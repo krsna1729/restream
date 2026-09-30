@@ -63,6 +63,130 @@ should expect that much run-to-run spread on this suite specifically.
 | egress-growth-source-srt 10-per-group | 104,948 KB | 6,444 KB | 2,125 KB | not measured by this harness mode | 39685ea3 | 2026-07-18 |
 | egress-growth-transcode-dual-mixed 10-per-group | 700,156 KB | 6,390 KB | 35,728 KB | not measured by this harness mode | 39685ea3 | 2026-07-18 |
 
+
+### Media execution plane — local release A/B (2026-09-30)
+
+Scope: move shared SRT TS mux, HLS TS/fMP4 packaging, recording TS preparation,
+and external file-ingest demux/publication from the control scheduler to a
+separate fixed `restream-media` Tokio runtime. No codec/mux algorithm changes.
+
+Both binaries were built with `scripts/build/release-harness.sh` from
+`2e0379a49ab38583d5a9fcd9f7bfc40ca361c4d7` (dirty); the baseline excludes
+the media-executor migration. KVM, AMD EPYC, six vCPUs, Linux
+`6.8.0-139-generic`, Rust 1.96.0, FFmpeg 6.1.1. Restream CPUs `0-2`;
+load driver/sinks `3-5`. CPU percentages below are Restream process CPU
+(`100%` = one core), excluding FFmpeg children.
+
+Initial file workload: eight looped external file ingests from
+`test/fixtures/transport/bench-h264-8m.ts`, eight native fMP4 previews, eight
+recordings, two control workers, 30-second window after five-second settling.
+The driver requests engine health at 10 Hz and each preview playlist at 1 Hz.
+Commands:
+
+```sh
+taskset -c 3-5 python3 .local/scratch/media-plane-perf.py \
+  --bin .local/ab-bins/media-plane-before/restream \
+  --out .local/artifacts/media-plane/file-before-fixed-1 --feeds 8 --seconds 30
+taskset -c 3-5 python3 .local/scratch/media-plane-perf.py \
+  --bin target/qual-release/restream \
+  --out .local/artifacts/media-plane/file-after-fixed-1 --feeds 8 --seconds 30
+```
+
+The measurement driver was task-local scratch, removed after measurement; these
+commands record the executed apparatus rather than a maintained harness entry.
+
+| Metric | Before | After |
+|---|---:|---:|
+| Aggregate input | 64.46 Mbit/s | 64.92 Mbit/s |
+| Control Tokio CPU | 85.62% | 32.09% |
+| Media-worker CPU | — | 4.98% |
+| Restream process CPU | 89.76% | 39.31% |
+| Health p50 / p99 / max | 35.36 / 351.88 / 620.20 ms | 12.97 / 72.60 / 104.19 ms |
+| Sampled peak RSS | 783.92 MiB | 767.22 MiB |
+| Finalized recording duration, aggregate | 334.58 s | 338.78 s |
+
+All eight playlists progressed in both runs; every finalized recording was
+probed as H.264/AAC and passed a two-second FFmpeg decode smoke. Recording
+duration includes setup and settling, not just the measurement window.
+This single paired run is **directional**, not a proven deployment speedup.
+
+#### Reviewed binary repeats
+
+After the lifecycle review fixes, the release build was repeated and the same
+timed workload ran in order **after-2, before-2, before-3, after-3**. Commands
+used the binary paths above, `--feeds 8 --seconds 30`, and artifact directories
+`file-{before,after}-reviewed-{2,3}` under the same artifact root.
+Only post-window validation changed: every finalized recording was decoded
+through its full duration, rather than the initial two-second smoke.
+
+Reviewed after-binary SHA-256:
+`7921201d611172694935aac0d9a9fef9b63a7897e369bc05fdc09b5cd5f44889`.
+The before binary and fixture hashes are unchanged.
+The following medians summarize these **two repeats per binary only**;
+the initial pair above is not included.
+
+| Metric | Before median (range) | Reviewed after median (range) |
+|---|---:|---:|
+| Aggregate input, Mbit/s | 64.53 (64.50–64.56) | 63.41 (63.31–63.51) |
+| Restream process CPU | 75.26% (70.05–80.47%) | 67.72% (64.53–70.91%) |
+| Control-worker CPU | 71.72% (66.57–76.87%) | 57.76% (55.41–60.11%) |
+| Media-worker CPU | — | 7.02% (6.45–7.59%) |
+| CPU seconds / input GiB | 100.17 (93.28–107.07) | 91.74 (87.28–96.20) |
+| Health p50, ms | 27.83 (25.68–29.98) | 25.93 (24.16–27.69) |
+| Health p99, ms | 255.12 (242.68–267.56) | 173.77 (153.12–194.43) |
+| Health maximum, ms | 632.84 (566.99–698.69) | 339.85 (287.74–391.96) |
+| Sampled peak RSS, MiB | 785.82 (776.57–795.07) | 755.74 (736.79–774.69) |
+| Finalized recording duration, aggregate seconds | 335.96 (334.85–337.08) | 327.09 (323.99–330.19) |
+
+All eight playlists progressed and all eight recordings finalized in each
+repeat; all 32 repeated-run recordings passed full-duration decoding.
+Health requests remained 300 per run. Input throughput is 1.7% lower after,
+so the 10.0% process-CPU reduction is not an equal-work speedup:
+normalizing CPU time by measured input bytes gives an **8.4% directional
+improvement**. Control-worker CPU fell 19.5% and health p99 fell 31.9%.
+Recording durations include setup/settling and are 2.6% lower after.
+Two repeats on this jittery host do not establish statistical significance.
+Use these reviewed results, not the much larger initial single-pair deltas,
+as the current result.
+
+Final verification: library suite (1,979 tests), API suite (112 tests),
+fixture-discipline, formatting/docs checks, and the full concurrency contract
+passed. The contract used `CONCURRENCY_HARNESS_ARGS=--no-netns` because this
+host cannot create the required namespace; it exercised `fault.resilience`,
+`fault.egress-retry`, `fault.output-stall`, and `recovery`.
+The full Cargo/test-hygiene runs stopped at the unrelated hard-coded SRT
+revision assertion in `tests/architecture_compliance.rs:128`; the hygiene
+noise scan therefore did not run. Release-policy inputs were left unchanged.
+
+
+Fan-out command: `CAPACITY_SKIP_BUILD=1 CAPACITY_ALLOW_DIRTY=1
+CAPACITY_PROTOCOLS=srt,hls CAPACITY_SRT_OUTPUTS=50 CAPACITY_HLS_OUTPUTS=50
+CAPACITY_REPEATS=2 CAPACITY_WINDOW_SECS=30 CAPACITY_SETTLE_SECS=5
+CAPACITY_JITTER_SECS=0 scripts/harness/capacity-ramp.sh`, with
+`CAPACITY_ARTIFACT_ROOT=.local/artifacts/media-plane/capacity-{before,after}`.
+One 8 Mbit/s ingest; 50 destinations; release builds, two repeats each.
+
+| Workload | Before | After | Interpretation |
+|---|---|---|---|
+| HLS PUT ×50 | 2/2 passed, 50/50 due segments, CPU median 45.73%, sampled peak RSS 145.07 MiB | 2/2 passed, 50/50 due segments, CPU median 24.71%, sampled peak RSS 130.13 MiB | Equal delivery; directional CPU improvement |
+| SRT ×50 | 1/2 passed, minimum 29/50 delivered, minimum receive ratio 0.9316, CPU median 157.13% | 2/2 passed, minimum 50/50 delivered, minimum receive ratio 0.9916, CPU median 137.39% | Unequal delivered work; **not** a comparable CPU speedup or capacity ceiling |
+
+Criterion command: `scripts/build/resource-limit.sh cargo bench --bench
+stage_feeder --bench hls_cost --bench hls_fmp4_cost -- --baseline
+media-plane-before --warm-up-time 1 --measurement-time 2`.
+Unchanged kernel measurements moved in both directions: e.g. 1080p30 TS mux
+reported +9.8% time, 1080p60 TS mux −21.2%, fMP4 video +0.45% (no detected
+change), and the 60-packet feeder burst +12.5% (no detected change).
+These do not measure executor scheduling and establish **no attributable
+kernel speedup**. Host jitter was not measured in the fan-out campaign.
+
+Raw logs/results are local under `.local/artifacts/media-plane/`. Initial
+Restream SHA-256s: before
+`eddbc7ae1c1cd595b6a62d3d5153fd10deec8680a3e7fde128d05144bc9ac551`;
+after `a190314c8c2a12fdde208fde494b5fa578c3b02cc450db8e636086235017c265`.
+Fixture SHA-256:
+`c70cd5f865384f4eb0a5f2de608573d8877f0efc03aeaf9138fb586e9e6b9ed5`.
+
 Full 42-case breakdown and dated MSR/resource campaigns live in
 [archive/quality/baselines-campaigns-2026-07.md](../../archive/quality/baselines-campaigns-2026-07.md).
 VPS/WSL2 profiling dumps live in

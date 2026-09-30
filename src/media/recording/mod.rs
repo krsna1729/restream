@@ -479,6 +479,65 @@ async fn drain_ready_bursts(
         for pkt in packets.iter() {
             stage_metrics.record_in(pkt.payload.len() as u64);
         }
+        // Even an always-ready ring must let cancellation and sibling media
+        // tasks progress before the next bounded burst.
+        tokio::task::yield_now().await;
+    }
+}
+
+/// Both the coordinator and its media task own one of these: dropping either
+/// side releases a writer blocked on EOF and a feeder blocked on queue space.
+struct QueueCloseGuard(Arc<MemoryQueue>);
+
+impl Drop for QueueCloseGuard {
+    fn drop(&mut self) {
+        self.0.close();
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn feed_recording(
+    pipeline_name: String,
+    pipeline_id: String,
+    ring_buffer: Arc<RingBuffer>,
+    engine: Arc<MediaEngine>,
+    cancel_token: CancellationToken,
+    service_metadata: TsServiceMetadata,
+    queue_guard: QueueCloseGuard,
+    stage_metrics: Arc<StageMetrics>,
+) {
+    let mut reader = Reader::new_with_keyframe_preroll(
+        format!("recording:{}", pipeline_name),
+        ring_buffer,
+        startup_policy::recording_keyframe_preroll_packets(),
+    );
+    let mut packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
+    let (video_sequence_header, _) = engine.get_sequence_headers(&pipeline_id).await;
+    let mut feeder: Option<TsPacketFeeder> = None;
+    // Reuse one TS accumulation buffer and queue write per burst.
+    let mut ts_batch = Vec::with_capacity(MEDIA_TS_BATCH_TARGET_BYTES);
+
+    loop {
+        tokio::select! {
+            _ = cancel_token.cancelled() => break,
+            _ = reader.wait_for_data() => {
+                drain_ready_bursts(
+                    &mut reader,
+                    &cancel_token,
+                    &mut packets,
+                    MEDIA_PULL_BURST_PACKETS,
+                    &engine,
+                    &pipeline_id,
+                    &mut feeder,
+                    &video_sequence_header,
+                    &service_metadata,
+                    &mut ts_batch,
+                    &queue_guard.0,
+                    &stage_metrics,
+                )
+                .await;
+            }
+        }
     }
 }
 
@@ -547,14 +606,8 @@ pub async fn start_recording(
         engine.config.avio_capacity,
     ));
 
-    // Guard: close the queue on drop so the OS writer thread always unblocks,
-    // even if this async fn is cancelled or panics before reaching queue.close().
-    struct QueueCloseGuard(Arc<crate::media::avio::MemoryQueue>);
-    impl Drop for QueueCloseGuard {
-        fn drop(&mut self) {
-            self.0.close();
-        }
-    }
+    // Outer abort closes queue space immediately, even while the media task
+    // is completing its current burst after executor::run cancels its token.
     let _queue_guard = QueueCloseGuard(queue.clone());
 
     let queue_clone = queue.clone();
@@ -563,65 +616,44 @@ pub async fn start_recording(
     // Store the JoinHandle so we can join the thread on exit and detect panics.
     // Dropping the handle detaches the thread silently — any crash becomes invisible.
     let muxer_handle = std::thread::spawn(move || {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_ts_writer(queue_clone, &file_path_clone, cancel_token_clone)
-        }));
-        match result {
-            Ok(Err(e)) => error!(err = ?e, "TS writer failed"),
-            Err(_) => error!("TS writer panicked"),
-            _ => {}
+        let _queue_guard = QueueCloseGuard(queue_clone.clone());
+        let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_ts_writer(queue_clone, &file_path_clone, cancel_token_clone.clone())
+        })) {
+            Ok(result) => result.map_err(str::to_owned),
+            Err(_) => Err("TS writer panicked".to_string()),
+        };
+        if result.is_err() {
+            cancel_token_clone.cancel();
         }
+        result
     });
 
-    let mut reader = Reader::new_with_keyframe_preroll(
-        format!("recording:{}", pipeline_name),
-        ring_buffer,
-        startup_policy::recording_keyframe_preroll_packets(),
-    );
-    let mut packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
-
-    // Lazily initialized when first packet arrives.
-    let (video_sequence_header, _) = engine.get_sequence_headers(&pipeline_id).await;
-    let mut feeder: Option<TsPacketFeeder> = None;
-    // Accumulation buffer: collect all muxed TS bytes for a burst, then
-    // write them in a single queue.write() call (one lock acquisition per
-    // burst instead of one per packet).
-    let mut ts_batch: Vec<u8> = Vec::with_capacity(MEDIA_TS_BATCH_TARGET_BYTES);
-
-    loop {
-        tokio::select! {
-            _ = cancel_token.cancelled() => break,
-            _ = reader.wait_for_data() => {
-                drain_ready_bursts(
-                    &mut reader,
-                    &cancel_token,
-                    &mut packets,
-                    MEDIA_PULL_BURST_PACKETS,
-                    &engine,
-                    &pipeline_id,
-                    &mut feeder,
-                    &video_sequence_header,
-                    &service_metadata,
-                    &mut ts_batch,
-                    &queue,
-                    &stage_metrics,
-                )
-                .await;
-            }
-        }
-    }
+    let feeder_result = crate::media::executor::run(
+        cancel_token.clone(),
+        feed_recording(
+            pipeline_name,
+            pipeline_id.clone(),
+            ring_buffer,
+            engine.clone(),
+            cancel_token.clone(),
+            service_metadata,
+            QueueCloseGuard(queue.clone()),
+            stage_metrics,
+        ),
+    )
+    .await;
 
     queue.close();
 
     // Join the muxer thread to ensure the file is fully flushed before we
     // check the duration and potentially delete it.  Joining also surfaces
     // any panic that escaped catch_unwind (shouldn't happen, but be explicit).
-    if let Err(e) = muxer_handle.join() {
-        error!(
-            "[recording] TS writer thread join failed for {}: {:?}",
-            filename, e
-        );
-    }
+    let writer_result = match tokio::task::spawn_blocking(move || muxer_handle.join()).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err("TS writer thread panicked".to_string()),
+        Err(e) => Err(format!("TS writer join task failed: {e}")),
+    };
 
     let duration = started_at.elapsed();
     info!(
@@ -630,7 +662,16 @@ pub async fn start_recording(
         duration.as_secs_f64()
     );
 
-    if duration.as_secs() < MIN_DURATION_SECS {
+    if let Err(error) = writer_result.and(feeder_result) {
+        error!(filename = %filename, err = %error, "recording failed");
+        lifecycle.record_error(error.clone());
+        if let Some(metadata) = &metadata {
+            metadata.report(RecordingMetadataEvent::Failed {
+                recording_id: recording_id.clone(),
+                error,
+            });
+        }
+    } else if duration.as_secs() < MIN_DURATION_SECS {
         let _ = fs::remove_file(&file_path);
         if let Some(metadata) = &metadata {
             metadata.report(RecordingMetadataEvent::Failed {

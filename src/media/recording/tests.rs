@@ -482,9 +482,6 @@ fn ts_writer_fails_on_invalid_path() {
     assert!(run_ts_writer(queue, "/nonexistent_dir/should/fail.ts", token).is_err());
 }
 
-// H5: QueueCloseGuard must unblock the writer thread even if the queue is
-// never explicitly closed by the caller (e.g., async fn cancelled/panicked).
-// Simulate by dropping the guard and verifying the writer exits.
 #[test]
 fn sanitize_name_trims_leading_trailing_underscores() {
     assert_eq!(sanitize_name("///name///"), "name");
@@ -529,26 +526,152 @@ fn ts_writer_drains_data_written_before_close() {
     let _ = std::fs::remove_file(&temp);
 }
 
-#[test]
-fn queue_close_guard_unblocks_writer_thread() {
+#[tokio::test]
+async fn aborting_control_owner_closes_media_feeder_and_writer() {
     let queue = Arc::new(MemoryQueue::new());
+    // Also release the writer if an assertion fails before the owner abort.
+    let _cleanup = QueueCloseGuard(queue.clone());
+    let ring = Arc::new(RingBuffer::new(512));
+    let cancel = CancellationToken::new();
+    let _cancel_cleanup = cancel.clone().drop_guard();
+    let path = std::env::temp_dir().join(format!(
+        "recording-media-abort-{}.ts",
+        rand::random::<u64>()
+    ));
+    let writer_path = path.to_string_lossy().into_owned();
+    let writer_queue = queue.clone();
+    let writer_cancel = cancel.clone();
+    let (writer_done_tx, writer_done_rx) = tokio::sync::oneshot::channel();
+    let writer = std::thread::spawn(move || {
+        let result = run_ts_writer(writer_queue, &writer_path, writer_cancel);
+        let _ = writer_done_tx.send(result);
+    });
 
-    // Start the writer thread on an open queue.
-    let queue_for_thread = queue.clone();
-    let temp_dir = std::env::temp_dir();
-    let file_path = temp_dir.join("test_guard_recording.ts");
-    let path_str = file_path.to_string_lossy().to_string();
-    let token = CancellationToken::new();
-    let thread = std::thread::spawn(move || run_ts_writer(queue_for_thread, &path_str, token));
+    let feeder_ring = ring.clone();
+    let feeder_queue = queue.clone();
+    let feeder_cancel = cancel.clone();
+    let owner = tokio::spawn(async move {
+        crate::media::executor::run(
+            feeder_cancel.clone(),
+            feed_recording(
+                "abort-test".to_string(),
+                "abort-test".to_string(),
+                feeder_ring,
+                Arc::new(MediaEngine::new()),
+                feeder_cancel,
+                TsServiceMetadata {
+                    provider_name: "test".to_string(),
+                    service_name: "test".to_string(),
+                },
+                QueueCloseGuard(feeder_queue),
+                Arc::new(StageMetrics::new()),
+            ),
+        )
+        .await
+    });
 
-    // Simulate the guard drop (async fn drop) by closing the queue directly.
-    // In production this is done by QueueCloseGuard::drop.
-    queue.close();
+    let timeout = std::time::Duration::from_secs(5);
+    tokio::time::timeout(timeout, async {
+        while ring.active_reader_count() != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("media feeder should register its reader");
+    assert!(!queue.is_closed());
 
-    // Writer thread must exit within 1 second — no hang.
-    let result = thread.join().expect("writer thread panicked");
-    assert!(result.is_ok());
-    let _ = std::fs::remove_file(temp_dir.join("test_guard_recording.ts"));
+    owner.abort();
+    assert!(owner.await.unwrap_err().is_cancelled());
+    assert!(cancel.is_cancelled());
+    tokio::time::timeout(timeout, async {
+        while ring.active_reader_count() != 0 || !queue.is_closed() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("aborted control owner must release media reader and close queue");
+    tokio::time::timeout(timeout, writer_done_rx)
+        .await
+        .expect("writer must observe EOF after the media feeder stops")
+        .expect("writer must report its result")
+        .expect("writer should flush successfully");
+    tokio::task::spawn_blocking(move || writer.join())
+        .await
+        .expect("writer join task should complete")
+        .expect("writer thread should not panic");
+    std::fs::remove_file(path).expect("completed writer file should be removable");
+}
+
+#[tokio::test]
+async fn recording_media_writer_failure_reports_failed_without_finalization() {
+    let media_dir = std::env::temp_dir().join(format!(
+        "recording-invalid-directory-{}",
+        rand::random::<u64>()
+    ));
+    // A regular file cannot contain the recording output: exercise the real
+    // writer's File::create error without permissions or timing assumptions.
+    std::fs::write(&media_dir, b"not a directory").expect("create invalid media directory");
+    let engine = Arc::new(MediaEngine::new());
+    let ring = Arc::new(RingBuffer::new(512));
+    let cancel = CancellationToken::new();
+    let _cancel_cleanup = cancel.clone().drop_guard();
+    let stage_key = StageKey::new("writer-failure", crate::domain::stage::StageKind::Recording);
+    let (lifecycle, _) = engine
+        .get_or_create_non_ring_stage_runtime(
+            stage_key.clone(),
+            crate::media::stage_lifecycle::StagePhase::Registered,
+            crate::media::stage_lifecycle::StageBackendKind::Recording,
+            cancel.clone(),
+        )
+        .await;
+    let (metadata_tx, mut metadata_rx) = mpsc::unbounded_channel();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        start_recording(
+            RecordingStart {
+                recording_id: "writer-failure".to_string(),
+                pipeline_name: "writer-failure".to_string(),
+                pipeline_id: "writer-failure".to_string(),
+                input_source: None,
+                media_dir: media_dir.to_string_lossy().into_owned(),
+                settings: RecordingSettings::default(),
+                stage_key: stage_key.clone(),
+                metadata: Some(RecordingMetadataReporter::new(metadata_tx)),
+            },
+            ring.clone(),
+            engine.clone(),
+            cancel.clone(),
+        ),
+    )
+    .await
+    .expect("failed writer must stop the feeder and finish the coordinator");
+
+    assert!(matches!(
+        metadata_rx.try_recv(),
+        Ok(RecordingMetadataEvent::Started { .. })
+    ));
+    let Ok(RecordingMetadataEvent::Failed {
+        recording_id,
+        error,
+    }) = metadata_rx.try_recv()
+    else {
+        panic!("writer failure must report Failed instead of Finalized");
+    };
+    assert_eq!(recording_id, "writer-failure");
+    let snapshot = lifecycle.snapshot();
+    assert_eq!(
+        snapshot.phase,
+        crate::media::stage_lifecycle::StagePhase::Failed
+    );
+    assert_eq!(snapshot.last_error, Some(error));
+    assert!(matches!(
+        metadata_rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Disconnected)
+    ));
+    assert!(cancel.is_cancelled());
+    assert_eq!(ring.active_reader_count(), 0);
+    assert!(!engine.stages.runtimes.read().await.contains_key(&stage_key));
+    std::fs::remove_file(media_dir).expect("remove invalid media directory");
 }
 
 fn drain_test_packet() -> MediaPacket {
@@ -624,6 +747,26 @@ async fn drain_ready_bursts_stops_within_one_burst_after_cancellation() {
         "cancelled drain consumed {drained} packets from a {backlog}-packet backlog, \
          expected at most one burst ({MEDIA_PULL_BURST_PACKETS})"
     );
+}
+
+#[tokio::test]
+async fn drain_ready_bursts_yields_before_the_next_media_burst() {
+    let ring = Arc::new(RingBuffer::new(512));
+    let mut reader = Reader::new("test-drain-yield".to_string(), ring.clone());
+    for _ in 0..10 * MEDIA_PULL_BURST_PACKETS {
+        ring.push(drain_test_packet());
+    }
+    let cancel = CancellationToken::new();
+    let engine = MediaEngine::new();
+
+    // Biased join polls the real drain first. Its first bounded yield lets
+    // cancellation run before any second burst, without relying on timing.
+    let (drained, ()) = tokio::join!(
+        biased;
+        drain_ready_bursts_test_call(&mut reader, &cancel, &engine),
+        async { cancel.cancel() },
+    );
+    assert_eq!(drained, MEDIA_PULL_BURST_PACKETS);
 }
 
 // Regression guard for the opposite failure mode: without cancellation,

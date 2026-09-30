@@ -182,9 +182,10 @@ flowchart LR
 ```
 
 One `ffmpeg` subprocess per `(pipeline, preset)`. FFmpeg reads MPEG-TS from
-stdin and writes transcoded MPEG-TS to `pipe:1` (stdout). A Tokio task reads
-stdout, runs it through `TsDemuxer`, and pushes the resulting `MediaPacket`s
-into `output_ring`.
+stdin and writes transcoded MPEG-TS to `pipe:1` (stdout). Dedicated stdin and
+stdout threads pull/mux the source ring and demux the child output with
+`TsDemuxer`, publishing `MediaPacket`s into `output_ring`. Tokio supervises
+the child lifecycle, not continuous pipe/media work.
 
 This is the **default** backend. It is robust because FFmpeg errors are
 isolated to the subprocess and logged to stderr; a crash restarts cleanly on
@@ -213,15 +214,16 @@ every transform path.
 
 ### Muxing stages summary
 
-| Stage | Role |
-|---|---|
-| SRT Ingest | `TsDemuxer` — demux MPEG-TS into `MediaPacket`s (inline async) |
-| External transcoder | subprocess FFmpeg stdin→stdout; `TsMuxer` writes stdin, `TsDemuxer` reads stdout |
-| Internal transcoder | in-process FFmpeg via `MemoryQueue`+`avio`; `TsMuxer` feeds input, output packets pushed directly to ring |
-| SRT Egress | Shared `TsMuxer` task per unique `(pipeline, preset)` feeding a shared `TsChunkRing` (SPMC lock-free package ring) |
-| HLS | `TsMuxer` remux to MPEG-TS, then segment in memory (inline async) |
-| Recording | Raw MPEG-TS write to `.ts` file via `MemoryQueue` (OS thread) |
-
+| Stage | Role | Execution Context |
+|---|---|---|
+| SRT Ingest | `TsDemuxer` — demux MPEG-TS into `MediaPacket`s, gate, timestamps, ring publish | Compio SRT Ingress Owner (inline) |
+| RTMP Ingest | `RtmpPublisherMedia` — chunk parse, FLV classification, sequence headers, gate, ring publish | Compio RTMP Ingress Owner (inline) |
+| External transcoder | subprocess FFmpeg stdin→stdout; `StageInputPump` writes stdin, `TsDemuxer` reads stdout | Dedicated OS threads (`restream-ffin`, `restream-ffout`) |
+| Internal transcoder | in-process FFmpeg via `MemoryQueue`+`avio`; `StageInputPump` refills on FFmpeg thread | Guarded FFmpeg OS threads |
+| SRT Egress | Shared `TsMuxer` task per unique `(pipeline, preset)` feeding shared `TsChunkRing` | Media Executor (`restream-media`) |
+| HLS | MPEG-TS mux/segmenting for remote outputs; separate fMP4 packaging for preview | Media Executor (`restream-media`) |
+| Recording | MPEG-TS feeder task to `MemoryQueue`; raw `.ts` disk write | Feeder: Media Executor; Writer: OS thread |
+| File Ingest | External FFmpeg stdout demux, timestamps, gate, and ring publish | Media Executor (`restream-media`) |
 
 
 ## Protocol and codec boundaries
@@ -405,41 +407,43 @@ flowchart LR
     subgraph C1["RTMP ingress: one Compio/io_uring owner thread/runtime"]
         Accept["Compio TCP listener"]
         Session["RTMP handshake + ServerSession\nchunk parsing, AMF, media extraction"]
+        Media["RtmpPublisherMedia\nFLV classify, seq header, GOP, gate"]
+        Accept --> Session --> Media
     end
-    subgraph T1["Tokio control/application plane"]
-        Actor["Bounded control actor\npublish auth, play scheduling"]
-        Handoff["64 MiB permit-backed\nqueued/processing media commands"]
-        Gate["Selected-input gate"]
+    subgraph T1["Tokio control plane (side channel)"]
+        Actor["Bounded control actor\npublish auth, play scheduling, probe"]
+    end
+    subgraph R1["Shared Rings"]
         SR[("source_ring — shared SPMC")]
-        SR -->|"non-passthrough preset"| Prep["Reader + TsMuxer\n(inline async)"]
-        Stdin["FFmpeg stdin writer\n(async pipe I/O)"]
-        Stdout["FFmpeg stdout reader\n(async pipe I/O)"]
-        Stdout --> Demux["TsDemuxer\n(inline async)"]
-        Demux --> OR[("output_ring — shared SPMC,\none per (pipeline, preset)")]
+        OR[("output_ring — shared SPMC,\none per (pipeline, preset)")]
     end
-    subgraph P1["FFmpeg child process"]
-        FF["scale + libx264/libx265"]
+    subgraph M1["Dedicated IO threads & FFmpeg"]
+        Stdin["FFmpeg stdin writer thread\n(restream-ffin)"]
+        FF["FFmpeg child\nscale + libx264/libx265"]
+        Stdout["FFmpeg stdout reader thread\n(restream-ffout)"]
+        Stdin --> FF --> Stdout
     end
     subgraph S1["Egress fabric shard pool: one Compio/io_uring runtime per shard"]
         Leaf["RTMP leaf protocol engine"] --> Completion["Shared Compio TCP stream\nbounded 4 KiB RX/TX completions"]
         Completion --> Events["Bounded, coalesced\ncompletion events"]
         Events --> Leaf
     end
-    Accept --> Session
-    Session -->|"decoded media + typed events"| Handoff
-    Handoff --> Actor --> Gate --> SR
-    Prep --> Stdin --> FF --> Stdout
+    Session -.->|"auth / probe"| Actor
+    Media -->|"inline publish"| SR
+    SR -->|"non-passthrough preset"| Stdin
+    Stdout --> Demux["TsDemuxer"] --> OR
     SR -->|"passthrough"| Leaf
     OR --> Leaf
     Completion --> Dest["Destination RTMP/RTMPS server"]
 ```
 
 The accepted socket and RTMP protocol session stay together on the fixed
-Compio owner. Tokio receives only bounded typed control and decoded media;
-there is no Tokio duplex stream, byte pump, or duplicated TCP descriptor.
-Publisher TCP statistics are sampled on the socket-owning owner. The Tokio
-media handoff semaphore limits permit-backed queued/processing command payloads
-to 64 MiB, but excludes parser working sets. A blocked handoff may retain a
+Compio owner. Tokio receives bounded typed control, lifecycle commands, and
+the one-time media probe; ordinary publisher media goes directly to the ring
+on the owner. There is no Tokio duplex stream, byte pump, or duplicated TCP
+descriptor. Publisher TCP statistics are sampled on the socket-owning owner.
+The 64 MiB byte-permit budget bounds queued/processing probe payloads, not
+parser working sets. A blocked probe handoff may retain a
 completed RTMP message and the next incomplete parser assembly, each up to
 16,777,215 bytes, plus a 4 KiB socket read, separate 4 KiB parser staging
 buffer, and result metadata.
@@ -451,10 +455,10 @@ other transport allocations add more.
 | Hop | Thread/process model | Memory owner |
 |---|---|---|
 | RTMP listener and protocol session | One Compio/io_uring owner thread/runtime; accepted connection futures remain pinned there. Connection admission is clamped to 1–16,384 and the handshake has a configured timeout | Compio socket and RTMP parser/session state; no per-connection thread/runtime or Tokio duplex |
-| RTMP control actor | One bounded Tokio actor per admitted connection; auth, ingest/ring state, and play-reader scheduling only | Per-session command channel of 16 entries; data commands are covered by the shared 64 MiB byte-permit budget |
-| Parser-to-Tokio media handoff | Typed decoded media commands; lossy quality uses `try_send` | 64 MiB queued/processing media budget; excludes one completed max-size message plus the next parser assembly, both 4 KiB read/parser buffers, and small result metadata per connection |
+| RTMP control actor | One bounded Tokio actor per admitted connection; authorization/registration, lifecycle, one-time media probe, and diagnostic play-reader scheduling | Per-session command channel of 16 entries; probe payloads share the 64 MiB byte-permit budget |
+| RTMP publisher media | FLV classification, sequence-header handling, timestamp mapping, standby GOP, input gating, and ring publication run inline on the Compio ingress owner | Owner-local publisher state and shared ring; no ordinary per-packet media channel |
 | `source_ring` / `output_ring` | Shared application structure | Fixed-capacity `RingBuffer` per pipeline / per `(pipeline, preset)`, independent of output count |
-| External transcoder (non-passthrough preset) | One FFmpeg child plus two Tokio pipe tasks per `(pipeline, preset)` | FFmpeg process memory plus the existing bounded pipe/`MemoryQueue` bridge |
+| External transcoder (non-passthrough preset) | One FFmpeg child plus dedicated stdin/stdout threads per `(pipeline, preset)`; Tokio supervises lifecycle only | FFmpeg process memory and bounded pipe buffers; input pump pulls the ring on its writer thread |
 | RTMP/RTMPS egress shard | Fixed fabric shard thread and one Compio/io_uring runtime; protocol engine and completion workers share the owner thread | Per active transport leaf: nominal 16 KiB for plain RTMP and 16 KiB + 24 B for RTMPS adapter buffers. At the default upper topology of 8 shards × 4,096 leaves (32,768), this is about 512 MiB / 512.75 MiB; configured shard/leaf overrides scale total capacity. Excludes engine/TLS/task/event state, allocator overhead, and kernel socket buffers. The existing application pending-byte ceiling remains separate |
 
 The egress runtime uses one shared `Rc<Compio TcpStream>` per active leaf.
@@ -471,19 +475,24 @@ readiness scans.
 flowchart LR
     subgraph L1["SRT ingress Owner thread: one Compio/io_uring runtime"]
         SS["srt-rs Owner listener/recv\nPeerTable + protocol timers"]
+        SD["TsDemuxer + gate + timestamps\nstandby GOP + ring publish"]
+        SS --> SD
     end
-    subgraph T2["Tokio application pipeline"]
-        SS -->|"bounded events"| Demux2["TsDemuxer\n(inline async)"]
-        Demux2 --> SR2[("source_ring — shared SPMC")]
-        SR2 -->|"non-passthrough preset"| Prep2["shared transform stage\n(as in RTMP path)"]
-        Prep2 --> OR2[("output_ring")]
-        OR2 --> Mux["shared TsMuxer,\n1 task per (pipeline, preset)\n(inline async)"]
-        SR2 -->|"passthrough"| Mux
-        Mux --> TCR[("TsChunkRing — shared SPMC\npackage ring")]
+    subgraph R2["Shared packet rings"]
+        SR2[("source_ring — shared SPMC")]
+        OR2[("output_ring")]
+    end
+    subgraph MX["Media Executor pool: restream-media"]
+        Mux["Shared TsMuxer\n1 task per (pipeline, preset)"]
+        TCR[("TsChunkRing — shared SPMC\npackage ring")]
+        Mux --> TCR
     end
     subgraph S2["Egress fabric shard pool: OS threads per feed,\neach shard runs one Compio runtime with per-family Owners"]
         Leaf2["SRT leaf: connection,\ncongestion, encryption state"] --> Send2["send_shared into the logical caller"]
     end
+    SD --> SR2
+    SR2 -->|"passthrough"| Mux
+    OR2 --> Mux
     TCR --> Leaf2
     subgraph L2["Shared SRT state: one Compio Owner per (shard, address family):\n1 caller UDP socket, caller pool, fixed TX pool"]
         Send2 --> Buf["srt-rs protocol buffers + TSBPD\ndeadline enforcement"]
@@ -493,9 +502,8 @@ flowchart LR
 
 | Hop | Thread/process model | Memory owner |
 |---|---|---|
-| SRT ingest socket and protocol tasks | One Compio runtime and Owner own the listener socket, peer table, timers, and protocol state; bounded events reach Tokio session handling | Ingress currently uses raw readiness: managed RX is observed but not installed because transient managed-ring `ENOBUFS` terminates the pinned upstream RX stream. Per-peer protocol state and kernel `SO_RCVBUF` remain separate |
-| `TsDemuxer` → `source_ring` | Tokio worker, inline async | Shared `source_ring`, same structure as RTMP |
-| Shared `TsMuxer` (SRT preparation) | One Tokio task per `(pipeline, preset)`, inline async | `TsChunkRing` (256-chunk shared ring, `RESTREAM_TS_RING_CAPACITY`) |
+| SRT ingest socket, demux, and publish | One Compio runtime and Owner own the listener socket, peer table, timers, demux, input gate, standby GOP, and ring publication | Ingress currently uses raw readiness: managed RX is observed but not installed because transient managed-ring `ENOBUFS` terminates the pinned upstream RX stream. Ingest media runs inline to completion on the Owner (WI11 step 1) |
+| Shared `TsMuxer` (SRT preparation) | Media Executor pool (`restream-media`), one task per `(pipeline, preset)` | `TsChunkRing` (256-chunk shared ring, `RESTREAM_TS_RING_CAPACITY`) |
 | Egress shard (SRT) | Fixed OS-thread pool per feed; each shard owns one Compio runtime and at most one `Owner` per local address family, plus queued leaf visits | Per-leaf application state and bounded scratch; protocol state lives in the Owner |
 | Shared SRT transport | One Compio `Owner` per `(shard, local family)`: one caller UDP socket, one bounded caller pool, fixed TX pool and one receive consumer; shared TS muxing remains per `(pipeline, preset)` | srt-rs caller/protocol state plus kernel `SO_SNDBUF`; DATA is materialized into reserved TX-pool slots |
 
@@ -548,19 +556,22 @@ bond fails the output explicitly.
 
 ## SRT ingress owner
 
-The SRT listener is one owner thread (`srt-in-<port>`): one production Compio
-runtime (forced io_uring, no fallback; `ManagedPreferred` receive with an
-observed substrate, RawReadiness only inside a working io_uring runtime) and one
-`srt_transport::compio::Owner` attached with `Owner::listen_with_resolver`. The
-Owner owns the socket, the `PeerTable`, handshake admission, timers, ACK/NAK,
-listener TX and every peer's send/disconnect/retire. There is no second protocol
-table on Tokio.
+The SRT listener is one owner thread (`srt-in-<port>`), with one production
+Compio runtime (forced io_uring, no fallback) and one
+`srt_transport::compio::Owner` attached with `Owner::listen_with_resolver`.
+The runtime's managed-RX capability is observed but deliberately not installed
+on ingress: the pinned srt-rs integration treats a surfaced transient
+provided-buffer-exhaustion error (`ENOBUFS`) as an owner RX-stream fault.
+Without the substrate, `ManagedPreferred` selects raw readiness inside the
+working io_uring runtime. The pinned upstream listener drains bounded
+`recvmmsg` batches, with `recvfrom` for the residual byte-budget tail.
+This is not a per-datagram Tokio bridge or a transport-runtime fallback.
 
-The `srt-rs` Owner holds up to 256 managed-RX buffer leases in its bounded
-completion ring. Restream provisions 512 Compio provided buffers, leaving one
-ring's worth of headroom so a full completion ring can drop its next datagram
-and return the lease instead of exhausting the provided-buffer ring. At the
-2,048-byte slot size, the ingress ring costs 1 MiB.
+The Owner owns the socket, `PeerTable`, handshake admission, timers, ACK/NAK,
+listener TX and every peer's send/disconnect/retire. There is no second protocol
+table on Tokio. Ingress does not provision the previously described managed
+provided-buffer ring; egress's separately qualified managed-RX policy is
+independent.
 
 - **Admission** is synchronous on the owner thread: the resolver reads the
   `SrtIngestPolicyStore` (mode validation, `UNAUTHORIZED`/`BAD_MODE`/
@@ -568,15 +579,13 @@ and return the lease instead of exhausting the provided-buffer ring. At the
   response for bonded callers. The asynchronous checks (pipeline authentication,
   IP bans, duplicate publishers, missing read target) stay in Tokio and, on
   rejection, send `Disconnect` for the real `LogicalPeerId`.
-- **Bridges are bounded.** Commands (Tokio to Owner): `Send`, `Disconnect`,
-  `Shutdown`, capacity 256, at most 32 applied per owner visit before the Owner is
-  serviced again. Events (Owner to Tokio): `Connected`, `Media`, `Disconnected`,
-  `Fault`, capacity 256. A full event bridge stops draining Owner events, so
-  protocol flow control absorbs the pressure; accepted media is never counted and
-  dropped. A full command bridge leaves an SRT reader's fragments queued in Tokio
-  (a fragment is popped only once the bridge accepted it). Read/play fragments
-  that wait for send-window room are bounded per peer (32) and in total (1024);
-  a peer that exceeds them is explicitly disconnected (`overloadDisconnects`).
+- **Bridges are bounded.** Commands (Tokio to Owner): `AttachPublisher`,
+  `AttachReader`, `ProbeApplied`, `Disconnect`, and `Shutdown`, capacity 256.
+  Events (Owner to Tokio): `Connected`, `Probe`, `Disconnected`, and `Fault`,
+  capacity 256. These carry lifecycle and the one-time stream probe only:
+  publisher demux/publication and diagnostic reader playback stay on the Owner.
+  Backpressure on the lifecycle bridge retains unaccepted events; it does not
+  introduce a per-packet media handoff through Tokio.
 - **Retirement.** A terminal `Disconnected` is forwarded and the peer is removed
   from the Owner; a locally disconnected peer is retired after its terminal event
   or a 500 ms grace. Stale commands for a retired `LogicalPeerId` are harmless and

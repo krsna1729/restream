@@ -25,7 +25,7 @@ pub(crate) fn start_shared_ts_muxer(
     let pipeline_id_str = pipeline_id.to_string();
     let stage_key_str = stage_key.to_string();
 
-    tokio::spawn(async move {
+    let _ = crate::media::executor::spawn(cancel.clone(), async move {
         // Wait for ingest metadata before starting the MPEG-TS muxer
         let (video_meta, audio_tracks) = loop {
             if cancel.is_cancelled() {
@@ -133,6 +133,9 @@ pub(crate) fn start_shared_ts_muxer(
         let mut pull_packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
 
         loop {
+            if cancel.is_cancelled() {
+                break;
+            }
             tokio::select! {
                 _ = cancel.cancelled() => break,
                 _ = reader.wait_for_data() => {
@@ -242,6 +245,9 @@ pub(crate) fn start_shared_ts_muxer(
                     }
                 }
             }
+            // One bounded pull burst per media turn; an always-ready source
+            // must not monopolize this worker or starve cancellation.
+            tokio::task::yield_now().await;
             if !engine
                 .ingests
                 .active

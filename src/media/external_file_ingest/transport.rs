@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use tokio::io::AsyncReadExt;
@@ -17,7 +18,35 @@ pub(super) struct FileIngestTimestamps {
     promotion: InputTimestampMapper,
 }
 
+/// Detach the pipe from CONTROL before registering it on the media reactor.
+/// Timestamp state crosses the executor once per attempt, never per packet.
 pub(super) async fn pump_stdout(
+    runtime: Arc<ExternalFileIngestRuntime>,
+    stdout: ChildStdout,
+    mut timestamps: FileIngestTimestamps,
+) -> Result<(FileIngestTimestamps, Result<(), String>), String> {
+    let stdout = match stdout.into_owned_fd() {
+        Ok(stdout) => stdout,
+        Err(error) => {
+            return Ok((
+                timestamps,
+                Err(format!("Failed to detach ffmpeg stdout: {error}")),
+            ));
+        }
+    };
+    crate::media::executor::run(runtime.registration.cancel_token.clone(), async move {
+        // Keep the descriptor's nonblocking flags; from_std registers it with
+        // the currently entered MEDIA runtime, not its original CONTROL reactor.
+        let result = match ChildStdout::from_std(std::process::ChildStdout::from(stdout)) {
+            Ok(stdout) => pump_stdout_inner(&runtime, stdout, &mut timestamps).await,
+            Err(error) => Err(format!("Failed to register ffmpeg stdout: {error}")),
+        };
+        (timestamps, result)
+    })
+    .await
+}
+
+async fn pump_stdout_inner(
     runtime: &ExternalFileIngestRuntime,
     mut stdout: ChildStdout,
     timestamps: &mut FileIngestTimestamps,
@@ -42,6 +71,7 @@ pub(super) async fn pump_stdout(
 
     loop {
         let read = tokio::select! {
+            biased;
             _ = runtime.registration.cancel_token.cancelled() => break,
             result = stdout.read(&mut buf) => result,
         }
@@ -161,6 +191,9 @@ pub(super) async fn pump_stdout(
             crate::media::engine::MediaEngine::now_epoch_ms(),
             Ordering::Relaxed,
         );
+        // A continuously ready pipe must not monopolize a shared media worker.
+        // Cancellation is observed at every bounded (at most 64 KiB) read.
+        tokio::task::yield_now().await;
     }
 
     Ok(())

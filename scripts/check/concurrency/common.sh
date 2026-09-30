@@ -113,4 +113,18 @@ run_common_concurrency_checks() {
     scripts/build/resource-limit.sh cargo test fresh_leaf_first_visit --lib -- --nocapture
   "$run_step_fn" recording-drain-bounded-on-cancel \
     scripts/build/resource-limit.sh cargo test media::recording::tests::drain_ready_bursts --lib -- --nocapture
+  "$run_step_fn" lib-media-executor \
+    scripts/build/resource-limit.sh cargo test media::executor::tests --lib
+  "$run_step_fn" lib-media-control-isolation \
+    scripts/build/resource-limit.sh cargo test while_control_thread_is_blocked --lib
+  "$run_step_fn" lib-media-file-ingest \
+    scripts/build/resource-limit.sh cargo test media::external_file_ingest::tests --lib
+  "$run_step_fn" recording-media-owner-abort \
+    scripts/build/resource-limit.sh cargo test aborting_control_owner_closes_media_feeder_and_writer --lib
+  "$run_step_fn" hls-media-owner-abort \
+    scripts/build/resource-limit.sh cargo test control_owner_abort_flushes_final_segment --lib
+  "$run_step_fn" recording-media-writer-failure \
+    scripts/build/resource-limit.sh cargo test recording_media_writer_failure_reports_failed_without_finalization --lib
+  "$run_step_fn" hls-media-replacement \
+    scripts/build/resource-limit.sh cargo test detached_teardown_preserves_replacement --lib
 }

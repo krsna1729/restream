@@ -75,19 +75,25 @@ The current layering sequence and stop rules live in
 ## Runtime ownership
 
 Tokio owns Axum, reconciliation, application/database policy, authentication,
-media orchestration, the native mux/demux work not yet moved to the ingress
-owners (RTMP publish, shared TS mux, HLS segmenter; SRT ingest media already
-runs on the SRT ingress Owner, WI11), and asynchronous child-process
-supervision. Dedicated processes or guarded OS threads own blocking FFmpeg
-work. Compio/io_uring owns the production SRT and RTMP/RTMPS transport paths.
+media orchestration, and asynchronous child-process supervision. Compio/io_uring
+owns production SRT and RTMP/RTMPS transport sockets and inline ingress media.
+A separate fixed media executor (`restream-media`) owns shared SRT TS muxing,
+HLS TS/fMP4 packaging, recording preparation, and external file-ingest
+demux/publication instead of the control scheduler. Guarded OS threads or child
+processes own blocking FFmpeg codecs and disk file writes.
+Lightweight audio-router stages still use control-runtime tasks, as does the
+diagnostic direct-RTMP-play request/reply scheduler; neither is migrated here.
 
 - RTMP ingress uses one fixed Compio/io_uring owner thread and runtime for the
   listener and accepted connections. That owner runs the RTMP handshake,
   `ServerSession`, chunk parsing, AMF command handling, media extraction,
-  protocol responses, TCP statistics, and teardown. Tokio actors handle auth
-  and pipeline/ring work through bounded typed messages; there is no Tokio
-  duplex byte bridge or borrowed FD crossing.
-- The RTMP ingress byte semaphore bounds permit-backed queued/processing media
+  protocol responses, TCP statistics, and teardown. Ingest media runs inline
+  on the owner (`RtmpPublisherMedia`: FLV classification, sequence-header
+  caching, timestamp mapping, standby GOP, input gate, and ring publication);
+  Tokio actors handle only initial auth, registration, session lifecycle, and
+  the one-time media probe. There is no per-packet owner→Tokio→ring hop, and no
+  Tokio duplex byte bridge or borrowed FD crossing.
+- The RTMP ingress byte semaphore bounds permit-backed queued/processing probe
   commands to 64 MiB. It does not bound parser working sets: a blocked permit
   wait can coexist with a completed RTMP message and the next parser assembly,
   each up to the 24-bit RTMP limit (16,777,215 bytes), plus a 4 KiB socket
@@ -110,11 +116,18 @@ work. Compio/io_uring owns the production SRT and RTMP/RTMPS transport paths.
   treats transient managed-ring `ENOBUFS` as a terminal RX-stream failure, so
   ingress remains on raw readiness until that failure is retryable. Egress
   retains its independently qualified managed RX path.
+  Ingest media (TS demux, input gate, timestamps, standby GOP, and ring publication)
+  runs to completion inline on the Owner thread without a per-packet Tokio hop.
 - The former direct RTMP io_uring/epoll production path is removed; remaining
   generic dataplane cleanup is tracked under WI7.
-- In-process FFmpeg codec work runs on guarded OS threads; recording uses a
-  feeder task and writer thread. Default transcoder and file-ingest paths use
-  managed FFmpeg child processes with asynchronous pipe I/O.
+- The media executor pool runs continuous container packaging off the control runtime and
+  off the transport owners: shared SRT TS muxing (`TsChunkRing`), HLS segmenting
+  (MPEG-TS and fMP4 preview), recording muxing, and external file-ingest demux.
+- In-process FFmpeg codec work runs on guarded OS threads; recording disk I/O
+  uses a dedicated file-writer thread. External transcoders use managed FFmpeg
+  children with dedicated stdin/stdout threads. External file ingest uses a
+  managed child, with stdout readiness/demux on the media runtime and stderr
+  capture and child supervision on CONTROL.
 
 The transport ownership invariant is that each production SRT/RTMP/RTMPS
 connection keeps its socket, protocol and handshake state, timers, receive and
@@ -122,19 +135,20 @@ pending-transmit buffers, I/O submissions/completions, fairness accounting,
 telemetry, and teardown on one Compio shard. Tokio may exchange bounded typed
 control/lifecycle messages, snapshots, and decoded/shared media buffers; live
 network byte streams, Tokio duplex streams, borrowed transport FDs, and Tokio
-network wrappers must not cross the boundary. RTMP ingress keeps auth and
-pipeline/ring work in Tokio but parses RTMP on the socket-owning Compio shard.
+network wrappers must not cross the boundary. RTMP and SRT ingress keep auth and
+lifecycle in Tokio but execute transport and packet parsing/publishing on their
+socket-owning Compio owners.
 RTMPS retains the same owner through Rustls handoff and kTLS; unsupported
 behavior remains fail-closed.
 
 Fixed shard ownership, explicit per-visit and completion budgets, bounded
 queues/buffers, and generation-safe lifecycle handling are required. Persistent
 one-shot receive/write workers are the current RTMP egress baseline; provided
-buffer rings and multishot I/O remain optional mechanisms. HLS PUT and FFmpeg
-pipe I/O remain Tokio paths unless later capacity evidence justifies a separate
-experiment. Codec work never moves to the I/O reactors. WI5B source convergence
-is in local verification; real-media, fault, hosted, and container acceptance
-remain open.
+buffer rings and multishot I/O remain optional mechanisms. HLS PUT remains on
+the Tokio control runtime; continuous FFmpeg pipe input/output uses dedicated
+threads or the media runtime. Codec work never moves to the I/O reactors.
+WI5B source convergence is in local verification; real-media, fault, hosted,
+and container acceptance remain open.
 
 Thread and process entry points tied to media lifecycle catch panics or child
 failures, surface status, and cancel their stage rather than terminating the
@@ -143,6 +157,11 @@ limits and environment parsing are in `src/config.rs`.
 
 The Tokio runtime is built in `src/main.rs`. Its resolved sizing uses the
 effective CPU limit and may be overridden by the documented runtime variables.
+The media executor is a separate, lazily initialized Tokio runtime, with
+`effective_cpu_count().clamp(1, 4)` worker threads named `restream-media`.
+Tasks keep their ring cursors and reusable buffers on this execution class;
+they check cancellation and yield between bounded bursts. It does not add a
+per-feed thread or a per-packet handoff through the control runtime.
 Restream does not pin individual thread families; coarse CPU and NUMA placement
 is a deployment concern.
 

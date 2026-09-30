@@ -2611,6 +2611,13 @@ peer/network bottleneck
 
 ### WI11 — Media execution plane (proposed; measure first)
 
+> Historical proposal: the problem description, placement rationale and table
+> below record the pre-WI11 design, not current runtime ownership. The landed
+> model keeps cheap ingress media on Compio owners and container packaging on
+> dedicated media workers; see [Runtime Crossings](runtime-crossings.md) and
+> the completed WI11 steps below. Lightweight audio routing and diagnostic RTMP
+> play remain CONTROL exceptions.
+
 Transport now lives on Compio, but continuous media work still runs on Tokio
 because it was grouped with application logic: SRT MPEG-TS demux, RTMP FLV
 classification/probing, standby GOP caching and promotion, timestamp mapping
@@ -2654,7 +2661,7 @@ demand, not a claim that dedicated threads always outperform Tokio.
 
 Hot-path task classes, from a packet entering to leaving:
 
-| # | Stage | Class | Scales with | Timing | Today | Target |
+| # | Stage | Class | Scales with | Timing | Before WI11 | Original target |
 |---|---|---|---|---|---|---|
 | 1 | Socket receive (TCP read, UDP recv) | transport I/O | connections | completion-driven; stalls overflow kernel buffers | Compio ingress owners | same |
 | 2 | Protocol state (RTMP handshake, chunks, acks; SRT reorder, ACK/NAK, TSBPD, decrypt, keepalive) | transport protocol | connections × packets | hard deadlines (SRT ACK every 10 ms, retransmit windows) | ingress owners | same |
@@ -3172,23 +3179,20 @@ Open, in order:
      In-process stages refill their AVIO queue from the ring on the FFmpeg
      thread; external stages use one dedicated stdin thread and one stdout
      thread. See [runtime-crossings.md](runtime-crossings.md) C8.
-   - Step 3b: shared TS mux and HLS segmenter off Tokio. Ownership
-     locality, not reactor monopolization: per-payload work of ~4–5 µs is
-     fine inline on an owner, but a TS mux burst, HLS segment boundary or
-     playlist update is chunkier. Measure their per-invocation cost first;
-     run inline on the publishing owner only under a stated service quantum
-     (with an overrun counter), otherwise on a per-shard media executor
-     class fed from the ring (local or SPSC), never back on Tokio.
-     (External review, 2026-09-28.) Measured (bench profile, this host):
-     TS mux 1.46 µs per 8 KB video packet, 44.6 µs per 60-packet burst,
-     127 µs per second of 1080p60 8 Mbit/s (`stage_feeder`, `hls_cost`
-     `mux_one_second`), so the shared TS mux fits inline on the publishing
-     owner. HLS `push_segment` (every ~6 s) costs 69 µs at 720p, 145 µs
-     1080p30, 362 µs 1080p60 and 988 µs at 4K HEVC: within a 500 µs
-     quantum up to 1080p60, over it at 4K, so the segment boundary needs
-     the media executor or a bounded split. Playlist/segment snapshots
-     (3.5–21 ms, `window_push_and_snapshot`) are reader-side (HTTP, HLS
-     PUT) and must never run on an owner.
+   - **DONE** Step 3b: media execution plane (shared SRT TS mux, HLS segmenter,
+     recording feeder, and external file-ingest demux off the control runtime).
+     Shared TS mux, HLS TS and fMP4 packaging, recording preparation, and file
+     demux run on dedicated media workers (`restream-media`, separate Tokio
+     runtime with a fixed process-wide pool of 1..4 threads), yielding between
+     bounded bursts. Reviewed release A/B, two repeats per binary, 8 file
+     feeds + previews + recordings: median control CPU 71.72% → 57.76%,
+     process CPU 75.26% → 67.72%, health p99 255.12 ms → 173.77 ms.
+     Input 64.53 → 63.41 Mbit/s; normalized CPU/input GiB improved 8.4%.
+     All previews progressed; all repeated-run recordings passed full-duration
+     decoding. Directional KVM-host evidence, not a deployment capacity claim.
+     See [runtime-crossings.md](runtime-crossings.md) C4, C9, C10, C11.
+     Detailed commands, provenance, normalization and limitations are in the
+     [baseline ledger](agent-guidance/quality/baselines.md#media-execution-plane--local-release-ab-2026-09-30).
    - **DONE** Step 4 (108bc129): direct feed wakes from the
      publishing thread to egress shards. The Tokio feed watcher is gone:
      the ring calls its publication subscribers (`PublishWake`), each

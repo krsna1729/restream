@@ -28,6 +28,7 @@ mod engine_rtmp_egress_fabric;
 mod engine_runtime;
 mod engine_sink_egress_fabric;
 mod engine_snapshots;
+pub(crate) mod executor;
 pub(crate) mod external_file_ingest;
 pub mod external_transcoder;
 pub mod feeder;

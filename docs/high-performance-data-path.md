@@ -110,11 +110,15 @@ standby cache bounds in addition to the selected pipeline.
 
 ## Native and child-process boundaries
 
-Tokio owns control/application work. Per-packet media work is moving off it
-(WI11): SRT ingest media (TS demux, input gate, timestamps, standby GOP, ring
-publish) runs to completion on the SRT ingress Owner; RTMP publish, the shared
-TS mux and the HLS segmenter still run on Tokio until they move to the owner
-that publishes the feed.
+Tokio owns control/application work. The migrated container services no longer
+schedule on the Tokio control runtime (WI11). Ingest media runs to completion on
+the Compio ingress owners: SRT TS demux and RTMP FLV parsing, sequence-header
+caching, timestamp mapping, standby GOP, gate, and publication. Shared SRT TS
+muxing (`TsChunkRing`), HLS segmenting (MPEG-TS and fMP4), recording muxing,
+and external file-ingest demux run on the dedicated media executor pool
+(`restream-media`).
+Lightweight audio-router stages and diagnostic direct RTMP play scheduling
+remain control-runtime tasks; this migration does not move those paths.
 Compio/io_uring owns production RTMP, RTMPS, and SRT transport sockets and
 connection protocol state. Calls that may block are isolated on guarded OS
 threads. The default codec-heavy transform path launches an FFmpeg child and
