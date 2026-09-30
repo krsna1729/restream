@@ -666,6 +666,9 @@ impl OwnerLoop {
                 .rx_ring_depth
                 .store(rx.depth as u64, Ordering::Relaxed);
             stats.rx_ring_dropped.store(rx.dropped, Ordering::Relaxed);
+            stats
+                .rx_buffer_exhaustions
+                .store(rx.buffer_exhaustions, Ordering::Relaxed);
             stats.rx_truncated.store(rx.truncated, Ordering::Relaxed);
         }
         if let Some(telemetry) = self.owner.listener_telemetry() {

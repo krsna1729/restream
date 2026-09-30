@@ -83,6 +83,8 @@ pub struct OwnerFamilyMetrics {
     pub caller_cancelled: u64,
     pub rx_ring_depth: u32,
     pub rx_ring_dropped: u64,
+    /// Provided-buffer exhaustion events, not discarded datagrams.
+    pub rx_buffer_exhaustions: u64,
     pub rx_truncated: u64,
 }
 

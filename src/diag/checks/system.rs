@@ -151,11 +151,12 @@ pub(in crate::diag) async fn check_srt_listener_owner(
     ));
     lines.push(format!("Live peers: {}", owner.peers));
     lines.push(format!(
-        "RX: {} packets, {} bytes, ring depth {}, ring drops {}, truncated {}",
+        "RX: {} packets, {} bytes, ring depth {}, ring drops {}, buffer exhaustions {}, truncated {}",
         owner.rx_packets,
         owner.rx_bytes,
         owner.rx_ring_depth,
         owner.rx_ring_dropped,
+        owner.rx_buffer_exhaustions,
         owner.rx_truncated
     ));
     lines.push(format!(
@@ -291,17 +292,21 @@ mod tests {
         stats
             .bonding_available
             .store(true, std::sync::atomic::Ordering::Relaxed);
+        stats
+            .ingress_owner
+            .rx_buffer_exhaustions
+            .store(7, std::sync::atomic::Ordering::Relaxed);
         let healthy = check_srt_listener_owner(8, &engine).await;
         assert_eq!(healthy.name, "SRT Listener Owner");
         assert!(healthy.issues.is_empty(), "{:?}", healthy.issues);
         assert!(healthy.stdout.contains("Owner faulted: false"));
+        assert!(healthy.stdout.contains("buffer exhaustions 7"));
         assert!(
             healthy
                 .stdout
                 .contains("Publisher telemetry: 0 dropped samples")
         );
         assert!(!healthy.stdout.contains("UDP recv queue"));
-
         let owner = &stats.ingress_owner;
         owner
             .faulted

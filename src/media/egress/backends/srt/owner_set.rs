@@ -823,6 +823,7 @@ impl SrtOwners {
                 rx_packets = owner.rx_packets,
                 rx_truncated = owner.rx_truncated,
                 rx_ring_dropped = owner.rx_ring_dropped,
+                rx_buffer_exhaustions = owner.rx_buffer_exhaustions,
                 tx_packets = owner.tx_packets,
                 tx_completed_ok = owner.tx_completed_ok,
                 tx_high_water = owner.tx_high_water,
@@ -898,6 +899,7 @@ impl SrtOwners {
                 caller_cancelled: pool.cancelled,
                 rx_ring_depth: rx.map_or(0, |stats| stats.depth as u32),
                 rx_ring_dropped: rx.map_or(0, |stats| stats.dropped),
+                rx_buffer_exhaustions: rx.map_or(0, |stats| stats.buffer_exhaustions),
                 rx_truncated: rx.map_or(0, |stats| stats.truncated),
             };
         }

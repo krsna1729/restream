@@ -160,7 +160,7 @@ fn srt_owner_json(
     family: &'static str,
     owner: &crate::media::egress::metrics::OwnerFamilyMetrics,
 ) -> serde_json::Value {
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "family": family,
         "present": owner.present,
         "faulted": owner.faulted,
@@ -214,7 +214,9 @@ fn srt_owner_json(
         "callerFailed": owner.caller_failed,
         "callerCancelled": owner.caller_cancelled,
         "peerGroupCollisions": owner.peer_group_collisions,
-    })
+    });
+    value["rxBufferExhaustions"] = owner.rx_buffer_exhaustions.into();
+    value
 }
 
 impl MediaEngine {
