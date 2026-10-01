@@ -629,7 +629,8 @@ pub async fn start_recording(
         result
     });
 
-    let feeder_result = crate::media::executor::run(
+    let feeder_result = crate::media::executor::run_with_class(
+        crate::media::executor::MediaServiceClass::Recording,
         cancel_token.clone(),
         feed_recording(
             pipeline_name,

@@ -405,6 +405,11 @@ pub fn malloc_arena_env() -> (Option<String>, Option<String>) {
     )
 }
 
+/// The media executor worker threads override (`RESTREAM_MEDIA_WORKERS`).
+pub fn media_executor_workers_env() -> Option<usize> {
+    env_optional_positive_usize("RESTREAM_MEDIA_WORKERS").map(|v| v.clamp(1, 64))
+}
+
 pub(crate) fn env_optional_positive_usize(name: &str) -> Option<usize> {
     std::env::var(name)
         .ok()

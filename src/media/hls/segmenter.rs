@@ -36,7 +36,8 @@ pub async fn start_hls_segmenter(
             cancel_token.clone(),
         )
         .await;
-    let result = crate::media::executor::run(
+    let result = crate::media::executor::run_with_class(
+        crate::media::executor::MediaServiceClass::HlsSegmenter,
         cancel_token.clone(),
         run_hls_segmenter(
             pipeline_id,
