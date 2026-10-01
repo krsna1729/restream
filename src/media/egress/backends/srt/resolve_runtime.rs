@@ -20,6 +20,7 @@ const SRT_RESOLVE_REQUEST_QUEUE_CAPACITY: usize = 1024;
 pub(crate) type ResolvingSrtShardBackendDefault = ResolvingSrtShardBackend<SrtShardBackend>;
 
 pub(crate) struct SrtResolveWorkerSet {
+    completion_sender: SyncSender<SrtResolvedConnect>,
     request_sender: Option<SyncSender<SrtResolveRequest>>,
     stopping: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
@@ -27,39 +28,53 @@ pub(crate) struct SrtResolveWorkerSet {
 
 impl SrtResolveWorkerSet {
     pub(crate) fn new(completion_sender: SyncSender<SrtResolvedConnect>) -> Self {
-        let (request_sender, request_receiver) =
-            mpsc::sync_channel::<SrtResolveRequest>(SRT_RESOLVE_REQUEST_QUEUE_CAPACITY);
-        let stopping = Arc::new(AtomicBool::new(false));
-        let worker_stopping = Arc::clone(&stopping);
-        let worker = std::thread::spawn(move || {
-            while let Ok(request) = request_receiver.recv() {
-                if worker_stopping.load(Ordering::SeqCst) {
-                    break;
-                }
-                let output_id = request.output_id.clone();
-                let generation = request.generation;
-                if super::resolve_srt_peer_hosts(request, completion_sender.clone()).is_err() {
-                    // An empty address list is the bounded failure completion:
-                    // the shard removes the matching pending connect instead
-                    // of leaving an unresolved output resident forever.
-                    let _ = completion_sender.send(SrtResolvedConnect {
-                        output_id,
-                        generation,
-                        peer_addrs: Vec::new(),
-                    });
-                }
-            }
-        });
         Self {
-            request_sender: Some(request_sender),
-            stopping,
-            worker: Some(worker),
+            completion_sender,
+            request_sender: None,
+            stopping: Arc::new(AtomicBool::new(false)),
+            worker: None,
         }
+    }
+
+    fn ensure_started(&mut self) -> Option<&SyncSender<SrtResolveRequest>> {
+        if self.request_sender.is_none() {
+            let (request_sender, request_receiver) =
+                mpsc::sync_channel::<SrtResolveRequest>(SRT_RESOLVE_REQUEST_QUEUE_CAPACITY);
+            let worker_stopping = Arc::clone(&self.stopping);
+            let completion_sender = self.completion_sender.clone();
+            let worker = std::thread::Builder::new()
+                .name("srt-dns-res".to_string())
+                .spawn(move || {
+                    while let Ok(request) = request_receiver.recv() {
+                        if worker_stopping.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        let output_id = request.output_id.clone();
+                        let generation = request.generation;
+                        if super::resolve_srt_peer_hosts(request, completion_sender.clone())
+                            .is_err()
+                        {
+                            let _ = completion_sender.send(SrtResolvedConnect {
+                                output_id,
+                                generation,
+                                peer_addrs: Vec::new(),
+                            });
+                        }
+                    }
+                })
+                .ok()?;
+            self.request_sender = Some(request_sender);
+            self.worker = Some(worker);
+        }
+        self.request_sender.as_ref()
     }
 
     /// Queue a bounded batch for the one resolver worker owned by this shard.
     fn spawn_batch(&mut self, requests: Vec<SrtResolveRequest>) {
-        let Some(sender) = self.request_sender.as_ref() else {
+        if requests.is_empty() {
+            return;
+        }
+        let Some(sender) = self.ensure_started() else {
             return;
         };
         for request in requests {
