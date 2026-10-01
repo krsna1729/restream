@@ -152,6 +152,7 @@ pub(super) async fn sample_resource_window(
             .into_iter()
             .collect();
     save_engine_health(env, api, &meta, "start").await;
+    save_media_executor(env, api, &meta, "start").await;
     let rated_started = Instant::now();
     let thread_ticks_start = super::thread_cpu::thread_group_ticks(stack.restream_pid);
     while rated_started.elapsed() < Duration::from_secs(env.sample_secs) {
@@ -292,6 +293,7 @@ pub(super) async fn sample_resource_window(
     }
     let thread_ticks_end = super::thread_cpu::thread_group_ticks(stack.restream_pid);
     let rated_secs = rated_started.elapsed().as_secs_f64();
+    save_media_executor(env, api, &meta, "end").await;
     save_pipeline_telemetry(env, api, &meta).await;
     let mut aggregate = summarize_resource_samples(meta, env.lifecycle, &samples);
     aggregate.delivery = super::delivery::summarize(&delivery_samples);
@@ -771,6 +773,24 @@ async fn save_engine_health(
     if let Ok(health) = api.get_json("/api/v1/engine/health").await {
         let stem = format!("{}-p{}-o{}", meta.scenario, meta.pipelines, meta.outputs);
         write_engine_health(env, &health, &stem, phase);
+    }
+}
+
+/// `/metrics/system` `mediaExecutor` (per-class poll busy time, per-worker busy
+/// time, queue depth). Cumulative; `start` and `end` bracket the rated window.
+async fn save_media_executor(
+    env: &ResourceSweepEnv,
+    api: &RampApi,
+    meta: &ResourceScenarioMeta<'_>,
+    phase: &str,
+) {
+    if let Ok(system) = api.get_json("/metrics/system?view=summary").await {
+        let stem = format!("{}-p{}-o{}", meta.scenario, meta.pipelines, meta.outputs);
+        let _ = std::fs::write(
+            env.work_dir
+                .join(format!("media-executor-{stem}-{phase}.json")),
+            serde_json::to_string_pretty(&system["mediaExecutor"]).unwrap_or_default(),
+        );
     }
 }
 
