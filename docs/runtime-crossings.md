@@ -127,8 +127,15 @@ Disk             blocking file writer threads
   carried all of it, `globalQueueDepth` 0–1, and `maxPollUs` was 62 ms (a
   lifetime maximum: a VM stall or startup, not shown to be work). The pool is
   far from loaded at this size, so no sizing law follows from one feed; the
-  open question is many feeds plus HLS and recording. Thread count peaked at 24
-  (16 for RTMP ingest alone), consistent with one egress shard group per SRT
-  feed sized `clamp(effective_cpus, 2, 8)` regardless of output count
-  (`retain_srt_fabric_runtime`, `SrtCpuParallel`), so N SRT feeds spawn
-  roughly N × shards threads. N-feed thread counts were not measured.
+  open question is many feeds plus HLS and recording. Per-feed egress
+  topology, measured (release, Restream pinned to 3 CPUs so `effective_cpus`
+  = 3, one RTMP-published pipeline with one SRT output to a local MediaMTX
+  per feed, 15 s settle): 1 / 4 / 8 feeds gave 17 / 32 / 50 threads and
+  76 / 165 / 280 MB RSS against 11–12 threads idle, i.e. each feed adds one
+  egress shard group of `clamp(effective_cpus, 2, 8)` threads
+  (`egress-shard-0..2`, one Compio runtime each) plus one `srt-dns-res`
+  thread, ≈ 4 threads and ≈ 28 MB (including the 12 MB source ring) per feed,
+  regardless of output count (`retain_srt_fabric_runtime`,
+  `SrtCpuParallel`). With all 6 CPUs that is 6 shard threads per feed: 8
+  feeds would run 48 shard threads on 6 CPUs. CPU cost per idle shard thread
+  and the SRT×N-feed throughput effect were not measured.
