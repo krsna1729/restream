@@ -274,51 +274,61 @@ pub struct RtmpListenerStats {
     pub rtmp_fd_exhaustion_errors: AtomicU64,
 }
 
+impl serde::Serialize for SrtIngressOwnerSnapshot {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("SrtIngressOwnerSnapshot", 41)?;
+        s.serialize_field("faulted", &self.faulted)?;
+        s.serialize_field("managedRx", &self.managed_rx)?;
+        s.serialize_field("serviceVisits", &self.service_visits)?;
+        s.serialize_field("serviceActions", &self.service_actions)?;
+        s.serialize_field("maintenanceActions", &self.maintenance_actions)?;
+        s.serialize_field("budgetExhausted", &self.budget_exhausted)?;
+        s.serialize_field("txCapacity", &self.tx_capacity)?;
+        s.serialize_field("txInFlight", &self.tx_in_flight)?;
+        s.serialize_field("txHighWater", &self.tx_high_water)?;
+        s.serialize_field("txExhaustions", &self.tx_exhaustions)?;
+        s.serialize_field("txPackets", &self.tx_packets)?;
+        s.serialize_field("txCompletedOk", &self.tx_completed_ok)?;
+        s.serialize_field("txFailed", &self.tx_failed)?;
+        s.serialize_field("rxPackets", &self.rx_packets)?;
+        s.serialize_field("rxBytes", &self.rx_bytes)?;
+        s.serialize_field("rxRingDepth", &self.rx_ring_depth)?;
+        s.serialize_field("rxRingDropped", &self.rx_ring_dropped)?;
+        s.serialize_field("rxBufferExhaustions", &self.rx_buffer_exhaustions)?;
+        s.serialize_field("rxTruncated", &self.rx_truncated)?;
+        s.serialize_field("peers", &self.peers)?;
+        s.serialize_field("policyRequests", &self.policy_requests)?;
+        s.serialize_field("policyRejections", &self.policy_rejections)?;
+        s.serialize_field("policyDeferred", &self.policy_deferred)?;
+        s.serialize_field("credentialFailures", &self.credential_failures)?;
+        s.serialize_field("commandDepthHighWater", &self.command_depth_hwm)?;
+        s.serialize_field("eventDepthHighWater", &self.event_depth_hwm)?;
+        s.serialize_field("eventBridgeFullVisits", &self.event_bridge_full_visits)?;
+        s.serialize_field("telemetryDropped", &self.telemetry_dropped)?;
+        s.serialize_field("deferredSends", &self.deferred_sends)?;
+        s.serialize_field("deferredSendsHighWater", &self.deferred_sends_hwm)?;
+        s.serialize_field("staleCommands", &self.stale_commands)?;
+        s.serialize_field("overloadDisconnects", &self.overload_disconnects)?;
+        s.serialize_field("sendFailures", &self.send_failures)?;
+        s.serialize_field("mediaPayloads", &self.media_payloads)?;
+        s.serialize_field("mediaWorkUs", &self.media_work_us)?;
+        s.serialize_field("mediaPassMaxUs", &self.media_pass_max_us)?;
+        s.serialize_field("mediaSlowPasses5ms", &self.media_slow_passes_5ms)?;
+        s.serialize_field("mediaSlowPasses20ms", &self.media_slow_passes_20ms)?;
+        s.serialize_field("mediaUnattachedDropped", &self.media_unattached_dropped)?;
+        s.serialize_field("mediaProbeHoldOverflows", &self.media_probe_hold_overflows)?;
+        s.serialize_field("mediaProbeAckMaxUs", &self.media_probe_ack_max_us)?;
+        s.end()
+    }
+}
+
 impl SrtIngressOwnerSnapshot {
     /// The status-API projection: camelCase, low-cardinality, no identities.
     pub fn to_json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "faulted": self.faulted,
-            "managedRx": self.managed_rx,
-            "serviceVisits": self.service_visits,
-            "serviceActions": self.service_actions,
-            "maintenanceActions": self.maintenance_actions,
-            "budgetExhausted": self.budget_exhausted,
-            "txCapacity": self.tx_capacity,
-            "txInFlight": self.tx_in_flight,
-            "txHighWater": self.tx_high_water,
-            "txExhaustions": self.tx_exhaustions,
-            "txPackets": self.tx_packets,
-            "txCompletedOk": self.tx_completed_ok,
-            "txFailed": self.tx_failed,
-            "rxPackets": self.rx_packets,
-            "rxBytes": self.rx_bytes,
-            "rxRingDepth": self.rx_ring_depth,
-            "rxRingDropped": self.rx_ring_dropped,
-            "rxBufferExhaustions": self.rx_buffer_exhaustions,
-            "rxTruncated": self.rx_truncated,
-            "peers": self.peers,
-            "policyRequests": self.policy_requests,
-            "policyRejections": self.policy_rejections,
-            "policyDeferred": self.policy_deferred,
-            "credentialFailures": self.credential_failures,
-            "commandDepthHighWater": self.command_depth_hwm,
-            "eventDepthHighWater": self.event_depth_hwm,
-            "eventBridgeFullVisits": self.event_bridge_full_visits,
-            "telemetryDropped": self.telemetry_dropped,
-            "deferredSends": self.deferred_sends,
-            "deferredSendsHighWater": self.deferred_sends_hwm,
-            "staleCommands": self.stale_commands,
-            "overloadDisconnects": self.overload_disconnects,
-            "sendFailures": self.send_failures,
-            "mediaPayloads": self.media_payloads,
-            "mediaWorkUs": self.media_work_us,
-            "mediaPassMaxUs": self.media_pass_max_us,
-            "mediaSlowPasses5ms": self.media_slow_passes_5ms,
-            "mediaSlowPasses20ms": self.media_slow_passes_20ms,
-            "mediaUnattachedDropped": self.media_unattached_dropped,
-            "mediaProbeHoldOverflows": self.media_probe_hold_overflows,
-            "mediaProbeAckMaxUs": self.media_probe_ack_max_us,
-        })
+        serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
     }
 }
