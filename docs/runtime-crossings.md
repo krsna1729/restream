@@ -137,5 +137,22 @@ Disk             blocking file writer threads
   thread, ≈ 4 threads and ≈ 28 MB (including the 12 MB source ring) per feed,
   regardless of output count (`retain_srt_fabric_runtime`,
   `SrtCpuParallel`). With all 6 CPUs that is 6 shard threads per feed: 8
-  feeds would run 48 shard threads on 6 CPUs. CPU cost per idle shard thread
-  and the SRT×N-feed throughput effect were not measured.
+  feeds would run 48 shard threads on 6 CPUs.
+  Cost of the multiplication, same host and pinning, 8 SRT outputs of 4
+  Mbit/s (32 Mbit/s egress) to MediaMTX, process CPU over a 20 s window, 2
+  interleaved reps: 1 feed × 8 outputs 33–46%, 2 × 4 51–57%, 4 × 2 59–67%,
+  8 × 1 74–80% (context switches 2,000 → 6,000 per second, 20 → 51 threads,
+  80 → 285 MB). Of the 8 × 1 total, egress shards are 64–68%, versus 31–42%
+  for 1 × 8; the media pool adds 3–5% for eight muxers against 0.4%.
+  Forcing one shard per feed (`wi37-shard-bench`, `RESTREAM_WI37_SRT_SHARDS=1`,
+  interleaved against the default of 3): 8 × 1 77% → 70% (−9%), 1 × 8 43% →
+  28% (−35%), threads 51 → 35, RSS 285 → 211 MB. Two causes are
+  confounded in the topology and not separated: shard-thread overhead, and lost
+  send coalescing when fewer outputs share a shard (outputs sharing a
+  destination port share sends). Delivery was not checked per output in this
+  probe, so a single saturated shard could look cheaper than it is: one shard
+  ran 28% at 8 outputs, so it saturates near 25–30 outputs at this bitrate.
+  This supports sizing SRT shards by output count per feed (the RTMP
+  `OutputCount` profile) instead of always claiming the CPU ceiling, but the
+  law is deliberately held provisional (Q-025) until a delivery-checked,
+  cross-host measurement exists.
