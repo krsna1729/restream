@@ -3207,12 +3207,14 @@ Open, in order:
      refinement: clear the shard wake gate only before parking, so a busy
      shard costs the producer one atomic and no channel push.
    - Step 5 (with 2a): several ingress owners per protocol.
-     - RTMP (written, branch `wi11/ingress-shards`, unbuilt): N owner
+     - RTMP (landed, default 1 until a ramp shows the scaling): N owner
        threads, each with its own `SO_REUSEPORT` listener on the port; the
        kernel spreads connections by 4-tuple hash, so there is no accept
-       hand-off. Connection limit and parser budget split evenly
-       (`RESTREAM_RTMP_INGRESS_OWNERS`, default 1 until a ramp shows the
-       scaling). All owners feed the one Tokio control-session loop.
+       hand-off. Connection limit and parser budget split exactly
+       (`RESTREAM_RTMP_INGRESS_OWNERS`). Accepting starts only once every
+       owner is ready; one failed owner cancels its siblings. All owners feed
+       the one Tokio control-session loop. Scaling evidence (owners 1 vs N at
+       RTMP×100/×1000) is still owed.
      - SRT (design, needs srt-rs work, confirm with the user first): the
        Compio `Owner` supports only a `PerPort` listener and
        `Promotion::Never`; there is no multi-acceptor Compio driver.
