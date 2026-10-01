@@ -3,14 +3,14 @@
 //! read current engine state plus recent outcomes, retry state, recording, and
 //! HLS activity without pushing those JSON concerns back into `MediaEngine`.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::atomic::Ordering;
-
 use super::status_projection as api_view_models;
 use crate::media::engine::MediaEngine;
 use crate::system_sampling::{
     CpuCapacitySnapshot, HostSettingsSnapshot, NofileLimitSnapshot, sample_host_settings,
 };
+use serde::Serialize;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::Ordering;
 
 const REQUIRED_RMEM_MAX: u64 = 26_214_400;
 const REQUIRED_WMEM_MAX: u64 = 8_388_608;
@@ -20,76 +20,106 @@ const REQUIRED_WMEM_MAX: u64 = 8_388_608;
 /// reconciler's 1s default tick so ordinary idle gaps never misreport.
 const EGRESS_FABRIC_SHARD_STALL_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
 
-fn nofile_limit_json(configured: u64, snapshot: NofileLimitSnapshot) -> serde_json::Value {
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NofileLimitJson {
+    pub configured: u64,
+    pub soft: Option<u64>,
+    pub hard: Option<u64>,
+    pub satisfied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unsupported: Option<bool>,
+}
+
+fn nofile_limit_json(configured: u64, snapshot: NofileLimitSnapshot) -> NofileLimitJson {
     match snapshot {
-        NofileLimitSnapshot::Available { soft, hard } => serde_json::json!({
-            "configured": configured,
-            "soft": soft,
-            "hard": hard,
-            "satisfied": soft >= configured,
-        }),
-        NofileLimitSnapshot::ReadFailed => serde_json::json!({
-            "configured": configured,
-            "soft": null,
-            "hard": null,
-            "satisfied": false,
-            "error": "getrlimit failed",
-        }),
+        NofileLimitSnapshot::Available { soft, hard } => NofileLimitJson {
+            configured,
+            soft: Some(soft),
+            hard: Some(hard),
+            satisfied: soft >= configured,
+            error: None,
+            unsupported: None,
+        },
+        NofileLimitSnapshot::ReadFailed => NofileLimitJson {
+            configured,
+            soft: None,
+            hard: None,
+            satisfied: false,
+            error: Some("getrlimit failed"),
+            unsupported: None,
+        },
         #[cfg(not(unix))]
-        NofileLimitSnapshot::Unsupported => serde_json::json!({
-            "configured": configured,
-            "soft": null,
-            "hard": null,
-            "satisfied": true,
-            "unsupported": true,
-        }),
+        NofileLimitSnapshot::Unsupported => NofileLimitJson {
+            configured,
+            soft: None,
+            hard: None,
+            satisfied: true,
+            error: None,
+            unsupported: Some(true),
+        },
     }
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HostSettingRow {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub current: serde_json::Value,
+    pub required: Option<u64>,
+    pub unit: &'static str,
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
 fn host_info_setting_json(
-    key: &str,
-    label: &str,
+    key: &'static str,
+    label: &'static str,
     current: serde_json::Value,
-    unit: &str,
+    unit: &'static str,
     detail: impl Into<String>,
-) -> serde_json::Value {
-    serde_json::json!({
-        "key": key,
-        "label": label,
-        "current": current,
-        "required": null,
-        "unit": unit,
-        "status": "ok",
-        "detail": detail.into(),
-    })
+) -> HostSettingRow {
+    HostSettingRow {
+        key,
+        label,
+        current,
+        required: None,
+        unit,
+        status: "ok",
+        detail: Some(detail.into()),
+    }
 }
 
 fn host_setting_json(
-    key: &str,
-    label: &str,
+    key: &'static str,
+    label: &'static str,
     current: Option<u64>,
     required: u64,
-    unit: &str,
+    unit: &'static str,
     detail: Option<String>,
-) -> serde_json::Value {
+) -> HostSettingRow {
     let status = current.map_or(
         "unknown",
         |value| {
             if value >= required { "ok" } else { "warning" }
         },
     );
-    serde_json::json!({
-        "key": key,
-        "label": label,
-        "current": current,
-        "required": required,
-        "unit": unit,
-        "status": status,
-        "detail": detail,
-    })
+    HostSettingRow {
+        key,
+        label,
+        current: serde_json::json!(current),
+        required: Some(required),
+        unit,
+        status,
+        detail,
+    }
 }
 
-fn cpu_capacity_settings(snapshot: &CpuCapacitySnapshot) -> Vec<serde_json::Value> {
+fn cpu_capacity_settings(snapshot: &CpuCapacitySnapshot) -> Vec<HostSettingRow> {
     let mut rows = Vec::new();
     if let Some(cpus) = snapshot.available_parallelism {
         rows.push(host_info_setting_json(
@@ -132,17 +162,18 @@ fn cpu_capacity_settings(snapshot: &CpuCapacitySnapshot) -> Vec<serde_json::Valu
     rows
 }
 
-fn host_settings_json(engine: &MediaEngine, snapshot: &HostSettingsSnapshot) -> serde_json::Value {
-    let nofile = nofile_limit_json(engine.config.tuning.nofile_limit, snapshot.nofile);
-    let nofile_soft = nofile.get("soft").and_then(|value| value.as_u64());
-    let nofile_hard = nofile.get("hard").and_then(|value| value.as_u64());
-    let nofile_detail = nofile_hard.map(|hard| format!("hard limit {hard}"));
+fn host_settings_json(
+    engine: &MediaEngine,
+    snapshot: &HostSettingsSnapshot,
+    nofile: &NofileLimitJson,
+) -> Vec<HostSettingRow> {
+    let nofile_detail = nofile.hard.map(|hard| format!("hard limit {hard}"));
 
     let mut rows = vec![
         host_setting_json(
             "runtime.nofile",
             "Open file descriptors",
-            nofile_soft,
+            nofile.soft,
             engine.config.tuning.nofile_limit,
             "fds",
             nofile_detail,
@@ -189,7 +220,58 @@ fn host_settings_json(engine: &MediaEngine, snapshot: &HostSettingsSnapshot) -> 
         ),
     ];
     rows.extend(cpu_capacity_settings(&snapshot.cpu_capacity));
-    serde_json::json!(rows)
+    rows
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RtmpListenerHealthJson {
+    accept_errors: u64,
+    fd_exhaustion_errors: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SrtListenerHealthJson<'a> {
+    bonding_available: bool,
+    ingress_owner: &'a crate::media::snapshots::SrtIngressOwnerSnapshot,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TuningHealthJson {
+    output_max_retries: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeLimitsHealthJson {
+    nofile: NofileLimitJson,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EngineHealthSnapshotJson<'a> {
+    generated_at: String,
+    status: &'static str,
+    pipelines: &'a serde_json::Map<String, serde_json::Value>,
+    stages: &'a serde_json::Map<String, serde_json::Value>,
+    runtime_limits: RuntimeLimitsHealthJson,
+    host_settings: Vec<HostSettingRow>,
+    rtmp_listener: RtmpListenerHealthJson,
+    srt_listener: SrtListenerHealthJson<'a>,
+    egress_fabric_shards:
+        &'a [crate::media::engine_egress_fabric_diagnostics::EgressFabricShardStatus],
+    tuning: TuningHealthJson,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EngineHealthSummarySnapshotJson<'a> {
+    status: &'static str,
+    pipelines: &'a serde_json::Map<String, serde_json::Value>,
+    runtime_limits: RuntimeLimitsHealthJson,
+    host_settings: Vec<HostSettingRow>,
 }
 
 pub(crate) async fn output_status(
@@ -441,12 +523,7 @@ pub(crate) async fn health_snapshot(
         }
     }
 
-    let ingress_owner = engine
-        .runtime
-        .listener_stats
-        .ingress_owner
-        .snapshot()
-        .to_json();
+    let ingress_owner = engine.runtime.listener_stats.ingress_owner.snapshot();
     let bonding_available = engine
         .runtime
         .listener_stats
@@ -475,37 +552,33 @@ pub(crate) async fn health_snapshot(
     }
 
     let host_settings = sample_host_settings();
-    let egress_fabric_shards: Vec<serde_json::Value> = engine
+    let nofile = nofile_limit_json(engine.config.tuning.nofile_limit, host_settings.nofile);
+    let host_settings_rows = host_settings_json(engine, &host_settings, &nofile);
+    let egress_fabric_shards = engine
         .egress_fabric_shard_statuses(EGRESS_FABRIC_SHARD_STALL_AFTER)
-        .await
-        .iter()
-        .map(|status| status.to_json())
-        .collect();
-    serde_json::json!({
-        "generatedAt": chrono::Utc::now().to_rfc3339(),
-        "status": "ready",
-        "pipelines": serde_json::Value::Object(pipelines_json),
-        "stages": serde_json::Value::Object(stages_json),
-        "runtimeLimits": {
-            "nofile": nofile_limit_json(
-                engine.config.tuning.nofile_limit,
-                host_settings.nofile,
-            ),
+        .await;
+
+    let snapshot = EngineHealthSnapshotJson {
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        status: "ready",
+        pipelines: &pipelines_json,
+        stages: &stages_json,
+        runtime_limits: RuntimeLimitsHealthJson { nofile },
+        host_settings: host_settings_rows,
+        rtmp_listener: RtmpListenerHealthJson {
+            accept_errors: rtmp_accept_errors,
+            fd_exhaustion_errors: rtmp_fd_exhaustion_errors,
         },
-        "hostSettings": host_settings_json(engine, &host_settings),
-        "rtmpListener": {
-            "acceptErrors": rtmp_accept_errors,
-            "fdExhaustionErrors": rtmp_fd_exhaustion_errors,
+        srt_listener: SrtListenerHealthJson {
+            bonding_available,
+            ingress_owner: &ingress_owner,
         },
-        "srtListener": {
-            "bondingAvailable": bonding_available,
-            "ingressOwner": ingress_owner,
+        egress_fabric_shards: &egress_fabric_shards,
+        tuning: TuningHealthJson {
+            output_max_retries: engine.config.tuning.output_max_retries,
         },
-        "egressFabricShards": egress_fabric_shards,
-        "tuning": {
-            "outputMaxRetries": engine.config.tuning.output_max_retries,
-        },
-    })
+    };
+    serde_json::to_value(&snapshot).unwrap_or(serde_json::Value::Null)
 }
 
 pub(crate) async fn health_summary_snapshot(
@@ -650,17 +723,15 @@ pub(crate) async fn health_summary_snapshot(
     }
 
     let host_settings = sample_host_settings();
-    serde_json::json!({
-        "status": "ready",
-        "pipelines": serde_json::Value::Object(pipelines_json),
-        "runtimeLimits": {
-            "nofile": nofile_limit_json(
-                engine.config.tuning.nofile_limit,
-                host_settings.nofile,
-            ),
-        },
-        "hostSettings": host_settings_json(engine, &host_settings),
-    })
+    let nofile = nofile_limit_json(engine.config.tuning.nofile_limit, host_settings.nofile);
+    let host_settings_rows = host_settings_json(engine, &host_settings, &nofile);
+    let summary = EngineHealthSummarySnapshotJson {
+        status: "ready",
+        pipelines: &pipelines_json,
+        runtime_limits: RuntimeLimitsHealthJson { nofile },
+        host_settings: host_settings_rows,
+    };
+    serde_json::to_value(&summary).unwrap_or(serde_json::Value::Null)
 }
 
 #[cfg(test)]
@@ -676,9 +747,9 @@ mod tests {
     #[test]
     fn host_setting_json_status_boundary_is_inclusive_at_required() {
         let at_required = host_setting_json("k", "label", Some(100), 100, "bytes", None);
-        assert_eq!(at_required["status"], "ok");
+        assert_eq!(at_required.status, "ok");
         let one_below = host_setting_json("k", "label", Some(99), 100, "bytes", None);
-        assert_eq!(one_below["status"], "warning");
+        assert_eq!(one_below.status, "warning");
     }
 
     #[test]
@@ -687,15 +758,15 @@ mod tests {
         // not be conflated with a below-threshold "warning": it is a
         // distinct "unknown" status regardless of how large `required` is.
         let value = host_setting_json("k", "label", None, u64::MAX, "bytes", None);
-        assert_eq!(value["status"], "unknown");
-        assert!(value["current"].is_null());
-        assert_eq!(value["required"], u64::MAX);
+        assert_eq!(value.status, "unknown");
+        assert!(value.current.is_null());
+        assert_eq!(value.required, Some(u64::MAX));
     }
 
     #[test]
     fn host_setting_json_passes_through_none_detail_as_null() {
         let value = host_setting_json("k", "label", Some(1), 1, "bytes", None);
-        assert!(value["detail"].is_null());
+        assert!(value.detail.is_none());
     }
 
     #[tokio::test]

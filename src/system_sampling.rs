@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use sysinfo::System;
 
@@ -89,8 +90,27 @@ struct EngineCpuUsageSnapshot {
 
 static CHILD_PROCESS_CPU_SAMPLES: OnceLock<Mutex<HashMap<u32, CpuSample>>> = OnceLock::new();
 static ENGINE_CPU_SAMPLE: OnceLock<Mutex<Option<EngineCpuSample>>> = OnceLock::new();
+static HOST_SETTINGS_CACHE: OnceLock<Mutex<Option<(Instant, HostSettingsSnapshot)>>> =
+    OnceLock::new();
+const HOST_SETTINGS_CACHE_TTL: Duration = Duration::from_secs(15);
 
 pub(crate) fn sample_host_settings() -> HostSettingsSnapshot {
+    let cache = HOST_SETTINGS_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = cache.lock() {
+        if let Some((instant, snapshot)) = guard.as_ref()
+            && instant.elapsed() < HOST_SETTINGS_CACHE_TTL
+        {
+            return snapshot.clone();
+        }
+        let fresh = sample_host_settings_uncached();
+        *guard = Some((Instant::now(), fresh.clone()));
+        fresh
+    } else {
+        sample_host_settings_uncached()
+    }
+}
+
+fn sample_host_settings_uncached() -> HostSettingsSnapshot {
     HostSettingsSnapshot {
         nofile: sample_nofile_limit(),
         receive_buffer_max: proc_sys_u64("net.core.rmem_max"),
