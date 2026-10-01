@@ -104,3 +104,19 @@ Disk             blocking file writer threads
   (~140 by its on-CPU cost). Moving demux off Tokio (WI11) does not lift it;
   more Owners on the port (SO_REUSEPORT) would. The RTMP ingress owner is
   ~0.66% per publisher (~150 per core).
+- **M5** RTMP ingress owners, what is shared. Per-packet publish touches
+  only owner-local state (`RtmpPublisherMedia`, per-owner `ParserBudget`,
+  connection cap) plus the pipeline's own ring (`Arc::new(MediaPacket)` per
+  packet, `notify_waiters` and the publication wake per publish). Shared
+  across owners: the process allocator (glibc arenas default to 2, and a
+  packet is freed by whichever thread drops its last reference, owner or
+  reader), the single Tokio
+  control-session consumer (lifecycle, probe and 0.5 Hz quality only), the
+  engine registries (per-session setup only), the kernel (reuseport group,
+  loopback softirq, io_uring wakeups/IPIs; vCPU IPIs are expensive under
+  KVM). Measured at N ≤ 4 on 6 vCPUs: no contention signature (weak scaling
+  flat); losses are load dilution per owner and hash skew. Untested
+  candidates if a larger host shows inflation at fixed load per owner:
+  `MALLOC_ARENA_MAX` ≥ owners + shards, per-owner packet/buffer pools,
+  CPU-aligned connection steering (`SO_ATTACH_REUSEPORT_CBPF` on CPU id or
+  `SO_INCOMING_CPU`), and coalescing the per-publish `Notify`.
