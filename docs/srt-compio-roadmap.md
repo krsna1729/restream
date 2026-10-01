@@ -3277,9 +3277,11 @@ Open, in order:
    trees per request (health snapshot 7–10% of Restream samples at RTMP×100).
    It does not interrupt egress (the API reads published atomics and
    snapshots); it costs CONTROL CPU. Typed serialization and a short-TTL
-   cache for `sample_host_settings` landed in #196; still open: re-profile
-   RTMP×100 and quantify at 1000 outputs, and a lighter delivery endpoint for
-   the harness.
+   cache for `sample_host_settings` landed in #196. Measured per request at
+   500 live outputs (runtime-crossings O2): health −45%, `/metrics/system`
+   summary −93%, telemetry endpoints unchanged; a sweep tick still costs
+   ~32% of a core in Tokio. Next: stop the double health poll, a compact
+   delivery view, per-output detail on request.
 6. **SRT per-output cost** (~2.9% of a core per 8 Mbit/s output, ~20× RTMP):
    srt-rs per-packet protocol work; backlog in
    [media-copy-audit.md](media-copy-audit.md#srt-rs-backlog-evidence-backed).

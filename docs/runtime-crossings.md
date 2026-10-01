@@ -68,7 +68,7 @@ Disk             blocking file writer threads
 | # | Crossing | Finding | Verdict |
 |---|---|---|---|
 | O1 | API telemetry → host/process sampling (`/metrics/system`, status, resource map, agent context) | Each request built a fresh `sysinfo::System::new_all()` and `refresh_all()`: every process on the host, with command lines, environments and per-thread task lists, on a Tokio worker. The capacity harness requests `/metrics/system` on every sampling tick and the dashboard polls it. In the RTMP×100 fan-out profile `restream-tokio` was 48.9% of Restream samples; 39.6% was axum request handling and 24.5% `build_system_metrics_snapshot` (22.4% `sysinfo::refresh_procs`). Media work on Tokio was small: the SRT ingest loop ~2% and TS demux < 1%. The host CPU% it reported was also wrong: `global_cpu_usage()` read from a just-created `System` has no previous sample to diff against. | **Fixed.** One long-lived sampler (`system_sampling::sampled_system`) refreshes host CPU usage (a real delta between calls), memory, and only Restream plus its children (`/proc/self/task/*/children`). Symbol-resolved release profiles, SRT → 100 RTMP outputs: `build_system_metrics_snapshot` 24.5% → 1.2% of Restream samples (`sysinfo::refresh_procs` 22.4% → gone). Interleaved A/B (5 reps, release binaries): Restream CPU median 49.1% → 40.1% (mean 49.6 → 37.9), delivery 100/100 throughout. The next Tokio item is the health snapshot at 9.5% of samples, which the harness also polls every second. |
-| O2 | API observation cost (health, telemetry) | Release profile RTMP×100 at 43b68dc0 (`symprof/now-rtmp100`, Restream ≈0.39 cores): API handling ~21% of Restream samples; health snapshot 7–10%, pipeline/engine telemetry ~5.5%, host sampling (sysinfo + `sample_host_settings`) ~2.5%. Inside the health snapshot, allocator calls are ~45% of its samples and `serde_json::Value` serialization ~36%; the per-output projection itself (`egress_runtime_json`) ~4%. The cost is building a `Value` tree per request and grows with output count; the capacity harness polls health and telemetry every second, so ramp CPU includes it. `sample_host_settings` rereads ~6 `/proc` and cgroup files per call (~1%). | **Fix landed (#196: typed serialization, host settings cache); re-measurement pending.** The API only reads what shards and leaves already publish (atomics, small state-change mutexes, the 1 Hz quality snapshot); it sends no shard commands and never waits on a shard thread, so it does not interrupt egress. It costs Tokio CPU on Restream's cores (which inflates ramp CPU and competes only when a rung is CPU-bound) and competes only with CONTROL work, since ingest and container media no longer run on the control runtime. The before numbers above are from before #196; repeat the RTMP×100 profile and quantify at 1000 outputs before calling it closed. A lighter delivery endpoint for the harness is still a candidate. |
+| O2 | API observation cost (health, telemetry) | Release profile RTMP×100 at 43b68dc0 (`symprof/now-rtmp100`, Restream ≈0.39 cores): API handling ~21% of Restream samples; health snapshot 7–10%, pipeline/engine telemetry ~5.5%, host sampling (sysinfo + `sample_host_settings`) ~2.5%. Inside the health snapshot, allocator calls are ~45% of its samples and `serde_json::Value` serialization ~36%; the per-output projection itself (`egress_runtime_json`) ~4%. The cost is building a `Value` tree per request and grows with output count; the capacity harness polls health and telemetry every second, so ramp CPU includes it. `sample_host_settings` rereads ~6 `/proc` and cgroup files per call (~1%). | **Partly fixed; the remaining cost is payload size.** #196 (typed serialization, host settings cache) measured per request (2026-10-01, release, 6-vCPU KVM guest, one pipeline with 500 live `sink://` outputs, Restream on CPUs 0–2, `restream-tokio` thread CPU minus interleaved idle windows, 3 windows × 2 interleaved reps per arm): `/api/v1/engine/health` 171 → 94 ms CPU (2.9 → 1.6 MB, −45%); `/metrics/system?view=summary` 78 → 5 ms (1.29 MB → 10 KB, −93%); `/api/v1/engine/telemetry` 70 → 65 ms and `/api/v1/pipelines/{id}/telemetry` 70 → 63 ms (1.56 MB each, unchanged within noise). Cost tracks bytes serialized (≈41–57 µs per KB, ≈3.2 KB per output per response). One sweep tick polls telemetry, health, summary, then health and pipeline telemetry again (`delivery::sample`): 560 → 320 ms of Tokio CPU per second at 500 outputs, i.e. ~32% of a core is still observation; payloads grow with output count (1000 outputs not measured). Sweep-level A/B (RTMP×100/×1000, SRT×50) could not resolve #196: the same binary's process CPU varied 18–27% (×100) and 88–130% (×1000) between reps. The API only reads what shards and leaves already publish and sends no shard commands, so it does not interrupt egress; it competes only with CONTROL work. Remaining candidates: stop polling health twice per tick, a compact delivery/summary view for the harness and dashboard, and per-output detail on request instead of in every response. |
 
 ## Open measurement items
 
@@ -120,3 +120,39 @@ Disk             blocking file writer threads
   `MALLOC_ARENA_MAX` ≥ owners + shards, per-owner packet/buffer pools,
   CPU-aligned connection steering (`SO_ATTACH_REUSEPORT_CBPF` on CPU id or
   `SO_INCOMING_CPU`), and coalescing the per-publish `Notify`.
+- **M6** Media executor and SRT feed topology. One SRT feed at 4 Mbit/s with 4
+  and 16 outputs (2026-10-01, release, harness `media-executor-*-start/end.json`
+  window deltas): `sharedTsMux` ran ~27 polls/s for 146–174 ms of poll time per
+  15 s (≈1% of one worker), the other classes were idle, two of four workers
+  carried all of it, `globalQueueDepth` 0–1, and `maxPollUs` was 62 ms (a
+  lifetime maximum: a VM stall or startup, not shown to be work). The pool is
+  far from loaded at this size, so no sizing law follows from one feed; the
+  open question is many feeds plus HLS and recording. Per-feed egress
+  topology, measured (release, Restream pinned to 3 CPUs so `effective_cpus`
+  = 3, one RTMP-published pipeline with one SRT output to a local MediaMTX
+  per feed, 15 s settle): 1 / 4 / 8 feeds gave 17 / 32 / 50 threads and
+  76 / 165 / 280 MB RSS against 11–12 threads idle, i.e. each feed adds one
+  egress shard group of `clamp(effective_cpus, 2, 8)` threads
+  (`egress-shard-0..2`, one Compio runtime each) plus one `srt-dns-res`
+  thread, ≈ 4 threads and ≈ 28 MB (including the 12 MB source ring) per feed,
+  regardless of output count (`retain_srt_fabric_runtime`,
+  `SrtCpuParallel`). With all 6 CPUs that is 6 shard threads per feed: 8
+  feeds would run 48 shard threads on 6 CPUs.
+  Cost of the multiplication, same host and pinning, 8 SRT outputs of 4
+  Mbit/s (32 Mbit/s egress) to MediaMTX, process CPU over a 20 s window, 2
+  interleaved reps: 1 feed × 8 outputs 33–46%, 2 × 4 51–57%, 4 × 2 59–67%,
+  8 × 1 74–80% (context switches 2,000 → 6,000 per second, 20 → 51 threads,
+  80 → 285 MB). Of the 8 × 1 total, egress shards are 64–68%, versus 31–42%
+  for 1 × 8; the media pool adds 3–5% for eight muxers against 0.4%.
+  Forcing one shard per feed (`wi37-shard-bench`, `RESTREAM_WI37_SRT_SHARDS=1`,
+  interleaved against the default of 3): 8 × 1 77% → 70% (−9%), 1 × 8 43% →
+  28% (−35%), threads 51 → 35, RSS 285 → 211 MB. Two causes are
+  confounded in the topology and not separated: shard-thread overhead, and lost
+  send coalescing when fewer outputs share a shard (outputs sharing a
+  destination port share sends). Delivery was not checked per output in this
+  probe, so a single saturated shard could look cheaper than it is: one shard
+  ran 28% at 8 outputs, so it saturates near 25–30 outputs at this bitrate.
+  This supports sizing SRT shards by output count per feed (the RTMP
+  `OutputCount` profile) instead of always claiming the CPU ceiling, but the
+  law is deliberately held provisional (Q-025) until a delivery-checked,
+  cross-host measurement exists.
