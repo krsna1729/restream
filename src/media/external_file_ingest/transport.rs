@@ -34,15 +34,19 @@ pub(super) async fn pump_stdout(
             ));
         }
     };
-    crate::media::executor::run(runtime.registration.cancel_token.clone(), async move {
-        // Keep the descriptor's nonblocking flags; from_std registers it with
-        // the currently entered MEDIA runtime, not its original CONTROL reactor.
-        let result = match ChildStdout::from_std(std::process::ChildStdout::from(stdout)) {
-            Ok(stdout) => pump_stdout_inner(&runtime, stdout, &mut timestamps).await,
-            Err(error) => Err(format!("Failed to register ffmpeg stdout: {error}")),
-        };
-        (timestamps, result)
-    })
+    crate::media::executor::run_with_class(
+        crate::media::executor::MediaServiceClass::FileIngest,
+        runtime.registration.cancel_token.clone(),
+        async move {
+            // Keep the descriptor's nonblocking flags; from_std registers it with
+            // the currently entered MEDIA runtime, not its original CONTROL reactor.
+            let result = match ChildStdout::from_std(std::process::ChildStdout::from(stdout)) {
+                Ok(stdout) => pump_stdout_inner(&runtime, stdout, &mut timestamps).await,
+                Err(error) => Err(format!("Failed to register ffmpeg stdout: {error}")),
+            };
+            (timestamps, result)
+        },
+    )
     .await
 }
 

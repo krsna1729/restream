@@ -199,18 +199,22 @@ impl StageRuntimeManager {
                 stage = %key,
                 "spawning audio-router stage"
             );
-            let _ = crate::media::executor::spawn(cancel.clone(), async move {
-                crate::media::transcoder::start_audio_router(
-                    pipeline_id,
-                    routing,
-                    source_ring,
-                    output_ring,
-                    engine,
-                    cancel,
-                    key,
-                )
-                .await;
-            });
+            let _ = crate::media::executor::spawn_with_class(
+                crate::media::executor::MediaServiceClass::AudioRouter,
+                cancel.clone(),
+                async move {
+                    crate::media::transcoder::start_audio_router(
+                        pipeline_id,
+                        routing,
+                        source_ring,
+                        output_ring,
+                        engine,
+                        cancel,
+                        key,
+                    )
+                    .await;
+                },
+            );
             return;
         }
 

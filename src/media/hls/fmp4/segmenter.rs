@@ -37,7 +37,8 @@ pub async fn start_hls_fmp4_segmenter(
             cancel_token.clone(),
         )
         .await;
-    let result = crate::media::executor::run(
+    let result = crate::media::executor::run_with_class(
+        crate::media::executor::MediaServiceClass::HlsFmp4,
         cancel_token.clone(),
         run_hls_fmp4_segmenter(
             pipeline_id,

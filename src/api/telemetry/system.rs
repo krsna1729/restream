@@ -144,6 +144,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
             },
             "engine": engine,
             "capacity": capacity,
+            "mediaExecutor": crate::media::executor::snapshot(),
             "egressShards": egress_shards,
             "ioUring": io_uring,
             "rtmps": {
@@ -187,6 +188,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
             },
             "engine": engine,
             "capacity": capacity,
+            "mediaExecutor": crate::media::executor::snapshot(),
             "egressShards": egress_shards,
             "ioUring": io_uring,
             "rtmps": {
