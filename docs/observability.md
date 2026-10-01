@@ -510,6 +510,30 @@ faults as issues. Buffer exhaustion is informational, not a packet-loss alarm.
 The active ingest selects the RTMP, SRT, or file check set. Returns `404`
 without an active ingest.
 
+### Media executor (`mediaExecutor`)
+
+Both summary and full `GET /metrics/system` responses include `mediaExecutor`,
+the `restream-media` pool that runs shared SRT TS muxing, HLS packaging,
+recording preparation, audio routing and file-ingest demux. All counters are
+cumulative; compute rates from two snapshots.
+
+- `classes[]`: per service class, `active` services, `polls` and `busyUs`
+  (wall time spent inside the services' `poll` calls, not service lifetime) and
+  `maxPollUs` (longest single poll). Window utilization is
+  `Δ busyUs / (Δ wall µs × configuredWorkers)`; demand per wake is
+  `Δ busyUs / Δ polls`.
+- `workers[]`: per Tokio worker `busyUs` and `parks`, plus
+  `globalQueueDepth`. These are empty/zero until the first media service starts
+  the runtime.
+- `queueLatency*`: spawn-to-first-poll delay of newly started services only.
+
+`busyUs` is wall time. On a VM the hypervisor can deschedule a vCPU inside a
+poll without the guest reporting steal (measured 20–128 ms gaps on the capacity
+host), so busy time inflates on such hosts. A `maxPollUs` in the tens of
+milliseconds against microsecond-scale polls indicates a stall rather than
+work; compare with the capacity ramp's host jitter probe before sizing
+`RESTREAM_MEDIA_WORKERS`.
+
 ## Known instrumentation gaps
 
 These should be fixed before adding new timing work:
