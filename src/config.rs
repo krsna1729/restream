@@ -298,6 +298,9 @@ pub struct AppConfig {
     pub backend_policy: BackendPolicy,
     pub rtmp_backlog: u32,
     pub rtmp_max_connections: usize,
+    /// Number of parallel RTMP ingress Compio owner threads on the listening port.
+    /// Connection limit and parser budget are split evenly between them.
+    pub rtmp_ingress_owners: usize,
     /// Largest inbound RTMP message a publisher may declare; longer ones are
     /// rejected before their payload is buffered.
     pub rtmp_max_message_bytes: usize,
@@ -641,6 +644,7 @@ impl Default for AppConfig {
             },
             rtmp_backlog: 1024,
             rtmp_max_connections: 512,
+            rtmp_ingress_owners: 1,
             rtmp_max_message_bytes: 8 * 1024 * 1024,
             rtmp_ingest_parser_budget_bytes: 256 * 1024 * 1024,
             rtmp_handshake_timeout_ms: 10_000,
@@ -696,6 +700,7 @@ impl AppConfig {
         let backend_policy = backend_policy_from_env();
         let rtmp_backlog = env_u32("RESTREAM_RTMP_LISTENER_BACKLOG", 1024);
         let rtmp_max_connections = env_usize("RESTREAM_RTMP_MAX_CONNECTIONS", 512).clamp(1, 16384);
+        let rtmp_ingress_owners = env_usize("RESTREAM_RTMP_INGRESS_OWNERS", 1).clamp(1, 64);
         let rtmp_max_message_bytes = env_usize("RESTREAM_RTMP_MAX_MESSAGE_BYTES", 8 * 1024 * 1024)
             .clamp(64 * 1024, 0x00FF_FFFF);
         let rtmp_ingest_parser_budget_bytes = env_usize(
@@ -799,6 +804,7 @@ impl AppConfig {
             backend_policy,
             rtmp_backlog,
             rtmp_max_connections,
+            rtmp_ingress_owners,
             rtmp_max_message_bytes,
             rtmp_ingest_parser_budget_bytes,
             rtmp_handshake_timeout_ms,
@@ -923,6 +929,7 @@ impl AppConfig {
             "rtmp": {
                 "backlog": self.rtmp_backlog,
                 "maxConnections": self.rtmp_max_connections,
+                "ingressOwners": self.rtmp_ingress_owners,
                 "maxMessageBytes": self.rtmp_max_message_bytes,
                 "ingestParserBudgetBytes": self.rtmp_ingest_parser_budget_bytes,
                 "handshakeTimeoutMs": self.rtmp_handshake_timeout_ms,

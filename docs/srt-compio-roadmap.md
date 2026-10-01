@@ -3207,12 +3207,25 @@ Open, in order:
      refinement: clear the shard wake gate only before parking, so a busy
      shard costs the producer one atomic and no channel push.
    - Step 5 (with 2a): several ingress owners per protocol.
-     - RTMP (written, branch `wi11/ingress-shards`, unbuilt): N owner
+     - RTMP (landed, default 1 until a ramp shows the scaling): N owner
        threads, each with its own `SO_REUSEPORT` listener on the port; the
        kernel spreads connections by 4-tuple hash, so there is no accept
-       hand-off. Connection limit and parser budget split evenly
-       (`RESTREAM_RTMP_INGRESS_OWNERS`, default 1 until a ramp shows the
-       scaling). All owners feed the one Tokio control-session loop.
+       hand-off. Connection limit and parser budget split exactly
+       (`RESTREAM_RTMP_INGRESS_OWNERS`). Accepting starts only once every
+       owner is ready; one failed owner cancels its siblings. All owners feed
+       the one Tokio control-session loop. Release A/B (2026-10-01, 6-CPU
+       KVM host, RTMP ingest only, 8 Mbit/s publishers, offered load matched
+       at 7.75–7.82 Mbit/s per publisher, 2 interleaved reps, window means,
+       CPU normalized by received Mbit/s from `pipeline-telemetry`
+       `bytesReceived`/`uptimeSecs`): one owner costs 7.1–7.6 (32
+       publishers) and 5.9 (64) % of a core per 100 Mbit/s; four owners
+       cost 9.9–10.5 and 7.6–8.3, i.e. +28–40% on the owner threads at
+       loads one owner carries easily (no throughput gain to buy). Owner
+       count 1 against the pre-change binary (2759a356) is inside run-to-run
+       spread (owner 7.4–7.6 vs 7.2–7.4 at 32, 6.2–7.0 vs 5.8–6.3 at 64).
+       Keep the default at 1; raise it only when one owner saturates
+       (~150 publishers per core at 8 Mbit/s), which this host cannot drive,
+       so a benefit past saturation is unmeasured.
      - SRT (design, needs srt-rs work, confirm with the user first): the
        Compio `Owner` supports only a `PerPort` listener and
        `Promotion::Never`; there is no multi-acceptor Compio driver.

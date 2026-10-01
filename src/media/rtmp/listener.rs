@@ -1,4 +1,4 @@
-//! RTMP TCP admission and the fixed Compio connection owner.
+//! RTMP TCP admission and fixed Compio connection owners.
 
 use std::io;
 use std::net::SocketAddr;
@@ -64,8 +64,25 @@ pub(crate) async fn start_rtmp_server_on_with_shutdown(
     engine.register_listener_shutdown(move || shutdown_for_engine.cancel());
 
     let addr = format!("0.0.0.0:{port}");
-    let listener = match bind_rtmp_listener_with_backlog(port, engine.config.rtmp_backlog) {
-        Ok(listener) => listener,
+    let connection_limit = engine.config.rtmp_max_connections.clamp(1, 16_384);
+    let parser_budget = engine.config.rtmp_ingest_parser_budget_bytes;
+    let owners = engine
+        .config
+        .rtmp_ingress_owners
+        .clamp(1, 64)
+        .min(connection_limit)
+        .min((parser_budget / engine.config.rtmp_max_message_bytes.max(1)).max(1));
+    if owners < engine.config.rtmp_ingress_owners.clamp(1, 64) {
+        warn!(
+            requested = engine.config.rtmp_ingress_owners,
+            owners,
+            connection_limit,
+            parser_budget,
+            "RTMP ingress owners reduced by connection limit or parser budget"
+        );
+    }
+    let listeners = match bind_rtmp_listeners(port, engine.config.rtmp_backlog, owners) {
+        Ok(listeners) => listeners,
         Err(error) => {
             report_listener_error(
                 &engine,
@@ -79,7 +96,7 @@ pub(crate) async fn start_rtmp_server_on_with_shutdown(
             return;
         }
     };
-    let bound_addr = match listener.local_addr() {
+    let bound_addr = match listeners[0].local_addr() {
         Ok(addr) => addr,
         Err(error) => {
             error!(%error, "failed to inspect RTMP TCP listener address");
@@ -92,49 +109,65 @@ pub(crate) async fn start_rtmp_server_on_with_shutdown(
         }
     };
 
-    let connection_limit = engine.config.rtmp_max_connections.clamp(1, 16_384);
+    // Partition exact totals, including remainders. Owner-local accounting
+    // keeps parser reads free of cross-thread atomics; hash skew may reject
+    // on one owner before another owner's share is used.
+    let owners_shutdown = shutdown.child_token();
+    let _owners_guard = owners_shutdown.clone().drop_guard();
+    let accepting = CancellationToken::new();
     let (control_tx, mut control_rx) = mpsc::channel(connection_limit);
-    let (ready_tx, ready_rx) = oneshot::channel();
-    let acceptor = match spawn_compio_owner(
-        listener,
-        control_tx,
-        shutdown.clone(),
-        engine.clone(),
-        ready_tx,
-        connection_limit,
-    ) {
-        Ok(acceptor) => acceptor,
-        Err(error) => {
-            error!(%error, "failed to start RTMP Compio owner thread");
-            if let Some(started) = started.take() {
-                let _ = started.send(Err(format!("failed to start RTMP owner thread: {error}")));
+    let mut readiness = Vec::with_capacity(owners);
+    for (index, listener) in listeners.into_iter().enumerate() {
+        let (ready_tx, ready_rx) = oneshot::channel();
+        match spawn_compio_owner(
+            index,
+            listener,
+            control_tx.clone(),
+            owners_shutdown.clone(),
+            accepting.clone(),
+            engine.clone(),
+            ready_tx,
+            owner_share(connection_limit, index, owners),
+            owner_share(parser_budget, index, owners),
+        ) {
+            Ok(owner) => {
+                engine.register_os_thread(owner);
+                readiness.push(ready_rx);
             }
-            return;
-        }
-    };
-    engine.register_os_thread(acceptor);
-
-    match ready_rx.await {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => {
-            error!(%error, "RTMP Compio io_uring owner failed to start");
-            if let Some(started) = started.take() {
-                let _ = started.send(Err(error));
+            Err(error) => {
+                error!(%error, owner = index, "failed to start RTMP Compio owner thread");
+                if let Some(started) = started.take() {
+                    let _ =
+                        started.send(Err(format!("failed to start RTMP owner thread: {error}")));
+                }
+                return;
             }
-            return;
-        }
-        Err(error) => {
-            error!("RTMP Compio owner exited before reporting startup");
-            if let Some(started) = started.take() {
-                let _ = started.send(Err(format!(
-                    "RTMP Compio owner exited before startup readiness: {error}"
-                )));
-            }
-            return;
         }
     }
-
-    info!("Server listening on {}", addr);
+    drop(control_tx);
+    for (index, ready_rx) in readiness.into_iter().enumerate() {
+        let failure = match ready_rx.await {
+            Ok(Ok(())) => continue,
+            Ok(Err(error)) => error,
+            Err(error) => format!("RTMP Compio owner exited before startup readiness: {error}"),
+        };
+        error!(%failure, owner = index, "RTMP Compio io_uring owner failed to start");
+        if let Some(started) = started.take() {
+            let _ = started.send(Err(failure));
+        }
+        return;
+    }
+    if owners_shutdown.is_cancelled() {
+        if let Some(started) = started.take() {
+            let _ = started.send(Err(
+                "RTMP ingress cancelled before startup readiness".to_string()
+            ));
+        }
+        return;
+    }
+    // No owner accepts until every runtime/socket has initialized.
+    accepting.cancel();
+    info!(owners, "Server listening on {}", addr);
     if let Some(started) = started {
         let _ = started.send(Ok(bound_addr));
     }
@@ -176,17 +209,28 @@ pub(crate) async fn start_rtmp_server_on_with_shutdown(
     }
 }
 
+fn owner_share(total: usize, index: usize, owners: usize) -> usize {
+    total / owners + usize::from(index < total % owners)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn spawn_compio_owner(
+    index: usize,
     listener: std::net::TcpListener,
     control_tx: mpsc::Sender<ControlSession>,
     shutdown: CancellationToken,
+    accepting: CancellationToken,
     engine: Arc<MediaEngine>,
     ready: oneshot::Sender<Result<(), String>>,
     connection_limit: usize,
+    parser_budget_bytes: usize,
 ) -> io::Result<thread::JoinHandle<()>> {
     thread::Builder::new()
-        .name("restream-rtmp-compio-owner".to_string())
+        .name(format!("restream-rtmp-compio-owner-{index}"))
         .spawn(move || {
+            // A failed/panicked owner cancels its siblings, not just its own
+            // connections. The server's guard also covers control-task abort.
+            let _owner_guard = shutdown.clone().drop_guard();
             let entries = rtmp_io_uring_entries(connection_limit);
             let mut proactor = ProactorBuilder::new();
             proactor
@@ -226,12 +270,18 @@ fn spawn_compio_owner(
                     }
                 };
                 let _ = ready.send(Ok(()));
+                tokio::select! {
+                    biased;
+                    _ = shutdown.cancelled() => return listener.close().await,
+                    _ = accepting.cancelled() => {}
+                }
                 run_compio_owner(
                     listener,
                     control_tx,
                     shutdown,
                     owner_engine,
                     connection_limit,
+                    parser_budget_bytes,
                 )
                 .await
             });
@@ -258,11 +308,10 @@ async fn run_compio_owner(
     shutdown: CancellationToken,
     engine: Arc<MediaEngine>,
     connection_limit: usize,
+    parser_budget_bytes: usize,
 ) -> io::Result<()> {
     let connection_shutdown = CancellationToken::new();
-    let parser_budget = super::ingest::parser_budget::ParserBudget::new(
-        engine.config.rtmp_ingest_parser_budget_bytes,
-    );
+    let parser_budget = super::ingest::parser_budget::ParserBudget::new(parser_budget_bytes);
     let mut connections = FuturesUnordered::new();
     let accept_result = loop {
         tokio::select! {
@@ -363,13 +412,33 @@ fn is_fd_exhaustion_error(error: &io::Error) -> bool {
     matches!(error.raw_os_error(), Some(libc::EMFILE | libc::ENFILE))
 }
 
-/// Create the listening socket the Compio owner adopts: IPv4 any-address,
-/// `SO_REUSEADDR`, nonblocking and close-on-exec, with an explicit backlog
-/// (std's `TcpListener::bind` cannot set one). Plain syscalls, so no Tokio
-/// network type ever touches the RTMP transport socket.
-fn bind_rtmp_listener_with_backlog(
+/// Bind one socket per owner to the same port; Linux hashes connections to
+/// `SO_REUSEPORT` listeners. Port zero is resolved by the first bind.
+fn bind_rtmp_listeners(
     port: u16,
     backlog: u32,
+    owners: usize,
+) -> io::Result<Vec<std::net::TcpListener>> {
+    let first = bind_rtmp_listener(port, backlog, owners > 1)?;
+    let port = first.local_addr()?.port();
+    let mut listeners = Vec::with_capacity(owners);
+    listeners.push(first);
+    for _ in 1..owners {
+        listeners.push(bind_rtmp_listener(port, backlog, true)?);
+    }
+    Ok(listeners)
+}
+
+#[cfg(test)]
+fn bind_rtmp_listener_with_backlog(port: u16, backlog: u32) -> io::Result<std::net::TcpListener> {
+    bind_rtmp_listener(port, backlog, false)
+}
+
+/// Nonblocking, close-on-exec IPv4 listener adopted directly by Compio.
+fn bind_rtmp_listener(
+    port: u16,
+    backlog: u32,
+    reuse_port: bool,
 ) -> Result<std::net::TcpListener, io::Error> {
     use std::os::fd::{FromRawFd, OwnedFd};
 
@@ -403,6 +472,17 @@ fn bind_rtmp_listener_with_backlog(
             std::mem::size_of::<libc::c_int>() as libc::socklen_t,
         )
     })?;
+    if reuse_port {
+        check(unsafe {
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_REUSEPORT,
+                (&enable as *const libc::c_int).cast(),
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            )
+        })?;
+    }
     let address = libc::sockaddr_in {
         sin_family: libc::AF_INET as libc::sa_family_t,
         sin_port: port.to_be(),
@@ -425,7 +505,7 @@ fn bind_rtmp_listener_with_backlog(
 
 #[cfg(test)]
 mod tests {
-    use super::{bind_rtmp_listener_with_backlog, start_rtmp_server_on_with_shutdown};
+    use super::{bind_rtmp_listener_with_backlog, owner_share, start_rtmp_server_on_with_shutdown};
     use crate::domain::ingest_security::IngestSecurityConfig;
     use crate::media::engine::MediaEngine;
     use crate::media::ingest_auth::{
@@ -435,6 +515,7 @@ mod tests {
     use crate::media::security::IngestSecurityService;
     use std::sync::Arc;
     use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
     use tokio_util::sync::CancellationToken;
 
@@ -458,7 +539,35 @@ mod tests {
 
     #[tokio::test]
     async fn owner_shutdown_releases_listener_for_rebind() {
-        let engine = Arc::new(MediaEngine::new());
+        exercise_owner_shutdown(1, false).await;
+    }
+
+    #[tokio::test]
+    async fn sharded_owner_shutdown_releases_all_listeners_for_rebind() {
+        exercise_owner_shutdown(3, false).await;
+    }
+
+    #[tokio::test]
+    async fn aborting_control_task_stops_all_ingress_owners() {
+        exercise_owner_shutdown(3, true).await;
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn owner_shares_preserve_global_limits(total in 1usize..16_384, owners in 1usize..65) {
+            let owners = owners.min(total);
+            let shares: Vec<_> = (0..owners).map(|index| owner_share(total, index, owners)).collect();
+            proptest::prop_assert_eq!(shares.iter().sum::<usize>(), total);
+            proptest::prop_assert!(shares.iter().all(|share| *share > 0));
+            proptest::prop_assert!(shares.iter().max().unwrap() - shares.iter().min().unwrap() <= 1);
+        }
+    }
+
+    async fn exercise_owner_shutdown(owners: usize, abort_control: bool) {
+        let engine = Arc::new(MediaEngine::new_with_config(Arc::new(crate::AppConfig {
+            rtmp_ingress_owners: owners,
+            ..crate::AppConfig::default()
+        })));
         let shutdown = CancellationToken::new();
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(start_rtmp_server_on_with_shutdown(
@@ -517,31 +626,56 @@ mod tests {
             }
         };
 
-        let client = TcpStream::connect(address)
-            .await
-            .expect("client should connect while owner is accepting");
-        engine.shutdown_listeners();
-        drop(client);
-        tokio::time::timeout(Duration::from_secs(5), server)
-            .await
-            .expect("RTMP listener task should stop")
-            .expect("RTMP listener task should not panic");
+        let mut clients = Vec::new();
+        for _ in 0..16 {
+            let mut client = TcpStream::connect(address).await.unwrap();
+            let mut c0c1 = [0u8; 1537];
+            c0c1[0] = 3;
+            client.write_all(&c0c1).await.unwrap();
+            let mut response = [0u8; 3073];
+            tokio::time::timeout(Duration::from_secs(5), client.read_exact(&mut response))
+                .await
+                .expect("every admitted client completes the RTMP handshake")
+                .unwrap();
+            assert_eq!(response[0], 3);
+            client.write_all(&response[1..1537]).await.unwrap();
+            clients.push(client);
+        }
+        if abort_control {
+            server.abort();
+            assert!(server.await.unwrap_err().is_cancelled());
+        } else {
+            engine.shutdown_listeners();
+            tokio::time::timeout(Duration::from_secs(5), server)
+                .await
+                .expect("RTMP listener task should stop")
+                .expect("RTMP listener task should not panic");
+        }
+        let handles = engine.drain_os_thread_handles();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::task::spawn_blocking(move || {
+                for handle in handles {
+                    handle.join().expect("RTMP owner thread should join");
+                }
+            }),
+        )
+        .await
+        .expect("all owner threads stop")
+        .unwrap();
+        for mut client in clients {
+            let mut remainder = Vec::new();
+            let closed =
+                tokio::time::timeout(Duration::from_secs(5), client.read_to_end(&mut remainder))
+                    .await
+                    .expect("shutdown closes every admitted socket");
+            // Cancelling while C2 is still unread legitimately resets TCP.
+            assert!(
+                closed.is_ok() || closed.unwrap_err().kind() == std::io::ErrorKind::ConnectionReset
+            );
+        }
         let rebound = bind_rtmp_listener_with_backlog(address.port(), 512)
             .expect("owner shutdown should release the listening port");
         drop(rebound);
-
-        let handles = engine.drain_os_thread_handles();
-        assert_eq!(
-            handles.len(),
-            1,
-            "RTMP ingress owns one fixed Compio thread"
-        );
-        tokio::task::spawn_blocking(move || {
-            for handle in handles {
-                handle.join().expect("RTMP owner thread should join");
-            }
-        })
-        .await
-        .expect("thread joins should complete");
     }
 }
