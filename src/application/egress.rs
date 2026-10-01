@@ -201,10 +201,10 @@ pub struct PreparedSinkFabricFeed {
 /// coalescing multiple SRT egress leaves onto one TS byte stream), so
 /// unlike `prepare_srt_fabric_feed` this needs no engine calls at all.
 pub fn prepare_sink_fabric_feed(
-    output: &Output,
+    _output: &Output,
     prepared: &PreparedOutput,
 ) -> PreparedSinkFabricFeed {
-    let feed_id = FeedId::new(format!("sink:{}", output.id));
+    let feed_id = FeedId::new(format!("sink:{}", prepared.media_stage_key));
     PreparedSinkFabricFeed {
         feed_id,
         feed: Arc::new(RingFeed::new(
@@ -233,10 +233,10 @@ pub struct PreparedRecirculationFabricFeed {
 /// Recirculation reads directly off the source output's own ring, same as
 /// sink and RTMP — no shared muxer stage to resolve.
 pub fn prepare_recirculation_fabric_feed(
-    output: &Output,
+    _output: &Output,
     prepared: &PreparedOutput,
 ) -> PreparedRecirculationFabricFeed {
-    let feed_id = FeedId::new(format!("pipeline:{}", output.id));
+    let feed_id = FeedId::new(format!("pipeline:{}", prepared.media_stage_key));
     PreparedRecirculationFabricFeed {
         feed_id,
         feed: Arc::new(RingFeed::new(
