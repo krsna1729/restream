@@ -3213,19 +3213,36 @@ Open, in order:
        hand-off. Connection limit and parser budget split exactly
        (`RESTREAM_RTMP_INGRESS_OWNERS`). Accepting starts only once every
        owner is ready; one failed owner cancels its siblings. All owners feed
-       the one Tokio control-session loop. Release A/B (2026-10-01, 6-CPU
-       KVM host, RTMP ingest only, 8 Mbit/s publishers, offered load matched
-       at 7.75–7.82 Mbit/s per publisher, 2 interleaved reps, window means,
-       CPU normalized by received Mbit/s from `pipeline-telemetry`
-       `bytesReceived`/`uptimeSecs`): one owner costs 7.1–7.6 (32
-       publishers) and 5.9 (64) % of a core per 100 Mbit/s; four owners
-       cost 9.9–10.5 and 7.6–8.3, i.e. +28–40% on the owner threads at
-       loads one owner carries easily (no throughput gain to buy). Owner
-       count 1 against the pre-change binary (2759a356) is inside run-to-run
-       spread (owner 7.4–7.6 vs 7.2–7.4 at 32, 6.2–7.0 vs 5.8–6.3 at 64).
-       Keep the default at 1; raise it only when one owner saturates
-       (~150 publishers per core at 8 Mbit/s), which this host cannot drive,
-       so a benefit past saturation is unmeasured.
+       the one Tokio control-session loop.
+       Scaling evidence (2026-10-01, release, 6-vCPU KVM guest, 11.9 GB,
+       RTMP ingest only, 8 Mbit/s publishers at 7.75–7.86 Mbit/s offered; CPU
+       normalized by received Mbit/s from `pipeline-telemetry`
+       `bytesReceived`/`uptimeSecs`; per-thread run time and wakeups from
+       `/proc/<pid>/task/*/schedstat`). Sizing bounds the design: a harness
+       ffmpeg publisher costs ~2.3% of a core and 56 MB, so ~64 publishers
+       (≈1.5 cores, 3.6 GB plus Restream's ~19 MB per pipeline) is the
+       ceiling, while one owner saturates near 150–200 publishers. Saturation
+       and a USL fit through it do not fit this host; they need a ≥12-vCPU
+       host or a lightweight publisher generator.
+       Pinned grid (Restream on CPUs 0–3, harness and publishers on 4–5;
+       1/2/4 owners × 16/32/64 publishers, 2 reps, interleaved): at 64
+       publishers owner cost is 8.3 / 8.8 / 9.2 % of a core per 100 Mbit/s
+       for 1 / 2 / 4 owners (+6% / +11%). Weak scaling (16 publishers per
+       owner) is flat within noise (10.8 / 14.5 / 9.2); repeats of the same
+       cell differ by 7–35%, so α and β cannot be separated from noise and
+       there is no contention signature at N ≤ 4. What changes with N is
+       load per owner: scheduler wakeups per Mbit rise (≈1.0 / 1.8 / 2.4 at
+       64 publishers) while µs of work per wakeup fall (≈820 / 480 / 390),
+       and run-queue delay per wakeup rises (≈80 / 95 / 150 µs). The busiest
+       owner carries 0.52 (N=2) and 0.33 (N=4) of the load against an ideal
+       0.50 and 0.25: reuseport 4-tuple hashing is balls-into-bins, leaving
+       ≈0.79 of four cores usable at 64 connections (0.88 at 256, 0.92 at
+       512; simulation, matches the measured 0.76). An earlier unpinned A/B
+       (owners, publishers and Tokio floating over all six CPUs) showed +28–40%
+       at the same loads: partitioning matters more than owner count on a
+       small host. Owner count 1 against the pre-change binary (2759a356) is
+       inside run-to-run spread. Keep the default at 1; raise it only when
+       one owner saturates. A benefit past saturation is unmeasured.
      - SRT (design, needs srt-rs work, confirm with the user first): the
        Compio `Owner` supports only a `PerPort` listener and
        `Promotion::Never`; there is no multi-acceptor Compio driver.
