@@ -6,6 +6,7 @@
 //! and no thread per feed. Services must check cancellation and yield between
 //! bounded bursts. Blocking codecs and disk writes remain on their own threads.
 
+use std::future::Future;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -30,40 +31,52 @@ pub(crate) enum MediaServiceClass {
     Other,
 }
 
+impl MediaServiceClass {
+    /// Declaration order; `class as usize` indexes `MediaExecutorMetrics::classes`.
+    const ALL: [Self; 7] = [
+        Self::SharedTsMux,
+        Self::HlsSegmenter,
+        Self::HlsFmp4,
+        Self::Recording,
+        Self::AudioRouter,
+        Self::FileIngest,
+        Self::Other,
+    ];
+}
+
+/// Per-class counters. `busy_ns` is wall time spent inside the services'
+/// `poll` calls, not service lifetime: services run for the life of their
+/// pipeline and are parked on rings, timers and pipes almost all of that time.
+/// Wall time includes hypervisor vCPU descheduling inside a poll, which a VM
+/// guest may not report as steal; `max_poll_ns` exposes such stalls (one
+/// 20–120 ms poll among ~µs polls), so read `busy` next to it.
+#[derive(Default)]
+struct ClassMetrics {
+    active: AtomicU64,
+    polls: AtomicU64,
+    busy_ns: AtomicU64,
+    max_poll_ns: AtomicU64,
+}
+
 #[derive(Default)]
 struct MediaExecutorMetrics {
     spawned_total: AtomicU64,
     completed_total: AtomicU64,
     panicked_total: AtomicU64,
-    active_ts_muxers: AtomicU64,
-    active_hls_segmenters: AtomicU64,
-    active_hls_fmp4: AtomicU64,
-    active_recordings: AtomicU64,
-    active_audio_routers: AtomicU64,
-    active_file_ingests: AtomicU64,
-    active_other: AtomicU64,
     queue_latency_samples: AtomicU64,
     queue_latency_us_sum: AtomicU64,
     queue_latency_us_max: AtomicU64,
-    busy_us_sum: AtomicU64,
+    classes: [ClassMetrics; 7],
 }
 
 impl MediaExecutorMetrics {
-    fn active_counter(&self, class: MediaServiceClass) -> &AtomicU64 {
-        match class {
-            MediaServiceClass::SharedTsMux => &self.active_ts_muxers,
-            MediaServiceClass::HlsSegmenter => &self.active_hls_segmenters,
-            MediaServiceClass::HlsFmp4 => &self.active_hls_fmp4,
-            MediaServiceClass::Recording => &self.active_recordings,
-            MediaServiceClass::AudioRouter => &self.active_audio_routers,
-            MediaServiceClass::FileIngest => &self.active_file_ingests,
-            MediaServiceClass::Other => &self.active_other,
-        }
+    fn class(&self, class: MediaServiceClass) -> &ClassMetrics {
+        &self.classes[class as usize]
     }
 
     fn record_start(&self, class: MediaServiceClass, queue_latency_us: u64) {
         self.spawned_total.fetch_add(1, Ordering::Relaxed);
-        self.active_counter(class).fetch_add(1, Ordering::Relaxed);
+        self.class(class).active.fetch_add(1, Ordering::Relaxed);
         self.queue_latency_samples.fetch_add(1, Ordering::Relaxed);
         self.queue_latency_us_sum
             .fetch_add(queue_latency_us, Ordering::Relaxed);
@@ -71,86 +84,114 @@ impl MediaExecutorMetrics {
             .fetch_max(queue_latency_us, Ordering::Relaxed);
     }
 
-    fn record_completion(&self, class: MediaServiceClass, busy_us: u64) {
-        self.active_counter(class).fetch_sub(1, Ordering::Relaxed);
+    fn record_completion(&self, class: MediaServiceClass) {
+        self.class(class).active.fetch_sub(1, Ordering::Relaxed);
         self.completed_total.fetch_add(1, Ordering::Relaxed);
-        self.busy_us_sum.fetch_add(busy_us, Ordering::Relaxed);
     }
 
     fn record_failure_or_abort(&self, class: MediaServiceClass) {
-        self.active_counter(class).fetch_sub(1, Ordering::Relaxed);
+        self.class(class).active.fetch_sub(1, Ordering::Relaxed);
         self.panicked_total.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn snapshot(&self, configured_workers: usize) -> MediaExecutorSnapshot {
+    fn snapshot(
+        &self,
+        configured_workers: usize,
+        runtime: Option<&Runtime>,
+    ) -> MediaExecutorSnapshot {
         let samples = self.queue_latency_samples.load(Ordering::Relaxed);
         let sum_us = self.queue_latency_us_sum.load(Ordering::Relaxed);
-        let avg_us = sum_us.checked_div(samples).unwrap_or(0);
-        let active_mux = self.active_ts_muxers.load(Ordering::Relaxed);
-        let active_hls = self.active_hls_segmenters.load(Ordering::Relaxed);
-        let active_fmp4 = self.active_hls_fmp4.load(Ordering::Relaxed);
-        let active_rec = self.active_recordings.load(Ordering::Relaxed);
-        let active_audio = self.active_audio_routers.load(Ordering::Relaxed);
-        let active_file = self.active_file_ingests.load(Ordering::Relaxed);
-        let active_other = self.active_other.load(Ordering::Relaxed);
-        let active_total = active_mux
-            + active_hls
-            + active_fmp4
-            + active_rec
-            + active_audio
-            + active_file
-            + active_other;
+        let classes: Vec<ClassSnapshot> = MediaServiceClass::ALL
+            .iter()
+            .map(|&class| {
+                let metrics = self.class(class);
+                ClassSnapshot {
+                    class,
+                    active: metrics.active.load(Ordering::Relaxed),
+                    polls: metrics.polls.load(Ordering::Relaxed),
+                    busy_us: metrics.busy_ns.load(Ordering::Relaxed) / 1000,
+                    max_poll_us: metrics.max_poll_ns.load(Ordering::Relaxed) / 1000,
+                }
+            })
+            .collect();
+        let (workers, global_queue_depth) = runtime.map_or((Vec::new(), 0), |runtime| {
+            let metrics = runtime.metrics();
+            let workers = (0..metrics.num_workers())
+                .map(|worker| WorkerSnapshot {
+                    busy_us: metrics.worker_total_busy_duration(worker).as_micros() as u64,
+                    parks: metrics.worker_park_count(worker),
+                })
+                .collect();
+            (workers, metrics.global_queue_depth())
+        });
 
         MediaExecutorSnapshot {
             configured_workers,
-            active_services: active_total,
-            active_ts_muxers: active_mux,
-            active_hls_segmenters: active_hls + active_fmp4,
-            active_recordings: active_rec,
-            active_audio_routers: active_audio,
-            active_file_ingests: active_file,
-            active_other,
+            active_services: classes.iter().map(|class| class.active).sum(),
             spawned_total: self.spawned_total.load(Ordering::Relaxed),
             completed_total: self.completed_total.load(Ordering::Relaxed),
             panicked_total: self.panicked_total.load(Ordering::Relaxed),
             queue_latency_samples: samples,
-            queue_latency_avg_us: avg_us,
+            queue_latency_avg_us: sum_us.checked_div(samples).unwrap_or(0),
             queue_latency_max_us: self.queue_latency_us_max.load(Ordering::Relaxed),
-            busy_time_total_ms: self.busy_us_sum.load(Ordering::Relaxed) / 1000,
+            global_queue_depth,
+            classes,
+            workers,
         }
     }
 }
 
 static METRICS: OnceLock<MediaExecutorMetrics> = OnceLock::new();
+static RUNTIME: OnceLock<Result<Runtime, String>> = OnceLock::new();
 
 fn metrics() -> &'static MediaExecutorMetrics {
     METRICS.get_or_init(MediaExecutorMetrics::default)
 }
 
+/// Cumulative per-class counters. Utilization over a window is
+/// `Δbusy_us / (Δwall_us × configured_workers)`; demand per wake is
+/// `Δbusy_us / Δpolls`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClassSnapshot {
+    pub class: MediaServiceClass,
+    pub active: u64,
+    pub polls: u64,
+    pub busy_us: u64,
+    pub max_poll_us: u64,
+}
+
+/// Cumulative per-worker counters from the Tokio runtime.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WorkerSnapshot {
+    pub busy_us: u64,
+    pub parks: u64,
+}
+
 /// Operational snapshot of media executor thread pool and active workloads.
+/// `workers` is empty and `global_queue_depth` zero until the first service
+/// starts the runtime.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MediaExecutorSnapshot {
     pub configured_workers: usize,
     pub active_services: u64,
-    pub active_ts_muxers: u64,
-    pub active_hls_segmenters: u64,
-    pub active_recordings: u64,
-    pub active_audio_routers: u64,
-    pub active_file_ingests: u64,
-    pub active_other: u64,
     pub spawned_total: u64,
     pub completed_total: u64,
     pub panicked_total: u64,
     pub queue_latency_samples: u64,
     pub queue_latency_avg_us: u64,
     pub queue_latency_max_us: u64,
-    pub busy_time_total_ms: u64,
+    pub global_queue_depth: usize,
+    pub classes: Vec<ClassSnapshot>,
+    pub workers: Vec<WorkerSnapshot>,
 }
 
 /// Expose current media executor telemetry.
 pub(crate) fn snapshot() -> MediaExecutorSnapshot {
-    metrics().snapshot(configured_workers())
+    let runtime = RUNTIME.get().and_then(|runtime| runtime.as_ref().ok());
+    metrics().snapshot(configured_workers(), runtime)
 }
 
 /// Returns the worker thread count configured for restream-media.
@@ -160,7 +201,6 @@ pub(crate) fn configured_workers() -> usize {
 }
 
 fn runtime() -> Result<&'static Runtime, String> {
-    static RUNTIME: OnceLock<Result<Runtime, String>> = OnceLock::new();
     RUNTIME
         .get_or_init(|| {
             let workers = configured_workers();
@@ -173,6 +213,23 @@ fn runtime() -> Result<&'static Runtime, String> {
         })
         .as_ref()
         .map_err(Clone::clone)
+}
+
+/// Drive `future`, adding the wall time of each of its `poll` calls to
+/// `metrics`. Two clock reads per poll; services poll once per wake or yielded
+/// burst, never per packet.
+async fn poll_timed<F: Future>(metrics: &ClassMetrics, future: F) -> F::Output {
+    let mut future = std::pin::pin!(future);
+    std::future::poll_fn(|cx| {
+        let started = Instant::now();
+        let poll = future.as_mut().poll(cx);
+        let elapsed = started.elapsed().as_nanos() as u64;
+        metrics.polls.fetch_add(1, Ordering::Relaxed);
+        metrics.busy_ns.fetch_add(elapsed, Ordering::Relaxed);
+        metrics.max_poll_ns.fetch_max(elapsed, Ordering::Relaxed);
+        poll
+    })
+    .await
 }
 
 struct CancelOnDrop {
@@ -228,10 +285,8 @@ where
         let queue_latency_us = queued_at.elapsed().as_micros() as u64;
         metrics().record_start(class, queue_latency_us);
         guard.started = true;
-        let run_start = Instant::now();
-        let output = future.await;
-        let busy_us = run_start.elapsed().as_micros() as u64;
-        metrics().record_completion(class, busy_us);
+        let output = poll_timed(metrics().class(class), future).await;
+        metrics().record_completion(class);
         guard.disarm();
         output
     }))
@@ -386,17 +441,50 @@ mod tests {
 
         started.await.unwrap();
         let snap_running = snapshot();
-        assert!(snap_running.active_recordings >= 1);
+        assert!(active(&snap_running, MediaServiceClass::Recording) >= 1);
         assert!(snap_running.spawned_total > snap_before.spawned_total);
+        assert_eq!(snap_running.workers.len(), configured_workers());
 
         done.send(()).unwrap();
         task.await.unwrap();
         let snap_after = snapshot();
         assert_eq!(
-            snap_after.active_recordings,
-            snap_running.active_recordings - 1
+            active(&snap_after, MediaServiceClass::Recording),
+            active(&snap_running, MediaServiceClass::Recording) - 1
         );
         assert!(snap_after.completed_total > snap_before.completed_total);
         assert!(snap_after.queue_latency_samples > snap_before.queue_latency_samples);
+    }
+
+    fn active(snapshot: &MediaExecutorSnapshot, class: MediaServiceClass) -> u64 {
+        snapshot
+            .classes
+            .iter()
+            .find(|candidate| candidate.class == class)
+            .unwrap()
+            .active
+    }
+
+    #[tokio::test]
+    async fn poll_timed_counts_time_in_poll_not_time_parked() {
+        let parked = ClassMetrics::default();
+        poll_timed(&parked, tokio::time::sleep(Duration::from_millis(60))).await;
+        assert!(parked.polls.load(Ordering::Relaxed) >= 2);
+        assert!(
+            parked.busy_ns.load(Ordering::Relaxed) < 30_000_000,
+            "a service parked on a timer is not busy"
+        );
+
+        let blocking = ClassMetrics::default();
+        poll_timed(&blocking, async {
+            std::thread::sleep(Duration::from_millis(20));
+        })
+        .await;
+        assert_eq!(blocking.polls.load(Ordering::Relaxed), 1);
+        assert!(blocking.busy_ns.load(Ordering::Relaxed) >= 20_000_000);
+        assert_eq!(
+            blocking.max_poll_ns.load(Ordering::Relaxed),
+            blocking.busy_ns.load(Ordering::Relaxed)
+        );
     }
 }
