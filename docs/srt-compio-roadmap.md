@@ -3240,14 +3240,16 @@ Open, in order:
    sets from `sched_getaffinity`; pin at thread start; size shards from the
    hot set and Tokio from the control set; no split at ≤ 2 CPUs; FFmpeg
    placement decided by measurement. Interleaved on/off A/B at RTMP×1000,
-   SRT×100, HLS×500 under API load. Not before WI11: until then ingest media
-   still runs on Tokio, so the split would mix classes and be measured twice.
-5. **O2 API observation cost**: health/telemetry build `serde_json::Value`
+   SRT×100, HLS×500 under API load. WI11 is done, so ingest and container
+   media no longer run on the control runtime and the split now measures
+   classes separately.
+5. **O2 API observation cost**: health/telemetry built `serde_json::Value`
    trees per request (health snapshot 7–10% of Restream samples at RTMP×100).
    It does not interrupt egress (the API reads published atomics and
-   snapshots); it costs Tokio CPU and can delay ingest media still on Tokio.
-   Quantify at 1000 outputs, then typed serialization, a short-TTL cache for
-   `sample_host_settings`, and a lighter delivery endpoint for the harness.
+   snapshots); it costs CONTROL CPU. Typed serialization and a short-TTL
+   cache for `sample_host_settings` landed in #196; still open: re-profile
+   RTMP×100 and quantify at 1000 outputs, and a lighter delivery endpoint for
+   the harness.
 6. **SRT per-output cost** (~2.9% of a core per 8 Mbit/s output, ~20× RTMP):
    srt-rs per-packet protocol work; backlog in
    [media-copy-audit.md](media-copy-audit.md#srt-rs-backlog-evidence-backed).
