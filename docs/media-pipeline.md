@@ -442,20 +442,16 @@ Compio owner. Tokio receives bounded typed control, lifecycle commands, and
 the one-time media probe; ordinary publisher media goes directly to the ring
 on the owner. There is no Tokio duplex stream, byte pump, or duplicated TCP
 descriptor. Publisher TCP statistics are sampled on the socket-owning owner.
-The 64 MiB byte-permit budget bounds queued/processing probe payloads, not
-parser working sets. A blocked probe handoff may retain a
-completed RTMP message and the next incomplete parser assembly, each up to
-16,777,215 bytes, plus a 4 KiB socket read, separate 4 KiB parser staging
-buffer, and result metadata.
-At the default 512-connection cap, those two parser payloads alone approach
-16 GiB; at the configured maximum of 16,384, they approach 512 GiB. These
-theoretical payload-only ceilings are not RSS estimates; parser/session and
-other transport allocations add more.
+A connection's parser can hold one completed RTMP message and the next
+incomplete assembly, each up to `RESTREAM_RTMP_MAX_MESSAGE_BYTES`, plus a 4 KiB
+socket read and parser staging buffer. The aggregate parser budget
+(`RESTREAM_RTMP_INGEST_PARSER_BUDGET_BYTES`) caps the sum across connections;
+the connection that would exceed it is rejected.
 
 | Hop | Thread/process model | Memory owner |
 |---|---|---|
 | RTMP listener and protocol session | One Compio/io_uring owner thread/runtime; accepted connection futures remain pinned there. Connection admission is clamped to 1–16,384 and the handshake has a configured timeout | Compio socket and RTMP parser/session state; no per-connection thread/runtime or Tokio duplex |
-| RTMP control actor | One bounded Tokio actor per admitted connection; authorization/registration, lifecycle, one-time media probe, and diagnostic play-reader scheduling | Per-session command channel of 16 entries; probe payloads share the 64 MiB byte-permit budget |
+| RTMP control actor | One bounded Tokio actor per admitted connection; authorization/registration, lifecycle, one-time media probe, and diagnostic play-reader scheduling | Per-session command channel of 16 entries carrying lifecycle commands and the one-time probe metadata |
 | RTMP publisher media | FLV classification, sequence-header handling, timestamp mapping, standby GOP, input gating, and ring publication run inline on the Compio ingress owner | Owner-local publisher state and shared ring; no ordinary per-packet media channel |
 | `source_ring` / `output_ring` | Shared application structure | Fixed-capacity `RingBuffer` per pipeline / per `(pipeline, preset)`, independent of output count |
 | External transcoder (non-passthrough preset) | One FFmpeg child plus dedicated stdin/stdout threads per `(pipeline, preset)`; Tokio supervises lifecycle only | FFmpeg process memory and bounded pipe buffers; input pump pulls the ring on its writer thread |

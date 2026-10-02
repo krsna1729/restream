@@ -551,7 +551,7 @@ fn effective_summary_covers_runtime_knobs_without_secret_values() {
 
 #[test]
 fn target_egress_fabric_shards_matches_known_cases() {
-    use EgressShardProfile::{OutputCount, SrtCpuParallel};
+    use EgressShardProfile::{OutputCount, SrtOutputCount};
 
     // --- OutputCount (RTMP/sink/pipeline shape) ---
 
@@ -579,18 +579,13 @@ fn target_egress_fabric_shards_matches_known_cases() {
     assert_eq!(target_egress_fabric_shards(OutputCount, 0, 1), 1);
     assert_eq!(target_egress_fabric_shards(OutputCount, 1_000_000, 1), 2);
 
-    // --- SrtCpuParallel ---
-
-    // The SRT shard target remains the CPU-derived ceiling regardless of
-    // output count. WI3.7 current-host measurements are provisional evidence;
-    // changing the policy still requires a matched post-cutover scaling
-    // qualification (Q-025).
-    assert_eq!(target_egress_fabric_shards(SrtCpuParallel, 0, 8), 8);
-    assert_eq!(target_egress_fabric_shards(SrtCpuParallel, 1, 8), 8);
-    assert_eq!(target_egress_fabric_shards(SrtCpuParallel, 60, 8), 8);
-    assert_eq!(target_egress_fabric_shards(SrtCpuParallel, 1_000_000, 8), 8);
-    assert_eq!(target_egress_fabric_shards(SrtCpuParallel, 1, 1), 2);
-    assert_eq!(target_egress_fabric_shards(SrtCpuParallel, 1, 6), 6);
+    // SRT starts with output-count sizing, not a full CPU-sized pool per feed.
+    assert_eq!(target_egress_fabric_shards(SrtOutputCount, 0, 8), 1);
+    assert_eq!(target_egress_fabric_shards(SrtOutputCount, 1, 8), 1);
+    assert_eq!(target_egress_fabric_shards(SrtOutputCount, 64, 8), 1);
+    assert_eq!(target_egress_fabric_shards(SrtOutputCount, 65, 8), 2);
+    assert_eq!(target_egress_fabric_shards(SrtOutputCount, 129, 8), 3);
+    assert_eq!(target_egress_fabric_shards(SrtOutputCount, 1_000_000, 8), 8);
 }
 
 proptest::proptest! {
@@ -602,7 +597,7 @@ proptest::proptest! {
         outputs in 0usize..100_000,
         cpus in 1usize..256,
     ) {
-        for profile in [EgressShardProfile::OutputCount, EgressShardProfile::SrtCpuParallel] {
+        for profile in [EgressShardProfile::OutputCount, EgressShardProfile::SrtOutputCount] {
             let target = target_egress_fabric_shards(profile, outputs, cpus);
             let ceiling = default_egress_fabric_shards(cpus);
             proptest::prop_assert!(target >= 1);
@@ -620,22 +615,11 @@ proptest::proptest! {
         delta in 0usize..50_000,
     ) {
         let larger = smaller + delta;
-        for profile in [EgressShardProfile::OutputCount, EgressShardProfile::SrtCpuParallel] {
+        for profile in [EgressShardProfile::OutputCount, EgressShardProfile::SrtOutputCount] {
             let target_small = target_egress_fabric_shards(profile, smaller, cpus);
             let target_large = target_egress_fabric_shards(profile, larger, cpus);
             proptest::prop_assert!(target_large >= target_small);
         }
     }
 
-    /// SrtCpuParallel is output-count-independent: any output count on a
-    /// fixed CPU count claims exactly the CPU-derived ceiling.
-    #[test]
-    fn srt_cpu_parallel_target_is_cpu_ceiling_regardless_of_outputs(
-        outputs in 0usize..100_000,
-        cpus in 1usize..256,
-    ) {
-        let target = target_egress_fabric_shards(EgressShardProfile::SrtCpuParallel, outputs, cpus);
-        let ceiling = default_egress_fabric_shards(cpus);
-        proptest::prop_assert_eq!(target, ceiling);
-    }
 }

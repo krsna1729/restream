@@ -61,7 +61,8 @@ impl MediaEngine {
             )
             .expect("egress fabric manager config is clamped nonzero");
             let runtime = EgressFabricRuntime::new(manager_config, group)
-                .map_err(SrtFabricEnsureError::Runtime)?;
+                .map_err(SrtFabricEnsureError::Runtime)?
+                .adaptive(config.shards);
 
             let wakes =
                 subscribe_fabric_wakes("srt", feed_id.clone(), feed, runtime.feed_wake_handles());
@@ -102,7 +103,10 @@ impl MediaEngine {
         if matches!(command, EgressCommand::Add(_))
             && let Some(inputs) = rescale_inputs.take()
         {
-            self.rescale_srt_fabric(feed_id, runtime, inputs);
+            {
+                let reason = runtime.reason_for(&command);
+                self.rescale_srt_fabric(feed_id, runtime, inputs, reason);
+            };
         }
 
         let outcome = runtime
@@ -110,10 +114,34 @@ impl MediaEngine {
             .map_err(SrtFabricDispatchError::Dispatch)?;
 
         if let Some(inputs) = rescale_inputs.take() {
-            self.rescale_srt_fabric(feed_id, runtime, inputs);
+            self.rescale_srt_fabric(
+                feed_id,
+                runtime,
+                inputs,
+                crate::media::egress::runtime::ResizeReason::Remove,
+            );
         }
 
         Ok(outcome)
+    }
+
+    pub(crate) async fn resize_srt_fabrics(&self) {
+        let mut registry = self.fabric.srt.lock().await;
+        let crate::media::engine_registries::SrtFabricRegistry {
+            runtimes, feeds, ..
+        } = &mut *registry;
+        for (id, runtime) in runtimes {
+            if runtime.observation_due()
+                && let Some(feed) = feeds.get(id)
+            {
+                self.rescale_srt_fabric(
+                    id,
+                    runtime,
+                    feed.clone_reader(),
+                    crate::media::egress::runtime::ResizeReason::Observe,
+                );
+            }
+        }
     }
 
     fn rescale_srt_fabric(
@@ -121,33 +149,30 @@ impl MediaEngine {
         feed_id: &FeedId,
         runtime: &mut EgressFabricRuntime,
         feed: TsFeed,
+        reason: crate::media::egress::runtime::ResizeReason,
     ) {
         let config = &self.config.egress_fabric;
         let shard_config = config.shard_config();
         let budget = config.work_budget();
         let effective_cpus = crate::system_sampling::effective_cpu_count();
         let owner_settings = self.srt_owner_settings();
-        let result = runtime.rescale(
-            crate::config::EgressShardProfile::SrtCpuParallel,
-            effective_cpus,
-            shard_config,
-            |_shard_id| {
-                let feed = feed.clone_reader();
-                let drain_timeout = shard_config.drain_timeout();
-                let leaf_capacity = shard_config.leaf_capacity().get();
-                // Built on the new shard's own thread, like the initial spawn;
-                // a runtime that cannot be built fails this grow attempt.
-                move || {
-                    crate::media::egress::backends::srt::resolve_runtime::resolving_srt_shard_backend(
-                        feed,
-                        budget,
-                        drain_timeout,
-                        leaf_capacity,
-                        owner_settings,
-                    )
-                }
-            },
-        );
+        runtime.forecast_feed(&feed.publication_ring());
+        let result = runtime.rescale(crate::config::EgressShardProfile::SrtOutputCount, effective_cpus, reason, shard_config, |_shard_id| {
+            let feed = feed.clone_reader();
+            let drain_timeout = shard_config.drain_timeout();
+            let leaf_capacity = shard_config.leaf_capacity().get();
+            // Built on the new shard's own thread, like the initial spawn;
+            // a runtime that cannot be built fails this grow attempt.
+            move || {
+                crate::media::egress::backends::srt::resolve_runtime::resolving_srt_shard_backend(
+                    feed,
+                    budget,
+                    drain_timeout,
+                    leaf_capacity,
+                    owner_settings,
+                )
+            }
+        });
         match result {
             Ok(touched) if !touched.is_empty() => {
                 tracing::info!(feed_id = %feed_id, shards = ?touched, "srt fabric shard pool rescaled");

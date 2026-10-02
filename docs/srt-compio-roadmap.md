@@ -2353,21 +2353,20 @@ teardown. Tokio remains the control/application plane. Bounded typed commands,
 lifecycle events, snapshots, and decoded/shared media may cross domains; live
 transport byte streams, Tokio network wrappers, and borrowed FDs may not.
 
-RTMP ingress runs protocol handling on the same Compio owner as its socket;
-auth and pipeline/ring work remain in Tokio. Ingest memory is bounded in two
-layers (WI5B.1):
+RTMP ingress runs protocol handling and publisher media on the same Compio
+owner as its socket; Tokio keeps auth, registration and lifecycle. Ingest
+memory is bounded by the parser (WI5B.1, WI11 step 2):
 
-- before handoff: a declared RTMP message longer than
-  `RESTREAM_RTMP_MAX_MESSAGE_BYTES` (default 8 MiB, clamped 64 KiB-16 MiB) is
-  rejected when its chunk header is decoded, before any payload is buffered;
-  the parser grows with received bytes rather than reserving a declared
-  length. Bytes every ingest parser holds, plus completed media still awaiting
-  a handoff permit, are charged to one aggregate budget
-  (`RESTREAM_RTMP_INGEST_PARSER_BUDGET_BYTES`, default 256 MiB); the
-  connection whose input would exceed it is rejected. The budget is a plain
-  counter on the single ingest owner thread.
-- after handoff: the 64 MiB media-handoff semaphore covers queued and
-  processing payloads.
+- a declared RTMP message longer than `RESTREAM_RTMP_MAX_MESSAGE_BYTES`
+  (default 8 MiB, clamped 64 KiB-16 MiB) is rejected when its chunk header is
+  decoded, before any payload is buffered; the parser grows with received bytes
+  rather than reserving a declared length. Bytes every ingest parser holds are
+  charged to one aggregate budget (`RESTREAM_RTMP_INGEST_PARSER_BUDGET_BYTES`,
+  default 256 MiB, split across ingress owners); the connection whose input
+  would exceed it is rejected. The budget is a plain counter on each owner.
+- completed media is published to the ring inline on the owner; there is no
+  per-packet handoff queue or byte permit. The control session receives only
+  the one-time media probe (codec metadata) on its 16-entry command channel.
 
 Pre-handoff memory is therefore bounded by the budget independent of the
 connection count, plus per-connection socket reads and session metadata. The
@@ -2748,7 +2747,7 @@ The Oracle must model these separately; one "RTMP" cost coefficient is wrong:
 
 | Workload | Path | Crossing |
 |---|---|---|
-| RTMP publish (ingest) | Compio ingress owner parses; decoded `Bytes` handed to the connection's Tokio control session (bounded channel of 16, shared 64 MiB byte permit) → ring publish | one channel op and possible cross-runtime wake per decoded audio/video message (~77/s per 30 fps + AAC publisher) |
+| RTMP publish (ingest) | Compio ingress owner parses and publishes to the ring inline (`RtmpPublisherMedia`); the Tokio control session receives lifecycle commands and the one-time media probe only | none per packet (WI11 step 2) |
 | Direct RTMP play (clients of Restream's `play` endpoint; debug/diagnostic only, not modelled for capacity) | Tokio control session pulls ≤ 32 `Arc<MediaPacket>` per `PlayNext` request/reply; the same Compio ingress owner serializes and writes | one request/reply per burst; at the live edge bursts can be a single packet; players share the ingress owner with publishers |
 | Configured RTMP/RTMPS outputs | egress fabric Compio shards reading shared feeds | none per packet; the capacity ramp's RTMP numbers measure only this |
 

@@ -369,6 +369,10 @@ where
     connecting: HashMap<LeafKey, ConnectingRtmpConnect>,
     connecting_by_output: HashMap<OutputId, LeafKey>,
     last_stall_sweep: Option<Instant>,
+    /// Accumulates the current stall sweep; `service` is the previous full
+    /// sweep's summary, published in shard metrics.
+    sweep_service: crate::media::egress::metrics::ServiceAccumulator,
+    service: crate::media::egress::metrics::ShardService,
     /// Bound on how long a leaf may stay in `draining_since` before it is
     /// force-closed regardless of remaining `pending_application_bytes`.
     /// Defaults to `EgressShardConfig::DEFAULT_DRAIN_TIMEOUT`; tests use
@@ -428,6 +432,8 @@ where
             connecting: HashMap::new(),
             connecting_by_output: HashMap::new(),
             last_stall_sweep: None,
+            sweep_service: Default::default(),
+            service: Default::default(),
             drain_timeout: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
             resync_count: 0,
             budget_exhaustions: 0,
@@ -495,6 +501,8 @@ where
         let _ = self.poller.remove(socket_ref.fd);
         self.feed_waiting.retain(|key| *key != socket_ref.key);
         self.stall_candidates.retain(|key| *key != socket_ref.key);
+        self.sweep_service.invalidate();
+        self.service = Default::default();
         self.ready.retain(|event| event.key != socket_ref.key);
         self.poll_buffer.retain(|event| event.key != socket_ref.key);
         let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) else {
@@ -708,6 +716,7 @@ where
         metrics.stale_completions = stale_completions;
         metrics.budget_exhaustions = self.budget_exhaustions;
         metrics.queue_overflows = self.queue_overflows;
+        metrics.service = self.service;
     }
 
     fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {

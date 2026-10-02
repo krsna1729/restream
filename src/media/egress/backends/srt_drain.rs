@@ -60,23 +60,20 @@ impl SrtShardBackend {
             return;
         }
         self.last_stall_sweep = Some(now);
-        self.shard_saturated = shard_saturated(self.sweep_visited, self.sweep_pressured);
-        self.sweep_visited = 0;
-        self.sweep_pressured = 0;
-        let shard_saturated = self.shard_saturated;
+        let shard_saturated = self.service.saturated;
         let head_sequence = crate::media::egress::feed::EgressFeed::head_sequence(&self.feed);
         let feed_published_bytes = self.feed.published_bytes();
         let drain_timeout = self.drain_timeout;
         // Visit each queued leaf at most once per sweep: live keys return to
         // the tail, so a fixed count would revisit them at the same `now` and
         // collapse every two-sample rate (send rate, delivery) to a zero window.
-        let visits = self.stall_candidates.len().min(256);
+        let visits = self.sweep_service.begin(self.stall_candidates.len());
         for _ in 0..visits {
             let Some(key) = self.stall_candidates.pop_front() else {
                 break;
             };
             let owners = &self.owners;
-            let Some((output_id, close, pressured)) = self
+            let Some((output_id, close, pressured, delivery)) = self
                 .leaves
                 .get_mut(key.0)
                 .and_then(Option::as_mut)
@@ -92,6 +89,9 @@ impl SrtShardBackend {
                         .as_ref()
                         .and_then(|stats| leaf.sample_quality(stats, now, feed_published_bytes));
                     let drops = quality.as_ref().and_then(|q| q.packets_sent_drop);
+                    let delivery = quality
+                        .as_ref()
+                        .and_then(|q| Some((q.delivery_ratio?, q.offered_bps?)));
                     let reason = match leaf.observe_stall(now, drops, lag_units, backlog) {
                         LeafStallClass::Idle => None,
                         LeafStallClass::Backpressured => Some("backpressured"),
@@ -116,15 +116,14 @@ impl SrtShardBackend {
                         leaf.common().output_id.clone(),
                         draining || matches!(reason, Some("stalled")),
                         reason.is_some(),
+                        delivery,
                     )
                 })
             else {
+                self.sweep_service.add(false, None);
                 continue;
             };
-            self.sweep_visited += 1;
-            if pressured {
-                self.sweep_pressured += 1;
-            }
+            self.sweep_service.add(pressured, delivery);
             if !close {
                 self.enqueue_stall_candidate(key);
                 continue;
@@ -149,6 +148,9 @@ impl SrtShardBackend {
             }
             self.remove_leaf(key, crate::media::egress::backend::CloseReason::NoProgress);
         }
+        if let Some(service) = self.sweep_service.finish(now) {
+            self.service = service;
+        }
     }
 
     /// Move leaves parked on `Feed` into the ready queue when the feed
@@ -165,48 +167,5 @@ impl SrtShardBackend {
             }
             self.enqueue_ready_candidate(key);
         }
-    }
-}
-
-/// A shard is saturated when at least `SATURATED_MIN_PRESSURED_LEAVES` of the
-/// leaves one full sweep visited, and at least a quarter of them, were
-/// backpressured or stalled: the Owner, not one destination, is behind. The
-/// minimum is on pressured leaves, not on population, so one stuck
-/// destination on a small shard (1 of 4) is still recycled.
-const SATURATED_SHARE_DENOMINATOR: usize = 4;
-const SATURATED_MIN_PRESSURED_LEAVES: usize = 4;
-
-pub(super) fn shard_saturated(visited: usize, pressured: usize) -> bool {
-    pressured >= SATURATED_MIN_PRESSURED_LEAVES
-        && pressured * SATURATED_SHARE_DENOMINATOR >= visited
-}
-
-#[cfg(test)]
-mod saturation_tests {
-    use super::shard_saturated;
-
-    #[test]
-    fn a_lone_stuck_destination_does_not_saturate_the_shard() {
-        assert!(!shard_saturated(4, 1), "1 of 4 is one bad destination");
-        assert!(!shard_saturated(8, 2));
-        assert!(!shard_saturated(100, 1));
-        assert!(!shard_saturated(100, 24));
-    }
-
-    #[test]
-    fn a_quarter_of_the_shard_and_at_least_four_outputs_behind_is_saturation() {
-        assert!(shard_saturated(16, 4));
-        assert!(shard_saturated(100, 25));
-        assert!(shard_saturated(200, 200));
-    }
-
-    #[test]
-    fn fewer_than_four_pressured_outputs_are_never_saturation() {
-        assert!(
-            !shard_saturated(3, 3),
-            "small shards still recycle stalled outputs"
-        );
-        assert!(!shard_saturated(4, 3));
-        assert!(!shard_saturated(0, 0));
     }
 }

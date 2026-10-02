@@ -205,10 +205,9 @@ impl EgressFabricConfig {
         NonZeroU32::new(self.shards).expect("egress fabric shard count is clamped nonzero")
     }
 
-    /// SRT's initial shard count. The benchmark-only WI3.7 seam is applied
-    /// only to the SRT fabric; RTMP/sink/pipeline retain `shards`.
+    /// SRT starts small, exactly like RTMP; the benchmark seam can pin a count.
     pub(crate) fn srt_shard_count(&self) -> NonZeroU32 {
-        NonZeroU32::new(wi37_srt_shard_override().unwrap_or(self.shards))
+        NonZeroU32::new(wi37_srt_shard_override().unwrap_or(1))
             .expect("egress fabric shard count is clamped nonzero")
     }
 
@@ -439,67 +438,50 @@ fn default_tokio_worker_threads(effective_cpus: usize) -> usize {
 /// gap entirely (fabric ~2% *below* legacy) and shrank the peak gap to
 /// ~3.5%, across three repeated live captures at each of shards=2, 4,
 /// and 6 — while preserving fabric's ~12-15% lower RSS throughout.
-fn default_egress_fabric_shards(effective_cpus: usize) -> u32 {
+pub(crate) fn default_egress_fabric_shards(effective_cpus: usize) -> u32 {
     effective_cpus.clamp(2, 8) as u32
 }
 
-/// Outputs a single shard can carry before another shard is worth its
-/// fixed per-shard runtime/readiness overhead (see
-/// `default_egress_fabric_shards`'s doc comment). Chosen so this formula
-/// saturates at `default_egress_fabric_shards(effective_cpus)` right
-/// around 1,200 outputs on an 8-core host (`1200 / 8 = 150`... rounded
-/// RTMP-shaped output-count scaling threshold. The profile is bounded by the
-/// CPU-derived shard ceiling and is not used for SRT.
-const OUTPUTS_PER_SHARD: u32 = 128;
-
-/// How one egress fabric runtime's shard pool should scale with its
-/// output count. A runtime is per (protocol, feed); the profile is chosen
-/// by the owning engine path, not inferred here.
-///
-/// RTMP (`OutputCount`) spreads per-shard protocol and Compio TCP readiness
-/// work across outputs. SRT (`SrtCpuParallel`) instead budgets parallelism
-/// across the per-family Compio Owners each shard can host.
-///
-/// Keep the SRT policy unchanged: WI3.7 current-host measurements are
-/// provisional evidence, not a portable shard law. Revisit it only after the
-/// final transport is in place and cross-host qualification is available.
-/// Q-025 tracks that decision.
+/// Startup priors only. Both transports use the same runtime service-demand
+/// controller; SRT's prior reserves more CPU per output than RTMP.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EgressShardProfile {
-    /// RTMP/sink/pipeline feeds: grow one shard per `OUTPUTS_PER_SHARD`
-    /// outputs, bounded by the CPU-derived ceiling.
     OutputCount,
-    /// SRT feeds: always claim the CPU-derived ceiling, independent of
-    /// output count — shard count is an egress-multiplexer parallelism
-    /// budget, and CPU count is its natural ceiling. Provisional after the
-    /// srt-rs cutover; see `target_egress_fabric_shards`' note.
-    SrtCpuParallel,
+    SrtOutputCount,
 }
 
-/// Live, output-count-aware shard target for one egress fabric runtime
-/// (one instance per protocol per feed — see `EgressFabricRuntime`), used
-/// to rescale the shard pool as outputs are added/removed instead of
-/// paying for a fixed shard count picked once at startup. Default builds
-/// remain a pure CPU-derived policy. The benchmark-only WI3.7 feature may
-/// supply an exact 1..=4 SRT target through `RESTREAM_WI37_SRT_SHARDS`.
+impl EgressShardProfile {
+    pub(crate) fn outputs_per_shard(self) -> u32 {
+        match self {
+            Self::OutputCount => 128,
+            // Delivery checked at 4.8 Mbit/s/output: one shard delivered 64,
+            // began degrading at 96 and collapsed at 128 on the reference VPS.
+            Self::SrtOutputCount => 64,
+        }
+    }
+
+    pub(crate) fn shard_override(self) -> Option<u32> {
+        match self {
+            Self::SrtOutputCount => wi37_srt_shard_override(),
+            Self::OutputCount => None,
+        }
+    }
+}
+
+/// Symmetric output-count startup law, capped by available shard parallelism.
 pub(crate) fn target_egress_fabric_shards(
     profile: EgressShardProfile,
     output_count: usize,
     effective_cpus: usize,
 ) -> u32 {
     let cpu_max = default_egress_fabric_shards(effective_cpus);
-    if matches!(profile, EgressShardProfile::SrtCpuParallel)
-        && let Some(requested) = wi37_srt_shard_override()
-    {
+    if let Some(requested) = profile.shard_override() {
         return requested;
     }
-    let by_outputs = match profile {
-        EgressShardProfile::OutputCount => u32::try_from(output_count)
-            .unwrap_or(u32::MAX)
-            .div_ceil(OUTPUTS_PER_SHARD)
-            .max(1),
-        EgressShardProfile::SrtCpuParallel => cpu_max.max(1),
-    };
+    let by_outputs = u32::try_from(output_count)
+        .unwrap_or(u32::MAX)
+        .div_ceil(profile.outputs_per_shard())
+        .max(1);
     by_outputs.clamp(1, cpu_max)
 }
 

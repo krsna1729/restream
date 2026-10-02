@@ -59,8 +59,13 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   measurement until WI4A–WI6 transport convergence, WI7/WI9 cleanup, and WI8
   runtime/host calibration are complete. No production shard policy or
   performance constants change from WI3.7.
-- Status: open and deferred until those prerequisites are complete (Filed:
-  2026-09-05 by claude, from PR #141 review).
+- Status: current-host part done (2026-10-02). The CPU-ceiling SRT profile is
+  gone: SRT and RTMP share one service-demand law (`src/media/egress/sizing.rs`)
+  with a delivery-checked cold prior (64 SRT outputs per shard at 4.8 Mbit/s),
+  and resizing never moves a live output (`docs/runtime-crossings.md` M6).
+  Still open: cross-host qualification of the cold prior and of
+  `srt_egress_connect_concurrency` (Filed: 2026-09-05 by claude, from PR #141
+  review).
 
 ### Q-026 [resilience] [opus] Attribute and recalibrate the frozen-SRT-destination RSS gate
 - Goal: explain the ~70 MB RSS growth of `fault.srt-output-stall`'s frozen

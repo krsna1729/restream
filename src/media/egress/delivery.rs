@@ -6,6 +6,10 @@
 
 use std::time::{Duration, Instant};
 
+/// Delivery ratio below which an output is not keeping up with what the feed
+/// offered. Shared by quality reporting and shard sizing.
+pub(crate) const DELIVERY_FLOOR: f64 = 0.95;
+
 /// Shortest window a delivery rate is computed over. The stall sweep samples
 /// every second, but one second of peer ACKs against one second of publishing
 /// swings with keyframe bursts and ACK timing; five seconds is steady enough

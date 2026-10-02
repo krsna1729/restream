@@ -89,6 +89,106 @@ pub struct OwnerFamilyMetrics {
 }
 
 // ---------------------------------------------------------------------------
+// Delivery service quality (input to shard sizing)
+// ---------------------------------------------------------------------------
+
+/// A shard is saturated when at least `SATURATED_MIN_PRESSURED_LEAVES` of the
+/// leaves one full sweep visited, and at least a quarter of them, were
+/// backpressured or stalled: the shard, not one destination, is behind. The
+/// minimum is on pressured leaves, not on population, so one stuck
+/// destination on a small shard (1 of 4) is still recycled.
+const SATURATED_SHARE_DENOMINATOR: usize = 4;
+const SATURATED_MIN_PRESSURED_LEAVES: usize = 4;
+
+pub(crate) fn shard_saturated(visited: usize, pressured: usize) -> bool {
+    pressured >= SATURATED_MIN_PRESSURED_LEAVES
+        && pressured * SATURATED_SHARE_DENOMINATOR >= visited
+}
+
+/// What one full stall sweep saw across a shard's outputs: how many closed a
+/// delivery window, how many of those fell under the delivery floor, and the
+/// sums needed to combine shards into one fairness index. Fixed scalars; the
+/// sweep that already visits every leaf at ~1 Hz fills it, so it adds nothing
+/// to a packet path.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ShardService {
+    /// Leaves the sweep visited.
+    pub visited: u32,
+    /// Of those, backpressured or stalled.
+    pub pressured: u32,
+    /// `shard_saturated(visited, pressured)`.
+    pub saturated: bool,
+    /// Leaves with a closed delivery window (a ratio to judge).
+    pub rated: u32,
+    /// Rated leaves delivering under `DELIVERY_FLOOR` of what was offered.
+    pub under_floor: u32,
+    /// `Σ delivery_ratio` and `Σ delivery_ratio²` over rated leaves: Jain's
+    /// index across shards is `(Σx)² / (n·Σx²)` on the summed values.
+    pub sum_ratio: f64,
+    pub sum_sq_ratio: f64,
+    /// `Σ offered_bps` over rated leaves.
+    pub offered_bps: f64,
+    pub delivered_bps: f64,
+    pub completed_at: Option<Instant>,
+}
+
+/// Collects one sweep's leaves into a [`ShardService`].
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ServiceAccumulator {
+    summary: ShardService,
+    remaining: usize,
+}
+
+impl ServiceAccumulator {
+    pub(crate) fn invalidate(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Keep the sweep bounded, but retain its totals over the entire rotation.
+    pub(crate) fn begin(&mut self, population: usize) -> usize {
+        if self.remaining == 0 {
+            self.summary = ShardService::default();
+            self.remaining = population;
+        }
+        self.remaining.min(256)
+    }
+
+    pub(crate) fn add(&mut self, pressured: bool, delivery: Option<(f64, f64)>) {
+        if self.remaining == 0 {
+            return;
+        }
+        self.remaining -= 1;
+        let summary = &mut self.summary;
+        summary.visited += 1;
+        summary.pressured += u32::from(pressured);
+        if let Some((ratio, offered)) = delivery
+            && ratio.is_finite()
+            && ratio >= 0.0
+            && offered.is_finite()
+            && offered > 0.0
+        {
+            summary.rated += 1;
+            summary.under_floor +=
+                u32::from(ratio < crate::media::egress::delivery::DELIVERY_FLOOR);
+            summary.sum_ratio += ratio;
+            summary.sum_sq_ratio += ratio * ratio;
+            summary.offered_bps += offered;
+            summary.delivered_bps += ratio * offered;
+        }
+    }
+
+    pub(crate) fn finish(&mut self, now: Instant) -> Option<ShardService> {
+        if self.remaining > 0 || self.summary.visited == 0 {
+            return None;
+        }
+        let mut summary = std::mem::take(&mut self.summary);
+        summary.saturated = shard_saturated(summary.visited as usize, summary.pressured as usize);
+        summary.completed_at = Some(now);
+        Some(summary)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ShardMetrics
 // ---------------------------------------------------------------------------
 
@@ -166,6 +266,13 @@ pub struct ShardMetrics {
     pub srt_managed_rx_available: bool,
     /// Owner teardowns that missed their quiescence bound.
     pub srt_owner_shutdown_incomplete: u64,
+
+    /// Last completed stall sweep's delivery summary (see [`ShardService`]).
+    pub service: ShardService,
+    /// CPU time consumed by the shard thread, cumulative; sampled about once a
+    /// second. Zero until first sampled or where the clock is unavailable.
+    pub thread_cpu_ns: u64,
+    pub thread_cpu_at: Option<Instant>,
 
     /// Time this snapshot was collected.
     pub collected_at: Option<Instant>,
@@ -390,13 +497,60 @@ mod tests {
     }
 
     #[test]
-    fn metric_names_not_empty() {
-        // Smoke-check that constants are non-empty (catches accidental blanks).
-        assert!(!names::LEAF_PENDING_BYTES.is_empty());
-        assert!(!names::DRIVER_BUDGET_VIOLATIONS.is_empty());
-        assert!(!names::FEED_RETAINED_MEDIA_AGE_MS.is_empty());
-        assert!(!names::FEED_OVERSIZED_UNITS.is_empty());
-        assert!(!names::LEAF_BYTES_SENT.is_empty());
-        assert!(!names::LEAF_BYTES_DISCARDED.is_empty());
+    fn service_sampling_preserves_delivery_and_isolates_one_slow_peer() {
+        let mut sample = ServiceAccumulator::default();
+        let now = Instant::now();
+        assert_eq!(sample.begin(4), 4);
+        sample.add(true, Some((0.1, 100.0)));
+        for _ in 0..3 {
+            sample.add(false, Some((1.0, 100.0)));
+        }
+        let summary = sample.finish(now).unwrap();
+        assert_eq!((summary.rated, summary.under_floor), (4, 1));
+        assert_eq!(summary.offered_bps, 400.0);
+        assert_eq!(summary.delivered_bps, 310.0);
+        assert!(!summary.saturated);
+        assert!(sample.finish(now).is_none());
+        assert!(shard_saturated(16, 4));
+        assert!(!shard_saturated(4, 1));
+        assert!(!shard_saturated(100, 24));
+        assert!(shard_saturated(100, 25));
+        assert!(!shard_saturated(3, 3));
+    }
+
+    #[test]
+    fn service_rotation_covers_large_populations_and_restarts_on_membership_change() {
+        let now = Instant::now();
+        let mut sample = ServiceAccumulator::default();
+        assert_eq!(sample.begin(300), 256);
+        for _ in 0..256 {
+            sample.add(false, Some((1.0, 100.0)));
+        }
+        assert!(
+            sample.finish(now).is_none(),
+            "a bounded batch is not the whole population"
+        );
+        assert_eq!(sample.begin(300), 44);
+        for _ in 0..44 {
+            sample.add(false, Some((1.0, 100.0)));
+        }
+        let summary = sample.finish(now).unwrap();
+        assert_eq!(summary.rated, 300);
+        assert_eq!(summary.delivered_bps, 30_000.0);
+        assert_eq!(summary.completed_at, Some(now));
+        sample.begin(300);
+        for _ in 0..256 {
+            sample.add(false, Some((1.0, 100.0)));
+        }
+        sample.invalidate();
+        assert_eq!(sample.begin(2), 2);
+        for _ in 0..2 {
+            sample.add(false, Some((1.0, 200.0)));
+        }
+        assert_eq!(
+            sample.finish(now).unwrap().delivered_bps,
+            400.0,
+            "retired leaves cannot leak into the next rotation"
+        );
     }
 }

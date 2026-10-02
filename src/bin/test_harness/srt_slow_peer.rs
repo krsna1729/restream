@@ -6,10 +6,9 @@
 //! timers and generating ACK/NAK/control. That is receiver-window backpressure
 //! on a live connection -- not a frozen (SIGSTOPped) peer, which
 //! `fault.srt-output-stall` covers separately. Healthy siblings go to the
-//! harness's fast SRT sink. SRT egress always runs at least two shards
-//! (`default_egress_fabric_shards` clamps the CPU-derived count to 2..=8), so
-//! even one effective CPU gives TWO shards. With `SLOW_PEER_EXACT_OWNER=1` the
-//! healthy siblings are chosen with the production
+//! harness's fast SRT sink. SRT starts with one shard and grows from measured
+//! service demand. With `SLOW_PEER_EXACT_OWNER=1` the healthy siblings are
+//! chosen with the production
 //! `assign_output_to_shard` and the LIVE shard count, so every one of them
 //! (and the slow output) provably lives on the same shard, hence the same IPv4
 //! Owner and caller socket. (`shardId` in the output health row is not used: it
@@ -377,7 +376,7 @@ pub(crate) async fn srt_slow_peer() -> Result<Value, String> {
         "label": label,
         "healthyOutputs": healthy_count,
         "watchSecs": watch.as_secs(),
-        "topologyNote": "SRT egress floors its shard count at 2 (default_egress_fabric_shards clamps to 2..=8): one effective CPU still gives TWO shards",
+        "topologyNote": "SRT starts with one shard and sizes from output demand; exact-owner assertions use the live topology, not a CPU-derived floor",
         "exactOwner": exact_topology,
         "targetOwnerAtPauseStart": owner_at_start,
         "targetOwnerAtPauseEnd": owner_at_end,

@@ -117,6 +117,10 @@ run_common_concurrency_checks() {
     scripts/build/resource-limit.sh cargo test media::recording::tests::drain_ready_bursts --lib -- --nocapture
   "$run_step_fn" lib-media-executor \
     scripts/build/resource-limit.sh cargo test media::executor::tests --lib
+  "$run_step_fn" lib-egress-sizing \
+    scripts/build/resource-limit.sh cargo test media::egress::sizing --lib
+  "$run_step_fn" lib-egress-resize \
+    scripts/build/resource-limit.sh cargo test media::egress::runtime --lib
   "$run_step_fn" lib-media-control-isolation \
     scripts/build/resource-limit.sh cargo test while_control_thread_is_blocked --lib
   "$run_step_fn" lib-media-file-ingest \
