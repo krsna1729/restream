@@ -3259,19 +3259,26 @@ Open, in order:
    A cross-thread handoff, if one is ever needed, uses the wait-free SPSC
    ring measured in `benches/ingest_handoff.rs` (rtrb 18.6 M payloads/s vs
    5.3 M for today's Tokio mpsc).
-4. **Core segregation after WI11** (written: branch `wi11/cores`, off by
-   default, compiled and live-checked: `RESTREAM_CONTROL_CPUS` /
-   `RESTREAM_HOT_CPUS` / `RESTREAM_MEDIA_CPUS`; Tokio and the main thread
-   on control, owners/shards/FFmpeg I/O on hot, FFmpeg on media, shards
-   sized from the hot set; sets outside the starting affinity mask, e.g. a
-   container cpuset, disable it; the on/off A/B below decides adoption): disjoint control (Tokio, blocking pool,
-   sqlx) and hot-path (egress shards, ingress owners, media workers) CPU
-   sets from `sched_getaffinity`; pin at thread start; size shards from the
-   hot set and Tokio from the control set; no split at ≤ 2 CPUs; FFmpeg
-   placement decided by measurement. Interleaved on/off A/B at RTMP×1000,
-   SRT×100, HLS×500 under API load. WI11 is done, so ingest and container
-   media no longer run on the control runtime and the split now measures
-   classes separately.
+4. **Core segregation after WI11: rejected (2026-10-02).** Branch `wi11/cores`
+   pinned threads at start: Tokio and the main thread on `RESTREAM_CONTROL_CPUS`,
+   owners and shards on `RESTREAM_HOT_CPUS`, media workers and FFmpeg on
+   `RESTREAM_MEDIA_CPUS`. It also sized Tokio and shards from those sets. Release
+   run, kernel 7.0.0-34, Restream on 4 CPUs (control 0, hot 1-2, media 3),
+   harness on 2, arms interleaved, 2 repeats each:
+   - Against the default, segregation used less CPU: RTMP×1000 134–147% →
+     105–112%, HLS×500 69% → 55–57%, SRT×100 125–151% → 107–128%. But SRT
+     delivery got worse: the default passed 12/12 repeats (SRT×100 and ×50),
+     segregation 9/12 at SRT×100.
+   - A control arm kept segregation's thread counts (2 shards, 1 Tokio worker)
+     without pinning. It gave the same RTMP saving (102–104%), so the saving
+     comes from fewer threads, not placement. Against this control, pinning
+     cost +3–6% CPU on RTMP and saved ~11% CPU on SRT (114 vs 128%), where the
+     control passed only 2/4 repeats.
+   Placement is not a win over today's default, and it adds affinity code that
+   [Q-012](agent-guidance/quality/baselines.md) already rejected. Use a
+   process-level cpuset. The useful signal is the thread count: RTMP×1000 held
+   delivery on 2 shards for ~25% less CPU than on 4. That belongs to the shard
+   law (Q-025), not to placement. Patch archived; branch deleted.
 5. **O2 API observation cost**: health/telemetry built `serde_json::Value`
    trees per request (health snapshot 7–10% of Restream samples at RTMP×100).
    It does not interrupt egress (the API reads published atomics and
@@ -3290,24 +3297,18 @@ Open, in order:
 7. **Shard sizing on big hosts**: shards cap at `effective_cpus.clamp(2, 8)`
    and `effective_cpus` is read once at startup. Revisit with cross-host data
    (item 10); ties into Q-025.
-8. **HLS PUT on Compio via cyper (evaluation).** Written: branch
-   `wi11/hls-cyper`, compile-time feature `hls-put-cyper`; the upload loop
-   is shared and only the transport differs (Reqwest on Tokio vs cyper on
-   one `restream-hls-put` Compio thread). Both builds pass clippy and the 9
-   uploader tests (real PUT sink, timeout, retry). HLS PUT uploads with Reqwest
-   on Tokio (`src/media/hls/upload.rs`: one uploader per output polling the
-   in-memory store every 500 ms). `cyper` 0.9 (hyper 1 on compio `^0.19`)
-   matches the pinned compio 0.19.2. Adopt only if it qualifies on every one
-   of: signed URLs and YouTube-style `file=` query parameters;
-   segment-before-playlist ordering and playlist-update visibility; rustls
-   certificate verification, SNI and HTTP/2 negotiation; HTTP 307/308
-   redirects preserving the PUT method and body; timeouts, cancellation during
-   an outstanding request, retries and reconnects; connection reuse across
-   successive segments and playlists; and CPU per uploaded GiB, allocations,
-   syscalls, wakeups and tail upload latency against Reqwest (interleaved A/B;
-   the ramp's HLS rungs give lag p99/max). Current baseline: HLS×1000 at 118%
-   of 3 cores, p99 lag 1.1–1.9 s. This is the "optional transport experiment"
-   in §35, not a prerequisite for anything else.
+8. **HLS PUT on Compio via cyper: rejected (2026-10-02).** Branch
+   `wi11/hls-cyper` (feature `hls-put-cyper`) ran every uploader on one
+   `restream-hls-put` Compio thread. Release run, Restream on 3 CPUs, arms
+   interleaved, 2 rounds × 2 repeats. Restream CPU was unchanged (HLS×500
+   59–63% Reqwest vs 52–72% cyper; HLS×1000 95–97% vs 89–105%); the work only
+   moved off Tokio onto the new thread. p99 segment lag got 2–4× worse (×500:
+   0.53–0.71 s → 1.1–1.8 s; ×1000: 0.94–1.21 s → 2.4–5.4 s). The ×1000 rung
+   failed 1 of 2 repeats in both rounds. Peak RSS grew from 0.22 to 3.8–4.5 GB
+   at ×500 and from 0.36 to 8.8–9.2 GB at ×1000. For context, Reqwest HLS PUT
+   costs about as much per Gbit/s as RTMP egress (~15% vs ~17% of a core). The
+   open HLS item is the 500 ms per-output store polling, not the transport.
+   Patch archived; branch deleted.
 9. **SRT overload behaviour** (product decision): past capacity, SRT degrades
    many destinations at once. Choose admission control or load shedding.
 10. **Cross-host capacity run** (user-run, prompt in
@@ -3412,9 +3413,16 @@ Open, in order:
       48-feed pair measured 64.8% raw vs 49.3% managed `srt-in` CPU, but
       Restream-received input rates differed (7.81 vs 4.45 Mbit/s/feed), so
       exclude that CPU contrast rather than claim a gain.
-15. **mimalloc decision**: `alloc-mimalloc` / `alloc-jemalloc` features and
-    `#[global_allocator]` are on local branch `wip/alloc-ab` (462c411e).
-    Needs the fan-out A/B, then adopt or drop.
+15. **Allocator: keep glibc (2026-10-02).** `mimalloc` and `jemalloc` were
+    tried as `#[global_allocator]` features. Release run, kernel 7.0.0-38,
+    Restream on 4 CPUs, arms interleaved, 2 rounds × 2 repeats; every arm
+    passed delivery. RTMP×1000 CPU: glibc 118/122%, mimalloc 116/106%,
+    jemalloc 119/117%. HLS×500: 63/57%, 56/58%, 58/55%. Peak RSS at RTMP×1000:
+    263–266, 270–287 and 306–313 MB. No allocator beats glibc outside the spread
+    between rounds, and jemalloc costs +16–18% RSS. SRT could not be judged on
+    this kernel (see backlog Q-027). The earlier SRT-ingest result (mimalloc −13% total
+    CPU at 32 publishers, +90 MB) is still unrepeated. Patch archived; branch
+    deleted.
 16. **Hot-path ledger** (the exit criterion above): symbol-resolved release
     profiles of every hot thread, with sections for copies
     ([media-copy-audit.md](media-copy-audit.md)), crossings
@@ -3429,10 +3437,11 @@ Open, in order:
     (srt-rs sends at submit and retransmits from a loss queue); batched
     receive (its future work) landed above. Still to measure: RSS per idle
     SRT session at 1000 outputs (lazy payload memory on the receive side).
-17. **Housekeeping**: native worktrees under `.local/worktrees/`
-    (`wi11-feedwake` and `wi11-ffmpeg-input` are merged and can go;
-    `wi11-bufreuse` pending) and pushed branches `wi11/ffmpeg-input`
-    (merged) and `wi11/bufreuse` (pending) to delete after merge.
+17. **Housekeeping: done (2026-10-02).** The WI11 worktrees and branches are
+    gone: `wi11/bufreuse` merged (#206); `wi11/ingress-shards` was superseded
+    by #201; `wi11/cores`, `wi11/hls-cyper`, `wip/alloc-ab` and
+    `codex/rx-owner-tsmux` were rejected or superseded, and their patches are
+    archived under `.local/artifacts/`.
 
 Watch items: local `fault.resilience` (2026-09-28, debug build, 4 runs on the
 tree after step 4 and the review fixes) failed twice, on different cases:
