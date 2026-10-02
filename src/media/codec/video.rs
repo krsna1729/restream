@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::ops::ControlFlow;
 
 use bytes::Bytes;
 
@@ -188,15 +189,12 @@ pub(crate) struct AnnexbParameterSetAccumulator {
 
 impl AnnexbParameterSetAccumulator {
     pub(crate) fn push_payload(&mut self, payload: &[u8]) -> Option<Vec<u8>> {
-        let nalus = split_annexb_nalus(payload);
-        if nalus.is_empty() {
-            return self.complete();
-        }
-
-        for nalu in nalus {
+        // Runs for every video packet; allocates only when the payload
+        // actually carries parameter sets.
+        let _ = for_each_annexb_nalu(payload, |nalu| {
             self.push_nalu(nalu);
-        }
-
+            ControlFlow::Continue(())
+        });
         self.complete()
     }
 
@@ -279,21 +277,17 @@ fn annexb_nalu(nalu: &[u8]) -> Vec<u8> {
 }
 
 pub(crate) fn raw_annexb_is_keyframe(payload: &[u8]) -> bool {
-    split_annexb_nalus(payload).iter().any(|nalu| {
-        if nalu.is_empty() {
-            return false;
+    for_each_annexb_nalu(payload, |nalu| {
+        let keyframe = !nalu.is_empty()
+            && ((nalu[0] & 0x1F) == 5
+                || (nalu.len() >= 2 && matches!((nalu[0] >> 1) & 0x3F, 16..=23)));
+        if keyframe {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
         }
-
-        let h264_nal_type = nalu[0] & 0x1F;
-        if h264_nal_type == 5 {
-            return true;
-        }
-
-        if nalu.len() < 2 {
-            return false;
-        }
-        matches!((nalu[0] >> 1) & 0x3F, 16..=23)
     })
+    .is_break()
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -441,26 +435,27 @@ pub fn annexb_to_avcc(data: &[u8]) -> Vec<u8> {
 /// Like `annexb_to_avcc` but appends output into a caller-provided buffer.
 /// Callers can reuse the allocation across packets to avoid per-packet heap churn.
 ///
-/// # Implementation choice: two-pass (split_annexb_nalus) over single-pass (Peekable)
+/// # Implementation choice: callback walker (no allocation)
 ///
-/// A streaming single-pass variant using `memmem::find_iter().peekable()` was
-/// benchmarked on 2026-06-23 (bench-dev, x86-64, Zen-family) and was
-/// **25–31% slower** for the dominant 1-NALU P-frame case (~890 ns vs ~690 ns at
-/// 8 KiB). The `Peekable` iterator wrapper adds per-call overhead that exceeds
-/// the cost of the two small intermediate Vecs allocated by `split_annexb_nalus`.
-/// Re-benchmark on hardware with slower allocators or if NALU counts grow
-/// significantly (>4 per frame) where the allocation cost might dominate.
+/// History: a `memmem::find_iter().peekable()` single-pass variant was
+/// measured 25–31% slower than a two-pass split into two small `Vec`s on
+/// 2026-06-23 (1-NALU P-frame at 8 KiB, ~890 ns vs ~690 ns), in a
+/// single-threaded micro-benchmark where allocation is uncontended. Under
+/// production load those per-packet `Vec`s contend on the allocator (arena
+/// lock waits on the SRT ingress Owner, runtime-crossings C3), so this walks
+/// NALUs with [`for_each_annexb_nalu`]: one pass, no `Peekable`, no
+/// allocation. `benches/codec_conversions.rs` compares it with the scratch
+/// variant below.
 #[inline]
 pub fn annexb_to_avcc_into(data: &[u8], out: &mut Vec<u8>) -> bool {
-    let nalus = split_annexb_nalus(data);
     let mut has_vcl = false;
-    for nalu in &nalus {
+    let _ = for_each_annexb_nalu(data, |nalu| {
         if nalu.is_empty() {
-            continue;
+            return ControlFlow::Continue(());
         }
         let nal_type = nalu[0] & 0x1F;
         if matches!(nal_type, 7..=9) {
-            continue;
+            return ControlFlow::Continue(());
         }
         if matches!(nal_type, 1..=5) {
             has_vcl = true;
@@ -468,7 +463,8 @@ pub fn annexb_to_avcc_into(data: &[u8], out: &mut Vec<u8>) -> bool {
         let len = nalu.len() as u32;
         out.extend_from_slice(&len.to_be_bytes());
         out.extend_from_slice(nalu);
-    }
+        ControlFlow::Continue(())
+    });
     has_vcl
 }
 
@@ -553,19 +549,44 @@ pub fn find_annexb_start_codes(data: &[u8]) -> Vec<(usize, usize)> {
 /// Split Annex B byte stream into individual NALUs (without start codes).
 pub fn split_annexb_nalus(data: &[u8]) -> Vec<&[u8]> {
     let mut nalus = Vec::new();
-    let starts = find_annexb_start_codes(data);
-    for i in 0..starts.len() {
-        let nalu_start = starts[i].1;
-        let nalu_end = if i + 1 < starts.len() {
-            starts[i + 1].0
-        } else {
-            data.len()
-        };
-        if nalu_start < nalu_end {
-            nalus.push(&data[nalu_start..nalu_end]);
-        }
-    }
+    let _ = for_each_annexb_nalu(data, |nalu| {
+        nalus.push(nalu);
+        ControlFlow::Continue(())
+    });
     nalus
+}
+
+/// Visit each NALU of an Annex B stream (without its start code), in order,
+/// stopping as soon as `visit` breaks. Same boundaries as
+/// [`find_annexb_start_codes`] and [`split_annexb_nalus`], in one pass with no
+/// allocation: the per-frame `Vec`s the split form builds showed up as
+/// allocator-lock waits on the SRT ingress Owner (runtime-crossings C3), so
+/// per-packet paths walk NALUs with this instead.
+pub fn for_each_annexb_nalu<'a>(
+    data: &'a [u8],
+    mut visit: impl FnMut(&'a [u8]) -> ControlFlow<()>,
+) -> ControlFlow<()> {
+    let finder = get_start_code_finder();
+    // Payload start of the NALU whose end is the next start code.
+    let mut current: Option<usize> = None;
+    for idx in finder.find_iter(data) {
+        let mut start = idx;
+        while start > 0 && data[start - 1] == 0 {
+            start -= 1;
+        }
+        if let Some(nalu_start) = current
+            && nalu_start < start
+        {
+            visit(&data[nalu_start..start])?;
+        }
+        current = Some(idx + 3);
+    }
+    if let Some(nalu_start) = current
+        && nalu_start < data.len()
+    {
+        visit(&data[nalu_start..])?;
+    }
+    ControlFlow::Continue(())
 }
 
 /// Build an FLV video sequence header (AVCC decoder config) from Annex B keyframe data.

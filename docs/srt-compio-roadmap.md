@@ -3317,13 +3317,17 @@ Open, in order:
 11. **WI7.3**: residual dead-code and compatibility audit against the current
     tree.
 12. **WI11 follow-ups** (2026-09-28):
-    - Annex B walker (allocation-free per-frame parameter-set scan): branch
-      `wi11/bufreuse`, CI green. `codec_conversions` before/after is
-      inconclusive: unchanged benches moved −27% to +9%; walker paths
-      `annexb_to_avcc/two_pass` −16%/−27% (P-frames), `with_scratch` and
-      `video_for_rtmp` IDR +9%/+12%. The parameter-set scan it targets has
-      no direct bench: add one, then interleaved repeats, before adopting. TS demuxer buffer reuse (per-PES allocation) not
-      started.
+    - **DONE** Annex B walker (`for_each_annexb_nalu`): one pass over the
+      NALUs with no allocation, used by the per-frame parameter-set scan,
+      `raw_annexb_is_keyframe` and `annexb_to_avcc_into`. `codec_conversions`
+      was run pinned to one CPU, base and walker alternated twice
+      (2026-10-02). On the changed paths, P-frame and multi-NALU conversions
+      ran 9–21% faster in both rounds (`annexb_to_avcc/two_pass` 8 KiB
+      400/429 → 362/374 ns; 3-NALU 30 KiB 1.67/1.71 → 1.37/1.55 µs;
+      `video_for_rtmp` 3-NALU 1.78/1.75 → 1.41/1.50 µs). The unchanged
+      `with_scratch` control moved −4% to +9%, and the IDR results were mixed
+      (−10%/+2%). This removes two allocations per frame on ingest and RTMP
+      egress. TS demuxer buffer reuse (per-PES allocation) has not started.
     - Wake gate armed before park: the shard clears its `WakeGate` every
       loop iteration, so a busy shard still costs the producer about one
       channel push per iteration. Clear it only just before parking (arm,

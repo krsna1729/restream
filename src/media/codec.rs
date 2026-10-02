@@ -19,7 +19,8 @@ pub use enhanced_rtmp_hevc::{
     build_hevc_enhanced_rtmp_sequence_header, hevc_video_for_enhanced_rtmp_with_composition_into,
 };
 pub(crate) use video::{
-    AnnexbParameterSetAccumulator, annexb_parameter_sets, raw_annexb_is_keyframe,
+    AnnexbParameterSetAccumulator, annexb_parameter_sets, for_each_annexb_nalu,
+    raw_annexb_is_keyframe,
 };
 pub use video::{
     annexb_to_avcc, annexb_to_avcc_into, annexb_to_avcc_with_scratch, avcc_to_annexb,
