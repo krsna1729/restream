@@ -50,6 +50,10 @@ pub struct EgressManager {
     desired_specs: HashMap<OutputId, OutputSpec>,
     command_depths: Vec<usize>,
     draining_shards: Vec<bool>,
+    /// Shards that accept NEW outputs (`<= config.shard_count`). Shards above
+    /// it only drain: a live output is never moved, so resizing cannot
+    /// reconnect a destination.
+    placement: NonZeroU32,
     shutting_down: bool,
 }
 
@@ -61,6 +65,7 @@ impl EgressManager {
             desired: HashMap::new(),
             desired_specs: HashMap::new(),
             draining_shards: vec![false; config.shard_count.get() as usize],
+            placement: config.shard_count,
             shutting_down: false,
         }
     }
@@ -70,7 +75,7 @@ impl EgressManager {
     }
 
     pub fn assign_output(&self, output_id: &OutputId) -> ShardId {
-        assign_output_to_shard(output_id, self.config.shard_count)
+        assign_output_to_shard(output_id, self.placement)
     }
 
     pub fn assign_spec(&self, spec: &OutputSpec) -> ShardId {
@@ -197,7 +202,11 @@ impl EgressManager {
     where
         F: FnMut(ShardId, EgressCommand) -> Result<(), E>,
     {
-        let shard_id = self.assign_spec(&spec);
+        // A live output stays where its leaf and socket live.
+        let shard_id = self
+            .desired
+            .get(&spec.id)
+            .map_or_else(|| self.assign_spec(&spec), |current| current.shard_id);
         if let Some(current) = self.desired.get(&spec.id) {
             if spec.generation < current.generation {
                 return Ok(ManagerCommandOutcome::IgnoredStale {
@@ -358,84 +367,48 @@ impl EgressManager {
             .count()
     }
 
-    /// Live output count this manager currently owns — the input to
-    /// `target_egress_fabric_shards` (`src/config.rs`) for dynamic shard
-    /// scaling.
+    /// Live output count this manager currently owns, the demand input for
+    /// shard sizing.
     pub fn output_count(&self) -> usize {
         self.desired.len()
     }
 
-    /// Re-derive every output's shard assignment under `new_shard_count`
-    /// and dispatch `Remove`+`Add` for exactly the outputs whose
-    /// assignment actually changed (see `assign_output_to_shard`'s doc
-    /// comment for why that's a small fraction, not all of them).
-    /// Updates `self.config`'s shard count and the per-shard bookkeeping
-    /// vecs to match. Returns the output ids that moved, for logging.
-    ///
-    /// Callers are expected to have already resized the underlying
-    /// `EgressShardGroup` to `new_shard_count` (grow before rehoming a
-    /// shard *onto*, shrink after rehoming everything *off* — see
-    /// `EgressFabricRuntime::rescale`) — this method only touches
-    /// `EgressManager`'s own view of shard count and assignment.
-    pub fn rehome<E, F>(
-        &mut self,
-        new_shard_count: NonZeroU32,
-        mut dispatch: F,
-    ) -> Result<Vec<OutputId>, EgressManagerDispatchError<E>>
-    where
-        F: FnMut(ShardId, EgressCommand) -> Result<(), E>,
-    {
-        if new_shard_count == self.config.shard_count {
-            return Ok(Vec::new());
-        }
-        let old_len = self.command_depths.len();
-        let new_len = new_shard_count.get() as usize;
-        self.config.shard_count = new_shard_count;
-        // Grow the bookkeeping vecs up front so newly targeted shards have
-        // a command-slot/draining entry before anything is dispatched to
-        // them. Shrinking is deferred to the end of this call (see below).
-        if new_len > old_len {
-            self.command_depths.resize(new_len, 0);
-            self.draining_shards.resize(new_len, false);
-        }
+    /// Shards accepting new outputs.
+    pub fn placement_count(&self) -> NonZeroU32 {
+        self.placement
+    }
 
-        let to_move: Vec<(OutputId, OutputSpec, ShardId)> = self
-            .desired
-            .iter()
-            .filter_map(|(output_id, desired)| {
-                let new_shard = assign_output_to_shard(output_id, new_shard_count);
-                if new_shard == desired.shard_id {
-                    return None;
-                }
-                let spec = self.desired_specs.get(output_id)?.clone();
-                Some((output_id.clone(), spec, desired.shard_id))
-            })
-            .collect();
+    /// Make `shards` shards, already spawned by the caller, available for new
+    /// outputs. Existing outputs stay where they are.
+    pub fn grow_to(&mut self, shards: NonZeroU32) {
+        let shards = shards.max(self.config.shard_count);
+        self.config.shard_count = shards;
+        self.command_depths.resize(shards.get() as usize, 0);
+        self.draining_shards.resize(shards.get() as usize, false);
+        self.placement = shards;
+    }
 
-        let mut moved = Vec::with_capacity(to_move.len());
-        for (output_id, spec, old_shard_id) in to_move {
-            // The caller shrinks the physical shard group before calling
-            // `rehome` (see `EgressFabricRuntime::rescale`), so an output
-            // whose old shard index is now >= `new_len` has already had
-            // its shard shut down and drained -- there is no live handle
-            // left to send `Remove` to, and the leaf state is already
-            // gone. Only outputs still on a surviving shard need an
-            // actual `Remove` dispatched there.
-            if (old_shard_id.index() as usize) < new_len {
-                self.dispatch_remove(output_id.clone(), &mut dispatch)?;
-            } else {
-                self.desired.remove(&output_id);
-                self.desired_specs.remove(&output_id);
-            }
-            self.dispatch_spec(spec, false, &mut dispatch)?;
-            moved.push(output_id);
-        }
+    /// Send new outputs only to the first `shards` shards (never more than
+    /// exist). Higher shards drain through ordinary output removal.
+    pub fn set_placement(&mut self, shards: NonZeroU32) {
+        self.placement = shards.min(self.config.shard_count);
+    }
 
-        if new_len < old_len {
-            self.command_depths.truncate(new_len);
-            self.draining_shards.truncate(new_len);
+    /// Forget the highest shard when it no longer accepts new outputs and
+    /// owns none. The caller then shuts its thread down. A shard with a live
+    /// output is never retired.
+    pub fn retire_empty_tail(&mut self) -> bool {
+        let tail = self.config.shard_count.get();
+        if tail <= 1
+            || self.placement.get() >= tail
+            || self.desired_count_for_shard(ShardId::new(tail - 1)) > 0
+        {
+            return false;
         }
-        Ok(moved)
+        self.config.shard_count = NonZeroU32::new(tail - 1).expect("tail > 1");
+        self.command_depths.truncate((tail - 1) as usize);
+        self.draining_shards.truncate((tail - 1) as usize);
+        true
     }
 }
 
@@ -485,15 +458,11 @@ pub enum EgressManagerDispatchError<E> {
 }
 
 /// Rendezvous (highest-random-weight) hashing: score every shard by
-/// hashing `(output_id, shard_index)` together and pick the max. Unlike
-/// `hash % shard_count`, changing `shard_count` only changes the winner
-/// for the outputs whose arg-max shard was affected — roughly
-/// `1/shard_count` of them — instead of remapping nearly everything.
-/// That property is what makes `EgressManager::rehome` (dynamic shard
-/// scaling) cheap: a resize only needs to move the outputs that actually
-/// changed shard, not replay every output on every shard. `shard_count`
-/// is always small (see `default_egress_fabric_shards`, capped at 8), so
-/// this stays a cheap `O(shard_count)` scan.
+/// hashing `(output_id, shard_index)` together and pick the max. Changing the
+/// count changes the winner for about `1/shard_count` of NEW outputs, while
+/// existing outputs keep their recorded shard. `shard_count` is always small
+/// (see `default_egress_fabric_shards`, capped at 8), so this stays a cheap
+/// `O(shard_count)` scan.
 pub fn assign_output_to_shard(output_id: &OutputId, shard_count: NonZeroU32) -> ShardId {
     let bytes = output_id.as_str().as_bytes();
     (0..shard_count.get())

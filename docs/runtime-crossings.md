@@ -152,7 +152,20 @@ Disk             blocking file writer threads
   destination port share sends). Delivery was not checked per output in this
   probe, so a single saturated shard could look cheaper than it is: one shard
   ran 28% at 8 outputs, so it saturates near 25–30 outputs at this bitrate.
-  This supports sizing SRT shards by output count per feed (the RTMP
-  `OutputCount` profile) instead of always claiming the CPU ceiling, but the
-  law is deliberately held provisional (Q-025) until a delivery-checked,
-  cross-host measurement exists.
+  Delivery-checked follow-up (2026-10-02, release, one 4 Mbit/s feed, sink
+  receivers, 20 s windows): one shard delivered every output at 8–64 outputs
+  (ratio ≥ 0.97, Jain ≥ 0.999) at 19–51% shard busy, started losing outputs at
+  96 (92/96 delivered, 62% busy) and collapsed at 128 (0/128, 89% busy); two
+  shards delivered 96/96 and lost fairness at 128. **Adopted:** SRT and RTMP use
+  one service-demand law (`egress::sizing`): every feed starts with one shard;
+  before each new output the pool is sized from measured CPU per delivered bit
+  times the feed's bitrate at 50% target busy (cold prior 64 SRT / 128 RTMP
+  outputs per shard). Live outputs never move: growth serves new outputs only,
+  and shrink stops placing on the tail shard and stops its thread once its last
+  output leaves (60 healthy windows, 5-minute dwell, projected < 40% busy on one
+  shard fewer). A thread-cgroup run (CPU quota on shard 0, 48 → 88 → 8 SRT
+  outputs) confirmed no topology change under short or sustained pressure, a
+  shard added only for new outputs, the tail retired after the dwell, and every
+  surviving destination kept its original SRT connection with no failure,
+  retry or unexpected close. Cross-host qualification of the coefficient
+  (Q-025) remains open.

@@ -37,15 +37,14 @@ impl MediaEngine {
         } else {
             let config = &self.config.egress_fabric;
             let group = spawn_sink_fabric_shard_group(
-                config.shard_count(),
+                std::num::NonZeroU32::MIN,
                 config.shard_config(),
                 config.work_budget(),
                 |_| feed.clone_reader(),
             )
             .map_err(SinkFabricEnsureError::Spawn)?;
-            let manager_config =
-                EgressManagerConfig::new(config.shards, config.command_channel_capacity)
-                    .expect("egress fabric manager config is clamped nonzero");
+            let manager_config = EgressManagerConfig::new(1, config.command_channel_capacity)
+                .expect("egress fabric manager config is clamped nonzero");
             let runtime = EgressFabricRuntime::new(manager_config, group)
                 .map_err(SinkFabricEnsureError::Runtime)?;
 
@@ -119,6 +118,7 @@ impl MediaEngine {
         let result = runtime.rescale(
             crate::config::EgressShardProfile::OutputCount,
             effective_cpus,
+            crate::media::egress::runtime::ResizeReason::Remove,
             shard_config,
             |_shard_id| {
                 let feed = feed.clone_reader();

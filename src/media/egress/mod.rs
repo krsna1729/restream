@@ -40,6 +40,7 @@ pub mod policy;
 pub(crate) mod runtime;
 pub mod scheduler;
 pub mod shard;
+pub(crate) mod sizing;
 pub mod supervisor;
 pub mod timer;
 pub mod visit;

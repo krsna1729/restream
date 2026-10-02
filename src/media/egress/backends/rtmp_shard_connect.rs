@@ -233,6 +233,8 @@ where
             delivery: Default::default(),
         });
         self.enqueue_stall_candidate(key);
+        self.sweep_service.invalidate();
+        self.service = Default::default();
         if let Some(previous) = self
             .output_sockets
             .insert(output_id.clone(), RtmpLeafSocket { key, fd })

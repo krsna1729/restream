@@ -113,12 +113,12 @@ where
         // Visit each queued leaf at most once per sweep: live keys return to
         // the tail, so a fixed count would revisit them at the same `now` and
         // collapse every two-sample rate (send rate, delivery) to a zero window.
-        let visits = self.stall_candidates.len().min(256);
+        let visits = self.sweep_service.begin(self.stall_candidates.len());
         for _ in 0..visits {
             let Some(key) = self.stall_candidates.pop_front() else {
                 break;
             };
-            let Some((output_id, close)) =
+            let Some((output_id, close, pressured, delivery)) =
                 self.leaves
                     .get_mut(key.0)
                     .and_then(Option::as_mut)
@@ -129,6 +129,9 @@ where
                             0
                         };
                         let quality = leaf.sample_quality(now, feed_published_bytes);
+                        let delivery = quality
+                            .as_ref()
+                            .and_then(|q| Some((q.delivery_ratio?, q.offered_bps?)));
                         let reason = match leaf.observe_stall(now) {
                             LeafStallClass::Idle => None,
                             LeafStallClass::Backpressured => Some("backpressured"),
@@ -156,11 +159,15 @@ where
                         (
                             leaf.common.output_id.clone(),
                             draining || startup_expired || matches!(reason, Some("stalled")),
+                            reason.is_some(),
+                            delivery,
                         )
                     })
             else {
+                self.sweep_service.add(false, None);
                 continue;
             };
+            self.sweep_service.add(pressured, delivery);
             if !close {
                 self.enqueue_stall_candidate(key);
                 continue;
@@ -174,6 +181,9 @@ where
             // The shared removal path returns the key to `free_leaf_keys` and
             // purges it from every queue; closing in place leaked the slot.
             self.remove_leaf_socket(socket_ref, CloseReason::NoProgress);
+        }
+        if let Some(service) = self.sweep_service.finish(now) {
+            self.service = service;
         }
     }
 }

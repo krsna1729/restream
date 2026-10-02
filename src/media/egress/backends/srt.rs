@@ -232,13 +232,11 @@ pub(crate) struct SrtShardBackend {
     pending_connects: HashMap<OutputId, PendingSrtConnect>,
     event_scratch: Vec<owner_set::SrtOwnerEvent>,
     last_stall_sweep: Option<Instant>,
-    /// Leaves the current stall sweep visited, and how many of them were
-    /// backpressured or stalled.
-    sweep_visited: usize,
-    sweep_pressured: usize,
-    /// Whether the previous full sweep found the shard saturated (see
-    /// `srt_drain::shard_saturated`).
-    shard_saturated: bool,
+    /// Accumulates the current stall sweep (leaves visited, how many were
+    /// backpressured or stalled, delivery windows closed).
+    sweep_service: crate::media::egress::metrics::ServiceAccumulator,
+    /// The previous full sweep's summary; published in shard metrics.
+    service: crate::media::egress::metrics::ShardService,
     /// Leaves get `drain_timeout` minus the Owner-teardown reserve to flush,
     /// so shutdown stays inside the generic shard drain deadline.
     drain_timeout: Duration,
@@ -289,9 +287,8 @@ impl SrtShardBackend {
             pending_connects: HashMap::new(),
             event_scratch: Vec::with_capacity(256),
             last_stall_sweep: None,
-            sweep_visited: 0,
-            sweep_pressured: 0,
-            shard_saturated: false,
+            sweep_service: Default::default(),
+            service: Default::default(),
             drain_timeout: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
             owner_shutdown_reserve: owner_set::OWNER_SHUTDOWN_RESERVE,
             resync_count: 0,
@@ -401,6 +398,8 @@ impl SrtShardBackend {
         self.callers.insert(caller, key);
         self.enqueue_ready_candidate(key);
         self.enqueue_stall_candidate(key);
+        self.sweep_service.invalidate();
+        self.service = Default::default();
         if let Some(previous) = self.output_sockets.insert(output_id, key) {
             self.remove_leaf(
                 previous,
@@ -536,6 +535,8 @@ impl SrtShardBackend {
         self.ready_candidates.retain(|queued| *queued != key);
         self.blocked.retain(|queued| *queued != key);
         self.stall_candidates.retain(|queued| *queued != key);
+        self.sweep_service.invalidate();
+        self.service = Default::default();
         let Some(mut leaf) = self.leaves.get_mut(key.0).and_then(Option::take) else {
             return false;
         };
@@ -735,6 +736,7 @@ impl EgressShardBackend for SrtShardBackend {
         self.owners.observe(metrics);
         metrics.budget_exhaustions = self.budget_exhaustions;
         metrics.queue_overflows = self.queue_overflows;
+        metrics.service = self.service;
     }
 
     fn on_command(

@@ -499,6 +499,7 @@ fn run_shard_thread<B: EgressShardBackend>(
             snapshot: Arc::clone(&snapshot),
             wake_gate,
             draining_until: None,
+            last_cpu_sample: None,
         };
         runtime.run();
     }));
@@ -527,6 +528,8 @@ struct EgressShardRuntime<'a, B: EgressShardBackend> {
     /// deadline passes, whichever comes first. `None` means "not shutting
     /// down yet."
     draining_until: Option<Instant>,
+    /// When `metrics.thread_cpu_ns` was last read (about once a second).
+    last_cpu_sample: Option<Instant>,
 }
 
 impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
@@ -782,7 +785,16 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
         self.metrics.feed_resyncs = self.backend.resync_count();
         self.metrics.budget_exhaustions = self.backend.budget_exhaustion_count();
         self.backend.observe_metrics(&mut self.metrics);
-        self.metrics.collected_at = Some(Instant::now());
+        let collected_at = Instant::now();
+        self.metrics.collected_at = Some(collected_at);
+        if self
+            .last_cpu_sample
+            .is_none_or(|at| collected_at.saturating_duration_since(at) >= Duration::from_secs(1))
+        {
+            self.metrics.thread_cpu_ns = thread_cpu_ns();
+            self.metrics.thread_cpu_at = (self.metrics.thread_cpu_ns > 0).then_some(collected_at);
+            self.last_cpu_sample = Some(collected_at);
+        }
 
         let mut snapshot = self.snapshot.lock().unwrap();
         snapshot.loop_iterations = self.metrics.loop_iterations;
@@ -793,6 +805,23 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
         snapshot.last_progress_at = self.metrics.collected_at;
         snapshot.metrics = self.metrics.clone();
     }
+}
+
+/// CPU time the calling thread has consumed. Zero if the clock is unavailable.
+fn thread_cpu_ns() -> u64 {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `ts` is a valid out-pointer for the call; the clock id is a
+    // constant supported on Linux.
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) };
+    if rc != 0 {
+        return 0;
+    }
+    (ts.tv_sec.max(0) as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(ts.tv_nsec.max(0) as u64)
 }
 
 impl EgressShardCommandEffect {

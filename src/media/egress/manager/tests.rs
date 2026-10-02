@@ -478,7 +478,7 @@ fn failed_shutdown_dispatch_preserves_shutdown_state() {
 }
 
 // ---------------------------------------------------------------------------
-// Dynamic shard scaling: rendezvous assignment + rehome
+// Dynamic shard scaling: rendezvous placement for NEW outputs only
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -507,83 +507,107 @@ fn resizing_shard_count_moves_only_a_minority_of_outputs() {
     );
 }
 
-#[test]
-fn rehome_is_a_noop_when_shard_count_is_unchanged() {
-    let mut manager = manager(4);
+fn roomy(shards: u32) -> EgressManager {
+    EgressManager::new(EgressManagerConfig::new(shards, 8192).unwrap())
+}
+
+fn add(manager: &mut EgressManager, id: &str) -> ShardId {
     manager
-        .dispatch_command(EgressCommand::Add(spec("out-1")), |_, _| {
-            Ok::<_, SendFailure>(())
-        })
+        .dispatch_command(
+            EgressCommand::Add(spec(id)),
+            |_, _| Ok::<_, SendFailure>(()),
+        )
         .unwrap();
-
-    let moved = manager
-        .rehome(NonZeroU32::new(4).unwrap(), |_, _| Ok::<_, SendFailure>(()))
-        .unwrap();
-
-    assert!(moved.is_empty());
+    manager.desired_output(&OutputId::new(id)).unwrap().shard_id
 }
 
 #[test]
-fn rehome_moves_exactly_the_outputs_whose_assignment_changed() {
-    let mut manager = manager(4);
-    let ids: Vec<OutputId> = (0..200)
-        .map(|i| OutputId::new(format!("out-{i}")))
+fn growth_keeps_every_live_output_and_places_only_new_ones_on_new_shards() {
+    let mut manager = roomy(2);
+    let before: Vec<(String, ShardId)> = (0..200)
+        .map(|i| (format!("old-{i}"), add(&mut manager, &format!("old-{i}"))))
         .collect();
-    for id in &ids {
-        manager
-            .dispatch_command(EgressCommand::Add(spec(id.as_str())), |_, _| {
-                Ok::<_, SendFailure>(())
-            })
-            .unwrap();
+    manager.grow_to(NonZeroU32::new(4).unwrap());
+    for (id, shard) in &before {
+        assert_eq!(
+            manager.desired_output(&OutputId::new(id)).unwrap().shard_id,
+            *shard
+        );
     }
-    let before: std::collections::HashMap<OutputId, ShardId> = ids
-        .iter()
-        .map(|id| (id.clone(), manager.desired_output(id).unwrap().shard_id))
+    let fresh: Vec<ShardId> = (0..400)
+        .map(|i| add(&mut manager, &format!("new-{i}")))
         .collect();
+    for shard in 0..4 {
+        assert!(
+            fresh.iter().filter(|s| s.index() == shard).count() > 40,
+            "new outputs use every shard, including shard {shard}"
+        );
+    }
+}
 
-    let new_count = NonZeroU32::new(6).unwrap();
-    let mut dispatched: Vec<(ShardId, EgressCommand)> = Vec::new();
-    let moved = manager
-        .rehome(new_count, |shard_id, command| {
-            dispatched.push((shard_id, command.clone()));
+#[test]
+fn updating_a_live_output_stays_on_its_recorded_shard_after_resizing() {
+    let mut manager = roomy(2);
+    let original = add(&mut manager, "stable");
+    manager.grow_to(NonZeroU32::new(8).unwrap());
+    let mut update = spec("stable");
+    update.generation = 2;
+    let mut sent = Vec::new();
+    manager
+        .dispatch_command(EgressCommand::Update(update), |shard, command| {
+            sent.push((shard, command));
             Ok::<_, SendFailure>(())
         })
         .unwrap();
-
-    let expected_moved: std::collections::HashSet<OutputId> = ids
-        .iter()
-        .filter(|id| before[*id] != assign_output_to_shard(id, new_count))
-        .cloned()
-        .collect();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].0, original);
     assert_eq!(
-        moved
-            .iter()
-            .cloned()
-            .collect::<std::collections::HashSet<_>>(),
-        expected_moved
+        manager
+            .desired_output(&OutputId::new("stable"))
+            .unwrap()
+            .shard_id,
+        original
     );
+}
 
-    // Every moved output now agrees with a fresh assignment computation,
-    // and unmoved outputs kept their original shard.
-    for id in &ids {
-        let current = manager.desired_output(id).unwrap().shard_id;
-        assert_eq!(current, assign_output_to_shard(id, new_count));
-        if !expected_moved.contains(id) {
-            assert_eq!(current, before[id], "unmoved output {id} changed shard");
-        }
+#[test]
+fn retiring_a_shard_stops_new_placement_and_waits_for_its_last_output() {
+    let mut manager = roomy(3);
+    let live: Vec<(String, ShardId)> = (0..60)
+        .map(|i| (format!("live-{i}"), add(&mut manager, &format!("live-{i}"))))
+        .collect();
+    let tail: Vec<&String> = live
+        .iter()
+        .filter(|(_, shard)| shard.index() == 2)
+        .map(|(id, _)| id)
+        .collect();
+    assert!(tail.len() > 1, "hash puts several outputs on shard 2");
+    manager.set_placement(NonZeroU32::new(2).unwrap());
+    assert!(
+        !manager.retire_empty_tail(),
+        "live outputs keep the tail alive"
+    );
+    for i in 0..200 {
+        assert!(add(&mut manager, &format!("after-{i}")).index() < 2);
     }
-
-    // Exactly one Remove + one Add per moved output, nothing for the rest.
-    let remove_count = dispatched
-        .iter()
-        .filter(|(_, command)| matches!(command, EgressCommand::Remove(_)))
-        .count();
-    let add_count = dispatched
-        .iter()
-        .filter(|(_, command)| matches!(command, EgressCommand::Add(_)))
-        .count();
-    assert_eq!(remove_count, expected_moved.len());
-    assert_eq!(add_count, expected_moved.len());
+    let remove = |manager: &mut EgressManager, id: &String| {
+        manager
+            .dispatch_command(EgressCommand::Remove(OutputId::new(id)), |_, _| {
+                Ok::<_, SendFailure>(())
+            })
+            .unwrap();
+    };
+    for id in &tail[..tail.len() - 1] {
+        remove(&mut manager, id);
+    }
+    assert!(
+        !manager.retire_empty_tail(),
+        "one live output remains on the tail"
+    );
+    remove(&mut manager, tail[tail.len() - 1]);
+    assert!(manager.retire_empty_tail());
+    assert_eq!(manager.config().shard_count().get(), 2);
+    assert!(!manager.retire_empty_tail(), "placement shards stay");
 }
 
 #[test]
@@ -663,54 +687,64 @@ mod proptests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(200))]
 
-        /// Arbitrary Add/Remove/rehome sequences never leave a desired
-        /// output's tracked shard disagreeing with what
-        /// `assign_output_to_shard` would currently compute for it, and
-        /// command depths never go negative (checked implicitly: the
-        /// manager's own `complete_one_command`/dispatch bookkeeping uses
-        /// saturating arithmetic, so this exercises that no shard ends up
-        /// with a depth that silently wrapped).
+        /// Arbitrary Add/Remove/resize sequences never move a live output,
+        /// never leave one on a shard that no longer exists, and never place a
+        /// new output outside the placement shards.
         #[test]
-        fn desired_state_stays_consistent_across_resizes(
+        fn resizing_never_moves_or_strands_outputs(
             ops in prop::collection::vec(
                 prop_oneof![
                     (0usize..8).prop_map(ProptestOp::Add),
                     (0usize..8).prop_map(ProptestOp::Remove),
                     (1u32..6).prop_map(ProptestOp::Resize),
                 ],
-                0..80,
+                0..120,
             ),
         ) {
-            let mut manager = manager(3);
+            let mut manager = roomy(3);
+            let mut recorded = std::collections::HashMap::new();
             for op in ops {
                 match op {
                     ProptestOp::Add(index) => {
                         let id = format!("out-{index}");
-                        let _ = manager.dispatch_command(
-                            EgressCommand::Add(spec(&id)),
-                            |_, _| Ok::<_, SendFailure>(()),
-                        );
+                        let placement = manager.placement_count().get();
+                        if manager
+                            .dispatch_command(EgressCommand::Add(spec(&id)), |_, _| Ok::<_, SendFailure>(()))
+                            .is_ok()
+                        {
+                            let shard = manager.desired_output(&OutputId::new(&id)).unwrap().shard_id;
+                            recorded.entry(id).or_insert_with(|| {
+                                assert!(shard.index() < placement);
+                                shard
+                            });
+                        }
                     }
                     ProptestOp::Remove(index) => {
-                        let id = OutputId::new(format!("out-{index}"));
+                        let id = format!("out-{index}");
                         let _ = manager.dispatch_command(
-                            EgressCommand::Remove(id),
+                            EgressCommand::Remove(OutputId::new(&id)),
                             |_, _| Ok::<_, SendFailure>(()),
                         );
+                        recorded.remove(&id);
                     }
                     ProptestOp::Resize(count) => {
-                        let new_count = NonZeroU32::new(count).unwrap();
-                        let _ = manager.rehome(new_count, |_, _| Ok::<_, SendFailure>(()));
+                        let count = NonZeroU32::new(count).unwrap();
+                        if count > manager.config().shard_count() {
+                            manager.grow_to(count);
+                        } else {
+                            manager.set_placement(count);
+                        }
+                        while manager.retire_empty_tail() {}
                     }
                 }
-
-                let shard_count = manager.config().shard_count();
+                let shard_count = manager.config().shard_count().get();
                 for index in 0..8 {
-                    let id = OutputId::new(format!("out-{index}"));
-                    if let Some(desired) = manager.desired_output(&id) {
-                        prop_assert_eq!(
-                            desired.shard_id,
-                            assign_output_to_shard(&id, shard_count)
+                    let id = format!("out-{index}");
+                    if let Some(desired) = manager.desired_output(&OutputId::new(&id)) {
+                        prop_assert_eq!(Some(&desired.shard_id), recorded.get(&id));
+                        prop_assert!(
+                            desired.shard_id.index() < shard_count,
+                            "an output was stranded on a retired shard"
                         );
                     }
                 }

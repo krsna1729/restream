@@ -41,16 +41,15 @@ impl MediaEngine {
             let config = &self.config.egress_fabric;
             let target_source = SharedPipelineTargetSource::new();
             let group = spawn_pipeline_fabric_shard_group(
-                config.shard_count(),
+                std::num::NonZeroU32::MIN,
                 config.shard_config(),
                 config.work_budget(),
                 target_source.clone(),
                 |_| feed.clone_reader(),
             )
             .map_err(PipelineFabricEnsureError::Spawn)?;
-            let manager_config =
-                EgressManagerConfig::new(config.shards, config.command_channel_capacity)
-                    .expect("egress fabric manager config is clamped nonzero");
+            let manager_config = EgressManagerConfig::new(1, config.command_channel_capacity)
+                .expect("egress fabric manager config is clamped nonzero");
             let runtime = EgressFabricRuntime::new(manager_config, group)
                 .map_err(PipelineFabricEnsureError::Runtime)?;
 
@@ -157,6 +156,7 @@ impl MediaEngine {
         let result = runtime.rescale(
             crate::config::EgressShardProfile::OutputCount,
             effective_cpus,
+            crate::media::egress::runtime::ResizeReason::Remove,
             shard_config,
             |_shard_id| {
                 let feed = feed.clone_reader();

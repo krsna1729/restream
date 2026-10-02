@@ -111,6 +111,20 @@ fn ring_feed_reads_pushed_packets() {
 }
 
 #[test]
+fn offered_bytes_follow_ring_replacement_and_later_publications() {
+    let old = Arc::new(RingBuffer::new(8));
+    let replacement = Arc::new(RingBuffer::new(16));
+    let feed = RingFeed::new(old.clone(), Arc::new(FeedEpoch::new()));
+    push_packet(&old, b"old", true);
+    assert_eq!(feed.published_bytes(), 3);
+    old.seal_and_forward(replacement.clone());
+    push_packet(&replacement, b"new-payload", true);
+    assert_eq!(feed.published_bytes(), 11);
+    push_packet(&replacement, b"tail", false);
+    assert_eq!(feed.published_bytes(), 15);
+}
+
+#[test]
 fn ring_feed_reuses_caller_owned_batch_storage() {
     let ring = Arc::new(RingBuffer::new(16));
     let epoch = Arc::new(FeedEpoch::new());

@@ -268,7 +268,7 @@ pub struct RingFeed {
 impl RingFeed {
     /// Cumulative payload bytes published to this feed (offered load).
     pub(crate) fn published_bytes(&self) -> u64 {
-        self.ring.published_bytes()
+        self.current_ring().published_bytes()
     }
 
     pub fn new(ring: Arc<RingBuffer>, epoch: Arc<FeedEpoch>) -> Self {

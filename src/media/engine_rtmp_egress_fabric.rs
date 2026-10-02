@@ -49,7 +49,7 @@ impl MediaEngine {
             )
             .map_err(RtmpFabricEnsureError::TrustRoots)?;
             let group = spawn_rtmp_fabric_shard_group(
-                config.shard_count(),
+                std::num::NonZeroU32::new(1).unwrap(),
                 config.shard_config(),
                 config.tcp_poller_max_events,
                 config.work_budget(),
@@ -59,11 +59,11 @@ impl MediaEngine {
                 |_| feed.clone_reader(),
             )
             .map_err(RtmpFabricEnsureError::Spawn)?;
-            let manager_config =
-                EgressManagerConfig::new(config.shards, config.command_channel_capacity)
-                    .expect("egress fabric manager config is clamped nonzero");
+            let manager_config = EgressManagerConfig::new(1, config.command_channel_capacity)
+                .expect("egress fabric manager config is clamped nonzero");
             let runtime = EgressFabricRuntime::new(manager_config, group)
-                .map_err(RtmpFabricEnsureError::Runtime)?;
+                .map_err(RtmpFabricEnsureError::Runtime)?
+                .adaptive(config.shards);
 
             let wakes =
                 subscribe_fabric_wakes("rtmp", feed_id.clone(), feed, runtime.feed_wake_handles());
@@ -139,14 +139,16 @@ impl MediaEngine {
         // just established (surfaced by the live concurrency harness as a
         // spurious extra reconnect right after a fresh output starts).
         // Size the pool for an `Add` *before* dispatching it so it lands on
-        // its final shard the first time. `Remove` (and everything else)
-        // still rescales after: shrinking once an output count drops
-        // doesn't disturb anything live.
+        // its final shard the first time. Remove defers shrinking until the
+        // periodic controller has observed sustained headroom.
         let mut rescale_inputs = rescale_inputs;
         if matches!(command, EgressCommand::Add(_))
             && let Some(inputs) = rescale_inputs.take()
         {
-            self.rescale_rtmp_fabric(feed_id, runtime, inputs);
+            {
+                let reason = runtime.reason_for(&command);
+                self.rescale_rtmp_fabric(feed_id, runtime, inputs, reason);
+            };
         }
 
         let outcome = runtime
@@ -154,10 +156,43 @@ impl MediaEngine {
             .map_err(RtmpFabricDispatchError::Dispatch)?;
 
         if let Some(inputs) = rescale_inputs.take() {
-            self.rescale_rtmp_fabric(feed_id, runtime, inputs);
+            self.rescale_rtmp_fabric(
+                feed_id,
+                runtime,
+                inputs,
+                crate::media::egress::runtime::ResizeReason::Remove,
+            );
         }
 
         Ok(outcome)
+    }
+
+    pub(crate) async fn resize_rtmp_fabrics(&self) {
+        let mut registry = self.fabric.rtmp.lock().await;
+        let crate::media::engine_registries::RtmpFabricRegistry {
+            runtimes,
+            feeds,
+            startup_sources,
+            rtmps_client_configs,
+            ..
+        } = &mut *registry;
+        for (id, runtime) in runtimes {
+            if !runtime.observation_due() {
+                continue;
+            }
+            if let (Some(feed), Some(startup), Some(tls)) = (
+                feeds.get(id),
+                startup_sources.get(id),
+                rtmps_client_configs.get(id),
+            ) {
+                self.rescale_rtmp_fabric(
+                    id,
+                    runtime,
+                    (startup.clone(), (feed.clone_reader(), tls.clone())),
+                    crate::media::egress::runtime::ResizeReason::Observe,
+                );
+            }
+        }
     }
 
     fn rescale_rtmp_fabric(
@@ -168,6 +203,7 @@ impl MediaEngine {
             SharedRtmpPublishStartupSource,
             (RingFeed, Arc<tokio_rustls::rustls::ClientConfig>),
         ),
+        reason: crate::media::egress::runtime::ResizeReason,
     ) {
         let config = &self.config.egress_fabric;
         let shard_config = config.shard_config();
@@ -175,9 +211,11 @@ impl MediaEngine {
         let chunk_size = self.config.rtmp_egress_chunk_size;
         let poller_max_events = config.tcp_poller_max_events;
         let effective_cpus = crate::system_sampling::effective_cpu_count();
+        runtime.forecast_feed(&feed.publication_ring());
         let result = runtime.rescale(
             crate::config::EgressShardProfile::OutputCount,
             effective_cpus,
+            reason,
             shard_config,
             |_shard_id| {
                 let feed = feed.clone_reader();
