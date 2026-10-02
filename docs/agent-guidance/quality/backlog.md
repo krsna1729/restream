@@ -18,6 +18,26 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 
 ## Open
 
+### Q-027 [performance] [opus] Explain the SRT×100 fan-out failure after the kernel 7.0.0-38 reboot
+- Goal: name the cause of SRT×100 losing delivery on this host after the
+  reboot from kernel 7.0.0-34 to 7.0.0-38, and either fix it in Restream or
+  srt-rs, or document it as a host/kernel limit with evidence.
+- Files: `src/media/egress/backends/srt*`, srt-rs `crates/srt-transport/src/runtimes/compio.rs`
+  (TX pool / GSO send), `scripts/harness/capacity-ramp.sh`.
+- Gates: `CAPACITY_PROTOCOLS=srt CAPACITY_SRT_OUTPUTS=100` (4 Restream CPUs,
+  2 harness CPUs) passes 2/2 again, or an A/B (old vs new kernel, or one
+  variable such as GSO or managed RX) isolates the change.
+- Context: the same `wi11/cores` release binary passed 8/8 SRT×100 repeats on
+  7.0.0-34 (125–151% CPU; ~92k TX datagrams/s; ~15 µs CPU per SRT packet). On
+  7.0.0-38 it fails 0/2 (21/100 delivered, 153% CPU), and so does every
+  redevelop `9c704798` allocator arm (7–26/100 delivered). Symptoms: Owner TX
+  exhaustion every sample, leaves closed `no progress (stalled) blocked=true`,
+  ~44k TX datagrams/s at 39 µs per packet, no receiver UDP buffer errors. RTMP
+  and HLS fan-out on the same host still pass. Jitter probe: 0.06% lost, worst
+  gap 5.8 ms.
+- Status: open (Filed: 2026-10-02 by claude). Blocks SRT capacity evidence on
+  this host.
+
 ### Q-024 [modularity] [sonnet] Collapse the connector/completion test seams in both egress backends
 - Goal: remove production traits that exist only so tests can substitute a
   fake, in SRT *and* RTMP together: `SrtSocketConnector`
