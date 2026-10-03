@@ -276,7 +276,7 @@ jobs:
         with:
           node_version: '22'
           npm_ci: 'true'
-          system_deps_profile: base
+          system_deps_profile: media
           native_prefix: 'true'
           rust_cache: 'true'
       - name: Build frontend assets for Rust tests
@@ -297,7 +297,7 @@ jobs:
           rust_components: llvm-tools-preview
           node_version: '22'
           npm_ci: 'true'
-          system_deps_profile: base
+          system_deps_profile: media
           native_prefix: 'true'
           rust_cache: 'true'
       - name: Build frontend assets for coverage
