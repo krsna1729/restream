@@ -11,6 +11,17 @@ fn main() {
     let mut args = std::env::args_os();
     let _program = args.next();
     if let Some(flag) = args.next() {
+        if flag == "host-check" || flag == "host-tune" {
+            if args.next().is_some() {
+                print_usage_and_exit();
+            }
+            let mut out = std::io::stdout().lock();
+            std::process::exit(if flag == "host-check" {
+                restream::host_tuning::host_check(&mut out)
+            } else {
+                restream::host_tuning::host_tune(&mut out)
+            });
+        }
         if flag == "--emit-sbom" {
             let Some(path) = args.next() else {
                 print_usage_and_exit();
@@ -56,7 +67,7 @@ fn main() {
 }
 
 fn print_usage_and_exit() -> ! {
-    eprintln!("usage: restream [--emit-sbom <path>]");
+    eprintln!("usage: restream [host-check | host-tune | --emit-sbom <path>]");
     std::process::exit(2);
 }
 
