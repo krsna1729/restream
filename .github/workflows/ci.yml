@@ -84,6 +84,8 @@ jobs:
         run: ./scripts/check/source-audit.sh
       - name: Check resource limiter concurrency policy
         run: ./scripts/check/resource-limit.sh
+      - name: Check Markdown documentation
+        run: node scripts/check/docs.mjs
 
   docker-runtime-smoke:
     name: Docker runtime source-build smoke (targeted)
