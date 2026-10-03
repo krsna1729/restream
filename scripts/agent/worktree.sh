@@ -64,7 +64,7 @@ Defaults:
   - seed .cargo/ and node_modules/ from the source tree when present
   - install locked frontend dependencies in the destination worktree when the
     seeded node_modules/ tree is missing or incomplete
-  - share .local/build/static and copy public/bin from the source tree when present
+  - share .local/build/static from the source tree when present
 
 Options:
   --cleanup                remove the worktree for <id> instead of creating/updating it
@@ -78,7 +78,7 @@ Options:
   --no-target-cache        skip target/ seeding
   --no-cargo-config        skip .cargo/ seeding
   --no-node-modules        skip node_modules/ seeding
-  --no-share-static        skip .local/build/static sharing and public/bin seeding
+  --no-share-static        skip .local/build/static sharing
   --copy-static            copy .local/build/static instead of sharing it
   --check-frontend-deps <path>
                            verify a prepared frontend dependency tree and exit
@@ -91,8 +91,6 @@ Notes:
     build layer. Use --copy-static when working on that layer so native inputs
     are isolated but immediately buildable. Use --no-share-static only when the
     worktree should start without generated static artifacts.
-  - public/bin is always copied when static outputs are enabled. rust-embed does
-    not include files reached through a symlinked public/bin directory.
   - The default target warmup copies only high-value debug artifacts:
     debug/deps, debug/build, debug/.fingerprint, root debug binaries, and no
     incremental state unless --with-incremental is set.
@@ -679,7 +677,6 @@ if [[ -z "$BRANCH_NAME" ]]; then
 fi
 
 STATIC_SOURCE_ROOT="$SOURCE_TREE/.local/build/static"
-PUBLIC_BIN_SOURCE="$SOURCE_TREE/public/bin"
 TARGET_SOURCE="$SOURCE_TREE/target"
 CARGO_SOURCE="$SOURCE_TREE/.cargo"
 NODE_SOURCE="$SOURCE_TREE/node_modules"
@@ -741,13 +738,11 @@ fi
 
 if ((SHARE_STATIC)); then
     share_path "$STATIC_SOURCE_ROOT" "$WORKTREE_PATH/.local/build/static" ".local/build/static"
-    sync_tree "$PUBLIC_BIN_SOURCE" "$WORKTREE_PATH/public/bin" "public/bin snapshot"
 elif ((COPY_STATIC)); then
     sync_tree "$STATIC_SOURCE_ROOT" "$WORKTREE_PATH/.local/build/static" ".local/build/static"
     rewrite_copied_static_pkgconfig "$STATIC_SOURCE_ROOT" "$WORKTREE_PATH/.local/build/static"
-    sync_tree "$PUBLIC_BIN_SOURCE" "$WORKTREE_PATH/public/bin" "public/bin snapshot"
 else
-    info "skip static outputs and public/bin snapshot by request"
+    info "skip static outputs by request"
 fi
 
 AGENT_STATE_DIR="$WORKTREE_PATH/.agent-state"

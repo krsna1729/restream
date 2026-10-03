@@ -21,6 +21,10 @@ case "$profile" in
     base|build)
         groups=(rust-build)
         ;;
+    media)
+        # FFmpeg subprocess tests: the executable is no longer embedded.
+        groups=(rust-build media-tools)
+        ;;
     browser|browser-build)
         groups=(rust-build media-tools)
         ;;
@@ -37,7 +41,7 @@ case "$profile" in
         ;;
     *)
         echo "ci-system-deps: unknown profile '$profile'" >&2
-        echo "expected one of: base, build, browser, browser-build, live, live-build, harness-runtime, live-runtime, native-build" >&2
+        echo "expected one of: base, build, media, browser, browser-build, live, live-build, harness-runtime, live-runtime, native-build" >&2
         exit 2
         ;;
 esac

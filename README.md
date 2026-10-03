@@ -121,9 +121,9 @@ diagnostic all-files report.
 
 The Dockerfile rebuilds native dependencies and frontend output from the same
 committed scripts used locally in a clean build container, then produces a
-distroless runtime image with the generated binary, release metadata, and the
-owned runtime paths. The media stack and embedded FFmpeg remain linked from the
-repo-managed static native prefix.
+distroless runtime image with the generated binary, release metadata, the
+owned runtime paths, and an FFmpeg executable for subprocess stages. The media
+stack stays linked from the repo-managed static native prefix.
 
 ```sh
 docker build \

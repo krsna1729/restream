@@ -23,7 +23,7 @@ fn feeder_remuxed_single_audio_hevc_fixture_transcodes_as_file_input() {
         .parent()
         .expect("temp artifact dir")
         .join("output.ts");
-    let ffmpeg = crate::ffmpeg_extract::ensure_ffmpeg_extracted();
+    let ffmpeg = crate::ffmpeg_binary::ffmpeg_bin_path();
     let mut args = build_stage_ffmpeg_args_for_input("720p", "h264", "hevc");
     let input_pos = args
         .iter()
@@ -97,7 +97,7 @@ fn feeder_remuxed_h264_marker_fixture_transcodes_as_file_input() {
         .parent()
         .expect("temp artifact dir")
         .join("output.ts");
-    let ffmpeg = crate::ffmpeg_extract::ensure_ffmpeg_extracted();
+    let ffmpeg = crate::ffmpeg_binary::ffmpeg_bin_path();
     let mut args = build_stage_ffmpeg_args("720p", "h264");
     let input_pos = args
         .iter()
@@ -201,7 +201,7 @@ fn feeder_remuxed_h264_marker_fixture_transcodes_as_live_pipe_input() {
         "remuxed H.264 marker fixture should produce TS bytes"
     );
 
-    let ffmpeg = crate::ffmpeg_extract::ensure_ffmpeg_extracted();
+    let ffmpeg = crate::ffmpeg_binary::ffmpeg_bin_path();
     let mut child = std::process::Command::new(ffmpeg)
         .args(build_stage_ffmpeg_args("720p", "h264"))
         .stdin(std::process::Stdio::piped())
@@ -327,7 +327,7 @@ fn observed_rate_probe_transcodes_h264_aac_bitrate_fixture_before_pipe_closes() 
         }
     }
 
-    let ffmpeg = crate::ffmpeg_extract::ensure_ffmpeg_extracted();
+    let ffmpeg = crate::ffmpeg_binary::ffmpeg_bin_path();
     let mut child = std::process::Command::new(ffmpeg)
         .args(args)
         .stdin(std::process::Stdio::piped())
@@ -469,7 +469,7 @@ fn feeder_remuxed_hevc_fixture_transcodes_before_live_pipe_closes() {
         "the persistent-pipe proof must emit before the old 2 MiB probe ceiling"
     );
 
-    let ffmpeg = crate::ffmpeg_extract::ensure_ffmpeg_extracted();
+    let ffmpeg = crate::ffmpeg_binary::ffmpeg_bin_path();
     let mut child = std::process::Command::new(ffmpeg)
         .args(build_stage_ffmpeg_args_for_input("h264", "h264", "hevc"))
         .stdin(std::process::Stdio::piped())

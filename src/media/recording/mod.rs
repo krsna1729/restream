@@ -188,7 +188,7 @@ fn ffmpeg_muxers_include_mp4(listing: &str) -> bool {
 fn ffmpeg_supports_mp4_muxer() -> bool {
     static SUPPORTS_MP4_MUXER: OnceLock<bool> = OnceLock::new();
     *SUPPORTS_MP4_MUXER.get_or_init(|| {
-        let ffmpeg = crate::ffmpeg_extract::ffmpeg_bin_path();
+        let ffmpeg = crate::ffmpeg_binary::ffmpeg_bin_path();
         match std::process::Command::new(ffmpeg)
             .args(["-hide_banner", "-muxers"])
             .output()
@@ -250,7 +250,7 @@ async fn remux_recording_to_mp4(
 
     let mp4_path = build_mp4_path(&ts_path);
     let temp_path = build_mp4_temp_path(&mp4_path);
-    let ffmpeg_path = crate::ffmpeg_extract::ffmpeg_bin_path().to_path_buf();
+    let ffmpeg_path = crate::ffmpeg_binary::ffmpeg_bin_path().to_path_buf();
     let args = build_recording_remux_args(&ts_path, &temp_path, ffmpeg_threads);
     let _ = tokio::fs::remove_file(&temp_path).await;
 
