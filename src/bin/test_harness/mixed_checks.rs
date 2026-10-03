@@ -37,6 +37,46 @@ fn emit_mixed_output_cell_timing(
     )
 }
 
+pub(crate) async fn preflight_mixed_rtmps_capabilities(
+    api: &RampApi,
+    cases: &[MixedOutputCase],
+) -> Result<(), String> {
+    if !cases
+        .iter()
+        .any(|case| case.protocol() == MixedOutputProtocol::Rtmps)
+    {
+        return Ok(());
+    }
+    preflight_rtmps_ktls_capabilities(api).await
+}
+
+pub(crate) async fn preflight_rtmps_ktls_capabilities(api: &RampApi) -> Result<(), String> {
+    let system = api.get_json("/metrics/system?view=summary").await?;
+    let capabilities = &system["rtmps"]["ktlsCapabilities"];
+    let unsupported = unsupported_rtmps_ktls_suites(capabilities);
+    if unsupported.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "RTMPS live output requires kernel TLS support for every AES-GCM TLS suite; unsupported: {unsupported:?}"
+        ))
+    }
+}
+
+// Live peers may negotiate any of these suites; a partial probe is not enough
+// because production kTLS handoff requires the exact negotiated pair.
+fn unsupported_rtmps_ktls_suites(capabilities: &serde_json::Value) -> Vec<&'static str> {
+    [
+        "tls12Aes128Gcm",
+        "tls12Aes256Gcm",
+        "tls13Aes128Gcm",
+        "tls13Aes256Gcm",
+    ]
+    .into_iter()
+    .filter(|name| !capabilities[*name].as_bool().unwrap_or(false))
+    .collect()
+}
+
 pub(crate) async fn verify_mixed_output_dimensions(
     env: &MixedEnv,
     api: &RampApi,
@@ -62,8 +102,11 @@ pub(crate) async fn verify_mixed_output_dimensions(
                 url: &url,
                 expected: case.expected_dimensions(),
                 expected_video_codec: Some(case.expected_video_codec_for_input(input_case)),
-                mediamtx_api: matches!(case.protocol(), MixedOutputProtocol::Rtmp)
-                    .then_some(env.mtx_api),
+                mediamtx_api: matches!(
+                    case.protocol(),
+                    MixedOutputProtocol::Rtmp | MixedOutputProtocol::Rtmps
+                )
+                .then_some(env.mtx_api),
                 cookie: None,
                 cell: env.output_cell(case.id(), index),
             },
@@ -109,8 +152,10 @@ pub(crate) async fn verify_mixed_output_cases_inner(
         let url = mixed_output_read_url(env, cfg, case, index);
         let label = format!("{} out{index}", case.id());
         let cell = env.output_cell(case.id(), index);
-        let mediamtx_publish_probe = matches!(case.protocol(), MixedOutputProtocol::Rtmp)
-            && case.expected_video_codec_for_input(input_case) == "hevc";
+        let mediamtx_publish_probe = matches!(
+            case.protocol(),
+            MixedOutputProtocol::Rtmp | MixedOutputProtocol::Rtmps
+        ) && case.expected_video_codec_for_input(input_case) == "hevc";
         let mut output_failed = false;
         if env.check_selected("ffprobe") {
             selected_checks.push("ffprobe");
@@ -125,8 +170,11 @@ pub(crate) async fn verify_mixed_output_cases_inner(
                     url: &url,
                     expected: case.expected_dimensions(),
                     expected_video_codec: Some(case.expected_video_codec_for_input(input_case)),
-                    mediamtx_api: matches!(case.protocol(), MixedOutputProtocol::Rtmp)
-                        .then_some(env.mtx_api),
+                    mediamtx_api: matches!(
+                        case.protocol(),
+                        MixedOutputProtocol::Rtmp | MixedOutputProtocol::Rtmps
+                    )
+                    .then_some(env.mtx_api),
                     cookie: None,
                     cell: cell.clone(),
                 },
@@ -304,4 +352,21 @@ pub(crate) async fn verify_mixed_output_cases_inner(
         ));
     }
     Ok(())
+}
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn rtmps_preflight_rejects_partial_kernel_tls_suite_support() {
+        let capabilities = serde_json::json!({
+            "tls12Aes128Gcm": true,
+            "tls12Aes256Gcm": true,
+            "tls13Aes128Gcm": false,
+            "tls13Aes256Gcm": true,
+        });
+
+        assert_eq!(
+            super::unsupported_rtmps_ktls_suites(&capabilities),
+            vec!["tls13Aes128Gcm"]
+        );
+    }
 }

@@ -43,6 +43,7 @@ resource-sweep.source
 resource-sweep.transcode
 resource-sweep.hevc
 smoke
+direct-play
 mixed.live.srt.h264.a1.bf0
 mixed.live.srt.h264.a1.bf2
 EOF
@@ -66,7 +67,7 @@ restream_release_shard_timeout() {
     #     still needed cleanup/completion time beyond the 15m bucket.
     #   - full bitrate measurement family: <= ~15m locally -> 60m
     case "$shard" in
-        smoke|branch-matrix|msr-smoke)
+        smoke|direct-play|branch-matrix|msr-smoke)
             echo 10m
             ;;
         mixed.*.bf0|mixed.*.bf2|fault.resilience|ramp-family)
@@ -91,6 +92,12 @@ restream_release_shard_plan() {
             printf 'mode\tapi-smoke\n'
             printf 'mode\tfile.live-edge\n'
             printf 'mode\tsrt.policy\n'
+            ;;
+        direct-play)
+            # Direct play from Restream's own ingest (debug path): SRT read
+            # and RTMP play must probe and decode like a player.
+            printf 'mode\tsrt.policy\n'
+            printf 'mode\ttimestamp.bframe\n'
             ;;
         mixed.live.*.bf0|mixed.live.*.bf2)
             printf 'mode\t%s\n' "$shard"

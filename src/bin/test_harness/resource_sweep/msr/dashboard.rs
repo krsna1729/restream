@@ -198,7 +198,7 @@ pub(crate) async fn msr_dashboard() -> Result<Value, String> {
 
     let protocol_mix = MsrProtocolMix::from_env()?;
     let hero_plan = msr_output_plan_for_mix(protocol_mix);
-    let mut stack = start_resource_sweep_stack(&env.resource).await?;
+    let mut stack = start_resource_sweep_stack(&env.resource, LocalPeerNeeds::ALL).await?;
 
     let hero_pipeline = MsrDashboardPipeline {
         id: create_resource_pipeline(

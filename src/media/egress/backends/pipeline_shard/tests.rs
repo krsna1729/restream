@@ -2,7 +2,7 @@ use super::*;
 use crate::media::egress::command::{FeedId, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::FeedEpoch;
 use crate::media::egress::leaf::EgressProgressSink;
-use crate::media::egress::policy::LeafPolicy;
+use crate::media::egress::policy::{LeafPolicy, WorkBudgetConfig};
 use crate::media::egress::shard::{EgressShardConfig, EgressShardHandle};
 use crate::media::engine::IngestRegistration;
 use crate::media::input_gate::InputPacketGate;
@@ -79,7 +79,7 @@ fn pipeline_shard_backend_publishes_a_real_unit_into_the_target_ring_on_a_real_s
         config(),
         PipelineShardBackend::new(
             feed,
-            WorkBudget::new(8, 4096, Duration::from_millis(50)),
+            WorkBudgetConfig::new(8, 4096, Duration::from_millis(50)),
             target_source,
         ),
     );
@@ -130,7 +130,7 @@ fn pipeline_shard_backend_rejects_add_with_no_claimed_target() {
         config(),
         PipelineShardBackend::new(
             feed,
-            WorkBudget::new(8, 4096, Duration::from_millis(50)),
+            WorkBudgetConfig::new(8, 4096, Duration::from_millis(50)),
             EmptyPipelineTargetSource,
         ),
     );

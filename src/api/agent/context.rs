@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use sysinfo::{Disks, System};
+use sysinfo::Disks;
 
 use super::super::{
     state::AppState,
@@ -27,10 +27,10 @@ pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
     let alerts = alerts::derive_alerts(&health);
     let events = state.engine.recent_events(events::MAX_EVENTS, None);
     let engine_telemetry = crate::api_runtime_views::engine_telemetry(&state.engine).await;
-    let system = System::new_all();
+    let process = crate::system_sampling::sampled_system(process_resource_snapshot);
     let resource_map = crate::api_runtime_views::resource_map(
         &state.engine,
-        process_resource_snapshot(&system),
+        process,
         None,
         ResourceMapOptions::summary(),
     )
@@ -65,7 +65,7 @@ pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
 
     let bonding_available = state.engine.bonding_available();
     let (mut status, _) = crate::runtime_info::status_and_sbom(bonding_available);
-    status["os"] = system_status(&system);
+    status["os"] = crate::system_sampling::sampled_system(system_status);
 
     let settings = catalog.settings;
     let custom_encoding_len = catalog.custom_encoding_len;

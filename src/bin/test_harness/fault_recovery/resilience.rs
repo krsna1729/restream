@@ -1,9 +1,11 @@
+use super::super::mixed_runner::preflight_rtmps_ktls_capabilities;
 use super::super::resource_sweep::ffmpeg_children_stats;
 use super::super::*;
 use super::egress::{
     fault_rtmp_egress_output_churn, fault_rtmp_egress_sink_disappear,
     fault_rtmp_egress_sink_stalls, fault_srt_egress_sink_disappear,
 };
+use super::rtmps_egress::{fault_rtmps_egress_sink_disappear, fault_rtmps_egress_sink_stalls};
 
 pub(crate) async fn create_pipeline_with_stream_key(
     api: &RampApi,
@@ -193,6 +195,7 @@ pub(crate) async fn recovery() -> Result<Value, String> {
         sink_port,
         hls_put_port,
         timeout,
+        &work_dir,
     )
     .await?;
 
@@ -220,6 +223,58 @@ pub(crate) async fn recovery() -> Result<Value, String> {
     Ok(result)
 }
 
+async fn terminate_restream_gracefully(
+    child: &mut tokio::process::Child,
+    log_path: &std::path::Path,
+) -> Result<Value, String> {
+    let pid = child
+        .id()
+        .ok_or_else(|| "Restream child has no process id before SIGTERM".to_string())?;
+    // SAFETY: `pid` is the live child process owned by this harness.
+    if unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) } != 0 {
+        let error = std::io::Error::last_os_error();
+        stop_child(child).await;
+        return Err(format!("send SIGTERM to Restream pid {pid}: {error}"));
+    }
+
+    let started = Instant::now();
+    let status = match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+        Ok(Ok(status)) => status,
+        Ok(Err(error)) => {
+            stop_child(child).await;
+            return Err(format!(
+                "wait for Restream pid {pid} after SIGTERM: {error}"
+            ));
+        }
+        Err(_) => {
+            stop_child(child).await;
+            return Err(format!(
+                "Restream pid {pid} did not exit within five seconds after SIGTERM"
+            ));
+        }
+    };
+    let elapsed = started.elapsed();
+    if !status.success() {
+        return Err(format!(
+            "Restream pid {pid} exited unsuccessfully after SIGTERM: {status}"
+        ));
+    }
+
+    let logs = std::fs::read_to_string(log_path)
+        .map_err(|error| format!("read Restream shutdown log {}: {error}", log_path.display()))?;
+    if !logs.contains("restream.shutdown.completed") {
+        return Err(format!(
+            "Restream pid {pid} exited without restream.shutdown.completed in {}",
+            log_path.display()
+        ));
+    }
+    Ok(json!({
+        "passed": true,
+        "shutdownMs": elapsed.as_millis(),
+        "shutdownCompleted": true
+    }))
+}
+
 pub(crate) async fn fault_resilience() -> Result<Value, String> {
     let work_dir = artifact_path("fault.resilience");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
@@ -236,6 +291,8 @@ pub(crate) async fn fault_resilience() -> Result<Value, String> {
         start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
 
     let fixture_h264 = checked_h264_fixture()?;
+    preflight_rtmps_ktls_capabilities(&api).await?;
+    let (rtmps_cert, rtmps_key) = restream::test_fixtures::rtmps_harness_cert_fixture()?;
 
     let mut results: Vec<Value> = Vec::new();
 
@@ -252,6 +309,7 @@ pub(crate) async fn fault_resilience() -> Result<Value, String> {
             sink_port,
             hls_put_port,
             timeout,
+            &work_dir,
         )
         .await?,
     );
@@ -385,12 +443,40 @@ pub(crate) async fn fault_resilience() -> Result<Value, String> {
         fault_rtmp_egress_output_churn(&api, &ports, &fixture_h264, sink_port, timeout).await?,
     );
 
-    // ── 7. RTMP egress sink stops draining and surfaces stalled ─────────
+    // ── 7. RTMP egress sink stops draining and surfaces stalled ──────────
     results.push(
         fault_rtmp_egress_sink_stalls(&api, &ports, &fixture_h264, sink_port, timeout).await?,
     );
 
-    // ── 8. SRT egress sink disappears ───────────────────────────────────
+    // ── 7b. RTMPS egress reconnects after the sink disappears ────────────
+    results.push(
+        fault_rtmps_egress_sink_disappear(
+            &api,
+            &ports,
+            &fixture_h264,
+            sink_port,
+            timeout,
+            &rtmps_cert,
+            &rtmps_key,
+        )
+        .await?,
+    );
+
+    // ── 7c. RTMPS slow receiver surfaces stalled output ─────────────────
+    results.push(
+        fault_rtmps_egress_sink_stalls(
+            &api,
+            &ports,
+            &fixture_h264,
+            sink_port,
+            timeout,
+            &rtmps_cert,
+            &rtmps_key,
+        )
+        .await?,
+    );
+
+    // ── 8. SRT egress sink disappears ──────────────────────────────────
     results.push(fault_srt_egress_sink_disappear(&api, &ports, &fixture_h264, timeout).await?);
 
     for test_name in [
@@ -411,6 +497,123 @@ pub(crate) async fn fault_resilience() -> Result<Value, String> {
     let history_contract = verify_live_history_contract(&api, &["egress.failed"]).await?;
     let external_transcoder_history = verify_external_transcoder_history_contract(&api).await?;
     println!("[fault.resilience] history contract verified");
+
+    let shutdown_pipeline = create_pipeline(&api, "fault-graceful-rtmp-rtmps").await?;
+    let rtmp_shutdown_port = sink_port
+        .checked_add(1)
+        .ok_or_else(|| "SINK_PORT must leave room for the RTMP shutdown sink".to_string())?;
+    let rtmp_shutdown_metrics = Arc::new(GeneralizedSinkMetrics::default());
+    let rtmp_shutdown_sink =
+        start_generalized_sink_server(rtmp_shutdown_port, rtmp_shutdown_metrics.clone()).await?;
+    let rtmps_shutdown_metrics = Arc::new(GeneralizedSinkMetrics::default());
+    let rtmps_shutdown_sink = match start_generalized_rtmps_sink_server(
+        sink_port,
+        &rtmps_cert,
+        &rtmps_key,
+        rtmps_shutdown_metrics.clone(),
+    )
+    .await
+    {
+        Ok(server) => server,
+        Err(error) => {
+            stop_generalized_sink_server(rtmp_shutdown_sink);
+            return Err(error);
+        }
+    };
+    let rtmp_shutdown_output_id = create_output(
+        &api,
+        &shutdown_pipeline,
+        "rtmp-shutdown-sink",
+        &format!("rtmp://127.0.0.1:{rtmp_shutdown_port}/live/fault-graceful-rtmp-sink"),
+        "source",
+    )
+    .await?;
+    let rtmps_shutdown_output_id = create_output(
+        &api,
+        &shutdown_pipeline,
+        "rtmps-shutdown-sink",
+        &format!("rtmps://127.0.0.1:{sink_port}/live/fault-graceful-rtmps-sink"),
+        "source",
+    )
+    .await?;
+    let mut shutdown_publisher = spawn_publisher(
+        &fixture_h264,
+        &format!(
+            "rtmp://127.0.0.1:{}/live/fault-graceful-rtmp-rtmps",
+            ports.rtmp
+        ),
+        "flv",
+        false,
+    )
+    .await?;
+    let startup_result = async {
+        wait_for_api_input_live(&api, &shutdown_pipeline, timeout).await?;
+        start_output(&api, &shutdown_pipeline, &rtmp_shutdown_output_id).await?;
+        start_output(&api, &shutdown_pipeline, &rtmps_shutdown_output_id).await?;
+        let rtmp_initial_media =
+            wait_for_sink_video_above(&rtmp_shutdown_metrics, 9, timeout).await;
+        let rtmps_initial_media =
+            wait_for_sink_video_above(&rtmps_shutdown_metrics, 9, timeout).await;
+        Ok::<(bool, bool), String>((rtmp_initial_media, rtmps_initial_media))
+    }
+    .await;
+    let (rtmp_initial_media, rtmps_initial_media) = match startup_result {
+        Ok(initial_media) => initial_media,
+        Err(error) => {
+            stop_child(&mut shutdown_publisher).await;
+            stop_generalized_sink_server(rtmp_shutdown_sink);
+            stop_generalized_sink_server(rtmps_shutdown_sink);
+            stop_child(&mut child).await;
+            return Err(error);
+        }
+    };
+    stop_generalized_sink_server(rtmp_shutdown_sink);
+    stop_generalized_sink_server(rtmps_shutdown_sink);
+
+    let retry_deadline = Instant::now() + Duration::from_secs(10);
+    let mut rtmp_saw_retrying = false;
+    let mut rtmps_saw_retrying = false;
+    while Instant::now() < retry_deadline && !(rtmp_saw_retrying && rtmps_saw_retrying) {
+        if !rtmp_saw_retrying
+            && let Ok((status, _)) = api
+                .get_output_status(&shutdown_pipeline, &rtmp_shutdown_output_id)
+                .await
+        {
+            rtmp_saw_retrying = status.status == "retrying";
+        }
+        if !rtmps_saw_retrying
+            && let Ok((status, _)) = api
+                .get_output_status(&shutdown_pipeline, &rtmps_shutdown_output_id)
+                .await
+        {
+            rtmps_saw_retrying = status.status == "retrying";
+        }
+        if !(rtmp_saw_retrying && rtmps_saw_retrying) {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    let shutdown_result = terminate_restream_gracefully(&mut child, &log_path).await;
+    stop_child(&mut shutdown_publisher).await;
+    let shutdown_result = match shutdown_result {
+        Ok(result) => result,
+        Err(error) => json!({"passed": false, "error": error}),
+    };
+    let shutdown_passed = shutdown_result["passed"] == true;
+    let mut rtmp_shutdown_result = shutdown_result.clone();
+    rtmp_shutdown_result["test"] = json!("rtmp-egress-reconnect-shutdown");
+    rtmp_shutdown_result["initialMedia"] = json!(rtmp_initial_media);
+    rtmp_shutdown_result["sawRetrying"] = json!(rtmp_saw_retrying);
+    rtmp_shutdown_result["passed"] =
+        json!(rtmp_initial_media && rtmp_saw_retrying && shutdown_passed);
+    results.push(rtmp_shutdown_result);
+    let mut rtmps_shutdown_result = shutdown_result;
+    rtmps_shutdown_result["test"] = json!("rtmps-egress-reconnect-shutdown");
+    rtmps_shutdown_result["initialMedia"] = json!(rtmps_initial_media);
+    rtmps_shutdown_result["sawRetrying"] = json!(rtmps_saw_retrying);
+    rtmps_shutdown_result["passed"] =
+        json!(rtmps_initial_media && rtmps_saw_retrying && shutdown_passed);
+    results.push(rtmps_shutdown_result);
 
     stop_child(&mut child).await;
 

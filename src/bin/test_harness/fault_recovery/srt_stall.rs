@@ -11,7 +11,7 @@
 //! and is closed only once it reaches `Stalled`. `SIGSTOP` on a real
 //! MediaMTX receiver was meant to produce exactly that by freezing its
 //! `recv()` loop. It does not: `SIGSTOP` freezes *every* thread in the
-//! receiver process, including libsrt's own internal ACK/keepalive thread,
+//! receiver process, including its SRT protocol/ACK workers,
 //! so the connection is detected as fully broken within seconds (observed:
 //! `srt_send failed ... Connection was broken`), not backpressured — SRT
 //! has no way to distinguish "receiver alive but not reading" from

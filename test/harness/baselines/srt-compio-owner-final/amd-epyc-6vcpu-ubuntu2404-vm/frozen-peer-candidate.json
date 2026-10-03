@@ -1,0 +1,101 @@
+{
+  "variant": "candidate",
+  "tag": "frozen-peer-candidate",
+  "harness_exit": 1,
+  "gate_rssGrowthKb": 69676,
+  "gate_limit_kb": 65536,
+  "gate_rssBeforeKb": null,
+  "gate_rssAfterKb": null,
+  "enteredRetryCycle": true,
+  "sigstopOk": true,
+  "rss_mb_median_by_fifth": [
+    139,
+    181.0,
+    194.0,
+    197.0,
+    197.0
+  ],
+  "rss_mb_max": 198,
+  "threads_max": 29,
+  "fds_max": 66,
+  "rss_series_mb_every_10s": [
+    [
+      0,
+      74,
+      17,
+      49
+    ],
+    [
+      10,
+      139,
+      17,
+      50
+    ],
+    [
+      20,
+      171,
+      28,
+      64
+    ],
+    [
+      30,
+      181,
+      16,
+      50
+    ],
+    [
+      40,
+      181,
+      16,
+      50
+    ],
+    [
+      50,
+      191,
+      28,
+      64
+    ],
+    [
+      60,
+      194,
+      16,
+      50
+    ],
+    [
+      70,
+      194,
+      16,
+      50
+    ],
+    [
+      80,
+      194,
+      16,
+      50
+    ],
+    [
+      90,
+      198,
+      29,
+      66
+    ],
+    [
+      100,
+      197,
+      17,
+      52
+    ],
+    [
+      110,
+      197,
+      17,
+      52
+    ],
+    [
+      120,
+      197,
+      17,
+      52
+    ]
+  ]
+}

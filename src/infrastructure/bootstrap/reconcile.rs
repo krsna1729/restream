@@ -84,6 +84,8 @@ impl Reconciler {
             };
 
             self.egress.reconcile(&outputs).await;
+            self.engine.resize_srt_fabrics().await;
+            self.engine.resize_rtmp_fabrics().await;
             self.sweep_unused_stages(&outputs).await;
             if !self.reconcile_recordings(tick).await {
                 continue;

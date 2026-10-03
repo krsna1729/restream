@@ -210,7 +210,7 @@ pub struct EgressProgressSink {
     /// buffer occupancy — status `quality` source). Sampled once per second
     /// by the shard's stall sweep, the same cadence and mechanism as
     /// `backpressure_reason`, from whichever native stats source the
-    /// transport exposes (`srt_bistats` for SRT, `TCP_INFO` for RTMP).
+    /// transport exposes (`srt-rs` logical-caller statistics for SRT, `TCP_INFO` for RTMP).
     pub quality:
         Option<std::sync::Arc<std::sync::Mutex<crate::media::snapshots::PublisherQuality>>>,
     /// Set by shard code exactly once, only when this leaf is closed for a

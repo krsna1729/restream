@@ -357,7 +357,7 @@ async fn run_backend_complex_audio_probe(
     let mut stack = if env.lifecycle == ResourceSweepLifecycle::Isolated {
         None
     } else {
-        Some(start_resource_sweep_stack(&env).await?)
+        Some(start_resource_sweep_stack(&env, LocalPeerNeeds::ALL).await?)
     };
     let mut retained_publishers = Vec::new();
     let aggregates = run_resource_egress_growth(
@@ -437,7 +437,7 @@ async fn run_branch_matrix_variant(env: &BranchMatrixEnv) -> Result<Value, Strin
     let mut stack = if resource.lifecycle == ResourceSweepLifecycle::Isolated {
         None
     } else {
-        Some(start_resource_sweep_stack(resource).await?)
+        Some(start_resource_sweep_stack(resource, LocalPeerNeeds::ALL).await?)
     };
     let mut retained_publishers: Vec<Child> = Vec::new();
     let mut aggregates = Vec::new();

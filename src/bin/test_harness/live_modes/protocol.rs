@@ -148,6 +148,55 @@ async fn run_transcode_bframe_probe_case(
     }
 }
 
+/// Direct play from ingest is a debug path; this is its player check. It
+/// decodes five seconds of the read the way a player would (ffmpeg into a
+/// null sink) and fails on a non-zero exit or a decode-error pattern. A
+/// timestamp warning is tolerated only when a video-packet probe of the same
+/// read shows monotone DTS, as the mixed output decode scan does.
+async fn assert_direct_play_decodes(
+    label: &str,
+    url: &str,
+    work_dir: &Path,
+) -> Result<Value, String> {
+    let (passed, status, matched_pattern, stderr) = ffmpeg_decode_scan(label, url).await?;
+    let mut fallback = Value::Null;
+    let tolerated = if decode_scan_needs_video_dts_fallback(url, status, matched_pattern) {
+        let packets_path = work_dir.join(format!(
+            "{}.direct-play-decode.ffprobe.json",
+            safe_artifact_stem(label)
+        ));
+        let packet_probe = ffprobe_video_packets(url, &packets_path).await?;
+        let packet_count = count_video_packets(&packet_probe);
+        let dts_monotone = video_dts_monotone(&packet_probe);
+        fallback = json!({"packetCount": packet_count, "videoDtsMonotone": dts_monotone});
+        packet_count > 0 && dts_monotone
+    } else {
+        false
+    };
+    let result = json!({
+        "passed": passed || tolerated,
+        "exitStatus": status,
+        "matchedPattern": matched_pattern,
+        "videoDtsFallback": fallback,
+    });
+    if passed || tolerated {
+        Ok(result)
+    } else {
+        let tail: String = stderr
+            .lines()
+            .rev()
+            .take(8)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
+        Err(format!(
+            "{label}: direct-play decode failed: {result}\n{tail}"
+        ))
+    }
+}
+
 fn srt_publish_url(port: u16, stream_key: &str, crypto: Option<(&str, u32)>) -> String {
     harness_srt_ffmpeg_url(port, stream_key, HarnessSrtMode::Publish, crypto)
 }
@@ -242,11 +291,17 @@ pub(crate) async fn srt_policy_correctness() -> Result<Value, String> {
     wait_for_api_input_live(&api, &plain_inherit_id, Duration::from_secs(15)).await?;
     let plain_read_probe = ffprobe(&srt_read_url(ports.srt, "policy-plain-inherit", None)).await?;
     assert_media_only(&plain_read_probe, "plain inherit read")?;
+    let plain_read_decode = assert_direct_play_decodes(
+        "plain inherit read",
+        &srt_read_url(ports.srt, "policy-plain-inherit", None),
+        &work_dir,
+    )
+    .await?;
     stop_child(&mut plain_pub).await;
     wait_for_api_input_off(&api, &plain_inherit_id, Duration::from_secs(10)).await?;
     results.insert(
         "globalPlaintextInherit".to_string(),
-        json!({"passed": true, "readProbe": plain_read_probe}),
+        json!({"passed": true, "readProbe": plain_read_probe, "readDecode": plain_read_decode}),
     );
 
     api.patch_json(
@@ -358,6 +413,12 @@ pub(crate) async fn srt_policy_correctness() -> Result<Value, String> {
         ))
         .await?;
         assert_media_only(&read_ok, label)?;
+        let read_decode = assert_direct_play_decodes(
+            label,
+            &srt_read_url(ports.srt, stream_key, Some((passphrase, pbkeylen))),
+            &work_dir,
+        )
+        .await?;
         let read_plain_fail = expect_srt_read_failure(
             &srt_read_url(ports.srt, stream_key, None),
             &format!("{label} plaintext read"),
@@ -383,6 +444,7 @@ pub(crate) async fn srt_policy_correctness() -> Result<Value, String> {
             json!({
                 "passed": true,
                 "readProbe": read_ok,
+                "readDecode": read_decode,
                 "plaintextReadRejected": read_plain_fail,
                 "wrongPassphraseReadRejected": read_wrong_pass_fail,
                 "plaintextPublishRejected": publish_plain_fail,
@@ -457,10 +519,21 @@ pub(crate) async fn bframe_rtmp_correctness() -> Result<Value, String> {
     let video_count = sink_metrics.video_count.load(Ordering::Relaxed);
     let sink_summary = sink_metrics.summary();
 
-    let source_passed =
-        packet_count >= 30 && bframe_count > 0 && ffprobe_dts_monotone && sink_dts_monotone;
+    // `read_url` plays Restream's own RTMP ingest (direct play), so this is
+    // also that path's player check.
+    let (play_decodes, play_decode) =
+        match assert_direct_play_decodes("rtmp direct play", &read_url, &work_dir).await {
+            Ok(result) => (true, result),
+            Err(error) => (false, json!({"passed": false, "error": error})),
+        };
+    let source_passed = packet_count >= 30
+        && bframe_count > 0
+        && ffprobe_dts_monotone
+        && sink_dts_monotone
+        && play_decodes;
     let mut source_results = json!({
         "passed": source_passed,
+        "directPlayDecode": play_decode,
         "packetCount": packet_count,
         "bframeCount": bframe_count,
         "ffprobeDtsMonotone": ffprobe_dts_monotone,
@@ -476,6 +549,8 @@ pub(crate) async fn bframe_rtmp_correctness() -> Result<Value, String> {
         source_results["error"] = json!("RTMP egress did not expose any packets with PTS > DTS");
     } else if !ffprobe_dts_monotone || !sink_dts_monotone {
         source_results["error"] = json!("RTMP egress DTS values are not monotone");
+    } else if !play_decodes {
+        source_results["error"] = json!("RTMP direct play did not decode cleanly");
     }
 
     install_bframe_transcode_profiles(&api).await?;

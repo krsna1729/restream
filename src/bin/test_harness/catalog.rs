@@ -114,6 +114,28 @@ mod tests {
     }
 
     #[test]
+    fn live_catalog_only_routes_rtmps_from_rtmp_ingest() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test/harness");
+        let catalog = HarnessCatalog::load(&root).expect("load checked-in harness catalog");
+        for (mode, expected_rtmps) in [
+            ("mixed.live.rtmp.h264.a1.bf0", true),
+            ("mixed.live.srt.h264.a1.bf0", false),
+        ] {
+            let plan = catalog.plan_mode(mode).expect("plan mixed live mode");
+            let outputs = plan["outputs"]["resolved"]
+                .as_array()
+                .expect("resolved output matrix");
+            assert_eq!(
+                outputs
+                    .iter()
+                    .any(|output| output["protocol"].as_str() == Some("rtmps")),
+                expected_rtmps,
+                "{mode} RTMPS matrix membership"
+            );
+        }
+    }
+
+    #[test]
     fn workflow_ref_accepts_short_ids() {
         assert_eq!(
             workflow_ref_from_name("mixed-scenario"),

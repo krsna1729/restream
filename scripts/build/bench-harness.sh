@@ -8,7 +8,12 @@ if [[ -z "${TMPDIR:-}" || ! -d "${TMPDIR:-}" || ! -w "${TMPDIR:-}" ]]; then
   export TMPDIR=/tmp
 fi
 
-scripts/build/resource-limit.sh cargo build --profile bench --bin restream --bin test_harness
+feature_args=()
+if [[ -n "${RESTREAM_BENCH_FEATURES:-}" ]]; then
+  feature_args=(--features "$RESTREAM_BENCH_FEATURES")
+fi
+
+scripts/build/resource-limit.sh cargo build --profile bench --bin restream --bin test_harness "${feature_args[@]}"
 
 # Cargo hardcodes target/release as the output dir for a profile named
 # "bench" (dir-name cannot be overridden for built-in profile names, and the
@@ -27,6 +32,27 @@ for binary in target/bench/restream target/bench/test_harness; do
     exit 1
   fi
 done
+
+# Build provenance: which tree these binaries were built from. The packet-rate
+# contract reads this stamp next to the harness binary and refuses to call a
+# rung baseline-eligible unless the running binary was built from the recorded
+# commit with a clean tree — a clean SHA at run time alone does not prove the
+# executed binary came from it.
+provenance_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
+provenance_dirty=false
+if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+  provenance_dirty=true
+fi
+bench_features="${RESTREAM_BENCH_FEATURES:-}"
+cat > target/bench/build-provenance.json <<EOF
+{
+  "gitSha": "${provenance_sha}",
+  "gitDirty": ${provenance_dirty},
+  "features": "${bench_features}",
+  "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+echo "bench build provenance: sha=${provenance_sha:-unknown} dirty=${provenance_dirty}"
 
 cat <<'EOF'
 Bench-profile measurement binaries are ready:

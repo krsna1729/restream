@@ -17,7 +17,7 @@ use crate::media::ring_buffer::{MEDIA_PRODUCER_BATCH_PACKETS, RingBuffer};
 use crate::media::stage_metrics::StageMetrics;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error};
+use tracing::error;
 
 mod audio_router;
 
@@ -42,33 +42,6 @@ impl AsRef<[u8]> for OwnedFfmpegPacket {
 
 use crate::domain::audio_routing::{AudioRouting, parse_audio_routing};
 
-/// Byte sink that writes MPEG-TS batches into an in-process `MemoryQueue`.
-pub(crate) struct InternalMemoryQueueSink {
-    queue: Arc<crate::media::avio::MemoryQueue>,
-    cancel: CancellationToken,
-}
-
-impl InternalMemoryQueueSink {
-    pub(crate) fn new(
-        queue: Arc<crate::media::avio::MemoryQueue>,
-        cancel: CancellationToken,
-    ) -> Self {
-        Self { queue, cancel }
-    }
-}
-
-impl crate::media::ffmpeg::stage_input::StageByteSink for InternalMemoryQueueSink {
-    async fn write_ts(&mut self, bytes: &[u8], _cancel: &CancellationToken) -> Result<(), String> {
-        if bytes.is_empty() {
-            return Ok(());
-        }
-        if !self.queue.write_cancellable(bytes, &self.cancel).await {
-            return Err("input queue closed or cancelled".into());
-        }
-        Ok(())
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn run_internal_video_stage(
     pipeline_id: String,
@@ -76,7 +49,7 @@ async fn run_internal_video_stage(
     engine: Arc<crate::media::engine::MediaEngine>,
     cancel_token: CancellationToken,
     stage_key: StageKey,
-    mut input_pump: crate::media::ffmpeg::stage_input::StageInputPump,
+    input_pump: crate::media::ffmpeg::stage_input::StageInputPump,
     output_normalizer: StageOutputNormalizer,
     needs_scale: bool,
     output_codec: VideoCodecKind,
@@ -97,6 +70,8 @@ async fn run_internal_video_stage(
         backend: crate::media::stage_lifecycle::StageBackendKind::InternalFfmpeg,
         pid: None,
     });
+
+    input_queue.set_refill(Box::new(input_pump.into_queue_refill(cancel_token.clone())));
 
     // Spawn thread to run FFmpeg processing: demux input MPEG-TS, push packets
     // directly to the output RingBuffer (no output mux/demux round-trip).
@@ -141,24 +116,10 @@ async fn run_internal_video_stage(
     });
     engine.register_os_thread(handle);
 
-    let mut queue_sink = InternalMemoryQueueSink::new(input_queue.clone(), cancel_token.clone());
-    if let Err(e) = input_pump.pump_to(&mut queue_sink, &cancel_token).await {
-        if cancel_token.is_cancelled() && e.contains("closed or cancelled") {
-            debug!(
-                pipeline_id = %pipeline_id,
-                preset = %preset,
-                "internal transcoder shared pump stopped during cancellation: {}",
-                e
-            );
-        } else {
-            error!(
-                pipeline_id = %pipeline_id,
-                preset = %preset,
-                "internal transcoder shared pump failed: {}",
-                e
-            );
-        }
-    }
+    // The FFmpeg thread pulls its input from the ring itself (AVIO refill),
+    // so this task only waits for the stage to end: cancellation, end of
+    // input, or the FFmpeg thread exiting (which cancels the token).
+    cancel_token.cancelled().await;
 
     input_queue.close();
     engine.remove_input_queue(&stage_key).await;

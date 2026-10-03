@@ -15,6 +15,8 @@ live here and in `AGENTS.md`.
 - [Evidence and generated inventories](#evidence-and-generated-inventories)
 - [Live integration tests](#live-integration-tests)
 - [Capability gates](#capability-gates)
+- [Container runtime smoke](#container-runtime-smoke)
+- [SRT egress qualification](#srt-egress-qualification)
 
 ## Rust test suite
 
@@ -280,7 +282,7 @@ on loopback?" by comparing:
 
 Each case uses the same fixed transfer shape: `8` live-mode SRT packets of
 `1316` bytes per timed iteration. The only benchmark variable is the negotiated
-SRT encryption key length through `SRTO_PBKEYLEN`.
+SRT encryption key length as selected by the `srt-proto` key-length setting.
 
 Use the full `cargo test` suite, full benchmark suites, or live integration
 modes as a broader confidence pass when a change crosses module boundaries,
@@ -421,6 +423,31 @@ Use the catalog's current inspection commands to resolve a mode and review its
 services, scenarios, checks, timeouts, and artifacts before spending time on a
 live run.
 
+### Transport live-CI tiers
+
+- Pull requests run one short live SRT smoke and one RTMP-input smoke. The RTMP
+  mixed matrix includes its RTMPS output row; a capability preflight reports
+  missing Linux kTLS support as an explicit failure rather than falling back
+  to userspace TLS. The fast concurrency proof stays on pull requests; full
+  live lifecycle faults are deferred to the `redevelop` tier.
+- Pushes to `redevelop` run the H.264/H.265 SRT live shapes, two RTMP live
+  shapes, `srt-crypto-matrix`, and `fault.resilience`. The concurrency live
+  lifecycle job adds `fault.egress-retry`, `fault.output-stall`, and `recovery`.
+  `fault.resilience` also proves RTMPS media delivery, sink loss reaching
+  `retrying`, and successful SIGTERM shutdown with
+  `restream.shutdown.completed` within the five-second bound.
+- Nightly certification adds the broader file/live, crypto, bitrate, ramp,
+  resource, and churn matrix. Its harness artifacts upload on every result;
+  pull-request failure/cancellation artifacts are retained for 3 days and
+  `redevelop` failure/cancellation artifacts for 7 days. The redevelop
+  concurrency fault logs/results are retained for 7 days on failure/cancel.
+
+The catalog and workflow matrices are the source of truth for exact shard
+names. A capability failure is evidence that the runner cannot qualify the
+requested transport; do not silently skip or substitute a different transport.
+RTMPS ingest is not in the current product contract; its live leg is RTMP
+ingest → Restream → RTMPS egress.
+
 ### Fixtures and artifacts
 
 Harness publishers and probes must resolve committed media through
@@ -464,3 +491,34 @@ These capabilities must be treated as test results, not assumptions:
 | Audio remap/downmix | Channel-level filtering is implemented for the default runtime; full audio-content matrix remains required |
 | Custom encoding | Runtime output selection must stay rejected until custom args are applied by a transcoder backend |
 | Bonded SRT ingest | Separate-process broadcast + backup tests |
+
+## Container runtime smoke
+
+`scripts/check/container-smoke.sh` proves the shipped runtime image, not just
+process startup. It (1) checks the non-root user and no-mount health contract,
+(2) proves real SRT egress under the shipped seccomp profile
+(`distribution/docker/restream-seccomp.json`), and (3) drives a real H.264 RTMP
+publisher through the image to RTMPS media egress using the mixed live harness.
+The RTMPS probe mounts the checked-in trust certificate read-only at the same
+absolute path used by the host-side harness; health remains a no-mount check.
+The mixed mode verifies sink media, not only a successful socket connection.
+The smoke also records what the engine's DEFAULT seccomp profile does as a
+negative control (Docker 25+ denies the required `io_uring` syscalls; the
+expected denial never fails the run, and a future default that allows them is
+recorded as such). The live proofs need the harness
+(`scripts/build/bench-harness.sh`); `--diagnostic-unconfined` adds a
+`seccomp=unconfined` troubleshooting control that is never a deployment
+recommendation. `tests/seccomp_profile.rs` statically pins the profile to "Moby
+baseline + exactly the `io_uring` delta".
+
+## SRT egress qualification
+
+`scripts/harness/srt_final_qual.py` drives the SRT Compio Owner final
+qualification (fresh-process fanout points sampled at 1 Hz with the Owner
+metrics exposed in `/metrics/system` `egressShards`, concurrent connect bursts,
+the `srt.slow-peer` mode, and the frozen-destination case) and derives the gates
+and rates; `scripts/harness/test_srt_final_qual.py` tests that machinery. The
+`srt.slow-peer` harness mode pauses APPLICATION delivery on one `RawSrtSink`
+receiver (protocol timers and ACK/NAK keep running, unlike a SIGSTOPped peer) and
+requires healthy siblings to keep progressing. Results and method:
+`test/harness/baselines/srt-compio-owner-final/`.

@@ -91,11 +91,12 @@ stays outside the shared stage:
 | Source packet ring | Independent reader position and lag counters |
 | HLS pipeline store | Request authorization and response transfer |
 
-Under the egress fabric (see `docs/archive/egress/implementation.md`), RTMP/RTMPS
-and SRT egress additionally share a small, CPU-derived and output-count-
-scaled pool of shard OS threads across many destinations, each
-multiplexed through native non-blocking readiness polling rather than one
-blocking sender thread per destination.
+Under the egress fabric (see `docs/archive/egress/implementation.md`), RTMP,
+RTMPS, and SRT egress share a small, CPU-derived and output-count-scaled pool
+of shard OS threads across many destinations. RTMP/RTMPS active socket I/O is
+completion-driven on one Compio/io_uring runtime per shard; bounded rotating
+`PollFd` scans are limited to pending connects. SRT uses the shard-local
+Compio `Owner` model.
 
 Sharing must not couple destination failure domains. A stalled or failed
 destination can lose its own buffered data or restart without stopping the
@@ -109,10 +110,20 @@ standby cache bounds in addition to the selected pipeline.
 
 ## Native and child-process boundaries
 
-Tokio owns sockets and inline native mux/demux work. Calls that may block are
-isolated on guarded OS threads. The default codec-heavy transform path launches
-an FFmpeg child and handles its pipes asynchronously; selected stage families
-can use in-process FFmpeg when their feature/configuration path is enabled.
+Tokio owns control/application work. The migrated container services no longer
+schedule on the Tokio control runtime (WI11). Ingest media runs to completion on
+the Compio ingress owners: SRT TS demux and RTMP FLV parsing, sequence-header
+caching, timestamp mapping, standby GOP, gate, and publication. Shared SRT TS
+muxing (`TsChunkRing`), HLS segmenting (MPEG-TS and fMP4), recording muxing,
+and external file-ingest demux run on the dedicated media executor pool
+(`restream-media`).
+Lightweight audio-router stages and diagnostic direct RTMP play scheduling
+remain control-runtime tasks; this migration does not move those paths.
+Compio/io_uring owns production RTMP, RTMPS, and SRT transport sockets and
+connection protocol state. Calls that may block are isolated on guarded OS
+threads. The default codec-heavy transform path launches an FFmpeg child and
+handles its pipes asynchronously; selected stage families can use in-process
+FFmpeg when their feature/configuration path is enabled.
 
 The external boundary has a process-start cost and pipe traffic, but isolates
 codec failure and avoids blocking the async scheduler. The in-process boundary

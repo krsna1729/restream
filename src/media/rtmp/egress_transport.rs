@@ -3,7 +3,7 @@ use percent_encoding::percent_decode_str;
 use reqwest::Url;
 use std::sync::Arc;
 use tokio_rustls::rustls::pki_types::pem::PemObject;
-use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+use tokio_rustls::rustls::{CipherSuite, ClientConfig, ProtocolVersion, RootCertStore};
 
 pub(crate) struct RtmpUrlParts {
     pub(crate) host: String,
@@ -13,15 +13,46 @@ pub(crate) struct RtmpUrlParts {
     pub(crate) tls: bool,
 }
 
+pub(crate) fn supports_rtmps_cipher_suite(version: ProtocolVersion, suite: CipherSuite) -> bool {
+    matches!(
+        (version, suite),
+        (
+            ProtocolVersion::TLSv1_2,
+            CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+                | CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+                | CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+                | CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+        ) | (
+            ProtocolVersion::TLSv1_3,
+            CipherSuite::TLS13_AES_128_GCM_SHA256 | CipherSuite::TLS13_AES_256_GCM_SHA384
+        )
+    )
+}
+
+fn rtmps_crypto_provider() -> Arc<tokio_rustls::rustls::crypto::CryptoProvider> {
+    let mut provider = tokio_rustls::rustls::crypto::ring::default_provider();
+    provider.cipher_suites.retain(|suite| {
+        supports_rtmps_cipher_suite(ProtocolVersion::TLSv1_2, suite.suite())
+            || supports_rtmps_cipher_suite(ProtocolVersion::TLSv1_3, suite.suite())
+    });
+    Arc::new(provider)
+}
+
+fn client_config_with_roots(roots: RootCertStore) -> Arc<ClientConfig> {
+    Arc::new(
+        ClientConfig::builder_with_provider(rtmps_crypto_provider())
+            .with_safe_default_protocol_versions()
+            .expect("RTMPS client cipher suites support TLS 1.2 and TLS 1.3")
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+    )
+}
+
 pub(crate) fn rustls_client_config() -> Arc<ClientConfig> {
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
-    Arc::new(
-        ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth(),
-    )
+    client_config_with_roots(roots)
 }
 
 /// Same trust store as [`rustls_client_config`] plus any CA certificates
@@ -43,11 +74,7 @@ pub(crate) fn rustls_client_config_with_extra_roots(
         ));
     }
 
-    Ok(Arc::new(
-        ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth(),
-    ))
+    Ok(client_config_with_roots(roots))
 }
 
 fn extra_trust_roots_from_pem_file(
@@ -151,6 +178,30 @@ mod tests {
         // No filesystem access is attempted for the `None` case; this just
         // proves the default path still builds a usable config.
         assert!(resolve_rtmps_client_config(None).is_ok());
+    }
+
+    #[test]
+    fn rtmps_client_provider_only_advertises_supported_aes_gcm_suites() {
+        let provider = rtmps_crypto_provider();
+        assert!(
+            provider.cipher_suites.iter().all(|suite| {
+                supports_rtmps_cipher_suite(ProtocolVersion::TLSv1_2, suite.suite())
+                    || supports_rtmps_cipher_suite(ProtocolVersion::TLSv1_3, suite.suite())
+            }),
+            "RTMPS offered a suite with no kTLS handling"
+        );
+        assert!(
+            provider
+                .cipher_suites
+                .iter()
+                .any(|suite| { suite.suite() == CipherSuite::TLS13_AES_128_GCM_SHA256 })
+        );
+        assert!(
+            !provider
+                .cipher_suites
+                .iter()
+                .any(|suite| { suite.suite() == CipherSuite::TLS13_CHACHA20_POLY1305_SHA256 })
+        );
     }
 
     #[test]

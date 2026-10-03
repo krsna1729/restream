@@ -32,6 +32,8 @@ docker_args=(
     run
     --rm
     --network host
+    # Compio needs io_uring; keep the shipped profile's other restrictions.
+    --security-opt "seccomp=$ROOT/distribution/docker/restream-seccomp.json"
     --user "$(id -u):$(id -g)"
     -e "HOME=$container_home"
     -e "BENCH_BUILD=${BENCH_BUILD:-never}"

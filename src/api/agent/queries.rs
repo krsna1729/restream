@@ -13,8 +13,6 @@ use super::{agent_health_snapshot, context::build_agent_context};
 use crate::api_runtime_views::{ResourceMapOptions, ResourceMapView};
 #[cfg(feature = "agent-plane")]
 use crate::{alerts, events};
-#[cfg(feature = "agent-plane")]
-use sysinfo::System;
 
 #[cfg(feature = "agent-plane")]
 const AGENT_PROCESSING_GRAPH_OUTPUT_LIMIT: usize = 50;
@@ -136,10 +134,10 @@ pub async fn agent_investigation_handler(
     } else {
         crate::api_runtime_views::engine_telemetry(&state.engine).await
     };
-    let system = System::new_all();
+    let process = crate::system_sampling::sampled_system(process_resource_snapshot);
     let resource_map = crate::api_runtime_views::resource_map(
         &state.engine,
-        process_resource_snapshot(&system),
+        process,
         request.pipeline_id.as_deref(),
         ResourceMapOptions::new(ResourceMapView::Grouped, Some(25)),
     )

@@ -1,0 +1,22 @@
+{
+  "cpu_model": "AMD EPYC Processor (with IBPB)",
+  "logical_cpus": 6,
+  "physical_cores": "6",
+  "sockets": "1",
+  "effective_cpus_affinity": 6,
+  "cgroup_cpu_max": null,
+  "memory_total_gib": 11.7,
+  "kernel": "Linux 6.8.0-139-generic",
+  "arch": "x86_64",
+  "governor": "not readable (VM)",
+  "rust_profile": "bench (target/bench; scripts/build/bench-harness.sh)",
+  "candidate_sha": "c74b98ceadb486de1f105da4020d4ecaec5b84da",
+  "baseline_sha": "c323e5f5e832a618f71edd873ddcd3dc6c1bde30",
+  "srt_rs_pin_candidate": "7382e26f80410bef43da149a3550978bcc7a4d49",
+  "peer_mode": "MSR_PEER=sink (harness-native in-process SRT sink)",
+  "scenario": "egress-growth-source-srt (h264 SRT ingest 1.5M fixture, source-copy SRT outputs)",
+  "srt_latency": "harness default (HARNESS_SRT_LATENCY_US)",
+  "restream_env": {},
+  "stray_processes_now": [],
+  "recorded_at": "2026-09-20T08:58:03Z"
+}

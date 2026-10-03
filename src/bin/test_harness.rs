@@ -39,6 +39,8 @@ mod catalog;
 mod catalog_cli;
 #[path = "test_harness/core.rs"]
 mod core;
+#[path = "test_harness/egress_duty.rs"]
+mod egress_duty;
 #[path = "test_harness/fault_input_promotion.rs"]
 mod fault_input_promotion;
 #[path = "test_harness/fault_manifest.rs"]
@@ -67,22 +69,36 @@ mod mixed_runner;
 mod mode_specs;
 #[path = "test_harness/output_progress.rs"]
 mod output_progress;
+
+#[path = "test_harness/peer_state.rs"]
+mod peer_state;
 #[path = "test_harness/resource_sweep.rs"]
 mod resource_sweep;
 #[path = "test_harness/sinks.rs"]
 mod sinks;
 #[path = "test_harness/srt_raw_sink.rs"]
 mod srt_raw_sink;
+#[path = "test_harness/srt_sink.rs"]
+mod srt_sink;
+#[path = "test_harness/srt_slow_peer.rs"]
+mod srt_slow_peer;
 #[path = "test_harness/srt_urls.rs"]
 mod srt_urls;
+
+#[path = "test_harness/substrate_pps.rs"]
+mod substrate_pps;
 #[path = "test_harness/suite.rs"]
 mod suite;
+
+#[path = "test_harness/udp_drain.rs"]
+mod udp_drain;
 #[path = "test_harness/workflow_exec.rs"]
 mod workflow_exec;
 
 use api_client::*;
 use catalog_cli::*;
 use core::*;
+use egress_duty::*;
 use fault_input_promotion::*;
 use fault_manifest::*;
 use fault_recovery::*;
@@ -99,6 +115,7 @@ use output_progress::*;
 use resource_sweep::*;
 use sinks::*;
 use srt_raw_sink::*;
+use srt_slow_peer::*;
 use srt_urls::*;
 use suite::*;
 use workflow_exec::*;
@@ -129,6 +146,7 @@ fn planned_mixed_stage_count(
             (0..duplicates_per_output).map(move |duplicate| {
                 let url = match output_case.protocol() {
                     MixedOutputProtocol::Rtmp => "rtmp://example/live/out",
+                    MixedOutputProtocol::Rtmps => "rtmps://example/live/out",
                     MixedOutputProtocol::Srt => "srt://example:9000?streamid=publish:out",
                 };
                 PlannedOutput::new(
@@ -184,7 +202,7 @@ fn main() {
         }
         if let Err(error) = run().await {
             eprintln!("test harness failed: {error}");
-            // Native FFmpeg/libsrt worker threads can still be alive on a failed
+            // Native FFmpeg/SRT worker threads can still be alive on a failed
             // test. Avoid process-global C teardown while those threads exist.
             unsafe { libc::_exit(1) };
         }
@@ -230,11 +248,16 @@ async fn run() -> Result<(), String> {
             "fault.egress-retry" => fault_egress_retry().await,
             "fault.output-stall" => fault_output_stall().await,
             "fault.srt-output-stall" => fault_srt_output_stall().await,
+            "srt.slow-peer" => srt_slow_peer().await,
             "fault.resilience" => fault_resilience().await,
             "file.live-edge" => file_live_edge().await,
             "signal.control" => signal_control().await,
             "recovery" => recovery().await,
             "resource-sweep" => resource_sweep().await,
+            "srt-sink" => srt_sink::srt_sink_mode().await,
+            "egress-duty" => egress_duty().await,
+            "udp-drain" => udp_drain::udp_drain_mode().await,
+            "substrate-pps" => substrate_pps::substrate_pps_mode().await,
             "msr" => msr().await,
             "msr.dashboard" => msr_dashboard().await,
             "bitrate-sweep" => bitrate_sweep().await,

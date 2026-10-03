@@ -209,6 +209,14 @@
           },
           "purpose": "SRT destinations that stop taking data: bounded RSS against a frozen receiver, and the backpressured-but-connected stall path against a raw undrained SRT listener"
         },
+        "srt.slow-peer": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": true
+          },
+          "purpose": "one genuinely slow APPLICATION SRT receiver (delivery paused, protocol alive) among healthy SRT outputs: healthy siblings must keep progressing and feed retention must stay bounded (WI2.5)"
+        },
         "fault.resilience": {
           "suiteDefault": true,
           "suiteOrder": 500,
@@ -225,6 +233,38 @@
             "benchProfile": false
           },
           "purpose": "recovery-focused subset of fault behavior"
+        },
+        "srt-sink": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": false,
+            "benchProfile": true
+          },
+          "purpose": "standalone SRT sink peer on this host for multi-host packet-rate rungs (RESOURCE_SWEEP_SRT_PEER_HOSTS on the measuring host); reports its own counters and UDP drop counters"
+        },
+        "udp-drain": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": false,
+            "benchProfile": true
+          },
+          "purpose": "cheap wildcard UDP drain peer for substrate benchmarks: one receive socket per thread, counters and kernel drop counters on /state, so a sender result can be classified as receiver-limited or attributable"
+        },
+        "egress-duty": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": false,
+            "benchProfile": false
+          },
+          "purpose": "WI3.6 Stage D: one live Restream SRT egress fanout against the independent pinned srt-bench receiver on the lane, over a rated window; reports the pinned SRT egress shard thread CPU and the whole Restream process CPU per first-transmission DATA datagram, plus the receiver's whole-run loss/reconciliation fence. Manages its own lane network namespace (`ip netns exec`) and takes explicit binary paths, so it is not gated on the bench profile"
+        },
+        "substrate-pps": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": false,
+            "benchProfile": true
+          },
+          "purpose": "substrate UDP submission benchmark (compio vs native io_uring): one pinned sender CPU, 1000 destinations over the veth lane, preconstructed payload, queue-depth window; reports pps, pps/core and payload Gbit/s with the drain peer's counters deciding attribution"
         }
       }
     }

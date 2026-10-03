@@ -22,6 +22,7 @@ pub(super) fn spawn_child(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|error| format!("Failed to spawn ffmpeg: {error}"))?;
 

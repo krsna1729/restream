@@ -465,6 +465,17 @@ never expected to be started by hand outside `PEER_SKIP_START`.
   before driving SRT timers and outbound control packets, matching srt-bench's
   reuseport receiver strategy without multiplying externally visible ports.
 
+  Resource-sweep delivery measurement works against sink peers too. The RTMP
+  listeners run counting-only (no per-packet history) and record wire bytes
+  per connection; an RTMPS listener starts on each instance's RTMPS port when
+  `RESOURCE_SWEEP_RTMPS_CERT`/`_KEY` are set. The SRT pool records payload
+  bytes per logical connection (pool-wide sequence per srt-rs
+  `LogicalPeerId`; Restream's callers share UDP sockets, so addresses do not
+  identify connections, and pool threads can share a port). Closed
+  connections leave the counters. This is the receiver to use when mediamtx
+  would be the bottleneck: at 100 SRT outputs mediamtx received almost
+  nothing while this sink received 100/100 at ratio ≥ 0.98.
+
   Because a sink peer discards data below the RTMP/SRT protocol layer, mediamtx
   path-health and ffprobe read-back are skipped entirely; each checkpoint
   is instead verified from restream's own `/api/v1/engine/health`: every

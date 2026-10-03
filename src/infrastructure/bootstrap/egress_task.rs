@@ -323,11 +323,7 @@ impl EgressTask {
     async fn run_srt_fabric(&self, fabric: SrtFabricTask) {
         match self
             .engine
-            .retain_srt_fabric_runtime(
-                fabric.feed_id.clone(),
-                fabric.feed.as_ref(),
-                &self.pipeline_id,
-            )
+            .retain_srt_fabric_runtime(fabric.feed_id.clone(), fabric.feed.as_ref())
             .await
         {
             Ok(_) => {}

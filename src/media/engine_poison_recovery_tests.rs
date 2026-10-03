@@ -1,31 +1,4 @@
 use super::*;
-use std::sync::Mutex;
-
-// Supports the poisoned-mutex regression test below; mirrors the idiom
-// established in `avio.rs`'s and `ring_buffer_tests.rs`'s own test modules.
-static EXPECTED_PANIC_HOOK_LOCK: Mutex<()> = Mutex::new(());
-
-type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>;
-
-struct ScopedSilentPanicHook(Option<PanicHook>);
-
-impl ScopedSilentPanicHook {
-    fn new() -> Self {
-        Self(Some(std::panic::take_hook()))
-    }
-
-    fn silence(&mut self) {
-        std::panic::set_hook(Box::new(|_| {}));
-    }
-}
-
-impl Drop for ScopedSilentPanicHook {
-    fn drop(&mut self) {
-        if let Some(hook) = self.0.take() {
-            std::panic::set_hook(hook);
-        }
-    }
-}
 
 // Regression: active_egress_diag_snapshots reads `phase`/`target_addr`/
 // `last_error` via `unwrap_or_else(|e| e.into_inner())`, which is supposed to
@@ -48,25 +21,23 @@ async fn active_egress_diag_snapshots_recovers_from_poisoned_locks() {
         )
     };
 
-    let _panic_hook_lock = EXPECTED_PANIC_HOOK_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut panic_hook = ScopedSilentPanicHook::new();
-    panic_hook.silence();
-
     let p = phase.clone();
     let _ = std::thread::spawn(move || {
-        let _guard = p.lock().unwrap();
-        panic!("deliberate poison: phase");
+        crate::test_support::with_expected_panic_suppressed(|| {
+            let _guard = p.lock().unwrap();
+            panic!("deliberate poison: phase");
+        });
     })
     .join();
     assert!(phase.lock().is_err(), "phase mutex should be poisoned");
 
     let t = target_addr.clone();
     let _ = std::thread::spawn(move || {
-        let mut guard = t.lock().unwrap();
-        *guard = Some("poisoned-addr".to_string());
-        panic!("deliberate poison: target_addr");
+        crate::test_support::with_expected_panic_suppressed(|| {
+            let mut guard = t.lock().unwrap();
+            *guard = Some("poisoned-addr".to_string());
+            panic!("deliberate poison: target_addr");
+        });
     })
     .join();
     assert!(
@@ -76,17 +47,16 @@ async fn active_egress_diag_snapshots_recovers_from_poisoned_locks() {
 
     let e = last_error.clone();
     let _ = std::thread::spawn(move || {
-        let _guard = e.lock().unwrap();
-        panic!("deliberate poison: last_error");
+        crate::test_support::with_expected_panic_suppressed(|| {
+            let _guard = e.lock().unwrap();
+            panic!("deliberate poison: last_error");
+        });
     })
     .join();
     assert!(
         last_error.lock().is_err(),
         "last_error mutex should be poisoned"
     );
-
-    drop(panic_hook);
-    drop(_panic_hook_lock);
 
     let snapshots = engine.active_egress_diag_snapshots("pipe-1").await;
     assert_eq!(

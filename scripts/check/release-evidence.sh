@@ -75,7 +75,21 @@ if [[ -n "$ARCHIVE" ]]; then
     if [[ -n "$BINARY_BUNDLE" ]]; then
         scripts/check/release-artifact-smoke.sh "$BINARY_BUNDLE"
     fi
-    scripts/check/container-smoke.sh --image restream:release --load-archive "$ARCHIVE"
+    # The runtime image cannot perform SRT (or start its ingress) under Docker's
+    # default seccomp profile, so a release advertising the image MUST ship the
+    # supported profile beside it, byte-identical to the repository's, and the
+    # smoke must pass with exactly that release asset.
+    profile="${ARCHIVE%-oci.tar.gz}-seccomp.json"
+    [[ -s "$profile" ]] || {
+        echo "release-evidence: the runtime image archive is missing its seccomp profile beside it: $profile" >&2
+        exit 1
+    }
+    cmp -s "$profile" distribution/docker/restream-seccomp.json || {
+        echo "release-evidence: $profile differs from distribution/docker/restream-seccomp.json" >&2
+        exit 1
+    }
+    scripts/check/container-smoke.sh --image restream:release --load-archive "$ARCHIVE" \
+        --seccomp-profile "$profile"
 else
     scripts/check/container-smoke.sh --image restream:release
 fi

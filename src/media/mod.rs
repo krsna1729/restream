@@ -28,6 +28,7 @@ mod engine_rtmp_egress_fabric;
 mod engine_runtime;
 mod engine_sink_egress_fabric;
 mod engine_snapshots;
+pub(crate) mod executor;
 pub(crate) mod external_file_ingest;
 pub mod external_transcoder;
 pub mod feeder;
@@ -65,6 +66,7 @@ pub mod tcp_stats;
 pub mod timing;
 pub mod transcoder;
 pub mod ts_chunk_ring;
+pub mod uring_capabilities;
 
 use ring_buffer::MEDIA_PULL_BURST_PACKETS;
 

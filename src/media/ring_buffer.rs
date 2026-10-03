@@ -53,7 +53,7 @@
 //! the engine directly; it does not wait for the reconciler. Monotonic
 //! `write_idx` orders slots for readers; it does not prove a unique producer.
 
-use arc_swap::ArcSwapOption;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
@@ -129,10 +129,70 @@ pub struct PayloadStats {
     pub max_payload_bytes: usize,
 }
 
+/// Woken by a ring's producer right after each publication, and when the ring
+/// is sealed or ends. Egress fabric shards subscribe with their coalescing
+/// wake gates, so a publication reaches them from the producing thread with no
+/// watcher task in between (WI11). Implementations must be cheap and must not
+/// block: they run on the producer's hot path.
+pub trait PublishWake: Send + Sync {
+    fn wake(&self);
+}
+
+/// A ring's publication subscribers. A replacement ring shares its
+/// predecessor's set (`seal_and_forward`), so wakes follow the feed.
+pub struct PublishSubscribers {
+    list: ArcSwap<Vec<Arc<dyn PublishWake>>>,
+}
+
+impl PublishSubscribers {
+    fn new() -> Self {
+        Self {
+            list: ArcSwap::from_pointee(Vec::new()),
+        }
+    }
+
+    /// Add `subscriber`; idempotent per `Arc`. Control-plane only (copies
+    /// the list).
+    pub fn subscribe(&self, subscriber: Arc<dyn PublishWake>) {
+        self.list.rcu(|list| {
+            let mut list = Vec::clone(list);
+            if !list
+                .iter()
+                .any(|existing| std::ptr::addr_eq(Arc::as_ptr(existing), Arc::as_ptr(&subscriber)))
+            {
+                list.push(subscriber.clone());
+            }
+            list
+        });
+    }
+
+    pub fn unsubscribe(&self, subscriber: &Arc<dyn PublishWake>) {
+        self.list.rcu(|list| {
+            list.iter()
+                .filter(|existing| {
+                    !std::ptr::addr_eq(Arc::as_ptr(existing), Arc::as_ptr(subscriber))
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+    }
+
+    pub fn len(&self) -> usize {
+        self.list.load().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 pub struct RingBuffer {
     slots: Vec<RingSlot>,
     write_idx: AlignedAtomicUsize,
     last_keyframe_idx: AlignedAtomicUsize,
+    /// Cumulative payload bytes published: the offered load for delivery
+    /// telemetry. Single producer, so a relaxed load/store suffices.
+    published_bytes: AtomicU64,
     capacity: usize,
     created_at: Instant,
     notify: Arc<tokio::sync::Notify>,
@@ -162,6 +222,10 @@ pub struct RingBuffer {
     /// ring.  External egress connections never disconnect — they just see a
     /// sub-millisecond hiccup as readers move to the new ring.
     pub next: ArcSwapOption<RingBuffer>,
+    /// Woken by the producer after each publication (see [`PublishWake`]).
+    /// Created on first subscription, so a ring nobody subscribes to pays
+    /// one atomic load per publication.
+    publish_subscribers: std::sync::OnceLock<Arc<PublishSubscribers>>,
 }
 
 impl RingBuffer {
@@ -185,6 +249,7 @@ impl RingBuffer {
                 // would also produce index 0 if we started from AtomicUsize::new(0)).
                 val: AtomicUsize::new(usize::MAX),
             },
+            published_bytes: AtomicU64::new(0),
             capacity,
             created_at: Instant::now(),
             notify: Arc::new(tokio::sync::Notify::new()),
@@ -195,6 +260,29 @@ impl RingBuffer {
             estimated_pkt_rate: std::sync::atomic::AtomicU32::new(0),
             end_of_stream: AtomicBool::new(false),
             next: ArcSwapOption::empty(),
+            publish_subscribers: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// The publication subscribers of this ring and of every ring that
+    /// replaces it. Subscribers hold this set rather than the ring, so a
+    /// subscription never pins a superseded ring's packets.
+    pub fn publication_subscribers(&self) -> Arc<PublishSubscribers> {
+        Arc::clone(
+            self.publish_subscribers
+                .get_or_init(|| Arc::new(PublishSubscribers::new())),
+        )
+    }
+
+    /// One atomic load without subscribers; with them, one `ArcSwap` load and
+    /// one call per subscriber. No allocation.
+    #[inline]
+    fn wake_publication_subscribers(&self) {
+        let Some(subscribers) = self.publish_subscribers.get() else {
+            return;
+        };
+        for subscriber in subscribers.list.load().iter() {
+            subscriber.wake();
         }
     }
 
@@ -260,14 +348,22 @@ impl RingBuffer {
     /// woken; they drain any remaining slots in `self`, then follow `self.next` to
     /// `new_ring` automatically.
     pub fn seal_and_forward(&self, new_ring: Arc<RingBuffer>) {
+        // The replacement inherits the publication subscribers before it is
+        // reachable, so no publication on it can miss them.
+        // A fresh replacement has no set of its own yet, so `set` succeeds.
+        let _ = new_ring
+            .publish_subscribers
+            .set(self.publication_subscribers());
         self.next.store(Some(new_ring));
         // Wake all readers blocked on this ring so they can discover `next`.
         self.notify.notify_waiters();
+        self.wake_publication_subscribers();
     }
 
     pub fn mark_end_of_stream(&self) {
         self.end_of_stream.store(true, Ordering::Release);
         self.notify.notify_waiters();
+        self.wake_publication_subscribers();
     }
 
     pub fn is_end_of_stream(&self) -> bool {
@@ -366,6 +462,7 @@ impl RingBuffer {
         let idx = self.write_idx.val.load(Ordering::Relaxed);
         let slot_idx = idx % self.capacity;
         let is_keyframe = packet.media_type == MediaType::Video && packet.is_keyframe;
+        let payload_bytes = packet.payload.len() as u64;
 
         self.slots[slot_idx]
             .published_at_us
@@ -375,9 +472,11 @@ impl RingBuffer {
         if is_keyframe {
             self.last_keyframe_idx.val.store(idx, Ordering::Release);
         }
+        self.add_published_bytes(payload_bytes);
 
         self.write_idx.val.store(idx + 1, Ordering::Release);
         self.notify.notify_waiters();
+        self.wake_publication_subscribers();
     }
 
     /// Publish a burst with one write-index release and one waiter notification.
@@ -391,11 +490,13 @@ impl RingBuffer {
     {
         let start_idx = self.write_idx.val.load(Ordering::Relaxed);
         let mut count = 0usize;
+        let mut payload_bytes = 0u64;
 
         for packet in packets {
             let idx = start_idx + count;
             let slot_idx = idx % self.capacity;
             let is_keyframe = packet.media_type == MediaType::Video && packet.is_keyframe;
+            payload_bytes += packet.payload.len() as u64;
 
             self.slots[slot_idx]
                 .published_at_us
@@ -408,10 +509,12 @@ impl RingBuffer {
         }
 
         if count > 0 {
+            self.add_published_bytes(payload_bytes);
             self.write_idx
                 .val
                 .store(start_idx + count, Ordering::Release);
             self.notify.notify_waiters();
+            self.wake_publication_subscribers();
         }
 
         count
@@ -434,6 +537,18 @@ impl RingBuffer {
     pub fn read_at(&self, idx: usize) -> Option<Arc<MediaPacket>> {
         let slot_idx = idx % self.capacity;
         self.slots[slot_idx].data.load_full()
+    }
+
+    fn add_published_bytes(&self, bytes: u64) {
+        // Single producer: no read-modify-write instruction needed.
+        let total = self.published_bytes.load(Ordering::Relaxed);
+        self.published_bytes
+            .store(total.wrapping_add(bytes), Ordering::Relaxed);
+    }
+
+    /// Cumulative payload bytes published so far (offered load).
+    pub fn published_bytes(&self) -> u64 {
+        self.published_bytes.load(Ordering::Relaxed)
     }
 
     fn elapsed_us(&self) -> u64 {

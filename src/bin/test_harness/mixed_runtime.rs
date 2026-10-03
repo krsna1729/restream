@@ -21,11 +21,18 @@ pub(crate) async fn start_mixed_restream(env: &MixedEnv) -> Result<Child, String
 }
 
 pub(crate) async fn start_mixed_mediamtx(env: &MixedEnv) -> Result<Child, String> {
+    let (cert, key) = restream::test_fixtures::rtmps_harness_cert_fixture()?;
     std::fs::write(
         &env.mediamtx_config,
         format!(
-            "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nrtmp: yes\nrtmpAddress: :{}\nrtmpEncryption: \"no\"\nrtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: yes\nhlsAddress: :{}\nhlsPartDuration: 200ms\nhlsSegmentDuration: 2s\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
-            env.mtx_rtmp, env.mtx_srt, env.mtx_hls, env.mtx_api
+            "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nrtmp: yes\nrtmpAddress: :{}\nrtmpEncryption: \"optional\"\nrtmpsAddress: :{}\nrtmpServerCert: {}\nrtmpServerKey: {}\nrtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: yes\nhlsAddress: :{}\nhlsPartDuration: 200ms\nhlsSegmentDuration: 2s\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
+            env.mtx_rtmp,
+            env.mtx_rtmps,
+            cert.display(),
+            key.display(),
+            env.mtx_srt,
+            env.mtx_hls,
+            env.mtx_api
         ),
     )
     .map_err(|e| e.to_string())?;
@@ -48,6 +55,12 @@ pub(crate) async fn start_mixed_mediamtx(env: &MixedEnv) -> Result<Child, String
     {
         stop_child(&mut child).await;
         return Err(format!("mediamtx did not become ready: {err}"));
+    }
+    if let Err(err) = wait_for_tcp_listener_ready(env.mtx_rtmps, Duration::from_secs(10)).await {
+        stop_child(&mut child).await;
+        return Err(format!(
+            "mediamtx RTMPS listener did not become ready: {err}"
+        ));
     }
     Ok(child)
 }

@@ -11,11 +11,12 @@ pub(in super::super) async fn run_mixed_anchor_config(
 ) -> Result<Value, String> {
     let cfg = case.scenario_id();
     let n = env.n_per_group;
-    let output_cases = single_track_mixed_output_cases();
+    let output_cases = mixed_output_cases_for_input(case);
     let total = n * output_cases.len();
     let (source_output_case, scaled_output_cases) = output_cases
         .split_first()
         .ok_or("mixed anchor output matrix must contain a source row")?;
+    preflight_mixed_rtmps_capabilities(api, output_cases).await?;
     let (pipeline_id, stream_key) = create_mixed_pipeline(api, cfg).await?;
 
     let mut publisher = spawn_mixed_live_publisher(env, case, &stream_key).await?;
@@ -419,6 +420,7 @@ pub(in super::super) async fn run_mixed_live_config(
         mixed_output_cases_for_input(case),
         env.output_groups.as_deref(),
     )?;
+    preflight_mixed_rtmps_capabilities(api, &output_cases).await?;
     let total = n * output_cases.len();
     let (pipeline_id, stream_key) = create_mixed_pipeline(api, cfg).await?;
 

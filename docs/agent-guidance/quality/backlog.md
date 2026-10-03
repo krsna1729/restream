@@ -18,31 +18,37 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 
 ## Open
 
-### Q-023 [performance] [opus] Batch the shared SRT egress table drive per visit
-- Goal: a connected shared-muxer leaf stops driving the whole shared
-  `CallerTable` after every accepted fragment. Logical callers enqueue their
-  sends under the existing `WorkBudget`, and the common socket/table is
-  flushed once per visit (or per pass), with backpressure and acceptance
-  semantics unchanged. Needs before/after evidence at shared-muxer density,
-  not just a smaller call count.
-- Files: `src/media/srt/tokio_egress/mod.rs` (`RustSrtSocket::send`'s
-  `Shared` arm, `drive_shared_srt_egress`), `src/media/srt/egress_engine.rs`
-  (`send_pending`'s fragment loop), `src/media/srt/tokio_egress/shared.rs`.
-- Gates: `scripts/build/resource-limit.sh cargo test --lib srt`;
-  `scripts/check/concurrency/contract.sh`; `benches/matrix_throughput.rs`
-  before/after; MSR shared-muxer ladder for the density claim.
-- Context: `RustSrtSocket::send`'s `Shared` arm calls `shared.drive(...)`
-  after each successful `send_shared`, and `SrtEgressEngine::send_pending`
-  loops several ≤1316-byte fragments per visit, so a busy pass performs many
-  whole-table drives (drain shared socket, flush shared outbound, poll every
-  caller) under one mutex. Predates PR #141 (it arrived with the srt-rs
-  cutover itself — the `Shared`/`CallerTable` path is post-cutover
-  architecture — and was already on #141's base); #141 bounded only the
-  *readiness* path (`poll_ready` drives the table once regardless of leaf
-  count, proven by
-  `poll_ready_drive_of_the_shared_muxer_does_not_scale_with_leaf_count`) and
-  deliberately did not touch the send path.
-- Status: open (Filed: 2026-09-05 by claude, from PR #141 review)
+### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
+- Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
+  sink keeps up with SRT×100 on this host, and receiver loss is reported per
+  socket so it can never again be mistaken for Restream loss.
+- Files: `src/bin/test_harness/harness_srt_sink.rs`, `resource_sweep.rs`,
+  `srt_sink.rs`; production reference `src/media/srt/ingress_owner.rs`.
+- Gates: `CAPACITY_PROTOCOLS=srt CAPACITY_SRT_OUTPUTS=100` (Restream on 4 CPUs,
+  harness on 2) passes at least 6 of 7 repeats with the default 8 MiB sink
+  buffer; per-socket receive drops and managed-RX exhaustion appear in the
+  resource-sweep results.
+- Context: after the reboot from kernel 7.0.0-34 to 7.0.0-38 the same release
+  binary went from 8/8 SRT×100 passes to intermittent failure. Evidence
+  (2026-10-03, `6f1bcfbf`, 21 probed runs):
+  - Restream's send side is healthy in failing runs: 69–107k TX datagrams/s,
+    all completed, about 850 per output per second against ~760 needed.
+  - Pass or fail follows the harness sink's UDP receive-buffer drops: passes at
+    500–2,400 drops/s, failures at 19,800–39,200/s (7 runs, 2 passed).
+  - A 24 MiB sink buffer cut drops to 0–4,300/s and passed 2 of 4.
+  - GSO off in Restream (one `sendmsg` per datagram) passed 1 of 4 with drops of
+    1.4k–29k/s, against 0 of 4 with GSO on: not the cause.
+  - The sink drains at most 512 datagrams per wake, then sends every control
+    packet with its own `send_to().await` before reading again; at ~64k
+    datagrams/s per socket an 8 MiB buffer covers ~56 ms of not reading, while
+    the harness CPUs are shared with the publisher and the VPS shows vCPU gaps
+    up to 128 ms.
+  Plan: run the sink on the srt-rs Compio Owner listener exactly as SRT ingress
+  does (managed multishot RX fills a kernel-side buffer ring, batched TX), with
+  per-socket drop counters. Proving that 7.0.0-38 itself made the receive path
+  burstier needs a boot back into 7.0.0-34 (owner decision).
+- Status: open (Filed: 2026-10-02 by claude; investigated 2026-10-03). Blocks
+  SRT capacity evidence on this host.
 
 ### Q-024 [modularity] [sonnet] Collapse the connector/completion test seams in both egress backends
 - Goal: remove production traits that exist only so tests can substitute a
@@ -69,24 +75,45 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   and call connect_fabric_* directly. Filed: 2026-09-05 by claude, from PR
   #141 review.
 
-### Q-025 [performance] [opus] Remeasure the SRT shard-count scaling law after the srt-rs cutover
-- Goal: either re-justify `EgressShardProfile::SrtCpuParallel` (always claim
-  the CPU-derived shard ceiling for SRT feeds) with post-cutover evidence, or
-  replace it with a law derived from the current mechanism. Same for
-  `srt_egress_connect_concurrency`, still sized under a libsrt
-  `CSndQueue` saturation point that no longer exists.
+### Q-025 [performance] [opus] Re-qualify the SRT shard law after transport convergence
+- Goal: settle `EgressShardProfile::SrtCpuParallel` and
+  `srt_egress_connect_concurrency` against the final Compio Owner and transport
+  architecture; the previous libsrt `CSndQueue` saturation rationale no longer
+  applies.
 - Files: `src/config.rs` (`target_egress_fabric_shards`,
   `EgressShardProfile`, `srt_egress_connect_concurrency`), plus a matrix
   document under `docs/agent-guidance/quality/`.
-- Gates: MSR shard-count x caller-density matrix at 30/200/600/1200 with
-  full delivery and clean teardown; no code change without it.
-- Context: the current policy was derived from libsrt's
-  one-`CSndQueue`-worker-per-multiplexer model. After #137/#141 a shard owns
-  an application-owned UDP socket plus `CallerTable` driven from the shard
-  thread — no per-multiplexer worker — so shard count is no longer buying
-  the thing the policy assumed. The comments in `config.rs` now mark the
-  policy provisional; this item is the measurement that resolves it.
-- Status: open (Filed: 2026-09-05 by claude, from PR #141 review)
+- Gates: one-core/shard-law matrix at the final transport topology, followed by
+  cross-host qualification; no production policy change without valid measured
+  evidence.
+- Context: WI3.7's provenance-clean current-host result is provisional
+  evidence, not a frozen coefficient or runtime-law decision. Defer new
+  measurement until WI4A–WI6 transport convergence, WI7/WI9 cleanup, and WI8
+  runtime/host calibration are complete. No production shard policy or
+  performance constants change from WI3.7.
+- Status: current-host part done (2026-10-02). The CPU-ceiling SRT profile is
+  gone: SRT and RTMP share one service-demand law (`src/media/egress/sizing.rs`)
+  with a delivery-checked cold prior (64 SRT outputs per shard at 4.8 Mbit/s),
+  and resizing never moves a live output (`docs/runtime-crossings.md` M6).
+  Still open: cross-host qualification of the cold prior and of
+  `srt_egress_connect_concurrency` (Filed: 2026-09-05 by claude, from PR #141
+  review).
+
+### Q-026 [resilience] [opus] Attribute and recalibrate the frozen-SRT-destination RSS gate
+- Goal: explain the ~70 MB RSS growth of `fault.srt-output-stall`'s frozen
+  destination case (114 -> ~185 MB, then a plateau) and either remove the cause
+  or recalibrate the fixed 64 MiB `MAX_ACCEPTABLE_RSS_GROWTH_KB` from an
+  attribution, not from the observed result.
+- Files: `src/bin/test_harness/fault_recovery/srt_stall.rs`, retry/cleanup paths
+  in `src/media/egress/backends/srt*.rs`.
+- Gates: `scripts/harness/run.sh fault.srt-output-stall -- --no-netns`;
+  `scripts/harness/srt_final_qual.py frozen` for the RSS time series.
+- Context: WI2.5 measured the gate failing on BOTH `c323e5f5` (67.6 and 72.5 MB)
+  and the Compio Owner (69.7-74.6 MB over four runs), with a late-window plateau
+  in each (candidate ~197 MB, baseline ~184 MB). No Compio-specific retry-memory
+  regression, so the threshold was deliberately left unchanged; this debt
+  predates the cutover. Evidence:
+  `test/harness/baselines/srt-compio-owner-final/`. Filed: 2026-09-20 by claude.
 
 ### Q-001 [proof] [sonnet] Establish the per-module coverage map
 - Goal: a per-module line/branch coverage table for `src/` recorded in the
@@ -514,3 +541,29 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 ## Archive
 
 (done items move here with their commit hashes)
+
+### Q-023 [performance] [opus] Batch the shared SRT egress table drive per visit
+- Goal: a connected shared-muxer leaf stops driving the whole shared
+  `CallerTable` after every accepted fragment. Logical callers enqueue their
+  sends under the existing `WorkBudget`, and the common socket/table is
+  flushed once per visit (or per pass), with backpressure and acceptance
+  semantics unchanged. Needs before/after evidence at shared-muxer density,
+  not just a smaller call count.
+- Files: `src/media/srt/tokio_egress/mod.rs` (`RustSrtSocket::send`'s
+  `Shared` arm, `drive_shared_srt_egress`), `src/media/srt/egress_engine.rs`
+  (`send_pending`'s fragment loop), `src/media/srt/tokio_egress/shared.rs`.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib srt`;
+  `scripts/check/concurrency/contract.sh`; `benches/matrix_throughput.rs`
+  before/after; MSR shared-muxer ladder for the density claim.
+- Context: `RustSrtSocket::send`'s `Shared` arm calls `shared.drive(...)`
+  after each successful `send_shared`, and `SrtEgressEngine::send_pending`
+  loops several ≤1316-byte fragments per visit, so a busy pass performs many
+  whole-table drives (drain shared socket, flush shared outbound, poll every
+  caller) under one mutex. Predates PR #141 (it arrived with the srt-rs
+  cutover itself — the `Shared`/`CallerTable` path is post-cutover
+  architecture — and was already on #141's base); #141 bounded only the
+  *readiness* path (`poll_ready` drives the table once regardless of leaf
+  count, proven by
+  `poll_ready_drive_of_the_shared_muxer_does_not_scale_with_leaf_count`) and
+  deliberately did not touch the send path.
+- Status: done (Resolved by the SRT egress move to the Compio `Owner`: `send_shared` only enqueues into protocol state, and `Owner::service` runs once per ready batch per family — proven by `one_ready_batch_is_one_owner_service_pass`. The files named above no longer exist.)

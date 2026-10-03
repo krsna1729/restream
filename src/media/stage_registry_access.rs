@@ -92,6 +92,21 @@ impl MediaEngine {
         self.stages.runtimes.write().await.remove(key);
     }
 
+    /// Detached teardown must not remove a newer runtime registered at this key.
+    pub(crate) async fn remove_stage_runtime_if_current(
+        &self,
+        key: &StageKey,
+        lifecycle: &Arc<StageLifecycle>,
+    ) {
+        let mut runtimes = self.stages.runtimes.write().await;
+        if runtimes
+            .get(key)
+            .is_some_and(|runtime| Arc::ptr_eq(&runtime.lifecycle, lifecycle))
+        {
+            runtimes.remove(key);
+        }
+    }
+
     pub async fn get_or_create_ts_muxer_stage(
         self: &Arc<Self>,
         pipeline_id: &str,

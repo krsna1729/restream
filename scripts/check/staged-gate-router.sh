@@ -257,17 +257,28 @@ is_source_audit_scope_file() {
 diff_contains_concurrency_change() {
     ((${#rust_files[@]} > 0)) || return 1
 
+    local diff word_pattern scoped_pattern line
     case "$MODE" in
         staged)
-            git diff --cached -U0 -- "${rust_files[@]}"
+            diff="$(git diff --cached -U0 -- "${rust_files[@]}")"
             ;;
         unstaged)
-            git diff -U0 -- "${rust_files[@]}"
+            diff="$(git diff -U0 -- "${rust_files[@]}")"
             ;;
         base)
-            git diff -U0 "$BASE_REF"...HEAD -- "${rust_files[@]}"
+            diff="$(git diff -U0 "$BASE_REF"...HEAD -- "${rust_files[@]}")"
             ;;
-    esac | rg -q '^\+.*\b(tokio::spawn|spawn_blocking|std::thread|thread::spawn|Mutex|RwLock|Atomic[A-Za-z]*|mpsc::|watch::|broadcast::|oneshot::|Notify|Semaphore|JoinHandle|catch_unwind)\b'
+    esac
+
+    word_pattern='(^|[^[:alnum:]_])(tokio::spawn|spawn_blocking|std::thread|thread::spawn|Mutex|RwLock|Atomic[A-Za-z]*|Notify|Semaphore|JoinHandle|catch_unwind)([^[:alnum:]_]|$)'
+    scoped_pattern='(^|[^[:alnum:]_])(mpsc|watch|broadcast|oneshot)::'
+    while IFS= read -r line; do
+        [[ "$line" == +* ]] || continue
+        if [[ "$line" =~ $word_pattern || "$line" =~ $scoped_pattern ]]; then
+            return 0
+        fi
+    done <<< "$diff"
+    return 1
 }
 
 for file in "${changed_files[@]}"; do

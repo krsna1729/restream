@@ -4,18 +4,13 @@ use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_SRT_PBKEYLEN: i32 = 16;
 
-/// Historical flat listener default (`media::srt::socket::DESIRED_LATENCY_MS`),
-/// duplicated here rather than imported: `domain` sits below `media` in the
-/// layering and must not depend on it. This is a stable, protocol-adjacent
-/// constant unlikely to drift, but if `DESIRED_LATENCY_MS` ever changes,
-/// change this to match.
+/// Default SRT ingest latency in milliseconds. Kept in the domain layer so
+/// configuration defaults do not depend on the media transport module.
 pub const DEFAULT_SRT_INGEST_LATENCY_MS: i32 = 250;
 
-/// The SRT wire protocol's own documented range for the negotiated TSBPD
-/// delay field (`TsbPdDelay`/`RcvTsbPdDelay`/`SndTsbPdDelay` in the vendored
-/// libsrt handshake spec, `docs/features/handshake.md`) — not a value this
-/// repo invented. Mirrors `media::srt::buffer_sizing::SRT_LATENCY_MS_FLOOR`;
-/// duplicated for the same layering reason as the constant above.
+/// The SRT wire protocol's documented range for the negotiated TSBPD delay
+/// (`TsbPdDelay`/`RcvTsbPdDelay`/`SndTsbPdDelay` in the handshake spec,
+/// `docs/features/handshake.md`); not a value this repo invented.
 pub const SRT_INGEST_LATENCY_MS_FLOOR: i32 = 20;
 pub const SRT_INGEST_LATENCY_MS_CEILING: i32 = 8_000;
 
@@ -34,13 +29,10 @@ pub struct SrtGlobalIngestConfig {
     pub passphrase: Option<String>,
     #[serde(default = "default_srt_pbkeylen")]
     pub pbkeylen: i32,
-    /// This caller's own proposed minimum TSBPD delay (`SRTO_RCVLATENCY`)
-    /// for every ingest connection that doesn't set a per-pipeline
-    /// override. See `SrtPipelineIngestConfig::latency_ms` for why this is
-    /// the only latency lever ingest can offer at all (the actually
-    /// negotiated value is `max(this, the caller's own PEERLATENCY)`, and
-    /// PREBIND options like `SRTO_RCVBUF` must be fixed before that
-    /// negotiation completes — see `media::srt::listener`).
+    /// Minimum TSBPD delay for an ingest caller without a per-pipeline
+    /// override. The transport negotiates it with the caller; a caller that
+    /// proposes a larger receive delay may get that larger negotiated value.
+    /// This setting does not configure the caller's UDP socket buffers.
     #[serde(default = "default_srt_ingest_latency_ms")]
     pub latency_ms: i32,
 }
@@ -66,17 +58,15 @@ pub struct SrtPipelineIngestConfig {
     pub latency_ms: Option<i32>,
 }
 
-/// Ingest's own receive-side buffer-sizing formula (`media::srt::
-/// buffer_sizing`) also derives `SRTO_RCVBUF`/`SRTO_FC` from this value —
-/// see that module for the "why", and why it can only ever be sized from
-/// this configured value, never the value actually negotiated with a
-/// caller.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedSrtCrypto {
     Plaintext,
     Encrypted { passphrase: String, pbkeylen: i32 },
 }
 
+/// Resolved policy for one SRT StreamID. Ingress applies its latency and
+/// encryption through the listener admission policy; socket buffers remain
+/// transport configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedSrtIngestConfig {
     pub crypto: ResolvedSrtCrypto,

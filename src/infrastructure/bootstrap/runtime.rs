@@ -69,16 +69,24 @@ impl RuntimeTasks {
         let rtmp_engine = engine.clone();
         let rtmp_security = security.clone();
         let rtmp_pipeline_access = pipeline_access.clone();
+        let rtmp_shutdown = CancellationToken::new();
+        let rtmp_task_shutdown = rtmp_shutdown.clone();
+        let (rtmp_started_tx, rtmp_started_rx) = tokio::sync::oneshot::channel();
         let rtmp = tokio::spawn(async move {
-            crate::media::rtmp::start_rtmp_server_on(
+            crate::media::rtmp::start_rtmp_server_on_with_shutdown(
                 rtmp_pipeline_access,
                 rtmp_security,
                 rtmp_engine,
                 rtmp_port,
+                rtmp_shutdown,
+                Some(rtmp_started_tx),
             )
             .await;
-            error!("RTMP server task exited unexpectedly");
+            if !rtmp_task_shutdown.is_cancelled() {
+                error!("RTMP server task exited unexpectedly");
+            }
         });
+        let _ = rtmp_started_rx.await;
 
         let srt_server = Arc::new(crate::media::srt::SrtServer::new(
             pipeline_access,

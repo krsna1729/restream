@@ -147,8 +147,9 @@ fn shard_group_replaces_only_panicked_shards() {
     survivor.wait_for_commands(1);
     wait_for_panicked(&group, ShardId::new(0));
 
-    let replaced = group.replace_panicked(config(4, 4), |_| ProbeBackend {
-        probe: replacement.clone(),
+    let replaced = group.replace_panicked(config(4, 4), |_| {
+        let probe = replacement.clone();
+        move || ProbeBackend { probe }
     });
 
     assert_eq!(replaced, vec![ShardId::new(0)]);
@@ -319,8 +320,9 @@ fn stalled_shard_heartbeat_does_not_trigger_panic_replacement() {
     );
     gate.wait_until_entered();
     let heartbeat = group.heartbeat(Instant::now(), Duration::ZERO);
-    let replaced = group.replace_panicked(config(4, 4), |_| ProbeBackend {
-        probe: replacement.clone(),
+    let replaced = group.replace_panicked(config(4, 4), |_| {
+        let probe = replacement.clone();
+        move || ProbeBackend { probe }
     });
     gate.release();
     let snapshots = group.shutdown_and_join();

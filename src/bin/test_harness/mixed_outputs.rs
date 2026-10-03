@@ -56,7 +56,8 @@ where
             duplicate_index: index,
             protocol: protocol.clone(),
             encoding: spec.encoding.to_string(),
-            rtmp_mode: (protocol == "rtmp").then(|| spec.rtmp_mode.as_str().to_string()),
+            rtmp_mode: matches!(protocol.as_str(), "rtmp" | "rtmps")
+                .then(|| spec.rtmp_mode.as_str().to_string()),
             selected_audio_track: spec.selected_audio_track,
             publish_url: url,
             read_url: None,
@@ -96,6 +97,9 @@ pub(crate) fn mixed_output_publish_url(
         MixedOutputProtocol::Rtmp => {
             format!("rtmp://127.0.0.1:{}/live/{output_name}", env.mtx_rtmp)
         }
+        MixedOutputProtocol::Rtmps => {
+            format!("rtmps://localhost:{}/live/{output_name}", env.mtx_rtmps)
+        }
         MixedOutputProtocol::Srt => {
             harness_srt_output_url(env.mtx_srt, &output_name, HarnessSrtMode::Publish)
         }
@@ -111,6 +115,9 @@ pub(crate) fn mixed_output_read_url(
     let output_name = mixed_output_instance_name(cfg, case.id(), index);
     match case.protocol() {
         MixedOutputProtocol::Rtmp => mixed_output_publish_url(env, cfg, case, index),
+        MixedOutputProtocol::Rtmps => {
+            format!("rtmp://127.0.0.1:{}/live/{output_name}", env.mtx_rtmp)
+        }
         MixedOutputProtocol::Srt => {
             harness_srt_output_url(env.mtx_srt, &output_name, HarnessSrtMode::Read)
         }

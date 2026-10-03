@@ -14,7 +14,7 @@ use ffmpeg_next as ffmpeg;
 use std::collections::VecDeque;
 use std::ffi::CString;
 use std::os::raw::{c_int, c_void};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
@@ -34,8 +34,33 @@ fn default_avio_queue_capacity() -> usize {
     DEFAULT_AVIO_QUEUE_CAPACITY
 }
 
+/// Produces a queue's input on the reading thread, on demand (WI11): FFmpeg's
+/// AVIO read callback calls it when the queue runs dry, so a stage's input is
+/// pulled from its source ring on the FFmpeg thread with no producer task or
+/// thread in between.
+pub trait QueueRefill: Send {
+    /// Block until more input is available and append it to `out` (which is
+    /// empty on entry). Return `false` at end of input or on cancellation;
+    /// the queue then closes.
+    fn refill(&mut self, out: &mut Vec<u8>) -> bool;
+}
+
+struct RefillState {
+    source: Box<dyn QueueRefill>,
+    pending: Vec<u8>,
+    offset: usize,
+}
+
 pub struct MemoryQueue {
     inner: Mutex<MemoryQueueInner>,
+    /// Set by [`MemoryQueue::set_refill`]; only the reading thread touches it.
+    refill: Mutex<Option<RefillState>>,
+    /// Lets plain queues skip the `refill` lock on every read.
+    has_refill: AtomicBool,
+    /// Bytes of the current refilled batch not yet read. Kept outside the
+    /// `refill` lock, which the reading thread holds while it waits for
+    /// input, so `len`/`stats` never block on it.
+    refill_pending: AtomicUsize,
     cvar: Condvar,
     space_available: Notify,
     capacity: usize,
@@ -78,6 +103,9 @@ impl MemoryQueue {
                 buf: VecDeque::new(),
                 closed: false,
             }),
+            refill: Mutex::new(None),
+            has_refill: AtomicBool::new(false),
+            refill_pending: AtomicUsize::new(0),
             cvar: Condvar::new(),
             space_available: Notify::new(),
             capacity,
@@ -254,6 +282,7 @@ impl MemoryQueue {
             .unwrap_or_else(|e| e.into_inner())
             .buf
             .len()
+            + self.refill_pending.load(Ordering::Relaxed)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -263,7 +292,7 @@ impl MemoryQueue {
     pub fn stats(&self) -> MemoryQueueStats {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         MemoryQueueStats {
-            len: inner.buf.len(),
+            len: inner.buf.len() + self.refill_pending.load(Ordering::Relaxed),
             capacity: self.capacity,
             high_water_bytes: self.high_water_bytes.load(Ordering::Relaxed),
             blocked_writes: self.blocked_writes.load(Ordering::Relaxed),
@@ -276,7 +305,52 @@ impl MemoryQueue {
         self.high_water_bytes.fetch_max(len, Ordering::Relaxed);
     }
 
+    /// Make this queue pull its input from `source` on the reading thread
+    /// instead of waiting for writers. Reads then serve refilled batches
+    /// directly, without staging them in the queue buffer.
+    pub fn set_refill(&self, source: Box<dyn QueueRefill>) {
+        *self.refill.lock().unwrap_or_else(|e| e.into_inner()) = Some(RefillState {
+            source,
+            pending: Vec::with_capacity(crate::media::MEDIA_TS_BATCH_TARGET_BYTES),
+            offset: 0,
+        });
+        self.has_refill.store(true, Ordering::Release);
+    }
+
+    fn read_refilled(&self, state: &mut RefillState, target: &mut [u8]) -> usize {
+        loop {
+            let available = state.pending.len() - state.offset;
+            if available > 0 {
+                let to_read = available.min(target.len());
+                target[..to_read]
+                    .copy_from_slice(&state.pending[state.offset..state.offset + to_read]);
+                state.offset += to_read;
+                self.refill_pending
+                    .store(state.pending.len() - state.offset, Ordering::Relaxed);
+                return to_read;
+            }
+            state.pending.clear();
+            state.offset = 0;
+            if self.is_closed() || !state.source.refill(&mut state.pending) {
+                self.close();
+                return 0;
+            }
+            self.record_depth(state.pending.len());
+            self.refill_pending
+                .store(state.pending.len(), Ordering::Relaxed);
+        }
+    }
+
     pub fn read(&self, target: &mut [u8]) -> usize {
+        if self.has_refill.load(Ordering::Acquire)
+            && let Some(state) = self
+                .refill
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_mut()
+        {
+            return self.read_refilled(state, target);
+        }
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         while inner.buf.is_empty() && !inner.closed {
             // Use wait_timeout so the FFmpeg AVIO thread is not blocked indefinitely

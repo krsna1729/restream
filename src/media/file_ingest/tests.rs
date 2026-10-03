@@ -459,6 +459,8 @@ async fn internal_bf0_file_ingest_caches_video_startup_state() {
     sleep(Duration::from_secs(2)).await;
 
     let (cached_video, _) = engine.get_sequence_headers(pipeline_id).await;
+    // The codec-thread read (stage input refresh) sees the same header.
+    assert_eq!(engine.try_video_sequence_header(pipeline_id), cached_video);
     let ring_parameter_sets = ring_buffer.video_parameter_sets();
     let ring_sequence_header = ring_parameter_sets
         .as_deref()

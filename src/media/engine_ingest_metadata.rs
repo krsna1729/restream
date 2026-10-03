@@ -246,6 +246,20 @@ impl MediaEngine {
         (video, audio)
     }
 
+    /// The ingest's cached video sequence header, read without waiting: for
+    /// codec threads, which must not enter async engine state. `None` when
+    /// the pipeline has no ingest, no header yet, or the ingest map is being
+    /// written at this instant (the caller retries on a later packet).
+    pub fn try_video_sequence_header(&self, pipeline_id: &str) -> Option<bytes::Bytes> {
+        let ingests = self.ingests.active.try_read().ok()?;
+        ingests
+            .get(pipeline_id)?
+            .video_sequence_header
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
     pub async fn get_sequence_headers(
         &self,
         pipeline_id: &str,

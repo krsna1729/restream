@@ -106,9 +106,11 @@ fn mixed_input_rows_select_their_output_matrix() {
             assert!(cases.iter().any(|case| case.expected_audio_tracks() == 2));
         } else {
             assert_eq!(
-                cases.len(),
-                single_track_mixed_output_cases().len(),
-                "{} should exercise the single-track output matrix",
+                cases
+                    .iter()
+                    .any(|output| output.protocol() == MixedOutputProtocol::Rtmps),
+                case.protocol() == MixedInputProtocol::Rtmp,
+                "{} should include RTMPS only for RTMP ingest",
                 case.scenario_id()
             );
             assert!(cases.iter().all(|case| case.expected_audio_tracks() == 1));
@@ -127,7 +129,7 @@ fn mixed_scenario_plan_expands_without_signal_cost() {
     assert_eq!(plans.len(), 18);
     assert_eq!(
         plans.iter().map(|plan| plan.output_cells()).sum::<usize>(),
-        232
+        234
     );
     assert_eq!(
         plans

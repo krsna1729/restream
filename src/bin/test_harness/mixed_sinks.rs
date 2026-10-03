@@ -178,7 +178,7 @@ pub(crate) async fn add_mixed_multi_output_cases(
 ) -> Result<(), String> {
     for case in cases {
         let mut direct_urls = Vec::new();
-        if env.use_direct_signal_sinks() {
+        if env.use_direct_signal_sinks() && case.protocol() != MixedOutputProtocol::Rtmps {
             for index in 1..=env.n_per_group {
                 let sink =
                     spawn_ffmpeg_signal_sink(env, cfg, case, index, *next_signal_sink_offset)
@@ -190,7 +190,7 @@ pub(crate) async fn add_mixed_multi_output_cases(
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
         match case.protocol() {
-            MixedOutputProtocol::Rtmp => {
+            MixedOutputProtocol::Rtmp | MixedOutputProtocol::Rtmps => {
                 add_mixed_group(
                     env,
                     api,
@@ -340,10 +340,22 @@ pub(crate) async fn spawn_ffmpeg_signal_sink(
     let capture_path = env.work_dir.join(format!("{stem}.signal.mkv"));
     let publish_url = match case.protocol() {
         MixedOutputProtocol::Rtmp => format!("rtmp://127.0.0.1:{port}/live/{stem}"),
+        MixedOutputProtocol::Rtmps => {
+            return Err(format!(
+                "RTMPS output {} cannot use the direct FFmpeg signal sink",
+                case.id()
+            ));
+        }
         MixedOutputProtocol::Srt => harness_srt_ffmpeg_publish_url(port),
     };
     let listen_url = match case.protocol() {
         MixedOutputProtocol::Rtmp => publish_url.clone(),
+        MixedOutputProtocol::Rtmps => {
+            return Err(format!(
+                "RTMPS output {} cannot use the direct FFmpeg signal sink",
+                case.id()
+            ));
+        }
         MixedOutputProtocol::Srt => harness_srt_ffmpeg_listener_url(port),
     };
     let mut command = Command::new("ffmpeg");

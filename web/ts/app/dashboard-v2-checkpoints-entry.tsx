@@ -505,106 +505,99 @@ if (!settingsContainer) {
 }
 const settingsRootContainer: HTMLElement = settingsContainer;
 let settingsRoot: Root | null = null;
+function renderCheckpoint(
+  container: HTMLElement,
+  root: Root | null,
+  node: React.JSX.Element | null,
+): Root {
+  const currentRoot = root ?? createRoot(container);
+  container.hidden = node === null;
+  flushSync(() => currentRoot.render(node));
+  return currentRoot;
+}
+
 
 export function renderDashboardV2PipelineInspectCheckpoint(
   model: PipelineInspectCheckpointModel | null,
   actions: DashboardV2PipelineInspectActions,
 ): void {
-  inspectRoot ??= createRoot(inspectContainer);
-  inspectContainer.hidden = model === null;
-  flushSync(() => {
-    inspectRoot?.render(
-      model ? (
-        <DashboardV2PipelineInspectCheckpoint actions={actions} model={model} />
-      ) : null,
-    );
-  });
+  inspectRoot = renderCheckpoint(
+    inspectContainer,
+    inspectRoot,
+    model ? (
+      <DashboardV2PipelineInspectCheckpoint actions={actions} model={model} />
+    ) : null,
+  );
 }
+
 
 export function renderDashboardV2IncidentsCheckpoint(
   model: IncidentsCheckpointModel | null,
   actions: DashboardV2IncidentsActions,
 ): void {
-  incidentsRoot ??= createRoot(incidentsRootContainer);
-  incidentsRootContainer.hidden = model === null;
-  flushSync(() => {
-    incidentsRoot?.render(
-      model ? (
-        <DashboardV2IncidentsCheckpoint actions={actions} model={model} />
-      ) : null,
-    );
-  });
+  incidentsRoot = renderCheckpoint(
+    incidentsRootContainer,
+    incidentsRoot,
+    model ? <DashboardV2IncidentsCheckpoint actions={actions} model={model} /> : null,
+  );
 }
+
 
 export function renderDashboardV2TelemetryCheckpoint(
   model: TelemetryCheckpointModel | null,
   actions: DashboardV2TelemetryActions,
 ): void {
-  telemetryRoot ??= createRoot(telemetryRootContainer);
-  telemetryRootContainer.hidden = model === null;
-  flushSync(() => {
-    telemetryRoot?.render(
-      model ? (
-        <DashboardV2TelemetryCheckpoint actions={actions} model={model} />
-      ) : null,
-    );
-  });
+  telemetryRoot = renderCheckpoint(
+    telemetryRootContainer,
+    telemetryRoot,
+    model ? <DashboardV2TelemetryCheckpoint actions={actions} model={model} /> : null,
+  );
 }
+
 
 export function renderDashboardV2StatusCheckpoint(
   model: StatusCheckpointModel | null,
   actions: DashboardV2StatusActions,
 ): void {
-  statusRoot ??= createRoot(statusRootContainer);
-  statusRootContainer.hidden = model === null;
-  flushSync(() => {
-    statusRoot?.render(
-      model ? (
-        <DashboardV2StatusCheckpoint actions={actions} model={model} />
-      ) : null,
-    );
-  });
+  statusRoot = renderCheckpoint(
+    statusRootContainer,
+    statusRoot,
+    model ? <DashboardV2StatusCheckpoint actions={actions} model={model} /> : null,
+  );
 }
+
 
 export function renderDashboardV2MediaCheckpoint(
   model: MediaCheckpointModel | null,
   actions: DashboardV2MediaActions,
 ): void {
-  mediaRoot ??= createRoot(mediaRootContainer);
-  mediaRootContainer.hidden = model === null;
-  flushSync(() => {
-    mediaRoot?.render(
-      model ? <DashboardV2MediaCheckpoint actions={actions} model={model} /> : null,
-    );
-  });
+  mediaRoot = renderCheckpoint(
+    mediaRootContainer,
+    mediaRoot,
+    model ? <DashboardV2MediaCheckpoint actions={actions} model={model} /> : null,
+  );
 }
+
 
 export function renderDashboardV2SettingsCheckpoint(
   model: SettingsCheckpointModel | null,
   actions: DashboardV2SettingsActions,
 ): void {
-  settingsRoot ??= createRoot(settingsRootContainer);
-  settingsRootContainer.hidden = model === null;
-  flushSync(() => {
-    settingsRoot?.render(
-      model ? (
-        <DashboardV2SettingsCheckpoint actions={actions} model={model} />
-      ) : null,
-    );
-  });
+  settingsRoot = renderCheckpoint(
+    settingsRootContainer,
+    settingsRoot,
+    model ? <DashboardV2SettingsCheckpoint actions={actions} model={model} /> : null,
+  );
 }
+
 
 export function renderDashboardV2ControlRoomCheckpoint(
   model: ControlRoomCheckpointModel | null,
   actions: DashboardV2ControlRoomActions,
 ): void {
-  controlRoomRoot ??= createRoot(controlRoomRootContainer);
-  controlRoomRootContainer.hidden = model === null;
-  flushSync(() => {
-    controlRoomRoot?.render(
-      model ? (
-        <DashboardV2ControlRoomCheckpoint actions={actions} model={model} />
-      ) : null,
-    );
-  });
+  controlRoomRoot = renderCheckpoint(
+    controlRoomRootContainer,
+    controlRoomRoot,
+    model ? <DashboardV2ControlRoomCheckpoint actions={actions} model={model} /> : null,
+  );
 }

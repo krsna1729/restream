@@ -1,31 +1,6 @@
 use super::*;
 use proptest::prelude::*;
 use std::sync::Arc;
-use std::sync::Mutex;
-
-static EXPECTED_PANIC_HOOK_LOCK: Mutex<()> = Mutex::new(());
-
-type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>;
-
-struct ScopedSilentPanicHook(Option<PanicHook>);
-
-impl ScopedSilentPanicHook {
-    fn new() -> Self {
-        Self(Some(std::panic::take_hook()))
-    }
-
-    fn silence(&mut self) {
-        std::panic::set_hook(Box::new(|_| {}));
-    }
-}
-
-impl Drop for ScopedSilentPanicHook {
-    fn drop(&mut self) {
-        if let Some(hook) = self.0.take() {
-            std::panic::set_hook(hook);
-        }
-    }
-}
 
 #[tokio::test]
 async fn write_batch_preserves_chunk_order() {
@@ -75,20 +50,15 @@ async fn read_recovers_from_poisoned_mutex() {
     // then verify that write() and read_nonblocking() do not panic.
     // We use Arc<MemoryQueue> so the poisoning thread can share the object.
     let queue = Arc::new(MemoryQueue::new());
-    {
-        let _panic_hook_lock = EXPECTED_PANIC_HOOK_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut panic_hook = ScopedSilentPanicHook::new();
-        panic_hook.silence();
-        let q = queue.clone();
-        // unwrap() inside a thread that panics → the Mutex becomes poisoned
-        let _ = std::thread::spawn(move || {
+    let q = queue.clone();
+    // unwrap() inside a thread that panics → the Mutex becomes poisoned
+    let _ = std::thread::spawn(move || {
+        crate::test_support::with_expected_panic_suppressed(|| {
             let _guard = q.inner.lock().unwrap();
             panic!("deliberate poison");
-        })
-        .join(); // returns Err(payload) — that's expected, we just consume it
-    }
+        });
+    })
+    .join(); // returns Err(payload) — that's expected, we just consume it
     // The mutex is now poisoned. write() and read_nonblocking() must
     // recover via `unwrap_or_else(|e| e.into_inner())` and not panic.
     queue.write(b"hello").await;
@@ -475,4 +445,40 @@ proptest! {
         prop_assert_eq!(read, total_bytes);
         prop_assert_eq!(actual, expected);
     }
+}
+
+/// A refill-driven queue reports the unread part of its current batch as
+/// depth, like bytes staged by a writer, and reads it back in order.
+#[test]
+fn refilled_batch_counts_toward_queue_depth() {
+    struct OneBatch(Option<Vec<u8>>);
+    impl QueueRefill for OneBatch {
+        fn refill(&mut self, out: &mut Vec<u8>) -> bool {
+            match self.0.take() {
+                Some(batch) => {
+                    out.extend_from_slice(&batch);
+                    true
+                }
+                None => false,
+            }
+        }
+    }
+
+    let batch: Vec<u8> = (0..1000u32).map(|i| i as u8).collect();
+    let queue = MemoryQueue::new();
+    queue.set_refill(Box::new(OneBatch(Some(batch.clone()))));
+    assert_eq!(queue.len(), 0);
+
+    let mut first = [0u8; 300];
+    assert_eq!(queue.read(&mut first), 300);
+    assert_eq!(queue.len(), 700);
+    assert_eq!(queue.stats().len, 700);
+    assert_eq!(queue.stats().high_water_bytes, 1000);
+
+    let mut rest = [0u8; 1000];
+    assert_eq!(queue.read(&mut rest), 700);
+    assert_eq!(queue.len(), 0);
+    assert_eq!([&first[..], &rest[..700]].concat(), batch);
+    assert_eq!(queue.read(&mut rest), 0, "end of input closes the queue");
+    assert!(queue.is_closed());
 }

@@ -303,7 +303,7 @@
           "codecEdge": 0
         }
       },
-      "outputs": "@outputs.singleTrack",
+      "outputs": "@outputs.singleTrackRtmp",
       "checks": "@checks.defaultMixed",
       "batchGroup": "live-rtmp",
       "outputPlan": "all-at-once"
@@ -337,7 +337,7 @@
           "codecEdge": 0
         }
       },
-      "outputs": "@outputs.singleTrack",
+      "outputs": "@outputs.singleTrackRtmp",
       "checks": "@checks.defaultMixed",
       "batchGroup": "live-rtmp",
       "outputPlan": "all-at-once"
@@ -632,6 +632,75 @@
         "id": "rtmp.src-legacy.a0",
         "protocol": "rtmp",
         "encoding": "source",
+        "expectedDimensions": "1920x1080",
+        "expectedAudioTracks": 1
+      },
+      {
+        "id": "rtmp.720p.a0",
+        "protocol": "rtmp",
+        "encoding": "720p",
+        "expectedDimensions": "1280x720",
+        "expectedAudioTracks": 1
+      },
+      {
+        "id": "rtmp.720p-enh.a0",
+        "protocol": "rtmp",
+        "encoding": "720p",
+        "rtmpMode": "enhanced",
+        "expectedDimensions": "1280x720",
+        "expectedAudioTracks": 1
+      },
+      {
+        "id": "rtmp.1080p.a0",
+        "protocol": "rtmp",
+        "encoding": "1080p",
+        "expectedDimensions": "1920x1080",
+        "expectedAudioTracks": 1
+      },
+      {
+        "id": "rtmp.1080p-enh.a0",
+        "protocol": "rtmp",
+        "encoding": "1080p",
+        "rtmpMode": "enhanced",
+        "expectedDimensions": "1920x1080",
+        "expectedAudioTracks": 1
+      },
+      {
+        "id": "srt.src.a0",
+        "protocol": "srt",
+        "encoding": "source",
+        "expectedDimensions": "1920x1080",
+        "expectedAudioTracks": 1
+      },
+      {
+        "id": "srt.720p.a0",
+        "protocol": "srt",
+        "encoding": "720p",
+        "expectedDimensions": "1280x720",
+        "expectedAudioTracks": 1
+      },
+      {
+        "id": "srt.1080p.a0",
+        "protocol": "srt",
+        "encoding": "1080p",
+        "expectedDimensions": "1920x1080",
+        "expectedAudioTracks": 1
+      }
+    ],
+    "singleTrackRtmp": [
+      {
+        "id": "rtmp.src.a0",
+        "protocol": "rtmp",
+        "encoding": "source",
+        "rtmpMode": "enhanced",
+        "expectedDimensions": "1920x1080",
+        "expectedAudioTracks": 1
+      },
+      {
+        "id": "rtmps.src.a0",
+        "protocol": "rtmps",
+        "encoding": "source",
+        "rtmpMode": "enhanced",
         "expectedDimensions": "1920x1080",
         "expectedAudioTracks": 1
       },

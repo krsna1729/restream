@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use proptest::prelude::*;
+use proptest::test_runner::{Config as ProptestConfig, FileFailurePersistence};
 use restream::media::packet::{MediaPacket, MediaType, PayloadFormat};
 use restream::media::standby_gop::StandbyGopCache;
 
@@ -62,6 +63,9 @@ fn packet_limit_invalidates_the_whole_gop() {
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig::with_failure_persistence(
+        FileFailurePersistence::WithSource("proptest-regressions")
+    ))]
     #[test]
     fn cache_never_exceeds_its_declared_limits(
         byte_limit in 1usize..4_096,

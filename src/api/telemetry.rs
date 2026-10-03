@@ -12,7 +12,6 @@ use axum::{
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
-use sysinfo::System;
 
 use crate::alerts;
 use crate::api_runtime_views::{ResourceMapOptions, ResourceMapView};
@@ -269,10 +268,9 @@ pub async fn status_get_handler(
         return response;
     }
 
-    let sys = System::new_all();
     let bonding_available = state.engine.bonding_available();
     let (mut status, _) = crate::runtime_info::status_and_sbom(bonding_available);
-    status["os"] = system_status(&sys);
+    status["os"] = crate::system_sampling::sampled_system(system_status);
 
     Json(status).into_response()
 }
@@ -364,8 +362,7 @@ pub async fn v1_engine_resource_map_handler(
         return response;
     }
 
-    let sys = System::new_all();
-    let process = process_resource_snapshot(&sys);
+    let process = crate::system_sampling::sampled_system(process_resource_snapshot);
     let snapshot = crate::api_runtime_views::resource_map(
         &state.engine,
         process,

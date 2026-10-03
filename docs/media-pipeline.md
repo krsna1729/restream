@@ -23,6 +23,7 @@ For the performance optimization plan and benchmark results, see
 - [Buffer sizing for 4K 60fps](#buffer-sizing-for-4k-60fps)
 - [Thread and memory ownership, ingest to egress](#thread-and-memory-ownership-ingest-to-egress)
 - [SRT bonding](#srt-bonding)
+- [SRT ingress owner](#srt-ingress-owner)
 - [Protocol correctness requirements](#protocol-correctness-requirements)
 
 ## Current shape
@@ -99,8 +100,8 @@ count in one atomic word; loom covers no overlapping writers and one activation
 for a replay-ready boundary.
 
 This is connected standby, not bonded ingest. Each publisher remains an
-independent source and the operator chooses one. Libsrt socket groups remain the
-only bonded SRT path. File inputs retain the next-live-keyframe promotion path;
+independent source and the operator chooses one. SRT bonding is one caller group
+represented by a single logical publisher. File inputs retain the next-live-keyframe promotion path;
 the compressed-GOP cache applies to continuously connected RTMP/SRT publishers.
 
 ## Transcoder stages
@@ -181,9 +182,10 @@ flowchart LR
 ```
 
 One `ffmpeg` subprocess per `(pipeline, preset)`. FFmpeg reads MPEG-TS from
-stdin and writes transcoded MPEG-TS to `pipe:1` (stdout). A Tokio task reads
-stdout, runs it through `TsDemuxer`, and pushes the resulting `MediaPacket`s
-into `output_ring`.
+stdin and writes transcoded MPEG-TS to `pipe:1` (stdout). Dedicated stdin and
+stdout threads pull/mux the source ring and demux the child output with
+`TsDemuxer`, publishing `MediaPacket`s into `output_ring`. Tokio supervises
+the child lifecycle, not continuous pipe/media work.
 
 This is the **default** backend. It is robust because FFmpeg errors are
 isolated to the subprocess and logged to stderr; a crash restarts cleanly on
@@ -212,15 +214,16 @@ every transform path.
 
 ### Muxing stages summary
 
-| Stage | Role |
-|---|---|
-| SRT Ingest | `TsDemuxer` — demux MPEG-TS into `MediaPacket`s (inline async) |
-| External transcoder | subprocess FFmpeg stdin→stdout; `TsMuxer` writes stdin, `TsDemuxer` reads stdout |
-| Internal transcoder | in-process FFmpeg via `MemoryQueue`+`avio`; `TsMuxer` feeds input, output packets pushed directly to ring |
-| SRT Egress | Shared `TsMuxer` task per unique `(pipeline, preset)` feeding a shared `TsChunkRing` (SPMC lock-free package ring) |
-| HLS | `TsMuxer` remux to MPEG-TS, then segment in memory (inline async) |
-| Recording | Raw MPEG-TS write to `.ts` file via `MemoryQueue` (OS thread) |
-
+| Stage | Role | Execution Context |
+|---|---|---|
+| SRT Ingest | `TsDemuxer` — demux MPEG-TS into `MediaPacket`s, gate, timestamps, ring publish | Compio SRT Ingress Owner (inline) |
+| RTMP Ingest | `RtmpPublisherMedia` — chunk parse, FLV classification, sequence headers, gate, ring publish | Compio RTMP Ingress Owner (inline) |
+| External transcoder | subprocess FFmpeg stdin→stdout; `StageInputPump` writes stdin, `TsDemuxer` reads stdout | Dedicated OS threads (`restream-ffin`, `restream-ffout`) |
+| Internal transcoder | in-process FFmpeg via `MemoryQueue`+`avio`; `StageInputPump` refills on FFmpeg thread | Guarded FFmpeg OS threads |
+| SRT Egress | Shared `TsMuxer` task per unique `(pipeline, preset)` feeding shared `TsChunkRing` | Media Executor (`restream-media`) |
+| HLS | MPEG-TS mux/segmenting for remote outputs; separate fMP4 packaging for preview | Media Executor (`restream-media`) |
+| Recording | MPEG-TS feeder task to `MemoryQueue`; raw `.ts` disk write | Feeder: Media Executor; Writer: OS thread |
+| File Ingest | External FFmpeg stdout demux, timestamps, gate, and ring publish | Media Executor (`restream-media`) |
 
 
 ## Protocol and codec boundaries
@@ -235,7 +238,7 @@ every transform path.
 | Audio remap/downmix | Channel-level DSP routes use an external FFmpeg audio stage (`pan` for remap, stereo resample for downmix); `atrack` remains packet-only |
 | HLS pull routes/store | Implemented and tested; live segment generation uses native TsMuxer |
 | HLS upload | Implemented; HTTP/HTTPS output URLs PUT new segments plus playlist to the target |
-| RTMPS output | `rtmps://` URLs accepted by API and routed through RTMP egress with Rustls wrapping before the RTMP handshake |
+| RTMPS output | `rtmps://` uses the RTMP Compio shard path; Rustls completes TLS and hands record I/O to Linux kTLS. TLS 1.3 tickets are discarded after handoff (no session resumption); KeyUpdate closes the output. Unsupported suites or handoff errors fail without userspace-TLS fallback |
 | Custom output encoding | Not applied; `custom` is rejected by output create/update instead of being exposed as a passthrough runtime option |
 
 ## Resolution presets
@@ -384,124 +387,140 @@ the normal MPEG-TS demux back into the shared output ring.
 | HLS fMP4 preview window | advertise `max_segments`; retain `max_segments + 6` | Grace keeps the oldest advertised segment fetchable across a playlist refresh; not the TS eviction algorithm | `hls/fmp4/store.rs` |
 | HLS `EXT-X-TARGETDURATION` | TS starts at 6s; fMP4 starts from first media duration | Sticky high-water mark of `duration.ceil()` since create/clear (7.2s → 8); eviction never shrinks it (`target_duration_never_decreases`) | `hls/store.rs`, `hls/fmp4/store.rs` |
 | RTMP TCP SO_RCVBUF/SO_SNDBUF | 128 KB before auth, 8 MB after publish auth | Limits unauthenticated connection footprint while preserving burst headroom for accepted publishers | `rtmp.rs` |
-| SRT SRTO_LATENCY | 250 ms | Dejitter + retransmit window. At 50 Mbps = 1.56 MB in flight | `srt.rs` |
-| SRT SRTO_LOSSMAXTTL | 256 packets | Reorder tolerance. At 50 Mbps/1316 B ≈ 54 ms | `srt.rs` |
-| SRT UDP buffers | 8 MB | Kernel SO_RCVBUF/SNDBUF. Requires `rmem_max`/`wmem_max` ≥ 8 MB | `srt.rs` |
-| SRT internal buffers | 12 MB | libsrt retransmission/reordering. ≥ latency × bitrate × (1+loss) | `srt.rs` |
-| SRT SRTO_FC | 32768 packets | Flow control window. 32768 × 1316 B ≈ 43 MB window | `srt.rs` |
-| SRT SRTO_MAXBW | unlimited | Auto-detect bandwidth from input rate | `srt.rs` |
-| SRT recv buffer | 1316 bytes (single) / 2048 bytes (group) | One SRT payload per receive | `srt.rs` |
-
-Runtime verification: `srt_log_effective_opts` reads back values after
-`srt_setsockopt` and warns if the kernel clamped UDP buffers.
+| SRT caller UDP buffers | 8 MiB requested by default (`RESTREAM_SRT_UDP_BUF_BYTES` overrides) | Applied to the shared egress Owner socket; the kernel may clamp the request | `media/srt/knobs.rs`, `media/srt/egress_connect.rs` |
+| SRT egress TX pool | 16 fixed slots per shard/address family | Bounds in-flight datagrams; payloads are materialized into reserved slots | `media/egress/backends/srt/owner_set.rs` |
 
 ## Thread and memory ownership, ingest to egress
 
 This section traces one publisher's media from its entry socket to its exit
 socket for each protocol, naming which concurrency primitive owns each hop
 and which structure owns the memory at that hop. It complements
-[Architecture § Runtime ownership](architecture.md#runtime-ownership), which
-states the general policy (Tokio owns non-blocking work; blocking native
-calls are isolated on dedicated OS threads); this section applies that
-policy to the two concrete ingest/egress protocols. Consistent with that
-policy statement, this is an ownership and scaling-formula map, not a copied
-thread count — exact counts depend on live CPU count, feed count, and
-output count. A fully worked, measured example for one 1,200-output MSR run
-(exact thread histogram, RSS breakdown, and a per-connection memory model)
-lives in
-[the MSR resource-attribution investigation](archive/quality/msr-1200-resource-attribution-2026-08-13.md).
+[Architecture § Runtime ownership](architecture.md#runtime-ownership). Exact
+thread counts depend on live CPU count, feed count, and output count; they are
+not capacity recommendations. A worked MSR resource attribution is in
+[the MSR investigation](archive/quality/msr-1200-resource-attribution-2026-08-13.md).
 
 ### RTMP: ingest to egress
 
 ```mermaid
 flowchart LR
-    subgraph T1["Tokio worker pool (fixed size; RESTREAM_TOKIO_WORKER_THREADS)"]
-        RS["RTMP socket accept + parse\n(inline async)"] --> Gate["Selected-input gate"]
-        Gate --> SR[("source_ring — shared SPMC")]
-        SR -->|"non-passthrough preset"| Prep["Reader + TsMuxer\n(inline async)"]
-        Stdin["FFmpeg stdin writer\n(async pipe I/O)"]
-        Stdout["FFmpeg stdout reader\n(async pipe I/O)"]
-        Stdout --> Demux["TsDemuxer\n(inline async)"]
-        Demux --> OR[("output_ring — shared SPMC,\none per (pipeline, preset)")]
+    subgraph C1["RTMP ingress: one Compio/io_uring owner thread/runtime"]
+        Accept["Compio TCP listener"]
+        Session["RTMP handshake + ServerSession\nchunk parsing, AMF, media extraction"]
+        Media["RtmpPublisherMedia\nFLV classify, seq header, GOP, gate"]
+        Accept --> Session --> Media
     end
-    subgraph P1["FFmpeg child process (own OS process, not a Restream thread)"]
-        FF["scale + libx264/libx265"]
+    subgraph T1["Tokio control plane (side channel)"]
+        Actor["Bounded control actor\npublish auth, play scheduling, probe"]
     end
-    Prep --> Stdin --> FF --> Stdout
-    subgraph S1["Egress fabric shard pool: OS threads,\ncount = OutputCount profile\n(ceil(feed output count / 128), capped at the CPU-derived ceiling)"]
-        Leaf["RTMP leaf: chunking, ack,\noptional TLS state"] --> Send["non-blocking TCP write"]
+    subgraph R1["Shared Rings"]
+        SR[("source_ring — shared SPMC")]
+        OR[("output_ring — shared SPMC,\none per (pipeline, preset)")]
     end
+    subgraph M1["Dedicated IO threads & FFmpeg"]
+        Stdin["FFmpeg stdin writer thread\n(restream-ffin)"]
+        FF["FFmpeg child\nscale + libx264/libx265"]
+        Stdout["FFmpeg stdout reader thread\n(restream-ffout)"]
+        Stdin --> FF --> Stdout
+    end
+    subgraph S1["Egress fabric shard pool: one Compio/io_uring runtime per shard"]
+        Leaf["RTMP leaf protocol engine"] --> Completion["Shared Compio TCP stream\nbounded 4 KiB RX/TX completions"]
+        Completion --> Events["Bounded, coalesced\ncompletion events"]
+        Events --> Leaf
+    end
+    Session -.->|"auth / probe"| Actor
+    Media -->|"inline publish"| SR
+    SR -->|"non-passthrough preset"| Stdin
+    Stdout --> Demux["TsDemuxer"] --> OR
     SR -->|"passthrough"| Leaf
     OR --> Leaf
-    Send --> Dest["Destination RTMP/RTMPS server"]
+    Completion --> Dest["Destination RTMP/RTMPS server"]
 ```
+
+The accepted socket and RTMP protocol session stay together on the fixed
+Compio owner. Tokio receives bounded typed control, lifecycle commands, and
+the one-time media probe; ordinary publisher media goes directly to the ring
+on the owner. There is no Tokio duplex stream, byte pump, or duplicated TCP
+descriptor. Publisher TCP statistics are sampled on the socket-owning owner.
+A connection's parser can hold one completed RTMP message and the next
+incomplete assembly, each up to `RESTREAM_RTMP_MAX_MESSAGE_BYTES`, plus a 4 KiB
+socket read and parser staging buffer. The aggregate parser budget
+(`RESTREAM_RTMP_INGEST_PARSER_BUDGET_BYTES`) caps the sum across connections;
+the connection that would exceed it is rejected.
 
 | Hop | Thread/process model | Memory owner |
 |---|---|---|
-| Socket accept, RTMP/FLV parse | Tokio worker, inline async | Per-connection read buffer; kernel `SO_RCVBUF`/`SO_SNDBUF` (128 KiB pre-auth, 8 MiB post-auth) — kernel-owned, not process RSS |
-| `source_ring` / `output_ring` | No dedicated thread; shared structure | One fixed-capacity `RingBuffer` (1024 / 512 slots) per pipeline / per `(pipeline, preset)` stage, regardless of destination count |
-| External transcoder (non-passthrough preset) | 1 FFmpeg child process + 2 Tokio tasks (stdin writer, stdout reader) per `(pipeline, preset)` | FFmpeg's own process memory (outside Restream's RSS) plus the pipe/`MemoryQueue` bridge |
-| Egress shard (RTMP/RTMPS) | Fixed OS-thread pool per feed, sized by `EgressShardProfile::OutputCount`: `ceil(output_count / 128)`, capped at the CPU-derived ceiling (`src/config.rs`) | Per-leaf `LeafCommon`: small fixed state plus bounded pending bytes (`RESTREAM_EGRESS_MAX_PENDING_BYTES`, 256 KiB ceiling); TCP send buffer is kernel-owned (`RESTREAM_RTMP_STREAM_BUFFER_BYTES`, 8 MiB), not RSS |
+| RTMP listener and protocol session | One Compio/io_uring owner thread/runtime; accepted connection futures remain pinned there. Connection admission is clamped to 1–16,384 and the handshake has a configured timeout | Compio socket and RTMP parser/session state; no per-connection thread/runtime or Tokio duplex |
+| RTMP control actor | One bounded Tokio actor per admitted connection; authorization/registration, lifecycle, one-time media probe, and diagnostic play-reader scheduling | Per-session command channel of 16 entries carrying lifecycle commands and the one-time probe metadata |
+| RTMP publisher media | FLV classification, sequence-header handling, timestamp mapping, standby GOP, input gating, and ring publication run inline on the Compio ingress owner | Owner-local publisher state and shared ring; no ordinary per-packet media channel |
+| `source_ring` / `output_ring` | Shared application structure | Fixed-capacity `RingBuffer` per pipeline / per `(pipeline, preset)`, independent of output count |
+| External transcoder (non-passthrough preset) | One FFmpeg child plus dedicated stdin/stdout threads per `(pipeline, preset)`; Tokio supervises lifecycle only | FFmpeg process memory and bounded pipe buffers; input pump pulls the ring on its writer thread |
+| RTMP/RTMPS egress shard | Fixed fabric shard thread and one Compio/io_uring runtime; protocol engine and completion workers share the owner thread | Per active transport leaf: nominal 16 KiB for plain RTMP and 16 KiB + 24 B for RTMPS adapter buffers. At the default upper topology of 8 shards × 4,096 leaves (32,768), this is about 512 MiB / 512.75 MiB; configured shard/leaf overrides scale total capacity. Excludes engine/TLS/task/event state, allocator overhead, and kernel socket buffers. The existing application pending-byte ceiling remains separate |
+
+The egress runtime uses one shared `Rc<Compio TcpStream>` per active leaf.
+One-shot RX and TX workers exchange bytes with the synchronous RTMP engine
+through bounded connection-local queues; the event channel is bounded by the
+configured per-shard TCP event capacity. Only pending connects use duplicated
+`PollFd` registrations, which are removed at activation and scanned with a
+rotating per-call budget. Established leaves do not participate in population
+readiness scans.
 
 ### SRT: ingest to egress
 
 ```mermaid
 flowchart LR
-    subgraph L1["libsrt ingest multiplexer: 1 CSndQueue + 1 CRcvQueue\nworker-thread pair (one bound local UDP endpoint),\nplus 1 TsbPd thread per live ingest connection"]
-        SS["SRT socket accept/recv"]
+    subgraph L1["SRT ingress Owner thread: one Compio/io_uring runtime"]
+        SS["srt-rs Owner listener/recv\nPeerTable + protocol timers"]
+        SD["TsDemuxer + gate + timestamps\nstandby GOP + ring publish"]
+        SS --> SD
     end
-    subgraph T2["Tokio worker pool"]
-        SS --> Demux2["TsDemuxer\n(inline async)"]
-        Demux2 --> SR2[("source_ring — shared SPMC")]
-        SR2 -->|"non-passthrough preset"| Prep2["shared transform stage\n(as in RTMP path)"]
-        Prep2 --> OR2[("output_ring")]
-        OR2 --> Mux["shared TsMuxer,\n1 task per (pipeline, preset)\n(inline async)"]
-        SR2 -->|"passthrough"| Mux
-        Mux --> TCR[("TsChunkRing — shared SPMC\npackage ring")]
+    subgraph R2["Shared packet rings"]
+        SR2[("source_ring — shared SPMC")]
+        OR2[("output_ring")]
     end
-    subgraph S2["Egress fabric shard pool: OS threads per feed,\ncount = SrtCpuParallel profile\n(always the CPU-derived ceiling, independent of that feed's output count)"]
-        Leaf2["SRT leaf: connection,\ncongestion, encryption state"] --> Send2["non-blocking srt_sendmsg2"]
+    subgraph MX["Media Executor pool: restream-media"]
+        Mux["Shared TsMuxer\n1 task per (pipeline, preset)"]
+        TCR[("TsChunkRing — shared SPMC\npackage ring")]
+        Mux --> TCR
     end
+    subgraph S2["Egress fabric shard pool: OS threads per feed,\neach shard runs one Compio runtime with per-family Owners"]
+        Leaf2["SRT leaf: connection,\ncongestion, encryption state"] --> Send2["send_shared into the logical caller"]
+    end
+    SD --> SR2
+    SR2 -->|"passthrough"| Mux
+    OR2 --> Mux
     TCR --> Leaf2
-    subgraph L2["libsrt egress multiplexer: 1 per (pipeline, shard) by default,\nshared across every feed of that pipeline assigned to that shard —\n1 CSndQueue + 1 CRcvQueue worker-thread pair"]
-        Send2 --> Buf["CSndBuffer (~6 MB negotiated\nceiling per socket) + TSBPD\ndeadline enforcement"]
+    subgraph L2["Shared SRT state: one Compio Owner per (shard, address family):\n1 caller UDP socket, caller pool, fixed TX pool"]
+        Send2 --> Buf["srt-rs protocol buffers + TSBPD\ndeadline enforcement"]
     end
     Buf --> Dest2["Destination SRT receiver"]
 ```
 
 | Hop | Thread/process model | Memory owner |
 |---|---|---|
-| SRT ingest socket, libsrt multiplexer | 1 multiplexer for the whole ingest listener: 1 `CSndQueue` + 1 `CRcvQueue` thread pair, plus 1 `SRT:TsbPd` delivery-timing thread per live connection | libsrt's own `CRcvBuffer` per connection; kernel `SO_RCVBUF` is separate and kernel-owned |
-| `TsDemuxer` → `source_ring` | Tokio worker, inline async | Shared `source_ring`, same structure as RTMP |
-| Shared `TsMuxer` (SRT preparation) | 1 Tokio task per `(pipeline, preset)`, inline async | `TsChunkRing` (256-chunk shared ring, `RESTREAM_TS_RING_CAPACITY`) |
-| Egress shard (SRT) | Fixed OS-thread pool **per feed** (a feed is one `(protocol, pipeline, encoding)` selection, e.g. one selected audio track), sized by `EgressShardProfile::SrtCpuParallel`: always the CPU-derived ceiling, **not reduced for a small feed** — this is deliberate, not an oversight; see below | Per-leaf `LeafCommon`, same small bound as RTMP |
-| libsrt egress multiplexer | 1 per `(pipeline, shard id)` by default, shared across every feed of that pipeline on shard *N* — so multiplexer/thread count tracks `shard count x active pipeline count`, not feed count or output count (`src/media/egress/backends/srt/muxer_ports.rs`; `RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED=0` reverts to sharing by shard id alone, engine-wide) | libsrt's own `CSndBuffer`, a real per-**socket** userspace allocation (~6.1 MB negotiated ceiling from `DESIRED_SRT_BUF`, `src/media/srt/socket.rs`) that counts toward process RSS — roughly 2.8x RTMP's per-connection memory cost in the measured example above. Kernel `SO_SNDBUF` (`DESIRED_UDP_BUF`, 8 MiB requested) is separate and does not count toward RSS |
+| SRT ingest socket, demux, and publish | One Compio runtime and Owner own the listener socket, peer table, timers, demux, input gate, standby GOP, and ring publication | The Owner installs the managed-RX substrate observed from its own runtime before attach. `ManagedPreferred` selects multishot when available and falls back to raw readiness otherwise. Ingest media runs inline to completion on the Owner (WI11 step 1) |
+| Shared `TsMuxer` (SRT preparation) | Media Executor pool (`restream-media`), one task per `(pipeline, preset)` | `TsChunkRing` (256-chunk shared ring, `RESTREAM_TS_RING_CAPACITY`) |
+| Egress shard (SRT) | Fixed OS-thread pool per feed; each shard owns one Compio runtime and at most one `Owner` per local address family, plus queued leaf visits | Per-leaf application state and bounded scratch; protocol state lives in the Owner |
+| Shared SRT transport | One Compio `Owner` per `(shard, local family)`: one caller UDP socket, one bounded caller pool, fixed TX pool and one receive consumer; shared TS muxing remains per `(pipeline, preset)` | srt-rs caller/protocol state plus kernel `SO_SNDBUF`; DATA is materialized into reserved TX-pool slots |
 
-`SrtCpuParallel` claiming the full CPU-derived shard ceiling for every SRT
-feed regardless of that feed's own output count is the fix for a real,
-previously-shipped bug, not an unexamined default: an earlier
-output-count-scaled formula (matching RTMP's `OutputCount` profile) capped a
-small SRT feed at 1 shard / 1 libsrt multiplexer, and one multiplexer's
-single `CSndQueue` thread became a hard bottleneck once concurrent SRT
-egress connections crossed roughly 120, triggering continuous `TLPKTDROP`
-packet loss (full account in
-[the SRT egress scale investigation](archive/quality/srt-egress-scale-investigation-2026-08-10.md)).
-The corresponding cost is that egress-shard thread count for SRT scales with
-**distinct SRT feed count** times the CPU-derived shard ceiling — a
-process with many small, distinct SRT track selections pays the same
-per-feed shard-thread cost as one with a few large ones. Making that
-cheaper without reopening the fixed bug is an open, unimplemented
-improvement — see the "Efficiency evaluation" note in the resource
-attribution doc linked above for the specific tradeoff and why it was not
-attempted in the same session that just proved the current design correct
-at 1,200 outputs.
+The SRT path bounds work per shard three ways: a finite `OwnerServiceBudget`
+for each per-family Owner's service pass, explicit ready/feed-wait/parked
+queues for leaf visits, and the Owner's fixed TX pool (16 slots per family) as
+the physical in-flight envelope. Restream keeps no transport queue of its own:
+unsent protocol output waits in bounded protocol state, and payload is
+materialized straight into a reserved TX-pool slot when the Owner drains it.
 
 ## SRT bonding
 
 ### Ingest
 
 The srt-rs listener explicitly accepts publisher-created Broadcast and Backup
-groups. Their authenticated matching legs feed one stable logical input,
+groups. Restream answers every bonded leg with ONE application-owned
+receiving-group id (random per listener lifetime, never derived from an address,
+port or socket id), in the caller's own mode; a caller's group id identifies the
+CALLER group and is never echoed. A direct caller receives no GROUP response.
+Because the id is stable across legs, libsrt callers pin it and see no
+`SRT_REJ_GROUP`. Their authenticated matching legs feed one stable logical input,
 deduplicate received MPEG-TS payloads, and retain per-leg health plus logical
 aggregate telemetry. Matching StreamIDs on independent sockets do not create a
 bond.
@@ -516,10 +535,64 @@ srt://primary:10080?streamid=publish:key&bond=backup1:10080,backup2:10080
 
 This creates an SRT Backup group with the URL authority as the primary leg and
 the listed peers as standbys. Add `type=broadcast` to duplicate each media
-message over every healthy leg. The egress adapter uses srt-rs's Tokio-native
-group transport, so each leg is a Tokio UDP socket and all group I/O remains
-nonblocking.
+message over every healthy leg.
 
+`bond=` means true SRT bonding: ONE logical stream, ONE logical caller, N
+physical paths, and every path must terminate in the SAME remote receiving
+group. Distinct hosts, IPs or ports are fine (they can be different network
+endpoints of one receiver process); the validity test is the remote group
+identity the SRT handshake establishes, not the URL strings. If a leg answers
+from a different receiving group, `srt-rs` reports a peer-group collision and
+Restream fails the whole output (it never keeps the healthy leg running or
+degrades to one leg); normal retry policy owns any restart. A backup leg that is
+merely unreachable is ordinary degradation, not a collision. Independent
+receivers are not a bond target. All legs of one bond must share one address
+family (one bond, one family Owner, one shared caller socket); a mixed-family
+bond fails the output explicitly.
+
+## SRT ingress owner
+
+The SRT listener is one owner thread (`srt-in-<port>`), with one production
+Compio runtime (forced io_uring, no fallback) and one
+`srt_transport::compio::Owner` attached with `Owner::listen_with_resolver`.
+The runtime's managed-RX capability is observed but deliberately not installed
+on ingress: the pinned srt-rs integration treats a surfaced transient
+provided-buffer-exhaustion error (`ENOBUFS`) as an owner RX-stream fault.
+Without the substrate, `ManagedPreferred` selects raw readiness inside the
+working io_uring runtime. The pinned upstream listener drains bounded
+`recvmmsg` batches, with `recvfrom` for the residual byte-budget tail.
+This is not a per-datagram Tokio bridge or a transport-runtime fallback.
+
+The Owner owns the socket, `PeerTable`, handshake admission, timers, ACK/NAK,
+listener TX and every peer's send/disconnect/retire. There is no second protocol
+table on Tokio. Ingress does not provision the previously described managed
+provided-buffer ring; egress's separately qualified managed-RX policy is
+independent.
+
+- **Admission** is synchronous on the owner thread: the resolver reads the
+  `SrtIngestPolicyStore` (mode validation, `UNAUTHORIZED`/`BAD_MODE`/
+  `BAD_REQUEST`, latency, passphrase, key length) and adds the receiving-group
+  response for bonded callers. The asynchronous checks (pipeline authentication,
+  IP bans, duplicate publishers, missing read target) stay in Tokio and, on
+  rejection, send `Disconnect` for the real `LogicalPeerId`.
+- **Bridges are bounded.** Commands (Tokio to Owner): `AttachPublisher`,
+  `AttachReader`, `ProbeApplied`, `Disconnect`, and `Shutdown`, capacity 256.
+  Events (Owner to Tokio): `Connected`, `Probe`, `Disconnected`, and `Fault`,
+  capacity 256. These carry lifecycle and the one-time stream probe only:
+  publisher demux/publication and diagnostic reader playback stay on the Owner.
+  Backpressure on the lifecycle bridge retains unaccepted events; it does not
+  introduce a per-packet media handoff through Tokio.
+- **Retirement.** A terminal `Disconnected` is forwarded and the peer is removed
+  from the Owner; a locally disconnected peer is retired after its terminal event
+  or a 500 ms grace. Stale commands for a retired `LogicalPeerId` are harmless and
+  counted (`staleCommands`).
+- **Owner fault** stops admission, reports `Fault` to Tokio and ends the thread;
+  there is no rebuild on another runtime. Shutdown flushes SHUTDOWN datagrams and
+  runs `Owner::shutdown_and_drain`; the verdict is logged, never assumed.
+- **Metrics**: `srtListener.ingressOwner` in the engine status (service visits and
+  actions, TX capacity/in-flight/high-water/exhaustions, RX packets/bytes/ring
+  depth/drops/truncation, peers, admission telemetry, bridge depth high-water,
+  stale commands, overload disconnects). No peer or StreamID labels.
 
 ## Protocol correctness requirements
 

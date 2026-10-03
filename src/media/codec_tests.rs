@@ -72,3 +72,63 @@ fn minimal_hevc_sps_nalu(chroma_format_idc: u64, bit_depth_minus8: u64) -> Vec<u
 include!("codec_tests/format_conversion.rs");
 include!("codec_tests/annexb_avcc.rs");
 include!("codec_tests/transport_stream.rs");
+
+/// The allocation-free NALU walker yields exactly the NALUs the production
+/// start-code finder delimits, for arbitrary byte streams (zeros and start
+/// codes over-represented so boundaries are dense).
+mod annexb_walker {
+    use std::ops::ControlFlow;
+
+    use proptest::prelude::*;
+
+    use crate::media::codec::{find_annexb_start_codes, for_each_annexb_nalu};
+
+    fn by_start_codes(data: &[u8]) -> Vec<&[u8]> {
+        let starts = find_annexb_start_codes(data);
+        let mut nalus = Vec::new();
+        for (index, &(_, nalu_start)) in starts.iter().enumerate() {
+            let nalu_end = starts.get(index + 1).map_or(data.len(), |next| next.0);
+            if nalu_start < nalu_end {
+                nalus.push(&data[nalu_start..nalu_end]);
+            }
+        }
+        nalus
+    }
+
+    fn walked(data: &[u8]) -> Vec<&[u8]> {
+        let mut nalus = Vec::new();
+        let _ = for_each_annexb_nalu(data, |nalu| {
+            nalus.push(nalu);
+            ControlFlow::Continue(())
+        });
+        nalus
+    }
+
+    proptest! {
+        #[test]
+        fn walker_matches_the_start_code_finder(
+            data in proptest::collection::vec(
+                prop_oneof![4 => Just(0u8), 2 => Just(1u8), 1 => any::<u8>()],
+                0..256,
+            )
+        ) {
+            prop_assert_eq!(walked(&data), by_start_codes(&data));
+        }
+    }
+
+    #[test]
+    fn walker_stops_when_the_visitor_breaks() {
+        let data = [0, 0, 1, 0x67, 0, 0, 1, 0x68, 0, 0, 1, 0x65];
+        let mut seen = 0;
+        let flow = for_each_annexb_nalu(&data, |_| {
+            seen += 1;
+            if seen == 2 {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        });
+        assert!(flow.is_break());
+        assert_eq!(seen, 2);
+    }
+}

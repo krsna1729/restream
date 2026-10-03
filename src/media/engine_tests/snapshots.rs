@@ -353,6 +353,29 @@ async fn health_snapshot_exposes_bonding_and_member_telemetry() {
     assert_eq!(quality["srtGroupBrokenMembers"], 0);
 }
 
+/// The SRT listener diagnostic counts SRT ingests only: a concurrent RTMP
+/// ingest must not inflate the listener's stream number.
+#[tokio::test]
+async fn srt_listener_diag_counts_only_srt_ingests() {
+    let engine = MediaEngine::new();
+    engine
+        .try_register_ingest("pipeline-rtmp", "rtmp-key", "rtmp")
+        .await
+        .unwrap();
+    engine
+        .try_register_ingest("pipeline-srt", "srt-key", "srt")
+        .await
+        .unwrap();
+
+    let stats = engine.srt_listener_diag_snapshot().await;
+    assert_eq!(stats.active_ingest_count, 1);
+    assert_eq!(
+        engine.active_ingest_count().await,
+        2,
+        "the engine-wide ingest count still counts every protocol"
+    );
+}
+
 #[tokio::test]
 async fn health_snapshot_exposes_runtime_limit_and_rtmp_listener_errors() {
     let engine = MediaEngine::new();

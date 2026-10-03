@@ -404,8 +404,9 @@ fn manager_replays_only_replaced_shard_outputs_after_panic() {
     wait_for_panicked(&group, ShardId::new(0));
 
     assert_eq!(
-        group.replace_panicked(config(4, 4), |_| ProbeBackend {
-            probe: replacement.clone(),
+        group.replace_panicked(config(4, 4), |_| {
+            let probe = replacement.clone();
+            move || ProbeBackend { probe }
         }),
         vec![ShardId::new(0)]
     );
@@ -455,12 +456,12 @@ fn grow_spawns_one_handle_at_the_next_shard_id() {
     .unwrap();
 
     let new_probe = Probe::default();
-    let shard_id = group.grow(
-        config(4, 4),
-        ProbeBackend {
-            probe: new_probe.clone(),
-        },
-    );
+    let probe = new_probe.clone();
+    let shard_id = group
+        .grow_with(config(4, 4), move || {
+            Ok::<_, std::convert::Infallible>(ProbeBackend { probe })
+        })
+        .unwrap();
 
     assert_eq!(shard_id, ShardId::new(1));
     assert_eq!(group.shard_count(), 2);
@@ -568,7 +569,11 @@ mod grow_shrink_proptests {
                 match op {
                     GrowShrinkOp::Grow => {
                         let probe = Probe::default();
-                        let shard_id = group.grow(config(4, 4), ProbeBackend { probe });
+                        let shard_id = group
+                            .grow_with(config(4, 4), move || {
+                                Ok::<_, std::convert::Infallible>(ProbeBackend { probe })
+                            })
+                            .unwrap();
                         prop_assert_eq!(shard_id, ShardId::new(expected_count as u32));
                         expected_count += 1;
                     }

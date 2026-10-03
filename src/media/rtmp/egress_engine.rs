@@ -1,13 +1,10 @@
 use bytes::Bytes;
 use rml_rtmp::time::RtmpTimestamp;
 
-use crate::media::codec;
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
 
-use super::egress_packets::{
-    cache_h264_parameter_sets, rtmp_video_packet_can_be_dropped, video_sequence_header_for_keyframe,
-};
-use super::enhanced::cache_hevc_parameter_sets;
+use super::egress_packets::{rtmp_video_packet_can_be_dropped, video_sequence_header_for_keyframe};
+use super::egress_payload_cache::{RtmpPayloadCache, SharedRtmpPayloadCache};
 use super::flv::{FlvVideoPacketKind, classify_flv_video_packet};
 use super::timestamps::{RtmpTimestampGuard, refreshed_video_sequence_header_timestamp};
 
@@ -30,8 +27,9 @@ pub(crate) struct RtmpMediaEncoder {
     raw_parameter_sets: Vec<u8>,
     last_video_config: Option<Vec<u8>>,
     timestamp_guard: RtmpTimestampGuard,
-    video_buffer: Vec<u8>,
-    audio_buffer: Vec<u8>,
+    /// Raw → FLV conversions, shared with the other outputs on this shard
+    /// (see `egress_payload_cache`); private until the shard shares its own.
+    payloads: SharedRtmpPayloadCache,
 }
 
 impl RtmpMediaEncoder {
@@ -42,9 +40,12 @@ impl RtmpMediaEncoder {
             raw_parameter_sets,
             last_video_config: None,
             timestamp_guard: RtmpTimestampGuard::new(),
-            video_buffer: Vec::new(),
-            audio_buffer: Vec::new(),
+            payloads: RtmpPayloadCache::shared(),
         }
+    }
+
+    pub(crate) fn share_payload_cache(&mut self, payloads: SharedRtmpPayloadCache) {
+        self.payloads = payloads;
     }
 
     pub(crate) fn encode(&mut self, packet: &MediaPacket, actions: &mut Vec<RtmpMediaAction>) {
@@ -66,10 +67,13 @@ impl RtmpMediaEncoder {
         let mut timestamp = self.timestamp_guard.packet_timestamp(packet);
         let payload = match packet.format {
             PayloadFormat::Raw => {
-                if self.enhanced_hevc {
-                    cache_hevc_parameter_sets(&packet.payload, &mut self.raw_parameter_sets);
-                } else {
-                    cache_h264_parameter_sets(&packet.payload, &mut self.raw_parameter_sets);
+                let converted = self
+                    .payloads
+                    .borrow_mut()
+                    .convert(packet, self.enhanced_hevc);
+                if let Some(parameter_sets) = &converted.parameter_sets {
+                    self.raw_parameter_sets.clear();
+                    self.raw_parameter_sets.extend_from_slice(parameter_sets);
                 }
                 if !self.video_ready && !packet.is_keyframe {
                     return;
@@ -103,26 +107,10 @@ impl RtmpMediaEncoder {
                 if !self.video_ready {
                     return;
                 }
-                let composition = (packet.pts - packet.dts).clamp(-8_388_608, 8_388_607) as i32;
-                let encoded = if self.enhanced_hevc {
-                    codec::hevc_video_for_enhanced_rtmp_with_composition_into(
-                        &packet.payload,
-                        packet.is_keyframe,
-                        composition,
-                        &mut self.video_buffer,
-                    )
-                } else {
-                    codec::video_for_rtmp_with_composition_into(
-                        &packet.payload,
-                        packet.is_keyframe,
-                        composition,
-                        &mut self.video_buffer,
-                    )
-                };
-                if !encoded {
+                let Some(payload) = converted.payload else {
                     return;
-                }
-                Bytes::copy_from_slice(&self.video_buffer)
+                };
+                payload
             }
             PayloadFormat::Flv => {
                 if !self.video_ready {
@@ -147,8 +135,11 @@ impl RtmpMediaEncoder {
     fn encode_audio(&mut self, packet: &MediaPacket, actions: &mut Vec<RtmpMediaAction>) {
         let payload = match packet.format {
             PayloadFormat::Raw => {
-                codec::audio_for_rtmp_into(&packet.payload, &mut self.audio_buffer);
-                Bytes::copy_from_slice(&self.audio_buffer)
+                let converted = self.payloads.borrow_mut().convert(packet, false);
+                let Some(payload) = converted.payload else {
+                    return;
+                };
+                payload
             }
             PayloadFormat::Flv => packet.payload.clone(),
         };

@@ -6,7 +6,7 @@ use crate::media::egress::manager::{
     EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome,
 };
 use crate::media::egress::runtime::{
-    EgressFabricRuntime, EgressFabricRuntimeError, spawn_fabric_wake_watcher,
+    EgressFabricRuntime, EgressFabricRuntimeError, subscribe_fabric_wakes,
 };
 use crate::media::egress::shard::EgressShardGroupError;
 #[cfg(test)]
@@ -37,32 +37,27 @@ impl MediaEngine {
         } else {
             let config = &self.config.egress_fabric;
             let group = spawn_sink_fabric_shard_group(
-                config.shard_count(),
+                std::num::NonZeroU32::MIN,
                 config.shard_config(),
                 config.work_budget(),
                 |_| feed.clone_reader(),
             )
             .map_err(SinkFabricEnsureError::Spawn)?;
-            let manager_config =
-                EgressManagerConfig::new(config.shards, config.command_channel_capacity)
-                    .expect("egress fabric manager config is clamped nonzero");
+            let manager_config = EgressManagerConfig::new(1, config.command_channel_capacity)
+                .expect("egress fabric manager config is clamped nonzero");
             let runtime = EgressFabricRuntime::new(manager_config, group)
                 .map_err(SinkFabricEnsureError::Runtime)?;
 
             // Sink leaves have no poller at all (see `sink_shard.rs`'s
-            // module doc), so this watcher's `FeedWake` delivery is their
+            // module doc), so this subscription's `FeedWake` delivery is their
             // *only* readiness signal, not just an interest-widening hint
             // the way it is for RTMP/SRT.
-            let watcher = spawn_fabric_wake_watcher(
-                "sink",
-                feed_id.clone(),
-                feed.clone_reader(),
-                runtime.feed_wake_handles(),
-            );
+            let wakes =
+                subscribe_fabric_wakes("sink", feed_id.clone(), feed, runtime.feed_wake_handles());
 
             tracing::info!(feed_id = %feed_id, "sink fabric runtime created");
             registry.runtimes.insert(feed_id.clone(), runtime);
-            registry.feed_watchers.insert(feed_id.clone(), watcher);
+            registry.feed_wakes.insert(feed_id.clone(), wakes);
             registry.feeds.insert(feed_id.clone(), feed.clone_reader());
             true
         };
@@ -123,12 +118,16 @@ impl MediaEngine {
         let result = runtime.rescale(
             crate::config::EgressShardProfile::OutputCount,
             effective_cpus,
+            crate::media::egress::runtime::ResizeReason::Remove,
             shard_config,
             |_shard_id| {
-                Ok::<_, std::convert::Infallible>(SinkShardBackend::new(
-                    feed.clone_reader(),
-                    budget,
-                ))
+                let feed = feed.clone_reader();
+                let leaf_capacity = shard_config.leaf_capacity().get();
+                move || {
+                    Ok::<_, std::convert::Infallible>(
+                        SinkShardBackend::new(feed, budget).with_leaf_capacity(leaf_capacity),
+                    )
+                }
             },
         );
         match result {
@@ -152,9 +151,7 @@ impl MediaEngine {
             }
             registry.active_outputs.remove(feed_id);
             registry.feeds.remove(feed_id);
-            if let Some(watcher) = registry.feed_watchers.remove(feed_id) {
-                watcher.abort();
-            }
+            registry.feed_wakes.remove(feed_id);
             registry.runtimes.remove(feed_id)
         };
 
@@ -199,9 +196,7 @@ impl MediaEngine {
         let runtimes = {
             let mut registry = self.fabric.sink.lock().await;
             registry.active_outputs.clear();
-            for watcher in registry.feed_watchers.drain() {
-                watcher.1.abort();
-            }
+            registry.feed_wakes.clear();
             std::mem::take(&mut registry.runtimes)
         };
         let count = runtimes.len();

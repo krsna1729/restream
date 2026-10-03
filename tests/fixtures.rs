@@ -95,3 +95,59 @@ fn h264_bf0_marker_probe_emits_startup_sequence_header() {
         path.display()
     );
 }
+
+/// The canonical 8 Mbps contract workload must really carry ~8 Mbps of
+/// MPEG-TS payload. The packet-rate ladder compares measured pps against the
+/// roadmap's ~760 first-transmission DATA packets/s/output, which only holds
+/// if the fixture's effective rate is the stated one. The rate is measured
+/// from the fixture itself (file bytes over the demuxed media span), so an
+/// encoder or generator drift fails here instead of silently redefining the
+/// workload that later optimization numbers are compared against.
+#[test]
+fn canonical_8m_bench_fixtures_carry_the_stated_payload_rate() {
+    use restream::media::mpegts::TsDemuxer;
+    use restream::test_fixtures::bench_transport_fixture;
+
+    const TARGET_MBPS: f64 = 8.0;
+    const TOLERANCE_MBPS: f64 = 0.4;
+
+    for multi_audio in [false, true] {
+        let path =
+            bench_transport_fixture("h264", "8M", multi_audio).unwrap_or_else(|e| panic!("{e}"));
+        let bytes = std::fs::read(&path)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+        let mut demuxer = TsDemuxer::new();
+        let mut packets = Vec::new();
+        for chunk in bytes.chunks(1316) {
+            demuxer.feed(chunk);
+            demuxer.drain_into(&mut packets);
+        }
+        demuxer.flush();
+        demuxer.drain_into(&mut packets);
+        assert!(
+            packets.len() > 100,
+            "{} demuxed into {} packets",
+            path.display(),
+            packets.len()
+        );
+
+        let min_pts = packets.iter().map(|packet| packet.pts).min().unwrap();
+        let max_pts = packets.iter().map(|packet| packet.pts).max().unwrap();
+        let span_secs = (max_pts - min_pts) as f64 / 1000.0;
+        assert!(
+            span_secs > 7.0,
+            "{}: media span {:.3}s is shorter than the 8 second workload",
+            path.display(),
+            span_secs
+        );
+
+        let mbps = bytes.len() as f64 * 8.0 / span_secs / 1e6;
+        assert!(
+            (mbps - TARGET_MBPS).abs() <= TOLERANCE_MBPS,
+            "{} carries {:.3} Mbps of MPEG-TS payload, expected {TARGET_MBPS} ±{TOLERANCE_MBPS} Mbps; \
+             re-tune scripts/fixtures/generate-bench-fixtures.sh and regenerate the fixture",
+            path.display(),
+            mbps
+        );
+    }
+}

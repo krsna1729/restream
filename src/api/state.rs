@@ -434,7 +434,7 @@ pub fn clear_session_cookie(secure: bool) -> String {
     ) + session_cookie_security_attr(secure)
 }
 
-/// Best-effort startup/runtime refresh for the in-memory libsrt policy store.
+/// Best-effort startup/runtime refresh for the in-memory SRT ingest policy store.
 pub async fn refresh_srt_ingest_policy_store(state: &AppState) {
     if let Err(error) = state.refresh_srt_ingest_policy_store().await {
         warn!(err = %error, "failed to refresh SRT ingest policy store");

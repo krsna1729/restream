@@ -1,13 +1,11 @@
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
 
-use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
 use crate::media::engine::MediaEngine;
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
 use crate::media::metadata::{AudioMeta, VideoMeta};
-use crate::media::packet::MediaType;
+use crate::media::packet::{MediaPacket, MediaType};
 use crate::media::ring_buffer::MEDIA_PULL_BURST_PACKETS;
 use crate::media::ring_buffer::{Reader, RingBuffer};
 use crate::media::stage_lifecycle::StageLifecycle;
@@ -43,14 +41,6 @@ pub struct StageInputPump {
     /// Optional engine + pipeline for dynamic sequence-header refresh on
     /// publisher reconnect with new stream parameters.
     engine_refresh: Option<(Arc<MediaEngine>, String)>,
-}
-
-pub trait StageByteSink {
-    fn write_ts(
-        &mut self,
-        bytes: &[u8],
-        cancel: &CancellationToken,
-    ) -> impl std::future::Future<Output = Result<(), String>> + Send;
 }
 
 impl StageInputPump {
@@ -113,100 +103,136 @@ impl StageInputPump {
         self.reader.current_ring().codec_hint_str().to_string()
     }
 
-    /// Read from the input ring, feed MPEG-TS bytes to `sink`, until
-    /// cancellation or error.
-    pub async fn pump_to<S: StageByteSink>(
-        &mut self,
-        sink: &mut S,
-        cancel: &CancellationToken,
-    ) -> Result<(), String> {
-        let mut ts_batch = Vec::with_capacity(MEDIA_TS_BATCH_TARGET_BYTES);
-        let mut packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
+    /// Turn this pump into the input of an in-process FFmpeg stage: the
+    /// stage's AVIO reads pull the ring and encode TS on the FFmpeg thread
+    /// (see [`crate::media::avio::QueueRefill`]), so no Tokio task feeds it.
+    pub fn into_queue_refill(self, cancel: CancellationToken) -> StageInputRefill {
+        StageInputRefill {
+            pump: self,
+            cancel,
+            packets: Vec::with_capacity(MEDIA_PULL_BURST_PACKETS),
+        }
+    }
 
-        loop {
-            tokio::select! {
-                _ = cancel.cancelled() => {
-                    debug!("stage input pump cancelled");
-                    return Ok(());
+    /// Pull one burst from the ring and append its TS to `ts_batch`. Never
+    /// waits: it runs on the FFmpeg (or stdin writer) thread.
+    fn encode_burst(&mut self, packets: &mut Vec<Arc<MediaPacket>>, ts_batch: &mut Vec<u8>) {
+        packets.clear();
+        if self
+            .reader
+            .pull_burst(packets, MEDIA_PULL_BURST_PACKETS)
+            .is_err()
+        {
+            return;
+        }
+
+        for pkt in packets.drain(..) {
+            if !self.include_audio && pkt.media_type == MediaType::Audio {
+                continue;
+            }
+
+            // Dynamic parameter-set refresh:
+            // When the feeder needs raw video parameter sets (SPS/PPS
+            // for H.264, or VPS/SPS/PPS for HEVC), try to obtain them
+            // from multiple sources in priority order:
+            //   1. Ring buffer annex-B parameter sets (TS/SRT sources)
+            //   2. Per-packet annex-B payload (raw TS frames)
+            //   3. Engine ingest video_sequence_header (RTMP/FLV sources)
+            //
+            // Source 3 also handles publisher reconnect with new stream
+            // parameters: if the ring clears the parameter sets (or the
+            // feeder's cache becomes stale), we re-fetch from the engine.
+            if pkt.media_type == MediaType::Video && self.feeder.needs_raw_video_parameter_sets() {
+                if let Some(parameter_sets) = self.reader.current_ring().video_parameter_sets() {
+                    self.feeder
+                        .set_raw_video_parameter_sets_if_empty(&parameter_sets);
+                } else if let Some(parameter_sets) =
+                    crate::media::codec::annexb_parameter_sets(&pkt.payload)
+                {
+                    self.feeder
+                        .set_raw_video_parameter_sets_if_empty(&parameter_sets);
+                } else if let Some((engine, pipeline_id)) = &self.engine_refresh {
+                    // Fallback: fetch AVCC sequence header from engine
+                    // ingest state (set by RTMP handler on connect/reconnect).
+                    if let Some(header) = engine.try_video_sequence_header(pipeline_id) {
+                        self.feeder.set_video_sequence_header_from_avcc(&header);
+                    }
                 }
-                _ = self.reader.wait_for_data() => {
-                    if self.reader.is_caught_up_to_end_of_stream() {
-                        return Ok(());
-                    }
+            }
 
-                    packets.clear();
-                    if self
-                        .reader
-                        .pull_burst(&mut packets, MEDIA_PULL_BURST_PACKETS)
-                        .is_err()
-                    {
-                        continue;
-                    }
-
-                    ts_batch.clear();
-
-                    for pkt in packets.drain(..) {
-                        if !self.include_audio && pkt.media_type == MediaType::Audio {
-                            continue;
-                        }
-
-                        // Dynamic parameter-set refresh:
-                        // When the feeder needs raw video parameter sets (SPS/PPS
-                        // for H.264, or VPS/SPS/PPS for HEVC), try to obtain them
-                        // from multiple sources in priority order:
-                        //   1. Ring buffer annex-B parameter sets (TS/SRT sources)
-                        //   2. Per-packet annex-B payload (raw TS frames)
-                        //   3. Engine ingest video_sequence_header (RTMP/FLV sources)
-                        //
-                        // Source 3 also handles publisher reconnect with new stream
-                        // parameters: if the ring clears the parameter sets (or the
-                        // feeder's cache becomes stale), we re-fetch from the engine.
-                        if pkt.media_type == MediaType::Video
-                            && self.feeder.needs_raw_video_parameter_sets()
-                        {
-                            if let Some(parameter_sets) =
-                                self.reader.current_ring().video_parameter_sets()
-                            {
-                                self.feeder
-                                    .set_raw_video_parameter_sets_if_empty(&parameter_sets);
-                            } else if let Some(parameter_sets) =
-                                crate::media::codec::annexb_parameter_sets(&pkt.payload)
-                            {
-                                self.feeder
-                                    .set_raw_video_parameter_sets_if_empty(&parameter_sets);
-                            } else if let Some((engine, pipeline_id)) = &self.engine_refresh {
-                                // Fallback: fetch AVCC sequence header from engine
-                                // ingest state (set by RTMP handler on connect/reconnect).
-                                let (video_sh, _) =
-                                    engine.get_sequence_headers(pipeline_id).await;
-                                if let Some(header) = video_sh {
-                                    self.feeder.set_video_sequence_header_from_avcc(&header);
-                                }
-                            }
-                        }
-
-                        let in_bytes = pkt.payload.len() as u64;
-                        let extended = self.feeder.extend_ts_for_packet(&pkt, &mut ts_batch);
-                        if extended {
-                            self.metrics.record_in(in_bytes);
-                            if !self.has_emitted_first_input {
-                                self.has_emitted_first_input = true;
-                                if let Some(lc) = &self.lifecycle {
-                                    lc.record_first_input();
-                                }
-                            }
-                        }
-                    }
-
-                    if !ts_batch.is_empty()
-                        && let Err(e) = sink.write_ts(&ts_batch, cancel).await
-                    {
-                        return Err(format!("stage byte sink write error: {e:?}"));
+            let in_bytes = pkt.payload.len() as u64;
+            let extended = self.feeder.extend_ts_for_packet(&pkt, ts_batch);
+            if extended {
+                self.metrics.record_in(in_bytes);
+                if !self.has_emitted_first_input {
+                    self.has_emitted_first_input = true;
+                    if let Some(lc) = &self.lifecycle {
+                        lc.record_first_input();
                     }
                 }
             }
         }
     }
+}
+
+/// A [`StageInputPump`] driven by its FFmpeg stage's AVIO reads.
+pub struct StageInputRefill {
+    pump: StageInputPump,
+    cancel: CancellationToken,
+    packets: Vec<Arc<MediaPacket>>,
+}
+
+impl crate::media::avio::QueueRefill for StageInputRefill {
+    fn refill(&mut self, out: &mut Vec<u8>) -> bool {
+        loop {
+            let data = block_on(async {
+                tokio::select! {
+                    biased;
+                    _ = self.cancel.cancelled() => false,
+                    _ = self.pump.reader.wait_for_data() => true,
+                }
+            });
+            if !data || self.pump.reader.is_caught_up_to_end_of_stream() {
+                return false;
+            }
+            self.pump.encode_burst(&mut self.packets, out);
+            if !out.is_empty() {
+                return true;
+            }
+        }
+    }
+}
+
+/// Run `future` to completion on the calling (non-Tokio) thread, parking it
+/// while pending. Used only to wait for ring data or cancellation, both
+/// runtime-agnostic primitives (`Notify`, `CancellationToken`). The waker is
+/// cached per thread, so a poll that completes at once allocates nothing.
+fn block_on<F: std::future::Future>(future: F) -> F::Output {
+    use std::task::{Context, Poll, Wake, Waker};
+
+    struct ThreadUnpark(std::thread::Thread);
+    impl Wake for ThreadUnpark {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    thread_local! {
+        static WAKER: Waker = Waker::from(Arc::new(ThreadUnpark(std::thread::current())));
+    }
+
+    WAKER.with(|waker| {
+        let mut cx = Context::from_waker(waker);
+        let mut future = std::pin::pin!(future);
+        loop {
+            if let Poll::Ready(output) = future.as_mut().poll(&mut cx) {
+                return output;
+            }
+            std::thread::park();
+        }
+    })
 }
 
 #[cfg(test)]
@@ -217,20 +243,20 @@ mod tests {
     use bytes::Bytes;
     use std::sync::atomic::Ordering;
 
-    struct CapturingSink {
-        bytes_written: usize,
-        writes: usize,
-    }
-
-    impl StageByteSink for CapturingSink {
-        async fn write_ts(
-            &mut self,
-            bytes: &[u8],
-            _cancel: &CancellationToken,
-        ) -> Result<(), String> {
-            self.bytes_written += bytes.len();
-            self.writes += 1;
-            Ok(())
+    /// Drain a refill-driven pump the way its reading thread would, until
+    /// it reports end of input. Returns (TS bytes, non-empty batches).
+    fn drain(pump: StageInputPump) -> (usize, usize) {
+        use crate::media::avio::QueueRefill;
+        let mut refill = pump.into_queue_refill(CancellationToken::new());
+        let (mut bytes, mut batches) = (0, 0);
+        let mut out = Vec::new();
+        loop {
+            out.clear();
+            if !refill.refill(&mut out) {
+                return (bytes, batches);
+            }
+            bytes += out.len();
+            batches += 1;
         }
     }
 
@@ -298,15 +324,15 @@ mod tests {
         assert_eq!(pump.codec_hint(), "hevc");
     }
 
-    #[tokio::test]
-    async fn pump_suppresses_first_input_for_filtered_audio_until_eos() {
+    #[test]
+    fn pump_suppresses_first_input_for_filtered_audio_until_eos() {
         let ring = Arc::new(RingBuffer::new(8));
         let lifecycle = Arc::new(StageLifecycle::new(StagePhase::BackendSpawned {
             backend: StageBackendKind::InternalFfmpeg,
             pid: None,
         }));
         let metrics = Arc::new(StageMetrics::new());
-        let mut pump = StageInputPump::new(
+        let pump = StageInputPump::new(
             "filtered-audio-only".to_string(),
             ring.clone(),
             0,
@@ -316,21 +342,13 @@ mod tests {
             metrics.clone(),
         )
         .with_lifecycle(lifecycle.clone());
-        let cancel = CancellationToken::new();
-        let mut sink = CapturingSink {
-            bytes_written: 0,
-            writes: 0,
-        };
-
         ring.push(audio_packet(0));
         ring.mark_end_of_stream();
 
-        pump.pump_to(&mut sink, &cancel)
-            .await
-            .expect("pump should finish at EOS");
+        let (bytes_written, writes) = drain(pump);
 
-        assert_eq!(sink.bytes_written, 0);
-        assert_eq!(sink.writes, 0);
+        assert_eq!(bytes_written, 0);
+        assert_eq!(writes, 0);
         assert_eq!(metrics.packets_in.load(Ordering::Relaxed), 0);
         assert_eq!(
             lifecycle.current_phase(),
@@ -341,8 +359,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn pump_records_first_input_once_after_filtered_audio_then_video_eos() {
+    #[test]
+    fn pump_records_first_input_once_after_filtered_audio_then_video_eos() {
         let ring = Arc::new(RingBuffer::new(8));
         ring.set_video_parameter_sets(h264_parameter_sets());
         let video = video_meta();
@@ -351,7 +369,7 @@ mod tests {
             pid: None,
         }));
         let metrics = Arc::new(StageMetrics::new());
-        let mut pump = StageInputPump::new(
+        let pump = StageInputPump::new(
             "filtered-audio-then-video".to_string(),
             ring.clone(),
             0,
@@ -361,25 +379,94 @@ mod tests {
             metrics.clone(),
         )
         .with_lifecycle(lifecycle.clone());
-        let cancel = CancellationToken::new();
-        let mut sink = CapturingSink {
-            bytes_written: 0,
-            writes: 0,
-        };
-
         ring.push(audio_packet(0));
         ring.push(video_keyframe(33));
         ring.mark_end_of_stream();
 
-        pump.pump_to(&mut sink, &cancel)
-            .await
-            .expect("pump should finish at EOS");
+        let (bytes_written, writes) = drain(pump);
 
-        assert!(sink.bytes_written > 0);
-        assert_eq!(sink.writes, 1);
+        assert!(bytes_written > 0);
+        assert_eq!(writes, 1);
         assert_eq!(metrics.packets_in.load(Ordering::Relaxed), 1);
         let snapshot = lifecycle.snapshot();
         assert_eq!(snapshot.phase, StagePhase::FirstInput);
         assert!(snapshot.first_input_at.is_some());
+    }
+
+    fn video_pump(ring: &Arc<RingBuffer>, metrics: &Arc<StageMetrics>) -> StageInputPump {
+        ring.set_video_parameter_sets(h264_parameter_sets());
+        StageInputPump::new(
+            "refill".to_string(),
+            ring.clone(),
+            0,
+            Some(&video_meta()),
+            &[],
+            true,
+            metrics.clone(),
+        )
+    }
+
+    /// The FFmpeg-thread input path: AVIO reads through the queue pull the
+    /// ring and encode TS on the reading thread, with no Tokio runtime, and
+    /// the queue closes at end of stream.
+    #[test]
+    fn queue_refill_pulls_the_ring_on_the_reading_thread_until_eos() {
+        use crate::media::avio::MemoryQueue;
+
+        let ring = Arc::new(RingBuffer::new(8));
+        let metrics = Arc::new(StageMetrics::new());
+        let queue = Arc::new(MemoryQueue::new());
+        queue.set_refill(Box::new(
+            video_pump(&ring, &metrics).into_queue_refill(CancellationToken::new()),
+        ));
+
+        ring.push(video_keyframe(0));
+        let reader = {
+            let queue = queue.clone();
+            std::thread::spawn(move || {
+                let mut total = Vec::new();
+                let mut buf = [0u8; 4096];
+                loop {
+                    let n = queue.read(&mut buf);
+                    if n == 0 {
+                        return total;
+                    }
+                    total.extend_from_slice(&buf[..n]);
+                }
+            })
+        };
+        // The reader parks waiting for the ring, then wakes on publication.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        ring.push(video_keyframe(33));
+        ring.mark_end_of_stream();
+
+        let ts = reader.join().unwrap();
+        assert!(!ts.is_empty());
+        assert_eq!(ts.len() % 188, 0);
+        assert!(ts.chunks(188).all(|packet| packet[0] == 0x47));
+        assert_eq!(metrics.packets_in.load(Ordering::Relaxed), 2);
+        assert!(queue.is_closed());
+    }
+
+    #[test]
+    fn queue_refill_stops_on_cancel_while_waiting() {
+        use crate::media::avio::MemoryQueue;
+
+        let ring = Arc::new(RingBuffer::new(8));
+        let metrics = Arc::new(StageMetrics::new());
+        let cancel = CancellationToken::new();
+        let queue = Arc::new(MemoryQueue::new());
+        queue.set_refill(Box::new(
+            video_pump(&ring, &metrics).into_queue_refill(cancel.clone()),
+        ));
+        let reader = {
+            let queue = queue.clone();
+            std::thread::spawn(move || queue.read(&mut [0u8; 64]))
+        };
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        cancel.cancel();
+
+        assert_eq!(reader.join().unwrap(), 0);
+        assert!(queue.is_closed());
     }
 }

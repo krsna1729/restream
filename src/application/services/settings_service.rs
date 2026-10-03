@@ -182,7 +182,7 @@ impl SettingsService {
         srt_pbkeylen: i32,
     ) -> ServiceResult<()> {
         // Rebuild the policy store from persisted global settings plus the
-        // current pipeline catalog so libsrt sees one coherent snapshot.
+        // current pipeline catalog so the SRT ingress owner sees one coherent snapshot.
         let global =
             load_global_srt_ingest_config(self.meta_store.as_ref(), srt_passphrase, srt_pbkeylen)
                 .await;

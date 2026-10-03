@@ -1,7 +1,8 @@
 //! Native Linux TCP statistics for RTMP publishers and egress targets.
 //!
-//! The RTMP server/egress task owns the socket, so it can read `TCP_INFO` and
-//! `SO_MEMINFO` directly without spawning `ss` or matching address strings.
+//! RTMP ingress and egress sample socket-owned descriptors on their Compio
+//! owner threads. Both keep `TCP_INFO` and `SO_MEMINFO` tied to the live socket
+//! without spawning `ss` or matching address strings.
 
 use std::io;
 
@@ -450,20 +451,19 @@ fn collect_tcp_stats(socket: &tokio::net::TcpStream) -> io::Result<TcpReceiverSt
     collect_tcp_stats_by_fd(socket.as_raw_fd())
 }
 
-/// Same as [`collect_tcp_stats`] but takes a raw fd directly, for callers
-/// that own a non-Tokio socket (the RTMP egress fabric's non-blocking
-/// `std::net::TcpStream`/`rustls::StreamOwned` — see
-/// `RtmpConnection::raw_fd()`) and would otherwise have no way to reach
-/// `TCP_INFO` for that connection.
+/// Same as [`collect_tcp_stats`] but takes a caller-owned raw fd. RTMP ingress
+/// calls it on the Compio owner for the live socket; RTMP egress samples the
+/// descriptor held by `RtmpConnection`. Callers must keep the TCP descriptor
+/// valid for this call.
 #[cfg(target_os = "linux")]
 pub fn collect_tcp_stats_by_fd(fd: std::os::fd::RawFd) -> io::Result<TcpReceiverStats> {
     let mut info = LinuxTcpInfo::default();
     let mut info_len = std::mem::size_of::<LinuxTcpInfo>() as libc::socklen_t;
-    // SAFETY: getsockopt TCP_INFO fills a LinuxTcpInfo struct. `fd` is a
-    // valid socket from tokio. `info` is a stack-allocated default-zeroed
-    // struct of the correct size for the TCP_INFO option. `info_len` is
-    // correctly initialized to sizeof(LinuxTcpInfo) and may be updated
-    // by the kernel to the actual bytes written.
+    // SAFETY: getsockopt TCP_INFO fills a LinuxTcpInfo struct. The caller
+    // guarantees `fd` remains a valid TCP socket for this call. `info` is a
+    // stack-allocated default-zeroed struct of the correct size for the
+    // TCP_INFO option. `info_len` is initialized to sizeof(LinuxTcpInfo) and
+    // may be updated by the kernel to the actual bytes written.
     let result = unsafe {
         libc::getsockopt(
             fd,

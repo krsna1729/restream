@@ -99,10 +99,17 @@ jobs:
       - uses: ./.github/actions/ci-bootstrap
         with:
           node_version: '22'
-          system_deps_profile: build
+          npm_ci: 'true'
+          # `live`: release evidence runs the container smoke, whose SRT
+          # capability proof drives the live harness (FFmpeg and host tools).
+          system_deps_profile: live
           native_prefix: 'true'
           rust_cache: 'true'
       - uses: ./.github/actions/security-tools
+      - name: Build the live harness used by the container SRT proof
+        run: |
+          npm run build:frontend
+          ./scripts/build/bench-harness.sh
       - uses: actions/download-artifact@v8
         with:
           name: release-dist-${{ env.RELEASE_VERSION }}-${{ github.sha }}
@@ -175,6 +182,7 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" \
             dist/restream-"$GITHUB_REF_NAME"-oci.tar.gz \
+            dist/restream-"$GITHUB_REF_NAME"-seccomp.json \
             dist/restream-"$GITHUB_REF_NAME"-linux-x86_64.tar.gz \
             dist/restream-mcp-"$GITHUB_REF_NAME"-linux-x86_64.tar.gz \
             dist/test-harness-"$GITHUB_REF_NAME"-linux-x86_64.tar.gz \

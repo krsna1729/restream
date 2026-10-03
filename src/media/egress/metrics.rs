@@ -14,6 +14,181 @@ use crate::media::egress::command::ShardId;
 use crate::media::egress::lifecycle::LeafLifecycle;
 
 // ---------------------------------------------------------------------------
+// SRT family Owner observability
+// ---------------------------------------------------------------------------
+
+/// Low-cardinality view of one SRT address-family `Owner` on a shard. Fixed
+/// scalars only: collecting it allocates nothing and it never appears on a
+/// packet path. Counters are cumulative since the Owner was created; gauges
+/// are the value at collection time.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OwnerFamilyMetrics {
+    /// The shard has instantiated an Owner for this family.
+    pub present: bool,
+    /// The Owner latched a structural fault: it admits no new callers.
+    pub faulted: bool,
+    /// Receive datapath: `true` managed multishot, `false` readiness reader.
+    pub managed_rx: bool,
+    pub tx_capacity: u32,
+    pub tx_free: u32,
+    pub tx_high_water: u32,
+    pub tx_exhaustions: u64,
+    pub tx_in_flight: u32,
+    /// Attributed TX failure events dropped because the bounded queue filled.
+    pub tx_failures_dropped: u64,
+    pub rx_packets: u64,
+    pub rx_bytes: u64,
+    pub tx_packets: u64,
+    pub tx_bytes: u64,
+    /// Per-class breakdown of `tx_packets`, accumulated from the Owner's
+    /// per-visit `tx_class` deltas. `total()` always equals `tx_packets`;
+    /// DATA-first versus DATA-retransmit versus control is what packet-rate
+    /// work needs, and it cannot be derived from the total.
+    pub tx_class: srt_transport::compio::OwnerTxClassCounters,
+    /// UDP GSO coalescing: sends that carried several datagrams, and the
+    /// datagrams that joined a staged send (submissions saved). Coalescing
+    /// needs consecutive datagrams to one destination address.
+    pub tx_batching: srt_transport::compio::OwnerTxBatchingCounters,
+    pub tx_completed_ok: u64,
+    pub tx_short_sends: u64,
+    pub tx_failed_sends: u64,
+    pub tx_peer_local_failures: u64,
+    pub tx_transient_failures: u64,
+    /// Protocol output that could not be materialized (leg quarantined).
+    pub protocol_output_failures: u64,
+    pub service_visits: u64,
+    /// Wall time spent inside `Owner::service` (sum and worst single call),
+    /// measured once per ready batch -- never per packet or per leaf.
+    pub service_duration_sum_us: u64,
+    pub service_duration_max_us: u64,
+    /// Cumulative protocol-output (TX) actions charged to `max_actions`.
+    pub service_actions: u64,
+    /// Cumulative pool/lifecycle maintenance actions charged to
+    /// `max_maintenance_actions`; a separate axis from `service_actions`.
+    pub maintenance_actions: u64,
+    /// Bonded callers retired because a leg answered from another remote
+    /// receiving group. Cumulative; the ids live in the warning log only.
+    pub peer_group_collisions: u64,
+    pub service_budget_exhausted: u64,
+    pub caller_in_flight: u32,
+    pub caller_queued: u32,
+    /// Highest caller-pool in-flight / queued depth seen at any ready batch
+    /// (a gauge sampled at 1 Hz would miss a millisecond-scale burst), and the
+    /// longest continuous period the queue was non-empty.
+    pub caller_in_flight_hwm: u32,
+    pub caller_queued_hwm: u32,
+    pub caller_queue_longest_us: u64,
+    pub caller_expired: u64,
+    pub caller_failed: u64,
+    pub caller_cancelled: u64,
+    pub rx_ring_depth: u32,
+    pub rx_ring_dropped: u64,
+    /// Provided-buffer exhaustion events, not discarded datagrams.
+    pub rx_buffer_exhaustions: u64,
+    pub rx_truncated: u64,
+}
+
+// ---------------------------------------------------------------------------
+// Delivery service quality (input to shard sizing)
+// ---------------------------------------------------------------------------
+
+/// A shard is saturated when at least `SATURATED_MIN_PRESSURED_LEAVES` of the
+/// leaves one full sweep visited, and at least a quarter of them, were
+/// backpressured or stalled: the shard, not one destination, is behind. The
+/// minimum is on pressured leaves, not on population, so one stuck
+/// destination on a small shard (1 of 4) is still recycled.
+const SATURATED_SHARE_DENOMINATOR: usize = 4;
+const SATURATED_MIN_PRESSURED_LEAVES: usize = 4;
+
+pub(crate) fn shard_saturated(visited: usize, pressured: usize) -> bool {
+    pressured >= SATURATED_MIN_PRESSURED_LEAVES
+        && pressured * SATURATED_SHARE_DENOMINATOR >= visited
+}
+
+/// What one full stall sweep saw across a shard's outputs: how many closed a
+/// delivery window, how many of those fell under the delivery floor, and the
+/// sums needed to combine shards into one fairness index. Fixed scalars; the
+/// sweep that already visits every leaf at ~1 Hz fills it, so it adds nothing
+/// to a packet path.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ShardService {
+    /// Leaves the sweep visited.
+    pub visited: u32,
+    /// Of those, backpressured or stalled.
+    pub pressured: u32,
+    /// `shard_saturated(visited, pressured)`.
+    pub saturated: bool,
+    /// Leaves with a closed delivery window (a ratio to judge).
+    pub rated: u32,
+    /// Rated leaves delivering under `DELIVERY_FLOOR` of what was offered.
+    pub under_floor: u32,
+    /// `Σ delivery_ratio` and `Σ delivery_ratio²` over rated leaves: Jain's
+    /// index across shards is `(Σx)² / (n·Σx²)` on the summed values.
+    pub sum_ratio: f64,
+    pub sum_sq_ratio: f64,
+    /// `Σ offered_bps` over rated leaves.
+    pub offered_bps: f64,
+    pub delivered_bps: f64,
+    pub completed_at: Option<Instant>,
+}
+
+/// Collects one sweep's leaves into a [`ShardService`].
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ServiceAccumulator {
+    summary: ShardService,
+    remaining: usize,
+}
+
+impl ServiceAccumulator {
+    pub(crate) fn invalidate(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Keep the sweep bounded, but retain its totals over the entire rotation.
+    pub(crate) fn begin(&mut self, population: usize) -> usize {
+        if self.remaining == 0 {
+            self.summary = ShardService::default();
+            self.remaining = population;
+        }
+        self.remaining.min(256)
+    }
+
+    pub(crate) fn add(&mut self, pressured: bool, delivery: Option<(f64, f64)>) {
+        if self.remaining == 0 {
+            return;
+        }
+        self.remaining -= 1;
+        let summary = &mut self.summary;
+        summary.visited += 1;
+        summary.pressured += u32::from(pressured);
+        if let Some((ratio, offered)) = delivery
+            && ratio.is_finite()
+            && ratio >= 0.0
+            && offered.is_finite()
+            && offered > 0.0
+        {
+            summary.rated += 1;
+            summary.under_floor +=
+                u32::from(ratio < crate::media::egress::delivery::DELIVERY_FLOOR);
+            summary.sum_ratio += ratio;
+            summary.sum_sq_ratio += ratio * ratio;
+            summary.offered_bps += offered;
+            summary.delivered_bps += ratio * offered;
+        }
+    }
+
+    pub(crate) fn finish(&mut self, now: Instant) -> Option<ShardService> {
+        if self.remaining > 0 || self.summary.visited == 0 {
+            return None;
+        }
+        let mut summary = std::mem::take(&mut self.summary);
+        summary.saturated = shard_saturated(summary.visited as usize, summary.pressured as usize);
+        summary.completed_at = Some(now);
+        Some(summary)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ShardMetrics
 // ---------------------------------------------------------------------------
 
@@ -22,16 +197,6 @@ use crate::media::egress::lifecycle::LeafLifecycle;
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ShardMetrics {
     pub shard_id: Option<ShardId>,
-
-    // --- Leaf counts ---
-    /// Total leaves currently assigned to this shard.
-    pub leaves_total: u32,
-    /// Leaves in each lifecycle state (indexed by ordinal — filled at publish
-    /// time from the actual slab in Phase 3).
-    pub leaves_active: u32,
-    pub leaves_connecting: u32,
-    pub leaves_retry_wait: u32,
-    pub leaves_closing: u32,
 
     // --- Ready queue ---
     /// Current depth of the ready queue.
@@ -60,10 +225,6 @@ pub struct ShardMetrics {
     /// Sum of loop durations for latency percentile computation (Phase 3).
     pub loop_duration_sum_us: u64,
 
-    // --- Connect / handshake concurrency ---
-    pub concurrent_connects: u32,
-    pub concurrent_handshakes: u32,
-
     // --- Retry ---
     pub retry_events: u64,
 
@@ -72,6 +233,46 @@ pub struct ShardMetrics {
     pub driver_budget_violations: u64,
     /// Total wall time spent in overrunning advance() calls.
     pub driver_overrun_us: u64,
+
+    // --- Backend transport counters ---
+    pub rx_packets: u64,
+    pub rx_bytes: u64,
+    pub tx_packets: u64,
+    pub tx_bytes: u64,
+    /// Completion events the shard consumed: readiness notifications that
+    /// Compio worker tasks send after their io_uring operations complete, not
+    /// raw io_uring CQEs (one notification can follow several CQEs).
+    pub cqes: u64,
+    pub sqes: u64,
+    pub ready_visits: u64,
+    pub budget_exhaustions: u64,
+    pub stale_completions: u64,
+    pub rx_pool_empty: u64,
+    pub tx_pool_empty: u64,
+    pub send_zc_attempts: u64,
+    pub send_zc_fallbacks: u64,
+    pub cq_overflows: u64,
+    pub ready_overflows: u64,
+    /// Bounded backend work queues rejected an enqueue. A nonzero value is
+    /// an overload or scheduler-invariant signal, never permission to grow.
+    pub queue_overflows: u64,
+
+    // --- SRT Compio Owners (index 0 = IPv4, 1 = IPv6) ---
+    pub srt_owners: [OwnerFamilyMetrics; 2],
+    /// The shard's Compio runtime is io_uring (vs Poll).
+    pub srt_runtime_io_uring: bool,
+    /// The shard's runtime provides the full managed-RX substrate (Owners
+    /// under `ManagedPreferred` select managed multishot only when true).
+    pub srt_managed_rx_available: bool,
+    /// Owner teardowns that missed their quiescence bound.
+    pub srt_owner_shutdown_incomplete: u64,
+
+    /// Last completed stall sweep's delivery summary (see [`ShardService`]).
+    pub service: ShardService,
+    /// CPU time consumed by the shard thread, cumulative; sampled about once a
+    /// second. Zero until first sampled or where the clock is unavailable.
+    pub thread_cpu_ns: u64,
+    pub thread_cpu_at: Option<Instant>,
 
     /// Time this snapshot was collected.
     pub collected_at: Option<Instant>,
@@ -296,13 +497,60 @@ mod tests {
     }
 
     #[test]
-    fn metric_names_not_empty() {
-        // Smoke-check that constants are non-empty (catches accidental blanks).
-        assert!(!names::LEAF_PENDING_BYTES.is_empty());
-        assert!(!names::DRIVER_BUDGET_VIOLATIONS.is_empty());
-        assert!(!names::FEED_RETAINED_MEDIA_AGE_MS.is_empty());
-        assert!(!names::FEED_OVERSIZED_UNITS.is_empty());
-        assert!(!names::LEAF_BYTES_SENT.is_empty());
-        assert!(!names::LEAF_BYTES_DISCARDED.is_empty());
+    fn service_sampling_preserves_delivery_and_isolates_one_slow_peer() {
+        let mut sample = ServiceAccumulator::default();
+        let now = Instant::now();
+        assert_eq!(sample.begin(4), 4);
+        sample.add(true, Some((0.1, 100.0)));
+        for _ in 0..3 {
+            sample.add(false, Some((1.0, 100.0)));
+        }
+        let summary = sample.finish(now).unwrap();
+        assert_eq!((summary.rated, summary.under_floor), (4, 1));
+        assert_eq!(summary.offered_bps, 400.0);
+        assert_eq!(summary.delivered_bps, 310.0);
+        assert!(!summary.saturated);
+        assert!(sample.finish(now).is_none());
+        assert!(shard_saturated(16, 4));
+        assert!(!shard_saturated(4, 1));
+        assert!(!shard_saturated(100, 24));
+        assert!(shard_saturated(100, 25));
+        assert!(!shard_saturated(3, 3));
+    }
+
+    #[test]
+    fn service_rotation_covers_large_populations_and_restarts_on_membership_change() {
+        let now = Instant::now();
+        let mut sample = ServiceAccumulator::default();
+        assert_eq!(sample.begin(300), 256);
+        for _ in 0..256 {
+            sample.add(false, Some((1.0, 100.0)));
+        }
+        assert!(
+            sample.finish(now).is_none(),
+            "a bounded batch is not the whole population"
+        );
+        assert_eq!(sample.begin(300), 44);
+        for _ in 0..44 {
+            sample.add(false, Some((1.0, 100.0)));
+        }
+        let summary = sample.finish(now).unwrap();
+        assert_eq!(summary.rated, 300);
+        assert_eq!(summary.delivered_bps, 30_000.0);
+        assert_eq!(summary.completed_at, Some(now));
+        sample.begin(300);
+        for _ in 0..256 {
+            sample.add(false, Some((1.0, 100.0)));
+        }
+        sample.invalidate();
+        assert_eq!(sample.begin(2), 2);
+        for _ in 0..2 {
+            sample.add(false, Some((1.0, 200.0)));
+        }
+        assert_eq!(
+            sample.finish(now).unwrap().delivered_bps,
+            400.0,
+            "retired leaves cannot leak into the next rotation"
+        );
     }
 }

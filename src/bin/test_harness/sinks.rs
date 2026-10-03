@@ -29,6 +29,47 @@ pub(crate) struct GeneralizedSinkMetrics {
     pub(crate) packets: Mutex<Vec<SinkPacket>>,
     pub(crate) video_codec: Mutex<Option<String>>,
     pub(crate) audio_codec: Mutex<Option<String>>,
+    /// Record per-packet history and codecs (correctness probes). Scale runs
+    /// use `counting_only`: a shared, ever-growing history behind one mutex
+    /// would make the sink, not Restream, the bottleneck.
+    pub(crate) record_packets: bool,
+    /// Cumulative wire bytes read per accepted connection, in accept order.
+    pub(crate) per_connection: Mutex<Vec<Arc<AtomicU64>>>,
+}
+
+/// Removes a connection's byte counter when its handler returns, so a closed
+/// connection stops counting as a destination.
+struct ConnectionCounter<'a> {
+    metrics: &'a GeneralizedSinkMetrics,
+    bytes: &'a Arc<AtomicU64>,
+}
+
+impl Drop for ConnectionCounter<'_> {
+    fn drop(&mut self) {
+        self.metrics
+            .per_connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|bytes| !Arc::ptr_eq(bytes, self.bytes));
+    }
+}
+
+impl GeneralizedSinkMetrics {
+    pub(crate) fn counting_only() -> Self {
+        Self {
+            record_packets: false,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn per_connection_bytes(&self) -> Vec<u64> {
+        self.per_connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|bytes| bytes.load(Ordering::Relaxed))
+            .collect()
+    }
 }
 
 impl Default for GeneralizedSinkMetrics {
@@ -44,6 +85,8 @@ impl Default for GeneralizedSinkMetrics {
             packets: Mutex::new(Vec::new()),
             video_codec: Mutex::new(None),
             audio_codec: Mutex::new(None),
+            record_packets: true,
+            per_connection: Mutex::new(Vec::new()),
         }
     }
 }
@@ -123,15 +166,32 @@ impl GeneralizedSinkMetrics {
     }
 }
 
-async fn handle_generalized_sink_client(
-    mut socket: TcpStream,
+async fn handle_generalized_sink_client<S>(
+    mut socket: S,
     metrics: Arc<GeneralizedSinkMetrics>,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+{
     metrics.connections.fetch_add(1, Ordering::Relaxed);
+    let wire_bytes = Arc::new(AtomicU64::new(0));
+    metrics
+        .per_connection
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(wire_bytes.clone());
+    let _registered = ConnectionCounter {
+        metrics: &metrics,
+        bytes: &wire_bytes,
+    };
     let mut handshake = Handshake::new(PeerType::Server);
-    let mut buffer = vec![0u8; 8_192];
+    let mut buffer = vec![0u8; 64 * 1024];
     let remaining = loop {
-        let n = socket.read(&mut buffer).await.map_err(|e| e.to_string())?;
+        let n = socket
+            .read(&mut buffer)
+            .await
+            .map_err(|error| format!("RTMP handshake read: {error}"))?;
+        wire_bytes.fetch_add(n as u64, Ordering::Relaxed);
         if n == 0 {
             return Err("socket closed during handshake".to_string());
         }
@@ -169,10 +229,14 @@ async fn handle_generalized_sink_client(
     }
 
     loop {
-        let n = socket.read(&mut buffer).await.map_err(|e| e.to_string())?;
+        let n = socket
+            .read(&mut buffer)
+            .await
+            .map_err(|error| format!("RTMP session read: {error}"))?;
         if n == 0 {
             return Ok(());
         }
+        wire_bytes.fetch_add(n as u64, Ordering::Relaxed);
         let results = session
             .handle_input(&buffer[..n])
             .map_err(|e| format!("{e:?}"))?;
@@ -180,12 +244,15 @@ async fn handle_generalized_sink_client(
     }
 }
 
-async fn write_generalized_sink_results(
-    socket: &mut TcpStream,
+async fn write_generalized_sink_results<S>(
+    socket: &mut S,
     session: &mut ServerSession,
     results: Vec<ServerSessionResult>,
     metrics: &GeneralizedSinkMetrics,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    S: tokio::io::AsyncWrite + Unpin + Send,
+{
     let mut pending: VecDeque<_> = results.into();
     while let Some(result) = pending.pop_front() {
         match result {
@@ -208,6 +275,18 @@ async fn write_generalized_sink_results(
                         .map_err(|e| format!("{e:?}"))?;
                     metrics.publishing.fetch_add(1, Ordering::Relaxed);
                     pending.extend(accepted.drain(..));
+                }
+                ServerSessionEvent::VideoDataReceived { data, .. } if !metrics.record_packets => {
+                    metrics.messages.fetch_add(1, Ordering::Relaxed);
+                    metrics
+                        .bytes
+                        .fetch_add(data.len() as u64, Ordering::Relaxed);
+                }
+                ServerSessionEvent::AudioDataReceived { data, .. } if !metrics.record_packets => {
+                    metrics.messages.fetch_add(1, Ordering::Relaxed);
+                    metrics
+                        .bytes
+                        .fetch_add(data.len() as u64, Ordering::Relaxed);
                 }
                 ServerSessionEvent::VideoDataReceived {
                     data, timestamp, ..
@@ -344,6 +423,23 @@ fn set_socket_recv_buffer(socket: &TcpStream, size: libc::c_int) -> Result<(), S
     }
 }
 
+fn rtmps_test_acceptor(
+    cert_path: &std::path::Path,
+    key_path: &std::path::Path,
+) -> Result<tokio_rustls::TlsAcceptor, String> {
+    use rustls_pki_types::pem::PemObject;
+
+    let cert = rustls_pki_types::CertificateDer::from_pem_file(cert_path)
+        .map_err(|error| format!("read RTMPS test certificate: {error}"))?;
+    let key = rustls_pki_types::PrivateKeyDer::from_pem_file(key_path)
+        .map_err(|error| format!("read RTMPS test key: {error}"))?;
+    let config = tokio_rustls::rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert], key)
+        .map_err(|error| format!("configure RTMPS test server: {error}"))?;
+    Ok(tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config)))
+}
+
 pub(crate) async fn start_generalized_sink_server(
     sink_port: u16,
     metrics: Arc<GeneralizedSinkMetrics>,
@@ -380,13 +476,72 @@ pub(crate) async fn start_generalized_sink_server(
         reader_handles,
     })
 }
+pub(crate) async fn start_generalized_rtmps_sink_server(
+    sink_port: u16,
+    cert_path: &std::path::Path,
+    key_path: &std::path::Path,
+    metrics: Arc<GeneralizedSinkMetrics>,
+) -> Result<GeneralizedSinkServer, String> {
+    let acceptor = rtmps_test_acceptor(cert_path, key_path)?;
+    let listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
+        .await
+        .map_err(|error| format!("RTMPS sink bind {sink_port}: {error}"))?;
+    let cancel = CancellationToken::new();
+    let reader_handles: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let reader_handles_inner = reader_handles.clone();
+    let metrics_inner = metrics.clone();
+    let cancel_inner = cancel.clone();
+    let task = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                result = listener.accept() => {
+                    if let Ok((socket, _)) = result {
+                        let acceptor = acceptor.clone();
+                        let metrics = metrics_inner.clone();
+                        let handle = tokio::spawn(async move {
+                            let socket = match acceptor.accept(socket).await {
+                                Ok(socket) => socket,
+                                Err(error) => {
+                                    eprintln!("RTMPS sink TLS handshake failed: {error}");
+                                    return;
+                                }
+                            };
+                            let (_, tls) = socket.get_ref();
+                            eprintln!(
+                                "RTMPS sink negotiated TLS {:?} {:?}",
+                                tls.protocol_version(),
+                                tls.negotiated_cipher_suite().map(|suite| suite.suite())
+                            );
+                            if let Err(error) =
+                                handle_generalized_sink_client(socket, metrics).await
+                            {
+                                eprintln!("RTMPS sink RTMP session failed: {error}");
+                            }
+                        });
+                        reader_handles_inner.lock().unwrap().push(handle);
+                    }
+                }
+                _ = cancel_inner.cancelled() => break,
+            }
+        }
+    });
 
-async fn handle_stalled_rtmp_sink_client(
-    mut socket: TcpStream,
+    Ok(GeneralizedSinkServer {
+        cancel,
+        task,
+        reader_handles,
+    })
+}
+
+async fn handle_stalled_rtmp_sink_client<S>(
+    mut socket: S,
     publish_accepted: Arc<std::sync::atomic::AtomicBool>,
     cancel: CancellationToken,
-) -> Result<(), String> {
-    let _ = set_socket_recv_buffer(&socket, 4 * 1024);
+) -> Result<(), String>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+{
     let mut handshake = Handshake::new(PeerType::Server);
     let mut buffer = vec![0u8; 8_192];
     let remaining = loop {
@@ -497,10 +652,70 @@ pub(crate) async fn start_stalled_rtmp_sink_server(
             tokio::select! {
                 result = listener.accept() => {
                     if let Ok((socket, _)) = result {
+                        let _ = set_socket_recv_buffer(&socket, 4 * 1024);
                         let accepted = publish_accepted_inner.clone();
                         let cancel_client = cancel_inner.clone();
                         tokio::spawn(async move {
                             let _ = handle_stalled_rtmp_sink_client(socket, accepted, cancel_client).await;
+                        });
+                    }
+                }
+                _ = cancel_inner.cancelled() => break,
+            }
+        }
+    });
+
+    Ok(StalledRtmpSinkServer {
+        cancel,
+        task,
+        publish_accepted,
+    })
+}
+pub(crate) async fn start_stalled_rtmps_sink_server(
+    sink_port: u16,
+    cert_path: &std::path::Path,
+    key_path: &std::path::Path,
+) -> Result<StalledRtmpSinkServer, String> {
+    let acceptor = rtmps_test_acceptor(cert_path, key_path)?;
+    let listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
+        .await
+        .map_err(|error| format!("RTMPS stall sink bind {sink_port}: {error}"))?;
+    let cancel = CancellationToken::new();
+    let cancel_inner = cancel.clone();
+    let publish_accepted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let publish_accepted_inner = publish_accepted.clone();
+    let task = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                result = listener.accept() => {
+                    if let Ok((socket, _)) = result {
+                        let _ = set_socket_recv_buffer(&socket, 4 * 1024);
+                        let acceptor = acceptor.clone();
+                        let accepted = publish_accepted_inner.clone();
+                        let cancel_client = cancel_inner.clone();
+                        tokio::spawn(async move {
+                            let socket = match acceptor.accept(socket).await {
+                                Ok(socket) => socket,
+                                Err(error) => {
+                                    eprintln!("RTMPS stalled sink TLS handshake failed: {error}");
+                                    return;
+                                }
+                            };
+                            let (_, tls) = socket.get_ref();
+                            eprintln!(
+                                "RTMPS stalled sink negotiated TLS {:?} {:?}",
+                                tls.protocol_version(),
+                                tls.negotiated_cipher_suite().map(|suite| suite.suite())
+                            );
+                            if let Err(error) = handle_stalled_rtmp_sink_client(
+                                socket,
+                                accepted,
+                                cancel_client,
+                            )
+                            .await
+                            {
+                                eprintln!("RTMPS stalled sink RTMP session failed: {error}");
+                            }
                         });
                     }
                 }

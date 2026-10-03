@@ -9,7 +9,7 @@ use crate::media::egress::manager::{
     EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome,
 };
 use crate::media::egress::runtime::{
-    EgressFabricRuntime, EgressFabricRuntimeError, spawn_fabric_wake_watcher,
+    EgressFabricRuntime, EgressFabricRuntimeError, subscribe_fabric_wakes,
 };
 use crate::media::egress::shard::EgressShardGroupError;
 #[cfg(test)]
@@ -41,26 +41,25 @@ impl MediaEngine {
             let config = &self.config.egress_fabric;
             let target_source = SharedPipelineTargetSource::new();
             let group = spawn_pipeline_fabric_shard_group(
-                config.shard_count(),
+                std::num::NonZeroU32::MIN,
                 config.shard_config(),
                 config.work_budget(),
                 target_source.clone(),
                 |_| feed.clone_reader(),
             )
             .map_err(PipelineFabricEnsureError::Spawn)?;
-            let manager_config =
-                EgressManagerConfig::new(config.shards, config.command_channel_capacity)
-                    .expect("egress fabric manager config is clamped nonzero");
+            let manager_config = EgressManagerConfig::new(1, config.command_channel_capacity)
+                .expect("egress fabric manager config is clamped nonzero");
             let runtime = EgressFabricRuntime::new(manager_config, group)
                 .map_err(PipelineFabricEnsureError::Runtime)?;
 
             // Pipeline leaves have no poller either (see
             // `retain_sink_fabric_runtime`'s identical comment), so this is
             // their only readiness signal too.
-            let watcher = spawn_fabric_wake_watcher(
+            let wakes = subscribe_fabric_wakes(
                 "pipeline",
                 feed_id.clone(),
-                feed.clone_reader(),
+                feed,
                 runtime.feed_wake_handles(),
             );
 
@@ -69,7 +68,7 @@ impl MediaEngine {
             registry
                 .target_sources
                 .insert(feed_id.clone(), target_source);
-            registry.feed_watchers.insert(feed_id.clone(), watcher);
+            registry.feed_wakes.insert(feed_id.clone(), wakes);
             registry.feeds.insert(feed_id.clone(), feed.clone_reader());
             true
         };
@@ -157,13 +156,18 @@ impl MediaEngine {
         let result = runtime.rescale(
             crate::config::EgressShardProfile::OutputCount,
             effective_cpus,
+            crate::media::egress::runtime::ResizeReason::Remove,
             shard_config,
             |_shard_id| {
-                Ok::<_, std::convert::Infallible>(PipelineShardBackend::new(
-                    feed.clone_reader(),
-                    budget,
-                    target_source.clone(),
-                ))
+                let feed = feed.clone_reader();
+                let target_source = target_source.clone();
+                let leaf_capacity = shard_config.leaf_capacity().get();
+                move || {
+                    Ok::<_, std::convert::Infallible>(
+                        PipelineShardBackend::new(feed, budget, target_source)
+                            .with_leaf_capacity(leaf_capacity),
+                    )
+                }
             },
         );
         match result {
@@ -188,9 +192,7 @@ impl MediaEngine {
             registry.active_outputs.remove(feed_id);
             registry.target_sources.remove(feed_id);
             registry.feeds.remove(feed_id);
-            if let Some(watcher) = registry.feed_watchers.remove(feed_id) {
-                watcher.abort();
-            }
+            registry.feed_wakes.remove(feed_id);
             registry.runtimes.remove(feed_id)
         };
 
@@ -236,9 +238,7 @@ impl MediaEngine {
             let mut registry = self.fabric.pipeline.lock().await;
             registry.active_outputs.clear();
             registry.target_sources.clear();
-            for watcher in registry.feed_watchers.drain() {
-                watcher.1.abort();
-            }
+            registry.feed_wakes.clear();
             std::mem::take(&mut registry.runtimes)
         };
         let count = runtimes.len();

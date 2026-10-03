@@ -19,6 +19,8 @@ examples:
 
 notes:
   - BENCH_BUILD controls build behavior: always|if-needed|never
+  - RESTREAM_BENCH_FEATURES passes optional Cargo features to the bench build
+    (for WI3.7 use RESTREAM_BENCH_FEATURES=wi37-shard-bench)
   - default BENCH_BUILD=if-needed rebuilds when src/, Cargo.toml, build.rs,
     or rust-toolchain.toml is newer than target/bench/test_harness
 EOF
@@ -33,7 +35,9 @@ needs_bench_rebuild() {
   local stamp
   stamp=$(stat -c '%Y' "$bin")
   local newest
-  newest=$(find src scripts test/harness Cargo.toml build.rs rust-toolchain.toml \
+  # Workspace crates and the lockfile are build inputs too: a stale bench pair
+  # must not be able to masquerade as a fresh build of the current tree.
+  newest=$(find src scripts test/harness crates Cargo.toml Cargo.lock build.rs rust-toolchain.toml \
     -type f -not -path '*/target/*' -printf '%T@\n' 2>/dev/null | sort -nr | head -n1)
   if [[ -z "$newest" ]]; then
     return 1
@@ -81,7 +85,9 @@ case "$build_mode" in
   0|false|FALSE|never)
     ;;
   if-needed)
-    if needs_bench_rebuild "$bin"; then
+    if [[ -n "${RESTREAM_BENCH_FEATURES:-}" ]]; then
+      ./scripts/build/bench-harness.sh
+    elif needs_bench_rebuild "$bin"; then
       ./scripts/build/bench-harness.sh
     fi
     ;;

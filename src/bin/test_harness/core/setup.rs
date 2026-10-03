@@ -106,8 +106,8 @@ pub(crate) fn command_with_optional_cgroup(program: impl AsRef<OsStr>, scope: &s
     command
 }
 
-pub(crate) const MEDIAMTX_CONFIG_ENV_NAMES: [&str; 4] =
-    ["MTX_RTMP", "MTX_SRT", "MTX_HLS", "MTX_API"];
+pub(crate) const MEDIAMTX_CONFIG_ENV_NAMES: [&str; 5] =
+    ["MTX_RTMP", "MTX_RTMPS", "MTX_SRT", "MTX_HLS", "MTX_API"];
 
 pub(crate) fn remove_mediamtx_config_env(command: &mut Command) -> &mut Command {
     for name in MEDIAMTX_CONFIG_ENV_NAMES {

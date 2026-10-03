@@ -589,6 +589,13 @@ fn engine_publishes_a_raw_keyframe_once_publish_is_accepted() {
             budget(),
         );
         match progress {
+            // The peer closes right after reporting the video; that close is
+            // only unexpected if the video never arrived.
+            EngineProgress::Failed(_) | EngineProgress::PeerClosed
+                if video_rx.recv_timeout(Duration::from_millis(100)).is_ok() =>
+            {
+                break;
+            }
             EngineProgress::Failed(failure) => panic!("engine failed: {failure:?}"),
             EngineProgress::PeerClosed => panic!("peer closed unexpectedly"),
             _ => thread::sleep(Duration::from_millis(1)),

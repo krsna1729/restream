@@ -111,6 +111,40 @@ fn ring_feed_reads_pushed_packets() {
 }
 
 #[test]
+fn offered_bytes_follow_ring_replacement_and_later_publications() {
+    let old = Arc::new(RingBuffer::new(8));
+    let replacement = Arc::new(RingBuffer::new(16));
+    let feed = RingFeed::new(old.clone(), Arc::new(FeedEpoch::new()));
+    push_packet(&old, b"old", true);
+    assert_eq!(feed.published_bytes(), 3);
+    old.seal_and_forward(replacement.clone());
+    push_packet(&replacement, b"new-payload", true);
+    assert_eq!(feed.published_bytes(), 11);
+    push_packet(&replacement, b"tail", false);
+    assert_eq!(feed.published_bytes(), 15);
+}
+
+#[test]
+fn ring_feed_reuses_caller_owned_batch_storage() {
+    let ring = Arc::new(RingBuffer::new(16));
+    let epoch = Arc::new(FeedEpoch::new());
+    push_packet(&ring, b"first", true);
+    push_packet(&ring, b"second", false);
+
+    let feed = RingFeed::new(ring, epoch);
+    let mut units = Vec::with_capacity(4);
+    let storage = units.as_ptr();
+    let result = feed.read_from_into(FeedCursor::new(0, 0), ReadBudget::default(), &mut units);
+
+    assert!(
+        matches!(result, FeedRead::Units { next_cursor, .. } if next_cursor.next_sequence == 2)
+    );
+    assert_eq!(units.len(), 2);
+    assert_eq!(units.as_ptr(), storage);
+    assert_eq!(&*units[1].payload, b"second");
+}
+
+#[test]
 fn ring_feed_epoch_mismatch() {
     let ring = Arc::new(RingBuffer::new(16));
     let epoch = Arc::new(FeedEpoch::new());
@@ -135,6 +169,72 @@ fn ring_feed_head_sequence_matches_write_idx() {
     assert_eq!(feed.head_sequence(), 1);
     push_packet(&ring, b"b", false);
     assert_eq!(feed.head_sequence(), 2);
+}
+
+#[test]
+fn ring_feed_follows_grown_ring_for_reads_and_wakes() {
+    #[derive(Default)]
+    struct CountingWake(std::sync::atomic::AtomicUsize);
+    impl crate::media::ring_buffer::PublishWake for CountingWake {
+        fn wake(&self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    let wakes = |counter: &CountingWake| counter.0.load(std::sync::atomic::Ordering::Relaxed);
+
+    let old_ring = Arc::new(RingBuffer::new(4));
+    push_packet(&old_ring, b"before-grow-keyframe", true);
+    push_packet(&old_ring, b"before-grow-tail", false);
+    let feed = RingFeed::new(old_ring.clone(), Arc::new(FeedEpoch::new()));
+    let old_head = feed.head_sequence();
+
+    let counter = Arc::new(CountingWake::default());
+    assert!(Arc::ptr_eq(&feed.publication_ring(), &old_ring));
+    feed.publication_ring()
+        .publication_subscribers()
+        .subscribe(counter.clone());
+
+    let grown_ring = Arc::new(RingBuffer::new_continuing(16, old_head as usize));
+    assert_eq!(grown_ring.seed_readable_tail_from(&old_ring), 2);
+    old_ring.seal_and_forward(grown_ring.clone());
+    assert_eq!(
+        wakes(&counter),
+        1,
+        "sealing the old ring must wake its subscribers"
+    );
+
+    assert!(Arc::ptr_eq(&feed.publication_ring(), &grown_ring));
+    push_packet(&grown_ring, b"after-grow-read", false);
+    assert_eq!(
+        wakes(&counter),
+        2,
+        "the replacement ring must inherit the subscribers"
+    );
+
+    assert_eq!(feed.head_sequence(), old_head + 1);
+    assert_eq!(feed.retention_snapshot().head_sequence, old_head + 1);
+    assert_eq!(feed.latest_sync_point(), Some(FeedCursor::new(0, 0)));
+    match feed.read_from(FeedCursor::new(0, old_head), ReadBudget::default()) {
+        FeedRead::Units { units, next_cursor } => {
+            assert_eq!(next_cursor.next_sequence, old_head + 1);
+            assert_eq!(&*units[0].payload, b"after-grow-read");
+        }
+        other => panic!("expected post-resize packet, got {other:?}"),
+    }
+
+    push_packet(&grown_ring, b"after-grow-reused-read", false);
+    let mut units = Vec::new();
+    let result = feed.read_from_into(
+        FeedCursor::new(0, old_head + 1),
+        ReadBudget::default(),
+        &mut units,
+    );
+    assert!(matches!(
+        result,
+        FeedRead::Units { next_cursor, .. }
+            if next_cursor.next_sequence == old_head + 2
+    ));
+    assert_eq!(&*units[0].payload, b"after-grow-reused-read");
 }
 
 #[test]
@@ -536,43 +636,26 @@ fn overrun_stats_accumulate() {
 // Watcher wake pattern (regression for the live delivery stall)
 // -----------------------------------------------------------------------
 
-/// Regression for a live SRT fabric stall: a bare `notify.notified().await`
-/// loop only wakes on notifications delivered *after* the await begins, so
-/// a publish that lands before the watcher's first poll is invisible to it
-/// — the watcher then waits for some future, unrelated push that may never
-/// come. The fix mirrors `Reader::wait_for_data`'s check-register-recheck
-/// pattern: read the head, then check again after registering interest
-/// (here: simply before ever awaiting), so an already-published head is
-/// observed on the very first pass with no wait at all.
+/// First-pass regression for the live fabric watcher: a publication that
+/// lands before the task is polled must be observed without waiting for a
+/// later notification.
 #[tokio::test]
 async fn feed_watcher_pattern_observes_publish_that_landed_before_first_poll() {
     let ring = Arc::new(RingBuffer::new(16));
     let epoch = Arc::new(FeedEpoch::new());
     let feed = RingFeed::new(ring.clone(), epoch);
-
-    // Publish happens fully before the watcher ever runs — the exact shape
-    // of the live bug (muxer stage publishes its first burst before the
-    // watcher task gets its first poll).
     push_packet(&ring, b"already-published", true);
 
     let last_head = 0u64;
     let current_head = feed.head_sequence();
-
-    // The safe pattern: compare heads first; only await notified() if
-    // nothing changed. A bare `notify().await` loop has no such check and
-    // would instead block here waiting for a notification that already
-    // fired and was missed.
     assert_ne!(
         current_head, last_head,
         "watcher must observe the pre-existing publish without waiting"
     );
 }
 
-/// End-to-end shape of the fix: even when the publish genuinely races the
-/// watcher's registration (arrives while it is checking, not before), the
-/// recheck-after-register step still catches it deterministically because
-/// registration and the recheck happen in the same synchronous step with no
-/// `.await` between them.
+/// Register the notification waiter before rechecking the head, closing the
+/// lost-wakeup gap when a publish races the watcher's registration.
 #[tokio::test]
 async fn feed_watcher_pattern_registers_before_recheck_closing_the_race_window() {
     let ring = Arc::new(RingBuffer::new(16));
@@ -581,17 +664,15 @@ async fn feed_watcher_pattern_registers_before_recheck_closing_the_race_window()
     let notify = ring.get_notify();
 
     let mut last_head = feed.head_sequence();
-    // Step 1: register interest (create the Notified future) BEFORE the
-    // recheck, exactly as the fixed watcher does.
     let notified = notify.notified();
-    // Step 2: a publish "races" here, landing between registration and the
-    // recheck below.
+    tokio::pin!(notified);
+    notified.as_mut().enable();
     push_packet(&ring, b"raced-publish", true);
-    // Step 3: recheck — must observe the race without needing `notified`
-    // to fire, because the head comparison alone already closes the gap.
     let current_head = feed.head_sequence();
     if current_head == last_head {
-        notified.await;
+        tokio::time::timeout(std::time::Duration::from_secs(1), notified)
+            .await
+            .expect("registered waiter must receive the racing publish");
     }
     last_head = feed.head_sequence();
 

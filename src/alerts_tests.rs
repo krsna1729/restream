@@ -8,7 +8,7 @@ use serde_json::json;
 fn snapshot_with_pipeline(pipeline_id: &str, input_status: &str) -> serde_json::Value {
     json!({
         "generatedAt": "2026-06-25T00:00:00Z",
-        "srtListener": { "udpDrops": 0 },
+        "srtListener": { "bondingAvailable": true },
         "pipelines": {
             pipeline_id: {
                 "input": {
@@ -74,7 +74,7 @@ fn publisher_absent_yields_critical_alert() {
 fn reader_lag_above_threshold_yields_warning() {
     let snap = json!({
         "generatedAt": "2026-06-25T00:00:00Z",
-        "srtListener": { "udpDrops": 0 },
+        "srtListener": { "bondingAvailable": true },
         "pipelines": {
             "pipe1": {
                 "input": {
@@ -98,7 +98,7 @@ fn reader_lag_above_threshold_yields_warning() {
 fn reader_lag_below_threshold_yields_no_alert() {
     let snap = json!({
         "generatedAt": "2026-06-25T00:00:00Z",
-        "srtListener": { "udpDrops": 0 },
+        "srtListener": { "bondingAvailable": true },
         "pipelines": {
             "pipe1": {
                 "input": {
@@ -118,7 +118,7 @@ fn reader_lag_below_threshold_yields_no_alert() {
 fn reader_overflow_yields_warning() {
     let snap = json!({
         "generatedAt": "2026-06-25T00:00:00Z",
-        "srtListener": { "udpDrops": 0 },
+        "srtListener": { "bondingAvailable": true },
         "pipelines": {
             "pipe1": {
                 "input": {
@@ -142,7 +142,7 @@ fn reader_overflow_yields_warning() {
 fn stopped_output_with_active_publisher_yields_warning() {
     let snap = json!({
         "generatedAt": "2026-06-25T00:00:00Z",
-        "srtListener": { "udpDrops": 0 },
+        "srtListener": { "bondingAvailable": true },
         "pipelines": {
             "pipe1": {
                 "input": {
@@ -167,7 +167,7 @@ fn stopped_output_without_publisher_yields_no_alert() {
     // Output warnings are suppressed when there's no publisher — nothing to forward.
     let snap = json!({
         "generatedAt": "2026-06-25T00:00:00Z",
-        "srtListener": { "udpDrops": 0 },
+        "srtListener": { "bondingAvailable": true },
         "pipelines": {
             "pipe1": {
                 "input": {
@@ -190,7 +190,7 @@ fn stopped_output_without_publisher_yields_no_alert() {
 fn failed_output_phase_yields_warning() {
     let snap = json!({
         "generatedAt": "2026-06-25T00:00:00Z",
-        "srtListener": { "udpDrops": 0 },
+        "srtListener": { "bondingAvailable": true },
         "pipelines": {
             "pipe1": {
                 "input": { "status": "on", "readerMetrics": [] },
@@ -222,7 +222,7 @@ fn failed_output_phase_yields_warning() {
 fn output_blocked_by_stage_yields_causal_warning() {
     let snap = json!({
         "generatedAt": "2026-06-25T00:00:00Z",
-        "srtListener": { "udpDrops": 0 },
+        "srtListener": { "bondingAvailable": true },
         "pipelines": {
             "pipe1": {
                 "input": { "status": "on", "readerMetrics": [] },
@@ -428,7 +428,7 @@ fn stage_phase_table_is_consistent_for_status_graph_and_alerts() {
 
     let snap = json!({
         "generatedAt": "2026-06-25T00:00:00Z",
-        "srtListener": { "udpDrops": 0 },
+        "srtListener": { "bondingAvailable": true },
         "pipelines": {},
         "stages": stages
     });
@@ -450,7 +450,7 @@ fn stage_phase_table_is_consistent_for_status_graph_and_alerts() {
 fn stale_output_progress_yields_warning_after_successful_send() {
     let snap = json!({
         "generatedAt": "2026-06-25T00:00:00Z",
-        "srtListener": { "udpDrops": 0 },
+        "srtListener": { "bondingAvailable": true },
         "pipelines": {
             "pipe1": {
                 "input": { "status": "on", "readerMetrics": [] },
@@ -473,19 +473,6 @@ fn stale_output_progress_yields_warning_after_successful_send() {
 }
 
 #[test]
-fn srt_udp_drops_yield_engine_warning() {
-    let snap = json!({
-        "generatedAt": "2026-06-25T00:00:00Z",
-        "srtListener": { "udpDrops": 42 },
-        "pipelines": {}
-    });
-    let alerts = derive_alerts(&snap);
-    assert_eq!(alerts.len(), 1);
-    assert_eq!(alerts[0].severity, Severity::Warning);
-    assert_eq!(alerts[0].scope, Scope::Engine);
-}
-
-#[test]
 fn low_nofile_limit_yields_engine_warning() {
     let snap = json!({
         "generatedAt": "2026-06-25T00:00:00Z",
@@ -497,7 +484,7 @@ fn low_nofile_limit_yields_engine_warning() {
                 "satisfied": false
             }
         },
-        "srtListener": { "udpDrops": 0 },
+        "srtListener": { "bondingAvailable": true },
         "pipelines": {}
     });
     let alerts = derive_alerts(&snap);
@@ -521,7 +508,7 @@ fn rtmp_fd_exhaustion_yields_critical_engine_alert() {
             "acceptErrors": 7,
             "fdExhaustionErrors": 3
         },
-        "srtListener": { "udpDrops": 0 },
+        "srtListener": { "bondingAvailable": true },
         "pipelines": {}
     });
     let alerts = derive_alerts(&snap);
@@ -541,7 +528,10 @@ fn rtmp_fd_exhaustion_yields_critical_engine_alert() {
 fn alerts_sorted_critical_before_warning() {
     let snap = json!({
         "generatedAt": "2026-06-25T00:00:00Z",
-        "srtListener": { "udpDrops": 1 },
+        "runtimeLimits": {
+            "nofile": { "configured": 65536, "soft": 1024, "hard": 1024, "satisfied": false }
+        },
+        "srtListener": { "bondingAvailable": true },
         "pipelines": {
             "pipe1": {
                 "input": { "status": "off", "readerMetrics": [] },
@@ -591,7 +581,7 @@ fn tracker_updates_last_seen_preserves_first_seen() {
 fn saturated_srt_receive_buffer_yields_input_causal_alert() {
     let snap = json!({
         "generatedAt": "2026-06-25T00:00:00Z",
-        "srtListener": { "udpDrops": 0 },
+        "srtListener": { "bondingAvailable": true },
         "pipelines": {
             "pipe-srt": {
                 "input": {
@@ -600,8 +590,8 @@ fn saturated_srt_receive_buffer_yields_input_causal_alert() {
                     "publisher": {
                         "protocol": "srt",
                         "quality": {
-                            "srtRecvBufBytes": 8_218_796,
-                            "srtRecvBufAvailBytes": 1_500
+                            "srtRecvBufPackets": 8_192,
+                            "srtRecvBufCapacityPackets": 8_192
                         }
                     }
                 },
@@ -646,7 +636,7 @@ fn tracker_pipeline_scope_does_not_prune_other_pipelines() {
     let tracker = AlertTracker::new();
     let snap = json!({
         "generatedAt": "2026-06-25T00:00:00Z",
-        "srtListener": { "udpDrops": 0 },
+        "srtListener": { "bondingAvailable": true },
         "pipelines": {
             "pipe-a": {
                 "input": { "status": "off", "readerMetrics": [] },
@@ -681,7 +671,7 @@ fn tracker_pipeline_scope_does_not_prune_other_pipelines() {
 fn stage_failed_phase_yields_warning_alert() {
     let snap = json!({
         "generatedAt": "2026-06-25T00:00:00Z",
-        "srtListener": { "udpDrops": 0 },
+        "srtListener": { "bondingAvailable": true },
         "pipelines": {},
         "stages": {
             "pipe1:video_preset(720p)": {
@@ -704,7 +694,7 @@ fn stage_failed_phase_yields_warning_alert() {
 fn stage_waiting_for_capacity_or_high_wait_yields_warning_alert() {
     let snap = json!({
         "generatedAt": "2026-06-25T00:00:00Z",
-        "srtListener": { "udpDrops": 0 },
+        "srtListener": { "bondingAvailable": true },
         "pipelines": {},
         "stages": {
             "pipe2:video_preset(1080p)": {
@@ -729,7 +719,7 @@ fn stage_waiting_for_capacity_or_high_wait_yields_warning_alert() {
 fn stage_receiving_input_without_output_yields_warning_alert() {
     let snap = json!({
         "generatedAt": "2026-06-25T00:00:00Z",
-        "srtListener": { "udpDrops": 0 },
+        "srtListener": { "bondingAvailable": true },
         "pipelines": {},
         "stages": {
             "pipe2:video:720p": {
@@ -758,7 +748,7 @@ fn stage_receiving_input_without_output_yields_warning_alert() {
 fn hls_preview_waiting_for_keyframe_yields_warning_alert() {
     let snap = json!({
         "generatedAt": "2026-06-25T00:00:00Z",
-        "srtListener": { "udpDrops": 0 },
+        "srtListener": { "bondingAvailable": true },
         "pipelines": {},
         "stages": {
             "pipe2:preview:low:from:source": {
@@ -780,7 +770,7 @@ fn hls_preview_waiting_for_keyframe_yields_warning_alert() {
 fn stage_alerts_are_derived_without_pipeline_object() {
     let snap = json!({
         "generatedAt": "2026-06-25T00:00:00Z",
-        "srtListener": { "udpDrops": 0 },
+        "srtListener": { "bondingAvailable": true },
         "stages": {
             "pipe3:video:720p": {
                 "phase": "failed",
@@ -799,7 +789,7 @@ fn stage_alerts_are_derived_without_pipeline_object() {
 fn snapshot_with_fabric_shard(shard: serde_json::Value) -> serde_json::Value {
     json!({
         "generatedAt": "2026-06-25T00:00:00Z",
-        "srtListener": { "udpDrops": 0 },
+        "srtListener": { "bondingAvailable": true },
         "pipelines": {},
         "egressFabricShards": [shard],
     })
@@ -898,7 +888,7 @@ fn snapshot_with_retrying_output(
 ) -> serde_json::Value {
     json!({
         "generatedAt": "2026-06-25T00:00:00Z",
-        "srtListener": { "udpDrops": 0 },
+        "srtListener": { "bondingAvailable": true },
         "tuning": { "outputMaxRetries": output_max_retries },
         "pipelines": {
             "pipe1": {

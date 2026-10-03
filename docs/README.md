@@ -72,6 +72,11 @@ write-ups live in the [documentation archive](archive/README.md).
 - [Current priorities](current-priorities.md) — maintained forward-looking
   priorities.
 - [Layering roadmap](layering-roadmap.md) — maintained refactor sequence.
+- [Runtime crossings audit](runtime-crossings.md) — every Compio/Tokio/FFmpeg crossing with mechanism, rate, bound and verdict, plus open measurement items.
+- [Egress capacity ramp](capacity-ramp.md) — reproducible RTMP/RTMPS/SRT fan-out capacity measurement against in-process sinks, reference results, and a handoff prompt for other hosts.
+- [Media copy audit and allocator exploration](media-copy-audit.md) — per-byte copy inventory with justifications, memcpy/byte-search decision data, in-flight zero-copy work and Rust Allocator API leverage plan.
+- [SRT / Compio dataplane roadmap](srt-compio-roadmap.md) — execution order, invariants, performance targets and decision gates for the SRT Owner migration and packet-rate program.
+- [WI11 rejected experiments](wi11-rejected-experiments.md) — dated evidence for CPU segregation, HLS PUT on cyper and alternative allocators: setup, results, mechanism and what stays open.
 - [Frontend layering audit](archive/audits/frontend-layering-audit-2026-07-21.md) — dated three-lens frontend architecture audit.
 - [Testing decision record](testing-strategy.md) — accepted rationale for the
   unit/live tier boundary. Use [testing.md](testing.md) for current commands.
@@ -115,6 +120,8 @@ Markdown is indexed only from [archive/README.md](archive/README.md).
 - [Documentation archive](archive/README.md)
 - [MIT license](../LICENSE.md)
 - [Third-party component manifest](../distribution/THIRD_PARTY_COMPONENTS.md)
+- [Docker seccomp profile and container launch contract](../distribution/docker/README.md)
+- [SRT Compio Owner final qualification results](../test/harness/baselines/srt-compio-owner-final/amd-epyc-6vcpu-ubuntu2404-vm/README.md)
 - [Harness manifest README](../test/harness/README.md)
 - [SRT scaling investigation tools README](../test/native/srt-scaling/README.md)
 - [Phase 0 egress baseline workloads](../test/harness/baselines/egress-phase0/README.md)
@@ -162,6 +169,7 @@ Markdown is indexed only from [archive/README.md](archive/README.md).
 - [Quality backlog](agent-guidance/quality/backlog.md)
 - [Performance and resource baselines](agent-guidance/quality/baselines.md)
 - [Quality journal](agent-guidance/quality/journal.md)
+- [WI11 rejected experiments](wi11-rejected-experiments.md)
 
 ### Canonical agent skills and references
 
