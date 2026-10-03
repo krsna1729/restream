@@ -26,7 +26,9 @@ fn main() {
             if args.next().is_some() {
                 print_usage_and_exit();
             }
-            std::process::exit(restream::ffmpeg_binary::fetch());
+            std::process::exit(restream::ffmpeg_binary::fetch(
+                &mut std::io::stdout().lock(),
+            ));
         }
         if flag == "--emit-sbom" {
             let Some(path) = args.next() else {

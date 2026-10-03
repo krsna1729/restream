@@ -9,7 +9,7 @@
 
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
-use std::io::Write as _;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tracing::{info, warn};
@@ -127,19 +127,20 @@ fn hex(bytes: &[u8]) -> String {
 
 /// `restream ffmpeg-fetch`: download the BtbN FFmpeg 8.1 static GPL build
 /// for this architecture, verify it against the release's checksum list, and
-/// install `bin/ffmpeg` under `.restream/runtime/ffmpeg/`. Optional: a
-/// system FFmpeg on `PATH` works without it.
-pub fn fetch() -> i32 {
+/// install `bin/ffmpeg` under `.restream/runtime/ffmpeg/`. Progress and
+/// errors go to `out`. Optional: a system FFmpeg on `PATH` works without it.
+pub fn fetch(out: &mut impl Write) -> i32 {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(runtime) => runtime,
         Err(error) => {
-            eprintln!("ffmpeg-fetch: {error}");
+            let _ = writeln!(out, "ffmpeg-fetch: {error}");
             return 1;
         }
     };
+    let _ = writeln!(out, "downloading the BtbN FFmpeg 8.1 build ...");
     match runtime.block_on(fetch_into(Path::new(FETCH_DIR))) {
         Ok(path) => {
             let version = std::process::Command::new(&path)
@@ -149,11 +150,11 @@ pub fn fetch() -> i32 {
                 .and_then(|out| String::from_utf8(out.stdout).ok())
                 .and_then(|text| text.lines().next().map(str::to_string))
                 .unwrap_or_default();
-            println!("installed {} ({version})", path.display());
+            let _ = writeln!(out, "installed {} ({version})", path.display());
             0
         }
         Err(error) => {
-            eprintln!("ffmpeg-fetch: {error}");
+            let _ = writeln!(out, "ffmpeg-fetch: {error}");
             1
         }
     }
@@ -190,7 +191,6 @@ async fn fetch_into(dir: &Path) -> Result<PathBuf, String> {
         .map_err(|error| format!("creating {}: {error}", archive.display()))?;
     let mut response = get(format!("{FETCH_RELEASE}/{asset}")).await?;
     let mut hasher = Sha256::new();
-    println!("downloading {asset} ...");
     while let Some(chunk) = response
         .chunk()
         .await
