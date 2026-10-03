@@ -225,7 +225,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/ci-bootstrap
         with:
-          system_deps_profile: base
+          system_deps_profile: media
           native_prefix: 'true'
           rust_cache: 'true'
       - name: Run fast concurrency proof
