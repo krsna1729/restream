@@ -253,6 +253,13 @@ else
     echo "Using cached x265 build."
 fi
 
+# `--disable-autodetect` still probes libc iconv (FFmpeg configure keeps
+# `libc_iconv` unless iconv is disabled by name). In a static binary, glibc's
+# iconv loads gconv modules from the host with dlopen, and those modules pull
+# in the host's libc.so.6. On a host whose glibc differs from the build host,
+# the first MPEG-TS SDT service name in a non-UTF-8 charset (ISO 6937 is the
+# DVB default) kills the process with SIGFPE. Without iconv, FFmpeg keeps the
+# raw service-name bytes; that is metadata only.
 FFMPEG_FINGERPRINT="$(
     {
         git -C "$SOURCES/ffmpeg" rev-parse HEAD
@@ -273,6 +280,7 @@ FFMPEG_FINGERPRINT="$(
             --disable-doc \
             --disable-debug \
             --disable-autodetect \
+            --disable-iconv \
             --disable-network \
             --enable-x86asm \
             --disable-everything \
@@ -308,6 +316,7 @@ if ! stamp_matches "$FFMPEG_STAMP" "$FFMPEG_FINGERPRINT" ||
         --disable-doc \
         --disable-debug \
         --disable-autodetect \
+        --disable-iconv \
         --disable-network \
         --enable-x86asm \
         --extra-cflags="$BUILD_CFLAGS" \
@@ -383,6 +392,7 @@ if ! stamp_matches "$FFMPEG_BIN_STAMP" "$FFMPEG_FINGERPRINT" ||
         --disable-doc \
         --disable-debug \
         --disable-autodetect \
+        --disable-iconv \
         --disable-network \
         --enable-x86asm \
         --extra-cflags="$BUILD_CFLAGS -I$PREFIX/include" \
