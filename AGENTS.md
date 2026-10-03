@@ -75,7 +75,7 @@ npm run test:frontend:coverage
 npx playwright test
 
 scripts/build/resource-limit.sh cargo bench --bench <name>
-scripts/build/resource-limit.sh target/debug/test_harness mixed-anchor
+scripts/harness/run.sh <mode>   # modes: target/bench/test_harness catalog list-modes
 ```
 
 Integration tests use a private loopback namespace by default; use `--no-netns` only when required.
@@ -96,28 +96,29 @@ in on demand, and verify with the narrowest gate first.
 - Skills supply task-specific guidance within the user's scope and existing
   authorization. Do not start quality loops, turn reviews into fixes, or add
   approval stops merely because a skill is relevant.
-- Pick the first gate by files touched, then broaden to full
-  `scripts/build/resource-limit.sh cargo test` only when the change crosses module
-  boundaries or shared contracts. Treat unrelated full-suite failures as
-  separate findings.
+- Correctness gates run in GitHub PR CI, not locally: push the branch, open
+  the PR, and read the failing job. Locally, run only (a) performance
+  measurement and (b) the targeted new or changed test or feature you are
+  writing (`cargo test <name>`, one harness mode for a new scenario). Do not
+  rerun full suites, concurrency contracts, or harness matrices locally to
+  confirm what CI already runs on quieter runners. Treat unrelated CI
+  failures as separate findings.
 
-| Files touched | First gate |
-|---|---|
-| one backend module | `scripts/build/resource-limit.sh cargo test <module>` |
-| timestamp/DTS/PTS logic | `scripts/build/resource-limit.sh cargo test av_sync` |
-| lifecycle in `engine.rs`, `srt.rs`, `ts_chunk_ring.rs`, `avio.rs`, `recording.rs`, `file_ingest.rs`, `external_transcoder.rs` | `scripts/check/concurrency/contract.sh` |
-| concurrency primitives or thread hops | `scripts/check/concurrency/fast.sh` |
-| frontend/backend contract surface | `scripts/check/api-contract.sh` |
-| test media, fixtures, bench/harness setup | `scripts/check/fixture-discipline.sh` |
-| Markdown documentation | `node scripts/check/docs.mjs` |
-| `web/ts/`, `web/styles/input.css` | `npm run test:frontend` (plus Playwright for browser-only behavior) |
-| hot-path code | relevant `benches/` suite before and after |
-| RTMP/SRT/HLS protocol behavior | `test_harness` `correctness*` modes (protocol-test skill) |
+| Files touched | CI job that gates it | Local, when adding/changing it |
+|---|---|---|
+| backend module, timestamp/DTS/PTS logic | Rust unit hygiene and fixtures | `cargo test <new test name>` |
+| lifecycle, concurrency primitives, thread hops | Concurrency fast; Concurrency live on master pushes | the new test or loom case only |
+| frontend/backend contract surface | API contract | — |
+| test media, fixtures, bench/harness setup | Rust unit hygiene and fixtures | — |
+| Markdown documentation | Source architecture audit (`scripts/check/docs.mjs`) | — |
+| `web/ts/`, `web/styles/input.css` | Frontend unit, Frontend app, HLS browser | the new test only |
+| RTMP/SRT/HLS protocol behavior | Transport live-harness; master push transport matrix | one harness mode for a new scenario (`test_harness catalog list-modes`) |
+| hot-path code | — | relevant `benches/` suite before and after |
 
 ## Build and Worktree Safety
 
 **Never run Cargo builds, tests, checks, clippy, or benchmarks while a live pipeline is running.**
-Static FFmpeg libraries can push WSL2 into OOM territory.
+Static FFmpeg libraries can push a small host into OOM territory.
 
 Before heavy builds in multi-worktree sessions:
 
@@ -185,12 +186,11 @@ Hot paths include `src/media/`, ring buffers, mux/demux loops, AVIO queues, SRT/
 - Prefer checked-in fixtures over inline media generation for tests, benches, and harness runs.
 - Test-only code may adapt or observe production code, never re-implement it: inject fakes through an existing type parameter or constructor and call the production function, rather than adding a `#[cfg(test)]` sibling that repeats its logic.
 - Route dashboard API calls through `web/ts/core/api.ts`; update contract tests when routes or payloads change.
-- Run `scripts/check/test-hygiene.sh` for test-heavy changes; suppress expected noise at the test helper, not in CI.
+- `scripts/check/test-hygiene.sh` runs in CI (Rust unit hygiene and fixtures); suppress expected noise at the test helper, not in CI.
 - For concurrency or thread-hop changes, extend `scripts/check/concurrency/fast.sh` or explain why the existing proof gate already covers the change.
 - If teardown or recovery semantics change, update the live harness assertion and the operator-visible status contract in the same change.
 - Gate selection by files touched: see the Inner Loop table above.
-- Keep libtest parallel for correctness work, but run it through `scripts/build/resource-limit.sh`; the wrapper bounds `RUST_TEST_THREADS` with a separate memory/CPU-derived test budget unless explicitly overridden.
-- For scale or integration checks, use `scripts/build/resource-limit.sh target/debug/test_harness mixed-anchor`.
+- Scale and capacity runs are performance measurement and stay local: `scripts/harness/capacity-ramp.sh`, serially, on an idle host.
 
 ## Autonomous Quality Loops
 
