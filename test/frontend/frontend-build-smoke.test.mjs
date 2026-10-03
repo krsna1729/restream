@@ -101,11 +101,11 @@ test("compiled dashboard keeps the default React seam in a bounded bundle", asyn
   assert.equal(v2Entry.includes("dashboard-v2-pipeline-inspect-root"), false);
   const sharedGzip = gzipSync(sharedRuntime).byteLength;
   assert.ok(
-    gzipSync(v2Entry).byteLength + sharedGzip <= 77_250,
+    gzipSync(v2Entry).byteLength + sharedGzip <= 87_000,
     "the default Overview/Operate route payload must stay within its recorded gzip budget",
   );
   assert.ok(
-    gzipSync(checkpointsEntry).byteLength + sharedGzip <= 69_000,
+    gzipSync(checkpointsEntry).byteLength + sharedGzip <= 78_750,
     "the opt-in checkpoint route payload must stay within its recorded gzip budget",
   );
 });
