@@ -38,7 +38,7 @@ version = "1"
 version = "0.10"
 
 [dependencies.rand]
-version = "0.8"
+version = "0.10"
 
 [dependencies.rml_amf0]
 version = "0.3.0"
