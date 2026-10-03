@@ -47,8 +47,34 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   does (managed multishot RX fills a kernel-side buffer ring, batched TX), with
   per-socket drop counters. Proving that 7.0.0-38 itself made the receive path
   burstier needs a boot back into 7.0.0-34 (owner decision).
+  Owner sink result (2026-10-03, #217): the plan did not fix it. On 2 harness
+  vCPUs the Owner sink passed 0 of 7 with 17.5–25.5k managed-RX buffer
+  exhaustions and 23k–361k kernel socket drops per 30 s window. A 4096-entry
+  RX ring removed the exhaustions but delivered less (2–21 of 100), so
+  exhaustion is a symptom. With 3 harness vCPUs (the script's default split)
+  it delivered 97, 100 and 99 of 100: the sink is CPU-bound at one Owner per
+  port. Production SRT ingest has the same one-Owner-per-port ceiling.
+  Next: multiple Owners per port (`SO_REUSEPORT` in `Owner::listen`), added
+  when kernel socket drops persist with the Owner busy; then rerun this gate.
 - Status: open (Filed: 2026-10-02 by claude; investigated 2026-10-03). Blocks
-  SRT capacity evidence on this host.
+  SRT capacity evidence on this host at the 4/2 CPU split.
+
+### Q-028 [testing] [sonnet] Local live-harness flakes on a loaded 6-vCPU VPS
+- Goal: decide whether the local failures below are real defects or host
+  load, so a local live run is either trustworthy or explicitly ignored.
+- Files: `test/harness/` scenarios `mixed.live.srt.*` and
+  `srt-crypto-matrix`; `src/bin/test_harness/` signal validation.
+- Gates: the same modes pass in CI's master push transport matrix (they do
+  today); a local rerun on an idle host either passes or reproduces with a
+  named cause.
+- Context (2026-10-03, base `b118d1e` and the srt-rs repin alike, load
+  average 13–20 on 6 vCPUs): `mixed.live.srt.h264.a2.bf2` failed 3 of 3 on
+  base with too few video/audio markers, audio PTS gaps of 85–128 ms (vCPU
+  stalls on this VPS reach 128 ms) and one missing audio rendition;
+  `srt-crypto-matrix` failed 1 of 3 on base with `error sending request` to
+  the API (`/auth/login`, `/engine/telemetry`). Correctness gates now run in
+  PR CI (AGENTS.md); this item only covers whether local runs can be trusted.
+- Status: open (Filed: 2026-10-03 by claude).
 
 ### Q-024 [modularity] [sonnet] Collapse the connector/completion test seams in both egress backends
 - Goal: remove production traits that exist only so tests can substitute a
