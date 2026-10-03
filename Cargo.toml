@@ -67,14 +67,15 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 url = "2"
 percent-encoding = "2"
 shiguredo_mp4 = "2026.5.0"
-# srt-rs main 43b9429 (PR #131: cooperative taskrun, separate managed-RX
-# buffer exhaustion counter; PR #130: transient managed buffer exhaustion;
-# PR #128: GSO send coalescing, id hashing without SipHash, acked-bytes stats,
-# TX-blocked work fix, batched raw-readiness listener receive). SRT egress and
-# ingress both run on `srt_transport::compio::Owner`; ingress attaches with
-# `Owner::listen_with_resolver`.
-srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "43b9429b2b5bbda8bfcd155d6b50fa7260e931c7" }
-srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "43b9429b2b5bbda8bfcd155d6b50fa7260e931c7", features = ["compio"] }
+# srt-rs main d520429 (PR #132: ACKACK history of 256 Full ACKs with at most
+# two Full ACKs per ACK interval, and a removed bonded member's complete
+# payloads stay deliverable; PR #133: `Owner::set_tx_gso`; PR #131:
+# cooperative taskrun, separate managed-RX buffer exhaustion counter; PR #128:
+# GSO send coalescing, id hashing without SipHash, acked-bytes stats). SRT
+# egress and ingress both run on `srt_transport::compio::Owner`; ingress
+# attaches with `Owner::listen_with_resolver`.
+srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "d520429c08520ba5f844d762af62254221cfc97a" }
+srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "d520429c08520ba5f844d762af62254221cfc97a", features = ["compio"] }
 # Bounded shard command channel with both blocking and Future-based receive, so
 # a backend that owns a thread-affine completion runtime can await commands
 # alongside its own I/O without a second wake source.

@@ -348,6 +348,9 @@ pub struct AppConfig {
     /// Datagrams in flight per SRT egress family Owner (its TX pool and lane
     /// count): the per-shard SRT send window.
     pub srt_egress_tx_capacity: usize,
+    /// Whether SRT egress Owners coalesce equal-length datagrams to one peer
+    /// into UDP GSO sends. On by default; off sends one `sendmsg` per datagram.
+    pub srt_egress_gso: bool,
     pub use_internal_file_ingest: bool,
     pub initial_admin_password: Option<String>,
     pub secure_session_cookies: bool,
@@ -654,6 +657,7 @@ impl Default for AppConfig {
             srt_egress_muxer_max_shards: 64,
             srt_egress_connect_concurrency: 64,
             srt_egress_tx_capacity: crate::media::egress::backends::srt::SRT_OWNER_TX_CAPACITY,
+            srt_egress_gso: true,
             use_internal_file_ingest: false,
             initial_admin_password: None,
             secure_session_cookies: false,
@@ -743,6 +747,7 @@ impl AppConfig {
             crate::media::egress::backends::srt::SRT_OWNER_TX_CAPACITY,
         )
         .clamp(1, 4096);
+        let srt_egress_gso = env_bool("RESTREAM_SRT_EGRESS_GSO").unwrap_or(true);
         let use_internal_file_ingest =
             std::env::var_os("RESTREAM_USE_INTERNAL_FILE_INGEST").is_some();
         let initial_admin_password = std::env::var("RESTREAM_INITIAL_ADMIN_PASSWORD").ok();
@@ -814,6 +819,7 @@ impl AppConfig {
             srt_egress_muxer_max_shards,
             srt_egress_connect_concurrency,
             srt_egress_tx_capacity,
+            srt_egress_gso,
             use_internal_file_ingest,
             initial_admin_password,
             secure_session_cookies,

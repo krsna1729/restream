@@ -121,13 +121,39 @@ fn release_policy_metadata_is_declared_and_enforced() {
             "build.rs missing native input policy for {native_input}"
         );
     }
-    // SRT is the pinned pure-Rust final upstream srt-rs. Keep the revision
-    // visible in the root manifest so release metadata cannot silently drift
-    // back to an unpinned dependency.
-    assert!(cargo_toml.contains("https://github.com/krsna1729/srt-rs"));
-    assert!(cargo_toml.contains("43b9429b2b5bbda8bfcd155d6b50fa7260e931c7"));
-    assert!(cargo_toml.contains("srt_proto"));
-    assert!(cargo_toml.contains("srt-transport"));
+    // srt-rs is pinned to one git revision for both crates, and the release
+    // attribution names that same revision. Checked by value, not by a copied
+    // SHA, so a repin only has to keep the two files consistent.
+    let srt_revs: Vec<&str> = cargo_toml
+        .lines()
+        .filter(|line| line.contains("git = \"https://github.com/krsna1729/srt-rs\""))
+        .map(|line| {
+            let rev = line
+                .split("rev = \"")
+                .nth(1)
+                .and_then(|rest| rest.get(..40))
+                .unwrap_or_else(|| panic!("srt-rs dependency without a pinned rev: {line}"));
+            assert!(
+                rev.bytes().all(|b| b.is_ascii_hexdigit()),
+                "srt-rs rev must be a full commit SHA: {line}"
+            );
+            rev
+        })
+        .collect();
+    assert_eq!(
+        srt_revs.len(),
+        2,
+        "srt_proto and srt-transport must both be pinned"
+    );
+    assert_eq!(
+        srt_revs[0], srt_revs[1],
+        "srt-rs crates must share one revision"
+    );
+    let third_party = include_str!("../distribution/THIRD_PARTY_COMPONENTS.md");
+    assert!(
+        third_party.contains(&format!("git commit `{}`", srt_revs[0])),
+        "distribution/THIRD_PARTY_COMPONENTS.md must name the pinned srt-rs revision"
+    );
 
     let deny_toml = include_str!("../deny.toml");
     assert!(deny_toml.contains("unknown-registry = \"deny\""));

@@ -128,6 +128,8 @@ pub(crate) struct SrtOwnerSettings {
     pub(crate) runtime_builder: RuntimeBuilder,
     /// Datagrams in flight per family Owner (TX pool slots and lanes).
     pub(crate) tx_capacity: usize,
+    /// UDP GSO coalescing of equal-length datagrams to one peer (default on).
+    pub(crate) tx_gso: bool,
 }
 
 impl SrtOwnerSettings {
@@ -139,11 +141,17 @@ impl SrtOwnerSettings {
             rx_policy: RxModePolicy::ManagedPreferred,
             runtime_builder: production_runtime,
             tx_capacity: SRT_OWNER_TX_CAPACITY,
+            tx_gso: true,
         }
     }
 
     pub(crate) fn with_tx_capacity(mut self, tx_capacity: usize) -> Self {
         self.tx_capacity = tx_capacity.max(1);
+        self
+    }
+
+    pub(crate) fn with_tx_gso(mut self, enabled: bool) -> Self {
+        self.tx_gso = enabled;
         self
     }
 
@@ -362,6 +370,8 @@ impl SrtOwners {
             .set_rx_substrate(self.substrate)
             .map_err(|error| error.to_string())?;
         owner.set_rx_mode_policy(self.settings.rx_policy);
+        // Before any socket attaches, as `set_tx_gso` requires.
+        owner.set_tx_gso(self.settings.tx_gso);
         owner
             .set_caller_pool_capacity(self.settings.caller_max_in_flight)
             .map_err(|error| error.to_string())?;
