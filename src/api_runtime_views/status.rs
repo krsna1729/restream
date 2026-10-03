@@ -12,8 +12,7 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 
-const REQUIRED_RMEM_MAX: u64 = 26_214_400;
-const REQUIRED_WMEM_MAX: u64 = 8_388_608;
+use crate::host_tuning::{REQUIRED_RMEM_MAX, REQUIRED_WMEM_MAX};
 
 /// A fabric shard genuinely idle between polls (nothing to send right now)
 /// is not the same as a stalled one — this must stay well above the

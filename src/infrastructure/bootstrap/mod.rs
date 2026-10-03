@@ -75,6 +75,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
         summary = %config.effective_summary(),
         "effective startup configuration",
     );
+    crate::host_tuning::warn_unmet();
     match crate::malloc_tuning::applied() {
         Some(setting @ crate::malloc_tuning::ArenaSetting::Failed { .. })
         | Some(setting @ crate::malloc_tuning::ArenaSetting::InvalidOverride { .. }) => warn!(

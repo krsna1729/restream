@@ -24,6 +24,7 @@ pub mod diag;
 pub mod domain;
 pub mod events;
 pub mod ffmpeg_extract;
+pub mod host_tuning;
 pub mod infrastructure;
 pub mod logging;
 pub mod malloc_tuning;

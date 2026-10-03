@@ -9,6 +9,7 @@ in SQLite.
 - [Fixed Runtime Values and Environment Variables](#fixed-runtime-values-and-environment-variables)
 - [SQLite-Backed Settings](#sqlite-backed-settings)
 - [Linux Service Placement](#linux-service-placement)
+- [Host Kernel Settings](#host-kernel-settings)
 - [SQLite Performance Settings](#sqlite-performance-settings)
 - [Ingest URLs](#ingest-urls)
 - [Output Configuration](#output-configuration)
@@ -175,6 +176,33 @@ do not cap native helper threads created by FFmpeg or SQLite. Restream
 names its Tokio runtime threads `restream-tokio` so process tools can separate
 them from the `srt-in-<port>` ingress owner thread, `sqlx-sqlite-*`, and other native helper threads; that label
 covers Tokio scheduler, blocking, and replacement worker threads.
+
+## Host Kernel Settings
+
+The server never needs root. Run the one-shot helpers from the same binary
+instead:
+
+```sh
+restream host-check        # report; exit status 1 if anything is unmet
+sudo restream host-tune    # apply once and persist, then report
+```
+
+At startup the server logs one `restream.host.setting_unmet` warning per unmet
+setting.
+
+| Setting | Requirement | `host-tune` action | Why |
+|---|---|---|---|
+| `net.core.rmem_max` | `>= 26214400` | raise; persist in `/etc/sysctl.d/99-restream.conf` | SRT UDP receive buffers |
+| `net.core.wmem_max` | `>= 8388608` | raise; persist | SRT UDP send buffers |
+| `net.core.somaxconn` | `>= 4096` | raise; persist | RTMP accept backlog under connection bursts |
+| `tls` kernel module | loaded | `modprobe tls`; persist in `/etc/modules-load.d/restream.conf` | kTLS for RTMPS outputs (no userspace fallback) |
+| `kernel.io_uring_disabled` | `0` | report only | Compio owner threads need io_uring; re-enabling it is a host-policy decision |
+| `net.ipv4.ip_local_port_range` | `>= 4096` ports | report only | ephemeral ports for many concurrent outputs; the Linux default is ample |
+| `RLIMIT_NOFILE` hard limit | `>= 65536` | report only | set `LimitNOFILE` in the systemd unit (`scripts/deploy/install-systemd-service.sh` above sets 65536) |
+
+`host-tune` never lowers a value that is already above the requirement.
+Restream does not use socket busy-polling, so `net.core.busy_poll` and
+`busy_read` are not requirements.
 
 ## SQLite Performance Settings
 
@@ -388,10 +416,12 @@ per-leg and deduplicated aggregate telemetry.
 
 ### Linux host and harness capacity
 
-For a fresh Linux host, `scripts/dev/bootstrap.sh` and
-`scripts/dev/bootstrap-runtime.sh` report whether private user/network
-namespaces and the required SRT UDP buffer ceilings are available. To persist
-the harness host settings, run:
+Production kernel settings come from `restream host-tune`
+([Host Kernel Settings](#host-kernel-settings)). The live harness additionally
+needs private user/network namespaces. `scripts/dev/bootstrap.sh` and
+`scripts/dev/bootstrap-runtime.sh` report whether those namespaces and the
+required SRT UDP buffer ceilings are available. To persist the harness host
+settings, run:
 
 ```sh
 scripts/dev/bootstrap.sh --configure-harness-host
