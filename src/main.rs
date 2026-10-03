@@ -15,10 +15,11 @@ fn main() {
             if args.next().is_some() {
                 print_usage_and_exit();
             }
+            let mut out = std::io::stdout().lock();
             std::process::exit(if flag == "host-check" {
-                restream::host_tuning::host_check()
+                restream::host_tuning::host_check(&mut out)
             } else {
-                restream::host_tuning::host_tune()
+                restream::host_tuning::host_tune(&mut out)
             });
         }
         if flag == "--emit-sbom" {

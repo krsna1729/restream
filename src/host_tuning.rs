@@ -191,7 +191,7 @@ fn sysctl_conf(current: impl Fn(&str) -> Option<u64>) -> String {
     conf
 }
 
-fn print_report() -> bool {
+fn print_report(out: &mut impl std::io::Write) -> bool {
     let mut all_met = true;
     for requirement in REQUIREMENTS {
         let status = evaluate(requirement.check, observe(requirement).as_deref());
@@ -200,7 +200,8 @@ fn print_report() -> bool {
             Status::Unmet(current) => ("FAIL", current.as_str()),
             Status::Unknown => ("??  ", "unreadable"),
         };
-        println!(
+        let _ = writeln!(
+            out,
             "[{tag}] {} = {current} (need {}): {}",
             requirement.key,
             need(requirement.check),
@@ -208,28 +209,31 @@ fn print_report() -> bool {
         );
         if !matches!(status, Status::Met(_)) {
             all_met = false;
-            println!("       -> {}", requirement.advice);
+            let _ = writeln!(out, "       -> {}", requirement.advice);
         }
     }
     all_met
 }
 
-/// `restream host-check`: report every requirement; exit status 1 if any is
-/// unmet or unreadable.
-pub fn host_check() -> i32 {
-    if print_report() { 0 } else { 1 }
+/// `restream host-check`: report every requirement to `out`; exit status 1
+/// if any is unmet or unreadable.
+pub fn host_check(out: &mut impl std::io::Write) -> i32 {
+    if print_report(out) { 0 } else { 1 }
 }
 
 /// `restream host-tune`: raise sysctl ceilings, load and persist kernel
-/// modules, then report. Report-only requirements are left untouched.
-pub fn host_tune() -> i32 {
+/// modules, then report to `out`. Report-only requirements are left untouched.
+pub fn host_tune(out: &mut impl std::io::Write) -> i32 {
     #[cfg(unix)]
     // SAFETY: geteuid has no preconditions.
     let root = unsafe { libc::geteuid() } == 0;
     #[cfg(not(unix))]
     let root = false;
     if !root {
-        eprintln!("host-tune changes kernel settings and needs root: sudo restream host-tune");
+        let _ = writeln!(
+            out,
+            "host-tune changes kernel settings and needs root: sudo restream host-tune"
+        );
         return 1;
     }
 
@@ -240,7 +244,7 @@ pub fn host_tune() -> i32 {
     };
     let mut failed = false;
     if let Err(error) = std::fs::write(SYSCTL_CONF, sysctl_conf(current)) {
-        eprintln!("failed to write {SYSCTL_CONF}: {error}");
+        let _ = writeln!(out, "failed to write {SYSCTL_CONF}: {error}");
         failed = true;
     }
     for requirement in REQUIREMENTS.iter().filter(|r| r.check.tunable()) {
@@ -248,7 +252,7 @@ pub fn host_tune() -> i32 {
             Check::SysctlAtLeast(min) if current(requirement.key).is_some_and(|v| v < min) => {
                 if let Err(error) = std::fs::write(proc_sys_path(requirement.key), min.to_string())
                 {
-                    eprintln!("failed to set {}: {error}", requirement.key);
+                    let _ = writeln!(out, "failed to set {}: {error}", requirement.key);
                     failed = true;
                 }
             }
@@ -258,11 +262,11 @@ pub fn host_tune() -> i32 {
                     .status()
                     .is_ok_and(|status| status.success());
                 if !loaded {
-                    eprintln!("modprobe {} failed", requirement.key);
+                    let _ = writeln!(out, "modprobe {} failed", requirement.key);
                     failed = true;
                 }
                 if let Err(error) = std::fs::write(MODULES_CONF, format!("{}\n", requirement.key)) {
-                    eprintln!("failed to write {MODULES_CONF}: {error}");
+                    let _ = writeln!(out, "failed to write {MODULES_CONF}: {error}");
                     failed = true;
                 }
             }
@@ -270,9 +274,9 @@ pub fn host_tune() -> i32 {
         }
     }
     if !failed {
-        println!("persisted {SYSCTL_CONF} and {MODULES_CONF}");
+        let _ = writeln!(out, "persisted {SYSCTL_CONF} and {MODULES_CONF}");
     }
-    let all_met = print_report();
+    let all_met = print_report(out);
     if failed || !all_met { 1 } else { 0 }
 }
 
