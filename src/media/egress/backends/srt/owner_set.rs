@@ -49,7 +49,7 @@ pub(crate) const SRT_OWNER_TX_CAPACITY: usize = 16;
 
 /// Largest datagram an Owner will carry: SRT live payload (1316) + header and
 /// GCM tag fit under the 1500-byte control ceiling, which therefore dominates.
-pub(crate) const SRT_OWNER_WIRE_CEILING: usize = 1500;
+pub const SRT_OWNER_WIRE_CEILING: usize = 1500;
 
 /// Per-drain cap on each bounded Owner event queue.
 const EVENT_DRAIN: usize = 64;
@@ -84,7 +84,7 @@ pub(crate) type RuntimeBuilder =
 
 /// The one production runtime: forced io_uring. There is no fallback driver;
 /// when io_uring cannot be created the shard does not start.
-pub(crate) fn production_runtime(
+pub fn production_runtime(
     config: ProductionRuntimeConfig,
 ) -> Result<compio::runtime::Runtime, String> {
     production_runtime_builder(config)?

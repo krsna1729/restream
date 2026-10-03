@@ -411,7 +411,6 @@ Names are provisional until the mode is implemented:
 | `PEER_COUNT` | `1` | Number of peer instances (`MTX_RTMP`/`MTX_SRT`/`MTX_API` + instance offset each); outputs distribute round-robin by ordinal (`ordinal % PEER_COUNT`). |
 | `PEER_SKIP_START` | unset | Meaningful only for `MSR_PEER=mediamtx`: peer instances are pre-started externally, and the harness verifies all `PEER_COUNT` instances are live instead of spawning them. No effect on `MSR_PEER=sink` — an in-process listener has no external-process equivalent to skip-start; it is always bound fresh by the harness. |
 | `MSR_PEER` | `mediamtx` | `mediamtx` (default) or `sink` — see "Peer modes" below |
-| `HARNESS_SRT_SINK_THREADS` | up to `4` host CPUs | `MSR_PEER=sink` only: **total** Tokio thread/socket budget for the shared SRT sink pool. With one peer (the default), it creates that many `SO_REUSEPORT` sockets on one UDP port. |
 | `HARNESS_SRT_SINK_UDP_BUFFER` | `8388608` (8MB) | `MSR_PEER=sink` only: requested `SO_RCVBUF`/`SO_SNDBUF` per SRT socket; `0` preserves host defaults. Linux may clamp this to `net.core.rmem_max`/`wmem_max`. |
 | `MSR_SKIP_FFPROBE` | unset | Skip ffprobe read-back checks (always forced on when `MSR_PEER=sink`) |
 | `MSR_SINK_SAMPLE_SECS` | `3` | mediamtx path-health sample window before the resource-window sample |
@@ -456,14 +455,15 @@ never expected to be started by hand outside `PEER_SKIP_START`.
   `mediamtx`).
 
   The SRT side is a single shared `harness_srt_sink.rs::HarnessSrtSinkPool`
-  spanning every `PEER_COUNT` port, not one listener per instance.
-  `HARNESS_SRT_SINK_THREADS` is a **total** Tokio thread/socket budget for
-  that pool (default: up to four host CPUs). With the default one peer it
-  binds that many `SO_REUSEPORT` sockets to a single UDP port, allowing the
-  kernel to distribute SRT flows by 4-tuple while each socket and peer table
-  stays exclusively owned by one runtime. Each Tokio wake drains its socket
-  before driving SRT timers and outbound control packets, matching srt-bench's
-  reuseport receiver strategy without multiplying externally visible ports.
+  spanning every `PEER_COUNT` port. Each port gets one production
+  `srt_transport::compio::Owner` on its own thread, built like the SRT ingress
+  Owner (forced io_uring, managed multishot RX), so the sink measures
+  Restream through the same receive path production uses. `Owner::listen` is
+  per-port, so `PEER_COUNT` is also the SRT sink's thread count: raise it to
+  spread a high-rate SRT rung over more sink threads. Resource-sweep records
+  carry `srtSinkDrops` for the rated window: kernel socket drops per port
+  (`/proc/net/udp{,6}` `drops`) and the Owners' managed-RX `dropped`,
+  `bufferExhaustions` and `truncated`.
 
   Resource-sweep delivery measurement works against sink peers too. The RTMP
   listeners run counting-only (no per-packet history) and record wire bytes

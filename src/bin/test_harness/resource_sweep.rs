@@ -112,13 +112,9 @@ struct ResourceSweepStack {
 
 /// In-process harness-native sink peers: one RTMP accept-and-discard
 /// listener per `PEER_COUNT` instance (reused from `sinks.rs`, already
-/// harness-native and proven), plus a single shared `HarnessSrtSinkPool`
-/// spanning every instance's SRT port. The SRT side is one shared pool
-/// rather than one-listener-per-instance so `HARNESS_SRT_SINK_THREADS` can
-/// be a total thread budget partitioned with exclusive port ownership
-/// across *all* `PEER_COUNT` ports, not a per-port thread count -- see
-/// `harness_srt_sink.rs`'s module doc comment for why shared-multiplexer
-/// thread pooling was a measured regression.
+/// harness-native and proven), plus one `HarnessSrtSinkPool` spanning every
+/// instance's SRT port with one production SRT Owner thread per port, so
+/// `PEER_COUNT` is also the SRT sink's thread count.
 #[derive(Default)]
 struct SinkPeerStack {
     rtmp: Vec<GeneralizedSinkServer>,
@@ -346,10 +342,8 @@ async fn start_resource_sweep_peers(env: &ResourceSweepEnv) -> Result<Vec<Child>
 /// equivalent of -- a harness sink peer is always started fresh, bound
 /// directly by this harness process.
 ///
-/// `HARNESS_SRT_SINK_THREADS` defaults to up to four host CPUs and is a
-/// *total* thread budget for the shared SRT pool
-/// (`HarnessSrtSinkPool`), partitioned with exclusive port ownership
-/// across every `PEER_COUNT` port, not a per-port thread count.
+/// The SRT pool runs one production SRT Owner thread per `PEER_COUNT` port
+/// (`HarnessSrtSinkPool`).
 async fn start_harness_sink_peers(
     env: &ResourceSweepEnv,
     needs: LocalPeerNeeds,
@@ -404,11 +398,8 @@ async fn start_harness_sink_peers(
     }
 
     let srt_pool = if needs.srt {
-        let default_sink_threads =
-            std::thread::available_parallelism().map_or(1, |count| count.get().min(4));
-        let discard_threads = env_usize("HARNESS_SRT_SINK_THREADS", default_sink_threads);
         let udp_buffer = env_usize("HARNESS_SRT_SINK_UDP_BUFFER", 8 * 1024 * 1024);
-        match HarnessSrtSinkPool::start(&srt_ports, udp_buffer, discard_threads) {
+        match HarnessSrtSinkPool::start(&srt_ports, udp_buffer) {
             Ok(pool) => Some(pool),
             Err(err) => {
                 for server in rtmp {

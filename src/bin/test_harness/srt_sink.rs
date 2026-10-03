@@ -118,7 +118,7 @@ fn sink_state(
     run: &str,
     started_ms: u128,
     ports: &[u16],
-    counters: SrtSinkCounters,
+    sink: &crate::harness_srt_sink::SrtSinkCountersHandle,
     requested_rcvbuf: usize,
 ) -> Value {
     let (nic_rx_dropped, nic_tx_dropped) = host_nic_drop_counters();
@@ -127,12 +127,13 @@ fn sink_state(
         started_ms,
         cpus_allowed_list().as_deref(),
         ports,
-        counters,
+        sink.snapshot(),
         host_udp_drop_counters(),
         nic_rx_dropped,
         nic_tx_dropped,
     );
     state["requestedRcvbufBytes"] = json!(requested_rcvbuf);
+    state["sinkDrops"] = sink.drops().json();
     state["effectiveSocketBuffers"] = probe_effective_socket_buffers(requested_rcvbuf);
     state
 }
@@ -156,9 +157,6 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
         harness_port_defaults().mtx_api as usize,
     );
     let state_port = u16::try_from(state_port).map_err(|_| "SRT_SINK_STATE_PORT out of range")?;
-    let default_threads =
-        std::thread::available_parallelism().map_or(1, |count| count.get().min(4));
-    let threads = env_usize("HARNESS_SRT_SINK_THREADS", default_threads);
     let udp_buffer = env_usize("HARNESS_SRT_SINK_UDP_BUFFER", 8 * 1024 * 1024);
     let interval_secs = env_secs("SRT_SINK_REPORT_SECS", 5).max(1);
     if let Ok(mask) = std::env::var("SRT_SINK_CPUSET")
@@ -168,7 +166,7 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
         pin_to_cpuset(mask.trim())?;
         println!("[srt-sink] pinned to cpus {mask}");
     }
-    let pool = HarnessSrtSinkPool::start(&ports, udp_buffer, threads)?;
+    let pool = HarnessSrtSinkPool::start(&ports, udp_buffer)?;
 
     let started = Instant::now();
     let started_ms = SystemTime::now()
@@ -177,6 +175,7 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
         .unwrap_or(0);
     let run = run_id();
     let start_drops = host_udp_drop_counters();
+    let start_sink_drops = pool.counters().drops();
 
     // The state endpoint is what makes a remote rung's validity checkable: the
     // measuring host polls it every sample and refuses `healthy` without it.
@@ -187,12 +186,10 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
         let run = run.clone();
         let ports = ports.clone();
         let counters = pool.counters();
-        std::sync::Arc::new(move || {
-            sink_state(&run, started_ms, &ports, counters.snapshot(), udp_buffer)
-        })
+        std::sync::Arc::new(move || sink_state(&run, started_ms, &ports, &counters, udp_buffer))
     }));
     println!(
-        "[srt-sink] run {run} listening on {ports:?} with {threads} thread(s), {udp_buffer} B udp buffer; \
+        "[srt-sink] run {run} listening on {ports:?} with one SRT Owner thread per port, {udp_buffer} B udp buffer; \
          state endpoint on {state_port}/state (dual-stack when available); send SIGINT/SIGTERM to stop"
     );
 
@@ -225,6 +222,7 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
 
     let counters = pool.snapshot();
     let drops = udp_drops_since_start(start_drops);
+    let sink_drops = pool.counters().drops().since(&start_sink_drops);
     state_task.abort();
     pool.stop();
     Ok(json!({
@@ -233,7 +231,7 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
         "cpusAllowedList": cpus_allowed_list(),
         "ports": ports,
         "statePort": state_port,
-        "threads": threads,
+        "sinkDropsSinceStart": sink_drops.json(),
         "udpBufferBytes": udp_buffer,
         "uptimeSecs": started.elapsed().as_secs(),
         "stoppedBy": stopped_by,
