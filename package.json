@@ -18,18 +18,18 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
-    "@playwright/test": "^1.62.1",
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/cli": "^4.3.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
-    "daisyui": "^5.7.28",
-    "fast-check": "^4.9.0",
+    "daisyui": "^5.7.47",
+    "fast-check": "^4.10.2",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
-    "vite": "^8.2.2"
+    "vite": "^8.3.2"
   },
   "dependencies": {
-    "hls.js": "^1.7.2",
+    "hls.js": "^1.7.3",
     "react": "^19.2.7",
     "react-dom": "^19.2.8"
   }
