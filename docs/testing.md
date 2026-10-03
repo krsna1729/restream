@@ -429,8 +429,8 @@ live run.
   mixed matrix includes its RTMPS output row; a capability preflight reports
   missing Linux kTLS support as an explicit failure rather than falling back
   to userspace TLS. The fast concurrency proof stays on pull requests; full
-  live lifecycle faults are deferred to the `redevelop` tier.
-- Pushes to `redevelop` run the H.264/H.265 SRT live shapes, two RTMP live
+  live lifecycle faults are deferred to the `master` push tier.
+- Pushes to `master` run the H.264/H.265 SRT live shapes, two RTMP live
   shapes, `srt-crypto-matrix`, and `fault.resilience`. The concurrency live
   lifecycle job adds `fault.egress-retry`, `fault.output-stall`, and `recovery`.
   `fault.resilience` also proves RTMPS media delivery, sink loss reaching
@@ -439,7 +439,7 @@ live run.
 - Nightly certification adds the broader file/live, crypto, bitrate, ramp,
   resource, and churn matrix. Its harness artifacts upload on every result;
   pull-request failure/cancellation artifacts are retained for 3 days and
-  `redevelop` failure/cancellation artifacts for 7 days. The redevelop
+  `master` failure/cancellation artifacts for 7 days. The `master` push
   concurrency fault logs/results are retained for 7 days on failure/cancel.
 
 The catalog and workflow matrices are the source of truth for exact shard
