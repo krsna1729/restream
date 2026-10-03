@@ -354,4 +354,39 @@ mod tests {
         assert!(!conf.contains("io_uring_disabled"));
         assert!(!conf.contains("ip_local_port_range"));
     }
+
+    proptest::proptest! {
+        /// For any current values (or unreadable ones), every persisted
+        /// setting is exactly max(current, requirement): tuning raises to the
+        /// requirement and never lowers a host value.
+        #[test]
+        fn persisted_value_is_max_of_current_and_requirement(
+            currents in proptest::collection::vec(proptest::option::of(proptest::num::u64::ANY), 3),
+        ) {
+            let keys: Vec<(&str, u64)> = REQUIREMENTS
+                .iter()
+                .filter_map(|r| match r.check {
+                    Check::SysctlAtLeast(min) => Some((r.key, min)),
+                    _ => None,
+                })
+                .collect();
+            proptest::prop_assert_eq!(keys.len(), currents.len());
+            let current_of = |key: &str| {
+                keys.iter().position(|(k, _)| *k == key).and_then(|i| currents[i])
+            };
+            let conf = sysctl_conf(current_of);
+            for (i, (key, min)) in keys.iter().enumerate() {
+                let want = currents[i].map_or(*min, |current| current.max(*min));
+                let line = format!("{key} = {want}\n");
+                proptest::prop_assert!(conf.contains(&line), "missing {line:?} in {conf}");
+            }
+        }
+
+        /// A minimum check is met exactly when the observed value reaches it.
+        #[test]
+        fn minimum_check_is_met_iff_value_reaches_minimum(min in proptest::num::u64::ANY, value in proptest::num::u64::ANY) {
+            let met = matches!(evaluate(Check::SysctlAtLeast(min), Some(&value.to_string())), Status::Met(_));
+            proptest::prop_assert_eq!(met, value >= min);
+        }
+    }
 }
