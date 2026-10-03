@@ -22,6 +22,12 @@ fn main() {
                 restream::host_tuning::host_tune(&mut out)
             });
         }
+        if flag == "ffmpeg-fetch" {
+            if args.next().is_some() {
+                print_usage_and_exit();
+            }
+            std::process::exit(restream::ffmpeg_binary::fetch());
+        }
         if flag == "--emit-sbom" {
             let Some(path) = args.next() else {
                 print_usage_and_exit();
@@ -47,11 +53,9 @@ fn main() {
 
     let config = std::sync::Arc::new(restream::AppConfig::from_env());
 
-    // Initialise FFmpeg binary path from config (synchronous, before any
-    // async task can race with it). Must happen before ffmpeg_bin_path()
-    // consumers run — OnceLock init is thread-safe but we keep it on the
-    // main thread for clarity.
-    restream::ffmpeg_extract::init(config.ffmpeg_bin_path.clone());
+    // Seed the configured FFmpeg path before any consumer can resolve it;
+    // `run_app` resolves and logs the executable once logging is up.
+    restream::ffmpeg_binary::init(config.ffmpeg_bin_path.clone());
     let worker_threads = config.tokio_runtime.worker_threads;
     let max_blocking_threads = config.tokio_runtime.max_blocking_threads;
     tokio::runtime::Builder::new_multi_thread()
@@ -62,12 +66,10 @@ fn main() {
         .build()
         .expect("Failed to build tokio runtime")
         .block_on(restream::run_app(config));
-
-    restream::ffmpeg_extract::cleanup_ffmpeg();
 }
 
 fn print_usage_and_exit() -> ! {
-    eprintln!("usage: restream [host-check | host-tune | --emit-sbom <path>]");
+    eprintln!("usage: restream [host-check | host-tune | ffmpeg-fetch | --emit-sbom <path>]");
     std::process::exit(2);
 }
 

@@ -21,8 +21,8 @@ Two checked-in inputs must remain compatible:
 - [Cargo.toml](../Cargo.toml) owns the `ffmpeg-next` Rust binding family.
 
 [scripts/build/native-deps.sh](../scripts/build/native-deps.sh) owns download,
-configuration, compilation, capability verification, and placement of the
-embedded `public/bin/ffmpeg`. It rejects a version override that disagrees
+configuration, compilation, and capability verification of the static FFmpeg
+libraries linked into Restream. It rejects a version override that disagrees
 with the committed lock. Do not copy its flags, dependency list, or output-copy
 steps into this document.
 
@@ -58,10 +58,10 @@ version table becoming stale whenever the pin moves.
 
 ## Runtime executable override
 
-External transforms, subprocess file ingest, and recording remux normally use
-the embedded executable prepared by the native build. `FFMPEG_BIN_PATH`
-overrides that executable for a deployment; its user-facing contract belongs
-in [Configuration](configuration.md).
+External transforms, subprocess file ingest, and recording remux run an
+FFmpeg executable that is not part of the build: a system `ffmpeg`, the copy
+installed by `restream ffmpeg-fetch`, or `FFMPEG_BIN_PATH`. Its user-facing
+contract belongs in [Configuration](configuration.md).
 
 The linked in-process FFmpeg libraries are selected at build time and cannot be
 changed with the runtime executable override.
@@ -71,8 +71,8 @@ changed with the runtime executable override.
 - If native setup rejects a version, compare the requested value with
   `scripts/build/native/native-inputs.lock`; an unreviewed override is
   intentionally unsupported.
-- If the embedded executable is missing, rerun the native builder rather than
-  copying a host binary into `public/bin/`.
+- If no FFmpeg executable is found at startup, install the distribution's
+  `ffmpeg` package or run `restream ffmpeg-fetch`.
 - If Rust compilation fails after a version update, check the
   `ffmpeg-next` family in `Cargo.toml` and the compiler output before
   changing features.

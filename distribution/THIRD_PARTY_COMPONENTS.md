@@ -14,9 +14,11 @@ component. It is intentionally not a replacement for the license texts in
 | x265 | commit `e444744c03978c1fb4e037168967020cf2648427` | GPL-2.0-or-later | <https://bitbucket.org/multicoreware/x265_git> |
 | srt-rs | git commit `d520429c08520ba5f844d762af62254221cfc97a` ([krsna1729/srt-rs](https://github.com/krsna1729/srt-rs), pinned in `Cargo.toml`) | Apache-2.0 | <https://github.com/krsna1729/srt-rs> |
 | hls.js | npm package `hls.js@1.7.3` | Apache-2.0 | <https://github.com/video-dev/hls.js> |
+| FFmpeg executable (container images only) | BtbN `ffmpeg-n8.1-latest-linux64-gpl-8.1` (or `linuxarm64`) from the `latest` release, verified against that release's `checksums.sha256` at image build | GPL; the archive's `LICENSE.txt` names the exact version | <https://github.com/BtbN/FFmpeg-Builds> |
 
-The native FFmpeg build used for release binaries enables GPL components and
-links x264 and x265. Binary and container releases therefore keep the
+The native FFmpeg libraries linked into Restream enable GPL components and
+link x264 and x265. Restream no longer bundles an FFmpeg executable; container
+images add the BtbN build listed above. Binary and container releases therefore keep the
 matching GitHub source archive available beside the binary assets. The native
 source pins, checksums, configuration, and build scripts are checked in under
 `scripts/build/native/`.

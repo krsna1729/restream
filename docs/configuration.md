@@ -28,8 +28,8 @@ in SQLite.
 | glibc malloc arenas | **Provisional** `2` (set at startup with `mallopt`, return value checked; the effective setting is logged as `restream.malloc.arenas` and shown as `runtime.malloc.arena_max` in host settings). Measured on one 6-CPU host only: −34 to −47 MB RSS at 50 SRT / 500 RTMP outputs, frozen-SRT-destination surge 66–72 MB → 30–47 MB, no measurable CPU change. Arenas reduce allocator lock contention, so qualify per host (`docs/capacity-ramp.md`) before treating 2 as final | `RESTREAM_MALLOC_ARENA_MAX` (`default` = glibc policy, or a positive count); an operator `MALLOC_ARENA_MAX` takes precedence and is applied by glibc |
 | Tokio blocking-thread ceiling | `512` | `RESTREAM_TOKIO_MAX_BLOCKING_THREADS` |
 | Transcoder backend | External FFmpeg subprocess | `RESTREAM_INTERNAL_VIDEO_PRESETS`, `RESTREAM_INTERNAL_HEVC_TO_H264`, `RESTREAM_INTERNAL_HLS_PREVIEW`, and `RESTREAM_INTERNAL_AUDIO_COMPLEX` (`1`/`true`/`yes`/`on` enable each in-process stage family independently) |
-| File-ingest backend | External embedded FFmpeg subprocess | `RESTREAM_USE_INTERNAL_FILE_INGEST` (`1`/`true`/`yes`/`on` to enable in-process remux + demux for passthrough file ingest) |
-| External transcoder and file-ingest executable | Embedded `public/bin/ffmpeg`, extracted to `.restream/runtime/ffmpeg/` at startup | `FFMPEG_BIN_PATH` |
+| File-ingest backend | External FFmpeg subprocess | `RESTREAM_USE_INTERNAL_FILE_INGEST` (`1`/`true`/`yes`/`on` to enable in-process remux + demux for passthrough file ingest) |
+| External transcoder and file-ingest executable | `ffmpeg` on `PATH`; else the copy installed by `restream ffmpeg-fetch` in `.restream/runtime/ffmpeg/` | `FFMPEG_BIN_PATH` |
 | External FFmpeg codec threads | FFmpeg-selected | `RESTREAM_EXTERNAL_FFMPEG_THREADS` |
 | Recording remux FFmpeg threads | FFmpeg-selected | `RESTREAM_RECORDING_FFMPEG_THREADS` |
 | Concurrent external FFmpeg stages | Derived from available CPUs | `RESTREAM_EXTERNAL_FFMPEG_PERMITS`; derivation can be tuned with `RESTREAM_EXTERNAL_FFMPEG_CPU_RESERVE`, `RESTREAM_EXTERNAL_FFMPEG_CPU_PER_CHILD`, and `RESTREAM_EXTERNAL_FFMPEG_MAX_CHILDREN` |
@@ -94,10 +94,20 @@ output fails; there is no implicit userspace-TLS fallback. Configure
 `RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM` only when the destination uses a
 private CA.
 
-`FFMPEG_BIN_PATH` overrides the shared subprocess FFmpeg path used by the
-external transcoder, the default file-ingest backend, and post-recording
-`.ts` → `.mp4` remux. The recording remux path requires that binary to expose
-the `mov/mp4` muxer.
+FFmpeg is not bundled. The subprocess executable used by the external
+transcoder, the default file-ingest backend, and post-recording `.ts` → `.mp4`
+remux resolves in this order: `FFMPEG_BIN_PATH`; the copy installed by
+`restream ffmpeg-fetch`; `ffmpeg` on `PATH`. The recording remux path requires
+that binary to expose the `mov/mp4` muxer; video presets need the `libx264`
+and `libx265` encoders. If none is found, the server still starts and logs one
+warning; only those FFmpeg-backed features fail.
+
+`restream ffmpeg-fetch` is an optional helper. It downloads the
+[BtbN](https://github.com/BtbN/FFmpeg-Builds) FFmpeg 8.1 static GPL build for
+the host architecture (x86-64 or arm64) from that project's `latest` GitHub
+release, verifies it against the release's `checksums.sha256`, and installs
+`bin/ffmpeg`. It needs GNU `tar` with xz support. The container images run the
+same download in their build and set `FFMPEG_BIN_PATH=/usr/local/bin/ffmpeg`.
 
 The default working-directory layout is deliberately small and hidden under
 `.restream/`: `data/` owns only SQLite state and its sidecars, `media/` owns
@@ -338,7 +348,7 @@ service owns the exact subprocess arguments; this reference documents the
 user-visible settings and resulting behavior.
 
 `liveOptimized=true` forces the subprocess backend even when
-`RESTREAM_USE_INTERNAL_FILE_INGEST=1`. In that mode the embedded FFmpeg binary
+`RESTREAM_USE_INTERNAL_FILE_INGEST=1`. In that mode the FFmpeg executable
 re-encodes video to H.264, audio to AAC, disables scene-cut GOP drift, and
 forces keyframes at the configured `targetGopSeconds` cadence for steadier HLS
 preview and recording from sparse-GOP source files.

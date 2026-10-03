@@ -66,8 +66,7 @@ native_state_ready() {
     [[ -f .local/build/static/env.sh ]] &&
         [[ -f .local/build/static/prefix/lib/libavcodec.a ]] &&
         [[ -f .local/build/static/prefix/lib/libavformat.a ]] &&
-        [[ -x .local/build/static/prefix/bin/restream-ffmpeg-capabilities ]] &&
-        [[ -x public/bin/ffmpeg ]]
+        [[ -x .local/build/static/prefix/bin/restream-ffmpeg-capabilities ]]
 }
 
 if native_state_ready; then
@@ -139,8 +138,7 @@ for asset in \
     public/js/app/dashboard-v2-entry.js \
     public/js/app/dashboard-v2-checkpoints-entry.js \
     public/js/app/dashboard-v2-jsx-runtime.js \
-    public/js/lib/hls.min.js \
-    public/bin/ffmpeg; do
+    public/js/lib/hls.min.js; do
     [[ -s "$asset" ]] || {
         echo "prepare-build-tree: required generated asset is missing: $asset" >&2
         exit 1

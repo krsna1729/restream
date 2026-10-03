@@ -18,7 +18,7 @@ restream_require_commands cargo npm tar
 
 # A clean release checkout has neither node_modules nor generated public assets.
 # Reuse the canonical release preparation script so packaging, CI, and local
-# due diligence cannot drift on whether public/ and public/bin/ffmpeg exist.
+# due diligence cannot drift on whether the generated public/ assets exist.
 scripts/release/prepare-build-tree.sh
 
 # `restream-mcp` is feature-gated. Build the supported executable set through

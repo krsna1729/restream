@@ -25,7 +25,6 @@ declare -a NOISE_PATTERNS=(
   'specified frame type is not compatible with max B-frames'
   'Could not find codec parameters'
   'not enough frames to estimate rate'
-  'ensure_ffmpeg_extracted\(\) must be called before ffmpeg_bin_path\(\)'
   '405 Method Not Allowed'
   'Blocking waiting for file lock on build directory'
   'resource-limit: waiting for another build to finish'

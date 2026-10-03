@@ -15,7 +15,7 @@ pub(super) struct SpawnedExternalFileIngest {
 pub(super) fn spawn_child(
     source: &ExternalFileIngestSource,
 ) -> Result<SpawnedExternalFileIngest, String> {
-    let ffmpeg_bin = crate::ffmpeg_extract::ensure_ffmpeg_extracted();
+    let ffmpeg_bin = crate::ffmpeg_binary::ffmpeg_bin_path();
     let args = build_ffmpeg_args(source);
     let mut child = Command::new(ffmpeg_bin)
         .args(&args)

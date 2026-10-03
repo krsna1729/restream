@@ -133,13 +133,13 @@ echo ""
 echo "Checking for inline std::env::var usage outside src/config.rs..."
 # Exclude config.rs, main.rs (tokio runtime limits), test harness,
 # tests, benches, test_fixtures.rs, lib.rs (config-chain helpers),
-# ffmpeg_extract.rs (the documented FFMPEG_BIN_PATH fallback), planner
+# ffmpeg_binary.rs (FFMPEG_BIN_PATH fallback and PATH lookup), planner
 # (BackendPolicy::from_env), and restream-mcp (separate binary).
 RAW_ENV_VARS=$(grep -rn "std::env::var" src/ \
     | grep -v "src/config.rs" \
     | grep -v "src/main.rs" \
     | grep -v "src/lib.rs" \
-    | grep -v "src/ffmpeg_extract.rs" \
+    | grep -v "src/ffmpeg_binary.rs" \
     | grep -v "src/planner/" \
     | grep -v "src/bin/test_harness" \
     | grep -v "src/bin/restream-mcp.rs" \

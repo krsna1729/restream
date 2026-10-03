@@ -41,7 +41,7 @@ fn run_external_stage_args(fixture: &[u8], preset: &str) -> Vec<MediaPacket> {
         let _guard = FFMPEG_EXTRACT_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        restream::ffmpeg_extract::ensure_ffmpeg_extracted()
+        restream::ffmpeg_binary::ffmpeg_bin_path()
     };
     let temp_dir = temp_artifact_dir();
     let input_path = temp_dir.join("input.ts");

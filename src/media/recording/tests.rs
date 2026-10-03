@@ -206,7 +206,7 @@ async fn remux_recording_to_mp4_deletes_source_ts_when_retention_disabled() {
     );
 
     let roundtrip_ts = temp_dir.join("roundtrip.ts");
-    let status = TokioCommand::new(crate::ffmpeg_extract::ffmpeg_bin_path())
+    let status = TokioCommand::new(crate::ffmpeg_binary::ffmpeg_bin_path())
         .args([
             "-y",
             "-hide_banner",
@@ -260,7 +260,7 @@ async fn remux_recording_to_mp4_keeps_source_ts_when_retention_enabled() {
     );
 
     let roundtrip_ts = temp_dir.join("roundtrip.ts");
-    let status = TokioCommand::new(crate::ffmpeg_extract::ffmpeg_bin_path())
+    let status = TokioCommand::new(crate::ffmpeg_binary::ffmpeg_bin_path())
         .args([
             "-y",
             "-hide_banner",
@@ -371,7 +371,7 @@ async fn assert_remux_preserves_timestamp_continuity(retain_source_ts: bool) {
     let source_audio_span = stream_span_ms(&source_packets, MediaType::Audio);
 
     let roundtrip_ts = temp_dir.join("roundtrip.ts");
-    let status = TokioCommand::new(crate::ffmpeg_extract::ffmpeg_bin_path())
+    let status = TokioCommand::new(crate::ffmpeg_binary::ffmpeg_bin_path())
         .args([
             "-y",
             "-hide_banner",

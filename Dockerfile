@@ -118,7 +118,6 @@ FROM rust-build AS runtime-tree
 # target directory above.
 COPY src/ src/
 COPY --from=frontend-build /workspace/public public
-COPY --from=native-deps /workspace/public/bin/ffmpeg public/bin/ffmpeg
 # COPY keeps each file's original (checkout-time) mtime, which is OLDER than the
 # dummy sources the warm layer compiled, so Cargo would treat the warmed dummy
 # artifacts (a stub main) as up to date. Touch the real sources so the final
@@ -138,6 +137,28 @@ RUN scripts/build/bench-harness.sh
 # writable by UID 1000 in rootless container engines.
 FROM native-deps AS runtime-state
 RUN mkdir -p /restream-state && touch /restream-state/.keep
+
+# FFmpeg is not bundled in the binary; images carry the same BtbN build that
+# `restream ffmpeg-fetch` installs, verified against the release checksums.
+FROM ubuntu:24.04 AS ffmpeg-fetch
+ARG TARGETARCH
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+RUN case "${TARGETARCH:-amd64}" in \
+        amd64) asset=ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz ;; \
+        arm64) asset=ffmpeg-n8.1-latest-linuxarm64-gpl-8.1.tar.xz ;; \
+        *) echo "no FFmpeg build for ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && base=https://github.com/BtbN/FFmpeg-Builds/releases/download/latest \
+    && cd /tmp \
+    && curl -fsSLO "$base/checksums.sha256" \
+    && curl -fsSLO "$base/$asset" \
+    && grep " \*\?$asset\$" checksums.sha256 | sha256sum -c - \
+    && tar -xJf "$asset" --strip-components=2 --wildcards '*/bin/ffmpeg' \
+    && install -m 0755 ffmpeg /usr/local/bin/ffmpeg \
+    && rm -f "$asset" ffmpeg checksums.sha256
 
 # ── Stage 4: distroless runtime ──────────────────────────────────────────────
 #
@@ -161,6 +182,8 @@ LABEL org.opencontainers.image.source="https://github.com/krsna1729/restream" \
 EXPOSE 3030 1935 10080/udp
 
 COPY --from=runtime-state --chown=1000:1000 /restream-state /.restream
+COPY --from=ffmpeg-fetch /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
+ENV FFMPEG_BIN_PATH=/usr/local/bin/ffmpeg
 
 USER 1000:1000
 
@@ -192,6 +215,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates netbase tzdata \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=ffmpeg-fetch /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
+ENV FFMPEG_BIN_PATH=/usr/local/bin/ffmpeg
 
 COPY --from=runtime-tree /workspace/target/release/restream /restream
 COPY distribution/ /usr/share/doc/restream/distribution/
@@ -232,7 +257,7 @@ RUN scripts/dev/bootstrap-runtime.sh --skip-harness-host-check
 # Build explicitly with the same provenance args documented in README.md:
 # `docker build --build-arg RESTREAM_BUILD_GIT_COMMIT=... --build-arg RESTREAM_BUILD_TIMESTAMP=... --target harness -t restream:harness .`.
 # It contains every generated executable used in live validation (`restream`,
-# bench-profile `test_harness`, and the embedded static FFmpeg), the pinned
+# bench-profile `test_harness`; FFmpeg comes from the runtime's ffmpeg package), the pinned
 # MediaMTX peer, committed fixtures, and only the OS tools the harness invokes.
 FROM ci-harness-runtime AS harness
 
@@ -245,7 +270,6 @@ LABEL org.opencontainers.image.source="https://github.com/krsna1729/restream" \
     org.opencontainers.image.licenses="MIT AND GPL-2.0-or-later AND MPL-2.0 AND Apache-2.0"
 COPY --from=harness-build /workspace/target/bench/restream /workspace/target/bench/restream
 COPY --from=harness-build /workspace/target/bench/test_harness /workspace/target/bench/test_harness
-COPY --from=harness-build /workspace/public/bin/ffmpeg /workspace/public/bin/ffmpeg
 COPY test/fixtures/ test/fixtures/
 COPY test/harness/ test/harness/
 COPY distribution/ /usr/share/doc/restream/distribution/
