@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - master
-      - redevelop
   pull_request:
   workflow_dispatch:
 
@@ -233,7 +232,7 @@ jobs:
         run: scripts/build/resource-limit.sh cargo test --test egress_scheduler_shape
 
   concurrency-contract:
-    if: ${{ github.ref == 'refs/heads/redevelop' }}
+    if: ${{ github.ref == 'refs/heads/master' }}
     name: Concurrency live lifecycle proof
     runs-on: ubuntu-24.04
     needs: api-contract
@@ -344,7 +343,7 @@ jobs:
           retention-days: 1
 
   integration-shards:
-    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/redevelop' }}
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
     needs: integration-build
     uses: ./.github/workflows/_harness-runtime-shards.yml
     with:
@@ -365,8 +364,8 @@ jobs:
     secrets:
       gh_token: ${{ github.token }}
 
-  redevelop-transport-shards:
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/redevelop' }}
+  master-transport-shards:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
     needs: integration-build
     uses: ./.github/workflows/_harness-runtime-shards.yml
     with:
@@ -375,8 +374,8 @@ jobs:
       install_dir: target/bench
       harness_bin: target/bench/test_harness
       restream_bin: target/bench/restream
-      shard_name_prefix: Redevelop transport qualification
-      artifact_upload_prefix: redevelop-transport
+      shard_name_prefix: Master transport qualification
+      artifact_upload_prefix: master-transport
       artifact_upload_path: .local/artifacts/
       artifact_retention_days: 7
       upload_artifacts_mode: failure_or_cancelled

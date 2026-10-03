@@ -2,7 +2,7 @@
 
 Status: active  
 Scope: `restream` + upstream `srt-rs`  
-Primary branch: `restream/redevelop`
+Primary branch: `restream/master` (`redevelop` merged in #186, `fbcc427c`)
 
 Current known heads at the time this tracker was established:
 
