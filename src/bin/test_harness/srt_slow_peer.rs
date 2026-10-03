@@ -143,7 +143,7 @@ pub(crate) async fn srt_slow_peer() -> Result<Value, String> {
     let healthy_port = base.checked_add(2000).ok_or("healthy sink port overflow")?;
     let slow_port = base.checked_add(2001).ok_or("slow sink port overflow")?;
 
-    let healthy_sink = HarnessSrtSinkPool::start(&[healthy_port], 8 * 1024 * 1024, 2)?;
+    let healthy_sink = HarnessSrtSinkPool::start(&[healthy_port], 8 * 1024 * 1024)?;
     let slow_sink = RawSrtSink::start(slow_port)?;
     let (mut child, api) = start_restream_api(
         &default_restream_bin(),

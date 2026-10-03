@@ -261,7 +261,7 @@ cmd_start_peer() {
     srt-sink)
       exec sudo -n ip netns exec "$NETNS" env \
         SRT_SINK_PORTS="$SRT_PORT" SRT_SINK_STATE_PORT="$STATE_PORT" \
-        SRT_SINK_CPUSET="$SRT_SINK_CPUSET" HARNESS_SRT_SINK_THREADS="${HARNESS_SRT_SINK_THREADS:-4}" \
+        SRT_SINK_CPUSET="$SRT_SINK_CPUSET" \
         HARNESS_SRT_SINK_UDP_BUFFER="${HARNESS_SRT_SINK_UDP_BUFFER:-33554432}" \
         "$binary" srt-sink --no-netns
       ;;

@@ -390,6 +390,7 @@ fn report_test_aggregate() -> MsrCheckpointAggregate {
         resource: ResourceAggregate {
             delivery: Default::default(),
             thread_cpu_pct: Default::default(),
+            srt_sink_drops: None,
             scenario: MSR_MODE.to_string(),
             label: "30-outputs".to_string(),
             lifecycle: "continuous".to_string(),

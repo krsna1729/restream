@@ -253,7 +253,6 @@ run_rung() {
   env "${shards_env[@]}" \
     RESTREAM_CPUSET="$restream_cpus" \
     MSR_PEER=sink PEER_COUNT="$peer_count" \
-    HARNESS_SRT_SINK_THREADS="$sink_threads" \
     RESTREAM_BIN="$PWD/$bin_dir/restream" WORK_DIR="$dir" \
     RESOURCE_SWEEP_SCENARIOS="$(scenario_for "$protocol")" \
     RESOURCE_SWEEP_INGEST_COUNTS=1 RESOURCE_SWEEP_EGRESS_COUNTS="$outputs" \

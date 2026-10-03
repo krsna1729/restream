@@ -414,6 +414,12 @@ fn dead_srt_udp_queue_telemetry_does_not_return() {
         "SRT UDP drops",
     ];
     let mut inspect = |path: &std::path::Path, source: &str| {
+        // The harness SRT sink reads real per-socket drops from
+        // `/proc/net/udp` to grade its own receiver; the guard is about
+        // production telemetry.
+        if path.starts_with("src/bin/test_harness") {
+            return;
+        }
         for dead in DEAD {
             assert!(
                 !source.contains(dead),
