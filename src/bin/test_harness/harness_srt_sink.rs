@@ -372,8 +372,16 @@ fn sink_thread(
 /// The SRT ingress Owner's construction (`media::srt::ingress_owner::build`)
 /// minus the admission resolver: the sink accepts every caller.
 fn build_owner(port: u16, udp_buffer: usize) -> Result<(Owner, compio::runtime::Runtime), String> {
-    let runtime_config =
+    let mut runtime_config =
         ProductionRuntimeConfig::for_owner(SINK_TX_CAPACITY, SRT_OWNER_WIRE_CEILING);
+    // A/B knob: managed-RX provided buffers (power of two; production 256).
+    if let Some(entries) = std::env::var("HARNESS_SRT_SINK_RX_RING")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|entries| entries.is_power_of_two())
+    {
+        runtime_config.rx_ring_entries = entries;
+    }
     let runtime = production_runtime(runtime_config)?;
     let profile = runtime.block_on(observe_production_runtime(
         &runtime,
