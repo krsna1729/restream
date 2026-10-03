@@ -30,7 +30,6 @@ pub use self::errors::HandshakeError;
 
 use hmac::{Hmac, Mac, NewMac};
 use rand;
-use rand::Rng;
 use sha2::Sha256;
 
 const RTMP_PACKET_SIZE: usize = 1536;
@@ -510,11 +509,7 @@ fn calc_hmac(input: &[u8], key: &[u8]) -> [u8; SHA256_DIGEST_LENGTH] {
 }
 
 fn fill_with_random_data(buffer: &mut [u8]) {
-    let mut rng = rand::thread_rng();
-    for x in 0..buffer.len() {
-        let value = rng.gen();
-        buffer[x] = value;
-    }
+    rand::fill(buffer);
 }
 
 #[cfg(test)]
