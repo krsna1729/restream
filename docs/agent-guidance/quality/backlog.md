@@ -18,25 +18,37 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 
 ## Open
 
-### Q-027 [performance] [opus] Explain the SRT×100 fan-out failure after the kernel 7.0.0-38 reboot
-- Goal: name the cause of SRT×100 losing delivery on this host after the
-  reboot from kernel 7.0.0-34 to 7.0.0-38, and either fix it in Restream or
-  srt-rs, or document it as a host/kernel limit with evidence.
-- Files: `src/media/egress/backends/srt*`, srt-rs `crates/srt-transport/src/runtimes/compio.rs`
-  (TX pool / GSO send), `scripts/harness/capacity-ramp.sh`.
-- Gates: `CAPACITY_PROTOCOLS=srt CAPACITY_SRT_OUTPUTS=100` (4 Restream CPUs,
-  2 harness CPUs) passes 2/2 again, or an A/B (old vs new kernel, or one
-  variable such as GSO or managed RX) isolates the change.
-- Context: the same `wi11/cores` release binary passed 8/8 SRT×100 repeats on
-  7.0.0-34 (125–151% CPU; ~92k TX datagrams/s; ~15 µs CPU per SRT packet). On
-  7.0.0-38 it fails 0/2 (21/100 delivered, 153% CPU), and so does every
-  redevelop `9c704798` allocator arm (7–26/100 delivered). Symptoms: Owner TX
-  exhaustion every sample, leaves closed `no progress (stalled) blocked=true`,
-  ~44k TX datagrams/s at 39 µs per packet, no receiver UDP buffer errors. RTMP
-  and HLS fan-out on the same host still pass. Jitter probe: 0.06% lost, worst
-  gap 5.8 ms.
-- Status: open (Filed: 2026-10-02 by claude). Blocks SRT capacity evidence on
-  this host.
+### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
+- Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
+  sink keeps up with SRT×100 on this host, and receiver loss is reported per
+  socket so it can never again be mistaken for Restream loss.
+- Files: `src/bin/test_harness/harness_srt_sink.rs`, `resource_sweep.rs`,
+  `srt_sink.rs`; production reference `src/media/srt/ingress_owner.rs`.
+- Gates: `CAPACITY_PROTOCOLS=srt CAPACITY_SRT_OUTPUTS=100` (Restream on 4 CPUs,
+  harness on 2) passes at least 6 of 7 repeats with the default 8 MiB sink
+  buffer; per-socket receive drops and managed-RX exhaustion appear in the
+  resource-sweep results.
+- Context: after the reboot from kernel 7.0.0-34 to 7.0.0-38 the same release
+  binary went from 8/8 SRT×100 passes to intermittent failure. Evidence
+  (2026-10-03, `6f1bcfbf`, 21 probed runs):
+  - Restream's send side is healthy in failing runs: 69–107k TX datagrams/s,
+    all completed, about 850 per output per second against ~760 needed.
+  - Pass or fail follows the harness sink's UDP receive-buffer drops: passes at
+    500–2,400 drops/s, failures at 19,800–39,200/s (7 runs, 2 passed).
+  - A 24 MiB sink buffer cut drops to 0–4,300/s and passed 2 of 4.
+  - GSO off in Restream (one `sendmsg` per datagram) passed 1 of 4 with drops of
+    1.4k–29k/s, against 0 of 4 with GSO on: not the cause.
+  - The sink drains at most 512 datagrams per wake, then sends every control
+    packet with its own `send_to().await` before reading again; at ~64k
+    datagrams/s per socket an 8 MiB buffer covers ~56 ms of not reading, while
+    the harness CPUs are shared with the publisher and the VPS shows vCPU gaps
+    up to 128 ms.
+  Plan: run the sink on the srt-rs Compio Owner listener exactly as SRT ingress
+  does (managed multishot RX fills a kernel-side buffer ring, batched TX), with
+  per-socket drop counters. Proving that 7.0.0-38 itself made the receive path
+  burstier needs a boot back into 7.0.0-34 (owner decision).
+- Status: open (Filed: 2026-10-02 by claude; investigated 2026-10-03). Blocks
+  SRT capacity evidence on this host.
 
 ### Q-024 [modularity] [sonnet] Collapse the connector/completion test seams in both egress backends
 - Goal: remove production traits that exist only so tests can substitute a

@@ -76,6 +76,7 @@ write-ups live in the [documentation archive](archive/README.md).
 - [Egress capacity ramp](capacity-ramp.md) — reproducible RTMP/RTMPS/SRT fan-out capacity measurement against in-process sinks, reference results, and a handoff prompt for other hosts.
 - [Media copy audit and allocator exploration](media-copy-audit.md) — per-byte copy inventory with justifications, memcpy/byte-search decision data, in-flight zero-copy work and Rust Allocator API leverage plan.
 - [SRT / Compio dataplane roadmap](srt-compio-roadmap.md) — execution order, invariants, performance targets and decision gates for the SRT Owner migration and packet-rate program.
+- [WI11 rejected experiments](wi11-rejected-experiments.md) — dated evidence for CPU segregation, HLS PUT on cyper and alternative allocators: setup, results, mechanism and what stays open.
 - [Frontend layering audit](archive/audits/frontend-layering-audit-2026-07-21.md) — dated three-lens frontend architecture audit.
 - [Testing decision record](testing-strategy.md) — accepted rationale for the
   unit/live tier boundary. Use [testing.md](testing.md) for current commands.
@@ -168,6 +169,7 @@ Markdown is indexed only from [archive/README.md](archive/README.md).
 - [Quality backlog](agent-guidance/quality/backlog.md)
 - [Performance and resource baselines](agent-guidance/quality/baselines.md)
 - [Quality journal](agent-guidance/quality/journal.md)
+- [WI11 rejected experiments](wi11-rejected-experiments.md)
 
 ### Canonical agent skills and references
 
