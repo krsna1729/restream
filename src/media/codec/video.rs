@@ -203,10 +203,16 @@ impl AnnexbParameterSetAccumulator {
             return;
         }
         let h264_nal_type = nalu[0] & 0x1F;
-        let h265_nal_type = if nalu.len() >= 2 {
-            (nalu[0] >> 1) & 0x3F
-        } else {
-            0
+        // A base-layer H.265 parameter set has a two-byte header with
+        // forbidden_zero_bit = 0, nuh_layer_id = 0 and nuh_temporal_id_plus1
+        // >= 1 (7.3.1.2): first byte 0x40/0x42/0x44, second byte 0x01..=0x07.
+        // Without the layer check, common H.264 reference slices (0x41, 0x43,
+        // 0x45) read as VPS/SPS/PPS.
+        let h265_nal_type = match nalu {
+            [first, second, ..] if first & 0x81 == 0 && (1..=7).contains(second) => {
+                (first >> 1) & 0x3F
+            }
+            _ => 0,
         };
 
         if (32..=34).contains(&h265_nal_type) && self.switch_kind(AnnexbCodecKind::H265) {
