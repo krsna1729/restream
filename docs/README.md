@@ -45,6 +45,8 @@ document is one `git log -- <path>` away.
   invariants and how to measure them.
 - [Concurrency proofing](concurrency-proofing.md): which proof catches which
   bug, and the gates.
+- [Isolation audit](isolation-audit.md): every resource entities share, its
+  per-entity bound and its test; open findings.
 - [Assurance roadmap](assurance-roadmap.md): which rung (types, tests, Kani,
   TLA+, Lean) should prove which invariant.
 - [Frontend](frontend.md): design system, route contract, visual baseline

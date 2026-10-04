@@ -118,6 +118,7 @@ impl SrtServer {
             event_capacity: INGRESS_EVENT_CAPACITY,
             telemetry_capacity: INGRESS_TELEMETRY_CAPACITY,
             owners: self.engine.config.srt_ingress_owners,
+            max_peers_per_ip: self.engine.config.srt_max_peers_per_ip,
         })
         .await
         {

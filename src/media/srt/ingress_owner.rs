@@ -190,6 +190,11 @@ pub(super) fn listener_plans(config: &IngressConfig) -> Result<Vec<OwnerListener
     let listener_config = ListenerConfig::builder(config.bind)
         .topology(topology)
         .bonded_inputs(BondedInputPolicy::Accept)
+        .configure_admission(|admission| {
+            // srt-rs defaults this to `max_peers` (no per-client bound).
+            admission.limits.max_peers_per_ip =
+                config.max_peers_per_ip.clamp(1, admission.limits.max_peers);
+        })
         .configure_transport(|transport| {
             // Same receive buffer as egress Owner sockets (`desired_udp_buf`,
             // 8 MiB unless RESTREAM_SRT_UDP_BUF_BYTES overrides). With the

@@ -741,11 +741,15 @@ pub(super) async fn handle_rtmp_client(
     let mut stats_tick: Pin<Box<dyn Future<Output = ()>>> =
         Box::pin(compio::time::sleep(Duration::from_secs(2)));
     let fd = socket.raw_fd();
+    // Until it publishes, the client holds a slot without having
+    // authenticated; it must get there by this deadline.
+    let admission_deadline =
+        Instant::now() + Duration::from_millis(engine.config.rtmp_preauth_timeout_ms);
     while disconnect.is_none() {
         // Read straight into the session's own input buffer: the only copy of
         // a received byte before chunk reassembly is the kernel's.
         let input = session.take_input_buffer();
-        let Some(read_result) = read_rtmp_input_or_quality(
+        let read = read_rtmp_input_or_quality(
             &mut socket,
             input,
             &shutdown,
@@ -754,9 +758,21 @@ pub(super) async fn handle_rtmp_client(
             fd,
             &mut previous_tcp_bytes,
             &commands,
-        )
-        .await
-        else {
+        );
+        let read = if publishing {
+            read.await
+        } else {
+            // Dropping the read on expiry is safe: the connection closes.
+            let remaining = admission_deadline.saturating_duration_since(Instant::now());
+            match compio::time::timeout(remaining, read).await {
+                Ok(read) => read,
+                Err(_) => {
+                    disconnect = Some(("admission", PREAUTH_DEADLINE_PASSED, true));
+                    break;
+                }
+            }
+        };
+        let Some(read_result) = read else {
             disconnect = Some(("shutdown", "RTMP listener shutting down", false));
             break;
         };
@@ -845,6 +861,7 @@ pub(super) async fn handle_rtmp_client(
 }
 
 const PARSER_BUDGET_EXHAUSTED: &str = "RTMP ingest parser budget exhausted";
+const PREAUTH_DEADLINE_PASSED: &str = "RTMP client did not publish before the admission deadline";
 
 /// Media payload bytes in parsed results not yet published to the ring.
 fn awaiting_handoff_bytes(results: &[ServerSessionResult]) -> usize {

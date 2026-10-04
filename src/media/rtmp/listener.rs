@@ -66,6 +66,8 @@ pub(crate) async fn start_rtmp_server_on_with_shutdown(
 
     let addr = format!("0.0.0.0:{port}");
     let connection_limit = engine.config.rtmp_max_connections.clamp(1, 16_384);
+    let client_slots =
+        super::client_slots::ClientSlots::new(engine.config.rtmp_max_connections_per_ip);
     let parser_budget = engine.config.rtmp_ingest_parser_budget_bytes;
     let owners = engine
         .config
@@ -128,8 +130,11 @@ pub(crate) async fn start_rtmp_server_on_with_shutdown(
             accepting.clone(),
             engine.clone(),
             ready_tx,
-            owner_share(connection_limit, index, owners),
-            owner_share(parser_budget, index, owners),
+            OwnerLimits {
+                connections: owner_share(connection_limit, index, owners),
+                parser_budget_bytes: owner_share(parser_budget, index, owners),
+                client_slots: Arc::clone(&client_slots),
+            },
         ) {
             Ok(owner) => {
                 engine.register_os_thread(owner);
@@ -210,6 +215,14 @@ pub(crate) async fn start_rtmp_server_on_with_shutdown(
     }
 }
 
+/// What one ingress owner may admit: its share of the connection cap and the
+/// parser budget, and the per-client slots every owner shares.
+struct OwnerLimits {
+    connections: usize,
+    parser_budget_bytes: usize,
+    client_slots: Arc<super::client_slots::ClientSlots>,
+}
+
 fn owner_share(total: usize, index: usize, owners: usize) -> usize {
     total / owners + usize::from(index < total % owners)
 }
@@ -223,8 +236,7 @@ fn spawn_compio_owner(
     accepting: CancellationToken,
     engine: Arc<MediaEngine>,
     ready: oneshot::Sender<Result<(), String>>,
-    connection_limit: usize,
-    parser_budget_bytes: usize,
+    limits: OwnerLimits,
 ) -> io::Result<thread::JoinHandle<()>> {
     thread::Builder::new()
         .name(format!("restream-rtmp-compio-owner-{index}"))
@@ -232,7 +244,7 @@ fn spawn_compio_owner(
             // A failed/panicked owner cancels its siblings, not just its own
             // connections. The server's guard also covers control-task abort.
             let _owner_guard = shutdown.clone().drop_guard();
-            let entries = rtmp_io_uring_entries(connection_limit);
+            let entries = rtmp_io_uring_entries(limits.connections);
             let mut proactor = ProactorBuilder::new();
             proactor
                 .driver_type(DriverType::IoUring)
@@ -276,15 +288,7 @@ fn spawn_compio_owner(
                     _ = shutdown.cancelled() => return listener.close().await,
                     _ = accepting.cancelled() => {}
                 }
-                run_compio_owner(
-                    listener,
-                    control_tx,
-                    shutdown,
-                    owner_engine,
-                    connection_limit,
-                    parser_budget_bytes,
-                )
-                .await
+                run_compio_owner(listener, control_tx, shutdown, owner_engine, limits).await
             });
             if let Err(error) = owner_result {
                 report_listener_error(
@@ -308,9 +312,13 @@ async fn run_compio_owner(
     control_tx: mpsc::Sender<ControlSession>,
     shutdown: CancellationToken,
     engine: Arc<MediaEngine>,
-    connection_limit: usize,
-    parser_budget_bytes: usize,
+    limits: OwnerLimits,
 ) -> io::Result<()> {
+    let OwnerLimits {
+        connections: connection_limit,
+        parser_budget_bytes,
+        client_slots,
+    } = limits;
     let connection_shutdown = CancellationToken::new();
     let parser_budget = super::ingest::parser_budget::ParserBudget::new(parser_budget_bytes);
     let mut connections = FuturesUnordered::new();
@@ -341,6 +349,11 @@ async fn run_compio_owner(
                     drop(stream);
                     continue;
                 }
+                let Some(client_slot) = client_slots.try_acquire(peer_addr.ip()) else {
+                    warn!(%peer_addr, "RTMP connection rejected: this client holds its maximum connections");
+                    drop(stream);
+                    continue;
+                };
 
                 let (command_tx, command_rx) = mpsc::channel(CONTROL_SESSION_CAPACITY);
                 let session_shutdown = connection_shutdown.child_token();
@@ -368,6 +381,7 @@ async fn run_compio_owner(
                     connection_parser_budget,
                 ));
                 connections.push(Box::pin(connection.catch_unwind().map(move |result| {
+                    drop(client_slot);
                     match result {
                         Ok(Ok(())) => {}
                         Ok(Err(error)) => warn!(%error, %peer_addr, "error handling RTMP client"),
