@@ -3,6 +3,7 @@
 //! TCP admission, ingest sessions, and egress publication are separate owners.
 //! The public entry points remain re-exported here for callers.
 
+mod client_slots;
 mod egress_connection;
 mod egress_engine;
 mod egress_metadata;

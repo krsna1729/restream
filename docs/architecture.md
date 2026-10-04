@@ -347,7 +347,8 @@ Rules for code behind a boundary:
   evaluated when the level is disabled.
 
 Engine health reports `containedPanics`, `rtmpListener.restarts` and
-`srtListener.restarts`.
+`srtListener.restarts`. Shared resources, their per-entity bounds and the open findings are in
+the [isolation audit](isolation-audit.md).
 
 Concurrency proof expectations and the stage coverage map live in
 [Concurrency proofing](concurrency-proofing.md) and
