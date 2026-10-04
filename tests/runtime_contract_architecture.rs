@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 #[test]
 fn selected_runtime_contracts_stay_ready_for_extraction() {
     for (name, source) in [

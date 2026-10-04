@@ -1,4 +1,5 @@
 //! Focused contract tests for live output runtime status payloads.
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;

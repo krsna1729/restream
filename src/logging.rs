@@ -65,24 +65,18 @@ struct SpanStore(Arc<Mutex<HashMap<Id, SpanFields>>>);
 
 impl SpanStore {
     fn record(&self, id: &Id, fields: SpanFields) {
-        if let Ok(mut m) = self.0.lock() {
-            m.insert(id.clone(), fields);
-        }
+        crate::sync::lock(&self.0).insert(id.clone(), fields);
     }
 
     fn remove(&self, id: &Id) {
-        if let Ok(mut m) = self.0.lock() {
-            m.remove(id);
-        }
+        crate::sync::lock(&self.0).remove(id);
     }
 
     fn lookup<S>(&self, ctx: &Context<'_, S>) -> SpanFields
     where
         S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
     {
-        let Ok(m) = self.0.lock() else {
-            return SpanFields::default();
-        };
+        let m = crate::sync::lock(&self.0);
         let mut result = SpanFields::default();
         if let Some(scope) = ctx.lookup_current() {
             for span in scope.scope() {
@@ -202,9 +196,7 @@ impl<S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>> Layer
     }
 
     fn on_record(&self, id: &Id, values: &Record<'_>, _ctx: Context<'_, S>) {
-        if let Ok(mut m) = self.spans.0.lock()
-            && let Some(sf) = m.get_mut(id)
-        {
+        if let Some(sf) = crate::sync::lock(&self.spans.0).get_mut(id) {
             let mut v = SpanVisitor(sf.clone());
             values.record(&mut v);
             *sf = v.0;

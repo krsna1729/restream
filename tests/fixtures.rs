@@ -1,6 +1,7 @@
 //! Contract tests for checked-in media fixtures.
 //! This file owns the canonical fixture lookup guarantees that higher-level
 //! correctness and integration tests depend on.
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 
 #[test]
 fn checked_in_fixture_contract_is_satisfied() {

@@ -44,10 +44,7 @@ pub(crate) fn start_shared_ts_muxer(
                         {
                             std::sync::Arc::new(routed_tracks.to_vec())
                         } else {
-                            let lock = ingest
-                                .audio_tracks
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner());
+                            let lock = crate::sync::lock(&ingest.audio_tracks);
                             if lock.is_empty()
                                 && let Some(audio) = metadata.audio
                             {

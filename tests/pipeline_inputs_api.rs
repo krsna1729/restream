@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 mod support;
 
 use axum::http::StatusCode;

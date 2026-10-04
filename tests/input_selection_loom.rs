@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 #[cfg(loom)]
 mod loom_tests {
     use loom::sync::Arc;

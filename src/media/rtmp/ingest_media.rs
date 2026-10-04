@@ -235,7 +235,7 @@ impl RtmpPublisherMedia {
 }
 
 fn lock<T>(cell: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    cell.lock().unwrap_or_else(|error| error.into_inner())
+    crate::sync::lock(cell)
 }
 
 pub(super) fn push_promotion_headers(

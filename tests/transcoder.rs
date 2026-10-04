@@ -1,4 +1,5 @@
 //! Transcoder integration-test ownership facade.
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 
 #[path = "transcoder/basic_external.rs"]
 mod basic_external;

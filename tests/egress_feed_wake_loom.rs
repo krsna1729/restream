@@ -20,6 +20,7 @@
 //! The model mirrors `WakeGate`'s orderings rather than importing it (std
 //! atomics vs loom atomics), matching the repository's loom convention — keep
 //! it in sync with `src/media/egress/journal.rs`.
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 
 #[cfg(loom)]
 mod loom_tests {

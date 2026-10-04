@@ -376,13 +376,9 @@ impl RingBuffer {
 
     /// Number of readers whose `Arc<ReaderInfo>` is still alive.
     pub fn active_reader_count(&self) -> usize {
-        self.readers
-            .lock()
-            .map(|mut g| {
-                g.retain(|w| w.upgrade().is_some());
-                g.len()
-            })
-            .unwrap_or(0)
+        let mut readers = crate::sync::lock(&self.readers);
+        readers.retain(|w| w.upgrade().is_some());
+        readers.len()
     }
 
     /// Store the probed packet rate so telemetry can show buffer depth in seconds.
@@ -565,43 +561,37 @@ impl RingBuffer {
 
     pub fn min_read_idx(&self) -> usize {
         let write_idx = self.write_idx.val.load(Ordering::Relaxed);
-        if let Ok(readers) = self.readers.lock() {
-            let mut min_idx = write_idx;
-            let mut has_readers = false;
-            for w in readers.iter() {
-                if let Some(info) = w.upgrade() {
-                    let r_idx = info.read_idx.load(Ordering::Relaxed);
-                    min_idx = min_idx.min(r_idx);
-                    has_readers = true;
-                }
+        let readers = crate::sync::lock(&self.readers);
+        let mut min_idx = write_idx;
+        let mut has_readers = false;
+        for w in readers.iter() {
+            if let Some(info) = w.upgrade() {
+                let r_idx = info.read_idx.load(Ordering::Relaxed);
+                min_idx = min_idx.min(r_idx);
+                has_readers = true;
             }
-            if has_readers { min_idx } else { write_idx }
-        } else {
-            write_idx
         }
+        if has_readers { min_idx } else { write_idx }
     }
 
     pub fn fill_and_capacity(&self) -> (usize, usize) {
         let write_idx = self.write_idx.val.load(Ordering::Relaxed);
-        if let Ok(readers) = self.readers.lock() {
-            let mut min_idx = write_idx;
-            let mut has_readers = false;
-            for w in readers.iter() {
-                if let Some(info) = w.upgrade() {
-                    let r_idx = info.read_idx.load(Ordering::Relaxed);
-                    min_idx = min_idx.min(r_idx);
-                    has_readers = true;
-                }
+        let readers = crate::sync::lock(&self.readers);
+        let mut min_idx = write_idx;
+        let mut has_readers = false;
+        for w in readers.iter() {
+            if let Some(info) = w.upgrade() {
+                let r_idx = info.read_idx.load(Ordering::Relaxed);
+                min_idx = min_idx.min(r_idx);
+                has_readers = true;
             }
-            let fill = if has_readers {
-                write_idx.saturating_sub(min_idx).min(self.capacity)
-            } else {
-                write_idx.min(self.capacity)
-            };
-            (fill, self.capacity)
-        } else {
-            (write_idx.min(self.capacity), self.capacity)
         }
+        let fill = if has_readers {
+            write_idx.saturating_sub(min_idx).min(self.capacity)
+        } else {
+            write_idx.min(self.capacity)
+        };
+        (fill, self.capacity)
     }
 
     pub fn payload_stats(&self) -> PayloadStats {
@@ -723,7 +713,7 @@ impl RingBuffer {
         let now_us = self.elapsed_us();
         let mut snapshots = Vec::new();
 
-        let mut readers = self.readers.lock().unwrap_or_else(|e| e.into_inner());
+        let mut readers = crate::sync::lock(&self.readers);
         readers.retain(|weak_ref| {
             let Some(info) = weak_ref.upgrade() else {
                 return false;

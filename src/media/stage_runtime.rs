@@ -379,7 +379,7 @@ impl StageRuntimeManager {
                 .get(key.pipeline.as_str())
                 .map(|i| {
                     let metadata = i.metadata();
-                    let lock = i.audio_tracks.lock().unwrap_or_else(|e| e.into_inner());
+                    let lock = crate::sync::lock(&i.audio_tracks);
                     if lock.is_empty()
                         && let Some(audio) = metadata.audio
                     {
@@ -475,11 +475,8 @@ pub(crate) async fn wait_for_stage_metadata(
                     // there are already packets present in the ring buffer (where
                     // SPS/PPS are sent in-band inside the media payloads, e.g. HEVC RTMP).
                     let ring_has_params = source_buffer.video_parameter_sets().is_some();
-                    let engine_has_seq_header = ingest
-                        .video_sequence_header
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .is_some();
+                    let engine_has_seq_header =
+                        crate::sync::lock(&ingest.video_sequence_header).is_some();
                     let ring_has_packets = source_buffer.get_write_idx() > 0;
                     if !ring_has_params && !engine_has_seq_header && !ring_has_packets {
                         return None;
@@ -488,10 +485,7 @@ pub(crate) async fn wait_for_stage_metadata(
 
                 let audio_tracks = if include_audio {
                     let ingest_audio_tracks = {
-                        let lock = ingest
-                            .audio_tracks
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
+                        let lock = crate::sync::lock(&ingest.audio_tracks);
                         if lock.is_empty() {
                             metadata
                                 .audio

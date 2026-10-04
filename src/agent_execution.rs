@@ -368,9 +368,7 @@ fn oldest_operation_id(records: &HashMap<String, OperationRecord>) -> Option<Str
 }
 
 fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    crate::sync::lock(&mutex)
 }
 
 pub fn public_record(record: &OperationRecord) -> Value {

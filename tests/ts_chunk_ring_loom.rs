@@ -2,6 +2,7 @@
 //! This file owns the synchronization contract behind
 //! `TsChunkReader::wait_for_data_or_cancelled`, ensuring wakeups and
 //! cancellation race safely without deadlock or invalid states.
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 
 #[cfg(loom)]
 mod loom_tests {

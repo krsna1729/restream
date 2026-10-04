@@ -21,6 +21,7 @@
 //! 4. **MPEG-TS PTS round-trip exactness at 48 h**: `ms → 90 kHz → ms`
 //!    must be lossless at the 48-hour mark. Loss here would shift one stream
 //!    independently and cause visible sync drift.
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 
 use restream::media::ring_buffer::DtsEnforcer;
 

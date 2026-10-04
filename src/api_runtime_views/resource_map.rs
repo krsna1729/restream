@@ -582,17 +582,10 @@ pub(crate) async fn resource_map(
     let srt_sender_limit = 512u64;
     let srt_sender_threads =
         srt_sender_limit.saturating_sub(engine.runtime.sender_semaphore.available_permits() as u64);
-    let registered_os_threads = engine
-        .runtime
-        .os_threads
-        .lock()
-        .map(|threads| {
-            threads
-                .iter()
-                .filter(|thread| !thread.is_finished())
-                .count() as u64
-        })
-        .unwrap_or(0);
+    let registered_os_threads = crate::sync::lock(&engine.runtime.os_threads)
+        .iter()
+        .filter(|thread| !thread.is_finished())
+        .count() as u64;
     let retained_payload_bytes = number_field(&memory_accounting, "retainedPayloadBytes");
     let avio_queues = memory_accounting
         .get("avioQueues")

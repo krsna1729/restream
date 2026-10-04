@@ -3,6 +3,7 @@
 //! or bypassing transport paths from returning. Test-only items are excluded
 //! item by item (`strip_test_items`), so production code that follows a test
 //! block is still checked.
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 
 fn collect_rust_sources(
     directory: &std::path::Path,

@@ -639,11 +639,7 @@ mod tests {
 
         let error = engine
             .with_active_egress("out1", |egress| {
-                egress
-                    .last_error
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .clone()
+                crate::sync::lock(&egress.last_error).clone()
             })
             .await
             .flatten()

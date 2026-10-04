@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 use bytes::Bytes;
 use proptest::prelude::*;
 use proptest::test_runner::{Config as ProptestConfig, FileFailurePersistence};

@@ -1,6 +1,7 @@
 //! Loom model-checks for shared transcoder-stage replacement.
 //! This file owns the registry invariants around cancelled-stage replacement
 //! so concurrent creators converge on one live codec-edge stage per key.
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 
 #[cfg(loom)]
 mod loom_tests {

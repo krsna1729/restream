@@ -310,9 +310,7 @@ use super::packet_contract_verdict::sample_validity;
 static SAMPLER: Mutex<Option<PacketContractSampler>> = Mutex::new(None);
 
 fn with_sampler<T>(f: impl FnOnce(&mut PacketContractSampler) -> T) -> Option<T> {
-    let mut guard = SAMPLER
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut guard = restream::sync::lock(&SAMPLER);
     guard.as_mut().map(f)
 }
 
@@ -322,9 +320,7 @@ pub(super) fn begin(work_dir: &Path, run: RunMetadata) {
     let jsonl = samples_jsonl(work_dir);
     let _ = std::fs::remove_file(&jsonl);
     let _ = std::fs::remove_file(summary_json(work_dir));
-    *SAMPLER
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(PacketContractSampler {
+    *restream::sync::lock(&SAMPLER) = Some(PacketContractSampler {
         previous: None,
         previous_at: None,
         rated_started: None,

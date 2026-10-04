@@ -201,15 +201,11 @@ pub(crate) fn supports(version: ProtocolVersion, suite: CipherSuite) -> bool {
         return false;
     };
     let key = (tls13, cipher);
-    if let Ok(cache) = KTLS_CAPABILITY_CACHE.lock()
-        && let Some(&proven) = cache.get(&key)
-    {
+    if let Some(&proven) = crate::sync::lock(&KTLS_CAPABILITY_CACHE).get(&key) {
         return proven;
     }
     let proven = probe_capability(version, suite, cipher);
-    if let Ok(mut cache) = KTLS_CAPABILITY_CACHE.lock() {
-        cache.insert(key, proven);
-    }
+    crate::sync::lock(&KTLS_CAPABILITY_CACHE).insert(key, proven);
     proven
 }
 

@@ -132,41 +132,22 @@ pub(super) fn egress_runtime_view(
         encoding: egress.encoding.clone(),
         pipeline_id: egress.pipeline_id.clone(),
         protocol: egress.protocol.clone(),
-        target_addr: egress
-            .target_addr
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone(),
+        target_addr: crate::sync::lock(&egress.target_addr).clone(),
         status: MediaEngine::egress_effective_status(egress, has_ingest),
         raw_status: egress.status.as_str(),
-        phase: egress
-            .phase
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_str(),
+        phase: crate::sync::lock(&egress.phase).as_str(),
         terminal_stage: egress.terminal_stage_key.as_ref().map(|k| k.to_string()),
         uptime_secs: egress.start_instant.elapsed().as_secs_f64(),
         bytes_out: egress.bytes_sent.load(Ordering::Relaxed),
         resync_count: egress.resync_count.load(Ordering::Relaxed),
         feed_lag_units: egress.feed_lag_units.load(Ordering::Relaxed),
-        backpressure_reason: *egress
-            .backpressure_reason
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()),
+        backpressure_reason: *crate::sync::lock(&egress.backpressure_reason),
         last_progress_at: MediaEngine::epoch_ms_to_rfc3339(last_progress_ms),
         last_progress_age_ms: (last_progress_ms > 0)
             .then(|| now_ms.saturating_sub(last_progress_ms)),
-        last_error: egress
-            .last_error
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone(),
+        last_error: crate::sync::lock(&egress.last_error).clone(),
         last_error_at: MediaEngine::epoch_ms_to_rfc3339(last_error_ms),
-        failure_phase: egress
-            .failure_phase
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone(),
+        failure_phase: crate::sync::lock(&egress.failure_phase).clone(),
         blocked_by: blocked_by.map(super::stage_projection::stage_runtime_snapshot_json),
         recent_failure_count: 0,
         flapping: false,
@@ -175,11 +156,7 @@ pub(super) fn egress_runtime_view(
         retry_backoff_ms: None,
         next_retry_at: None,
         retry_remaining_ms: None,
-        quality: egress
-            .quality
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone(),
+        quality: crate::sync::lock(&egress.quality).clone(),
         metrics: egress.metrics.snapshot(),
         fabric: egress.is_fabric,
         shard_id: egress.shard_id,
@@ -320,10 +297,7 @@ pub(crate) fn probe_snapshot(pipeline_id: &str, ingest: &ActiveIngest) -> serde_
     };
 
     let audio_tracks: Vec<serde_json::Value> = {
-        let tracks = ingest
-            .audio_tracks
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let tracks = crate::sync::lock(&ingest.audio_tracks);
         if tracks.is_empty() {
             metadata
                 .audio
@@ -339,10 +313,7 @@ pub(crate) fn probe_snapshot(pipeline_id: &str, ingest: &ActiveIngest) -> serde_
     };
 
     let gop = {
-        let times = ingest
-            .keyframe_times
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let times = crate::sync::lock(&ingest.keyframe_times);
         if times.len() >= 2 {
             let intervals: Vec<f64> = times
                 .windows(2)

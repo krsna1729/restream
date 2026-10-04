@@ -178,12 +178,7 @@ mod tests {
                 if let Some(message) = self.fail_keys.get(key) {
                     return Err(MetaLookupError::new(message.clone()));
                 }
-                Ok(self
-                    .values
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .get(key)
-                    .cloned())
+                Ok(crate::sync::lock(&self.values).get(key).cloned())
             })
         }
     }
@@ -191,10 +186,7 @@ mod tests {
     impl MetaStoreWriter for FakeMetaStore {
         fn set_meta<'a>(&'a self, key: &'a str, value: &'a str) -> MetaWriteFuture<'a> {
             Box::pin(async move {
-                self.values
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .insert(key.to_string(), value.to_string());
+                crate::sync::lock(&self.values).insert(key.to_string(), value.to_string());
                 Ok(value.to_string())
             })
         }

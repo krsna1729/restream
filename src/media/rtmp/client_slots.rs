@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ClientKey {
@@ -46,7 +46,7 @@ impl ClientSlots {
     /// already holds its share.
     pub(super) fn try_acquire(self: &Arc<Self>, ip: IpAddr) -> Option<ClientSlot> {
         let key = ClientKey::of(ip);
-        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut held = crate::sync::lock(&self.held);
         let count = held.entry(key).or_insert(0);
         if *count >= self.per_client {
             return None;
@@ -60,7 +60,7 @@ impl ClientSlots {
 
     #[cfg(test)]
     fn held_by(&self, ip: IpAddr) -> usize {
-        let held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        let held = crate::sync::lock(&self.held);
         held.get(&ClientKey::of(ip)).copied().unwrap_or(0)
     }
 }
@@ -74,11 +74,7 @@ pub(super) struct ClientSlot {
 
 impl Drop for ClientSlot {
     fn drop(&mut self) {
-        let mut held = self
-            .slots
-            .held
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut held = crate::sync::lock(&self.slots.held);
         if let Some(count) = held.get_mut(&self.key) {
             *count = count.saturating_sub(1);
             if *count == 0 {

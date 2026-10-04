@@ -82,11 +82,7 @@ pub struct Reader {
 
 impl Drop for Reader {
     fn drop(&mut self) {
-        let mut readers = self
-            .buffer
-            .readers
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut readers = crate::sync::lock(&self.buffer.readers);
         readers.retain(|weak| match weak.upgrade() {
             Some(info) => !Arc::ptr_eq(&info, &self.info),
             None => false,
@@ -109,10 +105,7 @@ impl Reader {
         let info = Arc::new(ReaderInfo::new(name.clone(), start_idx));
 
         {
-            let mut readers = buffer
-                .readers
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
+            let mut readers = crate::sync::lock(&buffer.readers);
             readers.push(Arc::downgrade(&info));
         }
 
@@ -329,9 +322,7 @@ impl Reader {
     fn migrate_to(&mut self, new_ring: Arc<RingBuffer>) {
         let old_read_idx = self.read_idx;
         let old_ring = std::mem::replace(&mut self.buffer, new_ring.clone());
-        if let Ok(mut readers) = new_ring.readers.lock() {
-            readers.push(Arc::downgrade(&self.info));
-        }
+        crate::sync::lock(&new_ring.readers).push(Arc::downgrade(&self.info));
         let new_write_idx = new_ring.get_write_idx();
         if self.migration_preroll_packets > 0 && old_read_idx == new_write_idx {
             let keyframe_start = new_ring.fast_forward(new_write_idx);
@@ -344,9 +335,7 @@ impl Reader {
                 self.info.read_idx.store(self.read_idx, Ordering::Relaxed);
             }
         }
-        if let Ok(mut readers) = old_ring.readers.lock() {
-            readers.retain(|weak| weak.upgrade().is_some());
-        }
+        crate::sync::lock(&old_ring.readers).retain(|weak| weak.upgrade().is_some());
         debug!(
             read_idx = self.read_idx,
             name = %self.info.name,

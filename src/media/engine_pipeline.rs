@@ -215,11 +215,10 @@ impl MediaEngine {
                 return true;
             }
 
-            let has_readers = if let Ok(mut readers) = stage.ring.readers.lock() {
+            let has_readers = {
+                let mut readers = crate::sync::lock(&stage.ring.readers);
                 readers.retain(|reader| reader.upgrade().is_some());
                 !readers.is_empty()
-            } else {
-                false
             };
             let has_fabric_consumer = active_fabric_feeds.contains(&format!("srt:{key}"));
 

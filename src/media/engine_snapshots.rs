@@ -57,10 +57,7 @@ impl MediaEngine {
     pub(crate) fn sample_egress_bitrate_kbps(egress: &ActiveEgress) -> Option<f64> {
         let bytes_sent = egress.bytes_sent.load(Ordering::Relaxed);
         let prev = egress.prev_bytes_sent.load(Ordering::Relaxed);
-        let mut prev_time = egress
-            .prev_sample_time
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut prev_time = crate::sync::lock(&egress.prev_sample_time);
         let elapsed = prev_time.elapsed().as_secs_f64();
 
         if elapsed > 0.5 && bytes_sent > prev {
@@ -68,16 +65,10 @@ impl MediaEngine {
             let rate = (delta as f64 * 8.0) / (elapsed * 1000.0);
             egress.prev_bytes_sent.store(bytes_sent, Ordering::Relaxed);
             *prev_time = Instant::now();
-            *egress
-                .bitrate_kbps
-                .lock()
-                .unwrap_or_else(|error| error.into_inner()) = Some(rate);
+            *crate::sync::lock(&egress.bitrate_kbps) = Some(rate);
             Some(rate)
         } else {
-            *egress
-                .bitrate_kbps
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
+            *crate::sync::lock(&egress.bitrate_kbps)
         }
     }
 
@@ -146,11 +137,7 @@ impl MediaEngine {
     ) -> Option<IngestDiagSnapshot> {
         let ingests = self.ingests.active.read().await;
         let ingest = ingests.get(pipeline_id)?;
-        let keyframe_times = ingest
-            .keyframe_times
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let keyframe_times = crate::sync::lock(&ingest.keyframe_times).clone();
         let metadata = ingest.metadata();
         Some(IngestDiagSnapshot {
             protocol: ingest.protocol.clone(),

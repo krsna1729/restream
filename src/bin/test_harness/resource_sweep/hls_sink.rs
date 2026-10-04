@@ -107,9 +107,7 @@ async fn receive(
         .get("file")
         .and_then(|file| file.strip_prefix("seg")?.strip_suffix(".ts")?.parse().ok());
     let now = Instant::now();
-    let mut arrivals = arrivals
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut arrivals = restream::sync::lock(&arrivals);
     *arrivals.bytes.entry(cid.clone()).or_default() += received;
     if let Some(index) = segment {
         arrivals
@@ -125,10 +123,7 @@ async fn receive(
 impl HlsSinkHandle {
     /// Cumulative body bytes per output, for fairness over byte rates.
     pub(super) fn per_output_bytes(&self) -> Vec<(String, u64)> {
-        let arrivals = self
-            .arrivals
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let arrivals = restream::sync::lock(&self.arrivals);
         arrivals
             .bytes
             .iter()
@@ -137,10 +132,7 @@ impl HlsSinkHandle {
     }
 
     pub(super) fn window(&self, start: Instant, end: Instant) -> HlsWindow {
-        let arrivals = self
-            .arrivals
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let arrivals = restream::sync::lock(&self.arrivals);
         // An output that uploaded only playlists (or failed every segment)
         // still counts as a destination.
         let mut segments = arrivals.segments.clone();

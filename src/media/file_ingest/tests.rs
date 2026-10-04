@@ -546,10 +546,7 @@ fn prime_input_container_metadata_populates_ingest_before_any_packet_read() {
         assert_eq!(video.codec, "hevc");
         assert!(video.width > 0 && video.height > 0);
 
-        let audio_tracks = ingest
-            .audio_tracks
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let audio_tracks = crate::sync::lock(&ingest.audio_tracks);
         assert_eq!(audio_tracks.len(), 2, "both audio tracks should be primed");
         for track in audio_tracks.iter() {
             assert!(track.sample_rate > 0 && track.channels > 0);

@@ -270,9 +270,7 @@ impl EgressProgressSink {
             counter.store(lag_units, std::sync::atomic::Ordering::Relaxed);
         }
         if let Some(slot) = &self.backpressure_reason {
-            *slot
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = reason;
+            *crate::sync::lock(slot) = reason;
         }
     }
 
@@ -285,9 +283,7 @@ impl EgressProgressSink {
     #[inline]
     pub fn record_quality(&self, quality: crate::media::snapshots::PublisherQuality) {
         if let Some(slot) = &self.quality {
-            *slot
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = quality;
+            *crate::sync::lock(slot) = quality;
         }
     }
 

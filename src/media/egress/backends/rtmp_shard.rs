@@ -86,27 +86,17 @@ impl SharedRtmpPublishStartupSource {
     }
 
     pub(crate) fn set(&self, output_id: OutputId, startup: RtmpPublishStartup) {
-        self.pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(output_id, startup);
+        crate::sync::lock(&self.pending).insert(output_id, startup);
     }
 
     pub(crate) fn remove(&self, output_id: &OutputId) {
-        self.pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(output_id);
+        crate::sync::lock(&self.pending).remove(output_id);
     }
 }
 
 impl RtmpPublishStartupSource for SharedRtmpPublishStartupSource {
     fn take_startup(&mut self, output_id: &OutputId) -> Option<RtmpPublishStartup> {
-        self.pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(output_id)
-            .cloned()
+        crate::sync::lock(&self.pending).get(output_id).cloned()
     }
 }
 

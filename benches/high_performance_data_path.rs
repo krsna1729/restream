@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods)] // bench code: raw std locks are fine
 use criterion::{Criterion, criterion_group, criterion_main};
 
 #[path = "high_performance_data_path/burst.rs"]

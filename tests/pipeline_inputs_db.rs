@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 use restream::db;
 use restream::domain::pipeline_input::PipelineInputRole;
 use sqlx::SqlitePool;

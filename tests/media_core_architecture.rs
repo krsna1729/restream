@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 #[test]
 fn candidate_types_stay_independent_of_engine_and_runtime_adapters() {
     for (name, source) in [

@@ -798,14 +798,7 @@ mod tests {
 
     impl MetaStore for FakeMetaStore {
         fn get_meta<'a>(&'a self, key: &'a str) -> MetaLookupFuture<'a> {
-            Box::pin(async move {
-                Ok(self
-                    .values
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .get(key)
-                    .cloned())
-            })
+            Box::pin(async move { Ok(crate::sync::lock(&self.values).get(key).cloned()) })
         }
     }
 

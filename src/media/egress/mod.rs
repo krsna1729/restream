@@ -46,6 +46,7 @@ pub mod timer;
 pub mod visit;
 
 #[cfg(any(test, feature = "egress-test-driver"))]
+#[allow(clippy::disallowed_methods)]
 pub mod test_driver;
 #[cfg(test)]
 mod visit_tests;

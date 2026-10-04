@@ -67,10 +67,7 @@ pub struct ActiveIngest {
 
 impl ActiveIngest {
     pub fn metadata(&self) -> IngestMetadata {
-        self.metadata
-            .read()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone()
+        crate::sync::read(&self.metadata).clone()
     }
 }
 
@@ -228,19 +225,12 @@ impl MediaEngine {
     }
 
     pub fn backend_policy(&self) -> crate::planner::BackendPolicy {
-        *self
-            .backend_policy
-            .read()
-            // SAFE-EXPECT: a poisoned backend-policy lock is a process-wide invariant failure.
-            .expect("backend policy lock poisoned")
+        // A plain `Copy` value: a poisoned lock still holds a whole one.
+        *crate::sync::read(&self.backend_policy)
     }
 
     pub fn set_backend_policy(&self, policy: crate::planner::BackendPolicy) {
-        *self
-            .backend_policy
-            .write()
-            // SAFE-EXPECT: a poisoned backend-policy lock is a process-wide invariant failure.
-            .expect("backend policy lock poisoned") = policy;
+        *crate::sync::write(&self.backend_policy) = policy;
     }
 
     pub(crate) fn now_epoch_ms() -> u64 {
@@ -355,10 +345,7 @@ impl MediaEngine {
     pub(crate) fn sample_ingest_bitrate_kbps(ingest: &ActiveIngest) -> Option<f64> {
         let bytes_received = ingest.bytes_received.load(Ordering::Relaxed);
         let previous_bytes = ingest.prev_bytes_received.load(Ordering::Relaxed);
-        let mut previous_time = ingest
-            .prev_sample_time
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut previous_time = crate::sync::lock(&ingest.prev_sample_time);
         let elapsed = previous_time.elapsed().as_secs_f64();
 
         if elapsed > 0.5 && bytes_received > previous_bytes {
@@ -371,22 +358,13 @@ impl MediaEngine {
                 .last_progress_ms
                 .store(Self::now_epoch_ms(), Ordering::Relaxed);
             *previous_time = Instant::now();
-            *ingest
-                .bitrate_kbps
-                .lock()
-                .unwrap_or_else(|error| error.into_inner()) = Some(rate);
+            *crate::sync::lock(&ingest.bitrate_kbps) = Some(rate);
             Some(rate)
         } else if elapsed > 1.0 && bytes_received == previous_bytes {
-            *ingest
-                .bitrate_kbps
-                .lock()
-                .unwrap_or_else(|error| error.into_inner()) = Some(0.0);
+            *crate::sync::lock(&ingest.bitrate_kbps) = Some(0.0);
             Some(0.0)
         } else {
-            *ingest
-                .bitrate_kbps
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
+            *crate::sync::lock(&ingest.bitrate_kbps)
         }
     }
 
