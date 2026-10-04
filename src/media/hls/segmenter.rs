@@ -392,8 +392,7 @@ mod tests {
         let segment = package_with_blocked_control(ring, cancel, packets, service, move || {
             store
                 .snapshot()
-                .and_then(|snapshot| snapshot.segments.into_iter().last())
-                .map(|segment| segment.data)
+                .and_then(|snapshot| snapshot.segments.last().map(|segment| segment.data.clone()))
         })
         .await;
 

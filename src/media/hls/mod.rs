@@ -44,7 +44,7 @@ use crate::media::packet::MediaType;
 use crate::media::ring_buffer::RingBuffer;
 
 pub use segmenter::start_hls_segmenter;
-pub use store::{HlsSegmentSnapshot, HlsSegmentVariant, HlsStore, HlsStoreSnapshot};
+pub use store::{HlsPublished, HlsSegmentSnapshot, HlsSegmentVariant, HlsStore, HlsStoreSnapshot};
 
 const MIN_SEGMENT_SECS: f64 = 1.0;
 const SEGMENT_CAPACITY: usize = 8 * 1024 * 1024;
@@ -662,7 +662,7 @@ mod tests {
         let mut global_last_dts: HashMap<(u8, u32), i64> = HashMap::new();
         let mut prev_segment_last_dts: Option<HashMap<(u8, u32), i64>> = None;
 
-        for segment in snapshot.segments {
+        for segment in &snapshot.segments {
             let mut demuxer = crate::media::mpegts::TsDemuxer::new();
             demuxer.feed(&segment.data);
             demuxer.flush();

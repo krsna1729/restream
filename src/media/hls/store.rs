@@ -1,7 +1,8 @@
 use std::collections::{HashMap, VecDeque};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
+use tokio::sync::watch;
 
 use super::HlsConfig;
 use crate::media::metadata::{AudioMeta, VideoMeta};
@@ -25,9 +26,16 @@ pub struct HlsStoreSnapshot {
     pub segments: Vec<HlsSegmentSnapshot>,
 }
 
+/// The playlist and segments as of the latest publish; `None` while empty.
+pub type HlsPublished = Option<Arc<HlsStoreSnapshot>>;
+
 pub struct HlsStore {
     inner: Mutex<HlsStoreInner>,
     config: HlsConfig,
+    /// Rebuilt once per publish (segment push or clear) and shared by every
+    /// reader, so N uploaders cost one playlist render and wake on publish
+    /// instead of polling.
+    published: watch::Sender<HlsPublished>,
 }
 
 struct HlsStoreInner {
@@ -67,6 +75,7 @@ impl HlsStore {
                 variant_segments: HashMap::new(),
             }),
             config,
+            published: watch::Sender::new(None),
         }
     }
 
@@ -80,6 +89,7 @@ impl HlsStore {
         inner.next_index = 0;
         inner.target_duration = TARGET_DURATION_SECS;
         inner.variant_segments.clear();
+        self.published.send_replace(None);
     }
 
     pub fn push_segment(&self, duration: f64, data: Bytes) {
@@ -101,6 +111,17 @@ impl HlsStore {
                     .retain(|(segment_index, _), _| *segment_index != segment.index);
             }
         }
+        // Built and sent under the lock, so publishes reach readers in order.
+        self.published
+            .send_replace(build_snapshot(&inner).map(Arc::new));
+    }
+
+    /// Wakes on every publish. The current value is marked unseen, so a new
+    /// reader handles the segments already in the store first.
+    pub fn subscribe(&self) -> watch::Receiver<HlsPublished> {
+        let mut receiver = self.published.subscribe();
+        receiver.mark_changed();
+        receiver
     }
 
     pub fn get_playlist(&self) -> Option<String> {
@@ -161,28 +182,31 @@ impl HlsStore {
         }
     }
 
-    pub fn snapshot(&self) -> Option<HlsStoreSnapshot> {
-        let inner = crate::sync::lock(&self.inner);
-        if inner.segments.is_empty() {
-            return None;
-        }
-        let first_seq = inner.segments.front().map(|s| s.index).unwrap_or(0);
-        let target_dur = inner.target_duration.ceil() as u64;
-        let mut playlist = format!(
-            "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:{}\n#EXT-X-MEDIA-SEQUENCE:{}\n",
-            target_dur, first_seq
-        );
-        let mut segments = Vec::with_capacity(inner.segments.len());
-        for seg in &inner.segments {
-            playlist.push_str(&format!(
-                "#EXTINF:{:.3},\nseg{}.ts\n",
-                seg.duration, seg.index
-            ));
-            segments.push(HlsSegmentSnapshot {
-                index: seg.index,
-                data: seg.data.clone(),
-            });
-        }
-        Some(HlsStoreSnapshot { playlist, segments })
+    pub fn snapshot(&self) -> HlsPublished {
+        self.published.borrow().clone()
     }
+}
+
+fn build_snapshot(inner: &HlsStoreInner) -> Option<HlsStoreSnapshot> {
+    if inner.segments.is_empty() {
+        return None;
+    }
+    let first_seq = inner.segments.front().map(|s| s.index).unwrap_or(0);
+    let target_dur = inner.target_duration.ceil() as u64;
+    let mut playlist = format!(
+        "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:{}\n#EXT-X-MEDIA-SEQUENCE:{}\n",
+        target_dur, first_seq
+    );
+    let mut segments = Vec::with_capacity(inner.segments.len());
+    for seg in &inner.segments {
+        playlist.push_str(&format!(
+            "#EXTINF:{:.3},\nseg{}.ts\n",
+            seg.duration, seg.index
+        ));
+        segments.push(HlsSegmentSnapshot {
+            index: seg.index,
+            data: seg.data.clone(),
+        });
+    }
+    Some(HlsStoreSnapshot { playlist, segments })
 }

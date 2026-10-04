@@ -5,7 +5,7 @@
 //! segments beside it. This module supports both shapes.
 
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tracing::error;
 
@@ -18,9 +18,21 @@ use crate::media::engine::{EgressRegistration, MediaEngine};
 
 const HLS_PLAYLIST_CONTENT_TYPE: &str = "application/vnd.apple.mpegurl";
 const HLS_SEGMENT_CONTENT_TYPE: &str = "video/mp2t";
-const UPLOAD_INTERVAL: Duration = Duration::from_millis(500);
 const HLS_UPLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const HLS_UPLOAD_RETRY_BACKOFF: Duration = Duration::from_secs(1);
+
+/// `<manufacturer> / <model> / <version>`: YouTube asks for this form and
+/// Akamai requires a User-Agent on every request.
+const HLS_UPLOAD_USER_AGENT: &str = concat!("Restream / restream / ", env!("CARGO_PKG_VERSION"));
+
+/// One client for every uploader: one connection pool and one TLS
+/// configuration, instead of a pool and TLS state per output.
+static HLS_UPLOAD_CLIENT: LazyLock<Client> = LazyLock::new(|| {
+    Client::builder()
+        .user_agent(HLS_UPLOAD_USER_AGENT)
+        .build()
+        .unwrap_or_else(|_| Client::new())
+});
 
 pub struct HlsUploadStart {
     pub output_id: String,
@@ -92,23 +104,35 @@ pub async fn start_hls_put_upload(
             )
             .await;
     }
-    let client = Client::new();
+    let client = &*HLS_UPLOAD_CLIENT;
+    let mut published = store.subscribe();
+    drop(store);
     let mut uploaded_segments = HashSet::new();
     let mut retry_attempts = 0u32;
+    // After a failed upload the same publish is retried once the backoff
+    // ends, without waiting for the next segment.
+    let mut retry_pending = false;
 
     loop {
-        tokio::select! {
-            _ = registration.cancel_token.cancelled() => return,
-            _ = tokio::time::sleep(UPLOAD_INTERVAL) => {}
+        if !retry_pending {
+            tokio::select! {
+                _ = registration.cancel_token.cancelled() => return,
+                changed = published.changed() => {
+                    if changed.is_err() {
+                        return; // the store is gone
+                    }
+                }
+            }
         }
+        retry_pending = false;
 
-        let Some(snapshot) = store.snapshot() else {
+        let Some(snapshot) = published.borrow_and_update().clone() else {
             continue;
         };
         prune_uploaded_segments(&mut uploaded_segments, &snapshot);
 
         let mut upload_failed = false;
-        for segment in snapshot.segments {
+        for segment in &snapshot.segments {
             if uploaded_segments.contains(&segment.index) {
                 continue;
             }
@@ -116,10 +140,10 @@ pub async fn start_hls_put_upload(
             let segment_url = derive_hls_upload_url(&playlist_url, &segment_name);
             let segment_len = segment.data.len() as u64;
             match put_bytes_with_timeout(
-                &client,
+                client,
                 segment_url,
                 HLS_SEGMENT_CONTENT_TYPE,
-                segment.data,
+                segment.data.clone(),
                 HLS_UPLOAD_REQUEST_TIMEOUT,
             )
             .await
@@ -155,13 +179,14 @@ pub async fn start_hls_put_upload(
             if wait_for_upload_retry_backoff(&registration).await {
                 return;
             }
+            retry_pending = true;
             continue;
         }
 
-        let playlist_bytes = snapshot.playlist.into_bytes();
+        let playlist_bytes = snapshot.playlist.clone().into_bytes();
         let playlist_len = playlist_bytes.len() as u64;
         if let Err(err) = put_bytes(
-            &client,
+            client,
             playlist_url.clone(),
             HLS_PLAYLIST_CONTENT_TYPE,
             playlist_bytes,
@@ -180,6 +205,7 @@ pub async fn start_hls_put_upload(
             if wait_for_upload_retry_backoff(&registration).await {
                 return;
             }
+            retry_pending = true;
         } else {
             retry_attempts = 0;
             engine.clear_egress_retry_state(&output_id).await;
@@ -405,16 +431,26 @@ mod tests {
     async fn uploads_segments_and_playlist_to_put_sink() {
         let seen = Arc::new(Mutex::new(Vec::<(String, String, Vec<u8>)>::new()));
         let seen_for_handler = seen.clone();
+        let agents = Arc::new(Mutex::new(HashSet::<String>::new()));
+        let agents_for_handler = agents.clone();
         let app = Router::new().route(
             "/{*path}",
             put(move |uri: OriginalUri, headers: HeaderMap, body: Bytes| {
                 let seen = seen_for_handler.clone();
+                let agents = agents_for_handler.clone();
                 async move {
-                    let content_type = headers
-                        .get(reqwest::header::CONTENT_TYPE.as_str())
-                        .and_then(|value| value.to_str().ok())
-                        .unwrap_or("")
-                        .to_string();
+                    let header = |name: &str| {
+                        headers
+                            .get(name)
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or("")
+                            .to_string()
+                    };
+                    let content_type = header(reqwest::header::CONTENT_TYPE.as_str());
+                    agents
+                        .lock()
+                        .unwrap()
+                        .insert(header(reqwest::header::USER_AGENT.as_str()));
                     seen.lock()
                         .unwrap()
                         .push((uri.0.to_string(), content_type, body.to_vec()));
@@ -483,6 +519,83 @@ mod tests {
             }),
             "playlist PUT not observed: {seen:?}"
         );
+        assert_eq!(
+            *agents.lock().unwrap(),
+            HashSet::from([HLS_UPLOAD_USER_AGENT.to_string()]),
+            "every request carries the encoder User-Agent"
+        );
+    }
+
+    /// Uploads follow publishes: the playlist goes out once per new segment,
+    /// not on a timer (the uploader used to re-PUT an unchanged playlist
+    /// every 500 ms per output), and a new segment goes out when published.
+    #[tokio::test]
+    async fn uploads_follow_publishes_instead_of_a_timer() {
+        let seen = Arc::new(Mutex::new(HashMap::<String, usize>::new()));
+        let seen_for_handler = seen.clone();
+        let app = Router::new().route(
+            "/{*path}",
+            put(move |uri: OriginalUri| {
+                let seen = seen_for_handler.clone();
+                async move {
+                    *seen.lock().unwrap().entry(uri.0.to_string()).or_default() += 1;
+                    StatusCode::NO_CONTENT
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let count = |uri: &str| seen.lock().unwrap().get(uri).copied().unwrap_or(0);
+        let wait_for = |uri: &'static str, target: usize| {
+            let seen = seen.clone();
+            async move {
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+                while seen.lock().unwrap().get(uri).copied().unwrap_or(0) < target {
+                    assert!(tokio::time::Instant::now() < deadline, "no PUT of {uri}");
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            }
+        };
+
+        let store = Arc::new(HlsStore::new());
+        store.push_segment(1.2, bytes::Bytes::from_static(b"segment-0"));
+        let engine = Arc::new(MediaEngine::new());
+        let terminal_stage_key = planned_hls_key("pipe1");
+        let target_url = format!("http://{addr}/live/out.m3u8");
+        let registration = engine
+            .register_egress_attempt(
+                "out1",
+                "pipe1",
+                &target_url,
+                Some(terminal_stage_key.clone()),
+            )
+            .await;
+        let uploader = tokio::spawn(start_hls_put_upload(
+            HlsUploadStart {
+                output_id: "out1".to_string(),
+                pipeline_id: "pipe1".to_string(),
+                target_url,
+                terminal_stage_key,
+            },
+            store.clone(),
+            engine,
+            registration.clone(),
+        ));
+
+        wait_for("/live/out.m3u8", 1).await;
+        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        assert_eq!(count("/live/out.m3u8"), 1, "unchanged playlist re-sent");
+
+        store.push_segment(1.2, bytes::Bytes::from_static(b"segment-1"));
+        wait_for("/live/seg1.ts", 1).await;
+        wait_for("/live/out.m3u8", 2).await;
+        assert_eq!(count("/live/seg0.ts"), 1, "a segment is sent once");
+
+        registration.cancel_token.cancel();
+        let _ = uploader.await;
     }
 
     #[tokio::test]
