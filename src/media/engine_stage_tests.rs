@@ -1,5 +1,4 @@
 use super::*;
-use crate::media::engine_hls::HlsConsumers;
 use crate::media::engine_registries::SrtMuxerAssignment;
 use crate::media::ts_chunk_ring::TsChunkRing;
 use std::collections::{HashMap, HashSet};

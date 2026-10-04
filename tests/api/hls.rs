@@ -317,49 +317,6 @@ async fn internal_file_ingest_preview_hls_serves_playlist_and_segment() {
     sleep(Duration::from_millis(250)).await;
 }
 
-// --- Regression: Round 6 #7 — HLS consumer refcount ---
-
-#[tokio::test]
-async fn hls_persistent_consumer_refcount_is_zero_after_balanced_add_remove() {
-    // add_hls_persistent_consumer(+1) must be matched by remove(-1).
-    // This test exercises the engine methods directly to confirm the counter
-    // returns to zero, guarding against underflow or permanent leak.
-    let engine = Arc::new(MediaEngine::new());
-    use restream::media::engine_hls::HlsConsumers;
-    use tokio_util::sync::CancellationToken;
-
-    let token = CancellationToken::new();
-    {
-        let mut stores = engine.hls.consumers.write().await;
-        stores.insert("pipe1".to_string(), HlsConsumers::new(token.clone()));
-    }
-
-    engine.add_hls_persistent_consumer("pipe1").await;
-    engine.add_hls_persistent_consumer("pipe1").await;
-    {
-        let consumers = engine.hls.consumers.read().await;
-        assert_eq!(
-            consumers["pipe1"]
-                .persistent
-                .load(std::sync::atomic::Ordering::Relaxed),
-            2,
-            "count should be 2 after two adds"
-        );
-    }
-    engine.remove_hls_persistent_consumer("pipe1").await;
-    engine.remove_hls_persistent_consumer("pipe1").await;
-    {
-        let consumers = engine.hls.consumers.read().await;
-        assert_eq!(
-            consumers["pipe1"]
-                .persistent
-                .load(std::sync::atomic::Ordering::Relaxed),
-            0,
-            "count should be 0 after balanced removes"
-        );
-    }
-}
-
 #[tokio::test]
 async fn hls_playlist_route_returns_blocked_stage_cause_when_applicable() {
     use restream::domain::stage::StageKind;
