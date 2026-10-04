@@ -322,3 +322,62 @@ async fn broadcast_bond_ingests_as_one_logical_input() {
 async fn backup_bond_ingests_as_one_logical_input() {
     bonded_ingest(GroupType::Backup).await;
 }
+
+// ---------------------------------------------------------------------------
+// Fault domain: one peer's media panic
+// ---------------------------------------------------------------------------
+
+/// A panic in one publisher's media work (demux, here injected) disconnects
+/// that publisher only. The Owner keeps running: it is not faulted, and the
+/// next publisher on the same listener reaches its ring. Before the
+/// per-peer boundary the unwind ended the Owner thread, which stopped the
+/// listener and shut Restream down.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_panicking_publisher_is_disconnected_and_the_owner_keeps_serving() {
+    let server = TestServer::start(
+        &["doomed", "healthy"],
+        vec![plain("doomed"), plain("healthy")],
+    )
+    .await;
+    let remote = server.remote;
+    let before = crate::panic_boundary::contained_panics();
+
+    let mut poison = vec![0u8; CHUNK];
+    poison[..super::ingress_media::INJECTED_PANIC_PAYLOAD.len()]
+        .copy_from_slice(super::ingress_media::INJECTED_PANIC_PAYLOAD);
+    let poison = vec![Bytes::from(poison); 50];
+    let doomed = blocking(move || {
+        let mut publish = publish_step(poison);
+        run_caller(
+            direct(remote, "#!::r=doomed,m=publish", None),
+            Duration::from_secs(6),
+            move |ctx| ctx.report.disconnected || publish(ctx),
+        )
+    })
+    .await;
+    assert!(doomed.connected, "{doomed:?}");
+    assert!(
+        doomed.disconnected,
+        "the panicking peer is disconnected: {doomed:?}"
+    );
+    assert!(crate::panic_boundary::contained_panics() > before);
+
+    let chunks = ts_chunks(400);
+    let healthy = blocking(move || {
+        run_caller(
+            direct(remote, "#!::r=healthy,m=publish", None),
+            Duration::from_secs(20),
+            publish_step(chunks),
+        )
+    })
+    .await;
+    assert!(healthy.connected, "{healthy:?}");
+    assert!(server.ring_progress("pipeline-healthy").await > 0);
+    let stats = server
+        .engine
+        .listener_stats_handle()
+        .ingress_owner
+        .snapshot();
+    assert!(!stats.faulted, "{stats:?}");
+    server.stop().await;
+}

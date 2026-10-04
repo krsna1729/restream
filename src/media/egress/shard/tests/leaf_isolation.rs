@@ -1,13 +1,12 @@
 use super::super::*;
 use super::support::{config, output_spec};
-use crate::media::egress::backend::{
-    EngineProgress, Interest, ProtocolEngine, Readiness, WaitCondition,
-};
-use crate::media::egress::command::{EgressCommand, OutputId, ShardId};
-use crate::media::egress::feed::FeedCursor;
-use crate::media::egress::policy::WorkBudget;
-use crate::media::egress::scheduler::{LeafKey, ReadyQueue, ScheduleState, try_enqueue};
+use crate::media::egress::backend::{EngineProgress, Interest, Readiness, WaitCondition};
+use crate::media::egress::command::{EgressCommand, FeedId, OutputId, ShardId};
+use crate::media::egress::leaf::LeafCommon;
+use crate::media::egress::policy::{LeafLimits, WorkBudget};
+use crate::media::egress::scheduler::{LeafKey, ReadyQueue, VisitDecision, try_enqueue};
 use crate::media::egress::test_driver::{EngineScript, FakeEngine, FakeFeed, FakeTransport};
+use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 use std::num::NonZeroU32;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -38,6 +37,40 @@ fn blocked_leaf_does_not_starve_ready_leaf_on_same_shard_thread() {
     assert!(state.healthy_visits >= 3);
     assert!(snapshot.media_ticks >= 1);
     assert!(snapshot.stopped);
+    assert!(!snapshot.panicked);
+}
+
+/// A panic in one output's engine fails that output only: the shard thread
+/// keeps running and the other output on it keeps being served. Before the
+/// containment in `visit_leaf`, the panic unwound the shard thread, which
+/// stopped every output on it (`snapshot.panicked`).
+#[test]
+fn panicking_leaf_fails_alone_and_its_shard_keeps_serving_the_others() {
+    let probe = LeafProbe::default();
+    let handle = EgressShardHandle::spawn(
+        ShardId::new(0),
+        config(16, 4),
+        LeafHarnessBackend::new(probe.clone()),
+    );
+
+    assert_eq!(
+        handle.try_send(EgressCommand::Add(output_spec("out-panics"))),
+        Ok(())
+    );
+    assert_eq!(
+        handle.try_send(EgressCommand::Add(output_spec("out-healthy"))),
+        Ok(())
+    );
+
+    probe.wait_for_healthy_visits(8);
+    let snapshot = handle.shutdown_and_join();
+    let state = probe.state();
+
+    assert_eq!(
+        state.failures,
+        vec![("out-panics".to_string(), "engine_panic")]
+    );
+    assert!(state.healthy_visits >= 8);
     assert!(!snapshot.panicked);
 }
 
@@ -207,33 +240,39 @@ impl LeafHarnessBackend {
         }
     }
 
+    /// One visit through `EngineVisit::run`, the seam every production
+    /// backend uses (generation check, priming, panic containment,
+    /// progress-to-decision mapping).
     fn visit_ready_leaf(&mut self, key: LeafKey) {
         let leaf = &mut self.leaves[key.0];
-        leaf.schedule.enqueued = false;
-        let progress = leaf.engine.advance(
-            &mut leaf.transport,
-            Readiness::WRITABLE,
-            &self.feed,
-            &mut leaf.cursor,
-            WorkBudget::new(4, 4 * 1024, Duration::from_millis(10)),
-        );
+        let EngineVisitResult::Visited(outcome) = (EngineVisit {
+            generation: 1,
+            common: &mut leaf.common,
+            engine: &mut leaf.engine,
+            transport: &mut leaf.transport,
+            readiness: Readiness::WRITABLE,
+            feed: &self.feed,
+            budget: WorkBudget::new(4, 4 * 1024, Duration::from_millis(10)),
+        })
+        .run() else {
+            return;
+        };
 
-        match progress {
-            EngineProgress::Progress { .. } => {
-                leaf.schedule.mark_serviced();
-                self.probe.record_visit(&leaf.output_id);
-                try_enqueue(&mut leaf.schedule, &mut self.queue, key);
+        match outcome.progress {
+            EngineProgress::Progress { .. } | EngineProgress::Needs(_) => {
+                self.probe.record_visit(&leaf.common.output_id);
             }
-            EngineProgress::Yield => {
-                try_enqueue(&mut leaf.schedule, &mut self.queue, key);
+            EngineProgress::Failed(failure) => {
+                self.probe
+                    .record_failure(&leaf.common.output_id, failure.reason);
             }
-            EngineProgress::Needs(_) => {
-                self.probe.record_visit(&leaf.output_id);
-            }
-            EngineProgress::HandshakeComplete
+            EngineProgress::Yield
+            | EngineProgress::HandshakeComplete
             | EngineProgress::FeedOverrun
-            | EngineProgress::PeerClosed
-            | EngineProgress::Failed(_) => {}
+            | EngineProgress::PeerClosed => {}
+        }
+        if outcome.decision == VisitDecision::Continue {
+            try_enqueue(&mut leaf.common.schedule, &mut self.queue, key);
         }
     }
 }
@@ -242,7 +281,9 @@ impl EgressShardBackend for LeafHarnessBackend {
     fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {
         if let EgressCommand::Add(spec) = command {
             let key = LeafKey(self.leaves.len());
-            let engine = if spec.id.as_str().contains("blocked") {
+            let engine = if spec.id.as_str().contains("panics") {
+                FakeEngine::new(vec![EngineScript::Panic])
+            } else if spec.id.as_str().contains("blocked") {
                 FakeEngine::always_blocks()
             } else if spec.id.as_str().contains("throttled") {
                 // Severely throttled but writable: trickles one unit, then
@@ -266,14 +307,12 @@ impl EgressShardBackend for LeafHarnessBackend {
                 FakeEngine::always_progress(1, 1)
             };
             let mut leaf = HarnessLeaf {
-                output_id: spec.id,
-                schedule: ScheduleState::new(),
+                common: LeafCommon::new(spec.id, 1, FeedId::new("feed"), LeafLimits::default()),
                 engine,
                 transport: FakeTransport::default(),
-                cursor: FeedCursor::new(0, 0),
             };
 
-            try_enqueue(&mut leaf.schedule, &mut self.queue, key);
+            try_enqueue(&mut leaf.common.schedule, &mut self.queue, key);
             self.leaves.push(leaf);
         }
         EgressShardCommandEffect::Continue
@@ -291,11 +330,9 @@ impl EgressShardBackend for LeafHarnessBackend {
 }
 
 struct HarnessLeaf {
-    output_id: OutputId,
-    schedule: ScheduleState,
+    common: LeafCommon,
     engine: FakeEngine,
     transport: FakeTransport,
-    cursor: FeedCursor,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -318,6 +355,13 @@ impl LeafProbe {
                 .entry(output_id.as_str().to_owned())
                 .or_insert(0) += 1;
         }
+        condvar.notify_all();
+    }
+
+    fn record_failure(&self, output_id: &OutputId, reason: &'static str) {
+        let (lock, condvar) = &*self.inner;
+        let mut state = lock.lock().unwrap();
+        state.failures.push((output_id.as_str().to_owned(), reason));
         condvar.notify_all();
     }
 
@@ -362,6 +406,7 @@ struct LeafProbeState {
     throttled_visits: u64,
     healthy_visits: u64,
     healthy_visits_by_leaf: std::collections::HashMap<String, u64>,
+    failures: Vec<(String, &'static str)>,
 }
 
 impl LeafProbeState {

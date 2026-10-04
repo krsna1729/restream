@@ -8,6 +8,7 @@ use std::thread;
 
 use compio::driver::{DriverType, ProactorBuilder};
 use compio::runtime::RuntimeBuilder;
+use futures_util::FutureExt;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
@@ -353,18 +354,33 @@ async fn run_compio_owner(
                 }
                 let connection_parser_budget = parser_budget.clone();
                 let connection_engine = engine.clone();
-                connections.push(Box::pin(async move {
-                    if let Err(error) = handle_rtmp_client(
-                        stream,
-                        peer_addr,
-                        command_tx,
-                        session_shutdown,
-                        connection_engine,
-                        connection_parser_budget,
-                    ).await {
-                        warn!(%error, %peer_addr, "error handling RTMP client");
+                // Fault domain: a panic while serving one connection ends that
+                // connection (its socket, parser charge and gate lease drop
+                // with the future; the control session sees its command
+                // channel close), not the owner thread and every other
+                // connection on it.
+                let connection = std::panic::AssertUnwindSafe(handle_rtmp_client(
+                    stream,
+                    peer_addr,
+                    command_tx,
+                    session_shutdown,
+                    connection_engine,
+                    connection_parser_budget,
+                ));
+                connections.push(Box::pin(connection.catch_unwind().map(move |result| {
+                    match result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => warn!(%error, %peer_addr, "error handling RTMP client"),
+                        Err(payload) => {
+                            let panic = crate::panic_boundary::record_contained(payload.as_ref());
+                            error!(
+                                %peer_addr,
+                                panic,
+                                "RTMP connection panicked; only that connection was closed"
+                            );
+                        }
                     }
-                }));
+                })));
             }
         }
     };

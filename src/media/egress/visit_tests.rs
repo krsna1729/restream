@@ -706,3 +706,38 @@ fn live_start_cursor_does_not_skip_a_keyframe_published_during_the_query() {
         cursor.next_sequence
     );
 }
+
+/// A panicking engine fails its own leaf with a retryable `engine_panic`
+/// and the visit returns normally; the unwind never reaches the shard.
+#[test]
+fn engine_panic_is_contained_as_a_retryable_failure_of_that_leaf() {
+    let feed = FakeFeed::new();
+    let mut common = common(1);
+    let mut engine = FakeEngine::new(vec![EngineScript::Panic]);
+    let mut transport = FakeTransport::default();
+    let before = crate::panic_boundary::contained_panics();
+
+    let result = EngineVisit {
+        generation: 1,
+        common: &mut common,
+        engine: &mut engine,
+        transport: &mut transport,
+        readiness: Readiness::WRITABLE,
+        feed: &feed,
+        budget: budget(),
+    }
+    .run();
+
+    let EngineVisitResult::Visited(EngineVisitOutcome {
+        progress: EngineProgress::Failed(failure),
+        decision,
+    }) = result
+    else {
+        panic!("expected a failed visit");
+    };
+    assert_eq!(failure.reason, "engine_panic");
+    assert!(failure.retryable);
+    assert_eq!(failure.detail, "scripted engine panic");
+    assert_eq!(decision, VisitDecision::Close);
+    assert!(crate::panic_boundary::contained_panics() > before);
+}

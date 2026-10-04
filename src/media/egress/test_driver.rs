@@ -225,6 +225,10 @@ pub enum EngineScript {
     },
     /// Yield the visit.
     Yield,
+    /// Unwind out of `advance`, as a bug in a protocol engine would. Uses
+    /// `resume_unwind`, which skips the panic hook, so passing test logs stay
+    /// quiet.
+    Panic,
 }
 
 // ---------------------------------------------------------------------------
@@ -312,6 +316,7 @@ impl<F: EgressFeed<Unit = Bytes>> ProtocolEngine for FakeEngine<F> {
                 })
             }
             EngineScript::Yield => EngineProgress::Yield,
+            EngineScript::Panic => std::panic::resume_unwind(Box::new("scripted engine panic")),
         }
     }
 

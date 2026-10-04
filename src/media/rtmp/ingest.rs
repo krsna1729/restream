@@ -674,6 +674,8 @@ pub(super) async fn handle_rtmp_client(
         return Ok(());
     };
     let (remaining, _handshake_buffer) = handshake.map_err(|_| "RTMP handshake timed out")??;
+    #[cfg(test)]
+    injected_panics::unwind_if_marked(client_addr);
 
     let mut session_config = ServerSessionConfig::new();
     session_config.max_message_length =
@@ -938,6 +940,37 @@ async fn read_rtmp_input_or_quality(
                 *stats_tick = Box::pin(compio::time::sleep(Duration::from_secs(2)));
             }
             _ = shutdown.cancelled() => return None,
+        }
+    }
+}
+
+/// Test-only fault point: a connection from a marked peer address unwinds
+/// right after the handshake, as a parser bug would, to prove the listener
+/// contains it. `resume_unwind` skips the panic hook, so logs stay quiet.
+#[cfg(test)]
+pub(super) mod injected_panics {
+    use std::collections::HashSet;
+    use std::net::SocketAddr;
+    use std::sync::{Mutex, PoisonError};
+
+    static MARKED: Mutex<Option<HashSet<SocketAddr>>> = Mutex::new(None);
+
+    pub(in crate::media::rtmp) fn mark(peer: SocketAddr) {
+        MARKED
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_or_insert_with(HashSet::new)
+            .insert(peer);
+    }
+
+    pub(super) fn unwind_if_marked(peer: SocketAddr) {
+        let marked = MARKED
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_mut()
+            .is_some_and(|set| set.remove(&peer));
+        if marked {
+            std::panic::resume_unwind(Box::new("injected RTMP connection panic"));
         }
     }
 }

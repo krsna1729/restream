@@ -189,6 +189,11 @@ harness = false
 name = "input_gate"
 harness = false
 
+[[bench]]
+name = "egress_visit"
+harness = false
+required-features = ["egress-test-driver"]
+
 [profile.dev]
 incremental = true
 codegen-units = 16

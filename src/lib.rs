@@ -29,6 +29,7 @@ pub mod infrastructure;
 pub mod logging;
 pub mod malloc_tuning;
 pub mod media;
+pub mod panic_boundary;
 pub mod planner;
 pub mod runtime;
 pub mod runtime_info;

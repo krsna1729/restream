@@ -1,4 +1,4 @@
-use crate::media::egress::backend::{EngineProgress, ProtocolEngine, Readiness};
+use crate::media::egress::backend::{EngineProgress, ProtocolEngine, ProtocolFailure, Readiness};
 use crate::media::egress::feed::{EgressFeed, FeedCursor};
 use crate::media::egress::leaf::LeafCommon;
 use crate::media::egress::policy::WorkBudget;
@@ -107,7 +107,27 @@ pub(crate) fn visit_leaf<F: EgressFeed>(
             "egress leaf cursor primed to feed live start"
         );
     }
-    let progress = advance(&mut common.cursor, readiness, budget);
+    // Fault domain: a panic in one output's engine fails that output (and
+    // its retry policy takes over), not the shard thread and every other
+    // output on it. The engine and transport are per-leaf state, dropped
+    // with the leaf when it closes.
+    let cursor = &mut common.cursor;
+    let progress = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        advance(cursor, readiness, budget)
+    }))
+    .unwrap_or_else(|payload| {
+        let detail = crate::panic_boundary::record_contained(payload.as_ref()).to_string();
+        tracing::error!(
+            output_id = %common.output_id,
+            %detail,
+            "egress engine panicked; the output is closed and retried"
+        );
+        EngineProgress::Failed(ProtocolFailure {
+            reason: "engine_panic",
+            detail,
+            retryable: true,
+        })
+    });
     let decision = apply_progress_to_common(common, &progress, feed);
 
     EngineVisitResult::Visited(EngineVisitOutcome { progress, decision })
