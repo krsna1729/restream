@@ -14,6 +14,13 @@ items).
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
 - [Q-026 frozen-SRT-destination RSS gate](#q-026-resilience-opus-attribute-and-recalibrate-the-frozen-srt-destination-rss-gate)
 - [Q-029 payload-cache delivery watch](#q-029-performance-sonnet-close-the-payload-cache-delivery-watch-item)
+- [Q-030 HLS upload is polled on CONTROL](#q-030-performance-opus-make-hls-upload-publication-driven-and-move-it-off-control)
+- [Q-031 one capacity allocator](#q-031-architecture-opus-derive-every-thread-count-from-one-capacity-allocator)
+- [Q-032 CPU placement](#q-032-performance-opus-measure-core-segregation-of-control-media-and-hot-threads)
+- [Q-033 host-level shard pool](#q-033-architecture-opus-decide-per-feed-shard-groups-versus-a-host-level-shard-pool)
+- [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
+- [Q-035 MEDIA attribution](#q-035-observability-sonnet-attribute-media-pool-time-to-feed-and-stage)
+- [Q-036 enforced runtime truth table](#q-036-docs-sonnet-make-runtime-crossings-an-enforced-truth-table)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -115,7 +122,7 @@ items).
 ### Q-029 [performance] [sonnet] Close the payload-cache delivery watch item
 - Goal: show whether the egress payload cache (E0) widens the worst-destination
   delivery ratio, or close the watch item.
-- Files: `src/media/egress_payload_cache.rs`.
+- Files: `src/media/rtmp/egress_payload_cache.rs`.
 - Gates: `cargo xtask capacity-ramp` RTMP at 100 outputs, cache build against
   `702bc3df`, interleaved, at least 10 repeats; record delivery (worst
   destination ratio, Jain) next to CPU.
@@ -125,3 +132,106 @@ items).
   0.99978) and coincided with a host preemption burst. The worst-destination
   ratio spread was wider with the cache (0.892–0.994 vs 0.970–0.980).
 - Status: open (filed from the media copy audit, removed 2026-10-04).
+
+### Q-030 [performance] [opus] Make HLS upload publication-driven and move it off CONTROL
+- Goal: HLS PUT reacts to segment/playlist publication, as RTMP/SRT egress
+  reacts to feed wakes, and its network I/O leaves the CONTROL runtime.
+- Files: `src/media/hls/upload.rs` (`UPLOAD_INTERVAL` 500 ms poll per output,
+  Reqwest on Tokio CONTROL), `src/media/egress/` (fabric backend candidate).
+- Gates: fake-server unit tests and proptest for request framing and retry
+  state; a fuzz target for the HTTP response parser; a loom model if a thread
+  hop is added; HLS-output benches before and after against Reqwest; a live
+  harness fault case (destination stall and restart).
+- Context: poll cost scales with outputs even when nothing changes, and the
+  PUTs load the scheduler meant for low-rate control work. Two separable
+  wins: publication-driven wake (independent of runtime) and an
+  egress-fabric shard backend (Compio HTTP client). Measure each alone.
+- Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
+  review).
+
+### Q-031 [architecture] [opus] Derive every thread count from one capacity allocator
+- Goal: thread counts follow measured service demand (λ × D at a target
+  utilization, bounded by real CPUs) instead of independent constants that
+  together can claim more CPUs than the host has.
+- Files: `src/config.rs` (`default_tokio_worker_threads` = `ceil(C/3)` in
+  `[2, 8]`, `default_egress_fabric_shards` = `clamp(C, 2, 8)`,
+  `RESTREAM_RTMP_INGRESS_OWNERS`, `RESTREAM_SRT_INGRESS_OWNERS`),
+  `src/media/executor.rs` (MEDIA `clamp(C, 1, 4)`, fixed after start),
+  `src/media/egress/sizing.rs` (the one demand-driven law today).
+- Gates: mixed-load matrix (RTMP + SRT + HLS + recording) showing no
+  regression in delivery against the current constants; Kani/Lean obligations
+  in the [assurance roadmap](assurance-roadmap.md) once the model gates
+  admission.
+- Context: egress shards already use the demand law (Q-025). MEDIA has
+  per-class busy/poll telemetry but no feedback loop; no auto-resize before
+  mixed-load data. Ingress RX mode (managed multishot vs `RawReadiness`) is a
+  host fact with its own coefficients: model it, do not unify it.
+- Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
+  review).
+
+### Q-032 [performance] [opus] Measure core segregation of CONTROL, MEDIA and HOT threads
+- Goal: decide, with evidence, whether CONTROL, MEDIA and Owner/shard threads
+  get disjoint CPU sets.
+- Files: thread spawn sites in `src/media/executor.rs`,
+  `src/media/egress/shard.rs`, `src/media/srt/ingress_owner.rs`,
+  `src/media/rtmp/` ingress owners.
+- Gates: interleaved A/B (shared vs segregated affinity) at RTMP×100 and
+  SRT×64 with delivery checked per output; `perf sched` run-queue latency.
+- Context: the schedulers are logically separate but Linux can stack them on
+  one run queue while another core idles; RTMP-owner experiments
+  (`runtime-crossings.md` M4/M5) suggest placement matters.
+- Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
+  review).
+
+### Q-033 [architecture] [opus] Decide per-feed shard groups versus a host-level shard pool
+- Goal: the unit of egress execution matches the resource it spends (host
+  CPU), or the per-feed shape is kept with a measured reason.
+- Files: `src/media/egress/runtime.rs`, `src/media/engine_*_egress_fabric.rs`,
+  `src/media/egress/backends/sink_shard.rs` and the pipeline-recirculation
+  backend.
+- Gates: many-feed matrix (1/4/8/16 feeds × few outputs) for threads, RSS,
+  context switches and process CPU, delivery checked per output.
+- Context: every fabric now starts at one shard and grows by demand, which
+  removed most of the waste measured in M6 (8 × 1 SRT feeds: 51 → 35 threads
+  with one shard per feed). Still per feed: one OS thread minimum for each
+  (protocol, feed), including sink and pipeline outputs that have no socket
+  poller and could run on MEDIA. Feed publish wake cost scales with
+  subscribed shards (`WakeGate`, W1); an arm-before-park refinement is only
+  worth it if the many-feed matrix shows it.
+- Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
+  review).
+
+### Q-034 [resilience] [opus] Define one overload policy for shared service centers
+- Goal: when a shared Owner or shard saturates, viable destinations keep
+  delivering and the excess is shed or refused explicitly, with an
+  operator-visible reason.
+- Files: `src/media/egress/sizing.rs` (admission point before Add),
+  `src/media/egress/backends/srt*.rs`, `src/media/rtmp/` egress.
+- Gates: live harness case that drives one shard past saturation (M6: one SRT
+  shard collapses from 92/96 to 0/128 delivered) and asserts the surviving set
+  and the status contract.
+- Context: RTMP connections mostly fail and retry one at a time; SRT outputs
+  on one shard deteriorate together after saturation.
+- Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
+  review).
+
+### Q-035 [observability] [sonnet] Attribute MEDIA pool time to feed and stage
+- Goal: MEDIA telemetry answers "which feed/stage used the pool", not only
+  "is the pool busy", at per-task (not per-packet) cost.
+- Files: `src/media/executor.rs` (`MediaServiceClass` counters).
+- Gates: unit test for the attribution counters; bench showing no hot-path
+  regression.
+- Context: input to Q-031's service-demand model.
+- Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
+  review).
+
+### Q-036 [docs] [sonnet] Make runtime-crossings an enforced truth table
+- Goal: `docs/runtime-crossings.md` is the one statement of which thread
+  owns each crossing, and CI rejects docs that contradict it.
+- Files: `docs/runtime-crossings.md`, `scripts/check/docs.mjs`.
+- Gates: `node scripts/check/docs.mjs` fails on a seeded contradiction (for
+  example the removed RTMP owner → Tokio media handoff with a 64 MiB permit).
+- Context: a stale WI8 table (since deleted with `srt-compio-roadmap.md`)
+  once led design work to a wrong runtime model.
+- Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
+  review).
