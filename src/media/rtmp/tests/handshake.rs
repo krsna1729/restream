@@ -892,7 +892,11 @@ async fn clients_connecting_while_connections_end_are_all_accepted() {
         Arc::new(AcceptAllAuthenticator {
             pipeline_id: "pipe-accept-race".to_string(),
         });
-    let (engine, addr, server) = start_ingress_test_server(pipeline_access).await;
+    // All 2 × CLIENTS connections come from 127.0.0.1: lift the per-client
+    // cap (default 64) above them, so this measures the accept loop, not
+    // admission (`one_client_cannot_take_every_connection_slot` covers that).
+    let engine = engine_with_admission_limits(4 * CLIENTS, 60_000);
+    let (engine, addr, server) = start_ingress_test_server_with_engine(pipeline_access, engine).await;
 
     let mut tasks = tokio::task::JoinSet::new();
     for _ in 0..CLIENTS {
