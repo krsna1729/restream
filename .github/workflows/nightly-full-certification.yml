@@ -32,7 +32,8 @@ jobs:
         with:
           node_version: '22'
           npm_ci: 'true'
-          system_deps_profile: base
+          # FFmpeg subprocess tests need the executable (no longer embedded).
+          system_deps_profile: media
           native_prefix: 'true'
           rust_cache: 'true'
       - name: Build frontend assets
@@ -48,9 +49,16 @@ jobs:
       - uses: ./.github/actions/ci-bootstrap
         with:
           node_version: '22'
-          system_deps_profile: build
+          npm_ci: 'true'
+          # `live`: the SRT and RTMP(S) media proofs drive the live harness,
+          # which needs FFmpeg and the harness host tools (same as PR CI).
+          system_deps_profile: live
           native_prefix: 'true'
           rust_cache: 'true'
+      - name: Build frontend assets for the harness binary
+        run: npm run build:frontend
+      - name: Build the live harness used by the SRT and RTMP(S) media proofs
+        run: ./scripts/build/bench-harness.sh
       - uses: docker/setup-buildx-action@v4
       - name: Prepare build tree
         run: scripts/release/prepare-build-tree.sh
