@@ -293,6 +293,33 @@ fn annexb_parameter_sets_accepts_complete_h265_parameter_sets() {
 }
 
 #[test]
+fn h264_reference_slices_are_not_taken_for_h265_parameter_sets() {
+    // 0x41 / 0x43 / 0x45 are H.264 non-IDR slices with nal_ref_idc = 2; read
+    // as an H.265 header they are types 32..=34 (VPS/SPS/PPS). A long-lived
+    // accumulator that sees one must still take the next H.264 keyframe's
+    // SPS/PPS.
+    let keyframe = |sps: u8| {
+        vec![
+            0x00, 0x00, 0x00, 0x01, 0x67, 0x64, 0x00, sps, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x68,
+            0xEE, 0x3C, 0x80, 0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x80,
+        ]
+    };
+    let mut accumulator = AnnexbParameterSetAccumulator::default();
+    assert!(accumulator.push_payload(&keyframe(0x1E)).is_some());
+    for header in [0x41, 0x43, 0x45] {
+        let p_slice = [0x00, 0x00, 0x00, 0x01, header, 0x01, 0x9A, 0x02, 0x03];
+        assert!(
+            accumulator.push_payload(&p_slice).is_none_or(|sets| sets[4] == 0x67),
+            "slice header {header:#04x} must not produce H.265 parameter sets"
+        );
+    }
+    let refreshed = accumulator
+        .push_payload(&keyframe(0x28))
+        .expect("the next H.264 keyframe still yields SPS/PPS");
+    assert_eq!(refreshed[7], 0x28, "the new SPS is taken");
+}
+
+#[test]
 fn audio_for_ts_flv_config_packet_returns_none() {
     // packet_type 0 (AAC sequence header) — should be dropped
     assert!(audio_for_ts(&[0xAF, 0x00, 0x12, 0x10], PayloadFormat::Flv, 48000, 2).is_none());
