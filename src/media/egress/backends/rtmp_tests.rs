@@ -333,7 +333,7 @@ fn budget() -> WorkBudget {
 
 fn drive_to<F>(
     engine: &mut RtmpFabricEngine,
-    client_stream: &mut RtmpConnection,
+    client_stream: &mut TlsTcpConnection,
     feed: &RingFeed,
     cursor: &mut FeedCursor,
     mut is_done: F,
@@ -371,7 +371,7 @@ fn engine_reaches_handshake_complete_through_the_visit_loop() {
 
     let client_stream = TcpStream::connect(addr).unwrap();
     client_stream.set_nonblocking(true).unwrap();
-    let mut client_stream = RtmpConnection::plain(client_stream);
+    let mut client_stream = TlsTcpConnection::plain(client_stream);
 
     let mut engine =
         RtmpFabricEngine::new_client(test_parts(), 4096, false, RtmpPublishStartup::default())
@@ -403,7 +403,7 @@ fn engine_reaches_publish_accepted_through_the_visit_loop() {
 
     let client_stream = TcpStream::connect(addr).unwrap();
     client_stream.set_nonblocking(true).unwrap();
-    let mut client_stream = RtmpConnection::plain(client_stream);
+    let mut client_stream = TlsTcpConnection::plain(client_stream);
 
     let mut engine =
         RtmpFabricEngine::new_client(test_parts(), 4096, false, RtmpPublishStartup::default())
@@ -438,7 +438,7 @@ fn engine_reports_protocol_failure_when_peer_closes_mid_handshake() {
 
     let client_stream = TcpStream::connect(addr).unwrap();
     client_stream.set_nonblocking(true).unwrap();
-    let mut client_stream = RtmpConnection::plain(client_stream);
+    let mut client_stream = TlsTcpConnection::plain(client_stream);
 
     let mut engine =
         RtmpFabricEngine::new_client(test_parts(), 4096, false, RtmpPublishStartup::default())
@@ -504,7 +504,7 @@ fn engine_reports_protocol_failure_when_peer_closes_mid_negotiation() {
 
     let client_stream = TcpStream::connect(addr).unwrap();
     client_stream.set_nonblocking(true).unwrap();
-    let mut client_stream = RtmpConnection::plain(client_stream);
+    let mut client_stream = TlsTcpConnection::plain(client_stream);
 
     let mut engine =
         RtmpFabricEngine::new_client(test_parts(), 4096, false, RtmpPublishStartup::default())
@@ -549,7 +549,7 @@ fn engine_publishes_a_raw_keyframe_once_publish_is_accepted() {
 
     let client_stream = TcpStream::connect(addr).unwrap();
     client_stream.set_nonblocking(true).unwrap();
-    let mut client_stream = RtmpConnection::plain(client_stream);
+    let mut client_stream = TlsTcpConnection::plain(client_stream);
 
     let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(4));
     let payload = Bytes::from_static(&[
@@ -625,7 +625,7 @@ fn advance_stops_draining_the_startup_batch_once_the_budget_is_exhausted() {
 
     let client_stream = TcpStream::connect(addr).unwrap();
     client_stream.set_nonblocking(true).unwrap();
-    let mut client_stream = RtmpConnection::plain(client_stream);
+    let mut client_stream = TlsTcpConnection::plain(client_stream);
 
     let mut metadata = StreamMetadata::new();
     metadata.video_width = Some(1920);
@@ -723,7 +723,7 @@ fn pending_application_bytes_reflects_queued_wire_data_and_drains_to_zero() {
 
     let client_stream = TcpStream::connect(addr).unwrap();
     client_stream.set_nonblocking(true).unwrap();
-    let mut client_stream = RtmpConnection::plain(client_stream);
+    let mut client_stream = TlsTcpConnection::plain(client_stream);
 
     let mut metadata = StreamMetadata::new();
     metadata.video_width = Some(1920);
@@ -821,7 +821,7 @@ fn advance_pulls_a_burst_of_feed_units_in_one_read_from_call() {
 
     let client_stream = TcpStream::connect(addr).unwrap();
     client_stream.set_nonblocking(true).unwrap();
-    let mut client_stream = RtmpConnection::plain(client_stream);
+    let mut client_stream = TlsTcpConnection::plain(client_stream);
 
     let mut engine =
         RtmpFabricEngine::new_client(test_parts(), 4096, false, RtmpPublishStartup::default())
@@ -895,7 +895,7 @@ fn engine_detects_peer_close_during_steady_state_publishing() {
 
     let client_stream = TcpStream::connect(addr).unwrap();
     client_stream.set_nonblocking(true).unwrap();
-    let mut client_stream = RtmpConnection::plain(client_stream);
+    let mut client_stream = TlsTcpConnection::plain(client_stream);
 
     let mut engine =
         RtmpFabricEngine::new_client(test_parts(), 4096, false, RtmpPublishStartup::default())

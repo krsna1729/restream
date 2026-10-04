@@ -1,27 +1,23 @@
-//! Plain-or-TLS transport for the RTMP fabric engine.
+//! Plain-or-TLS transport for fabric protocol engines.
 //!
 //! Compio-owned completion workers drive socket reads and writes on the egress
-//! shard runtime. The synchronous RTMP and rustls state machines exchange
+//! shard runtime. The synchronous protocol and rustls state machines exchange
 //! bytes with those workers through bounded connection-local buffers.
 
 use std::io::{self, Read, Write};
 use std::net::Shutdown;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::media::egress::backend::Interest;
 use crate::media::egress::backends::compio_tcp::CompioTcpStream;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, ClientConnection, ProtocolVersion, StreamOwned};
 
-#[cfg(test)]
-use crate::media::rtmp::rustls_client_config;
+use super::ktls;
+use super::telemetry::TlsCounters;
 
-#[path = "rtmp_ktls.rs"]
-pub(crate) mod rtmp_ktls;
-
-enum RtmpConnectionState {
+enum ConnectionState {
     Plain(CompioTcpStream),
     Ktls(KtlsConnection),
     Tls(Option<Box<StreamOwned<ClientConnection, CompioTcpStream>>>),
@@ -91,12 +87,12 @@ impl KtlsConnection {
                 *peer_closed = true;
                 return Ok(0);
             }
-            if record_type != rtmp_ktls::RECORD_TYPE_DATA {
+            if record_type != ktls::RECORD_TYPE_DATA {
                 control_records += 1;
             }
             match record_type {
-                rtmp_ktls::RECORD_TYPE_DATA => return Ok(count),
-                rtmp_ktls::RECORD_TYPE_HANDSHAKE if version == ProtocolVersion::TLSv1_3 => {
+                ktls::RECORD_TYPE_DATA => return Ok(count),
+                ktls::RECORD_TYPE_HANDSHAKE if version == ProtocolVersion::TLSv1_3 => {
                     if handshake_buffer.len().saturating_add(count) > (1 << 20) + 4 {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
@@ -106,7 +102,7 @@ impl KtlsConnection {
                     handshake_buffer.extend_from_slice(&buffer[..count]);
                     Self::process_handshake_buffer(handshake_buffer)?;
                 }
-                rtmp_ktls::RECORD_TYPE_ALERT => {
+                ktls::RECORD_TYPE_ALERT => {
                     let (level, description) = match (pending_alert_level.take(), count) {
                         (None, 1) => {
                             *pending_alert_level = Some(buffer[0]);
@@ -189,81 +185,6 @@ impl KtlsConnection {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct RtmpsTelemetrySnapshot {
-    pub(crate) connections: u64,
-    pub(crate) tls12: u64,
-    pub(crate) tls13: u64,
-    pub(crate) ktls_requested: u64,
-    pub(crate) ktls_attempts: u64,
-    pub(crate) ktls_success: u64,
-    pub(crate) ktls_unsupported: u64,
-    pub(crate) ktls_error: u64,
-    pub(crate) userspace_tls_connections: u64,
-    pub(crate) ktls_tls12_aes128_gcm: bool,
-    pub(crate) ktls_tls12_aes256_gcm: bool,
-    pub(crate) ktls_tls13_aes128_gcm: bool,
-    pub(crate) ktls_tls13_aes256_gcm: bool,
-}
-
-struct RtmpsCounters {
-    connections: AtomicU64,
-    tls12: AtomicU64,
-    tls13: AtomicU64,
-    ktls_requested: AtomicU64,
-    ktls_attempts: AtomicU64,
-    ktls_success: AtomicU64,
-    ktls_unsupported: AtomicU64,
-    ktls_error: AtomicU64,
-    userspace_tls_connections: AtomicU64,
-}
-
-static RTMPS_COUNTERS: RtmpsCounters = RtmpsCounters {
-    connections: AtomicU64::new(0),
-    tls12: AtomicU64::new(0),
-    tls13: AtomicU64::new(0),
-    ktls_requested: AtomicU64::new(0),
-    ktls_attempts: AtomicU64::new(0),
-    ktls_success: AtomicU64::new(0),
-    ktls_unsupported: AtomicU64::new(0),
-    ktls_error: AtomicU64::new(0),
-    userspace_tls_connections: AtomicU64::new(0),
-};
-
-pub(crate) fn rtmps_telemetry_snapshot() -> RtmpsTelemetrySnapshot {
-    use tokio_rustls::rustls::{CipherSuite, ProtocolVersion};
-
-    RtmpsTelemetrySnapshot {
-        connections: RTMPS_COUNTERS.connections.load(Ordering::Relaxed),
-        tls12: RTMPS_COUNTERS.tls12.load(Ordering::Relaxed),
-        tls13: RTMPS_COUNTERS.tls13.load(Ordering::Relaxed),
-        ktls_requested: RTMPS_COUNTERS.ktls_requested.load(Ordering::Relaxed),
-        ktls_attempts: RTMPS_COUNTERS.ktls_attempts.load(Ordering::Relaxed),
-        ktls_success: RTMPS_COUNTERS.ktls_success.load(Ordering::Relaxed),
-        ktls_unsupported: RTMPS_COUNTERS.ktls_unsupported.load(Ordering::Relaxed),
-        ktls_error: RTMPS_COUNTERS.ktls_error.load(Ordering::Relaxed),
-        userspace_tls_connections: RTMPS_COUNTERS
-            .userspace_tls_connections
-            .load(Ordering::Relaxed),
-        ktls_tls12_aes128_gcm: rtmp_ktls::supports(
-            ProtocolVersion::TLSv1_2,
-            CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-        ),
-        ktls_tls12_aes256_gcm: rtmp_ktls::supports(
-            ProtocolVersion::TLSv1_2,
-            CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-        ),
-        ktls_tls13_aes128_gcm: rtmp_ktls::supports(
-            ProtocolVersion::TLSv1_3,
-            CipherSuite::TLS13_AES_128_GCM_SHA256,
-        ),
-        ktls_tls13_aes256_gcm: rtmp_ktls::supports(
-            ProtocolVersion::TLSv1_3,
-            CipherSuite::TLS13_AES_256_GCM_SHA384,
-        ),
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KtlsState {
     NotRequested,
@@ -273,18 +194,21 @@ enum KtlsState {
     SetupFailed,
 }
 
-pub(crate) struct RtmpConnection {
-    state: RtmpConnectionState,
+pub(crate) struct TlsTcpConnection {
+    state: ConnectionState,
     tls_version_recorded: bool,
     ktls_state: KtlsState,
+    /// The owning protocol's counters; `None` for plain TCP.
+    counters: Option<&'static TlsCounters>,
 }
 
-impl RtmpConnection {
+impl TlsTcpConnection {
     pub(crate) fn plain(stream: impl Into<CompioTcpStream>) -> Self {
         Self {
-            state: RtmpConnectionState::Plain(stream.into()),
+            state: ConnectionState::Plain(stream.into()),
             tls_version_recorded: false,
             ktls_state: KtlsState::NotRequested,
+            counters: None,
         }
     }
 
@@ -293,43 +217,43 @@ impl RtmpConnection {
     // wrapper is only exercised by tests.
     #[cfg(test)]
     pub(crate) fn tls(stream: impl Into<CompioTcpStream>, host: &str) -> Result<Self, String> {
-        Self::tls_with_config(stream, host, rustls_client_config())
+        static TEST_COUNTERS: TlsCounters = TlsCounters::new();
+        Self::tls_with_config(stream, host, super::rustls_client_config(), &TEST_COUNTERS)
     }
 
-    /// Same as [`Self::tls`] but with an explicit `ClientConfig` — the
-    /// production path always uses `rustls_client_config()`'s
-    /// webpki-roots-trusting config; tests use this to substitute a locally
-    /// generated test certificate instead.
+    /// Same as [`Self::tls`] but with an explicit `ClientConfig` and the
+    /// owning protocol's counters. Production passes the destination's
+    /// resolved config; tests substitute a locally generated certificate.
     pub(crate) fn tls_with_config(
         stream: impl Into<CompioTcpStream>,
         host: &str,
         config: Arc<ClientConfig>,
+        counters: &'static TlsCounters,
     ) -> Result<Self, String> {
         let server_name = ServerName::try_from(host.to_string())
-            .map_err(|_| format!("invalid RTMPS host name: {host}"))?;
+            .map_err(|_| format!("invalid TLS server name: {host}"))?;
         let mut config = (*config).clone();
         config.enable_secret_extraction = true;
         let connection = ClientConnection::new(Arc::new(config), server_name)
             .map_err(|error| format!("rustls client connection init failed: {error}"))?;
-        RTMPS_COUNTERS.connections.fetch_add(1, Ordering::Relaxed);
-        RTMPS_COUNTERS
-            .ktls_requested
-            .fetch_add(1, Ordering::Relaxed);
+        TlsCounters::add(&counters.connections);
+        TlsCounters::add(&counters.ktls_requested);
         let stream: CompioTcpStream = stream.into();
         stream.set_ancillary_mode();
         Ok(Self {
-            state: RtmpConnectionState::Tls(Some(Box::new(StreamOwned::new(connection, stream)))),
+            state: ConnectionState::Tls(Some(Box::new(StreamOwned::new(connection, stream)))),
             tls_version_recorded: false,
             ktls_state: KtlsState::Requested,
+            counters: Some(counters),
         })
     }
 
     pub(crate) fn completion_stream(&self) -> &CompioTcpStream {
         match &self.state {
-            RtmpConnectionState::Plain(stream) | RtmpConnectionState::Failed(stream) => stream,
-            RtmpConnectionState::Ktls(connection) => &connection.stream,
-            RtmpConnectionState::Tls(Some(stream)) => &stream.sock,
-            RtmpConnectionState::Tls(None) => {
+            ConnectionState::Plain(stream) | ConnectionState::Failed(stream) => stream,
+            ConnectionState::Ktls(connection) => &connection.stream,
+            ConnectionState::Tls(Some(stream)) => &stream.sock,
+            ConnectionState::Tls(None) => {
                 unreachable!("TLS stream is only temporarily taken during handoff")
             }
         }
@@ -347,7 +271,7 @@ impl RtmpConnection {
     /// has nothing in flight and no staged input, over and over, instead of
     /// waiting for the receive completion.
     pub(crate) fn interest_hint(&self, requested: Interest) -> Interest {
-        let RtmpConnectionState::Tls(Some(stream)) = &self.state else {
+        let ConnectionState::Tls(Some(stream)) = &self.state else {
             return requested;
         };
         let hint = Interest {
@@ -383,22 +307,20 @@ impl RtmpConnection {
     /// finished flushing), `0` otherwise. This is a worst-case upper bound
     /// on the hidden buffer, not an exact occupancy count — the point is
     /// keeping `LeafLimits::max_pending_bytes` enforcement from
-    /// under-counting a backpressured RTMPS leaf by an unbounded amount,
+    /// under-counting a backpressured TLS leaf by an unbounded amount,
     /// not precise accounting.
     pub(crate) fn rustls_pending_bytes_estimate(&self) -> usize {
         const RUSTLS_DEFAULT_BUFFER_LIMIT: usize = 64 * 1024;
         match &self.state {
-            RtmpConnectionState::Plain(_)
-            | RtmpConnectionState::Ktls(_)
-            | RtmpConnectionState::Failed(_) => 0,
-            RtmpConnectionState::Tls(Some(stream)) => {
+            ConnectionState::Plain(_) | ConnectionState::Ktls(_) | ConnectionState::Failed(_) => 0,
+            ConnectionState::Tls(Some(stream)) => {
                 if stream.conn.wants_write() {
                     RUSTLS_DEFAULT_BUFFER_LIMIT
                 } else {
                     0
                 }
             }
-            RtmpConnectionState::Tls(None) => 0,
+            ConnectionState::Tls(None) => 0,
         }
     }
     pub(crate) fn shutdown(&self, how: Shutdown) -> io::Result<()> {
@@ -406,7 +328,7 @@ impl RtmpConnection {
     }
 
     fn advance_tls_handshake(&mut self) -> io::Result<()> {
-        if let RtmpConnectionState::Tls(Some(stream)) = &mut self.state
+        if let ConnectionState::Tls(Some(stream)) = &mut self.state
             && (stream.conn.is_handshaking() || stream.conn.wants_write())
         {
             stream.conn.complete_io(&mut stream.sock)?;
@@ -415,7 +337,7 @@ impl RtmpConnection {
             }
         }
         self.maybe_handoff_ktls()?;
-        if matches!(self.state, RtmpConnectionState::Tls(_)) {
+        if matches!(self.state, ConnectionState::Tls(_)) {
             return Err(io::ErrorKind::WouldBlock.into());
         }
         Ok(())
@@ -425,8 +347,11 @@ impl RtmpConnection {
         if self.ktls_state != KtlsState::Requested {
             return Ok(());
         }
+        let Some(counters) = self.counters else {
+            return Ok(()); // plain TCP never requests kTLS
+        };
         let (version, suite, ready_to_handoff) = {
-            let RtmpConnectionState::Tls(Some(stream)) = &mut self.state else {
+            let ConnectionState::Tls(Some(stream)) = &mut self.state else {
                 return Ok(());
             };
             if stream.conn.is_handshaking() {
@@ -450,40 +375,34 @@ impl RtmpConnection {
         };
         if !self.tls_version_recorded {
             match version {
-                tokio_rustls::rustls::ProtocolVersion::TLSv1_2 => {
-                    RTMPS_COUNTERS.tls12.fetch_add(1, Ordering::Relaxed);
-                }
-                tokio_rustls::rustls::ProtocolVersion::TLSv1_3 => {
-                    RTMPS_COUNTERS.tls13.fetch_add(1, Ordering::Relaxed);
-                }
+                ProtocolVersion::TLSv1_2 => TlsCounters::add(&counters.tls12),
+                ProtocolVersion::TLSv1_3 => TlsCounters::add(&counters.tls13),
                 _ => {}
             }
             self.tls_version_recorded = true;
         }
-        let supported = crate::media::rtmp::supports_rtmps_cipher_suite(version, suite.suite())
-            && rtmp_ktls::supports(version, suite.suite());
+        let supported = super::supports_cipher_suite(version, suite.suite())
+            && ktls::supports(version, suite.suite());
         if !supported {
-            RTMPS_COUNTERS.ktls_attempts.fetch_add(1, Ordering::Relaxed);
+            TlsCounters::add(&counters.ktls_attempts);
             let tls_stream = match &mut self.state {
-                RtmpConnectionState::Tls(stream) => {
+                ConnectionState::Tls(stream) => {
                     stream.take().expect("TLS stream was checked above")
                 }
-                RtmpConnectionState::Plain(_)
-                | RtmpConnectionState::Ktls(_)
-                | RtmpConnectionState::Failed(_) => {
-                    return Err(io::Error::other("RTMPS state changed during kTLS check"));
+                ConnectionState::Plain(_)
+                | ConnectionState::Ktls(_)
+                | ConnectionState::Failed(_) => {
+                    return Err(io::Error::other("TLS state changed during kTLS check"));
                 }
             };
             let (_, socket) = tls_stream.into_parts();
-            self.state = RtmpConnectionState::Failed(socket);
+            self.state = ConnectionState::Failed(socket);
             self.ktls_state = KtlsState::Unsupported;
-            RTMPS_COUNTERS
-                .ktls_unsupported
-                .fetch_add(1, Ordering::Relaxed);
+            TlsCounters::add(&counters.ktls_unsupported);
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 format!(
-                    "RTMPS requires kTLS, unsupported negotiated TLS {:?} suite {:?}",
+                    "TLS egress requires kTLS, unsupported negotiated TLS {:?} suite {:?}",
                     version,
                     suite.suite()
                 ),
@@ -492,35 +411,32 @@ impl RtmpConnection {
         if !ready_to_handoff {
             return Ok(());
         }
-        RTMPS_COUNTERS.ktls_attempts.fetch_add(1, Ordering::Relaxed);
+        TlsCounters::add(&counters.ktls_attempts);
         let stream = match &mut self.state {
-            RtmpConnectionState::Tls(stream) => {
-                stream.take().expect("TLS stream was checked above")
+            ConnectionState::Tls(stream) => stream.take().expect("TLS stream was checked above"),
+            ConnectionState::Plain(_) | ConnectionState::Ktls(_) | ConnectionState::Failed(_) => {
+                return Ok(());
             }
-            RtmpConnectionState::Plain(_)
-            | RtmpConnectionState::Ktls(_)
-            | RtmpConnectionState::Failed(_) => return Ok(()),
         };
         let (connection, socket) = stream.into_parts();
         #[allow(deprecated)]
         let secrets = match connection.dangerous_extract_secrets() {
             Ok(secrets) => secrets,
             Err(error) => {
-                self.state = RtmpConnectionState::Failed(socket);
+                self.state = ConnectionState::Failed(socket);
                 self.ktls_state = KtlsState::SetupFailed;
-                RTMPS_COUNTERS.ktls_error.fetch_add(1, Ordering::Relaxed);
+                TlsCounters::add(&counters.ktls_error);
                 return Err(io::Error::other(format!("rustls kTLS handoff: {error}")));
             }
         };
-        if let Err(error) = rtmp_ktls::install(socket.as_raw_fd(), version, suite.suite(), &secrets)
-        {
-            self.state = RtmpConnectionState::Failed(socket);
+        if let Err(error) = ktls::install(socket.as_raw_fd(), version, suite.suite(), &secrets) {
+            self.state = ConnectionState::Failed(socket);
             self.ktls_state = KtlsState::SetupFailed;
-            RTMPS_COUNTERS.ktls_error.fetch_add(1, Ordering::Relaxed);
+            TlsCounters::add(&counters.ktls_error);
             return Err(error);
         }
         socket.set_ktls_mode();
-        self.state = RtmpConnectionState::Ktls(KtlsConnection {
+        self.state = ConnectionState::Ktls(KtlsConnection {
             stream: socket,
             version,
             handshake_buffer: Vec::new(),
@@ -528,39 +444,40 @@ impl RtmpConnection {
             peer_closed: false,
         });
         self.ktls_state = KtlsState::Enabled;
-        RTMPS_COUNTERS.ktls_success.fetch_add(1, Ordering::Relaxed);
+        TlsCounters::add(&counters.ktls_success);
         Ok(())
     }
 
     #[cfg(test)]
     pub(crate) fn is_ktls(&self) -> bool {
-        matches!(self.state, RtmpConnectionState::Ktls(_))
+        matches!(self.state, ConnectionState::Ktls(_))
     }
 }
 
-impl Drop for RtmpConnection {
+impl Drop for TlsTcpConnection {
     fn drop(&mut self) {
-        if self.tls_version_recorded && matches!(self.state, RtmpConnectionState::Tls(_)) {
-            RTMPS_COUNTERS
-                .userspace_tls_connections
-                .fetch_add(1, Ordering::Relaxed);
+        if self.tls_version_recorded
+            && matches!(self.state, ConnectionState::Tls(_))
+            && let Some(counters) = self.counters
+        {
+            TlsCounters::add(&counters.userspace_tls_connections);
         }
     }
 }
 
-impl Read for RtmpConnection {
+impl Read for TlsTcpConnection {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.advance_tls_handshake()?;
         match &mut self.state {
-            RtmpConnectionState::Plain(stream) => stream.read(buf),
-            RtmpConnectionState::Ktls(connection) => connection.read(buf),
-            RtmpConnectionState::Tls(_) => Err(io::ErrorKind::WouldBlock.into()),
-            RtmpConnectionState::Failed(_) => Err(io::Error::other("TLS handoff failed")),
+            ConnectionState::Plain(stream) => stream.read(buf),
+            ConnectionState::Ktls(connection) => connection.read(buf),
+            ConnectionState::Tls(_) => Err(io::ErrorKind::WouldBlock.into()),
+            ConnectionState::Failed(_) => Err(io::Error::other("TLS handoff failed")),
         }
     }
 }
 
-impl RtmpConnection {
+impl TlsTcpConnection {
     /// Zero-copy counterpart of `write_vectored` for media: shared payload
     /// slices are queued by reference. Only plain and kTLS connections carry
     /// media; Rustls-owned sockets refuse like `write` does.
@@ -570,46 +487,46 @@ impl RtmpConnection {
     ) -> io::Result<usize> {
         self.advance_tls_handshake()?;
         match &mut self.state {
-            RtmpConnectionState::Plain(stream) => stream.write_shared(parts),
-            RtmpConnectionState::Ktls(connection) => connection.stream.write_shared(parts),
-            RtmpConnectionState::Tls(_) => Err(io::ErrorKind::WouldBlock.into()),
-            RtmpConnectionState::Failed(_) => Err(io::Error::other("TLS handoff failed")),
+            ConnectionState::Plain(stream) => stream.write_shared(parts),
+            ConnectionState::Ktls(connection) => connection.stream.write_shared(parts),
+            ConnectionState::Tls(_) => Err(io::ErrorKind::WouldBlock.into()),
+            ConnectionState::Failed(_) => Err(io::Error::other("TLS handoff failed")),
         }
     }
 }
 
-impl Write for RtmpConnection {
+impl Write for TlsTcpConnection {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.advance_tls_handshake()?;
         match &mut self.state {
-            RtmpConnectionState::Plain(stream) => stream.write(buf),
-            RtmpConnectionState::Ktls(connection) => connection.stream.write(buf),
-            RtmpConnectionState::Tls(_) => Err(io::ErrorKind::WouldBlock.into()),
-            RtmpConnectionState::Failed(_) => Err(io::Error::other("TLS handoff failed")),
+            ConnectionState::Plain(stream) => stream.write(buf),
+            ConnectionState::Ktls(connection) => connection.stream.write(buf),
+            ConnectionState::Tls(_) => Err(io::ErrorKind::WouldBlock.into()),
+            ConnectionState::Failed(_) => Err(io::Error::other("TLS handoff failed")),
         }
     }
 
     fn write_vectored(&mut self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
         self.advance_tls_handshake()?;
         match &mut self.state {
-            RtmpConnectionState::Plain(stream) => stream.write_vectored(bufs),
-            RtmpConnectionState::Ktls(connection) => connection.stream.write_vectored(bufs),
-            RtmpConnectionState::Tls(_) => Err(io::ErrorKind::WouldBlock.into()),
-            RtmpConnectionState::Failed(_) => Err(io::Error::other("TLS handoff failed")),
+            ConnectionState::Plain(stream) => stream.write_vectored(bufs),
+            ConnectionState::Ktls(connection) => connection.stream.write_vectored(bufs),
+            ConnectionState::Tls(_) => Err(io::ErrorKind::WouldBlock.into()),
+            ConnectionState::Failed(_) => Err(io::Error::other("TLS handoff failed")),
         }
     }
 
     fn flush(&mut self) -> io::Result<()> {
         self.advance_tls_handshake()?;
         match &mut self.state {
-            RtmpConnectionState::Plain(stream) => stream.flush(),
-            RtmpConnectionState::Ktls(connection) => connection.stream.flush(),
-            RtmpConnectionState::Tls(_) => Err(io::ErrorKind::WouldBlock.into()),
-            RtmpConnectionState::Failed(_) => Err(io::Error::other("TLS handoff failed")),
+            ConnectionState::Plain(stream) => stream.flush(),
+            ConnectionState::Ktls(connection) => connection.stream.flush(),
+            ConnectionState::Tls(_) => Err(io::ErrorKind::WouldBlock.into()),
+            ConnectionState::Failed(_) => Err(io::Error::other("TLS handoff failed")),
         }
     }
 }
 
 #[cfg(test)]
-#[path = "rtmp_connection_tests.rs"]
+#[path = "connection_tests.rs"]
 mod tests;

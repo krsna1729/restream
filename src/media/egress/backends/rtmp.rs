@@ -37,8 +37,8 @@ use crate::media::rtmp::{
 };
 
 use super::compio_tcp::TxPart;
-use super::rtmp_connection::RtmpConnection;
 use super::rtmp_handshake::{HandshakeOutcome, NonBlockingRtmpHandshake};
+use crate::media::egress::tls::{TlsCounters, TlsTcpConnection};
 use rtmp_negotiation::{SessionAdvanceOutcome, SessionNegotiation};
 
 #[path = "rtmp_negotiation.rs"]
@@ -48,6 +48,10 @@ mod rtmp_negotiation;
 mod rtmp_wire;
 
 use rtmp_wire::RtmpWireMessage;
+
+/// RTMPS connection and kTLS counters, reported under `rtmps` in the system
+/// telemetry.
+pub(crate) static RTMPS_TLS_COUNTERS: TlsCounters = TlsCounters::new();
 
 const SESSION_READ_BUFFER: usize = 4096;
 const MAX_VECTORED_PACKETS: usize = 16;
@@ -338,7 +342,7 @@ impl MediaPublisher {
 
     fn advance(
         &mut self,
-        stream: &mut RtmpConnection,
+        stream: &mut TlsTcpConnection,
         readiness: Readiness,
         feed: &RingFeed,
         cursor: &mut FeedCursor,
@@ -619,7 +623,7 @@ impl RtmpFabricEngine {
 
 impl ProtocolEngine for RtmpFabricEngine {
     type Feed = RingFeed;
-    type Transport = RtmpConnection;
+    type Transport = TlsTcpConnection;
 
     fn advance(
         &mut self,

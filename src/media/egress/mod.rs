@@ -43,6 +43,7 @@ pub mod shard;
 pub(crate) mod sizing;
 pub mod supervisor;
 pub mod timer;
+pub(crate) mod tls;
 pub mod visit;
 
 #[cfg(any(test, feature = "egress-test-driver"))]

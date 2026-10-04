@@ -243,7 +243,7 @@ impl CompioTcpStream {
             }
             #[cfg(test)]
             Self::Std(stream) => {
-                super::super::rtmp_connection::rtmp_ktls::recv_record(stream.as_raw_fd(), buf)
+                crate::media::egress::tls::ktls::recv_record(stream.as_raw_fd(), buf)
             }
         }
     }
@@ -696,7 +696,7 @@ async fn receive_ancillary_worker(
             Ok((count, control_len, flags)) => {
                 let ktls_active = buffers.borrow().ktls_active;
                 let record_type = if ktls_active {
-                    match super::super::rtmp_connection::rtmp_ktls::record_type_from_control(
+                    match crate::media::egress::tls::ktls::record_type_from_control(
                         &control[..control_len],
                         flags.contains(ReturnFlags::CTRUNC),
                     ) {

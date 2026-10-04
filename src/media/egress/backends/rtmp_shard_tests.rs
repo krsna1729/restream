@@ -720,7 +720,7 @@ async fn feed_wake_delivers_media_after_idle_when_factory_start_is_delayed() {
         4,
         delayed_budget,
         4096,
-        crate::media::rtmp::resolve_rtmps_client_config(None).unwrap(),
+        crate::media::egress::tls::resolve_client_config(None).unwrap(),
         startup_source.clone(),
         |_| feed.clone_reader(),
     )
