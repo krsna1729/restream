@@ -178,7 +178,8 @@ fn bench_video_for_ts(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(flv_p.len() as u64));
     group.bench_function("flv_pframe_8k", |b| {
         b.iter_batched(
-            || (0usize, Vec::new()),
+            // 4-byte NALU lengths, as every production caller starts with.
+            || (4usize, Vec::new()),
             |(mut nls, mut cache)| {
                 black_box(video_for_ts(
                     &flv_p,

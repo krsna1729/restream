@@ -331,7 +331,7 @@ struct GeneratedMuxPacket {
 
 fn generated_audio_payload(track_index: u32, payload_len: usize, seed: u8) -> Vec<u8> {
     let raw_len = payload_len.max(1);
-    let mut payload = Vec::from(crate::media::codec::build_adts_header(raw_len, 48_000, 2));
+    let mut payload = Vec::from(crate::media::codec::build_adts_header(raw_len, 48_000, 2).unwrap());
     payload.extend((0..raw_len).map(|offset| {
         seed.wrapping_add(track_index as u8)
             .wrapping_add(offset as u8)

@@ -1,3 +1,10 @@
+#![deny(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 use std::num::NonZeroU32;
 
 use shiguredo_mp4::{
@@ -16,17 +23,11 @@ use shiguredo_mp4::{
 };
 
 use super::rendition::BufferedSample;
-use crate::media::codec::{adts_frame_count, build_aac_sequence_header};
+use crate::media::codec::{adts_frame_count, avcc_record, build_aac_sequence_header};
 use crate::media::metadata::{AudioMeta, VideoMeta};
 use crate::media::packet::{MediaPacket, PayloadFormat};
 
 pub(super) const VIDEO_TIMESCALE: u32 = 90_000;
-
-pub(super) struct AvccNalLists {
-    pub sps: Vec<Vec<u8>>,
-    pub pps: Vec<Vec<u8>>,
-    pub length_size: u8,
-}
 
 pub(super) fn build_mux_samples(
     buffered: &[BufferedSample],
@@ -37,12 +38,17 @@ pub(super) fn build_mux_samples(
 ) -> Result<Vec<Sample>, String> {
     let timescale = NonZeroU32::new(timescale).ok_or_else(|| "zero timescale".to_string())?;
     let mut samples = Vec::with_capacity(buffered.len());
-    for (index, sample) in buffered.iter().enumerate() {
-        let next_dts = buffered
-            .get(index + 1)
+    let mut buffered_iter = buffered.iter().peekable();
+    while let Some(sample) = buffered_iter.next() {
+        let next_dts = buffered_iter
+            .peek()
             .map(|next| next.dts)
             .or(next_segment_first_dts)
-            .unwrap_or_else(|| sample.dts + sample.default_duration as i64);
+            .unwrap_or_else(|| {
+                sample
+                    .dts
+                    .saturating_add(i64::from(sample.default_duration))
+            });
         let duration = next_dts.saturating_sub(sample.dts);
         if duration <= 0 || duration > u32::MAX as i64 {
             return Err(format!("invalid sample duration: {duration}"));
@@ -74,7 +80,7 @@ pub(super) fn build_mux_samples(
 }
 
 pub(super) fn is_flv_avc_sequence_header(payload: &[u8]) -> bool {
-    payload.len() > 1 && (payload[0] & 0x0F) == 7 && payload[1] == 0
+    matches!(payload, [tag, 0, ..] if tag & 0x0F == 7)
 }
 
 pub(super) fn build_h264_sample_entry_from_video_packet(
@@ -105,45 +111,16 @@ pub(super) fn build_h264_sample_entry_from_flv_sequence_header(
     if !is_flv_avc_sequence_header(sequence_header) {
         return None;
     }
-    let avcc = sequence_header.get(5..)?;
-    let lists = parse_avcc_nal_lists(avcc)?;
-    let length_size = LengthSize::from_length_size_minus_one(lists.length_size).ok()?;
+    let record = avcc_record(sequence_header.get(5..)?)?;
+    let length_size = LengthSize::from_length_size_minus_one(record.length_size_minus_one).ok()?;
+    let owned = |list: &[&[u8]]| list.iter().map(|nalu| nalu.to_vec()).collect::<Vec<_>>();
     build_avc1_box(
-        &lists.sps,
-        &lists.pps,
+        &owned(&record.sps),
+        &owned(&record.pps),
         &H264SampleEntryConfig { length_size },
     )
     .ok()
     .map(SampleEntry::Avc1)
-}
-
-pub(super) fn parse_avcc_nal_lists(data: &[u8]) -> Option<AvccNalLists> {
-    if data.len() < 7 {
-        return None;
-    }
-    let mut pos = 6usize;
-    let num_sps = (data[5] & 0x1F) as usize;
-    let mut sps = Vec::with_capacity(num_sps);
-    for _ in 0..num_sps {
-        let len = u16::from_be_bytes([*data.get(pos)?, *data.get(pos + 1)?]) as usize;
-        pos += 2;
-        sps.push(data.get(pos..pos + len)?.to_vec());
-        pos += len;
-    }
-    let num_pps = *data.get(pos)? as usize;
-    pos += 1;
-    let mut pps = Vec::with_capacity(num_pps);
-    for _ in 0..num_pps {
-        let len = u16::from_be_bytes([*data.get(pos)?, *data.get(pos + 1)?]) as usize;
-        pos += 2;
-        pps.push(data.get(pos..pos + len)?.to_vec());
-        pos += len;
-    }
-    Some(AvccNalLists {
-        sps,
-        pps,
-        length_size: data[4] & 0x03,
-    })
 }
 
 pub(super) fn sample_entry_codec_string(sample_entry: &SampleEntry) -> Option<String> {
@@ -154,7 +131,7 @@ pub(super) fn build_aac_sample_entry(
     track: &AudioMeta,
     audio_sequence_header: Option<&[u8]>,
 ) -> Option<SampleEntry> {
-    let asc = aac_specific_config(track, audio_sequence_header);
+    let asc = aac_specific_config(track, audio_sequence_header)?;
     build_mp4a_box(
         &asc,
         &Mp4aSampleEntryConfig {
@@ -168,11 +145,11 @@ pub(super) fn build_aac_sample_entry(
     .map(SampleEntry::Mp4a)
 }
 
-fn aac_specific_config(track: &AudioMeta, header: Option<&[u8]>) -> AudioSpecificConfig {
+fn aac_specific_config(track: &AudioMeta, header: Option<&[u8]>) -> Option<AudioSpecificConfig> {
     header
         .and_then(parse_flv_audio_specific_config)
         .or_else(|| parse_generated_asc(track.sample_rate, track.channels))
-        .unwrap_or_else(default_aac_lc_stereo_48k)
+        .or_else(default_aac_lc_stereo_48k)
 }
 
 fn parse_flv_audio_specific_config(bytes: &[u8]) -> Option<AudioSpecificConfig> {
@@ -189,13 +166,12 @@ fn parse_generated_asc(sample_rate: u32, channels: u32) -> Option<AudioSpecificC
     parse_flv_audio_specific_config(header.as_ref())
 }
 
-fn default_aac_lc_stereo_48k() -> AudioSpecificConfig {
-    AudioSpecificConfig {
+fn default_aac_lc_stereo_48k() -> Option<AudioSpecificConfig> {
+    Some(AudioSpecificConfig {
         audio_object_type: AudioObjectType::AacLc,
-        sampling_frequency: SamplingFrequency::from_hz(48_000)
-            .expect("48 kHz is an AAC table rate"),
+        sampling_frequency: SamplingFrequency::from_hz(48_000).ok()?,
         channel_configuration: ChannelConfiguration::Stereo,
-    }
+    })
 }
 
 pub(super) fn default_video_duration(video: &VideoMeta) -> u32 {

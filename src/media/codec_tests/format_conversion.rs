@@ -49,7 +49,7 @@ fn parse_avcc_config_extracts_sps_pps() {
 #[test]
 fn adts_round_trip() {
     let raw_aac = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02];
-    let with_adts = prepend_adts(&raw_aac, 48000, 2);
+    let with_adts = prepend_adts(&raw_aac, 48000, 2).unwrap();
     assert_eq!(with_adts.len(), 7 + raw_aac.len());
     assert!(has_adts_sync(&with_adts));
     let stripped = strip_adts(&with_adts);
@@ -59,10 +59,10 @@ fn adts_round_trip() {
 #[test]
 fn adts_frame_count_counts_complete_frames() {
     let mut payload = Vec::new();
-    let frame_a = build_adts_header(2, 48000, 2);
+    let frame_a = build_adts_header(2, 48000, 2).unwrap();
     payload.extend_from_slice(&frame_a);
     payload.extend_from_slice(&[0x11, 0x22]);
-    let frame_b = build_adts_header(3, 48000, 2);
+    let frame_b = build_adts_header(3, 48000, 2).unwrap();
     payload.extend_from_slice(&frame_b);
     payload.extend_from_slice(&[0x33, 0x44, 0x55]);
 
@@ -83,7 +83,7 @@ proptest! {
     ) {
         let mut payload = Vec::new();
         for (idx, frame_size) in frame_sizes.iter().copied().enumerate() {
-            let frame = build_adts_header(frame_size, 48000, 2);
+            let frame = build_adts_header(frame_size, 48000, 2).unwrap();
             payload.extend_from_slice(&frame);
             payload.extend(std::iter::repeat_n(idx as u8, frame_size));
         }
@@ -121,7 +121,7 @@ fn audio_for_ts_adds_adts_for_raw_without() {
 
 #[test]
 fn audio_for_ts_passes_through_existing_adts() {
-    let mut with_adts = Vec::from(build_adts_header(4, 48000, 2));
+    let mut with_adts = Vec::from(build_adts_header(4, 48000, 2).unwrap());
     with_adts.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]);
     let result = audio_for_ts(&with_adts, PayloadFormat::Raw, 48000, 2);
     assert!(matches!(result, Some(Cow::Borrowed(_))));
@@ -317,7 +317,7 @@ fn build_aac_seq_header_synthesizes_correct_config() {
 #[test]
 fn audio_for_rtmp_strips_adts() {
     let raw = [0xDE, 0xAD, 0xBE, 0xEF];
-    let mut with_adts = Vec::from(build_adts_header(raw.len(), 48000, 2));
+    let mut with_adts = Vec::from(build_adts_header(raw.len(), 48000, 2).unwrap());
     with_adts.extend_from_slice(&raw);
 
     let result = audio_for_rtmp(&with_adts);

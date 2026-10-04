@@ -6,6 +6,13 @@
 //! `ServerSessionConfig::max_message_length`; this budget caps the sum across
 //! connections. Every connection future runs on the single RTMP Compio owner
 //! thread, so the shared total is a plain `Rc<Cell>`: no atomics, no locks.
+#![deny(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -49,7 +56,14 @@ impl ParserCharge {
     /// aggregate would exceed the budget; the caller rejects this connection,
     /// whose share is released when the charge drops.
     pub(crate) fn update(&mut self, bytes: usize) -> Result<(), ()> {
-        let held = self.budget.held.get() - self.charged + bytes;
+        // `held` is the sum of every live charge, so it is never below this
+        // one's `charged`; saturating keeps a broken invariant from wrapping.
+        let held = self
+            .budget
+            .held
+            .get()
+            .saturating_sub(self.charged)
+            .saturating_add(bytes);
         self.budget.held.set(held);
         self.charged = bytes;
         if held > self.budget.limit {
@@ -63,16 +77,20 @@ impl ParserCharge {
     /// the handoff budget. Never refuses: it only releases bytes.
     pub(crate) fn release_to(&mut self, bytes: usize) {
         let bytes = bytes.min(self.charged);
-        self.budget
-            .held
-            .set(self.budget.held.get() - self.charged + bytes);
+        self.budget.held.set(
+            self.budget
+                .held
+                .get()
+                .saturating_sub(self.charged)
+                .saturating_add(bytes),
+        );
         self.charged = bytes;
     }
 }
 
 impl Drop for ParserCharge {
     fn drop(&mut self) {
-        let held = self.budget.held.get() - self.charged;
+        let held = self.budget.held.get().saturating_sub(self.charged);
         self.budget.held.set(held);
     }
 }

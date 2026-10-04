@@ -16,7 +16,7 @@ fn build_adts_header_all_sample_rates() {
         (8000, 11),
     ];
     for (rate, expected_freq_idx) in rates {
-        let hdr = build_adts_header(100, rate, 2);
+        let hdr = build_adts_header(100, rate, 2).unwrap();
         let actual = (hdr[2] >> 2) & 0x0F;
         assert_eq!(
             actual, expected_freq_idx,
@@ -25,15 +25,53 @@ fn build_adts_header_all_sample_rates() {
     }
 }
 
+/// The ADTS length field is 13 bits and includes the header. The largest
+/// frame it can describe reads back as exactly one frame; one byte more is
+/// refused. It used to be written with a truncated length, so a TS demuxer
+/// lost ADTS sync on the rest of the stream.
+#[test]
+fn adts_header_refuses_frames_its_length_field_cannot_hold() {
+    let mut largest = Vec::from(build_adts_header(MAX_ADTS_PAYLOAD, 48_000, 2).unwrap());
+    largest.resize(7 + MAX_ADTS_PAYLOAD, 0x11);
+    assert_eq!(adts_frame_count(&largest), 1);
+    assert!(build_adts_header(MAX_ADTS_PAYLOAD + 1, 48_000, 2).is_none());
+
+    let mut flv = vec![0xAF, 0x01];
+    flv.resize(2 + MAX_ADTS_PAYLOAD + 1, 0x22);
+    assert!(audio_for_ts(&flv, PayloadFormat::Flv, 48_000, 2).is_none());
+    let raw = vec![0x22; MAX_ADTS_PAYLOAD + 1];
+    assert!(audio_for_ts(&raw, PayloadFormat::Raw, 48_000, 2).is_none());
+    let mut buf = Vec::new();
+    assert!(audio_for_ts_into(&raw, PayloadFormat::Raw, 48_000, 2, &mut buf).is_none());
+}
+
+/// A header whose length field is below its own 7 bytes ends the count. A
+/// zero length would otherwise never advance past the frame.
+#[test]
+fn adts_frame_count_stops_at_a_length_shorter_than_the_header() {
+    let mut payload = Vec::from(build_adts_header(2, 48_000, 2).unwrap());
+    payload.extend_from_slice(&[0x11, 0x22]);
+    for claimed in [6u8, 0] {
+        let mut bad = payload.clone();
+        let mut header = build_adts_header(2, 48_000, 2).unwrap();
+        header[3] &= 0xFC;
+        header[4] = 0;
+        header[5] = (claimed << 5) | 0x1F;
+        bad.extend_from_slice(&header);
+        bad.extend_from_slice(&[0; 8]);
+        assert_eq!(adts_frame_count(&bad), 1, "claimed length {claimed}");
+    }
+}
+
 #[test]
 fn build_adts_header_unknown_rate_defaults_to_48k() {
-    let hdr = build_adts_header(100, 99999, 2);
+    let hdr = build_adts_header(100, 99999, 2).unwrap();
     assert_eq!((hdr[2] >> 2) & 0x0F, 3); // defaults to 48000
 }
 
 #[test]
 fn build_adts_header_channels_clamped_to_7() {
-    let hdr = build_adts_header(100, 48000, 8);
+    let hdr = build_adts_header(100, 48000, 8).unwrap();
     assert_eq!((hdr[2] & 0x01) << 2 | (hdr[3] >> 6), 7);
 }
 
