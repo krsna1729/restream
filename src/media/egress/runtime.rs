@@ -791,7 +791,7 @@ mod tests {
                 .manager
                 .desired_output(&OutputId::new(format!("old-{i}")))
                 .unwrap();
-            assert_eq!(live.shard_id, ShardId::new(0), "old-{i} stayed put");
+            assert_eq!(live.shard_id(), ShardId::new(0), "old-{i} stayed put");
         }
         assert!(no_remove(&old_probe));
         assert_eq!(
@@ -829,7 +829,7 @@ mod tests {
         }
         let on_tail: Vec<OutputId> = (0..40)
             .map(|i| OutputId::new(format!("out-{i}")))
-            .filter(|id| runtime.manager.desired_output(id).unwrap().shard_id == ShardId::new(1))
+            .filter(|id| runtime.manager.desired_output(id).unwrap().shard_id() == ShardId::new(1))
             .collect();
         assert!(!on_tail.is_empty());
         probes[0].wait_for_commands(40 - on_tail.len());
@@ -861,7 +861,7 @@ mod tests {
                 .manager
                 .desired_output(&OutputId::new(format!("later-{i}")))
                 .unwrap()
-                .shard_id;
+                .shard_id();
             assert_eq!(
                 shard,
                 ShardId::new(0),

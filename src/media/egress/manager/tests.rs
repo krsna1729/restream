@@ -101,12 +101,12 @@ fn add_command_records_desired_output_and_enqueues_to_assigned_shard() {
         })
     );
     assert_eq!(
-        manager.desired_output(&output_spec.id),
-        Some(&DesiredOutput {
-            id: output_spec.id,
-            generation: 1,
-            shard_id: expected_shard,
-        })
+        manager.desired_output(&output_spec.id).map(|desired| (
+            desired.id().clone(),
+            desired.generation(),
+            desired.shard_id()
+        )),
+        Some((output_spec.id, 1, expected_shard))
     );
     assert_eq!(manager.command_depth(expected_shard), 1);
 }
@@ -190,12 +190,12 @@ fn newer_generation_replaces_desired_output_and_enqueues_once() {
     ));
 
     assert_eq!(
-        manager.desired_output(&first.id),
-        Some(&DesiredOutput {
-            id: first.id,
-            generation: 2,
-            shard_id,
-        })
+        manager.desired_output(&first.id).map(|desired| (
+            desired.id().clone(),
+            desired.generation(),
+            desired.shard_id()
+        )),
+        Some((first.id, 2, shard_id))
     );
     assert_eq!(manager.command_depth(shard_id), 2);
 }
@@ -247,12 +247,12 @@ fn sink_spec_uses_common_lifecycle_command_contract() {
         Ok(ManagerCommandOutcome::Enqueued { shard_id })
     );
     assert_eq!(
-        manager.desired_output(&output_id),
-        Some(&DesiredOutput {
-            id: output_id.clone(),
-            generation: 3,
-            shard_id,
-        })
+        manager.desired_output(&output_id).map(|desired| (
+            desired.id().clone(),
+            desired.generation(),
+            desired.shard_id()
+        )),
+        Some((output_id.clone(), 3, shard_id))
     );
     assert_eq!(
         manager.apply_command(EgressCommand::Remove(output_id.clone())),
@@ -289,12 +289,12 @@ fn remove_preserves_desired_output_when_channel_is_full() {
     );
 
     assert_eq!(
-        manager.desired_output(&output_id),
-        Some(&DesiredOutput {
-            id: output_id,
-            generation: 1,
-            shard_id: ShardId::new(0),
-        })
+        manager.desired_output(&output_id).map(|desired| (
+            desired.id().clone(),
+            desired.generation(),
+            desired.shard_id()
+        )),
+        Some((output_id, 1, ShardId::new(0)))
     );
 }
 
@@ -441,12 +441,12 @@ fn failed_remove_dispatch_preserves_desired_output() {
         })
     );
     assert_eq!(
-        manager.desired_output(&output_id),
-        Some(&DesiredOutput {
-            id: output_id,
-            generation: 1,
-            shard_id: expected_shard,
-        })
+        manager.desired_output(&output_id).map(|desired| (
+            desired.id().clone(),
+            desired.generation(),
+            desired.shard_id()
+        )),
+        Some((output_id, 1, expected_shard))
     );
     assert_eq!(manager.command_depth(expected_shard), 1);
 }
@@ -518,7 +518,10 @@ fn add(manager: &mut EgressManager, id: &str) -> ShardId {
             |_, _| Ok::<_, SendFailure>(()),
         )
         .unwrap();
-    manager.desired_output(&OutputId::new(id)).unwrap().shard_id
+    manager
+        .desired_output(&OutputId::new(id))
+        .unwrap()
+        .shard_id()
 }
 
 #[test]
@@ -530,7 +533,10 @@ fn growth_keeps_every_live_output_and_places_only_new_ones_on_new_shards() {
     manager.grow_to(NonZeroU32::new(4).unwrap());
     for (id, shard) in &before {
         assert_eq!(
-            manager.desired_output(&OutputId::new(id)).unwrap().shard_id,
+            manager
+                .desired_output(&OutputId::new(id))
+                .unwrap()
+                .shard_id(),
             *shard
         );
     }
@@ -565,7 +571,7 @@ fn updating_a_live_output_stays_on_its_recorded_shard_after_resizing() {
         manager
             .desired_output(&OutputId::new("stable"))
             .unwrap()
-            .shard_id,
+            .shard_id(),
         original
     );
 }
@@ -712,7 +718,7 @@ mod proptests {
                             .dispatch_command(EgressCommand::Add(spec(&id)), |_, _| Ok::<_, SendFailure>(()))
                             .is_ok()
                         {
-                            let shard = manager.desired_output(&OutputId::new(&id)).unwrap().shard_id;
+                            let shard = manager.desired_output(&OutputId::new(&id)).unwrap().shard_id();
                             recorded.entry(id).or_insert_with(|| {
                                 assert!(shard.index() < placement);
                                 shard

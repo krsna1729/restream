@@ -46,8 +46,9 @@ impl EgressManagerConfig {
 #[derive(Debug, Clone)]
 pub struct EgressManager {
     config: EgressManagerConfig,
+    /// Every live output: its spec and the shard it is placed on, in one
+    /// entry, so the spec and the placement cannot disagree.
     desired: HashMap<OutputId, DesiredOutput>,
-    desired_specs: HashMap<OutputId, OutputSpec>,
     command_depths: Vec<usize>,
     draining_shards: Vec<bool>,
     /// Shards that accept NEW outputs (`<= config.shard_count`). Shards above
@@ -63,7 +64,6 @@ impl EgressManager {
             command_depths: vec![0; config.shard_count.get() as usize],
             config,
             desired: HashMap::new(),
-            desired_specs: HashMap::new(),
             draining_shards: vec![false; config.shard_count.get() as usize],
             placement: config.shard_count,
             shutting_down: false,
@@ -206,14 +206,14 @@ impl EgressManager {
         let shard_id = self
             .desired
             .get(&spec.id)
-            .map_or_else(|| self.assign_spec(&spec), |current| current.shard_id);
+            .map_or_else(|| self.assign_spec(&spec), DesiredOutput::shard_id);
         if let Some(current) = self.desired.get(&spec.id) {
-            if spec.generation < current.generation {
+            if spec.generation < current.generation() {
                 return Ok(ManagerCommandOutcome::IgnoredStale {
                     shard_id: current.shard_id,
                 });
             }
-            if spec.generation == current.generation {
+            if spec.generation == current.generation() {
                 return Ok(ManagerCommandOutcome::AlreadyCurrent {
                     shard_id: current.shard_id,
                 });
@@ -242,14 +242,8 @@ impl EgressManager {
             .map_err(|source| EgressManagerDispatchError::Dispatch { shard_id, source })?;
         self.reserve_command_slot(shard_id)
             .map_err(EgressManagerDispatchError::Command)?;
-        let desired = DesiredOutput {
-            id: spec.id.clone(),
-            generation: spec.generation,
-            shard_id,
-        };
-        let output_id = spec.id.clone();
-        self.desired.insert(output_id.clone(), desired.clone());
-        self.desired_specs.insert(output_id, spec);
+        self.desired
+            .insert(spec.id.clone(), DesiredOutput { spec, shard_id });
         Ok(ManagerCommandOutcome::Enqueued { shard_id })
     }
 
@@ -272,7 +266,6 @@ impl EgressManager {
         self.reserve_command_slot(shard_id)
             .map_err(EgressManagerDispatchError::Command)?;
         self.desired.remove(&output_id);
-        self.desired_specs.remove(&output_id);
         Ok(ManagerCommandOutcome::Enqueued { shard_id })
     }
 
@@ -351,12 +344,10 @@ impl EgressManager {
     ) -> Result<Vec<OutputSpec>, EgressManagerCommandError> {
         self.check_command_slots(shard_id, 0)?;
         Ok(self
-            .desired_specs
-            .iter()
-            .filter_map(|(output_id, spec)| {
-                let desired = self.desired.get(output_id)?;
-                (desired.shard_id == shard_id).then(|| spec.clone())
-            })
+            .desired
+            .values()
+            .filter(|desired| desired.shard_id == shard_id)
+            .map(|desired| desired.spec.clone())
             .collect())
     }
 
@@ -412,11 +403,25 @@ impl EgressManager {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A live output as the manager last dispatched it.
+#[derive(Debug, Clone)]
 pub struct DesiredOutput {
-    pub id: OutputId,
-    pub generation: u64,
-    pub shard_id: ShardId,
+    spec: OutputSpec,
+    shard_id: ShardId,
+}
+
+impl DesiredOutput {
+    pub fn id(&self) -> &OutputId {
+        &self.spec.id
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.spec.generation
+    }
+
+    pub fn shard_id(&self) -> ShardId {
+        self.shard_id
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

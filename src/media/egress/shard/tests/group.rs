@@ -6,8 +6,7 @@ use super::support::{
 use crate::media::egress::command::OutputSpec;
 use crate::media::egress::command::{EgressCommand, ShardId};
 use crate::media::egress::manager::{
-    DesiredOutput, EgressManager, EgressManagerCommandError, EgressManagerDispatchError,
-    ManagerCommandOutcome,
+    EgressManager, EgressManagerCommandError, EgressManagerDispatchError, ManagerCommandOutcome,
 };
 use std::num::NonZeroU32;
 use std::time::{Duration, Instant};
@@ -111,12 +110,12 @@ fn manager_dispatch_to_group_routes_add_to_assigned_thread() {
         vec![format!("add:{output_id}"), "shutdown".to_string()]
     );
     assert_eq!(
-        manager.desired_output(&output_id),
-        Some(&DesiredOutput {
-            id: output_id,
-            generation: 1,
-            shard_id: ShardId::new(1),
-        })
+        manager.desired_output(&output_id).map(|desired| (
+            desired.id().clone(),
+            desired.generation(),
+            desired.shard_id()
+        )),
+        Some((output_id, 1, ShardId::new(1)))
     );
     assert!(snapshots.iter().all(|snapshot| snapshot.stopped));
 }
@@ -206,12 +205,12 @@ fn manager_dispatch_to_group_converges_after_shard_queue_full() {
     let snapshots = group.shutdown_and_join();
 
     assert_eq!(
-        manager.desired_output(&rejected_id),
-        Some(&DesiredOutput {
-            id: rejected_id,
-            generation: 1,
-            shard_id: ShardId::new(0),
-        })
+        manager.desired_output(&rejected_id).map(|desired| (
+            desired.id().clone(),
+            desired.generation(),
+            desired.shard_id()
+        )),
+        Some((rejected_id, 1, ShardId::new(0)))
     );
     assert!(snapshots.iter().all(|snapshot| snapshot.stopped));
 }
