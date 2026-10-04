@@ -48,6 +48,8 @@ media behavior or a hot path.
 - [High-performance data path](high-performance-data-path.md) — hot-path
   invariants and the measurement workflow.
 - [Concurrency proofing](concurrency-proofing.md) — proof ladder and gates.
+- [Assurance roadmap](assurance-roadmap.md) — which rung proves which
+  invariant, and what to build next (Kani, TLA+, Lean).
 - [Stage boundary proof map](stage-boundary-proof-map.md) — current invariant
   coverage by runtime boundary.
 - [Frontend boundary proof map](frontend-boundary-proof-map.md) — current
