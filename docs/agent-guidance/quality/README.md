@@ -67,7 +67,7 @@ rerun.
 ## Host safety
 
 One quality loop runs per host. Use the worktree helper and its
-`.agent-state/setup.env` for isolated caches and the shared build lock.
+`.agent-state/setup.env` for isolated caches, and check `pgrep -a -x cargo` before heavy builds.
 Respect active claims regardless of age.
 
 Loops skip heavy builds while another task's media processes run and defer

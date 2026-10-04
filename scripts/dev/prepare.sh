@@ -9,7 +9,7 @@ if [[ ! -d node_modules ]]; then
   exit 2
 fi
 
-scripts/build/resource-limit.sh scripts/build/native-deps.sh
+scripts/build/native-deps.sh
 npm run build:frontend
 
 echo "prepare: native prefix and embedded frontend assets are ready"

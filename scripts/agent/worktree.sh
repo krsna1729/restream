@@ -2,7 +2,6 @@
 set -euo pipefail
 
 SCRIPT_ROOT="${RESTREAM_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
-DEFAULT_LOCK_FILE="/tmp/restream-build.lock"
 DEFAULT_LOCAL_ARTIFACT_KEEP="${RESTREAM_AGENT_WORKTREE_LOCAL_ARTIFACT_KEEP:-3}"
 DEFAULT_INCREMENTAL_KEEP="${RESTREAM_AGENT_WORKTREE_INCREMENTAL_KEEP:-2}"
 
@@ -539,7 +538,6 @@ AGENT_WORKTREE_PATH="$worktree_path"
 AGENT_SOURCE_TREE="$source_tree"
 AGENT_WORK_ROOT="$work_root"
 AGENT_WORK_DIR_TEMPLATE="$work_root/<mode>"
-RESTREAM_BUILD_LOCK_FILE="$DEFAULT_LOCK_FILE"
 AGENT_SHARED_STATIC_ROOT="$shared_static_root"
 AGENT_TARGET_CACHE_MODE="$target_cache_mode"
 AGENT_TARGET_CACHE_WITH_INCREMENTAL="$target_incremental"
@@ -552,7 +550,6 @@ This directory belongs to the agent worktree setup helper.
 Useful defaults:
   source setup.env
   export WORK_ROOT="$work_root"
-  export RESTREAM_BUILD_LOCK_FILE="$DEFAULT_LOCK_FILE"
 
 Live harness examples:
   WORK_DIR="$work_root/mixed-anchor" target/debug/test_harness mixed-anchor
@@ -777,6 +774,5 @@ agent-worktree: ready
   branch: $BRANCH_NAME
   source: $SOURCE_TREE
   work root: $WORK_ROOT_DEFAULT
-  lock env: RESTREAM_BUILD_LOCK_FILE=$DEFAULT_LOCK_FILE
   cleanup: scripts/agent/worktree.sh --cleanup $WORKTREE_ID
 EOF

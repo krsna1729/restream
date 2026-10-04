@@ -51,7 +51,7 @@ owning script and its verification, with this manifest updated only when the
 distribution boundary itself changes.
 
 The stable preparation entry points used by that verification are
-`scripts/build/resource-limit.sh ./scripts/build/native-deps.sh` for the native
+`./scripts/build/native-deps.sh` for the native
 prefix and `npm run build:frontend` for embedded browser output. The scripts
 own their internal steps and flags.
 

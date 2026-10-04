@@ -152,13 +152,13 @@ fi
 
 if (( RUN_NATIVE_SETUP )); then
     echo "bootstrap-dev: building pinned native dependency prefix"
-    "$ROOT/scripts/build/resource-limit.sh" "$ROOT/scripts/build/native-deps.sh"
+    "$ROOT/scripts/build/native-deps.sh"
 fi
 
 cat <<EOF
 bootstrap-dev: done
 
 Next steps:
-  scripts/build/resource-limit.sh ./scripts/build/app-native.sh
+  ./scripts/build/app-native.sh
   cargo run
 EOF

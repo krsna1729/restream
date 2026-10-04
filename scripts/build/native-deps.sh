@@ -9,11 +9,6 @@ PREFIX="$BUILD_ROOT/prefix"
 STAMPS="$BUILD_ROOT/stamps"
 NATIVE_INPUT_LOCK="$ROOT/scripts/build/native/native-inputs.lock"
 
-if [[ -z "${RESTREAM_BUILD_LOCK_HELD:-}" ]]; then
-    echo "setup-static-build: run via scripts/build/resource-limit.sh ./scripts/build/native-deps.sh" >&2
-    exit 2
-fi
-
 # shellcheck source=scripts/lib/debian-packages.sh
 source "$ROOT/scripts/lib/debian-packages.sh"
 
@@ -165,7 +160,7 @@ reset_cmake_build_if_moved() {
 # ─ Microarchitecture/Optimization Level ──────────────────────────────────────
 # By default, compiles with x86-64-v3 (AVX2 baseline) for wide compatibility in releases.
 # You can override this by setting the RESTREAM_MARCH environment variable, e.g.:
-#   RESTREAM_MARCH=native scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
+#   RESTREAM_MARCH=native ./scripts/build/native-deps.sh
 #
 MARCH="${RESTREAM_MARCH:-x86-64-v3}"
 
@@ -204,7 +199,7 @@ if ! stamp_matches "$X264_STAMP" "$X264_FINGERPRINT" ||
         --enable-pic \
         --disable-opencl \
         --disable-cli
-    make -j"${BUILD_JOBS:-$(nproc)}"
+    make -j"$(nproc)"
     make install
     popd >/dev/null
     write_stamp "$X264_STAMP" "$X264_FINGERPRINT"
@@ -245,7 +240,7 @@ if ! stamp_matches "$X265_STAMP" "$X265_FINGERPRINT" ||
         -DENABLE_CLI=OFF \
         -DENABLE_LIBNUMA=OFF \
         -DENABLE_PIC=ON
-    cmake --build "$BUILD_ROOT/x265-build" --parallel "${BUILD_JOBS:-$(nproc)}"
+    cmake --build "$BUILD_ROOT/x265-build" --parallel "$(nproc)"
     cmake --install "$BUILD_ROOT/x265-build"
     perl -0pi -e 's/(?:\s+-lgcc_s)+//g' "$PREFIX/lib/pkgconfig/x265.pc"
     write_stamp "$X265_STAMP" "$X265_FINGERPRINT"
@@ -344,7 +339,7 @@ if ! stamp_matches "$FFMPEG_STAMP" "$FFMPEG_FINGERPRINT" ||
         exit 1
     fi
 
-    make -j"${BUILD_JOBS:-$(nproc)}"
+    make -j"$(nproc)"
     make install
     make distclean
     popd >/dev/null
@@ -391,7 +386,7 @@ EOF
 
 echo
 echo "Static build environment is ready."
-echo "Build with: scripts/build/resource-limit.sh ./scripts/build/app-static.sh"
-echo "Faster iteration: RESTREAM_BUILD_PROFILE=fast-release scripts/build/resource-limit.sh ./scripts/build/app-static.sh"
-echo "Force native rebuild: RESTREAM_REBUILD_NATIVE=1 scripts/build/resource-limit.sh ./scripts/build/native-deps.sh"
+echo "Build with: ./scripts/build/app-static.sh"
+echo "Faster iteration: RESTREAM_BUILD_PROFILE=fast-release ./scripts/build/app-static.sh"
+echo "Force native rebuild: RESTREAM_REBUILD_NATIVE=1 ./scripts/build/native-deps.sh"
 echo "Environment: $BUILD_ROOT/env.sh"

@@ -21,7 +21,7 @@ Parallel work has four independent concerns:
 | Concern | Owner | Rule |
 |---|---|---|
 | Source edits | `scripts/agent/worktree.sh` | One task and branch per worktree |
-| Heavy builds | `scripts/build/resource-limit.sh` plus worktree `setup.env` | One host-global exclusive build lane |
+| Heavy builds | `.cargo/config.toml` job count plus worktree `setup.env` | One heavy build at a time per host; check `pgrep -a -x cargo` |
 | Live correctness | `scripts/harness/run.sh` and harness manifests | Use the wrapper and its isolation defaults |
 | Measurements | Bench and measurement workflows | Run serially on an otherwise idle host |
 
@@ -48,14 +48,12 @@ share a writable `target/` tree between worktrees.
 
 ## Build coordination
 
-The generated `setup.env` is the source of truth for `WORK_ROOT`,
-`RESTREAM_BUILD_LOCK_FILE`, and shared native state. Source it before running
+The generated `setup.env` is the source of truth for `WORK_ROOT` and
+shared native state. Source it before running
 worktree commands.
 
-Prefix heavy Cargo and native-build commands with
-`scripts/build/resource-limit.sh`. The wrapper owns lock behavior, timeout
-handling, and job sizing. Do not duplicate those settings in agent-specific
-wrappers or documentation.
+Cargo job sizing lives in `.cargo/config.toml`; nothing serializes builds
+across worktrees, so check `pgrep -a -x cargo` before a heavy build.
 
 Never compile while a live Restream, MediaMTX, or FFmpeg pipeline is running.
 Do not kill processes owned by another task merely to acquire the build lane.
@@ -105,7 +103,6 @@ refuses unsafe cleanup unless its explicit force option is used.
 - [AGENTS.md](../AGENTS.md) owns agent safety, gate selection, and model-tier
   guidance.
 - `scripts/agent/worktree.sh` owns worktree creation and cache preparation.
-- `scripts/build/resource-limit.sh` owns heavy-command serialization.
 - [Testing](testing.md) and the harness catalog own live workflow selection.
 - Dated performance evidence owns measured host limits; this guide does not
   copy machine-specific concurrency numbers.

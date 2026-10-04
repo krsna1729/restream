@@ -218,7 +218,7 @@ fn probe_pinned_package(package: &str, prefix: &Path, cargo_metadata: bool) -> p
         .probe(package)
         .unwrap_or_else(|error| {
             panic!(
-                "{package} not found in repo static prefix {}: {error}. Run `scripts/build/resource-limit.sh ./scripts/build/native-deps.sh` first.",
+                "{package} not found in repo static prefix {}: {error}. Run `./scripts/build/native-deps.sh` first.",
                 prefix.display()
             )
         });
@@ -237,7 +237,7 @@ fn check_required_static_inputs(prefix: &Path) {
         assert_required_file(
             &path,
             &format!(
-                "repo static archive is missing: {}. Run `scripts/build/resource-limit.sh ./scripts/build/native-deps.sh` first.",
+                "repo static archive is missing: {}. Run `./scripts/build/native-deps.sh` first.",
                 path.display()
             ),
         );
@@ -249,7 +249,7 @@ fn check_required_static_inputs(prefix: &Path) {
         assert_required_file(
             &path,
             &format!(
-                "repo static pkg-config file is missing: {}. Run `scripts/build/resource-limit.sh ./scripts/build/native-deps.sh` first.",
+                "repo static pkg-config file is missing: {}. Run `./scripts/build/native-deps.sh` first.",
                 path.display()
             ),
         );

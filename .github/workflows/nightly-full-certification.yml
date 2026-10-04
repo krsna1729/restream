@@ -39,7 +39,7 @@ jobs:
       - name: Build frontend assets
         run: npm run build:frontend
       - name: Run workspace tests with all features
-        run: scripts/build/resource-limit.sh cargo test --workspace --all-features -- --nocapture
+        run: cargo test --workspace --all-features -- --nocapture
 
   docker-runtime-source-build:
     name: Nightly Docker runtime source-build
@@ -85,7 +85,7 @@ jobs:
         run: |
           RESTREAM_BUILD_PROFILE=release \
           RESTREAM_BUILD_BINS="restream test_harness" \
-          scripts/build/resource-limit.sh ./scripts/build/app-native.sh
+          ./scripts/build/app-native.sh
       - name: Stage nightly harness binaries
         run: |
           mkdir -p .local/nightly-harness-bin

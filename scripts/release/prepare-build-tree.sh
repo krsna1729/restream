@@ -72,7 +72,7 @@ native_state_ready() {
 if native_state_ready; then
     echo "prepare-build-tree: reusing existing native prefix"
 else
-    scripts/build/resource-limit.sh scripts/build/native-deps.sh
+    scripts/build/native-deps.sh
 fi
 
 frontend_assets_exist() {

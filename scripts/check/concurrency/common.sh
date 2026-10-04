@@ -8,129 +8,129 @@ run_common_concurrency_checks() {
   done
 
   "$run_step_fn" api-health \
-    scripts/build/resource-limit.sh cargo test health_endpoint_exposes_probe_and_egress_fault_fields --test api -- --nocapture
+    cargo test health_endpoint_exposes_probe_and_egress_fault_fields --test api -- --nocapture
   "$run_step_fn" api-output-recent-failure \
-    scripts/build/resource-limit.sh cargo test output_status_and_health_preserve_recent_egress_failure_after_unregister --test api -- --nocapture
+    cargo test output_status_and_health_preserve_recent_egress_failure_after_unregister --test api -- --nocapture
   "$run_step_fn" api-output-restart-retry \
-    scripts/build/resource-limit.sh cargo test active_output_status_ignores_stale_retry_state_after_restart --test api -- --nocapture
+    cargo test active_output_status_ignores_stale_retry_state_after_restart --test api -- --nocapture
   "$run_step_fn" output-status-active \
-    scripts/build/resource-limit.sh cargo test active_output_status_matches_health_runtime_fields --test output_status_contract -- --nocapture
+    cargo test active_output_status_matches_health_runtime_fields --test output_status_contract -- --nocapture
   "$run_step_fn" output-status-stalled \
-    scripts/build/resource-limit.sh cargo test stalled_output_status_matches_health_runtime_fields --test output_status_contract -- --nocapture
+    cargo test stalled_output_status_matches_health_runtime_fields --test output_status_contract -- --nocapture
   "$run_step_fn" api-disconnect-clears \
-    scripts/build/resource-limit.sh cargo test health_endpoint_clears_recent_disconnect_details_after_reconnect --test api -- --nocapture
+    cargo test health_endpoint_clears_recent_disconnect_details_after_reconnect --test api -- --nocapture
   "$run_step_fn" api-disconnect-flapping \
-    scripts/build/resource-limit.sh cargo test health_endpoint_surfaces_repeated_transient_disconnects_as_flapping --test api -- --nocapture
+    cargo test health_endpoint_surfaces_repeated_transient_disconnects_as_flapping --test api -- --nocapture
   "$run_step_fn" api-egress-flapping \
-    scripts/build/resource-limit.sh cargo test recovered_output_surfaces_flapping_after_repeated_sink_failures --test api -- --nocapture
+    cargo test recovered_output_surfaces_flapping_after_repeated_sink_failures --test api -- --nocapture
   "$run_step_fn" db-stale-job-update \
-    scripts/build/resource-limit.sh cargo test stale_job_update_cannot_clobber_replacement_attempt --test db -- --nocapture
+    cargo test stale_job_update_cannot_clobber_replacement_attempt --test db -- --nocapture
   "$run_step_fn" db-multiple-stale-job-updates \
-    scripts/build/resource-limit.sh cargo test multiple_stale_job_updates_cannot_clobber_newest_attempt --test db -- --nocapture
+    cargo test multiple_stale_job_updates_cannot_clobber_newest_attempt --test db -- --nocapture
   "$run_step_fn" lib-stale-ingest-unregister \
-    scripts/build/resource-limit.sh cargo test stale_ingest_unregister_cannot_clobber_replacement_attempt --lib -- --nocapture
+    cargo test stale_ingest_unregister_cannot_clobber_replacement_attempt --lib -- --nocapture
   "$run_step_fn" lib-stale-ingest-disconnect \
-    scripts/build/resource-limit.sh cargo test stale_ingest_disconnect_cannot_poison_replacement_attempt --lib -- --nocapture
+    cargo test stale_ingest_disconnect_cannot_poison_replacement_attempt --lib -- --nocapture
   "$run_step_fn" lib-stale-egress-unregister \
-    scripts/build/resource-limit.sh cargo test stale_egress_unregister_cannot_clobber_replacement_attempt --lib -- --nocapture
+    cargo test stale_egress_unregister_cannot_clobber_replacement_attempt --lib -- --nocapture
   "$run_step_fn" lib-stale-egress-error \
-    scripts/build/resource-limit.sh cargo test stale_egress_error_cannot_poison_replacement_attempt --lib -- --nocapture
+    cargo test stale_egress_error_cannot_poison_replacement_attempt --lib -- --nocapture
   "$run_step_fn" lib-stale-egress-queue \
-    scripts/build/resource-limit.sh cargo test stale_egress_queue_removal_cannot_drop_replacement_queue --lib -- --nocapture
+    cargo test stale_egress_queue_removal_cannot_drop_replacement_queue --lib -- --nocapture
   "$run_step_fn" ring-proptest \
-    scripts/build/resource-limit.sh cargo test prop_no_loss_no_gap_no_duplication --test ring_migration -- --nocapture
+    cargo test prop_no_loss_no_gap_no_duplication --test ring_migration -- --nocapture
   "$run_step_fn" ring-multi-reader-proptest \
-    scripts/build/resource-limit.sh cargo test prop_multi_reader_migration_preserves_each_reader_order --test ring_migration -- --nocapture
+    cargo test prop_multi_reader_migration_preserves_each_reader_order --test ring_migration -- --nocapture
   "$run_step_fn" input-selection-proptest \
-    scripts/build/resource-limit.sh cargo test gate_matches_sequential_selection_model --test input_selection -- --nocapture
+    cargo test gate_matches_sequential_selection_model --test input_selection -- --nocapture
   "$run_step_fn" standby-gop-proptest \
-    scripts/build/resource-limit.sh cargo test cache_never_exceeds_its_declared_limits --test standby_gop -- --nocapture
+    cargo test cache_never_exceeds_its_declared_limits --test standby_gop -- --nocapture
   "$run_step_fn" lib-avio-batch \
-    scripts/build/resource-limit.sh cargo test write_batch_round_trips_random_chunks --lib -- --nocapture
+    cargo test write_batch_round_trips_random_chunks --lib -- --nocapture
   "$run_step_fn" lib-avio-unit \
-    scripts/build/resource-limit.sh cargo test 'media::avio::tests' --lib -- --nocapture
+    cargo test 'media::avio::tests' --lib -- --nocapture
   "$run_step_fn" lib-srt-stream-id-normalization \
-    scripts/build/resource-limit.sh cargo test media::srt_stream_id::tests --lib -- --nocapture
+    cargo test media::srt_stream_id::tests --lib -- --nocapture
   "$run_step_fn" lib-srt-ingress-owner \
-    scripts/build/resource-limit.sh cargo test media::srt::ingress_live_tests --lib -- --nocapture
+    cargo test media::srt::ingress_live_tests --lib -- --nocapture
   "$run_step_fn" lib-srt-ingress-bridges \
-    scripts/build/resource-limit.sh cargo test media::srt::ingress_bridge_tests --lib -- --nocapture
+    cargo test media::srt::ingress_bridge_tests --lib -- --nocapture
   "$run_step_fn" lib-srt-ingress-admission \
-    scripts/build/resource-limit.sh cargo test media::srt::ingress_admission --lib -- --nocapture
+    cargo test media::srt::ingress_admission --lib -- --nocapture
   "$run_step_fn" external-transcoder-routing \
-    scripts/build/resource-limit.sh cargo test external_output_stream_idx_routes_known_tracks_without_aliasing --lib -- --nocapture
+    cargo test external_output_stream_idx_routes_known_tracks_without_aliasing --lib -- --nocapture
   "$run_step_fn" external-transcoder-routing-proptest \
-    scripts/build/resource-limit.sh cargo test proptest_external_output_dts_routing_preserves_per_stream_monotonicity --lib -- --nocapture
+    cargo test proptest_external_output_dts_routing_preserves_per_stream_monotonicity --lib -- --nocapture
   "$run_step_fn" external-transcoder-h264-live \
-    scripts/build/resource-limit.sh cargo test external_720p_stage_emits_live_packets_for_h264_marker_fixture --lib -- --nocapture
+    cargo test external_720p_stage_emits_live_packets_for_h264_marker_fixture --lib -- --nocapture
   "$run_step_fn" external-transcoder-h264-dts-remux \
-    scripts/build/resource-limit.sh cargo test external_1080p_stage_remuxes_marker_fixture_with_monotone_dts --lib -- --nocapture
+    cargo test external_1080p_stage_remuxes_marker_fixture_with_monotone_dts --lib -- --nocapture
   "$run_step_fn" internal-transcoder-chunked-scale \
-    scripts/build/resource-limit.sh cargo test internal_scale_stage_chunked_remux_input_preserves_video_timestamp_order --test transcoder -- --nocapture
+    cargo test internal_scale_stage_chunked_remux_input_preserves_video_timestamp_order --test transcoder -- --nocapture
   "$run_step_fn" internal-transcoder-source-proptest \
-    scripts/build/resource-limit.sh cargo test prop_source_stage_chunked_input_preserves_per_stream_dts_order --test transcoder -- --nocapture
+    cargo test prop_source_stage_chunked_input_preserves_per_stream_dts_order --test transcoder -- --nocapture
   "$run_step_fn" internal-transcoder-replacement-metadata \
-    scripts/build/resource-limit.sh cargo test replacement_video_stage_preserves_codec_hint_and_audio_tracks --test transcoder -- --nocapture
+    cargo test replacement_video_stage_preserves_codec_hint_and_audio_tracks --test transcoder -- --nocapture
   "$run_step_fn" hls-segment-dts-boundaries \
-    scripts/build/resource-limit.sh cargo test hls_segment_boundaries_preserve_non_decreasing_dts_per_stream --lib -- --nocapture
+    cargo test hls_segment_boundaries_preserve_non_decreasing_dts_per_stream --lib -- --nocapture
   "$run_step_fn" recording-remux-continuity-retention-disabled \
-    scripts/build/resource-limit.sh cargo test remux_recording_to_mp4_preserves_timestamp_continuity_when_retention_disabled --lib -- --nocapture
+    cargo test remux_recording_to_mp4_preserves_timestamp_continuity_when_retention_disabled --lib -- --nocapture
   "$run_step_fn" recording-remux-continuity-retention-enabled \
-    scripts/build/resource-limit.sh cargo test remux_recording_to_mp4_preserves_timestamp_continuity_when_retention_enabled --lib -- --nocapture
+    cargo test remux_recording_to_mp4_preserves_timestamp_continuity_when_retention_enabled --lib -- --nocapture
   "$run_step_fn" test-harness-process-lifecycle \
-    scripts/build/resource-limit.sh cargo test --bin test_harness tests::kill_and_wait_child_terminates_spawned_process -- --exact --nocapture
+    cargo test --bin test_harness tests::kill_and_wait_child_terminates_spawned_process -- --exact --nocapture
   "$run_step_fn" rtmp-ingress-listener-shutdown \
-    scripts/build/resource-limit.sh cargo test compio_rtmp_listener_shutdown_joins_acceptor_and_session_workers --lib -- --nocapture
+    cargo test compio_rtmp_listener_shutdown_joins_acceptor_and_session_workers --lib -- --nocapture
   "$run_step_fn" rtmp-sharded-ingress-lifecycle \
-    scripts/build/resource-limit.sh cargo test media::rtmp::listener::tests --lib
+    cargo test media::rtmp::listener::tests --lib
   "$run_step_fn" lib-compio-rtmp-readiness-fairness \
-    scripts/build/resource-limit.sh cargo test media::egress::backends::compio_tcp::tests --lib -- --nocapture
+    cargo test media::egress::backends::compio_tcp::tests --lib -- --nocapture
   "$run_step_fn" test-harness-slow-sink-sibling-count \
-    scripts/build/resource-limit.sh cargo test --bin test_harness tests::fault_output_stall_sibling_count_honors_n_per_group_cap -- --exact --nocapture
+    cargo test --bin test_harness tests::fault_output_stall_sibling_count_honors_n_per_group_cap -- --exact --nocapture
   "$run_step_fn" lib-recent-egress \
-    scripts/build/resource-limit.sh cargo test recent_egress --lib -- --nocapture
+    cargo test recent_egress --lib -- --nocapture
   "$run_step_fn" lib-ingest-grace \
-    scripts/build/resource-limit.sh cargo test recent_ingest_disconnect_respects_grace_window --lib -- --nocapture
+    cargo test recent_ingest_disconnect_respects_grace_window --lib -- --nocapture
   "$run_step_fn" lib-ingest-flap-window \
-    scripts/build/resource-limit.sh cargo test build_recent_ingest_outcome_resets_flap_streak_outside_window --lib -- --nocapture
+    cargo test build_recent_ingest_outcome_resets_flap_streak_outside_window --lib -- --nocapture
   "$run_step_fn" lib-ingest-proptest \
-    scripts/build/resource-limit.sh cargo test prop_ingest_lifecycle_preserves_health_invariants --lib -- --nocapture
+    cargo test prop_ingest_lifecycle_preserves_health_invariants --lib -- --nocapture
   "$run_step_fn" lib-egress-flap-window \
-    scripts/build/resource-limit.sh cargo test build_recent_egress_outcome_resets_flap_streak_outside_window --lib -- --nocapture
+    cargo test build_recent_egress_outcome_resets_flap_streak_outside_window --lib -- --nocapture
   "$run_step_fn" lib-health-reconnect-flapping \
-    scripts/build/resource-limit.sh cargo test health_snapshot_surfaces_flapping_after_repeated_reconnects --lib -- --nocapture
+    cargo test health_snapshot_surfaces_flapping_after_repeated_reconnects --lib -- --nocapture
   "$run_step_fn" lib-health-egress-flapping \
-    scripts/build/resource-limit.sh cargo test health_snapshot_surfaces_flapping_after_repeated_egress_recoveries --lib -- --nocapture
+    cargo test health_snapshot_surfaces_flapping_after_repeated_egress_recoveries --lib -- --nocapture
   "$run_step_fn" lib-late-retry-state \
-    scripts/build/resource-limit.sh cargo test late_retry_state_update_is_ignored_after_output_restarts --lib -- --nocapture
+    cargo test late_retry_state_update_is_ignored_after_output_restarts --lib -- --nocapture
   "$run_step_fn" lib-multi-late-retry-state \
-    scripts/build/resource-limit.sh cargo test repeated_late_retry_updates_cannot_poison_newest_output_attempt --lib -- --nocapture
+    cargo test repeated_late_retry_updates_cannot_poison_newest_output_attempt --lib -- --nocapture
   "$run_step_fn" lib-output-retry-backoff \
-    scripts/build/resource-limit.sh cargo test output_status_surfaces_retry_backoff_after_failure --lib -- --nocapture
+    cargo test output_status_surfaces_retry_backoff_after_failure --lib -- --nocapture
   "$run_step_fn" lib-egress-proptest \
-    scripts/build/resource-limit.sh cargo test prop_egress_lifecycle_preserves_runtime_and_health_invariants --lib -- --nocapture
+    cargo test prop_egress_lifecycle_preserves_runtime_and_health_invariants --lib -- --nocapture
   "$run_step_fn" lib-egress-leaf-cursor-priming \
-    scripts/build/resource-limit.sh cargo test first_visit_primes --lib -- --nocapture
+    cargo test first_visit_primes --lib -- --nocapture
   "$run_step_fn" lib-egress-leaf-live-start \
-    scripts/build/resource-limit.sh cargo test fresh_leaf_first_visit --lib -- --nocapture
+    cargo test fresh_leaf_first_visit --lib -- --nocapture
   "$run_step_fn" recording-drain-bounded-on-cancel \
-    scripts/build/resource-limit.sh cargo test media::recording::tests::drain_ready_bursts --lib -- --nocapture
+    cargo test media::recording::tests::drain_ready_bursts --lib -- --nocapture
   "$run_step_fn" lib-media-executor \
-    scripts/build/resource-limit.sh cargo test media::executor::tests --lib
+    cargo test media::executor::tests --lib
   "$run_step_fn" lib-egress-sizing \
-    scripts/build/resource-limit.sh cargo test media::egress::sizing --lib
+    cargo test media::egress::sizing --lib
   "$run_step_fn" lib-egress-resize \
-    scripts/build/resource-limit.sh cargo test media::egress::runtime --lib
+    cargo test media::egress::runtime --lib
   "$run_step_fn" lib-media-control-isolation \
-    scripts/build/resource-limit.sh cargo test while_control_thread_is_blocked --lib
+    cargo test while_control_thread_is_blocked --lib
   "$run_step_fn" lib-media-file-ingest \
-    scripts/build/resource-limit.sh cargo test media::external_file_ingest::tests --lib
+    cargo test media::external_file_ingest::tests --lib
   "$run_step_fn" recording-media-owner-abort \
-    scripts/build/resource-limit.sh cargo test aborting_control_owner_closes_media_feeder_and_writer --lib
+    cargo test aborting_control_owner_closes_media_feeder_and_writer --lib
   "$run_step_fn" hls-media-owner-abort \
-    scripts/build/resource-limit.sh cargo test control_owner_abort_flushes_final_segment --lib
+    cargo test control_owner_abort_flushes_final_segment --lib
   "$run_step_fn" recording-media-writer-failure \
-    scripts/build/resource-limit.sh cargo test recording_media_writer_failure_reports_failed_without_finalization --lib
+    cargo test recording_media_writer_failure_reports_failed_without_finalization --lib
   "$run_step_fn" hls-media-replacement \
-    scripts/build/resource-limit.sh cargo test detached_teardown_preserves_replacement --lib
+    cargo test detached_teardown_preserves_replacement --lib
 }

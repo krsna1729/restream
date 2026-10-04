@@ -13,7 +13,7 @@ if [[ -z "${TMPDIR:-}" || ! -d "${TMPDIR:-}" || ! -w "${TMPDIR:-}" ]]; then
   export TMPDIR=/tmp
 fi
 
-scripts/build/resource-limit.sh cargo build --release --bin restream --bin test_harness
+cargo build --release --bin restream --bin test_harness
 
 mkdir -p target/qual-release
 cp target/release/restream target/qual-release/restream

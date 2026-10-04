@@ -770,7 +770,7 @@ fn source_distribution_manifest_matches_declared_build_inputs() {
         "tsconfig.json",
         "tsconfig.v2.json",
         "vite.v2.config.ts",
-        "scripts/build/resource-limit.sh ./scripts/build/native-deps.sh",
+        "./scripts/build/native-deps.sh",
         "npm run build:frontend",
         "hls.min.js.map",
     ] {

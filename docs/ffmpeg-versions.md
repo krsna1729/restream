@@ -31,7 +31,7 @@ steps into this document.
 Run the canonical native builder through the resource limiter:
 
 ```sh
-scripts/build/resource-limit.sh scripts/build/native-deps.sh
+scripts/build/native-deps.sh
 ```
 
 The script reuses a valid native prefix and explains how to request a rebuild

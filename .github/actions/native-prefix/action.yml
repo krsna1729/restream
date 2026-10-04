@@ -22,7 +22,7 @@ runs:
     - if: steps.restore.outputs.cache-hit != 'true'
       name: Build native prefix
       shell: bash
-      run: scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
+      run: ./scripts/build/native-deps.sh
     - if: steps.restore.outputs.cache-hit != 'true'
       name: Save native prefix cache
       uses: actions/cache/save@v6

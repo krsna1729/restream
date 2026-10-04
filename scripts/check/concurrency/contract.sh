@@ -8,10 +8,6 @@ source "$ROOT_DIR/scripts/check/concurrency/common.sh"
 LOG_DIR="$ROOT_DIR/.local/artifacts/concurrency-contract-logs"
 mkdir -p "$LOG_DIR"
 
-if [[ -z "${RESTREAM_BUILD_LOCK_FILE:-}" ]]; then
-  export RESTREAM_BUILD_LOCK_FILE="/tmp/restream-build.lock"
-fi
-
 declare -A BASELINE_RUNTIME_PIDS=()
 
 capture_runtime_baseline() {
@@ -66,10 +62,6 @@ check_process_lifecycle_guards() {
   ' "$harness"
   grep -q 'async fn kill_and_wait_child' "$harness" || {
     echo "process lifecycle guard failed: missing kill_and_wait_child helper in $harness" >&2
-    return 1
-  }
-  grep -q 'RESTREAM_BUILD_LOCK_FILE' scripts/build/resource-limit.sh || {
-    echo "process lifecycle guard failed: scripts/build/resource-limit.sh must honor RESTREAM_BUILD_LOCK_FILE" >&2
     return 1
   }
 }
@@ -156,7 +148,7 @@ run_logged history-grouping bash scripts/check/history-grouping.sh
 run_logged process-lifecycle-guards check_process_lifecycle_guards
 
 run_common_concurrency_checks run_logged
-run_logged build-harness-bins scripts/build/resource-limit.sh cargo build --bin restream --bin test_harness
+run_logged build-harness-bins cargo build --bin restream --bin test_harness
 
 run_harness_mode fault.resilience .local/artifacts/concurrency-contract
 

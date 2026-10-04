@@ -61,7 +61,7 @@ else
     # producing a downloadable bundle. Release automation always supplies the
     # bundle so its exact executable is the SBOM source.
     RESTREAM_SBOM_PATH="$SBOM" RESTREAM_BUILD_PROFILE=release \
-        scripts/build/resource-limit.sh ./scripts/build/app-native.sh
+        ./scripts/build/app-native.sh
 fi
 [[ -s "$SBOM" ]] || {
     echo "release-evidence: SBOM was not written: $SBOM" >&2

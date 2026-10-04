@@ -18,7 +18,7 @@ target="$1"
 manifest_json="$(mktemp)"
 trap 'rm -f "$manifest_json"' EXIT
 
-scripts/build/resource-limit.sh cargo rustc \
+cargo rustc \
   --test "$target" \
   --message-format=json-render-diagnostics \
   -- \

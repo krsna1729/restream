@@ -50,7 +50,7 @@ semantics. Operational guidance is in
 Build the server with the sidecar's required features:
 
 ```sh
-scripts/build/resource-limit.sh cargo build \
+cargo build \
   --bin restream-mcp \
   --features mcp-server,mcp-http-backend
 ```

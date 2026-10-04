@@ -43,7 +43,7 @@ Instructions for AI coding agents in this repository.
 
 Use the pinned Rust toolchain from `rust-toolchain.toml`.
 
-- Prefix Cargo and other heavy commands with `scripts/build/resource-limit.sh`.
+- Cargo's job count comes from `.cargo/config.toml` (`jobs = -1`: all CPUs but one); override with `CARGO_BUILD_JOBS`.
 - Use `--profile bench` instead of `--release` for local or agent builds.
   Exception: performance evidence that gets committed (capacity ramps, A/B
   runs, profiles) uses real release binaries from
@@ -59,9 +59,9 @@ Use the pinned Rust toolchain from `rust-toolchain.toml`.
 - Default frontend verification is `npm run test:frontend`; use Playwright when browser-only behavior is touched.
 
 ```sh
-scripts/build/resource-limit.sh cargo build --profile bench
-scripts/build/resource-limit.sh cargo test
-scripts/build/resource-limit.sh cargo clippy
+cargo build --profile bench
+cargo test
+cargo clippy
 cargo fmt --all
 
 scripts/agent/worktree.sh <id>
@@ -74,7 +74,7 @@ npm run test:frontend
 npm run test:frontend:coverage
 npx playwright test
 
-scripts/build/resource-limit.sh cargo bench --bench <name>
+cargo bench --bench <name>
 scripts/harness/run.sh <mode>   # modes: target/bench/test_harness catalog list-modes
 ```
 
@@ -120,13 +120,14 @@ in on demand, and verify with the narrowest gate first.
 **Never run Cargo builds, tests, checks, clippy, or benchmarks while a live pipeline is running.**
 Static FFmpeg libraries can push a small host into OOM territory.
 
-Before heavy builds in multi-worktree sessions:
+Before heavy builds, check for live media; nothing else serializes builds
+against live runs or other worktrees:
 
 ```sh
-export RESTREAM_BUILD_LOCK_FILE=/tmp/restream-build.lock
 pgrep -a -x restream
 pgrep -a -x mediamtx
 pgrep -a -x ffmpeg
+pgrep -a -x cargo
 ```
 
 - Stop only processes owned by this task or covered by the user's restart
@@ -136,7 +137,7 @@ pgrep -a -x ffmpeg
 - Use one worktree per agent or task.
 - Treat `target/`, `.cargo/`, and `node_modules/` as copied caches owned by the destination worktree; do not point multiple worktrees at one live `target/`.
 - Use `--no-share-static` when touching native or linkage-related inputs such as `build.rs`, Docker/static build scripts, or native `test/*.c` helpers.
-- Use `.agent-state/setup.env` as the source of truth for `WORK_ROOT`, `RESTREAM_BUILD_LOCK_FILE`, and the shared static root.
+- Use `.agent-state/setup.env` as the source of truth for `WORK_ROOT` and the shared static root.
 
 ## Media Rules
 
@@ -202,8 +203,7 @@ Hot paths include `src/media/`, ring buffers, mux/demux loops, AVIO queues, SRT/
   Commit each item separately only when commits are authorized for the run.
   Loops never push.
 - One quality loop per host. Multi-agent work goes through
-  `scripts/agent/worktree.sh` with a host-global
-  `RESTREAM_BUILD_LOCK_FILE=/tmp/restream-build.lock`.
+  `scripts/agent/worktree.sh`; check `pgrep -a -x cargo` before heavy builds.
 - Loops skip (never kill) media processes they did not start.
 - Backlog tiers describe required capability; select work the available model
   can reliably execute and verify, using the guidance below.

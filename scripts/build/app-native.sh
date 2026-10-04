@@ -4,13 +4,8 @@ set -euo pipefail
 ROOT="${RESTREAM_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
 BUILD_ROOT="${RESTREAM_BUILD_ROOT:-$ROOT/.local/build/static}"
 
-if [[ -z "${RESTREAM_BUILD_LOCK_HELD:-}" ]]; then
-    echo "build-native: run via scripts/build/resource-limit.sh ./scripts/build/app-native.sh" >&2
-    exit 2
-fi
-
 if [[ ! -f "$BUILD_ROOT/env.sh" ]]; then
-    "$ROOT/scripts/build/resource-limit.sh" "$ROOT/scripts/build/native-deps.sh"
+    "$ROOT/scripts/build/native-deps.sh"
 fi
 
 PROFILE="${RESTREAM_BUILD_PROFILE:-debug}"

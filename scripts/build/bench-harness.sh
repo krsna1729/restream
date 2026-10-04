@@ -13,7 +13,7 @@ if [[ -n "${RESTREAM_BENCH_FEATURES:-}" ]]; then
   feature_args=(--features "$RESTREAM_BENCH_FEATURES")
 fi
 
-scripts/build/resource-limit.sh cargo build --profile bench --bin restream --bin test_harness "${feature_args[@]}"
+cargo build --profile bench --bin restream --bin test_harness "${feature_args[@]}"
 
 # Cargo hardcodes target/release as the output dir for a profile named
 # "bench" (dir-name cannot be overridden for built-in profile names, and the

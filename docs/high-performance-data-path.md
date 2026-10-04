@@ -147,8 +147,7 @@ For a hot-path change:
 6. Update the baseline ledger only when the result is repeatable and useful as
    a future comparison point.
 
-Use `scripts/build/resource-limit.sh` for Cargo work and
-`scripts/build/bench-harness.sh` when a measurement mode requires the canonical
+Use `scripts/build/bench-harness.sh` when a measurement mode requires the canonical
 `target/bench/` binaries. Do not infer production capacity from loopback
 throughput alone.
 

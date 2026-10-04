@@ -493,14 +493,14 @@ commands directly rather than inspecting a generated claim:
 
 ```sh
 # Lower-layer isolation: agent-plane and agent-execution must stay disabled.
-scripts/build/resource-limit.sh cargo check --lib --no-default-features --features mcp-core
-scripts/build/resource-limit.sh cargo check --lib --no-default-features --features mcp-server
-scripts/build/resource-limit.sh cargo check --bin restream-mcp --no-default-features --features mcp-server,mcp-http-backend
+cargo check --lib --no-default-features --features mcp-core
+cargo check --lib --no-default-features --features mcp-server
+cargo check --bin restream-mcp --no-default-features --features mcp-server,mcp-http-backend
 
 # Compatibility combo: mcp-embedded intentionally enables agent-plane (with
 # mcp-core). It must compile, must not enable agent-execution, and must not
 # mount an in-process MCP backend (HTTP sidecar remains the only backend).
-scripts/build/resource-limit.sh cargo check --lib --no-default-features --features mcp-embedded
+cargo check --lib --no-default-features --features mcp-embedded
 ```
 
 The first three commands prove lower MCP surfaces compile without

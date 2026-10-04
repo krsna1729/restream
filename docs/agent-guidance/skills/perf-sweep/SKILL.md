@@ -16,7 +16,7 @@ run serially on an otherwise idle host; only the measurement workload may run.
 Do not stop processes belonging to another task.
 
 ```sh
-scripts/build/resource-limit.sh cargo bench --bench <name>
+cargo bench --bench <name>
 scripts/harness/run.sh <mode>
 ```
 

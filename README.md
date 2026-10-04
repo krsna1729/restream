@@ -72,7 +72,7 @@ binary directly:
 
 ```sh
 scripts/dev/prepare.sh
-scripts/build/resource-limit.sh scripts/build/app-native.sh
+scripts/build/app-native.sh
 RESTREAM_INITIAL_ADMIN_PASSWORD=change-me target/debug/restream
 ```
 
@@ -87,9 +87,9 @@ distributions and scoped workflows.
 Most backend work stays in this loop:
 
 ```sh
-scripts/build/resource-limit.sh ./scripts/build/app-native.sh
-scripts/build/resource-limit.sh cargo test
-scripts/build/resource-limit.sh cargo clippy
+./scripts/build/app-native.sh
+cargo test
+cargo clippy
 cargo fmt --all
 ```
 

@@ -1,7 +1,7 @@
-# Cap parallel rustc jobs so concurrent builds don't OOM.
-# Override with: CARGO_BUILD_JOBS=N cargo build
+# Leave one CPU free so builds don't starve the desktop or a live run; static
+# FFmpeg links are memory-heavy. Override with: CARGO_BUILD_JOBS=N cargo build
 [build]
-jobs = 8
+jobs = -1
 
 # mold is ~10× faster than ld for linking. All profiles benefit.
 [target.x86_64-unknown-linux-gnu]
