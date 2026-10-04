@@ -61,18 +61,30 @@ Ordered by severity: unauthenticated first, then by what is lost.
 Closed: F1 RTMP per-client connection cap, F2 RTMP admission deadline, F3
 SRT per-client cap, F5 lock poisoning (191 call sites; the 3 that panicked
 were the egress shard snapshot, about 21 silently skipped their work once
-poisoned); see the table for bounds and tests.
+poisoned), F4 below; see the table for bounds and tests.
 
-- **F4. The MPEG-TS demuxer has no fuzz target.** `mpegts/demux.rs` parses
-  every byte of SRT ingest (65 indexing and 42 arithmetic sites by clippy).
-  `mpegts_probe.rs` likewise. Fix: `ts_demux` and `ts_probe` fuzz targets;
-  each crash becomes a regression test before its fix.
+- **F4 (closed). The MPEG-TS demuxer had no fuzz target.** `ts_demux`
+  (`fuzz/fuzz_targets/ts_demux.rs`) drives `TsDemuxer` and, through it, the
+  stream probe in `mpegts_probe`, seeded from the TS fixtures by
+  `fuzz/seed-corpus.sh`: 1.08M runs, 1,601 edges, no crash. The `Parser
+  fuzz smoke` CI job runs every target.
 - **F6. Parsers of untrusted bytes still index and do arithmetic
   unchecked:** 276 indexing, 220 arithmetic and 66 truncating-cast sites in
   `rtmp/flv.rs`, `codec/`, `mpegts/demux.rs`, `mpegts_probe.rs`,
   `hls/fmp4/codec.rs` and the RTMP ingest modules. Each is a panic (contained
   now, but the entity still fails) or a silent wrap in release. Fix: convert
   module by module to checked forms and deny the lints there.
+  Converted, with the lints denied: `rtmp/flv.rs`, `mpegts/demux.rs`,
+  `mpegts_probe` (with `h264`, `h265`), `codec/{bits, h264_sps, video, aac,
+  enhanced_rtmp_hevc}`, `hls/fmp4/codec.rs`, `rtmp/ingest_media.rs`,
+  `rtmp/timestamps.rs`, `rtmp/ingest/parser_budget.rs`. The conversion also
+  removed duplicate parsers that had drifted: one H.264 SPS parser
+  (`codec::parse_h264_sps`), one bit reader and RBSP (`codec::bits`), one
+  AVC decoder configuration walker (`codec::video::avcc_record`). Defects it
+  found: 1080i read as 1920x1084 on RTMP; high profiles 134-139 read as
+  32x5120 on TS; `avcc_to_annexb` panicked on a length width of 0; an AAC
+  frame above 8,184 bytes got an ADTS header with a truncated length (the
+  frame is now dropped).
 - **F7. Release builds wrap on integer overflow** (no `overflow-checks`).
   An overflow that is a contained panic in tests is a wrong value in
   production (the SPS scaling-list bug was this). Decision needs data:
@@ -86,12 +98,12 @@ What the compiler and clippy can enforce:
 |---|---|---|
 | Containment needs unwinding | `#[cfg(panic = "abort")] compile_error!` in `lib.rs` | done |
 | No panicking or skipping lock access | `clippy.toml` `disallowed-methods` on `Mutex::lock`/`RwLock::{read,write}` outside `crate::sync` (tests, benches and the harness may use them) | done (F5) |
-| Parsers cannot index, overflow or unwrap | `#![deny(clippy::indexing_slicing, clippy::arithmetic_side_effects, clippy::unwrap_used, clippy::expect_used, clippy::panic)]` per parser module | per module (F6) |
+| Parsers cannot index, overflow or unwrap | `#![deny(clippy::indexing_slicing, clippy::arithmetic_side_effects, clippy::unwrap_used, clippy::expect_used, clippy::panic)]` per parser module | per module (F6; converted modules listed there) |
 | Overflow is never silent | `overflow-checks = true` in release | after benchmark (F7) |
 | Fault-injection points never ship | `#[cfg(test)]` only (`INJECTED_PANIC_PAYLOAD`, `injected_panics`, `EngineScript::Panic`) | done |
 
 ## Order of work
 
-1. F4 fuzz targets; fix any crash with a regression test.
+1. F4 fuzz targets; fix any crash with a regression test (done).
 2. F6 module by module, each with a benchmark when it is on the hot path.
 3. F7 benchmark and decision.

@@ -14,8 +14,8 @@ mod h264_sps;
 mod video;
 
 pub use aac::{
-    adts_frame_count, audio_for_rtmp, audio_for_rtmp_into, audio_for_ts, audio_for_ts_into,
-    build_aac_sequence_header, build_adts_header, strip_adts,
+    MAX_ADTS_PAYLOAD, adts_frame_count, audio_for_rtmp, audio_for_rtmp_into, audio_for_ts,
+    audio_for_ts_into, build_aac_sequence_header, build_adts_header, strip_adts,
 };
 pub(crate) use bits::{BitReader, rbsp};
 pub use enhanced_rtmp_hevc::{
@@ -23,8 +23,8 @@ pub use enhanced_rtmp_hevc::{
 };
 pub(crate) use h264_sps::{level_name, parse_h264_sps, profile_name};
 pub(crate) use video::{
-    AnnexbParameterSetAccumulator, annexb_parameter_sets, for_each_annexb_nalu,
-    raw_annexb_is_keyframe,
+    AnnexbParameterSetAccumulator, annexb_parameter_sets, avcc_record, for_each_annexb_nalu,
+    raw_annexb_is_keyframe, take_u16_prefixed,
 };
 pub use video::{
     annexb_to_avcc, annexb_to_avcc_into, annexb_to_avcc_with_scratch, avcc_to_annexb,

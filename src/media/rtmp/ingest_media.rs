@@ -9,6 +9,13 @@
 //! back are the one-time stream probes ([`RtmpMediaEvent`]), which update
 //! ingest metadata. Sequence headers go straight into the ingest session's
 //! shared cells, so play, egress and promotion read the same values as before.
+#![deny(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -65,9 +72,10 @@ impl RtmpPublisherMedia {
         let packet_kind = classify_flv_video_packet(&data);
         let is_keyframe = matches!(packet_kind, Some(FlvVideoPacketKind::Keyframe));
         let dts = timestamp as i64;
-        let pts = dts + flv_video_composition_time_ms(&data) as i64;
+        let pts = dts.saturating_add(i64::from(flv_video_composition_time_ms(&data)));
         let parameter_sets = flv_avcc_config_annexb_parameter_sets(&data);
-        if matches!(packet_kind, Some(FlvVideoPacketKind::SequenceHeader)) && (data[0] & 0x0F) == 7
+        if matches!(packet_kind, Some(FlvVideoPacketKind::SequenceHeader))
+            && data.first().is_some_and(|tag| tag & 0x0F == 7)
         {
             *lock(&self.video_sequence_header) = Some(data.clone());
         }
@@ -131,13 +139,13 @@ impl RtmpPublisherMedia {
     /// probe, for Tokio to record as ingest metadata and audio tracks.
     pub(super) fn on_audio(&mut self, data: Bytes, timestamp: u32) -> Option<RtmpMediaEvent> {
         self.account(data.len());
-        if data.len() >= 2 && (data[0] >> 4) == 10 && data[1] == 0 {
+        if matches!(data.as_ref(), [tag, 0, ..] if tag >> 4 == 10) {
             *lock(&self.audio_sequence_header) = Some(data.clone());
         }
         let mut event = None;
         if !self.audio_probed {
             let format_id = data.first().map(|byte| (byte >> 4) & 0x0f).unwrap_or(0xff);
-            let has_complete_config = format_id != 10 || (data.len() >= 3 && data[1] == 0);
+            let has_complete_config = format_id != 10 || matches!(data.as_ref(), [_, 0, _, ..]);
             if has_complete_config && let Some(meta) = parse_flv_audio_meta(&data) {
                 self.audio_probed = true;
                 event = Some(RtmpMediaEvent::Audio(meta));

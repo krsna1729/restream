@@ -181,10 +181,10 @@ fn muxer_reserves_internal_adts_frame_timestamps() {
     };
     let mut muxer = TsMuxer::new(None, &[audio]);
     let mut two_frame_payload = Vec::new();
-    let frame_a = crate::media::codec::build_adts_header(2, 48000, 2);
+    let frame_a = crate::media::codec::build_adts_header(2, 48000, 2).unwrap();
     two_frame_payload.extend_from_slice(&frame_a);
     two_frame_payload.extend_from_slice(&[0x11, 0x22]);
-    let frame_b = crate::media::codec::build_adts_header(2, 48000, 2);
+    let frame_b = crate::media::codec::build_adts_header(2, 48000, 2).unwrap();
     two_frame_payload.extend_from_slice(&frame_b);
     two_frame_payload.extend_from_slice(&[0x33, 0x44]);
 
@@ -199,7 +199,7 @@ fn muxer_reserves_internal_adts_frame_timestamps() {
     );
 
     let mut one_frame_payload = Vec::new();
-    let frame = crate::media::codec::build_adts_header(2, 48000, 2);
+    let frame = crate::media::codec::build_adts_header(2, 48000, 2).unwrap();
     one_frame_payload.extend_from_slice(&frame);
     one_frame_payload.extend_from_slice(&[0x55, 0x66]);
     assert!(

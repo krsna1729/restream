@@ -67,7 +67,52 @@ fn avcc_sequence_header_refuses_parameter_sets_it_cannot_encode() {
     assert_eq!(parse_avcc_config(&header[5..]).1, annexb(&max));
 }
 
+/// A NALU length width outside 1..=4 converts nothing. Width 0 used to read
+/// a four-byte length from a shorter body and panic on the index.
+#[test]
+fn avcc_to_annexb_ignores_an_impossible_length_width() {
+    assert!(avcc_to_annexb(&[0, 1], 0).is_empty());
+    assert!(avcc_to_annexb(&[0, 0, 0, 0, 0, 0, 0, 1, 0xAA], 8).is_empty());
+    assert_eq!(avcc_to_annexb(&[1, 0xAA], 1), [0, 0, 0, 1, 0xAA]);
+}
+
 proptest! {
+    /// `avcc_record` reads back exactly the lists a well-formed record
+    /// carries, and every strict prefix of the record is `None`: never a
+    /// partial SPS/PPS list. RTMP ingest, FLV → TS and the fMP4 sample entry
+    /// all read the record through it.
+    #[test]
+    fn avcc_record_reads_whole_records_and_rejects_every_prefix(
+        header in any::<[u8; 5]>(),
+        sps_bodies in prop::collection::vec(prop::collection::vec(any::<u8>(), 0..16), 0..3),
+        pps_bodies in prop::collection::vec(prop::collection::vec(any::<u8>(), 0..16), 0..3),
+    ) {
+        let mut data = header.to_vec();
+        data.push(0xE0 | sps_bodies.len() as u8);
+        for sps in &sps_bodies {
+            data.extend_from_slice(&(sps.len() as u16).to_be_bytes());
+            data.extend_from_slice(sps);
+        }
+        data.push(pps_bodies.len() as u8);
+        for pps in &pps_bodies {
+            data.extend_from_slice(&(pps.len() as u16).to_be_bytes());
+            data.extend_from_slice(pps);
+        }
+
+        let record = avcc_record(&data).expect("well-formed record");
+        prop_assert_eq!(record.length_size_minus_one, header[4] & 0x03);
+        prop_assert_eq!(&record.sps, &sps_bodies);
+        prop_assert_eq!(&record.pps, &pps_bodies);
+        for cut in 0..data.len() {
+            prop_assert!(avcc_record(&data[..cut]).is_none(), "prefix {cut} parsed");
+        }
+    }
+
+    #[test]
+    fn avcc_record_never_panics(bytes in prop::collection::vec(any::<u8>(), 0..128)) {
+        let _ = avcc_record(&bytes);
+    }
+
     /// Every AVC sequence header Restream builds from Annex-B parameter sets
     /// reads back, through the same parser RTMP ingest uses, as exactly the
     /// SPS and PPS it was built from, in order.

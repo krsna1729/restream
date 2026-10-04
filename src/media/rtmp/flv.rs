@@ -9,17 +9,8 @@
     clippy::panic
 )]
 
-use crate::media::codec;
+use crate::media::codec::{self, take_u16_prefixed};
 use crate::media::metadata::{AudioMeta, VideoMeta};
-
-/// The next `u16` length-prefixed item of an AVCDecoderConfigurationRecord
-/// list, advancing `rest` past it.
-fn take_u16_prefixed<'a>(rest: &mut &'a [u8]) -> Option<&'a [u8]> {
-    let (len, tail) = rest.split_first_chunk::<2>()?;
-    let (item, tail) = tail.split_at_checked(usize::from(u16::from_be_bytes(*len)))?;
-    *rest = tail;
-    Some(item)
-}
 
 pub(super) fn parse_flv_video_meta(data: &[u8]) -> Option<VideoMeta> {
     let &[tag, packet_type] = data.first_chunk::<2>()?;
@@ -45,7 +36,9 @@ pub(super) fn parse_flv_video_meta(data: &[u8]) -> Option<VideoMeta> {
             meta.profile = Some(codec::profile_name(profile_idc).to_string());
             meta.level = Some(codec::level_name(level_idc));
 
-            // Parse the first SPS for resolution and timing info.
+            // Parse the first SPS for resolution and timing info. Only the
+            // first SPS is read, so a record whose PPS list is truncated still
+            // reports its size (`avcc_record` would reject the whole record).
             if let Some((&num_sps, mut sps_list)) =
                 avc_config.get(5..).and_then(<[u8]>::split_first)
                 && num_sps & 0x1F > 0
@@ -73,21 +66,12 @@ pub(super) fn flv_avcc_config_annexb_parameter_sets(data: &[u8]) -> Option<Vec<u
     if tag & 0x0F != 7 || packet_type != 0 {
         return None;
     }
-    // Five FLV tag bytes, then the record; its sixth byte is the SPS count.
-    let (&num_sps, mut rest) = data.get(10..)?.split_first()?;
-
+    // Five FLV tag bytes, then the record.
+    let record = codec::avcc_record(data.get(5..)?)?;
     let mut annexb = Vec::new();
-    for _ in 0..(num_sps & 0x1F) {
-        let sps = take_u16_prefixed(&mut rest)?;
+    for nalu in record.sps.iter().chain(&record.pps) {
         annexb.extend_from_slice(&[0, 0, 0, 1]);
-        annexb.extend_from_slice(sps);
-    }
-    let (&num_pps, tail) = rest.split_first()?;
-    rest = tail;
-    for _ in 0..num_pps {
-        let pps = take_u16_prefixed(&mut rest)?;
-        annexb.extend_from_slice(&[0, 0, 0, 1]);
-        annexb.extend_from_slice(pps);
+        annexb.extend_from_slice(nalu);
     }
 
     codec::annexb_parameter_sets(&annexb)

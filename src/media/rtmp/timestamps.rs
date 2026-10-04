@@ -1,3 +1,10 @@
+#![deny(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 use rml_rtmp::time::RtmpTimestamp;
 
 use crate::media::packet::{MediaPacket, MediaType};
@@ -30,7 +37,7 @@ impl RtmpTimestampGuard {
             MediaType::Audio => &mut self.last_audio_ms,
         };
         if timestamp_ms <= *slot {
-            timestamp_ms = (*slot + 1).min(u32::MAX as i64);
+            timestamp_ms = slot.saturating_add(1).min(u32::MAX as i64);
         }
         *slot = timestamp_ms;
         timestamp_ms

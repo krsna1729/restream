@@ -159,7 +159,7 @@ fn flv_audio_data_gets_adts_header() {
 
 #[test]
 fn raw_audio_with_adts_is_passthrough() {
-    let adts = build_adts_header(4, 48000, 2);
+    let adts = build_adts_header(4, 48000, 2).unwrap();
     let mut payload = adts.to_vec();
     payload.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]);
     let result = audio_for_ts(&payload, PayloadFormat::Raw, 48000, 2);
@@ -207,7 +207,7 @@ fn annexb_with_only_sps_pps_returns_none() {
 #[test]
 fn audio_for_rtmp_strips_adts_adds_flv_header() {
     let raw_aac = &[0xDE, 0xAD, 0xBE, 0xEF];
-    let adts = build_adts_header(raw_aac.len(), 48000, 2);
+    let adts = build_adts_header(raw_aac.len(), 48000, 2).unwrap();
     let mut with_adts = adts.to_vec();
     with_adts.extend_from_slice(raw_aac);
 
@@ -234,7 +234,9 @@ fn youtube_safe_aac_rtmp_shapes_use_seq_header_then_non_adts_raw_data() {
     assert_eq!(&sequence_header[2..], &[0x11, 0x90]);
 
     let raw_aac = &[0xDE, 0xAD, 0xBE, 0xEF];
-    let mut adts_aac = build_adts_header(raw_aac.len(), 48_000, 2).to_vec();
+    let mut adts_aac = build_adts_header(raw_aac.len(), 48_000, 2)
+        .unwrap()
+        .to_vec();
     adts_aac.extend_from_slice(raw_aac);
     let data_packet = audio_for_rtmp(&adts_aac);
 
@@ -261,7 +263,7 @@ fn srt_demuxed_raw_packets_convert_to_rtmp_flv_packets() {
     assert_eq!(&video[9..9 + nalu_len], IDR_NALU);
 
     let raw_aac = &[0xDE, 0xAD, 0xBE, 0xEF];
-    let mut adts_aac = build_adts_header(raw_aac.len(), 48000, 2).to_vec();
+    let mut adts_aac = build_adts_header(raw_aac.len(), 48000, 2).unwrap().to_vec();
     adts_aac.extend_from_slice(raw_aac);
     let audio = audio_for_rtmp(&adts_aac);
     assert_eq!(audio[0], 0xAF, "audio should be AAC FLV");
@@ -367,7 +369,7 @@ fn avcc_config_extracts_correct_nalu_len_size() {
 #[test]
 fn strip_adts_removes_exactly_7_bytes_for_no_crc() {
     let raw = &[0xDE, 0xAD, 0xBE, 0xEF];
-    let adts = build_adts_header(raw.len(), 44100, 1);
+    let adts = build_adts_header(raw.len(), 44100, 1).unwrap();
     assert_eq!(
         adts[1] & 0x01,
         1,
