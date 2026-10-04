@@ -81,7 +81,7 @@ pub(crate) async fn preflight_check() -> Result<Value, String> {
             "required": "optimized",
             "explicitRestreamBin": explicit_restream_bin,
             "status": "fail",
-            "hint": "measurement modes require optimized binaries; use `target/release/test_harness` in release CI, or run `scripts/build/bench-harness.sh` locally"
+            "hint": "measurement modes require optimized binaries; use `target/release/test_harness` in release CI, or run `cargo xtask build-bench` locally"
         })
     };
 

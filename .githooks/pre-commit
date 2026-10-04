@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="${RESTREAM_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
-cd "$ROOT"
-
-scripts/check/staged-gate-router.sh
+cd "$(git rev-parse --show-toplevel)"
+exec cargo xtask gates --staged

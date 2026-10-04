@@ -15,7 +15,7 @@ pub(super) struct RunMetadata {
     pub(super) git_sha: Option<String>,
     pub(super) git_dirty: Option<bool>,
     /// Which tree the bench binaries were built from, read from the stamp
-    /// `scripts/build/bench-harness.sh` writes next to them. A clean SHA at run
+    /// `cargo xtask build-bench` writes next to them. A clean SHA at run
     /// time does not prove the executed binary came from it.
     pub(super) build: Option<BuildProvenance>,
     /// Resource-sweep lifecycle (`isolated` is the contractual one).

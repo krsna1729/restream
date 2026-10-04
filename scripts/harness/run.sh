@@ -80,15 +80,15 @@ bin=${HARNESS_BIN:-target/bench/test_harness}
 build_mode=${BENCH_BUILD:-if-needed}
 case "$build_mode" in
   1|true|TRUE|always)
-    ./scripts/build/bench-harness.sh
+    cargo xtask build-bench
     ;;
   0|false|FALSE|never)
     ;;
   if-needed)
     if [[ -n "${RESTREAM_BENCH_FEATURES:-}" ]]; then
-      ./scripts/build/bench-harness.sh
+      cargo xtask build-bench
     elif needs_bench_rebuild "$bin"; then
-      ./scripts/build/bench-harness.sh
+      cargo xtask build-bench
     fi
     ;;
   *)
@@ -98,7 +98,7 @@ case "$build_mode" in
 esac
 
 if [[ ! -x "$bin" ]]; then
-  echo "missing harness binary at $bin; run scripts/build/bench-harness.sh" >&2
+  echo "missing harness binary at $bin; run cargo xtask build-bench" >&2
   exit 1
 fi
 

@@ -798,7 +798,7 @@ fn source_distribution_manifest_matches_declared_build_inputs() {
 
     for script in [
         "scripts/harness/run.sh",
-        "scripts/build/bench-harness.sh",
+        "crates/xtask/src/bins.rs",
         "scripts/build/native-deps.sh",
         "scripts/dev/frontend/prepare-assets.mjs",
     ] {

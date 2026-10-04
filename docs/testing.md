@@ -23,13 +23,13 @@ live here and in `AGENTS.md`.
 Run the repo gate:
 
 ```sh
-./scripts/check/test-hygiene.sh
+cargo xtask test-hygiene
 ```
 
 For fixture-first media discipline:
 
 ```sh
-./scripts/check/fixture-discipline.sh
+cargo xtask fixture-discipline
 ```
 
 For a plain full-suite run without the hygiene scan:
@@ -480,7 +480,7 @@ The smoke also records what the engine's DEFAULT seccomp profile does as a
 negative control (Docker 25+ denies the required `io_uring` syscalls; the
 expected denial never fails the run, and a future default that allows them is
 recorded as such). The live proofs need the harness
-(`scripts/build/bench-harness.sh`); `--diagnostic-unconfined` adds a
+(`cargo xtask build-bench`); `--diagnostic-unconfined` adds a
 `seccomp=unconfined` troubleshooting control that is never a deployment
 recommendation. `tests/seccomp_profile.rs` statically pins the profile to "Moby
 baseline + exactly the `io_uring` delta".

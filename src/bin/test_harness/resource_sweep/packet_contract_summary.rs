@@ -387,7 +387,7 @@ pub(super) fn baseline_eligibility(
             }
         }
         None => reasons.push(
-            "no bench build provenance stamp next to the harness binary (build with scripts/build/bench-harness.sh)"
+            "no bench build provenance stamp next to the harness binary (build with `cargo xtask build-bench`)"
                 .to_string(),
         ),
     }

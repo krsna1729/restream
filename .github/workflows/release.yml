@@ -109,7 +109,7 @@ jobs:
       - name: Build the live harness used by the container SRT proof
         run: |
           npm run build:frontend
-          ./scripts/build/bench-harness.sh
+          cargo xtask build-bench
       - uses: actions/download-artifact@v8
         with:
           name: release-dist-${{ env.RELEASE_VERSION }}-${{ github.sha }}

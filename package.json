@@ -5,7 +5,7 @@
     "build:frontend": "npm run prepare:frontend-assets && npx tsc -p tsconfig.json && npm run build:frontend:v2 && npx tailwindcss -i web/styles/input.css -o public/output.css",
     "build:frontend:v2": "npx tsc -p tsconfig.v2.json && vite build --config vite.v2.config.ts",
     "build:css": "npx tailwindcss -i web/styles/input.css -o public/output.css",
-    "check:api-contract": "./scripts/check/api-contract.sh",
+    "check:api-contract": "cargo xtask api-contract",
     "format:check": "npx tsc -p tsconfig.json --noEmit && npx tsc -p tsconfig.v2.json",
     "test:frontend": "./scripts/dev/frontend/node-tests.sh && npm run test:frontend:js-smoke",
     "test:frontend:coverage": "./scripts/dev/frontend/node-tests.sh --coverage && npm run test:frontend:js-smoke",

@@ -22,8 +22,8 @@ proof gate, then the live contract gate before signing off on lifecycle or
 recovery changes:
 
 ```sh
-scripts/check/concurrency/fast.sh
-scripts/check/concurrency/contract.sh
+cargo xtask concurrency fast
+cargo xtask concurrency contract
 ```
 
 Read [concurrency proofing](../../../concurrency-proofing.md) for model targets,

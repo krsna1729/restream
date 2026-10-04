@@ -58,7 +58,7 @@ jobs:
       - name: Build frontend assets for the harness binary
         run: npm run build:frontend
       - name: Build the live harness used by the SRT and RTMP(S) media proofs
-        run: ./scripts/build/bench-harness.sh
+        run: cargo xtask build-bench
       - uses: docker/setup-buildx-action@v4
       - name: Prepare build tree
         run: scripts/release/prepare-build-tree.sh

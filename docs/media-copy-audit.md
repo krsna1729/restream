@@ -158,7 +158,7 @@ CPU was 216% of 300%. Attribution, in order:
    socket dropping 1.08M datagrams (siblings 0). Restream's callers share a
    UDP socket per shard, so the kernel's 4-tuple hash sees a handful of
    flows. The resource sweep now spreads outputs across `PEER_COUNT` sink
-   ports, and `capacity-ramp.sh` defaults `PEER_COUNT` to the sink thread
+   ports, and `cargo xtask capacity-ramp` defaults `PEER_COUNT` to the sink thread
    count: sink drops fell to 4k/44k/11k across three sockets.
 3. **Restream SRT ingest socket**: it ran with the kernel default 208 KB
    receive buffer and dropped 5,876 publisher datagrams; it now requests the
@@ -188,7 +188,7 @@ Not srt-rs, but found in the same runs:
   (`scripts/harness/veth-topology.sh`).
 
 Order: S1 (with S4), then S2, then S3, re-running
-`scripts/harness/capacity-ramp.sh` with `CAPACITY_PROTOCOLS=srt` after each.
+`cargo xtask capacity-ramp` with `CAPACITY_PROTOCOLS=srt` after each.
 The Restream collapse policy can proceed in parallel.
 
 ## Work items and status

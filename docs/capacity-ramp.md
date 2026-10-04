@@ -64,16 +64,16 @@ Run on a clean checkout of the agreed commit:
 
 ```sh
 git checkout <agreed commit>
-scripts/harness/capacity-ramp.sh
+cargo xtask capacity-ramp
 ```
 
-It builds release binaries (`scripts/build/release-harness.sh`, into
+It builds release binaries (`cargo xtask build-release`, into
 `target/qual-release/`; `CAPACITY_BUILD_PROFILE=bench` uses the inner-loop
 bench profile instead), refuses a
 dirty worktree or running `restream`/`mediamtx`/`ffmpeg`, and writes
 `.local/artifacts/capacity-ramp/<utc stamp>/` with `summary.md`,
 `summary.csv`, `provenance.json` and one resource-sweep directory per rung
-and repeat. `scripts/harness/capacity-ramp.sh --help` lists every knob.
+and repeat. `cargo xtask capacity-ramp --help` lists every knob.
 
 CPU split. By default Restream gets the first half of the online CPUs and the
 harness, publisher and sinks the second half. On large hosts:
@@ -119,7 +119,7 @@ A full default run takes roughly 1–2 hours (3 repeats, 30 s windows).
 ## Reference results
 
 Reference: 6-CPU AMD EPYC KVM VPS (1 NUMA node), kernel 6.8, commit
-`1a2e7e12`, release binaries, `scripts/harness/capacity-ramp.sh` defaults
+`1a2e7e12`, release binaries, `cargo xtask capacity-ramp` defaults
 (Restream on CPUs 0–2, harness on 3–5, product-default shards, SRT sink
 threads and peer count 3, 30 s windows, 3 repeats per rung; ladders capped at
 1000). CPU is % of one core; Restream's budget is 300%. Artifacts:
@@ -163,7 +163,7 @@ Earlier ramps (bench profile at `6616fa85`; release at `b4159089` and
 `RTMP×4000` failed on the command-admission bug fixed in `85a6699f`, and that
 single-port SRT sinks understated SRT CPU by about a third.
 
-**Host jitter.** `scripts/harness/host-jitter.py`, which the ramp runs on every
+**Host jitter.** `cargo xtask host-jitter`, which the ramp runs on every
 Restream CPU before starting (`provenance.json` `host_jitter`, summary header),
 spins on a monotonic clock and counts gaps over 5 ms. On the reference VPS an
 idle pinned CPU loses 0.6–3% of wall time in gaps up to ~120 ms with zero
@@ -176,7 +176,7 @@ rung moved by ~30% between sessions (RTMPS×500: 124% in the baseline ramp,
 with interleaved A/B runs in one session; treat cross-session capacity
 tables as indicative. The baseline numbers above used the bench profile;
 evidence committed from now on uses release binaries
-(`scripts/build/release-harness.sh`).
+(`cargo xtask build-release`).
 
 ## Prompt for running on another machine
 
@@ -204,7 +204,7 @@ and report results comparable to the reference host in docs/capacity-ramp.md.
      CAPACITY_HARNESS_CPUS = all CPUs of node 1.
    - One node: leave the defaults (half and half).
 5. Run A (product defaults; ladders stop at 1000 outputs per protocol):
-     scripts/harness/capacity-ramp.sh
+     cargo xtask capacity-ramp
    Compare hosts by CPU per output at equal rungs, not only by capacity:
    a protocol that passes 1000 on both hosts is capped, not equal.
    Run B: same ladders plus CAPACITY_EGRESS_SHARDS=<number of Restream CPUs>.

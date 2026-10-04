@@ -54,7 +54,7 @@ Read the item outcome, gate results, and remaining work in the journal. For
 runs authorized to commit, `git log --oneline --grep 'quality('` lists deliveries.
 
 Canonical bodies live in `docs/agent-guidance/skills/<name>/SKILL.md`.
-Run `scripts/agent/setup-skills.sh` after changes to refresh local Claude Code
+Run `cargo xtask setup-skills` after changes to refresh local Claude Code
 shims and prune removed registrations. Worktree setup runs it automatically;
 `.claude/` is generated and gitignored.
 

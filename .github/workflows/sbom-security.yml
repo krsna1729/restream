@@ -33,7 +33,7 @@ jobs:
           rust_cache: 'true'
 
       - name: Build bench binary for SBOM scan
-        run: scripts/build/bench-harness.sh
+        run: cargo xtask build-bench
 
       - name: Emit scheduled runtime SBOM
         run: |

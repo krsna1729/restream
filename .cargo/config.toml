@@ -1,3 +1,6 @@
+[alias]
+xtask = "run --quiet --package xtask --"
+
 # Leave one CPU free so builds don't starve the desktop or a live run; static
 # FFmpeg links are memory-heavy. Override with: CARGO_BUILD_JOBS=N cargo build
 [build]

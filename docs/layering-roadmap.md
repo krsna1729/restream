@@ -34,7 +34,7 @@ The frontend now has a clear, modular shape:
   (`pipeline-view/`, `control-room/`, `editor/`, `pipeline-inspector/`, `settings/`, `status/`)
 - `web/ts/history` for history-specific controller/rendering behavior
 
-All authored frontend TypeScript files (`web/ts/*`) are strictly under 999 raw lines, enforced by `./scripts/check/source-audit.sh`.
+All authored frontend TypeScript files (`web/ts/*`) are strictly under 999 raw lines, enforced by `cargo xtask source-audit`.
 
 Current backend evidence:
 
@@ -62,7 +62,7 @@ Frontend examples:
 
 ## Size Policy
 
-`scripts/check/source-audit.sh` measures raw physical lines for authored Rust
+`cargo xtask source-audit` measures raw physical lines for authored Rust
 in the root `build.rs` and in `src/`, `test/`, `tests/`, and `benches/`.
 Fixtures and generated artifacts remain outside this metric. Authored
 TypeScript and JavaScript now share the same 1,000-line hard maximum as the
@@ -472,7 +472,7 @@ deliberate exception: it is the stable observer-facing API beside
 `domain::state` remains the defining owner. Remove the re-export only as a
 versioned public-API change, not as an internal layering cleanup.
 
-Run `scripts/check/source-audit.sh` after changing a candidate boundary. It
+Run `cargo xtask source-audit` after changing a candidate boundary. It
 stays deliberately mechanical and bash/grep-only: forbidden-import greps, a
 per-file raw-line-count check (`FAIL`/`WARN` on stdout for every file at or
 over its size band, grouped by responsibility class), approved

@@ -1138,7 +1138,7 @@ runtime verdict: `healthy` describes the datapath, eligibility describes
 whether the artifact may be recorded as a contractual baseline. It requires:
 
 - a clean known SHA, an unoverridden `RESTREAM_BIN` (the provenance stamp only covers the default sibling binary), and bench binaries built from that same clean tree —
-  `scripts/build/bench-harness.sh` writes `target/bench/build-provenance.json`
+  `cargo xtask build-bench` writes `target/bench/build-provenance.json`
   next to the binaries, and a clean SHA at run time alone never proves the
   executed binary came from it;
 - `lifecycle=isolated`, `peerMode=sink`, exactly one configured egress rung
@@ -3076,7 +3076,7 @@ WI10
 ## 36. Immediate Next Action
 
 This is the handoff queue: any agent can pick up from the first open item.
-Evidence rules: release binaries (`scripts/build/release-harness.sh`) for
+Evidence rules: release binaries (`cargo xtask build-release`) for
 committed performance claims, interleaved A/B within one session (this VPS
 drifts ~30% across sessions), symbol-resolved profiles for attribution, and
 no cargo work while a live pipeline or benchmark runs.

@@ -80,8 +80,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+      - uses: ./.github/actions/ci-bootstrap
       - name: Check source size and generated-file boundaries
-        run: ./scripts/check/source-audit.sh
+        run: cargo xtask source-audit
       - name: Check Markdown documentation
         run: node scripts/check/docs.mjs
 
@@ -140,7 +141,7 @@ jobs:
         run: npm run build:frontend
       - if: ${{ steps.scope.outputs.run == 'true' }}
         name: Build the live harness used by the SRT and RTMP(S) media proofs
-        run: ./scripts/build/bench-harness.sh
+        run: cargo xtask build-bench
       - if: ${{ steps.scope.outputs.run == 'true' }}
         uses: docker/setup-buildx-action@v4
       - if: ${{ steps.scope.outputs.run == 'true' }}
@@ -178,7 +179,7 @@ jobs:
           native_prefix: 'true'
           rust_cache: 'true'
       - name: Run API contract smoke
-        run: ./scripts/check/api-contract.sh
+        run: cargo xtask api-contract
 
   frontend:
     name: Frontend unit and browser DOM
@@ -227,7 +228,7 @@ jobs:
           native_prefix: 'true'
           rust_cache: 'true'
       - name: Run fast concurrency proof
-        run: bash ./scripts/check/concurrency/fast.sh
+        run: cargo xtask concurrency fast
       - name: Assert egress ready-queue cost shape (O(ready), not O(population))
         run: cargo test --test egress_scheduler_shape
 
@@ -250,7 +251,7 @@ jobs:
           # namespace setup; keep the live fault slices on the same host-network
           # fallback used by the other hosted harness jobs.
           CONCURRENCY_HARNESS_ARGS: "--no-netns"
-        run: bash ./scripts/check/concurrency/contract.sh
+        run: cargo xtask concurrency contract
       - name: Upload concurrency fault evidence
         if: ${{ always() && (failure() || cancelled()) }}
         uses: actions/upload-artifact@v7
@@ -280,9 +281,9 @@ jobs:
       - name: Build frontend assets for Rust tests
         run: npm run build:frontend
       - name: Check Rust test hygiene
-        run: ./scripts/check/test-hygiene.sh
+        run: cargo xtask test-hygiene
       - name: Check fixture discipline
-        run: ./scripts/check/fixture-discipline.sh
+        run: cargo xtask fixture-discipline
 
   coverage:
     name: Workspace coverage report
@@ -331,7 +332,7 @@ jobs:
       - name: Build frontend assets for harness binaries
         run: npm run build:frontend
       - name: Build bench-profile harness binaries
-        run: ./scripts/build/bench-harness.sh
+        run: cargo xtask build-bench
       - name: Stage transport harness artifact
         run: |
           mkdir -p .local/ci-harness-bin

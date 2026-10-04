@@ -47,13 +47,13 @@ Use the pinned Rust toolchain from `rust-toolchain.toml`.
 - Use `--profile bench` instead of `--release` for local or agent builds.
   Exception: performance evidence that gets committed (capacity ramps, A/B
   runs, profiles) uses real release binaries from
-  `scripts/build/release-harness.sh` (`target/qual-release/`); keep the bench
+  `cargo xtask build-release` (`target/qual-release/`); keep the bench
   profile for the day-to-day inner loop.
 - Cargo hardcodes `target/release` as the output dir for a profile named
   `bench` (long-standing `cargo bench` compatibility quirk); `cargo build
   --profile bench` alone does not populate `target/bench/`. For measurement
   harness modes that require binaries at `target/bench/`, build with
-  `scripts/build/bench-harness.sh` instead — the one canonical path to those
+  `cargo xtask build-bench` instead — the one canonical path to those
   binaries.
 - Edit `web/ts/` and `web/styles/input.css`; do not hand-edit generated files in `public/js/`.
 - Default frontend verification is `npm run test:frontend`; use Playwright when browser-only behavior is touched.
@@ -68,7 +68,7 @@ scripts/agent/worktree.sh <id>
 source .local/worktrees/<id>/.agent-state/setup.env
 scripts/agent/worktree.sh --cleanup <id>
 
-scripts/agent/setup-skills.sh
+cargo xtask setup-skills
 
 npm run test:frontend
 npm run test:frontend:coverage
@@ -89,9 +89,9 @@ in on demand, and verify with the narrowest gate first.
   touches when it touches it (see Key References).
 - Skill bodies load on invocation; the canonical versions live in
   `docs/agent-guidance/skills/`. Claude Code shims are generated locally by
-  `scripts/agent/setup-skills.sh` (`.claude/` is gitignored;
+  `cargo xtask setup-skills` (`.claude/` is gitignored;
   `scripts/agent/worktree.sh` runs it automatically in new worktrees). After
-  adding or editing a canonical skill, run `scripts/agent/setup-skills.sh` to
+  adding or editing a canonical skill, run `cargo xtask setup-skills` to
   refresh local shims.
 - Skills supply task-specific guidance within the user's scope and existing
   authorization. Do not start quality loops, turn reviews into fixes, or add
@@ -187,11 +187,11 @@ Hot paths include `src/media/`, ring buffers, mux/demux loops, AVIO queues, SRT/
 - Prefer checked-in fixtures over inline media generation for tests, benches, and harness runs.
 - Test-only code may adapt or observe production code, never re-implement it: inject fakes through an existing type parameter or constructor and call the production function, rather than adding a `#[cfg(test)]` sibling that repeats its logic.
 - Route dashboard API calls through `web/ts/core/api.ts`; update contract tests when routes or payloads change.
-- `scripts/check/test-hygiene.sh` runs in CI (Rust unit hygiene and fixtures); suppress expected noise at the test helper, not in CI.
-- For concurrency or thread-hop changes, extend `scripts/check/concurrency/fast.sh` or explain why the existing proof gate already covers the change.
+- `cargo xtask test-hygiene` runs in CI (Rust unit hygiene and fixtures); suppress expected noise at the test helper, not in CI.
+- For concurrency or thread-hop changes, extend the step tables in `crates/xtask/src/concurrency.rs` (`cargo xtask concurrency fast`) or explain why the existing proof gate already covers the change.
 - If teardown or recovery semantics change, update the live harness assertion and the operator-visible status contract in the same change.
 - Gate selection by files touched: see the Inner Loop table above.
-- Scale and capacity runs are performance measurement and stay local: `scripts/harness/capacity-ramp.sh`, serially, on an idle host.
+- Scale and capacity runs are performance measurement and stay local: `cargo xtask capacity-ramp`, serially, on an idle host.
 
 ## Autonomous Quality Loops
 
