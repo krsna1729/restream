@@ -18,7 +18,7 @@ stays open. The roadmap entries (§36 items 4, 8 and 15 in
 
 ## Method
 
-All runs use release binaries and `scripts/harness/capacity-ramp.sh` on the
+All runs use release binaries and `cargo xtask capacity-ramp` on the
 6-vCPU KVM host (AMD EPYC, 11.9 GB). Restream and the harness (publisher and
 receiver sinks) run on disjoint CPU sets. The arms of each comparison run
 interleaved (A, B, A, B), so slow drift on the host affects both arms alike.
@@ -251,6 +251,6 @@ are archived on the measurement host under `.local/artifacts/`:
 `rx-owner-tsmux-superseded.patch`). Run artifacts are under
 `.local/artifacts/from-wi11-cores/`, `from-wi11-hls-cyper/`, `from-alloc-ab/`
 and `cyper-probe/`. To rerun one arm, apply a patch to its base commit, build
-with `scripts/build/release-harness.sh` (add the feature flag for cyper or an
-allocator), and run `scripts/harness/capacity-ramp.sh` with the CPU split and
+with `cargo xtask build-release` (add the feature flag for cyper or an
+allocator), and run `cargo xtask capacity-ramp` with the CPU split and
 ladder given in each setup above.

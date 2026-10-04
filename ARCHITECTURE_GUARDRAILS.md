@@ -18,7 +18,7 @@ Run the canonical source audit:
 cargo xtask source-audit
 ```
 
-[`xtask/src/source_audit.rs`](xtask/src/source_audit.rs) is authoritative
+[`crates/xtask/src/source_audit.rs`](crates/xtask/src/source_audit.rs) is authoritative
 for the boundaries it rejects; its stdout is the report. Do not copy its
 current import patterns, file limits, approved environment-read locations, or
 generated inventories into this page. A change to one of those rules belongs

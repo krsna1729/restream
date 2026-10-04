@@ -473,7 +473,7 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   `resource-sweep` harness run recorded in `baselines.md` next to the
   historical 2026-06-27 numbers.
 - Files: `docs/agent-guidance/quality/baselines.md`.
-- Gates: `scripts/build/bench-harness.sh` then
+- Gates: `cargo xtask build-bench` then
   `target/bench/test_harness resource-sweep`, serial,
   idle host.
 - Context: the 2026-06-27 memory-optimization pass cut ~205 MB RSS across 15

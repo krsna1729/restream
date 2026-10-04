@@ -761,11 +761,11 @@ write_agent_state \
     "$TARGET_CACHE_MODE" \
     "$WITH_INCREMENTAL"
 
-if [[ -x "$WORKTREE_PATH/scripts/agent/setup-skills.sh" ]]; then
+if [[ -f "$WORKTREE_PATH/crates/xtask/src/skills.rs" ]]; then
     info "generate local Claude Code skill shims"
-    run_cmd "$WORKTREE_PATH/scripts/agent/setup-skills.sh"
+    run_cmd env -C "$WORKTREE_PATH" cargo xtask setup-skills
 else
-    info "skip skill shims: scripts/agent/setup-skills.sh not present in worktree"
+    info "skip skill shims: crates/xtask not present in worktree"
 fi
 
 cat <<EOF

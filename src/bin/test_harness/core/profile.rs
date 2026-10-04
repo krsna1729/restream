@@ -15,7 +15,7 @@ fn path_profile(path: &Path) -> Option<&'static str> {
                 .and_then(|value| match value {
                     "debug" => Some("debug"),
                     // `target/qual-release` holds release-profile copies from
-                    // scripts/build/release-harness.sh (kept apart from
+                    // cargo xtask build-release (kept apart from
                     // target/release, which the bench profile also writes).
                     "release" | "qual-release" => Some("release"),
                     "bench" => Some("bench"),
@@ -134,7 +134,7 @@ pub(crate) fn ensure_measurement_profile(command: &str, raw: &[String]) -> Resul
     }
 
     Err(format!(
-        "{command} requires optimized measurement binaries; use `target/release/test_harness` in release CI, or build local measurement binaries with `scripts/build/bench-harness.sh`"
+        "{command} requires optimized measurement binaries; use `target/release/test_harness` in release CI, or build local measurement binaries with `cargo xtask build-bench`"
     ))
 }
 

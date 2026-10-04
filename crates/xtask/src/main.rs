@@ -10,9 +10,12 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
+mod bins;
+mod capacity;
 mod concurrency;
 mod gates;
 mod scan;
+mod skills;
 mod source_audit;
 
 /// Outcome of one step; the error is the message printed before exiting.
@@ -35,6 +38,11 @@ fn main() -> ExitCode {
         ["concurrency", "contract"] => concurrency::contract(),
         ["loom", target] => concurrency::loom(target),
         ["gates", ref rest @ ..] => gates::run_gates(rest),
+        ["build-bench"] => bins::build_bench(),
+        ["build-release"] => bins::build_release(),
+        ["capacity-ramp", ref rest @ ..] => capacity::capacity_ramp(rest),
+        ["host-jitter", ref rest @ ..] => capacity::host_jitter(rest),
+        ["setup-skills", ref rest @ ..] => skills::setup_skills(rest),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -61,12 +69,20 @@ commands:
   concurrency contract  fast set + live fault/recovery harness modes
   loom <test-target>    build one tests/<target>.rs with --cfg loom and run it
   gates [--staged|--unstaged|--base <ref>] [--dry-run]
-                        route changed files to checks; run the pre-commit ones";
+                        route changed files to checks; run the pre-commit ones
+  build-bench           bench-profile restream + test_harness into target/bench/
+  build-release         release binaries into target/qual-release/ (committed evidence)
+  capacity-ramp         egress capacity ramp (--help lists its environment)
+  host-jitter [secs] [threshold_ms]
+                        scheduling-gap probe for the current CPU (pin with taskset)
+  setup-skills [--symlink]
+                        generate local Claude Code skill shims";
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask lives one level below the repository root")
+        .ancestors()
+        .nth(2)
+        .expect("xtask lives at crates/xtask below the repository root")
         .to_path_buf()
 }
 

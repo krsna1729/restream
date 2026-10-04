@@ -1,7 +1,7 @@
 //! The production image is built by Dockerfile stages that stage the Cargo
 //! workspace by hand: a dependency-warming layer (member MANIFESTS only, so the
 //! cache boundary survives) and the real build (`runtime-tree`, with the real
-//! member sources). The workspace currently has no path members. Adding a path workspace member without teaching the recipe
+//! member sources). Adding a path workspace member without teaching the recipe
 //! breaks release-image construction ("failed to load manifest for workspace
 //! member"), which local `cargo` never notices. This guard keeps the two in
 //! step; it is a cheap source check, not a Dockerfile parser.

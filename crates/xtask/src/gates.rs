@@ -333,7 +333,7 @@ fn is_fixture_or_harness(file: &str) -> bool {
             "benches/*",
             "scripts/fixtures/*",
             "scripts/harness/*",
-            "scripts/build/bench-harness.sh",
+            "crates/xtask/src/bins.rs",
             "src/bin/test_harness.rs",
             "src/bin/test_harness/*",
         ],
@@ -523,7 +523,7 @@ mod tests {
         assert_eq!(module_filter("src/lib.rs"), None);
         assert_eq!(module_filter("src/bin/test_harness/main.rs"), None);
         assert_eq!(module_filter("benches/api_health.rs"), None);
-        assert_eq!(module_filter("xtask/src/main.rs"), None);
+        assert_eq!(module_filter("crates/xtask/src/main.rs"), None);
     }
 
     #[test]

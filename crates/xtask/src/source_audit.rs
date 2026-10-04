@@ -291,7 +291,7 @@ mod tests {
             ("src/media/engine.rs", "production"),
             ("test/frontend/x.test.mjs", "frontend-test"),
             ("web/ts/core/api.ts", "frontend-production"),
-            ("xtask/src/main.rs", "other"),
+            ("crates/xtask/src/main.rs", "other"),
         ] {
             assert_eq!(classify(path), class, "{path}");
         }

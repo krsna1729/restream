@@ -250,7 +250,7 @@ srt_probe() {
     local harness="${RESTREAM_HARNESS_BIN:-target/bench/test_harness}"
     [[ -x "$harness" ]] || {
         echo "container-smoke: the SRT capability proof needs the live harness ($harness)." >&2
-        echo "container-smoke: build it with scripts/build/bench-harness.sh" >&2
+        echo "container-smoke: build it with cargo xtask build-bench" >&2
         return 3
     }
     local dir
@@ -282,7 +282,7 @@ rtmps_probe() {
     local trust_root="$ROOT/test/fixtures/tls/mediamtx-rtmps-cert.pem"
     [[ -x "$harness" ]] || {
         echo "container-smoke: the RTMPS media proof needs the live harness ($harness)." >&2
-        echo "container-smoke: build it with scripts/build/bench-harness.sh" >&2
+        echo "container-smoke: build it with cargo xtask build-bench" >&2
         return 3
     }
     [[ -r "$trust_root" ]] || {

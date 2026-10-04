@@ -92,7 +92,7 @@ ENV RESTREAM_BUILD_GIT_COMMIT=${RESTREAM_BUILD_GIT_COMMIT} \
     RESTREAM_BUILD_TIMESTAMP=${RESTREAM_BUILD_TIMESTAMP} \
     RESTREAM_SKIP_SBOM=1
 
-COPY scripts/build/app-native.sh scripts/build/bench-harness.sh scripts/build/emit-sbom.sh scripts/build/
+COPY scripts/build/app-native.sh scripts/build/emit-sbom.sh scripts/build/
 
 # Warm the release dependency graph without copying the real application code.
 # The dummy main compiles the full dependency set into .local/build/static/cargo-target
@@ -102,11 +102,13 @@ COPY .cargo/ .cargo/
 # `[patch.crates-io]` path dependencies must exist before Cargo can resolve the
 # graph (tests/docker_build_recipe.rs enforces this).
 COPY vendor/ vendor/
-# The workspace has no path members; if one is added, stage its manifest and a
-# dummy lib here (tests/docker_build_recipe.rs enforces this).
-RUN mkdir -p benches src \
+# Path workspace members: stage each manifest with a dummy lib so the warm
+# layer's workspace loads (tests/docker_build_recipe.rs enforces this).
+COPY crates/xtask/Cargo.toml crates/xtask/Cargo.toml
+RUN mkdir -p benches src crates/xtask/src \
     && awk '/^\[\[bench\]\]$/ { in_bench = 1; next } in_bench && /^name = "/ { name = $0; sub(/^name = "/, "", name); sub(/"$/, "", name); printf "fn main() {}\\n" > ("benches/" name ".rs"); in_bench = 0 }' Cargo.toml \
-    && printf 'fn main() {}\n' > src/main.rs
+    && printf 'fn main() {}\n' > src/main.rs \
+    && : > crates/xtask/src/lib.rs
 RUN RESTREAM_BUILD_PROFILE=release ./scripts/build/app-native.sh
 
 # Return to the application build stage for its runtime filesystem assembly.
@@ -117,12 +119,13 @@ FROM rust-build AS runtime-tree
 # frontend rebuilds, while frontend edits reuse the warmed Cargo dependency
 # target directory above.
 COPY src/ src/
+COPY crates/xtask/ crates/xtask/
 COPY --from=frontend-build /workspace/public public
 # COPY keeps each file's original (checkout-time) mtime, which is OLDER than the
 # dummy sources the warm layer compiled, so Cargo would treat the warmed dummy
-# artifacts (a stub main) as up to date. Touch the real sources so the final
-# build compiles them.
-RUN find src -type f -name '*.rs' -exec touch {} + \
+# artifacts (a stub main, an empty member lib) as up to date. Touch the real
+# sources so the final build compiles them.
+RUN find crates src -type f -name '*.rs' -exec touch {} + \
     && RESTREAM_BUILD_PROFILE=release ./scripts/build/app-native.sh
 
 # The harness image is an explicit target, so this extra bench build is paid
@@ -131,7 +134,7 @@ RUN find src -type f -name '*.rs' -exec touch {} + \
 # assets rather than the dummy dependency-warmup crate.
 FROM runtime-tree AS harness-build
 
-RUN scripts/build/bench-harness.sh
+RUN cargo xtask build-bench
 
 # Seed the state directory as a copyable path; WORKDIR alone did not make it
 # writable by UID 1000 in rootless container engines.

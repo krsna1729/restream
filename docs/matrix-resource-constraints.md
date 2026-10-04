@@ -53,7 +53,7 @@ host or worktree session, establish process ownership and check for running buil
 ## Running a bounded matrix
 
 1. Build the required profile. If the mode consumes `target/bench/`, use
-   `scripts/build/bench-harness.sh`.
+   `cargo xtask build-bench`.
 2. Choose the smallest harness mode that proves the changed protocol or
    lifecycle boundary.
 3. Apply whole-process limits outside the harness when the experiment requires

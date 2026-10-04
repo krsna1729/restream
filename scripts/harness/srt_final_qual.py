@@ -52,7 +52,7 @@ def cmd_env(args):
         "kernel": sh("uname -sr"),
         "arch": sh("uname -m"),
         "governor": gov or "not readable (VM)",
-        "rust_profile": "bench (target/bench; scripts/build/bench-harness.sh)",
+        "rust_profile": "bench (target/bench; cargo xtask build-bench)",
         "candidate_sha": args.candidate,
         "baseline_sha": args.baseline,
         "srt_rs_pin_candidate": args.pin,

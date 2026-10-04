@@ -141,7 +141,7 @@ jobs:
         run: npm run build:frontend
       - if: ${{ steps.scope.outputs.run == 'true' }}
         name: Build the live harness used by the SRT and RTMP(S) media proofs
-        run: ./scripts/build/bench-harness.sh
+        run: cargo xtask build-bench
       - if: ${{ steps.scope.outputs.run == 'true' }}
         uses: docker/setup-buildx-action@v4
       - if: ${{ steps.scope.outputs.run == 'true' }}
@@ -332,7 +332,7 @@ jobs:
       - name: Build frontend assets for harness binaries
         run: npm run build:frontend
       - name: Build bench-profile harness binaries
-        run: ./scripts/build/bench-harness.sh
+        run: cargo xtask build-bench
       - name: Stage transport harness artifact
         run: |
           mkdir -p .local/ci-harness-bin
