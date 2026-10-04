@@ -17,3 +17,4 @@ include!("tests/egress_startup.rs");
 include!("tests/flv.rs");
 include!("tests/endpoint.rs");
 include!("tests/metadata_timestamps.rs");
+include!("tests/admission.rs");

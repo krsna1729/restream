@@ -306,6 +306,12 @@ pub struct AppConfig {
     /// complete; the connection that would exceed it is rejected.
     pub rtmp_ingest_parser_budget_bytes: usize,
     pub rtmp_handshake_timeout_ms: u64,
+    /// Connections one client (an IPv4 address or an IPv6 /64) may hold at
+    /// once, so one client cannot take every slot of `rtmp_max_connections`.
+    pub rtmp_max_connections_per_ip: usize,
+    /// Time after the handshake within which a client must start publishing
+    /// (or playing); until then it holds a slot without having authenticated.
+    pub rtmp_preauth_timeout_ms: u64,
     pub rtmp_preauth_buffer_bytes: usize,
     pub rtmp_stream_buffer_bytes: usize,
     pub rtmp_egress_chunk_size: u32,
@@ -354,6 +360,9 @@ pub struct AppConfig {
     /// members; bonded legs relocate to their group's Owner). 1 is one Owner
     /// on one socket.
     pub srt_ingress_owners: usize,
+    /// Peers one client IP may hold on the SRT listener (srt-rs
+    /// `admission.max_peers_per_ip`), so one client cannot take every slot.
+    pub srt_max_peers_per_ip: usize,
     pub use_internal_file_ingest: bool,
     pub initial_admin_password: Option<String>,
     pub secure_session_cookies: bool,
@@ -636,6 +645,8 @@ impl Default for AppConfig {
             rtmp_max_message_bytes: 8 * 1024 * 1024,
             rtmp_ingest_parser_budget_bytes: 256 * 1024 * 1024,
             rtmp_handshake_timeout_ms: 10_000,
+            rtmp_max_connections_per_ip: 64,
+            rtmp_preauth_timeout_ms: 10_000,
             rtmp_preauth_buffer_bytes: 128 * 1024,
             rtmp_stream_buffer_bytes: 8 * 1024 * 1024,
             rtmp_egress_chunk_size: 16 * 1024,
@@ -662,6 +673,7 @@ impl Default for AppConfig {
             srt_egress_tx_capacity: crate::media::egress::backends::srt::SRT_OWNER_TX_CAPACITY,
             srt_egress_gso: true,
             srt_ingress_owners: 1,
+            srt_max_peers_per_ip: 64,
             use_internal_file_ingest: false,
             initial_admin_password: None,
             secure_session_cookies: false,
@@ -700,6 +712,10 @@ impl AppConfig {
         .clamp(rtmp_max_message_bytes, 16 * 1024 * 1024 * 1024);
         let rtmp_handshake_timeout_ms =
             env_u64("RESTREAM_RTMP_HANDSHAKE_TIMEOUT_MS", 10_000).clamp(100, 300_000);
+        let rtmp_max_connections_per_ip =
+            env_usize("RESTREAM_RTMP_MAX_CONNECTIONS_PER_IP", 64).clamp(1, rtmp_max_connections);
+        let rtmp_preauth_timeout_ms =
+            env_u64("RESTREAM_RTMP_PREAUTH_TIMEOUT_MS", 10_000).clamp(100, 300_000);
         let rtmp_preauth_buffer_bytes = env_usize("RESTREAM_RTMP_PREAUTH_BUFFER_BYTES", 128 * 1024)
             .clamp(16 * 1024, 1024 * 1024);
         let rtmp_stream_buffer_bytes =
@@ -753,6 +769,7 @@ impl AppConfig {
         .clamp(1, 4096);
         let srt_egress_gso = env_bool("RESTREAM_SRT_EGRESS_GSO").unwrap_or(true);
         let srt_ingress_owners = env_usize("RESTREAM_SRT_INGRESS_OWNERS", 1).clamp(1, cpus.max(1));
+        let srt_max_peers_per_ip = env_usize("RESTREAM_SRT_MAX_PEERS_PER_IP", 64).clamp(1, 4096);
         let use_internal_file_ingest =
             std::env::var_os("RESTREAM_USE_INTERNAL_FILE_INGEST").is_some();
         let initial_admin_password = std::env::var("RESTREAM_INITIAL_ADMIN_PASSWORD").ok();
@@ -800,6 +817,8 @@ impl AppConfig {
             rtmp_max_message_bytes,
             rtmp_ingest_parser_budget_bytes,
             rtmp_handshake_timeout_ms,
+            rtmp_max_connections_per_ip,
+            rtmp_preauth_timeout_ms,
             rtmp_preauth_buffer_bytes,
             rtmp_stream_buffer_bytes,
             rtmp_egress_chunk_size,
@@ -826,6 +845,7 @@ impl AppConfig {
             srt_egress_tx_capacity,
             srt_egress_gso,
             srt_ingress_owners,
+            srt_max_peers_per_ip,
             use_internal_file_ingest,
             initial_admin_password,
             secure_session_cookies,
@@ -927,6 +947,8 @@ impl AppConfig {
                 "maxMessageBytes": self.rtmp_max_message_bytes,
                 "ingestParserBudgetBytes": self.rtmp_ingest_parser_budget_bytes,
                 "handshakeTimeoutMs": self.rtmp_handshake_timeout_ms,
+                "maxConnectionsPerIp": self.rtmp_max_connections_per_ip,
+                "preauthTimeoutMs": self.rtmp_preauth_timeout_ms,
                 "preauthBufferBytes": self.rtmp_preauth_buffer_bytes,
                 "streamBufferBytes": self.rtmp_stream_buffer_bytes,
                 "egressChunkSize": self.rtmp_egress_chunk_size,

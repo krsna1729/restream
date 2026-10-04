@@ -139,6 +139,8 @@ pub(crate) struct IngressConfig {
     pub(crate) telemetry_capacity: usize,
     /// Owner threads sharing the port; 1 is one Owner on one socket.
     pub(crate) owners: usize,
+    /// Peers one client IP may hold (srt-rs `max_peers_per_ip`).
+    pub(crate) max_peers_per_ip: usize,
 }
 
 /// One Owner thread's place in the listener: its plan, the timestamp origin
