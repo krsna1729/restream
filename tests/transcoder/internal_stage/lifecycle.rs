@@ -170,9 +170,10 @@ fn prebuffered_h264_packets_drive_internal_scaled_stage() {
 
         let packets = collect_packets_with_deadline(&mut reader, 20, Duration::from_secs(6)).await;
 
-        cancel.cancel();
-
+        // Read the phase while the stage still runs: after cancel the stage is
+        // tearing down and its snapshot no longer describes the output phase.
         let snapshot = manager.snapshot(&stage_key).await;
+        cancel.cancel();
         assert!(
             packets
                 .iter()
