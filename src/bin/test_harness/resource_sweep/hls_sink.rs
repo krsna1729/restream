@@ -98,7 +98,7 @@ async fn receive(
 ) -> StatusCode {
     let cid = query.get("cid").cloned().unwrap_or_default();
     let mut received = 0u64;
-    let mut content = Fnv1a::new();
+    let mut content = SegmentIdentity::default();
     let mut stream = body.into_data_stream();
     while let Some(chunk) = stream.next().await {
         match chunk {
@@ -125,6 +125,46 @@ async fn receive(
             .or_insert(now);
     }
     StatusCode::NO_CONTENT
+}
+
+/// Bytes at each end of a body that, with its length, identify a segment.
+const IDENTITY_EDGE_BYTES: usize = 4096;
+
+/// A segment's identity from its length and its first and last
+/// `IDENTITY_EDGE_BYTES`, independent of how the body was chunked. Every
+/// output uploads the same bytes for a segment; two segments of one window
+/// differ in length or in their final TS packets. Constant work per body:
+/// hashing every byte cost the receiver about one core at HLS x1000, which
+/// delayed its arrival timestamps and inflated the measured lag.
+#[derive(Default)]
+struct SegmentIdentity {
+    length: u64,
+    head: Vec<u8>,
+    tail: std::collections::VecDeque<u8>,
+}
+
+impl SegmentIdentity {
+    fn update(&mut self, bytes: &[u8]) {
+        self.length += bytes.len() as u64;
+        let head_room = IDENTITY_EDGE_BYTES.saturating_sub(self.head.len());
+        self.head
+            .extend_from_slice(&bytes[..head_room.min(bytes.len())]);
+        let keep = bytes.len().min(IDENTITY_EDGE_BYTES);
+        self.tail.extend(&bytes[bytes.len() - keep..]);
+        while self.tail.len() > IDENTITY_EDGE_BYTES {
+            self.tail.pop_front();
+        }
+    }
+
+    fn finish(&self) -> u64 {
+        let mut hash = Fnv1a::new();
+        hash.update(&self.length.to_le_bytes());
+        hash.update(&self.head);
+        let (first, second) = self.tail.as_slices();
+        hash.update(first);
+        hash.update(second);
+        hash.finish()
+    }
 }
 
 /// FNV-1a over a byte stream; the result does not depend on how the stream
@@ -308,16 +348,24 @@ mod tests {
 
     #[test]
     fn segment_identity_does_not_depend_on_chunking() {
-        let mut whole = Fnv1a::new();
-        whole.update(b"segment-bytes");
-        let mut split = Fnv1a::new();
-        split.update(b"segm");
-        split.update(b"ent-by");
-        split.update(b"tes");
-        assert_eq!(whole.finish(), split.finish());
-        let mut other = Fnv1a::new();
-        other.update(b"segment-bytez");
-        assert_ne!(whole.finish(), other.finish());
+        // Larger than both edges, so head, middle and tail all exist.
+        let body: Vec<u8> = (0..20_000u32).map(|i| (i * 7 % 251) as u8).collect();
+        let mut whole = SegmentIdentity::default();
+        whole.update(&body);
+        for cut in [1, 4095, 4096, 4097, 9_000, 19_999] {
+            let mut split = SegmentIdentity::default();
+            split.update(&body[..cut]);
+            split.update(&body[cut..]);
+            assert_eq!(whole.finish(), split.finish(), "cut at {cut}");
+        }
+        let mut other_end = body.clone();
+        *other_end.last_mut().unwrap() ^= 1;
+        let mut other = SegmentIdentity::default();
+        other.update(&other_end);
+        assert_ne!(whole.finish(), other.finish(), "a different last packet");
+        let mut shorter = SegmentIdentity::default();
+        shorter.update(&body[..19_000]);
+        assert_ne!(whole.finish(), shorter.finish(), "a different length");
     }
 
     #[test]
