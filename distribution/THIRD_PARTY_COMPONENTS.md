@@ -12,7 +12,7 @@ component. It is intentionally not a replacement for the license texts in
 | FFmpeg | tag `n8.1.2`, commit `38b88335f99e76ed89ff3c93f877fdefce736c13` | GPL-2.0-or-later when configured with `--enable-gpl` | <https://github.com/FFmpeg/FFmpeg> |
 | x264 | commit `b35605ace3ddf7c1a5d67a2eb553f034aef41d55` | GPL-2.0-or-later | <https://code.videolan.org/videolan/x264> |
 | x265 | commit `e444744c03978c1fb4e037168967020cf2648427` | GPL-2.0-or-later | <https://bitbucket.org/multicoreware/x265_git> |
-| srt-rs | git commit `d520429c08520ba5f844d762af62254221cfc97a` ([krsna1729/srt-rs](https://github.com/krsna1729/srt-rs), pinned in `Cargo.toml`) | Apache-2.0 | <https://github.com/krsna1729/srt-rs> |
+| srt-rs | git commit `0f2c86d1255faa9da0208fa7d94838737a9bf9b6` ([krsna1729/srt-rs](https://github.com/krsna1729/srt-rs), pinned in `Cargo.toml`) | Apache-2.0 | <https://github.com/krsna1729/srt-rs> |
 | hls.js | npm package `hls.js@1.7.3` | Apache-2.0 | <https://github.com/video-dev/hls.js> |
 | FFmpeg executable (container images only) | BtbN `ffmpeg-n8.1-latest-linux64-gpl-8.1` (or `linuxarm64`) from the `latest` release, verified against that release's `checksums.sha256` at image build | GPL; the archive's `LICENSE.txt` names the exact version | <https://github.com/BtbN/FFmpeg-Builds> |
 
