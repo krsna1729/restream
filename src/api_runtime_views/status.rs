@@ -227,12 +227,14 @@ fn host_settings_json(
 struct RtmpListenerHealthJson {
     accept_errors: u64,
     fd_exhaustion_errors: u64,
+    restarts: u64,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SrtListenerHealthJson {
     bonding_available: bool,
+    restarts: u64,
     ingress_owner: crate::media::snapshots::SrtIngressOwnerSnapshot,
 }
 
@@ -264,6 +266,10 @@ pub(crate) struct EngineHealthView {
     srt_listener: SrtListenerHealthJson,
     egress_fabric_shards:
         Vec<crate::media::engine_egress_fabric_diagnostics::EgressFabricShardStatus>,
+    /// Panics contained at a per-entity boundary since start
+    /// (`crate::panic_boundary`); each one ended one connection, peer or
+    /// output only.
+    contained_panics: u64,
     tuning: TuningHealthJson,
 }
 
@@ -574,12 +580,23 @@ pub(crate) async fn health_snapshot_view(
         rtmp_listener: RtmpListenerHealthJson {
             accept_errors: rtmp_accept_errors,
             fd_exhaustion_errors: rtmp_fd_exhaustion_errors,
+            restarts: engine
+                .runtime
+                .rtmp_listener_stats
+                .restarts
+                .load(Ordering::Relaxed),
         },
         srt_listener: SrtListenerHealthJson {
             bonding_available,
+            restarts: engine
+                .runtime
+                .listener_stats
+                .restarts
+                .load(Ordering::Relaxed),
             ingress_owner,
         },
         egress_fabric_shards,
+        contained_panics: crate::panic_boundary::contained_panics(),
         tuning: TuningHealthJson {
             output_max_retries: engine.config.tuning.output_max_retries,
         },

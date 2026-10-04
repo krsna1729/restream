@@ -926,3 +926,46 @@ async fn clients_connecting_while_connections_end_are_all_accepted() {
     assert_eq!(accepted, CLIENTS, "every connecting client completes its handshake");
     stop_ingress_test_server(&engine, server).await;
 }
+
+/// A panic while serving one RTMP connection closes that connection only:
+/// the owner thread keeps accepting and serving publishers. Before the
+/// per-connection boundary in `run_compio_owner`, the panic unwound the
+/// owner, its drop guard stopped the listener, and bootstrap shut down.
+#[tokio::test]
+async fn a_panicking_connection_does_not_stop_the_listener() {
+    let pipeline_access: Arc<dyn PipelineAccessAuthenticator> =
+        Arc::new(AcceptAllAuthenticator {
+            pipeline_id: "pipe-contained-panic".to_string(),
+        });
+    let (engine, addr, server) = start_ingress_test_server(pipeline_access).await;
+    let before = crate::panic_boundary::contained_panics();
+
+    let mut doomed = TcpStream::connect(addr).await.unwrap();
+    super::ingest::injected_panics::mark(doomed.local_addr().unwrap());
+    let _ = perform_client_handshake(&mut doomed, &CancellationToken::new()).await;
+    let mut buf = [0u8; 256];
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        while matches!(doomed.read(&mut buf).await, Ok(n) if n > 0) {}
+    })
+    .await;
+    assert!(closed.is_ok(), "the panicking connection must be closed");
+    // The owner closes the socket before it records the panic.
+    let counted = tokio::time::timeout(Duration::from_secs(5), async {
+        while crate::panic_boundary::contained_panics() == before {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    assert!(counted.is_ok(), "the contained panic is counted");
+
+    let published = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut publisher = TcpStream::connect(addr).await.unwrap();
+        drive_client_publish_handshake(&mut publisher, "any-key").await
+    })
+    .await;
+    assert!(
+        matches!(published, Ok(true)),
+        "the listener must keep serving publishers"
+    );
+    stop_ingress_test_server(&engine, server).await;
+}

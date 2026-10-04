@@ -62,6 +62,7 @@ pub(crate) use super::ingress_bridge::{
     IngressConfig, IngressExit, IngressPeer, OwnerSeat, SrtIngressEvent, SrtIngressHandle,
 };
 use super::ingress_media::IngressMedia;
+use crate::media::snapshots::SrtIngressOwnerStats;
 
 #[path = "ingress_owner_send.rs"]
 mod send;
@@ -475,9 +476,10 @@ impl OwnerLoop {
                     // Retired while Tokio admitted it: nothing to run.
                     return;
                 }
-                if let Some(probe) =
-                    self.media
-                        .attach_publisher(logical_peer.id, media, &self.stats.ingress_owner)
+                if let Some(Some(probe)) = self
+                    .contain_peer_media(logical_peer.id, |ingress, stats| {
+                        ingress.attach_publisher(logical_peer.id, media, stats)
+                    })
                 {
                     self.pending_events.push_back(SrtIngressEvent::Probe {
                         logical_peer,
@@ -499,6 +501,35 @@ impl OwnerLoop {
             }
             IngressCommand::Disconnect { logical_peer } => self.disconnect(logical_peer.id, now),
             IngressCommand::Shutdown => self.shutting_down = true,
+        }
+    }
+
+    /// Fault domain: one peer's media work (TS demux, timestamp mapping,
+    /// ring publication) runs here; if it unwinds, that peer's media state is
+    /// discarded and the peer disconnected, and the Owner keeps serving every
+    /// other peer. Shared state touched by media work is atomics, the
+    /// pipeline's own ring, and the byte budgets `discard` gives back.
+    fn contain_peer_media<R>(
+        &mut self,
+        peer: LogicalPeerId,
+        work: impl FnOnce(&mut IngressMedia, &SrtIngressOwnerStats) -> R,
+    ) -> Option<R> {
+        let media = &mut self.media;
+        let stats = &self.stats.ingress_owner;
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(media, stats))) {
+            Ok(result) => Some(result),
+            Err(payload) => {
+                let panic = crate::panic_boundary::record_contained(payload.as_ref());
+                error!(
+                    peer = ?peer,
+                    panic,
+                    "SRT ingress media panicked; only that peer was disconnected"
+                );
+                self.media.discard(peer);
+                let now = self.timestamp();
+                self.disconnect(peer, now);
+                None
+            }
         }
     }
 
@@ -645,9 +676,10 @@ impl OwnerLoop {
                     });
                 }
                 ConnectionEvent::DataReceived { payload, .. } => {
-                    if let Some(probe) =
-                        self.media
-                            .on_payload(logical_peer, payload, &self.stats.ingress_owner)
+                    if let Some(Some(probe)) = self
+                        .contain_peer_media(logical_peer, |ingress, stats| {
+                            ingress.on_payload(logical_peer, payload, stats)
+                        })
                     {
                         self.pending_events.push_back(SrtIngressEvent::Probe {
                             logical_peer: self.session(logical_peer),

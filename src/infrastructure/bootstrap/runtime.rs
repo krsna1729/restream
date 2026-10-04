@@ -12,6 +12,8 @@ use crate::media::ingest_auth::PipelineAccessAuthenticator;
 use crate::media::security::IngestSecurityService;
 use crate::media::srt::SrtIngestPolicyStore;
 
+use super::listener_supervisor::SupervisedListener;
+
 pub(super) struct RuntimeLaunch {
     pub config: Arc<AppConfig>,
     pub state: Arc<AppState>,
@@ -23,8 +25,8 @@ pub(super) struct RuntimeLaunch {
 
 pub(super) struct RuntimeTasks {
     http: JoinHandle<()>,
-    rtmp: JoinHandle<()>,
-    srt: JoinHandle<()>,
+    rtmp: SupervisedListener,
+    srt: SupervisedListener,
 }
 
 impl RuntimeTasks {
@@ -66,28 +68,39 @@ impl RuntimeTasks {
         });
 
         let rtmp_port = config.ports.rtmp;
-        let rtmp_engine = engine.clone();
-        let rtmp_security = security.clone();
-        let rtmp_pipeline_access = pipeline_access.clone();
-        let rtmp_shutdown = CancellationToken::new();
-        let rtmp_task_shutdown = rtmp_shutdown.clone();
-        let (rtmp_started_tx, rtmp_started_rx) = tokio::sync::oneshot::channel();
-        let rtmp = tokio::spawn(async move {
-            crate::media::rtmp::start_rtmp_server_on_with_shutdown(
-                rtmp_pipeline_access,
-                rtmp_security,
-                rtmp_engine,
-                rtmp_port,
-                rtmp_shutdown,
-                Some(rtmp_started_tx),
-            )
-            .await;
-            if !rtmp_task_shutdown.is_cancelled() {
-                error!("RTMP server task exited unexpectedly");
+        let rtmp_restarts = Arc::clone(&engine.runtime.rtmp_listener_stats.restarts);
+        let spawn_rtmp = {
+            let engine = engine.clone();
+            let security = security.clone();
+            let pipeline_access = pipeline_access.clone();
+            move |started: Option<tokio::sync::oneshot::Sender<_>>| {
+                let engine = engine.clone();
+                let security = security.clone();
+                let pipeline_access = pipeline_access.clone();
+                tokio::spawn(async move {
+                    crate::media::rtmp::start_rtmp_server_on_with_shutdown(
+                        pipeline_access,
+                        security,
+                        engine,
+                        rtmp_port,
+                        CancellationToken::new(),
+                        started,
+                    )
+                    .await;
+                })
             }
-        });
+        };
+        let (rtmp_started_tx, rtmp_started_rx) = tokio::sync::oneshot::channel();
+        let rtmp_task = spawn_rtmp(Some(rtmp_started_tx));
         let _ = rtmp_started_rx.await;
+        let rtmp = SupervisedListener::new(
+            "rtmp",
+            rtmp_task,
+            Box::new(move || spawn_rtmp(None)),
+            rtmp_restarts,
+        );
 
+        let srt_restarts = Arc::clone(&engine.runtime.listener_stats.restarts);
         let srt_server = Arc::new(crate::media::srt::SrtServer::new(
             pipeline_access,
             engine,
@@ -95,10 +108,8 @@ impl RuntimeTasks {
             srt_ingest_policy_store,
         ));
         let srt_port = config.ports.srt;
-        let srt = tokio::spawn(async move {
-            srt_server.run(srt_port).await;
-            error!("SRT server task exited unexpectedly");
-        });
+        let spawn_srt = move || tokio::spawn(Arc::clone(&srt_server).run(srt_port));
+        let srt = SupervisedListener::new("srt", spawn_srt(), Box::new(spawn_srt), srt_restarts);
 
         Self { http, rtmp, srt }
     }
@@ -108,6 +119,14 @@ impl RuntimeTasks {
         shutdown: &CancellationToken,
         interval: Duration,
     ) -> bool {
+        let now = tokio::time::Instant::now();
+        self.rtmp.restart_if_due(now);
+        self.srt.restart_if_due(now);
+        // Wake for a due restart even when the reconcile interval is longer.
+        let wake = [self.rtmp.restart_due(), self.srt.restart_due()]
+            .into_iter()
+            .flatten()
+            .fold(now + interval, std::cmp::min);
         tokio::select! {
             _ = shutdown.cancelled() => false,
             result = &mut self.http => {
@@ -115,21 +134,13 @@ impl RuntimeTasks {
                 shutdown.cancel();
                 false
             }
-            result = &mut self.rtmp => {
-                error!(result = ?result, "critical RTMP listener task exited");
-                shutdown.cancel();
-                false
-            }
-            result = &mut self.srt => {
-                error!(result = ?result, "critical SRT listener task exited");
-                shutdown.cancel();
-                false
-            }
-            _ = tokio::time::sleep(interval) => true,
+            () = self.rtmp.exited() => true,
+            () = self.srt.exited() => true,
+            _ = tokio::time::sleep_until(wake) => true,
         }
     }
 
     pub fn into_handles(self) -> (JoinHandle<()>, JoinHandle<()>, JoinHandle<()>) {
-        (self.http, self.rtmp, self.srt)
+        (self.http, self.rtmp.into_handle(), self.srt.into_handle())
     }
 }

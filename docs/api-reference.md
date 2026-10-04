@@ -803,6 +803,7 @@ Query params:
   },
   "srtListener": {
     "bondingAvailable": false,
+    "restarts": 0,
     "ingressOwner": {
       "faulted": false,
       "managedRx": true,
@@ -817,8 +818,10 @@ Query params:
   },
   "rtmpListener": {
     "acceptErrors": 0,
-    "fdExhaustionErrors": 0
+    "fdExhaustionErrors": 0,
+    "restarts": 0
   },
+  "containedPanics": 0,
   "runtimeLimits": {
     "nofile": {
       "configured": 65536,

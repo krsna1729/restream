@@ -321,3 +321,70 @@ fn detach_flushes_the_demuxer_and_forgets_the_peer() {
     let _ = feed(&mut media, &ts_chunks(10), &stats);
     assert_eq!(ring.get_write_idx(), after_detach);
 }
+
+fn poison_payload() -> Bytes {
+    let mut payload = vec![0u8; CHUNK];
+    payload[..INJECTED_PANIC_PAYLOAD.len()].copy_from_slice(INJECTED_PANIC_PAYLOAD);
+    Bytes::from(payload)
+}
+
+/// A peer whose media work unwinds is discarded and gives back exactly its
+/// share of the Owner-wide held-bytes budget; another publisher's held media
+/// and its release are unaffected.
+#[test]
+fn discarding_a_panicked_peer_returns_only_its_held_bytes() {
+    let stats = SrtIngressOwnerStats::default();
+    let mut media = IngressMedia::<u64>::default();
+    let chunks = ts_chunks(900);
+    let ring_one = Arc::new(RingBuffer::new(4096));
+    let ring_two = Arc::new(RingBuffer::new(4096));
+    let _ = media.attach_publisher(1, publisher(ring_one), &stats);
+    let _ = media.attach_publisher(2, publisher(ring_two.clone()), &stats);
+    let probed = feed_until_probe(&mut media, 1, &chunks, &stats);
+    let _ = feed_peer(&mut media, 1, &chunks[probed + 1..], &stats);
+    let one_held = media.held_bytes;
+    let probed = feed_until_probe(&mut media, 2, &chunks, &stats);
+    let _ = feed_peer(&mut media, 2, &chunks[probed + 1..], &stats);
+    let two_held = media.held_bytes - one_held;
+    assert!(one_held > 0 && two_held > 0);
+
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        media.on_payload(1, poison_payload(), &stats)
+    }));
+    assert!(unwound.is_err());
+    media.discard(1);
+
+    assert_eq!(media.held_bytes, two_held);
+    let before = ring_two.get_write_idx();
+    media.probe_applied(2, None, &stats);
+    assert!(
+        ring_two.get_write_idx() > before,
+        "peer 2's held media flows"
+    );
+    assert_eq!(media.held_bytes, 0);
+}
+
+/// The admission replay can unwind too: the slot is in the map before the
+/// replay, so discarding the peer returns the bytes the replay held. (With
+/// the slot inserted after the replay, an unwind dropped it and its held
+/// bytes stayed charged to the Owner-wide budget forever.)
+#[test]
+fn a_replay_that_unwinds_leaves_no_bytes_charged() {
+    let stats = SrtIngressOwnerStats::default();
+    let mut media = IngressMedia::<u64>::default();
+    let mut early = ts_chunks(900);
+    early.push(poison_payload());
+    let _ = feed(&mut media, &early, &stats);
+    assert!(media.unattached_bytes > 0);
+
+    let ring = Arc::new(RingBuffer::new(4096));
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        media.attach_publisher(1, publisher(ring), &stats)
+    }));
+    assert!(unwound.is_err());
+    media.discard(1);
+
+    assert_eq!(media.held_bytes, 0);
+    assert_eq!(media.unattached_bytes, 0);
+    assert!(media.publisher_peers().is_empty());
+}

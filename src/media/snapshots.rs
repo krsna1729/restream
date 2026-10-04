@@ -185,6 +185,8 @@ pub struct ListenerSocketStats {
     pub bonding_available: AtomicBool,
     /// Counters published by the SRT ingress Owner thread.
     pub ingress_owner: SrtIngressOwnerStats,
+    /// Restarts after the listener ended without a shutdown request.
+    pub restarts: std::sync::Arc<AtomicU64>,
 }
 
 macro_rules! ingress_owner_stats {
@@ -272,6 +274,8 @@ ingress_owner_stats! {
 pub struct RtmpListenerStats {
     pub rtmp_accept_errors: AtomicU64,
     pub rtmp_fd_exhaustion_errors: AtomicU64,
+    /// Restarts after the listener ended without a shutdown request.
+    pub restarts: std::sync::Arc<AtomicU64>,
 }
 
 impl serde::Serialize for SrtIngressOwnerSnapshot {

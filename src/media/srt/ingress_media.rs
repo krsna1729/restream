@@ -226,6 +226,10 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
         held_total: &mut usize,
         stats: &SrtIngressOwnerStats,
     ) -> Option<DemuxProbe> {
+        #[cfg(test)]
+        if payload.starts_with(INJECTED_PANIC_PAYLOAD) {
+            std::panic::resume_unwind(Box::new("injected SRT media panic"));
+        }
         slot.media.demuxer.feed(payload.as_ref());
         if slot.media.demuxer.drain_into(&mut slot.media.packets) > 0 {
             if !slot.probe_pending {
@@ -330,30 +334,32 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
         media: Box<SrtPublisherMedia>,
         stats: &SrtIngressOwnerStats,
     ) -> Option<DemuxProbe> {
-        let mut slot = PublisherSlot {
-            media,
-            probe_pending: false,
-            held: VecDeque::new(),
-            held_bytes: 0,
-            probe_sent_at: None,
-        };
+        // Inserted before the replay, so the shared held-bytes budget always
+        // matches the slots in the map, even if the replay unwinds and the
+        // peer is discarded (see `discard`).
+        let slot = self
+            .publishers
+            .entry(peer)
+            .insert_entry(PublisherSlot {
+                media,
+                probe_pending: false,
+                held: VecDeque::new(),
+                held_bytes: 0,
+                probe_sent_at: None,
+            })
+            .into_mut();
         let mut probe = None;
         if let Some(early) = self.unattached.remove(&peer) {
             self.unattached_bytes -= early.bytes;
             for payload in early.payloads {
-                if let Some(found) = Self::accept(
-                    &mut slot,
-                    &payload,
-                    &self.limits,
-                    &mut self.held_bytes,
-                    stats,
-                ) {
+                if let Some(found) =
+                    Self::accept(slot, &payload, &self.limits, &mut self.held_bytes, stats)
+                {
                     probe = Some(found);
                 }
                 stats.media_payloads.fetch_add(1, Ordering::Relaxed);
             }
         }
-        self.publishers.insert(peer, slot);
         probe
     }
 
@@ -402,6 +408,17 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
         }
     }
 
+    /// The peer's media work unwound: drop all of its state without the
+    /// flush `detach` does (its demuxer state is suspect) and give back its
+    /// share of the Owner-wide byte budgets, so other peers are unaffected.
+    pub(crate) fn discard(&mut self, peer: K) {
+        self.forget_unattached(peer);
+        self.readers.remove(&peer);
+        if let Some(slot) = self.publishers.remove(&peer) {
+            self.held_bytes -= slot.held_bytes;
+        }
+    }
+
     fn forget_unattached(&mut self, peer: K) {
         if let Some(early) = self.unattached.remove(&peer) {
             self.unattached_bytes -= early.bytes;
@@ -417,6 +434,11 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
         self.publishers.keys().copied().collect()
     }
 }
+
+/// Test-only fault point: a payload with this prefix unwinds out of the
+/// demux step, as a parser bug would. `resume_unwind` skips the panic hook.
+#[cfg(test)]
+pub(crate) const INJECTED_PANIC_PAYLOAD: &[u8] = b"restream-test-injected-panic";
 
 #[cfg(test)]
 #[path = "ingress_media_tests.rs"]

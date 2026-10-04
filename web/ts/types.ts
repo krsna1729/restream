@@ -353,8 +353,10 @@ export interface HealthData {
   rtmpListener?: {
     acceptErrors?: number;
     fdExhaustionErrors?: number;
+    restarts?: number;
   };
   srtListener?: Record<string, unknown> | null;
+  containedPanics?: number;
 }
 
 export interface SystemMetrics {

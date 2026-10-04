@@ -29,6 +29,7 @@ mod auth;
 mod egress;
 mod events;
 mod layout;
+mod listener_supervisor;
 mod reconcile;
 mod runtime;
 mod shutdown;

@@ -309,6 +309,46 @@ Failure isolation follows these rules:
   at `segment_capacity` and may grow until a later keyframe splits the
   segment; there is no hard byte ceiling on this path.
 
+### Fault domains
+
+One publisher or one destination must never affect another. Threads serve
+many entities at once (an RTMP owner serves many connections, an SRT Owner
+many peers, an egress shard many outputs), so each entity has its own panic
+boundary at the one seam where its bytes enter:
+
+| Entity | Boundary | On panic |
+|---|---|---|
+| Egress output | `egress::visit::visit_leaf` (every backend's visit) | that output fails (`engine_panic`, retryable) and its retry policy runs; the shard keeps serving the rest |
+| RTMP ingest connection | the connection future in `rtmp::listener::run_compio_owner` | that connection closes; its parser charge and gate lease drop with it |
+| SRT ingest peer | `srt::ingress_owner::OwnerLoop::contain_peer_media` (demux, publish, admission replay) | that peer's media state is discarded without a flush and the peer disconnected; its share of the Owner byte budgets is returned |
+| Ingest listener | `bootstrap::listener_supervisor` | a listener that ends without a shutdown request restarts after 1 s, doubling to 30 s, reset after 60 s of healthy running |
+
+```mermaid
+flowchart LR
+  P["bytes from one peer"] --> B{"per-entity boundary"}
+  B -- ok --> W["normal work"]
+  B -- panic --> E["that entity ends<br/>(closed, disconnected or failed)"]
+  E --> C["containedPanics + 1"]
+  T["shared thread"] -. keeps serving .-> O["every other entity"]
+  L["listener task ends"] --> S["supervisor restarts it<br/>(rtmpListener / srtListener restarts + 1)"]
+```
+
+Rules for code behind a boundary:
+
+- Shared state touched there must stay valid after an unwind: atomics,
+  poison-tolerant locks, RAII guards, and per-entity state that is dropped
+  with the entity. Insert per-entity state into its owning map before work
+  that can unwind, so a discard can always find and release it.
+- Never drop a pending Compio I/O future in a `select!` that loses: the
+  completion (an accepted socket, received bytes) is discarded with it. Keep
+  the operation in flight across iterations and replace it only when it
+  completes.
+- Counters belong outside `tracing` macros: their field expressions are not
+  evaluated when the level is disabled.
+
+Engine health reports `containedPanics`, `rtmpListener.restarts` and
+`srtListener.restarts`.
+
 Concurrency proof expectations and the stage coverage map live in
 [Concurrency proofing](concurrency-proofing.md) and
 [Stage boundary proof map](testing.md#stage-boundary-proof-map).
