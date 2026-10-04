@@ -27,6 +27,10 @@ expressed through the production API, never merely because a new abstraction
 exists. If hardening an invariant adds more machinery than the tests it
 replaces, do not do it.
 
+Rust is affine, not linear: a lease or permit gives at-most-once ownership,
+but `mem::forget` or an abort skips its `Drop`. Exact resource accounting must
+therefore tolerate a leaked token (a bounded leak, never a double release).
+
 ## The ladder
 
 ```mermaid
@@ -50,14 +54,23 @@ measurement owns **physics** (what this host can sustain). Proofs never yield
 a host coefficient such as packets per second; measurements never yield a
 universal invariant.
 
+Safe Rust is strong at spatial questions (who owns this, how long it lives,
+who may mutate it) and weak at temporal ones (should this event still be
+accepted, will this caller be serviced, does shutdown terminate). That
+boundary is where to climb. A shared-nothing design (one owner per
+connection, no connection mutex) is itself a verification technique: it
+removes whole bug families before any checker runs.
+
 ## Where we are
 
-Checked against `master` (Restream) and `main` (srt-rs), October 2026.
+Checked against `master` (Restream) and `main` (srt-rs), October 2026, and
+re-checked against the full conversation after the isolation work (open PRs
+named where they apply).
 
 | Rung | Restream | srt-rs |
 |---|---|---|
-| 1 Language | Strong: Compio Owners are `!Send` and thread-homed; one Owner per address family, not per output. Unsafe is confined to FFmpeg/libc/socket boundaries. | Strong: sans-I/O single-owner protocol core; `srt-lifecycle` forbids `unsafe`; strict unsafe lints. |
-| 2 API design | Good, with duplicated state the types do not prevent (listed below). | Strong: logical peer/caller ids, transactional first attach, bounded caller pool, generational dense arena that owns readiness. |
+| 1 Language | Strong: Compio Owners are `!Send` and thread-homed; one Owner per address family, not per output. Unsafe is confined to FFmpeg/libc/socket boundaries. Builds refuse `panic = "abort"` (fault domains need unwinding, #240). **No workspace unsafe lints.** | Strong: sans-I/O single-owner protocol core; `srt-lifecycle` forbids `unsafe`; strict unsafe lints. |
+| 2 API design | Good, with duplicated state the types do not prevent (listed below). Per-entity panic boundaries and per-client admission bounds (#237, #239; [isolation audit](isolation-audit.md)); std locks only through poison-tolerant `crate::sync`, enforced by `clippy.toml` (#240). | Strong: logical peer/caller ids, transactional first attach, bounded caller pool, generational dense arena that owns readiness. |
 | 3 Ecosystem | Many property tests and live fault cases; cargo-fuzz smoke over seven media/RTMP/TS parsers; **no Miri or sanitizer job in CI**. | Mature: proptests with checked-in seeds, Miri, ASan, structured cargo-fuzz targets, libsrt interop. |
 | 4 Model checking | Seven Loom models in the mandatory concurrency gate. **No Kani.** | One Loom model (reuseport layout barrier, run by `cargo xtask ci`). **No Kani.** |
 | 5–6 TLA+, Lean | None. | None. |
@@ -69,6 +82,32 @@ duplicated state in Restream and Kani at rung 4 in both repositories.
 
 Each item names the code it changes and the tests it lets us delete. Hot-path
 items need before/after benchmark or codegen evidence.
+
+### Rung 1: adopt srt-rs's workspace lints
+
+Restream's `[lints]` sets only `unexpected_cfgs`. Adopt what srt-rs already
+enforces: `unsafe_op_in_unsafe_fn = "deny"`, `clippy::undocumented_unsafe_blocks
+= "deny"` (every `unsafe` carries its `SAFETY:` argument), `unused_must_use =
+"deny"`, and `#![forbid(unsafe_code)]` in modules with no FFI or syscalls
+(the parsers, the scheduler, the reconciler). Fix the existing sites in the
+same change; no allow-list.
+
+### Rung 2: the strong Rust forms
+
+Use these before any checker, wherever the weak form exists today:
+
+| Invariant | Weak form | Strong form |
+|---|---|---|
+| never zero | `usize` + tests | `NonZeroUsize` / `NonZeroU32` |
+| exactly one lifecycle state | several booleans | one `enum` + one transition function |
+| one owner of a resource | id + discipline | owned non-`Clone` capability |
+| acquire and release paired | `add()` … `remove()` | RAII lease (`Drop` releases) |
+| stale object never mutated | index + generation checks at each site | opaque generational handle resolved by the arena |
+| queue never over capacity | `VecDeque` + caller `len` checks | bounded container with no unchecked insert |
+| queued at most once | queue + external flag | queue owns membership |
+| invalid config never runs | public fields + validation convention | private fields + validated constructor |
+| units never mix | several `u64`s | newtypes (`Bytes`, `Packets`, `Generation`, `ShardId`) |
+| untrusted bytes never panic | indexing + tests | slice patterns, `get`, checked arithmetic, module-level `deny` lints ([isolation audit](isolation-audit.md) F6) |
 
 ### Rung 2: delete duplicated state
 
@@ -116,7 +155,10 @@ Add a small Miri target for pure, ownership-sensitive Rust that needs no
 FFmpeg or kernel, and an AddressSanitizer job over selected native/FFI-heavy
 integration tests. Do not copy srt-rs's whole matrix: Miri cannot execute
 FFmpeg or io_uring paths. The parser fuzz targets (enhanced-RTMP HEVC,
-AVCC/ASC, RTMP server responses) exist; see [testing](testing.md#parser-fuzz-targets).
+AVCC/ASC, RTMP server responses, ingest requests, MPEG-TS demux) exist and a
+crash found by them is fixed with a regression test first; see
+[testing](testing.md#parser-fuzz-targets). Fuzz belongs at externally supplied
+bytes: no theorem prover for parser robustness.
 
 ### Rung 4: Kani on a handful of primitives
 
@@ -129,8 +171,12 @@ function, not a framework:
 | srt-rs | `DueIndex` / `DenseDueIndex` | entries and due results stay consistent through replace/remove |
 | srt-rs | admission accounting, `CallerPool` | totals never exceed limits; queued + in-flight + free = capacity |
 | srt-rs | sequence/window arithmetic | wrap and frontier operations stay in valid regions |
+| srt-rs | TX / permit pool | free + held + in flight = capacity; no stranded slot |
+| srt-rs | output-drain budget arithmetic | no underflow or overrun through any bounded sequence |
+| srt-rs | packet-size and rate conversions | payload ↔ wire bytes, MAXBW (the 1316/1332 class) |
 | Restream | `ReadyQueue` (after item 2) | membership ⇔ queued; each key at most once |
 | Restream | generational arena (after item 6) | generation mismatch ⇒ no mutable access |
+| Restream | `WorkBudget` (after item 5) | granted work never exceeds the budget |
 
 Loom stays narrow: only cross-thread primitives that remain after the
 fixed-owner design (wakes, snapshot swaps, shutdown signals, the reuseport
@@ -166,10 +212,18 @@ Small specifications with 2–3 actors, kept beside the code
   only in plaintext mode or after kTLS is installed, never both.
 - **`Rescale`** (only once the Oracle may move live state): exactly one owner
   per leaf, no rescale during another, stale migration completions ignored.
+- **Media ring and cursors** (deferred while ring semantics are stable):
+  oldest ≤ head; occupancy ≤ capacity; a cursor never resurrects evicted
+  state; a frozen leaf cannot block eviction or another leaf's progress.
 
 Use a refinement mapping (concrete slot/generation/ready model → abstract
 caller states) so models stay small. TLAPS stays out unless an unbounded
 proof becomes necessary.
+
+Footprint stays tiny: `spec/tla/` beside the code (srt-rs:
+`GenerationOwnership`, `OwnerScheduler`; Restream: `Reconciler`, later
+`Rescale`) and `spec/lean/Capacity/` (`Units`, `Conservation`, `Envelope`,
+`Admission`). No framework, model API or proof runtime.
 
 ### Lean (when capacity work makes the model gate admission)
 
@@ -180,6 +234,24 @@ monotonicity of demand Σλᵢcᵢ in each rate; the envelope lemma
 (max utilization < U_safe ⇒ every resource < U_safe); admission. Lean proves
 the equation machinery; coefficients come from measurement.
 
+Candidates to graduate from tests to theorems (10–20, not more): receiver
+occupancy = retained + loss + application reservations ≤ capacity; a stale
+completion never mutates a newer generation; one visit never exceeds its
+budget; partial send or backpressure never reorders output; ring memory stays
+bounded however slowly one destination reads; rebuilding a deadline index
+keeps the set of live deadlines; transactional admission rolls back
+completely; continuously ready work is serviced under stated fairness.
+
+### Assurance CI tiers (once the formal pieces exist)
+
+| Gate | Contents |
+|---|---|
+| PR fast | Rust tests, selected Kani harnesses, small TLC configurations, Lean build |
+| PR integration | live SRT/RTMP/kTLS end-to-end, libsrt interop, fault cases |
+| Nightly | larger TLC models, deeper Kani unwinds, longer fuzz runs |
+| Performance qualification | pinned-host workloads, Oracle calibration |
+| Release | full host/container/loss/crypto matrix |
+
 ### Oracle provenance
 
 Label every claim the system reports by how it is known: `PROVED`,
@@ -187,6 +259,13 @@ Label every claim the system reports by how it is known: `PROVED`,
 `INFERRED`, `ASSUMED`. A theorem has no confidence score; a capacity
 estimate does. Optimizations then carry a falsifiable prediction (which
 limiting term moves, by how much) checked by a controlled benchmark.
+
+The Oracle is a causal performance model (identity, conservation, queues,
+service rates, deadlines, kernel evidence, time correlation) with a query
+interface, not a model guessing from dashboards. Its first production form
+only computes: required cores and shards, headroom, hottest shard and the
+current bottleneck. It moves live state only after migration is boring and
+`Rescale` is model-checked.
 
 ### Languages to watch, not adopt
 
@@ -200,7 +279,10 @@ limiting term moves, by how much) checked by a controlled benchmark.
   memory, NIC queues, io_uring shards, accelerators; edges with bandwidth,
   latency and cost) is a good schema for the Oracle, with capacities measured
   rather than taken from specifications. Vx itself targets tensor placement
-  and is at v0.0.2.
+  and is at v0.0.2. Worth one side experiment: describe a simplified host
+  (2 NUMA nodes, 1 NIC, 4 egress shards, 1 GPU) in its machine algebra and
+  see where Restream-specific resources (PPS, SQE/CQE, socket memory,
+  deadlines) stop fitting.
 
 Not planned: Verus, Prusti, Creusot, Coq or Isabelle; formal models of Linux,
 Compio, TLS or the whole SRT protocol; a proof of the full Rust ↔ TLA+
