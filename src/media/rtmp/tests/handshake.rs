@@ -878,3 +878,51 @@ fn short_amf0_command_from_a_destination_is_a_protocol_error() {
         Err(egress_connection::RtmpSessionError::Protocol(_))
     ));
 }
+
+/// Connections that end while new clients connect must not cost those
+/// clients their connection. The owner used to build a fresh Compio accept
+/// for every `select!` iteration; when a finishing connection won the
+/// select, the pending accept was dropped together with a completion that
+/// could already hold the next client's socket, which was then closed
+/// unseen ("remote closed during handshake" on the client).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn clients_connecting_while_connections_end_are_all_accepted() {
+    const CLIENTS: usize = 48;
+    let pipeline_access: Arc<dyn PipelineAccessAuthenticator> =
+        Arc::new(AcceptAllAuthenticator {
+            pipeline_id: "pipe-accept-race".to_string(),
+        });
+    let (engine, addr, server) = start_ingress_test_server(pipeline_access).await;
+
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..CLIENTS {
+        // Ends promptly: the server closes it on the malformed command.
+        tasks.spawn(async move {
+            let mut ending = TcpStream::connect(addr).await.unwrap();
+            if perform_client_handshake(&mut ending, &CancellationToken::new())
+                .await
+                .is_ok()
+            {
+                let _ = ending.write_all(&SHORT_AMF0_COMMAND).await;
+            }
+            None
+        });
+        tasks.spawn(async move {
+            let mut client = TcpStream::connect(addr).await.unwrap();
+            let handshake = tokio::time::timeout(
+                Duration::from_secs(5),
+                perform_client_handshake(&mut client, &CancellationToken::new()),
+            )
+            .await;
+            Some(matches!(handshake, Ok(Ok(_))))
+        });
+    }
+    let mut accepted = 0;
+    while let Some(result) = tasks.join_next().await {
+        if result.unwrap() == Some(true) {
+            accepted += 1;
+        }
+    }
+    assert_eq!(accepted, CLIENTS, "every connecting client completes its handshake");
+    stop_ingress_test_server(&engine, server).await;
+}

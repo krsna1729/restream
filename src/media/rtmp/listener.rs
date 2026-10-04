@@ -313,12 +313,19 @@ async fn run_compio_owner(
     let connection_shutdown = CancellationToken::new();
     let parser_budget = super::ingest::parser_budget::ParserBudget::new(parser_budget_bytes);
     let mut connections = FuturesUnordered::new();
+    // One accept stays in flight across iterations and is replaced only when
+    // it completes. Dropping a pending Compio accept (as a fresh
+    // `listener.accept()` per `select!` iteration did whenever another branch
+    // won) discards a completion that may already hold an accepted socket:
+    // the kernel accepted the client, Restream closed it unseen.
+    let mut accept = Box::pin(listener.accept());
     let accept_result = loop {
         tokio::select! {
             biased;
             _ = shutdown.cancelled() => break Ok(()),
             Some(()) = connections.next(), if !connections.is_empty() => {}
-            accepted = listener.accept() => {
+            accepted = &mut accept => {
+                accept.set(listener.accept());
                 let (stream, peer_addr) = match accepted {
                     Ok(accepted) => accepted,
                     Err(error) => break Err(error),
@@ -363,6 +370,7 @@ async fn run_compio_owner(
     };
 
     connection_shutdown.cancel();
+    drop(accept);
     let close_result = listener.close().await;
     while connections.next().await.is_some() {}
     accept_result.and(close_result)
