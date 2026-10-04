@@ -1,9 +1,8 @@
 # High-performance data path
 
 This document records the stable performance contract for packet and byte
-movement. Current measurements belong in the
-[quality baseline ledger](agent-guidance/quality/baselines.md); benchmark code
-and production source own executable detail.
+movement. Measurements belong in the commit that makes the change; benchmark
+code and production source own executable detail.
 
 ## Contents
 
@@ -91,7 +90,7 @@ stays outside the shared stage:
 | Source packet ring | Independent reader position and lag counters |
 | HLS pipeline store | Request authorization and response transfer |
 
-Under the egress fabric (see `docs/archive/egress/implementation.md`), RTMP,
+Under the [egress fabric](egress-architecture.md), RTMP,
 RTMPS, and SRT egress share a small, CPU-derived and output-count-scaled pool
 of shard OS threads across many destinations. RTMP/RTMPS active socket I/O is
 completion-driven on one Compio/io_uring runtime per shard; bounded rotating
@@ -144,8 +143,7 @@ For a hot-path change:
 4. Run the focused correctness gate before trusting a speed result.
 5. Repeat the same measurement and record variance, throughput, latency, and
    resource effects relevant to the hypothesis.
-6. Update the baseline ledger only when the result is repeatable and useful as
-   a future comparison point.
+6. Record the before/after numbers, host and command in the commit message.
 
 Use `cargo xtask build-bench` when a measurement mode requires the canonical
 `target/bench/` binaries. Do not infer production capacity from loopback

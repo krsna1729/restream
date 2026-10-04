@@ -193,7 +193,7 @@ fallback, but the default image is `runtime`/distroless.
 - [API Reference](docs/api-reference.md): route-level behavior
 - [Testing](docs/testing.md): verification strategy and live test entry points
 - [Observability](docs/observability.md): health, diagnostics, telemetry
-- [Current Priorities](docs/current-priorities.md): durable platform priority themes and links to actionable work
+- [Backlog](docs/backlog.md): the one list of open engineering work
 
 ## Expectations
 

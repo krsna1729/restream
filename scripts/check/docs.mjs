@@ -109,14 +109,8 @@ for (const filename of files) {
 
   // Skill packages optimize for immediate execution, so a TOC is needless
   // preamble. Legal text and one-section shims also need no navigation.
-  // Archived evidence is frozen; do not enforce TOC churn on historical docs.
-  const isArchive =
-    relative === "docs/archive/README.md" ||
-    relative.startsWith("docs/archive/");
   const requiresContents =
-    h2.length > 0 &&
-    path.basename(filename) !== "SKILL.md" &&
-    !isArchive;
+    h2.length > 0 && path.basename(filename) !== "SKILL.md";
   if (requiresContents) {
     if (h1.length !== 1) {
       errors.push(`${relative}: expected one H1, found ${h1.length}`);
@@ -188,11 +182,8 @@ for (const filename of files) {
 }
 
 // The central index must reach every maintained Markdown file except itself.
-// Archived evidence is indexed from docs/archive/README.md instead.
 const indexRelative = "docs/README.md";
-const archiveIndexRelative = "docs/archive/README.md";
 const index = path.join(root, indexRelative);
-const archiveIndex = path.join(root, archiveIndexRelative);
 
 function collectMarkdownLinks(fromFile) {
   const linked = new Set();
@@ -208,29 +199,15 @@ function collectMarkdownLinks(fromFile) {
 }
 
 const linkedFromDocsIndex = collectMarkdownLinks(index);
-const linkedFromArchiveIndex = collectMarkdownLinks(archiveIndex);
 
 if (fs.existsSync(index)) {
   for (const filename of files) {
     const relative = relativePath(filename);
     if (relative === indexRelative) continue;
-    if (
-      relative.startsWith("docs/archive/") &&
-      relative !== archiveIndexRelative
-    ) {
-      if (!linkedFromArchiveIndex.has(path.resolve(filename))) {
-        errors.push(`${relative}: not linked from docs/archive/README.md`);
-      }
-      continue;
-    }
     if (!linkedFromDocsIndex.has(path.resolve(filename))) {
       errors.push(`${relative}: not linked from docs/README.md`);
     }
   }
-}
-
-if (fs.existsSync(archiveIndex) && !fs.existsSync(index)) {
-  errors.push(`${archiveIndexRelative}: docs/README.md is missing`);
 }
 
 if (errors.length > 0) {

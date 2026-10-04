@@ -234,8 +234,7 @@ impl EgressFabricConfig {
         if self.shards > effective_cpus.saturating_mul(4) {
             warnings.push(format!(
                 "RESTREAM_EGRESS_SHARDS ({}) is more than 4x this host's effective CPU count ({effective_cpus}) \
-                 — more shard threads than cores usually costs CPU without buying throughput \
-                 (see docs/archive/egress/implementation.md Phase 5/7's shard-count findings)",
+                 — more shard threads than cores usually costs CPU without buying throughput",
                 self.shards
             ));
         }
@@ -330,7 +329,7 @@ pub struct AppConfig {
     /// a burst of 600-700 concurrent handshakes to one peer reliably completes
     /// within ~3-9s but not the old 3s default, so attempts past 3s paid a full
     /// retry/backoff cycle. 10s cleared the same burst with zero failures
-    /// (`docs/archive/quality/srt-egress-scale-investigation-2026-08-10.md`,
+    /// (SRT egress scale investigation, git history:
     /// "sink-mode bugs fixed; real ~600-connection SRT egress ceiling
     /// characterized"). Not scale-tested past 700 in one pipeline.
     pub srt_connect_timeout_ms: u64,
@@ -437,7 +436,7 @@ fn default_tokio_worker_threads(effective_cpus: usize) -> usize {
 
 /// Egress fabric shard threads scale with host cores instead of a flat
 /// constant. A live legacy-vs-fabric `perf` comparison at a combined
-/// 1,140 RTMP + 60 SRT workload (`docs/archive/egress/implementation.md` Phase 5)
+/// 1,140 RTMP + 60 SRT workload (the egress migration record (git history) Phase 5)
 /// measured the previous flat default of 4 costing fabric ~12% more avg
 /// CPU and ~23% more peak CPU than legacy on a 6-CPU host; raising the
 /// shard count toward the host's own core count (matching

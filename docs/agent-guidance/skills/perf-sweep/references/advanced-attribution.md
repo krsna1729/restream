@@ -46,7 +46,7 @@ worker placement. Measure allocations, syscall/copy cost, and latency tails
 before proposing pooling, I/O redesign, batching, or affinity. Prove soak and
 teardown behavior before calling RSS growth a leak.
 
-Check [the baseline ledger](../../../quality/baselines.md) for prior negative
+Check `git log` for prior negative
 results; repeat a failed experiment only when relevant code, workload, or a
 previously missing variable changed. Do not add diagnostic readers that change
 production behavior.

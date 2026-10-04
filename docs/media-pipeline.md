@@ -354,13 +354,10 @@ covered by `same_encoding_outputs_share_one_transcoder_stage` in engine tests,
 and holds regardless of egress routing.
 
 "Independent sender" above describes protocol/retry state ownership, not a
-literal OS thread per destination: under the egress fabric (see
-`docs/archive/egress/implementation.md`), each output is a leaf serviced by a
+literal OS thread per destination: under the [egress fabric](egress-architecture.md), each output is a leaf serviced by a
 shared shard OS thread alongside other outputs, not a dedicated thread.
 
-Current measurements belong in the
-[quality baseline ledger](agent-guidance/quality/baselines.md). This guide owns
-the sharing invariant, not a copied performance snapshot.
+This guide owns the sharing invariant, not a performance snapshot.
 
 ## Audio stage cache
 
@@ -397,8 +394,7 @@ socket for each protocol, naming which concurrency primitive owns each hop
 and which structure owns the memory at that hop. It complements
 [Architecture § Runtime ownership](architecture.md#runtime-ownership). Exact
 thread counts depend on live CPU count, feed count, and output count; they are
-not capacity recommendations. A worked MSR resource attribution is in
-[the MSR investigation](archive/quality/msr-1200-resource-attribution-2026-08-13.md).
+not capacity recommendations.
 
 ### RTMP: ingest to egress
 

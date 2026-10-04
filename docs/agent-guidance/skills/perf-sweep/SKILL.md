@@ -26,8 +26,7 @@ evidence. Inspect the current harness catalog before choosing a workload.
 
 Record the revision/dirty tree, host, command, workload, and comparable
 before/after numbers. Use Criterion's saved baseline for local comparisons;
-put durable results in [baselines](../../quality/baselines.md) when maintaining
-the ledger or landing a measured change. Historical numbers are context, not
+put the numbers in the commit message of a measured change. Historical numbers are context, not
 a current control run.
 
 ## Choose the work

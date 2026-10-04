@@ -15,7 +15,7 @@
 //! are never folded into "packet events".
 //!
 //! This establishes the measurement contract in
-//! `docs/srt-compio-roadmap.md` §10. It measures; it does not optimize.
+//! the packet-rate benchmark contract. It measures; it does not optimize.
 //! Metrics the product cannot source yet (scheduler wake rate, SQEs per
 //! submission, io_uring enters/s, and `cycles/packet` without a PMU) are
 //! recorded in the summary's `unavailable` block with the reason, never as a

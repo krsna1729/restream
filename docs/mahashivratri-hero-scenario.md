@@ -27,16 +27,8 @@
   protocol mixes (pure RTMP, pure SRT, canonical 95/5); 4K, HEVC, and
   event-hardware/external-link runs still pending
 - **Baseline status:** all three protocol mixes clean at the full
-  1,200-output target with real 1080p60/8Mbps media, recorded 2026-08-13 —
-  see
-  [1,200-output resource attribution](archive/quality/msr-1200-resource-attribution-2026-08-13.md)
-  for the measured CPU/RSS/thread footprint and
-  [the SRT egress scale investigation](archive/quality/srt-egress-scale-investigation-2026-08-10.md)
-  for the correctness fixes that made this run clean. The earlier
-  2026-07-11 connection-scale baseline (synthetic low-bitrate fixture) is
-  superseded by this real-bitrate result; see
-  [archived baselines campaigns](archive/quality/baselines-campaigns-2026-07.md)
-  for the historical entry.
+  1,200-output target with real 1080p60/8Mbps media, recorded 2026-08-13 (the
+  measurement and its attribution are in git history).
 
 This document tracks the Mahashivratri production scenario for the current
 backend: one high-resolution SRT contribution carrying one video stream and 30
@@ -194,13 +186,6 @@ per second.
 | pure RTMP | 1200/1200 | ~2.4 | 1.51 GB | 55 |
 | canonical 95/5 | 1200/1200 | ~3.2 | 1.97 GB | 223 |
 
-Attribution and earlier synthetic-bitrate / profiling campaigns:
-[msr-1200-resource-attribution](archive/quality/msr-1200-resource-attribution-2026-08-13.md),
-[srt-egress-scale-investigation](archive/quality/srt-egress-scale-investigation-2026-08-10.md),
-[archived baselines campaigns](archive/quality/baselines-campaigns-2026-07.md),
-[archived profiling notes](archive/quality/baselines-profiling-2026-07.md).
-Live Criterion/resource ledger:
-[baselines.md](agent-guidance/quality/baselines.md).
 
 This closes connection-scale evidence for MSR-02, MSR-03, and MSR-07 at real
 1080p60 bitrate. MSR-01 (external-link certification), the 4K/HEVC slice of
@@ -444,8 +429,7 @@ never expected to be started by hand outside `PEER_SKIP_START`.
   instance) in place of mediamtx, bound directly by the `test_harness`
   process itself — far lower per-connection memory than a real mediamtx
   path, for runs where raw connection count matters more than a readable
-  path. As of `docs/archive/quality/srt-scaling-investigation.md`'s
-  sink-mode extraction, this replaced spawning a separate `restream
+  path. This replaced spawning a separate `restream
   --sink-mode` process per instance; `RESTREAM_SINK_MODE` no longer exists
   in production restream (see that doc for why the two "sink" concepts —
   this receiver and the unrelated `sink://` egress output type — needed to
@@ -485,8 +469,7 @@ never expected to be started by hand outside `PEER_SKIP_START`.
   `bytesOutBefore`/`bytesOutAfter`/`bytesOutDelta`/`packetsSentDrop` totals
   in place of `mediamtxPathHealth`. **Read `bytesOutDelta` against the
   target aggregate, not just its presence** — `outputsPresent`/`PASS` alone
-  does not mean sustained throughput; see the srt-scaling-investigation.md
-  doc's `srt-only` correction for a case where it badly did not. The sink
+  does not mean sustained throughput. The sink
   RTMP listener completes real `connect`/`createStream`/`publish`
   negotiation (`rml_rtmp::sessions::ServerSession`, the same state machine
   real ingest drives) before discarding media, so a genuine RTMP egress
@@ -538,10 +521,6 @@ Eventually, a passing canonical run should require:
 
 - [Media pipeline](media-pipeline.md)
 - [Testing](testing.md)
-- [Testing strategy](testing-strategy.md)
+- [Testing strategy](testing.md#why-two-test-tiers)
 - [Resource sweep](resource-sweep.md)
-- [Matrix resource constraints](matrix-resource-constraints.md)
-- [Performance and resource baselines](agent-guidance/quality/baselines.md)
-- [SRT egress scale investigation](archive/quality/srt-egress-scale-investigation-2026-08-10.md)
-- [1,200-output resource attribution (thread/memory/CPU by mix)](archive/quality/msr-1200-resource-attribution-2026-08-13.md)
-- [netns confound investigation (4-worktree controlled campaign)](archive/quality/msr-1200-netns-confound-investigation-2026-08-14.md)
+- [Matrix resource constraints](resource-sweep.md#matrix-resource-constraints)

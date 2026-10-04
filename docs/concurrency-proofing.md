@@ -132,7 +132,7 @@ run leaves no new `restream`, `mediamtx`, `ffmpeg`, `ffprobe`, or
 `test_harness` survivors behind.
 
 The maintained proof inventory is the
-[stage boundary proof map](stage-boundary-proof-map.md). It names the current
+[stage boundary proof map](testing.md#stage-boundary-proof-map). It names the current
 boundary, invariant, enforcing proof, and remaining gap without copying gate
 internals into this guide.
 

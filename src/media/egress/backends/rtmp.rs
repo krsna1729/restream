@@ -140,7 +140,7 @@ impl MediaPendingWrite {
 /// visit's [`WorkBudget`] — mirroring the SRT fabric engine's fragment
 /// batching (`src/media/srt/egress_engine.rs`), which existed precisely
 /// because one-wake-per-unit caused a measured CPU regression (see
-/// `docs/archive/egress/implementation.md` Phase 4 status).
+/// the egress migration record (git history) Phase 4 status).
 struct MediaPublisher {
     core: RtmpSessionCore,
     encoder: RtmpMediaEncoder,

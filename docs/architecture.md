@@ -15,6 +15,8 @@ dependency.
 - [Shared processing stages](#shared-processing-stages)
 - [Lifecycle and recovery](#lifecycle-and-recovery)
 - [State and authentication](#state-and-authentication)
+- [Dataplane invariants](#dataplane-invariants)
+- [Enforcement](#enforcement)
 - [Key source areas](#key-source-areas)
 
 ## System shape
@@ -68,9 +70,23 @@ bypasses. SQLite adapters calling `db::*` is the intended shape, not a
 breach — including `infrastructure/sqlite_ports.rs`,
 `pipeline_input_store.rs`, and `recording_metadata.rs`.
 
-The current layering sequence and stop rules live in
-[Layering roadmap](layering-roadmap.md) and the
-[layering audit skill](agent-guidance/skills/layering-audit/SKILL.md).
+The layering rules are [below](#layering-rules); the
+[layering audit skill](agent-guidance/skills/layering-audit/SKILL.md) owns the stop rules.
+
+### Layering rules
+
+- Keep `domain`, `runtime` and `planner` free of edge, persistence, media and
+  application imports; keep the `output_spec` facade curated. Measure rebuild,
+  reuse or isolation value before proposing new crates.
+- Keep cross-feature frontend coordination in `web/ts/app`; split a feature
+  module only when one concept owns its state and render path; keep hot
+  refresh paths (output cards, high-frequency rerenders) on DOM reuse.
+- Keep API handlers thin: agent orchestration in
+  `application::services::agent_service`, validation, authorization, status
+  codes and response projection at the edge, system metric collection in
+  telemetry submodules.
+- Split by ownership, not by size: a file near the 999-line limit is pressure
+  to find the owner, not permission to cut it in half.
 
 ## Runtime ownership
 
@@ -170,8 +186,8 @@ counts vary with active publishers, outputs, recordings, stage sharing, codec
 capabilities, and host CPU limits; live runtime state and operator-facing
 telemetry are the appropriate source for a running process.
 
-Detailed WI5B execution order and acceptance gates live in the
-[SRT / Compio roadmap](srt-compio-roadmap.md).
+The constraints this design must keep are the
+[dataplane invariants](#dataplane-invariants).
 
 Media and memory ownership below describe the current source topology; WI5B's
 real-media, fault, hosted, and container qualification remains open.
@@ -295,7 +311,7 @@ Failure isolation follows these rules:
 
 Concurrency proof expectations and the stage coverage map live in
 [Concurrency proofing](concurrency-proofing.md) and
-[Stage boundary proof map](stage-boundary-proof-map.md).
+[Stage boundary proof map](testing.md#stage-boundary-proof-map).
 
 ## State and authentication
 
@@ -308,6 +324,73 @@ only its scrypt hash is stored in SQLite.
 The HTTP listener is loopback-only by default. Deployments that expose it on
 another interface must provide the surrounding TLS and network boundary.
 Configuration details are in [Configuration](configuration.md).
+
+## Dataplane invariants
+
+These are not optimization suggestions. They are constraints.
+
+### Ownership
+
+- fixed shard ownership
+- no OS thread per connection
+- no task per SRT caller
+- no UDP socket per SRT caller
+- no runtime per output
+- one Compio runtime per SRT shard
+- at most one SRT Owner per address family per shard
+
+### Media
+
+- bounded shared feeds
+- cursor-based consumption
+- no per-output media queue
+- slow output cannot pin shared retention indefinitely
+- immutable/shared media where possible
+
+### Scheduling
+
+- bounded work budgets
+- explicit ready/deadline scheduling
+- no population scans in hot scheduler paths
+- no service-to-quiescence loops
+- Owner service once per ready batch, not per leaf
+- exact identity for completions/events
+- stale generation safety
+
+### Protocol
+
+- preserve SRT wire behavior
+- preserve protocol deadlines separately from application scheduling deadlines
+- preserve stream-id admission policy
+- preserve encryption semantics
+- preserve bonding semantics
+- preserve exact peer/group identity
+
+### Runtime
+
+- io_uring production path is fail-closed
+- no hidden fallback to Tokio or Poll
+- RawReadiness is a receive mode inside a working Compio/io_uring runtime
+- RawReadiness is not an alternative to io_uring
+- ManagedPreferred stays the production policy unless evidence proves otherwise
+
+### Cleanup
+
+When a replacement path is accepted:
+
+- delete the old path in the same architectural tranche
+- do not preserve compatibility for its own sake
+- do not maintain dual runtimes
+- preserve behavioral contracts, not old implementation structure
+
+## Enforcement
+
+`cargo xtask source-audit` enforces the mechanical boundaries (forbidden
+imports, the 999-line file limit, approved environment-variable readers,
+API stage-start rules); `crates/xtask/src/source_audit.rs` is the authority,
+so its rules are not repeated here. Passing it proves the encoded regressions
+are absent, not that every boundary is ideal. Change a boundary on purpose by
+updating the audit, its test and this page in the same change.
 
 ## Key source areas
 

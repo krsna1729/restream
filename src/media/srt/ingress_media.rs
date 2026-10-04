@@ -2,7 +2,7 @@
 //! input gating, timestamp mapping, standby GOP caching and ring publication
 //! for every publisher, plus direct SRT read/play. A received payload is
 //! parsed on the thread that received it; nothing per packet crosses to Tokio
-//! (`docs/srt-compio-roadmap.md` WI11, two-pool plan).
+//! (two-pool plan).
 //!
 //! Tokio keeps session lifecycle: it authenticates a `Connected` peer, builds
 //! its [`SrtPublisherMedia`] (engine registration) and attaches it with a
