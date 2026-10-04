@@ -75,6 +75,22 @@ pub async fn build_health_snapshot_for_pipeline_ids(
     snapshot_with_recording_state(state, pipeline_ids, false).await
 }
 
+/// The full health view for one caller-selected pipeline set, ready to
+/// serialize: no JSON tree is built, which is what the HTTP response needs.
+pub async fn build_health_view_for_pipeline_ids(
+    state: &AppState,
+    pipeline_ids: &[String],
+) -> impl serde::Serialize + use<> {
+    let recording_enabled = recording_enabled_map(state, pipeline_ids).await;
+    crate::api_runtime_views::health_snapshot_view(
+        &state.engine,
+        pipeline_ids,
+        &recording_enabled,
+        state.ingest_disconnect_grace_ms,
+    )
+    .await
+}
+
 /// Builds the summary health snapshot for one caller-selected pipeline set.
 pub async fn build_health_summary_snapshot_for_pipeline_ids(
     state: &AppState,
@@ -154,14 +170,20 @@ pub async fn v1_engine_health_handler(
         return response;
     }
 
-    // The query only selects the transport view shape; both cases share the
-    // same runtime snapshot pipeline and differ only in summary/full rendering.
-    let summary = summary_view_requested(query.view.as_deref());
-    let response = match build_dashboard_health_snapshot(&state, summary).await {
-        Ok(response) => response,
+    // The query only selects the transport view shape. The full view is
+    // serialized straight from its typed form; at hundreds of outputs a JSON
+    // tree in between cost more than the rest of the request.
+    if summary_view_requested(query.view.as_deref()) {
+        return match build_dashboard_health_snapshot(&state, true).await {
+            Ok(response) => Json(response).into_response(),
+            Err(error) => error.into_response(),
+        };
+    }
+    let pipeline_ids = match list_dashboard_runtime_pipeline_ids(&state).await {
+        Ok(pipeline_ids) => pipeline_ids,
         Err(error) => return error.into_response(),
     };
-    Json(response).into_response()
+    Json(build_health_view_for_pipeline_ids(&state, &pipeline_ids).await).into_response()
 }
 
 /// Lightweight process health probe used by infrastructure and liveness checks.

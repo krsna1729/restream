@@ -9,7 +9,7 @@ use crate::system_sampling::{
     CpuCapacitySnapshot, HostSettingsSnapshot, NofileLimitSnapshot, sample_host_settings,
 };
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::Ordering;
 
 use crate::host_tuning::{REQUIRED_RMEM_MAX, REQUIRED_WMEM_MAX};
@@ -231,9 +231,9 @@ struct RtmpListenerHealthJson {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SrtListenerHealthJson<'a> {
+struct SrtListenerHealthJson {
     bonding_available: bool,
-    ingress_owner: &'a crate::media::snapshots::SrtIngressOwnerSnapshot,
+    ingress_owner: crate::media::snapshots::SrtIngressOwnerSnapshot,
 }
 
 #[derive(Serialize)]
@@ -248,19 +248,22 @@ struct RuntimeLimitsHealthJson {
     nofile: NofileLimitJson,
 }
 
+/// The full engine health view, owned and serializable without building a
+/// JSON tree: the HTTP handler serializes it directly; in-process consumers
+/// that need a `serde_json::Value` use [`health_snapshot`].
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct EngineHealthSnapshotJson<'a> {
+pub(crate) struct EngineHealthView {
     generated_at: String,
     status: &'static str,
-    pipelines: &'a serde_json::Map<String, serde_json::Value>,
-    stages: &'a serde_json::Map<String, serde_json::Value>,
+    pipelines: BTreeMap<String, api_view_models::PipelineHealthView>,
+    stages: serde_json::Map<String, serde_json::Value>,
     runtime_limits: RuntimeLimitsHealthJson,
     host_settings: Vec<HostSettingRow>,
     rtmp_listener: RtmpListenerHealthJson,
-    srt_listener: SrtListenerHealthJson<'a>,
+    srt_listener: SrtListenerHealthJson,
     egress_fabric_shards:
-        &'a [crate::media::engine_egress_fabric_diagnostics::EgressFabricShardStatus],
+        Vec<crate::media::engine_egress_fabric_diagnostics::EgressFabricShardStatus>,
     tuning: TuningHealthJson,
 }
 
@@ -283,13 +286,14 @@ pub(crate) async fn output_status(
         let egresses = engine.egresses.active.read().await;
         egresses.get(output_id).map(|egress| {
             let terminal_stage_key = egress.terminal_stage_key.clone();
-            let mut value = api_view_models::egress_runtime_json(egress, false, true, None);
-            api_view_models::apply_recent_egress_instability_json(&mut value, recent.as_ref());
-            api_view_models::apply_egress_retry_state_json(&mut value, retry.as_ref());
-            value["totalSize"] = serde_json::json!(egress.bytes_sent.load(Ordering::Relaxed));
-            value["bitrateKbps"] =
-                serde_json::json!(MediaEngine::sample_egress_bitrate_kbps(egress));
-            value["startedAt"] = serde_json::Value::String(egress.started_at.clone());
+            let mut view = api_view_models::egress_runtime_view(egress, false, true, None);
+            view.apply_recent_instability(recent.as_ref());
+            view.apply_retry_state(retry.as_ref());
+            let view = view.with_totals(
+                egress.bytes_sent.load(Ordering::Relaxed),
+                MediaEngine::sample_egress_bitrate_kbps(egress),
+                &egress.started_at,
+            );
 
             let explanation = crate::runtime::output::OutputRuntimeExplanation {
                 output_id: crate::domain::ids::OutputId::new(&egress.output_id),
@@ -300,11 +304,11 @@ pub(crate) async fn output_status(
                 terminal_stage: terminal_stage_key.clone(),
                 blocked_by: None,
             };
-            (value, explanation, terminal_stage_key)
+            (view, explanation, terminal_stage_key)
         })
     };
 
-    if let Some((mut value, mut explanation, terminal_stage_key)) = active {
+    if let Some((mut view, mut explanation, terminal_stage_key)) = active {
         let blocked_by = if let Some(key) = terminal_stage_key.as_ref() {
             engine.egress_blocked_by_stage_snapshot(key).await
         } else {
@@ -312,30 +316,43 @@ pub(crate) async fn output_status(
         };
         if let Some(blocked_by) = blocked_by {
             explanation.blocked_by = Some(blocked_by.key.clone());
-            value["blockedBy"] = super::stage_projection::stage_runtime_snapshot_json(&blocked_by);
+            view.blocked_by = Some(super::stage_projection::stage_runtime_snapshot_json(
+                &blocked_by,
+            ));
         }
+        let mut value = api_view_models::to_json(&view);
         value["explanation"] = api_view_models::output_runtime_explanation_json(&explanation);
 
         return Some(value);
     }
 
     recent.as_ref().map(|outcome| {
-        let mut value = api_view_models::recent_egress_runtime_json(outcome, false);
-        api_view_models::apply_recent_egress_instability_json(&mut value, Some(outcome));
-        api_view_models::apply_egress_retry_state_json(&mut value, retry.as_ref());
-        value["totalSize"] = serde_json::json!(outcome.bytes_sent);
-        value["bitrateKbps"] = serde_json::Value::Null;
-        value["startedAt"] = serde_json::Value::String(outcome.started_at.clone());
-        value
+        let mut view = api_view_models::recent_egress_runtime_view(outcome, false);
+        view.apply_recent_instability(Some(outcome));
+        view.apply_retry_state(retry.as_ref());
+        api_view_models::to_json(&view.with_totals(outcome.bytes_sent, None, &outcome.started_at))
     })
 }
 
+/// The full health view as a JSON value, for in-process consumers (alerts,
+/// agent context, observability) that read it as a tree.
 pub(crate) async fn health_snapshot(
     engine: &MediaEngine,
     pipeline_ids: &[String],
     recording_enabled: &HashMap<String, bool>,
     disconnect_grace_ms: u64,
 ) -> serde_json::Value {
+    api_view_models::to_json(
+        &health_snapshot_view(engine, pipeline_ids, recording_enabled, disconnect_grace_ms).await,
+    )
+}
+
+pub(crate) async fn health_snapshot_view(
+    engine: &MediaEngine,
+    pipeline_ids: &[String],
+    recording_enabled: &HashMap<String, bool>,
+    disconnect_grace_ms: u64,
+) -> EngineHealthView {
     let mut hls_snapshots = HashMap::new();
     for pipeline_id in pipeline_ids {
         hls_snapshots.insert(
@@ -377,7 +394,7 @@ pub(crate) async fn health_snapshot(
     let (total_bytes_by_pipeline, mut outputs_by_pipeline, blocked_requests) = {
         let egresses = engine.egresses.active.read().await;
         let mut totals: HashMap<String, u64> = HashMap::new();
-        let mut outputs: HashMap<String, serde_json::Map<String, serde_json::Value>> =
+        let mut outputs: HashMap<String, BTreeMap<String, api_view_models::OutputHealthView>> =
             HashMap::new();
         let mut blocked_requests = Vec::new();
 
@@ -388,26 +405,17 @@ pub(crate) async fn health_snapshot(
 
             let bitrate_kbps = MediaEngine::sample_egress_bitrate_kbps(egress);
             let has_ingest = active_ingest_ids.contains(pipeline_id.as_str());
-            let mut output_json =
-                api_view_models::egress_runtime_json(egress, false, has_ingest, None);
-            api_view_models::apply_recent_egress_instability_json(
-                &mut output_json,
-                recent_egresses.get(output_id),
-            );
-            api_view_models::apply_egress_retry_state_json(
-                &mut output_json,
-                retry_egresses.get(output_id),
-            );
-            output_json["totalSize"] = serde_json::json!(bytes_sent);
-            output_json["bitrateKbps"] = serde_json::json!(bitrate_kbps);
-            output_json["startedAt"] = serde_json::Value::String(egress.started_at.clone());
+            let mut view = api_view_models::egress_runtime_view(egress, false, has_ingest, None);
+            view.apply_recent_instability(recent_egresses.get(output_id));
+            view.apply_retry_state(retry_egresses.get(output_id));
+            let view = view.with_totals(bytes_sent, bitrate_kbps, &egress.started_at);
             if let Some(key) = egress.terminal_stage_key.clone() {
                 blocked_requests.push((pipeline_id.clone(), output_id.to_string(), key));
             }
-            outputs
-                .entry(pipeline_id)
-                .or_default()
-                .insert(output_id.to_string(), output_json);
+            outputs.entry(pipeline_id).or_default().insert(
+                output_id.to_string(),
+                api_view_models::OutputHealthView::Active(view),
+            );
         }
 
         (totals, outputs, blocked_requests)
@@ -441,7 +449,7 @@ pub(crate) async fn health_snapshot(
             .collect()
     };
 
-    let mut pipelines_json = serde_json::Map::new();
+    let mut pipelines: BTreeMap<String, api_view_models::PipelineHealthView> = BTreeMap::new();
     for pipeline_id in pipeline_ids {
         let total_bytes_sent = total_bytes_by_pipeline
             .get(pipeline_id)
@@ -461,22 +469,20 @@ pub(crate) async fn health_snapshot(
             )
         });
 
-        let mut outputs_json = outputs_by_pipeline.remove(pipeline_id).unwrap_or_default();
+        let mut outputs = outputs_by_pipeline.remove(pipeline_id).unwrap_or_default();
         for (output_id, outcome) in recent_egresses.iter() {
-            if outcome.pipeline_id == *pipeline_id && !outputs_json.contains_key(output_id) {
-                let mut output_json = api_view_models::recent_egress_runtime_json(outcome, false);
-                api_view_models::apply_recent_egress_instability_json(
-                    &mut output_json,
-                    Some(outcome),
+            if outcome.pipeline_id == *pipeline_id && !outputs.contains_key(output_id) {
+                let mut view = api_view_models::recent_egress_runtime_view(outcome, false);
+                view.apply_recent_instability(Some(outcome));
+                view.apply_retry_state(retry_egresses.get(output_id));
+                outputs.insert(
+                    output_id.to_string(),
+                    api_view_models::OutputHealthView::Recent(view.with_totals(
+                        outcome.bytes_sent,
+                        None,
+                        &outcome.started_at,
+                    )),
                 );
-                api_view_models::apply_egress_retry_state_json(
-                    &mut output_json,
-                    retry_egresses.get(output_id),
-                );
-                output_json["totalSize"] = serde_json::json!(outcome.bytes_sent);
-                output_json["bitrateKbps"] = serde_json::Value::Null;
-                output_json["startedAt"] = serde_json::Value::String(outcome.started_at.clone());
-                outputs_json.insert(output_id.to_string(), output_json);
             }
         }
 
@@ -489,21 +495,23 @@ pub(crate) async fn health_snapshot(
             .get(pipeline_id)
             .expect("precomputed HLS snapshot");
 
-        pipelines_json.insert(
+        pipelines.insert(
             pipeline_id.clone(),
-            api_view_models::pipeline_health_json(
-                input_json,
-                outputs_json,
-                rec_enabled,
-                rec_active,
-                api_view_models::hls_preview_json(
+            api_view_models::PipelineHealthView {
+                input: input_json,
+                outputs,
+                recording: api_view_models::RecordingHealthView {
+                    enabled: rec_enabled,
+                    active: rec_active,
+                },
+                hls_preview: api_view_models::hls_preview_json(
                     hls_snapshot.active,
                     hls_snapshot.persistent_consumers,
                     hls_snapshot.last_access_age_ms,
                     hls_snapshot.segments,
                     hls_snapshot.playlist_bytes,
                 ),
-            ),
+            },
         );
     }
 
@@ -511,14 +519,13 @@ pub(crate) async fn health_snapshot(
         let Some(blocked_by) = engine.egress_blocked_by_stage_snapshot(&key).await else {
             continue;
         };
-        if let Some(output_json) = pipelines_json
+        if let Some(api_view_models::OutputHealthView::Active(view)) = pipelines
             .get_mut(&pipeline_id)
-            .and_then(|pipeline| pipeline.get_mut("outputs"))
-            .and_then(|outputs| outputs.as_object_mut())
-            .and_then(|outputs| outputs.get_mut(&output_id))
+            .and_then(|pipeline| pipeline.outputs.get_mut(&output_id))
         {
-            output_json["blockedBy"] =
-                super::stage_projection::stage_runtime_snapshot_json(&blocked_by);
+            view.blocked_by = Some(super::stage_projection::stage_runtime_snapshot_json(
+                &blocked_by,
+            ));
         }
     }
 
@@ -557,11 +564,11 @@ pub(crate) async fn health_snapshot(
         .egress_fabric_shard_statuses(EGRESS_FABRIC_SHARD_STALL_AFTER)
         .await;
 
-    let snapshot = EngineHealthSnapshotJson {
+    EngineHealthView {
         generated_at: chrono::Utc::now().to_rfc3339(),
         status: "ready",
-        pipelines: &pipelines_json,
-        stages: &stages_json,
+        pipelines,
+        stages: stages_json,
         runtime_limits: RuntimeLimitsHealthJson { nofile },
         host_settings: host_settings_rows,
         rtmp_listener: RtmpListenerHealthJson {
@@ -570,14 +577,13 @@ pub(crate) async fn health_snapshot(
         },
         srt_listener: SrtListenerHealthJson {
             bonding_available,
-            ingress_owner: &ingress_owner,
+            ingress_owner,
         },
-        egress_fabric_shards: &egress_fabric_shards,
+        egress_fabric_shards,
         tuning: TuningHealthJson {
             output_max_retries: engine.config.tuning.output_max_retries,
         },
-    };
-    serde_json::to_value(&snapshot).unwrap_or(serde_json::Value::Null)
+    }
 }
 
 pub(crate) async fn health_summary_snapshot(
