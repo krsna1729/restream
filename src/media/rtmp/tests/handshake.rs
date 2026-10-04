@@ -759,3 +759,170 @@ async fn client_stop_during_playback_detaches_the_reader() {
     let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
     join_test_owner_threads(&engine).await;
 }
+
+/// One RTMP chunk after the handshake: an AMF0 command message (type 20)
+/// whose body is a single AMF0 string, i.e. fewer than the three values
+/// (name, transaction id, command object) every command carries.
+#[rustfmt::skip]
+const SHORT_AMF0_COMMAND: [u8; 16] = [
+    0x03,             // fmt 0, chunk stream 3
+    0x00, 0x00, 0x00, // timestamp
+    0x00, 0x00, 0x04, // message length
+    0x14,             // AMF0 command
+    0x00, 0x00, 0x00, 0x00, // message stream 0
+    0x02, 0x00, 0x01, b'x', // AMF0 string "x"
+];
+
+/// Before the vendored rml_rtmp fix, this unauthenticated chunk panicked the
+/// RTMP ingress owner thread inside `amf0_command::deserialize`; the owner's
+/// drop guard then stopped the listener and Restream shut down. It must close
+/// only the offending connection.
+#[tokio::test]
+async fn short_amf0_command_closes_only_that_connection() {
+    let pipeline_access: Arc<dyn PipelineAccessAuthenticator> =
+        Arc::new(AcceptAllAuthenticator {
+            pipeline_id: "pipe-short-command".to_string(),
+        });
+    let (engine, addr, server) = start_ingress_test_server(pipeline_access).await;
+
+    let mut attacker = TcpStream::connect(addr).await.unwrap();
+    perform_client_handshake(&mut attacker, &CancellationToken::new())
+        .await
+        .expect("handshake");
+    attacker.write_all(&SHORT_AMF0_COMMAND).await.unwrap();
+    let mut buf = [0u8; 256];
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        while matches!(attacker.read(&mut buf).await, Ok(n) if n > 0) {}
+    })
+    .await;
+    assert!(closed.is_ok(), "the offending connection must be closed");
+
+    // Bounded: with a dead owner the socket still accepts in the kernel
+    // backlog, so an unbounded handshake would hang instead of failing.
+    let published = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut publisher = TcpStream::connect(addr).await.unwrap();
+        drive_client_publish_handshake(&mut publisher, "any-key").await
+    })
+    .await;
+    assert!(
+        matches!(published, Ok(true)),
+        "the listener must keep serving publishers"
+    );
+    stop_ingress_test_server(&engine, server).await;
+}
+
+/// A message whose chunk stream later declares a length below the bytes
+/// already received (fuzz: `rtmp_server_responses`). Before the vendored fix
+/// this underflowed in rml_rtmp's chunk deserializer: a panic with overflow
+/// checks, and in release a message that never completes and keeps growing.
+#[rustfmt::skip]
+fn shrinking_message_length_chunks() -> Vec<u8> {
+    let mut bytes = vec![
+        0x03, 0, 0, 0, 0, 0, 200, 0x09, 1, 0, 0, 0, // fmt 0: 200-byte video message
+    ];
+    bytes.extend([0xAB; 128]); // first 128-byte chunk
+    bytes.extend([0x43, 0, 0, 0, 0, 0, 10, 0x09]); // fmt 1: length now 10
+    bytes.extend([0xCD; 10]);
+    bytes
+}
+
+#[tokio::test]
+async fn shrinking_message_length_closes_only_that_connection() {
+    let pipeline_access: Arc<dyn PipelineAccessAuthenticator> =
+        Arc::new(AcceptAllAuthenticator {
+            pipeline_id: "pipe-shrinking-length".to_string(),
+        });
+    let (engine, addr, server) = start_ingress_test_server(pipeline_access).await;
+
+    let mut attacker = TcpStream::connect(addr).await.unwrap();
+    perform_client_handshake(&mut attacker, &CancellationToken::new())
+        .await
+        .expect("handshake");
+    attacker.write_all(&shrinking_message_length_chunks()).await.unwrap();
+    let mut buf = [0u8; 256];
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        while matches!(attacker.read(&mut buf).await, Ok(n) if n > 0) {}
+    })
+    .await;
+    assert!(closed.is_ok(), "the offending connection must be closed");
+
+    let published = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut publisher = TcpStream::connect(addr).await.unwrap();
+        drive_client_publish_handshake(&mut publisher, "any-key").await
+    })
+    .await;
+    assert!(
+        matches!(published, Ok(true)),
+        "the listener must keep serving publishers"
+    );
+    stop_ingress_test_server(&engine, server).await;
+}
+
+/// The same chunk from an RTMP destination server is a protocol error for
+/// that output, not a panic on its egress shard.
+#[test]
+fn short_amf0_command_from_a_destination_is_a_protocol_error() {
+    let parts = egress_transport::RtmpUrlParts {
+        host: "127.0.0.1".to_string(),
+        port: 1935,
+        app: "live".to_string(),
+        stream_key: "key".to_string(),
+        tls: false,
+    };
+    let mut session = egress_connection::RtmpSessionCore::new(parts, 4096).unwrap();
+    let _ = session.take_initial_packets();
+    session.request_connection(false).unwrap();
+
+    assert!(matches!(
+        session.handle_server_input(&SHORT_AMF0_COMMAND),
+        Err(egress_connection::RtmpSessionError::Protocol(_))
+    ));
+}
+
+/// Connections that end while new clients connect must not cost those
+/// clients their connection. The owner used to build a fresh Compio accept
+/// for every `select!` iteration; when a finishing connection won the
+/// select, the pending accept was dropped together with a completion that
+/// could already hold the next client's socket, which was then closed
+/// unseen ("remote closed during handshake" on the client).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn clients_connecting_while_connections_end_are_all_accepted() {
+    const CLIENTS: usize = 48;
+    let pipeline_access: Arc<dyn PipelineAccessAuthenticator> =
+        Arc::new(AcceptAllAuthenticator {
+            pipeline_id: "pipe-accept-race".to_string(),
+        });
+    let (engine, addr, server) = start_ingress_test_server(pipeline_access).await;
+
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..CLIENTS {
+        // Ends promptly: the server closes it on the malformed command.
+        tasks.spawn(async move {
+            let mut ending = TcpStream::connect(addr).await.unwrap();
+            if perform_client_handshake(&mut ending, &CancellationToken::new())
+                .await
+                .is_ok()
+            {
+                let _ = ending.write_all(&SHORT_AMF0_COMMAND).await;
+            }
+            None
+        });
+        tasks.spawn(async move {
+            let mut client = TcpStream::connect(addr).await.unwrap();
+            let handshake = tokio::time::timeout(
+                Duration::from_secs(5),
+                perform_client_handshake(&mut client, &CancellationToken::new()),
+            )
+            .await;
+            Some(matches!(handshake, Ok(Ok(_))))
+        });
+    }
+    let mut accepted = 0;
+    while let Some(result) = tasks.join_next().await {
+        if result.unwrap() == Some(true) {
+            accepted += 1;
+        }
+    }
+    assert_eq!(accepted, CLIENTS, "every connecting client completes its handshake");
+    stop_ingress_test_server(&engine, server).await;
+}

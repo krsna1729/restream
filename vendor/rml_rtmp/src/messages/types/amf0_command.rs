@@ -32,7 +32,10 @@ pub fn deserialize(data: Bytes) -> Result<RtmpMessage, MessageDeserializationErr
     let transaction_id: f64;
     let command_object: Amf0Value;
     {
-        let mut arg_iterator = arguments.drain(..3);
+        // restream vendor patch: a command with fewer than three values is
+        // malformed, not a panic (`drain(..3)` panicked on a short vector, so
+        // one peer packet crashed the session's thread).
+        let mut arg_iterator = arguments.drain(..arguments.len().min(3));
 
         command_name = match arg_iterator
             .next()
@@ -110,6 +113,23 @@ mod tests {
         ];
 
         assert_eq!(expected, result);
+    }
+
+    // restream vendor patch
+    #[test]
+    fn commands_with_fewer_than_three_values_are_invalid() {
+        let short = [
+            vec![],
+            vec![Amf0Value::Utf8String("connect".to_string())],
+            vec![
+                Amf0Value::Utf8String("connect".to_string()),
+                Amf0Value::Number(1.0),
+            ],
+        ];
+        for values in short {
+            let bytes = Bytes::from(rml_amf0::serialize(&values).unwrap());
+            assert!(deserialize(bytes).is_err(), "{} values", values.len());
+        }
     }
 
     #[test]
