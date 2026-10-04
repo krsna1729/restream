@@ -400,6 +400,99 @@ fn ktls_read_yields_after_a_bounded_number_of_ticket_records() {
     assert_eq!(&buffer[..count], b"world");
 }
 
+#[derive(Debug, Clone)]
+enum ServerRecords {
+    Data(Vec<u8>),
+    /// NewSessionTickets with these body lengths, cut into handshake records
+    /// of these sizes (cycled).
+    Tickets(Vec<usize>, Vec<usize>),
+}
+
+fn server_records() -> impl proptest::strategy::Strategy<Value = (Vec<ServerRecords>, bool)> {
+    use proptest::prelude::*;
+    let item = prop_oneof![
+        prop::collection::vec(any::<u8>(), 1..64).prop_map(ServerRecords::Data),
+        (
+            prop::collection::vec(0usize..300, 1..4),
+            prop::collection::vec(1usize..64, 1..6)
+        )
+            .prop_map(|(tickets, cuts)| ServerRecords::Tickets(tickets, cuts)),
+    ];
+    (prop::collection::vec(item, 0..12), any::<bool>())
+}
+
+proptest::proptest! {
+    /// After the kTLS handoff the server's records reach the RTMP reader as
+    /// exactly its application data, in order: TLS 1.3 tickets split across
+    /// records anywhere (headers included) are consumed whole, the per-read
+    /// control budget only defers, and close_notify (whole or as two
+    /// one-byte records) ends the stream.
+    #[test]
+    fn ktls_reader_yields_exactly_the_application_data(
+        (items, split_close_notify) in server_records()
+    ) {
+        let mut records = std::collections::VecDeque::new();
+        let mut expected = Vec::new();
+        for item in items {
+            match item {
+                ServerRecords::Data(bytes) => {
+                    expected.extend_from_slice(&bytes);
+                    records.push_back((bytes, rtmp_ktls::RECORD_TYPE_DATA));
+                }
+                ServerRecords::Tickets(lengths, cuts) => {
+                    let mut handshake = Vec::new();
+                    for len in lengths {
+                        handshake.push(4);
+                        handshake.extend_from_slice(&(len as u32).to_be_bytes()[1..]);
+                        handshake.extend(std::iter::repeat_n(0xab, len));
+                    }
+                    let mut cuts = cuts.into_iter().cycle();
+                    while !handshake.is_empty() {
+                        let size = cuts.next().unwrap().min(handshake.len());
+                        let record: Vec<u8> = handshake.drain(..size).collect();
+                        records.push_back((record, rtmp_ktls::RECORD_TYPE_HANDSHAKE));
+                    }
+                }
+            }
+        }
+        if split_close_notify {
+            records.push_back((vec![1], rtmp_ktls::RECORD_TYPE_ALERT));
+            records.push_back((vec![0], rtmp_ktls::RECORD_TYPE_ALERT));
+        } else {
+            records.push_back((vec![1, 0], rtmp_ktls::RECORD_TYPE_ALERT));
+        }
+
+        let (stream, _server) = connected_pair();
+        let mut connection = KtlsConnection {
+            stream: CompioTcpStream::from_std(stream),
+            version: tokio_rustls::rustls::ProtocolVersion::TLSv1_3,
+            handshake_buffer: Vec::new(),
+            pending_alert_level: None,
+            peer_closed: false,
+        };
+        let mut received = Vec::new();
+        let mut buffer = [0; 64];
+        loop {
+            let read = connection.read_with(&mut buffer, |buffer| {
+                let (record, record_type) = records
+                    .pop_front()
+                    .expect("the reader stops at close_notify");
+                buffer[..record.len()].copy_from_slice(&record);
+                Ok((record.len(), record_type))
+            });
+            match read {
+                Ok(0) => break,
+                Ok(count) => received.extend_from_slice(&buffer[..count]),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => proptest::prop_assert!(false, "read failed: {error}"),
+            }
+        }
+        proptest::prop_assert_eq!(received, expected);
+        proptest::prop_assert!(connection.handshake_buffer.is_empty());
+        proptest::prop_assert!(records.is_empty());
+    }
+}
+
 fn run_tls_server_peer(
     mut stream: TcpStream,
     cert: CertificateDer<'static>,
