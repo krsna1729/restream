@@ -338,6 +338,7 @@ jobs:
       - name: Run every parser target for 30 s
         working-directory: fuzz
         run: |
+          ./seed-corpus.sh
           for target in $(cargo +nightly fuzz list); do
             cargo +nightly fuzz run "$target" -- -max_total_time=30 -timeout=5
           done

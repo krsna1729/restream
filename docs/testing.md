@@ -60,9 +60,11 @@ through `media::rtmp::fuzz_entry`, which exists only under `--cfg fuzzing`.
 | `hevc_enhanced_rtmp` | HEVC Annex-B from SRT ingest | `build_hevc_enhanced_rtmp_sequence_header` (SPS profile/tier/level), coded-frame packer |
 | `rtmp_server_responses` | destination server bytes after the handshake | `RtmpSessionCore::handle_server_input` |
 | `rtmp_client_requests` | publisher bytes after the handshake | ingest `ServerSession::handle_input` with the message-size limit |
+| `ts_demux` | SRT ingest MPEG-TS, sync-forced or raw | `TsDemuxer` (PAT/PMT, PES, `mpegts_probe`) |
 
 ```sh
 cd fuzz
+./seed-corpus.sh   # seeds ts_demux from the checked-in TS fixtures
 cargo +nightly fuzz run <target> -- -max_total_time=60
 ```
 

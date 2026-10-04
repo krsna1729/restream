@@ -61,3 +61,10 @@ path = "fuzz_targets/rtmp_client_requests.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "ts_demux"
+path = "fuzz_targets/ts_demux.rs"
+test = false
+doc = false
+bench = false
