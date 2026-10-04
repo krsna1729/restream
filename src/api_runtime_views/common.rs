@@ -5,57 +5,208 @@ use crate::media::engine::{
 };
 use crate::media::ring_buffer::RingBuffer;
 
+/// Retry state as an output view reports it; computed once per output.
+struct RetryView {
+    attempts: u32,
+    backoff_ms: u64,
+    next_retry_at: Option<String>,
+    remaining_ms: u64,
+}
+
+impl RetryView {
+    fn new(retry: &EgressRetryState) -> Self {
+        Self {
+            attempts: retry.attempts,
+            backoff_ms: retry.backoff_ms,
+            next_retry_at: MediaEngine::epoch_ms_to_rfc3339(retry.next_retry_at_ms),
+            remaining_ms: retry
+                .next_retry_at_ms
+                .saturating_sub(MediaEngine::now_epoch_ms()),
+        }
+    }
+}
+
+/// Generates the status/retry/totals setters shared by the active and recent
+/// output views (same JSON keys on both).
+macro_rules! output_view_patches {
+    ($view:ty) => {
+        impl $view {
+            pub(super) fn apply_recent_instability(
+                &mut self,
+                recent: Option<&RecentEgressOutcome>,
+            ) {
+                let (count, flapping) = MediaEngine::recent_egress_flap_state(recent);
+                self.recent_failure_count = count;
+                self.flapping = flapping;
+            }
+
+            pub(super) fn apply_retry_state(&mut self, retry: Option<&EgressRetryState>) {
+                let Some(retry) = retry.map(RetryView::new) else {
+                    return;
+                };
+                self.status = "retrying".to_string();
+                self.retrying = true;
+                self.retry_attempts = Some(retry.attempts);
+                self.retry_backoff_ms = Some(retry.backoff_ms);
+                self.next_retry_at = retry.next_retry_at;
+                self.retry_remaining_ms = Some(retry.remaining_ms);
+            }
+
+            /// `totalSize`, `bitrateKbps` and `startedAt`, which the output
+            /// status and health views add to the runtime fields.
+            pub(super) fn with_totals(
+                mut self,
+                total_size: u64,
+                bitrate_kbps: Option<f64>,
+                started_at: &str,
+            ) -> Self {
+                self.total_size = Some(total_size);
+                self.bitrate_kbps = Some(bitrate_kbps);
+                self.started_at = Some(started_at.to_string());
+                self
+            }
+        }
+    };
+}
+
+/// Runtime fields of an active egress, serialized directly (no JSON tree).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct EgressRuntimeView {
+    output_id: String,
+    output_name: String,
+    encoding: String,
+    pipeline_id: String,
+    protocol: String,
+    target_addr: Option<String>,
+    status: String,
+    raw_status: &'static str,
+    phase: &'static str,
+    terminal_stage: Option<String>,
+    uptime_secs: f64,
+    bytes_out: u64,
+    resync_count: u64,
+    feed_lag_units: u64,
+    backpressure_reason: Option<&'static str>,
+    last_progress_at: Option<String>,
+    last_progress_age_ms: Option<u64>,
+    last_error: Option<String>,
+    last_error_at: Option<String>,
+    failure_phase: Option<String>,
+    pub(super) blocked_by: Option<serde_json::Value>,
+    recent_failure_count: u32,
+    flapping: bool,
+    retrying: bool,
+    retry_attempts: Option<u32>,
+    retry_backoff_ms: Option<u64>,
+    next_retry_at: Option<String>,
+    retry_remaining_ms: Option<u64>,
+    quality: crate::media::snapshots::PublisherQuality,
+    metrics: crate::media::stage_metrics::StageMetricsSnapshot,
+    fabric: bool,
+    shard_id: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bitrate_kbps: Option<Option<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    started_at: Option<String>,
+}
+
+output_view_patches!(EgressRuntimeView);
+
+pub(super) fn egress_runtime_view(
+    egress: &ActiveEgress,
+    include_target_url: bool,
+    has_ingest: bool,
+    blocked_by: Option<&crate::runtime::stage::StageRuntimeSnapshot>,
+) -> EgressRuntimeView {
+    let last_progress_ms = egress.last_progress_ms.load(Ordering::Relaxed);
+    let last_error_ms = egress.last_error_ms.load(Ordering::Relaxed);
+    let now_ms = MediaEngine::now_epoch_ms();
+    EgressRuntimeView {
+        output_id: egress.output_id.clone(),
+        output_name: egress.output_name.clone(),
+        encoding: egress.encoding.clone(),
+        pipeline_id: egress.pipeline_id.clone(),
+        protocol: egress.protocol.clone(),
+        target_addr: egress
+            .target_addr
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone(),
+        status: MediaEngine::egress_effective_status(egress, has_ingest),
+        raw_status: egress.status.as_str(),
+        phase: egress
+            .phase
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_str(),
+        terminal_stage: egress.terminal_stage_key.as_ref().map(|k| k.to_string()),
+        uptime_secs: egress.start_instant.elapsed().as_secs_f64(),
+        bytes_out: egress.bytes_sent.load(Ordering::Relaxed),
+        resync_count: egress.resync_count.load(Ordering::Relaxed),
+        feed_lag_units: egress.feed_lag_units.load(Ordering::Relaxed),
+        backpressure_reason: *egress
+            .backpressure_reason
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()),
+        last_progress_at: MediaEngine::epoch_ms_to_rfc3339(last_progress_ms),
+        last_progress_age_ms: (last_progress_ms > 0)
+            .then(|| now_ms.saturating_sub(last_progress_ms)),
+        last_error: egress
+            .last_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone(),
+        last_error_at: MediaEngine::epoch_ms_to_rfc3339(last_error_ms),
+        failure_phase: egress
+            .failure_phase
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone(),
+        blocked_by: blocked_by.map(super::stage_projection::stage_runtime_snapshot_json),
+        recent_failure_count: 0,
+        flapping: false,
+        retrying: false,
+        retry_attempts: None,
+        retry_backoff_ms: None,
+        next_retry_at: None,
+        retry_remaining_ms: None,
+        quality: egress
+            .quality
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone(),
+        metrics: egress.metrics.snapshot(),
+        fabric: egress.is_fabric,
+        shard_id: egress.shard_id,
+        target_url: include_target_url.then(|| egress.target_url.clone()),
+        total_size: None,
+        bitrate_kbps: None,
+        started_at: None,
+    }
+}
+
+/// The runtime fields as a JSON value, for views that extend them further.
 pub(super) fn egress_runtime_json(
     egress: &ActiveEgress,
     include_target_url: bool,
     has_ingest: bool,
     blocked_by: Option<&crate::runtime::stage::StageRuntimeSnapshot>,
 ) -> serde_json::Value {
-    let last_progress_ms = egress.last_progress_ms.load(Ordering::Relaxed);
-    let last_error_ms = egress.last_error_ms.load(Ordering::Relaxed);
-    let now_ms = MediaEngine::now_epoch_ms();
-    let status = MediaEngine::egress_effective_status(egress, has_ingest);
-    let mut value = serde_json::json!({
-        "outputId": egress.output_id.clone(),
-        "outputName": egress.output_name.clone(),
-        "encoding": egress.encoding.clone(),
-        "pipelineId": egress.pipeline_id.clone(),
-        "protocol": egress.protocol.clone(),
-        "targetAddr": egress.target_addr.lock().unwrap_or_else(|e| e.into_inner()).clone(),
-        "status": status,
-        "rawStatus": egress.status.as_str(),
-        "phase": egress.phase.lock().unwrap_or_else(|e| e.into_inner()).as_str(),
-        "terminalStage": egress.terminal_stage_key.as_ref().map(|k| k.to_string()),
-        "uptimeSecs": egress.start_instant.elapsed().as_secs_f64(),
-        "bytesOut": egress.bytes_sent.load(Ordering::Relaxed),
-        "resyncCount": egress.resync_count.load(Ordering::Relaxed),
-        "feedLagUnits": egress.feed_lag_units.load(Ordering::Relaxed),
-        "backpressureReason": *egress
-            .backpressure_reason
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()),
-        "lastProgressAt": MediaEngine::epoch_ms_to_rfc3339(last_progress_ms),
-        "lastProgressAgeMs": (last_progress_ms > 0).then(|| now_ms.saturating_sub(last_progress_ms)),
-        "lastError": egress.last_error.lock().unwrap_or_else(|e| e.into_inner()).clone(),
-        "lastErrorAt": MediaEngine::epoch_ms_to_rfc3339(last_error_ms),
-        "failurePhase": egress.failure_phase.lock().unwrap_or_else(|e| e.into_inner()).clone(),
-        "blockedBy": blocked_by.map(super::stage_projection::stage_runtime_snapshot_json),
-        "recentFailureCount": 0,
-        "flapping": false,
-        "retrying": false,
-        "retryAttempts": serde_json::Value::Null,
-        "retryBackoffMs": serde_json::Value::Null,
-        "nextRetryAt": serde_json::Value::Null,
-        "retryRemainingMs": serde_json::Value::Null,
-        "quality": egress.quality.lock().unwrap_or_else(|e| e.into_inner()).clone(),
-        "metrics": egress.metrics.snapshot(),
-        "fabric": egress.is_fabric,
-        "shardId": egress.shard_id,
-    });
-    if include_target_url {
-        value["targetUrl"] = serde_json::Value::String(egress.target_url.clone());
-    }
-    value
+    to_json(&egress_runtime_view(
+        egress,
+        include_target_url,
+        has_ingest,
+        blocked_by,
+    ))
+}
+
+pub(super) fn to_json(view: &impl serde::Serialize) -> serde_json::Value {
+    serde_json::to_value(view).unwrap_or(serde_json::Value::Null)
 }
 
 pub(super) fn output_runtime_explanation_json(
@@ -72,75 +223,90 @@ pub(super) fn output_runtime_explanation_json(
     })
 }
 
-pub(super) fn recent_egress_runtime_json(
+/// Runtime fields of an egress that recently ended, serialized directly.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct RecentEgressRuntimeView {
+    output_id: String,
+    pipeline_id: String,
+    protocol: String,
+    target_addr: Option<String>,
+    status: String,
+    raw_status: &'static str,
+    phase: &'static str,
+    uptime_secs: f64,
+    bytes_out: u64,
+    resync_count: u64,
+    feed_lag_units: u64,
+    backpressure_reason: Option<&'static str>,
+    last_progress_at: Option<String>,
+    last_progress_age_ms: Option<u64>,
+    last_error: Option<String>,
+    last_error_at: Option<String>,
+    failure_phase: Option<String>,
+    recent_failure_count: u32,
+    flapping: bool,
+    retrying: bool,
+    retry_attempts: Option<u32>,
+    retry_backoff_ms: Option<u64>,
+    next_retry_at: Option<String>,
+    retry_remaining_ms: Option<u64>,
+    quality: crate::media::snapshots::PublisherQuality,
+    metrics: crate::media::stage_metrics::StageMetricsSnapshot,
+    ended_at: Option<String>,
+    ended_age_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bitrate_kbps: Option<Option<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    started_at: Option<String>,
+}
+
+output_view_patches!(RecentEgressRuntimeView);
+
+pub(super) fn recent_egress_runtime_view(
     outcome: &RecentEgressOutcome,
     include_target_url: bool,
-) -> serde_json::Value {
+) -> RecentEgressRuntimeView {
     let now_ms = MediaEngine::now_epoch_ms();
-    let mut value = serde_json::json!({
-        "outputId": outcome.output_id,
-        "pipelineId": outcome.pipeline_id,
-        "protocol": outcome.protocol,
-        "targetAddr": outcome.target_addr,
-        "status": outcome.status.as_str(),
-        "rawStatus": outcome.raw_status.as_str(),
-        "phase": outcome.phase.as_str(),
-        "uptimeSecs": outcome.uptime_secs,
-        "bytesOut": outcome.bytes_sent,
-        "resyncCount": outcome.resync_count,
-        "feedLagUnits": outcome.feed_lag_units,
-        "backpressureReason": outcome.backpressure_reason,
-        "lastProgressAt": MediaEngine::epoch_ms_to_rfc3339(outcome.last_progress_ms),
-        "lastProgressAgeMs": (outcome.last_progress_ms > 0).then(|| now_ms.saturating_sub(outcome.last_progress_ms)),
-        "lastError": outcome.last_error,
-        "lastErrorAt": MediaEngine::epoch_ms_to_rfc3339(outcome.last_error_ms),
-        "failurePhase": outcome.failure_phase,
-        "recentFailureCount": 0,
-        "flapping": false,
-        "retrying": false,
-        "retryAttempts": serde_json::Value::Null,
-        "retryBackoffMs": serde_json::Value::Null,
-        "nextRetryAt": serde_json::Value::Null,
-        "retryRemainingMs": serde_json::Value::Null,
-        "quality": outcome.quality,
-        "metrics": outcome.metrics,
-        "endedAt": MediaEngine::epoch_ms_to_rfc3339(outcome.ended_at_ms),
-        "endedAgeMs": now_ms.saturating_sub(outcome.ended_at_ms),
-    });
-    if include_target_url {
-        value["targetUrl"] = serde_json::Value::String(outcome.target_url.clone());
+    RecentEgressRuntimeView {
+        output_id: outcome.output_id.clone(),
+        pipeline_id: outcome.pipeline_id.clone(),
+        protocol: outcome.protocol.clone(),
+        target_addr: outcome.target_addr.clone(),
+        status: outcome.status.as_str().to_string(),
+        raw_status: outcome.raw_status.as_str(),
+        phase: outcome.phase.as_str(),
+        uptime_secs: outcome.uptime_secs,
+        bytes_out: outcome.bytes_sent,
+        resync_count: outcome.resync_count,
+        feed_lag_units: outcome.feed_lag_units,
+        backpressure_reason: outcome.backpressure_reason,
+        last_progress_at: MediaEngine::epoch_ms_to_rfc3339(outcome.last_progress_ms),
+        last_progress_age_ms: (outcome.last_progress_ms > 0)
+            .then(|| now_ms.saturating_sub(outcome.last_progress_ms)),
+        last_error: outcome.last_error.clone(),
+        last_error_at: MediaEngine::epoch_ms_to_rfc3339(outcome.last_error_ms),
+        failure_phase: outcome.failure_phase.clone(),
+        recent_failure_count: 0,
+        flapping: false,
+        retrying: false,
+        retry_attempts: None,
+        retry_backoff_ms: None,
+        next_retry_at: None,
+        retry_remaining_ms: None,
+        quality: outcome.quality.clone(),
+        metrics: outcome.metrics,
+        ended_at: MediaEngine::epoch_ms_to_rfc3339(outcome.ended_at_ms),
+        ended_age_ms: now_ms.saturating_sub(outcome.ended_at_ms),
+        target_url: include_target_url.then(|| outcome.target_url.clone()),
+        total_size: None,
+        bitrate_kbps: None,
+        started_at: None,
     }
-    value
-}
-
-pub(super) fn apply_recent_egress_instability_json(
-    value: &mut serde_json::Value,
-    recent: Option<&RecentEgressOutcome>,
-) {
-    let (recent_failure_count, flapping) = MediaEngine::recent_egress_flap_state(recent);
-    value["recentFailureCount"] = serde_json::json!(recent_failure_count);
-    value["flapping"] = serde_json::Value::Bool(flapping);
-}
-
-pub(super) fn apply_egress_retry_state_json(
-    value: &mut serde_json::Value,
-    retry: Option<&EgressRetryState>,
-) {
-    let Some(retry) = retry else {
-        return;
-    };
-
-    let remaining_ms = retry
-        .next_retry_at_ms
-        .saturating_sub(MediaEngine::now_epoch_ms());
-    value["status"] = serde_json::Value::String("retrying".to_string());
-    value["retrying"] = serde_json::Value::Bool(true);
-    value["retryAttempts"] = serde_json::json!(retry.attempts);
-    value["retryBackoffMs"] = serde_json::json!(retry.backoff_ms);
-    value["nextRetryAt"] = MediaEngine::epoch_ms_to_rfc3339(retry.next_retry_at_ms)
-        .map(serde_json::Value::String)
-        .unwrap_or(serde_json::Value::Null);
-    value["retryRemainingMs"] = serde_json::json!(remaining_ms);
 }
 
 pub(crate) fn probe_snapshot(pipeline_id: &str, ingest: &ActiveIngest) -> serde_json::Value {
@@ -263,39 +429,8 @@ mod tests {
     use super::*;
     use crate::domain::state::{EgressPhase, EgressRuntimeStatus, EgressStatus};
 
-    #[test]
-    fn retry_state_marks_runtime_value_as_retrying() {
-        let mut value = serde_json::json!({
-            "status": "running",
-            "retrying": false,
-            "retryAttempts": serde_json::Value::Null,
-            "retryBackoffMs": serde_json::Value::Null,
-            "nextRetryAt": serde_json::Value::Null,
-            "retryRemainingMs": serde_json::Value::Null,
-        });
-        let retry = EgressRetryState {
-            attempts: 3,
-            backoff_ms: 5_000,
-            next_retry_at_ms: MediaEngine::now_epoch_ms() + 5_000,
-        };
-
-        apply_egress_retry_state_json(&mut value, Some(&retry));
-
-        assert_eq!(value["status"], "retrying");
-        assert_eq!(value["retrying"], true);
-        assert_eq!(value["retryAttempts"], 3);
-        assert_eq!(value["retryBackoffMs"], 5_000);
-        assert!(value["retryRemainingMs"].as_u64().unwrap_or(0) > 0);
-    }
-
-    #[test]
-    fn recent_egress_instability_surfaces_flapping_window() {
-        let mut value = serde_json::json!({
-            "status": "running",
-            "recentFailureCount": 0,
-            "flapping": false,
-        });
-        let recent = RecentEgressOutcome {
+    fn failed_recent_outcome() -> RecentEgressOutcome {
+        RecentEgressOutcome {
             output_id: "out-1".to_string(),
             pipeline_id: "pipe-1".to_string(),
             protocol: "rtmp".to_string(),
@@ -319,9 +454,36 @@ mod tests {
             quality: Default::default(),
             metrics: Default::default(),
             ended_at_ms: MediaEngine::now_epoch_ms() - 1_000,
+        }
+    }
+
+    #[test]
+    fn retry_state_marks_runtime_view_as_retrying() {
+        let mut view = recent_egress_runtime_view(&failed_recent_outcome(), false);
+        let retry = EgressRetryState {
+            attempts: 3,
+            backoff_ms: 5_000,
+            next_retry_at_ms: MediaEngine::now_epoch_ms() + 5_000,
         };
 
-        apply_recent_egress_instability_json(&mut value, Some(&recent));
+        view.apply_retry_state(Some(&retry));
+        let value = to_json(&view);
+
+        assert_eq!(value["status"], "retrying");
+        assert_eq!(value["retrying"], true);
+        assert_eq!(value["retryAttempts"], 3);
+        assert_eq!(value["retryBackoffMs"], 5_000);
+        assert!(value["nextRetryAt"].is_string());
+        assert!(value["retryRemainingMs"].as_u64().unwrap_or(0) > 0);
+    }
+
+    #[test]
+    fn recent_egress_instability_surfaces_flapping_window() {
+        let recent = failed_recent_outcome();
+        let mut view = recent_egress_runtime_view(&recent, false);
+
+        view.apply_recent_instability(Some(&recent));
+        let value = to_json(&view);
 
         assert_eq!(value["recentFailureCount"], 2);
         assert_eq!(value["flapping"], true);

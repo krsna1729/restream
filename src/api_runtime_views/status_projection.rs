@@ -4,8 +4,8 @@ use crate::media::engine::{ActiveIngest, MediaEngine, RecentIngestOutcome};
 
 use super::common::ingest_video_track_selection_json;
 pub(super) use super::common::{
-    apply_egress_retry_state_json, apply_recent_egress_instability_json, egress_runtime_json,
-    output_runtime_explanation_json, reader_snapshot_json, recent_egress_runtime_json,
+    EgressRuntimeView, RecentEgressRuntimeView, egress_runtime_view,
+    output_runtime_explanation_json, reader_snapshot_json, recent_egress_runtime_view, to_json,
 };
 
 pub(super) fn active_pipeline_input_json(
@@ -211,19 +211,29 @@ pub(super) fn hls_preview_json(
     })
 }
 
-pub(super) fn pipeline_health_json(
-    input: serde_json::Value,
-    outputs: serde_json::Map<String, serde_json::Value>,
-    recording_enabled: bool,
-    recording_active: bool,
-    hls_preview: serde_json::Value,
-) -> serde_json::Value {
-    serde_json::json!({
-        "input": input,
-        "outputs": serde_json::Value::Object(outputs),
-        "recording": { "enabled": recording_enabled, "active": recording_active },
-        "hlsPreview": hls_preview,
-    })
+/// One output in the health view: still running, or recently ended.
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+pub(super) enum OutputHealthView {
+    Active(EgressRuntimeView),
+    Recent(RecentEgressRuntimeView),
+}
+
+#[derive(serde::Serialize)]
+pub(super) struct RecordingHealthView {
+    pub(super) enabled: bool,
+    pub(super) active: bool,
+}
+
+/// One pipeline in the full health view. Outputs stay typed until the
+/// response is serialized; keyed by output ID in sorted order.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PipelineHealthView {
+    pub(super) input: serde_json::Value,
+    pub(super) outputs: std::collections::BTreeMap<String, OutputHealthView>,
+    pub(super) recording: RecordingHealthView,
+    pub(super) hls_preview: serde_json::Value,
 }
 
 pub(super) fn pipeline_health_summary_json(
@@ -369,27 +379,5 @@ mod tests {
         assert_eq!(value["videoTrackSelection"]["selectedTrackIndex"], 0);
         assert_eq!(value["videoTrackSelection"]["availableTrackCount"], 2);
         assert_eq!(value["videoTrackSelection"]["ignoredTrackCount"], 1);
-    }
-
-    #[test]
-    fn health_view_wraps_input_outputs_recording_and_hls() {
-        let mut outputs = serde_json::Map::new();
-        outputs.insert(
-            "out-1".to_string(),
-            serde_json::json!({"status": "running"}),
-        );
-
-        let value = pipeline_health_json(
-            serde_json::json!({"status": "on"}),
-            outputs,
-            true,
-            false,
-            hls_preview_json(true, 1, Some(25), 3, 1024),
-        );
-
-        assert_eq!(value["input"]["status"], "on");
-        assert_eq!(value["outputs"]["out-1"]["status"], "running");
-        assert_eq!(value["recording"]["enabled"], true);
-        assert_eq!(value["hlsPreview"]["segments"], 3);
     }
 }
