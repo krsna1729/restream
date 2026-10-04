@@ -111,7 +111,7 @@ Use these before any checker, wherever the weak form exists today:
 
 ### Rung 2: delete duplicated state
 
-1. **`EgressManager` keeps one map, not two.** `desired` and `desired_specs`
+1. **`EgressManager` keeps one map, not two** (done). `desired` and `desired_specs`
    (`src/media/egress/manager.rs`) must agree on keys and generations; fold
    the spec into `DesiredOutput`. Disagreement then has no representation.
 2. **`ReadyQueue` owns membership.** `ScheduleState::enqueued`
