@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 mod concurrency;
+mod gates;
 mod scan;
 mod source_audit;
 
@@ -33,6 +34,7 @@ fn main() -> ExitCode {
         ["concurrency", "fast"] => concurrency::fast(),
         ["concurrency", "contract"] => concurrency::contract(),
         ["loom", target] => concurrency::loom(target),
+        ["gates", ref rest @ ..] => gates::run_gates(rest),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -57,7 +59,9 @@ commands:
   api-contract          frontend/backend API contract + api-smoke harness run
   concurrency fast      loom models and focused concurrency regressions
   concurrency contract  fast set + live fault/recovery harness modes
-  loom <test-target>    build one tests/<target>.rs with --cfg loom and run it";
+  loom <test-target>    build one tests/<target>.rs with --cfg loom and run it
+  gates [--staged|--unstaged|--base <ref>] [--dry-run]
+                        route changed files to checks; run the pre-commit ones";
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
