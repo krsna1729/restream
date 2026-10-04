@@ -58,11 +58,17 @@ fn minimal_hevc_sps_nalu(chroma_format_idc: u64, bit_depth_minus8: u64) -> Vec<u
     push_bits(&mut bits, 0x7b, 8);
     push_ue(&mut bits, 0);
     push_ue(&mut bits, chroma_format_idc);
+    if chroma_format_idc == 3 {
+        push_bits(&mut bits, 0, 1); // separate_colour_plane_flag
+    }
     push_ue(&mut bits, 1920);
     push_ue(&mut bits, 1080);
     push_bits(&mut bits, 0, 1);
     push_ue(&mut bits, bit_depth_minus8);
     push_ue(&mut bits, bit_depth_minus8);
+    // rbsp_trailing_bits: a stop bit keeps the last byte nonzero, so Annex-B
+    // framing (which strips trailing zero bytes) leaves the SPS intact.
+    push_bits(&mut bits, 1, 1);
 
     let mut sps = vec![0x42, 0x01];
     sps.extend(insert_emulation_prevention(&pack_bits(&bits)));
@@ -72,6 +78,7 @@ fn minimal_hevc_sps_nalu(chroma_format_idc: u64, bit_depth_minus8: u64) -> Vec<u
 include!("codec_tests/format_conversion.rs");
 include!("codec_tests/annexb_avcc.rs");
 include!("codec_tests/transport_stream.rs");
+include!("codec_tests/parser_round_trips.rs");
 
 /// The allocation-free NALU walker yields exactly the NALUs the production
 /// start-code finder delimits, for arbitrary byte streams (zeros and start

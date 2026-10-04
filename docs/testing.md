@@ -46,6 +46,31 @@ Keep successful logs quiet. New tests should not land with compiler warnings,
 panic text, FFmpeg probe chatter, or similar “expected noise” in passing runs;
 fix or suppress that output at the helper level instead.
 
+### Parser fuzz targets
+
+`fuzz/` holds cargo-fuzz targets for the parsers that read untrusted media
+bytes. They call the production functions; RTMP-private parsers are reached
+through `media::rtmp::fuzz_entry`, which exists only under `--cfg fuzzing`.
+
+| Target | Input | Production code |
+|---|---|---|
+| `flv_video_tag` | RTMP ingest video tag | `classify_flv_video_packet`, `flv_avcc_config_annexb_parameter_sets`, `parse_flv_video_meta` (SPS) |
+| `flv_audio_tag` | RTMP ingest audio tag | `parse_flv_audio_meta` (AudioSpecificConfig) |
+| `avcc_annexb` | H.264 from either ingest | `parse_avcc_config`, `avcc_to_annexb`, `annexb_to_avcc`, `build_avcc_sequence_header` (must read back) |
+| `hevc_enhanced_rtmp` | HEVC Annex-B from SRT ingest | `build_hevc_enhanced_rtmp_sequence_header` (SPS profile/tier/level), coded-frame packer |
+| `rtmp_server_responses` | destination server bytes after the handshake | `RtmpSessionCore::handle_server_input` |
+| `rtmp_client_requests` | publisher bytes after the handshake | ingest `ServerSession::handle_input` with the message-size limit |
+| `ts_demux` | SRT ingest MPEG-TS, sync-forced or raw | `TsDemuxer` (PAT/PMT, PES, `mpegts_probe`) |
+
+```sh
+cd fuzz
+./seed-corpus.sh   # seeds ts_demux from the checked-in TS fixtures
+cargo +nightly fuzz run <target> -- -max_total_time=60
+```
+
+CI (`Parser fuzz smoke`) runs every target for 30 s. A crash becomes a
+regression unit test next to the parser before the fix lands.
+
 ## Frontend test split
 
 Frontend confidence is intentionally split between TypeScript ownership and

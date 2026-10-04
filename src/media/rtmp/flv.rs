@@ -236,7 +236,12 @@ pub(super) fn parse_sps_video_info(sps_nalu: &[u8]) -> Option<SpsVideoInfo> {
                     let mut next_scale = 8i32;
                     for _ in 0..size {
                         if next_scale != 0 {
+                            // delta_scale is -128..=127 (H.264 7.4.2.1.1.1);
+                            // anything else is not a valid SPS.
                             let delta = reader.read_signed_exp_golomb()?;
+                            if !(-128..=127).contains(&delta) {
+                                return None;
+                            }
                             next_scale = (last_scale + delta + 256) % 256;
                         }
                         last_scale = if next_scale == 0 {
@@ -397,15 +402,12 @@ impl<'a> BitReader<'a> {
         Some((1 << zeros) - 1 + suffix)
     }
 
-    fn read_signed_exp_golomb(&mut self) -> Option<i32> {
-        let val = self.read_exp_golomb()?;
-        if val == 0 {
-            Some(0)
-        } else if val % 2 == 1 {
-            Some((val / 2 + 1) as i32)
-        } else {
-            Some(-(val as i32 / 2))
-        }
+    pub(super) fn read_signed_exp_golomb(&mut self) -> Option<i32> {
+        // se(v) maps codeNum k to (-1)^(k+1) * ceil(k / 2); computed in i64
+        // because codeNum reaches 2^32 - 2.
+        let code = i64::from(self.read_exp_golomb()?);
+        let magnitude = (code + 1) / 2;
+        i32::try_from(if code % 2 == 1 { magnitude } else { -magnitude }).ok()
     }
 }
 
@@ -472,7 +474,13 @@ pub(super) fn parse_flv_audio_meta(data: &[u8]) -> Option<AudioMeta> {
                 meta.sample_rate = aac_rates[freq_idx as usize];
             }
             if ch_config > 0 {
-                meta.channels = ch_config as u32;
+                // Channel configuration 7 is 7.1: eight channels (ISO/IEC
+                // 14496-3 Table 1.19), as the MPEG-TS ADTS probe reports.
+                meta.channels = if ch_config == 7 {
+                    8
+                } else {
+                    u32::from(ch_config)
+                };
                 meta.channel_layout = Some(
                     match ch_config {
                         1 => "mono",

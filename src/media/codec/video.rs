@@ -596,6 +596,9 @@ pub fn for_each_annexb_nalu<'a>(
 }
 
 /// Build an FLV video sequence header (AVCC decoder config) from Annex B keyframe data.
+///
+/// Returns `None` when the parameter sets do not fit the record: at most 31
+/// SPS (5-bit count), 255 PPS, and 65,535 bytes per NALU (16-bit length).
 pub fn build_avcc_sequence_header(annexb_data: &[u8]) -> Option<Bytes> {
     let nalus = split_annexb_nalus(annexb_data);
     let sps_list: Vec<&[u8]> = nalus
@@ -610,7 +613,12 @@ pub fn build_avcc_sequence_header(annexb_data: &[u8]) -> Option<Bytes> {
         .collect();
 
     let sps = sps_list.first()?;
-    if sps.len() < 4 {
+    let sps_count = u8::try_from(sps_list.len())
+        .ok()
+        .filter(|count| *count <= 0x1F)?;
+    let pps_count = u8::try_from(pps_list.len()).ok()?;
+    let too_long = |nalu: &&[u8]| u16::try_from(nalu.len()).is_err();
+    if sps.len() < 4 || sps_list.iter().chain(&pps_list).any(too_long) {
         return None;
     }
 
@@ -624,12 +632,12 @@ pub fn build_avcc_sequence_header(annexb_data: &[u8]) -> Option<Bytes> {
     buf.push(sps[3]); // AVCLevelIndication
     buf.push(0xFF); // lengthSizeMinusOne = 3 (4 bytes)
 
-    buf.push(0xE0 | sps_list.len() as u8);
+    buf.push(0xE0 | sps_count);
     for s in &sps_list {
         buf.extend_from_slice(&(s.len() as u16).to_be_bytes());
         buf.extend_from_slice(s);
     }
-    buf.push(pps_list.len() as u8);
+    buf.push(pps_count);
     for p in &pps_list {
         buf.extend_from_slice(&(p.len() as u16).to_be_bytes());
         buf.extend_from_slice(p);

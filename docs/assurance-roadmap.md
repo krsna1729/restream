@@ -58,7 +58,7 @@ Checked against `master` (Restream) and `main` (srt-rs), October 2026.
 |---|---|---|
 | 1 Language | Strong: Compio Owners are `!Send` and thread-homed; one Owner per address family, not per output. Unsafe is confined to FFmpeg/libc/socket boundaries. | Strong: sans-I/O single-owner protocol core; `srt-lifecycle` forbids `unsafe`; strict unsafe lints. |
 | 2 API design | Good, with duplicated state the types do not prevent (listed below). | Strong: logical peer/caller ids, transactional first attach, bounded caller pool, generational dense arena that owns readiness. |
-| 3 Ecosystem | Many property tests and live fault cases; **no Miri, sanitizer or fuzz job in CI**. | Mature: proptests with checked-in seeds, Miri, ASan, structured cargo-fuzz targets, libsrt interop. |
+| 3 Ecosystem | Many property tests and live fault cases; cargo-fuzz smoke over seven media/RTMP/TS parsers; **no Miri or sanitizer job in CI**. | Mature: proptests with checked-in seeds, Miri, ASan, structured cargo-fuzz targets, libsrt interop. |
 | 4 Model checking | Seven Loom models in the mandatory concurrency gate. **No Kani.** | One Loom model (reuseport layout barrier, run by `cargo xtask ci`). **No Kani.** |
 | 5–6 TLA+, Lean | None. | None. |
 
@@ -115,8 +115,8 @@ kTLS handoff, capacity).
 Add a small Miri target for pure, ownership-sensitive Rust that needs no
 FFmpeg or kernel, and an AddressSanitizer job over selected native/FFI-heavy
 integration tests. Do not copy srt-rs's whole matrix: Miri cannot execute
-FFmpeg or io_uring paths. Add cargo-fuzz targets for the parsers the
-test-depth audit names (enhanced-RTMP HEVC, AVCC/ASC, RTMP server responses).
+FFmpeg or io_uring paths. The parser fuzz targets (enhanced-RTMP HEVC,
+AVCC/ASC, RTMP server responses) exist; see [testing](testing.md#parser-fuzz-targets).
 
 ### Rung 4: Kani on a handful of primitives
 

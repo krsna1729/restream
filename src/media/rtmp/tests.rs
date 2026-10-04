@@ -18,3 +18,4 @@ include!("tests/flv.rs");
 include!("tests/endpoint.rs");
 include!("tests/metadata_timestamps.rs");
 include!("tests/admission.rs");
+include!("tests/server_responses.rs");

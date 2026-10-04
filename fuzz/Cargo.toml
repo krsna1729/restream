@@ -1,0 +1,70 @@
+[package]
+name = "restream-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+restream = { path = ".." }
+
+# Not part of the root workspace: cargo-fuzz builds it with nightly and
+# sanitizer flags.
+[workspace]
+members = ["."]
+
+# Same patched RTMP crate as the root workspace (a [patch] is not inherited).
+[patch.crates-io]
+rml_rtmp = { path = "../vendor/rml_rtmp" }
+
+[[bin]]
+name = "flv_video_tag"
+path = "fuzz_targets/flv_video_tag.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "flv_audio_tag"
+path = "fuzz_targets/flv_audio_tag.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "avcc_annexb"
+path = "fuzz_targets/avcc_annexb.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hevc_enhanced_rtmp"
+path = "fuzz_targets/hevc_enhanced_rtmp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rtmp_server_responses"
+path = "fuzz_targets/rtmp_server_responses.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rtmp_client_requests"
+path = "fuzz_targets/rtmp_client_requests.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ts_demux"
+path = "fuzz_targets/ts_demux.rs"
+test = false
+doc = false
+bench = false

@@ -316,6 +316,33 @@ jobs:
           echo "=== Coverage summary ==="
           cargo llvm-cov report --summary-only 2>/dev/null || true
 
+  fuzz-smoke:
+    name: Parser fuzz smoke
+    runs-on: ubuntu-24.04
+    needs: test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/ci-bootstrap
+        with:
+          node_version: '22'
+          npm_ci: 'true'
+          system_deps_profile: media
+          native_prefix: 'true'
+          rust_cache: 'true'
+      - name: Build frontend assets for the library
+        run: npm run build:frontend
+      - name: Install nightly and cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo install cargo-fuzz --locked
+      - name: Run every parser target for 30 s
+        working-directory: fuzz
+        run: |
+          ./seed-corpus.sh
+          for target in $(cargo +nightly fuzz list); do
+            cargo +nightly fuzz run "$target" -- -max_total_time=30 -timeout=5
+          done
+
   integration-build:
     name: Transport live-harness build
     runs-on: ubuntu-24.04

@@ -314,3 +314,69 @@ fn bit_reader_exp_golomb() {
     assert_eq!(r.read_exp_golomb(), Some(3));
 }
 
+
+/// se(v) over the whole codeNum range. The largest codeNum (2^32 - 2, 31
+/// leading zeros) is -(2^31 - 1); it used to wrap through `as i32` to +1.
+#[test]
+fn bit_reader_signed_exp_golomb_covers_the_full_code_range() {
+    let mut r = BitReader::new(&[0b01001100, 0b10000000]); // 010 011 00100
+    assert_eq!(r.read_signed_exp_golomb(), Some(1));
+    assert_eq!(r.read_signed_exp_golomb(), Some(-1));
+    assert_eq!(r.read_signed_exp_golomb(), Some(2));
+
+    let mut r = BitReader::new(&[0, 0, 0, 0b0000_0001, 0xFF, 0xFF, 0xFF, 0xFE]);
+    assert_eq!(r.read_signed_exp_golomb(), Some(-(i32::MAX)));
+}
+
+/// Fuzz crash (`flv_video_tag`): an AVC sequence header whose SPS scaling
+/// list carries a delta_scale far outside -128..=127 overflowed
+/// `last_scale + delta` (a panic in debug builds, a wrapped value in
+/// release). Such an SPS is invalid, so no resolution is reported.
+#[test]
+fn sps_with_out_of_range_scaling_delta_is_rejected() {
+    #[rustfmt::skip]
+    const CRASH: [u8; 63] = [
+        0x97, 0x00, 0x00, 0xc1, 0x60, 0x8e, 0x00, 0xc1, 0xc1, 0xc5, 0x8e, 0x00,
+        0x32, 0xee, 0x7a, 0x00, 0x00, 0x00, 0x07, 0x00, 0x1f, 0x2d, 0xad, 0xad,
+        0x2c, 0xad, 0xad, 0xad, 0xad, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff,
+        0x90, 0x00, 0x10, 0xad, 0xb5, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad,
+        0xad, 0xad, 0xad, 0x25, 0x1d, 0x1d, 0x1d, 0x1d, 0xff, 0xed, 0x1d, 0x21,
+        0x09, 0x00, 0x08,
+    ];
+    let meta = parse_flv_video_meta(&CRASH).expect("H.264 sequence header");
+    assert_eq!((meta.width, meta.height), (0, 0));
+}
+
+/// AAC channel configuration 7 is 7.1, eight channels (ISO/IEC 14496-3
+/// Table 1.19). The MPEG-TS ADTS probe already reported 8; the RTMP
+/// AudioSpecificConfig probe reported 7, so a 7.1 RTMP publisher and a 7.1
+/// SRT publisher disagreed on the channel count.
+#[test]
+fn flv_audio_probe_reports_eight_channels_for_channel_configuration_7() {
+    let header = crate::media::codec::build_aac_sequence_header(48_000, 8);
+    let meta = parse_flv_audio_meta(&header).expect("AAC sequence header");
+    assert_eq!(meta.channels, 8);
+    assert_eq!(meta.channel_layout.as_deref(), Some("7.1"));
+}
+
+proptest! {
+    /// The AudioSpecificConfig Restream synthesizes for SRT→RTMP (no cached
+    /// config) is read back by the RTMP ingest probe as the same rate and
+    /// channel count, for every rate and channel count the 2-byte AAC-LC
+    /// config can express (7 channels has no channel configuration).
+    #[test]
+    fn aac_sequence_header_round_trips_through_the_flv_audio_probe(
+        rate in prop::sample::select(vec![
+            96_000u32, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000,
+            12_000, 11_025, 8_000,
+        ]),
+        channels in prop::sample::select(vec![1u32, 2, 3, 4, 5, 6, 8]),
+    ) {
+        let header = crate::media::codec::build_aac_sequence_header(rate, channels);
+        let meta = parse_flv_audio_meta(&header).expect("AAC sequence header");
+        prop_assert_eq!(meta.codec.as_str(), "aac");
+        prop_assert_eq!(meta.profile.as_deref(), Some("LC"));
+        prop_assert_eq!(meta.sample_rate, rate);
+        prop_assert_eq!(meta.channels, channels);
+    }
+}

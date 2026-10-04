@@ -12,6 +12,9 @@ pub(crate) mod egress_payload_cache;
 mod egress_transport;
 mod enhanced;
 mod flv;
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub mod fuzz_entry;
 mod handshake;
 mod ingest;
 mod ingest_media;
