@@ -39,7 +39,7 @@ COPY scripts/lib/ scripts/lib/
 # would make unrelated release/harness/frontend helper edits rebuild the static
 # native prefix. Add only bootstrap/native-build owners here.
 COPY scripts/dev/bootstrap.sh scripts/dev/harness-host-prereqs.sh scripts/dev/install-git-hooks.sh scripts/dev/
-COPY scripts/build/resource-limit.sh scripts/build/native-deps.sh scripts/build/
+COPY scripts/build/native-deps.sh scripts/build/
 COPY scripts/build/native/ scripts/build/native/
 COPY scripts/native/ scripts/native/
 COPY .githooks/ .githooks/
@@ -107,7 +107,7 @@ COPY vendor/ vendor/
 RUN mkdir -p benches src \
     && awk '/^\[\[bench\]\]$/ { in_bench = 1; next } in_bench && /^name = "/ { name = $0; sub(/^name = "/, "", name); sub(/"$/, "", name); printf "fn main() {}\\n" > ("benches/" name ".rs"); in_bench = 0 }' Cargo.toml \
     && printf 'fn main() {}\n' > src/main.rs
-RUN RESTREAM_BUILD_PROFILE=release scripts/build/resource-limit.sh ./scripts/build/app-native.sh
+RUN RESTREAM_BUILD_PROFILE=release ./scripts/build/app-native.sh
 
 # Return to the application build stage for its runtime filesystem assembly.
 FROM rust-build AS runtime-tree
@@ -123,7 +123,7 @@ COPY --from=frontend-build /workspace/public public
 # artifacts (a stub main) as up to date. Touch the real sources so the final
 # build compiles them.
 RUN find src -type f -name '*.rs' -exec touch {} + \
-    && RESTREAM_BUILD_PROFILE=release scripts/build/resource-limit.sh ./scripts/build/app-native.sh
+    && RESTREAM_BUILD_PROFILE=release ./scripts/build/app-native.sh
 
 # The harness image is an explicit target, so this extra bench build is paid
 # only by `--target harness`, never by the production runtime image. It must

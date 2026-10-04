@@ -35,7 +35,7 @@ For fixture-first media discipline:
 For a plain full-suite run without the hygiene scan:
 
 ```sh
-scripts/build/resource-limit.sh cargo test
+cargo test
 ```
 
 Keep successful logs quiet. New tests should not land with compiler warnings,
@@ -107,10 +107,10 @@ lower layer cannot prove the behavior.
 
 For the native fMP4 preview path specifically:
 
-- `scripts/build/resource-limit.sh cargo test hls_fmp4 -- --nocapture` covers the unit,
+- `cargo test hls_fmp4 -- --nocapture` covers the unit,
   proptest, and loom-backed correctness checks for rendition publication and
   sample timestamp packaging.
-- `scripts/build/resource-limit.sh cargo bench --profile bench --bench hls_fmp4_cost`
+- `cargo bench --profile bench --bench hls_fmp4_cost`
   measures fMP4 segment muxing plus the multi-rendition in-memory publication
   path used by browser preview.
 - `npm run test:frontend:browser-dom` keeps the preview audio-track picker
@@ -208,38 +208,13 @@ uncommitted.
 Keep correctness throughput high, but treat measurement fidelity as a separate
 constraint.
 
-- Rust unit and integration tests: prefer a single `scripts/build/resource-limit.sh cargo test ...`
-  invocation and let Cargo own compile parallelism while `resource-limit.sh`
-  bounds `RUST_TEST_THREADS` from the same available-memory and CPU budget.
-  Avoid launching multiple heavy `cargo test` commands against the same worktree
-  at once; that just trades useful concurrency for lock contention and noisier
-  logs.
-
-### Test thread concurrency
-
-`scripts/build/resource-limit.sh` derives a default `RUST_TEST_THREADS` from
-available memory so that `cargo test` does not exhaust RAM on constrained
-machines such as WSL2 or small CI runners.
-
-The default budget is 500 MB per test thread (`RESTREAM_MB_PER_TEST_THREAD`,
-minimum 1). The final value is capped so that test threads never exceed the
-available CPU count minus the configured reserve
-(`RESTREAM_CPU_RESERVE`, default 1).
-
-```sh
-# Let the wrapper derive the thread count from the machine's resources:
-scripts/build/resource-limit.sh cargo test
-
-# Override the per-thread memory budget:
-RESTREAM_MB_PER_TEST_THREAD=1024 scripts/build/resource-limit.sh cargo test
-
-# Pin an explicit thread count (skips memory derivation entirely):
-RUST_TEST_THREADS=2 scripts/build/resource-limit.sh cargo test
-```
-
-The derivation runs both on the outer lock-acquiring invocation and on nested
-(re-entrant) invocations, so the budget is always applied when the build lock
-is held.
+- Rust unit and integration tests: prefer a single `cargo test ...`
+  invocation. Cargo owns compile parallelism (`.cargo/config.toml`,
+  `jobs = -1`) and libtest picks its default thread count. Avoid launching
+  multiple heavy `cargo test` commands against the same worktree at once;
+  that just trades useful concurrency for lock contention and noisier logs.
+  On a memory-constrained host, pin `RUST_TEST_THREADS=N` and
+  `CARGO_BUILD_JOBS=N` explicitly.
 - Live harness correctness modes: `src/bin/test_harness.rs` may batch
   correctness-only suite modes in parallel when each mode is isolated in its
   own network namespace and work directory.
@@ -247,7 +222,7 @@ is held.
   CPU, RSS, and throughput numbers are only comparable when the harness runs one
   measurement slice at a time from `target/bench/`.
 - Criterion benches: parallelize compilation and fixture preparation, not timed
-  measurement. `scripts/build/resource-limit.sh cargo bench --no-run` is the safe fan-out
+  measurement. `cargo bench --no-run` is the safe fan-out
   step; actual `cargo bench --bench ...` execution should stay serial unless the
   runs are explicitly resource-isolated.
 ## Scoped verification loop
@@ -259,18 +234,18 @@ developer loops fast while still making the verification signal precise.
 Good scoped Rust patterns:
 
 ```sh
-scripts/build/resource-limit.sh cargo test --lib <test-name-or-module-filter>
-scripts/build/resource-limit.sh cargo test --test api <test-name-filter>
-scripts/build/resource-limit.sh cargo test --test transcoder <test-name-filter>
+cargo test --lib <test-name-or-module-filter>
+cargo test --test api <test-name-filter>
+cargo test --test transcoder <test-name-filter>
 ```
 
 Good scoped benchmark patterns:
 
 ```sh
-scripts/build/resource-limit.sh cargo bench --bench <bench-name> -- <criterion-filter>
-scripts/build/resource-limit.sh cargo bench --bench high_performance_data_path -- data_path/egress_progress
-scripts/build/resource-limit.sh cargo bench --bench srt_ingest_latency -- 'srt_(ingest|egress)'
-scripts/build/resource-limit.sh cargo bench --bench hls_fmp4_cost -- hls_fmp4_cost
+cargo bench --bench <bench-name> -- <criterion-filter>
+cargo bench --bench high_performance_data_path -- data_path/egress_progress
+cargo bench --bench srt_ingest_latency -- 'srt_(ingest|egress)'
+cargo bench --bench hls_fmp4_cost -- hls_fmp4_cost
 ```
 
 The SRT bench is a socket-pair microbenchmark, not a live pipeline test. It is
@@ -384,8 +359,7 @@ scripts/harness/run.sh --prepare
 target/bench/test_harness catalog help
 ```
 
-Run a mode through the wrapper so stale binaries are rebuilt and the shared
-build lock is respected:
+Run a mode through the wrapper so stale binaries are rebuilt:
 
 ```sh
 scripts/harness/run.sh <mode>

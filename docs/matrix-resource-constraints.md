@@ -22,7 +22,7 @@ the production runtime owns admission and bounded media storage.
 
 | Resource | Current owner |
 |---|---|
-| Cargo/build memory and host-wide build serialization | `scripts/build/resource-limit.sh` and the worktree build lock |
+| Cargo/build parallelism | `.cargo/config.toml` (`jobs = -1`); no host-wide build serialization |
 | Tokio scheduler sizing | `src/main.rs` using values parsed by `src/config.rs` |
 | Packet, MPEG-TS, and AVIO queue bounds | `src/config.rs` and their structures under `src/media/` |
 | RTMP listener and connection admission | `src/media/rtmp.rs` and runtime configuration |
@@ -47,13 +47,12 @@ are executable behavior. Consult the harness entry point and
 [Testing](testing.md) instead of copying their lists here.
 
 The harness deliberately avoids killing unrelated media processes. In a shared
-host or worktree session, establish process ownership and the build lock before
-starting a heavy run.
+host or worktree session, establish process ownership and check for running builds
+(`pgrep -a -x cargo`) before starting a heavy run.
 
 ## Running a bounded matrix
 
-1. Build the required profile through the repository's resource-limited build
-   path. If the mode consumes `target/bench/`, use
+1. Build the required profile. If the mode consumes `target/bench/`, use
    `scripts/build/bench-harness.sh`.
 2. Choose the smallest harness mode that proves the changed protocol or
    lifecycle boundary.

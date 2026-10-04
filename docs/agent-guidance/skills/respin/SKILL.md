@@ -18,7 +18,7 @@ in a fresh run directory under `/tmp/restream-live/`.
 
 ## Setup
 
-- Build with `scripts/build/resource-limit.sh cargo build --profile bench --bin restream`.
+- Build with `cargo build --profile bench --bin restream`.
   Cargo places this binary at `target/release/restream`.
 - If frontend assets changed, run `npm run build:frontend` before Cargo and
   touch `src/api/static_assets.rs` to refresh the embedded assets.

@@ -68,9 +68,8 @@ single-file release contract.
 The [README](../README.md#daily-loop) owns the normal backend and frontend
 command loop so it does not drift between two newcomer guides.
 
-Use `scripts/build/resource-limit.sh` around Cargo and other heavy commands.
-The wrapper owns build serialization and job sizing; its source and usage text
-are authoritative. `scripts/build/app-native.sh` additionally verifies that
+Cargo job sizing lives in `.cargo/config.toml` (`jobs = -1`).
+`scripts/build/app-native.sh` verifies that
 the development binary uses the expected native linkage.
 
 ## Frontend work
@@ -102,7 +101,7 @@ explains when a benchmark is required without copying the target inventory.
 To exercise the fully static engineering path, run:
 
 ```sh
-scripts/build/resource-limit.sh scripts/build/app-static.sh
+scripts/build/app-static.sh
 ```
 
 The build script creates the native prefix when needed, verifies the resulting

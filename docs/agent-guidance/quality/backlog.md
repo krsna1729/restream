@@ -89,7 +89,7 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   `src/media/egress/backends/rtmp_shard.rs`,
   `src/media/egress/backends/rtmp_shard_resolve_runtime.rs`, plus the shard
   test modules for both backends.
-- Gates: `scripts/build/resource-limit.sh cargo test --lib`;
+- Gates: `cargo test --lib`;
   `scripts/check/concurrency/contract.sh`; standard fmt/clippy/source-audit.
 - Context: RTMP already calls `connect_fabric_tcp_egress_socket` directly, so
   SRT's connector generic is asymmetric residue; the completion-source trait
@@ -147,7 +147,7 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   `src/media/` modules.
 - Files: none modified (measurement only); output lands in
   `docs/agent-guidance/quality/journal.md` + new backlog items.
-- Gates: `scripts/build/resource-limit.sh cargo llvm-cov --summary-only` completes
+- Gates: `cargo llvm-cov --summary-only` completes
   clean (kill-check media processes first; this is a heavy build).
 - Context: cargo-llvm-cov is installed. The stale root `coverage.lcov` is from
   2026-06-24 and gitignored; a fresh map is the seed for invariant-coverage
@@ -184,7 +184,7 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   resolution, URL default key length, every supported key length, interior-NUL
   passphrases, and FFI option failures through the existing error surface.
 - Files: `src/media/srt/crypto.rs`, `src/media/srt_tests.rs`.
-- Gates: `scripts/build/resource-limit.sh cargo test srt_crypto --lib`;
+- Gates: `cargo test srt_crypto --lib`;
   `cargo fmt --all --check`; standard clippy and test gates.
 - Context: Q-001 measured 13/80 covered lines (16.25%) in the crypto adapter.
   Current higher-layer validation is strong, but the last conversion and FFI
@@ -205,7 +205,7 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   session/registration cleanup. Reuse the existing session harness and avoid a
   duplicate live pipeline.
 - Files: `src/media/rtmp.rs`, `src/media/rtmp/tests.rs`.
-- Gates: `scripts/build/resource-limit.sh cargo test rtmp --lib`;
+- Gates: `cargo test rtmp --lib`;
   `cargo fmt --all --check`; standard clippy and test gates.
 - Context: Q-001 measured 221/1,301 covered lines (16.99%) despite strong FLV,
   timestamp, and state-helper proofs. The remaining gap is concentrated in the
@@ -252,8 +252,7 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   state intact and then accept the valid update.
 - Files: `src/media/mpegts.rs`,
   `src/media/mpegts_tests/tables_and_sync.rs`.
-- Gates: break-it-first focused regression; `scripts/build/resource-limit.sh
-  cargo test media::mpegts::tests::tables_and_sync --lib`; relevant
+- Gates: break-it-first focused regression; `cargo test media::mpegts::tests::tables_and_sync --lib`; relevant
   `high_performance_data_path` MPEG-TS demux benchmark before/after; `cargo fmt
   --all --check`; standard clippy and test gates.
 - Context: Q-002 found that version and stream state are committed before
@@ -271,8 +270,7 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   untrusted counts, or publishing partial metadata; deterministic crafted
   vectors must exercise the bit-exhaustion and crop-underflow boundaries.
 - Files: `src/media/mpegts_probe.rs`, `src/media/mpegts_tests.rs`.
-- Gates: break-it-first focused regressions; `scripts/build/resource-limit.sh
-  cargo test media::mpegts::tests --lib`; relevant
+- Gates: break-it-first focused regressions; `cargo test media::mpegts::tests --lib`; relevant
   `high_performance_data_path` MPEG-TS demux benchmark before/after; `cargo fmt
   --all --check`; standard clippy and test gates.
 - Context: Q-002 found only a two-byte H.265 smoke case. The MPEG-TS probe bit
@@ -312,8 +310,7 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   the `MAX_PES_BUFFER` limit must remain effective under repeated
   continuation packets while a later valid PES still demuxes.
 - Files: `src/media/mpegts.rs`, `src/media/mpegts_tests.rs`.
-- Gates: break-it-first focused regressions; `scripts/build/resource-limit.sh
-  cargo test media::mpegts::tests --lib`; relevant MPEG-TS demux/resync
+- Gates: break-it-first focused regressions; `cargo test media::mpegts::tests --lib`; relevant MPEG-TS demux/resync
   benchmark before/after if production code changes; `cargo fmt --all
   --check`; standard clippy and test gates.
 - Context: Q-002 found a bounded corrupt-sync remainder regression but no
@@ -332,8 +329,7 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   float-to-millisecond overflow, and integer overflow in colon-delimited
   hours/minutes instead of coercing them to zero or saturated timestamps.
 - Files: `src/media/file_ingest.rs`.
-- Gates: break-it-first focused regression; `scripts/build/resource-limit.sh
-  cargo test media::file_ingest::tests --lib`; `cargo fmt --all --check`;
+- Gates: break-it-first focused regression; `cargo test media::file_ingest::tests --lib`; `cargo fmt --all --check`;
   standard clippy and test gates.
 - Context: Q-002 found ordinary negative/syntax rejection but no finite/range
   validation before floating-point casts and integer time arithmetic.
@@ -364,7 +360,7 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   `high_performance_data_path` recorded in `baselines.md` with date, commit,
   and noise notes.
 - Files: `docs/agent-guidance/quality/baselines.md`.
-- Gates: three clean serial `scripts/build/resource-limit.sh cargo bench --bench <name>`
+- Gates: three clean serial `cargo bench --bench <name>`
   runs on an otherwise idle host (`pgrep -x restream/mediamtx/ffmpeg` all
   empty).
 - Context: Criterion state in `target/criterion/` is scratch; the ledger is
@@ -381,9 +377,9 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   with MSR/process-counter evidence.
 - Files: `src/media/rtmp.rs`, `benches/codec_conversions.rs`,
   `docs/agent-guidance/quality/baselines.md`.
-- Gates: baseline and after `scripts/build/resource-limit.sh cargo bench --bench
+- Gates: baseline and after `cargo bench --bench
   codec_conversions -- 'codec/rtmp_payload_ownership'`; scoped
-  `scripts/build/resource-limit.sh cargo test rtmp --lib`; bench-profile
+  `cargo test rtmp --lib`; bench-profile
   `MSR_OUTPUT_COUNTS=1200` receiver proof via MediaMTX `/v3/paths/list` plus
   `perf stat -p <restream-pid>` before/after; `cargo fmt --all --check`.
 - Context: MSR perf at `da84fbe` showed RTMP egress, allocator calls, memmove,
@@ -462,8 +458,8 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   `fault.output-stall`, and `recovery` recorded in the journal; any failure or
   flake filed as its own item with output attached.
 - Files: none modified (measurement only).
-- Gates: `scripts/build/resource-limit.sh cargo build --bin test_harness` then each
-  mode via `scripts/build/resource-limit.sh target/debug/test_harness <mode>`,
+- Gates: `cargo build --bin test_harness` then each
+  mode via `target/debug/test_harness <mode>`,
   serially, idle host.
 - Context: these modes are the live resilience contract; the loop needs a
   known-green baseline before it can treat a failure as a regression signal.
@@ -478,7 +474,7 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   historical 2026-06-27 numbers.
 - Files: `docs/agent-guidance/quality/baselines.md`.
 - Gates: `scripts/build/bench-harness.sh` then
-  `scripts/build/resource-limit.sh target/bench/test_harness resource-sweep`, serial,
+  `target/bench/test_harness resource-sweep`, serial,
   idle host.
 - Context: the 2026-06-27 memory-optimization pass cut ~205 MB RSS across 15
   scale cases; without a refreshed baseline, regressions of that work are
@@ -578,7 +574,7 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 - Files: `src/media/srt/tokio_egress/mod.rs` (`RustSrtSocket::send`'s
   `Shared` arm, `drive_shared_srt_egress`), `src/media/srt/egress_engine.rs`
   (`send_pending`'s fragment loop), `src/media/srt/tokio_egress/shared.rs`.
-- Gates: `scripts/build/resource-limit.sh cargo test --lib srt`;
+- Gates: `cargo test --lib srt`;
   `scripts/check/concurrency/contract.sh`; `benches/matrix_throughput.rs`
   before/after; MSR shared-muxer ladder for the density claim.
 - Context: `RustSrtSocket::send`'s `Shared` arm calls `shared.drive(...)`

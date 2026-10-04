@@ -29,7 +29,7 @@ RESTREAM_SBOM_PATH="$release_sbom" \
 RESTREAM_BUILD_PROFILE=release \
 RESTREAM_BUILD_BINS="restream restream-mcp test_harness" \
 RESTREAM_BUILD_FEATURES="mcp-server,mcp-http-backend" \
-    scripts/build/resource-limit.sh ./scripts/build/app-native.sh
+    ./scripts/build/app-native.sh
 
 tmp="$(mktemp -d)"
 cleanup() {

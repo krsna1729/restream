@@ -292,9 +292,9 @@ for file in "${changed_files[@]}"; do
     fi
 
     if is_rust_lint_scope_file "$file"; then
-        add_auto_gate "scripts/build/resource-limit.sh cargo clippy --lib -- -D warnings"
-        add_auto_gate "scripts/build/resource-limit.sh cargo clippy --workspace --all-targets -- -D warnings"
-        add_auto_gate "scripts/build/resource-limit.sh cargo clippy --workspace --all-targets --features mcp-server,mcp-http-backend -- -D warnings"
+        add_auto_gate "cargo clippy --lib -- -D warnings"
+        add_auto_gate "cargo clippy --workspace --all-targets -- -D warnings"
+        add_auto_gate "cargo clippy --workspace --all-targets --features mcp-server,mcp-http-backend -- -D warnings"
     fi
 
     if [[ "$file" == *.sh ]] || [[ "$file" == .githooks/* ]]; then
@@ -321,15 +321,15 @@ for file in "${changed_files[@]}"; do
     fi
 
     if is_hot_path_file "$file"; then
-        add_manual_recommendation "relevant scripts/build/resource-limit.sh cargo bench --bench <name>"
+        add_manual_recommendation "relevant cargo bench --bench <name>"
     fi
 
     if is_protocol_file "$file"; then
-        add_manual_recommendation "scripts/build/resource-limit.sh target/debug/test_harness correctness*"
+        add_manual_recommendation "target/debug/test_harness correctness*"
     fi
 
     if is_mcp_feature_surface_file "$file" && ! is_rust_lint_scope_file "$file"; then
-        add_follow_up_gate "scripts/build/resource-limit.sh cargo clippy --workspace --all-targets --features mcp-server,mcp-http-backend -- -D warnings"
+        add_follow_up_gate "cargo clippy --workspace --all-targets --features mcp-server,mcp-http-backend -- -D warnings"
     fi
 
     if is_source_audit_scope_file "$file"; then
@@ -351,7 +351,7 @@ done
 
 if ((${#module_filters[@]} > 0)); then
     for filter in "${module_filters[@]}"; do
-        add_follow_up_gate "scripts/build/resource-limit.sh cargo test ${filter}"
+        add_follow_up_gate "cargo test ${filter}"
     done
 fi
 
@@ -408,16 +408,16 @@ if [[ -n "${auto_gates["cargo fmt --all --check"]+x}" ]]; then
     run_gate cargo fmt --all --check
 fi
 
-if [[ -n "${auto_gates["scripts/build/resource-limit.sh cargo clippy --lib -- -D warnings"]+x}" ]]; then
-    run_gate scripts/build/resource-limit.sh cargo clippy --lib -- -D warnings
+if [[ -n "${auto_gates["cargo clippy --lib -- -D warnings"]+x}" ]]; then
+    run_gate cargo clippy --lib -- -D warnings
 fi
 
-if [[ -n "${auto_gates["scripts/build/resource-limit.sh cargo clippy --workspace --all-targets -- -D warnings"]+x}" ]]; then
-    run_gate scripts/build/resource-limit.sh cargo clippy --workspace --all-targets -- -D warnings
+if [[ -n "${auto_gates["cargo clippy --workspace --all-targets -- -D warnings"]+x}" ]]; then
+    run_gate cargo clippy --workspace --all-targets -- -D warnings
 fi
 
-if [[ -n "${auto_gates["scripts/build/resource-limit.sh cargo clippy --workspace --all-targets --features mcp-server,mcp-http-backend -- -D warnings"]+x}" ]]; then
-    run_gate scripts/build/resource-limit.sh cargo clippy --workspace --all-targets --features mcp-server,mcp-http-backend -- -D warnings
+if [[ -n "${auto_gates["cargo clippy --workspace --all-targets --features mcp-server,mcp-http-backend -- -D warnings"]+x}" ]]; then
+    run_gate cargo clippy --workspace --all-targets --features mcp-server,mcp-http-backend -- -D warnings
 fi
 
 if [[ -n "${auto_gates["bash -n staged shell files"]+x}" ]]; then

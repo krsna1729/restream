@@ -145,7 +145,6 @@ case "$build_profile" in
   *) echo "capacity-ramp: CAPACITY_BUILD_PROFILE must be release or bench" >&2; exit 2 ;;
 esac
 if [[ "${CAPACITY_SKIP_BUILD:-0}" != 1 ]]; then
-  export RESTREAM_BUILD_LOCK_FILE="${RESTREAM_BUILD_LOCK_FILE:-/tmp/restream-build.lock}"
   "$build_script" >"$root/build.log" 2>&1 || {
     echo "capacity-ramp: build failed; see $root/build.log" >&2
     exit 4

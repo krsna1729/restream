@@ -5,7 +5,7 @@ ROOT_DIR="${RESTREAM_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
 cd "$ROOT_DIR"
 
 echo "[fixture-discipline] validating checked-in fixture contract"
-scripts/build/resource-limit.sh cargo test --test fixtures -- --nocapture
+cargo test --test fixtures -- --nocapture
 
 declare -a SCAN_ROOTS=(
   "src"
