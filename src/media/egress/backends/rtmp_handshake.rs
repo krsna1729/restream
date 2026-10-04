@@ -10,7 +10,7 @@ use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 
 use crate::media::egress::backend::{Interest, Readiness};
 
-use super::rtmp_connection::RtmpConnection;
+use crate::media::egress::tls::TlsTcpConnection;
 
 const HANDSHAKE_READ_BUFFER: usize = 4096;
 
@@ -77,7 +77,7 @@ impl NonBlockingRtmpHandshake {
     /// matching the fabric's bounded-work-per-visit contract.
     pub(crate) fn advance(
         &mut self,
-        stream: &mut RtmpConnection,
+        stream: &mut TlsTcpConnection,
         readiness: Readiness,
     ) -> HandshakeOutcome {
         // A pending write (including the final C2 response that accompanies

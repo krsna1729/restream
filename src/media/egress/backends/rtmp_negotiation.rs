@@ -6,8 +6,8 @@ use bytes::Bytes;
 use crate::media::egress::backend::{Interest, Readiness};
 use crate::media::rtmp::{RtmpSessionCore, RtmpSessionError, RtmpSessionEvent};
 
-use super::RtmpConnection;
 use super::SESSION_READ_BUFFER;
+use crate::media::egress::tls::TlsTcpConnection;
 
 pub(super) struct PendingWrite {
     pub(super) bytes: Bytes,
@@ -66,7 +66,7 @@ impl SessionNegotiation {
 
     pub(super) fn advance(
         &mut self,
-        stream: &mut RtmpConnection,
+        stream: &mut TlsTcpConnection,
         readiness: Readiness,
     ) -> SessionAdvanceOutcome {
         let mut wrote = false;

@@ -172,45 +172,30 @@ fn ktls_buffered_record_reads_copy_partial_payload_with_type() {
         let mut state = buffers.borrow_mut();
         state.ktls_active = true;
         state.received.extend(b"abc");
-        state.record_type = Some((
-            3,
-            super::super::super::rtmp_connection::rtmp_ktls::RECORD_TYPE_ALERT,
-        ));
+        state.record_type = Some((3, crate::media::egress::tls::ktls::RECORD_TYPE_ALERT));
     }
 
     let mut first = [0xaa; 2];
     assert_eq!(
         stream.read_record(&mut first).unwrap(),
-        (
-            2,
-            super::super::super::rtmp_connection::rtmp_ktls::RECORD_TYPE_ALERT
-        )
+        (2, crate::media::egress::tls::ktls::RECORD_TYPE_ALERT)
     );
     assert_eq!(&first, b"ab");
     let mut second = [0xaa; 4];
     assert_eq!(
         stream.read_record(&mut second).unwrap(),
-        (
-            1,
-            super::super::super::rtmp_connection::rtmp_ktls::RECORD_TYPE_ALERT
-        )
+        (1, crate::media::egress::tls::ktls::RECORD_TYPE_ALERT)
     );
     assert_eq!(&second, &[b'c', 0xaa, 0xaa, 0xaa]);
     {
         let mut state = buffers.borrow_mut();
         state.received.extend(b"XYZ");
-        state.record_type = Some((
-            3,
-            super::super::super::rtmp_connection::rtmp_ktls::RECORD_TYPE_DATA,
-        ));
+        state.record_type = Some((3, crate::media::egress::tls::ktls::RECORD_TYPE_DATA));
     }
     let mut third = [0; 4];
     assert_eq!(
         stream.read_record(&mut third).unwrap(),
-        (
-            3,
-            super::super::super::rtmp_connection::rtmp_ktls::RECORD_TYPE_DATA
-        )
+        (3, crate::media::egress::tls::ktls::RECORD_TYPE_DATA)
     );
     assert_eq!(&third[..3], b"XYZ");
     assert!(buffers.borrow().received.is_empty());

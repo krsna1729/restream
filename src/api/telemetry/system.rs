@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 use sysinfo::{Disks, Networks, System};
 
 use crate::api::state::AppState;
-use crate::media::egress::backends::rtmp_connection::rtmps_telemetry_snapshot;
+use crate::media::egress::backends::rtmp::RTMPS_TLS_COUNTERS;
 use crate::media::uring_capabilities::UringCapabilities;
 use crate::system_sampling::{ProcessResourceSnapshot, sample_process_resources};
 
@@ -41,7 +41,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
         .map(|status| status.to_json())
         .collect::<Vec<_>>();
     let io_uring = uring_capabilities();
-    let rtmps = rtmps_telemetry_snapshot();
+    let rtmps = RTMPS_TLS_COUNTERS.snapshot();
 
     let media_root = {
         let absolute = configured_media_root(&state.media_dir);

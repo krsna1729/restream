@@ -1,4 +1,6 @@
 use super::*;
+
+static TEST_COUNTERS: TlsCounters = TlsCounters::new();
 use std::net::{TcpListener, TcpStream};
 
 fn connected_pair() -> (TcpStream, TcpStream) {
@@ -13,7 +15,7 @@ fn connected_pair() -> (TcpStream, TcpStream) {
 #[test]
 fn plain_connection_delegates_read_and_write() {
     let (client, mut server) = connected_pair();
-    let mut connection = RtmpConnection::plain(client);
+    let mut connection = TlsTcpConnection::plain(client);
 
     connection.write_all(b"hello").unwrap();
     let mut received = [0u8; 5];
@@ -42,7 +44,7 @@ fn plain_connection_delegates_read_and_write() {
 #[test]
 fn plain_connection_delegates_vectored_write() {
     let (client, mut server) = connected_pair();
-    let mut connection = RtmpConnection::plain(client);
+    let mut connection = TlsTcpConnection::plain(client);
     let buffers = [
         std::io::IoSlice::new(b"hello"),
         std::io::IoSlice::new(b" "),
@@ -61,7 +63,7 @@ fn plain_connection_raw_fd_matches_the_underlying_socket() {
 
     let (client, _server) = connected_pair();
     let expected_fd = client.as_raw_fd();
-    let connection = RtmpConnection::plain(client);
+    let connection = TlsTcpConnection::plain(client);
 
     assert_eq!(connection.raw_fd(), expected_fd);
 }
@@ -70,7 +72,7 @@ fn plain_connection_raw_fd_matches_the_underlying_socket() {
 fn tls_connection_rejects_an_invalid_host_name() {
     let (client, _server) = connected_pair();
 
-    let result = RtmpConnection::tls(client, "");
+    let result = TlsTcpConnection::tls(client, "");
 
     assert!(result.is_err());
 }
@@ -78,7 +80,7 @@ fn tls_connection_rejects_an_invalid_host_name() {
 #[test]
 fn plain_connection_never_reports_a_rustls_buffer_estimate() {
     let (client, _server) = connected_pair();
-    let connection = RtmpConnection::plain(client);
+    let connection = TlsTcpConnection::plain(client);
 
     assert_eq!(connection.rustls_pending_bytes_estimate(), 0);
 }
@@ -91,7 +93,7 @@ fn plain_connection_never_reports_a_rustls_buffer_estimate() {
 #[test]
 fn tls_connection_reports_a_nonzero_rustls_buffer_estimate_before_any_io() {
     let (client, _server) = connected_pair();
-    let connection = RtmpConnection::tls(client, "example.com").unwrap();
+    let connection = TlsTcpConnection::tls(client, "example.com").unwrap();
 
     assert_eq!(connection.rustls_pending_bytes_estimate(), 64 * 1024);
 }
@@ -102,7 +104,7 @@ fn tls_connection_raw_fd_matches_the_underlying_socket() {
 
     let (client, _server) = connected_pair();
     let expected_fd = client.as_raw_fd();
-    let connection = RtmpConnection::tls(client, "example.com").unwrap();
+    let connection = TlsTcpConnection::tls(client, "example.com").unwrap();
 
     assert_eq!(connection.raw_fd(), expected_fd);
 }
@@ -111,7 +113,7 @@ fn tls_connection_raw_fd_matches_the_underlying_socket() {
 // Real handshake round trip: a locally generated self-signed certificate
 // (via `rcgen`, a test-only dependency) served by a real
 // `rustls::ServerConnection` on a blocking background thread, and the
-// client driven non-blocking through `RtmpConnection` exactly the way the
+// client driven non-blocking through `TlsTcpConnection` exactly the way the
 // fabric engine's handshake/negotiation drivers do (WouldBlock -> retry).
 // The client trusts the test cert via a verifier that still performs real
 // signature verification (`rustls::crypto::verify_tls12/13_signature`) but
@@ -239,7 +241,8 @@ fn assert_ktls_application_data_round_trip(config: Arc<ClientConfig>) {
     let client_stream = TcpStream::connect(addr).unwrap();
     client_stream.set_nonblocking(true).unwrap();
     let mut connection =
-        RtmpConnection::tls_with_config(client_stream, "localhost", config).unwrap();
+        TlsTcpConnection::tls_with_config(client_stream, "localhost", config, &TEST_COUNTERS)
+            .unwrap();
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
@@ -282,7 +285,7 @@ fn assert_ktls_application_data_round_trip(config: Arc<ClientConfig>) {
 
 #[test]
 fn tls12_connection_hands_off_and_exchanges_application_data() {
-    if !super::rtmp_ktls::supports(
+    if !super::ktls::supports(
         tokio_rustls::rustls::ProtocolVersion::TLSv1_2,
         tokio_rustls::rustls::CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
     ) {
@@ -293,7 +296,7 @@ fn tls12_connection_hands_off_and_exchanges_application_data() {
 
 #[test]
 fn tls13_aes256_connection_hands_off_and_exchanges_application_data() {
-    if !super::rtmp_ktls::supports(
+    if !super::ktls::supports(
         tokio_rustls::rustls::ProtocolVersion::TLSv1_3,
         tokio_rustls::rustls::CipherSuite::TLS13_AES_256_GCM_SHA384,
     ) {
@@ -320,9 +323,13 @@ fn tls_connection_flushes_pending_write_after_handshake_completes() {
 
     let client_stream = TcpStream::connect(addr).unwrap();
     client_stream.set_nonblocking(true).unwrap();
-    let mut connection =
-        RtmpConnection::tls_with_config(client_stream, "localhost", test_client_config_tls12())
-            .unwrap();
+    let mut connection = TlsTcpConnection::tls_with_config(
+        client_stream,
+        "localhost",
+        test_client_config_tls12(),
+        &TEST_COUNTERS,
+    )
+    .unwrap();
     connection.ktls_state = KtlsState::NotRequested;
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -332,7 +339,7 @@ fn tls_connection_flushes_pending_write_after_handshake_completes() {
             "TLS handshake timed out"
         );
         let handshaking = match &connection.state {
-            RtmpConnectionState::Tls(Some(stream)) => stream.conn.is_handshaking(),
+            ConnectionState::Tls(Some(stream)) => stream.conn.is_handshaking(),
             _ => panic!("TLS connection left the userspace state unexpectedly"),
         };
         if !handshaking {
@@ -346,7 +353,7 @@ fn tls_connection_flushes_pending_write_after_handshake_completes() {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
 
-    let RtmpConnectionState::Tls(Some(stream)) = &mut connection.state else {
+    let ConnectionState::Tls(Some(stream)) = &mut connection.state else {
         panic!("TLS connection left the userspace state unexpectedly");
     };
     stream.conn.writer().write_all(b"hello").unwrap();
@@ -380,7 +387,7 @@ fn ktls_read_yields_after_a_bounded_number_of_ticket_records() {
         .read_with(&mut buffer, |buffer| {
             records_read += 1;
             buffer[..TICKET.len()].copy_from_slice(&TICKET);
-            Ok((TICKET.len(), rtmp_ktls::RECORD_TYPE_HANDSHAKE))
+            Ok((TICKET.len(), ktls::RECORD_TYPE_HANDSHAKE))
         })
         .unwrap_err();
 
@@ -394,7 +401,7 @@ fn ktls_read_yields_after_a_bounded_number_of_ticket_records() {
     let count = connection
         .read_with(&mut buffer, |buffer| {
             buffer[..5].copy_from_slice(b"world");
-            Ok((5, rtmp_ktls::RECORD_TYPE_DATA))
+            Ok((5, ktls::RECORD_TYPE_DATA))
         })
         .unwrap();
     assert_eq!(&buffer[..count], b"world");
@@ -437,7 +444,7 @@ proptest::proptest! {
             match item {
                 ServerRecords::Data(bytes) => {
                     expected.extend_from_slice(&bytes);
-                    records.push_back((bytes, rtmp_ktls::RECORD_TYPE_DATA));
+                    records.push_back((bytes, ktls::RECORD_TYPE_DATA));
                 }
                 ServerRecords::Tickets(lengths, cuts) => {
                     let mut handshake = Vec::new();
@@ -450,16 +457,16 @@ proptest::proptest! {
                     while !handshake.is_empty() {
                         let size = cuts.next().unwrap().min(handshake.len());
                         let record: Vec<u8> = handshake.drain(..size).collect();
-                        records.push_back((record, rtmp_ktls::RECORD_TYPE_HANDSHAKE));
+                        records.push_back((record, ktls::RECORD_TYPE_HANDSHAKE));
                     }
                 }
             }
         }
         if split_close_notify {
-            records.push_back((vec![1], rtmp_ktls::RECORD_TYPE_ALERT));
-            records.push_back((vec![0], rtmp_ktls::RECORD_TYPE_ALERT));
+            records.push_back((vec![1], ktls::RECORD_TYPE_ALERT));
+            records.push_back((vec![0], ktls::RECORD_TYPE_ALERT));
         } else {
-            records.push_back((vec![1, 0], rtmp_ktls::RECORD_TYPE_ALERT));
+            records.push_back((vec![1, 0], ktls::RECORD_TYPE_ALERT));
         }
 
         let (stream, _server) = connected_pair();
@@ -543,10 +550,11 @@ fn unsupported_tls_suite_fails_without_userspace_fallback() {
 
     let client_stream = TcpStream::connect(addr).unwrap();
     client_stream.set_nonblocking(true).unwrap();
-    let mut connection = RtmpConnection::tls_with_config(
+    let mut connection = TlsTcpConnection::tls_with_config(
         client_stream,
         "localhost",
         test_client_config_tls13_chacha(),
+        &TEST_COUNTERS,
     )
     .unwrap();
 
@@ -571,7 +579,7 @@ fn unsupported_tls_suite_fails_without_userspace_fallback() {
     ));
     assert!(matches!(
         &connection.state,
-        super::RtmpConnectionState::Failed(_)
+        super::ConnectionState::Failed(_)
     ));
     server.join().unwrap();
 }

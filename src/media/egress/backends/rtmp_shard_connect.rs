@@ -167,10 +167,11 @@ where
         let generation = connecting.common.generation;
         let fd = connecting.stream.as_raw_fd();
         let stream = if connecting.parts.tls {
-            match RtmpConnection::tls_with_config(
+            match TlsTcpConnection::tls_with_config(
                 connecting.stream,
                 &connecting.parts.host,
                 self.rtmps_client_config.clone(),
+                &super::super::rtmp::RTMPS_TLS_COUNTERS,
             ) {
                 Ok(stream) => stream,
                 Err(error) => {
@@ -182,7 +183,7 @@ where
                 }
             }
         } else {
-            RtmpConnection::plain(connecting.stream)
+            TlsTcpConnection::plain(connecting.stream)
         };
         let Some(publish_startup) = self.startup_source.take_startup(output_id) else {
             tracing::warn!(output_id = %output_id, "rtmp fabric leaf rejected: no publish startup available");

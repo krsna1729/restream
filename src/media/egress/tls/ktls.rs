@@ -2,7 +2,8 @@
 //!
 //! Linux exposes TLS 1.2/1.3 AES-GCM through `SOL_TLS`. Rustls supplies the
 //! negotiated traffic keys and record sequence numbers; `recvmsg` preserves
-//! TLS 1.3 inner record types so RTMP never sees post-handshake messages.
+//! TLS 1.3 inner record types so the protocol above never sees post-handshake
+//! messages.
 
 use std::collections::HashMap;
 use std::io;
@@ -210,7 +211,7 @@ pub(crate) fn supports(version: ProtocolVersion, suite: CipherSuite) -> bool {
 }
 
 fn capability_for(version: ProtocolVersion, suite: CipherSuite) -> Option<(bool, KtlsCipher)> {
-    if !crate::media::rtmp::supports_rtmps_cipher_suite(version, suite) {
+    if !super::supports_cipher_suite(version, suite) {
         return None;
     }
     let tls13 = version == ProtocolVersion::TLSv1_3;

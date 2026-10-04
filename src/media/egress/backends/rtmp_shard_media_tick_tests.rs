@@ -29,7 +29,7 @@ fn backend_with_resolve_queue() -> (
         feed(),
         budget(),
         4096,
-        crate::media::rtmp::rustls_client_config(),
+        crate::media::egress::tls::rustls_client_config(),
         queue,
         EmptyRtmpPublishStartupSource,
     );

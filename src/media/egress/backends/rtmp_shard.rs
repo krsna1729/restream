@@ -34,12 +34,12 @@ use crate::media::rtmp::parse_rtmp_url;
 #[cfg(test)]
 use super::compio_tcp::CompioTcpPoller;
 use super::rtmp::{RtmpFabricEngine, RtmpPublishStartup};
-use super::rtmp_connection::RtmpConnection;
 #[cfg(test)]
 use super::tcp::TcpConnectAttempt;
 #[cfg(test)]
 use super::tcp::TcpEgressPollError;
 use super::tcp::TcpReadyLeaf;
+use crate::media::egress::tls::TlsTcpConnection;
 
 use self::rtmp_shard_connect::{ConnectingRtmpConnect, PendingRtmpConnect};
 pub(crate) use super::rtmp_shard_poller::RtmpReadinessPoller;
@@ -157,7 +157,7 @@ pub(crate) fn resolve_rtmp_peer_host(host: &str, port: u16) -> Option<SocketAddr
 struct RtmpFabricLeaf {
     common: LeafCommon,
     engine: RtmpFabricEngine,
-    transport: RtmpConnection,
+    transport: TlsTcpConnection,
     pending_readiness: Readiness,
     /// Last-progress fallback while a leaf has made no byte or protocol
     /// progress yet, such as during connect or handshake.
@@ -873,7 +873,7 @@ where
             feed,
             budget,
             chunk_size,
-            crate::media::rtmp::rustls_client_config(),
+            crate::media::egress::tls::rustls_client_config(),
             queue,
             EmptyRtmpPublishStartupSource,
         )

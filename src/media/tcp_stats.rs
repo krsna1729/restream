@@ -453,7 +453,7 @@ fn collect_tcp_stats(socket: &tokio::net::TcpStream) -> io::Result<TcpReceiverSt
 
 /// Same as [`collect_tcp_stats`] but takes a caller-owned raw fd. RTMP ingress
 /// calls it on the Compio owner for the live socket; RTMP egress samples the
-/// descriptor held by `RtmpConnection`. Callers must keep the TCP descriptor
+/// descriptor held by `TlsTcpConnection`. Callers must keep the TCP descriptor
 /// valid for this call.
 #[cfg(target_os = "linux")]
 pub fn collect_tcp_stats_by_fd(fd: std::os::fd::RawFd) -> io::Result<TcpReceiverStats> {

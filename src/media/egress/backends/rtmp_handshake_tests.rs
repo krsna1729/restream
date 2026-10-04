@@ -41,7 +41,7 @@ fn run_server_peer(mut stream: StdTcpStream) {
     }
 }
 
-fn drive_to_completion(stream: &mut RtmpConnection) -> Vec<u8> {
+fn drive_to_completion(stream: &mut TlsTcpConnection) -> Vec<u8> {
     let mut client = NonBlockingRtmpHandshake::new_client().unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
@@ -74,7 +74,7 @@ fn client_handshake_completes_against_a_real_server_state_machine() {
 
     let client_stream = TcpStream::connect(addr).unwrap();
     client_stream.set_nonblocking(true).unwrap();
-    let mut client_stream = RtmpConnection::plain(client_stream);
+    let mut client_stream = TlsTcpConnection::plain(client_stream);
 
     let remaining = drive_to_completion(&mut client_stream);
 
@@ -97,7 +97,7 @@ fn advance_before_any_readiness_reports_pending_write_without_touching_the_socke
         return;
     };
     client_stream.set_nonblocking(true).unwrap();
-    let mut client_stream = RtmpConnection::plain(client_stream);
+    let mut client_stream = TlsTcpConnection::plain(client_stream);
 
     let mut client = NonBlockingRtmpHandshake::new_client().unwrap();
     let outcome = client.advance(&mut client_stream, Readiness::default());

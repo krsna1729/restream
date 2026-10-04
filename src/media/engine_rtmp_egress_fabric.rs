@@ -44,7 +44,7 @@ impl MediaEngine {
         } else {
             let config = &self.config.egress_fabric;
             let startup_source = SharedRtmpPublishStartupSource::new();
-            let rtmps_client_config = crate::media::rtmp::resolve_rtmps_client_config(
+            let rtmps_client_config = crate::media::egress::tls::resolve_client_config(
                 self.config.rtmps_extra_trust_roots_pem_path.as_deref(),
             )
             .map_err(RtmpFabricEnsureError::TrustRoots)?;
