@@ -18,7 +18,9 @@
 
 use std::time::{Duration, Instant};
 
-use srt_transport::advanced::admission::{LogicalPeerId, LogicalPeerStats};
+use srt_transport::advanced::admission::LogicalPeerStats;
+
+use super::ingress_bridge::IngressPeer;
 
 use crate::media::snapshots::PublisherQuality;
 
@@ -85,11 +87,11 @@ pub(crate) struct Observation {
     pub sample: PeerReceiverSample,
 }
 
-/// An observation addressed to one logical peer, as sent over the telemetry
-/// bridge.
+/// An observation addressed to one ingress session, as sent over the
+/// telemetry bridge.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct QualitySample {
-    pub peer: LogicalPeerId,
+    pub peer: IngressPeer,
     pub observation: Observation,
 }
 

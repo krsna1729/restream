@@ -8,7 +8,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use srt_transport::advanced::admission::LogicalPeerId;
 use tracing::{error, info, warn};
 
 use crate::media::engine::{IngestRegistration, MediaEngine};
@@ -27,7 +26,7 @@ use super::ingress_admission::ReceiverGroupId;
 use super::ingress_media::{SrtPublisherMedia, SrtReaderMedia};
 use super::ingress_owner::{
     INGRESS_COMMAND_CAPACITY, INGRESS_EVENT_CAPACITY, INGRESS_TELEMETRY_CAPACITY, IngressCommand,
-    IngressConfig, SrtIngressEvent, SrtIngressHandle,
+    IngressConfig, IngressPeer, SrtIngressEvent, SrtIngressHandle,
 };
 use super::ingress_quality::{QualityFold, QualitySample};
 
@@ -35,10 +34,10 @@ use super::ingress_quality::{QualityFold, QualitySample};
 /// Lifecycle only: media does not wait on it.
 const HOUSEKEEPING_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Tokio's end of the ingress Owner: the bounded command bridge plus the
+/// Tokio's end of the ingress Owners: the bounded command bridges plus the
 /// commands waiting for bridge room. Sessions are addressed only by
-/// `LogicalPeerId`; the protocol and media state they name live on the owner
-/// thread.
+/// `IngressPeer` (Owner index + `LogicalPeerId`); the protocol and media state
+/// they name live on that Owner's thread.
 struct Ingress {
     handle: SrtIngressHandle,
     pending_commands: VecDeque<IngressCommand>,
@@ -52,7 +51,7 @@ impl Ingress {
         self.flush_commands();
     }
 
-    fn disconnect(&mut self, peer: LogicalPeerId) {
+    fn disconnect(&mut self, peer: IngressPeer) {
         self.command(IngressCommand::Disconnect { logical_peer: peer });
     }
 
@@ -118,6 +117,7 @@ impl SrtServer {
             command_capacity: INGRESS_COMMAND_CAPACITY,
             event_capacity: INGRESS_EVENT_CAPACITY,
             telemetry_capacity: INGRESS_TELEMETRY_CAPACITY,
+            owners: self.engine.config.srt_ingress_owners,
         })
         .await
         {
@@ -142,7 +142,7 @@ impl SrtServer {
             .listener_stats_handle()
             .bonding_available
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        let mut sessions: HashMap<LogicalPeerId, Session> = HashMap::new();
+        let mut sessions: HashMap<IngressPeer, Session> = HashMap::new();
 
         info!(port, bind = %ingress.handle.local_addr(), "SRT listener ready (srt-rs compio Owner ingress)");
         let mut owner_fault = None;
@@ -213,7 +213,7 @@ impl SrtServer {
     /// second later) replaces it.
     async fn fold_telemetry(
         &self,
-        sessions: &mut HashMap<LogicalPeerId, Session>,
+        sessions: &mut HashMap<IngressPeer, Session>,
         QualitySample { peer, observation }: QualitySample,
     ) {
         let Some(Session::Publish(publisher)) = sessions.get_mut(&peer) else {
@@ -230,7 +230,7 @@ impl SrtServer {
     async fn handle_ingress_event(
         &self,
         ingress: &mut Ingress,
-        sessions: &mut HashMap<LogicalPeerId, Session>,
+        sessions: &mut HashMap<IngressPeer, Session>,
         event: SrtIngressEvent,
     ) {
         match event {
@@ -271,9 +271,9 @@ impl SrtServer {
     async fn handle_connected(
         &self,
         ingress: &mut Ingress,
-        sessions: &mut HashMap<LogicalPeerId, Session>,
+        sessions: &mut HashMap<IngressPeer, Session>,
         peer: SocketAddr,
-        logical_peer: LogicalPeerId,
+        logical_peer: IngressPeer,
         stream_id: String,
     ) {
         let parsed = parse_srt_stream_id(&stream_id);
@@ -513,7 +513,7 @@ impl SrtServer {
 async fn close_deleted_sessions(
     engine: &MediaEngine,
     ingress: &mut Ingress,
-    sessions: &mut HashMap<LogicalPeerId, Session>,
+    sessions: &mut HashMap<IngressPeer, Session>,
 ) {
     let live_pipelines = engine.ingests.pipelines.read().await;
     let mut to_close = Vec::new();
