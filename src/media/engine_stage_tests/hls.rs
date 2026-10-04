@@ -251,14 +251,16 @@ async fn shutdown_all_hls_segmenters_cleans_up_mixed_pool() {
 }
 
 #[tokio::test]
-async fn hls_persistent_consumer_add_and_remove_are_safe_noops_when_unregistered() {
+async fn hls_persistent_lease_is_none_when_no_segmenter_is_registered() {
     let engine = Arc::new(MediaEngine::new());
-    // No ensure_hls_segmenter call for this pipeline_id: the consumer entry
-    // does not exist. Both calls must be silent no-ops, not panics.
-    engine.add_hls_persistent_consumer("no-such-pipeline").await;
-    engine
-        .remove_hls_persistent_consumer("no-such-pipeline")
-        .await;
+    // No ensure_hls_segmenter call for this pipeline_id: there is nothing
+    // to lease, and asking must not create a registry entry.
+    assert!(
+        engine
+            .lease_hls_persistent_consumer("no-such-pipeline")
+            .await
+            .is_none()
+    );
 
     assert!(
         engine
@@ -267,6 +269,34 @@ async fn hls_persistent_consumer_add_and_remove_are_safe_noops_when_unregistered
             .is_none(),
         "no-op calls on an unregistered pipeline_id must not create a registry entry"
     );
+}
+
+/// An output's registration belongs to the segmenter entry it was taken
+/// from. When that segmenter shuts down and a new one starts for the same
+/// pipeline, releasing the old registration must not release a consumer of
+/// the new one: it used to, because release looked the entry up by
+/// pipeline id, so the new segmenter went idle under a live HLS output.
+#[tokio::test]
+async fn releasing_a_lease_from_a_replaced_segmenter_keeps_the_new_one_busy() {
+    let engine = Arc::new(MediaEngine::new());
+    engine.ensure_hls_segmenter("pipe-hls-restart").await;
+    let old_output = engine
+        .lease_hls_persistent_consumer("pipe-hls-restart")
+        .await
+        .expect("segmenter registered");
+    engine.shutdown_hls_segmenter("pipe-hls-restart").await;
+
+    engine.ensure_hls_segmenter("pipe-hls-restart").await;
+    let _new_output = engine
+        .lease_hls_persistent_consumer("pipe-hls-restart")
+        .await
+        .expect("segmenter registered again");
+    drop(old_output);
+
+    let consumers = engine.hls.consumers.read().await;
+    let entry = &consumers["pipe-hls-restart"];
+    assert_eq!(entry.persistent_count(), 1);
+    assert!(!entry.is_idle(0), "the new output still holds its lease");
 }
 
 // ── Matrix routing with synthetic packets (Phase 0 re-tier) ─────

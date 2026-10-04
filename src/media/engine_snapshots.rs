@@ -84,7 +84,7 @@ impl MediaEngine {
             store_exists: store.is_some(),
             active: consumer.is_some_and(|consumer| !consumer.cancel_token.is_cancelled()),
             persistent_consumers: consumer
-                .map(|consumer| consumer.persistent.load(Ordering::Relaxed))
+                .map(crate::media::engine_hls::HlsConsumers::persistent_count)
                 .unwrap_or(0),
             last_access_age_ms: consumer.map(|consumer| {
                 let now = consumer.reference_instant.elapsed().as_millis() as u64;

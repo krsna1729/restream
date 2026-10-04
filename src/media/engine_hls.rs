@@ -28,11 +28,11 @@ pub(crate) fn input_id_from_hls_preview_resource_id(resource_id: &str) -> Option
 }
 
 /// Tracks HLS consumers for a pipeline. Persistent consumers (egress outputs)
-/// register/unregister explicitly. Transient consumers (browser preview) keep
-/// the segmenter alive via playlist fetch heartbeats.
+/// hold a [`PersistentLease`]. Transient consumers (browser preview) keep the
+/// segmenter alive via playlist fetch heartbeats.
 pub struct HlsConsumers {
-    /// Number of persistent consumers (HLS egress outputs).
-    pub persistent: AtomicU64,
+    /// Live [`PersistentLease`]s taken from this entry; only leases change it.
+    persistent: Arc<AtomicU64>,
     /// Monotonic reference time.
     pub reference_instant: Instant,
     /// Monotonic elapsed millis since reference_instant for the last access.
@@ -44,7 +44,7 @@ pub struct HlsConsumers {
 impl HlsConsumers {
     pub fn new(cancel_token: CancellationToken) -> Self {
         Self {
-            persistent: AtomicU64::new(0),
+            persistent: Arc::new(AtomicU64::new(0)),
             reference_instant: Instant::now(),
             last_access_ms: AtomicU64::new(0),
             cancel_token,
@@ -59,12 +59,16 @@ impl HlsConsumers {
         self.last_access_ms.store(self.now_ms(), Ordering::Relaxed);
     }
 
-    pub fn add_persistent(&self) {
+    /// Register a persistent consumer of this entry until the lease drops.
+    pub fn lease_persistent(&self) -> PersistentLease {
         self.persistent.fetch_add(1, Ordering::Relaxed);
+        PersistentLease {
+            count: Arc::clone(&self.persistent),
+        }
     }
 
-    pub fn remove_persistent(&self) {
-        self.persistent.fetch_sub(1, Ordering::Relaxed);
+    pub fn persistent_count(&self) -> u64 {
+        self.persistent.load(Ordering::Relaxed)
     }
 
     pub fn is_idle(&self, timeout_ms: u64) -> bool {
@@ -75,6 +79,22 @@ impl HlsConsumers {
         let last = self.last_access_ms.load(Ordering::Relaxed);
         let now = self.now_ms();
         now.saturating_sub(last) >= timeout_ms
+    }
+}
+
+/// One persistent HLS consumer (an HLS egress output). While it lives, the
+/// segmenter entry it came from is never idle; dropping it releases exactly
+/// that registration, on that entry, once. It is not `Clone`, so there is no
+/// unmatched release, and a lease from a segmenter that has since been
+/// replaced cannot release the replacement's consumers.
+#[must_use = "dropping the lease releases the consumer at once"]
+pub struct PersistentLease {
+    count: Arc<AtomicU64>,
+}
+
+impl Drop for PersistentLease {
+    fn drop(&mut self) {
+        self.count.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -153,20 +173,16 @@ impl MediaEngine {
         }
     }
 
-    /// Register a persistent HLS consumer (e.g. HLS egress output).
-    pub async fn add_hls_persistent_consumer(&self, pipeline_id: &str) {
+    /// Register a persistent HLS consumer (an HLS egress output) of the
+    /// pipeline's running segmenter; `None` when no segmenter is registered.
+    pub async fn lease_hls_persistent_consumer(
+        &self,
+        pipeline_id: &str,
+    ) -> Option<PersistentLease> {
         let consumers = self.hls.consumers.read().await;
-        if let Some(c) = consumers.get(pipeline_id) {
-            c.add_persistent();
-        }
-    }
-
-    /// Unregister a persistent HLS consumer.
-    pub async fn remove_hls_persistent_consumer(&self, pipeline_id: &str) {
-        let consumers = self.hls.consumers.read().await;
-        if let Some(c) = consumers.get(pipeline_id) {
-            c.remove_persistent();
-        }
+        consumers
+            .get(pipeline_id)
+            .map(HlsConsumers::lease_persistent)
     }
 
     /// Shut down an idle HLS segmenter and clean up its store.
@@ -353,12 +369,17 @@ mod tests {
     }
 
     #[test]
-    fn is_idle_ignores_elapsed_time_while_persistent_consumers_exist() {
+    fn a_held_lease_vetoes_idle_and_its_drop_releases_it() {
         // A persistent (egress) consumer must veto idle shutdown outright,
         // even though the heartbeat was never touched and the timeout is 0.
         let hc = HlsConsumers::new(CancellationToken::new());
-        hc.add_persistent();
-        assert!(!hc.is_idle(0));
+        let first = hc.lease_persistent();
+        let second = hc.lease_persistent();
+        drop(first);
+        assert!(!hc.is_idle(0), "one lease is still held");
+        drop(second);
+        assert_eq!(hc.persistent_count(), 0);
+        assert!(hc.is_idle(0));
     }
 
     // `is_idle` compares `now_ms()` against `last_access_ms` with
@@ -373,21 +394,5 @@ mod tests {
         let hc = HlsConsumers::new(CancellationToken::new());
         hc.last_access_ms.store(u64::MAX, Ordering::Relaxed);
         assert!(!hc.is_idle(1000));
-    }
-
-    // `remove_persistent` has no guard against being called without a
-    // matching `add_persistent`: the counter is a bare `fetch_sub`, so it
-    // wraps to `u64::MAX` instead of saturating at 0. Because `is_idle`
-    // treats any nonzero `persistent` count as "never idle", a single
-    // mismatched remove call permanently pins the consumer as non-idle and
-    // leaks its segmenter/store. This test pins the current wrap-not-panic
-    // behavior so a future caller mismatch is visible as a stuck-non-idle
-    // regression rather than a silent resource leak.
-    #[test]
-    fn remove_persistent_without_add_wraps_and_permanently_blocks_idle_shutdown() {
-        let hc = HlsConsumers::new(CancellationToken::new());
-        hc.remove_persistent();
-        assert_eq!(hc.persistent.load(Ordering::Relaxed), u64::MAX);
-        assert!(!hc.is_idle(0));
     }
 }

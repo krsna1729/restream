@@ -122,7 +122,7 @@ Use these before any checker, wherever the weak form exists today:
    caller-discipline sequences and the discipline proptest; keep one check of
    the queue itself. Hot path: benchmark first. srt-rs's dense arena
    (`ready_queued`, generational `PeerSlotId`) is the pattern to copy.
-3. **HLS persistent consumers are a lease.** `add_persistent`/
+3. **HLS persistent consumers are a lease** (done: `PersistentLease`). `add_persistent`/
    `remove_persistent` on an `AtomicU64` (`src/media/engine_hls.rs`) allow an
    unmatched remove that wraps the counter (a test documents it). Return a
    non-`Clone` `PersistentLease` that decrements on `Drop`; delete the

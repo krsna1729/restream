@@ -95,7 +95,9 @@ impl EgressTask {
             return;
         }
 
-        let mut hls_persistent_registered = false;
+        // Held for the whole run, panics included; released (dropped) after
+        // the output is unregistered, as before.
+        let mut hls_lease: Option<crate::media::engine_hls::PersistentLease> = None;
         let panicked = std::panic::AssertUnwindSafe(async {
             match url_scheme {
                 OutputUrlScheme::Rtmp | OutputUrlScheme::Rtmps => {
@@ -158,10 +160,10 @@ impl EgressTask {
                             engine.shutdown_hls_segmenter(&pipeline_id).await;
                         });
                     }
-                    self.engine
-                        .add_hls_persistent_consumer(&self.pipeline_id)
+                    hls_lease = self
+                        .engine
+                        .lease_hls_persistent_consumer(&self.pipeline_id)
                         .await;
-                    hls_persistent_registered = true;
                     if matches!(url_scheme, OutputUrlScheme::Http | OutputUrlScheme::Https) {
                         crate::media::hls_upload::start_hls_put_upload(
                             crate::media::hls_upload::HlsUploadStart {
@@ -272,11 +274,7 @@ impl EgressTask {
             .engine
             .unregister_egress_if_current(&self.output_id, &self.registration)
             .await;
-        if hls_persistent_registered {
-            self.engine
-                .remove_hls_persistent_consumer(&self.pipeline_id)
-                .await;
-        }
+        drop(hls_lease);
 
         let ended_at = chrono::Utc::now().to_rfc3339();
         let job_status = if is_cancelled {
