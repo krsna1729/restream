@@ -811,6 +811,53 @@ async fn short_amf0_command_closes_only_that_connection() {
     stop_ingress_test_server(&engine, server).await;
 }
 
+/// A message whose chunk stream later declares a length below the bytes
+/// already received (fuzz: `rtmp_server_responses`). Before the vendored fix
+/// this underflowed in rml_rtmp's chunk deserializer: a panic with overflow
+/// checks, and in release a message that never completes and keeps growing.
+#[rustfmt::skip]
+fn shrinking_message_length_chunks() -> Vec<u8> {
+    let mut bytes = vec![
+        0x03, 0, 0, 0, 0, 0, 200, 0x09, 1, 0, 0, 0, // fmt 0: 200-byte video message
+    ];
+    bytes.extend([0xAB; 128]); // first 128-byte chunk
+    bytes.extend([0x43, 0, 0, 0, 0, 0, 10, 0x09]); // fmt 1: length now 10
+    bytes.extend([0xCD; 10]);
+    bytes
+}
+
+#[tokio::test]
+async fn shrinking_message_length_closes_only_that_connection() {
+    let pipeline_access: Arc<dyn PipelineAccessAuthenticator> =
+        Arc::new(AcceptAllAuthenticator {
+            pipeline_id: "pipe-shrinking-length".to_string(),
+        });
+    let (engine, addr, server) = start_ingress_test_server(pipeline_access).await;
+
+    let mut attacker = TcpStream::connect(addr).await.unwrap();
+    perform_client_handshake(&mut attacker, &CancellationToken::new())
+        .await
+        .expect("handshake");
+    attacker.write_all(&shrinking_message_length_chunks()).await.unwrap();
+    let mut buf = [0u8; 256];
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        while matches!(attacker.read(&mut buf).await, Ok(n) if n > 0) {}
+    })
+    .await;
+    assert!(closed.is_ok(), "the offending connection must be closed");
+
+    let published = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut publisher = TcpStream::connect(addr).await.unwrap();
+        drive_client_publish_handshake(&mut publisher, "any-key").await
+    })
+    .await;
+    assert!(
+        matches!(published, Ok(true)),
+        "the listener must keep serving publishers"
+    );
+    stop_ingress_test_server(&engine, server).await;
+}
+
 /// The same chunk from an RTMP destination server is a protocol error for
 /// that output, not a panic on its egress shard.
 #[test]

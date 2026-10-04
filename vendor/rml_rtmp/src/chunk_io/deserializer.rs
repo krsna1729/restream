@@ -332,6 +332,16 @@ impl ChunkDeserializer {
             });
         }
 
+        // restream vendor patch: a header that declares fewer bytes than this
+        // chunk stream already holds for the message in progress is invalid.
+        // It used to underflow `length - received` in `get_message_data`: a
+        // panic with overflow checks, and in release a message that never
+        // completes while every later chunk keeps appending to it.
+        let received = self.current_payload_data.len();
+        if (length as usize) < received {
+            return Err(ChunkDeserializationError::MessageLengthBelowReceived { length, received });
+        }
+
         self.current_header.message_length = length;
         self.current_stage = ParseStage::MessageTypeId;
         Ok(ParseStageResult::Success)
@@ -400,7 +410,10 @@ impl ChunkDeserializer {
         } else if self.current_payload_data.len() == 0 {
             // Since we already added the MAX_INITIAL_TIMESTAMP to the timestamp, only add the delta difference
             self.current_header.timestamp =
-                self.current_header.timestamp + (timestamp - MAX_INITIAL_TIMESTAMP);
+                // restream vendor patch: RTMP timestamps wrap; an extended
+                // timestamp below the 24-bit marker is malformed but must not
+                // panic.
+                self.current_header.timestamp + timestamp.wrapping_sub(MAX_INITIAL_TIMESTAMP);
         }
 
         self.current_stage = ParseStage::MessagePayload;
@@ -413,7 +426,9 @@ impl ChunkDeserializer {
     ) -> Result<ParseStageResult, ChunkDeserializationError> {
         let mut length = self.current_header.message_length as usize;
         let current_payload_length = self.current_payload_data.len();
-        let remaining_bytes = length - current_payload_length;
+        // Never negative: `get_message_length` refuses a length below the
+        // bytes already received (restream vendor patch).
+        let remaining_bytes = length.saturating_sub(current_payload_length);
         if length > self.max_chunk_size as usize {
             length = min(remaining_bytes, self.max_chunk_size as usize);
         }
@@ -520,6 +535,50 @@ mod tests {
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend(std::iter::repeat_n(0xAB, sent));
         bytes
+    }
+
+    /// A type-1 chunk header (csid 3) declaring `declared_length`, followed
+    /// by `sent` payload bytes. (restream vendor patch tests)
+    fn length_change_chunk(declared_length: u32, sent: usize) -> Vec<u8> {
+        let mut bytes = vec![0x43, 0, 0, 0];
+        bytes.extend_from_slice(&declared_length.to_be_bytes()[1..]);
+        bytes.push(9);
+        bytes.extend(std::iter::repeat_n(0xCD, sent));
+        bytes
+    }
+
+    #[test]
+    fn a_length_below_the_bytes_already_received_is_rejected() {
+        let mut deserializer = ChunkDeserializer::new();
+        // 128 of 200 bytes arrive (default chunk size 128): message in progress.
+        assert!(deserializer
+            .get_next_message(&declared_chunk(200, 128))
+            .unwrap()
+            .is_none());
+        let error = deserializer
+            .get_next_message(&length_change_chunk(10, 10))
+            .expect_err("a length below the received bytes must fail");
+        assert!(matches!(
+            error,
+            ChunkDeserializationError::MessageLengthBelowReceived {
+                length: 10,
+                received: 128
+            }
+        ));
+    }
+
+    #[test]
+    fn a_length_change_that_still_fits_the_received_bytes_completes() {
+        let mut deserializer = ChunkDeserializer::new();
+        assert!(deserializer
+            .get_next_message(&declared_chunk(200, 128))
+            .unwrap()
+            .is_none());
+        let message = deserializer
+            .get_next_message(&length_change_chunk(130, 2))
+            .unwrap()
+            .expect("130 bytes received for a 130-byte message");
+        assert_eq!(message.data.len(), 130);
     }
 
     #[test]

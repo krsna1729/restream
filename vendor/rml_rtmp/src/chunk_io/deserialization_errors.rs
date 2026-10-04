@@ -26,6 +26,12 @@ pub enum ChunkDeserializationError {
     #[error("Declared RTMP message length {length} exceeds the maximum of {max} bytes")]
     MessageTooLarge { length: u32, max: usize },
 
+    /// A chunk header declared a message length smaller than the bytes
+    /// already received for the message in progress on its chunk stream.
+    /// (restream vendor patch)
+    #[error("Declared RTMP message length {length} is below the {received} bytes already received")]
+    MessageLengthBelowReceived { length: u32, received: usize },
+
     /// An I/O error occurred while reading the input buffer
     #[error("{0}")]
     Io(#[from] io::Error),

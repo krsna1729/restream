@@ -28,6 +28,12 @@ Patch scope, marked `restream vendor patch` in the source:
   with fewer than three AMF0 values. It used `drain(..3)`, which panicked:
   one 16-byte command after the handshake panicked the RTMP ingress owner
   thread (and an RTMP destination could do the same to an egress shard).
+- A chunk header that declares a message length below the bytes already
+  received for that chunk stream fails with
+  `ChunkDeserializationError::MessageLengthBelowReceived`. It underflowed
+  `length - received`: a panic with overflow checks; in release a message
+  that never completes and grows with every later chunk. The extended
+  timestamp delta uses `wrapping_sub` (release behavior, no panic).
 
 Tests for each change live next to the patched code. Keep this patch minimal;
 drop it if upstream gains equivalent admission control.
