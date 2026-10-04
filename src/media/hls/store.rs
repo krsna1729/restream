@@ -18,6 +18,8 @@ struct HlsSegment {
 #[derive(Clone)]
 pub struct HlsSegmentSnapshot {
     pub index: u64,
+    /// Seconds, as listed in `#EXTINF`.
+    pub duration: f64,
     pub data: Bytes,
 }
 
@@ -205,6 +207,7 @@ fn build_snapshot(inner: &HlsStoreInner) -> Option<HlsStoreSnapshot> {
         ));
         segments.push(HlsSegmentSnapshot {
             index: seg.index,
+            duration: seg.duration,
             data: seg.data.clone(),
         });
     }

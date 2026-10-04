@@ -25,6 +25,7 @@ pub mod preview_graph;
 mod segmenter;
 mod store;
 pub mod upload;
+mod upload_policy;
 
 #[cfg(test)]
 use std::sync::Arc;

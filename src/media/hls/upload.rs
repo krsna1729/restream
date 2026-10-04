@@ -1,25 +1,29 @@
-//! HTTP PUT uploader for remote HLS ingest targets.
+//! HTTP PUT uploader for remote HLS ingest targets, on Tokio with Reqwest.
+//!
+//! What to send and how to react is [`super::upload_policy`]; this module is
+//! the transport and the status reporting.
 //!
 //! YouTube-style endpoints pass the target object name as a `file=` query
 //! parameter. Other HLS PUT origins commonly use a playlist path and expect
 //! segments beside it. This module supports both shapes.
 
-use std::collections::HashSet;
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
-use tracing::error;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tracing::warn;
 
 use reqwest::{Client, Url};
 
-use super::{HlsStore, HlsStoreSnapshot};
+use super::HlsStore;
+use super::upload_policy::{
+    Next, ResultEffect, Stopped, UploadOutcome, UploadPolicy, UploadRequest, UploadTarget, backoff,
+};
 use crate::domain::stage::StageKey;
 use crate::domain::state::EgressPhase;
 use crate::media::engine::{EgressRegistration, MediaEngine};
 
-const HLS_PLAYLIST_CONTENT_TYPE: &str = "application/vnd.apple.mpegurl";
-const HLS_SEGMENT_CONTENT_TYPE: &str = "video/mp2t";
 const HLS_UPLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-const HLS_UPLOAD_RETRY_BACKOFF: Duration = Duration::from_secs(1);
+/// The end-of-stream playlist after a stop gets this long, once.
+const HLS_UPLOAD_END_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// `<manufacturer> / <model> / <version>`: YouTube asks for this form and
 /// Akamai requires a User-Agent on every request.
@@ -39,6 +43,15 @@ pub struct HlsUploadStart {
     pub pipeline_id: String,
     pub target_url: String,
     pub terminal_stage_key: StageKey,
+}
+
+/// A segment-name prefix unique to this output attempt, also across process
+/// restarts (YouTube and Akamai require segment names never to repeat).
+pub(crate) fn upload_session_token() -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis());
+    format!("r{millis:x}")
 }
 
 pub async fn start_hls_put_upload(
@@ -79,7 +92,7 @@ pub async fn start_hls_put_upload(
     let playlist_url = match Url::parse(&target_url) {
         Ok(url) => url,
         Err(err) => {
-            error!(output_id = %output_id, err = %err, "invalid HLS upload URL");
+            warn!(output_id = %output_id, err = %err, "invalid HLS upload URL");
             engine
                 .record_egress_error_if_current(
                     &output_id,
@@ -104,197 +117,211 @@ pub async fn start_hls_put_upload(
             )
             .await;
     }
-    let client = &*HLS_UPLOAD_CLIENT;
     let mut published = store.subscribe();
     drop(store);
-    let mut uploaded_segments = HashSet::new();
-    let mut retry_attempts = 0u32;
-    // After a failed upload the same publish is retried once the backoff
-    // ends, without waiting for the next segment.
-    let mut retry_pending = false;
+    // Once every store handle is gone no segment can follow, but uploads
+    // already taken (and their retries) still finish.
+    let mut store_open = true;
+    let mut policy = UploadPolicy::new(upload_session_token());
+    let report = Report {
+        engine: &engine,
+        output_id: &output_id,
+        pipeline_id: &pipeline_id,
+        registration: &registration,
+    };
 
+    let mut dropped = 0;
     loop {
-        if !retry_pending {
-            tokio::select! {
-                _ = registration.cancel_token.cancelled() => return,
-                changed = published.changed() => {
-                    if changed.is_err() {
-                        return; // the store is gone
+        let next = policy.next(Instant::now());
+        if policy.dropped_segments() > dropped {
+            dropped = policy.dropped_segments();
+            report.dropped(dropped).await;
+        }
+        match next {
+            Next::Put(request) => {
+                let url = object_url(&playlist_url, &request);
+                let ending = matches!(request.target, UploadTarget::Playlist { end: true, .. });
+                let timeout = if ending {
+                    HLS_UPLOAD_END_TIMEOUT
+                } else {
+                    HLS_UPLOAD_REQUEST_TIMEOUT
+                };
+                let send = send_upload(&HLS_UPLOAD_CLIENT, url, &request, timeout);
+                let result = if ending {
+                    send.await
+                } else {
+                    tokio::select! {
+                        result = send => result,
+                        _ = registration.cancel_token.cancelled() => {
+                            // Abandon the request; the stop sends the end
+                            // playlist next.
+                            policy.on_result(UploadOutcome::Transport, Instant::now());
+                            policy.finish();
+                            continue;
+                        }
                     }
+                };
+                let (outcome, failure) = match result {
+                    Ok(status) => (UploadOutcome::Status(status.as_u16()), None),
+                    Err(error) => (UploadOutcome::Transport, Some(error)),
+                };
+                if let Some(effect) = policy.on_result(outcome, Instant::now()) {
+                    report.result(&request, effect, failure).await;
                 }
             }
-        }
-        retry_pending = false;
-
-        let Some(snapshot) = published.borrow_and_update().clone() else {
-            continue;
-        };
-        prune_uploaded_segments(&mut uploaded_segments, &snapshot);
-
-        let mut upload_failed = false;
-        for segment in &snapshot.segments {
-            if uploaded_segments.contains(&segment.index) {
-                continue;
+            Next::Wait(until) => {
+                if !store_open && until.is_none() {
+                    return;
+                }
+                let backoff = async {
+                    match until {
+                        Some(until) => tokio::time::sleep_until(until.into()).await,
+                        None => std::future::pending().await,
+                    }
+                };
+                tokio::select! {
+                    _ = registration.cancel_token.cancelled(), if !policy.is_finishing() => {
+                        policy.finish();
+                    }
+                    changed = published.changed(), if store_open => {
+                        if changed.is_err() {
+                            store_open = false;
+                        } else if let Some(snapshot) = published.borrow_and_update().clone() {
+                            policy.on_publish(&snapshot);
+                        }
+                    }
+                    _ = backoff => {}
+                }
             }
-            let segment_name = format!("seg{}.ts", segment.index);
-            let segment_url = derive_hls_upload_url(&playlist_url, &segment_name);
-            let segment_len = segment.data.len() as u64;
-            match put_bytes_with_timeout(
-                client,
-                segment_url,
-                HLS_SEGMENT_CONTENT_TYPE,
-                segment.data.clone(),
-                HLS_UPLOAD_REQUEST_TIMEOUT,
+            Next::Stop(Stopped::Ended) => return,
+            Next::Stop(Stopped::Rejected { status }) => {
+                warn!(
+                    output_id = %output_id,
+                    pipeline_id = %pipeline_id,
+                    status,
+                    "HLS ingest rejected the upload; not retrying"
+                );
+                return;
+            }
+        }
+    }
+}
+
+/// Status reporting for one uploader.
+struct Report<'a> {
+    engine: &'a MediaEngine,
+    output_id: &'a str,
+    pipeline_id: &'a str,
+    registration: &'a EgressRegistration,
+}
+
+impl Report<'_> {
+    async fn dropped(&self, total: u64) {
+        warn!(
+            output_id = %self.output_id,
+            pipeline_id = %self.pipeline_id,
+            total,
+            "HLS segment still failing after its duration; dropped"
+        );
+        self.engine
+            .record_egress_error_if_current(
+                self.output_id,
+                self.registration,
+                "upload_segment_dropped",
+                format!("{total} segment(s) dropped after failing for their duration"),
             )
-            .await
-            {
-                Ok(()) => {
-                    uploaded_segments.insert(segment.index);
-                    engine
-                        .record_egress_progress_if_current(&output_id, &registration, segment_len)
-                        .await;
-                }
-                Err(err) => {
-                    error!(
-                        "[hls-upload] Segment upload failed output={} pipeline={} segment={}: {}",
-                        output_id, pipeline_id, segment_name, err
-                    );
-                    engine
-                        .record_egress_error_if_current(
-                            &output_id,
-                            &registration,
-                            "upload_segment",
-                            err,
-                        )
-                        .await;
-                    retry_attempts = retry_attempts.saturating_add(1);
-                    publish_upload_retry_state(&engine, &output_id, &registration, retry_attempts)
-                        .await;
-                    upload_failed = true;
-                    break;
-                }
-            }
-        }
-        if upload_failed {
-            if wait_for_upload_retry_backoff(&registration).await {
-                return;
-            }
-            retry_pending = true;
-            continue;
-        }
+            .await;
+    }
 
-        let playlist_bytes = snapshot.playlist.clone().into_bytes();
-        let playlist_len = playlist_bytes.len() as u64;
-        if let Err(err) = put_bytes(
-            client,
-            playlist_url.clone(),
-            HLS_PLAYLIST_CONTENT_TYPE,
-            playlist_bytes,
-        )
-        .await
-        {
-            error!(
-                "[hls-upload] Playlist upload failed output={} pipeline={}: {}",
-                output_id, pipeline_id, err
-            );
-            engine
-                .record_egress_error_if_current(&output_id, &registration, "upload_playlist", err)
-                .await;
-            retry_attempts = retry_attempts.saturating_add(1);
-            publish_upload_retry_state(&engine, &output_id, &registration, retry_attempts).await;
-            if wait_for_upload_retry_backoff(&registration).await {
-                return;
+    async fn result(&self, request: &UploadRequest, effect: ResultEffect, failure: Option<String>) {
+        let kind = match request.target {
+            UploadTarget::Segment { .. } => "upload_segment",
+            UploadTarget::Playlist { .. } => "upload_playlist",
+        };
+        match effect {
+            ResultEffect::Acknowledged { bytes } => {
+                self.engine.clear_egress_retry_state(self.output_id).await;
+                self.engine
+                    .record_egress_progress_if_current(self.output_id, self.registration, bytes)
+                    .await;
             }
-            retry_pending = true;
-        } else {
-            retry_attempts = 0;
-            engine.clear_egress_retry_state(&output_id).await;
-            engine
-                .record_egress_progress_if_current(&output_id, &registration, playlist_len)
-                .await;
+            ResultEffect::WillRetry { attempts } => {
+                let error = failure.unwrap_or_else(|| "upload failed".to_string());
+                warn!(
+                    output_id = %self.output_id,
+                    pipeline_id = %self.pipeline_id,
+                    object = %request.file_name,
+                    attempts,
+                    error = %error,
+                    "HLS upload failed; retrying"
+                );
+                self.engine
+                    .record_egress_error_if_current(self.output_id, self.registration, kind, error)
+                    .await;
+                let backoff_ms = u64::try_from(backoff(attempts).as_millis()).unwrap_or(u64::MAX);
+                self.engine
+                    .update_egress_retry_state_if_current(
+                        self.output_id,
+                        self.registration,
+                        attempts,
+                        backoff_ms,
+                        backoff_ms,
+                    )
+                    .await;
+            }
+            ResultEffect::EndNotDelivered => {
+                tracing::info!(
+                    output_id = %self.output_id,
+                    error = failure.as_deref().unwrap_or("upload failed"),
+                    "HLS end playlist not delivered"
+                );
+            }
+            ResultEffect::Rejected { status } => {
+                self.engine
+                    .record_egress_error_if_current(
+                        self.output_id,
+                        self.registration,
+                        kind,
+                        format!(
+                            "HLS ingest rejected {} with HTTP {status}",
+                            request.file_name
+                        ),
+                    )
+                    .await;
+            }
         }
     }
 }
 
-fn prune_uploaded_segments(uploaded_segments: &mut HashSet<u64>, snapshot: &HlsStoreSnapshot) {
-    uploaded_segments.retain(|index| {
-        snapshot
-            .segments
-            .iter()
-            .any(|segment| segment.index == *index)
-    });
-}
-
-async fn wait_for_upload_retry_backoff(registration: &EgressRegistration) -> bool {
-    tokio::select! {
-        _ = registration.cancel_token.cancelled() => true,
-        _ = tokio::time::sleep(HLS_UPLOAD_RETRY_BACKOFF) => false,
+fn object_url(playlist_url: &Url, request: &UploadRequest) -> Url {
+    match request.target {
+        UploadTarget::Playlist { .. } => playlist_url.clone(),
+        UploadTarget::Segment { .. } => derive_hls_upload_url(playlist_url, &request.file_name),
     }
 }
 
-async fn publish_upload_retry_state(
-    engine: &MediaEngine,
-    output_id: &str,
-    registration: &EgressRegistration,
-    attempts: u32,
-) {
-    let backoff_ms = HLS_UPLOAD_RETRY_BACKOFF
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX);
-    engine
-        .update_egress_retry_state_if_current(
-            output_id,
-            registration,
-            attempts,
-            backoff_ms,
-            backoff_ms,
-        )
-        .await;
-}
-
-async fn put_bytes<B>(
+/// PUT one object; the status, or why none was received.
+async fn send_upload(
     client: &Client,
     url: Url,
-    content_type: &'static str,
-    body: B,
-) -> Result<(), String>
-where
-    B: Into<reqwest::Body>,
-{
-    put_bytes_with_timeout(client, url, content_type, body, HLS_UPLOAD_REQUEST_TIMEOUT).await
-}
-
-async fn put_bytes_with_timeout<B>(
-    client: &Client,
-    url: Url,
-    content_type: &'static str,
-    body: B,
+    request: &UploadRequest,
     timeout: Duration,
-) -> Result<(), String>
-where
-    B: Into<reqwest::Body>,
-{
-    let status = client
+) -> Result<reqwest::StatusCode, String> {
+    client
         .put(url.clone())
         .timeout(timeout)
-        .header(reqwest::header::CONTENT_TYPE, content_type)
-        .body(body)
+        .header(reqwest::header::CONTENT_TYPE, request.content_type)
+        .body(request.body.clone())
         .send()
         .await
+        .map(|response| response.status())
         .map_err(|err| {
             if err.is_timeout() {
                 format!("PUT {url} timed out after {} ms", timeout.as_millis())
             } else {
                 err.to_string()
             }
-        })?
-        .status();
-    if status.is_success() {
-        Ok(())
-    } else {
-        Err(format!("PUT {} returned {}", url, status))
-    }
+        })
 }
 
 pub(crate) fn derive_hls_upload_url(playlist_url: &Url, file_name: &str) -> Url {
@@ -351,11 +378,45 @@ mod tests {
     use axum::extract::OriginalUri;
     use axum::http::{HeaderMap, StatusCode};
     use axum::routing::put;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::sync::Mutex;
 
     use crate::domain::stage::{StageKey, StageKind};
-    use crate::media::hls::HlsSegmentSnapshot;
+
+    /// `uri` with the per-attempt session token (`r<hex>-`) of segment names
+    /// replaced by `S-`, so tests can name segments.
+    fn normalized(uri: &str) -> String {
+        let mut out = String::with_capacity(uri.len());
+        let mut rest = uri;
+        while let Some(at) = rest.find(['/', '=']) {
+            out.push_str(&rest[..=at]);
+            rest = &rest[at + 1..];
+            let token = rest
+                .strip_prefix('r')
+                .map(|tail| tail.chars().take_while(char::is_ascii_hexdigit).count());
+            if let Some(digits) = token.filter(|digits| *digits > 0)
+                && rest[1 + digits..].starts_with('-')
+            {
+                out.push('S');
+                rest = &rest[1 + digits..];
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+
+    #[test]
+    fn session_tokens_are_valid_segment_name_characters() {
+        let token = upload_session_token();
+        assert!(token.starts_with('r') && token.len() > 1);
+        assert!(token.chars().all(|c| c.is_ascii_alphanumeric()));
+        assert_eq!(normalized(&format!("/live/{token}-7.ts")), "/live/S-7.ts");
+        assert_eq!(
+            normalized(&format!("/u?cid=a&file={token}-0.ts")),
+            "/u?cid=a&file=S-0.ts"
+        );
+        assert_eq!(normalized("/live/out.m3u8"), "/live/out.m3u8");
+    }
 
     fn planned_hls_key(pipeline_id: &str) -> StageKey {
         StageKey::new(pipeline_id, StageKind::hls_segmenter(StageKind::source()))
@@ -401,32 +462,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn uploaded_segment_tracking_is_pruned_to_current_snapshot() {
-        let mut uploaded_segments = HashSet::from([0, 1, 2, 3]);
-        let snapshot = HlsStoreSnapshot {
-            playlist: "#EXTM3U\n".to_string(),
-            segments: vec![
-                HlsSegmentSnapshot {
-                    index: 2,
-                    data: Bytes::new(),
-                },
-                HlsSegmentSnapshot {
-                    index: 3,
-                    data: Bytes::new(),
-                },
-                HlsSegmentSnapshot {
-                    index: 4,
-                    data: Bytes::new(),
-                },
-            ],
-        };
-
-        prune_uploaded_segments(&mut uploaded_segments, &snapshot);
-
-        assert_eq!(uploaded_segments, HashSet::from([2, 3]));
-    }
-
     #[tokio::test]
     async fn uploads_segments_and_playlist_to_put_sink() {
         let seen = Arc::new(Mutex::new(Vec::<(String, String, Vec<u8>)>::new()));
@@ -451,9 +486,11 @@ mod tests {
                         .lock()
                         .unwrap()
                         .insert(header(reqwest::header::USER_AGENT.as_str()));
-                    seen.lock()
-                        .unwrap()
-                        .push((uri.0.to_string(), content_type, body.to_vec()));
+                    seen.lock().unwrap().push((
+                        normalized(&uri.0.to_string()),
+                        content_type,
+                        body.to_vec(),
+                    ));
                     StatusCode::NO_CONTENT
                 }
             }),
@@ -505,8 +542,8 @@ mod tests {
         let seen = seen.lock().unwrap();
         assert!(
             seen.iter().any(|(uri, content_type, body)| {
-                uri == "/upload?cid=abc&file=seg0.ts"
-                    && content_type == HLS_SEGMENT_CONTENT_TYPE
+                uri == "/upload?cid=abc&file=S-0.ts"
+                    && content_type == super::super::upload_policy::HLS_SEGMENT_CONTENT_TYPE
                     && body == b"segment-0"
             }),
             "segment PUT not observed: {seen:?}"
@@ -514,7 +551,7 @@ mod tests {
         assert!(
             seen.iter().any(|(uri, content_type, body)| {
                 uri == "/upload?cid=abc&file=out.m3u8"
-                    && content_type == HLS_PLAYLIST_CONTENT_TYPE
+                    && content_type == super::super::upload_policy::HLS_PLAYLIST_CONTENT_TYPE
                     && body.starts_with(b"#EXTM3U")
             }),
             "playlist PUT not observed: {seen:?}"
@@ -538,7 +575,11 @@ mod tests {
             put(move |uri: OriginalUri| {
                 let seen = seen_for_handler.clone();
                 async move {
-                    *seen.lock().unwrap().entry(uri.0.to_string()).or_default() += 1;
+                    *seen
+                        .lock()
+                        .unwrap()
+                        .entry(normalized(&uri.0.to_string()))
+                        .or_default() += 1;
                     StatusCode::NO_CONTENT
                 }
             }),
@@ -590,9 +631,9 @@ mod tests {
         assert_eq!(count("/live/out.m3u8"), 1, "unchanged playlist re-sent");
 
         store.push_segment(1.2, bytes::Bytes::from_static(b"segment-1"));
-        wait_for("/live/seg1.ts", 1).await;
+        wait_for("/live/S-1.ts", 1).await;
         wait_for("/live/out.m3u8", 2).await;
-        assert_eq!(count("/live/seg0.ts"), 1, "a segment is sent once");
+        assert_eq!(count("/live/S-0.ts"), 1, "a segment is sent once");
 
         registration.cancel_token.cancel();
         let _ = uploader.await;
@@ -614,11 +655,20 @@ mod tests {
         });
 
         let client = Client::new();
-        let result = put_bytes_with_timeout(
+        let request = UploadRequest {
+            target: UploadTarget::Playlist {
+                last_sequence: None,
+                end: false,
+            },
+            file_name: String::new(),
+            content_type: super::super::upload_policy::HLS_PLAYLIST_CONTENT_TYPE,
+            body: Bytes::from_static(b"#EXTM3U"),
+            fresh_connection: false,
+        };
+        let result = send_upload(
             &client,
             Url::parse(&format!("http://{addr}/upload?file=out.m3u8")).unwrap(),
-            HLS_PLAYLIST_CONTENT_TYPE,
-            Bytes::from_static(b"#EXTM3U"),
+            &request,
             Duration::from_millis(50),
         )
         .await;
@@ -639,11 +689,11 @@ mod tests {
             put(move |uri: OriginalUri| {
                 let seen = seen_for_handler.clone();
                 async move {
-                    let uri = uri.0.to_string();
+                    let uri = normalized(&uri.0.to_string());
                     let mut seen = seen.lock().unwrap();
                     let count = seen.entry(uri.clone()).or_default();
                     *count += 1;
-                    if uri.ends_with("file=seg0.ts") && *count == 1 {
+                    if uri.ends_with("file=S-0.ts") && *count == 1 {
                         StatusCode::BAD_GATEWAY
                     } else {
                         StatusCode::NO_CONTENT
@@ -690,7 +740,7 @@ mod tests {
             let (segment_attempts, playlist_attempts) = {
                 let seen = seen.lock().unwrap();
                 (
-                    seen.get("/upload?cid=abc&file=seg0.ts")
+                    seen.get("/upload?cid=abc&file=S-0.ts")
                         .copied()
                         .unwrap_or(0),
                     seen.get("/upload?cid=abc&file=out.m3u8")
@@ -717,6 +767,109 @@ mod tests {
         );
         registration.cancel_token.cancel();
         let _ = uploader.await;
+    }
+
+    /// A sink that records every PUT (normalized URI, body) and answers with
+    /// `status`.
+    async fn recording_sink(
+        status: StatusCode,
+    ) -> (std::net::SocketAddr, Arc<Mutex<Vec<(String, Vec<u8>)>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_for_handler = seen.clone();
+        let app = Router::new().route(
+            "/{*path}",
+            put(move |uri: OriginalUri, body: Bytes| {
+                let seen = seen_for_handler.clone();
+                async move {
+                    seen.lock()
+                        .unwrap()
+                        .push((normalized(&uri.0.to_string()), body.to_vec()));
+                    status
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (addr, seen)
+    }
+
+    async fn spawn_uploader(
+        target_url: String,
+        store: Arc<HlsStore>,
+    ) -> (EgressRegistration, tokio::task::JoinHandle<()>) {
+        let engine = Arc::new(MediaEngine::new());
+        let terminal_stage_key = planned_hls_key("pipe1");
+        let registration = engine
+            .register_egress_attempt(
+                "out1",
+                "pipe1",
+                &target_url,
+                Some(terminal_stage_key.clone()),
+            )
+            .await;
+        let uploader = tokio::spawn(start_hls_put_upload(
+            HlsUploadStart {
+                output_id: "out1".to_string(),
+                pipeline_id: "pipe1".to_string(),
+                target_url,
+                terminal_stage_key,
+            },
+            store,
+            engine,
+            registration.clone(),
+        ));
+        (registration, uploader)
+    }
+
+    /// Stopping an output sends a last playlist ending in EXT-X-ENDLIST
+    /// (Akamai marks a finished live stream this way), then the task ends.
+    #[tokio::test]
+    async fn stopping_sends_a_final_playlist_with_endlist() {
+        let (addr, seen) = recording_sink(StatusCode::OK).await;
+        let store = Arc::new(HlsStore::new());
+        store.push_segment(1.2, bytes::Bytes::from_static(b"segment-0"));
+        let (registration, uploader) =
+            spawn_uploader(format!("http://{addr}/live/out.m3u8"), store.clone()).await;
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        while seen.lock().unwrap().len() < 2 {
+            assert!(tokio::time::Instant::now() < deadline, "no first upload");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        registration.cancel_token.cancel();
+        tokio::time::timeout(Duration::from_secs(3), uploader)
+            .await
+            .expect("the uploader ends after a stop")
+            .unwrap();
+
+        let seen = seen.lock().unwrap();
+        let (uri, body) = seen.last().unwrap();
+        assert_eq!(uri, "/live/out.m3u8");
+        let playlist = std::str::from_utf8(body).unwrap();
+        assert!(
+            playlist.contains("-0.ts\n") && playlist.ends_with("#EXT-X-ENDLIST\n"),
+            "{playlist}"
+        );
+    }
+
+    /// A 401 (YouTube: the cid expired) ends the uploader without retrying.
+    #[tokio::test]
+    async fn a_rejected_upload_ends_the_uploader_without_retrying() {
+        let (addr, seen) = recording_sink(StatusCode::UNAUTHORIZED).await;
+        let store = Arc::new(HlsStore::new());
+        store.push_segment(1.2, bytes::Bytes::from_static(b"segment-0"));
+        let (_registration, uploader) =
+            spawn_uploader(format!("http://{addr}/live/out.m3u8"), store.clone()).await;
+
+        tokio::time::timeout(Duration::from_secs(3), uploader)
+            .await
+            .expect("a rejected uploader stops by itself")
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(seen.lock().unwrap().len(), 1, "no retry after a 401");
     }
 
     #[tokio::test]

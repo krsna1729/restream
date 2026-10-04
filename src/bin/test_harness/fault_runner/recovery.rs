@@ -490,10 +490,7 @@ pub(crate) async fn recovery_live_cases(
             request_seen(requests, |r| {
                 r["file"] == "out.m3u8" && r["contentType"] == "application/vnd.apple.mpegurl"
             }) && request_seen(requests, |r| {
-                r["file"]
-                    .as_str()
-                    .is_some_and(|f| is_segment_file(f, "seg"))
-                    && r["contentType"] == "video/mp2t"
+                r["file"].as_str().is_some_and(is_segment_file) && r["contentType"] == "video/mp2t"
             })
         });
 

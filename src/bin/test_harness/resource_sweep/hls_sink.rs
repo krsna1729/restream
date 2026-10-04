@@ -1,10 +1,11 @@
 //! Counting HLS PUT receiver and the segment-based delivery rule for resource
 //! sweeps (`MSR_PEER=sink`).
 //!
-//! Restream uploads each HLS segment (`seg{index}.ts`, the same index for every
-//! output of a pipeline; cut on keyframes, about 3 s with the checked-in
-//! fixtures and at most the 6 s target) and the playlist to every HLS PUT
-//! output. The
+//! Restream uploads each HLS segment (cut on keyframes, about 3 s with the
+//! checked-in fixtures and at most the 6 s target) and the playlist to every
+//! HLS PUT output. Each output names segments its own way (an output-local
+//! number behind a per-attempt token), so a segment is identified by its
+//! bytes: every output uploads the same bytes for the same segment. The
 //! sink streams and discards each body, so 1000 concurrent segment uploads
 //! never buffer whole segments, and records when each output finished each
 //! segment.
@@ -41,7 +42,8 @@ pub(super) const HLS_DESTINATION_PREFIX: &str = "hls-sink:";
 struct Arrivals {
     /// Cumulative body bytes per output (`cid`).
     bytes: HashMap<String, u64>,
-    /// Completion instant of each segment index at each output.
+    /// Completion instant of each segment (keyed by a hash of its bytes) at
+    /// each output.
     segments: HashMap<String, BTreeMap<u64, Instant>>,
 }
 
@@ -96,16 +98,21 @@ async fn receive(
 ) -> StatusCode {
     let cid = query.get("cid").cloned().unwrap_or_default();
     let mut received = 0u64;
+    let mut content = Fnv1a::new();
     let mut stream = body.into_data_stream();
     while let Some(chunk) = stream.next().await {
         match chunk {
-            Ok(chunk) => received += chunk.len() as u64,
+            Ok(chunk) => {
+                received += chunk.len() as u64;
+                content.update(&chunk);
+            }
             Err(_) => return StatusCode::BAD_REQUEST,
         }
     }
     let segment = query
         .get("file")
-        .and_then(|file| file.strip_prefix("seg")?.strip_suffix(".ts")?.parse().ok());
+        .is_some_and(|file| file.ends_with(".ts"))
+        .then(|| content.finish());
     let now = Instant::now();
     let mut arrivals = restream::sync::lock(&arrivals);
     *arrivals.bytes.entry(cid.clone()).or_default() += received;
@@ -118,6 +125,26 @@ async fn receive(
             .or_insert(now);
     }
     StatusCode::NO_CONTENT
+}
+
+/// FNV-1a over a byte stream; the result does not depend on how the stream
+/// is chunked.
+struct Fnv1a(u64);
+
+impl Fnv1a {
+    fn new() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+
+    fn update(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 = (self.0 ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
 }
 
 impl HlsSinkHandle {
@@ -277,6 +304,20 @@ mod tests {
         assert_eq!(window.delivered, 1);
         assert!((window.ratio_min - 2.0 / 3.0).abs() < 1e-9);
         assert_eq!(window.lag_max_ms, 4_000);
+    }
+
+    #[test]
+    fn segment_identity_does_not_depend_on_chunking() {
+        let mut whole = Fnv1a::new();
+        whole.update(b"segment-bytes");
+        let mut split = Fnv1a::new();
+        split.update(b"segm");
+        split.update(b"ent-by");
+        split.update(b"tes");
+        assert_eq!(whole.finish(), split.finish());
+        let mut other = Fnv1a::new();
+        other.update(b"segment-bytez");
+        assert_ne!(whole.finish(), other.finish());
     }
 
     #[test]

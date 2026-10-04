@@ -312,8 +312,12 @@ URL behavior:
 Any other prefix is rejected during validation with a `400 Bad Request`.
 Pipeline recirculation URLs are parsed and checked for cycles and target-input
 ownership before the output can start.
-HTTP/HTTPS HLS upload uses one shared local segmenter per pipeline, PUTs each
-new `seg<N>.ts`, then PUTs the playlist URL.
+HTTP/HTTPS HLS upload uses one shared local segmenter per pipeline. Each output
+starts at the newest segment, PUTs each new segment, then PUTs a playlist of the
+last three acknowledged segments (media sequence from 0 per output attempt),
+and on stop PUTs a final playlist ending in `#EXT-X-ENDLIST`. The rules follow
+the YouTube HLS ingestion guide and Akamai MSL HTTP ingest requirements; see
+[observability](observability.md) for how failures are reported.
 
 ## Process Logs
 
