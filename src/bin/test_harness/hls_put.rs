@@ -46,10 +46,7 @@ pub(crate) async fn run_hls_put_probe(
                 r["file"] == "out.m3u8" && r["contentType"] == "application/vnd.apple.mpegurl"
             });
             let segment_ct = request_seen(&requests, |r| {
-                r["file"]
-                    .as_str()
-                    .is_some_and(|f| is_segment_file(f, "seg"))
-                    && r["contentType"] == "video/mp2t"
+                r["file"].as_str().is_some_and(is_segment_file) && r["contentType"] == "video/mp2t"
             });
             content_types_ok = playlist_ct && segment_ct;
         }
@@ -317,7 +314,7 @@ fn first_segment_in(dir: &Path) -> Option<PathBuf> {
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| is_segment_file(name, "seg"))
+                .is_some_and(is_segment_file)
                 && file_nonempty(path)
         })
         .collect();
@@ -355,8 +352,14 @@ pub(crate) fn request_seen(requests: &[Value], predicate: impl Fn(&Value) -> boo
     requests.iter().any(predicate)
 }
 
-pub(crate) fn is_segment_file(file: &str, prefix: &str) -> bool {
-    file.strip_prefix(prefix)
-        .and_then(|rest| rest.strip_suffix(".ts"))
-        .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
+/// An HLS segment object name Restream uploads: `<token>-<n>.ts`.
+pub(crate) fn is_segment_file(file: &str) -> bool {
+    file.strip_suffix(".ts")
+        .and_then(|stem| stem.rsplit_once('-'))
+        .is_some_and(|(token, digits)| {
+            !token.is_empty()
+                && token.chars().all(|c| c.is_ascii_alphanumeric())
+                && !digits.is_empty()
+                && digits.chars().all(|c| c.is_ascii_digit())
+        })
 }

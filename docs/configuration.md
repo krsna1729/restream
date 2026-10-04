@@ -289,8 +289,10 @@ backend ownership starts. The served preview HLS path is
 fragmented MP4 (`init.mp4` + `.m4s`), but HTTP/HTTPS HLS upload intentionally
 stays on MPEG-TS for ingest compatibility. For HTTP/HTTPS HLS upload,
 segment upload URLs are derived from the playlist target: a `file=` query
-parameter is replaced with `seg<N>.ts`, otherwise the playlist path filename is
-replaced with the segment filename.
+parameter is replaced with the segment name, otherwise the playlist path
+filename is replaced with it. Segment names are `r<token>-<N>.ts`: `<N>` counts
+from 0 for each output attempt and `<token>` is unique to the attempt, so names
+never repeat across restarts (YouTube and Akamai ingest both require this).
 
 Output config describes video and audio separately:
 
