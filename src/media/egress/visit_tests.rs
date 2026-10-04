@@ -638,3 +638,71 @@ proptest! {
         }
     }
 }
+
+/// A feed whose producer publishes a keyframe at the live edge while the
+/// leaf is asking for the latest sync point: the query sees none, and the
+/// publication lands right after it.
+struct PublishDuringSyncQuery {
+    head: std::cell::Cell<u64>,
+    sync: std::cell::Cell<Option<u64>>,
+}
+
+impl EgressFeed for PublishDuringSyncQuery {
+    type Unit = Bytes;
+
+    fn head_sequence(&self) -> u64 {
+        self.head.get()
+    }
+
+    fn oldest_sequence(&self) -> u64 {
+        0
+    }
+
+    fn read_from(&self, _cursor: FeedCursor, _budget: ReadBudget) -> FeedRead<Self::Unit> {
+        FeedRead::Empty
+    }
+
+    fn latest_sync_point(&self) -> Option<FeedCursor> {
+        let seen = self.sync.get().map(|sequence| FeedCursor::new(0, sequence));
+        // The producer publishes a keyframe at the edge just after the query.
+        let keyframe = self.head.get();
+        self.sync.set(Some(keyframe));
+        self.head.set(keyframe + 1);
+        seen
+    }
+
+    fn sync_point_at_or_after(&self, _sequence: u64) -> Option<FeedCursor> {
+        self.sync.get().map(|sequence| FeedCursor::new(0, sequence))
+    }
+
+    fn epoch(&self) -> u64 {
+        0
+    }
+}
+
+/// A keyframe published between the sync-point query and the live-edge
+/// fallback must not be skipped: the start cursor stays at or before it, so
+/// the leaf delivers it instead of waiting a whole GOP for the next one.
+/// (Reproduced as a 1-in-200 failure of
+/// `sink_fabric_registry_dispatches_add_and_the_shard_discards_published_units`
+/// under CPU saturation: the leaf primed at head 1, past keyframe 0.)
+#[test]
+fn live_start_cursor_does_not_skip_a_keyframe_published_during_the_query() {
+    let feed = PublishDuringSyncQuery {
+        head: std::cell::Cell::new(7),
+        sync: std::cell::Cell::new(None),
+    };
+
+    let cursor = live_start_cursor(&feed);
+
+    assert_eq!(
+        feed.sync.get(),
+        Some(7),
+        "the keyframe landed at sequence 7"
+    );
+    assert!(
+        cursor.next_sequence <= 7,
+        "start cursor {} skipped the keyframe at 7",
+        cursor.next_sequence
+    );
+}

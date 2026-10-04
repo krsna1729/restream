@@ -133,9 +133,16 @@ pub(crate) fn visit_leaf<F: EgressFeed>(
 ///
 /// The epoch is re-read from the feed so a concurrent epoch bump is picked up
 /// in the same step.
+///
+/// The live edge is read *before* the sync point. The producer publishes
+/// concurrently, and reading it after a `None` sync point could land past a
+/// keyframe published between the two reads, skipping it (the leaf then
+/// waits a whole GOP). Read first, the fallback edge is at or before any
+/// keyframe the sync-point query did not see.
 pub(super) fn live_start_cursor<F: EgressFeed>(feed: &F) -> FeedCursor {
+    let edge = feed.head_sequence();
     feed.latest_sync_point()
-        .unwrap_or_else(|| FeedCursor::new(feed.epoch(), feed.head_sequence()))
+        .unwrap_or_else(|| FeedCursor::new(feed.epoch(), edge))
 }
 
 fn apply_progress_to_common<F: EgressFeed>(
