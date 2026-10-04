@@ -968,22 +968,18 @@ async fn read_rtmp_input_or_quality(
 pub(super) mod injected_panics {
     use std::collections::HashSet;
     use std::net::SocketAddr;
-    use std::sync::{Mutex, PoisonError};
+    use std::sync::Mutex;
 
     static MARKED: Mutex<Option<HashSet<SocketAddr>>> = Mutex::new(None);
 
     pub(in crate::media::rtmp) fn mark(peer: SocketAddr) {
-        MARKED
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        crate::sync::lock(&MARKED)
             .get_or_insert_with(HashSet::new)
             .insert(peer);
     }
 
     pub(super) fn unwind_if_marked(peer: SocketAddr) {
-        let marked = MARKED
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        let marked = crate::sync::lock(&MARKED)
             .as_mut()
             .is_some_and(|set| set.remove(&peer));
         if marked {

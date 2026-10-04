@@ -1,6 +1,7 @@
 //! Loom model-checks for ring migration wake behavior.
 //! This file owns the concurrent `seal_and_forward`/`wait_for_data` contract,
 //! reduced to a loom-friendly model so missed-notify bugs stay impossible.
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 
 #[cfg(loom)]
 mod loom_tests {

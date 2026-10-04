@@ -306,7 +306,7 @@ pub(crate) async fn output_status(
                 output_name: egress.output_name.clone(),
                 encoding: egress.encoding.clone(),
                 url: egress.target_url.clone(),
-                phase: *egress.phase.lock().unwrap_or_else(|e| e.into_inner()),
+                phase: *crate::sync::lock(&egress.phase),
                 terminal_stage: terminal_stage_key.clone(),
                 blocked_by: None,
             };

@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 use std::path::Path;
 
 fn collect_rust_sources(directory: &Path, inspect: &mut impl FnMut(&Path, &str)) {

@@ -1,0 +1,5 @@
+disallowed-methods = [
+  { path = "std::sync::Mutex::lock", reason = "use crate::sync::lock: a poisoned lock must not panic every later reader (docs/isolation-audit.md F5)" },
+  { path = "std::sync::RwLock::read", reason = "use crate::sync::read (poison-tolerant)" },
+  { path = "std::sync::RwLock::write", reason = "use crate::sync::write (poison-tolerant)" },
+]

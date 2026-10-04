@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
 use restream::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;

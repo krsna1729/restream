@@ -1,5 +1,6 @@
 //! End-to-end integration harness that drives RTMP, SRT, HLS, and API flows
 //! against a running restream instance for higher-level verification.
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, OriginalUri, State};

@@ -263,10 +263,7 @@ fn stall_sweep_samples_each_leaf_once_so_two_sample_rates_have_a_real_window() {
     backend.sweep_stalled_leaves(start);
     backend.last_stall_sweep = None;
     backend.sweep_stalled_leaves(start + crate::media::egress::delivery::DELIVERY_WINDOW);
-    let sampled = quality
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
+    let sampled = crate::sync::lock(&quality).clone();
     assert!(
         sampled.tcp_send_rate_mbps.is_some(),
         "the second sweep must rate against the first, not against itself: {sampled:?}"

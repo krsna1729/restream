@@ -1,6 +1,7 @@
 //! Loom model-checks for the AV I/O queue synchronization boundary.
 //! This file owns the close/wake contract behind `MemoryQueue`, proving the
 //! shutdown and backpressure invariants that media thread hops rely on.
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 
 #[cfg(loom)]
 mod loom_tests {

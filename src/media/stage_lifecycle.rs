@@ -19,9 +19,7 @@ pub use crate::domain::state::{StageBackendKind, StagePhase};
 // AGENTS.md. Recovering the guard is safe because the inner state is a
 // plain data struct with no invariant that spans multiple field writes.
 fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    crate::sync::lock(mutex)
 }
 
 #[derive(Clone, Debug)]

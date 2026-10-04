@@ -123,9 +123,7 @@ async fn pump_stdout_inner(
                         runtime.ring_buffer.set_video_parameter_sets(parameter_sets);
                     }
                     if packet.media_type == MediaType::Video && packet.is_keyframe {
-                        let mut times = cached_keyframe_times
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let mut times = crate::sync::lock(&cached_keyframe_times);
                         times.push(packet.pts);
                         if times.len() > 30 {
                             times.remove(0);

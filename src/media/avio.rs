@@ -126,7 +126,7 @@ impl MemoryQueue {
             // the wakeup and hanging the writer forever.
             let notified = self.space_available.notified();
             {
-                let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+                let inner = crate::sync::lock(&self.inner);
                 if inner.closed || inner.buf.len() < self.capacity {
                     break;
                 }
@@ -142,7 +142,7 @@ impl MemoryQueue {
                 .fetch_add(start.elapsed().as_micros() as u64, Ordering::Relaxed);
         }
 
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = crate::sync::lock(&self.inner);
         if inner.closed {
             return;
         }
@@ -159,7 +159,7 @@ impl MemoryQueue {
             // concurrent `notify_waiters()`.
             let notified = self.space_available.notified();
             {
-                let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+                let inner = crate::sync::lock(&self.inner);
                 if inner.closed || inner.buf.len() < self.capacity {
                     break;
                 }
@@ -184,7 +184,7 @@ impl MemoryQueue {
                 .fetch_add(start.elapsed().as_micros() as u64, Ordering::Relaxed);
         }
 
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = crate::sync::lock(&self.inner);
         if inner.closed || cancel.is_cancelled() {
             return false;
         }
@@ -211,7 +211,7 @@ impl MemoryQueue {
             // concurrent `notify_waiters()`.
             let notified = self.space_available.notified();
             {
-                let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+                let inner = crate::sync::lock(&self.inner);
                 if inner.closed || inner.buf.len() < self.capacity {
                     break;
                 }
@@ -227,7 +227,7 @@ impl MemoryQueue {
                 .fetch_add(start.elapsed().as_micros() as u64, Ordering::Relaxed);
         }
 
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = crate::sync::lock(&self.inner);
         if inner.closed {
             return 0;
         }
@@ -244,7 +244,7 @@ impl MemoryQueue {
     }
 
     pub fn write_sync(&self, data: &[u8]) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = crate::sync::lock(&self.inner);
         if inner.closed {
             return;
         }
@@ -254,7 +254,7 @@ impl MemoryQueue {
     }
 
     pub fn close(&self) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = crate::sync::lock(&self.inner);
         inner.closed = true;
         self.cvar.notify_all();
         self.space_available.notify_waiters();
@@ -268,7 +268,7 @@ impl MemoryQueue {
     }
 
     pub fn is_closed(&self) -> bool {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).closed
+        crate::sync::lock(&self.inner).closed
     }
 
     /// Current number of buffered bytes awaiting consumption.
@@ -277,12 +277,7 @@ impl MemoryQueue {
     /// thread unable to keep pace with ingest). Values consistently above a few
     /// megabytes indicate the downstream stage is falling behind.
     pub fn len(&self) -> usize {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .buf
-            .len()
-            + self.refill_pending.load(Ordering::Relaxed)
+        crate::sync::lock(&self.inner).buf.len() + self.refill_pending.load(Ordering::Relaxed)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -290,7 +285,7 @@ impl MemoryQueue {
     }
 
     pub fn stats(&self) -> MemoryQueueStats {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let inner = crate::sync::lock(&self.inner);
         MemoryQueueStats {
             len: inner.buf.len() + self.refill_pending.load(Ordering::Relaxed),
             capacity: self.capacity,
@@ -309,7 +304,7 @@ impl MemoryQueue {
     /// instead of waiting for writers. Reads then serve refilled batches
     /// directly, without staging them in the queue buffer.
     pub fn set_refill(&self, source: Box<dyn QueueRefill>) {
-        *self.refill.lock().unwrap_or_else(|e| e.into_inner()) = Some(RefillState {
+        *crate::sync::lock(&self.refill) = Some(RefillState {
             source,
             pending: Vec::with_capacity(crate::media::MEDIA_TS_BATCH_TARGET_BYTES),
             offset: 0,
@@ -343,15 +338,11 @@ impl MemoryQueue {
 
     pub fn read(&self, target: &mut [u8]) -> usize {
         if self.has_refill.load(Ordering::Acquire)
-            && let Some(state) = self
-                .refill
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .as_mut()
+            && let Some(state) = crate::sync::lock(&self.refill).as_mut()
         {
             return self.read_refilled(state, target);
         }
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = crate::sync::lock(&self.inner);
         while inner.buf.is_empty() && !inner.closed {
             // Use wait_timeout so the FFmpeg AVIO thread is not blocked indefinitely
             // if the producer panics without calling close().  Poison recovery via
@@ -383,7 +374,7 @@ impl MemoryQueue {
     }
 
     pub fn read_nonblocking(&self, target: &mut [u8]) -> usize {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = crate::sync::lock(&self.inner);
         if inner.buf.is_empty() {
             return 0;
         }

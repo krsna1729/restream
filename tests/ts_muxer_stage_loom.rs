@@ -1,6 +1,7 @@
 //! Loom model-checks for shared TS muxer-stage replacement.
 //! This file owns the registry concurrency guarantees that prevent cancelled
 //! muxer stages from being reused or duplicated under concurrent creation.
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 
 #[cfg(loom)]
 mod loom_tests {

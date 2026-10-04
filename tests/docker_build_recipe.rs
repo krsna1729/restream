@@ -5,6 +5,7 @@
 //! breaks release-image construction ("failed to load manifest for workspace
 //! member"), which local `cargo` never notices. This guard keeps the two in
 //! step; it is a cheap source check, not a Dockerfile parser.
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 
 const CARGO_TOML: &str = include_str!("../Cargo.toml");
 const DOCKERFILE: &str = include_str!("../Dockerfile");

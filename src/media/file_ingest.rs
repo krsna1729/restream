@@ -551,9 +551,7 @@ fn push_demuxed_packets(
             ring_buffer.set_video_parameter_sets(parameter_sets);
         }
         if pkt.media_type == MediaType::Video && pkt.is_keyframe {
-            let mut times = cached_keyframe_times
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut times = crate::sync::lock(cached_keyframe_times);
             times.push(pkt.pts);
             if times.len() > 30 {
                 times.remove(0);

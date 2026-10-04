@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 

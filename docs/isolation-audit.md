@@ -49,7 +49,7 @@ a shared budget so others are refused, or corrupt state others read.
 | SRT Owner → Tokio events | all SRT peers | — | 256 bridge + 1024 pending; media never waits | M3 measurements (`runtime-crossings.md`) |
 | Egress shard thread | outputs on the shard | panic boundary per visit; `WorkBudget` per visit | — | `panicking_leaf_fails_alone_and_its_shard_keeps_serving_the_others`, `blocked_leaf_does_not_starve_ready_leaf_on_same_shard_thread` |
 | Egress send memory | outputs on the shard | `LeafLimits::max_pending_bytes` 256 KiB, lag, backpressure time | shard leaf capacity | leaf isolation suite (`egress/shard/tests/leaf_isolation.rs`) |
-| Egress shard snapshot lock | shard thread and status API | — | — | **poisoning panics every later reader (F5)** |
+| Std locks shared by entities (shard snapshot, ring reader registry, ingest security, HLS stores, …) | entities and the status API | poison-tolerant `crate::sync::{lock, read, write}`; raw calls disallowed by `clippy.toml` | — | `a_poisoned_lock_still_serves_later_callers`; workspace clippy `-D warnings` |
 | Feed rings | one pipeline's outputs | readers never block the producer; overrun resyncs the reader | ring capacity | `fault_injection_rapid_overflow_recovery`, `first_visit_primes_the_cursor_to_the_latest_sync_point` |
 | Listener tasks | the whole protocol | — | restart with backoff | `listener_supervisor` tests |
 | Process allocator, FDs, CPU | everything | bounded by the per-entity bounds above | `nofile`, cgroup | capacity ramps |
@@ -58,18 +58,15 @@ a shared budget so others are refused, or corrupt state others read.
 
 Ordered by severity: unauthenticated first, then by what is lost.
 
-Closed (this change): F1 RTMP per-client connection cap, F2 RTMP admission
-deadline, F3 SRT per-client cap; see the table for bounds and tests.
+Closed: F1 RTMP per-client connection cap, F2 RTMP admission deadline, F3
+SRT per-client cap, F5 lock poisoning (191 call sites; the 3 that panicked
+were the egress shard snapshot, about 21 silently skipped their work once
+poisoned); see the table for bounds and tests.
 
 - **F4. The MPEG-TS demuxer has no fuzz target.** `mpegts/demux.rs` parses
   every byte of SRT ingest (65 indexing and 42 arithmetic sites by clippy).
   `mpegts_probe.rs` likewise. Fix: `ts_demux` and `ts_probe` fuzz targets;
   each crash becomes a regression test before its fix.
-- **F5. The egress shard snapshot uses `lock().unwrap()`** (`shard.rs` 440,
-  506, 799). A panic while it is held poisons it, and every later status
-  read panics: one shard's fault breaks the health API. These are the only
-  `lock().unwrap()` calls left outside tests. Fix: poison-tolerant locking,
-  enforced by lint (below).
 - **F6. Parsers of untrusted bytes still index and do arithmetic
   unchecked:** 276 indexing, 220 arithmetic and 66 truncating-cast sites in
   `rtmp/flv.rs`, `codec/`, `mpegts/demux.rs`, `mpegts_probe.rs`,
@@ -87,8 +84,8 @@ What the compiler and clippy can enforce:
 
 | Guard | Mechanism | Status |
 |---|---|---|
-| Containment needs unwinding | `#[cfg(panic = "abort")] compile_error!` in `lib.rs` | to add |
-| No panicking lock access | `clippy.toml` `disallowed-methods` on `Mutex::lock`/`RwLock::{read,write}` outside one poison-tolerant helper | to add (F5) |
+| Containment needs unwinding | `#[cfg(panic = "abort")] compile_error!` in `lib.rs` | done |
+| No panicking or skipping lock access | `clippy.toml` `disallowed-methods` on `Mutex::lock`/`RwLock::{read,write}` outside `crate::sync` (tests, benches and the harness may use them) | done (F5) |
 | Parsers cannot index, overflow or unwrap | `#![deny(clippy::indexing_slicing, clippy::arithmetic_side_effects, clippy::unwrap_used, clippy::expect_used, clippy::panic)]` per parser module | per module (F6) |
 | Overflow is never silent | `overflow-checks = true` in release | after benchmark (F7) |
 | Fault-injection points never ship | `#[cfg(test)]` only (`INJECTED_PANIC_PAYLOAD`, `injected_panics`, `EngineScript::Panic`) | done |
@@ -96,6 +93,5 @@ What the compiler and clippy can enforce:
 ## Order of work
 
 1. F4 fuzz targets; fix any crash with a regression test.
-2. F5 and the two lock/panic compile-time guards.
-3. F6 module by module, each with a benchmark when it is on the hot path.
-4. F7 benchmark and decision.
+2. F6 module by module, each with a benchmark when it is on the hot path.
+3. F7 benchmark and decision.

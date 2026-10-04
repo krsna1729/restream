@@ -3,6 +3,7 @@
 //! runtime all need io_uring, which Docker's default profile denies). It must
 //! stay exactly "Moby default + a proven io_uring delta": auditable, minimal,
 //! and never a broad allow.
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 
 use serde_json::{Value, json};
 

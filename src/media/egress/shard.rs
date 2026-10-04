@@ -437,7 +437,7 @@ impl EgressShardHandle {
     }
 
     pub fn snapshot(&self) -> EgressShardSnapshot {
-        self.snapshot.lock().unwrap().clone()
+        crate::sync::lock(&self.snapshot).clone()
     }
 
     pub fn shutdown_and_join(mut self) -> EgressShardSnapshot {
@@ -503,7 +503,7 @@ fn run_shard_thread<B: EgressShardBackend>(
         };
         runtime.run();
     }));
-    let mut snapshot = snapshot.lock().unwrap();
+    let mut snapshot = crate::sync::lock(&snapshot);
     if result.is_err() {
         snapshot.panicked = true;
     }
@@ -796,7 +796,7 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
             self.last_cpu_sample = Some(collected_at);
         }
 
-        let mut snapshot = self.snapshot.lock().unwrap();
+        let mut snapshot = crate::sync::lock(&self.snapshot);
         snapshot.loop_iterations = self.metrics.loop_iterations;
         snapshot.commands_processed = self.metrics.commands_processed;
         snapshot.timers_processed = self.metrics.timers_processed;

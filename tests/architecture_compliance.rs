@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 use restream::config::AppConfig;
 use restream::domain::ids::OutputId;
 use restream::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;

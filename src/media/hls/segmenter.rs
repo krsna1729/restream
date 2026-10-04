@@ -200,7 +200,7 @@ async fn run_hls_segmenter(
                                         let video =
                                             preview_video_meta.clone().or(metadata.video);
                                         video.as_ref()?;
-                                        let lock = i.audio_tracks.lock().unwrap_or_else(|e| e.into_inner());
+                                        let lock = crate::sync::lock(&i.audio_tracks);
                                         let tracks = if lock.is_empty()
                                             && let Some(audio) = metadata.audio {
                                                 std::sync::Arc::new(vec![audio])

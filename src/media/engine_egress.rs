@@ -345,7 +345,7 @@ impl MediaEngine {
     pub async fn update_egress_phase(&self, output_id: &str, phase: EgressPhase) {
         let egresses = self.egresses.active.read().await;
         if let Some(egress) = egresses.get(output_id) {
-            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = phase;
+            *crate::sync::lock(&egress.phase) = phase;
         }
     }
 
@@ -356,7 +356,7 @@ impl MediaEngine {
         phase: EgressPhase,
     ) -> bool {
         self.with_current_egress(output_id, registration, |egress| {
-            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = phase;
+            *crate::sync::lock(&egress.phase) = phase;
         })
         .await
         .is_some()
@@ -365,7 +365,7 @@ impl MediaEngine {
     pub async fn update_egress_target_addr(&self, output_id: &str, addr: String) {
         let egresses = self.egresses.active.read().await;
         if let Some(egress) = egresses.get(output_id) {
-            *egress.target_addr.lock().unwrap_or_else(|e| e.into_inner()) = Some(addr);
+            *crate::sync::lock(&egress.target_addr) = Some(addr);
         }
     }
 
@@ -376,7 +376,7 @@ impl MediaEngine {
         addr: String,
     ) -> bool {
         self.with_current_egress(output_id, registration, |egress| {
-            *egress.target_addr.lock().unwrap_or_else(|e| e.into_inner()) = Some(addr);
+            *crate::sync::lock(&egress.target_addr) = Some(addr);
         })
         .await
         .is_some()
@@ -385,7 +385,7 @@ impl MediaEngine {
     pub async fn update_egress_quality(&self, output_id: &str, quality: PublisherQuality) {
         let egresses = self.egresses.active.read().await;
         if let Some(egress) = egresses.get(output_id) {
-            *egress.quality.lock().unwrap_or_else(|e| e.into_inner()) = quality;
+            *crate::sync::lock(&egress.quality) = quality;
         }
     }
 
@@ -396,7 +396,7 @@ impl MediaEngine {
         quality: PublisherQuality,
     ) -> bool {
         self.with_current_egress(output_id, registration, |egress| {
-            *egress.quality.lock().unwrap_or_else(|e| e.into_inner()) = quality;
+            *crate::sync::lock(&egress.quality) = quality;
         })
         .await
         .is_some()
@@ -415,12 +415,9 @@ impl MediaEngine {
             } else {
                 EgressPhase::Sending
             };
-            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = active_phase;
-            *egress
-                .failure_phase
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) = None;
-            *egress.last_error.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            *crate::sync::lock(&egress.phase) = active_phase;
+            *crate::sync::lock(&egress.failure_phase) = None;
+            *crate::sync::lock(&egress.last_error) = None;
             egress.last_error_ms.store(0, Ordering::Relaxed);
         }
     }
@@ -442,12 +439,9 @@ impl MediaEngine {
             } else {
                 EgressPhase::Sending
             };
-            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = active_phase;
-            *egress
-                .failure_phase
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) = None;
-            *egress.last_error.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            *crate::sync::lock(&egress.phase) = active_phase;
+            *crate::sync::lock(&egress.failure_phase) = None;
+            *crate::sync::lock(&egress.last_error) = None;
             egress.last_error_ms.store(0, Ordering::Relaxed);
         })
         .await
@@ -463,12 +457,9 @@ impl MediaEngine {
             egress
                 .last_progress_ms
                 .store(Self::now_epoch_ms(), Ordering::Relaxed);
-            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = EgressPhase::Discarding;
-            *egress
-                .failure_phase
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) = None;
-            *egress.last_error.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            *crate::sync::lock(&egress.phase) = EgressPhase::Discarding;
+            *crate::sync::lock(&egress.failure_phase) = None;
+            *crate::sync::lock(&egress.last_error) = None;
             egress.last_error_ms.store(0, Ordering::Relaxed);
         })
         .await
@@ -579,13 +570,9 @@ impl MediaEngine {
             let egresses = self.egresses.active.read().await;
             if let Some(egress) = egresses.get(output_id) {
                 let pipeline_id = egress.pipeline_id.clone();
-                *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = EgressPhase::Failed;
-                *egress
-                    .failure_phase
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()) = Some(phase.to_string());
-                *egress.last_error.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some(message.clone());
+                *crate::sync::lock(&egress.phase) = EgressPhase::Failed;
+                *crate::sync::lock(&egress.failure_phase) = Some(phase.to_string());
+                *crate::sync::lock(&egress.last_error) = Some(message.clone());
                 egress
                     .last_error_ms
                     .store(Self::now_epoch_ms(), Ordering::Relaxed);
@@ -615,13 +602,9 @@ impl MediaEngine {
         let event = self
             .with_current_egress(output_id, registration, |egress| {
                 let pipeline_id = egress.pipeline_id.clone();
-                *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = EgressPhase::Failed;
-                *egress
-                    .failure_phase
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()) = Some(phase.to_string());
-                *egress.last_error.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some(message.clone());
+                *crate::sync::lock(&egress.phase) = EgressPhase::Failed;
+                *crate::sync::lock(&egress.failure_phase) = Some(phase.to_string());
+                *crate::sync::lock(&egress.last_error) = Some(message.clone());
                 egress
                     .last_error_ms
                     .store(Self::now_epoch_ms(), Ordering::Relaxed);

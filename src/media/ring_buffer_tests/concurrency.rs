@@ -71,10 +71,7 @@ fn reader_drop_also_prunes_other_stale_weaks() {
     let rb = Arc::new(RingBuffer::new(16));
     {
         let stale = Arc::new(ReaderInfo::new("stale".into(), 0));
-        rb.readers
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .push(Arc::downgrade(&stale));
+        crate::sync::lock(&rb.readers).push(Arc::downgrade(&stale));
     }
     assert_eq!(
         rb.readers

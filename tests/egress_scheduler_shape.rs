@@ -7,6 +7,7 @@
 //! nanosecond pins: a population scan would show the full population ratio.
 //! Each figure is the fastest of several trials, so a preemption or a sibling
 //! test binary competing for the CPU inflates one trial, not the result.
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 
 use std::time::Instant;
 

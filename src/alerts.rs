@@ -821,7 +821,7 @@ impl AlertTracker {
         mut should_prune_if_absent: impl FnMut(&AlertHistory) -> bool,
     ) {
         let now = chrono::Utc::now().to_rfc3339();
-        let mut history = self.history.lock().unwrap_or_else(|e| e.into_inner());
+        let mut history = crate::sync::lock(&self.history);
         let mut active_ids: HashMap<&str, ()> = HashMap::with_capacity(alerts.len());
 
         for alert in alerts.iter_mut() {
@@ -844,7 +844,7 @@ impl AlertTracker {
     }
 
     pub fn active_count(&self) -> usize {
-        self.history.lock().unwrap_or_else(|e| e.into_inner()).len()
+        crate::sync::lock(&self.history).len()
     }
 }
 

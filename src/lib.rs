@@ -1,6 +1,18 @@
 //! Crate root for the restream server.
 
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
+// Raw std lock access is disallowed in shipped code (clippy.toml, `crate::sync`);
+// tests may poison and inspect locks directly.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
+// Per-entity fault domains (`panic_boundary`) contain a panic by unwinding.
+// With `panic = "abort"` every contained panic would end the process, so
+// that configuration must not build.
+#[cfg(panic = "abort")]
+compile_error!(
+    "restream requires panic = \"unwind\": per-connection, per-peer and per-output \
+     panic boundaries (src/panic_boundary.rs) depend on it"
+);
 
 #[cfg(feature = "mcp-http-backend")]
 pub mod agent_backends;
@@ -34,6 +46,7 @@ pub mod planner;
 pub mod runtime;
 pub mod runtime_info;
 pub mod secret_display;
+pub mod sync;
 pub(crate) mod system_sampling;
 pub mod test_fixtures;
 

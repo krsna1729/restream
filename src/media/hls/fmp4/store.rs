@@ -138,7 +138,7 @@ impl Fmp4HlsStore {
     }
 
     pub fn clear(&self) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = crate::sync::lock(&self.inner);
         inner.video.clear();
         inner.audio.clear();
         inner.video_codec = None;
@@ -146,7 +146,7 @@ impl Fmp4HlsStore {
     }
 
     pub fn set_stream_metadata(&self, video: Option<VideoMeta>, audio_tracks: Vec<AudioMeta>) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = crate::sync::lock(&self.inner);
         inner.video_meta = video;
         inner.audio_tracks = audio_tracks.clone();
         inner.video_codec = None;
@@ -162,24 +162,24 @@ impl Fmp4HlsStore {
     }
 
     pub fn stream_metadata(&self) -> (Option<VideoMeta>, Vec<AudioMeta>) {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let inner = crate::sync::lock(&self.inner);
         (inner.video_meta.clone(), inner.audio_tracks.clone())
     }
 
     pub fn note_video_codec(&self, codec: String) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = crate::sync::lock(&self.inner);
         inner.video_codec = Some(codec);
     }
 
     pub fn note_audio_codec(&self, codec: String) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = crate::sync::lock(&self.inner);
         if !inner.audio_codecs.iter().any(|existing| existing == &codec) {
             inner.audio_codecs.push(codec);
         }
     }
 
     pub fn sample_codec_list(&self) -> Option<String> {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let inner = crate::sync::lock(&self.inner);
         let mut codecs = Vec::new();
         if let Some(video) = &inner.video_codec {
             codecs.push(video.clone());
@@ -193,12 +193,12 @@ impl Fmp4HlsStore {
     }
 
     pub fn put_video_init_segment(&self, data: Bytes) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = crate::sync::lock(&self.inner);
         inner.video.put_init_segment(data);
     }
 
     pub fn put_audio_init_segment(&self, track_index: u32, data: Bytes) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = crate::sync::lock(&self.inner);
         inner
             .audio
             .entry(track_index)
@@ -207,18 +207,18 @@ impl Fmp4HlsStore {
     }
 
     pub fn push_video_segment(&self, index: u64, duration: f64, data: Bytes) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = crate::sync::lock(&self.inner);
         inner.video.push_segment(self.config, index, duration, data);
     }
 
     pub fn publish_video_segment(&self, index: u64, duration: f64, init: Bytes, data: Bytes) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = crate::sync::lock(&self.inner);
         inner.video.put_init_segment(init);
         inner.video.push_segment(self.config, index, duration, data);
     }
 
     pub fn push_audio_segment(&self, track_index: u32, index: u64, duration: f64, data: Bytes) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = crate::sync::lock(&self.inner);
         inner.audio.entry(track_index).or_default().push_segment(
             self.config,
             index,
@@ -235,19 +235,19 @@ impl Fmp4HlsStore {
         init: Bytes,
         data: Bytes,
     ) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = crate::sync::lock(&self.inner);
         let rendition = inner.audio.entry(track_index).or_default();
         rendition.put_init_segment(init);
         rendition.push_segment(self.config, index, duration, data);
     }
 
     pub fn has_video_playlist(&self) -> bool {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let inner = crate::sync::lock(&self.inner);
         !inner.video.segments.is_empty()
     }
 
     pub fn get_primary_playlist(&self) -> Option<String> {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let inner = crate::sync::lock(&self.inner);
         if !inner.video.segments.is_empty() {
             return inner.video.playlist(
                 self.config,
@@ -264,7 +264,7 @@ impl Fmp4HlsStore {
     }
 
     pub fn get_video_playlist(&self) -> Option<String> {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let inner = crate::sync::lock(&self.inner);
         inner.video.playlist(
             self.config,
             || "init.mp4".to_string(),
@@ -273,7 +273,7 @@ impl Fmp4HlsStore {
     }
 
     pub fn get_audio_playlist(&self, track_index: u32) -> Option<String> {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let inner = crate::sync::lock(&self.inner);
         inner.audio.get(&track_index)?.playlist(
             self.config,
             || "init.mp4".to_string(),
@@ -282,27 +282,27 @@ impl Fmp4HlsStore {
     }
 
     pub fn get_video_init_segment(&self) -> Option<Bytes> {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let inner = crate::sync::lock(&self.inner);
         inner.video.init_segment.clone()
     }
 
     pub fn get_audio_init_segment(&self, track_index: u32) -> Option<Bytes> {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let inner = crate::sync::lock(&self.inner);
         inner.audio.get(&track_index)?.init_segment.clone()
     }
 
     pub fn get_video_segment(&self, index: u64) -> Option<Bytes> {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let inner = crate::sync::lock(&self.inner);
         inner.video.get_segment(index)
     }
 
     pub fn get_audio_segment(&self, track_index: u32, index: u64) -> Option<Bytes> {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let inner = crate::sync::lock(&self.inner);
         inner.audio.get(&track_index)?.get_segment(index)
     }
 
     pub fn segment_count(&self) -> usize {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let inner = crate::sync::lock(&self.inner);
         if !inner.video.segments.is_empty() {
             inner.video.segments.len()
         } else {

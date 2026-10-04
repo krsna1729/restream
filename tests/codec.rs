@@ -3,6 +3,7 @@
 //!
 //! These tests exercise the *runtime* conversion path (the actual functions
 //! called in SRT/HLS egress and the transcoder feeder), not a hand-rolled copy.
+#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 
 use restream::media::codec::{
     audio_for_rtmp, audio_for_ts, avcc_to_annexb, build_aac_sequence_header, build_adts_header,

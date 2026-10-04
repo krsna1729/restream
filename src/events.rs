@@ -228,13 +228,13 @@ impl EventLog {
     }
 
     pub fn set_sink(&self, sink: tokio::sync::mpsc::UnboundedSender<Event>) {
-        *self.sink.lock().unwrap_or_else(|e| e.into_inner()) = Some(sink);
+        *crate::sync::lock(&self.sink) = Some(sink);
     }
 
     /// Emit an event. The oldest event is dropped when the log is full.
     pub fn emit(&self, kind: EventKind) {
         let event = {
-            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            let mut inner = crate::sync::lock(&self.inner);
             let seq = inner.next_seq;
             inner.next_seq += 1;
             if inner.events.len() >= MAX_EVENTS {
@@ -248,14 +248,14 @@ impl EventLog {
             inner.events.push_back(event.clone());
             event
         };
-        if let Some(sink) = self.sink.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if let Some(sink) = crate::sync::lock(&self.sink).as_ref() {
             let _ = sink.send(event);
         }
     }
 
     /// Return up to `limit` most-recent events, optionally filtered by pipeline.
     pub fn recent(&self, limit: usize, pipeline_id: Option<&str>) -> Vec<Event> {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let inner = crate::sync::lock(&self.inner);
         inner
             .events
             .iter()

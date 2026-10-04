@@ -434,10 +434,7 @@ async fn drain_ready_bursts(
                     ingests.get(pipeline_id).and_then(|ingest| {
                         let metadata = ingest.metadata();
                         let video = metadata.video;
-                        let lock = ingest
-                            .audio_tracks
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
+                        let lock = crate::sync::lock(&ingest.audio_tracks);
                         let tracks = if lock.is_empty() {
                             metadata
                                 .audio

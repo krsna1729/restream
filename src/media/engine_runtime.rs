@@ -28,29 +28,17 @@ impl MediaEngine {
     /// Register an OS thread JoinHandle so it can be joined at shutdown.
     /// Already-finished handles are pruned opportunistically.
     pub fn register_os_thread(&self, handle: std::thread::JoinHandle<()>) {
-        let mut guards = self
-            .runtime
-            .os_threads
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut guards = crate::sync::lock(&self.runtime.os_threads);
         guards.retain(|thread| !thread.is_finished());
         guards.push(handle);
     }
 
     pub fn register_listener_shutdown(&self, shutdown: impl Fn() + Send + Sync + 'static) {
-        self.runtime
-            .listener_shutdowns
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .push(Box::new(shutdown));
+        crate::sync::lock(&self.runtime.listener_shutdowns).push(Box::new(shutdown));
     }
 
     pub fn shutdown_listeners(&self) {
-        let shutdowns: Vec<_> = self
-            .runtime
-            .listener_shutdowns
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
+        let shutdowns: Vec<_> = crate::sync::lock(&self.runtime.listener_shutdowns)
             .drain(..)
             .collect();
         for shutdown in shutdowns {
@@ -60,10 +48,7 @@ impl MediaEngine {
 
     /// Drain all registered OS thread handles for joining at shutdown.
     pub fn drain_os_thread_handles(&self) -> Vec<std::thread::JoinHandle<()>> {
-        self.runtime
-            .os_threads
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
+        crate::sync::lock(&self.runtime.os_threads)
             .drain(..)
             .collect()
     }
