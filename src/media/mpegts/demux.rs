@@ -1,3 +1,16 @@
+//! MPEG-TS demuxer for SRT ingest. Every byte is untrusted publisher input,
+//! so the module may not index, slice, unwrap or do unchecked integer
+//! arithmetic: whole packets are typed `&[u8; TS_PACKET_SIZE]` (constant
+//! offsets are checked at compile time) and every input-derived offset goes
+//! through `get`, slice patterns or checked arithmetic.
+#![deny(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
+
 use std::collections::HashMap;
 
 use bytes::Bytes;
@@ -7,9 +20,7 @@ use super::mpegts_probe::{
     audio_meta_complete, h264_is_keyframe, h265_is_keyframe, probe_audio, probe_video,
     video_meta_complete,
 };
-use super::wire::{
-    PAT_PID, PES_START_CODE, TS_PACKET_SIZE, TS_SYNC_BYTE, parse_timestamp, ts_to_ms,
-};
+use super::wire::{PAT_PID, TS_PACKET_SIZE, TS_SYNC_BYTE, parse_timestamp, ts_to_ms};
 use crate::media::metadata::{AudioMeta, VideoMeta};
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
 
@@ -30,7 +41,7 @@ fn pes_payload_len(pes_packet_len: usize, pes_header_len: usize) -> Option<usize
     if pes_packet_len == 0 {
         return None;
     }
-    pes_packet_len.checked_sub(3 + pes_header_len)
+    pes_packet_len.checked_sub(pes_header_len.checked_add(3)?)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +101,14 @@ impl PesAccumulator {
         }
     }
 
+    /// Append PES payload unless that would exceed `MAX_PES_BUFFER` (an
+    /// oversized frame is dropped, not grown without bound).
+    fn append_bounded(&mut self, data: &[u8]) {
+        if self.buf.len().saturating_add(data.len()) <= MAX_PES_BUFFER {
+            self.buf.extend_from_slice(data);
+        }
+    }
+
     fn reset(&mut self) {
         self.buf.clear();
         self.expected_payload_len = None;
@@ -131,32 +150,35 @@ struct StreamDescriptors {
 
 fn parse_stream_descriptors(data: &[u8]) -> StreamDescriptors {
     let mut descriptors = StreamDescriptors::default();
-    let mut pos = 0usize;
+    let mut rest = data;
 
-    while pos + 2 <= data.len() {
-        let tag = data[pos];
-        let len = data[pos + 1] as usize;
-        let start = pos + 2;
-        let end = start.saturating_add(len);
-        if end > data.len() {
+    while let Some((&[tag, len], tail)) = rest.split_first_chunk::<2>() {
+        let Some((payload, tail)) = tail.split_at_checked(usize::from(len)) else {
             break;
-        }
-
-        let payload = &data[start..end];
+        };
         if tag == 0x0A
-            && payload.len() >= 3
-            && let Ok(language) = std::str::from_utf8(&payload[..3])
+            && let Some(code) = payload.first_chunk::<3>()
+            && let Ok(language) = std::str::from_utf8(code)
         {
             let language = language.trim().to_ascii_lowercase();
             if !language.is_empty() {
                 descriptors.language = Some(language);
             }
         }
-
-        pos = end;
+        rest = tail;
     }
 
     descriptors
+}
+
+/// A 12-bit section/info length from two bytes (the top 4 bits are flags).
+fn length_12(high: u8, low: u8) -> usize {
+    usize::from(u16::from_be_bytes([high & 0x0F, low]))
+}
+
+/// A 13-bit PID from two bytes (the top 3 bits are flags).
+fn pid_13(high: u8, low: u8) -> u16 {
+    u16::from_be_bytes([high & 0x1F, low])
 }
 
 fn pmt_stream_loop_bounds(data: &[u8], end: usize) -> Option<(usize, usize)> {
@@ -165,23 +187,12 @@ fn pmt_stream_loop_bounds(data: &[u8], end: usize) -> Option<(usize, usize)> {
         return None;
     }
 
-    let program_info_len = ((data[10] as usize & 0x0F) << 8) | data[11] as usize;
-    let stream_loop_start = 12usize.checked_add(program_info_len)?;
-    if stream_loop_start > stream_loop_end {
-        return None;
-    }
-
-    let mut pos = stream_loop_start;
-    while pos < stream_loop_end {
-        let descriptor_start = pos.checked_add(5)?;
-        if descriptor_start > stream_loop_end {
-            return None;
-        }
-        let es_info_len = ((data[pos + 3] as usize & 0x0F) << 8) | data[pos + 4] as usize;
-        pos = descriptor_start.checked_add(es_info_len)?;
-        if pos > stream_loop_end {
-            return None;
-        }
+    let &[high, low] = data.get(10..12)?.first_chunk::<2>()?;
+    let stream_loop_start = 12usize.checked_add(length_12(high, low))?;
+    let mut entries = data.get(stream_loop_start..stream_loop_end)?;
+    while !entries.is_empty() {
+        let (&[_, _, _, info_high, info_low], tail) = entries.split_first_chunk::<5>()?;
+        entries = tail.get(length_12(info_high, info_low)..)?;
     }
 
     Some((stream_loop_start, stream_loop_end))
@@ -235,16 +246,14 @@ impl TsDemuxer {
     pub fn feed(&mut self, data: &[u8]) {
         if self.remainder.is_empty() {
             let leftover = self.feed_slice(data);
-            if leftover < data.len() {
-                self.remainder.extend_from_slice(&data[leftover..]);
-            }
+            self.remainder
+                .extend_from_slice(data.get(leftover..).unwrap_or_default());
         } else {
             self.remainder.extend_from_slice(data);
             let buf = std::mem::take(&mut self.remainder);
             let leftover = self.feed_slice(&buf);
-            if leftover < buf.len() {
-                self.remainder.extend_from_slice(&buf[leftover..]);
-            }
+            self.remainder
+                .extend_from_slice(buf.get(leftover..).unwrap_or_default());
         }
         // Safety cap: remainder must never exceed TS_PACKET_SIZE-1 bytes.
         // feed_slice guarantees the unprocessed tail is < TS_PACKET_SIZE under
@@ -255,23 +264,29 @@ impl TsDemuxer {
         // buffer to grow one byte per call before the 188-byte threshold is
         // reached and the block is processed or discarded.
         const MAX_REMAINDER: usize = TS_PACKET_SIZE - 1;
-        if self.remainder.len() > MAX_REMAINDER {
-            let excess = self.remainder.len() - MAX_REMAINDER;
+        if let Some(excess) = self.remainder.len().checked_sub(MAX_REMAINDER) {
             self.remainder.drain(..excess);
         }
     }
 
+    /// Process every whole packet in `buf`; returns where the unprocessed
+    /// tail starts.
     fn feed_slice(&mut self, buf: &[u8]) -> usize {
         let mut offset = find_ts_sync(buf);
 
-        while offset + TS_PACKET_SIZE <= buf.len() {
-            if buf[offset] != TS_SYNC_BYTE {
-                let next = find_ts_sync(&buf[offset + 1..]);
-                offset += 1 + next;
+        while let Some(packet) = buf
+            .get(offset..)
+            .and_then(<[u8]>::first_chunk::<TS_PACKET_SIZE>)
+        {
+            if packet[0] != TS_SYNC_BYTE {
+                // Resync after this byte: `offset + 1 + next` never passes
+                // `buf.len()`, so the additions cannot overflow.
+                let next = find_ts_sync(buf.get(offset.saturating_add(1)..).unwrap_or_default());
+                offset = offset.saturating_add(1).saturating_add(next);
                 continue;
             }
-            self.process_ts_packet(&buf[offset..offset + TS_PACKET_SIZE]);
-            offset += TS_PACKET_SIZE;
+            self.process_ts_packet(packet);
+            offset = offset.saturating_add(TS_PACKET_SIZE);
         }
 
         offset
@@ -288,9 +303,9 @@ impl TsDemuxer {
     /// for subsequent receives. Callers should consume `output.drain(..)` to
     /// retain their batch allocation too.
     pub fn drain_into(&mut self, output: &mut Vec<MediaPacket>) -> usize {
-        let start_len = output.len();
+        let moved = self.output.len();
         output.append(&mut self.output);
-        output.len() - start_len
+        moved
     }
 
     /// Take the probe result (available after the first PMT + PES headers are parsed).
@@ -303,36 +318,32 @@ impl TsDemuxer {
         !self.streams.is_empty()
     }
 
-    pub(super) fn process_ts_packet(&mut self, pkt: &[u8]) {
-        let pid = (((pkt[1] & 0x1F) as u16) << 8) | pkt[2] as u16;
-        let payload_unit_start = pkt[1] & 0x40 != 0;
-        let adaptation_field_control = (pkt[3] >> 4) & 0x03;
-        let continuity_counter = pkt[3] & 0x0F;
+    pub(super) fn process_ts_packet(&mut self, pkt: &[u8; TS_PACKET_SIZE]) {
+        let [_, flags, pid_low, control, ref after_header @ ..] = *pkt;
+        let pid = pid_13(flags, pid_low);
+        let payload_unit_start = flags & 0x40 != 0;
+        let adaptation_field_control = (control >> 4) & 0x03;
+        let continuity_counter = control & 0x0F;
 
-        let mut payload_offset = 4;
-        let mut random_access = false;
-
-        if (adaptation_field_control == 0x02 || adaptation_field_control == 0x03)
-            && payload_offset < TS_PACKET_SIZE
-        {
-            let af_len = pkt[payload_offset] as usize;
-            payload_offset += 1;
-            if af_len > 0 && payload_offset < TS_PACKET_SIZE {
-                let af_flags = pkt[payload_offset];
-                random_access = af_flags & 0x40 != 0;
-            }
-            payload_offset += af_len;
-        }
-
+        // 0b00 reserved and 0b10 adaptation field only: no payload.
         if adaptation_field_control == 0x00 || adaptation_field_control == 0x02 {
             return;
         }
-
-        if payload_offset >= TS_PACKET_SIZE {
+        let mut random_access = false;
+        let payload: &[u8] = if adaptation_field_control == 0x03 {
+            let Some((&af_len, rest)) = after_header.split_first() else {
+                return;
+            };
+            if af_len > 0 {
+                random_access = rest.first().is_some_and(|af_flags| af_flags & 0x40 != 0);
+            }
+            rest.get(usize::from(af_len)..).unwrap_or_default()
+        } else {
+            after_header
+        };
+        if payload.is_empty() {
             return;
         }
-
-        let payload = &pkt[payload_offset..TS_PACKET_SIZE];
 
         if pid == PAT_PID {
             self.parse_pat(payload, payload_unit_start);
@@ -344,67 +355,85 @@ impl TsDemuxer {
             return;
         }
 
-        let stream_idx = self.pid_to_stream[pid as usize];
+        let Some(&stream_idx) = self.pid_to_stream.get(usize::from(pid)) else {
+            return;
+        };
         if stream_idx == NO_STREAM {
             return;
         }
-        let stream_idx = stream_idx as usize;
-        self.streams[stream_idx].continuity = continuity_counter;
+        let stream_idx = usize::from(stream_idx);
+        let Some(stream) = self.streams.get_mut(stream_idx) else {
+            return;
+        };
+        stream.continuity = continuity_counter;
 
         if payload_unit_start {
             self.flush_pes(stream_idx);
 
-            if payload.len() >= 9 && payload[0..3] == PES_START_CODE {
-                let pes_packet_len = u16::from_be_bytes([payload[4], payload[5]]) as usize;
-                let pes_header_len = payload[8] as usize;
-                let flags = payload[7];
-                let has_pts = flags & 0x80 != 0;
-                let has_dts = flags & 0x40 != 0;
+            if let Some(
+                &[
+                    0x00,
+                    0x00,
+                    0x01,
+                    _,
+                    len_high,
+                    len_low,
+                    _,
+                    pes_flags,
+                    header_len,
+                ],
+            ) = payload.first_chunk::<9>()
+                && let Some(stream) = self.streams.get_mut(stream_idx)
+            {
+                let pes_packet_len = usize::from(u16::from_be_bytes([len_high, len_low]));
+                let pes_header_len = usize::from(header_len);
+                let has_pts = pes_flags & 0x80 != 0;
+                let has_dts = pes_flags & 0x40 != 0;
 
-                let stream = &mut self.streams[stream_idx];
                 stream.pes.random_access = random_access;
                 stream.pes.expected_payload_len = pes_payload_len(pes_packet_len, pes_header_len);
 
-                if has_pts && payload.len() >= 14 {
-                    stream.pes.pts = parse_timestamp(&payload[9..14]);
+                let header = payload.get(9..).unwrap_or_default();
+                if has_pts && let Some(pts) = header.first_chunk::<5>() {
+                    stream.pes.pts = parse_timestamp(pts);
                     stream.pes.has_timestamp = true;
                 }
-                if has_dts && payload.len() >= 19 {
-                    stream.pes.dts = parse_timestamp(&payload[14..19]);
+                if has_dts && let Some(dts) = header.get(5..).and_then(<[u8]>::first_chunk::<5>) {
+                    stream.pes.dts = parse_timestamp(dts);
                 } else if has_pts {
                     stream.pes.dts = stream.pes.pts;
                 }
 
-                let data_start = 9 + pes_header_len;
-                if data_start < payload.len() {
-                    let pes_data = &payload[data_start..];
-                    if stream.pes.buf.len() + pes_data.len() <= MAX_PES_BUFFER {
-                        stream.pes.buf.extend_from_slice(pes_data);
-                    }
+                if let Some(pes_data) = header.get(pes_header_len..)
+                    && !pes_data.is_empty()
+                {
+                    stream.pes.append_bounded(pes_data);
                 }
                 self.flush_completed_pes(stream_idx);
             }
         } else {
-            let stream = &mut self.streams[stream_idx];
-            if stream.pes.buf.len() + payload.len() <= MAX_PES_BUFFER {
-                stream.pes.buf.extend_from_slice(payload);
-            }
+            stream.pes.append_bounded(payload);
             self.flush_completed_pes(stream_idx);
         }
     }
 
     fn flush_completed_pes(&mut self, stream_idx: usize) {
-        let Some(expected) = self.streams[stream_idx].pes.expected_payload_len else {
+        let Some(stream) = self.streams.get_mut(stream_idx) else {
             return;
         };
-        if self.streams[stream_idx].pes.buf.len() >= expected {
-            self.streams[stream_idx].pes.buf.truncate(expected);
+        let Some(expected) = stream.pes.expected_payload_len else {
+            return;
+        };
+        if stream.pes.buf.len() >= expected {
+            stream.pes.buf.truncate(expected);
             self.flush_pes(stream_idx);
         }
     }
 
     fn flush_pes(&mut self, stream_idx: usize) {
-        let stream = &mut self.streams[stream_idx];
+        let Some(stream) = self.streams.get_mut(stream_idx) else {
+            return;
+        };
         if stream.pes.buf.is_empty() || !stream.pes.has_timestamp {
             stream.pes.reset();
             return;
@@ -422,7 +451,7 @@ impl TsDemuxer {
         // the next PES reassembly. copy_from_slice costs one allocation of exactly
         // the frame size but keeps the PES buf warm — net saving for typical streams.
         let payload = Bytes::copy_from_slice(&stream.pes.buf);
-        self.streams[stream_idx].pes.reset();
+        stream.pes.reset();
 
         let pts_ms = ts_to_ms(pts_90k);
         let dts_ms = ts_to_ms(dts_90k);
@@ -449,51 +478,45 @@ impl TsDemuxer {
     }
 
     fn parse_pat(&mut self, payload: &[u8], pusi: bool) {
-        let data = if pusi && !payload.is_empty() {
-            let pointer = payload[0] as usize;
-            if 1 + pointer >= payload.len() {
-                return;
+        let data = if pusi {
+            match section_after_pointer(payload) {
+                Some(section) => section,
+                None => return,
             }
-            &payload[1 + pointer..]
         } else {
             payload
         };
-
-        if data.len() < 8 || data[0] != 0x00 {
+        let Some(&[0x00, length_high, length_low, ..]) = data.first_chunk::<8>() else {
             return;
-        }
+        };
 
-        let section_length = ((data[1] as usize & 0x0F) << 8) | data[2] as usize;
-        let end = (3 + section_length).min(data.len());
-        let mut pos = 8;
-        while pos + 4 <= end.saturating_sub(4) {
-            let program_num = ((data[pos] as u16) << 8) | data[pos + 1] as u16;
-            let pid = ((data[pos + 2] as u16 & 0x1F) << 8) | data[pos + 3] as u16;
-            if program_num != 0 {
-                self.pmt_pid = Some(pid);
+        // Programs run from byte 8 to the CRC32 that ends the section.
+        let end = length_12(length_high, length_low)
+            .saturating_add(3)
+            .min(data.len())
+            .saturating_sub(4);
+        let Some(programs) = data.get(8..end) else {
+            return;
+        };
+        for program in programs.chunks_exact(4) {
+            if let &[number_high, number_low, pid_high, pid_low] = program
+                && u16::from_be_bytes([number_high, number_low]) != 0
+            {
+                self.pmt_pid = Some(pid_13(pid_high, pid_low));
                 break;
             }
-            pos += 4;
         }
     }
 
     fn parse_pmt(&mut self, payload: &[u8], pusi: bool) {
         if pusi {
-            let data = if !payload.is_empty() {
-                let pointer = payload[0] as usize;
-                if 1 + pointer >= payload.len() {
-                    return;
-                }
-                &payload[1 + pointer..]
-            } else {
+            let Some(data) = section_after_pointer(payload) else {
                 return;
             };
-
-            if data.len() < 3 || data[0] != 0x02 {
+            let Some(&[0x02, length_high, length_low]) = data.first_chunk::<3>() else {
                 return;
-            }
-            let section_length = ((data[1] as usize & 0x0F) << 8) | data[2] as usize;
-            self.pmt_expected = 3 + section_length;
+            };
+            self.pmt_expected = length_12(length_high, length_low).saturating_add(3);
             self.pmt_buf.clear();
             self.pmt_buf.extend_from_slice(data);
         } else if self.pmt_expected > 0 {
@@ -509,13 +532,15 @@ impl TsDemuxer {
         let data = &self.pmt_buf;
         let end = self.pmt_expected.min(data.len());
 
-        let Some((mut pos, stream_loop_end)) = pmt_stream_loop_bounds(data, end) else {
+        let (Some((loop_start, loop_end)), Some(&version_byte)) =
+            (pmt_stream_loop_bounds(data, end), data.get(5))
+        else {
             self.pmt_buf.clear();
             self.pmt_expected = 0;
             return;
         };
 
-        let incoming_version = (data[5] >> 1) & 0x1F;
+        let incoming_version = (version_byte >> 1) & 0x1F;
         if self.pmt_version == incoming_version {
             self.pmt_buf.clear();
             self.pmt_expected = 0;
@@ -532,19 +557,24 @@ impl TsDemuxer {
         self.probe_payloads.clear();
 
         let mut has_video = false;
-        while pos < stream_loop_end {
-            let stream_type = data[pos];
-            let es_pid = ((data[pos + 1] as u16 & 0x1F) << 8) | data[pos + 2] as u16;
-            let es_info_len = ((data[pos + 3] as usize & 0x0F) << 8) | data[pos + 4] as usize;
-            let desc_start = pos + 5;
-            let desc_end = desc_start + es_info_len;
-            let descriptors = parse_stream_descriptors(&data[desc_start..desc_end]);
-            pos = desc_end;
+        // `pmt_stream_loop_bounds` validated that these entries tile the loop.
+        let mut entries = data.get(loop_start..loop_end).unwrap_or_default();
+        while let Some((&[stream_type, pid_high, pid_low, info_high, info_low], tail)) =
+            entries.split_first_chunk::<5>()
+        {
+            let es_pid = pid_13(pid_high, pid_low);
+            let Some((descriptor_bytes, tail)) =
+                tail.split_at_checked(length_12(info_high, info_low))
+            else {
+                break;
+            };
+            entries = tail;
+            let descriptors = parse_stream_descriptors(descriptor_bytes);
 
             if let Some(kind) = StreamKind::from_stream_type(stream_type) {
                 let track_index = match kind.media_type() {
                     MediaType::Video => {
-                        self.video_track_count += 1;
+                        self.video_track_count = self.video_track_count.saturating_add(1);
                         if has_video {
                             continue;
                         }
@@ -553,7 +583,7 @@ impl TsDemuxer {
                     }
                     MediaType::Audio => {
                         let idx = self.audio_track_counter;
-                        self.audio_track_counter += 1;
+                        self.audio_track_counter = self.audio_track_counter.saturating_add(1);
                         idx
                     }
                 };
@@ -569,7 +599,12 @@ impl TsDemuxer {
                     continuity: CC_UNSET,
                     pes,
                 });
-                self.pid_to_stream[es_pid as usize] = stream_idx as u16;
+                if let (Some(slot), Ok(index)) = (
+                    self.pid_to_stream.get_mut(usize::from(es_pid)),
+                    u16::try_from(stream_idx),
+                ) {
+                    *slot = index;
+                }
             }
         }
 
@@ -578,7 +613,9 @@ impl TsDemuxer {
     }
 
     fn probe_payload_complete(&self, stream_idx: usize, payload: &[u8]) -> bool {
-        let stream = &self.streams[stream_idx];
+        let Some(stream) = self.streams.get(stream_idx) else {
+            return false;
+        };
         match stream.kind.media_type() {
             MediaType::Video => video_meta_complete(
                 stream.kind,
@@ -602,12 +639,13 @@ impl TsDemuxer {
         if self.probe_payloads.len() < self.streams.len() {
             self.probe_payloads.resize(self.streams.len(), None);
         }
-        let replace = match self.probe_payloads[stream_idx].as_deref() {
-            None => true,
-            Some(existing) => !self.probe_payload_complete(stream_idx, existing),
+        let replace = match self.probe_payloads.get(stream_idx) {
+            None => return,
+            Some(None) => true,
+            Some(Some(existing)) => !self.probe_payload_complete(stream_idx, existing),
         };
-        if replace {
-            self.probe_payloads[stream_idx] = Some(payload.to_vec());
+        if replace && let Some(slot) = self.probe_payloads.get_mut(stream_idx) {
+            *slot = Some(payload.to_vec());
         }
 
         if self.probe_payloads.iter().any(|p| p.is_none()) {
@@ -619,8 +657,10 @@ impl TsDemuxer {
         let mut video_sequence_header = None;
         let mut probe_complete = true;
 
-        for (idx, stream) in self.streams.iter().enumerate() {
-            let data = self.probe_payloads[idx].as_deref().unwrap();
+        for (stream, data) in self.streams.iter().zip(&self.probe_payloads) {
+            let Some(data) = data.as_deref() else {
+                return;
+            };
             match stream.kind.media_type() {
                 MediaType::Video => {
                     if video_meta.is_none() {
@@ -684,17 +724,25 @@ pub(super) fn find_ts_sync(data: &[u8]) -> usize {
     }
 
     let mut search_offset = 0usize;
-    while search_offset < data.len() {
-        let Some(relative) = memchr(TS_SYNC_BYTE, &data[search_offset..]) else {
-            return data.len();
-        };
-        let candidate = search_offset + relative;
+    while let Some(rest) = data.get(search_offset..)
+        && let Some(relative) = memchr(TS_SYNC_BYTE, rest)
+    {
+        // `candidate < data.len()`, so neither addition can overflow.
+        let candidate = search_offset.saturating_add(relative);
         if ts_sync_candidate_is_valid(data, candidate) {
             return candidate;
         }
-        search_offset = candidate + 1;
+        search_offset = candidate.saturating_add(1);
     }
     data.len()
+}
+
+/// A PSI section after its `pointer_field`, if the pointer stays inside the
+/// payload (and leaves at least one byte).
+fn section_after_pointer(payload: &[u8]) -> Option<&[u8]> {
+    let (&pointer, rest) = payload.split_first()?;
+    rest.get(usize::from(pointer)..)
+        .filter(|section| !section.is_empty())
 }
 
 pub(super) fn ts_sync_candidate_is_valid(data: &[u8], candidate: usize) -> bool {
@@ -702,13 +750,14 @@ pub(super) fn ts_sync_candidate_is_valid(data: &[u8], candidate: usize) -> bool 
         return false;
     }
 
-    let remaining = data.len() - candidate;
+    let remaining = data.len().saturating_sub(candidate);
     if remaining <= TS_PACKET_SIZE {
         return true;
     }
-    if data.get(candidate + TS_PACKET_SIZE) != Some(&TS_SYNC_BYTE) {
+    let second = candidate.saturating_add(TS_PACKET_SIZE);
+    if data.get(second) != Some(&TS_SYNC_BYTE) {
         return false;
     }
-    remaining <= TS_PACKET_SIZE * 2
-        || data.get(candidate + TS_PACKET_SIZE * 2) == Some(&TS_SYNC_BYTE)
+    remaining <= 2 * TS_PACKET_SIZE
+        || data.get(second.saturating_add(TS_PACKET_SIZE)) == Some(&TS_SYNC_BYTE)
 }

@@ -4,12 +4,8 @@ pub(super) const PAT_PID: u16 = 0x0000;
 pub(super) const SDT_PID: u16 = 0x0011;
 pub(super) const PES_START_CODE: [u8; 3] = [0x00, 0x00, 0x01];
 
-pub(super) fn parse_timestamp(data: &[u8]) -> i64 {
-    let b0 = data[0] as i64;
-    let b1 = data[1] as i64;
-    let b2 = data[2] as i64;
-    let b3 = data[3] as i64;
-    let b4 = data[4] as i64;
+pub(super) fn parse_timestamp(data: &[u8; 5]) -> i64 {
+    let [b0, b1, b2, b3, b4] = data.map(i64::from);
 
     ((b0 >> 1) & 0x07) << 30 | (b1 << 22) | ((b2 >> 1) << 15) | (b3 << 7) | (b4 >> 1)
 }

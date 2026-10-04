@@ -3,7 +3,7 @@ fn parse_timestamp_round_trip() {
     let ts: i64 = 132000; // 90kHz timestamp
     let mut buf = Vec::new();
     write_timestamp(&mut buf, ts, 0x02);
-    let parsed = parse_timestamp(&buf);
+    let parsed = parse_timestamp(buf.first_chunk::<5>().expect("5-byte timestamp"));
     assert_eq!(parsed, ts);
 }
 
@@ -12,7 +12,7 @@ fn parse_timestamp_large_value() {
     let ts: i64 = 8_589_934_591; // max 33-bit value
     let mut buf = Vec::new();
     write_timestamp(&mut buf, ts, 0x03);
-    let parsed = parse_timestamp(&buf);
+    let parsed = parse_timestamp(buf.first_chunk::<5>().expect("5-byte timestamp"));
     assert_eq!(parsed, ts);
 }
 

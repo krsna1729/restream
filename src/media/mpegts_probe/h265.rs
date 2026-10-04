@@ -1,5 +1,5 @@
-use super::bit_reader::BitReader;
 use super::for_each_nal_raw;
+use crate::media::codec::BitReader;
 use crate::media::metadata::VideoMeta;
 
 #[inline]
@@ -13,8 +13,10 @@ pub(in crate::media::mpegts) fn is_keyframe(payload: &[u8]) -> bool {
 pub(in crate::media::mpegts) fn find_sps(payload: &[u8]) -> Option<Vec<u8>> {
     let mut result = None;
     for_each_nal_raw(payload, |nal_data| {
-        if nal_data.len() >= 2 && ((nal_data[0] >> 1) & 0x3F) == 33 {
-            result = Some(nal_data[2..].to_vec());
+        if let Some((&[header, _], payload)) = nal_data.split_first_chunk::<2>()
+            && (header >> 1) & 0x3F == 33
+        {
+            result = Some(payload.to_vec());
             return true;
         }
         false
@@ -28,18 +30,13 @@ where
     F: FnMut(u8, &[u8]) -> bool,
 {
     for_each_nal_raw(data, |nal_data| {
-        if nal_data.is_empty() {
+        let Some(&header) = nal_data.first() else {
             return false;
-        }
-        // H.265 NAL header: forbidden(1) + nal_unit_type(6) + nuh_layer_id(6) + nuh_temporal_id_plus1(3)
-        let nal_type = (nal_data[0] >> 1) & 0x3F;
-        // Skip the 2-byte NAL header for payload
-        let payload_start = if nal_data.len() >= 2 {
-            2
-        } else {
-            nal_data.len()
         };
-        callback(nal_type, &nal_data[payload_start..])
+        // H.265 NAL header: forbidden(1) + nal_unit_type(6) + nuh_layer_id(6) + nuh_temporal_id_plus1(3)
+        let nal_type = (header >> 1) & 0x3F;
+        // Skip the 2-byte NAL header for payload
+        callback(nal_type, nal_data.get(2..).unwrap_or_default())
     })
 }
 
@@ -82,19 +79,20 @@ pub(in crate::media::mpegts) fn parse_sps(sps: &[u8], meta: &mut VideoMeta) -> O
 
     // Skip sub-layer profile info
     if max_sub_layers > 1 {
-        let mut sub_layer_profile_present = [false; 8];
-        let mut sub_layer_level_present = [false; 8];
-        for i in 0..(max_sub_layers - 1) as usize {
-            sub_layer_profile_present[i] = reader.read_bits(1)? == 1;
-            sub_layer_level_present[i] = reader.read_bits(1)? == 1;
+        // max_sub_layers is 2..=8 here (3 bits plus one).
+        let sub_layers = usize::try_from(max_sub_layers.checked_sub(1)?).ok()?;
+        let mut present = [(false, false); 8];
+        for (profile, level) in present.iter_mut().take(sub_layers) {
+            *profile = reader.read_bits(1)? == 1;
+            *level = reader.read_bits(1)? == 1;
         }
         // reserved_zero_2bits for i = sps_max_sub_layers_minus1 .. 7 (H.265 7.3.3).
-        reader.skip((9 - max_sub_layers) * 2)?;
-        for i in 0..(max_sub_layers - 1) as usize {
-            if sub_layer_profile_present[i] {
+        reader.skip(9u32.checked_sub(max_sub_layers)?.checked_mul(2)?)?;
+        for &(profile, level) in present.iter().take(sub_layers) {
+            if profile {
                 reader.skip(88)?; // profile info
             }
-            if sub_layer_level_present[i] {
+            if level {
                 reader.skip(8)?;
             }
         }
@@ -155,7 +153,7 @@ pub(in crate::media::mpegts) fn parse_sps(sps: &[u8], meta: &mut VideoMeta) -> O
     let start = if sub_layer_ordering_info_present == 1 {
         0
     } else {
-        max_sub_layers - 1
+        max_sub_layers.checked_sub(1)?
     };
     for _ in start..max_sub_layers {
         reader.read_ue()?; // max_dec_pic_buffering
@@ -202,7 +200,7 @@ pub(in crate::media::mpegts) fn parse_sps(sps: &[u8], meta: &mut VideoMeta) -> O
             reader.skip(1)?; // delta_rps_sign
             reader.read_ue()?; // abs_delta_rps_minus1
             // RefRpsIdx = i - 1 (delta_idx_minus1 defaults to 0 in SPS)
-            let count = num_delta_pocs[(i - 1) as usize];
+            let count = *num_delta_pocs.get(usize::try_from(i.checked_sub(1)?).ok()?)?;
             let mut this_count = 0u32;
             for _ in 0..=count {
                 let used = reader.read_bits(1)?;
@@ -315,7 +313,9 @@ fn skip_scaling_list_data(reader: &mut BitReader) -> Option<()> {
             if pred_mode == 0 {
                 reader.read_ue()?;
             } else {
-                let coef_num = std::cmp::min(64, 1u32 << (4 + (size_id << 1)));
+                let coef_num = 1u32
+                    .checked_shl(size_id.checked_mul(2)?.checked_add(4)?)?
+                    .min(64);
                 if size_id > 1 {
                     reader.read_se()?;
                 }
@@ -323,7 +323,7 @@ fn skip_scaling_list_data(reader: &mut BitReader) -> Option<()> {
                     reader.read_se()?;
                 }
             }
-            matrix_id += step;
+            matrix_id = matrix_id.checked_add(step)?;
         }
     }
     Some(())

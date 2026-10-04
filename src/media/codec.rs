@@ -8,16 +8,20 @@
 //! this façade for sequence-header synthesis and tests.
 
 mod aac;
+mod bits;
 mod enhanced_rtmp_hevc;
+mod h264_sps;
 mod video;
 
 pub use aac::{
     adts_frame_count, audio_for_rtmp, audio_for_rtmp_into, audio_for_ts, audio_for_ts_into,
     build_aac_sequence_header, build_adts_header, strip_adts,
 };
+pub(crate) use bits::{BitReader, rbsp};
 pub use enhanced_rtmp_hevc::{
     build_hevc_enhanced_rtmp_sequence_header, hevc_video_for_enhanced_rtmp_with_composition_into,
 };
+pub(crate) use h264_sps::{level_name, parse_h264_sps, profile_name};
 pub(crate) use video::{
     AnnexbParameterSetAccumulator, annexb_parameter_sets, for_each_annexb_nalu,
     raw_annexb_is_keyframe,

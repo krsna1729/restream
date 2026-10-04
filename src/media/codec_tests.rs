@@ -79,6 +79,7 @@ include!("codec_tests/format_conversion.rs");
 include!("codec_tests/annexb_avcc.rs");
 include!("codec_tests/transport_stream.rs");
 include!("codec_tests/parser_round_trips.rs");
+include!("codec_tests/h264_sps.rs");
 
 /// The allocation-free NALU walker yields exactly the NALUs the production
 /// start-code finder delimits, for arbitrary byte streams (zeros and start
