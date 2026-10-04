@@ -104,6 +104,19 @@ Disk             blocking file writer threads
   (~140 by its on-CPU cost). Moving demux off Tokio (WI11) does not lift it;
   more Owners on the port (SO_REUSEPORT) would. The RTMP ingress owner is
   ~0.66% per publisher (~150 per core).
+  **Measured with `RESTREAM_SRT_INGRESS_OWNERS=2`** (2026-10-04, release,
+  `ingest-growth-same` h264-srt ×32 at 8 Mbit/s, Restream on 4 vCPUs of a
+  6-vCPU KVM guest, 3 interleaved rounds): same delivery (~27k packets/s,
+  no ring drops, no bridge-full visits); the kernel's reuseport hash split
+  the 32 flows ~42/58. Per 20 s window `perf stat` gave the two Owners +2%
+  instructions and +10% cycles over one Owner, but +40% on-CPU time
+  (`srt-in` 50–58% → 68–82% by `/proc`): each Owner sees half the traffic,
+  so visits rise 36–55% with fewer packets each, and the extra park/wake
+  cycles cost time that is not guest cycles (effective clock 1.62 → 1.27 GHz;
+  steal reads 0; consistent with VM exits on timer arm and wake IPIs). Net on
+  this host: the hottest Owner drops from ~60% to ~49% at 32 publishers, so
+  K=2 lifts the per-Owner ceiling by ~20%, not 2×; the default stays 1. The
+  symbol mix is unchanged between K=1 and K=2 (no shared-state hotspot).
 - **M5** RTMP ingress owners, what is shared. Per-packet publish touches
   only owner-local state (`RtmpPublisherMedia`, per-owner `ParserBudget`,
   connection cap) plus the pipeline's own ring (`Arc::new(MediaPacket)` per
