@@ -3193,7 +3193,7 @@ dependencies = [
 [[package]]
 name = "srt-lifecycle"
 version = "0.1.0"
-source = "git+https://github.com/krsna1729/srt-rs?rev=0f2c86d1255faa9da0208fa7d94838737a9bf9b6#0f2c86d1255faa9da0208fa7d94838737a9bf9b6"
+source = "git+https://github.com/krsna1729/srt-rs?rev=1af686e50cc92f14d80539e1a329574a50cfa07b#1af686e50cc92f14d80539e1a329574a50cfa07b"
 dependencies = [
  "srt-proto",
 ]
@@ -3201,7 +3201,7 @@ dependencies = [
 [[package]]
 name = "srt-proto"
 version = "0.1.0"
-source = "git+https://github.com/krsna1729/srt-rs?rev=0f2c86d1255faa9da0208fa7d94838737a9bf9b6#0f2c86d1255faa9da0208fa7d94838737a9bf9b6"
+source = "git+https://github.com/krsna1729/srt-rs?rev=1af686e50cc92f14d80539e1a329574a50cfa07b#1af686e50cc92f14d80539e1a329574a50cfa07b"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3221,7 +3221,7 @@ dependencies = [
 [[package]]
 name = "srt-transport"
 version = "0.1.0"
-source = "git+https://github.com/krsna1729/srt-rs?rev=0f2c86d1255faa9da0208fa7d94838737a9bf9b6#0f2c86d1255faa9da0208fa7d94838737a9bf9b6"
+source = "git+https://github.com/krsna1729/srt-rs?rev=1af686e50cc92f14d80539e1a329574a50cfa07b#1af686e50cc92f14d80539e1a329574a50cfa07b"
 dependencies = [
  "bytes",
  "compio",

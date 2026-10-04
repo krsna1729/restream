@@ -67,17 +67,20 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 url = "2"
 percent-encoding = "2"
 shiguredo_mp4 = "2026.5.0"
-# srt-rs main 0f2c86d (PR #136: bonded legs relocate to the reuseport member
-# holding their group, ListenerTransfer bridge between Owners; PR #135:
-# `owner_plans` / `Owner::listen_planned` on every Owner; PR #134: multi-Owner
-# listener layouts; PR #132: ACKACK history of 256 Full ACKs with at most two
-# Full ACKs per ACK interval; PR #133: `Owner::set_tx_gso`; PR #131:
-# cooperative taskrun, separate managed-RX buffer exhaustion counter; PR #128:
-# GSO send coalescing, id hashing without SipHash, acked-bytes stats). SRT
-# egress and ingress both run on `srt_transport::compio::Owner`; ingress
-# attaches each `owner_plans` entry with `Owner::listen_planned`.
-srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "0f2c86d1255faa9da0208fa7d94838737a9bf9b6" }
-srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "0f2c86d1255faa9da0208fa7d94838737a9bf9b6", features = ["compio"] }
+# srt-rs main 1af686e (PR #139: the receiver skips its full TSBPD candidate
+# scan while deadlines follow sequence order; PR #138: packets buffered when
+# the TSBPD wrap period starts are no longer lost; PR #136: bonded legs
+# relocate to the reuseport member holding their group, ListenerTransfer
+# bridge between Owners; PR #135: `owner_plans` / `Owner::listen_planned` on
+# every Owner; PR #134: multi-Owner listener layouts; PR #132: ACKACK history
+# of 256 Full ACKs with at most two Full ACKs per ACK interval; PR #133:
+# `Owner::set_tx_gso`; PR #131: cooperative taskrun, separate managed-RX
+# buffer exhaustion counter; PR #128: GSO send coalescing, id hashing without
+# SipHash, acked-bytes stats). SRT egress and ingress both run on
+# `srt_transport::compio::Owner`; ingress attaches each `owner_plans` entry
+# with `Owner::listen_planned`.
+srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "1af686e50cc92f14d80539e1a329574a50cfa07b" }
+srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "1af686e50cc92f14d80539e1a329574a50cfa07b", features = ["compio"] }
 # Bounded shard command channel with both blocking and Future-based receive, so
 # a backend that owns a thread-affine completion runtime can await commands
 # alongside its own I/O without a second wake source.
