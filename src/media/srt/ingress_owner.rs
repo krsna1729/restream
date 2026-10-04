@@ -1,7 +1,10 @@
-//! The SRT ingress owner thread: ONE Compio runtime and ONE
-//! `srt_transport::compio::Owner` that owns the listener UDP socket and every
+//! An SRT ingress owner thread: ONE Compio runtime and ONE
+//! `srt_transport::compio::Owner` that owns its listener UDP socket and every
 //! protocol object behind it (handshake admission, timers, ACK/NAK, listener
-//! TX, receive state, per-peer send/disconnect/retire).
+//! TX, receive state, per-peer send/disconnect/retire). A listener is one such
+//! thread, or K members of one `SO_REUSEPORT` group (`owner_plans`), which
+//! pass misdelivered handshakes and relocated bonded legs to each other as
+//! `ListenerTransfer`s through unbounded per-Owner inboxes.
 //!
 //! Media runs to completion here too: every received payload goes through TS
 //! demux, input gating, timestamp mapping, standby GOP and ring publication on
@@ -12,9 +15,9 @@
 //!
 //! * `IngressCommand` (Tokio -> Owner): `AttachPublisher`, `AttachReader`,
 //!   `ProbeApplied`, `Disconnect`, `Shutdown`, all addressed by
-//!   `LogicalPeerId`. A `LogicalPeerId` is the sole cross-thread session
-//!   handle; no protocol object, table reference, socket id or `SocketAddr`
-//!   identifies a session.
+//!   `IngressPeer` (Owner index + `LogicalPeerId`). It is the sole
+//!   cross-thread session handle; no protocol object, table reference, socket
+//!   id or `SocketAddr` identifies a session.
 //! * `SrtIngressEvent` (Owner -> Tokio): `Connected`, `Probe`, `Disconnected`,
 //!   plus the terminal `Fault`.
 //! * `QualitySample` (Owner -> Tokio, LOSSY): per-peer receive-quality
@@ -38,10 +41,13 @@ use futures_util::future::{Either, pending, select};
 use srt_proto::{ConnectionEvent, Timestamp};
 use srt_transport::advanced::admission::{AdmissionEvent, BondedInputPolicy, LogicalPeerId};
 use srt_transport::compio::{
-    Owner, OwnerRxMode, OwnerServiceBudget, OwnerServiceReport, ProductionRuntimeConfig,
-    RxModePolicy, observe_production_runtime,
+    Owner, OwnerRxMode, OwnerServiceBudget, ProductionRuntimeConfig, RxModePolicy,
+    observe_production_runtime,
 };
-use srt_transport::{ListenerConfig, ListenerTopology, PromotionPolicy};
+use srt_transport::{
+    ListenerConfig, ListenerTopology, ListenerTransfer, OwnerListenerPlan, PromotionPolicy,
+    RuntimeFlavor, WorkerCount, owner_plans,
+};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
@@ -53,14 +59,17 @@ use crate::media::snapshots::ListenerSocketStats;
 use super::ingress_admission::ingress_resolver;
 pub(crate) use super::ingress_bridge::{
     INGRESS_COMMAND_CAPACITY, INGRESS_EVENT_CAPACITY, INGRESS_TELEMETRY_CAPACITY, IngressCommand,
-    IngressConfig, IngressExit, SrtIngressEvent, SrtIngressHandle,
+    IngressConfig, IngressExit, IngressPeer, OwnerSeat, SrtIngressEvent, SrtIngressHandle,
 };
 use super::ingress_media::IngressMedia;
 
 #[path = "ingress_owner_send.rs"]
 mod send;
+#[path = "ingress_owner_stats.rs"]
+mod stats;
 use super::ingress_quality::{Observation, QualitySample, sample_from_stats};
 use send::DeferredSends;
+use stats::{Published, publish};
 
 /// Concurrent datagram sends (TX pool slots and lanes) for the ingress Owner.
 /// Ingress TX is protocol replies (handshake, ACK/NAK, SHUTDOWN) plus SRT
@@ -150,16 +159,62 @@ struct OwnerLoop {
     stash: Option<IngressCommand>,
     shutting_down: bool,
     home_thread: std::thread::ThreadId,
+    /// This Owner's index in the listener; part of every session handle.
+    index: u16,
+    /// Transfers from the other Owners of the listener, and their inboxes.
+    inbox: flume::Receiver<ListenerTransfer>,
+    members: Vec<flume::Sender<ListenerTransfer>>,
+    transfers: Vec<ListenerTransfer>,
+    /// A transfer received while parked, accepted first on the next visit.
+    transfer_stash: Option<ListenerTransfer>,
+    /// This Owner's last published share of the listener-wide stats.
+    published: Published,
+}
+
+/// The srt-rs listener this ingress runs, split into one plan per Owner:
+/// one `PerPort` Owner, or `config.owners` members of a `SO_REUSEPORT`
+/// group whose bonded legs relocate to the member holding their group.
+pub(super) fn listener_plans(config: &IngressConfig) -> Result<Vec<OwnerListenerPlan>, String> {
+    let owners = std::num::NonZeroUsize::new(config.owners).unwrap_or(std::num::NonZeroUsize::MIN);
+    let (topology, promotion) = if owners.get() == 1 {
+        (ListenerTopology::PerPort, PromotionPolicy::Never)
+    } else {
+        (
+            ListenerTopology::ReusePortMulti {
+                acceptors: WorkerCount::Count(owners),
+            },
+            PromotionPolicy::Relocate,
+        )
+    };
+    let listener_config = ListenerConfig::builder(config.bind)
+        .topology(topology)
+        .bonded_inputs(BondedInputPolicy::Accept)
+        .configure_transport(|transport| {
+            // Same receive buffer as egress Owner sockets (`desired_udp_buf`,
+            // 8 MiB unless RESTREAM_SRT_UDP_BUF_BYTES overrides). With the
+            // kernel default (208 KB) the listener dropped 5,876 publisher
+            // datagrams in one SRT x150 run (`ss -uam`), which ARQ then had to
+            // recover.
+            if let Some(bytes) = std::num::NonZeroUsize::new(super::desired_udp_buf()) {
+                transport.socket_buffers = srt_transport::SocketBufferConfig::Bytes(bytes);
+            }
+            transport.promotion = promotion;
+        })
+        .build()
+        .map_err(|error| format!("failed to build srt-rs listener config: {error}"))?;
+    owner_plans(&listener_config, RuntimeFlavor::Compio)
+        .map_err(|error| format!("failed to plan srt-rs listener Owners: {error}"))
 }
 
 pub(super) fn run_owner_thread(
+    seat: OwnerSeat,
     config: IngressConfig,
     commands: flume::Receiver<IngressCommand>,
     events: mpsc::Sender<SrtIngressEvent>,
     telemetry: mpsc::Sender<QualitySample>,
     ready: flume::Sender<Result<SocketAddr, String>>,
 ) -> IngressExit {
-    match build(config, commands, events, telemetry) {
+    match build(seat, config, commands, events, telemetry) {
         Ok((mut owner_loop, local_addr)) => {
             let _ = ready.send(Ok(local_addr));
             owner_loop.serve()
@@ -176,6 +231,7 @@ pub(super) fn run_owner_thread(
 }
 
 fn build(
+    seat: OwnerSeat,
     config: IngressConfig,
     commands: flume::Receiver<IngressCommand>,
     events: mpsc::Sender<SrtIngressEvent>,
@@ -192,23 +248,13 @@ fn build(
     ));
     let substrate = profile.managed_rx_substrate();
     let rx_policy = RxModePolicy::ManagedPreferred;
-    let listener_config = ListenerConfig::builder(config.bind)
-        .topology(ListenerTopology::PerPort)
-        .bonded_inputs(BondedInputPolicy::Accept)
-        .configure_transport(|transport| {
-            // Same receive buffer as egress Owner sockets (`desired_udp_buf`,
-            // 8 MiB unless RESTREAM_SRT_UDP_BUF_BYTES overrides). With the
-            // kernel default (208 KB) the listener dropped 5,876 publisher
-            // datagrams in one SRT x150 run (`ss -uam`), which ARQ then had to
-            // recover.
-            if let Some(bytes) = std::num::NonZeroUsize::new(super::desired_udp_buf()) {
-                transport.socket_buffers = srt_transport::SocketBufferConfig::Bytes(bytes);
-            }
-            // The Owner has no relocation target.
-            transport.promotion = PromotionPolicy::Never;
-        })
-        .build()
-        .map_err(|error| format!("failed to build srt-rs listener config: {error}"))?;
+    let OwnerSeat {
+        index,
+        plan,
+        epoch,
+        inbox,
+        members,
+    } = seat;
     let mut owner = Owner::new_with_ceiling(INGRESS_TX_CAPACITY, SRT_OWNER_WIRE_CEILING);
     // Install the observation from this Owner's runtime before its first attach.
     owner
@@ -217,7 +263,7 @@ fn build(
     owner.set_rx_mode_policy(rx_policy);
     let resolver = ingress_resolver(config.policy_store, config.receiver_group);
     runtime
-        .block_on(async { owner.listen_with_resolver(&listener_config, resolver) })
+        .block_on(async { owner.listen_planned(&plan, Some(resolver)) })
         .map_err(|error| format!("failed to attach srt-rs listener: {error}"))?;
     let local_addr = owner
         .listener_local_addr()
@@ -232,6 +278,8 @@ fn build(
         rx_mode = ?rx_mode,
         rx_policy = ?rx_policy,
         bind = %local_addr,
+        owner = index,
+        owners = config.owners,
         receiver_group_id = format_args!("{:#010x}", config.receiver_group.wire_id()),
         tx_capacity = INGRESS_TX_CAPACITY,
         wire_ceiling = SRT_OWNER_WIRE_CEILING,
@@ -242,10 +290,13 @@ fn build(
         "srt ingress owner attached"
     );
     let stats = config.stats;
-    stats.ingress_owner.tx_capacity.store(
+    let mut published = Published::default();
+    publish(
+        &stats.ingress_owner.tx_capacity,
+        &mut published.tx_capacity,
         u64::try_from(INGRESS_TX_CAPACITY).unwrap_or(u64::MAX),
-        Ordering::Relaxed,
     );
+    // Every Owner of a listener observes the same runtime substrate.
     stats.ingress_owner.managed_rx.store(
         rx_mode == Some(OwnerRxMode::ManagedMultishot),
         Ordering::Relaxed,
@@ -261,7 +312,7 @@ fn build(
             live: std::collections::HashSet::new(),
             sample_queue: VecDeque::new(),
             next_sample_round: Instant::now() + SAMPLE_INTERVAL,
-            epoch: Instant::now(),
+            epoch,
             pending_events: VecDeque::with_capacity(64),
             scratch: Vec::with_capacity(64),
             media: IngressMedia::default(),
@@ -274,6 +325,12 @@ fn build(
             stash: None,
             shutting_down: false,
             home_thread: std::thread::current().id(),
+            index,
+            inbox,
+            members,
+            transfers: Vec::new(),
+            transfer_stash: None,
+            published,
         },
         local_addr,
     ))
@@ -330,6 +387,7 @@ impl OwnerLoop {
             if self.shutting_down {
                 break;
             }
+            self.accept_transfers(now);
 
             let report = {
                 let owner = &mut self.owner;
@@ -337,6 +395,7 @@ impl OwnerLoop {
                     .block_on(owner.service(now, OwnerServiceBudget::default()))
             };
             self.account_service(&report);
+            self.send_transfers();
             self.reap_closing();
             self.sample_peers();
             if let Some(detail) = self.owner.fault().map(|fault| format!("{fault:?}")) {
@@ -355,6 +414,8 @@ impl OwnerLoop {
             let busy = report.work_remaining
                 || self.stash.is_some()
                 || !self.commands.is_empty()
+                || self.transfer_stash.is_some()
+                || !self.inbox.is_empty()
                 || (!self.pending_events.is_empty() && self.events_has_room())
                 // A sampling round in progress finishes promptly.
                 || !self.sample_queue.is_empty();
@@ -365,20 +426,58 @@ impl OwnerLoop {
         self.finish(fault)
     }
 
-    /// Apply one command to Owner-owned state.
+    /// Take in what the other Owners of this listener sent: forwarded
+    /// handshakes and relocated bonded legs (each with its connected socket),
+    /// and slot releases. Bounded by srt-rs: at most its handshake queue per
+    /// sender plus one transfer per live relocated session.
+    fn accept_transfers(&mut self, now: Timestamp) {
+        if let Some(transfer) = self.transfer_stash.take() {
+            self.owner.accept_listener_transfer(transfer, now);
+        }
+        while let Ok(transfer) = self.inbox.try_recv() {
+            self.owner.accept_listener_transfer(transfer, now);
+        }
+    }
+
+    /// Hand the transfers this Owner owes to their members. The inboxes are
+    /// unbounded (srt-rs bounds what it queues), so this never blocks; a
+    /// member that already exited drops what it is sent.
+    fn send_transfers(&mut self) {
+        self.owner.poll_listener_transfers(&mut self.transfers);
+        for transfer in self.transfers.drain(..) {
+            if let Some(member) = self.members.get(transfer.to) {
+                let _ = member.send(transfer);
+            }
+        }
+    }
+
+    /// The cross-thread handle of this Owner's session `id`.
+    fn session(&self, id: LogicalPeerId) -> IngressPeer {
+        IngressPeer {
+            owner: self.index,
+            id,
+        }
+    }
+
+    /// Apply one command to Owner-owned state. Tokio routes each session
+    /// command to the Owner named in its [`IngressPeer`].
     fn apply(&mut self, command: IngressCommand, now: Timestamp) {
         match command {
             IngressCommand::AttachPublisher {
                 logical_peer,
                 media,
             } => {
-                if !self.live.contains(&logical_peer) {
+                debug_assert_eq!(
+                    logical_peer.owner, self.index,
+                    "command routed to the wrong Owner"
+                );
+                if !self.live.contains(&logical_peer.id) {
                     // Retired while Tokio admitted it: nothing to run.
                     return;
                 }
                 if let Some(probe) =
                     self.media
-                        .attach_publisher(logical_peer, media, &self.stats.ingress_owner)
+                        .attach_publisher(logical_peer.id, media, &self.stats.ingress_owner)
                 {
                     self.pending_events.push_back(SrtIngressEvent::Probe {
                         logical_peer,
@@ -390,15 +489,15 @@ impl OwnerLoop {
                 logical_peer,
                 reader,
             } => {
-                if self.live.contains(&logical_peer) {
-                    self.media.attach_reader(logical_peer, reader);
+                if self.live.contains(&logical_peer.id) {
+                    self.media.attach_reader(logical_peer.id, reader);
                 }
             }
             IngressCommand::ProbeApplied { logical_peer, ring } => {
                 self.media
-                    .probe_applied(logical_peer, ring, &self.stats.ingress_owner);
+                    .probe_applied(logical_peer.id, ring, &self.stats.ingress_owner);
             }
-            IngressCommand::Disconnect { logical_peer } => self.disconnect(logical_peer, now),
+            IngressCommand::Disconnect { logical_peer } => self.disconnect(logical_peer.id, now),
             IngressCommand::Shutdown => self.shutting_down = true,
         }
     }
@@ -451,7 +550,10 @@ impl OwnerLoop {
             };
             // Lossy by design: never wait for Tokio.
             if let Err(mpsc::error::TrySendError::Full(_)) =
-                self.telemetry.try_send(QualitySample { peer, observation })
+                self.telemetry.try_send(QualitySample {
+                    peer: self.session(peer),
+                    observation,
+                })
             {
                 self.stats
                     .ingress_owner
@@ -478,7 +580,7 @@ impl OwnerLoop {
                     self.pending_events
                         .push_back(SrtIngressEvent::Disconnected {
                             peer,
-                            logical_peer: entry.peer,
+                            logical_peer: self.session(entry.peer),
                             reason: "closed locally".to_string(),
                         });
                 }
@@ -538,7 +640,7 @@ impl OwnerLoop {
                     self.addrs.insert(logical_peer, peer);
                     self.pending_events.push_back(SrtIngressEvent::Connected {
                         peer,
-                        logical_peer,
+                        logical_peer: self.session(logical_peer),
                         stream_id,
                     });
                 }
@@ -548,7 +650,7 @@ impl OwnerLoop {
                             .on_payload(logical_peer, payload, &self.stats.ingress_owner)
                     {
                         self.pending_events.push_back(SrtIngressEvent::Probe {
-                            logical_peer,
+                            logical_peer: self.session(logical_peer),
                             probe,
                         });
                     }
@@ -557,7 +659,7 @@ impl OwnerLoop {
                     self.pending_events
                         .push_back(SrtIngressEvent::Disconnected {
                             peer,
-                            logical_peer,
+                            logical_peer: self.session(logical_peer),
                             reason: reason.to_string(),
                         });
                     // Forward, then retire: the terminal peer never stays
@@ -623,71 +725,6 @@ impl OwnerLoop {
             .fetch_max(commands, Ordering::Relaxed);
     }
 
-    fn account_service(&mut self, report: &OwnerServiceReport) {
-        let stats = &self.stats.ingress_owner;
-        stats.service_visits.fetch_add(1, Ordering::Relaxed);
-        stats
-            .service_actions
-            .fetch_add(report.actions as u64, Ordering::Relaxed);
-        stats
-            .maintenance_actions
-            .fetch_add(report.maintenance_actions as u64, Ordering::Relaxed);
-        if report.budget_exhausted {
-            stats.budget_exhausted.fetch_add(1, Ordering::Relaxed);
-        }
-        stats
-            .rx_packets
-            .fetch_add(report.rx_packets as u64, Ordering::Relaxed);
-        stats
-            .rx_bytes
-            .fetch_add(report.rx_bytes as u64, Ordering::Relaxed);
-        stats
-            .tx_packets
-            .fetch_add(report.tx_packets_submitted as u64, Ordering::Relaxed);
-        stats
-            .tx_completed_ok
-            .fetch_add(report.tx_completed_ok as u64, Ordering::Relaxed);
-        stats.tx_failed.fetch_add(
-            (report.tx_failed_sends + report.tx_short_sends) as u64,
-            Ordering::Relaxed,
-        );
-        let tx = self.owner.tx_pool_snapshot();
-        stats
-            .tx_in_flight
-            .store(self.owner.tx_in_flight() as u64, Ordering::Relaxed);
-        stats
-            .tx_high_water
-            .store(tx.high_water as u64, Ordering::Relaxed);
-        stats
-            .tx_exhaustions
-            .store(tx.exhaustions, Ordering::Relaxed);
-        if let Some(rx) = self.owner.rx_stats().listener {
-            stats
-                .rx_ring_depth
-                .store(rx.depth as u64, Ordering::Relaxed);
-            stats.rx_ring_dropped.store(rx.dropped, Ordering::Relaxed);
-            stats
-                .rx_buffer_exhaustions
-                .store(rx.buffer_exhaustions, Ordering::Relaxed);
-            stats.rx_truncated.store(rx.truncated, Ordering::Relaxed);
-        }
-        if let Some(telemetry) = self.owner.listener_telemetry() {
-            stats
-                .policy_requests
-                .store(telemetry.policy_requests, Ordering::Relaxed);
-            stats
-                .policy_rejections
-                .store(telemetry.policy_rejections, Ordering::Relaxed);
-            stats
-                .policy_deferred
-                .store(telemetry.policy_deferred, Ordering::Relaxed);
-            stats
-                .credential_failures
-                .store(telemetry.credential_failures, Ordering::Relaxed);
-        }
-        stats.peers.store(self.peers, Ordering::Relaxed);
-    }
-
     /// Park inside the Compio runtime until a command arrives, the Owner has
     /// network/completion activity, bridge room reappears (only when events are
     /// waiting), or the next protocol deadline. No fixed-frequency polling.
@@ -713,11 +750,16 @@ impl OwnerLoop {
             stash,
             pending_events,
             shutting_down,
+            inbox,
+            transfer_stash,
             ..
         } = self;
         let waiting_for_room = !pending_events.is_empty();
         runtime.block_on(async {
             let command = pin!(async { Wake::Command(commands.recv_async().await.ok()) });
+            // Every Owner holds a sender to its own inbox, so it never closes
+            // while this Owner runs.
+            let transfer = pin!(async { Wake::Transfer(inbox.recv_async().await.ok()) });
             let activity = pin!(async {
                 owner.wait_for_activity(wait).await;
                 Wake::Activity
@@ -732,9 +774,11 @@ impl OwnerLoop {
                     }
                 }
             });
-            // Commands are polled first so they win ties.
-            match first_ready(command, pin!(first_ready(activity, room))).await {
+            // Commands are polled first so they win ties, then transfers.
+            let rest = pin!(first_ready(activity, room));
+            match first_ready(command, pin!(first_ready(transfer, rest))).await {
                 Wake::Command(Some(command)) => *stash = Some(command),
+                Wake::Transfer(transfer) => *transfer_stash = transfer,
                 // Every Tokio sender is gone: the application is shutting down.
                 Wake::Command(None) | Wake::Closed => *shutting_down = true,
                 Wake::Room(permit) => {
@@ -789,6 +833,7 @@ impl OwnerLoop {
                 "srt ingress Owner did not reach quiescence within its shutdown bound"
             );
         }
+        self.withdraw_gauges();
         IngressExit { quiescent, fault }
     }
 
@@ -816,6 +861,7 @@ impl OwnerLoop {
 
 enum Wake<'a> {
     Command(Option<IngressCommand>),
+    Transfer(Option<ListenerTransfer>),
     Activity,
     Room(mpsc::Permit<'a, SrtIngressEvent>),
     Closed,

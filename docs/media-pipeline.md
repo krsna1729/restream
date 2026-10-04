@@ -469,7 +469,7 @@ readiness scans.
 
 ```mermaid
 flowchart LR
-    subgraph L1["SRT ingress Owner thread: one Compio/io_uring runtime"]
+    subgraph L1["SRT ingress Owner thread(s): one Compio/io_uring runtime each\n(RESTREAM_SRT_INGRESS_OWNERS share the port as a SO_REUSEPORT group)"]
         SS["srt-rs Owner listener/recv\nPeerTable + protocol timers"]
         SD["TsDemuxer + gate + timestamps\nstandby GOP + ring publish"]
         SS --> SD
@@ -498,7 +498,7 @@ flowchart LR
 
 | Hop | Thread/process model | Memory owner |
 |---|---|---|
-| SRT ingest socket, demux, and publish | One Compio runtime and Owner own the listener socket, peer table, timers, demux, input gate, standby GOP, and ring publication | The Owner installs the managed-RX substrate observed from its own runtime before attach. `ManagedPreferred` selects multishot when available and falls back to raw readiness otherwise. Ingest media runs inline to completion on the Owner (WI11 step 1) |
+| SRT ingest socket, demux, and publish | One Compio runtime and Owner per ingress Owner thread (default one; `RESTREAM_SRT_INGRESS_OWNERS` members of one `SO_REUSEPORT` group otherwise) own their listener socket, peer table, timers, demux, input gate, standby GOP, and ring publication for the sessions they hold; members pass forwarded handshakes and relocated bonded legs to each other directly | The Owner installs the managed-RX substrate observed from its own runtime before attach. `ManagedPreferred` selects multishot when available and falls back to raw readiness otherwise. Ingest media runs inline to completion on the Owner (WI11 step 1) |
 | Shared `TsMuxer` (SRT preparation) | Media Executor pool (`restream-media`), one task per `(pipeline, preset)` | `TsChunkRing` (256-chunk shared ring, `RESTREAM_TS_RING_CAPACITY`) |
 | Egress shard (SRT) | Fixed OS-thread pool per feed; each shard owns one Compio runtime and at most one `Owner` per local address family, plus queued leaf visits | Per-leaf application state and bounded scratch; protocol state lives in the Owner |
 | Shared SRT transport | One Compio `Owner` per `(shard, local family)`: one caller UDP socket, one bounded caller pool, fixed TX pool and one receive consumer; shared TS muxing remains per `(pipeline, preset)` | srt-rs caller/protocol state plus kernel `SO_SNDBUF`; DATA is materialized into reserved TX-pool slots |

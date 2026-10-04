@@ -351,6 +351,10 @@ pub struct AppConfig {
     /// Whether SRT egress Owners coalesce equal-length datagrams to one peer
     /// into UDP GSO sends. On by default; off sends one `sendmsg` per datagram.
     pub srt_egress_gso: bool,
+    /// SRT ingress Owner threads sharing the listener port (`SO_REUSEPORT`
+    /// members; bonded legs relocate to their group's Owner). 1 is one Owner
+    /// on one socket.
+    pub srt_ingress_owners: usize,
     pub use_internal_file_ingest: bool,
     pub initial_admin_password: Option<String>,
     pub secure_session_cookies: bool,
@@ -658,6 +662,7 @@ impl Default for AppConfig {
             srt_egress_connect_concurrency: 64,
             srt_egress_tx_capacity: crate::media::egress::backends::srt::SRT_OWNER_TX_CAPACITY,
             srt_egress_gso: true,
+            srt_ingress_owners: 1,
             use_internal_file_ingest: false,
             initial_admin_password: None,
             secure_session_cookies: false,
@@ -748,6 +753,7 @@ impl AppConfig {
         )
         .clamp(1, 4096);
         let srt_egress_gso = env_bool("RESTREAM_SRT_EGRESS_GSO").unwrap_or(true);
+        let srt_ingress_owners = env_usize("RESTREAM_SRT_INGRESS_OWNERS", 1).clamp(1, cpus.max(1));
         let use_internal_file_ingest =
             std::env::var_os("RESTREAM_USE_INTERNAL_FILE_INGEST").is_some();
         let initial_admin_password = std::env::var("RESTREAM_INITIAL_ADMIN_PASSWORD").ok();
@@ -820,6 +826,7 @@ impl AppConfig {
             srt_egress_connect_concurrency,
             srt_egress_tx_capacity,
             srt_egress_gso,
+            srt_ingress_owners,
             use_internal_file_ingest,
             initial_admin_password,
             secure_session_cookies,

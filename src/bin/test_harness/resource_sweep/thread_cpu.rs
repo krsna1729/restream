@@ -7,16 +7,18 @@
 
 use std::collections::BTreeMap;
 
-/// Thread name with a trailing `-<digits>` removed, so `egress-3` and
-/// `srt-in-32354` group with their siblings.
+/// Thread name with its trailing `-<digits>` segments removed, so `egress-3`,
+/// `srt-in-32354` and the multi-Owner `srt-in-32354-1` group with their
+/// siblings.
 pub(super) fn thread_group(comm: &str) -> String {
-    let comm = comm.trim();
-    match comm.rsplit_once('-') {
-        Some((head, tail)) if !tail.is_empty() && tail.bytes().all(|b| b.is_ascii_digit()) => {
-            head.to_string()
-        }
-        _ => comm.to_string(),
+    let mut comm = comm.trim();
+    while let Some((head, tail)) = comm.rsplit_once('-')
+        && !tail.is_empty()
+        && tail.bytes().all(|b| b.is_ascii_digit())
+    {
+        comm = head;
     }
+    comm.to_string()
 }
 
 /// Cumulative user+system clock ticks per thread group. Threads that exit
@@ -75,9 +77,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn groups_strip_a_trailing_number_only() {
+    fn groups_strip_trailing_numbers_only() {
         assert_eq!(thread_group("egress-3"), "egress");
         assert_eq!(thread_group("srt-in-32354"), "srt-in");
+        assert_eq!(thread_group("srt-in-32354-1"), "srt-in");
         assert_eq!(thread_group("restream-tokio"), "restream-tokio");
         assert_eq!(thread_group("restream-rtmp-c"), "restream-rtmp-c");
         assert_eq!(thread_group("sqlx-sqlite-wor"), "sqlx-sqlite-wor");

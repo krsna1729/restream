@@ -1,6 +1,5 @@
 //! Bridge, sampling and thread-ownership tests for the SRT ingress owner.
 
-use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -41,6 +40,7 @@ async fn owner_runs_publisher_media_to_completion_without_losing_payloads() {
         command_capacity: 2,
         event_capacity: 1,
         telemetry_capacity: 8,
+        owners: 1,
     })
     .await
     .expect("ingress owner starts");
@@ -99,6 +99,118 @@ async fn owner_runs_publisher_media_to_completion_without_losing_payloads() {
     assert!(exit.fault.is_none());
 }
 
+/// Two Owners share the listener port: publishers the kernel hashes to either
+/// Owner connect, every session command reaches the Owner named in its
+/// `IngressPeer`, every publisher's media is delivered, the listener-wide
+/// stats are the sum over both Owners, and an orderly stop withdraws their
+/// gauges.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_owners_share_the_port_and_each_session_command_reaches_its_owner() {
+    const PUBLISHERS: usize = 24;
+    const CHUNKS: usize = 30;
+    let entries: Vec<_> = (0..PUBLISHERS)
+        .map(|index| plain(&format!("pub-{index}")))
+        .collect();
+    let store = Arc::new(SrtIngestPolicyStore::new(
+        SrtGlobalIngestConfig::default(),
+        &entries,
+    ));
+    let stats = Arc::new(crate::media::snapshots::ListenerSocketStats::default());
+    let mut handle = SrtIngressHandle::start(IngressConfig {
+        bind: SocketAddr::from(([127, 0, 0, 1], free_port())),
+        policy_store: store,
+        receiver_group: ReceiverGroupId::generate(),
+        stats: stats.clone(),
+        command_capacity: 64,
+        event_capacity: 256,
+        telemetry_capacity: 8,
+        owners: 2,
+    })
+    .await
+    .expect("two ingress Owners start");
+    let remote = handle.local_addr();
+    let chunks = ts_chunks(CHUNKS);
+    let per_publisher = chunks.iter().map(Bytes::len).sum::<usize>() as u64;
+    let callers: Vec<_> = (0..PUBLISHERS)
+        .map(|index| {
+            let chunks = chunks.clone();
+            let stream_id = format!("#!::r=pub-{index},m=publish");
+            tokio::task::spawn_blocking(move || {
+                run_caller(
+                    direct(remote, &stream_id, None),
+                    Duration::from_secs(30),
+                    publish_step(chunks),
+                )
+            })
+        })
+        .collect();
+
+    let mut received = Vec::new();
+    let mut owners = std::collections::BTreeSet::new();
+    let done = |received: &Vec<Arc<std::sync::atomic::AtomicU64>>| {
+        received.len() == PUBLISHERS
+            && received
+                .iter()
+                .all(|bytes| bytes.load(std::sync::atomic::Ordering::Relaxed) == per_publisher)
+    };
+    let deadline = Instant::now() + Duration::from_secs(25);
+    while Instant::now() < deadline && !done(&received) {
+        match tokio::time::timeout(Duration::from_millis(100), handle.events.recv()).await {
+            Ok(Some(SrtIngressEvent::Connected { logical_peer, .. })) => {
+                owners.insert(logical_peer.owner);
+                let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(1024));
+                let (media, bytes) = test_publisher_media(ring);
+                received.push(bytes);
+                let command = IngressCommand::AttachPublisher {
+                    logical_peer,
+                    media,
+                };
+                assert!(handle.try_send(command).is_ok());
+            }
+            Ok(Some(SrtIngressEvent::Probe { logical_peer, .. })) => {
+                let command = IngressCommand::ProbeApplied {
+                    logical_peer,
+                    ring: None,
+                };
+                assert!(handle.try_send(command).is_ok());
+            }
+            Ok(Some(_)) | Err(_) => {}
+            Ok(None) => break,
+        }
+    }
+    for caller in callers {
+        let report = caller.await.expect("caller thread");
+        assert!(report.connected, "{report:?}");
+    }
+    assert!(done(&received), "every publisher's media reached its Owner");
+    assert_eq!(
+        owners.into_iter().collect::<Vec<_>>(),
+        [0, 1],
+        "the kernel spread publishers over both Owners"
+    );
+    let snapshot = stats.ingress_owner.snapshot();
+    assert_eq!(
+        snapshot.media_payloads,
+        (PUBLISHERS * CHUNKS) as u64,
+        "{snapshot:?}"
+    );
+    assert_eq!(snapshot.media_unattached_dropped, 0, "{snapshot:?}");
+    assert_eq!(
+        snapshot.tx_capacity,
+        2 * super::ingress_owner::INGRESS_TX_CAPACITY as u64,
+        "each Owner adds its TX capacity"
+    );
+    let exit = handle.shutdown().await;
+    assert!(exit.quiescent, "{exit:?}");
+    assert!(exit.fault.is_none());
+    let snapshot = stats.ingress_owner.snapshot();
+    assert_eq!(
+        (snapshot.tx_capacity, snapshot.peers, snapshot.tx_in_flight),
+        (0, 0, 0),
+        "stopped Owners withdraw their gauges"
+    );
+}
+
 /// A publisher's Owner-side media state wired to `ring`, plus its received
 /// byte counter.
 fn test_publisher_media(
@@ -152,6 +264,7 @@ async fn start_quality_owner(
         command_capacity: 16,
         event_capacity: 256,
         telemetry_capacity,
+        owners: 1,
     })
     .await
     .expect("ingress owner starts");
@@ -442,13 +555,4 @@ async fn one_ingress_owner_thread_serves_many_peers() {
         let _ = caller.await;
     }
     server.stop().await;
-}
-
-/// Every session identity a test used is unique (a LogicalPeerId is never
-/// reused), so a stale command can never reach a later peer.
-#[test]
-fn logical_peer_ids_are_hashable_session_handles() {
-    fn assert_handle<T: Copy + Eq + std::hash::Hash + std::fmt::Debug>() {}
-    assert_handle::<srt_transport::advanced::admission::LogicalPeerId>();
-    let _: HashSet<srt_transport::advanced::admission::LogicalPeerId> = HashSet::new();
 }

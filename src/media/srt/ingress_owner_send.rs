@@ -137,9 +137,11 @@ impl OwnerLoop {
         }
         self.deferred.push(peer, payload);
         let stats = &self.stats.ingress_owner;
-        stats
-            .deferred_sends
-            .store(self.deferred.total as u64, Ordering::Relaxed);
+        super::publish(
+            &stats.deferred_sends,
+            &mut self.published.deferred_sends,
+            self.deferred.total as u64,
+        );
         stats
             .deferred_sends_hwm
             .fetch_max(self.deferred.total as u64, Ordering::Relaxed);
@@ -185,10 +187,11 @@ impl OwnerLoop {
                 self.deferred.per_peer.remove(&peer);
             }
         }
-        self.stats
-            .ingress_owner
-            .deferred_sends
-            .store(self.deferred.total as u64, Ordering::Relaxed);
+        super::publish(
+            &self.stats.ingress_owner.deferred_sends,
+            &mut self.published.deferred_sends,
+            self.deferred.total as u64,
+        );
     }
 }
 
