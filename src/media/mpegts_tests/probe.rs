@@ -156,4 +156,254 @@ fn adts_probe_boundary_and_malformed_inputs() {
     assert!(audio_meta_complete(StreamKind::AacAdts, &meta));
 }
 
+/// H.264 RBSP writer for test SPSs: MSB-first bits and Exp-Golomb codes,
+/// the encoder side of the probe's `BitReader`.
+#[derive(Default)]
+struct RbspWriter {
+    bits: Vec<bool>,
+}
+
+impl RbspWriter {
+    fn bits(&mut self, value: u64, count: u32) {
+        for shift in (0..count).rev() {
+            self.bits.push((value >> shift) & 1 == 1);
+        }
+    }
+
+    fn ue(&mut self, value: u32) {
+        let coded = u64::from(value) + 1;
+        let len = 64 - coded.leading_zeros();
+        self.bits(0, len - 1);
+        self.bits(coded, len);
+    }
+
+    fn se(&mut self, value: i32) {
+        let mapped = if value > 0 {
+            2 * value.unsigned_abs() - 1
+        } else {
+            2 * value.unsigned_abs()
+        };
+        self.ue(mapped);
+    }
+
+    /// rbsp_trailing_bits, then emulation prevention: a NAL payload.
+    fn into_nal_payload(mut self) -> Vec<u8> {
+        self.bits.push(true);
+        while !self.bits.len().is_multiple_of(8) {
+            self.bits.push(false);
+        }
+        let rbsp = self
+            .bits
+            .chunks(8)
+            .map(|byte| byte.iter().fold(0u8, |acc, &bit| (acc << 1) | u8::from(bit)));
+        let mut nal = Vec::new();
+        let mut zeros = 0;
+        for byte in rbsp {
+            if zeros >= 2 && byte <= 3 {
+                nal.push(3);
+                zeros = 0;
+            }
+            nal.push(byte);
+            zeros = if byte == 0 { zeros + 1 } else { 0 };
+        }
+        nal
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SpsCase {
+    profile_idc: u8,
+    chroma_format_idc: u32,
+    scaling_deltas: Option<Vec<i32>>,
+    poc_type: u32,
+    poc_offsets: Vec<i32>,
+    width_mbs: u32,
+    height_units: u32,
+    frame_mbs_only: bool,
+    crop: [u32; 4],
+    timing: Option<(u32, u32)>,
+}
+
+impl SpsCase {
+    fn high_profile(&self) -> bool {
+        matches!(self.profile_idc, 100 | 110 | 122 | 244)
+    }
+
+    /// Expected size from the spec's crop units (7.4.2.1.1): CropUnitX/Y
+    /// follow SubWidthC/SubHeightC of the chroma format, times the field factor.
+    fn expected_size(&self) -> Option<(u32, u32)> {
+        let chroma = if self.high_profile() { self.chroma_format_idc } else { 1 };
+        let (sub_w, sub_h) = match chroma {
+            1 => (2, 2),
+            2 => (2, 1),
+            _ => (1, 1),
+        };
+        let field = if self.frame_mbs_only { 1 } else { 2 };
+        let [left, right, top, bottom] = self.crop;
+        let width = (self.width_mbs * 16).checked_sub((left + right) * sub_w)?;
+        let height =
+            (field * self.height_units * 16).checked_sub((top + bottom) * sub_h * field)?;
+        (width > 0 && height > 0).then_some((width, height))
+    }
+
+    /// Annex B access unit with this SPS as its only NAL.
+    fn access_unit(&self) -> Vec<u8> {
+        let mut w = RbspWriter::default();
+        w.bits(u64::from(self.profile_idc), 8);
+        w.bits(0, 8); // constraint flags + reserved
+        w.bits(40, 8); // level_idc
+        w.ue(0); // seq_parameter_set_id
+        if self.high_profile() {
+            w.ue(self.chroma_format_idc);
+            if self.chroma_format_idc == 3 {
+                w.bits(0, 1); // separate_colour_plane_flag
+            }
+            w.ue(0); // bit_depth_luma_minus8
+            w.ue(0); // bit_depth_chroma_minus8
+            w.bits(0, 1); // qpprime_y_zero_transform_bypass_flag
+            w.bits(u64::from(self.scaling_deltas.is_some()), 1);
+            if let Some(deltas) = &self.scaling_deltas {
+                let lists = if self.chroma_format_idc == 3 { 12 } else { 8 };
+                for list in 0..lists {
+                    // List 0 is sent with its deltas; the rest are absent.
+                    w.bits(u64::from(list == 0), 1);
+                    if list == 0 {
+                        // A 4x4 list: 16 entries, all deltas sent (none hit 0).
+                        for delta in deltas {
+                            w.se(*delta);
+                        }
+                    }
+                }
+            }
+        }
+        w.ue(0); // log2_max_frame_num_minus4
+        w.ue(self.poc_type);
+        match self.poc_type {
+            0 => w.ue(0),
+            1 => {
+                w.bits(0, 1); // delta_pic_order_always_zero_flag
+                w.se(-2); // offset_for_non_ref_pic
+                w.se(3); // offset_for_top_to_bottom_field
+                w.ue(self.poc_offsets.len() as u32);
+                for offset in &self.poc_offsets {
+                    w.se(*offset);
+                }
+            }
+            _ => {}
+        }
+        w.ue(1); // max_num_ref_frames
+        w.bits(0, 1); // gaps_in_frame_num_value_allowed_flag
+        w.ue(self.width_mbs - 1);
+        w.ue(self.height_units - 1);
+        w.bits(u64::from(self.frame_mbs_only), 1);
+        if !self.frame_mbs_only {
+            w.bits(0, 1); // mb_adaptive_frame_field_flag
+        }
+        w.bits(1, 1); // direct_8x8_inference_flag
+        let cropped = self.crop != [0; 4];
+        w.bits(u64::from(cropped), 1);
+        if cropped {
+            for edge in self.crop {
+                w.ue(edge);
+            }
+        }
+        w.bits(u64::from(self.timing.is_some()), 1); // vui_parameters_present_flag
+        if let Some((num_units_in_tick, time_scale)) = self.timing {
+            w.bits(0, 1); // aspect_ratio_info_present_flag
+            w.bits(0, 1); // overscan_info_present_flag
+            w.bits(0, 1); // video_signal_type_present_flag
+            w.bits(0, 1); // chroma_loc_info_present_flag
+            w.bits(1, 1); // timing_info_present_flag
+            w.bits(u64::from(num_units_in_tick), 32);
+            w.bits(u64::from(time_scale), 32);
+        }
+        let mut access_unit = vec![0, 0, 0, 1, 0x67];
+        access_unit.extend(w.into_nal_payload());
+        access_unit
+    }
+}
+
+fn sps_case() -> impl Strategy<Value = SpsCase> {
+    (
+        prop::sample::select(vec![66u8, 77, 88, 100, 110, 122, 244]),
+        0u32..=3,
+        prop::option::of(prop::collection::vec(-100i32..=100, 16)),
+        0u32..=2,
+        prop::collection::vec(-1000i32..=1000, 0..4),
+        1u32..=240,
+        1u32..=135,
+        any::<bool>(),
+        [0u32..=8, 0u32..=8, 0u32..=8, 0u32..=8],
+        prop::option::of((1u32..=1001, 1u32..=120_000)),
+    )
+        .prop_map(
+            |(profile_idc, chroma, scaling, poc_type, poc_offsets, w, h, fmo, crop, timing)| {
+                SpsCase {
+                    profile_idc,
+                    chroma_format_idc: chroma,
+                    // Each delta keeps the running scale nonzero, so all 16 are read.
+                    scaling_deltas: scaling.map(|deltas| {
+                        let mut scale = 8i32;
+                        deltas
+                            .into_iter()
+                            .map(|delta| {
+                                let next = (scale + delta + 256).rem_euclid(256);
+                                let delta = if next == 0 { delta + 1 } else { delta };
+                                scale = (scale + delta + 256).rem_euclid(256);
+                                delta
+                            })
+                            .collect()
+                    }),
+                    poc_type,
+                    poc_offsets,
+                    width_mbs: w,
+                    height_units: h,
+                    frame_mbs_only: fmo,
+                    crop,
+                    timing,
+                }
+            },
+        )
+}
+
+proptest! {
+    /// A publisher's SPS sets the probed size and frame rate exactly: every
+    /// chroma format, scaling matrix, POC type, field coding and crop is
+    /// decoded through to the spec's cropped dimensions.
+    #[test]
+    fn h264_sps_probe_reports_the_encoded_size(case in sps_case()) {
+        let meta = probe_video(StreamKind::H264, 0x100, None, None, &case.access_unit());
+        let expected = case.expected_size();
+        prop_assert_eq!(
+            (meta.width, meta.height),
+            expected.unwrap_or((0, 0)),
+            "{:?}",
+            case
+        );
+        if let (Some(_), Some((num_units_in_tick, time_scale))) = (expected, case.timing) {
+            let fps = f64::from(time_scale) / (2.0 * f64::from(num_units_in_tick));
+            prop_assert!((meta.fps - fps).abs() < 1e-9, "fps {} != {}", meta.fps, fps);
+        }
+    }
+
+    /// A truncated SPS never yields a wrong size: every prefix reports the
+    /// full answer or nothing.
+    #[test]
+    fn truncated_h264_sps_never_reports_a_wrong_size(case in sps_case()) {
+        let access_unit = case.access_unit();
+        let expected = case.expected_size().unwrap_or((0, 0));
+        for cut in 5..access_unit.len() {
+            let meta = probe_video(StreamKind::H264, 0x100, None, None, &access_unit[..cut]);
+            prop_assert!(
+                (meta.width, meta.height) == (0, 0) || (meta.width, meta.height) == expected,
+                "prefix {} of {:?} reported {}x{}",
+                cut,
+                case,
+                meta.width,
+                meta.height
+            );
+        }
+    }
+}
+
 // --- Helpers shared by PMT version tests ---
