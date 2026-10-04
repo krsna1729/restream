@@ -24,6 +24,10 @@ Patch scope, marked `restream vendor patch` in the source:
   `handle_input` is unchanged and shares the same parse path. The taken
   buffer can still hold unparsed bytes, so the caller must append (Compio:
   `AsyncReadExt::append`; plain `read` overwrites from the start).
+- `amf0_command::deserialize` returns `InvalidMessageFormat` for a command
+  with fewer than three AMF0 values. It used `drain(..3)`, which panicked:
+  one 16-byte command after the handshake panicked the RTMP ingress owner
+  thread (and an RTMP destination could do the same to an egress shard).
 
 Tests for each change live next to the patched code. Keep this patch minimal;
 drop it if upstream gains equivalent admission control.

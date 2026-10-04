@@ -759,3 +759,75 @@ async fn client_stop_during_playback_detaches_the_reader() {
     let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
     join_test_owner_threads(&engine).await;
 }
+
+/// One RTMP chunk after the handshake: an AMF0 command message (type 20)
+/// whose body is a single AMF0 string, i.e. fewer than the three values
+/// (name, transaction id, command object) every command carries.
+#[rustfmt::skip]
+const SHORT_AMF0_COMMAND: [u8; 16] = [
+    0x03,             // fmt 0, chunk stream 3
+    0x00, 0x00, 0x00, // timestamp
+    0x00, 0x00, 0x04, // message length
+    0x14,             // AMF0 command
+    0x00, 0x00, 0x00, 0x00, // message stream 0
+    0x02, 0x00, 0x01, b'x', // AMF0 string "x"
+];
+
+/// Before the vendored rml_rtmp fix, this unauthenticated chunk panicked the
+/// RTMP ingress owner thread inside `amf0_command::deserialize`; the owner's
+/// drop guard then stopped the listener and Restream shut down. It must close
+/// only the offending connection.
+#[tokio::test]
+async fn short_amf0_command_closes_only_that_connection() {
+    let pipeline_access: Arc<dyn PipelineAccessAuthenticator> =
+        Arc::new(AcceptAllAuthenticator {
+            pipeline_id: "pipe-short-command".to_string(),
+        });
+    let (engine, addr, server) = start_ingress_test_server(pipeline_access).await;
+
+    let mut attacker = TcpStream::connect(addr).await.unwrap();
+    perform_client_handshake(&mut attacker, &CancellationToken::new())
+        .await
+        .expect("handshake");
+    attacker.write_all(&SHORT_AMF0_COMMAND).await.unwrap();
+    let mut buf = [0u8; 256];
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        while matches!(attacker.read(&mut buf).await, Ok(n) if n > 0) {}
+    })
+    .await;
+    assert!(closed.is_ok(), "the offending connection must be closed");
+
+    // Bounded: with a dead owner the socket still accepts in the kernel
+    // backlog, so an unbounded handshake would hang instead of failing.
+    let published = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut publisher = TcpStream::connect(addr).await.unwrap();
+        drive_client_publish_handshake(&mut publisher, "any-key").await
+    })
+    .await;
+    assert!(
+        matches!(published, Ok(true)),
+        "the listener must keep serving publishers"
+    );
+    stop_ingress_test_server(&engine, server).await;
+}
+
+/// The same chunk from an RTMP destination server is a protocol error for
+/// that output, not a panic on its egress shard.
+#[test]
+fn short_amf0_command_from_a_destination_is_a_protocol_error() {
+    let parts = egress_transport::RtmpUrlParts {
+        host: "127.0.0.1".to_string(),
+        port: 1935,
+        app: "live".to_string(),
+        stream_key: "key".to_string(),
+        tls: false,
+    };
+    let mut session = egress_connection::RtmpSessionCore::new(parts, 4096).unwrap();
+    let _ = session.take_initial_packets();
+    session.request_connection(false).unwrap();
+
+    assert!(matches!(
+        session.handle_server_input(&SHORT_AMF0_COMMAND),
+        Err(egress_connection::RtmpSessionError::Protocol(_))
+    ));
+}
