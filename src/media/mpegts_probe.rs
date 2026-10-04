@@ -1,8 +1,17 @@
+//! Stream probes for MPEG-TS ingest (codec parameters from the first PES
+//! payloads). Untrusted publisher bytes: no indexing, slicing, unwrap or
+//! unchecked arithmetic here or in the H.264/H.265 submodules.
+#![deny(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
+
 use super::StreamKind;
 use crate::media::metadata::{AudioMeta, VideoMeta};
 
-#[path = "mpegts_probe/bit_reader.rs"]
-mod bit_reader;
 #[path = "mpegts_probe/h264.rs"]
 mod h264;
 #[path = "mpegts_probe/h265.rs"]
@@ -46,7 +55,7 @@ pub(super) fn probe_video(
         }
         StreamKind::H265 => {
             if let Some(ref raw_sps) = find_h265_sps(pes_payload) {
-                let sps = remove_emulation_prevention(raw_sps);
+                let sps = crate::media::codec::rbsp(raw_sps);
                 parse_h265_sps(&sps, &mut parsed_meta).is_some()
             } else {
                 false
@@ -88,10 +97,12 @@ pub(super) fn probe_audio(
         profile: None,
     };
 
-    if kind == StreamKind::AacAdts && pes_payload.len() >= 7 {
+    if kind == StreamKind::AacAdts
+        && let Some(&[0xFF, sync_low, b2, b3, _, _, _]) = pes_payload.first_chunk::<7>()
+    {
         // ADTS header parsing
-        if pes_payload[0] == 0xFF && (pes_payload[1] & 0xF0) == 0xF0 {
-            let profile_idx = (pes_payload[2] >> 6) as usize;
+        if sync_low & 0xF0 == 0xF0 {
+            let profile_idx = b2 >> 6;
             meta.profile = match profile_idx {
                 0 => Some("Main".to_string()),
                 1 => Some("LC".to_string()),
@@ -99,18 +110,20 @@ pub(super) fn probe_audio(
                 3 => Some("LTP/Reserved".to_string()),
                 _ => None,
             };
-            let sample_rate_idx = ((pes_payload[2] >> 2) & 0x0F) as usize;
-            let channel_config = ((pes_payload[2] & 0x01) << 2) | ((pes_payload[3] >> 6) & 0x03);
+            let sample_rate_idx = usize::from((b2 >> 2) & 0x0F);
+            // 3-bit channel configuration: the low bit of byte 2, then the
+            // top two bits of byte 3.
+            let channel_config = (u16::from_be_bytes([b2, b3]) >> 6) & 0x07;
 
             const SAMPLE_RATES: [u32; 13] = [
                 96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000,
                 7350,
             ];
 
-            if sample_rate_idx < SAMPLE_RATES.len() {
-                meta.sample_rate = SAMPLE_RATES[sample_rate_idx];
+            if let Some(&rate) = SAMPLE_RATES.get(sample_rate_idx) {
+                meta.sample_rate = rate;
             }
-            meta.channels = channel_config as u32;
+            meta.channels = u32::from(channel_config);
             if meta.channels == 7 {
                 meta.channels = 8;
             }
@@ -136,33 +149,17 @@ where
     if starts.is_empty() {
         return false;
     }
-    for i in 0..starts.len() {
-        let nalu_start = starts[i].1;
-        let nalu_end = if i + 1 < starts.len() {
-            starts[i + 1].0
-        } else {
-            data.len()
-        };
-        if nalu_start < nalu_end && callback(&data[nalu_start..nalu_end]) {
+    let mut starts = starts.iter().peekable();
+    while let Some(&(_, nalu_start)) = starts.next() {
+        let nalu_end = starts
+            .peek()
+            .map_or(data.len(), |&&(next_code, _)| next_code);
+        if let Some(nalu) = data.get(nalu_start..nalu_end)
+            && !nalu.is_empty()
+            && callback(nalu)
+        {
             return true;
         }
     }
     false
-}
-
-/// Remove RBSP emulation prevention bytes (0x00 0x00 0x03 → 0x00 0x00).
-fn remove_emulation_prevention(data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(data.len());
-    let mut i = 0;
-    while i < data.len() {
-        if i + 2 < data.len() && data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 3 {
-            out.push(0);
-            out.push(0);
-            i += 3;
-        } else {
-            out.push(data[i]);
-            i += 1;
-        }
-    }
-    out
 }
