@@ -17,7 +17,7 @@ request, report findings without moving code.
 - Frontend: `app` composes features; `core` owns shared transport/state/pure
   helpers; `features` own bounded UI; `history` owns its state and rendering.
 
-Read the relevant part of [the layering roadmap](../../../layering-roadmap.md)
+Read the relevant part of [the layering roadmap](../../../architecture.md#layering-rules)
 for the current boundary. Use an existing code index when available, and verify
 suspected upward dependencies against current source.
 

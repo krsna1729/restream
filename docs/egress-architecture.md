@@ -2,8 +2,7 @@
 
 This document is the normative ownership and concurrency contract for
 Restream's high-fan-out egress path (RTMP, RTMPS, SRT, and future live egress
-protocols). The fabric has shipped; the completed migration plan is archived
-as [egress implementation](archive/egress/implementation.md).
+protocols). The fabric has shipped.
 
 The central decision is to use one protocol-neutral egress fabric for
 ownership, scheduling, lifecycle, backpressure, retries, observability, and
@@ -130,8 +129,7 @@ Properties the fabric must keep preserving:
   count.
 
 Legacy per-destination RTMP tasks and per-destination SRT sender threads are
-gone; see [archive/egress/implementation.md](archive/egress/implementation.md)
-for the migration record.
+gone.
 
 ## Layer model
 
@@ -1091,13 +1089,11 @@ Performance acceptance is based on behavior under load, not socket count alone:
   behavior.
 
 Concrete workload thresholds used to prove these invariants live with the
-harness and the archived migration plan.
+harness.
 
 ## History and tradeoffs
 
-The fabric is shipped. Migration narrative (rollout selector, SRT-then-RTMP,
-legacy path removal) lives only in
-[`docs/archive/egress/implementation.md`](archive/egress/implementation.md).
+The fabric is shipped; the migration narrative is in git history.
 Control-plane identity, persisted outputs, API contracts, stage keys, and
 `MediaPacket` behavior stayed stable through that change.
 

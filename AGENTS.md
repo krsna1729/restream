@@ -12,7 +12,7 @@ Instructions for AI coding agents in this repository.
 - [Media Rules](#media-rules)
 - [Hot-Path Rules](#hot-path-rules)
 - [Testing](#testing)
-- [Autonomous Quality Loops](#autonomous-quality-loops)
+- [Rigor and Evidence](#rigor-and-evidence)
 - [Merge Strategy](#merge-strategy)
 - [Operational Guidance](#operational-guidance)
 - [Key References](#key-references)
@@ -94,8 +94,8 @@ in on demand, and verify with the narrowest gate first.
   adding or editing a canonical skill, run `cargo xtask setup-skills` to
   refresh local shims.
 - Skills supply task-specific guidance within the user's scope and existing
-  authorization. Do not start quality loops, turn reviews into fixes, or add
-  approval stops merely because a skill is relevant.
+  authorization. Do not turn reviews into fixes or add approval stops merely
+  because a skill is relevant.
 - Correctness gates run in GitHub PR CI, not locally: push the branch, open
   the PR, and read the failing job. Locally, run only (a) performance
   measurement and (b) the targeted new or changed test or feature you are
@@ -150,7 +150,7 @@ Before changing `src/media/`, read:
 
 Core invariants:
 
-- Tokio owns the control plane: API handlers, reconciliation, timers and application session state. Per-packet media work does not belong on Tokio (WI11): SRT and RTMP ingest media run to completion on their ingress owners; the shared TS mux and the HLS segmenter are still on Tokio and are moving to the owner that publishes the feed.
+- Tokio owns the control plane: API handlers, reconciliation, timers and application session state. Per-packet media work does not belong on Tokio: SRT and RTMP ingest media run to completion on their ingress owners; the shared TS mux and the HLS segmenter are still on Tokio and are moving to the owner that publishes the feed.
 - SRT transport sockets and protocol state (`PeerTable`, timers, ACK/NAK, TX) are owned by dedicated Compio `Owner` threads: one ingress owner thread per listener member (`RESTREAM_SRT_INGRESS_OWNERS`, default 1; more than one share the port as a `SO_REUSEPORT` group and pass srt-rs `ListenerTransfer`s between their threads, never through Tokio), and one Compio runtime with at most one `Owner` per address family per egress shard. Never move SRT sockets or `PeerTable` state onto Tokio; address SRT ingress sessions from Tokio only by `IngressPeer` (Owner index + `LogicalPeerId`) through bounded commands and events.
 - RTMP/RTMPS sockets stay on the native TCP/io_uring shard workers until the Compio TCP migration.
 - Blocking FFmpeg and other blocking calls belong on dedicated OS threads or the blocking pool, never on Tokio workers or an Owner thread.
@@ -193,20 +193,29 @@ Hot paths include `src/media/`, ring buffers, mux/demux loops, AVIO queues, SRT/
 - Gate selection by files touched: see the Inner Loop table above.
 - Scale and capacity runs are performance measurement and stay local: `cargo xtask capacity-ramp`, serially, on an idle host.
 
-## Autonomous Quality Loops
+## Rigor and Evidence
 
-- The autonomous quality program lives in `docs/agent-guidance/quality/`
-  (README, backlog, journal, baselines) with agent-neutral skills under
-  `docs/agent-guidance/skills/`; the quality-loop skill routes each dimension
-  to its maintained guidance. Start a loop only when requested.
-- One loop iteration = one backlog item, verified by gates and journaled.
-  Commit each item separately only when commits are authorized for the run.
-  Loops never push.
-- One quality loop per host. Multi-agent work goes through
-  `scripts/agent/worktree.sh`; check `pgrep -a -x cargo` before heavy builds.
-- Loops skip (never kill) media processes they did not start.
-- Backlog tiers describe required capability; select work the available model
-  can reliably execute and verify, using the guidance below.
+Every change carries the proof its risk calls for, written with the code, and
+its evidence in the commit message.
+
+- Put each invariant at the lowest rung that can enforce it: types and
+  ownership first, then one checked primitive, then tests of composition
+  ([assurance roadmap](docs/assurance-roadmap.md)). Delete a test only when
+  the API can no longer express what it defends.
+- New behavior: unit tests for the contract, a proptest against a simple model
+  for data structures and state machines, a fuzz target for parsers of
+  external bytes, a loom model for a cross-thread primitive, and a benchmark
+  before and after for hot paths.
+- A fix: a test that fails before and passes after.
+- A new guard: mutation-check it (disable or weaken it; a test must fail).
+- Never test wiring, copies, mock echoes or source text; never re-pin
+  incidental behavior.
+- Commit messages state the problem, the change, and the evidence: tests
+  added, mutation results, measured before/after numbers with host and
+  command. That is where measurements live; do not add ledgers or dated
+  evidence pages to `docs/`.
+- Open work goes in [`docs/backlog.md`](docs/backlog.md); close an item by
+  deleting it in the change that does the work.
 
 ## Merge Strategy
 
@@ -224,29 +233,20 @@ Hot paths include `src/media/`, ring buffers, mux/demux loops, AVIO queues, SRT/
 
 ## Operational Guidance
 
-- If the user starts a clearly new, unrelated task, suggest a fresh session to keep context costs down.
-- Do not suggest that mid-task or for follow-up questions on the same topic.
+- If the user starts a clearly new, unrelated task, suggest a fresh session to keep context costs down; not mid-task.
 - Use the lowest model class that can reliably do the work, and do not use a higher tier for helpers than the main session already has.
-- Legacy backlog tags are capability labels, not fixed model/version requirements:
-  `haiku` means retrieval, audits, or small documentation edits; `sonnet` means
-  scoped implementation and tests; `opus` means concurrency/lifecycle design,
-  hot-path architecture, benchmark attribution, or novel protocol behavior.
-  Match the available model to the task and required evidence; do not infer
-  capability from an obsolete model-name table.
 
 ## Key References
 
-- Overview/setup: `README.md`
-- Current priorities: `docs/current-priorities.md`
+- Documentation index: `docs/README.md`
+- Backlog: `docs/backlog.md`
 - Architecture: `docs/architecture.md`
 - Media pipeline: `docs/media-pipeline.md`
 - Performance: `docs/high-performance-data-path.md`
 - Testing: `docs/testing.md`
 - Concurrency proofing: `docs/concurrency-proofing.md`
+- Assurance roadmap: `docs/assurance-roadmap.md`
 - Agent skills (canonical, agent-neutral): `docs/agent-guidance/skills/`
-- Autonomous quality program: `docs/agent-guidance/quality/README.md`
-- Layering audit skill: `docs/agent-guidance/skills/layering-audit/SKILL.md`
 - Configuration: `docs/configuration.md`
-- Observability: `docs/observability.md`
-- Logging: `docs/logging.md`
+- Observability and logging: `docs/observability.md`
 - API: `docs/api-reference.md`

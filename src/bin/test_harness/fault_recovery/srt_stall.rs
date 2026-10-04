@@ -1,6 +1,6 @@
 //! The `fault.srt-output-stall` mode: two live proofs of the Phase 4
 //! exit-gate criteria for a destination that stops taking data
-//! (`docs/archive/egress/implementation.md`).
+//! (egress migration record, git history).
 //!
 //! **Two different faults, because `SIGSTOP` is not backpressure.** The
 //! original intent of this file was a single test of the

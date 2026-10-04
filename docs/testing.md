@@ -3,7 +3,7 @@
 This is the current verification guide. Start with the smallest gate that can
 prove the changed behavior, then broaden according to the affected boundary.
 The accepted tiering rationale lives in the
-[testing decision record](testing-strategy.md); current commands and policies
+[testing decision record](#why-two-test-tiers); current commands and policies
 live here and in `AGENTS.md`.
 
 ## Contents
@@ -17,6 +17,10 @@ live here and in `AGENTS.md`.
 - [Capability gates](#capability-gates)
 - [Container runtime smoke](#container-runtime-smoke)
 - [SRT egress qualification](#srt-egress-qualification)
+- [Why two test tiers](#why-two-test-tiers)
+- [Stage boundary proof map](#stage-boundary-proof-map)
+- [Frontend boundary proof map](#frontend-boundary-proof-map)
+- [Regression artifacts](#regression-artifacts)
 
 ## Rust test suite
 
@@ -48,8 +52,8 @@ Frontend confidence is intentionally split between TypeScript ownership and
 compiled-bundle smoke coverage. Current invariant coverage by UI contract
 boundary — SSE reconnects, mutation convergence, auth/session, route
 ownership, accessible structure — is tracked in
-[`frontend-boundary-proof-map.md`](frontend-boundary-proof-map.md), the
-frontend counterpart to [`stage-boundary-proof-map.md`](stage-boundary-proof-map.md):
+[frontend boundary proof map](#frontend-boundary-proof-map), the
+frontend counterpart to [stage boundary proof map](#stage-boundary-proof-map):
 
 - `npm run test:frontend` runs the Node-based frontend suites from a temporary
   sourcemapped build of `web/ts/**`, then finishes with a smaller smoke pass
@@ -199,7 +203,7 @@ those assets through `src/test_fixtures.rs` so missing files fail loudly and new
 fixtures are added to one explicit contract.
 
 Historical architecture-regression artifacts are indexed in
-[`regression-artifacts.md`](regression-artifacts.md). The index maps each known
+[regression artifacts](#regression-artifacts). The index maps each known
 failure class to its durable fixture, harness replay command, generated-artifact
 location, or proof gate; generated `.local/artifacts/` run directories remain
 uncommitted.
@@ -343,9 +347,8 @@ generated evidence instead:
 - Rust tests: `cargo test -- --list` and the test runner output;
 - coverage: `npm run test:frontend:coverage` and the repository coverage
   workflow/artifacts;
-- performance and resource evidence: the dated
-  [quality baseline ledger](agent-guidance/quality/baselines.md) and CI
-  artifacts produced by the owning workflow.
+- performance and resource evidence: the commit message of the measured
+  change and CI artifacts produced by the owning workflow.
 
 ## Live integration tests
 
@@ -442,7 +445,7 @@ weaken correctness checks to make a measurement pass, and do not use debug
 binaries for resource or performance conclusions.
 
 For the rationale behind this split, see
-[testing-strategy.md](testing-strategy.md). For protocol-specific execution,
+[why two test tiers](#why-two-test-tiers). For protocol-specific execution,
 use the canonical protocol-test skill or inspect the relevant catalog plan.
 
 ## Capability gates
@@ -494,5 +497,216 @@ the `srt.slow-peer` mode, and the frozen-destination case) and derives the gates
 and rates; `scripts/harness/test_srt_final_qual.py` tests that machinery. The
 `srt.slow-peer` harness mode pauses APPLICATION delivery on one `RawSrtSink`
 receiver (protocol timers and ACK/NAK keep running, unlike a SIGSTOPped peer) and
-requires healthy siblings to keep progressing. Results and method:
-`test/harness/baselines/srt-compio-owner-final/`.
+requires healthy siblings to keep progressing.
+
+## Why two test tiers
+
+Status: accepted and implemented.
+
+This record explains why Restream uses two correctness tiers. It is not the
+command reference; use [Testing](testing.md) to choose and run a gate.
+
+### Decision
+
+Restream has two correctness tiers:
+
+1. **Unit and component tests** run through `cargo test`. They exercise pure
+   logic, deterministic state machines, crafted packets/bytes, and bounded
+   concurrency models without requiring a running service.
+2. **Live tests** start the real `restream` binary, control it through the HTTP
+   API, and publish/read media over real localhost RTMP, SRT, HTTP, and file
+   boundaries.
+
+Benchmarks are a separate measurement workflow, not a third correctness tier.
+
+### Why there is no middle tier
+
+The former “in-process integration” modes called `MediaEngine::new()` directly
+while still using real FFmpeg processes and localhost sockets. They exercised
+the same engine code as live tests but bypassed process startup, API wiring,
+persistence, and reconciliation. Maintaining both shapes duplicated harness
+infrastructure without creating a distinct proof boundary.
+
+An in-memory ingest/egress subsystem was also rejected. Its two useful
+properties already have better homes:
+
+- deterministic malformed, reordered, gapped, or truncated input belongs in
+  unit/component tests near the parser, demuxer, or ring buffer;
+- exact egress assertions belong at a real harness sink receiving the wire
+  output of the running binary.
+
+The result is a clearer choice: prove logic without I/O, or prove the assembled
+system through its public process and protocol boundaries.
+
+### Tier responsibilities
+
+| Concern | Unit/component tier | Live tier |
+|---|---|---|
+| Timestamp math and DTS/PTS rules | Primary proof with synthetic packets | Representative wire round-trip |
+| Parser/demux fault isolation | Crafted bytes and deterministic errors | Process remains healthy during protocol faults |
+| Ring arithmetic and wake/cancel ordering | Unit, property, or loom model | Lifecycle/recovery assertion when externally visible |
+| API, database, and reconciliation | Focused handler/service tests where useful | Real binary controlled through `/api/v1/*` |
+| Protocol framing and interoperability | Pure codec/container helpers | Real RTMP/SRT/HLS/file traffic and readback |
+| Resource shape and throughput | Not a correctness claim | Bench-profile measurement after correctness passes |
+
+The live harness may act as controller, publisher, and sink in one process, but
+the system under test remains the separately spawned `restream` binary. A
+third-party sink such as MediaMTX or FFmpeg is added only when interoperability
+or decode validation is the property being proved.
+
+### Correctness versus measurement
+
+Correctness asks whether a protocol, timestamp, stream selection, lifecycle,
+or recovery contract holds. Measurement asks how much CPU, memory, latency, or
+throughput a known-correct path consumes.
+
+Keep those workflows separate:
+
+- correctness can use normal test profiles and parallelism when isolation is
+  sound;
+- measurement uses bench-profile binaries, fixed fixtures, and serial runs;
+- a faster result never compensates for a weakened correctness oracle;
+- a passing correctness test is not evidence of production-scale capacity.
+
+### Implemented outcome
+
+This testing-tier decision is implemented:
+
+- direct `MediaEngine::new()` harness modes were removed or re-tiered;
+- pure burst, timestamp, parser, and fault properties live in Rust tests;
+- shared child-process, port, fixture, and API helpers drive the real binary;
+- `api-smoke` covers authentication, persistence, and lifecycle without media;
+- mixed live scenarios combine protocol, codec, graph, HLS, and readback
+  assertions instead of spawning a separate pipeline for every property;
+- file-ingest and disconnect/recovery behavior have live modes;
+- benchmarks remain outside the correctness tier model.
+
+Current mode names, scenario composition, and commands are intentionally not
+copied here. The harness catalog and [Testing](testing.md) are the maintained
+sources of truth.
+
+### Ongoing rules
+
+- Add a unit/component test when the invariant can be proved without real I/O.
+- Add or extend a live scenario when the invariant crosses a process, protocol,
+  persistence, or lifecycle boundary.
+- Prefer enriching an existing representative live run over adding another
+  single-purpose end-to-end pipeline.
+- Use checked-in fixtures through `src/test_fixtures.rs`.
+- Keep fault injection close to the parser or state machine unless the fault's
+  externally visible recovery behavior requires the live tier.
+- Treat benchmarks and scale runs as evidence only after the relevant
+  correctness gates pass.
+
+## Stage boundary proof map
+
+This map tracks the proof wall around stage boundaries. The goal is not line
+coverage; it is to prove that packets, lifecycle state, capacity waits,
+cancellation, and diagnostics cross each boundary without losing causality.
+
+### Boundary Matrix
+
+| Boundary | Contract to prove | Current proof | Next confidence target |
+|---|---|---|---|
+| Planner -> stage runtime | Planned `StageKey` and backend policy select the runtime that is registered, rendered in graph/status, and used by outputs. | Graph planner unit tests, backend-policy unit tests, engine terminal-stage tests, HLS/recording planned-key tests, and a property test over generated output mixes proving terminal-stage presence, edge input presence, unique stage keys, and no stale unqualified HEVC video stages. | Add new generated cases when new output protocols or stage kinds are introduced. |
+| Runtime admission -> registry | `ensure_stage` creates exactly one live runtime, reuses live runtimes, replaces cancelled runtimes, and snapshots lifecycle/metrics. | Stage runtime unit tests plus mandatory-gate loom models for transcoder and TS muxer replacement races, including cancelled-stage replacement, concurrent creators, cleanup races, reader registration races, and codec metadata preservation. | No additional generic loom target is currently justified; it would duplicate the production locking rule already modeled by the stage-family replacement suites. |
+| Control runtime -> media executor | Continuous container work progresses independently of control scheduling; dropping a control owner cancels but does not abort media finalization; old HLS cleanup/errors cannot remove or fail a replacement generation; normal file EOF permits another pass. | Executor cancellation/completion tests, blocked-control production tests for shared TS mux/HLS/file demux, HLS owner-abort final-segment and detached-replacement tests, recording owner-abort/writer-failure tests, and file coordinator cancellation/abort child-reaping plus removed/replacement-session cleanup tests in the shared concurrency gate. | No new synchronization primitive: existing ring/queue/stage loom models still cover waits and registry replacement; add a model only if those primitives change. |
+| Source ring -> stage input (refill on the FFmpeg or stdin-writer thread) | Stage input starts at the correct keyframe/preroll point, emits TS bytes only for selected media, records first input once, refreshes parameter sets without awaiting engine state, exits on EOS/cancel, reports refilled bytes as queue depth, and an external child is reaped within the cancel grace even when its stdin writer is blocked. | Stage input codec-hint unit test, finite source-stage tests, source-stage chunking proptest, ring migration proptests/loom, filtered-packet first-input suppression, filtered-packet plus video EOS completion tests, `queue_refill_pulls_the_ring_on_the_reading_thread_until_eos`, `queue_refill_stops_on_cancel_while_waiting`, `refilled_batch_counts_toward_queue_depth`, `cancelled_reap_releases_a_writer_blocked_on_a_stalled_child`, and the `try_video_sequence_header` check in the file-ingest header test. | Add reconnect parameter-set refresh scenarios if a future reconnect bug appears. |
+| Stage input -> backend | External and internal FFmpeg receive the same `FfmpegStagePlan` and startup policy; capacity waits are lifecycle-visible and cancellation-aware. | `build_ffmpeg_stage_plan` unit tests (`stage_runtime.rs`) proving one plan is constructed per `StageKind` and carries startup policy for both backends; `tests/transcoder.rs` integration coverage proving the external path (`build_stage_ffmpeg_args`) and internal path (`run_ffmpeg_transcode_with_scale`) each produce correct output from that plan; external capacity unit/harness evidence. | Table-test each `StageKind` into `FfmpegStagePlan` plus backend output equivalence for internal/external paths. |
+| Backend -> output normalizer | Every backend emits through the normalizer; output timestamps are stage-local, non-negative, per-stream monotone, parameter sets are cached, first output is recorded once, and metrics match emitted packets. | Stage timeline unit tests, normalizer unit tests for first output, keyframe inference, split HEVC parameter sets, and a proptest over arbitrary interleaved audio/video packets asserting ring-visible timestamp/metric invariants. | Extend the property to generated split parameter-set/keyframe combinations if a future bug appears there. |
+| Audio router boundary | Selected tracks, remap/downmix operations, prebuffer replay, EOS, and lifecycle cleanup preserve packet order and selected-track intent. | Audio-router unit tests for selected tracks, prebuffer replay, multi-track routing, stage sharing, and a property test proving selected-track metadata and packet reindexing stay in lockstep over generated interleaved audio/video packets. | Add a property for remap/downmix only if those operations become router-owned instead of FFmpeg-owned. |
+| HLS segmenter boundary | Segmenter uses the planned protocol stage key, does not publish segments before init, exposes keyframe/no-segment states, and cleans runtime ownership. | HLS planned-key tests, fMP4 proptests, HLS publish loom, uploader terminal-stage tests. | Unit-test lifecycle/alert mapping for keyframe wait and no-segment states from the same snapshot. |
+| Recording writer boundary | Recording metadata identity is persisted before failures, lifecycle is stage-owned, writer cleanup is visible, and media-library reads never rely on filename tokens. | Recording metadata tests, mixed harness recording identity proof, recording stage runtime ownership tests, and `recording_media_writer_failure_reports_failed_without_finalization` proving metadata survives writer failure. | Extend service-level failure coverage only when writer/finalization semantics change. |
+| Runtime snapshot -> status/graph/alerts | Non-producing stage phases surface `blockedBy`, backend/capacity details, graph lifecycle details, diagnostics context, and alerts consistently. | Engine status tests, graph/status API tests, Phase 12 alert unit tests, and a table-driven stage phase contract that compares status JSON, graph node details, and alert classification for every non-producing `StagePhase`. | Add endpoint-level regression only if the serializer boundary changes. |
+| Cancel/teardown -> observable cleanup | Cancellation wakes waiters, stops stages, removes runtime registry entries, and leaves operator-visible status causal rather than unknown. | AVIO/TS ring/ring migration loom, lifecycle guard tests, fault harness evidence, and the shared `cargo xtask concurrency fast` gate that keeps those loom models plus status/recovery contracts mandatory. | No uncovered wake/cancel interleaving remains in the current boundary map; add loom only with a new production primitive or stage-family registry shape. |
+
+### Priority Order
+
+All current priority targets are complete. New proof work should start by
+adding a row to this map for the new stage family, protocol boundary, or
+runtime primitive, then choose the lowest proof layer that catches the bug.
+
+## Frontend boundary proof map
+
+This map is the frontend counterpart to
+[stage boundary proof map](#stage-boundary-proof-map). The goal is not
+line coverage; it is to prove that operator-visible UI contracts — stream
+reconnects, mutation convergence, session/auth redirects, route ownership,
+and accessible structure — hold across the boundaries where the dashboard
+talks to the backend, to real browser APIs, and to the operator.
+
+### Boundary Matrix
+
+| Boundary | Contract to prove | Current proof | Next confidence target |
+|---|---|---|---|
+| API client -> backend routes | Every dashboard read/mutation hits a canonical `/api/v1` route and method; multipart upload shape stays stable. | `test/frontend/frontend-api-contract.test.mjs`, plus the cross-stack `scripts/check/api-drift.mjs` gate run by `cargo xtask api-contract`. | None open; this is the most mature boundary — the only one with a hard-failing CI gate rather than an advisory test run. |
+| SSE/log-stream reconnect | One connection per filter/scope, paused while the tab is hidden, resumed from the last event id on visibility, replaced (not duplicated) when scope changes, and a superseded source's events never reach the caller. | `frontend-log-stream.test.mjs`, `frontend-status-stream.test.mjs`, `frontend-history-stream.test.mjs`, `frontend-overview-activity-stream.test.mjs` for scripted scenarios; `frontend-log-stream-interleaving.property.test.mjs` model-checks the staleness guard (`source !== openedSource`) against randomized `sync()`/`emit()` interleavings, the frontend analog of a loom test. | The interleaving proof covers `core/log-stream.ts` only; `frontend-status-stream.test.mjs`, `frontend-history-stream.test.mjs`, and `frontend-overview-activity-stream.test.mjs` still rely on scripted scenarios for their own reconnect guards. |
+| Dashboard runtime polling and mutation convergence | Output/pipeline start, stop, edit, and delete mutations optimistically update the UI and converge with the shared runtime poller; nothing starts a second poller of its own. | `test/frontend/dashboard-contract/output-mutations.test.mjs`, `pipeline-mutations.test.mjs`, `runtime-modes.test.mjs`, `runtime-polling.test.mjs`, `frontend-publisher-health-contract.test.mjs`. | None open. |
+| Auth/session boundary | Unauthenticated requests redirect to `/login`; a successful login reaches the dashboard and preserves the intended destination. | `test/frontend/frontend-browser-dom.spec.ts` (login flow, audio-track picker, HLS retry, mobile overflow). | None open. |
+| HLS playback and fatal-error retry | The managed HLS controller waits for manifest readiness, destroys and recreates the player on a fatal error, supports alternate-audio-track switching, and clears state on stage teardown. | `test/frontend/hls-player.spec.ts` (real browser playback), `npm run test:frontend:browser-dom` (audio-track picker), backend `cargo test hls_fmp4` and `cargo bench --bench hls_fmp4_cost` for the segment/publication side. | None open; see `docs/testing.md`'s fMP4 preview section for the full ladder. |
+| Dashboard route ownership and navigation history | Each mode route (overview, pipeline, media, settings, status, incidents, telemetry) is rendered by the v2 owner with no leftover v1 fallback; browser back/forward is one predictable history step per navigation; primary tab focus survives background refresh. | `test/frontend/redesign/seed-navigation.spec.ts`, `seed-media-route.spec.ts`, `seed-settings-route.spec.ts`, `seed-status-route.spec.ts`, `seed-surfaces.spec.ts`, `frontend-ops-navigation.test.mjs`, `frontend-build-smoke.test.mjs`. | None open. |
+| Accessible structure | Heading outline stays in true reading order and operator-clean across default routes, interactive controls expose accessible names, no serious/critical axe violations, and keyboard focus reaches primary actions. | `test/frontend/redesign/visual-accessibility.spec.ts`. | The strict route-heading-order assertion only covers Overview, Operate, Inspect, and Monitor; extend to Media/Settings/Status/Incidents/Telemetry if a heading-order regression ever surfaces there. |
+| Scale and large-fleet rendering | The dashboard stays responsive and collapses repeated entries (egress leaves, non-egress branch stages) once pipeline/output counts get large. | `test/frontend/redesign/seed-scale.spec.ts`, `frontend-pipeline-workspace.test.mjs` (processing-graph collapse cases). | None open. |
+
+### Current Mandatory Surfaces
+
+These frontend tests must never regress silently. Touching the boundary they
+cover requires an equal or stronger replacement proof in the same change,
+mirroring [`concurrency-proofing.md`](concurrency-proofing.md)'s backend
+list:
+
+- `test/frontend/frontend-api-contract.test.mjs`
+- `test/frontend/dashboard-contract/output-mutations.test.mjs`,
+  `pipeline-mutations.test.mjs`, `runtime-modes.test.mjs`,
+  `runtime-polling.test.mjs`
+- `test/frontend/frontend-publisher-health-contract.test.mjs`
+- `test/frontend/frontend-log-stream.test.mjs`,
+  `frontend-log-stream-interleaving.property.test.mjs`,
+  `frontend-status-stream.test.mjs`, `frontend-history-stream.test.mjs`
+- `test/frontend/hls-player.spec.ts`
+- `test/frontend/frontend-browser-dom.spec.ts`
+- `test/frontend/redesign/seed-navigation.spec.ts`,
+  `seed-media-route.spec.ts`, `seed-settings-route.spec.ts`,
+  `seed-status-route.spec.ts`
+- `test/frontend/redesign/visual-accessibility.spec.ts`
+- `test/frontend/frontend-build-smoke.test.mjs`
+
+### Priority Order
+
+All current priority targets are complete. New proof work should start by
+adding a row to this map for the new UI surface, stream contract, or route
+boundary, then choose the lowest layer that can catch the bug (TypeScript
+unit -> fake-DOM scenario matrix -> browser-native Playwright -> full
+`test:e2e`), per `docs/testing.md`'s layered UI strategy.
+
+## Regression artifacts
+
+This index preserves the historical failure evidence that drove the first
+architecture phases. Generated run directories stay under `.local/artifacts/` and
+are not committed; the durable guardrail is the checked-in fixture, harness
+mode, or proof gate listed here.
+
+### Historical failure classes
+
+| Historical failure class | Preserved evidence / replay path | Guardrail |
+|---|---|---|
+| External H.265 capacity or zero-output stall | HEVC checked-in fixtures: `test/fixtures/transport/correctness-h265.ts`, `test/fixtures/transport/bench-h265-1_5m.ts`, `test/fixtures/transport/bench-h265-1_5m-2a.ts`, plus mixed HEVC modes such as `mixed.live.srt.h265.a1.bf2` and `mixed.live.srt.h265.a2.bf2`. | Dependency-aware health and alert tests cover `waitingForCapacity`; `cargo xtask concurrency fast` includes external stage liveness checks. |
+| Low-CPU external-capacity collapse | Resource sweep artifacts are generated under `.local/artifacts/resource-sweep/`; authoritative CSV baselines are documented in `docs/resource-sweep.md`. | `target/bench/test_harness resource-sweep` and `docs/matrix-resource-constraints.md` preserve the capacity/RSS contract. |
+| Internal-transcoder timestamp discontinuity | `tests/transcoder.rs` and `tests/av_sync.rs` use checked-in MPEG-TS fixtures through `src/test_fixtures.rs`. | `cargo xtask concurrency fast` runs chunked internal-transcoder timestamp tests and source-stage proptests. |
+| Recording `.tmp.mp4` or wrong-case media selection | Recording metadata tests in `tests/api.rs` and mixed harness playback tests reject temporary outputs and metadata-less filename fallback. | `cargo test media_recording_identity --bin test_harness` and API media-library metadata tests preserve recording identity by `pipelineId`/`recordingId`. |
+
+### Adding evidence
+
+When adding a new historical failure artifact, prefer one of these durable
+forms:
+
+- a checked-in media fixture registered in `src/test_fixtures.rs`;
+- a focused unit/integration test that recreates the failure from an existing
+  fixture;
+- a harness mode that writes `manifest.json` and `results.jsonl` under
+  `.local/artifacts/<run-id>/`;
+- a documented benchmark or sweep baseline with its replay command.
+
+Do not commit ad-hoc generated run directories. If a generated artifact is
+needed for triage, store it under `.local/artifacts/<run-id>/` and reference the
+run id from the issue, PR or commit.

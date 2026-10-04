@@ -154,7 +154,7 @@ Per output, roughly: RTMP ~0.13%, RTMPS ~0.22%, HLS PUT ~0.10%, SRT ~2.9% of
 a core (SRT at distinct-enough destinations; see the sink-port note in
 [Run it](#run-it)). Past its limit SRT degrades for many destinations at
 once rather than a few. SRT's per-output cost is srt-rs per-packet protocol
-work; see the [media copy audit](media-copy-audit.md#srt-rs-backlog-evidence-backed).
+work.
 Every CPU figure includes the harness's per-second health and telemetry
 polling ([runtime crossings](runtime-crossings.md) O2).
 

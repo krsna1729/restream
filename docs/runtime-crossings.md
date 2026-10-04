@@ -7,9 +7,8 @@ crossing buys ownership, isolation or backpressure worth its cost),
 **fixed** (a cheaper form landed), or **measure** (plausibly material at
 scale; the WI8 instrument that decides it is named), or **interim** (bounded
 and safe, but continuous media work on the Tokio control runtime: boundedness
-proves safety, not that Tokio is the right steady-state executor; WI11 in
-`docs/srt-compio-roadmap.md` moves it). Updated as crossings change;
-`docs/srt-compio-roadmap.md` WI8 owns the measurement programme.
+proves safety, not that Tokio is the right steady-state executor; the work is
+moving to the owner that publishes the feed). Updated as crossings change.
 
 Execution contexts:
 

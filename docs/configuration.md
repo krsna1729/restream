@@ -177,8 +177,7 @@ construction. The runtime deliberately does not pin individual thread families
 itself. An in-process affinity scanner was prototyped and rejected — it did not
 reproduce the external-partition win even with masks proven applied, because it
 cannot hold a partition against the runtime's continuous thread turnover the way
-a process-level cpuset does (see
-`docs/agent-guidance/quality/baselines.md` § Q-012 decision).
+a process-level cpuset does.
 
 The runtime also exposes its resolved Tokio sizing in `/api/v1/engine/health`
 and the engineer telemetry host-settings table. `RESTREAM_TOKIO_WORKER_THREADS`
@@ -471,7 +470,7 @@ workload-dependent requirements. Record them with scale artifacts; runtime
 health exposes process limits, affinity, cgroup quota, and memory.
 
 The host-specific SRT buffer and receive-budget A/B measurements are preserved
-in [`srt-tokio-ab-knobs-2026-09-07.md`](archive/quality/srt-tokio-ab-knobs-2026-09-07.md);
+in `srt-tokio-ab-knobs-2026-09-07.md`;
 they are diagnostic evidence, not portable defaults or shard-policy inputs.
 
 

@@ -48,9 +48,7 @@ so the numbers describe the shipped datapath. `packet-contract.json` carries
 the run's git SHA/dirty state and workload/peer environment, one summary per
 `(scenario, output count)` rung, and a `validity` verdict per sample and per
 rung (`healthy`, `contaminated` when the host or peer dropped datagrams, or
-`invalid` when a participant is missing, stalled, retrying or faulted). See
-[the SRT/Compio roadmap](srt-compio-roadmap.md) §10 for the full
-metric-to-source table.
+`invalid` when a participant is missing, stalled, retrying or faulted).
 
 The sweep combines:
 
@@ -169,6 +167,7 @@ RESOURCE_SWEEP_LIFECYCLE=cumulative ./scripts/harness/run.sh resource-sweep
 
 - [Current Authoritative Snapshot (June 28, 2026)](#current-authoritative-snapshot-june-28-2026)
 - [Profiling Workflow](#profiling-workflow)
+- [Matrix resource constraints](#matrix-resource-constraints)
 
 ## Current Authoritative Snapshot (June 28, 2026)
 
@@ -275,3 +274,77 @@ pkill -9 -x ffmpeg
 pkill -9 -x restream
 pkill -9 -x mediamtx
 ```
+
+## Matrix resource constraints
+
+This page defines the resource boundary for live matrix runs. It intentionally
+does not duplicate current harness modes, queue values, or measured totals.
+
+### Scope
+
+Live matrices exercise the compiled Rust server with publishers, destinations,
+and optional FFmpeg/MediaMTX peers. They are integration and measurement work,
+not production capacity certification. The harness owns scenario construction;
+the production runtime owns admission and bounded media storage.
+
+### Resource owners
+
+| Resource | Current owner |
+|---|---|
+| Cargo/build parallelism | `.cargo/config.toml` (`jobs = -1`); no host-wide build serialization |
+| Tokio scheduler sizing | `src/main.rs` using values parsed by `src/config.rs` |
+| Packet, MPEG-TS, and AVIO queue bounds | `src/config.rs` and their structures under `src/media/` |
+| RTMP listener and connection admission | `src/media/rtmp.rs` and runtime configuration |
+| SRT sender admission and muxer sharding | `src/media/srt*.rs` and runtime configuration |
+| External FFmpeg child admission/thread hints | `src/config.rs` and `src/media/external_transcoder.rs` |
+| Scenario processes, fixtures, artifacts, and cleanup | `src/bin/test_harness/` and `test/harness/` |
+| Host/container cgroup, CPU, NUMA, and memory limits | The environment that launches the harness |
+
+The build limiter does not impose runtime cgroups on an already-built harness.
+Likewise, runtime semaphores bound specific server resources but do not cap
+MediaMTX, publisher FFmpeg processes, or the entire process tree.
+
+### Harness boundary
+
+MediaMTX is used only where a scenario needs an independent protocol peer or
+sink. FFmpeg may act as a fixture publisher, reader, or external transform
+child. These are test topology components; neither replaces the Rust server's
+production transport ownership.
+
+Fixture resolution, process cleanup, artifact retention, and supported modes
+are executable behavior. Consult the harness entry point and
+[Testing](testing.md) instead of copying their lists here.
+
+The harness deliberately avoids killing unrelated media processes. In a shared
+host or worktree session, establish process ownership and check for running builds
+(`pgrep -a -x cargo`) before starting a heavy run.
+
+### Running a bounded matrix
+
+1. Build the required profile. If the mode consumes `target/bench/`, use
+   `cargo xtask build-bench`.
+2. Choose the smallest harness mode that proves the changed protocol or
+   lifecycle boundary.
+3. Apply whole-process limits outside the harness when the experiment requires
+   a cgroup or container boundary.
+4. Capture the harness summary and retained artifacts needed to explain a
+   failure; do not retain routine high-volume output by default.
+5. Escalate to a broader matrix only after the focused mode passes.
+
+Environment variables recognized by the harness and server are parsed by their
+respective source owners. Avoid undocumented combinations in automation: a
+misspelled variable otherwise creates a false sense of constraint.
+
+### Interpreting results
+
+Record the workload shape, build identity, fixture, host limit, and whether
+publisher/sink resources are included. Separate these conclusions:
+
+- protocol correctness under the exercised topology;
+- recovery behavior under the injected fault;
+- directional CPU, memory, queue, or throughput evidence;
+- a deployment recommendation supported across representative hosts.
+
+Only the first two can usually be established by a single bounded run. Record
+repeatable results in the commit that makes the change, not in this
+contract.

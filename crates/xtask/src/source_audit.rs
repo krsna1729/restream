@@ -1,5 +1,5 @@
 //! Source-wide audit: layering, god-file growth, un-centralized environment
-//! variables and a few removed-API guardrails. `ARCHITECTURE_GUARDRAILS.md`
+//! variables and a few removed-API guardrails. `docs/architecture.md`
 //! points here as the authority.
 
 use std::path::{Path, PathBuf};
