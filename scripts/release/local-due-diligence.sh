@@ -68,9 +68,9 @@ sbom="${RESTREAM_RELEASE_DIR:-dist}/restream-${VERSION}.sbom.cdx.json"
 cargo fmt --all --check
 scripts/release/prepare-build-tree.sh
 npm run test:frontend
-scripts/check/api-contract.sh
-scripts/check/test-hygiene.sh
-scripts/check/fixture-discipline.sh
+cargo xtask api-contract
+cargo xtask test-hygiene
+cargo xtask fixture-discipline
 
 if [[ "$SKIP_HARNESS" -eq 0 ]]; then
     BENCH_BUILD="${BENCH_BUILD:-if-needed}" \

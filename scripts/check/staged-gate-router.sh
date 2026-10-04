@@ -309,15 +309,15 @@ for file in "${changed_files[@]}"; do
     fi
 
     if is_lifecycle_file "$file"; then
-        add_follow_up_gate "scripts/check/concurrency/contract.sh"
+        add_follow_up_gate "cargo xtask concurrency contract"
     fi
 
     if is_api_contract_file "$file"; then
-        add_follow_up_gate "scripts/check/api-contract.sh"
+        add_follow_up_gate "cargo xtask api-contract"
     fi
 
     if is_fixture_or_harness_file "$file"; then
-        add_follow_up_gate "scripts/check/fixture-discipline.sh"
+        add_follow_up_gate "cargo xtask fixture-discipline"
     fi
 
     if is_hot_path_file "$file"; then
@@ -333,12 +333,12 @@ for file in "${changed_files[@]}"; do
     fi
 
     if is_source_audit_scope_file "$file"; then
-        add_auto_gate "scripts/check/source-audit.sh"
+        add_auto_gate "cargo xtask source-audit"
     fi
 done
 
 if diff_contains_concurrency_change; then
-    add_follow_up_gate "scripts/check/concurrency/fast.sh"
+    add_follow_up_gate "cargo xtask concurrency fast"
 fi
 
 for file in "${rust_files[@]}"; do
@@ -434,6 +434,6 @@ if [[ -n "${auto_gates["node scripts/check/docs.mjs"]+x}" ]]; then
     run_gate node scripts/check/docs.mjs
 fi
 
-if [[ -n "${auto_gates["scripts/check/source-audit.sh"]+x}" ]]; then
-    run_gate scripts/check/source-audit.sh
+if [[ -n "${auto_gates["cargo xtask source-audit"]+x}" ]]; then
+    run_gate cargo xtask source-audit
 fi

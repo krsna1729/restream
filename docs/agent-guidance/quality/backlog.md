@@ -90,7 +90,7 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   `src/media/egress/backends/rtmp_shard_resolve_runtime.rs`, plus the shard
   test modules for both backends.
 - Gates: `cargo test --lib`;
-  `scripts/check/concurrency/contract.sh`; standard fmt/clippy/source-audit.
+  `cargo xtask concurrency contract`; standard fmt/clippy/source-audit.
 - Context: RTMP already calls `connect_fabric_tcp_egress_socket` directly, so
   SRT's connector generic is asymmetric residue; the completion-source trait
   is duplicated mock-only architecture in *both* backends. Symmetry between
@@ -487,8 +487,8 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 
 ### Q-007 [groom] [sonnet] Diff the stage proof map against the fast gate
 - Goal: every current rule claimed in `docs/stage-boundary-proof-map.md`
-  mapped to its enforcement in `scripts/check/concurrency/fast.sh` /
-  `scripts/check/concurrency/contract.sh`; uncovered rules filed as
+  mapped to its enforcement in `cargo xtask concurrency fast` /
+  `cargo xtask concurrency contract`; uncovered rules filed as
   `[proof]` items (tier per rule complexity).
 - Files: read-only; output to backlog + journal.
 - Gates: none (grooming).
@@ -508,7 +508,7 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   to reflect reality.
 - Files: per the roadmap step; plus `docs/layering-roadmap.md`.
 - Gates: scoped `cargo test` for the touched area;
-  `./scripts/check/api-contract.sh` if contract surface moved; standard
+  `cargo xtask api-contract` if contract surface moved; standard
   quality-loop gates.
 - Context: known cross-layer flows still open: planner→media backend parsing,
   runtime core emitting API-shaped JSON, protocol handlers reading raw SQL
@@ -575,7 +575,7 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   `Shared` arm, `drive_shared_srt_egress`), `src/media/srt/egress_engine.rs`
   (`send_pending`'s fragment loop), `src/media/srt/tokio_egress/shared.rs`.
 - Gates: `cargo test --lib srt`;
-  `scripts/check/concurrency/contract.sh`; `benches/matrix_throughput.rs`
+  `cargo xtask concurrency contract`; `benches/matrix_throughput.rs`
   before/after; MSR shared-muxer ladder for the density claim.
 - Context: `RustSrtSocket::send`'s `Shared` arm calls `shared.drive(...)`
   after each successful `send_shared`, and `SrtEgressEngine::send_pending`

@@ -187,8 +187,8 @@ Hot paths include `src/media/`, ring buffers, mux/demux loops, AVIO queues, SRT/
 - Prefer checked-in fixtures over inline media generation for tests, benches, and harness runs.
 - Test-only code may adapt or observe production code, never re-implement it: inject fakes through an existing type parameter or constructor and call the production function, rather than adding a `#[cfg(test)]` sibling that repeats its logic.
 - Route dashboard API calls through `web/ts/core/api.ts`; update contract tests when routes or payloads change.
-- `scripts/check/test-hygiene.sh` runs in CI (Rust unit hygiene and fixtures); suppress expected noise at the test helper, not in CI.
-- For concurrency or thread-hop changes, extend `scripts/check/concurrency/fast.sh` or explain why the existing proof gate already covers the change.
+- `cargo xtask test-hygiene` runs in CI (Rust unit hygiene and fixtures); suppress expected noise at the test helper, not in CI.
+- For concurrency or thread-hop changes, extend the step tables in `xtask/src/concurrency.rs` (`cargo xtask concurrency fast`) or explain why the existing proof gate already covers the change.
 - If teardown or recovery semantics change, update the live harness assertion and the operator-visible status contract in the same change.
 - Gate selection by files touched: see the Inner Loop table above.
 - Scale and capacity runs are performance measurement and stay local: `scripts/harness/capacity-ramp.sh`, serially, on an idle host.

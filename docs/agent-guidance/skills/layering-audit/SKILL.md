@@ -32,7 +32,7 @@ Stop when another split adds wrappers or navigation without clarifying ownership
 Avoid endpoint-local CRUD wrappers, compatibility facades that recreate coupling,
 and hot-path dispatch/channel hops introduced solely for layering.
 
-For size-driven work, `scripts/check/source-audit.sh` is authoritative: Rust
+For size-driven work, `cargo xtask source-audit` is authoritative: Rust
 warns at 800 lines and fails above 999; frontend TypeScript also caps at 999.
 Do not aim for the cap. Split by behavior/ownership, including tests, and keep
 new extractions below the warning band. Reduce existing oversize pressure
@@ -41,7 +41,7 @@ without growing other oversized files or weakening the gate.
 ## Verification
 
 Keep a boundary move behavior-preserving and run focused tests for every moved
-responsibility, then `scripts/check/source-audit.sh`. Apply AGENTS.md contract,
+responsibility, then `cargo xtask source-audit`. Apply AGENTS.md contract,
 frontend, concurrency, and benchmark gates to the actual changes.
 
 For MCP/agent feature boundaries, run the roadmap's negative feature-matrix

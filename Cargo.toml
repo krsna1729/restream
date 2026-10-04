@@ -9,6 +9,7 @@ repository = "https://github.com/krsna1729/restream"
 
 [workspace]
 resolver = "3"
+members = ["xtask"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }

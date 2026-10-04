@@ -14,9 +14,9 @@ mode, or proof gate listed here.
 
 | Historical failure class | Preserved evidence / replay path | Guardrail |
 |---|---|---|
-| External H.265 capacity or zero-output stall | HEVC checked-in fixtures: `test/fixtures/transport/correctness-h265.ts`, `test/fixtures/transport/bench-h265-1_5m.ts`, `test/fixtures/transport/bench-h265-1_5m-2a.ts`, plus mixed HEVC modes such as `mixed.live.srt.h265.a1.bf2` and `mixed.live.srt.h265.a2.bf2`. | Dependency-aware health and alert tests cover `waitingForCapacity`; `scripts/check/concurrency/fast.sh` includes external stage liveness checks. |
+| External H.265 capacity or zero-output stall | HEVC checked-in fixtures: `test/fixtures/transport/correctness-h265.ts`, `test/fixtures/transport/bench-h265-1_5m.ts`, `test/fixtures/transport/bench-h265-1_5m-2a.ts`, plus mixed HEVC modes such as `mixed.live.srt.h265.a1.bf2` and `mixed.live.srt.h265.a2.bf2`. | Dependency-aware health and alert tests cover `waitingForCapacity`; `cargo xtask concurrency fast` includes external stage liveness checks. |
 | Low-CPU external-capacity collapse | Resource sweep artifacts are generated under `.local/artifacts/resource-sweep/`; authoritative CSV baselines are documented in `docs/resource-sweep.md`. | `target/bench/test_harness resource-sweep` and `docs/matrix-resource-constraints.md` preserve the capacity/RSS contract. |
-| Internal-transcoder timestamp discontinuity | `tests/transcoder.rs` and `tests/av_sync.rs` use checked-in MPEG-TS fixtures through `src/test_fixtures.rs`. | `scripts/check/concurrency/fast.sh` runs chunked internal-transcoder timestamp tests and source-stage proptests. |
+| Internal-transcoder timestamp discontinuity | `tests/transcoder.rs` and `tests/av_sync.rs` use checked-in MPEG-TS fixtures through `src/test_fixtures.rs`. | `cargo xtask concurrency fast` runs chunked internal-transcoder timestamp tests and source-stage proptests. |
 | Recording `.tmp.mp4` or wrong-case media selection | Recording metadata tests in `tests/api.rs` and mixed harness playback tests reject temporary outputs and metadata-less filename fallback. | `cargo test media_recording_identity --bin test_harness` and API media-library metadata tests preserve recording identity by `pipelineId`/`recordingId`. |
 
 ## Adding evidence

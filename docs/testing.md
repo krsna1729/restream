@@ -23,13 +23,13 @@ live here and in `AGENTS.md`.
 Run the repo gate:
 
 ```sh
-./scripts/check/test-hygiene.sh
+cargo xtask test-hygiene
 ```
 
 For fixture-first media discipline:
 
 ```sh
-./scripts/check/fixture-discipline.sh
+cargo xtask fixture-discipline
 ```
 
 For a plain full-suite run without the hygiene scan:
