@@ -321,6 +321,14 @@ async fn owner_stamps_receive_quality_and_stops_sampling_retired_peers() {
             Some(sample) = handle.telemetry.recv() => samples.push(sample),
         }
     }
+    // Events and telemetry travel on separate bridges, so a sample the Owner
+    // took before retiring the peer can arrive just after the Disconnected
+    // event. Collect those for a grace far shorter than the sampling interval;
+    // anything observed later is a sample of a retired peer.
+    let grace_end = tokio::time::Instant::now() + Duration::from_millis(200);
+    while let Ok(Some(sample)) = tokio::time::timeout_at(grace_end, handle.telemetry.recv()).await {
+        samples.push(sample);
+    }
     let _ = caller.await;
     let peer = peer.expect("the publisher connected");
     assert!(disconnected, "the publisher's disconnect reached Tokio");
