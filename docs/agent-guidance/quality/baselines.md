@@ -501,7 +501,7 @@ path, and with it set the ceiling moves to the receiver instead.
 | compio, `rps_cpus` set on the peer queue | 172 554 | 1.817 | — | receiver-limited |
 | io-uring, `rps_cpus` set | 146 420 | 1.541 | — | receiver-limited |
 
-**TX-only lane (`scripts/harness/dummy-lane.sh`, disposable dummy netdev, no peer,
+**TX-only lane (`scripts/harness/dummy-lane.sh`, since removed; see git history; disposable dummy netdev, no peer,
 no receiver process).** The netdev's own `tx_packets`/`tx_bytes` reconcile with the
 sender's completions one-for-one (window slack allowed), which is what makes this
 lane usable for attribution at all; a device whose counters cannot account for the

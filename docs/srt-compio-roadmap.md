@@ -1217,7 +1217,7 @@ above, not a threshold invented for retransmissions.
 Status: DONE at `d6145413` — the current-host substrate characterization is
 recorded and the program moves on. Two single-host lanes exist: the veth/CPU-partitioned lane
 (`scripts/harness/veth-topology.sh`, end-to-end, receiver in a namespace) and a
-TX-only lane (`scripts/harness/dummy-lane.sh`, disposable dummy netdev, no peer,
+TX-only lane (`scripts/harness/dummy-lane.sh`, since removed; see git history; disposable dummy netdev, no peer,
 no receiver process). Harness mode `substrate-pps` runs three arms on exactly one
 pinned sender CPU — `sendto` (blocking `libc::sendto` control), `compio`, and a
 native `io_uring` ring with `SUBSTRATE_REAP_MODE=sliding|window` — with an explicit
@@ -1932,25 +1932,11 @@ Run each requested shard count `1, 2, 3, 4` over this ladder only:
 10, 20, 30, 40, 50, 60, 80 outputs
 ```
 
-The bounded runner is:
-
-```sh
-scripts/harness/wi37-capacity.sh
-```
-
-Use `WI37_SHARDS=1,2,3,4` and `WI37_FANOUTS=...` to select a resumable subset.
-Set `WI37_RESUME=1` to skip only a complete artifact whose contract matches the
-current git revision, feature build SHA, topology, and cell configuration.
-Mismatched or interrupted cells are written below `attempt-*`; earlier
-artifacts are never overwritten.
-
-Summarize the retained cells and fit provisional service demand with:
-
-```sh
-scripts/harness/wi37-capacity-analysis.py .local/artifacts/wi37-capacity \
-  --provenance .local/artifacts/wi37-capacity/provenance.json \
-  --out .local/artifacts/wi37-capacity/summary.json
-```
+The bounded runner was `scripts/harness/wi37-capacity.sh`, with
+`scripts/harness/wi37-capacity-analysis.py` fitting provisional service demand
+from the retained cells. Both were removed once the qualification finished;
+the results are in `test/harness/baselines/wi37-current-host/`, and git history
+has the runners (`WI37_SHARDS`, `WI37_FANOUTS`, `WI37_RESUME`).
 
 The analysis consumes only artifacts whose sibling `contract.json` matches the
 explicit provenance selection. It retains every matching attempt; each logical
