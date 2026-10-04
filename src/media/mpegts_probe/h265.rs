@@ -88,9 +88,8 @@ pub(in crate::media::mpegts) fn parse_sps(sps: &[u8], meta: &mut VideoMeta) -> O
             sub_layer_profile_present[i] = reader.read_bits(1)? == 1;
             sub_layer_level_present[i] = reader.read_bits(1)? == 1;
         }
-        if max_sub_layers < 8 {
-            reader.skip((8 - max_sub_layers) * 2)?;
-        }
+        // reserved_zero_2bits for i = sps_max_sub_layers_minus1 .. 7 (H.265 7.3.3).
+        reader.skip((9 - max_sub_layers) * 2)?;
         for i in 0..(max_sub_layers - 1) as usize {
             if sub_layer_profile_present[i] {
                 reader.skip(88)?; // profile info
