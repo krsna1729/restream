@@ -87,6 +87,9 @@ pub enum ProtocolSpec {
     Srt { url: String },
     /// Discard prepared media while exercising the common fabric path.
     Sink,
+    /// HLS segments and playlists PUT to an HTTP/HTTPS ingest (YouTube,
+    /// Akamai or any FFmpeg-compatible origin); `url` is the playlist URL.
+    HlsPut { url: String },
     Pipeline {
         target_pipeline_id: String,
         target_input_id: String,
@@ -235,7 +238,10 @@ mod tests {
                 assert_eq!(target_pipeline_id, "pipe-target");
                 assert_eq!(target_input_id, "input-backup");
             }
-            ProtocolSpec::Rtmp { .. } | ProtocolSpec::Srt { .. } | ProtocolSpec::Sink => {
+            ProtocolSpec::Rtmp { .. }
+            | ProtocolSpec::Srt { .. }
+            | ProtocolSpec::Sink
+            | ProtocolSpec::HlsPut { .. } => {
                 panic!("pipeline protocol spec should keep recirculation target identity")
             }
         }

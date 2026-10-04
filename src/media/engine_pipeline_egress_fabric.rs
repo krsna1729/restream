@@ -59,7 +59,7 @@ impl MediaEngine {
             let wakes = subscribe_fabric_wakes(
                 "pipeline",
                 feed_id.clone(),
-                feed,
+                feed.publication_ring().publication_subscribers(),
                 runtime.feed_wake_handles(),
             );
 

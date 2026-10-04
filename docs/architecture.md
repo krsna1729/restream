@@ -160,8 +160,11 @@ behavior remains fail-closed.
 Fixed shard ownership, explicit per-visit and completion budgets, bounded
 queues/buffers, and generation-safe lifecycle handling are required. Persistent
 one-shot receive/write workers are the current RTMP egress baseline; provided
-buffer rings and multishot I/O remain optional mechanisms. HLS PUT remains on
-the Tokio control runtime; continuous FFmpeg pipe input/output uses dedicated
+buffer rings and multishot I/O remain optional mechanisms. HLS PUT runs on
+the Tokio control runtime (Reqwest) by default; `RESTREAM_HLS_PUT_FABRIC=1`
+moves it onto egress-fabric shards, with the same upload policy
+(`media/hls/upload_policy.rs`), pending a measured comparison. Continuous
+FFmpeg pipe input/output uses dedicated
 threads or the media runtime. Codec work never moves to the I/O reactors.
 WI5B source convergence is in local verification; real-media, fault, hosted,
 and container acceptance remain open.

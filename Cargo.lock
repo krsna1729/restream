@@ -2569,6 +2569,7 @@ dependencies = [
  "flume",
  "futures-util",
  "http-body-util",
+ "httparse",
  "io-uring",
  "libc",
  "libsqlite3-sys",

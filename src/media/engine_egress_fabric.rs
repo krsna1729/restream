@@ -66,8 +66,12 @@ impl MediaEngine {
                 .map_err(SrtFabricEnsureError::Runtime)?
                 .adaptive(config.shards);
 
-            let wakes =
-                subscribe_fabric_wakes("srt", feed_id.clone(), feed, runtime.feed_wake_handles());
+            let wakes = subscribe_fabric_wakes(
+                "srt",
+                feed_id.clone(),
+                feed.publication_ring().publication_subscribers(),
+                runtime.feed_wake_handles(),
+            );
 
             tracing::info!(feed_id = %feed_id, "srt fabric runtime created");
             registry.runtimes.insert(feed_id.clone(), runtime);

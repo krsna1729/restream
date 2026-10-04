@@ -38,6 +38,10 @@ pub struct HlsStore {
     /// reader, so N uploaders cost one playlist render and wake on publish
     /// instead of polling.
     published: watch::Sender<HlsPublished>,
+    /// Woken on every publish, on the publishing thread: the HLS PUT fabric's
+    /// shards (the same producer-side wake the media rings give the other
+    /// fabrics).
+    publish_subscribers: Arc<crate::media::ring_buffer::PublishSubscribers>,
 }
 
 struct HlsStoreInner {
@@ -78,7 +82,14 @@ impl HlsStore {
             }),
             config,
             published: watch::Sender::new(None),
+            publish_subscribers: Arc::new(crate::media::ring_buffer::PublishSubscribers::new()),
         }
+    }
+
+    pub(crate) fn publication_subscribers(
+        &self,
+    ) -> Arc<crate::media::ring_buffer::PublishSubscribers> {
+        Arc::clone(&self.publish_subscribers)
     }
 
     pub fn config(&self) -> HlsConfig {
@@ -92,6 +103,8 @@ impl HlsStore {
         inner.target_duration = TARGET_DURATION_SECS;
         inner.variant_segments.clear();
         self.published.send_replace(None);
+        drop(inner);
+        self.publish_subscribers.wake_all();
     }
 
     pub fn push_segment(&self, duration: f64, data: Bytes) {
@@ -116,6 +129,8 @@ impl HlsStore {
         // Built and sent under the lock, so publishes reach readers in order.
         self.published
             .send_replace(build_snapshot(&inner).map(Arc::new));
+        drop(inner);
+        self.publish_subscribers.wake_all();
     }
 
     /// Wakes on every publish. The current value is marked unseen, so a new

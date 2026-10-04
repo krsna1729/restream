@@ -27,7 +27,7 @@ mod segmenter;
 mod store;
 pub mod upload;
 #[forbid(unsafe_code)]
-mod upload_policy;
+pub(crate) mod upload_policy;
 
 #[cfg(test)]
 use std::sync::Arc;

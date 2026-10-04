@@ -339,7 +339,7 @@ impl serde::Serialize for EgressFabricShardStatus {
 }
 
 impl MediaEngine {
-    /// Every live fabric shard's health, across all four protocol
+    /// Every live fabric shard's health, across all five protocol
     /// registries. `stall_after` should track how often the caller polls —
     /// a shard genuinely idle between polls (nothing to send) is not the
     /// same as a stalled one, so this must not be a fixed short constant.
@@ -373,6 +373,13 @@ impl MediaEngine {
             statuses.extend(heartbeats.into_iter().map(|hb| {
                 EgressFabricShardStatus::from_heartbeat("pipeline", feed_id.clone(), hb)
             }));
+        }
+        for (feed_id, heartbeats) in self.hls_put_fabric_shard_heartbeats(stall_after).await {
+            statuses.extend(
+                heartbeats.into_iter().map(|hb| {
+                    EgressFabricShardStatus::from_heartbeat("hls-put", feed_id.clone(), hb)
+                }),
+            );
         }
         statuses
     }

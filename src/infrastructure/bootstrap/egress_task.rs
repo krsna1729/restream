@@ -68,6 +68,15 @@ pub(super) struct PipelineFabricTask {
     pub(super) terminated: Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// An HTTP/HTTPS HLS output uploaded from the HLS PUT fabric. The store it
+/// reads is known only once `EgressTask::run` has started the segmenter.
+#[derive(Clone)]
+pub(super) struct HlsPutFabricTask {
+    pub(super) spec: OutputSpec,
+    /// See `SrtFabricTask::terminated`.
+    pub(super) terminated: Arc<std::sync::atomic::AtomicBool>,
+}
+
 pub(super) struct EgressTask {
     pub(super) output_id: String,
     pub(super) pipeline_id: String,
@@ -85,6 +94,7 @@ pub(super) struct EgressTask {
     pub(super) rtmp_fabric: Option<RtmpFabricTask>,
     pub(super) sink_fabric: Option<SinkFabricTask>,
     pub(super) pipeline_fabric: Option<PipelineFabricTask>,
+    pub(super) hls_put_fabric: Option<HlsPutFabricTask>,
 }
 
 impl EgressTask {
@@ -164,7 +174,9 @@ impl EgressTask {
                         .engine
                         .lease_hls_persistent_consumer(&self.pipeline_id)
                         .await;
-                    if matches!(url_scheme, OutputUrlScheme::Http | OutputUrlScheme::Https) {
+                    if let Some(fabric) = self.hls_put_fabric.clone() {
+                        self.run_hls_put_fabric(fabric, store).await;
+                    } else if matches!(url_scheme, OutputUrlScheme::Http | OutputUrlScheme::Https) {
                         crate::media::hls_upload::start_hls_put_upload(
                             crate::media::hls_upload::HlsUploadStart {
                                 output_id: self.output_id.clone(),
@@ -469,6 +481,73 @@ impl EgressTask {
             .engine
             .release_rtmp_fabric_runtime(&fabric.feed_id)
             .await;
+    }
+
+    async fn run_hls_put_fabric(
+        &self,
+        fabric: HlsPutFabricTask,
+        store: Arc<crate::media::hls::HlsStore>,
+    ) {
+        let feed_id = crate::media::engine_hls_egress_fabric::hls_put_feed_id(&self.pipeline_id);
+        if let Err(error) = self
+            .engine
+            .retain_hls_put_fabric_runtime(feed_id.clone(), &store)
+            .await
+        {
+            self.engine
+                .record_egress_error_if_current(
+                    &self.output_id,
+                    &self.registration,
+                    "hls_put_fabric_ensure",
+                    format!("{error:?}"),
+                )
+                .await;
+            return;
+        }
+        drop(store);
+        match self
+            .engine
+            .dispatch_hls_put_fabric_command(&feed_id, EgressCommand::Add(fabric.spec.clone()))
+            .await
+        {
+            Ok(_) => {
+                self.engine
+                    .update_egress_phase_if_current(
+                        &self.output_id,
+                        &self.registration,
+                        EgressPhase::Uploading,
+                    )
+                    .await;
+            }
+            Err(error) => {
+                let _ = self.engine.release_hls_put_fabric_runtime(&feed_id).await;
+                self.engine
+                    .record_egress_error_if_current(
+                        &self.output_id,
+                        &self.registration,
+                        "hls_put_fabric_dispatch",
+                        format!("{error:?}"),
+                    )
+                    .await;
+                return;
+            }
+        }
+        if self.wait_for_stop_or_leaf_failure(&fabric.terminated).await {
+            self.engine
+                .record_egress_error_if_current(
+                    &self.output_id,
+                    &self.registration,
+                    "hls_put_fabric_leaf",
+                    "HLS ingest rejected the upload or the leaf failed",
+                )
+                .await;
+        }
+        // The leaf sends its end playlist after the remove.
+        let _ = self
+            .engine
+            .dispatch_hls_put_fabric_command(&feed_id, EgressCommand::Remove(fabric.spec.id))
+            .await;
+        let _ = self.engine.release_hls_put_fabric_runtime(&feed_id).await;
     }
 
     async fn run_sink_fabric(&self, fabric: SinkFabricTask) {

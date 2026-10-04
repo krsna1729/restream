@@ -18,7 +18,9 @@ use crate::media::engine::MediaEngine;
 
 #[path = "egress_task.rs"]
 mod egress_task;
-use egress_task::{EgressTask, PipelineFabricTask, RtmpFabricTask, SinkFabricTask, SrtFabricTask};
+use egress_task::{
+    EgressTask, HlsPutFabricTask, PipelineFabricTask, RtmpFabricTask, SinkFabricTask, SrtFabricTask,
+};
 
 pub(super) type FailureTracker = Arc<Mutex<HashMap<String, (Instant, u32)>>>;
 
@@ -396,10 +398,45 @@ impl EgressReconciler {
             None
         };
 
+        let use_hls_put_fabric = self.engine.config.egress_fabric.hls_put_fabric
+            && matches!(url_scheme, OutputUrlScheme::Http | OutputUrlScheme::Https);
+        let hls_put_fabric = if use_hls_put_fabric {
+            let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let mut spec = crate::media::egress::OutputSpec {
+                id: crate::media::egress::OutputId::new(output.id.clone()),
+                generation: registration.attempt_id,
+                feed: crate::media::engine_hls_egress_fabric::hls_put_feed_id(&output.pipeline_id),
+                protocol: crate::media::egress::ProtocolSpec::HlsPut {
+                    url: output.url.clone(),
+                },
+                policy: crate::media::egress::LeafPolicy::default(),
+                progress: Default::default(),
+            };
+            if let Some(sink) = self
+                .engine
+                .with_active_egress(&output.id, |egress| {
+                    crate::media::egress::leaf::EgressProgressSink {
+                        bytes_sent: Some(egress.bytes_sent.clone()),
+                        metrics: Some(egress.metrics.clone()),
+                        last_progress_ms: Some(egress.last_progress_ms.clone()),
+                        terminated_unexpectedly: Some(terminated.clone()),
+                        ..Default::default()
+                    }
+                })
+                .await
+            {
+                spec.progress = sink;
+            }
+            Some(HlsPutFabricTask { spec, terminated })
+        } else {
+            None
+        };
+
         let is_fabric = rtmp_fabric.is_some()
             || srt_fabric.is_some()
             || sink_fabric.is_some()
-            || pipeline_fabric.is_some();
+            || pipeline_fabric.is_some()
+            || hls_put_fabric.is_some();
         let shard_id = is_fabric.then(|| {
             let shard_count = if srt_fabric.is_some() {
                 self.engine.config.egress_fabric.srt_shard_count()
@@ -433,6 +470,7 @@ impl EgressReconciler {
             rtmp_fabric,
             sink_fabric,
             pipeline_fabric,
+            hls_put_fabric,
         };
         tokio::spawn(task.run());
     }

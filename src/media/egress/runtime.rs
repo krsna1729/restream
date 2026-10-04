@@ -6,7 +6,6 @@ use std::time::{Duration, Instant};
 use arc_swap::ArcSwap;
 
 use crate::media::egress::command::{EgressCommand, FeedId, ShardId};
-use crate::media::egress::feed::EgressFeed;
 use crate::media::egress::manager::{
     EgressManager, EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome,
 };
@@ -350,25 +349,6 @@ impl EgressFabricRuntime {
     }
 }
 
-/// Feed types whose publications can wake a fabric: the ring the feed's
-/// producer publishes into. `RingFeed` resolves its current ring; a later
-/// replacement shares the subscriber set (`RingBuffer::seal_and_forward`).
-pub(crate) trait FabricWatchFeed: EgressFeed + Send + 'static {
-    fn publication_ring(&self) -> Arc<RingBuffer>;
-}
-
-impl FabricWatchFeed for crate::media::egress::journal::RingFeed {
-    fn publication_ring(&self) -> Arc<RingBuffer> {
-        crate::media::egress::journal::RingFeed::publication_ring(self)
-    }
-}
-
-impl FabricWatchFeed for crate::media::egress::journal::TsFeed {
-    fn publication_ring(&self) -> Arc<RingBuffer> {
-        crate::media::egress::journal::TsFeed::publication_ring(self)
-    }
-}
-
 /// Delivers one coalesced wake per shard from the publishing thread. Each
 /// `FeedWakeHandle::deliver` is an atomic swap on the shard's gate, plus one
 /// bounded `try_send` on its clear-to-set transition, so at most one wake per
@@ -417,16 +397,12 @@ impl Drop for FeedWakeSubscription {
 /// that grow later are woken too. One wake is delivered on subscribe, so a
 /// publication that landed before registration is not left waiting for the
 /// shards' idle poll.
-pub(crate) fn subscribe_fabric_wakes<F>(
+pub(crate) fn subscribe_fabric_wakes(
     kind: &'static str,
     feed_id: FeedId,
-    feed: &F,
+    subscribers: Arc<crate::media::ring_buffer::PublishSubscribers>,
     wake_handles: Arc<ArcSwap<Vec<FeedWakeHandle>>>,
-) -> FeedWakeSubscription
-where
-    F: FabricWatchFeed,
-{
-    let subscribers = feed.publication_ring().publication_subscribers();
+) -> FeedWakeSubscription {
     let waker: Arc<dyn PublishWake> = Arc::new(FabricWakers {
         handles: wake_handles,
     });
@@ -439,6 +415,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::media::egress::feed::EgressFeed;
     use std::num::NonZeroU32;
     use std::sync::{Arc, Condvar, Mutex};
     use std::time::Duration;
@@ -891,8 +868,12 @@ mod tests {
         let handles = Arc::new(ArcSwap::from_pointee(vec![
             group.feed_wake_handles()[0].clone(),
         ]));
-        let subscription =
-            subscribe_fabric_wakes("test", FeedId::new("feed-1"), &feed, handles.clone());
+        let subscription = subscribe_fabric_wakes(
+            "test",
+            FeedId::new("feed-1"),
+            feed.publication_ring().publication_subscribers(),
+            handles.clone(),
+        );
 
         // One wake on subscribe, then one per publication, delivered on the
         // publishing thread.

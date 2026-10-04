@@ -52,8 +52,12 @@ impl MediaEngine {
             // module doc), so this subscription's `FeedWake` delivery is their
             // *only* readiness signal, not just an interest-widening hint
             // the way it is for RTMP/SRT.
-            let wakes =
-                subscribe_fabric_wakes("sink", feed_id.clone(), feed, runtime.feed_wake_handles());
+            let wakes = subscribe_fabric_wakes(
+                "sink",
+                feed_id.clone(),
+                feed.publication_ring().publication_subscribers(),
+                runtime.feed_wake_handles(),
+            );
 
             tracing::info!(feed_id = %feed_id, "sink fabric runtime created");
             registry.runtimes.insert(feed_id.clone(), runtime);

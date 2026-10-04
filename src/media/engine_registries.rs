@@ -201,11 +201,29 @@ impl PipelineFabricRegistry {
     }
 }
 
+/// HLS PUT fabric runtimes, one per HLS store.
+#[derive(Default)]
+pub(crate) struct HlsPutFabricRegistry {
+    pub(crate) runtimes: HashMap<FeedId, EgressFabricRuntime>,
+    pub(crate) active_outputs: HashMap<FeedId, u64>,
+    /// One store publication wake subscription per runtime; dropped on release.
+    pub(crate) feed_wakes: HashMap<FeedId, FeedWakeSubscription>,
+    /// The store and TLS client config every shard of the runtime shares.
+    pub(crate) shared: HashMap<
+        FeedId,
+        (
+            std::sync::Arc<crate::media::hls::HlsStore>,
+            std::sync::Arc<tokio_rustls::rustls::ClientConfig>,
+        ),
+    >,
+}
+
 pub struct FabricRegistry {
     pub(crate) srt: TokioMutex<SrtFabricRegistry>,
     pub(crate) rtmp: TokioMutex<RtmpFabricRegistry>,
     pub(crate) sink: TokioMutex<SinkFabricRegistry>,
     pub(crate) pipeline: TokioMutex<PipelineFabricRegistry>,
+    pub(crate) hls_put: TokioMutex<HlsPutFabricRegistry>,
 }
 
 impl Default for FabricRegistry {
@@ -221,6 +239,7 @@ impl FabricRegistry {
             rtmp: TokioMutex::new(RtmpFabricRegistry::new()),
             sink: TokioMutex::new(SinkFabricRegistry::new()),
             pipeline: TokioMutex::new(PipelineFabricRegistry::new()),
+            hls_put: TokioMutex::new(HlsPutFabricRegistry::default()),
         }
     }
 }
