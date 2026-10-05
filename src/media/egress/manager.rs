@@ -17,6 +17,23 @@ pub enum EgressManagerConfigError {
 pub struct EgressManagerConfig {
     shard_count: NonZeroU32,
     command_channel_capacity: NonZeroUsize,
+    placement_policy: PlacementPolicy,
+}
+
+/// How a NEW output picks its shard among the placement shards. A live
+/// output never moves under either policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlacementPolicy {
+    /// `assign_output_to_shard`: a pure function of the output id and the
+    /// shard count. RTMP and SRT, whose harness proofs predict placement.
+    #[default]
+    Rendezvous,
+    /// The placement shard with the fewest live outputs, ties broken by
+    /// rendezvous score. For outputs of one feed with like per-output cost
+    /// (HLS PUT): shards that join the pool after the first outputs take
+    /// the new ones until the load evens out, where rendezvous would leave
+    /// the first shard carrying every output placed before the growth.
+    LeastLoaded,
 }
 
 impl EgressManagerConfig {
@@ -31,7 +48,13 @@ impl EgressManagerConfig {
         Ok(Self {
             shard_count,
             command_channel_capacity,
+            placement_policy: PlacementPolicy::Rendezvous,
         })
+    }
+
+    pub fn with_placement_policy(mut self, placement_policy: PlacementPolicy) -> Self {
+        self.placement_policy = placement_policy;
+        self
     }
 
     pub fn shard_count(self) -> NonZeroU32 {
@@ -49,6 +72,9 @@ pub struct EgressManager {
     /// Every live output: its spec and the shard it is placed on, in one
     /// entry, so the spec and the placement cannot disagree.
     desired: HashMap<OutputId, DesiredOutput>,
+    /// Live outputs per shard (`len == config.shard_count`), kept with
+    /// `desired`.
+    shard_outputs: Vec<u32>,
     draining_shards: Vec<bool>,
     /// Shards that accept NEW outputs (`<= config.shard_count`). Shards above
     /// it only drain: a live output is never moved, so resizing cannot
@@ -62,6 +88,7 @@ impl EgressManager {
         Self {
             config,
             desired: HashMap::new(),
+            shard_outputs: vec![0; config.shard_count.get() as usize],
             draining_shards: vec![false; config.shard_count.get() as usize],
             placement: config.shard_count,
             shutting_down: false,
@@ -73,7 +100,23 @@ impl EgressManager {
     }
 
     pub fn assign_output(&self, output_id: &OutputId) -> ShardId {
-        assign_output_to_shard(output_id, self.placement)
+        match self.config.placement_policy {
+            PlacementPolicy::Rendezvous => assign_output_to_shard(output_id, self.placement),
+            PlacementPolicy::LeastLoaded => {
+                let bytes = output_id.as_str().as_bytes();
+                (0..self.placement.get())
+                    .min_by_key(|&shard_index| {
+                        (
+                            self.shard_outputs
+                                .get(shard_index as usize)
+                                .copied()
+                                .unwrap_or(0),
+                            std::cmp::Reverse(stable_output_hash_pair(bytes, shard_index)),
+                        )
+                    })
+                    .map_or(ShardId::new(0), ShardId::new)
+            }
+        }
     }
 
     pub fn assign_spec(&self, spec: &OutputSpec) -> ShardId {
@@ -177,8 +220,14 @@ impl EgressManager {
         };
         sink.send(shard_id, command)
             .map_err(|source| EgressManagerDispatchError::Dispatch { shard_id, source })?;
-        self.desired
-            .insert(spec.id.clone(), DesiredOutput { spec, shard_id });
+        if self
+            .desired
+            .insert(spec.id.clone(), DesiredOutput { spec, shard_id })
+            .is_none()
+            && let Some(count) = self.shard_outputs.get_mut(shard_id.index() as usize)
+        {
+            *count = count.saturating_add(1);
+        }
         Ok(ManagerCommandOutcome::Enqueued { shard_id })
     }
 
@@ -196,6 +245,9 @@ impl EgressManager {
         sink.send(shard_id, EgressCommand::Remove(output_id.clone()))
             .map_err(|source| EgressManagerDispatchError::Dispatch { shard_id, source })?;
         self.desired.remove(&output_id);
+        if let Some(count) = self.shard_outputs.get_mut(shard_id.index() as usize) {
+            *count = count.saturating_sub(1);
+        }
         Ok(ManagerCommandOutcome::Enqueued { shard_id })
     }
 
@@ -275,10 +327,9 @@ impl EgressManager {
     }
 
     fn desired_count_for_shard(&self, shard_id: ShardId) -> usize {
-        self.desired
-            .values()
-            .filter(|desired| desired.shard_id == shard_id)
-            .count()
+        self.shard_outputs
+            .get(shard_id.index() as usize)
+            .map_or(0, |count| *count as usize)
     }
 
     /// Live output count this manager currently owns, the demand input for
@@ -298,6 +349,7 @@ impl EgressManager {
         let shards = shards.max(self.config.shard_count);
         self.config.shard_count = shards;
         self.draining_shards.resize(shards.get() as usize, false);
+        self.shard_outputs.resize(shards.get() as usize, 0);
         self.placement = shards;
     }
 
@@ -320,6 +372,7 @@ impl EgressManager {
         }
         self.config.shard_count = NonZeroU32::new(tail - 1).expect("tail > 1");
         self.draining_shards.truncate((tail - 1) as usize);
+        self.shard_outputs.truncate((tail - 1) as usize);
         true
     }
 }

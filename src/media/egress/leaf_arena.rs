@@ -10,7 +10,7 @@
 //! pass or one operation; owner maps (`output_sockets`, `callers`) hold it
 //! for the leaf's life and drop it on removal, so no key survives that long.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LeafKey {
     slot: u32,
     epoch: u32,

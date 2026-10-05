@@ -12,7 +12,8 @@
 //! output's deadlines (backoff, resolve, connect, request timeout) are
 //! shard timers. Slots live in a `LeafArena`: a late DNS answer or poller
 //! event for a removed output never reaches the output reusing its slot.
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap};
 use std::net::SocketAddr;
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
@@ -148,6 +149,9 @@ struct Slot {
     /// instead of queueing another, so one destination whose name server
     /// hangs holds at most one of the shard's lookup threads.
     lookup_in_flight: Option<u64>,
+    /// The deadline of this slot's live entry in the backend's `deadlines`
+    /// heap; `None` once that entry is popped or when nothing is indexed.
+    indexed_deadline: Option<Instant>,
 }
 
 impl Slot {
@@ -184,6 +188,15 @@ pub(crate) struct HlsPutShardBackend<P: RtmpReadinessPoller> {
     by_output: HashMap<OutputId, LeafKey>,
     /// Reused by `drive_due`.
     due: Vec<LeafKey>,
+    /// Min-heap of `(deadline, slot)`, so the due scan and the timer cost
+    /// O(log n) per change instead of a pass over every slot per event.
+    /// Lazy: an entry is live only while it matches the slot's
+    /// `indexed_deadline` and current `deadline()`; others are dropped when
+    /// they reach the top. Invariant: every slot whose `deadline()` is
+    /// `Some(d)` has a live `(d, key)` entry (see `index_deadline`). A stale
+    /// entry reaches the top once its instant passes, so the heap holds
+    /// about one entry per deadline change within the longest timeout.
+    deadlines: BinaryHeap<Reverse<(Instant, LeafKey)>>,
     /// Shutdown or drain began: keep the shard alive while a slot remains,
     /// so every end playlist gets its chance.
     draining: bool,
@@ -212,6 +225,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             slots: LeafArena::with_capacity(leaf_capacity),
             by_output: HashMap::new(),
             due: Vec::new(),
+            deadlines: BinaryHeap::with_capacity(leaf_capacity),
             draining: false,
             ready: ReadyQueue::with_capacity(leaf_capacity),
             poll_buffer: Vec::new(),
@@ -253,6 +267,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             wake_at: None,
             resolve_token: 0,
             lookup_in_flight: None,
+            indexed_deadline: None,
         });
         let Some(key) = inserted else {
             tracing::warn!(output_id = %spec.id, "hls put fabric leaf rejected: shard leaf capacity exhausted");
@@ -367,6 +382,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
                         deadline: Instant::now() + timeout,
                     };
                 }
+                self.index_deadline(key);
             }
             Err(error) => self.connection_failed(key, &error.message),
         }
@@ -442,8 +458,56 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
         }
     }
 
-    /// Drive one slot as far as it can go now.
+    /// Drive one slot as far as it can go now, then index the deadline it
+    /// is left with. Every deadline a slot gains is set here or in
+    /// `resolved`; the other paths only clear one.
     fn drive(&mut self, key: LeafKey, now: Instant) {
+        self.drive_slot(key, now);
+        self.index_deadline(key);
+    }
+
+    /// Give `key`'s current deadline a live heap entry, unless it has one.
+    fn index_deadline(&mut self, key: LeafKey) {
+        let Some(slot) = self.slots.get_mut(key) else {
+            return;
+        };
+        let Some(deadline) = slot.deadline() else {
+            return;
+        };
+        if slot.indexed_deadline != Some(deadline) {
+            slot.indexed_deadline = Some(deadline);
+            self.deadlines.push(Reverse((deadline, key)));
+        }
+    }
+
+    /// The earliest live heap entry, after dropping stale ones from the top.
+    /// An entry whose slot has since moved to another deadline without
+    /// being indexed (only possible for a later one) is re-indexed.
+    fn earliest_deadline(&mut self) -> Option<(Instant, LeafKey)> {
+        while let Some(&Reverse((at, key))) = self.deadlines.peek() {
+            let Some(slot) = self.slots.get_mut(key) else {
+                self.deadlines.pop();
+                continue;
+            };
+            if slot.indexed_deadline != Some(at) {
+                self.deadlines.pop(); // superseded or a duplicate
+                continue;
+            }
+            match slot.deadline() {
+                Some(current) if current == at => return Some((at, key)),
+                current => {
+                    self.deadlines.pop();
+                    slot.indexed_deadline = None;
+                    if current.is_some() {
+                        self.index_deadline(key);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn drive_slot(&mut self, key: LeafKey, now: Instant) {
         loop {
             let Some(slot) = self.slots.get_mut(key) else {
                 return;
@@ -569,12 +633,15 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
 
     fn drive_due(&mut self, now: Instant) {
         let mut due = std::mem::take(&mut self.due);
-        due.extend(
-            self.slots
-                .iter()
-                .filter(|(_, slot)| slot.deadline().is_some_and(|deadline| deadline <= now))
-                .map(|(key, _)| key),
-        );
+        while let Some((at, key)) = self.earliest_deadline()
+            && at <= now
+        {
+            self.deadlines.pop();
+            if let Some(slot) = self.slots.get_mut(key) {
+                slot.indexed_deadline = None;
+            }
+            due.push(key);
+        }
         for key in due.drain(..) {
             self.drive(key, now);
         }
@@ -583,15 +650,35 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
 
     /// Keep one shard timer at the earliest slot deadline.
     fn timer_effect(&mut self) -> EgressShardCommandEffect {
-        let earliest = self
-            .slots
-            .iter()
-            .filter_map(|(_, slot)| slot.deadline().map(|at| (at, slot)))
-            .min_by_key(|(at, _)| *at)
-            .map(|(at, slot)| (at, slot.output_id.clone(), slot.generation));
-        if earliest == self.scheduled {
+        let earliest = self.earliest_deadline();
+        // Every shard unit test checks the heap against the full scan it
+        // replaced; not in debug binaries, where the scan would cost O(n).
+        #[cfg(test)]
+        assert_eq!(
+            earliest.map(|(at, _)| at),
+            self.slots
+                .iter()
+                .filter_map(|(_, slot)| slot.deadline())
+                .min(),
+            "the deadline heap lost a slot deadline"
+        );
+        let unchanged = match (&earliest, &self.scheduled) {
+            (None, None) => true,
+            (Some((at, key)), Some((fire_at, output_id, generation))) => {
+                at == fire_at
+                    && self.slots.get(*key).is_some_and(|slot| {
+                        slot.output_id == *output_id && slot.generation == *generation
+                    })
+            }
+            _ => false,
+        };
+        if unchanged {
             return EgressShardCommandEffect::Continue;
         }
+        let earliest = earliest.and_then(|(at, key)| {
+            let slot = self.slots.get(key)?;
+            Some((at, slot.output_id.clone(), slot.generation))
+        });
         self.scheduled = earliest.clone();
         match earliest {
             Some((fire_at, output_id, generation)) => EgressShardCommandEffect::ScheduleTimer {

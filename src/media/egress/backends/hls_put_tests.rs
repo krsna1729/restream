@@ -32,7 +32,7 @@ impl MemoryIo {
 }
 
 impl UploadIo for MemoryIo {
-    fn write_shared(&mut self, parts: &[TxPart<'_>]) -> io::Result<usize> {
+    fn write_message(&mut self, parts: &[TxPart<'_>]) -> io::Result<usize> {
         if self.fail_writes {
             return Err(io::Error::new(io::ErrorKind::BrokenPipe, "reset"));
         }

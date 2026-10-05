@@ -33,6 +33,12 @@ pub(crate) struct IoBuffers {
     copied: BytesMut,
     pub(super) record_type: Option<(usize, u8)>,
     pending_write_bytes: usize,
+    /// The staged bytes stop inside a message whose rest is still to come
+    /// (`write_shared_message` could not stage all of it): the transmit
+    /// worker sends them with `MSG_MORE`, so the kernel coalesces them with
+    /// the rest instead of pushing a short segment (or, under kTLS, every
+    /// 16 KiB record as its own segment).
+    message_open: bool,
     rx_space_waker: Option<std::task::Waker>,
     tx_waker: Option<std::task::Waker>,
     rx_resume_waker: Option<std::task::Waker>,
@@ -395,6 +401,17 @@ impl CompioTcpStream {
     /// Accepts a prefix within the TX bound and reports its length, like
     /// `write_vectored`; `WouldBlock` when nothing fits.
     pub(crate) fn write_shared(&mut self, parts: &[TxPart<'_>]) -> io::Result<usize> {
+        self.stage_shared(parts, false)
+    }
+
+    /// `write_shared` for `parts` that are the rest of one message (an HTTP
+    /// request): until its last byte is staged, sends carry `MSG_MORE`, so
+    /// a 64 KiB staging bound does not cut the message into short pushes.
+    pub(crate) fn write_shared_message(&mut self, parts: &[TxPart<'_>]) -> io::Result<usize> {
+        self.stage_shared(parts, true)
+    }
+
+    fn stage_shared(&mut self, parts: &[TxPart<'_>], message: bool) -> io::Result<usize> {
         match self {
             Self::Compio { buffers, .. } => {
                 let mut buffers = buffers.borrow_mut();
@@ -421,9 +438,11 @@ impl CompioTcpStream {
                     available -= take;
                     count += take;
                 }
-                if count == 0 && parts.iter().any(|part| !part.as_slice().is_empty()) {
+                let total: usize = parts.iter().map(|part| part.as_slice().len()).sum();
+                if count == 0 && total > 0 {
                     Err(io::ErrorKind::WouldBlock.into())
                 } else {
+                    buffers.message_open = message && count < total;
                     wake(&mut buffers.tx_waker);
                     Ok(count)
                 }
@@ -576,7 +595,9 @@ impl Future for ReceiveArm {
     }
 }
 
-async fn take_transmit(buffers: &SharedIoBuffers, output: &mut Vec<Bytes>) {
+/// Swap the staged segments into `output`; true when they stop inside an
+/// open message (see `IoBuffers::message_open`).
+async fn take_transmit(buffers: &SharedIoBuffers, output: &mut Vec<Bytes>) -> bool {
     output.clear();
     std::future::poll_fn(|cx| {
         let mut buffers = buffers.borrow_mut();
@@ -590,9 +611,9 @@ async fn take_transmit(buffers: &SharedIoBuffers, output: &mut Vec<Bytes>) {
         // per-flush allocations.)
         buffers.seal_copied();
         std::mem::swap(output, &mut buffers.outgoing);
-        Poll::Ready(())
+        Poll::Ready(buffers.message_open)
     })
-    .await;
+    .await
 }
 
 async fn notify_readable(events: &flume::Sender<TcpReadyLeaf>, event: TcpReadyLeaf) -> bool {
@@ -857,16 +878,26 @@ pub(super) async fn transmit_worker(
     events: flume::Sender<TcpReadyLeaf>,
     event: TcpReadyLeaf,
 ) {
-    let mut stream = stream.as_ref();
-    use compio::io::AsyncWrite;
+    use compio::buf::IntoInner;
+    use compio::driver::op::{SendFlags, SendVectored};
     let mut data: Vec<Bytes> = Vec::new();
     loop {
-        take_transmit(&buffers, &mut data).await;
+        let flags = if take_transmit(&buffers, &mut data).await {
+            SendFlags::NOSIGNAL | SendFlags::MORE
+        } else {
+            // What `AsyncWrite::write_vectored` on a Compio stream sends.
+            SendFlags::NOSIGNAL
+        };
         // A partial write keeps its unsent segments in `data` and writes them
         // next, ahead of anything queued later, without moving any bytes.
         while !data.is_empty() {
+            let send = SendVectored::new(
+                PollTarget(Rc::clone(&stream)),
+                std::mem::take(&mut data),
+                flags,
+            );
             let compio::BufResult(result, returned) =
-                stream.write_vectored(std::mem::take(&mut data)).await;
+                compio::runtime::submit(send).await.into_inner();
             data = returned;
             match result {
                 Ok(0) => {

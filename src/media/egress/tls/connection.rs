@@ -576,6 +576,24 @@ impl TlsTcpConnection {
     }
 }
 
+impl TlsTcpConnection {
+    /// `write_shared` for the rest of one message (an HTTP request): sends
+    /// carry `MSG_MORE` until its last byte is staged, so kTLS records and
+    /// TCP segments fill instead of each record being pushed alone.
+    pub(crate) fn write_shared_message(
+        &mut self,
+        parts: &[crate::media::egress::backends::compio_tcp::TxPart<'_>],
+    ) -> io::Result<usize> {
+        self.advance_tls_handshake()?;
+        match &mut self.state {
+            ConnectionState::Plain(stream) => stream.write_shared_message(parts),
+            ConnectionState::Ktls(connection) => connection.stream.write_shared_message(parts),
+            ConnectionState::Tls(_) => Err(io::ErrorKind::WouldBlock.into()),
+            ConnectionState::Failed(_) => Err(io::Error::other("TLS handoff failed")),
+        }
+    }
+}
+
 impl Write for TlsTcpConnection {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.advance_tls_handshake()?;

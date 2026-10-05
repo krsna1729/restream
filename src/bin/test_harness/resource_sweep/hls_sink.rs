@@ -56,17 +56,21 @@ pub(crate) fn hls_sink_tls() -> bool {
         .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "on"))
 }
 
-/// A TCP listener that completes the TLS handshake before handing the
-/// connection to axum. A failed handshake is dropped and the next
-/// connection accepted. Handshakes run one at a time, which bounds how
-/// fast the sink admits a reconnect storm, not steady-state throughput.
+/// A TCP listener whose connections reach axum after their TLS handshake.
+/// Each handshake runs in its own task, as at a real ingest: a burst of
+/// connecting outputs is not served one handshake at a time, which would
+/// charge the sink's queueing to the uploader's request deadline. A failed
+/// handshake is dropped.
 struct TlsListener {
-    tcp: TcpListener,
-    acceptor: tokio_rustls::TlsAcceptor,
+    local: std::net::SocketAddr,
+    handshaken: tokio::sync::mpsc::Receiver<(
+        tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
+        std::net::SocketAddr,
+    )>,
 }
 
 impl TlsListener {
-    fn new(tcp: TcpListener) -> Result<Self, String> {
+    fn new(tcp: TcpListener, cancel: CancellationToken) -> Result<Self, String> {
         use tokio_rustls::rustls::pki_types::pem::PemObject;
         use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
         let (cert, key) = restream::test_fixtures::rtmps_harness_cert_fixture()?;
@@ -79,10 +83,27 @@ impl TlsListener {
             .with_no_client_auth()
             .with_single_cert(certs, key)
             .map_err(|error| format!("HLS sink TLS config: {error}"))?;
-        Ok(Self {
-            tcp,
-            acceptor: tokio_rustls::TlsAcceptor::from(Arc::new(config)),
-        })
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+        let local = tcp.local_addr().map_err(|error| error.to_string())?;
+        let (tx, handshaken) = tokio::sync::mpsc::channel(1024);
+        tokio::spawn(async move {
+            loop {
+                let accepted = tokio::select! {
+                    () = cancel.cancelled() => return,
+                    accepted = tcp.accept() => accepted,
+                };
+                let Ok((stream, addr)) = accepted else {
+                    continue;
+                };
+                let (acceptor, tx) = (acceptor.clone(), tx.clone());
+                tokio::spawn(async move {
+                    if let Ok(stream) = acceptor.accept(stream).await {
+                        let _ = tx.send((stream, addr)).await;
+                    }
+                });
+            }
+        });
+        Ok(Self { local, handshaken })
     }
 }
 
@@ -91,18 +112,15 @@ impl axum::serve::Listener for TlsListener {
     type Addr = std::net::SocketAddr;
 
     async fn accept(&mut self) -> (Self::Io, Self::Addr) {
-        loop {
-            let Ok((stream, addr)) = self.tcp.accept().await else {
-                continue;
-            };
-            if let Ok(stream) = self.acceptor.accept(stream).await {
-                return (stream, addr);
-            }
+        match self.handshaken.recv().await {
+            Some(connection) => connection,
+            // The accept task ended (shutdown): serve nothing more.
+            None => std::future::pending().await,
         }
     }
 
     fn local_addr(&self) -> std::io::Result<Self::Addr> {
-        self.tcp.local_addr()
+        Ok(self.local)
     }
 }
 
@@ -129,7 +147,7 @@ impl HlsCountingSink {
         let cancel = CancellationToken::new();
         let shutdown = cancel.clone();
         if hls_sink_tls() {
-            let listener = TlsListener::new(listener)?;
+            let listener = TlsListener::new(listener, cancel.clone())?;
             tokio::spawn(async move {
                 if let Err(error) = axum::serve(listener, app)
                     .with_graceful_shutdown(shutdown.cancelled_owned())
