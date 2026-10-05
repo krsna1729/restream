@@ -189,6 +189,8 @@ impl CompioTcpStream {
                 let buffers = buffers.borrow();
                 buffers.eof || buffers.error.is_some()
             }
+            // Test-only: detects a clean EOF with nothing pending; data
+            // before a FIN reads as "not closed".
             #[cfg(test)]
             Self::Std(stream) => match stream.peek(&mut [0_u8; 1]) {
                 Ok(count) => count == 0,
