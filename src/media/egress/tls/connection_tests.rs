@@ -611,7 +611,12 @@ fn exchange_with(
 /// tickets (returned) are in hand. `None` without kTLS for the suite.
 fn client_awaiting_handoff(
     runtime: &compio::runtime::Runtime,
-) -> Option<(TlsTcpConnection, Vec<u8>, TcpStream)> {
+) -> Option<(
+    TlsTcpConnection,
+    Vec<u8>,
+    tokio_rustls::rustls::ServerConnection,
+    TcpStream,
+)> {
     if !super::ktls::supports(
         tokio_rustls::rustls::ProtocolVersion::TLSv1_3,
         tokio_rustls::rustls::CipherSuite::TLS13_AES_256_GCM_SHA384,
@@ -659,7 +664,7 @@ fn client_awaiting_handoff(
         !tickets.is_empty(),
         "the server answered Finished with tickets"
     );
-    Some((client, tickets, peer))
+    Some((client, tickets, server, peer))
 }
 
 /// A TLS 1.3 server sends its session tickets once it has the client's
@@ -670,7 +675,7 @@ fn client_awaiting_handoff(
 #[test]
 fn session_tickets_received_before_the_ktls_handoff_do_not_hold_it_back() {
     let runtime = compio::runtime::Runtime::new().unwrap();
-    let Some((mut client, tickets, _peer)) = client_awaiting_handoff(&runtime) else {
+    let Some((mut client, tickets, _server, _peer)) = client_awaiting_handoff(&runtime) else {
         return;
     };
     client.tcp_stream().push_received_for_test(&tickets);
@@ -690,7 +695,7 @@ fn session_tickets_received_before_the_ktls_handoff_do_not_hold_it_back() {
 #[test]
 fn a_partial_record_before_the_ktls_handoff_waits_for_its_end() {
     let runtime = compio::runtime::Runtime::new().unwrap();
-    let Some((mut client, tickets, _peer)) = client_awaiting_handoff(&runtime) else {
+    let Some((mut client, tickets, _server, _peer)) = client_awaiting_handoff(&runtime) else {
         return;
     };
     let (head, tail) = tickets.split_at(tickets.len() - 3);
@@ -787,4 +792,54 @@ fn records_after_the_servers_finished_are_not_cut_and_their_data_survives_the_ha
         filled += count;
     }
     assert!(received == data, "the early data arrived altered");
+}
+
+/// rustls reads nothing after a close_notify. A record after it in the
+/// receive buffer can never be consumed, and the hand-off waits for an
+/// empty buffer: the connection must fail, not spin its shard thread.
+#[test]
+fn a_record_after_close_notify_before_the_handoff_fails_the_connection() {
+    let runtime = compio::runtime::Runtime::new().unwrap();
+    let Some((mut client, tickets, mut server, _peer)) = client_awaiting_handoff(&runtime) else {
+        return;
+    };
+    server.send_close_notify();
+    let mut close = Vec::new();
+    while server.wants_write() {
+        server.write_tls(&mut close).unwrap();
+    }
+    // The close_notify is read while the Finished is still being sent.
+    let mut buffered = tickets;
+    buffered.extend_from_slice(&close);
+    client.tcp_stream().push_received_for_test(&buffered);
+    let pending = client.write(b"GET").unwrap_err();
+    assert_eq!(pending.kind(), std::io::ErrorKind::WouldBlock, "{pending}");
+    // Any record after it arrives; the Finished write completes.
+    client.tcp_stream().push_received_for_test(&close);
+    client.tcp_stream().drain_for_test();
+
+    let error = client.write(b"GET").unwrap_err();
+    assert_eq!(
+        error.kind(),
+        std::io::ErrorKind::ConnectionAborted,
+        "{error}"
+    );
+}
+
+/// A peer that closes inside a record ends the connection at once; the
+/// record can never complete.
+#[test]
+fn eof_inside_a_record_before_the_handoff_fails_the_connection() {
+    let runtime = compio::runtime::Runtime::new().unwrap();
+    let Some((mut client, tickets, _server, _peer)) = client_awaiting_handoff(&runtime) else {
+        return;
+    };
+    client
+        .tcp_stream()
+        .push_received_for_test(&tickets[..tickets.len() - 3]);
+    client.tcp_stream().end_receive_for_test();
+    client.tcp_stream().drain_for_test();
+
+    let error = client.write(b"GET").unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof, "{error}");
 }

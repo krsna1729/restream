@@ -181,12 +181,13 @@ impl CompioTcpStream {
         }
     }
 
-    /// Nothing left to receive: EOF or a socket error, no bytes buffered.
-    pub(crate) fn receive_ended(&self) -> bool {
+    /// The receive side ended (EOF or a socket error); bytes received
+    /// before it may still be buffered.
+    pub(crate) fn receive_closed(&self) -> bool {
         match self {
             Self::Compio { buffers, .. } => {
                 let buffers = buffers.borrow();
-                buffers.received.is_empty() && (buffers.eof || buffers.error.is_some())
+                buffers.eof || buffers.error.is_some()
             }
             #[cfg(test)]
             Self::Std(stream) => match stream.peek(&mut [0_u8; 1]) {
@@ -214,6 +215,13 @@ impl CompioTcpStream {
     pub(crate) fn drain_for_test(&self) {
         let buffers = self.io_buffers().expect("a Compio stream");
         buffers.borrow_mut().pending_write_bytes = 0;
+    }
+
+    /// Test transport: the receive worker saw EOF.
+    #[cfg(test)]
+    pub(crate) fn end_receive_for_test(&self) {
+        let buffers = self.io_buffers().expect("a Compio stream");
+        buffers.borrow_mut().eof = true;
     }
 
     /// Test transport: bytes the receive worker read from the socket.

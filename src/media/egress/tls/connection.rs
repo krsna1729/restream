@@ -301,7 +301,8 @@ impl TlsTcpConnection {
         self.tcp_stream().resume_receive();
     }
     pub(crate) fn has_buffered_receive(&self) -> bool {
-        self.tcp_stream().has_buffered_receive()
+        matches!(&self.state, ConnectionState::Ktls(connection) if !connection.early_plaintext.is_empty())
+            || self.tcp_stream().has_buffered_receive()
     }
 
     /// Conservative estimate of rustls-internal buffered bytes not visible
@@ -483,19 +484,35 @@ fn pump_rustls(stream: &mut StreamOwned<ClientConnection, CompioTcpStream>) -> i
         }
         let whole = stream.sock.complete_tls_records_len();
         if whole == 0 {
-            // No record to read; a closed or failed socket ends the handshake.
-            if stream.conn.is_handshaking()
-                && stream.sock.receive_ended()
-                && stream.conn.read_tls(&mut stream.sock)? == 0
-            {
-                return Err(io::ErrorKind::UnexpectedEof.into());
+            if stream.sock.receive_closed() {
+                // The peer closed or the socket failed: a record cut short
+                // can never complete, and a handshake cannot finish.
+                if stream.sock.pending_receive_bytes() > 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "peer closed inside a TLS record before the kTLS hand-off",
+                    ));
+                }
+                if stream.conn.is_handshaking() && stream.conn.read_tls(&mut stream.sock)? == 0 {
+                    return Err(io::ErrorKind::UnexpectedEof.into());
+                }
             }
             return Ok(());
         }
         let mut records = Read::take(&mut stream.sock, whole as u64);
         while records.limit() > 0 {
             if stream.conn.read_tls(&mut records)? == 0 {
-                break;
+                // rustls reads nothing after close_notify: the records left
+                // can never be consumed, and the hand-off waits for them.
+                let kind = if stream.conn.is_handshaking() {
+                    io::ErrorKind::UnexpectedEof
+                } else {
+                    io::ErrorKind::ConnectionAborted
+                };
+                return Err(io::Error::new(
+                    kind,
+                    "peer sent TLS records after close_notify before the kTLS hand-off",
+                ));
             }
             if let Err(error) = stream.conn.process_new_packets() {
                 // Send the alert rustls queued for the failure, as
