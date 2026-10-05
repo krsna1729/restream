@@ -518,12 +518,11 @@ async fn start_resource_sweep_stack(
     for (key, value) in &env.backend_policy_env {
         restream_cmd.env(key, value);
     }
-    if hls_sink::hls_sink_tls() {
-        // The HTTPS sink's fixture certificate is the only root it needs.
-        let (cert, _) = restream::test_fixtures::rtmps_harness_cert_fixture()?;
-        let cert = std::path::absolute(&cert).map_err(|e| e.to_string())?;
-        restream_cmd.env("RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM", cert);
-    }
+    // The fixture certificate the HTTPS HLS sink and the MediaMTX RTMPS
+    // listener present, trusted as the generic harness spawn does.
+    let (cert, _) = restream::test_fixtures::rtmps_harness_cert_fixture()?;
+    let cert = std::path::absolute(&cert).map_err(|e| e.to_string())?;
+    restream_cmd.env("RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM", cert);
     apply_srt_listener_env(&mut restream_cmd, &env.srt_crypto);
     let mut restream = restream_cmd.spawn().map_err(|e| e.to_string())?;
     if let Err(err) = wait_for_http_ok(
