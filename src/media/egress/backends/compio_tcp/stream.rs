@@ -161,6 +161,78 @@ impl CompioTcpStream {
             .map_or(0, |buffers| buffers.borrow().received.len())
     }
 
+    /// Length of the run of whole TLS records (5-byte header, then the
+    /// length it gives) at the front of the receive buffer. Before the kTLS
+    /// hand-off only whole records may go to rustls, so that no record is
+    /// split between rustls and kernel TLS.
+    pub(crate) fn complete_tls_records_len(&self) -> usize {
+        match self {
+            Self::Compio { buffers, .. } => {
+                let buffers = buffers.borrow();
+                let received = &buffers.received;
+                whole_tls_records_len(received.len(), |at| received.get(at).copied())
+            }
+            #[cfg(test)]
+            Self::Std(stream) => {
+                let mut peeked = vec![0_u8; 64 * 1024];
+                let count = stream.peek(&mut peeked).unwrap_or(0);
+                whole_tls_records_len(count, |at| peeked.get(at).copied())
+            }
+        }
+    }
+
+    /// The receive side ended (EOF or a socket error); bytes received
+    /// before it may still be buffered.
+    pub(crate) fn receive_closed(&self) -> bool {
+        match self {
+            Self::Compio { buffers, .. } => {
+                let buffers = buffers.borrow();
+                buffers.eof || buffers.error.is_some()
+            }
+            // Test-only: detects a clean EOF with nothing pending; data
+            // before a FIN reads as "not closed".
+            #[cfg(test)]
+            Self::Std(stream) => match stream.peek(&mut [0_u8; 1]) {
+                Ok(count) => count == 0,
+                Err(error) => error.kind() != io::ErrorKind::WouldBlock,
+            },
+        }
+    }
+
+    /// Test transport: the staged TX bytes, as the transmit worker would
+    /// take them (they stay counted as pending until `drain_for_test`).
+    #[cfg(test)]
+    pub(crate) fn take_staged_for_test(&self) -> Vec<u8> {
+        let buffers = self.io_buffers().expect("a Compio stream");
+        let mut buffers = buffers.borrow_mut();
+        buffers.seal_copied();
+        std::mem::take(&mut buffers.outgoing)
+            .iter()
+            .flat_map(|segment| segment.iter().copied())
+            .collect()
+    }
+
+    /// Test transport: the transmit worker finished every staged write.
+    #[cfg(test)]
+    pub(crate) fn drain_for_test(&self) {
+        let buffers = self.io_buffers().expect("a Compio stream");
+        buffers.borrow_mut().pending_write_bytes = 0;
+    }
+
+    /// Test transport: the receive worker saw EOF.
+    #[cfg(test)]
+    pub(crate) fn end_receive_for_test(&self) {
+        let buffers = self.io_buffers().expect("a Compio stream");
+        buffers.borrow_mut().eof = true;
+    }
+
+    /// Test transport: bytes the receive worker read from the socket.
+    #[cfg(test)]
+    pub(crate) fn push_received_for_test(&self, bytes: &[u8]) {
+        let buffers = self.io_buffers().expect("a Compio stream");
+        buffers.borrow_mut().received.extend(bytes);
+    }
+
     /// Whether the adapter holds receive state the protocol has not consumed
     /// yet (bytes, EOF, or an error). A receive completion is an edge event,
     /// so the scheduler must revisit a read-waiting leaf in this state itself.
@@ -440,6 +512,20 @@ const IO_CHUNK: usize = 4096;
 /// Move the front `dst.len()` bytes of `deque` into `dst`: at most two slice
 /// copies (a ring's contents are at most two contiguous runs), then an O(1)
 /// front drop. Per-byte iteration here dominated RTMP egress CPU.
+/// Length of the run of whole TLS records (5-byte header, then the length
+/// it gives) at the front of `len` bytes read through `byte_at`.
+fn whole_tls_records_len(len: usize, byte_at: impl Fn(usize) -> Option<u8>) -> usize {
+    let mut whole = 0;
+    while let (Some(high), Some(low)) = (byte_at(whole + 3), byte_at(whole + 4)) {
+        let end = whole + 5 + usize::from(u16::from_be_bytes([high, low]));
+        if end > len {
+            break;
+        }
+        whole = end;
+    }
+    whole
+}
+
 pub(super) fn take_front(deque: &mut VecDeque<u8>, dst: &mut [u8]) {
     let count = dst.len();
     let (front, back) = deque.as_slices();

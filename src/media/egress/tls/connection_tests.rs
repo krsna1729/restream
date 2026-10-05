@@ -374,6 +374,7 @@ fn ktls_read_yields_after_a_bounded_number_of_ticket_records() {
     let mut connection = KtlsConnection {
         stream: CompioTcpStream::from_std(stream),
         version: tokio_rustls::rustls::ProtocolVersion::TLSv1_3,
+        early_plaintext: Vec::new(),
         handshake_buffer: Vec::new(),
         pending_alert_level: None,
         peer_closed: false,
@@ -473,6 +474,7 @@ proptest::proptest! {
         let mut connection = KtlsConnection {
             stream: CompioTcpStream::from_std(stream),
             version: tokio_rustls::rustls::ProtocolVersion::TLSv1_3,
+            early_plaintext: Vec::new(),
             handshake_buffer: Vec::new(),
             pending_alert_level: None,
             peer_closed: false,
@@ -582,4 +584,262 @@ fn unsupported_tls_suite_fails_without_userspace_fallback() {
         super::ConnectionState::Failed(_)
     ));
     server.join().unwrap();
+}
+
+/// Move the client's staged bytes to an in-memory TLS server and the
+/// server's answer back into the client's receive buffer.
+fn exchange_with(
+    client: &TlsTcpConnection,
+    server: &mut tokio_rustls::rustls::ServerConnection,
+) -> Vec<u8> {
+    let sent = client.tcp_stream().take_staged_for_test();
+    let mut input = &sent[..];
+    while !input.is_empty() {
+        server.read_tls(&mut input).unwrap();
+        server.process_new_packets().unwrap();
+    }
+    let mut answer = Vec::new();
+    while server.wants_write() {
+        server.write_tls(&mut answer).unwrap();
+    }
+    answer
+}
+
+/// A client `TlsTcpConnection` on a Compio stream whose bytes the test
+/// moves by hand, driven through the handshake to the point where its
+/// Finished is staged but still being sent, and the server's session
+/// tickets (returned) are in hand. `None` without kTLS for the suite.
+fn client_awaiting_handoff(
+    runtime: &compio::runtime::Runtime,
+) -> Option<(
+    TlsTcpConnection,
+    Vec<u8>,
+    tokio_rustls::rustls::ServerConnection,
+    TcpStream,
+)> {
+    if !super::ktls::supports(
+        tokio_rustls::rustls::ProtocolVersion::TLSv1_3,
+        tokio_rustls::rustls::CipherSuite::TLS13_AES_256_GCM_SHA384,
+    ) {
+        return None;
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let client_socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (peer, _) = listener.accept().unwrap();
+    client_socket.set_nonblocking(true).unwrap();
+    let socket = runtime
+        .enter(|| compio::net::TcpStream::from_std(client_socket))
+        .unwrap();
+    let mut client = TlsTcpConnection::tls_with_config(
+        CompioTcpStream::from_compio(socket),
+        "localhost",
+        test_client_config_tls13_aes256_gcm(),
+        &TEST_COUNTERS,
+    )
+    .unwrap();
+    let cert_key = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+    let server_config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![cert_key.cert.der().clone()],
+            PrivatePkcs8KeyDer::from(cert_key.signing_key.serialize_der()).into(),
+        )
+        .unwrap();
+    assert!(
+        server_config.send_tls13_tickets > 0,
+        "the server sends tickets"
+    );
+    let mut server = tokio_rustls::rustls::ServerConnection::new(Arc::new(server_config)).unwrap();
+
+    // ClientHello out; the server's flight back.
+    assert!(client.write(b"GET").is_err());
+    let flight = exchange_with(&client, &mut server);
+    client.tcp_stream().push_received_for_test(&flight);
+    client.tcp_stream().drain_for_test();
+    // The client completes and stages its Finished; it is still being sent.
+    assert!(client.write(b"GET").is_err());
+    let tickets = exchange_with(&client, &mut server);
+    assert!(!server.is_handshaking());
+    assert!(
+        !tickets.is_empty(),
+        "the server answered Finished with tickets"
+    );
+    Some((client, tickets, server, peer))
+}
+
+/// A TLS 1.3 server sends its session tickets once it has the client's
+/// Finished. When they reach the receive buffer before the hand-off (the
+/// Finished still being sent, as under load), the hand-off must still happen
+/// when that write completes: nothing else reads the buffer in this state,
+/// so the connection used to sit in userspace TLS until its timeout.
+#[test]
+fn session_tickets_received_before_the_ktls_handoff_do_not_hold_it_back() {
+    let runtime = compio::runtime::Runtime::new().unwrap();
+    let Some((mut client, tickets, _server, _peer)) = client_awaiting_handoff(&runtime) else {
+        return;
+    };
+    client.tcp_stream().push_received_for_test(&tickets);
+    assert!(
+        client.write(b"GET").is_err(),
+        "the Finished is not sent yet"
+    );
+    client.tcp_stream().drain_for_test();
+
+    assert_eq!(client.write(b"GET").unwrap(), 3);
+    assert!(client.is_ktls(), "the connection stayed in userspace TLS");
+}
+
+/// Only whole records go to rustls before the hand-off. A record whose end
+/// has not arrived stays in the buffer and holds the hand-off back, or its
+/// start would stay in rustls and its end go to kernel TLS.
+#[test]
+fn a_partial_record_before_the_ktls_handoff_waits_for_its_end() {
+    let runtime = compio::runtime::Runtime::new().unwrap();
+    let Some((mut client, tickets, _server, _peer)) = client_awaiting_handoff(&runtime) else {
+        return;
+    };
+    let (head, tail) = tickets.split_at(tickets.len() - 3);
+    client.tcp_stream().push_received_for_test(head);
+    client.tcp_stream().drain_for_test();
+    assert!(client.write(b"GET").is_err());
+    assert!(!client.is_ktls(), "handed off with a record cut in two");
+    let last_record_start = head.len() - client.tcp_stream().pending_receive_bytes();
+    assert!(
+        tickets.len() - last_record_start > 3,
+        "only the cut record is left"
+    );
+
+    client.tcp_stream().push_received_for_test(tail);
+    assert_eq!(client.write(b"GET").unwrap(), 3);
+    assert!(client.is_ktls());
+}
+
+/// Records that follow the server's Finished in the same flight (here
+/// half-RTT application data) arrive with it. rustls must get them as whole
+/// records: a raw 4 KiB read would end inside the data record, leaving its
+/// start in rustls and its end for the kernel at the hand-off. The data is
+/// then read after the hand-off, not lost with the rustls connection.
+#[test]
+fn records_after_the_servers_finished_are_not_cut_and_their_data_survives_the_handoff() {
+    if !super::ktls::supports(
+        tokio_rustls::rustls::ProtocolVersion::TLSv1_3,
+        tokio_rustls::rustls::CipherSuite::TLS13_AES_256_GCM_SHA384,
+    ) {
+        return;
+    }
+    let runtime = compio::runtime::Runtime::new().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let client_socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (_peer, _) = listener.accept().unwrap();
+    client_socket.set_nonblocking(true).unwrap();
+    let socket = runtime
+        .enter(|| compio::net::TcpStream::from_std(client_socket))
+        .unwrap();
+    let mut client = TlsTcpConnection::tls_with_config(
+        CompioTcpStream::from_compio(socket),
+        "localhost",
+        test_client_config_tls13_aes256_gcm(),
+        &TEST_COUNTERS,
+    )
+    .unwrap();
+    let cert_key = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+    let mut server_config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![cert_key.cert.der().clone()],
+            PrivatePkcs8KeyDer::from(cert_key.signing_key.serialize_der()).into(),
+        )
+        .unwrap();
+    server_config.send_half_rtt_data = true;
+    server_config.send_tls13_tickets = 0;
+    let mut server = tokio_rustls::rustls::ServerConnection::new(Arc::new(server_config)).unwrap();
+
+    assert!(client.write(b"GET").is_err());
+    let hello = client.tcp_stream().take_staged_for_test();
+    server.read_tls(&mut &hello[..]).unwrap();
+    server.process_new_packets().unwrap();
+    let mut finished_flight = Vec::new();
+    while server.wants_write() {
+        server.write_tls(&mut finished_flight).unwrap();
+    }
+    let data: Vec<u8> = (0..6000).map(|i| (i % 251) as u8).collect();
+    server.writer().write_all(&data).unwrap();
+    let mut data_records = Vec::new();
+    while server.wants_write() {
+        server.write_tls(&mut data_records).unwrap();
+    }
+    assert!(
+        finished_flight.len() < 4096 && finished_flight.len() + data_records.len() > 4096,
+        "a 4 KiB read must end inside the data record"
+    );
+    let mut flight = finished_flight;
+    flight.extend_from_slice(&data_records);
+    client.tcp_stream().push_received_for_test(&flight);
+    client.tcp_stream().drain_for_test();
+
+    assert!(
+        client.write(b"GET").is_err(),
+        "the Finished is not sent yet"
+    );
+    client.tcp_stream().drain_for_test();
+    assert_eq!(client.write(b"GET").unwrap(), 3);
+    assert!(client.is_ktls(), "the connection stayed in userspace TLS");
+    let mut received = vec![0_u8; data.len()];
+    let mut filled = 0;
+    while filled < data.len() {
+        let count = client.read(&mut received[filled..]).unwrap();
+        assert!(count > 0, "the early data ended short");
+        filled += count;
+    }
+    assert!(received == data, "the early data arrived altered");
+}
+
+/// rustls reads nothing after a close_notify. A record after it in the
+/// receive buffer can never be consumed, and the hand-off waits for an
+/// empty buffer: the connection must fail, not spin its shard thread.
+#[test]
+fn a_record_after_close_notify_before_the_handoff_fails_the_connection() {
+    let runtime = compio::runtime::Runtime::new().unwrap();
+    let Some((mut client, tickets, mut server, _peer)) = client_awaiting_handoff(&runtime) else {
+        return;
+    };
+    server.send_close_notify();
+    let mut close = Vec::new();
+    while server.wants_write() {
+        server.write_tls(&mut close).unwrap();
+    }
+    // The close_notify is read while the Finished is still being sent.
+    let mut buffered = tickets;
+    buffered.extend_from_slice(&close);
+    client.tcp_stream().push_received_for_test(&buffered);
+    let pending = client.write(b"GET").unwrap_err();
+    assert_eq!(pending.kind(), std::io::ErrorKind::WouldBlock, "{pending}");
+    // Any record after it arrives; the Finished write completes.
+    client.tcp_stream().push_received_for_test(&close);
+    client.tcp_stream().drain_for_test();
+
+    let error = client.write(b"GET").unwrap_err();
+    assert_eq!(
+        error.kind(),
+        std::io::ErrorKind::ConnectionAborted,
+        "{error}"
+    );
+}
+
+/// A peer that closes inside a record ends the connection at once; the
+/// record can never complete.
+#[test]
+fn eof_inside_a_record_before_the_handoff_fails_the_connection() {
+    let runtime = compio::runtime::Runtime::new().unwrap();
+    let Some((mut client, tickets, _server, _peer)) = client_awaiting_handoff(&runtime) else {
+        return;
+    };
+    client
+        .tcp_stream()
+        .push_received_for_test(&tickets[..tickets.len() - 3]);
+    client.tcp_stream().end_receive_for_test();
+    client.tcp_stream().drain_for_test();
+
+    let error = client.write(b"GET").unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof, "{error}");
 }
