@@ -25,8 +25,9 @@ use crate::media::egress::backend::{CloseReason, ProtocolEngine, Readiness};
 use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::RingFeed;
 use crate::media::egress::leaf::LeafCommon;
+use crate::media::egress::leaf_arena::{LeafArena, LeafKey};
 use crate::media::egress::policy::{LeafLimits, WorkBudget, WorkBudgetConfig};
-use crate::media::egress::scheduler::{LeafKey, ReadyQueue, VisitDecision, try_enqueue};
+use crate::media::egress::scheduler::{ReadyQueue, VisitDecision, try_enqueue};
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 
@@ -68,8 +69,7 @@ impl SinkFabricLeaf {
 pub(crate) struct SinkShardBackend {
     feed: RingFeed,
     budget_config: WorkBudgetConfig,
-    leaves: Vec<Option<SinkFabricLeaf>>,
-    free_leaf_keys: Vec<LeafKey>,
+    leaves: LeafArena<SinkFabricLeaf>,
     output_leaves: HashMap<OutputId, LeafKey>,
     ready: ReadyQueue,
 }
@@ -79,8 +79,7 @@ impl SinkShardBackend {
         Self {
             feed,
             budget_config: budget,
-            leaves: Vec::new(),
-            free_leaf_keys: Vec::new(),
+            leaves: LeafArena::with_capacity(0),
             output_leaves: HashMap::new(),
             ready: ReadyQueue::new(),
         }
@@ -88,11 +87,7 @@ impl SinkShardBackend {
     }
 
     pub(crate) fn with_leaf_capacity(mut self, capacity: usize) -> Self {
-        self.leaves = (0..capacity).map(|_| None).collect();
-        self.free_leaf_keys = (0..capacity as u32)
-            .rev()
-            .map(|slot| LeafKey(slot as usize))
-            .collect();
+        self.leaves = LeafArena::with_capacity(capacity);
         self.ready = ReadyQueue::with_capacity(capacity);
         self
     }
@@ -100,7 +95,7 @@ impl SinkShardBackend {
     fn add_leaf(&mut self, spec: OutputSpec) {
         let output_id = spec.id.clone();
         let previous = self.output_leaves.get(&output_id).copied();
-        if previous.is_none() && self.free_leaf_keys.is_empty() {
+        if previous.is_none() && self.leaves.is_full() {
             tracing::warn!(
                 output_id = %output_id,
                 "sink fabric leaf rejected: shard leaf capacity exhausted"
@@ -111,10 +106,7 @@ impl SinkShardBackend {
         if let Some(previous) = previous {
             self.remove_leaf_key(previous);
         }
-        let Some(key) = self.free_leaf_keys.pop() else {
-            spec.progress.mark_terminated_unexpectedly();
-            return;
-        };
+        let progress = spec.progress.clone();
         let common = LeafCommon::new(
             spec.id,
             spec.generation,
@@ -122,17 +114,20 @@ impl SinkShardBackend {
             LeafLimits::from_policy(&spec.policy),
         )
         .with_progress_sink(spec.progress);
-        self.leaves[key.0] = Some(SinkFabricLeaf {
+        let Some(key) = self.leaves.insert_with(|_| SinkFabricLeaf {
             common,
             engine: SinkEngine::default(),
             transport: SinkTransport::default(),
-        });
+        }) else {
+            progress.mark_terminated_unexpectedly();
+            return;
+        };
         self.output_leaves.insert(output_id, key);
         self.enqueue(key);
     }
 
     fn enqueue(&mut self, key: LeafKey) {
-        if let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) {
+        if let Some(leaf) = self.leaves.get_mut(key) {
             try_enqueue(&mut leaf.common.schedule, &mut self.ready, key);
         }
     }
@@ -145,18 +140,16 @@ impl SinkShardBackend {
 
     fn remove_leaf_key(&mut self, key: LeafKey) {
         self.ready.remove_key(key);
-        if let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::take) {
-            let mut leaf = leaf;
+        if let Some(mut leaf) = self.leaves.remove(key) {
             leaf.engine.close(&mut leaf.transport, CloseReason::Removed);
-            self.free_leaf_keys.push(key);
         }
     }
 
     /// The only readiness signal this backend has — see the module doc.
     /// Re-enqueues every leaf that isn't already pending a visit.
     fn enqueue_all_leaves(&mut self) {
-        for index in 0..self.leaves.len() {
-            self.enqueue(LeafKey(index));
+        for (key, leaf) in self.leaves.iter_mut() {
+            try_enqueue(&mut leaf.common.schedule, &mut self.ready, key);
         }
     }
 
@@ -165,7 +158,7 @@ impl SinkShardBackend {
             let Some(key) = self.ready.dequeue_next() else {
                 return;
             };
-            let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
+            let Some(leaf) = self.leaves.get_mut(key) else {
                 continue;
             };
             let generation = leaf.common.generation;
@@ -211,8 +204,7 @@ impl EgressShardBackend for SinkShardBackend {
 
     fn on_shutdown(&mut self) {
         self.ready.drain().for_each(drop);
-        for leaf in self.leaves.iter_mut().filter_map(Option::take) {
-            let mut leaf = leaf;
+        for mut leaf in self.leaves.drain() {
             leaf.engine
                 .close(&mut leaf.transport, CloseReason::ShardShutdown);
         }

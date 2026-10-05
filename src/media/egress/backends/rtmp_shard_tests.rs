@@ -491,7 +491,7 @@ fn sweep_stalled_leaves_closes_only_the_leaf_with_no_recent_progress() {
     let long_ago = now - Duration::from_secs(3600);
     {
         let socket_ref = *backend.output_sockets.get(&stuck_id).unwrap();
-        let leaf = backend.leaves[socket_ref.key.0].as_mut().unwrap();
+        let leaf = backend.leaves.get_mut(socket_ref.key).unwrap();
         leaf.common.pending_application_bytes = 4096;
         leaf.common.progress.last_byte_progress = None;
         leaf.common.progress.last_protocol_progress = None;
@@ -499,7 +499,7 @@ fn sweep_stalled_leaves_closes_only_the_leaf_with_no_recent_progress() {
     }
     {
         let socket_ref = *backend.output_sockets.get(&healthy_id).unwrap();
-        let leaf = backend.leaves[socket_ref.key.0].as_mut().unwrap();
+        let leaf = backend.leaves.get_mut(socket_ref.key).unwrap();
         leaf.common.pending_application_bytes = 4096;
         leaf.common.progress.last_byte_progress = Some(now);
         leaf.common.progress.last_protocol_progress = None;
@@ -577,7 +577,7 @@ fn shard_removes_the_leaf_once_the_peer_closes_after_publish_acceptance() {
         backend.on_ready();
         thread::sleep(Duration::from_millis(1));
     }
-    assert!(backend.leaves.iter().all(Option::is_none));
+    assert!(backend.leaves.is_empty());
 }
 
 /// Server peer that accepts connect/publish like [`run_accepting_server_peer`],
@@ -799,25 +799,13 @@ mod reregistration_tests;
 mod wake_tests;
 
 #[test]
-fn leaf_slots_are_fixed_and_exhaustion_does_not_grow_the_slab() {
-    let mut backend =
-        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096)
-            .with_leaf_capacity(1);
-
-    assert_eq!(backend.leaves.len(), 1);
-    assert_eq!(backend.allocate_leaf_key(), Some(LeafKey(0)));
-    assert_eq!(backend.allocate_leaf_key(), None);
-    assert_eq!(backend.leaves.len(), 1);
-}
-
-#[test]
 fn shard_work_queues_have_a_hard_leaf_bound() {
     let mut backend =
         RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096)
             .with_leaf_capacity(1);
     let event = TcpReadyLeaf {
         fd: -1,
-        key: LeafKey(0),
+        key: LeafKey::for_test(0, 0),
         generation: 0,
         readable: false,
         writable: true,
@@ -827,4 +815,53 @@ fn shard_work_queues_have_a_hard_leaf_bound() {
     assert!(push_bounded(&mut backend.ready, event, capacity));
     assert!(!push_bounded(&mut backend.ready, event, capacity));
     assert_eq!(backend.ready.len(), 1);
+}
+
+/// A readiness event or I/O completion still naming a removed leaf must not
+/// reach the output that reuses its slot. Both outputs are generation 1 and
+/// the shard has one slot, so before slot epochs the old event matched the
+/// new leaf exactly (same slot, same generation, often the same fd).
+#[test]
+fn a_removed_leafs_late_event_does_not_reach_the_slots_next_output() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let peers: Vec<_> = (0..2).filter_map(|_| listener.accept().ok()).collect();
+        thread::sleep(Duration::from_millis(500));
+        drop(peers);
+    });
+    let mut backend =
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096)
+            .with_leaf_capacity(1);
+    let url = format!("rtmp://{addr}/live/key");
+    let connect = |backend: &mut RtmpShardBackend<CompioTcpPoller>, id: &str| {
+        let spec = output_spec(id, &url, 1);
+        let output_id = spec.id.clone();
+        backend.on_command(EgressCommand::Add(spec));
+        assert!(backend.complete_pending_connect(&output_id, 1, addr));
+        for _ in 0..4 {
+            backend.on_ready();
+        }
+        *backend.output_sockets.get(&output_id).expect("connected")
+    };
+
+    let old = connect(&mut backend, "old");
+    backend.on_command(EgressCommand::Remove(OutputId::new("old")));
+    let new = connect(&mut backend, "new");
+    assert_eq!(old.key.slot(), new.key.slot(), "the one slot is reused");
+
+    let late = TcpReadyLeaf {
+        fd: new.fd,
+        key: old.key,
+        generation: 1,
+        readable: true,
+        writable: true,
+    };
+    let taken = backend.enqueue_ready(late);
+    backend.on_shutdown();
+    server.join().unwrap();
+    assert!(
+        !taken,
+        "an event for the removed leaf was taken as the new leaf's readiness"
+    );
 }

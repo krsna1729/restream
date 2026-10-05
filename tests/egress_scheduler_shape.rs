@@ -11,18 +11,27 @@
 
 use std::time::Instant;
 
-use restream::media::egress::scheduler::{LeafKey, ReadyQueue, ScheduleState, try_enqueue};
+use restream::media::egress::leaf_arena::{LeafArena, LeafKey};
+use restream::media::egress::scheduler::{ReadyQueue, ScheduleState, try_enqueue};
 
 fn drain_nanos(population: usize, ready: usize, iters: u64) -> u128 {
-    let mut leaves: Vec<ScheduleState> = (0..population).map(|_| ScheduleState::new()).collect();
+    let mut leaves = LeafArena::with_capacity(population);
+    let keys: Vec<LeafKey> = (0..population)
+        .map(|_| {
+            leaves
+                .insert_with(|_| ScheduleState::new())
+                .expect("capacity")
+        })
+        .collect();
     let mut queue = ReadyQueue::with_capacity(population);
     let start = Instant::now();
     for _ in 0..iters {
-        for (key, leaf) in leaves.iter_mut().enumerate().take(ready) {
-            assert!(try_enqueue(leaf, &mut queue, LeafKey(key)));
+        for &key in keys.iter().take(ready) {
+            let leaf = leaves.get_mut(key).expect("live leaf");
+            assert!(try_enqueue(leaf, &mut queue, key));
         }
         while let Some(key) = queue.dequeue_next() {
-            leaves[key.0].enqueued = false;
+            leaves.get_mut(key).expect("live leaf").enqueued = false;
         }
     }
     start.elapsed().as_nanos() / u128::from(iters.max(1))

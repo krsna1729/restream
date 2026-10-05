@@ -33,6 +33,7 @@ pub(crate) mod factory;
 pub mod feed;
 pub mod journal;
 pub mod leaf;
+pub mod leaf_arena;
 pub mod lifecycle;
 pub mod manager;
 pub mod metrics;

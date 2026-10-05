@@ -4,8 +4,9 @@ use crate::media::egress::backend::{EngineProgress, ProtocolEngine, Readiness};
 use crate::media::egress::backends::sink::{SinkDiscardStats, SinkEngine, SinkTransport};
 use crate::media::egress::command::{EgressCommand, OutputId, ShardId};
 use crate::media::egress::feed::FeedCursor;
+use crate::media::egress::leaf_arena::{LeafArena, LeafKey};
 use crate::media::egress::policy::WorkBudget;
-use crate::media::egress::scheduler::{LeafKey, ReadyQueue, ScheduleState, try_enqueue};
+use crate::media::egress::scheduler::{ReadyQueue, ScheduleState, try_enqueue};
 use crate::media::egress::test_driver::{FakeEngine, FakeFeed, FakeTransport};
 use bytes::Bytes;
 use std::sync::{Arc, Condvar, Mutex};
@@ -71,7 +72,7 @@ struct SinkHarnessBackend {
     probe: SinkProbe,
     feed: FakeFeed,
     queue: ReadyQueue,
-    leaves: Vec<SinkHarnessLeaf>,
+    leaves: LeafArena<SinkHarnessLeaf>,
 }
 
 impl SinkHarnessBackend {
@@ -84,12 +85,14 @@ impl SinkHarnessBackend {
             probe,
             feed,
             queue: ReadyQueue::new(),
-            leaves: Vec::new(),
+            leaves: LeafArena::with_capacity(64),
         }
     }
 
     fn visit_ready_leaf(&mut self, key: LeafKey) {
-        let leaf = &mut self.leaves[key.0];
+        let Some(leaf) = self.leaves.get_mut(key) else {
+            return;
+        };
         leaf.schedule.enqueued = false;
         let progress = leaf.kind.advance(&self.feed, &mut leaf.cursor);
 
@@ -126,14 +129,17 @@ impl SinkHarnessBackend {
 impl EgressShardBackend for SinkHarnessBackend {
     fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {
         if let EgressCommand::Add(spec) = command {
-            let key = LeafKey(self.leaves.len());
-            let mut leaf = SinkHarnessLeaf {
-                schedule: ScheduleState::new(),
-                kind: HarnessEngine::from_output_id(&spec.id),
-                cursor: FeedCursor::new(0, 0),
-            };
-            try_enqueue(&mut leaf.schedule, &mut self.queue, key);
-            self.leaves.push(leaf);
+            let key = self
+                .leaves
+                .insert_with(|_| SinkHarnessLeaf {
+                    schedule: ScheduleState::new(),
+                    kind: HarnessEngine::from_output_id(&spec.id),
+                    cursor: FeedCursor::new(0, 0),
+                })
+                .expect("harness capacity");
+            if let Some(leaf) = self.leaves.get_mut(key) {
+                try_enqueue(&mut leaf.schedule, &mut self.queue, key);
+            }
         }
         EgressShardCommandEffect::Continue
     }

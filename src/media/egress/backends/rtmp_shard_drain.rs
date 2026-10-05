@@ -24,11 +24,7 @@ where
         let Some(socket_ref) = self.output_sockets.get(output_id).copied() else {
             return;
         };
-        let Some(leaf) = self
-            .leaves
-            .get_mut(socket_ref.key.0)
-            .and_then(Option::as_mut)
-        else {
+        let Some(leaf) = self.leaves.get_mut(socket_ref.key) else {
             return;
         };
         if leaf.common.pending_application_bytes == 0 {
@@ -74,7 +70,7 @@ where
             .output_sockets
             .iter()
             .filter_map(|(output_id, socket_ref)| {
-                let leaf = self.leaves.get(socket_ref.key.0)?.as_ref()?;
+                let leaf = self.leaves.get(socket_ref.key)?;
                 let draining_since = leaf.draining_since?;
                 let flushed = leaf.common.pending_application_bytes == 0;
                 let expired = now.saturating_duration_since(draining_since) >= self.drain_timeout;
@@ -87,8 +83,7 @@ where
             };
             let reason = self
                 .leaves
-                .get(socket_ref.key.0)
-                .and_then(Option::as_ref)
+                .get(socket_ref.key)
                 .and_then(|leaf| leaf.draining_reason)
                 .unwrap_or(CloseReason::Removed);
             self.remove_leaf_socket(socket_ref, reason);
@@ -120,8 +115,7 @@ where
             };
             let Some((output_id, close, pressured, delivery)) =
                 self.leaves
-                    .get_mut(key.0)
-                    .and_then(Option::as_mut)
+                    .get_mut(key)
                     .map(|leaf| {
                         let lag_units = if leaf.common.cursor_primed {
                             head_sequence.saturating_sub(leaf.common.cursor.next_sequence)
@@ -175,7 +169,7 @@ where
             let Some(socket_ref) = self.output_sockets.remove(&output_id) else {
                 continue;
             };
-            if let Some(leaf) = self.leaves.get(socket_ref.key.0).and_then(Option::as_ref) {
+            if let Some(leaf) = self.leaves.get(socket_ref.key) {
                 leaf.common.progress_sink.mark_terminated_unexpectedly();
             }
             // The shared removal path returns the key to `free_leaf_keys` and

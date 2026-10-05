@@ -60,7 +60,7 @@ fn remove_defers_close_until_pending_bytes_are_flushed() {
 
     {
         let socket_ref = *backend.output_sockets.get(&output_id).unwrap();
-        let leaf = backend.leaves[socket_ref.key.0].as_mut().unwrap();
+        let leaf = backend.leaves.get_mut(socket_ref.key).unwrap();
         leaf.common.pending_application_bytes = 4096;
     }
 
@@ -72,7 +72,7 @@ fn remove_defers_close_until_pending_bytes_are_flushed() {
     );
     {
         let socket_ref = *backend.output_sockets.get(&output_id).unwrap();
-        let leaf = backend.leaves[socket_ref.key.0].as_ref().unwrap();
+        let leaf = backend.leaves.get(socket_ref.key).unwrap();
         assert!(
             leaf.draining_since.is_some(),
             "a deferred close must mark the leaf as draining"
@@ -83,7 +83,7 @@ fn remove_defers_close_until_pending_bytes_are_flushed() {
     // for real rather than leaving it registered forever.
     {
         let socket_ref = *backend.output_sockets.get(&output_id).unwrap();
-        let leaf = backend.leaves[socket_ref.key.0].as_mut().unwrap();
+        let leaf = backend.leaves.get_mut(socket_ref.key).unwrap();
         leaf.common.pending_application_bytes = 0;
     }
     backend.sweep_draining_leaves(std::time::Instant::now());
@@ -102,7 +102,7 @@ fn remove_closes_immediately_when_nothing_is_queued() {
     server.join().unwrap();
     {
         let socket_ref = *backend.output_sockets.get(&output_id).unwrap();
-        let leaf = backend.leaves[socket_ref.key.0].as_mut().unwrap();
+        let leaf = backend.leaves.get_mut(socket_ref.key).unwrap();
         leaf.common.pending_application_bytes = 0;
     }
 
@@ -126,7 +126,7 @@ fn draining_leaf_force_closes_once_the_drain_deadline_passes() {
 
     {
         let socket_ref = *backend.output_sockets.get(&output_id).unwrap();
-        let leaf = backend.leaves[socket_ref.key.0].as_mut().unwrap();
+        let leaf = backend.leaves.get_mut(socket_ref.key).unwrap();
         leaf.common.pending_application_bytes = 4096;
     }
     backend.on_command(EgressCommand::Remove(output_id.clone()));
@@ -138,7 +138,7 @@ fn draining_leaf_force_closes_once_the_drain_deadline_passes() {
     let long_ago = std::time::Instant::now() - Duration::from_secs(3600);
     {
         let socket_ref = *backend.output_sockets.get(&output_id).unwrap();
-        let leaf = backend.leaves[socket_ref.key.0].as_mut().unwrap();
+        let leaf = backend.leaves.get_mut(socket_ref.key).unwrap();
         leaf.draining_since = Some(long_ago);
         // Still nonzero — proves the close is deadline-driven, not
         // flush-driven.
@@ -161,7 +161,7 @@ fn shutdown_marks_every_connected_leaf_draining() {
     server.join().unwrap();
     {
         let socket_ref = *backend.output_sockets.get(&output_id).unwrap();
-        let leaf = backend.leaves[socket_ref.key.0].as_mut().unwrap();
+        let leaf = backend.leaves.get_mut(socket_ref.key).unwrap();
         leaf.common.pending_application_bytes = 4096;
     }
 
@@ -172,7 +172,7 @@ fn shutdown_marks_every_connected_leaf_draining() {
         "Shutdown must not close a leaf with pending bytes immediately"
     );
     let socket_ref = *backend.output_sockets.get(&output_id).unwrap();
-    let leaf = backend.leaves[socket_ref.key.0].as_ref().unwrap();
+    let leaf = backend.leaves.get(socket_ref.key).unwrap();
     assert!(leaf.draining_since.is_some());
     assert_eq!(
         leaf.draining_reason,
@@ -207,7 +207,7 @@ fn startup_deadline_terminates_a_leaf_that_never_reaches_publish() {
         backend.on_ready();
     }
 
-    let free_before = backend.free_leaf_keys.len();
+    let live_before = backend.leaves.len();
     let before_deadline = Instant::now();
     backend.sweep_stalled_leaves(before_deadline);
     assert!(backend.output_sockets.contains_key(&output_id));
@@ -221,9 +221,9 @@ fn startup_deadline_terminates_a_leaf_that_never_reaches_publish() {
     );
     assert!(terminated.load(std::sync::atomic::Ordering::Relaxed));
     assert_eq!(
-        backend.free_leaf_keys.len(),
-        free_before + 1,
-        "the swept leaf's key must return to the free list"
+        backend.leaves.len() + 1,
+        live_before,
+        "the swept leaf's slot must be freed"
     );
     assert!(
         backend.stall_candidates.is_empty() && backend.ready.is_empty(),

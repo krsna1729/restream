@@ -58,7 +58,7 @@ fn send_shared_marginal_allocations_are_reported() {
     harness.add_resolved(srt_spec("out", 1, &url_for(sink.addr)), vec![sink.addr]);
     assert!(harness.feed_until(&unit, Duration::from_secs(10), |_| sink.payloads() >= 20));
     let key = harness.backend.output_sockets[&OutputId::new("out")];
-    let caller = harness.backend.leaves[key.0].as_ref().unwrap().caller();
+    let caller = harness.backend.leaves.get(key).unwrap().caller();
 
     let now = harness.backend.owners.timestamp();
     // Warm: grow whatever the sender buffer grows.
