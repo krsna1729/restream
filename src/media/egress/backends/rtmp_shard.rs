@@ -406,7 +406,7 @@ where
             rtmps_client_config,
             leaves: LeafArena::with_capacity(EgressShardConfig::DEFAULT_LEAF_CAPACITY),
             output_sockets: HashMap::new(),
-            ready: ReadyQueue::with_capacity(ready_capacity),
+            ready: ReadyQueue::with_capacity(EgressShardConfig::DEFAULT_LEAF_CAPACITY),
             visits_until_poll: 0,
             feed_waiting: VecDeque::with_capacity(ready_capacity),
             stall_candidates: VecDeque::with_capacity(ready_capacity),

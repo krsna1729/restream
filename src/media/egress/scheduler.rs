@@ -109,8 +109,9 @@ impl ReadyQueue {
         self.member.get(key.slot()) == Some(&Some(key))
     }
 
-    /// Queue `key` at the tail unless it is already queued. Keys come from
-    /// live leaves, so a slot's epochs only increase across pushes.
+    /// Queue `key` at the tail unless it is already queued. Push only keys
+    /// of live leaves: a removed leaf's key pushed after its slot's next
+    /// occupant would replace that occupant's entry (a lost wakeup).
     pub fn push(&mut self, key: LeafKey) -> Push {
         if self.contains(key) {
             return Push::AlreadyQueued;
