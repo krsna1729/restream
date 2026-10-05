@@ -469,7 +469,13 @@ mod tests {
         let mut cursor = cursor_at(0);
         let b = budget();
 
-        let p = engine.advance(&mut transport, Readiness::WRITABLE, &feed, &mut cursor, b.clone());
+        let p = engine.advance(
+            &mut transport,
+            Readiness::WRITABLE,
+            &feed,
+            &mut cursor,
+            b.clone(),
+        );
         assert!(matches!(
             p,
             EngineProgress::Progress {
@@ -481,7 +487,7 @@ mod tests {
         assert_eq!(transport.bytes_written, 100);
         assert_eq!(cursor.next_sequence, 2);
 
-        let p2 = engine.advance(&mut transport, Readiness::WRITABLE, &feed, &mut cursor, b.clone());
+        let p2 = engine.advance(&mut transport, Readiness::WRITABLE, &feed, &mut cursor, b);
         assert!(matches!(
             p2,
             EngineProgress::Needs(WaitCondition::Io(Interest { writable: true, .. }))

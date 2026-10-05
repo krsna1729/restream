@@ -35,7 +35,7 @@ fn bench_visit(c: &mut Criterion) {
                     transport: &mut transport,
                     readiness: Readiness::WRITABLE,
                     feed: &feed,
-                    budget,
+                    budget: budget.clone(),
                 }
                 .run(),
             );
