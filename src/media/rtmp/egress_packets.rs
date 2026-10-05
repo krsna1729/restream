@@ -1,4 +1,11 @@
 //! RTMP egress startup headers and packet policy.
+#![deny(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 
 use bytes::Bytes;
 
@@ -95,7 +102,7 @@ pub(crate) fn resolve_deferred_audio_sequence_header(
 pub(crate) fn h264_sps_nalu(payload: &[u8]) -> Option<Vec<u8>> {
     let mut sps = None;
     let _ = codec::for_each_annexb_nalu(payload, |nalu| {
-        if !nalu.is_empty() && (nalu[0] & 0x1F) == 7 {
+        if matches!(nalu, [header, ..] if header & 0x1F == 7) {
             sps = Some(nalu.to_vec());
             std::ops::ControlFlow::Break(())
         } else {

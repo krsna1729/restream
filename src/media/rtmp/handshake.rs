@@ -21,8 +21,11 @@ pub(super) async fn perform_server_handshake(
         if count == 0 {
             return Err("Socket closed during handshake");
         }
+        let Some(received) = buffer.get(..count) else {
+            return Err("Socket read reported more bytes than its buffer");
+        };
         let result = handshake
-            .process_bytes(&buffer[..count])
+            .process_bytes(received)
             .map_err(|_| "Handshake parsing error")?;
         match result {
             HandshakeProcessResult::InProgress { response_bytes } => {
@@ -76,7 +79,10 @@ where
                     Ok(n) if n > 0 => n,
                     _ => return Err("remote closed during handshake".to_string()),
                 };
-                match handshake.process_bytes(&buffer[..n]) {
+                let Some(received) = buffer.get(..n) else {
+                    return Err("socket read reported more bytes than its buffer".to_string());
+                };
+                match handshake.process_bytes(received) {
                     Ok(HandshakeProcessResult::InProgress { response_bytes }) => {
                         if !response_bytes.is_empty() {
                             socket

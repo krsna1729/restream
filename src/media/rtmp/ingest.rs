@@ -78,7 +78,7 @@ impl RtmpClientSocket {
         let start = buffer.len();
         let mut stream = &self.stream;
         let compio::BufResult(result, slice) = stream
-            .read(buffer.slice(start..start + INGEST_READ_BYTES))
+            .read(buffer.slice(start..start.saturating_add(INGEST_READ_BYTES)))
             .await;
         let buffer = slice.into_inner();
         result.map(|count| (count, buffer))
@@ -700,7 +700,10 @@ pub(super) async fn handle_rtmp_client(
         match session.handle_input(&remaining) {
             Ok(results)
                 if parser_charge
-                    .update(session.inbound_buffered_bytes() + awaiting_handoff_bytes(&results))
+                    .update(parser_budget::held_bytes(
+                        session.inbound_buffered_bytes(),
+                        &results,
+                    ))
                     .is_err() =>
             {
                 disconnect = Some(("session", PARSER_BUDGET_EXHAUSTED, true));
@@ -743,6 +746,10 @@ pub(super) async fn handle_rtmp_client(
     let fd = socket.raw_fd();
     // Until it publishes, the client holds a slot without having
     // authenticated; it must get there by this deadline.
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "u64::MAX ms fits a monotonic Instant"
+    )]
     let admission_deadline =
         Instant::now() + Duration::from_millis(engine.config.rtmp_preauth_timeout_ms);
     while disconnect.is_none() {
@@ -798,7 +805,10 @@ pub(super) async fn handle_rtmp_client(
         };
         // Completed media in this batch counts too, until it is published.
         if parser_charge
-            .update(session.inbound_buffered_bytes() + awaiting_handoff_bytes(&results))
+            .update(parser_budget::held_bytes(
+                session.inbound_buffered_bytes(),
+                &results,
+            ))
             .is_err()
         {
             warn!(
@@ -864,19 +874,6 @@ const PARSER_BUDGET_EXHAUSTED: &str = "RTMP ingest parser budget exhausted";
 const PREAUTH_DEADLINE_PASSED: &str = "RTMP client did not publish before the admission deadline";
 
 /// Media payload bytes in parsed results not yet published to the ring.
-fn awaiting_handoff_bytes(results: &[ServerSessionResult]) -> usize {
-    results
-        .iter()
-        .map(|result| match result {
-            ServerSessionResult::RaisedEvent(
-                ServerSessionEvent::VideoDataReceived { data, .. }
-                | ServerSessionEvent::AudioDataReceived { data, .. },
-            ) => data.len(),
-            _ => 0,
-        })
-        .sum()
-}
-
 /// Operator-facing reason: an oversized declared message is distinct from
 /// malformed input.
 fn session_error_reason(error: &rml_rtmp::sessions::ServerSessionError) -> &'static str {

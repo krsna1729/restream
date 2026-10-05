@@ -15,6 +15,13 @@
 //! length plus timing flags) cannot be freed and reused while it is held. A
 //! lagging output that misses simply converts again; the cache never changes
 //! what an output sends.
+#![deny(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -98,10 +105,10 @@ impl RtmpPayloadCache {
             .rev()
             .find(|slot| slot.matches(packet, enhanced_hevc))
         {
-            self.hits += 1;
+            self.hits = self.hits.saturating_add(1);
             return slot.converted.clone();
         }
-        self.misses += 1;
+        self.misses = self.misses.saturating_add(1);
         let converted = convert_raw(packet, enhanced_hevc);
         if self.recent.len() == ENTRIES {
             self.recent.pop_front();
@@ -136,8 +143,12 @@ fn convert_raw(packet: &MediaPacket, enhanced_hevc: bool) -> ConvertedPayload {
             } else {
                 cache_h264_parameter_sets(&packet.payload, &mut parameter_sets);
             }
-            let composition = (packet.pts - packet.dts).clamp(-8_388_608, 8_388_607) as i32;
-            let mut out = Vec::with_capacity(packet.payload.len() + 16);
+            // Publisher timestamps: saturate, never wrap, before the clamp.
+            let composition = packet
+                .pts
+                .saturating_sub(packet.dts)
+                .clamp(-8_388_608, 8_388_607) as i32;
+            let mut out = Vec::with_capacity(packet.payload.len().saturating_add(16));
             let encoded = if enhanced_hevc {
                 codec::hevc_video_for_enhanced_rtmp_with_composition_into(
                     &packet.payload,
@@ -170,6 +181,7 @@ fn convert_raw(packet: &MediaPacket, enhanced_hevc: bool) -> ConvertedPayload {
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
     use crate::media::packet::PayloadFormat;
@@ -187,7 +199,7 @@ mod tests {
             is_keyframe: keyframe,
             track_index: 0,
             pts,
-            dts: pts - 40,
+            dts: pts.saturating_sub(40),
             payload: Bytes::copy_from_slice(payload),
         }
     }
@@ -260,10 +272,11 @@ mod tests {
                 payload.as_ptr()
             }
         };
-        let last = private.len() - 1;
+        let last_of = |output: usize| outputs.get(output).and_then(|actions| actions.last());
+        assert!(last_of(0).is_some(), "the first output sent the packet");
         assert_eq!(
-            payload_ptr(&outputs[0][last]),
-            payload_ptr(&outputs[2][last]),
+            last_of(0).map(payload_ptr),
+            last_of(2).map(payload_ptr),
             "later outputs reuse the first output's buffer instead of copying"
         );
         assert_eq!(
