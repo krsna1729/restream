@@ -51,6 +51,10 @@ pub struct EgressFabricConfig {
     pub visit_max_us: u64,
     pub max_pending_bytes: usize,
     pub drain_timeout_ms: u64,
+    /// Upload HTTP/HTTPS HLS outputs from egress-fabric shards instead of
+    /// the Reqwest uploader on Tokio (`RESTREAM_HLS_PUT_FABRIC`). Off until
+    /// measured against the Reqwest uploader.
+    pub hls_put_fabric: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +105,7 @@ impl Default for EgressFabricConfig {
             max_pending_bytes: 256 * 1024,
             drain_timeout_ms: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT
                 .as_millis() as u64,
+            hls_put_fabric: false,
         }
     }
 }
@@ -197,6 +202,7 @@ impl EgressFabricConfig {
                 defaults.drain_timeout_ms,
             )
             .clamp(1, 60_000),
+            hls_put_fabric: env_bool("RESTREAM_HLS_PUT_FABRIC").unwrap_or(defaults.hls_put_fabric),
         }
     }
 
@@ -890,6 +896,7 @@ impl AppConfig {
                 "visitMaxUs": self.egress_fabric.visit_max_us,
                 "maxPendingBytes": self.egress_fabric.max_pending_bytes,
                 "drainTimeoutMs": self.egress_fabric.drain_timeout_ms,
+                "hlsPutFabric": self.egress_fabric.hls_put_fabric,
             },
             "capacity": {
                 "ingressPps": self.capacity_limits.ingress_pps,

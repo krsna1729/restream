@@ -41,6 +41,7 @@ wi3-owner-bench = ["srt-transport/bench-internals"]
 wi37-shard-bench = []
 
 [dependencies]
+httparse = "1.10"
 tokio = { version = "1.39", features = [
     "fs", "io-util", "macros", "net", "process",
     "rt-multi-thread", "signal", "sync", "time", "test-util",

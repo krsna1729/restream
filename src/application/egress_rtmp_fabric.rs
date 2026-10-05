@@ -198,7 +198,10 @@ mod tests {
                 assert_eq!(url, "rtmp://localhost/live/key");
                 assert!(!tls);
             }
-            ProtocolSpec::Srt { .. } | ProtocolSpec::Sink | ProtocolSpec::Pipeline { .. } => {
+            ProtocolSpec::Srt { .. }
+            | ProtocolSpec::Sink
+            | ProtocolSpec::HlsPut { .. }
+            | ProtocolSpec::Pipeline { .. } => {
                 panic!("plain RTMP fabric spec must carry the RTMP protocol")
             }
         }
@@ -211,7 +214,10 @@ mod tests {
                 assert_eq!(url, "rtmps://localhost/live/key");
                 assert!(tls);
             }
-            ProtocolSpec::Srt { .. } | ProtocolSpec::Sink | ProtocolSpec::Pipeline { .. } => {
+            ProtocolSpec::Srt { .. }
+            | ProtocolSpec::Sink
+            | ProtocolSpec::HlsPut { .. }
+            | ProtocolSpec::Pipeline { .. } => {
                 panic!("RTMPS fabric spec must carry the RTMP protocol with TLS")
             }
         }

@@ -31,6 +31,7 @@ pub mod command;
 pub(crate) mod delivery;
 pub(crate) mod factory;
 pub mod feed;
+pub(crate) mod http1;
 pub mod journal;
 pub mod leaf;
 pub mod leaf_arena;

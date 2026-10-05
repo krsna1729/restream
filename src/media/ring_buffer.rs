@@ -145,7 +145,7 @@ pub struct PublishSubscribers {
 }
 
 impl PublishSubscribers {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             list: ArcSwap::from_pointee(Vec::new()),
         }
@@ -175,6 +175,14 @@ impl PublishSubscribers {
                 .cloned()
                 .collect::<Vec<_>>()
         });
+    }
+
+    /// One `ArcSwap` load and one call per subscriber; no allocation.
+    #[inline]
+    pub(crate) fn wake_all(&self) {
+        for subscriber in self.list.load().iter() {
+            subscriber.wake();
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -278,11 +286,8 @@ impl RingBuffer {
     /// one call per subscriber. No allocation.
     #[inline]
     fn wake_publication_subscribers(&self) {
-        let Some(subscribers) = self.publish_subscribers.get() else {
-            return;
-        };
-        for subscriber in subscribers.list.load().iter() {
-            subscriber.wake();
+        if let Some(subscribers) = self.publish_subscribers.get() {
+            subscribers.wake_all();
         }
     }
 

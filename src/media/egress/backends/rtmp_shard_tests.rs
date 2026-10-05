@@ -731,7 +731,7 @@ async fn feed_wake_delivers_media_after_idle_when_factory_start_is_delayed() {
     let wakes = crate::media::egress::runtime::subscribe_fabric_wakes(
         "rtmp",
         crate::media::egress::command::FeedId::new("feed"),
-        &feed,
+        feed.publication_ring().publication_subscribers(),
         runtime.feed_wake_handles(),
     );
     startup_source.set(

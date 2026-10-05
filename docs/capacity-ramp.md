@@ -12,6 +12,7 @@ disjoint CPU sets.
 - [What it measures](#what-it-measures)
 - [Run it](#run-it)
 - [Reading the results](#reading-the-results)
+- [HLS PUT transports](#hls-put-transports)
 - [Reference results](#reference-results)
 - [Prompt for running on another machine](#prompt-for-running-on-another-machine)
 
@@ -115,6 +116,25 @@ A full default run takes roughly 1–2 hours (3 repeats, 30 s windows).
   (`nstat -az | grep -i -E 'drop|overflow|RcvbufErrors'`).
 - SRT failure shape matters as much as the capacity number: note whether
   delivery degrades for a few destinations (graceful) or collapses for all.
+
+## HLS PUT transports
+
+HLS×1000 over HTTP, 8 Mbit/s, Restream on CPUs 0–2, the same harness grading
+every variant (segment identity by length and edge bytes), two interleaved
+repeats, 2026-10-04:
+
+| Variant | Delivered | p99 segment lag | CPU avg |
+|---|---|---|---|
+| Reqwest, a 500 ms timer and a client per output (before #246) | 1000, 1000 | 0.96–1.15 s | 83–89% |
+| Reqwest, publish-driven, one client (#246) | 1000, 1000 | 0.86–0.93 s | 52–59% |
+| Reqwest with the YouTube/Akamai upload policy (#248, default) | 1000, 1000 | 0.80–0.86 s | 54–57% |
+| Egress-fabric shards, same policy (`RESTREAM_HLS_PUT_FABRIC=1`, #251) | 1000, 1000 | 1.00–1.03 s | 80% |
+
+Most of the old cost was the per-output shape (a timer, a snapshot and a
+client per output), not Tokio: fixing that on Tokio cut CPU by about a third.
+The shard path is correct and compliant but costs about 24 points more CPU at
+this rung, so Reqwest stays the default. Not measured: HTTPS, where the shard
+path's kernel TLS may change the balance, and rungs above 1000.
 
 ## Reference results
 

@@ -1,4 +1,6 @@
 pub mod compio_tcp;
+pub mod hls_put;
+pub mod hls_put_shard;
 pub mod pipeline;
 pub mod pipeline_shard;
 pub mod rtmp;
