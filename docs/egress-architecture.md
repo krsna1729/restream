@@ -908,6 +908,15 @@ Live connections are not migrated solely to rebalance load. Reassignment occurs
 on output creation, reconnect, explicit shard drain, or a configuration change
 that already requires reconnect.
 
+The manager places a new output with one of two policies
+(`PlacementPolicy`). RTMP and SRT use rendezvous hashing over the placement
+shards, a pure function of output id and shard count that harness proofs use
+to predict co-location. HLS PUT uses least-loaded placement (fewest live
+outputs, rendezvous score breaks ties): the pool starts at one shard and grows
+while outputs arrive, and rendezvous would leave the first shard with every
+output placed before the growth (shard CPU split 51/27/11% at 400 HTTPS
+outputs under rendezvous; 25/25/24% at 600 under least-loaded).
+
 Shard count is independent of Tokio worker count. Production begins with a
 small fixed count and is selected by measurement. One shard is supported for
 proof and constrained deployments, but multiple shards are the normal failure

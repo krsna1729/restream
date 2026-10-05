@@ -87,7 +87,12 @@ Useful env vars:
   peer host; it binds the SRT sink pool (default port 8891, override with
   `SRT_SINK_PORTS`) and prints its own counters plus that host's kernel UDP
   error/receive-buffer counters every `SRT_SINK_REPORT_SECS` (default 5 s).
-- `RESOURCE_SWEEP_SCENARIOS=baseline-empty,ingest-only,ingest-growth-same,ingest-growth-mixed,egress-growth-source-same,egress-growth-source-srt,egress-growth-source-mixed,egress-growth-transcode-same,egress-growth-transcode-srt,egress-growth-transcode-mixed,egress-growth-source-plus-transcode-mixed,egress-growth-transcode-dual-mixed,egress-growth-source-plus-transcode-dual-mixed,egress-growth-hevc-bridge`
+- `RESOURCE_SWEEP_HLS_TLS=1` serves the HLS PUT counting sink over HTTPS with
+  the checked-in fixture certificate (SAN `127.0.0.1`), points HLS outputs at
+  `https://`, and passes the fixture to Restream as
+  `RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM`; the sink handshakes connections
+  concurrently, as an ingest does
+- `RESOURCE_SWEEP_SCENARIOS=baseline-empty,ingest-only,ingest-growth-same,ingest-growth-mixed,egress-growth-source-same,egress-growth-source-srt,egress-growth-source-mixed,egress-growth-transcode-same,egress-growth-transcode-srt,egress-growth-transcode-mixed,egress-growth-source-plus-transcode-mixed,egress-growth-transcode-dual-mixed,egress-growth-source-plus-transcode-dual-mixed,egress-growth-hevc-bridge,egress-growth-source-hls,egress-growth-source-rtmps`
 - `RESOURCE_SWEEP_LIFECYCLE=isolated|continuous|cumulative`
 - `RESOURCE_SWEEP_NO_CLEANUP=1` to leave the final scenario running
 

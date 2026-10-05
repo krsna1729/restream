@@ -163,9 +163,10 @@ one-shot receive/write workers are the current RTMP egress baseline; provided
 buffer rings and multishot I/O remain optional mechanisms. HLS PUT runs on
 the Tokio control runtime (Reqwest) by default; `RESTREAM_HLS_PUT_FABRIC=1`
 moves it onto egress-fabric shards, with the same upload policy
-(`media/hls/upload_policy.rs`). Over HTTP at HLS×1000 the shard path costs
-more CPU than the Reqwest path ([capacity ramp](capacity-ramp.md#hls-put-transports)),
-so it stays off by default. Continuous
+(`media/hls/upload_policy.rs`). Over HTTPS it matches the Reqwest path's
+CPU with about a fifth of its p99 segment lag; over HTTP it costs about 4
+points more ([capacity ramp](capacity-ramp.md#hls-put-transports)). It is
+still off by default. Continuous
 FFmpeg pipe input/output uses dedicated
 threads or the media runtime. Codec work never moves to the I/O reactors.
 WI5B source convergence is in local verification; real-media, fault, hosted,
