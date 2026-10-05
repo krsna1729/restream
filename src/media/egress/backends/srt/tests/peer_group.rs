@@ -38,10 +38,7 @@ fn fault(caller: SrtCaller, peer: std::net::SocketAddr) -> SrtOwnerEvent {
 
 fn caller_of(harness: &Harness, output: &str) -> SrtCaller {
     let key = harness.backend.output_sockets[&OutputId::new(output)];
-    harness.backend.leaves[key.0]
-        .as_ref()
-        .expect("leaf")
-        .caller()
+    harness.backend.leaves.get(key).expect("leaf").caller()
 }
 
 fn set(flag: &Arc<AtomicBool>) -> bool {
@@ -210,11 +207,9 @@ fn a_stale_collision_never_hits_a_replacement_generation() {
     harness.add_resolved(spec, vec![silent, silent]);
     let new = caller_of(&harness, "bond");
     assert_ne!(old, new, "a new logical caller");
-    assert_eq!(
-        harness.backend.output_sockets[&OutputId::new("bond")],
-        old_key,
-        "the leaf slot was reused"
-    );
+    let new_key = harness.backend.output_sockets[&OutputId::new("bond")];
+    assert_eq!(new_key.slot(), old_key.slot(), "the leaf slot was reused");
+    assert_ne!(new_key, old_key, "under a new key");
 
     let stale = harness.backend.stale_events;
     harness.backend.handle_owner_event(fault(old, silent));

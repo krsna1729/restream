@@ -15,7 +15,7 @@ use super::CompioTcpStream;
 #[cfg(test)]
 use super::stream::TRANSPORT_BUFFER_CAPACITY;
 use super::stream::{SharedIoBuffers, receive_worker, transmit_worker};
-use crate::media::egress::scheduler::LeafKey;
+use crate::media::egress::leaf_arena::LeafKey;
 use crate::media::egress::shard::EgressShardIdleWake;
 impl Drop for CompioTcpPoller {
     fn drop(&mut self) {

@@ -3,7 +3,7 @@
 //! interest, ready-leaf events, poll errors, connect attempts and the
 //! nonblocking-connect result check.
 
-use crate::media::egress::scheduler::LeafKey;
+use crate::media::egress::leaf_arena::LeafKey;
 use std::io;
 use std::os::fd::RawFd;
 use std::os::raw::c_int;

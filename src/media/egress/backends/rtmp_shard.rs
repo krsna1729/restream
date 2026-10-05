@@ -20,11 +20,12 @@ use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, Protoco
 use crate::media::egress::feed::EgressFeed;
 use crate::media::egress::journal::RingFeed;
 use crate::media::egress::leaf::LeafCommon;
+use crate::media::egress::leaf_arena::{LeafArena, LeafKey};
 use crate::media::egress::metrics::ShardMetrics;
 use crate::media::egress::policy::{
     LeafLimits, LeafStallClass, WorkBudget, WorkBudgetConfig, classify_stall,
 };
-use crate::media::egress::scheduler::{LeafKey, VisitDecision};
+use crate::media::egress::scheduler::VisitDecision;
 use crate::media::egress::shard::{
     EgressShardBackend, EgressShardCommandEffect, EgressShardConfig,
 };
@@ -342,8 +343,7 @@ where
     budget_config: WorkBudgetConfig,
     chunk_size: u32,
     rtmps_client_config: Arc<ClientConfig>,
-    leaves: Vec<Option<RtmpFabricLeaf>>,
-    free_leaf_keys: Vec<LeafKey>,
+    leaves: LeafArena<RtmpFabricLeaf>,
     output_sockets: HashMap<OutputId, RtmpLeafSocket>,
     ready: VecDeque<TcpReadyLeaf>,
     /// Visits left before completions are reaped again even though `ready`
@@ -404,13 +404,7 @@ where
             budget_config: budget,
             chunk_size,
             rtmps_client_config,
-            leaves: (0..EgressShardConfig::DEFAULT_LEAF_CAPACITY)
-                .map(|_| None)
-                .collect(),
-            free_leaf_keys: (0..EgressShardConfig::DEFAULT_LEAF_CAPACITY as u32)
-                .rev()
-                .map(|slot| LeafKey(slot as usize))
-                .collect(),
+            leaves: LeafArena::with_capacity(EgressShardConfig::DEFAULT_LEAF_CAPACITY),
             output_sockets: HashMap::new(),
             ready: VecDeque::with_capacity(ready_capacity),
             visits_until_poll: 0,
@@ -435,11 +429,7 @@ where
     }
 
     pub(crate) fn with_leaf_capacity(mut self, capacity: usize) -> Self {
-        self.leaves = (0..capacity).map(|_| None).collect();
-        self.free_leaf_keys = (0..capacity as u32)
-            .rev()
-            .map(|slot| LeafKey(slot as usize))
-            .collect();
+        self.leaves = LeafArena::with_capacity(capacity);
         self.queue_capacity = capacity;
         self.ready = VecDeque::with_capacity(capacity);
         self.feed_waiting = VecDeque::with_capacity(capacity);
@@ -451,12 +441,9 @@ where
         let queue_capacity = self.queue_capacity;
         let ready = &mut self.ready;
         let queue_overflows = &mut self.queue_overflows;
-        let Some(leaf) = self.leaves.get_mut(event.key.0).and_then(Option::as_mut) else {
+        let Some(leaf) = self.leaves.get_mut(event.key) else {
             return false;
         };
-        if leaf.common.generation != event.generation {
-            return false;
-        }
         merge_ready_flags(&mut leaf.pending_readiness, event);
         if leaf.common.schedule.enqueued {
             return true;
@@ -495,17 +482,11 @@ where
         self.service = Default::default();
         self.ready.retain(|event| event.key != socket_ref.key);
         self.poll_buffer.retain(|event| event.key != socket_ref.key);
-        let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) else {
+        let Some(mut leaf) = self.leaves.remove(socket_ref.key) else {
             return false;
         };
-        let mut leaf = leaf;
         leaf.engine.close(&mut leaf.transport, reason);
-        self.free_leaf_keys.push(socket_ref.key);
         true
-    }
-
-    fn allocate_leaf_key(&mut self) -> Option<LeafKey> {
-        self.free_leaf_keys.pop()
     }
 
     /// Minimum interval between stall sweeps — no per-leaf FFI probe to
@@ -534,24 +515,20 @@ where
     /// `poll_ready()`, exactly as before.
     fn enqueue_feed_waiting_leaves(&mut self) {
         while let Some(key) = self.feed_waiting.pop_front() {
-            let event = self
-                .leaves
-                .get_mut(key.0)
-                .and_then(Option::as_mut)
-                .and_then(|leaf| {
-                    leaf.common.schedule.feed_wake_queued = false;
-                    if !leaf.common.schedule.wants_feed_wake || leaf.common.schedule.enqueued {
-                        None
-                    } else {
-                        Some(TcpReadyLeaf {
-                            fd: leaf.transport.raw_fd(),
-                            key,
-                            generation: leaf.common.generation,
-                            readable: false,
-                            writable: false,
-                        })
-                    }
-                });
+            let event = self.leaves.get_mut(key).and_then(|leaf| {
+                leaf.common.schedule.feed_wake_queued = false;
+                if !leaf.common.schedule.wants_feed_wake || leaf.common.schedule.enqueued {
+                    None
+                } else {
+                    Some(TcpReadyLeaf {
+                        fd: leaf.transport.raw_fd(),
+                        key,
+                        generation: leaf.common.generation,
+                        readable: false,
+                        writable: false,
+                    })
+                }
+            });
             if let Some(event) = event {
                 self.enqueue_ready(event);
             }
@@ -565,13 +542,7 @@ where
         let mut poll_buffer = std::mem::take(&mut self.poll_buffer);
         for event in poll_buffer.drain(..) {
             if self.connecting.contains_key(&event.key) {
-                if self.finish_connecting(event)
-                    && self
-                        .leaves
-                        .get(event.key.0)
-                        .and_then(Option::as_ref)
-                        .is_some()
-                {
+                if self.finish_connecting(event) && self.leaves.get(event.key).is_some() {
                     self.enqueue_ready(event);
                 }
             } else {
@@ -592,7 +563,7 @@ where
         let event = self.ready.pop_front()?;
         let budget = self.budget_config.new_visit();
         let feed = &self.feed;
-        let leaf = self.leaves.get_mut(event.key.0).and_then(Option::as_mut)?;
+        let leaf = self.leaves.get_mut(event.key)?;
         let readiness = std::mem::take(&mut leaf.pending_readiness);
         let result = leaf.visit_ready(event.generation, readiness, feed, budget);
         let (progress, decision) = match result {
@@ -769,7 +740,7 @@ where
             // path — so every close observed here is unexpected from the
             // application's point of view.
             if let Some(socket_ref) = self.output_sockets.get(output_id)
-                && let Some(leaf) = self.leaves.get(socket_ref.key.0).and_then(Option::as_ref)
+                && let Some(leaf) = self.leaves.get(socket_ref.key)
             {
                 leaf.common.progress_sink.mark_terminated_unexpectedly();
             }
@@ -837,8 +808,7 @@ where
             .collect();
         for socket_ref in sockets {
             let _ = self.poller.remove(socket_ref.fd);
-            if let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) {
-                let mut leaf = leaf;
+            if let Some(mut leaf) = self.leaves.remove(socket_ref.key) {
                 leaf.engine.close(
                     &mut leaf.transport,
                     crate::media::egress::backend::CloseReason::ShardShutdown,

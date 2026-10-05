@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::os::unix::io::RawFd;
 use std::time::Duration;
 
-use crate::media::egress::scheduler::LeafKey;
+use crate::media::egress::leaf_arena::LeafKey;
 
 use super::tcp::{TcpConnectAttempt, TcpEgressPollError, TcpReadyLeaf};
 

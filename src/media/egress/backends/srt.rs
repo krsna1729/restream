@@ -27,9 +27,10 @@ use crate::media::egress::backend::Readiness;
 use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::TsFeed;
 use crate::media::egress::leaf::LeafCommon;
+use crate::media::egress::leaf_arena::{LeafArena, LeafKey};
 use crate::media::egress::metrics::ShardMetrics;
 use crate::media::egress::policy::{LeafLimits, WorkBudgetConfig};
-use crate::media::egress::scheduler::{LeafKey, VisitDecision};
+use crate::media::egress::scheduler::VisitDecision;
 use crate::media::egress::shard::{
     EgressShardBackend, EgressShardCommandEffect, EgressShardIdleWake,
 };
@@ -216,8 +217,7 @@ pub(crate) struct SrtShardBackend {
     budget_config: WorkBudgetConfig,
     /// The shard's Compio runtime and family Owners (`!Send`, thread-affine).
     owners: SrtOwners,
-    leaves: Vec<Option<SrtFabricLeaf>>,
-    free_leaf_keys: Vec<LeafKey>,
+    leaves: LeafArena<SrtFabricLeaf>,
     output_sockets: HashMap<OutputId, LeafKey>,
     /// Exact attribution: transport identity -> live leaf. A logical caller
     /// id is never reused by an Owner, so an old id can never reach a
@@ -274,8 +274,7 @@ impl SrtShardBackend {
             feed,
             budget_config: budget,
             owners,
-            leaves: Vec::new(),
-            free_leaf_keys: Vec::new(),
+            leaves: LeafArena::with_capacity(0),
             output_sockets: HashMap::new(),
             callers: HashMap::new(),
             queued_requests: HashMap::new(),
@@ -303,11 +302,7 @@ impl SrtShardBackend {
     }
 
     fn size_queues(&mut self, capacity: usize) {
-        self.leaves = (0..capacity).map(|_| None).collect();
-        self.free_leaf_keys = (0..capacity as u32)
-            .rev()
-            .map(|slot| LeafKey(slot as usize))
-            .collect();
+        self.leaves = LeafArena::with_capacity(capacity);
         self.ready = VecDeque::with_capacity(capacity);
         self.ready_candidates = VecDeque::with_capacity(capacity);
         self.feed_waiting = VecDeque::with_capacity(capacity);
@@ -331,7 +326,7 @@ impl SrtShardBackend {
     }
 
     fn leaf_queue_capacity(&self) -> usize {
-        self.leaves.len().max(1)
+        self.leaves.capacity().max(1)
     }
 
     fn enqueue_ready_candidate(&mut self, key: LeafKey) -> bool {
@@ -379,22 +374,20 @@ impl SrtShardBackend {
         admitted
     }
 
-    fn allocate_leaf_key(&mut self) -> Option<LeafKey> {
-        self.free_leaf_keys.pop()
-    }
-
     /// Make a connected output live: give it a leaf slot, index its caller for
     /// exact event attribution, and schedule its first visit. A previous leaf
     /// for the same output (an `Update`) is closed.
     fn install_leaf(&mut self, common: LeafCommon, caller: SrtCaller) -> Option<LeafKey> {
         let progress_sink = common.progress_sink.clone();
-        let Some(key) = self.allocate_leaf_key() else {
+        let output_id = common.output_id.clone();
+        let Some(key) = self
+            .leaves
+            .insert_with(|_| SrtFabricLeaf::new(common, caller))
+        else {
             progress_sink.mark_terminated_unexpectedly();
             self.owners.remove_now(&caller);
             return None;
         };
-        let output_id = common.output_id.clone();
-        self.leaves[key.0] = Some(SrtFabricLeaf::new(common, caller));
         self.callers.insert(caller, key);
         self.enqueue_ready_candidate(key);
         self.enqueue_stall_candidate(key);
@@ -491,7 +484,7 @@ impl SrtShardBackend {
                 .output_sockets
                 .len()
                 .saturating_add(self.pending_connects.len())
-                >= self.leaves.len()
+                >= self.leaves.capacity()
         {
             tracing::warn!(
                 output_id = %output_id,
@@ -537,14 +530,13 @@ impl SrtShardBackend {
         self.stall_candidates.retain(|queued| *queued != key);
         self.sweep_service.invalidate();
         self.service = Default::default();
-        let Some(mut leaf) = self.leaves.get_mut(key.0).and_then(Option::take) else {
+        let Some(mut leaf) = self.leaves.remove(key) else {
             return false;
         };
         let _ = reason;
         leaf.engine.clear();
         self.callers.remove(&leaf.caller);
         self.owners.begin_close(&leaf.caller);
-        self.free_leaf_keys.push(key);
         true
     }
 
@@ -576,13 +568,13 @@ impl SrtShardBackend {
             let Some(key) = self.blocked.pop_front() else {
                 break;
             };
-            if let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) {
+            if let Some(leaf) = self.leaves.get_mut(key) {
                 leaf.blocked_queued = false;
                 self.enqueue_ready_candidate(key);
             }
         }
         while let Some(key) = self.ready_candidates.pop_front() {
-            let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
+            let Some(leaf) = self.leaves.get_mut(key) else {
                 continue;
             };
             if leaf.common.schedule.enqueued {
@@ -591,7 +583,7 @@ impl SrtShardBackend {
             leaf.common.schedule.enqueued = true;
             let generation = leaf.common.generation;
             if !self.enqueue_ready_event(SrtReadyLeaf { key, generation })
-                && let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut)
+                && let Some(leaf) = self.leaves.get_mut(key)
             {
                 leaf.common.schedule.enqueued = false;
             }
@@ -603,7 +595,7 @@ impl SrtShardBackend {
         if matches!(decision, VisitDecision::Close) {
             return;
         }
-        let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
+        let Some(leaf) = self.leaves.get_mut(key) else {
             return;
         };
         if leaf.common.schedule.enqueued {
@@ -614,7 +606,7 @@ impl SrtShardBackend {
         if feed_wake {
             leaf.common.schedule.feed_wake_queued = true;
             if !self.enqueue_feed_waiting(key)
-                && let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut)
+                && let Some(leaf) = self.leaves.get_mut(key)
             {
                 leaf.common.schedule.feed_wake_queued = false;
             }
@@ -625,7 +617,7 @@ impl SrtShardBackend {
             if !leaf.blocked_queued {
                 leaf.blocked_queued = true;
                 if !self.enqueue_blocked(key)
-                    && let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut)
+                    && let Some(leaf) = self.leaves.get_mut(key)
                 {
                     leaf.blocked_queued = false;
                 }
@@ -644,7 +636,7 @@ impl SrtShardBackend {
         let budget = self.budget_config.new_visit();
         let feed = &self.feed;
         let now = self.owners.timestamp();
-        let leaf = self.leaves.get_mut(event.key.0).and_then(Option::as_mut)?;
+        let leaf = self.leaves.get_mut(event.key)?;
         let result = leaf.visit_ready(
             event.generation,
             Readiness {
@@ -814,8 +806,8 @@ impl EgressShardBackend for SrtShardBackend {
             // `Close` only comes from `PeerClosed`/`Failed`; an explicit
             // `Remove` never reaches here, so every close seen here is
             // unexpected from the application's point of view.
-            if let Some(key) = self.output_sockets.get(output_id)
-                && let Some(leaf) = self.leaves.get(key.0).and_then(Option::as_ref)
+            if let Some(&key) = self.output_sockets.get(output_id)
+                && let Some(leaf) = self.leaves.get(key)
             {
                 leaf.common.progress_sink.mark_terminated_unexpectedly();
             }

@@ -3,8 +3,9 @@ use super::support::{config, output_spec};
 use crate::media::egress::backend::{EngineProgress, Interest, Readiness, WaitCondition};
 use crate::media::egress::command::{EgressCommand, FeedId, OutputId, ShardId};
 use crate::media::egress::leaf::LeafCommon;
+use crate::media::egress::leaf_arena::{LeafArena, LeafKey};
 use crate::media::egress::policy::{LeafLimits, WorkBudget};
-use crate::media::egress::scheduler::{LeafKey, ReadyQueue, VisitDecision, try_enqueue};
+use crate::media::egress::scheduler::{ReadyQueue, VisitDecision, try_enqueue};
 use crate::media::egress::test_driver::{EngineScript, FakeEngine, FakeFeed, FakeTransport};
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 use std::num::NonZeroU32;
@@ -227,7 +228,7 @@ struct LeafHarnessBackend {
     probe: LeafProbe,
     feed: FakeFeed,
     queue: ReadyQueue,
-    leaves: Vec<HarnessLeaf>,
+    leaves: LeafArena<HarnessLeaf>,
 }
 
 impl LeafHarnessBackend {
@@ -236,7 +237,7 @@ impl LeafHarnessBackend {
             probe,
             feed: FakeFeed::new(),
             queue: ReadyQueue::new(),
-            leaves: Vec::new(),
+            leaves: LeafArena::with_capacity(1024),
         }
     }
 
@@ -244,7 +245,9 @@ impl LeafHarnessBackend {
     /// backend uses (generation check, priming, panic containment,
     /// progress-to-decision mapping).
     fn visit_ready_leaf(&mut self, key: LeafKey) {
-        let leaf = &mut self.leaves[key.0];
+        let Some(leaf) = self.leaves.get_mut(key) else {
+            return;
+        };
         let EngineVisitResult::Visited(outcome) = (EngineVisit {
             generation: 1,
             common: &mut leaf.common,
@@ -280,7 +283,6 @@ impl LeafHarnessBackend {
 impl EgressShardBackend for LeafHarnessBackend {
     fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {
         if let EgressCommand::Add(spec) = command {
-            let key = LeafKey(self.leaves.len());
             let engine = if spec.id.as_str().contains("panics") {
                 FakeEngine::new(vec![EngineScript::Panic])
             } else if spec.id.as_str().contains("blocked") {
@@ -306,14 +308,17 @@ impl EgressShardBackend for LeafHarnessBackend {
             } else {
                 FakeEngine::always_progress(1, 1)
             };
-            let mut leaf = HarnessLeaf {
-                common: LeafCommon::new(spec.id, 1, FeedId::new("feed"), LeafLimits::default()),
-                engine,
-                transport: FakeTransport::default(),
-            };
-
-            try_enqueue(&mut leaf.common.schedule, &mut self.queue, key);
-            self.leaves.push(leaf);
+            let key = self
+                .leaves
+                .insert_with(|_| HarnessLeaf {
+                    common: LeafCommon::new(spec.id, 1, FeedId::new("feed"), LeafLimits::default()),
+                    engine,
+                    transport: FakeTransport::default(),
+                })
+                .expect("harness capacity");
+            if let Some(leaf) = self.leaves.get_mut(key) {
+                try_enqueue(&mut leaf.common.schedule, &mut self.queue, key);
+            }
         }
         EgressShardCommandEffect::Continue
     }

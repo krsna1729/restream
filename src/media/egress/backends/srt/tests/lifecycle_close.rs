@@ -35,7 +35,7 @@ fn removed_leaf_with_backlog_drains_then_force_closes_at_the_deadline() {
         .get(&OutputId::new("out"))
         .copied();
     if let Some(key) = key {
-        let leaf = harness.backend.leaves[key.0].as_ref().unwrap();
+        let leaf = harness.backend.leaves.get(key).unwrap();
         assert!(
             leaf.draining_since.is_some(),
             "backlog keeps the leaf draining"

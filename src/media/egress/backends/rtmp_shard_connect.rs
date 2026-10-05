@@ -42,7 +42,7 @@ where
                 .len()
                 .saturating_add(self.pending_connects.len())
                 .saturating_add(self.connecting_by_output.len())
-                >= self.leaves.len()
+                >= self.leaves.capacity()
         {
             tracing::warn!(
                 output_id = %output_id,
@@ -104,7 +104,7 @@ where
             return false;
         }
 
-        let Some(key) = self.allocate_leaf_key() else {
+        let Some(key) = self.leaves.reserve() else {
             pending.common.progress_sink.mark_terminated_unexpectedly();
             tracing::warn!(
                 output_id = %output_id,
@@ -150,7 +150,7 @@ where
                     "rtmp fabric leaf connect failed"
                 );
                 pending.common.progress_sink.mark_terminated_unexpectedly();
-                self.free_leaf_keys.push(key);
+                self.leaves.remove(key);
                 false
             }
         }
@@ -178,7 +178,7 @@ where
                     tracing::warn!(output_id = %output_id, error = %error, "rtmp fabric leaf tls init failed");
                     let _ = self.poller.remove(fd);
                     progress_sink.mark_terminated_unexpectedly();
-                    self.free_leaf_keys.push(key);
+                    self.leaves.remove(key);
                     return false;
                 }
             }
@@ -189,7 +189,7 @@ where
             tracing::warn!(output_id = %output_id, "rtmp fabric leaf rejected: no publish startup available");
             let _ = self.poller.remove(fd);
             progress_sink.mark_terminated_unexpectedly();
-            self.free_leaf_keys.push(key);
+            self.leaves.remove(key);
             return false;
         };
         let engine = match RtmpFabricEngine::new_client(
@@ -206,7 +206,7 @@ where
                 tracing::warn!(output_id = %output_id, error = %error, "rtmp fabric leaf init failed");
                 let _ = self.poller.remove(fd);
                 progress_sink.mark_terminated_unexpectedly();
-                self.free_leaf_keys.push(key);
+                self.leaves.remove(key);
                 return false;
             }
         };
@@ -218,21 +218,25 @@ where
             tracing::warn!(output_id = %output_id, "rtmp fabric leaf poller registration failed");
             let _ = self.poller.remove(fd);
             progress_sink.mark_terminated_unexpectedly();
-            self.free_leaf_keys.push(key);
+            self.leaves.remove(key);
             return false;
         }
-        self.leaves[key.0] = Some(RtmpFabricLeaf {
-            common: connecting.common,
-            engine,
-            transport: stream,
-            pending_readiness: super::Readiness::default(),
-            observed_since: Instant::now(),
-            startup_deadline: Instant::now() + startup_timeout,
-            draining_since: None,
-            draining_reason: None,
-            previous_tcp_bytes: None,
-            delivery: Default::default(),
-        });
+        let filled = self.leaves.fill(
+            key,
+            RtmpFabricLeaf {
+                common: connecting.common,
+                engine,
+                transport: stream,
+                pending_readiness: super::Readiness::default(),
+                observed_since: Instant::now(),
+                startup_deadline: Instant::now() + startup_timeout,
+                draining_since: None,
+                draining_reason: None,
+                previous_tcp_bytes: None,
+                delivery: Default::default(),
+            },
+        );
+        debug_assert!(filled.is_ok(), "a reserved key fills once");
         self.enqueue_stall_candidate(key);
         self.sweep_service.invalidate();
         self.service = Default::default();
@@ -256,7 +260,7 @@ where
             self.remove_leaf_by_output(output_id);
             return false;
         }
-        tracing::info!(output_id = %output_id, leaf_key = key.0, "rtmp fabric leaf connected");
+        tracing::info!(output_id = %output_id, leaf_key = ?key, "rtmp fabric leaf connected");
         true
     }
 
@@ -274,7 +278,7 @@ where
         };
         if let Some(connecting) = self.connecting.remove(&key) {
             let _ = self.poller.remove(connecting.stream.as_raw_fd());
-            self.free_leaf_keys.push(key);
+            self.leaves.remove(key);
         }
     }
 
@@ -283,11 +287,9 @@ where
             return false;
         };
         let output_id = connecting.common.output_id.clone();
-        if self.connecting_by_output.get(&output_id) != Some(&event.key)
-            || connecting.common.generation != event.generation
-        {
+        if self.connecting_by_output.get(&output_id) != Some(&event.key) {
             let _ = self.poller.remove(connecting.stream.as_raw_fd());
-            self.free_leaf_keys.push(event.key);
+            self.leaves.remove(event.key);
             return false;
         }
         self.connecting_by_output.remove(&output_id);
@@ -298,7 +300,7 @@ where
                 .progress_sink
                 .mark_terminated_unexpectedly();
             let _ = self.poller.remove(connecting.stream.as_raw_fd());
-            self.free_leaf_keys.push(event.key);
+            self.leaves.remove(event.key);
             return false;
         }
         self.activate_connected(&output_id, connecting, event.key)

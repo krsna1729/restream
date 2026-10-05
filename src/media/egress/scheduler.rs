@@ -13,10 +13,7 @@ use std::time::Instant;
 // LeafKey
 // ---------------------------------------------------------------------------
 
-/// Index into a shard's `Slab<Leaf<_>>`. Cheap to copy, never reallocated
-/// for the same generation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct LeafKey(pub usize);
+use super::leaf_arena::LeafKey;
 
 // ---------------------------------------------------------------------------
 // ScheduleState — per-leaf
@@ -228,9 +225,17 @@ mod tests {
         let mut queue = ReadyQueue::new();
 
         // Enqueue leaf 0 once.
-        assert!(try_enqueue(&mut slab.states[0], &mut queue, LeafKey(0)));
+        assert!(try_enqueue(
+            &mut slab.states[0],
+            &mut queue,
+            LeafKey::for_test(0, 0)
+        ));
         // Second attempt returns false and does not double-enqueue.
-        assert!(!try_enqueue(&mut slab.states[0], &mut queue, LeafKey(0)));
+        assert!(!try_enqueue(
+            &mut slab.states[0],
+            &mut queue,
+            LeafKey::for_test(0, 0)
+        ));
 
         assert_eq!(queue.len(), 1);
     }
@@ -238,8 +243,8 @@ mod tests {
     #[test]
     fn ready_queue_has_a_hard_capacity() {
         let mut queue = ReadyQueue::with_capacity(1);
-        assert!(queue.push_back(LeafKey(0)));
-        assert!(!queue.push_back(LeafKey(1)));
+        assert!(queue.push_back(LeafKey::for_test(0, 0)));
+        assert!(!queue.push_back(LeafKey::for_test(1, 0)));
         assert_eq!(queue.len(), 1);
     }
 
@@ -249,14 +254,18 @@ mod tests {
         let mut queue = ReadyQueue::new();
 
         for i in 0..4 {
-            try_enqueue(&mut slab.states[i], &mut queue, LeafKey(i));
+            try_enqueue(
+                &mut slab.states[i],
+                &mut queue,
+                LeafKey::for_test(i as u32, 0),
+            );
         }
 
         // Should come out FIFO.
         for expected in 0..4usize {
             let key = queue.dequeue_next().unwrap();
-            slab.states[key.0].enqueued = false;
-            assert_eq!(key.0, expected);
+            slab.states[key.slot()].enqueued = false;
+            assert_eq!(key.slot(), expected);
         }
         assert!(queue.is_empty());
     }
@@ -266,18 +275,18 @@ mod tests {
         let mut slab = FakeSlab::new(2);
         let mut queue = ReadyQueue::new();
 
-        try_enqueue(&mut slab.states[0], &mut queue, LeafKey(0));
-        try_enqueue(&mut slab.states[1], &mut queue, LeafKey(1));
+        try_enqueue(&mut slab.states[0], &mut queue, LeafKey::for_test(0, 0));
+        try_enqueue(&mut slab.states[1], &mut queue, LeafKey::for_test(1, 0));
 
         // Dequeue leaf 0 and decide to suspend it (transport blocked).
         let key = queue.dequeue_next().unwrap();
-        assert_eq!(key.0, 0);
+        assert_eq!(key.slot(), 0);
         slab.states[0].enqueued = false; // suspend: clear enqueued, do NOT re-push.
 
         // Leaf 1 is still in queue.
         assert_eq!(queue.len(), 1);
         let key = queue.dequeue_next().unwrap();
-        assert_eq!(key.0, 1);
+        assert_eq!(key.slot(), 1);
         // If leaf 1 has more work, re-append it.
         queue.push_back_runnable(key);
         assert_eq!(queue.len(), 1);
@@ -290,17 +299,21 @@ mod tests {
         let mut queue = ReadyQueue::new();
 
         for i in 0..3 {
-            try_enqueue(&mut slab.states[i], &mut queue, LeafKey(i));
+            try_enqueue(
+                &mut slab.states[i],
+                &mut queue,
+                LeafKey::for_test(i as u32, 0),
+            );
         }
 
         // Service leaf 0, simulate it still has work → re-append at tail.
         let key0 = queue.dequeue_next().unwrap();
-        assert_eq!(key0.0, 0);
+        assert_eq!(key0.slot(), 0);
         queue.push_back_runnable(key0); // still runnable, goes to tail.
 
         // Next service is leaf 1, not leaf 0 again.
         let key1 = queue.dequeue_next().unwrap();
-        assert_eq!(key1.0, 1);
+        assert_eq!(key1.slot(), 1);
     }
 
     #[test]
@@ -308,7 +321,11 @@ mod tests {
         let mut slab = FakeSlab::new(5);
         let mut queue = ReadyQueue::new();
         for i in 0..5 {
-            try_enqueue(&mut slab.states[i], &mut queue, LeafKey(i));
+            try_enqueue(
+                &mut slab.states[i],
+                &mut queue,
+                LeafKey::for_test(i as u32, 0),
+            );
         }
         let drained: Vec<_> = queue.drain().collect();
         assert_eq!(drained.len(), 5);
@@ -399,11 +416,11 @@ mod tests {
                         if index >= leaf_count {
                             continue;
                         }
-                        try_enqueue(&mut slab.states[index], &mut queue, LeafKey(index));
+                        try_enqueue(&mut slab.states[index], &mut queue, LeafKey::for_test(index as u32, 0));
                     }
                     QueueOp::DequeueAndSuspend => {
                         if let Some(key) = queue.dequeue_next() {
-                            slab.states[key.0].enqueued = false;
+                            slab.states[key.slot()].enqueued = false;
                         }
                     }
                     QueueOp::DequeueAndRequeue => {
@@ -420,7 +437,7 @@ mod tests {
                 // minimal and readable.
                 let mut membership_counts = vec![0usize; leaf_count];
                 for key in queue.drain() {
-                    membership_counts[key.0] += 1;
+                    membership_counts[key.slot()] += 1;
                 }
                 for (index, count) in membership_counts.iter().enumerate() {
                     prop_assert!(
@@ -445,7 +462,7 @@ mod tests {
                 // fine).
                 for (index, in_queue) in membership_counts.iter().enumerate() {
                     if *in_queue == 1 {
-                        queue.push_back(LeafKey(index));
+                        queue.push_back(LeafKey::for_test(index as u32, 0));
                     }
                 }
             }

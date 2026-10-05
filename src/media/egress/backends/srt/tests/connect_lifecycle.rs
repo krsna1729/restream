@@ -15,7 +15,7 @@ fn direct_connect_admits_immediately_and_delivers_payload() {
 
     assert_eq!(harness.backend.output_sockets.len(), 1, "one leaf");
     let key = harness.backend.output_sockets[&OutputId::new("out-a")];
-    let leaf = harness.backend.leaves[key.0].as_ref().expect("leaf");
+    let leaf = harness.backend.leaves.get(key).expect("leaf");
     assert_eq!(leaf.common().generation, 3);
     assert_eq!(leaf.caller().family, AddressFamily::V4);
     assert_eq!(harness.backend.owners.owner_count(), 1);
@@ -87,7 +87,7 @@ fn queued_connect_is_correlated_then_admitted_to_the_same_output() {
         "queued output must be admitted once a permit frees"
     );
     let key = harness.backend.output_sockets[&OutputId::new("out-b")];
-    let leaf = harness.backend.leaves[key.0].as_ref().unwrap();
+    let leaf = harness.backend.leaves.get(key).unwrap();
     assert_eq!(leaf.common().output_id.as_str(), "out-b");
     assert_eq!(leaf.common().generation, 1);
     assert!(
@@ -187,11 +187,7 @@ fn stale_queued_admission_never_attaches_to_a_replacement_generation() {
     harness.backend.on_media_tick();
     let key = harness.backend.output_sockets[&OutputId::new("out-b")];
     assert_eq!(
-        harness.backend.leaves[key.0]
-            .as_ref()
-            .unwrap()
-            .common()
-            .generation,
+        harness.backend.leaves.get(key).unwrap().common().generation,
         2
     );
 }
@@ -311,7 +307,7 @@ fn removing_one_output_leaves_siblings_operational() {
 fn churn_reclaims_slots_and_callers_without_identity_reuse() {
     let sink = SinkPeer::v4();
     let mut harness = Harness::new();
-    let capacity = harness.backend.leaves.len();
+    let capacity = harness.backend.leaves.capacity();
     let mut seen = std::collections::HashSet::new();
 
     for round in 0..12u64 {
@@ -321,7 +317,7 @@ fn churn_reclaims_slots_and_callers_without_identity_reuse() {
             vec![sink.addr],
         );
         let key = harness.backend.output_sockets[&OutputId::new(&id)];
-        let caller = harness.backend.leaves[key.0].as_ref().unwrap().caller();
+        let caller = harness.backend.leaves.get(key).unwrap().caller();
         assert!(
             seen.insert(caller.id),
             "logical caller id {caller:?} was reused"
@@ -344,8 +340,11 @@ fn churn_reclaims_slots_and_callers_without_identity_reuse() {
     assert!(harness.backend.output_sockets.is_empty());
     assert!(harness.backend.callers.is_empty());
     assert_eq!(
-        harness.backend.free_leaf_keys.len(),
-        capacity,
+        (
+            harness.backend.leaves.len(),
+            harness.backend.leaves.capacity()
+        ),
+        (0, capacity),
         "every slot reclaimed"
     );
     let stats = harness

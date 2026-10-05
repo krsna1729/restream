@@ -17,7 +17,7 @@ fn deliver_until(harness: &mut Harness, until: impl Fn() -> bool, unit: &Bytes) 
 
 fn group_legs(harness: &Harness) -> Vec<(u32, String, u64)> {
     let key = harness.backend.output_sockets[&OutputId::new("bond")];
-    let caller = harness.backend.leaves[key.0].as_ref().unwrap().caller();
+    let caller = harness.backend.leaves.get(key).unwrap().caller();
     match harness.backend.owners.stats(&caller) {
         Some(srt_transport::advanced::caller::LogicalCallerStats::Group(group)) => group
             .legs

@@ -23,7 +23,7 @@ impl SrtShardBackend {
         let Some(key) = self.output_sockets.get(output_id).copied() else {
             return;
         };
-        let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
+        let Some(leaf) = self.leaves.get_mut(key) else {
             return;
         };
         let backlog = self
@@ -73,11 +73,8 @@ impl SrtShardBackend {
                 break;
             };
             let owners = &self.owners;
-            let Some((output_id, close, pressured, delivery)) = self
-                .leaves
-                .get_mut(key.0)
-                .and_then(Option::as_mut)
-                .map(|leaf| {
+            let Some((output_id, close, pressured, delivery)) =
+                self.leaves.get_mut(key).map(|leaf| {
                     let lag_units = if leaf.common().cursor_primed {
                         head_sequence.saturating_sub(leaf.common().cursor.next_sequence)
                     } else {
@@ -134,7 +131,7 @@ impl SrtShardBackend {
             // A leaf already draining for a requested close (Remove, drain,
             // shutdown) is expiring its drain window, not failing: only an
             // undrained leaf that stalled is an unexpected termination.
-            if let Some(leaf) = self.leaves.get(key.0).and_then(Option::as_ref)
+            if let Some(leaf) = self.leaves.get(key)
                 && leaf.draining_since.is_none()
             {
                 tracing::warn!(
@@ -158,7 +155,7 @@ impl SrtShardBackend {
     /// wake does not scan every output on the shard.
     pub(super) fn enqueue_feed_waiting_leaves(&mut self) {
         while let Some(key) = self.feed_waiting.pop_front() {
-            let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
+            let Some(leaf) = self.leaves.get_mut(key) else {
                 continue;
             };
             leaf.common.schedule.feed_wake_queued = false;

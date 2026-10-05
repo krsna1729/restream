@@ -53,7 +53,7 @@ impl SrtShardBackend {
                     id: fault.id,
                 };
                 if let Some(key) = self.callers.get(&caller).copied()
-                    && let Some(leaf) = self.leaves.get(key.0).and_then(Option::as_ref)
+                    && let Some(leaf) = self.leaves.get(key)
                 {
                     tracing::warn!(
                         output_id = %leaf.common.output_id,
@@ -85,7 +85,7 @@ impl SrtShardBackend {
                     return;
                 };
                 if let Some(key) = self.callers.get(&SrtCaller { family, id }).copied()
-                    && let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut)
+                    && let Some(leaf) = self.leaves.get_mut(key)
                 {
                     leaf.tx_failures = leaf.tx_failures.saturating_add(1);
                 }
@@ -152,7 +152,7 @@ impl SrtShardBackend {
             self.stale_events = self.stale_events.saturating_add(1);
             return;
         };
-        let Some(leaf) = self.leaves.get(key.0).and_then(Option::as_ref) else {
+        let Some(leaf) = self.leaves.get(key) else {
             return;
         };
         leaf.common.progress_sink.mark_terminated_unexpectedly();
@@ -184,7 +184,7 @@ impl SrtShardBackend {
             .map(|(_, key)| *key)
             .collect();
         for key in doomed {
-            if let Some(leaf) = self.leaves.get(key.0).and_then(Option::as_ref) {
+            if let Some(leaf) = self.leaves.get(key) {
                 leaf.common.progress_sink.mark_terminated_unexpectedly();
                 let output_id = leaf.common.output_id.clone();
                 self.output_sockets.remove(&output_id);

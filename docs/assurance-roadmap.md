@@ -162,6 +162,16 @@ Use these before any checker, wherever the weak form exists today:
    generational arena; keep one check of the arena and one wiring test per
    subsystem.
 
+   Done for slot-addressed state: `LeafArena` (`src/media/egress/leaf_arena.rs`)
+   owns every shard's leaves (RTMP, SRT, sink, pipeline), and a `LeafKey`
+   carries the slot's epoch, bumped on removal. Readiness events, I/O
+   completions and queued entries for a removed leaf stop resolving, even
+   when the slot, the fd and the spec generation are all reused (the case
+   per-handler checks missed). One proptest checks the arena; the RTMP
+   test `a_removed_leafs_late_event_does_not_reach_the_slots_next_output`
+   checks the wiring. Output-keyed pending connects (DNS, Owner admission)
+   keep their spec-generation check: the output id is their identity.
+
 Keep as they are: `LeafLifecycle` (one enum, one transition table; typestate
 would add wrapping for little gain), and every test of external behavior
 (RTMP serialization, libsrt interop, slow-peer isolation, Compio wakeups,

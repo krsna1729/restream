@@ -1,5 +1,5 @@
 use super::{CompioTcpPoller, CompioTcpStream, TcpConnectAttempt};
-use crate::media::egress::scheduler::LeafKey;
+use crate::media::egress::leaf_arena::LeafKey;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::fd::AsRawFd;
@@ -40,7 +40,7 @@ fn exercise_bounded_receive(ancillary_mode: bool) {
     let mut poller = CompioTcpPoller::new(4).unwrap();
     let mut stream = poller.adopt(client).unwrap();
     let fd = stream.raw_fd();
-    let key = LeafKey(22);
+    let key = LeafKey::for_test(22, 0);
     let generation = 51;
     let buffers = stream.io_buffers().unwrap();
     if ancillary_mode {
@@ -112,7 +112,7 @@ fn compio_poller_reports_generation_tagged_connect_readiness() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let address = listener.local_addr().unwrap();
     let server = thread::spawn(move || listener.accept().unwrap());
-    let key = LeafKey(3);
+    let key = LeafKey::for_test(3, 0);
     let mut poller = CompioTcpPoller::new(4).unwrap();
     let attempt = poller
         .start_connect(address, key, 7, Duration::from_secs(2))
@@ -222,7 +222,7 @@ fn compio_completion_workers_roundtrip_connection_io() {
     let mut poller = CompioTcpPoller::new(4).unwrap();
     let mut stream = poller.adopt(client).unwrap();
     let fd = stream.raw_fd();
-    let key = LeafKey(12);
+    let key = LeafKey::for_test(12, 0);
     let generation = 41;
     poller
         .register_connection(fd, key, generation, &stream)
@@ -304,7 +304,7 @@ fn dropping_poller_joins_workers_and_closes_active_connection() {
     let mut poller = CompioTcpPoller::new(4).unwrap();
     let mut stream = poller.adopt(client).unwrap();
     let fd = stream.raw_fd();
-    let key = LeafKey(13);
+    let key = LeafKey::for_test(13, 0);
     poller.register_connection(fd, key, 42, &stream).unwrap();
     assert_eq!(stream.write(b"hello").unwrap(), 5);
 
@@ -353,7 +353,7 @@ fn command_and_socket_readiness_are_serviced_fairly() {
     client.set_nonblocking(true).unwrap();
     let stream = poller.adopt(client).unwrap();
     let fd = stream.raw_fd();
-    let key = LeafKey(9);
+    let key = LeafKey::for_test(9, 0);
     poller
         .register_leaf(fd, key, 11, super::TcpEgressInterest::WRITE)
         .unwrap();
@@ -409,7 +409,7 @@ fn active_completions_do_not_starve_pending_connect_readiness() {
     active_client.set_nonblocking(true).unwrap();
     let active_stream = poller.adopt(active_client).unwrap();
     let active_fd = active_stream.raw_fd();
-    let active_key = LeafKey(20);
+    let active_key = LeafKey::for_test(20, 0);
     poller
         .register_connection(active_fd, active_key, 31, &active_stream)
         .unwrap();
@@ -428,7 +428,7 @@ fn active_completions_do_not_starve_pending_connect_readiness() {
     let pending_client = TcpStream::connect(pending_address).unwrap();
     pending_client.set_nonblocking(true).unwrap();
     let pending_fd = pending_client.as_raw_fd();
-    let pending_key = LeafKey(21);
+    let pending_key = LeafKey::for_test(21, 0);
     poller
         .register_leaf(pending_fd, pending_key, 32, super::TcpEgressInterest::WRITE)
         .unwrap();
@@ -475,7 +475,7 @@ fn compio_poller_reports_simultaneous_read_and_write_readiness() {
     let mut poller = CompioTcpPoller::new(4).unwrap();
     let stream = poller.adopt(client).unwrap();
     let fd = stream.raw_fd();
-    let key = LeafKey(4);
+    let key = LeafKey::for_test(4, 0);
     poller
         .register_leaf(fd, key, 13, super::TcpEgressInterest::READ_WRITE)
         .unwrap();
@@ -512,7 +512,7 @@ fn zero_timeout_polls_alone_complete_socket_io() {
     let mut poller = CompioTcpPoller::new(4).unwrap();
     let mut stream = poller.adopt(client).unwrap();
     let fd = stream.raw_fd();
-    let key = LeafKey(21);
+    let key = LeafKey::for_test(21, 0);
     poller.register_connection(fd, key, 3, &stream).unwrap();
     assert_eq!(stream.write(b"ping").unwrap(), 4);
 
@@ -559,7 +559,7 @@ fn rtmps_receive_before_ktls_consumes_nothing_while_waiting() {
     stream.set_ancillary_mode();
     let fd = stream.raw_fd();
     poller
-        .register_connection(fd, LeafKey(32), 9, &stream)
+        .register_connection(fd, LeafKey::for_test(32, 0), 9, &stream)
         .unwrap();
     // Let the receive worker reach its wait against the silent peer.
     let mut events = Vec::new();
