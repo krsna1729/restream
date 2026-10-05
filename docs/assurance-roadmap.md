@@ -188,10 +188,12 @@ crash found by them is fixed with a regression test first; see
 [testing](testing.md#parser-fuzz-targets). Fuzz belongs at externally supplied
 bytes: no theorem prover for parser robustness.
 
-Done: CI `Miri` runs the leaf arena, scheduler, ring buffer, bit reader and
-kTLS control-message parser; CI `AddressSanitizer` runs 196 FFI and syscall
-tests (avio, transcoders, file ingest, TLS, Compio TCP, external transcoder,
-TSC timing, RTMP listener) with build-std instrumentation. A deliberate
+Done: CI `Miri` runs the kTLS control-message parser (project `unsafe`) plus
+the leaf arena, scheduler and bit reader; CI `AddressSanitizer` runs the FFI
+and syscall tests (avio, transcoders, file ingest, TLS, Compio TCP, external
+transcoder, TSC timing, RTMP listener and live sessions, TCP stats, runtime
+info) with build-std instrumentation. Both refuse a filter that selects no
+test. A deliberate
 use-after-free probe was reported as `heap-use-after-free`, so the job is
 live. Leak detection is off (FFmpeg's process-lifetime allocations).
 

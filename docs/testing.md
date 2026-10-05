@@ -79,8 +79,11 @@ linked FFmpeg is not instrumented under ASan.
 
 | CI job | Modules | Why these |
 |---|---|---|
-| `Miri (ownership-sensitive pure modules)` | `egress::leaf_arena`, `egress::scheduler`, `ring_buffer`, `codec::bits`, the kTLS control-message parser | raw pointers, epoch keys, atomics; pure Rust |
-| `AddressSanitizer (FFI and syscall modules)` | `avio`, `transcoder`, `h264_transcoder`, `file_ingest`, `egress::tls`, `compio_tcp`, `external_transcoder`, `timing`, `rtmp::listener` | Rust-side use of FFmpeg, kTLS and socket memory |
+| `Miri (pure modules Miri can execute)` | the kTLS control-message parser, `egress::leaf_arena`, `egress::scheduler`, `codec::bits` | the kTLS parser is project `unsafe` (raw cmsg reads); the others are what Miri can run quickly, so it checks their std and dependency use |
+| `AddressSanitizer (FFI and syscall modules)` | `avio`, `transcoder`, `h264_transcoder`, `file_ingest`, `egress::tls`, `compio_tcp`, `external_transcoder`, `timing`, `rtmp::listener`, `rtmp::tests` (live listener and socket buffers), `tcp_stats` (`getsockopt` into fixed buffers), `runtime_info` (FFmpeg C strings) | Rust-side use of FFmpeg, kTLS and socket memory |
+
+Both jobs first run `scripts/ci/require-test-filters.sh`, which fails when any
+filter selects no test: a renamed module cannot silently drop out.
 
 ```sh
 MIRIFLAGS=-Zmiri-disable-isolation PROPTEST_CASES=8 \
@@ -89,8 +92,9 @@ RUSTFLAGS=-Zsanitizer=address ASAN_OPTIONS=detect_leaks=0 \
   cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu --lib -- media::avio
 ```
 
-`egress::journal` is left out of Miri: it exceeds 25 minutes there. A module
-gains `unsafe` or an FFI call: add it to the matching job.
+`ring_buffer` and `egress::journal` are left out of Miri (8 and over 25
+minutes there; neither has project `unsafe`). A module gains `unsafe` or an
+FFI call: add it to the matching job.
 
 ## Frontend test split
 
