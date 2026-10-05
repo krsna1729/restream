@@ -77,7 +77,10 @@ poisoned), F4 below; see the table for bounds and tests.
   Converted, with the lints denied: `rtmp/flv.rs`, `mpegts/demux.rs`,
   `mpegts_probe` (with `h264`, `h265`), `codec/{bits, h264_sps, video, aac,
   enhanced_rtmp_hevc}`, `hls/fmp4/codec.rs`, `rtmp/ingest_media.rs`,
-  `rtmp/timestamps.rs`, `rtmp/ingest/parser_budget.rs`. The conversion also
+  `rtmp/timestamps.rs`, `rtmp/ingest/parser_budget.rs`, the whole RTMP
+  ingest module (`rtmp/ingest.rs`, `ingest/session.rs`), and the RTMP egress
+  conversion path (`rtmp/egress_packets.rs`, `egress_payload_cache.rs`,
+  `egress_engine.rs`). The conversion also
   removed duplicate parsers that had drifted: one H.264 SPS parser
   (`codec::parse_h264_sps`), one bit reader and RBSP (`codec::bits`), one
   AVC decoder configuration walker (`codec::video::avcc_record`). Defects it

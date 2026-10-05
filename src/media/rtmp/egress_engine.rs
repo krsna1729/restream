@@ -1,3 +1,10 @@
+#![deny(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 use bytes::Bytes;
 use rml_rtmp::time::RtmpTimestamp;
 
@@ -194,20 +201,18 @@ mod tests {
 
         encoder.encode(&video(payload, true, PayloadFormat::Raw), &mut actions);
 
-        assert_eq!(actions.len(), 2);
         assert!(matches!(
-            actions[0],
-            RtmpMediaAction::Video {
-                can_be_dropped: false,
-                ..
-            }
-        ));
-        assert!(matches!(
-            actions[1],
-            RtmpMediaAction::Video {
-                can_be_dropped: false,
-                ..
-            }
+            actions.as_slice(),
+            [
+                RtmpMediaAction::Video {
+                    can_be_dropped: false,
+                    ..
+                },
+                RtmpMediaAction::Video {
+                    can_be_dropped: false,
+                    ..
+                },
+            ]
         ));
     }
 }

@@ -17,6 +17,8 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use rml_rtmp::sessions::{ServerSessionEvent, ServerSessionResult};
+
 /// Shared aggregate budget; clone one per connection on the owner thread.
 #[derive(Clone)]
 pub(crate) struct ParserBudget {
@@ -93,6 +95,22 @@ impl Drop for ParserCharge {
         let held = self.budget.held.get().saturating_sub(self.charged);
         self.budget.held.set(held);
     }
+}
+
+/// What the parser budget charges: the session's buffered input plus the
+/// completed media in `results` not yet published.
+pub(super) fn held_bytes(buffered: usize, results: &[ServerSessionResult]) -> usize {
+    let awaiting: usize = results
+        .iter()
+        .map(|result| match result {
+            ServerSessionResult::RaisedEvent(
+                ServerSessionEvent::VideoDataReceived { data, .. }
+                | ServerSessionEvent::AudioDataReceived { data, .. },
+            ) => data.len(),
+            _ => 0,
+        })
+        .sum();
+    buffered.saturating_add(awaiting)
 }
 
 #[cfg(test)]
