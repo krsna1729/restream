@@ -363,6 +363,7 @@ jobs:
           system_deps_profile: media
           native_prefix: 'true'
           rust_cache: 'false'
+          toolchain_cache: 'false'
       - name: Build frontend assets for the library
         run: npm run build:frontend
       - name: Install nightly with Miri
@@ -403,6 +404,7 @@ jobs:
           system_deps_profile: media
           native_prefix: 'true'
           rust_cache: 'false'
+          toolchain_cache: 'false'
       - name: Build frontend assets for the library
         run: npm run build:frontend
       - name: Install nightly with rust-src
@@ -410,6 +412,9 @@ jobs:
       # Rust code is instrumented (build-std, explicit target so proc-macros
       # and build scripts are not); the linked FFmpeg is not. Leak detection
       # is off: FFmpeg keeps process-lifetime allocations.
+      - name: The sanitizer flags are in effect
+        run: |
+          [[ $RUSTFLAGS == *sanitizer=address* ]] || { echo "RUSTFLAGS lost -Zsanitizer=address: $RUSTFLAGS"; exit 1; }
       - name: Every filter selects tests
         run: >
           scripts/ci/require-test-filters.sh cargo +nightly test -Zbuild-std

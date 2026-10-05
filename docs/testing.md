@@ -87,7 +87,7 @@ filter selects no test: a renamed module cannot silently drop out.
 
 ```sh
 MIRIFLAGS=-Zmiri-disable-isolation PROPTEST_CASES=8 \
-  cargo +nightly miri test --lib -- media::egress::leaf_arena media::ring_buffer
+  cargo +nightly miri test --lib -- media::egress::tls::ktls::tests::ancillary media::egress::leaf_arena
 RUSTFLAGS=-Zsanitizer=address ASAN_OPTIONS=detect_leaks=0 \
   cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu --lib -- media::avio
 ```
