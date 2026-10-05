@@ -76,8 +76,8 @@ where
         budget: WorkBudget,
     ) -> EngineProgress {
         let read_budget = ReadBudget::new(
-            budget.max_units.min(MEDIA_PULL_BURST_PACKETS),
-            budget.max_bytes.min(MEDIA_TS_BATCH_TARGET_BYTES),
+            budget.max_units().min(MEDIA_PULL_BURST_PACKETS),
+            budget.max_bytes().min(MEDIA_TS_BATCH_TARGET_BYTES),
         );
         match feed.read_from(*cursor, read_budget) {
             FeedRead::Units { units, next_cursor } => {

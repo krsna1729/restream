@@ -346,11 +346,8 @@ impl MediaPublisher {
         readiness: Readiness,
         feed: &RingFeed,
         cursor: &mut FeedCursor,
-        budget: WorkBudget,
+        mut budget: WorkBudget,
     ) -> EngineProgress {
-        let mut total_bytes = 0usize;
-        let mut total_units = 0usize;
-
         loop {
             // Checked at the top of every pass, not just before a feed read:
             // `current_batch` (one encoded feed unit's wire packets — e.g. a
@@ -364,10 +361,10 @@ impl MediaPublisher {
             // Cutting off here instead just defers the rest to the next
             // visit (`Self::finish` reports `Progress` if any bytes/units
             // already flowed this pass, which reschedules promptly).
-            if budget.is_exhausted(total_units, total_bytes) {
+            if budget.is_exhausted() {
                 return Self::finish(
-                    total_bytes,
-                    total_units,
+                    budget.spent_bytes(),
+                    budget.spent_units(),
                     WaitCondition::FeedOrIo(Interest::READ_WRITE),
                 );
             }
@@ -375,8 +372,8 @@ impl MediaPublisher {
             if let Some(pending) = &mut self.pending_write {
                 if !readiness.writable {
                     return Self::finish(
-                        total_bytes,
-                        total_units,
+                        budget.spent_bytes(),
+                        budget.spent_units(),
                         WaitCondition::Io(Interest::READ_WRITE),
                     );
                 }
@@ -389,8 +386,7 @@ impl MediaPublisher {
                     MediaPendingWrite::Vectored(message) => {
                         let mut parts: [TxPart<'_>; MAX_VECTORED_PACKETS] =
                             std::array::from_fn(|_| TxPart::Copy(&[]));
-                        let (count, _) =
-                            message.fill_parts(budget.remaining_bytes(total_bytes), &mut parts);
+                        let (count, _) = message.fill_parts(budget.remaining_bytes(), &mut parts);
                         stream.write_shared(&parts[..count])
                     }
                 };
@@ -404,11 +400,11 @@ impl MediaPublisher {
                     }
                     Ok(n) => {
                         pending.consume(n);
-                        total_bytes += n;
+                        budget.debit_bytes(n);
                         if !pending.is_complete() {
                             return Self::finish(
-                                total_bytes,
-                                total_units,
+                                budget.spent_bytes(),
+                                budget.spent_units(),
                                 WaitCondition::Io(Interest::READ_WRITE),
                             );
                         }
@@ -417,8 +413,8 @@ impl MediaPublisher {
                     Err(error) if error.kind() == ErrorKind::WouldBlock => {
                         let hint = stream.interest_hint(Interest::WRITE);
                         return Self::finish(
-                            total_bytes,
-                            total_units,
+                            budget.spent_bytes(),
+                            budget.spent_units(),
                             WaitCondition::Io(Interest {
                                 readable: true,
                                 writable: hint.writable,
@@ -444,7 +440,7 @@ impl MediaPublisher {
 
             if self.unit_in_flight {
                 self.unit_in_flight = false;
-                total_units += 1;
+                budget.debit_unit();
             }
 
             // Keep the RTMP control channel readable after publish startup.
@@ -493,14 +489,14 @@ impl MediaPublisher {
                 self.pending_units_index = 0;
                 match feed.read_from_into(
                     *cursor,
-                    ReadBudget::new(FEED_READ_BURST, budget.max_bytes),
+                    ReadBudget::new(FEED_READ_BURST, budget.max_bytes()),
                     &mut self.pending_units,
                 ) {
                     FeedRead::Units { next_cursor, .. } => *cursor = next_cursor,
                     FeedRead::Empty => {
                         return Self::finish(
-                            total_bytes,
-                            total_units,
+                            budget.spent_bytes(),
+                            budget.spent_units(),
                             WaitCondition::FeedOrIo(Interest::READ),
                         );
                     }
@@ -512,8 +508,8 @@ impl MediaPublisher {
 
             let Some(packet) = self.pending_units.get(self.pending_units_index).cloned() else {
                 return Self::finish(
-                    total_bytes,
-                    total_units,
+                    budget.spent_bytes(),
+                    budget.spent_units(),
                     WaitCondition::FeedOrIo(Interest::READ),
                 );
             };

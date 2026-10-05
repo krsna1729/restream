@@ -1,5 +1,4 @@
 use bytes::Bytes;
-use std::time::Instant;
 
 use crate::media::egress::backend::{
     EngineProgress, Interest, ProtocolFailure, Readiness, WaitCondition,
@@ -115,18 +114,17 @@ impl SrtEgressEngine {
     /// still stops one always-writable leaf from monopolizing the shard.
     fn send_pending(
         &mut self,
-        budget: WorkBudget,
+        mut budget: WorkBudget,
         send: &mut impl FnMut(&Bytes) -> SrtSendResult,
     ) -> EngineProgress {
         if self.pending.is_none() {
             return EngineProgress::Needs(WaitCondition::Io(Interest::WRITE));
         }
 
-        let mut total_bytes = 0usize;
         loop {
             let Some(pending) = self.pending.as_mut() else {
                 return EngineProgress::Progress {
-                    bytes: total_bytes,
+                    bytes: budget.spent_bytes(),
                     units: 1,
                     wait: WaitCondition::Io(Interest::WRITE),
                 };
@@ -136,18 +134,18 @@ impl SrtEgressEngine {
             match send(&fragment) {
                 SrtSendResult::Accepted { bytes } => {
                     pending.advance(bytes);
-                    total_bytes += bytes;
+                    budget.debit_bytes(bytes);
                     if pending.is_complete() {
                         self.pending = None;
                         return EngineProgress::Progress {
-                            bytes: total_bytes,
+                            bytes: budget.spent_bytes(),
                             units: 1,
                             wait: WaitCondition::Io(Interest::WRITE),
                         };
                     }
-                    if total_bytes >= budget.max_bytes || Instant::now() >= budget.deadline {
+                    if budget.is_exhausted() {
                         return EngineProgress::Progress {
-                            bytes: total_bytes,
+                            bytes: budget.spent_bytes(),
                             units: 0,
                             wait: WaitCondition::Io(Interest::WRITE),
                         };
@@ -156,9 +154,9 @@ impl SrtEgressEngine {
                     // returning to the shard scheduler.
                 }
                 SrtSendResult::WouldBlock => {
-                    return if total_bytes > 0 {
+                    return if budget.spent_bytes() > 0 {
                         EngineProgress::Progress {
-                            bytes: total_bytes,
+                            bytes: budget.spent_bytes(),
                             units: 0,
                             wait: WaitCondition::Io(Interest::WRITE),
                         }
@@ -203,7 +201,7 @@ impl SrtEgressEngine {
             self.pending_units_index = 0;
             match feed.read_from_into(
                 *cursor,
-                ReadBudget::new(FEED_READ_BURST, budget.max_bytes),
+                ReadBudget::new(FEED_READ_BURST, budget.max_bytes()),
                 &mut self.pending_units,
             ) {
                 FeedRead::Units { next_cursor, .. } => *cursor = next_cursor,

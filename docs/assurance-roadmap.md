@@ -134,12 +134,20 @@ Use these before any checker, wherever the weak form exists today:
    (`CommandSink::free_slots`, flume capacity minus length) before it sends;
    the shadow, its reset/complete calls and the test-only `apply_command`
    are gone.
-5. **`WorkBudget` debits itself.** Its fields are public counters checked by
+5. **`WorkBudget` debits itself** (done). Its fields were public counters checked by
    each engine (`src/media/egress/policy.rs`). Make it an active resource with
    private remaining units/bytes and `claim`/`take_*` operations, ideally
    reached only through a visit context that performs the I/O. Most
    per-backend "does not exceed N" tests collapse into one primitive test.
    Deadlines stay a runtime check.
+
+   Done: the limits and the spent units/bytes are private; engines call
+   `debit_bytes`/`debit_unit` and ask `is_exhausted()`/`remaining_bytes()`,
+   and report progress from `spent_*()`. The RTMP and SRT engines lost
+   their parallel `total_*` counters. Feed reads keep sizing from the
+   visit limit (`max_bytes()`), not the remainder, as before. The
+   per-engine budget tests stay: they check where each engine consults
+   the budget (an outsized unit stops mid-flush), not the arithmetic.
 6. **One generation resolver.** Stale-completion checks are written per
    handler (DNS, connect, timers, unregister, retry). Route every
    asynchronous mutation through `resolve_current(id) -> Option<&mut T>` on a
