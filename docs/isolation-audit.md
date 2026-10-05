@@ -85,10 +85,20 @@ poisoned), F4 below; see the table for bounds and tests.
   32x5120 on TS; `avcc_to_annexb` panicked on a length width of 0; an AAC
   frame above 8,184 bytes got an ADTS header with a truncated length (the
   frame is now dropped).
-- **F7. Release builds wrap on integer overflow** (no `overflow-checks`).
-  An overflow that is a contained panic in tests is a wrong value in
-  production (the SPS scaling-list bug was this). Decision needs data:
-  benchmark the media hot paths with `overflow-checks = true`.
+- **F7 (decided: off). Release builds wrap on integer overflow** (no
+  `overflow-checks`). An overflow that is a contained panic in tests is a
+  wrong value in production (the SPS scaling-list bug was this). Measured on
+  `62512dc7`, bench profile, the same commit with and without
+  `overflow-checks = true`, three interleaved rounds: SRT ingest ×32 costs
+  43.9% → 48.5% CPU (non-overlapping ranges; Owner time 3.21 → 3.62 µs per
+  payload); RTMP ingest ×32, RTMP egress ×100 and SRT egress ×64 are within
+  noise. Micro benches: median +3.3% over 59, but +22–30% on Annex-B →
+  AVCC, +59% on raw `video_for_ts`, +14% on ring pulls and per-packet mux
+  writes, +17% on 500-reader fan-out. Overflow matters for isolation where
+  bytes are untrusted, and there F6's module-level `arithmetic_side_effects`
+  deny already forces checked or saturating forms at compile time; global
+  checks would add that cost to every trusted hot loop for no isolation
+  gain. New parsers of untrusted input take the F6 deny list instead.
 
 ## Compile-time guards
 
@@ -99,11 +109,11 @@ What the compiler and clippy can enforce:
 | Containment needs unwinding | `#[cfg(panic = "abort")] compile_error!` in `lib.rs` | done |
 | No panicking or skipping lock access | `clippy.toml` `disallowed-methods` on `Mutex::lock`/`RwLock::{read,write}` outside `crate::sync` (tests, benches and the harness may use them) | done (F5) |
 | Parsers cannot index, overflow or unwrap | `#![deny(clippy::indexing_slicing, clippy::arithmetic_side_effects, clippy::unwrap_used, clippy::expect_used, clippy::panic)]` per parser module | per module (F6; converted modules listed there) |
-| Overflow is never silent | `overflow-checks = true` in release | after benchmark (F7) |
+| Overflow is never silent | `overflow-checks = true` in release | rejected with data (F7); parsers of untrusted bytes deny `arithmetic_side_effects` instead (F6) |
 | Fault-injection points never ship | `#[cfg(test)]` only (`INJECTED_PANIC_PAYLOAD`, `injected_panics`, `EngineScript::Panic`) | done |
 
 ## Order of work
 
 1. F4 fuzz targets; fix any crash with a regression test (done).
 2. F6 module by module, each with a benchmark when it is on the hot path.
-3. F7 benchmark and decision.
+3. F7 benchmark and decision (done: off).
