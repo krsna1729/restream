@@ -166,20 +166,34 @@ impl CompioTcpStream {
     /// hand-off only whole records may go to rustls, so that no record is
     /// split between rustls and kernel TLS.
     pub(crate) fn complete_tls_records_len(&self) -> usize {
-        let Some(buffers) = self.io_buffers() else {
-            return 0;
-        };
-        let buffers = buffers.borrow();
-        let received = &buffers.received;
-        let mut whole = 0;
-        while let (Some(&high), Some(&low)) = (received.get(whole + 3), received.get(whole + 4)) {
-            let end = whole + 5 + usize::from(u16::from_be_bytes([high, low]));
-            if end > received.len() {
-                break;
+        match self {
+            Self::Compio { buffers, .. } => {
+                let buffers = buffers.borrow();
+                let received = &buffers.received;
+                whole_tls_records_len(received.len(), |at| received.get(at).copied())
             }
-            whole = end;
+            #[cfg(test)]
+            Self::Std(stream) => {
+                let mut peeked = vec![0_u8; 64 * 1024];
+                let count = stream.peek(&mut peeked).unwrap_or(0);
+                whole_tls_records_len(count, |at| peeked.get(at).copied())
+            }
         }
-        whole
+    }
+
+    /// Nothing left to receive: EOF or a socket error, no bytes buffered.
+    pub(crate) fn receive_ended(&self) -> bool {
+        match self {
+            Self::Compio { buffers, .. } => {
+                let buffers = buffers.borrow();
+                buffers.received.is_empty() && (buffers.eof || buffers.error.is_some())
+            }
+            #[cfg(test)]
+            Self::Std(stream) => match stream.peek(&mut [0_u8; 1]) {
+                Ok(count) => count == 0,
+                Err(error) => error.kind() != io::ErrorKind::WouldBlock,
+            },
+        }
     }
 
     /// Test transport: the staged TX bytes, as the transmit worker would
@@ -488,6 +502,20 @@ const IO_CHUNK: usize = 4096;
 /// Move the front `dst.len()` bytes of `deque` into `dst`: at most two slice
 /// copies (a ring's contents are at most two contiguous runs), then an O(1)
 /// front drop. Per-byte iteration here dominated RTMP egress CPU.
+/// Length of the run of whole TLS records (5-byte header, then the length
+/// it gives) at the front of `len` bytes read through `byte_at`.
+fn whole_tls_records_len(len: usize, byte_at: impl Fn(usize) -> Option<u8>) -> usize {
+    let mut whole = 0;
+    while let (Some(high), Some(low)) = (byte_at(whole + 3), byte_at(whole + 4)) {
+        let end = whole + 5 + usize::from(u16::from_be_bytes([high, low]));
+        if end > len {
+            break;
+        }
+        whole = end;
+    }
+    whole
+}
+
 pub(super) fn take_front(deque: &mut VecDeque<u8>, dst: &mut [u8]) {
     let count = dst.len();
     let (front, back) = deque.as_slices();

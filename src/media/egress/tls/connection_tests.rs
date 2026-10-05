@@ -374,6 +374,7 @@ fn ktls_read_yields_after_a_bounded_number_of_ticket_records() {
     let mut connection = KtlsConnection {
         stream: CompioTcpStream::from_std(stream),
         version: tokio_rustls::rustls::ProtocolVersion::TLSv1_3,
+        early_plaintext: Vec::new(),
         handshake_buffer: Vec::new(),
         pending_alert_level: None,
         peer_closed: false,
@@ -473,6 +474,7 @@ proptest::proptest! {
         let mut connection = KtlsConnection {
             stream: CompioTcpStream::from_std(stream),
             version: tokio_rustls::rustls::ProtocolVersion::TLSv1_3,
+            early_plaintext: Vec::new(),
             handshake_buffer: Vec::new(),
             pending_alert_level: None,
             peer_closed: false,
@@ -705,4 +707,84 @@ fn a_partial_record_before_the_ktls_handoff_waits_for_its_end() {
     client.tcp_stream().push_received_for_test(tail);
     assert_eq!(client.write(b"GET").unwrap(), 3);
     assert!(client.is_ktls());
+}
+
+/// Records that follow the server's Finished in the same flight (here
+/// half-RTT application data) arrive with it. rustls must get them as whole
+/// records: a raw 4 KiB read would end inside the data record, leaving its
+/// start in rustls and its end for the kernel at the hand-off. The data is
+/// then read after the hand-off, not lost with the rustls connection.
+#[test]
+fn records_after_the_servers_finished_are_not_cut_and_their_data_survives_the_handoff() {
+    if !super::ktls::supports(
+        tokio_rustls::rustls::ProtocolVersion::TLSv1_3,
+        tokio_rustls::rustls::CipherSuite::TLS13_AES_256_GCM_SHA384,
+    ) {
+        return;
+    }
+    let runtime = compio::runtime::Runtime::new().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let client_socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (_peer, _) = listener.accept().unwrap();
+    client_socket.set_nonblocking(true).unwrap();
+    let socket = runtime
+        .enter(|| compio::net::TcpStream::from_std(client_socket))
+        .unwrap();
+    let mut client = TlsTcpConnection::tls_with_config(
+        CompioTcpStream::from_compio(socket),
+        "localhost",
+        test_client_config_tls13_aes256_gcm(),
+        &TEST_COUNTERS,
+    )
+    .unwrap();
+    let cert_key = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+    let mut server_config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![cert_key.cert.der().clone()],
+            PrivatePkcs8KeyDer::from(cert_key.signing_key.serialize_der()).into(),
+        )
+        .unwrap();
+    server_config.send_half_rtt_data = true;
+    server_config.send_tls13_tickets = 0;
+    let mut server = tokio_rustls::rustls::ServerConnection::new(Arc::new(server_config)).unwrap();
+
+    assert!(client.write(b"GET").is_err());
+    let hello = client.tcp_stream().take_staged_for_test();
+    server.read_tls(&mut &hello[..]).unwrap();
+    server.process_new_packets().unwrap();
+    let mut finished_flight = Vec::new();
+    while server.wants_write() {
+        server.write_tls(&mut finished_flight).unwrap();
+    }
+    let data: Vec<u8> = (0..6000).map(|i| (i % 251) as u8).collect();
+    server.writer().write_all(&data).unwrap();
+    let mut data_records = Vec::new();
+    while server.wants_write() {
+        server.write_tls(&mut data_records).unwrap();
+    }
+    assert!(
+        finished_flight.len() < 4096 && finished_flight.len() + data_records.len() > 4096,
+        "a 4 KiB read must end inside the data record"
+    );
+    let mut flight = finished_flight;
+    flight.extend_from_slice(&data_records);
+    client.tcp_stream().push_received_for_test(&flight);
+    client.tcp_stream().drain_for_test();
+
+    assert!(
+        client.write(b"GET").is_err(),
+        "the Finished is not sent yet"
+    );
+    client.tcp_stream().drain_for_test();
+    assert_eq!(client.write(b"GET").unwrap(), 3);
+    assert!(client.is_ktls(), "the connection stayed in userspace TLS");
+    let mut received = vec![0_u8; data.len()];
+    let mut filled = 0;
+    while filled < data.len() {
+        let count = client.read(&mut received[filled..]).unwrap();
+        assert!(count > 0, "the early data ended short");
+        filled += count;
+    }
+    assert!(received == data, "the early data arrived altered");
 }

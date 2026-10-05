@@ -27,6 +27,9 @@ enum ConnectionState {
 struct KtlsConnection {
     stream: CompioTcpStream,
     version: ProtocolVersion,
+    /// Application data rustls decrypted before the hand-off (a server that
+    /// writes first, or half-RTT data): served before any kernel record.
+    early_plaintext: Vec<u8>,
     handshake_buffer: Vec<u8>,
     pending_alert_level: Option<u8>,
     peer_closed: bool,
@@ -36,6 +39,12 @@ impl KtlsConnection {
     const MAX_CONTROL_RECORDS_PER_READ: usize = 8;
 
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if !self.early_plaintext.is_empty() {
+            let count = buffer.len().min(self.early_plaintext.len());
+            buffer[..count].copy_from_slice(&self.early_plaintext[..count]);
+            self.early_plaintext.drain(..count);
+            return Ok(count);
+        }
         let stream = &mut self.stream;
         Self::read_records(
             buffer,
@@ -329,13 +338,10 @@ impl TlsTcpConnection {
 
     fn advance_tls_handshake(&mut self) -> io::Result<()> {
         if let ConnectionState::Tls(Some(stream)) = &mut self.state {
+            pump_rustls(stream)?;
             if stream.conn.is_handshaking() || stream.conn.wants_write() {
-                stream.conn.complete_io(&mut stream.sock)?;
-                if stream.conn.is_handshaking() || stream.conn.wants_write() {
-                    return Err(io::ErrorKind::WouldBlock.into());
-                }
+                return Err(io::ErrorKind::WouldBlock.into());
             }
-            consume_post_handshake_records(stream)?;
         }
         self.maybe_handoff_ktls()?;
         if matches!(self.state, ConnectionState::Tls(_)) {
@@ -364,14 +370,11 @@ impl TlsTcpConnection {
             let Some(suite) = stream.conn.negotiated_cipher_suite() else {
                 return Ok(());
             };
+            // Every byte received so far went through rustls as whole
+            // records (`pump_rustls`), so none is cut at the hand-off.
             let ready_to_handoff = !stream.conn.wants_write()
                 && stream.sock.pending_write_bytes() == 0
-                && stream.sock.pending_receive_bytes() == 0
-                && !stream
-                    .conn
-                    .reader()
-                    .into_first_chunk()
-                    .is_ok_and(|chunk| !chunk.is_empty());
+                && stream.sock.pending_receive_bytes() == 0;
             (version, suite, ready_to_handoff)
         };
         if !self.tls_version_recorded {
@@ -413,12 +416,13 @@ impl TlsTcpConnection {
             return Ok(());
         }
         TlsCounters::add(&counters.ktls_attempts);
-        let stream = match &mut self.state {
+        let mut stream = match &mut self.state {
             ConnectionState::Tls(stream) => stream.take().expect("TLS stream was checked above"),
             ConnectionState::Plain(_) | ConnectionState::Ktls(_) | ConnectionState::Failed(_) => {
                 return Ok(());
             }
         };
+        let early_plaintext = take_plaintext(&mut stream.conn);
         let (connection, socket) = stream.into_parts();
         #[allow(deprecated)]
         let secrets = match connection.dangerous_extract_secrets() {
@@ -440,6 +444,7 @@ impl TlsTcpConnection {
         self.state = ConnectionState::Ktls(KtlsConnection {
             stream: socket,
             version,
+            early_plaintext,
             handshake_buffer: Vec::new(),
             pending_alert_level: None,
             peer_closed: false,
@@ -455,31 +460,62 @@ impl TlsTcpConnection {
     }
 }
 
-/// A TLS 1.3 server sends session tickets once the handshake is done.
-/// Records that reach the receive buffer before the kTLS hand-off must go
-/// through rustls: the hand-off waits for an empty receive buffer, and
-/// nothing else reads it in this state, so the connection would otherwise
-/// sit in userspace TLS until its request or connect timeout. Only whole
-/// records are fed (a partial one waits for its next receive event), so the
-/// hand-off never splits a record between rustls and the kernel.
-fn consume_post_handshake_records(
-    stream: &mut StreamOwned<ClientConnection, CompioTcpStream>,
-) -> io::Result<()> {
-    let whole = stream.sock.complete_tls_records_len();
-    if whole == 0 {
-        return Ok(());
-    }
-    let mut records = Read::take(&mut stream.sock, whole as u64);
-    while records.limit() > 0 {
-        if stream.conn.read_tls(&mut records)? == 0 {
-            break;
+/// Drive rustls over the Compio stream: send what it wants to write, then
+/// give it only the whole TLS records at the front of the receive buffer,
+/// until no whole record is left. `complete_io` would read raw bytes (up to
+/// 4 KiB at a time), which can end inside a record; at the kTLS hand-off
+/// that record's start would stay in rustls and its end go to the kernel
+/// (rustls' secret extraction does not check for buffered input). Whole
+/// records also cover what a TLS 1.3 server sends after the handshake
+/// (session tickets), which nothing else reads before the hand-off: it
+/// waits for an empty receive buffer. A partial record waits for its next
+/// receive event. Limit: a handshake message split across records with only
+/// its first record arrived would still reach the kernel without its start;
+/// rustls has no public check for it, and tickets fit in one record.
+fn pump_rustls(stream: &mut StreamOwned<ClientConnection, CompioTcpStream>) -> io::Result<()> {
+    loop {
+        while stream.conn.wants_write() {
+            match stream.conn.write_tls(&mut stream.sock) {
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(error) => return Err(error),
+            }
         }
-        stream
-            .conn
-            .process_new_packets()
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        let whole = stream.sock.complete_tls_records_len();
+        if whole == 0 {
+            // No record to read; a closed or failed socket ends the handshake.
+            if stream.conn.is_handshaking()
+                && stream.sock.receive_ended()
+                && stream.conn.read_tls(&mut stream.sock)? == 0
+            {
+                return Err(io::ErrorKind::UnexpectedEof.into());
+            }
+            return Ok(());
+        }
+        let mut records = Read::take(&mut stream.sock, whole as u64);
+        while records.limit() > 0 {
+            if stream.conn.read_tls(&mut records)? == 0 {
+                break;
+            }
+            if let Err(error) = stream.conn.process_new_packets() {
+                // Send the alert rustls queued for the failure, as
+                // `complete_io` does, then fail the connection.
+                let _ = stream.conn.write_tls(&mut stream.sock);
+                return Err(io::Error::new(io::ErrorKind::InvalidData, error));
+            }
+        }
     }
-    Ok(())
+}
+
+/// Application data rustls already decrypted; it would be lost with the
+/// rustls connection at the hand-off.
+fn take_plaintext(connection: &mut ClientConnection) -> Vec<u8> {
+    let mut plaintext = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    while let Ok(count @ 1..) = connection.reader().read(&mut chunk) {
+        plaintext.extend_from_slice(&chunk[..count]);
+    }
+    plaintext
 }
 
 impl Drop for TlsTcpConnection {
