@@ -511,6 +511,8 @@ impl Write for CompioTcpStream {
         }
     }
 
+    /// Copies only (the copied run adds no segment), so it needs no
+    /// `MAX_BATCH_SEGMENTS` guard; a zero-copy variant must use `stage_parts`.
     fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
         match self {
             Self::Compio { buffers, .. } => {

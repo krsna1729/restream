@@ -61,7 +61,10 @@ fn hls_upload_clients(extra_trust_roots_pem_path: Option<&str>) -> &'static HlsU
             if fresh {
                 builder = builder.pool_max_idle_per_host(0);
             }
-            builder.build().unwrap_or_else(|_| Client::new())
+            builder.build().unwrap_or_else(|error| {
+                warn!(error = %error, "HLS upload client build failed; using a default client");
+                Client::new()
+            })
         };
         HlsUploadClients {
             pooled: build(false),
