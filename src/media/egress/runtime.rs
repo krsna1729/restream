@@ -197,14 +197,7 @@ impl EgressFabricRuntime {
         &mut self,
         command: EgressCommand,
     ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<EgressShardGroupError>> {
-        self.observe_queued_commands();
-        self.manager.dispatch_to_group(command, &self.group)
-    }
-
-    fn observe_queued_commands(&mut self) {
-        let group = &self.group;
-        self.manager
-            .observe_queued_commands(|shard_id| group.queued_commands(shard_id));
+        self.manager.dispatch_command(command, &self.group)
     }
 
     /// Shared handle list for feed publication subscriptions (see the field

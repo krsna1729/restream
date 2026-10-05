@@ -431,9 +431,11 @@ impl EgressShardHandle {
         })
     }
 
-    /// Commands sent but not yet taken by the shard thread.
-    pub fn queued_commands(&self) -> usize {
-        self.sender.len()
+    /// Commands the channel can take now.
+    pub fn free_command_slots(&self) -> usize {
+        self.sender.capacity().map_or(usize::MAX, |capacity| {
+            capacity.saturating_sub(self.sender.len())
+        })
     }
 
     pub fn snapshot(&self) -> EgressShardSnapshot {

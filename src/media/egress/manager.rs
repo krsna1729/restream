@@ -49,7 +49,6 @@ pub struct EgressManager {
     /// Every live output: its spec and the shard it is placed on, in one
     /// entry, so the spec and the placement cannot disagree.
     desired: HashMap<OutputId, DesiredOutput>,
-    command_depths: Vec<usize>,
     draining_shards: Vec<bool>,
     /// Shards that accept NEW outputs (`<= config.shard_count`). Shards above
     /// it only drain: a live output is never moved, so resizing cannot
@@ -61,7 +60,6 @@ pub struct EgressManager {
 impl EgressManager {
     pub fn new(config: EgressManagerConfig) -> Self {
         Self {
-            command_depths: vec![0; config.shard_count.get() as usize],
             config,
             desired: HashMap::new(),
             draining_shards: vec![false; config.shard_count.get() as usize],
@@ -86,92 +84,36 @@ impl EgressManager {
         self.desired.get(output_id)
     }
 
-    pub fn command_depth(&self, shard_id: ShardId) -> usize {
-        self.command_depths
-            .get(shard_id.index() as usize)
-            .copied()
-            .unwrap_or(0)
-    }
-
-    /// Reset each shard's command depth to its real queue length. Dispatch
-    /// only ever adds to the depth, so a caller with live shards must call
-    /// this before dispatching; otherwise the depth counts every command
-    /// sent over the manager's life and admission eventually refuses
-    /// everything with `CommandChannelFull`.
-    pub fn observe_queued_commands(&mut self, queued: impl Fn(ShardId) -> usize) {
-        for (index, depth) in self.command_depths.iter_mut().enumerate() {
-            *depth = queued(ShardId::new(u32::try_from(index).unwrap_or(u32::MAX)));
-        }
-    }
-
-    pub fn complete_one_command(&mut self, shard_id: ShardId) {
-        if let Some(depth) = self.command_depths.get_mut(shard_id.index() as usize) {
-            *depth = depth.saturating_sub(1);
-        }
-    }
-
-    pub fn apply_command(
+    pub fn dispatch_command<S: CommandSink>(
         &mut self,
         command: EgressCommand,
-    ) -> Result<ManagerCommandOutcome, EgressManagerCommandError> {
-        self.dispatch_command(command, |_, _| Ok(())).map_err(
-            |error: EgressManagerDispatchError<()>| match error {
-                EgressManagerDispatchError::Command(command_error) => command_error,
-                EgressManagerDispatchError::Dispatch { .. } => {
-                    unreachable!("infallible dispatch failed")
-                }
-            },
-        )
-    }
-
-    pub fn dispatch_command<E, F>(
-        &mut self,
-        command: EgressCommand,
-        mut dispatch: F,
-    ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<E>>
-    where
-        F: FnMut(ShardId, EgressCommand) -> Result<(), E>,
-    {
+        sink: &S,
+    ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<S::Error>> {
         match command {
-            EgressCommand::Add(spec) => self.dispatch_spec(spec, false, dispatch),
-            EgressCommand::Update(spec) => self.dispatch_spec(spec, true, dispatch),
-            EgressCommand::Remove(output_id) => self.dispatch_remove(output_id, dispatch),
+            EgressCommand::Add(spec) => self.dispatch_spec(spec, false, sink),
+            EgressCommand::Update(spec) => self.dispatch_spec(spec, true, sink),
+            EgressCommand::Remove(output_id) => self.dispatch_remove(output_id, sink),
             // Feed wakes are delivered per shard by the feed watcher, not
             // routed through manager assignment.
             EgressCommand::FeedWake => Ok(ManagerCommandOutcome::Ignored),
             EgressCommand::DrainShard(shard_id) => {
-                self.check_command_slot(shard_id)
+                self.check_command_slots(shard_id, 1, sink)
                     .map_err(EgressManagerDispatchError::Command)?;
-                dispatch(shard_id, EgressCommand::DrainShard(shard_id))
+                sink.send(shard_id, EgressCommand::DrainShard(shard_id))
                     .map_err(|source| EgressManagerDispatchError::Dispatch { shard_id, source })?;
-                self.reserve_command_slot(shard_id)
-                    .map_err(EgressManagerDispatchError::Command)?;
                 self.mark_draining(shard_id)
                     .map_err(EgressManagerDispatchError::Command)?;
                 Ok(ManagerCommandOutcome::Enqueued { shard_id })
             }
-            EgressCommand::Shutdown => self.dispatch_shutdown(dispatch),
+            EgressCommand::Shutdown => self.dispatch_shutdown(sink),
         }
     }
 
-    pub fn dispatch_to_group(
-        &mut self,
-        command: EgressCommand,
-        group: &EgressShardGroup,
-    ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<EgressShardGroupError>> {
-        self.dispatch_command(command, |shard_id, command| {
-            group.try_send_to(shard_id, command)
-        })
-    }
-
-    pub fn dispatch_recreate_shard<E, F>(
+    pub fn dispatch_recreate_shard<S: CommandSink>(
         &mut self,
         shard_id: ShardId,
-        mut dispatch: F,
-    ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<E>>
-    where
-        F: FnMut(ShardId, EgressCommand) -> Result<(), E>,
-    {
+        sink: &S,
+    ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<S::Error>> {
         if self.shutting_down {
             return Ok(ManagerCommandOutcome::AlreadyShuttingDown);
         }
@@ -179,13 +121,11 @@ impl EgressManager {
             .specs_for_shard(shard_id)
             .map_err(EgressManagerDispatchError::Command)?;
         specs.sort_by(|left, right| left.id.cmp(&right.id));
-        self.check_command_slots(shard_id, specs.len())
+        self.check_command_slots(shard_id, specs.len(), sink)
             .map_err(EgressManagerDispatchError::Command)?;
         for spec in specs {
-            dispatch(shard_id, EgressCommand::Add(spec))
+            sink.send(shard_id, EgressCommand::Add(spec))
                 .map_err(|source| EgressManagerDispatchError::Dispatch { shard_id, source })?;
-            self.reserve_command_slot(shard_id)
-                .map_err(EgressManagerDispatchError::Command)?;
         }
         Ok(ManagerCommandOutcome::Replayed {
             shard_id,
@@ -193,15 +133,12 @@ impl EgressManager {
         })
     }
 
-    fn dispatch_spec<E, F>(
+    fn dispatch_spec<S: CommandSink>(
         &mut self,
         spec: OutputSpec,
         is_update: bool,
-        mut dispatch: F,
-    ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<E>>
-    where
-        F: FnMut(ShardId, EgressCommand) -> Result<(), E>,
-    {
+        sink: &S,
+    ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<S::Error>> {
         // A live output stays where its leaf and socket live.
         let shard_id = self
             .desired
@@ -231,66 +168,52 @@ impl EgressManager {
         // Check slot availability BEFORE cloning the OutputSpec for the
         // dispatch. When the channel is full, this avoids the spec clone
         // (heap-allocated Strings, Arc bump, LeafPolicy clone) entirely.
-        self.check_command_slot(shard_id)
+        self.check_command_slots(shard_id, 1, sink)
             .map_err(EgressManagerDispatchError::Command)?;
         let command = if is_update {
             EgressCommand::Update(spec.clone())
         } else {
             EgressCommand::Add(spec.clone())
         };
-        dispatch(shard_id, command)
+        sink.send(shard_id, command)
             .map_err(|source| EgressManagerDispatchError::Dispatch { shard_id, source })?;
-        self.reserve_command_slot(shard_id)
-            .map_err(EgressManagerDispatchError::Command)?;
         self.desired
             .insert(spec.id.clone(), DesiredOutput { spec, shard_id });
         Ok(ManagerCommandOutcome::Enqueued { shard_id })
     }
 
-    fn dispatch_remove<E, F>(
+    fn dispatch_remove<S: CommandSink>(
         &mut self,
         output_id: OutputId,
-        mut dispatch: F,
-    ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<E>>
-    where
-        F: FnMut(ShardId, EgressCommand) -> Result<(), E>,
-    {
+        sink: &S,
+    ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<S::Error>> {
         let Some(current) = self.desired.get(&output_id) else {
             return Ok(ManagerCommandOutcome::AlreadyRemoved);
         };
         let shard_id = current.shard_id;
-        self.check_command_slot(shard_id)
+        self.check_command_slots(shard_id, 1, sink)
             .map_err(EgressManagerDispatchError::Command)?;
-        dispatch(shard_id, EgressCommand::Remove(output_id.clone()))
+        sink.send(shard_id, EgressCommand::Remove(output_id.clone()))
             .map_err(|source| EgressManagerDispatchError::Dispatch { shard_id, source })?;
-        self.reserve_command_slot(shard_id)
-            .map_err(EgressManagerDispatchError::Command)?;
         self.desired.remove(&output_id);
         Ok(ManagerCommandOutcome::Enqueued { shard_id })
     }
 
-    fn dispatch_shutdown<E, F>(
+    fn dispatch_shutdown<S: CommandSink>(
         &mut self,
-        mut dispatch: F,
-    ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<E>>
-    where
-        F: FnMut(ShardId, EgressCommand) -> Result<(), E>,
-    {
+        sink: &S,
+    ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<S::Error>> {
         if self.shutting_down {
             return Ok(ManagerCommandOutcome::AlreadyShuttingDown);
         }
         for shard_index in 0..self.config.shard_count.get() {
-            self.check_command_slot(ShardId::new(shard_index))
+            self.check_command_slots(ShardId::new(shard_index), 1, sink)
                 .map_err(EgressManagerDispatchError::Command)?;
         }
         for shard_index in 0..self.config.shard_count.get() {
             let shard_id = ShardId::new(shard_index);
-            dispatch(shard_id, EgressCommand::Shutdown)
+            sink.send(shard_id, EgressCommand::Shutdown)
                 .map_err(|source| EgressManagerDispatchError::Dispatch { shard_id, source })?;
-        }
-        for shard_index in 0..self.config.shard_count.get() {
-            self.reserve_command_slot(ShardId::new(shard_index))
-                .map_err(EgressManagerDispatchError::Command)?;
         }
         self.shutting_down = true;
         Ok(ManagerCommandOutcome::Broadcast {
@@ -298,26 +221,24 @@ impl EgressManager {
         })
     }
 
-    fn reserve_command_slot(&mut self, shard_id: ShardId) -> Result<(), EgressManagerCommandError> {
-        self.check_command_slot(shard_id)?;
-        let depth = &mut self.command_depths[shard_id.index() as usize];
-        *depth += 1;
-        Ok(())
-    }
-
-    fn check_command_slot(&self, shard_id: ShardId) -> Result<(), EgressManagerCommandError> {
-        self.check_command_slots(shard_id, 1)
-    }
-
-    fn check_command_slots(
+    /// Refuse before sending (and before cloning a spec) when `shard_id`'s
+    /// channel cannot take `additional` more commands, so a multi-command
+    /// send is all-or-nothing. The channel is the only record of its depth:
+    /// a concurrent sender (feed wakes) can still fill it between this check
+    /// and the send, which then fails as a `Dispatch` error.
+    fn check_command_slots<S: CommandSink>(
         &self,
         shard_id: ShardId,
         additional: usize,
+        sink: &S,
     ) -> Result<(), EgressManagerCommandError> {
-        let Some(depth) = self.command_depths.get(shard_id.index() as usize) else {
+        if shard_id.index() >= self.config.shard_count.get() {
+            return Err(EgressManagerCommandError::UnknownShard { shard_id });
+        }
+        let Some(free) = sink.free_slots(shard_id) else {
             return Err(EgressManagerCommandError::UnknownShard { shard_id });
         };
-        if depth.saturating_add(additional) > self.config.command_channel_capacity.get() {
+        if additional > free {
             return Err(EgressManagerCommandError::CommandChannelFull { shard_id });
         }
         Ok(())
@@ -342,7 +263,9 @@ impl EgressManager {
         &self,
         shard_id: ShardId,
     ) -> Result<Vec<OutputSpec>, EgressManagerCommandError> {
-        self.check_command_slots(shard_id, 0)?;
+        if shard_id.index() >= self.config.shard_count.get() {
+            return Err(EgressManagerCommandError::UnknownShard { shard_id });
+        }
         Ok(self
             .desired
             .values()
@@ -374,7 +297,6 @@ impl EgressManager {
     pub fn grow_to(&mut self, shards: NonZeroU32) {
         let shards = shards.max(self.config.shard_count);
         self.config.shard_count = shards;
-        self.command_depths.resize(shards.get() as usize, 0);
         self.draining_shards.resize(shards.get() as usize, false);
         self.placement = shards;
     }
@@ -397,9 +319,29 @@ impl EgressManager {
             return false;
         }
         self.config.shard_count = NonZeroU32::new(tail - 1).expect("tail > 1");
-        self.command_depths.truncate((tail - 1) as usize);
         self.draining_shards.truncate((tail - 1) as usize);
         true
+    }
+}
+
+/// Where the manager sends commands: the shard command channels in
+/// production. The channel is the only authority on how full it is.
+pub trait CommandSink {
+    type Error;
+    /// Commands `shard_id`'s channel can take now; `None` for no such shard.
+    fn free_slots(&self, shard_id: ShardId) -> Option<usize>;
+    fn send(&self, shard_id: ShardId, command: EgressCommand) -> Result<(), Self::Error>;
+}
+
+impl CommandSink for EgressShardGroup {
+    type Error = EgressShardGroupError;
+
+    fn free_slots(&self, shard_id: ShardId) -> Option<usize> {
+        self.free_command_slots(shard_id)
+    }
+
+    fn send(&self, shard_id: ShardId, command: EgressCommand) -> Result<(), Self::Error> {
+        self.try_send_to(shard_id, command)
     }
 }
 

@@ -109,11 +109,11 @@ fn supervisor_replaces_panicked_shard_and_replays_only_its_outputs() {
     .unwrap();
 
     assert!(matches!(
-        manager.dispatch_to_group(EgressCommand::Add(panicked_output), &group),
+        manager.dispatch_command(EgressCommand::Add(panicked_output), &group),
         Ok(ManagerCommandOutcome::Enqueued { shard_id }) if shard_id == ShardId::new(0)
     ));
     assert!(matches!(
-        manager.dispatch_to_group(EgressCommand::Add(survivor_output), &group),
+        manager.dispatch_command(EgressCommand::Add(survivor_output), &group),
         Ok(ManagerCommandOutcome::Enqueued { shard_id }) if shard_id == ShardId::new(1)
     ));
     survivor.wait_for_commands(1);
@@ -165,7 +165,7 @@ fn supervisor_observes_stalled_shard_without_replacing_it() {
     .unwrap();
 
     assert!(matches!(
-        manager.dispatch_to_group(EgressCommand::Add(output), &group),
+        manager.dispatch_command(EgressCommand::Add(output), &group),
         Ok(ManagerCommandOutcome::Enqueued {
             shard_id: ShardId { .. }
         })
