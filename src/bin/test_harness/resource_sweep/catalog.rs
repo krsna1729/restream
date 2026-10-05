@@ -114,7 +114,12 @@ impl SweepOutputKind {
 /// output so the sink can count per destination.
 fn hls_put_output_url(name: &str) -> String {
     let port = super::super::harness_port_defaults().hls_put;
-    format!("http://127.0.0.1:{port}/upload?cid={name}&copy=0&file=out.m3u8")
+    let scheme = if super::hls_sink::hls_sink_tls() {
+        "https"
+    } else {
+        "http"
+    };
+    format!("{scheme}://127.0.0.1:{port}/upload?cid={name}&copy=0&file=out.m3u8")
 }
 
 /// Declarative resource-sweep egress scenario row.

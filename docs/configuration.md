@@ -88,7 +88,7 @@ in SQLite.
 | RTMP pre-auth socket buffers | `131072` bytes | `RESTREAM_RTMP_PREAUTH_BUFFER_BYTES` |
 | RTMP streaming socket buffers | `8388608` bytes | `RESTREAM_RTMP_STREAM_BUFFER_BYTES` |
 | RTMP egress chunk size | `16384` bytes | `RESTREAM_RTMP_EGRESS_CHUNK_SIZE` (sent with the RTMP `SetChunkSize` message; 16 KiB was the best measured loopback fanout point in the RTMP-only MSR chunk-size sweep) |
-| RTMPS extra trust roots | Public WebPKI roots | `RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM` (path to PEM CA certificates added to the default trust roots) |
+| Egress TLS extra trust roots (RTMPS and HLS PUT, both transports) | Public WebPKI roots | `RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM` (path to PEM CA certificates added to the default trust roots) |
 | HLS minimum segment length | 1 second | `RESTREAM_HLS_MIN_SEGMENT_MS` |
 | HLS live window length | 20 segments | `RESTREAM_HLS_MAX_SEGMENTS` |
 | HLS segment accumulator capacity | 8 MiB | `RESTREAM_HLS_SEGMENT_CAPACITY_BYTES` |

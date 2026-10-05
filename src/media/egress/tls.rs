@@ -7,7 +7,6 @@ mod connection;
 pub(crate) mod ktls;
 mod telemetry;
 
-#[cfg(test)]
 pub(crate) use client_config::rustls_client_config;
 pub(crate) use client_config::{resolve_client_config, supports_cipher_suite};
 pub(crate) use connection::TlsTcpConnection;

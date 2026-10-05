@@ -7,7 +7,7 @@
 //! parameter. Other HLS PUT origins commonly use a playlist path and expect
 //! segments beside it. This module supports both shapes.
 
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tracing::warn;
 
@@ -30,26 +30,45 @@ const HLS_UPLOAD_END_TIMEOUT: Duration = Duration::from_secs(1);
 /// Akamai requires a User-Agent on every request.
 const HLS_UPLOAD_USER_AGENT: &str = concat!("Restream / restream / ", env!("CARGO_PKG_VERSION"));
 
-/// One client for every uploader: one connection pool and one TLS
-/// configuration, instead of a pool and TLS state per output.
-static HLS_UPLOAD_CLIENT: LazyLock<Client> = LazyLock::new(|| {
-    Client::builder()
-        .user_agent(HLS_UPLOAD_USER_AGENT)
-        .build()
-        .unwrap_or_else(|_| Client::new())
-});
+/// The clients every uploader shares: one connection pool and one TLS
+/// configuration, instead of a pool and TLS state per output. `fresh` keeps
+/// no idle connections: every request on it opens a new connection and
+/// resolves the host again. It serves retries, which Akamai asks to
+/// re-resolve, and `HLS_UPLOAD_AVOID_POOL` after any failure, until the
+/// pooled connection to the failing node has idled out.
+struct HlsUploadClients {
+    pooled: Client,
+    fresh: Client,
+}
 
-/// A client that keeps no idle connections: every request on it opens a new
-/// connection and resolves the host again. Used for retries, which Akamai
-/// asks to re-resolve, and for `HLS_UPLOAD_AVOID_POOL` after any failure,
-/// until the pooled connection to the failing node has idled out.
-static HLS_UPLOAD_FRESH_CLIENT: LazyLock<Client> = LazyLock::new(|| {
-    Client::builder()
-        .user_agent(HLS_UPLOAD_USER_AGENT)
-        .pool_max_idle_per_host(0)
-        .build()
-        .unwrap_or_else(|_| Client::new())
-});
+static HLS_UPLOAD_CLIENTS: OnceLock<HlsUploadClients> = OnceLock::new();
+
+/// Built once, with the egress TLS configuration the RTMPS and HLS fabric
+/// paths use (`egress::tls::resolve_client_config`: webpki roots plus
+/// `RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM`, the same cipher suites), so both
+/// HLS transports trust the same CAs and negotiate the same TLS.
+fn hls_upload_clients(extra_trust_roots_pem_path: Option<&str>) -> &'static HlsUploadClients {
+    HLS_UPLOAD_CLIENTS.get_or_init(|| {
+        let tls = crate::media::egress::tls::resolve_client_config(extra_trust_roots_pem_path)
+            .unwrap_or_else(|error| {
+                warn!(error = %error, "HLS upload TLS extra trust roots unusable; using the default roots");
+                crate::media::egress::tls::rustls_client_config()
+            });
+        let build = |fresh: bool| {
+            let mut builder = Client::builder()
+                .user_agent(HLS_UPLOAD_USER_AGENT)
+                .use_preconfigured_tls((*tls).clone());
+            if fresh {
+                builder = builder.pool_max_idle_per_host(0);
+            }
+            builder.build().unwrap_or_else(|_| Client::new())
+        };
+        HlsUploadClients {
+            pooled: build(false),
+            fresh: build(true),
+        }
+    })
+}
 
 /// Reqwest's default idle timeout for pooled connections: after a failure an
 /// output stays on fresh connections this long, so its next first attempt
@@ -174,10 +193,12 @@ pub async fn start_hls_put_upload(
                     HLS_UPLOAD_REQUEST_TIMEOUT
                 };
                 let avoid_pool = avoid_pool_until.is_some_and(|until| Instant::now() < until);
+                let clients =
+                    hls_upload_clients(engine.config.rtmps_extra_trust_roots_pem_path.as_deref());
                 let client = if request.fresh_connection || avoid_pool {
-                    &*HLS_UPLOAD_FRESH_CLIENT
+                    &clients.fresh
                 } else {
-                    &*HLS_UPLOAD_CLIENT
+                    &clients.pooled
                 };
                 let send = send_upload(client, url, &request, timeout);
                 let result = if ending {
