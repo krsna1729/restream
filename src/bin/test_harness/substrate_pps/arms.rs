@@ -221,6 +221,7 @@ pub(crate) fn run_io_uring(
 
     let entries = config.queue_depth.next_power_of_two().max(8) as u32;
     let mut ring = IoUring::new(entries).map_err(|e| format!("io_uring setup: {e}"))?;
+    // SAFETY: socket(2) takes no pointers; the result is checked below.
     let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
     if fd < 0 {
         return Err(format!("socket(): {}", std::io::Error::last_os_error()));
@@ -246,6 +247,7 @@ pub(crate) fn run_io_uring(
                 iov_base: std::ptr::null_mut(),
                 iov_len: 0,
             },
+            // SAFETY: the header is plain old data; all-zero bytes are a valid empty value.
             msg: unsafe { std::mem::zeroed() },
         });
     }
@@ -254,6 +256,7 @@ pub(crate) fn run_io_uring(
             iov_base: payload.as_ptr() as *mut libc::c_void,
             iov_len: payload.len(),
         };
+        // SAFETY: the header is plain old data; all-zero bytes are a valid empty value.
         let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
         msg.msg_name = &slot.sockaddr as *const libc::sockaddr_in as *mut libc::c_void;
         msg.msg_namelen = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
@@ -345,6 +348,7 @@ pub(crate) fn run_io_uring(
         }
         in_flight = in_flight.saturating_sub(reaped);
     }
+    // SAFETY: `fd` is the socket opened above, owned only here and not used after.
     unsafe { libc::close(fd) };
     result
 }
@@ -358,6 +362,7 @@ pub(crate) fn run_sendto(
     payload: Bytes,
     handles: &SenderHandles,
 ) -> Result<(), String> {
+    // SAFETY: socket(2) takes no pointers; the result is checked below.
     let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
     if fd < 0 {
         return Err(format!("socket(): {}", std::io::Error::last_os_error()));
@@ -410,6 +415,7 @@ pub(crate) fn run_sendto(
             result = Err(format!("sendto: {}", std::io::Error::last_os_error()));
         }
     }
+    // SAFETY: `fd` is the socket opened above, owned only here and not used after.
     unsafe { libc::close(fd) };
     result
 }

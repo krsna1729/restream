@@ -39,7 +39,9 @@ pub(crate) fn thread_cpus_allowed_list(tid: libc::pid_t) -> Option<String> {
 /// Pin the calling thread (and every thread it spawns afterwards, which
 /// inherits the creating thread's mask) to `mask`, e.g. `2-5` or `0,2-3`.
 pub(crate) fn pin_to_cpuset(mask: &str) -> Result<(), String> {
+    // SAFETY: cpu_set_t is plain old data; all-zero bytes are the empty set.
     let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+    // SAFETY: `set` is a live cpu_set_t; the CPU index is bounds-checked by the macro.
     unsafe { libc::CPU_ZERO(&mut set) };
     for part in mask.split(',') {
         let part = part.trim();
@@ -60,9 +62,11 @@ pub(crate) fn pin_to_cpuset(mask: &str) -> Result<(), String> {
             return Err(format!("cpu mask {mask:?} is out of range"));
         }
         for cpu in start..=end {
+            // SAFETY: `set` is a live cpu_set_t; the CPU index is bounds-checked by the macro.
             unsafe { libc::CPU_SET(cpu, &mut set) };
         }
     }
+    // SAFETY: `set` is a live cpu_set_t and the length passed is its size.
     let rc = unsafe { libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set) };
     if rc != 0 {
         return Err(format!(
@@ -182,6 +186,7 @@ pub(crate) fn read_counter_file(path: &Path) -> Option<u64> {
 
 /// The calling thread's kernel thread id, for `/proc/self/task/<tid>/stat`.
 pub(crate) fn current_thread_id() -> libc::pid_t {
+    // SAFETY: gettid(2) takes no arguments and cannot fail.
     unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t }
 }
 
@@ -205,6 +210,7 @@ pub(crate) fn thread_cpu(tid: libc::pid_t) -> Option<ThreadCpu> {
     let fields: Vec<&str> = after_comm.split_whitespace().collect();
     let utime = fields.get(11)?.parse::<u64>().ok()?;
     let stime = fields.get(12)?.parse::<u64>().ok()?;
+    // SAFETY: sysconf(3) takes no pointers.
     let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
     if ticks <= 0 {
         return None;

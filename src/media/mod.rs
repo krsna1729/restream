@@ -12,6 +12,7 @@
 //! Supports H.264, H.265/HEVC, and multi-track audio.
 
 pub mod avio;
+#[forbid(unsafe_code)]
 pub mod codec;
 pub mod egress;
 pub mod engine;
@@ -42,6 +43,7 @@ pub use hls::upload as hls_upload;
 pub mod ingest_auth;
 pub mod input_gate;
 pub mod metadata;
+#[forbid(unsafe_code)]
 pub mod mpegts;
 pub mod packet;
 pub mod pipe_metrics;

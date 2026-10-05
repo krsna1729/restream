@@ -95,9 +95,11 @@ fn missing_or_reset_receiver_counters_never_read_as_zero() {
 
 #[test]
 fn set_send_buffer_accepts_a_live_socket() {
+    // SAFETY: socket(2) takes no pointers; the result is checked below.
     let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
     assert!(fd >= 0);
     assert!(set_send_buffer(fd, 1 << 20).is_ok());
+    // SAFETY: `fd` is the socket opened above, owned only here and not used after.
     unsafe { libc::close(fd) };
 }
 

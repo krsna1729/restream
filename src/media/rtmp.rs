@@ -11,15 +11,18 @@ mod egress_packets;
 pub(crate) mod egress_payload_cache;
 mod egress_transport;
 mod enhanced;
+#[forbid(unsafe_code)]
 mod flv;
 #[cfg(fuzzing)]
 #[doc(hidden)]
 pub mod fuzz_entry;
 mod handshake;
 mod ingest;
+#[forbid(unsafe_code)]
 mod ingest_media;
 mod listener;
 mod play;
+#[forbid(unsafe_code)]
 mod timestamps;
 
 pub(crate) use listener::start_rtmp_server_on_with_shutdown;

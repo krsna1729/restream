@@ -1,5 +1,4 @@
 #![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
-use restream::config::AppConfig;
 use restream::domain::ids::OutputId;
 use restream::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
 use restream::domain::output_spec::OutputConfig;
@@ -9,20 +8,6 @@ use restream::media::security::IngestSecurityService;
 use sqlx::SqlitePool;
 use std::collections::BTreeSet;
 use std::sync::Arc;
-
-#[tokio::test]
-async fn test_phase_2_config_reads_env_correctly() {
-    unsafe {
-        std::env::set_var("RESTREAM_DB_PATH", "test_env.db");
-        std::env::set_var("RESTREAM_MEDIA_DIR", "test_media_dir");
-        std::env::set_var("RESTREAM_LOG_RETENTION_DAYS", "14");
-    }
-
-    let config = AppConfig::from_env();
-    assert_eq!(config.db_path, "test_env.db");
-    assert_eq!(config.media_dir, "test_media_dir");
-    assert_eq!(config.log_retention_days, 14);
-}
 
 #[tokio::test]
 async fn test_phase_3_routing_resolves_all_major_routes() {

@@ -30,6 +30,7 @@ mod egress;
 mod events;
 mod layout;
 mod listener_supervisor;
+#[forbid(unsafe_code)]
 mod reconcile;
 mod runtime;
 mod shutdown;

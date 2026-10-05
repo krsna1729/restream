@@ -18,13 +18,17 @@ pub(super) const EGRESS_SHARD_PREFIX: &str = "egress-shard-";
 /// Pin a thread set to an exact CPU set (`pid == 0` = the calling thread), and
 /// report the mask the kernel actually holds afterwards.
 pub(super) fn set_affinity_mask(pid: u32, cpus: &BTreeSet<u32>) -> Result<Vec<u32>, String> {
+    // SAFETY: cpu_set_t is plain old data; all-zero bytes are the empty set.
     let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+    // SAFETY: `set` is a live cpu_set_t; the CPU index is bounds-checked by the macro.
     unsafe {
         libc::CPU_ZERO(&mut set);
     }
     for cpu in cpus {
+        // SAFETY: `set` is a live cpu_set_t; the CPU index is bounds-checked by the macro.
         unsafe { libc::CPU_SET(*cpu as usize, &mut set) };
     }
+    // SAFETY: `set` is a live cpu_set_t and the length passed is its size.
     let rc = unsafe {
         libc::sched_setaffinity(
             pid as libc::pid_t,
@@ -169,6 +173,7 @@ pub(super) fn read_proc_stat_cpu(path: &Path) -> Result<CpuTicks, String> {
 }
 
 pub(super) fn clock_ticks_per_sec() -> u64 {
+    // SAFETY: sysconf(3) takes no pointers.
     let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
     if ticks > 0 { ticks as u64 } else { 100 }
 }
@@ -218,7 +223,9 @@ pub(super) fn read_cpus_allowed_list(pid: u32) -> Option<String> {
 
 /// Observed affinities of a tid, as a CPU list.
 pub(super) fn observe_affinity(tid: u32) -> Result<Vec<u32>, String> {
+    // SAFETY: cpu_set_t is plain old data; all-zero bytes are the empty set.
     let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+    // SAFETY: `set` is a live cpu_set_t and the length passed is its size.
     let rc = unsafe {
         libc::sched_getaffinity(
             tid as libc::pid_t,
@@ -233,6 +240,7 @@ pub(super) fn observe_affinity(tid: u32) -> Result<Vec<u32>, String> {
         ));
     }
     Ok((0..libc::CPU_SETSIZE as usize)
+        // SAFETY: `set` is a live cpu_set_t; the CPU index is bounds-checked by the macro.
         .filter(|cpu| unsafe { libc::CPU_ISSET(*cpu, &set) })
         .map(|cpu| cpu as u32)
         .collect())
@@ -242,11 +250,14 @@ pub(super) fn observe_affinity(tid: u32) -> Result<Vec<u32>, String> {
 /// `/usr/bin/taskset -pc` when the kernel refuses (a same-UID child is granted
 /// this, but the fallback keeps the mode honest if it is not).
 pub(super) fn set_thread_affinity(tid: u32, cpu: u32) -> Result<(Vec<u32>, &'static str), String> {
+    // SAFETY: cpu_set_t is plain old data; all-zero bytes are the empty set.
     let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+    // SAFETY: `set` is a live cpu_set_t; the CPU index is bounds-checked by the macro.
     unsafe {
         libc::CPU_ZERO(&mut set);
         libc::CPU_SET(cpu as usize, &mut set);
     }
+    // SAFETY: `set` is a live cpu_set_t and the length passed is its size.
     let rc = unsafe {
         libc::sched_setaffinity(
             tid as libc::pid_t,

@@ -62,6 +62,7 @@ pub(crate) enum TcpConnectAttempt {
 pub(crate) fn connect_error(fd: RawFd) -> io::Result<()> {
     let mut error = 0;
     let mut length = std::mem::size_of::<c_int>() as libc::socklen_t;
+    // SAFETY: `error` and `length` are live locals sized for SO_ERROR (a c_int).
     let result = unsafe {
         libc::getsockopt(
             fd,

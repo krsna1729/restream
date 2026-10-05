@@ -165,6 +165,7 @@ pub(super) async fn sample_resource_window(
         let ticks = read_proc_stat_ticks(stack.restream_pid)?;
         let ffmpeg = ffmpeg_children_stats(stack.restream_pid)?;
         let interval_secs = prev_instant.elapsed().as_secs_f64().max(0.001);
+        // SAFETY: sysconf(3) takes no pointers.
         let clk_tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK) as f64 };
         let restream_cpu_pct =
             100.0 * (ticks.saturating_sub(prev_ticks)) as f64 / clk_tck / interval_secs;

@@ -70,6 +70,7 @@ impl DutyChildren {
                 kill
             } else {
                 // Same UID, so a plain `libc::kill` needs no helper binary.
+                // SAFETY: kill(2) takes no pointers.
                 let rc = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
                 if rc == 0 {
                     signaled = true;

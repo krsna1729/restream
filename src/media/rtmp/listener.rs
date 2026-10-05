@@ -480,6 +480,7 @@ fn bind_rtmp_listener(
 ) -> Result<std::net::TcpListener, io::Error> {
     use std::os::fd::{FromRawFd, OwnedFd};
 
+    // SAFETY: socket(2) takes no pointers; the result is checked below.
     let fd = unsafe {
         libc::socket(
             libc::AF_INET,
@@ -501,6 +502,7 @@ fn bind_rtmp_listener(
         }
     };
     let enable: libc::c_int = 1;
+    // SAFETY: `enable` is a live c_int of the length passed; `fd` is owned by `socket`.
     check(unsafe {
         libc::setsockopt(
             fd,
@@ -511,6 +513,7 @@ fn bind_rtmp_listener(
         )
     })?;
     if reuse_port {
+        // SAFETY: `enable` is a live c_int of the length passed; `fd` is owned by `socket`.
         check(unsafe {
             libc::setsockopt(
                 fd,
@@ -529,6 +532,7 @@ fn bind_rtmp_listener(
         },
         sin_zero: [0; 8],
     };
+    // SAFETY: `address` is a live sockaddr_in of the length passed; `fd` is owned by `socket`.
     check(unsafe {
         libc::bind(
             fd,
@@ -537,6 +541,7 @@ fn bind_rtmp_listener(
         )
     })?;
     let backlog = libc::c_int::try_from(backlog).unwrap_or(libc::c_int::MAX);
+    // SAFETY: listen(2) on the owned fd; no pointers.
     check(unsafe { libc::listen(fd, backlog) })?;
     Ok(std::net::TcpListener::from(socket))
 }

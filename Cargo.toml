@@ -13,6 +13,11 @@ members = ["crates/xtask"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)', 'cfg(fuzzing)'] }
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

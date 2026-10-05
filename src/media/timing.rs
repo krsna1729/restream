@@ -85,11 +85,13 @@ fn backend() -> &'static Backend {
             }
 
             let t0 = Instant::now();
+            // SAFETY: RDTSC is present on every x86_64 CPU and has no memory effects.
             let c0 = unsafe { core::arch::x86_64::_rdtsc() };
             while t0.elapsed().as_micros() < 200 {
                 core::hint::spin_loop();
             }
             let elapsed_us = t0.elapsed().as_micros() as f64;
+            // SAFETY: RDTSC is present on every x86_64 CPU and has no memory effects.
             let c1 = unsafe { core::arch::x86_64::_rdtsc() };
 
             if elapsed_us < MIN_WINDOW_US {
@@ -134,6 +136,7 @@ impl Clock {
         match self.0 {
             Backend::Tsc(_) => {
                 #[cfg(target_arch = "x86_64")]
+                // SAFETY: RDTSC is present on every x86_64 CPU and has no memory effects.
                 return Timestamp(unsafe { core::arch::x86_64::_rdtsc() });
                 #[cfg(not(target_arch = "x86_64"))]
                 unreachable!()
@@ -151,6 +154,7 @@ impl Clock {
             Backend::Tsc(us_per_cycle) => {
                 #[cfg(target_arch = "x86_64")]
                 {
+                    // SAFETY: RDTSC is present on every x86_64 CPU and has no memory effects.
                     let now = unsafe { core::arch::x86_64::_rdtsc() };
                     (now.saturating_sub(start.0) as f64 * us_per_cycle) as u64
                 }

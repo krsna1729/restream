@@ -134,6 +134,8 @@ impl CompioTcpPoller {
         let stream = open_nonblocking_tcp(peer_addr)?;
         let fd = stream.as_raw_fd();
         let (address, address_len) = socket_address(peer_addr);
+        // SAFETY: `fd` is the open socket owned by `stream`; `address` is a live
+        // sockaddr_storage initialised for `address_len` bytes.
         let result = unsafe {
             libc::connect(
                 fd,
@@ -609,6 +611,7 @@ fn open_nonblocking_tcp(peer_addr: SocketAddr) -> Result<TcpStream, TcpEgressPol
         SocketAddr::V4(_) => libc::AF_INET,
         SocketAddr::V6(_) => libc::AF_INET6,
     };
+    // SAFETY: socket(2) takes no pointers; the result is checked below.
     let fd = unsafe {
         libc::socket(
             domain,
@@ -620,6 +623,8 @@ fn open_nonblocking_tcp(peer_addr: SocketAddr) -> Result<TcpStream, TcpEgressPol
         let error = io::Error::last_os_error();
         return Err(CompioTcpPoller::error("compio_tcp_socket", error));
     }
+    // SAFETY: `fd` is a fresh socket checked above and owned by nothing else; the TcpStream
+    // takes sole ownership.
     let stream = unsafe { TcpStream::from_raw_fd(fd) };
     stream
         .set_nodelay(true)
@@ -628,6 +633,7 @@ fn open_nonblocking_tcp(peer_addr: SocketAddr) -> Result<TcpStream, TcpEgressPol
 }
 
 fn socket_address(peer_addr: SocketAddr) -> (libc::sockaddr_storage, libc::socklen_t) {
+    // SAFETY: sockaddr_storage is plain old data; all-zero bytes are a valid value.
     let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
     match peer_addr {
         SocketAddr::V4(address) => {
@@ -639,6 +645,8 @@ fn socket_address(peer_addr: SocketAddr) -> (libc::sockaddr_storage, libc::sockl
                 },
                 sin_zero: [0; 8],
             };
+            // SAFETY: two distinct live locals; sockaddr_in is smaller than sockaddr_storage,
+            // so the copy is in bounds and does not overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     (&value as *const libc::sockaddr_in).cast::<u8>(),
@@ -661,6 +669,8 @@ fn socket_address(peer_addr: SocketAddr) -> (libc::sockaddr_storage, libc::sockl
                 },
                 sin6_scope_id: address.scope_id(),
             };
+            // SAFETY: two distinct live locals; sockaddr_in6 is smaller than sockaddr_storage,
+            // so the copy is in bounds and does not overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     (&value as *const libc::sockaddr_in6).cast::<u8>(),

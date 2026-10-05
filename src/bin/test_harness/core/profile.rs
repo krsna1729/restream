@@ -114,6 +114,8 @@ pub(crate) fn maybe_reexec_in_port_namespace() -> Result<(), String> {
     }
 
     let code = status.code().unwrap_or(1);
+    // SAFETY: _exit(2) only ends the process; skipping destructors and atexit is the point
+    // here.
     unsafe { libc::_exit(code) };
 }
 

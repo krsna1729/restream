@@ -31,11 +31,13 @@ fn bind_drain_socket(
     timeout: Duration,
     reuseport: bool,
 ) -> Result<UdpSocket, String> {
+    // SAFETY: socket(2) takes no pointers; the result is checked below.
     let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
     if fd < 0 {
         return Err(format!("socket(): {}", std::io::Error::last_os_error()));
     }
     // Own the fd from here on so every early return closes it.
+    // SAFETY: `fd` is a fresh socket checked above and owned by nothing else.
     let socket = unsafe { UdpSocket::from_raw_fd(fd) };
     let enable: libc::c_int = 1;
     // SO_REUSEPORT only when explicitly asked for: per-socket reuseport spreads
@@ -46,6 +48,8 @@ fn bind_drain_socket(
         options.push((libc::SO_REUSEPORT, enable));
     }
     for (name, value) in options {
+        // SAFETY: the value pointer is a live c_int local of the length passed; `fd` is an open
+        // socket for the call.
         let rc = unsafe {
             libc::setsockopt(
                 fd,
@@ -63,6 +67,8 @@ fn bind_drain_socket(
         }
     }
     let rcvbuf = rcvbuf as libc::c_int;
+    // SAFETY: the value pointer is a live c_int local of the length passed; `fd` is an open
+    // socket for the call.
     let rc = unsafe {
         libc::setsockopt(
             fd,
@@ -84,6 +90,7 @@ fn bind_drain_socket(
         sin_addr: libc::in_addr { s_addr: 0 },
         sin_zero: [0; 8],
     };
+    // SAFETY: `address` is a live sockaddr_in of the length passed; `fd` is owned by `socket`.
     let rc = unsafe {
         libc::bind(
             fd,
@@ -129,6 +136,8 @@ fn drain_loop(socket: UdpSocket, stop: Arc<AtomicBool>, counters: Arc<DrainCount
 fn granted_rcvbuf(socket: &UdpSocket) -> Option<u64> {
     let mut value: libc::c_int = 0;
     let mut len = std::mem::size_of_val(&value) as libc::socklen_t;
+    // SAFETY: `value` and `len` are live locals of the sizes passed; the fd is an open socket
+    // for the call.
     let rc = unsafe {
         libc::getsockopt(
             socket.as_raw_fd(),
@@ -197,6 +206,7 @@ fn drain_loop_batched(
         .collect();
     let mut messages: Vec<libc::mmsghdr> = (0..batch)
         .map(|slot| {
+            // SAFETY: the header is plain old data; all-zero bytes are a valid empty value.
             let mut header: libc::mmsghdr = unsafe { std::mem::zeroed() };
             header.msg_hdr.msg_iov = &mut iovecs[slot] as *mut libc::iovec;
             header.msg_hdr.msg_iovlen = 1;
@@ -205,6 +215,8 @@ fn drain_loop_batched(
         .collect();
     let fd = socket.as_raw_fd();
     while !stop.load(Ordering::Relaxed) {
+        // SAFETY: each of the `batch` headers points at its own iovec, each iovec at its own
+        // slot of `arena`; all three live, unmoved, for the whole loop.
         let received = unsafe {
             libc::recvmmsg(
                 fd,

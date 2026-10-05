@@ -48,6 +48,8 @@ pub(crate) fn record_type_from_control(control: &[u8], truncated: bool) -> io::R
             "missing kTLS record-type control message",
         ));
     }
+    // SAFETY: the length check above keeps `control` longer than the cmsghdr (data_offset >=
+    // its size); read_unaligned needs no alignment.
     let header = unsafe { std::ptr::read_unaligned(control.as_ptr().cast::<libc::cmsghdr>()) };
     if header.cmsg_len < data_offset + 1
         || header.cmsg_len > control.len()
@@ -59,6 +61,7 @@ pub(crate) fn record_type_from_control(control: &[u8], truncated: bool) -> io::R
             "missing kTLS record-type control message",
         ));
     }
+    // SAFETY: `control.len() > data_offset` was checked above.
     Ok(unsafe { *control.as_ptr().add(data_offset) })
 }
 
@@ -69,11 +72,13 @@ pub(crate) fn recv_record(fd: RawFd, buffer: &mut [u8]) -> io::Result<(usize, u8
         iov_len: buffer.len(),
     };
     let mut control = ControlBuffer([0; 24]);
+    // SAFETY: msghdr is plain old data; all-zero bytes are a valid (empty) value.
     let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
     message.msg_iov = &mut iov;
     message.msg_iovlen = 1;
     message.msg_control = control.0.as_mut_ptr().cast();
     message.msg_controllen = control.0.len();
+    // SAFETY: `message` points at `iov` and `control`, live locals of the lengths it records.
     let received = unsafe { libc::recvmsg(fd, &mut message, libc::MSG_DONTWAIT) };
     if received < 0 {
         return Err(io::Error::last_os_error());
@@ -428,6 +433,7 @@ fn set_socket_option(
     value: *const libc::c_void,
     length: usize,
 ) -> io::Result<()> {
+    // SAFETY: callers pass `value` pointing at `length` readable bytes that outlive the call.
     let result = unsafe { libc::setsockopt(fd, level, name, value, length as libc::socklen_t) };
     (result == 0)
         .then_some(())
@@ -462,6 +468,8 @@ mod tests {
             cmsg_level: SOL_TLS,
             cmsg_type: TLS_GET_RECORD_TYPE,
         };
+        // SAFETY: ControlBuffer is align(8), enough for cmsghdr, and its 24 bytes
+        // hold the header and the byte at data_offset (16).
         unsafe {
             std::ptr::write(control.0.as_mut_ptr().cast::<libc::cmsghdr>(), header);
             *control.0.as_mut_ptr().add(data_offset) = RECORD_TYPE_ALERT;

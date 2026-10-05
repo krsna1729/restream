@@ -410,6 +410,8 @@ impl CustomInput {
     // are freed before returning. read_packet_cb is the only active
     // callback; seek and write are None (input is read-only).
     pub fn new(queue: *const MemoryQueue) -> Result<Self, &'static str> {
+        // SAFETY: per the contract above: `queue` outlives the context, every FFmpeg allocation
+        // below is null-checked and freed on each error path.
         unsafe {
             let buffer = ffmpeg::ffi::av_malloc(AVIO_BUFFER_SIZE) as *mut u8;
             if buffer.is_null() {
@@ -525,6 +527,8 @@ impl CustomOutput {
     // buffer. read and seek callbacks are None (output is write-only). On
     // all error paths, allocated resources are freed before returning.
     pub fn new(queue: *const MemoryQueue, format_name: &str) -> Result<Self, &'static str> {
+        // SAFETY: per the contract above: `queue` outlives the context, every FFmpeg allocation
+        // below is null-checked and freed on each error path.
         unsafe {
             let buffer = ffmpeg::ffi::av_malloc(AVIO_BUFFER_SIZE) as *mut u8;
             if buffer.is_null() {
@@ -619,7 +623,11 @@ impl Drop for CustomOutput {
 // `from_raw_parts_mut` is valid because FFmpeg guarantees `buf` points
 // to `buf_size` writable bytes.
 unsafe extern "C" fn read_packet_cb(opaque: *mut c_void, buf: *mut u8, buf_size: c_int) -> c_int {
+    // SAFETY: `opaque` is the `*const MemoryQueue` given to avio_alloc_context; the CustomInput
+    // that owns both keeps it alive.
     let queue = unsafe { &*(opaque as *const MemoryQueue) };
+    // SAFETY: FFmpeg passes `buf` as `buf_size` (non-negative) writable bytes, exclusively ours
+    // for this call.
     let target = unsafe { std::slice::from_raw_parts_mut(buf, buf_size as usize) };
     let n = queue.read(target);
     if n == 0 && queue.is_closed() {
@@ -635,7 +643,10 @@ unsafe extern "C" fn read_packet_cb(opaque: *mut c_void, buf: *mut u8, buf_size:
 // `from_raw_parts` is valid because FFmpeg guarantees `buf` is `buf_size`
 // readable bytes.
 unsafe extern "C" fn write_packet_cb(opaque: *mut c_void, buf: *mut u8, buf_size: c_int) -> c_int {
+    // SAFETY: `opaque` is the `*const MemoryQueue` given to avio_alloc_context; the
+    // CustomOutput that owns both keeps it alive.
     let queue = unsafe { &*(opaque as *const MemoryQueue) };
+    // SAFETY: FFmpeg passes `buf` as `buf_size` (non-negative) readable bytes for this call.
     let slice = unsafe { std::slice::from_raw_parts(buf, buf_size as usize) };
     queue.write_sync(slice);
     buf_size

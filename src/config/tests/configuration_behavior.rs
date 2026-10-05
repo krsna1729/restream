@@ -16,12 +16,16 @@ fn with_env_vars(vars: &[(&str, &str)], f: impl FnOnce()) {
         .iter()
         .map(|(name, _)| ((*name).to_string(), std::env::var(name).ok()))
         .collect::<Vec<_>>();
+    // SAFETY: ENV_LOCK serialises every test here that touches the environment, and no other
+    // test in this binary reads or writes these variables.
     unsafe {
         for (name, value) in vars {
             std::env::set_var(name, value);
         }
     }
     f();
+    // SAFETY: ENV_LOCK serialises every test here that touches the environment, and no other
+    // test in this binary reads or writes these variables.
     unsafe {
         for (name, value) in previous {
             if let Some(value) = value {
@@ -43,6 +47,8 @@ fn with_env_overlay(vars: &[(&str, &str)], removed: &[&str], f: impl FnOnce()) {
         .iter()
         .map(|name| ((*name).to_string(), std::env::var(name).ok()))
         .collect::<Vec<_>>();
+    // SAFETY: ENV_LOCK serialises every test here that touches the environment, and no other
+    // test in this binary reads or writes these variables.
     unsafe {
         for (name, value) in vars {
             std::env::set_var(name, value);
@@ -52,6 +58,8 @@ fn with_env_overlay(vars: &[(&str, &str)], removed: &[&str], f: impl FnOnce()) {
         }
     }
     f();
+    // SAFETY: ENV_LOCK serialises every test here that touches the environment, and no other
+    // test in this binary reads or writes these variables.
     unsafe {
         for (name, value) in previous_vars.into_iter().chain(previous_removed) {
             if let Some(value) = value {
@@ -148,12 +156,14 @@ fn runtime_layout_is_owned_and_each_path_can_be_overridden() {
             ("RESTREAM_DB_PATH", "/state/custom.db"),
             ("RESTREAM_MEDIA_DIR", "/assets"),
             ("RESTREAM_LOG_DIR", "/var/log/restream"),
+            ("RESTREAM_LOG_RETENTION_DAYS", "14"),
         ],
         || {
             let config = AppConfig::from_env();
             assert_eq!(config.db_path, "/state/custom.db");
             assert_eq!(config.media_dir, "/assets");
             assert_eq!(config.log_dir, "/var/log/restream");
+            assert_eq!(config.log_retention_days, 14);
         },
     );
 }
