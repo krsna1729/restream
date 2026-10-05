@@ -89,7 +89,6 @@ pub(crate) fn visit_leaf<F: EgressFeed>(
         return EngineVisitResult::StaleGeneration;
     }
 
-    common.schedule.enqueued = false;
     if !common.cursor_primed {
         // First visit: anchor the placeholder `(0, 0)` cursor to a real
         // feed position before the engine ever reads. `LeafCommon::new`

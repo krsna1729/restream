@@ -5,7 +5,7 @@ use crate::media::egress::command::{EgressCommand, FeedId, OutputId, ShardId};
 use crate::media::egress::leaf::LeafCommon;
 use crate::media::egress::leaf_arena::{LeafArena, LeafKey};
 use crate::media::egress::policy::{LeafLimits, WorkBudget};
-use crate::media::egress::scheduler::{ReadyQueue, VisitDecision, try_enqueue};
+use crate::media::egress::scheduler::{ReadyQueue, VisitDecision};
 use crate::media::egress::test_driver::{EngineScript, FakeEngine, FakeFeed, FakeTransport};
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 use std::num::NonZeroU32;
@@ -275,7 +275,7 @@ impl LeafHarnessBackend {
             | EngineProgress::PeerClosed => {}
         }
         if outcome.decision == VisitDecision::Continue {
-            try_enqueue(&mut leaf.common.schedule, &mut self.queue, key);
+            self.queue.push(key);
         }
     }
 }
@@ -316,16 +316,14 @@ impl EgressShardBackend for LeafHarnessBackend {
                     transport: FakeTransport::default(),
                 })
                 .expect("harness capacity");
-            if let Some(leaf) = self.leaves.get_mut(key) {
-                try_enqueue(&mut leaf.common.schedule, &mut self.queue, key);
-            }
+            self.queue.push(key);
         }
         EgressShardCommandEffect::Continue
     }
 
     fn on_media_tick(&mut self) -> EgressShardCommandEffect {
         for _ in 0..4 {
-            let Some(key) = self.queue.dequeue_next() else {
+            let Some(key) = self.queue.pop() else {
                 return EgressShardCommandEffect::Continue;
             };
             self.visit_ready_leaf(key);

@@ -28,7 +28,6 @@ fn records_progress_and_continues_current_generation() {
     let feed = FakeFeed::new();
     feed.push(Bytes::from_static(b"abc"), true);
     let mut common = common(7);
-    common.schedule.enqueued = true;
     let mut engine = FakeEngine::new(vec![EngineScript::Progress {
         bytes: 3,
         units: 1,
@@ -60,7 +59,6 @@ fn records_progress_and_continues_current_generation() {
     ));
     assert_eq!(outcome.decision, VisitDecision::Continue);
     assert_eq!(common.cursor, FeedCursor::new(0, 1));
-    assert!(!common.schedule.enqueued);
     assert!(common.schedule.last_service_at.is_some());
     assert_eq!(common.progress.total_bytes_sent, 3);
     assert_eq!(common.progress.total_units_sent, 1);
@@ -70,7 +68,6 @@ fn records_progress_and_continues_current_generation() {
 fn suspends_when_engine_needs_readiness() {
     let feed = FakeFeed::new();
     let mut common = common(1);
-    common.schedule.enqueued = true;
     let mut engine = FakeEngine::new(vec![EngineScript::Needs(WaitCondition::Io(
         Interest::WRITE,
     ))]);
@@ -92,7 +89,6 @@ fn suspends_when_engine_needs_readiness() {
     };
     assert!(matches!(outcome.progress, EngineProgress::Needs(wait) if wait.io_interest().writable));
     assert_eq!(outcome.decision, VisitDecision::Suspend);
-    assert!(!common.schedule.enqueued);
     assert!(common.schedule.last_service_at.is_some());
 }
 
@@ -147,7 +143,6 @@ fn wants_feed_wake_reflects_the_visit_outcomes_wait_condition() {
 
     for (script, expected) in cases {
         let mut common = common(1);
-        common.schedule.enqueued = true;
         common.schedule.wants_feed_wake = !expected; // start opposite, prove it flips
         let mut engine = FakeEngine::new(vec![script]);
         let mut transport = FakeTransport::default();
@@ -285,7 +280,6 @@ fn closes_failed_or_peer_closed_visits() {
 fn ignores_stale_generation_without_touching_engine_or_common_state() {
     let feed = FakeFeed::new();
     let mut common = common(5);
-    common.schedule.enqueued = true;
     let mut engine = FakeEngine::new(vec![EngineScript::Progress {
         bytes: 3,
         units: 1,
@@ -305,7 +299,6 @@ fn ignores_stale_generation_without_touching_engine_or_common_state() {
     .run();
 
     assert!(matches!(result, EngineVisitResult::StaleGeneration));
-    assert!(common.schedule.enqueued);
     assert_eq!(common.cursor, FeedCursor::new(0, 0));
     // A rejected visit must not consume the one-shot cursor priming either:
     // the leaf still has to be anchored by whichever visit actually runs.

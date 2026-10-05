@@ -30,7 +30,7 @@ use crate::media::egress::leaf::LeafCommon;
 use crate::media::egress::leaf_arena::{LeafArena, LeafKey};
 use crate::media::egress::metrics::ShardMetrics;
 use crate::media::egress::policy::{LeafLimits, WorkBudgetConfig};
-use crate::media::egress::scheduler::VisitDecision;
+use crate::media::egress::scheduler::{ReadyQueue, VisitDecision};
 use crate::media::egress::shard::{
     EgressShardBackend, EgressShardCommandEffect, EgressShardIdleWake,
 };
@@ -116,15 +116,6 @@ pub(crate) enum SrtResolveWorkerError {
     CompletionQueueFull,
     CompletionQueueClosed,
 }
-
-/// A leaf due a visit, carrying the generation it was scheduled under so a
-/// slot reused by a replacement output can never be visited on its behalf.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SrtReadyLeaf {
-    key: LeafKey,
-    generation: u64,
-}
-
 #[derive(Debug)]
 pub(crate) struct SrtResolveCompletionQueue {
     receiver: Receiver<SrtResolvedConnect>,
@@ -224,7 +215,7 @@ pub(crate) struct SrtShardBackend {
     /// replacement leaf that reuses the slot.
     callers: HashMap<SrtCaller, LeafKey>,
     queued_requests: HashMap<(AddressFamily, PoolRequestId), QueuedRequest>,
-    ready: VecDeque<SrtReadyLeaf>,
+    ready: ReadyQueue,
     ready_candidates: VecDeque<LeafKey>,
     feed_waiting: VecDeque<LeafKey>,
     blocked: VecDeque<LeafKey>,
@@ -278,7 +269,7 @@ impl SrtShardBackend {
             output_sockets: HashMap::new(),
             callers: HashMap::new(),
             queued_requests: HashMap::new(),
-            ready: VecDeque::new(),
+            ready: ReadyQueue::with_capacity(0),
             ready_candidates: VecDeque::new(),
             feed_waiting: VecDeque::new(),
             blocked: VecDeque::new(),
@@ -303,7 +294,7 @@ impl SrtShardBackend {
 
     fn size_queues(&mut self, capacity: usize) {
         self.leaves = LeafArena::with_capacity(capacity);
-        self.ready = VecDeque::with_capacity(capacity);
+        self.ready = ReadyQueue::with_capacity(capacity);
         self.ready_candidates = VecDeque::with_capacity(capacity);
         self.feed_waiting = VecDeque::with_capacity(capacity);
         self.blocked = VecDeque::with_capacity(capacity);
@@ -365,9 +356,8 @@ impl SrtShardBackend {
         admitted
     }
 
-    fn enqueue_ready_event(&mut self, event: SrtReadyLeaf) -> bool {
-        let capacity = self.leaf_queue_capacity();
-        let admitted = push_bounded(&mut self.ready, event, capacity);
+    fn enqueue_ready(&mut self, key: LeafKey) -> bool {
+        let admitted = self.ready.push(key).is_queued();
         if !admitted {
             self.queue_overflows = self.queue_overflows.saturating_add(1);
         }
@@ -524,7 +514,7 @@ impl SrtShardBackend {
         reason: crate::media::egress::backend::CloseReason,
     ) -> bool {
         self.feed_waiting.retain(|queued| *queued != key);
-        self.ready.retain(|event| event.key != key);
+        self.ready.remove(key);
         self.ready_candidates.retain(|queued| *queued != key);
         self.blocked.retain(|queued| *queued != key);
         self.stall_candidates.retain(|queued| *queued != key);
@@ -574,18 +564,8 @@ impl SrtShardBackend {
             }
         }
         while let Some(key) = self.ready_candidates.pop_front() {
-            let Some(leaf) = self.leaves.get_mut(key) else {
-                continue;
-            };
-            if leaf.common.schedule.enqueued {
-                continue;
-            }
-            leaf.common.schedule.enqueued = true;
-            let generation = leaf.common.generation;
-            if !self.enqueue_ready_event(SrtReadyLeaf { key, generation })
-                && let Some(leaf) = self.leaves.get_mut(key)
-            {
-                leaf.common.schedule.enqueued = false;
+            if self.leaves.get(key).is_some() {
+                self.enqueue_ready(key);
             }
         }
         summary.work_remaining || more_events
@@ -595,12 +575,12 @@ impl SrtShardBackend {
         if matches!(decision, VisitDecision::Close) {
             return;
         }
+        if self.ready.contains(key) {
+            return;
+        }
         let Some(leaf) = self.leaves.get_mut(key) else {
             return;
         };
-        if leaf.common.schedule.enqueued {
-            return;
-        }
         let feed_wake =
             leaf.common.schedule.wants_feed_wake && !leaf.common.schedule.feed_wake_queued;
         if feed_wake {
@@ -631,14 +611,15 @@ impl SrtShardBackend {
     /// decision so the caller can remove a closed leaf. `OutputId` wraps a
     /// `String`, so it is only cloned on `VisitDecision::Close`.
     fn visit_one_ready_leaf(&mut self) -> Option<(Option<OutputId>, VisitDecision)> {
-        let event = self.ready.pop_front()?;
+        let key = self.ready.pop()?;
         self.leaf_visits = self.leaf_visits.saturating_add(1);
         let budget = self.budget_config.new_visit();
         let feed = &self.feed;
         let now = self.owners.timestamp();
-        let leaf = self.leaves.get_mut(event.key)?;
+        let leaf = self.leaves.get_mut(key)?;
+        let generation = leaf.common.generation;
         let result = leaf.visit_ready(
-            event.generation,
+            generation,
             Readiness {
                 readable: false,
                 writable: true,
@@ -650,10 +631,7 @@ impl SrtShardBackend {
         );
 
         let decision = match result {
-            EngineVisitResult::StaleGeneration => {
-                leaf.common.schedule.enqueued = false;
-                VisitDecision::Suspend
-            }
+            EngineVisitResult::StaleGeneration => VisitDecision::Suspend,
             EngineVisitResult::Visited(outcome) => {
                 if matches!(
                     &outcome.progress,
@@ -800,7 +778,7 @@ impl EgressShardBackend for SrtShardBackend {
             owner_work_remaining = self.begin_batch();
         }
 
-        let ready_key = self.ready.front().map(|event| event.key);
+        let ready_key = self.ready.front();
         let outcome = self.visit_one_ready_leaf();
         if let Some((Some(output_id), VisitDecision::Close)) = &outcome {
             // `Close` only comes from `PeerClosed`/`Failed`; an explicit

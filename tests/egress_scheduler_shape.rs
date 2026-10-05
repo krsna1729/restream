@@ -1,7 +1,6 @@
 //! Egress scheduler shape gate: ready-queue cost follows ready work, never the
-//! leaf population. Drives the production `ReadyQueue` exactly as the sink and
-//! pipeline shards do (`try_enqueue` on a leaf's `ScheduleState`, then
-//! `dequeue_next` and clearing `enqueued`).
+//! leaf population. Drives the production `ReadyQueue` exactly as the shards
+//! do (`push` a leaf's key, then `pop`).
 //!
 //! Hosted VMs are noisy, so the bounds are generous shape invariants, not
 //! nanosecond pins: a population scan would show the full population ratio.
@@ -12,7 +11,7 @@
 use std::time::Instant;
 
 use restream::media::egress::leaf_arena::{LeafArena, LeafKey};
-use restream::media::egress::scheduler::{ReadyQueue, ScheduleState, try_enqueue};
+use restream::media::egress::scheduler::{Push, ReadyQueue, ScheduleState};
 
 fn drain_nanos(population: usize, ready: usize, iters: u64) -> u128 {
     let mut leaves = LeafArena::with_capacity(population);
@@ -27,11 +26,10 @@ fn drain_nanos(population: usize, ready: usize, iters: u64) -> u128 {
     let start = Instant::now();
     for _ in 0..iters {
         for &key in keys.iter().take(ready) {
-            let leaf = leaves.get_mut(key).expect("live leaf");
-            assert!(try_enqueue(leaf, &mut queue, key));
+            assert_eq!(queue.push(key), Push::Queued);
         }
-        while let Some(key) = queue.dequeue_next() {
-            leaves.get_mut(key).expect("live leaf").enqueued = false;
+        while let Some(key) = queue.pop() {
+            assert!(leaves.get(key).is_some());
         }
     }
     start.elapsed().as_nanos() / u128::from(iters.max(1))

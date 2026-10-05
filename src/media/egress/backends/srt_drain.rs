@@ -38,7 +38,7 @@ impl SrtShardBackend {
         leaf.draining_since = Some(Instant::now());
         leaf.draining_reason = Some(reason);
         // A draining leaf must be visited to flush.
-        if !leaf.common.schedule.enqueued {
+        if !self.ready.contains(key) {
             self.enqueue_ready_candidate(key);
         }
     }
@@ -159,7 +159,7 @@ impl SrtShardBackend {
                 continue;
             };
             leaf.common.schedule.feed_wake_queued = false;
-            if !leaf.common.schedule.wants_feed_wake || leaf.common.schedule.enqueued {
+            if !leaf.common.schedule.wants_feed_wake || self.ready.contains(key) {
                 continue;
             }
             self.enqueue_ready_candidate(key);

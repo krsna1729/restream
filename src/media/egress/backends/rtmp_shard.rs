@@ -25,7 +25,7 @@ use crate::media::egress::metrics::ShardMetrics;
 use crate::media::egress::policy::{
     LeafLimits, LeafStallClass, WorkBudget, WorkBudgetConfig, classify_stall,
 };
-use crate::media::egress::scheduler::VisitDecision;
+use crate::media::egress::scheduler::{ReadyQueue, VisitDecision};
 use crate::media::egress::shard::{
     EgressShardBackend, EgressShardCommandEffect, EgressShardConfig,
 };
@@ -345,7 +345,7 @@ where
     rtmps_client_config: Arc<ClientConfig>,
     leaves: LeafArena<RtmpFabricLeaf>,
     output_sockets: HashMap<OutputId, RtmpLeafSocket>,
-    ready: VecDeque<TcpReadyLeaf>,
+    ready: ReadyQueue,
     /// Visits left before completions are reaped again even though `ready`
     /// is non-empty: one ready-queue round. Local follow-up visits requeue
     /// without I/O, so polling only on an empty queue could starve the very
@@ -406,7 +406,7 @@ where
             rtmps_client_config,
             leaves: LeafArena::with_capacity(EgressShardConfig::DEFAULT_LEAF_CAPACITY),
             output_sockets: HashMap::new(),
-            ready: VecDeque::with_capacity(ready_capacity),
+            ready: ReadyQueue::with_capacity(ready_capacity),
             visits_until_poll: 0,
             feed_waiting: VecDeque::with_capacity(ready_capacity),
             stall_candidates: VecDeque::with_capacity(ready_capacity),
@@ -431,28 +431,25 @@ where
     pub(crate) fn with_leaf_capacity(mut self, capacity: usize) -> Self {
         self.leaves = LeafArena::with_capacity(capacity);
         self.queue_capacity = capacity;
-        self.ready = VecDeque::with_capacity(capacity);
+        self.ready = ReadyQueue::with_capacity(capacity);
         self.feed_waiting = VecDeque::with_capacity(capacity);
         self.stall_candidates = VecDeque::with_capacity(capacity);
         self
     }
 
     fn enqueue_ready(&mut self, event: TcpReadyLeaf) -> bool {
-        let queue_capacity = self.queue_capacity;
-        let ready = &mut self.ready;
-        let queue_overflows = &mut self.queue_overflows;
         let Some(leaf) = self.leaves.get_mut(event.key) else {
             return false;
         };
+        // Readiness accumulates on the leaf; the queue holds the key once.
         merge_ready_flags(&mut leaf.pending_readiness, event);
-        if leaf.common.schedule.enqueued {
-            return true;
-        }
-        leaf.common.schedule.enqueued = true;
-        let admitted = push_bounded(ready, event, queue_capacity);
+        self.push_ready(event.key)
+    }
+
+    fn push_ready(&mut self, key: LeafKey) -> bool {
+        let admitted = self.ready.push(key).is_queued();
         if !admitted {
-            leaf.common.schedule.enqueued = false;
-            *queue_overflows = queue_overflows.saturating_add(1);
+            self.queue_overflows = self.queue_overflows.saturating_add(1);
         }
         admitted
     }
@@ -480,7 +477,7 @@ where
         self.stall_candidates.retain(|key| *key != socket_ref.key);
         self.sweep_service.invalidate();
         self.service = Default::default();
-        self.ready.retain(|event| event.key != socket_ref.key);
+        self.ready.remove(socket_ref.key);
         self.poll_buffer.retain(|event| event.key != socket_ref.key);
         let Some(mut leaf) = self.leaves.remove(socket_ref.key) else {
             return false;
@@ -515,22 +512,12 @@ where
     /// `poll_ready()`, exactly as before.
     fn enqueue_feed_waiting_leaves(&mut self) {
         while let Some(key) = self.feed_waiting.pop_front() {
-            let event = self.leaves.get_mut(key).and_then(|leaf| {
-                leaf.common.schedule.feed_wake_queued = false;
-                if !leaf.common.schedule.wants_feed_wake || leaf.common.schedule.enqueued {
-                    None
-                } else {
-                    Some(TcpReadyLeaf {
-                        fd: leaf.transport.raw_fd(),
-                        key,
-                        generation: leaf.common.generation,
-                        readable: false,
-                        writable: false,
-                    })
-                }
-            });
-            if let Some(event) = event {
-                self.enqueue_ready(event);
+            let Some(leaf) = self.leaves.get_mut(key) else {
+                continue;
+            };
+            leaf.common.schedule.feed_wake_queued = false;
+            if leaf.common.schedule.wants_feed_wake {
+                self.push_ready(key);
             }
         }
     }
@@ -560,12 +547,13 @@ where
     /// leaf), so it's only cloned then — every other visit (the overwhelming
     /// majority in steady state) pays nothing for it.
     fn visit_one_ready_leaf(&mut self) -> Option<(Option<OutputId>, VisitDecision)> {
-        let event = self.ready.pop_front()?;
+        let key = self.ready.pop()?;
         let budget = self.budget_config.new_visit();
         let feed = &self.feed;
-        let leaf = self.leaves.get_mut(event.key)?;
+        let leaf = self.leaves.get_mut(key)?;
         let readiness = std::mem::take(&mut leaf.pending_readiness);
-        let result = leaf.visit_ready(event.generation, readiness, feed, budget);
+        let generation = leaf.common.generation;
+        let result = leaf.visit_ready(generation, readiness, feed, budget);
         let (progress, decision) = match result {
             EngineVisitResult::StaleGeneration => return Some((None, VisitDecision::Suspend)),
             EngineVisitResult::Visited(outcome) => {
@@ -597,11 +585,10 @@ where
             .saturating_add(leaf.transport.pending_transport_write_bytes());
         // Progress can still end on an empty feed. Keep that leaf parked for
         // the next publication even though this visit returns `Continue`.
-        let feed_waiting = leaf.common.schedule.wants_feed_wake
-            && !leaf.common.schedule.enqueued
-            && !leaf.common.schedule.feed_wake_queued;
+        let feed_waiting =
+            leaf.common.schedule.wants_feed_wake && !leaf.common.schedule.feed_wake_queued;
         if feed_waiting {
-            let admitted = push_bounded(&mut self.feed_waiting, event.key, self.queue_capacity);
+            let admitted = push_bounded(&mut self.feed_waiting, key, self.queue_capacity);
             if !admitted {
                 self.queue_overflows = self.queue_overflows.saturating_add(1);
             }
@@ -632,21 +619,7 @@ where
 
         if let Some(followup_readiness) = followup {
             leaf.pending_readiness = followup_readiness;
-            let admitted = push_bounded(
-                &mut self.ready,
-                TcpReadyLeaf {
-                    fd: event.fd,
-                    key: event.key,
-                    generation: event.generation,
-                    readable: followup_readiness.readable,
-                    writable: followup_readiness.writable,
-                },
-                self.queue_capacity,
-            );
-            if !admitted {
-                self.queue_overflows = self.queue_overflows.saturating_add(1);
-            }
-            leaf.common.schedule.enqueued = admitted;
+            self.push_ready(key);
         }
 
         Some((None, decision))

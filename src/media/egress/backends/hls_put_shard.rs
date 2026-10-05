@@ -12,7 +12,7 @@
 //! output's deadlines (backoff, resolve, connect, request timeout) are
 //! shard timers. Slots live in a `LeafArena`: a late DNS answer or poller
 //! event for a removed output never reaches the output reusing its slot.
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
@@ -28,6 +28,7 @@ use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, Protoco
 use crate::media::egress::leaf::EgressProgressSink;
 use crate::media::egress::leaf_arena::{LeafArena, LeafKey};
 use crate::media::egress::metrics::ShardMetrics;
+use crate::media::egress::scheduler::ReadyQueue;
 use crate::media::egress::shard::{
     EgressShardBackend, EgressShardCommandEffect, EgressShardIdleWake,
 };
@@ -147,8 +148,6 @@ struct Slot {
     /// instead of queueing another, so one destination whose name server
     /// hangs holds at most one of the shard's lookup threads.
     lookup_in_flight: Option<u64>,
-    /// In `ready`: an event for a queued slot does not queue it twice.
-    queued: bool,
 }
 
 impl Slot {
@@ -189,7 +188,7 @@ pub(crate) struct HlsPutShardBackend<P: RtmpReadinessPoller> {
     /// so every end playlist gets its chance.
     draining: bool,
     /// Slots with something to do now.
-    ready: VecDeque<LeafKey>,
+    ready: ReadyQueue,
     poll_buffer: Vec<TcpReadyLeaf>,
     scratch: Vec<u8>,
     /// The timer the shard holds for us: `(fire_at, output, generation)`.
@@ -214,7 +213,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             by_output: HashMap::new(),
             due: Vec::new(),
             draining: false,
-            ready: VecDeque::with_capacity(leaf_capacity),
+            ready: ReadyQueue::with_capacity(leaf_capacity),
             poll_buffer: Vec::new(),
             scratch: vec![0; SCRATCH_BYTES],
             scheduled: None,
@@ -254,7 +253,6 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             wake_at: None,
             resolve_token: 0,
             lookup_in_flight: None,
-            queued: false,
         });
         let Some(key) = inserted else {
             tracing::warn!(output_id = %spec.id, "hls put fabric leaf rejected: shard leaf capacity exhausted");
@@ -266,11 +264,8 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
     }
 
     fn enqueue(&mut self, key: LeafKey) {
-        if let Some(slot) = self.slots.get_mut(key)
-            && !slot.queued
-        {
-            slot.queued = true;
-            self.ready.push_back(key);
+        if self.slots.get(key).is_some() {
+            self.ready.push(key);
         }
     }
 
@@ -284,9 +279,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
         if self.by_output.get(&slot.output_id) == Some(&key) {
             self.by_output.remove(&slot.output_id);
         }
-        // A stale queue entry no longer resolves; dropping it keeps the
-        // queue at most one entry per live slot.
-        self.ready.retain(|ready| *ready != key);
+        self.ready.remove(key);
     }
 
     fn drop_connection(&mut self, key: LeafKey) {
@@ -451,9 +444,6 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
 
     /// Drive one slot as far as it can go now.
     fn drive(&mut self, key: LeafKey, now: Instant) {
-        if let Some(slot) = self.slots.get_mut(key) {
-            slot.queued = false;
-        }
         loop {
             let Some(slot) = self.slots.get_mut(key) else {
                 return;
@@ -570,7 +560,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
         let now = Instant::now();
         let mut rounds = self.ready.len();
         while rounds > 0
-            && let Some(key) = self.ready.pop_front()
+            && let Some(key) = self.ready.pop()
         {
             rounds -= 1;
             self.drive(key, now);
@@ -698,10 +688,7 @@ impl<P: RtmpReadinessPoller + 'static> EgressShardBackend for HlsPutShardBackend
                 if let Some(snapshot) = self.store.snapshot() {
                     for (key, slot) in self.slots.iter_mut() {
                         slot.policy.on_publish(&snapshot);
-                        if !slot.queued {
-                            slot.queued = true;
-                            self.ready.push_back(key);
-                        }
+                        self.ready.push(key);
                     }
                 }
             }
