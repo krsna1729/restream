@@ -105,13 +105,7 @@ pub(crate) fn install(
         ));
     }
     let ulp = b"tls\0";
-    set_socket_option(
-        fd,
-        libc::IPPROTO_TCP,
-        TCP_ULP,
-        ulp.as_ptr().cast(),
-        ulp.len(),
-    )?;
+    set_socket_option(fd, libc::IPPROTO_TCP, TCP_ULP, ulp)?;
     install_direction(fd, version, suite, TLS_TX, secrets.tx.0, &secrets.tx.1)?;
     install_direction(fd, version, suite, TLS_RX, secrets.rx.0, &secrets.rx.1)
 }
@@ -134,23 +128,11 @@ fn install_direction(
     match cipher {
         KtlsCipher::Aes128Gcm => {
             let info = aes128_info(wire_version, cipher_type, sequence, secret)?;
-            set_socket_option(
-                fd,
-                SOL_TLS,
-                direction,
-                &info as *const Tls12AesGcm128 as *const libc::c_void,
-                size_of_val(&info),
-            )
+            set_socket_option(fd, SOL_TLS, direction, &info)
         }
         KtlsCipher::Aes256Gcm => {
             let info = aes256_info(wire_version, cipher_type, sequence, secret)?;
-            set_socket_option(
-                fd,
-                SOL_TLS,
-                direction,
-                &info as *const Tls12AesGcm256 as *const libc::c_void,
-                size_of_val(&info),
-            )
+            set_socket_option(fd, SOL_TLS, direction, &info)
         }
     }
 }
@@ -271,15 +253,7 @@ fn probe_capability(version: ProtocolVersion, suite: CipherSuite, cipher: KtlsCi
     use std::os::unix::io::AsRawFd;
     let fd = accepted.as_raw_fd();
     let ulp = b"tls\0";
-    if set_socket_option(
-        fd,
-        libc::IPPROTO_TCP,
-        TCP_ULP,
-        ulp.as_ptr().cast(),
-        ulp.len(),
-    )
-    .is_err()
-    {
+    if set_socket_option(fd, libc::IPPROTO_TCP, TCP_ULP, ulp).is_err() {
         return false;
     }
     match cipher {
@@ -294,21 +268,9 @@ fn probe_capability(version: ProtocolVersion, suite: CipherSuite, cipher: KtlsCi
                 salt: [0xa5; 4],
                 rec_seq: [0; 8],
             };
-            set_socket_option(
-                fd,
-                SOL_TLS,
-                TLS_TX,
-                &info as *const Tls12AesGcm128 as *const libc::c_void,
-                size_of_val(&info),
-            )
-            .and(set_socket_option(
-                fd,
-                SOL_TLS,
-                TLS_RX,
-                &info as *const Tls12AesGcm128 as *const libc::c_void,
-                size_of_val(&info),
-            ))
-            .is_ok()
+            set_socket_option(fd, SOL_TLS, TLS_TX, &info)
+                .and(set_socket_option(fd, SOL_TLS, TLS_RX, &info))
+                .is_ok()
         }
         KtlsCipher::Aes256Gcm => {
             let info = Tls12AesGcm256 {
@@ -321,21 +283,9 @@ fn probe_capability(version: ProtocolVersion, suite: CipherSuite, cipher: KtlsCi
                 salt: [0xa5; 4],
                 rec_seq: [0; 8],
             };
-            set_socket_option(
-                fd,
-                SOL_TLS,
-                TLS_TX,
-                &info as *const Tls12AesGcm256 as *const libc::c_void,
-                size_of_val(&info),
-            )
-            .and(set_socket_option(
-                fd,
-                SOL_TLS,
-                TLS_RX,
-                &info as *const Tls12AesGcm256 as *const libc::c_void,
-                size_of_val(&info),
-            ))
-            .is_ok()
+            set_socket_option(fd, SOL_TLS, TLS_TX, &info)
+                .and(set_socket_option(fd, SOL_TLS, TLS_RX, &info))
+                .is_ok()
         }
     }
 }
@@ -426,15 +376,20 @@ fn aes256_info(
     Ok(result)
 }
 
-fn set_socket_option(
+/// `setsockopt` with the option value's bytes taken from `value`: the
+/// pointer and length cannot disagree.
+fn set_socket_option<T: ?Sized>(
     fd: RawFd,
     level: libc::c_int,
     name: libc::c_int,
-    value: *const libc::c_void,
-    length: usize,
+    value: &T,
 ) -> io::Result<()> {
-    // SAFETY: callers pass `value` pointing at `length` readable bytes that outlive the call.
-    let result = unsafe { libc::setsockopt(fd, level, name, value, length as libc::socklen_t) };
+    let length = libc::socklen_t::try_from(size_of_val(value))
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "socket option too large"))?;
+    let pointer = (value as *const T).cast::<libc::c_void>();
+    // SAFETY: `pointer` and `length` describe `value`, a live reference for
+    // this call; setsockopt only reads them.
+    let result = unsafe { libc::setsockopt(fd, level, name, pointer, length) };
     (result == 0)
         .then_some(())
         .ok_or_else(io::Error::last_os_error)

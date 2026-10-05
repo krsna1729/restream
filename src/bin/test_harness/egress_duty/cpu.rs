@@ -20,12 +20,14 @@ pub(super) const EGRESS_SHARD_PREFIX: &str = "egress-shard-";
 pub(super) fn set_affinity_mask(pid: u32, cpus: &BTreeSet<u32>) -> Result<Vec<u32>, String> {
     // SAFETY: cpu_set_t is plain old data; all-zero bytes are the empty set.
     let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
-    // SAFETY: `set` is a live cpu_set_t; the CPU index is bounds-checked by the macro.
+    // SAFETY: `set` is a live cpu_set_t; an index past CPU_SETSIZE panics in libc's
+    // Rust wrapper rather than writing out of bounds.
     unsafe {
         libc::CPU_ZERO(&mut set);
     }
     for cpu in cpus {
-        // SAFETY: `set` is a live cpu_set_t; the CPU index is bounds-checked by the macro.
+        // SAFETY: `set` is a live cpu_set_t; an index past CPU_SETSIZE panics in libc's
+        // Rust wrapper rather than writing out of bounds.
         unsafe { libc::CPU_SET(*cpu as usize, &mut set) };
     }
     // SAFETY: `set` is a live cpu_set_t and the length passed is its size.
@@ -240,7 +242,8 @@ pub(super) fn observe_affinity(tid: u32) -> Result<Vec<u32>, String> {
         ));
     }
     Ok((0..libc::CPU_SETSIZE as usize)
-        // SAFETY: `set` is a live cpu_set_t; the CPU index is bounds-checked by the macro.
+        // SAFETY: `set` is a live cpu_set_t; an index past CPU_SETSIZE panics in libc's
+        // Rust wrapper rather than writing out of bounds.
         .filter(|cpu| unsafe { libc::CPU_ISSET(*cpu, &set) })
         .map(|cpu| cpu as u32)
         .collect())
@@ -252,7 +255,8 @@ pub(super) fn observe_affinity(tid: u32) -> Result<Vec<u32>, String> {
 pub(super) fn set_thread_affinity(tid: u32, cpu: u32) -> Result<(Vec<u32>, &'static str), String> {
     // SAFETY: cpu_set_t is plain old data; all-zero bytes are the empty set.
     let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
-    // SAFETY: `set` is a live cpu_set_t; the CPU index is bounds-checked by the macro.
+    // SAFETY: `set` is a live cpu_set_t; an index past CPU_SETSIZE panics in libc's
+    // Rust wrapper rather than writing out of bounds.
     unsafe {
         libc::CPU_ZERO(&mut set);
         libc::CPU_SET(cpu as usize, &mut set);

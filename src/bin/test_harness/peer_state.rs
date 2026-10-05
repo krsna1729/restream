@@ -41,7 +41,8 @@ pub(crate) fn thread_cpus_allowed_list(tid: libc::pid_t) -> Option<String> {
 pub(crate) fn pin_to_cpuset(mask: &str) -> Result<(), String> {
     // SAFETY: cpu_set_t is plain old data; all-zero bytes are the empty set.
     let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
-    // SAFETY: `set` is a live cpu_set_t; the CPU index is bounds-checked by the macro.
+    // SAFETY: `set` is a live cpu_set_t; an index past CPU_SETSIZE panics in libc's
+    // Rust wrapper rather than writing out of bounds.
     unsafe { libc::CPU_ZERO(&mut set) };
     for part in mask.split(',') {
         let part = part.trim();
@@ -62,7 +63,8 @@ pub(crate) fn pin_to_cpuset(mask: &str) -> Result<(), String> {
             return Err(format!("cpu mask {mask:?} is out of range"));
         }
         for cpu in start..=end {
-            // SAFETY: `set` is a live cpu_set_t; the CPU index is bounds-checked by the macro.
+            // SAFETY: `set` is a live cpu_set_t; an index past CPU_SETSIZE panics in libc's
+            // Rust wrapper rather than writing out of bounds.
             unsafe { libc::CPU_SET(cpu, &mut set) };
         }
     }

@@ -200,7 +200,7 @@ fn run_ffmpeg_h264_stage_with_normalizer(
     use crate::media::avio::CustomInput;
     use ffmpeg_next::format::Pixel;
 
-    let mut custom = CustomInput::new(&*in_queue)?;
+    let mut custom = CustomInput::new(&in_queue)?;
     let ictx = custom
         .input
         .as_mut()

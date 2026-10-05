@@ -134,8 +134,7 @@ const WI37_SRT_SHARDS_ENV: &str = "RESTREAM_WI37_SRT_SHARDS";
 fn wi37_srt_shard_override() -> Option<u32> {
     #[cfg(feature = "wi37-shard-bench")]
     {
-        return std::env::var(WI37_SRT_SHARDS_ENV)
-            .ok()
+        return env_var(WI37_SRT_SHARDS_ENV)
             .and_then(|value| value.trim().parse::<u32>().ok())
             .filter(|value| (1..=4).contains(value));
     }
@@ -369,30 +368,44 @@ pub struct AppConfig {
     pub rtmps_extra_trust_roots_pem_path: Option<String>,
 }
 
+/// Every configuration read of the environment goes through here (tests
+/// overlay it per thread instead of mutating the process environment).
+fn env_var(name: &str) -> Option<String> {
+    #[cfg(test)]
+    if let Some(value) = configuration_behavior_tests::env_override(name) {
+        return value;
+    }
+    std::env::var(name).ok()
+}
+
+fn env_present(name: &str) -> bool {
+    #[cfg(test)]
+    if let Some(value) = configuration_behavior_tests::env_override(name) {
+        return value.is_some();
+    }
+    std::env::var_os(name).is_some()
+}
+
 fn env_u64(name: &str, default: u64) -> u64 {
-    std::env::var(name)
-        .ok()
+    env_var(name)
         .and_then(|value| value.parse().ok())
         .unwrap_or(default)
 }
 
 fn env_u32(name: &str, default: u32) -> u32 {
-    std::env::var(name)
-        .ok()
+    env_var(name)
         .and_then(|value| value.parse().ok())
         .unwrap_or(default)
 }
 
 fn env_usize(name: &str, default: usize) -> usize {
-    std::env::var(name)
-        .ok()
+    env_var(name)
         .and_then(|value| value.parse().ok())
         .unwrap_or(default)
 }
 
 fn env_positive_f64(name: &str, default: f64) -> f64 {
-    std::env::var(name)
-        .ok()
+    env_var(name)
         .and_then(|value| value.parse().ok())
         .filter(|value: &f64| value.is_finite() && value.is_sign_positive())
         .unwrap_or(default)
@@ -417,8 +430,8 @@ fn capacity_limits_from_env(parallelism: usize) -> CapacityLimits {
 /// `crate::malloc_tuning`.
 pub fn malloc_arena_env() -> (Option<String>, Option<String>) {
     (
-        std::env::var("MALLOC_ARENA_MAX").ok(),
-        std::env::var("RESTREAM_MALLOC_ARENA_MAX").ok(),
+        env_var("MALLOC_ARENA_MAX"),
+        env_var("RESTREAM_MALLOC_ARENA_MAX"),
     )
 }
 
@@ -428,8 +441,7 @@ pub fn media_executor_workers_env() -> Option<usize> {
 }
 
 pub(crate) fn env_optional_positive_usize(name: &str) -> Option<usize> {
-    std::env::var(name)
-        .ok()
+    env_var(name)
         .and_then(|value| value.parse().ok())
         .filter(|&value| value >= 1)
 }
@@ -501,7 +513,7 @@ pub(crate) fn target_egress_fabric_shards(
 }
 
 fn env_bool(name: &str) -> Option<bool> {
-    std::env::var(name).ok().map(|value| {
+    env_var(name).map(|value| {
         matches!(
             value.trim().to_ascii_lowercase().as_str(),
             "1" | "true" | "yes" | "on"
@@ -530,7 +542,7 @@ fn derive_external_ffmpeg_permits(
 /// accepting it here would silently bind an unpredictable ephemeral port while every API
 /// response keeps advertising `:0` as the connect address. Reject it like a parse failure.
 fn env_port(name: &str, default: u16) -> u16 {
-    match std::env::var(name).ok().and_then(|v| v.parse::<u16>().ok()) {
+    match env_var(name).and_then(|v| v.parse::<u16>().ok()) {
         Some(0) => {
             tracing::warn!(env = name, "port 0 is not valid; using default {default}");
             default
@@ -686,7 +698,7 @@ impl AppConfig {
     pub fn from_env() -> Self {
         let ports = ServerPorts::from_env();
         let http_bind_addr =
-            std::env::var("RESTREAM_HTTP_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
+            env_var("RESTREAM_HTTP_BIND_ADDR").unwrap_or_else(|| "127.0.0.1".to_string());
         let tuning = RuntimeTuning::from_env();
         let egress_fabric = EgressFabricConfig::from_env();
         let cpus = std::thread::available_parallelism()
@@ -694,10 +706,10 @@ impl AppConfig {
             .unwrap_or(1);
         let capacity_limits = capacity_limits_from_env(cpus);
         let tokio_runtime = TokioRuntimeConfig::from_env();
-        let db_path = std::env::var("RESTREAM_DB_PATH")
-            .unwrap_or_else(|_| ".restream/data/restream.db".to_string());
+        let db_path =
+            env_var("RESTREAM_DB_PATH").unwrap_or_else(|| ".restream/data/restream.db".to_string());
         let media_dir =
-            std::env::var("RESTREAM_MEDIA_DIR").unwrap_or_else(|_| DEFAULT_MEDIA_DIR.to_string());
+            env_var("RESTREAM_MEDIA_DIR").unwrap_or_else(|| DEFAULT_MEDIA_DIR.to_string());
         let log_retention_days = env_u64("RESTREAM_LOG_RETENTION_DAYS", 7);
         let backend_policy = backend_policy_from_env();
         let rtmp_backlog = env_u32("RESTREAM_RTMP_LISTENER_BACKLOG", 1024);
@@ -723,9 +735,8 @@ impl AppConfig {
                 .clamp(128 * 1024, 64 * 1024 * 1024);
         let rtmp_egress_chunk_size =
             env_u32("RESTREAM_RTMP_EGRESS_CHUNK_SIZE", 16 * 1024).clamp(128, 1024 * 1024);
-        let ffmpeg_threads = std::env::var("RESTREAM_EXTERNAL_FFMPEG_THREADS")
-            .ok()
-            .and_then(|v| v.parse::<u32>().ok());
+        let ffmpeg_threads =
+            env_var("RESTREAM_EXTERNAL_FFMPEG_THREADS").and_then(|v| v.parse::<u32>().ok());
         let avio_capacity = env_usize("RESTREAM_AVIO_QUEUE_CAPACITY", 512 * 1024)
             .clamp(64 * 1024, 16 * 1024 * 1024);
 
@@ -734,25 +745,21 @@ impl AppConfig {
             env_usize("RESTREAM_HLS_SEGMENT_CAPACITY_BYTES", 8 * 1024 * 1024).max(188);
         let hls_max_segments = env_usize("RESTREAM_HLS_MAX_SEGMENTS", 20).max(1);
 
-        let recording_threads = std::env::var("RESTREAM_RECORDING_FFMPEG_THREADS")
-            .ok()
-            .and_then(|v| v.parse::<u32>().ok());
+        let recording_threads =
+            env_var("RESTREAM_RECORDING_FFMPEG_THREADS").and_then(|v| v.parse::<u32>().ok());
         let ts_ring_capacity = env_usize("RESTREAM_TS_RING_CAPACITY", 256).clamp(32, 16384);
-        let ring_headroom_secs = std::env::var("RESTREAM_RING_HEADROOM_SECS")
-            .ok()
+        let ring_headroom_secs = env_var("RESTREAM_RING_HEADROOM_SECS")
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(6.0)
             .clamp(0.1, 60.0);
         let ring_capacity = env_usize("RESTREAM_RING_CAPACITY", 1024).clamp(64, 16384);
         let transcoder_ring_capacity =
             env_usize("RESTREAM_TRANSCODER_RING_CAPACITY", 512).clamp(64, 16384);
-        let ffmpeg_bin_path = std::env::var("FFMPEG_BIN_PATH").ok();
-        let log_dir =
-            std::env::var("RESTREAM_LOG_DIR").unwrap_or_else(|_| ".restream/logs".to_string());
-        let no_color = std::env::var_os("NO_COLOR").is_some();
-        let srt_passphrase = std::env::var("RESTREAM_SRT_PASSPHRASE").ok();
-        let srt_pbkeylen = std::env::var("RESTREAM_SRT_PBKEYLEN")
-            .ok()
+        let ffmpeg_bin_path = env_var("FFMPEG_BIN_PATH");
+        let log_dir = env_var("RESTREAM_LOG_DIR").unwrap_or_else(|| ".restream/logs".to_string());
+        let no_color = env_present("NO_COLOR");
+        let srt_passphrase = env_var("RESTREAM_SRT_PASSPHRASE");
+        let srt_pbkeylen = env_var("RESTREAM_SRT_PBKEYLEN")
             .and_then(|v| v.parse::<i32>().ok())
             .unwrap_or(16);
         let srt_connect_timeout_ms = env_u64("RESTREAM_SRT_CONNECT_TIMEOUT_MS", 10_000);
@@ -770,31 +777,26 @@ impl AppConfig {
         let srt_egress_gso = env_bool("RESTREAM_SRT_EGRESS_GSO").unwrap_or(true);
         let srt_ingress_owners = env_usize("RESTREAM_SRT_INGRESS_OWNERS", 1).clamp(1, cpus.max(1));
         let srt_max_peers_per_ip = env_usize("RESTREAM_SRT_MAX_PEERS_PER_IP", 64).clamp(1, 4096);
-        let use_internal_file_ingest =
-            std::env::var_os("RESTREAM_USE_INTERNAL_FILE_INGEST").is_some();
-        let initial_admin_password = std::env::var("RESTREAM_INITIAL_ADMIN_PASSWORD").ok();
+        let use_internal_file_ingest = env_present("RESTREAM_USE_INTERNAL_FILE_INGEST");
+        let initial_admin_password = env_var("RESTREAM_INITIAL_ADMIN_PASSWORD");
         let secure_session_cookies = env_bool("RESTREAM_SECURE_SESSION_COOKIES").unwrap_or(false);
-        let rtmps_extra_trust_roots_pem_path =
-            std::env::var("RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM").ok();
+        let rtmps_extra_trust_roots_pem_path = env_var("RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM");
 
         // Calculate external_ffmpeg_permits:
-        let permits = if let Ok(value) = std::env::var("RESTREAM_EXTERNAL_FFMPEG_PERMITS")
+        let permits = if let Some(value) = env_var("RESTREAM_EXTERNAL_FFMPEG_PERMITS")
             && let Some(v) = value.parse::<usize>().ok().filter(|&v| v >= 1)
         {
             v
         } else {
-            let reserve = std::env::var("RESTREAM_EXTERNAL_FFMPEG_CPU_RESERVE")
-                .ok()
+            let reserve = env_var("RESTREAM_EXTERNAL_FFMPEG_CPU_RESERVE")
                 .and_then(|value| value.parse::<usize>().ok())
                 .unwrap_or(2)
                 .min(cpus.saturating_sub(1));
-            let per_child = std::env::var("RESTREAM_EXTERNAL_FFMPEG_CPU_PER_CHILD")
-                .ok()
+            let per_child = env_var("RESTREAM_EXTERNAL_FFMPEG_CPU_PER_CHILD")
                 .and_then(|value| value.parse::<usize>().ok())
                 .unwrap_or(2)
                 .max(1);
-            let hard_cap = std::env::var("RESTREAM_EXTERNAL_FFMPEG_MAX_CHILDREN")
-                .ok()
+            let hard_cap = env_var("RESTREAM_EXTERNAL_FFMPEG_MAX_CHILDREN")
                 .and_then(|value| value.parse::<usize>().ok())
                 .unwrap_or(usize::MAX);
             derive_external_ffmpeg_permits(cpus, reserve, per_child, hard_cap)

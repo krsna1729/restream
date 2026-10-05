@@ -1,4 +1,5 @@
-use std::sync::Mutex;
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 use super::{
     AppConfig, DEFAULT_MEDIA_DIR, EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR, EgressFabricConfig,
@@ -8,67 +9,36 @@ use super::{
 };
 use crate::planner::BackendPolicy;
 
-static ENV_LOCK: Mutex<()> = Mutex::new(());
+thread_local! {
+    /// Per-test environment overrides read by `config::env_var`: `Some(value)`
+    /// sets a variable, `None` removes it. Thread-local, so parallel tests
+    /// never see each other's values and nothing mutates the process
+    /// environment, which is unsound while other threads run.
+    static ENV_OVERLAY: RefCell<HashMap<String, Option<String>>> = RefCell::new(HashMap::new());
+}
 
-fn with_env_vars(vars: &[(&str, &str)], f: impl FnOnce()) {
-    let _guard = ENV_LOCK.lock().unwrap();
-    let previous = vars
-        .iter()
-        .map(|(name, _)| ((*name).to_string(), std::env::var(name).ok()))
-        .collect::<Vec<_>>();
-    // SAFETY: ENV_LOCK serialises every test here that touches the environment, and no other
-    // test in this binary reads or writes these variables.
-    unsafe {
-        for (name, value) in vars {
-            std::env::set_var(name, value);
-        }
-    }
-    f();
-    // SAFETY: ENV_LOCK serialises every test here that touches the environment, and no other
-    // test in this binary reads or writes these variables.
-    unsafe {
-        for (name, value) in previous {
-            if let Some(value) = value {
-                std::env::set_var(name, value);
-            } else {
-                std::env::remove_var(name);
-            }
-        }
-    }
+/// The overlay's answer for `name`, if it overrides it.
+pub(super) fn env_override(name: &str) -> Option<Option<String>> {
+    ENV_OVERLAY.with(|overlay| overlay.borrow().get(name).cloned())
 }
 
 fn with_env_overlay(vars: &[(&str, &str)], removed: &[&str], f: impl FnOnce()) {
-    let _guard = ENV_LOCK.lock().unwrap();
-    let previous_vars = vars
+    let entries = vars
         .iter()
-        .map(|(name, _)| ((*name).to_string(), std::env::var(name).ok()))
-        .collect::<Vec<_>>();
-    let previous_removed = removed
-        .iter()
-        .map(|name| ((*name).to_string(), std::env::var(name).ok()))
-        .collect::<Vec<_>>();
-    // SAFETY: ENV_LOCK serialises every test here that touches the environment, and no other
-    // test in this binary reads or writes these variables.
-    unsafe {
-        for (name, value) in vars {
-            std::env::set_var(name, value);
-        }
-        for name in removed {
-            std::env::remove_var(name);
-        }
-    }
+        .map(|(name, value)| ((*name).to_string(), Some((*value).to_string())))
+        .chain(removed.iter().map(|name| ((*name).to_string(), None)));
+    let previous = ENV_OVERLAY.with(|overlay| {
+        let mut overlay = overlay.borrow_mut();
+        let previous = overlay.clone();
+        overlay.extend(entries);
+        previous
+    });
     f();
-    // SAFETY: ENV_LOCK serialises every test here that touches the environment, and no other
-    // test in this binary reads or writes these variables.
-    unsafe {
-        for (name, value) in previous_vars.into_iter().chain(previous_removed) {
-            if let Some(value) = value {
-                std::env::set_var(name, value);
-            } else {
-                std::env::remove_var(name);
-            }
-        }
-    }
+    ENV_OVERLAY.with(|overlay| *overlay.borrow_mut() = previous);
+}
+
+fn with_env_vars(vars: &[(&str, &str)], f: impl FnOnce()) {
+    with_env_overlay(vars, &[], f);
 }
 
 #[test]
