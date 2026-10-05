@@ -139,9 +139,14 @@ struct Slot {
     waiting_request: Option<UploadRequest>,
     exchange: Option<Exchange>,
     connect_timeout: Duration,
+    resolve_timeout: Duration,
     /// The policy's backoff instant, when it is waiting for one.
     wake_at: Option<Instant>,
     resolve_token: u64,
+    /// The lookup still running for this slot: a retry waits for its answer
+    /// instead of queueing another, so one destination whose name server
+    /// hangs holds at most one of the shard's lookup threads.
+    lookup_in_flight: Option<u64>,
     /// In `ready`: an event for a queued slot does not queue it twice.
     queued: bool,
 }
@@ -245,8 +250,10 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             waiting_request: None,
             exchange: None,
             connect_timeout: spec.policy.connect_timeout,
+            resolve_timeout: spec.policy.resolve_timeout,
             wake_at: None,
             resolve_token: 0,
+            lookup_in_flight: None,
             queued: false,
         });
         let Some(key) = inserted else {
@@ -297,6 +304,12 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
         let Some(slot) = self.slots.get_mut(key) else {
             return;
         };
+        let deadline = Instant::now() + slot.resolve_timeout;
+        if let Some(token) = slot.lookup_in_flight {
+            // The earlier lookup's answer serves this attempt too.
+            slot.conn = Conn::Resolving { token, deadline };
+            return;
+        }
         slot.resolve_token = slot.resolve_token.wrapping_add(1);
         let token = slot.resolve_token;
         let request = ResolveRequest {
@@ -305,11 +318,10 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             host: slot.target.host.clone(),
             port: slot.target.port,
         };
-        slot.conn = Conn::Resolving {
-            token,
-            deadline: Instant::now() + slot.connect_timeout,
-        };
-        if !self.resolver.request(request) {
+        slot.conn = Conn::Resolving { token, deadline };
+        if self.resolver.request(request) {
+            slot.lookup_in_flight = Some(token);
+        } else {
             self.connection_failed(key, "resolver queue full");
         }
     }
@@ -339,9 +351,12 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
 
     fn resolved(&mut self, resolved: Resolved) {
         let key = resolved.key;
-        let Some(slot) = self.slots.get(key) else {
+        let Some(slot) = self.slots.get_mut(key) else {
             return;
         };
+        if slot.lookup_in_flight == Some(resolved.token) {
+            slot.lookup_in_flight = None;
+        }
         if !matches!(slot.conn, Conn::Resolving { token, .. } if token == resolved.token) {
             return; // a stale lookup
         }

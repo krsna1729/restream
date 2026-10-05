@@ -415,7 +415,8 @@ impl Framing {
         // RFC 9112 6.3: Transfer-Encoding overrides Content-Length; a final
         // coding other than chunked is read until close; a response with
         // both cannot be trusted to leave the connection in sync.
-        if transfer_encoded && (length.is_some() || !chunked) {
+        // HTTP/1.0 has no Transfer-Encoding (RFC 9112 6.1): faulty framing.
+        if transfer_encoded && (length.is_some() || !chunked || http10) {
             keep_alive = false;
         }
         let body = if chunked {
