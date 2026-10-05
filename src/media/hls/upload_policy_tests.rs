@@ -383,3 +383,29 @@ proptest! {
         }
     }
 }
+
+/// A stop right after drops emptied the window still ends the stream:
+/// the end playlist repeats the last window sent, with EXT-X-ENDLIST, and
+/// EXT-X-MEDIA-SEQUENCE does not go back.
+#[test]
+fn a_stop_after_the_window_emptied_still_sends_endlist() {
+    let mut policy = UploadPolicy::new("rtest".to_string());
+    let start = Instant::now();
+    policy.on_publish(&snapshot(0..1, 1.0));
+    // s0 and its playlist are acknowledged.
+    for _ in 0..2 {
+        assert!(matches!(policy.next(start), Next::Put(_)));
+        policy.on_result(UploadOutcome::Status(200), start);
+    }
+    // Six more segments arrive while nothing is acknowledged: the cap drops
+    // one, which clears the window.
+    policy.on_publish(&snapshot(0..7, 1.0));
+    assert!(policy.backlog_dropped_segments() >= 1);
+    policy.finish();
+    let Next::Put(request) = policy.next(start) else {
+        panic!("a stop must send the end playlist");
+    };
+    let body = String::from_utf8(request.body.to_vec()).unwrap();
+    assert!(body.contains("#EXT-X-ENDLIST"), "{body}");
+    assert!(body.contains("#EXT-X-MEDIA-SEQUENCE:0"), "{body}");
+}

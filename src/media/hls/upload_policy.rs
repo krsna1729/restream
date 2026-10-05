@@ -112,6 +112,7 @@ struct PendingSegment {
     first_attempt: Option<Instant>,
 }
 
+#[derive(Clone)]
 struct AckedSegment {
     sequence: u64,
     duration: f64,
@@ -132,6 +133,9 @@ pub(crate) struct UploadPolicy {
     next_sequence: u64,
     pending: VecDeque<PendingSegment>,
     window: VecDeque<AckedSegment>,
+    /// The window of the last playlist sent: the end playlist repeats it
+    /// when drops emptied the window, so a stop always sends ENDLIST.
+    sent_window: VecDeque<AckedSegment>,
     /// The sequence after the last segment that left the window or was
     /// dropped: an acknowledgement below it (a segment dropped while in
     /// flight) is not listed, so EXT-X-MEDIA-SEQUENCE never goes back.
@@ -145,6 +149,8 @@ pub(crate) struct UploadPolicy {
     ending: bool,
     stopped: Option<Stopped>,
     dropped: u64,
+    /// Of `dropped`, those dropped by the backlog cap.
+    backlog_dropped: u64,
 }
 
 impl UploadPolicy {
@@ -157,6 +163,7 @@ impl UploadPolicy {
             next_sequence: 0,
             pending: VecDeque::new(),
             window: VecDeque::new(),
+            sent_window: VecDeque::new(),
             window_floor: 0,
             target_duration: 1,
             playlist_dirty: false,
@@ -166,6 +173,7 @@ impl UploadPolicy {
             ending: false,
             stopped: None,
             dropped: 0,
+            backlog_dropped: 0,
         }
     }
 
@@ -176,6 +184,11 @@ impl UploadPolicy {
 
     pub(crate) fn dropped_segments(&self) -> u64 {
         self.dropped
+    }
+
+    /// Segments dropped because the backlog passed `MAX_PENDING_SEGMENTS`.
+    pub(crate) fn backlog_dropped_segments(&self) -> u64 {
+        self.backlog_dropped
     }
 
     /// Take the segments this output has not seen. The first publish yields
@@ -213,9 +226,12 @@ impl UploadPolicy {
         }
         while self.pending.len() > MAX_PENDING_SEGMENTS {
             // The oldest is the furthest behind live; the playlist window
-            // restarts after the gap, as for any dropped segment.
+            // restarts after the gap, as for any dropped segment. Even when
+            // the oldest is in flight: dropping a later one instead would
+            // leave a gap inside the window, which HLS cannot list.
             if let Some(dropped) = self.pending.pop_front() {
                 self.drop_segment(dropped.sequence);
+                self.backlog_dropped = self.backlog_dropped.saturating_add(1);
             }
         }
     }
@@ -231,6 +247,11 @@ impl UploadPolicy {
         self.ending = true;
         self.pending.clear();
         self.backoff_until = None;
+        if self.window.is_empty() {
+            // Drops emptied the window; end with the last sent one, which
+            // keeps EXT-X-MEDIA-SEQUENCE where it was.
+            self.window = self.sent_window.clone();
+        }
     }
 
     /// The next request, or why there is none. One request is in flight at
@@ -300,6 +321,7 @@ impl UploadPolicy {
             end,
         };
         let body = Bytes::from(self.render_playlist(end));
+        self.sent_window.clone_from(&self.window);
         self.in_flight = Some(InFlight {
             target: target.clone(),
             duration: 0.0,
@@ -343,6 +365,16 @@ impl UploadPolicy {
                         // stays out of the playlist: listing it now would
                         // put a sequence behind the window's floor.
                         if sequence >= self.window_floor {
+                            // The window lists consecutive segments only; one
+                            // after a gap (the end playlist restored an older
+                            // window) starts a new window.
+                            if self
+                                .window
+                                .back()
+                                .is_some_and(|back| back.sequence.saturating_add(1) != sequence)
+                            {
+                                self.window.clear();
+                            }
                             self.window.push_back(AckedSegment { sequence, duration });
                             while self.window.len() > PLAYLIST_WINDOW {
                                 if let Some(left) = self.window.pop_front() {

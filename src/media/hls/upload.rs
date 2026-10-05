@@ -15,7 +15,8 @@ use reqwest::{Client, Url};
 
 use super::HlsStore;
 use super::upload_policy::{
-    Next, ResultEffect, Stopped, UploadOutcome, UploadPolicy, UploadRequest, UploadTarget, backoff,
+    MAX_PENDING_SEGMENTS, Next, ResultEffect, Stopped, UploadOutcome, UploadPolicy, UploadRequest,
+    UploadTarget, backoff,
 };
 use crate::domain::stage::StageKey;
 use crate::domain::state::EgressPhase;
@@ -40,7 +41,8 @@ static HLS_UPLOAD_CLIENT: LazyLock<Client> = LazyLock::new(|| {
 
 /// A client that keeps no idle connections: every request on it opens a new
 /// connection and resolves the host again. Used for retries, which Akamai
-/// asks to re-resolve, so an output is not pinned to a failed ingest node.
+/// asks to re-resolve, and for `HLS_UPLOAD_AVOID_POOL` after any failure,
+/// until the pooled connection to the failing node has idled out.
 static HLS_UPLOAD_FRESH_CLIENT: LazyLock<Client> = LazyLock::new(|| {
     Client::builder()
         .user_agent(HLS_UPLOAD_USER_AGENT)
@@ -48,6 +50,11 @@ static HLS_UPLOAD_FRESH_CLIENT: LazyLock<Client> = LazyLock::new(|| {
         .build()
         .unwrap_or_else(|_| Client::new())
 });
+
+/// Reqwest's default idle timeout for pooled connections: after a failure an
+/// output stays on fresh connections this long, so its next first attempt
+/// does not go back to the failed node's keep-alive connection.
+const HLS_UPLOAD_AVOID_POOL: Duration = Duration::from_secs(90);
 
 pub struct HlsUploadStart {
     pub output_id: String,
@@ -142,13 +149,20 @@ pub async fn start_hls_put_upload(
     };
 
     let mut dropped = 0;
+    let mut backlog_dropped = 0;
     // Why the last request failed, so a drop reports its cause.
     let mut last_failure: Option<String> = None;
+    let mut avoid_pool_until: Option<Instant> = None;
     loop {
         let next = policy.next(Instant::now());
         if policy.dropped_segments() > dropped {
             dropped = policy.dropped_segments();
-            report.dropped(dropped, last_failure.as_deref()).await;
+            if policy.backlog_dropped_segments() > backlog_dropped {
+                backlog_dropped = policy.backlog_dropped_segments();
+                report.backlog_dropped(dropped).await;
+            } else {
+                report.dropped(dropped, last_failure.as_deref()).await;
+            }
         }
         match next {
             Next::Put(request) => {
@@ -159,7 +173,8 @@ pub async fn start_hls_put_upload(
                 } else {
                     HLS_UPLOAD_REQUEST_TIMEOUT
                 };
-                let client = if request.fresh_connection {
+                let avoid_pool = avoid_pool_until.is_some_and(|until| Instant::now() < until);
+                let client = if request.fresh_connection || avoid_pool {
                     &*HLS_UPLOAD_FRESH_CLIENT
                 } else {
                     &*HLS_UPLOAD_CLIENT
@@ -194,6 +209,9 @@ pub async fn start_hls_put_upload(
                 };
                 if failure.is_some() {
                     last_failure.clone_from(&failure);
+                    avoid_pool_until = Some(Instant::now() + HLS_UPLOAD_AVOID_POOL);
+                } else {
+                    last_failure = None;
                 }
                 if let Some(effect) = policy.on_result(outcome, Instant::now()) {
                     report.result(&request, effect, failure).await;
@@ -264,6 +282,27 @@ impl Report<'_> {
                 self.registration,
                 "upload_segment",
                 format!("{cause}; segment dropped after failing for its duration ({total} so far)"),
+            )
+            .await;
+    }
+
+    /// The destination accepted uploads more slowly than live: the backlog
+    /// passed its bound and the oldest waiting segment was dropped.
+    async fn backlog_dropped(&self, total: u64) {
+        warn!(
+            output_id = %self.output_id,
+            pipeline_id = %self.pipeline_id,
+            total,
+            "HLS upload backlog over its bound; oldest waiting segment dropped"
+        );
+        self.engine
+            .record_egress_error_if_current(
+                self.output_id,
+                self.registration,
+                "upload_segment",
+                format!(
+                    "upload backlog over {MAX_PENDING_SEGMENTS} segments; oldest dropped ({total} so far)"
+                ),
             )
             .await;
     }
