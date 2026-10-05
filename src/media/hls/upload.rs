@@ -8,7 +8,7 @@
 //! segments beside it. This module supports both shapes.
 
 use std::sync::{Arc, LazyLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use tracing::warn;
 
 use reqwest::{Client, Url};
@@ -38,6 +38,17 @@ static HLS_UPLOAD_CLIENT: LazyLock<Client> = LazyLock::new(|| {
         .unwrap_or_else(|_| Client::new())
 });
 
+/// A client that keeps no idle connections: every request on it opens a new
+/// connection and resolves the host again. Used for retries, which Akamai
+/// asks to re-resolve, so an output is not pinned to a failed ingest node.
+static HLS_UPLOAD_FRESH_CLIENT: LazyLock<Client> = LazyLock::new(|| {
+    Client::builder()
+        .user_agent(HLS_UPLOAD_USER_AGENT)
+        .pool_max_idle_per_host(0)
+        .build()
+        .unwrap_or_else(|_| Client::new())
+});
+
 pub struct HlsUploadStart {
     pub output_id: String,
     pub pipeline_id: String,
@@ -48,10 +59,10 @@ pub struct HlsUploadStart {
 /// A segment-name prefix unique to this output attempt, also across process
 /// restarts (YouTube and Akamai require segment names never to repeat).
 pub(crate) fn upload_session_token() -> String {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| since.as_millis());
-    format!("r{millis:x}")
+    // 64 random bits: outputs started together (or after a clock rollback)
+    // must not share names, or two playlists in one origin directory would
+    // overwrite each other's segments.
+    format!("r{:016x}", rand::random::<u64>())
 }
 
 pub async fn start_hls_put_upload(
@@ -148,7 +159,12 @@ pub async fn start_hls_put_upload(
                 } else {
                     HLS_UPLOAD_REQUEST_TIMEOUT
                 };
-                let send = send_upload(&HLS_UPLOAD_CLIENT, url, &request, timeout);
+                let client = if request.fresh_connection {
+                    &*HLS_UPLOAD_FRESH_CLIENT
+                } else {
+                    &*HLS_UPLOAD_CLIENT
+                };
+                let send = send_upload(client, url, &request, timeout);
                 let result = if ending {
                     send.await
                 } else {

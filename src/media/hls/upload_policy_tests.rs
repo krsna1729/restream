@@ -233,6 +233,35 @@ fn finish_during_a_backoff_does_not_wait_for_it() {
     ));
 }
 
+/// A destination failing everything (a playlist retried without limit
+/// blocks every segment behind it) holds a bounded backlog, not the whole
+/// continuing stream: one failing destination must not exhaust shared
+/// memory.
+#[test]
+fn a_failing_playlist_cannot_pin_an_unbounded_backlog() {
+    let mut now = Instant::now();
+    let mut policy = UploadPolicy::new("r".into());
+    policy.on_publish(&snapshot(0..1, 2.0));
+    put(&mut policy, now);
+    ok(&mut policy, now);
+    for store_next in 2..60u64 {
+        policy.on_publish(&snapshot(store_next.saturating_sub(20)..store_next, 2.0));
+        match policy.next(now) {
+            Next::Put(_) => {
+                // A destination failing everything.
+                policy.on_result(UploadOutcome::Status(503), now);
+            }
+            Next::Wait(Some(until)) => now = until,
+            other => panic!("{other:?}"),
+        }
+        assert!(policy.pending_segments() <= MAX_PENDING_SEGMENTS);
+    }
+    assert!(
+        policy.dropped_segments() >= 50,
+        "older segments were dropped"
+    );
+}
+
 #[derive(Debug, Clone)]
 enum Event {
     Publish { added: u64, duration_tenths: u16 },
@@ -286,6 +315,7 @@ proptest! {
                     store_next += added;
                     let duration = f64::from(duration_tenths) / 10.0;
                     policy.on_publish(&snapshot(store_next.saturating_sub(20)..store_next, duration));
+                    prop_assert!(policy.pending_segments() <= MAX_PENDING_SEGMENTS, "unbounded backlog");
                 }
                 Event::Advance { millis } => now += Duration::from_millis(millis),
                 Event::Finish => policy.finish(),

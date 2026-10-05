@@ -33,6 +33,11 @@ pub(crate) const HLS_SEGMENT_CONTENT_TYPE: &str = "video/mp2t";
 
 /// Acknowledged segments each playlist lists (YouTube's example lists 3).
 const PLAYLIST_WINDOW: usize = 3;
+/// Segments an output may hold before sending them; past this the oldest
+/// is dropped. Bounds the memory one failing destination can pin (a
+/// playlist that keeps failing blocks every segment behind it) to a few
+/// segments, as YouTube bounds outstanding segments to five.
+pub(crate) const MAX_PENDING_SEGMENTS: usize = 5;
 const BACKOFF_FIRST: Duration = Duration::from_millis(200);
 const BACKOFF_MAX: Duration = Duration::from_secs(5);
 /// A segment is retried at least this long even when it is shorter.
@@ -127,6 +132,10 @@ pub(crate) struct UploadPolicy {
     next_sequence: u64,
     pending: VecDeque<PendingSegment>,
     window: VecDeque<AckedSegment>,
+    /// The sequence after the last segment that left the window or was
+    /// dropped: an acknowledgement below it (a segment dropped while in
+    /// flight) is not listed, so EXT-X-MEDIA-SEQUENCE never goes back.
+    window_floor: u64,
     /// Never decreases (HLS: the target duration must not change).
     target_duration: u64,
     playlist_dirty: bool,
@@ -148,6 +157,7 @@ impl UploadPolicy {
             next_sequence: 0,
             pending: VecDeque::new(),
             window: VecDeque::new(),
+            window_floor: 0,
             target_duration: 1,
             playlist_dirty: false,
             in_flight: None,
@@ -201,6 +211,18 @@ impl UploadPolicy {
             });
             self.next_sequence = self.next_sequence.saturating_add(1);
         }
+        while self.pending.len() > MAX_PENDING_SEGMENTS {
+            // The oldest is the furthest behind live; the playlist window
+            // restarts after the gap, as for any dropped segment.
+            if let Some(dropped) = self.pending.pop_front() {
+                self.drop_segment(dropped.sequence);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_segments(&self) -> usize {
+        self.pending.len()
     }
 
     /// Stop after one final playlist with `EXT-X-ENDLIST`; nothing more is
@@ -223,6 +245,10 @@ impl UploadPolicy {
         if let Some(until) = self.backoff_until.filter(|until| *until > now) {
             return Next::Wait(Some(until));
         }
+        if self.playlist_dirty && self.window.is_empty() {
+            // Everything it would list was dropped: nothing to send.
+            self.playlist_dirty = false;
+        }
         // YouTube: a playlist after every segment, also when catching up.
         if self.playlist_dirty || (self.ending && !self.window.is_empty()) {
             return Next::Put(self.playlist_request());
@@ -235,10 +261,10 @@ impl UploadPolicy {
                 // Akamai: past one segment duration, drop it and move on.
                 // The playlist window restarts after the gap, so it never
                 // lists the missing segment.
-                self.pending.pop_front();
-                self.window.clear();
+                if let Some(dropped) = self.pending.pop_front() {
+                    self.drop_segment(dropped.sequence);
+                }
                 self.attempts = 0;
-                self.dropped = self.dropped.saturating_add(1);
                 continue;
             }
             // The retry window counts from the first send.
@@ -313,11 +339,19 @@ impl UploadPolicy {
                             self.pending.pop_front();
                         }
                         self.target_duration = self.target_duration.max(duration.ceil() as u64);
-                        self.window.push_back(AckedSegment { sequence, duration });
-                        while self.window.len() > PLAYLIST_WINDOW {
-                            self.window.pop_front();
+                        // A segment dropped while in flight (the backlog cap)
+                        // stays out of the playlist: listing it now would
+                        // put a sequence behind the window's floor.
+                        if sequence >= self.window_floor {
+                            self.window.push_back(AckedSegment { sequence, duration });
+                            while self.window.len() > PLAYLIST_WINDOW {
+                                if let Some(left) = self.window.pop_front() {
+                                    self.window_floor =
+                                        self.window_floor.max(left.sequence.saturating_add(1));
+                                }
+                            }
+                            self.playlist_dirty = true;
                         }
-                        self.playlist_dirty = true;
                         ResultEffect::Acknowledged { bytes }
                     }
                     UploadTarget::Playlist { end, .. } => {
@@ -348,11 +382,20 @@ impl UploadPolicy {
         })
     }
 
+    /// Forget a segment that will not be sent; the next playlist starts
+    /// after it.
+    fn drop_segment(&mut self, sequence: u64) {
+        self.window.clear();
+        self.window_floor = self.window_floor.max(sequence.saturating_add(1));
+        self.dropped = self.dropped.saturating_add(1);
+    }
+
     fn segment_name(&self, sequence: u64) -> String {
         format!("{}-{sequence}.ts", self.session)
     }
 
     fn render_playlist(&self, end: bool) -> String {
+        // Never empty here: an empty window sends no playlist.
         let first = self.window.front().map_or(0, |segment| segment.sequence);
         let mut playlist = format!(
             "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:{}\n#EXT-X-MEDIA-SEQUENCE:{first}\n",
