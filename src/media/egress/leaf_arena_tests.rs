@@ -141,3 +141,18 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn drain_also_frees_reserved_slots() {
+    let mut arena: LeafArena<u8> = LeafArena::with_capacity(2);
+    let reserved = arena.reserve().unwrap();
+    let filled = arena.insert_with(|_| 1).unwrap();
+    assert_eq!(arena.drain().collect::<Vec<_>>(), vec![1]);
+    assert_eq!(
+        arena.fill(reserved, 2),
+        Err(2),
+        "a pre-drain reservation is stale"
+    );
+    assert!(arena.get(filled).is_none());
+    assert!(arena.reserve().is_some() && arena.reserve().is_some());
+}

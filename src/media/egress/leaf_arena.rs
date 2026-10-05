@@ -6,8 +6,9 @@
 //! compare generations per handler for them.
 //!
 //! An epoch wraps after 2^32 reuses of one slot; a key held across that many
-//! reuses could alias. Keys live for one queue pass or one in-flight I/O
-//! operation, far below that.
+//! reuses could alias. Queued entries and in-flight I/O hold a key for one
+//! pass or one operation; owner maps (`output_sockets`, `callers`) hold it
+//! for the leaf's life and drop it on removal, so no key survives that long.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LeafKey {
@@ -121,9 +122,19 @@ impl<T> LeafArena<T> {
             .and_then(|entry| entry.value.as_mut())
     }
 
+    /// Free a slot taken by [`Self::reserve`] and never filled (a connect
+    /// that failed). A filled slot must go through [`Self::remove`], which
+    /// hands the leaf back to be closed.
+    pub fn release_reserved(&mut self, key: LeafKey) {
+        let leaf = self.remove(key);
+        debug_assert!(leaf.is_none(), "release_reserved on a filled slot");
+        drop(leaf);
+    }
+
     /// Free `key`'s slot, reserved or filled, returning the leaf if there
     /// was one; `key` and every copy of it stop resolving. A stale key frees
     /// nothing.
+    #[must_use = "a removed leaf must be closed"]
     pub fn remove(&mut self, key: LeafKey) -> Option<T> {
         let entry = self
             .slots
@@ -159,17 +170,30 @@ impl<T> LeafArena<T> {
             })
     }
 
-    /// Remove every leaf (shard shutdown), as [`Self::remove`] would.
+    /// Free every slot, filled or reserved (shard shutdown), as
+    /// [`Self::remove`] would, yielding the leaves.
     pub fn drain(&mut self) -> impl Iterator<Item = T> + '_ {
+        let in_use: Vec<bool> = {
+            let mut in_use = vec![true; self.slots.len()];
+            for &slot in &self.free {
+                if let Some(flag) = in_use.get_mut(slot as usize) {
+                    *flag = false;
+                }
+            }
+            in_use
+        };
         let free = &mut self.free;
         self.slots
             .iter_mut()
+            .zip(in_use)
             .zip(0u32..)
-            .filter_map(move |(entry, slot)| {
-                let value = entry.value.take()?;
+            .filter_map(move |((entry, in_use), slot)| {
+                if !in_use {
+                    return None;
+                }
                 entry.epoch = entry.epoch.wrapping_add(1);
                 free.push(slot);
-                Some(value)
+                entry.value.take()
             })
     }
 }
