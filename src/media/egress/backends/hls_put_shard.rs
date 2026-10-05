@@ -45,6 +45,11 @@ pub(crate) static HLS_PUT_TLS_COUNTERS: TlsCounters = TlsCounters::new();
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// The end playlist after a remove gets this long.
 const END_TIMEOUT: Duration = Duration::from_secs(1);
+/// TX staging bound for upload connections, above the 64 KiB default: a
+/// 2 MiB segment goes out in four sends instead of 32, each with one
+/// completion and shard visit. HTTPS x600 and HTTP x1000 A/B, 512 KiB vs
+/// 64 KiB, paired rounds: 7-20 CPU points lower in every pair.
+const TRANSMIT_CAPACITY: usize = 512 * 1024;
 const RESOLVE_QUEUE_CAPACITY: usize = 1024;
 /// Lookup threads per shard: a destination whose name server hangs ties up
 /// one, not the shard's other outputs.
@@ -408,6 +413,8 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
         } else {
             TlsTcpConnection::plain(stream)
         };
+        let mut connection = connection;
+        connection.set_transmit_capacity(TRANSMIT_CAPACITY);
         let fd = connection.raw_fd();
         if let Err(error) = self.poller.register_connection(
             fd,

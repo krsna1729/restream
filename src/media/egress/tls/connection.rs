@@ -577,6 +577,16 @@ impl TlsTcpConnection {
 }
 
 impl TlsTcpConnection {
+    /// See `CompioTcpStream::set_transmit_capacity`.
+    pub(crate) fn set_transmit_capacity(&mut self, bytes: usize) {
+        match &mut self.state {
+            ConnectionState::Plain(stream) => stream.set_transmit_capacity(bytes),
+            ConnectionState::Tls(Some(connection)) => connection.sock.set_transmit_capacity(bytes),
+            ConnectionState::Ktls(connection) => connection.stream.set_transmit_capacity(bytes),
+            ConnectionState::Tls(None) | ConnectionState::Failed(_) => {}
+        }
+    }
+
     /// `write_shared` for the rest of one message (an HTTP request): sends
     /// carry `MSG_MORE` until its last byte is staged, so kTLS records and
     /// TCP segments fill instead of each record being pushed alone.

@@ -14,9 +14,10 @@ use super::super::tcp::TcpReadyLeaf;
 /// Compio completions; the synchronous protocol engine only consumes or
 /// produces bytes here.
 pub(super) const TRANSPORT_BUFFER_CAPACITY: usize = 4096;
-/// TX staging bound per connection. Each transmit completion carries up to
-/// this many bytes, so it sets the completion (event + visit) rate per byte
-/// of fan-out; RX stays at `TRANSPORT_BUFFER_CAPACITY`.
+/// Default TX staging bound per connection (`IoBuffers::transmit_capacity`).
+/// Each transmit completion carries up to this many bytes, so it sets the
+/// completion (event + visit) rate per byte of fan-out; RX stays at
+/// `TRANSPORT_BUFFER_CAPACITY`.
 pub(super) const TRANSMIT_BUFFER_CAPACITY: usize = 64 * 1024;
 pub(crate) type SharedIoBuffers = std::rc::Rc<std::cell::RefCell<IoBuffers>>;
 
@@ -33,6 +34,9 @@ pub(crate) struct IoBuffers {
     copied: BytesMut,
     pub(super) record_type: Option<(usize, u8)>,
     pending_write_bytes: usize,
+    /// TX staging bound (`TRANSMIT_BUFFER_CAPACITY` unless the connection's
+    /// owner raised it with `set_transmit_capacity`).
+    transmit_capacity: usize,
     /// The staged bytes stop inside a message whose rest is still to come
     /// (`write_shared_message` could not stage all of it): the transmit
     /// worker sends them with `MSG_MORE`, so the kernel coalesces them with
@@ -67,10 +71,10 @@ const COPIED_RUN_CAPACITY: usize = 4096;
 /// Kernel limit on iovecs per `writev` (`UIO_MAXIOV`).
 const MAX_WRITE_SEGMENTS: usize = 1024;
 
-// Every shared segment is at least `SHARE_MIN_BYTES` and each can be preceded
-// by one sealed copied run, so one staged batch holds at most this many
-// segments; exceeding `UIO_MAXIOV` would turn every send into EINVAL.
-const _: () = assert!(2 * TRANSMIT_BUFFER_CAPACITY.div_ceil(SHARE_MIN_BYTES) < MAX_WRITE_SEGMENTS);
+/// Staging stops short of this many segments in one batch: a shared slice
+/// adds at most two (a sealed copied run and the slice), and a batch over
+/// `UIO_MAXIOV` would turn every send into EINVAL.
+const MAX_BATCH_SEGMENTS: usize = MAX_WRITE_SEGMENTS - 2;
 
 impl TxPart<'_> {
     fn as_slice(&self) -> &[u8] {
@@ -102,6 +106,46 @@ impl IoBuffers {
         }
     }
 
+    /// Stage a prefix of `parts` within the TX bound and the batch segment
+    /// limit; `WouldBlock` when nothing fits. `message`: the parts are the
+    /// rest of one message, so a prefix leaves it open (`message_open`).
+    fn stage_parts(&mut self, parts: &[TxPart<'_>], message: bool) -> io::Result<usize> {
+        if let Some((kind, error)) = &self.error {
+            return Err(io::Error::new(*kind, error.clone()));
+        }
+        let mut available = self
+            .transmit_capacity
+            .saturating_sub(self.pending_write_bytes);
+        let mut count = 0;
+        for part in parts {
+            let len = part.as_slice().len();
+            let take = available.min(len);
+            if self.outgoing.len() >= MAX_BATCH_SEGMENTS {
+                break;
+            }
+            if take == 0 {
+                if len == 0 {
+                    continue;
+                }
+                break;
+            }
+            match part {
+                TxPart::Copy(bytes) => self.stage_copy(&bytes[..take]),
+                TxPart::Share(bytes) => self.stage_share(bytes.slice(..take)),
+            }
+            self.pending_write_bytes += take;
+            available -= take;
+            count += take;
+        }
+        let total: usize = parts.iter().map(|part| part.as_slice().len()).sum();
+        if count == 0 && total > 0 {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        self.message_open = message && count < total;
+        wake(&mut self.tx_waker);
+        Ok(count)
+    }
+
     fn has_outgoing(&self) -> bool {
         !self.outgoing.is_empty() || !self.copied.is_empty()
     }
@@ -109,6 +153,7 @@ impl IoBuffers {
     pub(super) fn new() -> SharedIoBuffers {
         std::rc::Rc::new(std::cell::RefCell::new(Self {
             receive_armed: true,
+            transmit_capacity: TRANSMIT_BUFFER_CAPACITY,
             // A non-zero original capacity lets `split` + `reserve` reuse or
             // regrow the run in one step instead of doubling up from zero.
             copied: BytesMut::with_capacity(COPIED_RUN_CAPACITY),
@@ -406,47 +451,26 @@ impl CompioTcpStream {
 
     /// `write_shared` for `parts` that are the rest of one message (an HTTP
     /// request): until its last byte is staged, sends carry `MSG_MORE`, so
-    /// a 64 KiB staging bound does not cut the message into short pushes.
+    /// the staging bound does not cut the message into short pushes.
     pub(crate) fn write_shared_message(&mut self, parts: &[TxPart<'_>]) -> io::Result<usize> {
         self.stage_shared(parts, true)
     }
 
+    /// Raise (or lower) this connection's TX staging bound. A larger bound
+    /// means fewer, larger sends: fewer completions, events and owner
+    /// visits per byte. Staged shared slices are references, so the bound
+    /// costs no copy; it only lets more of a payload be queued at once.
+    pub(crate) fn set_transmit_capacity(&mut self, bytes: usize) {
+        match self {
+            Self::Compio { buffers, .. } => buffers.borrow_mut().transmit_capacity = bytes.max(1),
+            #[cfg(test)]
+            Self::Std(_) => {}
+        }
+    }
+
     fn stage_shared(&mut self, parts: &[TxPart<'_>], message: bool) -> io::Result<usize> {
         match self {
-            Self::Compio { buffers, .. } => {
-                let mut buffers = buffers.borrow_mut();
-                if let Some((kind, message)) = &buffers.error {
-                    return Err(io::Error::new(*kind, message.clone()));
-                }
-                let mut available =
-                    TRANSMIT_BUFFER_CAPACITY.saturating_sub(buffers.pending_write_bytes);
-                let mut count = 0;
-                for part in parts {
-                    let len = part.as_slice().len();
-                    let take = available.min(len);
-                    if take == 0 {
-                        if len == 0 {
-                            continue;
-                        }
-                        break;
-                    }
-                    match part {
-                        TxPart::Copy(bytes) => buffers.stage_copy(&bytes[..take]),
-                        TxPart::Share(bytes) => buffers.stage_share(bytes.slice(..take)),
-                    }
-                    buffers.pending_write_bytes += take;
-                    available -= take;
-                    count += take;
-                }
-                let total: usize = parts.iter().map(|part| part.as_slice().len()).sum();
-                if count == 0 && total > 0 {
-                    Err(io::ErrorKind::WouldBlock.into())
-                } else {
-                    buffers.message_open = message && count < total;
-                    wake(&mut buffers.tx_waker);
-                    Ok(count)
-                }
-            }
+            Self::Compio { buffers, .. } => buffers.borrow_mut().stage_parts(parts, message),
             #[cfg(test)]
             Self::Std(stream) => {
                 let slices: Vec<IoSlice<'_>> = parts
@@ -470,8 +494,9 @@ impl Write for CompioTcpStream {
                 if let Some((kind, message)) = &buffers.error {
                     return Err(io::Error::new(*kind, message.clone()));
                 }
-                let available =
-                    TRANSMIT_BUFFER_CAPACITY.saturating_sub(buffers.pending_write_bytes);
+                let available = buffers
+                    .transmit_capacity
+                    .saturating_sub(buffers.pending_write_bytes);
                 let count = buf.len().min(available);
                 if count == 0 {
                     return Err(io::ErrorKind::WouldBlock.into());
@@ -493,8 +518,9 @@ impl Write for CompioTcpStream {
                 if let Some((kind, message)) = &buffers.error {
                     return Err(io::Error::new(*kind, message.clone()));
                 }
-                let mut available =
-                    TRANSMIT_BUFFER_CAPACITY.saturating_sub(buffers.pending_write_bytes);
+                let mut available = buffers
+                    .transmit_capacity
+                    .saturating_sub(buffers.pending_write_bytes);
                 let mut count = 0;
                 for buf in bufs.iter().filter(|buf| !buf.is_empty()) {
                     let take = available.min(buf.len());
@@ -952,56 +978,5 @@ pub(super) async fn transmit_worker(
 }
 
 #[cfg(test)]
-mod staging_tests {
-    use super::*;
-
-    fn staged(buffers: &mut IoBuffers) -> Vec<Bytes> {
-        buffers.seal_copied();
-        std::mem::take(&mut buffers.outgoing)
-    }
-
-    #[test]
-    fn staging_keeps_wire_order_and_shares_large_payload_without_copying() {
-        let mut buffers = IoBuffers::default();
-        let payload = Bytes::from(vec![7_u8; 4096]);
-        buffers.stage_copy(b"hd1");
-        buffers.stage_share(payload.clone());
-        buffers.stage_copy(b"hd2");
-        buffers.stage_share(Bytes::from_static(b"tiny"));
-        buffers.stage_copy(b"hd3");
-        let segments = staged(&mut buffers);
-
-        let wire: Vec<u8> = segments.iter().flat_map(|s| s.iter().copied()).collect();
-        let mut expected = b"hd1".to_vec();
-        expected.extend_from_slice(&payload);
-        expected.extend_from_slice(b"hd2tinyhd3");
-        assert_eq!(wire, expected);
-        assert_eq!(segments.len(), 3, "run, shared payload, run");
-        assert_eq!(
-            segments[1].as_ptr(),
-            payload.as_ptr(),
-            "large payload is sent from its own buffer"
-        );
-    }
-
-    #[test]
-    fn consume_segments_drops_written_segments_and_advances_a_partial_one() {
-        let mut segments = vec![
-            Bytes::from_static(b"abc"),
-            Bytes::from_static(b"defg"),
-            Bytes::from_static(b"hi"),
-        ];
-        consume_segments(&mut segments, 3);
-        assert_eq!(
-            segments,
-            vec![Bytes::from_static(b"defg"), Bytes::from_static(b"hi")]
-        );
-        consume_segments(&mut segments, 2);
-        assert_eq!(
-            segments,
-            vec![Bytes::from_static(b"fg"), Bytes::from_static(b"hi")]
-        );
-        consume_segments(&mut segments, 4);
-        assert!(segments.is_empty());
-    }
-}
+#[path = "stream_tests.rs"]
+mod staging_tests;
