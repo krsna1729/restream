@@ -288,8 +288,8 @@ fn run_internal_file_ingest_once(
     let queue = MemoryQueue::new_with_capacity(pass.engine.config.avio_capacity);
     let mut custom_output =
         CustomOutput::new(&queue, "mpegts").map_err(|e| format!("TS mux setup failed: {e}"))?;
-    let octx = custom_output
-        .output_mut()
+    // SAFETY: the context is only used in place through this borrow; it is never moved out.
+    let octx = unsafe { custom_output.output_mut() }
         .ok_or_else(|| "Failed to acquire TS output context".to_string())?;
 
     let mut startup_video_state_primed = false;

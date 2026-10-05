@@ -234,9 +234,8 @@ fn run_ffmpeg_transcoder_stage_with_normalizer(
         .unwrap_or_else(|| parse_audio_routing(preset));
 
     let mut custom_input = CustomInput::new(&in_queue)?;
-    let ictx = custom_input
-        .input_mut()
-        .ok_or("Failed to get CustomInput context")?;
+    // SAFETY: the context is only used in place through this borrow; it is never moved out.
+    let ictx = unsafe { custom_input.input_mut() }.ok_or("Failed to get CustomInput context")?;
 
     let mut audio_stream_index = 0usize;
     let mut audio_out_index = 0u32;
@@ -386,9 +385,8 @@ fn run_ffmpeg_transcode_with_scale_with_normalizer(
     use ffmpeg_next::format::Pixel;
 
     let mut custom = CustomInput::new(&in_queue)?;
-    let ictx = custom
-        .input_mut()
-        .ok_or("Failed to get CustomInput context")?;
+    // SAFETY: the context is only used in place through this borrow; it is never moved out.
+    let ictx = unsafe { custom.input_mut() }.ok_or("Failed to get CustomInput context")?;
 
     // Identify streams
     let video_idx = ictx

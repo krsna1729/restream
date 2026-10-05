@@ -498,10 +498,15 @@ impl<'q> CustomInput<'q> {
 }
 
 impl CustomInput<'_> {
-    /// The demuxer reading from the queue. Lent, never handed out: the
-    /// context must not outlive this wrapper, which owns its AVIO buffer and
-    /// borrows the queue its callback reads.
-    pub fn input_mut(&mut self) -> Option<&mut ffmpeg::format::context::Input> {
+    /// The demuxer reading from the queue.
+    ///
+    /// # Safety
+    ///
+    /// The caller must not move the context out of the returned reference
+    /// (`mem::swap`, `mem::replace`, `mem::take`): it points at the AVIO
+    /// buffer this wrapper frees on drop and at the queue it borrows, so a
+    /// moved-out context would read freed memory.
+    pub unsafe fn input_mut(&mut self) -> Option<&mut ffmpeg::format::context::Input> {
         self.input.as_mut()
     }
 }
@@ -614,9 +619,13 @@ impl<'q> CustomOutput<'q> {
 }
 
 impl CustomOutput<'_> {
-    /// The muxer writing into the queue; lent for the reason given on
-    /// [`CustomInput::input_mut`].
-    pub fn output_mut(&mut self) -> Option<&mut ffmpeg::format::context::Output> {
+    /// The muxer writing into the queue.
+    ///
+    /// # Safety
+    ///
+    /// As for [`CustomInput::input_mut`]: never move the context out of the
+    /// returned reference.
+    pub unsafe fn output_mut(&mut self) -> Option<&mut ffmpeg::format::context::Output> {
         self.output.as_mut()
     }
 }
