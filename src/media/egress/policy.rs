@@ -254,7 +254,7 @@ pub fn classify_stall(
 /// The engine must respect all three dimensions. Time is a guard against an
 /// unexpectedly expensive serializer or native call; bytes and units provide
 /// deterministic fairness.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct WorkBudget {
     max_units: usize,
     max_bytes: usize,
@@ -268,7 +268,9 @@ impl WorkBudget {
     /// Construct a budget with explicit limits.
     pub fn new(max_units: usize, max_bytes: usize, duration: Duration) -> Self {
         Self {
-            max_units,
+            // Zero would end every visit before any work; one unit is the
+            // least a visit may do.
+            max_units: max_units.max(1),
             max_bytes,
             deadline: Instant::now() + duration,
             spent_units: 0,
