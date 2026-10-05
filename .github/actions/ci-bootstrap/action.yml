@@ -26,6 +26,10 @@ inputs:
     description: Whether to restore the Rust cache.
     required: false
     default: "false"
+  toolchain_cache:
+    description: Whether setup-rust-toolchain keeps its own per-job cache (off for jobs with multi-GB nightly targets).
+    required: false
+    default: "true"
 
 runs:
   using: composite
@@ -34,9 +38,12 @@ runs:
       uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         components: ${{ inputs.rust_components }}
+        cache: ${{ inputs.toolchain_cache }}
 
     - if: ${{ inputs.rust_components == '' }}
       uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        cache: ${{ inputs.toolchain_cache }}
 
     - if: ${{ inputs.node_version != '' }}
       uses: actions/setup-node@v7
