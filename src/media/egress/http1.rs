@@ -127,6 +127,13 @@ pub(crate) struct ResponseReader {
     unread: Vec<u8>,
 }
 
+impl ResponseReader {
+    /// Bytes received past the response (the peer wrote more than asked).
+    pub(crate) fn has_unread(&self) -> bool {
+        !self.unread.is_empty()
+    }
+}
+
 impl Default for ResponseReader {
     fn default() -> Self {
         Self::new()
@@ -371,12 +378,17 @@ impl Framing {
     fn from_headers(headers: &[httparse::Header<'_>], http10: bool) -> Result<Self, HttpError> {
         let mut length: Option<u64> = None;
         let mut chunked = false;
+        let mut transfer_encoded = false;
         let mut keep_alive = !http10;
         for header in headers {
             let value = std::str::from_utf8(header.value)
                 .map_err(|_| HttpError::Malformed("header value"))?
                 .trim();
             if header.name.eq_ignore_ascii_case("content-length") {
+                // Digits only: `u64::from_str` would also take "+5".
+                if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                    return Err(HttpError::Malformed("content-length"));
+                }
                 let parsed: u64 = value
                     .parse()
                     .map_err(|_| HttpError::Malformed("content-length"))?;
@@ -385,6 +397,7 @@ impl Framing {
                 }
                 length = Some(parsed);
             } else if header.name.eq_ignore_ascii_case("transfer-encoding") {
+                transfer_encoded = true;
                 chunked = value
                     .rsplit(',')
                     .next()
@@ -399,9 +412,16 @@ impl Framing {
                 }
             }
         }
-        // RFC 9112 6.3: Transfer-Encoding overrides Content-Length.
+        // RFC 9112 6.3: Transfer-Encoding overrides Content-Length; a final
+        // coding other than chunked is read until close; a response with
+        // both cannot be trusted to leave the connection in sync.
+        if transfer_encoded && (length.is_some() || !chunked) {
+            keep_alive = false;
+        }
         let body = if chunked {
             Body::Chunked
+        } else if transfer_encoded {
+            Body::UntilClose
         } else if let Some(length) = length {
             Body::Length(length)
         } else {
@@ -416,7 +436,7 @@ fn parse_chunk_size(line: &[u8]) -> Result<u64, HttpError> {
     let size = std::str::from_utf8(size)
         .map_err(|_| HttpError::Malformed("chunk size"))?
         .trim();
-    if size.is_empty() || size.len() > 16 {
+    if size.is_empty() || size.len() > 16 || !size.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(HttpError::Malformed("chunk size"));
     }
     u64::from_str_radix(size, 16).map_err(|_| HttpError::Malformed("chunk size"))

@@ -274,3 +274,135 @@ fn an_origin_that_closes_after_each_response_gets_every_upload() {
     );
     assert!(!output.handle.shutdown_and_join().panicked);
 }
+
+fn backend(capacity: usize) -> HlsPutShardBackend<CompioTcpPoller> {
+    let store = Arc::new(HlsStore::new());
+    store.push_segment(1.5, Bytes::from_static(b"segment-zero"));
+    HlsPutShardBackend::new(
+        CompioTcpPoller::new(64).unwrap(),
+        store,
+        crate::media::egress::tls::rustls_client_config(),
+        capacity,
+    )
+    .unwrap()
+}
+
+fn hls_spec(id: &str, port: u16) -> OutputSpec {
+    OutputSpec {
+        id: OutputId::new(id),
+        generation: 1,
+        feed: FeedId::new("hls:pipe"),
+        protocol: ProtocolSpec::HlsPut {
+            url: format!("http://127.0.0.1:{port}/live/{id}.m3u8"),
+        },
+        policy: LeafPolicy::default(),
+        progress: EgressProgressSink::default(),
+    }
+}
+
+/// A DNS answer for a removed output must not connect the output that
+/// reuses its slot (both start their lookups at token 1): it would send
+/// the new output's segments and stream key to the old output's origin.
+#[test]
+fn a_removed_outputs_late_dns_answer_does_not_reach_the_slots_next_output() {
+    let mut backend = backend(1);
+    backend.on_command(EgressCommand::Add(hls_spec("old", 1)));
+    let old = backend.by_output[&OutputId::new("old")];
+    backend.close_slot(old);
+    backend.on_command(EgressCommand::Add(hls_spec("new", 2)));
+    let new = backend.by_output[&OutputId::new("new")];
+    let new_token = match backend.slots.get(new).map(|slot| &slot.conn) {
+        Some(Conn::Resolving { token, .. }) => *token,
+        _ => panic!("the new output resolves first"),
+    };
+
+    backend.resolved(Resolved {
+        key: old,
+        token: new_token,
+        addr: Some("127.0.0.1:9".parse().unwrap()),
+    });
+
+    assert!(
+        matches!(
+            backend.slots.get(new).map(|slot| &slot.conn),
+            Some(Conn::Resolving { .. })
+        ),
+        "the old output's answer connected the new output"
+    );
+}
+
+/// A lookup or connect that outlives its deadline fails the waiting
+/// request (and is retried) instead of holding the slot until the kernel
+/// gives up, with the shard re-arming an already-expired timer meanwhile.
+#[test]
+fn an_expired_resolve_fails_the_waiting_request() {
+    let mut backend = backend(1);
+    backend.on_command(EgressCommand::Add(hls_spec("slow-dns", 1)));
+    let key = backend.by_output[&OutputId::new("slow-dns")];
+    let past = Instant::now() - Duration::from_secs(1);
+    if let Some(slot) = backend.slots.get_mut(key) {
+        assert!(
+            slot.waiting_request.is_some(),
+            "the first segment waits for a connection"
+        );
+        slot.conn = Conn::Resolving {
+            token: u64::MAX,
+            deadline: past,
+        };
+    }
+
+    backend.drive(key, Instant::now());
+
+    let slot = backend.slots.get(key).unwrap();
+    assert!(
+        !matches!(
+            slot.conn,
+            Conn::Resolving {
+                token: u64::MAX,
+                ..
+            }
+        ),
+        "the expired lookup still holds the slot"
+    );
+    assert!(
+        slot.waiting_request.is_none(),
+        "the request was failed and handed back"
+    );
+}
+
+/// Remove then shutdown (the last output on a pipeline): while the end
+/// playlist is in flight the backend must report work, or the shard's
+/// "idle while draining" check stops it and EXT-X-ENDLIST is lost.
+#[test]
+fn a_drain_stays_alive_while_an_end_playlist_is_in_flight() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    // Accepts and reads, never answers: every exchange stays in flight.
+    let _silent = std::thread::spawn(move || {
+        let held: Vec<_> = listener.incoming().take(4).collect();
+        std::thread::sleep(Duration::from_secs(5));
+        drop(held);
+    });
+    let mut backend = backend(1);
+    backend.on_command(EgressCommand::Add(hls_spec("ending", port)));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while backend
+        .slots
+        .get(backend.by_output[&OutputId::new("ending")])
+        .is_some_and(|slot| slot.exchange.is_none())
+    {
+        assert!(Instant::now() < deadline, "the first upload never started");
+        backend.on_ready();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    backend.on_command(EgressCommand::Remove(OutputId::new("ending")));
+    backend.on_command(EgressCommand::Shutdown);
+
+    assert!(!backend.slots.is_empty());
+    assert_ne!(
+        backend.on_ready(),
+        EgressShardCommandEffect::Continue,
+        "a draining shard with an end playlist outstanding reported no work"
+    );
+    backend.on_shutdown();
+}

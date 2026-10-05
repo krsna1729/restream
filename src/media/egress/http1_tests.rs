@@ -54,13 +54,21 @@ fn every_body_framing_reads_to_one_response() {
         read(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3;ext=1\r\nabc\r\n0\r\nX-T: 1\r\n\r\n"),
         ok(200, true)
     );
-    // Transfer-Encoding wins over Content-Length (RFC 9112 6.3).
+    // Transfer-Encoding wins over Content-Length, and a response with both
+    // closes the connection (RFC 9112 6.3).
     assert_eq!(
         read(
             b"HTTP/1.1 200 OK\r\nContent-Length: 99\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
         ),
-        ok(200, true)
+        ok(200, false)
     );
+    // A final coding other than chunked is read until close.
+    assert_eq!(
+        read(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\nzz"),
+        Ok(None)
+    );
+    // Lengths are digits only.
+    assert!(read(b"HTTP/1.1 200 OK\r\nContent-Length: +5\r\n\r\nhello").is_err());
     // Connection: close, and HTTP/1.0 without keep-alive.
     assert_eq!(
         read(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"),

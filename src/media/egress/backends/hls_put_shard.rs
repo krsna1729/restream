@@ -5,15 +5,17 @@
 //! The shard owns the connections (Compio TCP through the same poller as
 //! RTMP, TLS through `egress::tls`, kernel TLS after the handshake) and the
 //! clock. A store publish wakes the shard directly (see
-//! `engine_hls_egress_fabric.rs`); a resolve worker thread keeps DNS off the
-//! shard, and every retry resolves again (Akamai). One request is in flight
-//! per output, and each output's deadlines (backoff, connect, request
-//! timeout) are shard timers.
+//! `engine_hls_egress_fabric.rs`); a small pool of resolve threads keeps
+//! DNS off the shard, so one destination with a hanging name server holds
+//! one lookup thread, not every output's connects, and every retry
+//! resolves again (Akamai). One request is in flight per output, and each
+//! output's deadlines (backoff, resolve, connect, request timeout) are
+//! shard timers. Slots live in a `LeafArena`: a late DNS answer or poller
+//! event for a removed output never reaches the output reusing its slot.
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::time::{Duration, Instant};
 
 use tokio_rustls::rustls::ClientConfig;
@@ -24,8 +26,8 @@ use super::rtmp_shard_poller::RtmpReadinessPoller;
 use super::tcp::{TcpConnectAttempt, TcpReadyLeaf, connect_error};
 use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::leaf::EgressProgressSink;
+use crate::media::egress::leaf_arena::{LeafArena, LeafKey};
 use crate::media::egress::metrics::ShardMetrics;
-use crate::media::egress::scheduler::LeafKey;
 use crate::media::egress::shard::{
     EgressShardBackend, EgressShardCommandEffect, EgressShardIdleWake,
 };
@@ -42,6 +44,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// The end playlist after a remove gets this long.
 const END_TIMEOUT: Duration = Duration::from_secs(1);
 const RESOLVE_QUEUE_CAPACITY: usize = 1024;
+/// Lookup threads per shard: a destination whose name server hangs ties up
+/// one, not the shard's other outputs.
+const RESOLVE_THREADS: usize = 4;
 const SCRATCH_BYTES: usize = 16 * 1024;
 
 // ---------------------------------------------------------------------------
@@ -61,62 +66,48 @@ struct Resolved {
     addr: Option<SocketAddr>,
 }
 
-/// One thread resolving names for the shard; dropping it ends the thread
-/// after its current lookup.
+/// A few threads resolving names for the shard. Dropping it closes the
+/// request queue; each thread ends after its current lookup and is never
+/// joined, so a lookup blocked in `getaddrinfo` cannot stall shutdown.
 struct Resolver {
-    requests: Option<SyncSender<ResolveRequest>>,
-    completions: Receiver<Resolved>,
-    worker: Option<std::thread::JoinHandle<()>>,
+    requests: flume::Sender<ResolveRequest>,
+    completions: flume::Receiver<Resolved>,
 }
 
 impl Resolver {
     fn spawn() -> std::io::Result<Self> {
-        let (request_tx, request_rx) = sync_channel::<ResolveRequest>(RESOLVE_QUEUE_CAPACITY);
-        let (done_tx, done_rx) = sync_channel::<Resolved>(RESOLVE_QUEUE_CAPACITY);
-        let worker = std::thread::Builder::new()
-            .name("hls-put-resolve".to_string())
-            .spawn(move || {
-                while let Ok(request) = request_rx.recv() {
-                    let addr = crate::media::egress::backends::rtmp_shard::resolve_rtmp_peer_host(
-                        &request.host,
-                        request.port,
-                    );
-                    let resolved = Resolved {
-                        key: request.key,
-                        token: request.token,
-                        addr,
-                    };
-                    if done_tx.send(resolved).is_err() {
-                        return;
+        let (request_tx, request_rx) = flume::bounded::<ResolveRequest>(RESOLVE_QUEUE_CAPACITY);
+        let (done_tx, done_rx) = flume::bounded::<Resolved>(RESOLVE_QUEUE_CAPACITY);
+        for _ in 0..RESOLVE_THREADS {
+            let (request_rx, done_tx) = (request_rx.clone(), done_tx.clone());
+            std::thread::Builder::new()
+                .name("hls-put-resolve".to_string())
+                .spawn(move || {
+                    while let Ok(request) = request_rx.recv() {
+                        let addr =
+                            crate::media::egress::backends::rtmp_shard::resolve_rtmp_peer_host(
+                                &request.host,
+                                request.port,
+                            );
+                        let resolved = Resolved {
+                            key: request.key,
+                            token: request.token,
+                            addr,
+                        };
+                        if done_tx.send(resolved).is_err() {
+                            return;
+                        }
                     }
-                }
-            })?;
+                })?;
+        }
         Ok(Self {
-            requests: Some(request_tx),
+            requests: request_tx,
             completions: done_rx,
-            worker: Some(worker),
         })
     }
 
     fn request(&self, request: ResolveRequest) -> bool {
-        self.requests.as_ref().is_some_and(|requests| {
-            !matches!(
-                requests.try_send(request),
-                Err(TrySendError::Full(_) | TrySendError::Disconnected(_))
-            )
-        })
-    }
-}
-
-impl Drop for Resolver {
-    fn drop(&mut self) {
-        self.requests = None;
-        while self.completions.try_recv().is_ok() {}
-        if let Some(worker) = self.worker.take() {
-            // Unblock a worker stuck on a full completion queue first.
-            drop(std::mem::replace(&mut self.completions, sync_channel(1).1));
-            let _ = worker.join();
-        }
+        self.requests.try_send(request).is_ok()
     }
 }
 
@@ -128,6 +119,7 @@ enum Conn {
     Idle,
     Resolving {
         token: u64,
+        deadline: Instant,
     },
     Connecting {
         stream: CompioTcpStream,
@@ -150,13 +142,15 @@ struct Slot {
     /// The policy's backoff instant, when it is waiting for one.
     wake_at: Option<Instant>,
     resolve_token: u64,
+    /// In `ready`: an event for a queued slot does not queue it twice.
+    queued: bool,
 }
 
 impl Slot {
     fn deadline(&self) -> Option<Instant> {
         let connect = match &self.conn {
-            Conn::Connecting { deadline, .. } => Some(*deadline),
-            _ => None,
+            Conn::Connecting { deadline, .. } | Conn::Resolving { deadline, .. } => Some(*deadline),
+            Conn::Idle | Conn::Open(_) => None,
         };
         [
             self.wake_at,
@@ -182,9 +176,13 @@ pub(crate) struct HlsPutShardBackend<P: RtmpReadinessPoller> {
     store: Arc<HlsStore>,
     client_config: Arc<ClientConfig>,
     resolver: Resolver,
-    slots: Vec<Option<Slot>>,
-    free: Vec<LeafKey>,
+    slots: LeafArena<Slot>,
     by_output: HashMap<OutputId, LeafKey>,
+    /// Reused by `drive_due`.
+    due: Vec<LeafKey>,
+    /// Shutdown or drain began: keep the shard alive while a slot remains,
+    /// so every end playlist gets its chance.
+    draining: bool,
     /// Slots with something to do now.
     ready: VecDeque<LeafKey>,
     poll_buffer: Vec<TcpReadyLeaf>,
@@ -207,9 +205,10 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             store,
             client_config,
             resolver: Resolver::spawn()?,
-            slots: (0..leaf_capacity).map(|_| None).collect(),
-            free: (0..leaf_capacity).rev().map(LeafKey).collect(),
+            slots: LeafArena::with_capacity(leaf_capacity),
             by_output: HashMap::new(),
+            due: Vec::new(),
+            draining: false,
             ready: VecDeque::with_capacity(leaf_capacity),
             poll_buffer: Vec::new(),
             scratch: vec![0; SCRATCH_BYTES],
@@ -232,19 +231,11 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             spec.progress.mark_terminated_unexpectedly();
             return;
         };
-        let Some(key) = self.free.pop() else {
-            tracing::warn!(output_id = %spec.id, "hls put fabric leaf rejected: shard leaf capacity exhausted");
-            spec.progress.mark_terminated_unexpectedly();
-            return;
-        };
         let mut policy = UploadPolicy::new(crate::media::hls::upload::upload_session_token());
         if let Some(snapshot) = self.store.snapshot() {
             policy.on_publish(&snapshot);
         }
-        let Some(entry) = self.slots.get_mut(key.0) else {
-            return;
-        };
-        *entry = Some(Slot {
+        let inserted = self.slots.insert_with(|_| Slot {
             output_id: spec.id.clone(),
             generation: spec.generation,
             progress: spec.progress.clone(),
@@ -256,25 +247,43 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             connect_timeout: spec.policy.connect_timeout,
             wake_at: None,
             resolve_token: 0,
+            queued: false,
         });
+        let Some(key) = inserted else {
+            tracing::warn!(output_id = %spec.id, "hls put fabric leaf rejected: shard leaf capacity exhausted");
+            spec.progress.mark_terminated_unexpectedly();
+            return;
+        };
         self.by_output.insert(spec.id, key);
-        self.ready.push_back(key);
+        self.enqueue(key);
+    }
+
+    fn enqueue(&mut self, key: LeafKey) {
+        if let Some(slot) = self.slots.get_mut(key)
+            && !slot.queued
+        {
+            slot.queued = true;
+            self.ready.push_back(key);
+        }
     }
 
     fn close_slot(&mut self, key: LeafKey) {
-        let Some(slot) = self.slots.get_mut(key.0).and_then(Option::take) else {
+        let Some(slot) = self.slots.remove(key) else {
             return;
         };
         if let Some(fd) = slot.fd() {
             let _ = self.poller.remove(fd);
         }
-        self.by_output.remove(&slot.output_id);
+        if self.by_output.get(&slot.output_id) == Some(&key) {
+            self.by_output.remove(&slot.output_id);
+        }
+        // A stale queue entry no longer resolves; dropping it keeps the
+        // queue at most one entry per live slot.
         self.ready.retain(|ready| *ready != key);
-        self.free.push(key);
     }
 
     fn drop_connection(&mut self, key: LeafKey) {
-        let Some(slot) = self.slots.get_mut(key.0).and_then(Option::as_mut) else {
+        let Some(slot) = self.slots.get_mut(key) else {
             return;
         };
         if let Some(fd) = slot.fd() {
@@ -285,7 +294,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
     }
 
     fn start_resolve(&mut self, key: LeafKey) {
-        let Some(slot) = self.slots.get_mut(key.0).and_then(Option::as_mut) else {
+        let Some(slot) = self.slots.get_mut(key) else {
             return;
         };
         slot.resolve_token = slot.resolve_token.wrapping_add(1);
@@ -296,7 +305,10 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             host: slot.target.host.clone(),
             port: slot.target.port,
         };
-        slot.conn = Conn::Resolving { token };
+        slot.conn = Conn::Resolving {
+            token,
+            deadline: Instant::now() + slot.connect_timeout,
+        };
         if !self.resolver.request(request) {
             self.connection_failed(key, "resolver queue full");
         }
@@ -306,7 +318,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
     /// a transport failure of that request.
     fn connection_failed(&mut self, key: LeafKey, why: &str) {
         self.drop_connection(key);
-        let Some(slot) = self.slots.get_mut(key.0).and_then(Option::as_mut) else {
+        let Some(slot) = self.slots.get_mut(key) else {
             return;
         };
         let ending = slot.policy.is_finishing();
@@ -322,15 +334,15 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
                 .on_result(UploadOutcome::Transport, Instant::now());
             report(slot, effect, Some(why));
         }
-        self.ready.push_back(key);
+        self.enqueue(key);
     }
 
     fn resolved(&mut self, resolved: Resolved) {
         let key = resolved.key;
-        let Some(slot) = self.slots.get(key.0).and_then(Option::as_ref) else {
+        let Some(slot) = self.slots.get(key) else {
             return;
         };
-        if !matches!(slot.conn, Conn::Resolving { token } if token == resolved.token) {
+        if !matches!(slot.conn, Conn::Resolving { token, .. } if token == resolved.token) {
             return; // a stale lookup
         }
         let Some(addr) = resolved.addr else {
@@ -341,7 +353,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
         match self.poller.start_connect(addr, key, generation, timeout) {
             Ok(TcpConnectAttempt::Connected(stream)) => self.activate(key, stream),
             Ok(TcpConnectAttempt::InProgress(stream)) => {
-                if let Some(slot) = self.slots.get_mut(key.0).and_then(Option::as_mut) {
+                if let Some(slot) = self.slots.get_mut(key) {
                     slot.conn = Conn::Connecting {
                         stream,
                         deadline: Instant::now() + timeout,
@@ -353,7 +365,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
     }
 
     fn activate(&mut self, key: LeafKey, stream: CompioTcpStream) {
-        let Some(slot) = self.slots.get_mut(key.0).and_then(Option::as_mut) else {
+        let Some(slot) = self.slots.get_mut(key) else {
             return;
         };
         let connection = if slot.target.tls {
@@ -383,7 +395,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             return;
         }
         slot.conn = Conn::Open(connection);
-        self.ready.push_back(key);
+        self.enqueue(key);
     }
 
     fn poll(&mut self) {
@@ -392,7 +404,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
         }
         let mut events = std::mem::take(&mut self.poll_buffer);
         for event in events.drain(..) {
-            let Some(slot) = self.slots.get(event.key.0).and_then(Option::as_ref) else {
+            let Some(slot) = self.slots.get(event.key) else {
                 continue;
             };
             if slot.fd() != Some(event.fd) {
@@ -405,8 +417,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
                 }
                 let Some(Conn::Connecting { stream, .. }) = self
                     .slots
-                    .get_mut(event.key.0)
-                    .and_then(Option::as_mut)
+                    .get_mut(event.key)
                     .map(|slot| std::mem::replace(&mut slot.conn, Conn::Idle))
                 else {
                     continue;
@@ -415,9 +426,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
                 self.activate(event.key, stream);
                 continue;
             }
-            if !self.ready.contains(&event.key) {
-                self.ready.push_back(event.key);
-            }
+            self.enqueue(event.key);
         }
         self.poll_buffer = events;
         while let Ok(resolved) = self.resolver.completions.try_recv() {
@@ -427,10 +436,24 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
 
     /// Drive one slot as far as it can go now.
     fn drive(&mut self, key: LeafKey, now: Instant) {
+        if let Some(slot) = self.slots.get_mut(key) {
+            slot.queued = false;
+        }
         loop {
-            let Some(slot) = self.slots.get_mut(key.0).and_then(Option::as_mut) else {
+            let Some(slot) = self.slots.get_mut(key) else {
                 return;
             };
+            match &slot.conn {
+                Conn::Resolving { deadline, .. } if now >= *deadline => {
+                    self.connection_failed(key, "name resolution timed out");
+                    continue;
+                }
+                Conn::Connecting { deadline, .. } if now >= *deadline => {
+                    self.connection_failed(key, "connect timed out");
+                    continue;
+                }
+                _ => {}
+            }
             if let Some(exchange) = slot.exchange.as_mut() {
                 let Conn::Open(connection) = &mut slot.conn else {
                     slot.exchange = None;
@@ -474,7 +497,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
                 }
                 // Take the request only once a connection is open; until
                 // then it stays waiting.
-                if let Some(slot) = self.slots.get_mut(key.0).and_then(Option::as_mut)
+                if let Some(slot) = self.slots.get_mut(key)
                     && matches!(slot.conn, Conn::Open(_))
                     && let Some(request) = slot.waiting_request.take()
                 {
@@ -495,7 +518,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
                     if request.fresh_connection && matches!(slot.conn, Conn::Open(_)) {
                         self.drop_connection(key);
                     }
-                    let Some(slot) = self.slots.get_mut(key.0).and_then(Option::as_mut) else {
+                    let Some(slot) = self.slots.get_mut(key) else {
                         return;
                     };
                     if matches!(slot.conn, Conn::Open(_)) {
@@ -521,7 +544,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
     }
 
     fn fail_exchange(&mut self, key: LeafKey, now: Instant, why: &str) {
-        let Some(slot) = self.slots.get_mut(key.0).and_then(Option::as_mut) else {
+        let Some(slot) = self.slots.get_mut(key) else {
             return;
         };
         let effect = slot.policy.on_result(UploadOutcome::Transport, now);
@@ -540,17 +563,17 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
     }
 
     fn drive_due(&mut self, now: Instant) {
-        for index in 0..self.slots.len() {
-            let due = self
-                .slots
-                .get(index)
-                .and_then(Option::as_ref)
-                .and_then(Slot::deadline)
-                .is_some_and(|deadline| deadline <= now);
-            if due {
-                self.drive(LeafKey(index), now);
-            }
+        let mut due = std::mem::take(&mut self.due);
+        due.extend(
+            self.slots
+                .iter()
+                .filter(|(_, slot)| slot.deadline().is_some_and(|deadline| deadline <= now))
+                .map(|(key, _)| key),
+        );
+        for key in due.drain(..) {
+            self.drive(key, now);
         }
+        self.due = due;
     }
 
     /// Keep one shard timer at the earliest slot deadline.
@@ -558,8 +581,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
         let earliest = self
             .slots
             .iter()
-            .flatten()
-            .filter_map(|slot| slot.deadline().map(|at| (at, slot)))
+            .filter_map(|(_, slot)| slot.deadline().map(|at| (at, slot)))
             .min_by_key(|(at, _)| *at)
             .map(|(at, slot)| (at, slot.output_id.clone(), slot.generation));
         if earliest == self.scheduled {
@@ -580,7 +602,15 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
         if !self.ready.is_empty() {
             return EgressShardCommandEffect::ScheduleReady { count: 1 };
         }
-        self.timer_effect()
+        let effect = self.timer_effect();
+        if self.draining && !self.slots.is_empty() && effect == EgressShardCommandEffect::Continue {
+            // The shard stops a drain that reports nothing to do; an end
+            // playlist still resolving, connecting or in flight is work.
+            // Re-arm the earliest deadline (every busy slot has one).
+            self.scheduled = None;
+            return self.timer_effect();
+        }
+        effect
     }
 }
 
@@ -642,33 +672,33 @@ impl<P: RtmpReadinessPoller + 'static> EgressShardBackend for HlsPutShardBackend
             EgressCommand::Add(spec) | EgressCommand::Update(spec) => self.add(spec),
             EgressCommand::Remove(output_id) => {
                 if let Some(key) = self.by_output.get(&output_id).copied()
-                    && let Some(slot) = self.slots.get_mut(key.0).and_then(Option::as_mut)
+                    && let Some(slot) = self.slots.get_mut(key)
                 {
                     slot.policy.finish();
                     slot.wake_at = None;
-                    self.ready.push_back(key);
+                    self.enqueue(key);
                 }
             }
             EgressCommand::FeedWake => {
                 if let Some(snapshot) = self.store.snapshot() {
-                    for (index, slot) in self.slots.iter_mut().enumerate() {
-                        if let Some(slot) = slot {
-                            slot.policy.on_publish(&snapshot);
-                            if !self.ready.contains(&LeafKey(index)) {
-                                self.ready.push_back(LeafKey(index));
-                            }
+                    for (key, slot) in self.slots.iter_mut() {
+                        slot.policy.on_publish(&snapshot);
+                        if !slot.queued {
+                            slot.queued = true;
+                            self.ready.push_back(key);
                         }
                     }
                 }
             }
             EgressCommand::DrainShard(_) | EgressCommand::Shutdown => {
+                self.draining = true;
                 let keys: Vec<LeafKey> = self.by_output.values().copied().collect();
                 for key in keys {
-                    if let Some(slot) = self.slots.get_mut(key.0).and_then(Option::as_mut) {
+                    if let Some(slot) = self.slots.get_mut(key) {
                         slot.policy.finish();
                         slot.wake_at = None;
                     }
-                    self.ready.push_back(key);
+                    self.enqueue(key);
                 }
             }
         }
@@ -678,10 +708,7 @@ impl<P: RtmpReadinessPoller + 'static> EgressShardBackend for HlsPutShardBackend
 
     fn timer_generation(&self, output_id: &OutputId) -> Option<u64> {
         let key = self.by_output.get(output_id)?;
-        self.slots
-            .get(key.0)
-            .and_then(Option::as_ref)
-            .map(|slot| slot.generation)
+        self.slots.get(*key).map(|slot| slot.generation)
     }
 
     fn on_timer(&mut self, _output_id: OutputId, _generation: u64) -> EgressShardCommandEffect {

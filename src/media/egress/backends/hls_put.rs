@@ -162,12 +162,12 @@ impl Exchange {
             match io.read(scratch) {
                 Ok(0) => {
                     return match self.reader.finish() {
-                        Ok(response) => ExchangeStep::Done(response),
+                        Ok(response) => ExchangeStep::Done(self.reusable(response)),
                         Err(error) => ExchangeStep::Failed(error.to_string()),
                     };
                 }
                 Ok(count) => match self.reader.feed(scratch.get(..count).unwrap_or_default()) {
-                    Ok(Some(response)) => return ExchangeStep::Done(response),
+                    Ok(Some(response)) => return ExchangeStep::Done(self.reusable(response)),
                     Ok(None) => {}
                     Err(error) => return ExchangeStep::Failed(http_error(error)),
                 },
@@ -177,6 +177,16 @@ impl Exchange {
                 Err(error) => return ExchangeStep::Failed(format!("receive: {error}")),
             }
         }
+    }
+
+    /// An answer before the whole request was sent, or with bytes after
+    /// it, leaves the connection out of step: the next request on it would
+    /// be read as the rest of this one. Such a connection is not reused.
+    fn reusable(&self, mut response: Response) -> Response {
+        if self.written < self.total() || self.reader.has_unread() {
+            response.keep_alive = false;
+        }
+        response
     }
 
     /// Request bytes not yet queued.
