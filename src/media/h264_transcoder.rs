@@ -201,10 +201,8 @@ fn run_ffmpeg_h264_stage_with_normalizer(
     use ffmpeg_next::format::Pixel;
 
     let mut custom = CustomInput::new(&in_queue)?;
-    let ictx = custom
-        .input
-        .as_mut()
-        .ok_or("failed to get CustomInput context")?;
+    // SAFETY: the context is only used in place through this borrow; it is never moved out.
+    let ictx = unsafe { custom.input_mut() }.ok_or("failed to get CustomInput context")?;
 
     // Identify streams
     let video_idx = ictx
