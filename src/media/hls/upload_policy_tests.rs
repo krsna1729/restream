@@ -233,6 +233,35 @@ fn finish_during_a_backoff_does_not_wait_for_it() {
     ));
 }
 
+/// A destination failing everything (a playlist retried without limit
+/// blocks every segment behind it) holds a bounded backlog, not the whole
+/// continuing stream: one failing destination must not exhaust shared
+/// memory.
+#[test]
+fn a_failing_playlist_cannot_pin_an_unbounded_backlog() {
+    let mut now = Instant::now();
+    let mut policy = UploadPolicy::new("r".into());
+    policy.on_publish(&snapshot(0..1, 2.0));
+    put(&mut policy, now);
+    ok(&mut policy, now);
+    for store_next in 2..60u64 {
+        policy.on_publish(&snapshot(store_next.saturating_sub(20)..store_next, 2.0));
+        match policy.next(now) {
+            Next::Put(_) => {
+                // A destination failing everything.
+                policy.on_result(UploadOutcome::Status(503), now);
+            }
+            Next::Wait(Some(until)) => now = until,
+            other => panic!("{other:?}"),
+        }
+        assert!(policy.pending_segments() <= MAX_PENDING_SEGMENTS);
+    }
+    assert!(
+        policy.dropped_segments() >= 50,
+        "older segments were dropped"
+    );
+}
+
 #[derive(Debug, Clone)]
 enum Event {
     Publish { added: u64, duration_tenths: u16 },
@@ -286,6 +315,7 @@ proptest! {
                     store_next += added;
                     let duration = f64::from(duration_tenths) / 10.0;
                     policy.on_publish(&snapshot(store_next.saturating_sub(20)..store_next, duration));
+                    prop_assert!(policy.pending_segments() <= MAX_PENDING_SEGMENTS, "unbounded backlog");
                 }
                 Event::Advance { millis } => now += Duration::from_millis(millis),
                 Event::Finish => policy.finish(),
@@ -352,4 +382,30 @@ proptest! {
             }
         }
     }
+}
+
+/// A stop right after drops emptied the window still ends the stream:
+/// the end playlist repeats the last window sent, with EXT-X-ENDLIST, and
+/// EXT-X-MEDIA-SEQUENCE does not go back.
+#[test]
+fn a_stop_after_the_window_emptied_still_sends_endlist() {
+    let mut policy = UploadPolicy::new("rtest".to_string());
+    let start = Instant::now();
+    policy.on_publish(&snapshot(0..1, 1.0));
+    // s0 and its playlist are acknowledged.
+    for _ in 0..2 {
+        assert!(matches!(policy.next(start), Next::Put(_)));
+        policy.on_result(UploadOutcome::Status(200), start);
+    }
+    // Six more segments arrive while nothing is acknowledged: the cap drops
+    // one, which clears the window.
+    policy.on_publish(&snapshot(0..7, 1.0));
+    assert!(policy.backlog_dropped_segments() >= 1);
+    policy.finish();
+    let Next::Put(request) = policy.next(start) else {
+        panic!("a stop must send the end playlist");
+    };
+    let body = String::from_utf8(request.body.to_vec()).unwrap();
+    assert!(body.contains("#EXT-X-ENDLIST"), "{body}");
+    assert!(body.contains("#EXT-X-MEDIA-SEQUENCE:0"), "{body}");
 }

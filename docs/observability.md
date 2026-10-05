@@ -288,7 +288,11 @@ HLS PUT requests are also bounded by an internal timeout (5 s). A 5xx, 408,
 backoff (200 ms doubling to 5 s, shown in the retry state). A segment still
 failing one segment duration after its first send is dropped
 (`upload_segment_dropped`) and the next playlist starts after it; the playlist
-itself is retried without limit. Any other 4xx (400, 401, 403, 404, 405, ...)
+itself is retried without limit. At most five segments wait for upload; a
+destination accepting them more slowly than live drops the oldest waiting one
+("upload backlog over 5 segments"). After any failure the output uses fresh
+connections for 90 s, so it does not return to the failed node's pooled
+connection. Any other 4xx (400, 401, 403, 404, 405, ...)
 means the target rejected the output: the uploader stops without retrying the
 request and records the status, and the output then follows the normal output
 retry policy.

@@ -604,3 +604,97 @@ async fn uploader_rejects_terminal_stage_mismatch() {
         "unexpected mismatch error: {error}"
     );
 }
+
+/// An origin on a std thread that answers 503 to the first request and 200
+/// after, recording the connection each request arrived on.
+/// `(connection number, request target)` per request, in arrival order.
+type SeenRequests = Arc<Mutex<Vec<(usize, String)>>>;
+
+fn connection_recording_origin() -> (std::net::SocketAddr, SeenRequests) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen = Arc::new(Mutex::new(Vec::<(usize, String)>::new()));
+    let seen_for_accept = seen.clone();
+    std::thread::spawn(move || {
+        for (connection, stream) in listener.incoming().enumerate() {
+            let Ok(mut stream) = stream else { return };
+            let seen = seen_for_accept.clone();
+            std::thread::spawn(move || {
+                let mut buffer = Vec::new();
+                loop {
+                    let head_end = loop {
+                        if let Some(end) = buffer.windows(4).position(|w| w == b"\r\n\r\n") {
+                            break end + 4;
+                        }
+                        let mut chunk = [0u8; 4096];
+                        match stream.read(&mut chunk) {
+                            Ok(0) | Err(_) => return,
+                            Ok(count) => buffer.extend_from_slice(&chunk[..count]),
+                        }
+                    };
+                    let head = String::from_utf8_lossy(&buffer[..head_end]).to_string();
+                    let target = head.split_whitespace().nth(1).unwrap_or("").to_string();
+                    let length: usize = head
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .map(str::to_string)
+                        })
+                        .map_or(0, |value| value.trim().parse().unwrap());
+                    while buffer.len() < head_end + length {
+                        let mut chunk = [0u8; 4096];
+                        match stream.read(&mut chunk) {
+                            Ok(0) | Err(_) => return,
+                            Ok(count) => buffer.extend_from_slice(&chunk[..count]),
+                        }
+                    }
+                    buffer.drain(..head_end + length);
+                    let nth = {
+                        let mut seen = crate::sync::lock(&seen);
+                        seen.push((connection, target));
+                        seen.len() - 1
+                    };
+                    let status = if nth == 0 { "503 Busy" } else { "200 OK" };
+                    let response = format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\n\r\n");
+                    if stream.write_all(response.as_bytes()).is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    (addr, seen)
+}
+
+/// After a retryable failure the retry goes out on a new connection (and
+/// so a new DNS lookup), as Akamai asks, not on the keep-alive connection
+/// of the failed node.
+#[tokio::test]
+async fn a_retry_uses_a_new_connection() {
+    let (addr, seen) = connection_recording_origin();
+    let store = Arc::new(HlsStore::new());
+    store.push_segment(1.2, bytes::Bytes::from_static(b"segment-0"));
+    let (registration, uploader) =
+        spawn_uploader(format!("http://{addr}/live/out.m3u8"), store.clone()).await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while crate::sync::lock(&seen).len() < 2 {
+        assert!(tokio::time::Instant::now() < deadline, "no retry");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let seen = crate::sync::lock(&seen).clone();
+    assert_eq!(seen[0].1, seen[1].1, "the same segment is retried");
+    assert_ne!(seen[0].0, seen[1].0, "the retry opened a new connection");
+
+    registration.cancel_token.cancel();
+    let _ = uploader.await;
+}
+
+/// Session tokens are unique even when many outputs start at once.
+#[test]
+fn session_tokens_do_not_repeat_within_a_burst() {
+    let tokens: HashSet<String> = (0..10_000).map(|_| upload_session_token()).collect();
+    assert_eq!(tokens.len(), 10_000);
+}
