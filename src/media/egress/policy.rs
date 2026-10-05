@@ -254,41 +254,67 @@ pub fn classify_stall(
 /// The engine must respect all three dimensions. Time is a guard against an
 /// unexpectedly expensive serializer or native call; bytes and units provide
 /// deterministic fairness.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct WorkBudget {
-    /// Maximum media or protocol units to process in this visit.
-    pub max_units: usize,
-    /// Maximum bytes to write or process in this visit.
-    pub max_bytes: usize,
+    max_units: usize,
+    max_bytes: usize,
     /// Hard deadline — the engine must yield before or at this instant.
-    pub deadline: Instant,
+    deadline: Instant,
+    spent_units: usize,
+    spent_bytes: usize,
 }
 
 impl WorkBudget {
     /// Construct a budget with explicit limits.
     pub fn new(max_units: usize, max_bytes: usize, duration: Duration) -> Self {
         Self {
-            max_units,
+            // Zero would end every visit before any work; one unit is the
+            // least a visit may do.
+            max_units: max_units.max(1),
             max_bytes,
             deadline: Instant::now() + duration,
+            spent_units: 0,
+            spent_bytes: 0,
         }
     }
 
-    /// Returns true if any budget dimension is exhausted.
-    pub fn is_exhausted(&self, consumed_units: usize, consumed_bytes: usize) -> bool {
-        consumed_units >= self.max_units
-            || consumed_bytes >= self.max_bytes
+    /// Record `bytes` written or processed in this visit.
+    pub fn debit_bytes(&mut self, bytes: usize) {
+        self.spent_bytes = self.spent_bytes.saturating_add(bytes);
+    }
+
+    /// Record one media or protocol unit finished in this visit.
+    pub fn debit_unit(&mut self) {
+        self.spent_units = self.spent_units.saturating_add(1);
+    }
+
+    /// The visit must yield: units, bytes or time ran out.
+    pub fn is_exhausted(&self) -> bool {
+        self.spent_units >= self.max_units
+            || self.spent_bytes >= self.max_bytes
             || Instant::now() >= self.deadline
     }
 
-    /// Returns remaining byte budget.
-    pub fn remaining_bytes(&self, consumed: usize) -> usize {
-        self.max_bytes.saturating_sub(consumed)
+    pub fn remaining_bytes(&self) -> usize {
+        self.max_bytes.saturating_sub(self.spent_bytes)
     }
 
-    /// Returns remaining unit budget.
-    pub fn remaining_units(&self, consumed: usize) -> usize {
-        self.max_units.saturating_sub(consumed)
+    pub fn spent_bytes(&self) -> usize {
+        self.spent_bytes
+    }
+
+    pub fn spent_units(&self) -> usize {
+        self.spent_units
+    }
+
+    /// The visit's unit limit, for sizing a feed read (not a debit).
+    pub fn max_units(&self) -> usize {
+        self.max_units
+    }
+
+    /// The visit's byte limit, for sizing a feed read (not a debit).
+    pub fn max_bytes(&self) -> usize {
+        self.max_bytes
     }
 }
 
@@ -382,23 +408,31 @@ mod tests {
 
     #[test]
     fn work_budget_exhausted_on_units() {
-        let budget = WorkBudget::new(5, 10_000, Duration::from_secs(10));
-        assert!(!budget.is_exhausted(4, 0));
-        assert!(budget.is_exhausted(5, 0));
+        let mut budget = WorkBudget::new(5, 10_000, Duration::from_secs(10));
+        for _ in 0..4 {
+            budget.debit_unit();
+        }
+        assert!(!budget.is_exhausted());
+        budget.debit_unit();
+        assert!(budget.is_exhausted());
     }
 
     #[test]
     fn work_budget_config_starts_a_fresh_deadline_after_factory_delay() {
         let config = WorkBudgetConfig::new(5, 100, Duration::from_millis(50));
         std::thread::sleep(Duration::from_millis(60));
-        assert!(!config.new_visit().is_exhausted(0, 0));
+        assert!(!config.new_visit().is_exhausted());
     }
 
     #[test]
     fn work_budget_exhausted_on_bytes() {
-        let budget = WorkBudget::new(1000, 100, Duration::from_secs(10));
-        assert!(!budget.is_exhausted(0, 99));
-        assert!(budget.is_exhausted(0, 100));
+        let mut budget = WorkBudget::new(1000, 100, Duration::from_secs(10));
+        budget.debit_bytes(99);
+        assert!(!budget.is_exhausted());
+        assert_eq!(budget.remaining_bytes(), 1);
+        budget.debit_bytes(usize::MAX);
+        assert!(budget.is_exhausted(), "an over-debit saturates");
+        assert_eq!(budget.remaining_bytes(), 0);
     }
 
     #[test]

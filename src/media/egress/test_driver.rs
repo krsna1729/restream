@@ -469,7 +469,13 @@ mod tests {
         let mut cursor = cursor_at(0);
         let b = budget();
 
-        let p = engine.advance(&mut transport, Readiness::WRITABLE, &feed, &mut cursor, b);
+        let p = engine.advance(
+            &mut transport,
+            Readiness::WRITABLE,
+            &feed,
+            &mut cursor,
+            b.clone(),
+        );
         assert!(matches!(
             p,
             EngineProgress::Progress {

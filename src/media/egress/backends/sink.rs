@@ -70,7 +70,7 @@ where
         cursor: &mut FeedCursor,
         budget: WorkBudget,
     ) -> EngineProgress {
-        let read_budget = ReadBudget::new(budget.max_units, budget.max_bytes);
+        let read_budget = ReadBudget::new(budget.max_units(), budget.max_bytes());
         match feed.read_from(*cursor, read_budget) {
             FeedRead::Units { units, next_cursor } => {
                 let bytes = units.iter().map(SinkDiscardUnit::discard_len).sum();
