@@ -41,6 +41,7 @@ pub(super) struct EgressDutyConfig {
 
 /// Online CPUs on the host, independent of this process's affinity mask.
 pub(super) fn system_cpu_count() -> u32 {
+    // SAFETY: sysconf(3) takes no pointers.
     let online = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
     if online > 0 {
         online as u32

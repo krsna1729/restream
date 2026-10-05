@@ -113,6 +113,8 @@ pub(crate) mod test_alloc {
 
     struct CountingAllocator;
 
+    // SAFETY: every method forwards unchanged to `System`, which upholds the GlobalAlloc
+    // contract; the counting touches only const-initialised thread-locals and never allocates.
     unsafe impl GlobalAlloc for CountingAllocator {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
             ACTIVE.with(|active| {
@@ -120,10 +122,13 @@ pub(crate) mod test_alloc {
                     COUNT.with(|count| count.set(count.get().saturating_add(1)));
                 }
             });
+            // SAFETY: the caller's `layout` contract passes through to `System` unchanged.
             unsafe { System.alloc(layout) }
         }
 
         unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+            // SAFETY: `pointer` came from `alloc` above, i.e. from `System`, with this
+            // `layout`.
             unsafe { System.dealloc(pointer, layout) }
         }
     }

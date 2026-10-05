@@ -48,6 +48,8 @@ pub(crate) fn record_type_from_control(control: &[u8], truncated: bool) -> io::R
             "missing kTLS record-type control message",
         ));
     }
+    // SAFETY: the length check above keeps `control` longer than the cmsghdr (data_offset >=
+    // its size); read_unaligned needs no alignment.
     let header = unsafe { std::ptr::read_unaligned(control.as_ptr().cast::<libc::cmsghdr>()) };
     if header.cmsg_len < data_offset + 1
         || header.cmsg_len > control.len()
@@ -59,6 +61,7 @@ pub(crate) fn record_type_from_control(control: &[u8], truncated: bool) -> io::R
             "missing kTLS record-type control message",
         ));
     }
+    // SAFETY: `control.len() > data_offset` was checked above.
     Ok(unsafe { *control.as_ptr().add(data_offset) })
 }
 
@@ -69,11 +72,13 @@ pub(crate) fn recv_record(fd: RawFd, buffer: &mut [u8]) -> io::Result<(usize, u8
         iov_len: buffer.len(),
     };
     let mut control = ControlBuffer([0; 24]);
+    // SAFETY: msghdr is plain old data; all-zero bytes are a valid (empty) value.
     let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
     message.msg_iov = &mut iov;
     message.msg_iovlen = 1;
     message.msg_control = control.0.as_mut_ptr().cast();
     message.msg_controllen = control.0.len();
+    // SAFETY: `message` points at `iov` and `control`, live locals of the lengths it records.
     let received = unsafe { libc::recvmsg(fd, &mut message, libc::MSG_DONTWAIT) };
     if received < 0 {
         return Err(io::Error::last_os_error());
@@ -100,13 +105,7 @@ pub(crate) fn install(
         ));
     }
     let ulp = b"tls\0";
-    set_socket_option(
-        fd,
-        libc::IPPROTO_TCP,
-        TCP_ULP,
-        ulp.as_ptr().cast(),
-        ulp.len(),
-    )?;
+    set_socket_option(fd, libc::IPPROTO_TCP, TCP_ULP, ulp)?;
     install_direction(fd, version, suite, TLS_TX, secrets.tx.0, &secrets.tx.1)?;
     install_direction(fd, version, suite, TLS_RX, secrets.rx.0, &secrets.rx.1)
 }
@@ -129,23 +128,11 @@ fn install_direction(
     match cipher {
         KtlsCipher::Aes128Gcm => {
             let info = aes128_info(wire_version, cipher_type, sequence, secret)?;
-            set_socket_option(
-                fd,
-                SOL_TLS,
-                direction,
-                &info as *const Tls12AesGcm128 as *const libc::c_void,
-                size_of_val(&info),
-            )
+            set_socket_option(fd, SOL_TLS, direction, &info)
         }
         KtlsCipher::Aes256Gcm => {
             let info = aes256_info(wire_version, cipher_type, sequence, secret)?;
-            set_socket_option(
-                fd,
-                SOL_TLS,
-                direction,
-                &info as *const Tls12AesGcm256 as *const libc::c_void,
-                size_of_val(&info),
-            )
+            set_socket_option(fd, SOL_TLS, direction, &info)
         }
     }
 }
@@ -266,15 +253,7 @@ fn probe_capability(version: ProtocolVersion, suite: CipherSuite, cipher: KtlsCi
     use std::os::unix::io::AsRawFd;
     let fd = accepted.as_raw_fd();
     let ulp = b"tls\0";
-    if set_socket_option(
-        fd,
-        libc::IPPROTO_TCP,
-        TCP_ULP,
-        ulp.as_ptr().cast(),
-        ulp.len(),
-    )
-    .is_err()
-    {
+    if set_socket_option(fd, libc::IPPROTO_TCP, TCP_ULP, ulp).is_err() {
         return false;
     }
     match cipher {
@@ -289,21 +268,9 @@ fn probe_capability(version: ProtocolVersion, suite: CipherSuite, cipher: KtlsCi
                 salt: [0xa5; 4],
                 rec_seq: [0; 8],
             };
-            set_socket_option(
-                fd,
-                SOL_TLS,
-                TLS_TX,
-                &info as *const Tls12AesGcm128 as *const libc::c_void,
-                size_of_val(&info),
-            )
-            .and(set_socket_option(
-                fd,
-                SOL_TLS,
-                TLS_RX,
-                &info as *const Tls12AesGcm128 as *const libc::c_void,
-                size_of_val(&info),
-            ))
-            .is_ok()
+            set_socket_option(fd, SOL_TLS, TLS_TX, &info)
+                .and(set_socket_option(fd, SOL_TLS, TLS_RX, &info))
+                .is_ok()
         }
         KtlsCipher::Aes256Gcm => {
             let info = Tls12AesGcm256 {
@@ -316,21 +283,9 @@ fn probe_capability(version: ProtocolVersion, suite: CipherSuite, cipher: KtlsCi
                 salt: [0xa5; 4],
                 rec_seq: [0; 8],
             };
-            set_socket_option(
-                fd,
-                SOL_TLS,
-                TLS_TX,
-                &info as *const Tls12AesGcm256 as *const libc::c_void,
-                size_of_val(&info),
-            )
-            .and(set_socket_option(
-                fd,
-                SOL_TLS,
-                TLS_RX,
-                &info as *const Tls12AesGcm256 as *const libc::c_void,
-                size_of_val(&info),
-            ))
-            .is_ok()
+            set_socket_option(fd, SOL_TLS, TLS_TX, &info)
+                .and(set_socket_option(fd, SOL_TLS, TLS_RX, &info))
+                .is_ok()
         }
     }
 }
@@ -421,14 +376,20 @@ fn aes256_info(
     Ok(result)
 }
 
-fn set_socket_option(
+/// `setsockopt` with the option value's bytes taken from `value`: the
+/// pointer and length cannot disagree.
+fn set_socket_option<T: ?Sized>(
     fd: RawFd,
     level: libc::c_int,
     name: libc::c_int,
-    value: *const libc::c_void,
-    length: usize,
+    value: &T,
 ) -> io::Result<()> {
-    let result = unsafe { libc::setsockopt(fd, level, name, value, length as libc::socklen_t) };
+    let length = libc::socklen_t::try_from(size_of_val(value))
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "socket option too large"))?;
+    let pointer = (value as *const T).cast::<libc::c_void>();
+    // SAFETY: `pointer` and `length` describe `value`, a live reference for
+    // this call; setsockopt only reads them.
+    let result = unsafe { libc::setsockopt(fd, level, name, pointer, length) };
     (result == 0)
         .then_some(())
         .ok_or_else(io::Error::last_os_error)
@@ -462,6 +423,8 @@ mod tests {
             cmsg_level: SOL_TLS,
             cmsg_type: TLS_GET_RECORD_TYPE,
         };
+        // SAFETY: ControlBuffer is align(8), enough for cmsghdr, and its 24 bytes
+        // hold the header and the byte at data_offset (16).
         unsafe {
             std::ptr::write(control.0.as_mut_ptr().cast::<libc::cmsghdr>(), header);
             *control.0.as_mut_ptr().add(data_offset) = RECORD_TYPE_ALERT;

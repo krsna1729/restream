@@ -574,6 +574,7 @@ fn rtmps_receive_before_ktls_consumes_nothing_while_waiting() {
     stream.set_ktls_mode();
 
     let mut peek = [0u8; 16];
+    // SAFETY: `peek` is a live buffer of the length passed; `fd` stays open for the call.
     let peeked = unsafe {
         libc::recv(
             fd,

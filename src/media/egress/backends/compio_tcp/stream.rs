@@ -254,6 +254,7 @@ impl CompioTcpStream {
             std::net::Shutdown::Write => libc::SHUT_WR,
             std::net::Shutdown::Both => libc::SHUT_RDWR,
         };
+        // SAFETY: shutdown(2) on this stream's own open fd; no pointers.
         let result = unsafe { libc::shutdown(self.raw_fd(), how) };
         if result == 0 {
             Ok(())
@@ -262,10 +263,12 @@ impl CompioTcpStream {
         }
     }
     pub(crate) fn duplicate_std_fd(fd: RawFd) -> io::Result<TcpStream> {
+        // SAFETY: fcntl(F_DUPFD_CLOEXEC) takes no pointers; `fd` is only borrowed for the call.
         let duplicate = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
         if duplicate < 0 {
             return Err(io::Error::last_os_error());
         }
+        // SAFETY: `duplicate` is a new descriptor checked above and owned by nothing else.
         let stream = unsafe { TcpStream::from_raw_fd(duplicate) };
         if let Err(error) = stream.set_nonblocking(true) {
             drop(stream);
@@ -608,6 +611,8 @@ async fn receive_before_ktls(
     }
     data.clear();
     data.resize(room, 0);
+    // SAFETY: `data` was just resized to `room` bytes and recv writes at most `room`; the fd is
+    // this stream's own.
     let count = unsafe {
         libc::recv(
             stream.as_raw_fd(),

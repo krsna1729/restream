@@ -318,6 +318,8 @@ pub(crate) const SEND_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 /// decided by a default buffer size.
 pub(crate) fn set_send_buffer(fd: libc::c_int, bytes: usize) -> Result<(), String> {
     let value = bytes as libc::c_int;
+    // SAFETY: the value pointer is a live c_int local of the length passed; `fd` is an open
+    // socket for the call.
     let rc = unsafe {
         libc::setsockopt(
             fd,

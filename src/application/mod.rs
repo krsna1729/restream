@@ -13,6 +13,7 @@ pub mod outputs;
 pub mod pipeline_inputs;
 pub mod ports;
 pub mod recirculation;
+#[forbid(unsafe_code)]
 pub mod reconcile;
 pub mod recording;
 pub mod services;

@@ -327,6 +327,8 @@ fn run_internal_file_ingest_once(
             .add_stream(encoder::find(codec::Id::None))
             .map_err(|e| format!("Failed to add TS stream: {e}"))?;
         ost.set_parameters(ist.parameters());
+        // SAFETY: `ost` was just added to `octx`, so its codec parameters are a live, non-null
+        // AVCodecParameters we may mutate.
         unsafe {
             (*ost.parameters().as_mut_ptr()).codec_tag = 0;
         }

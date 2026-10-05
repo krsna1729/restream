@@ -38,6 +38,7 @@ pub mod manager;
 pub mod metrics;
 pub mod policy;
 pub(crate) mod runtime;
+#[forbid(unsafe_code)]
 pub mod scheduler;
 pub mod shard;
 pub(crate) mod sizing;

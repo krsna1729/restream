@@ -19,12 +19,14 @@
 //! RingBuffer → TsMuxer (inline) → segment accumulator → HlsStore
 //! ```
 
+#[forbid(unsafe_code)]
 pub mod fmp4;
 pub mod preview;
 pub mod preview_graph;
 mod segmenter;
 mod store;
 pub mod upload;
+#[forbid(unsafe_code)]
 mod upload_policy;
 
 #[cfg(test)]

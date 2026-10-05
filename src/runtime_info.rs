@@ -279,6 +279,7 @@ fn ffmpeg_components(native_inputs: &[Value]) -> (Vec<Value>, String, String) {
     // functions that return NUL-terminated static strings valid for the
     // process lifetime. No ownership transfer; caller must not free.
     let configuration = c_string(unsafe { ffmpeg_next::ffi::avcodec_configuration() });
+    // SAFETY: as above, a static NUL-terminated string.
     let license_text = c_string(unsafe { ffmpeg_next::ffi::avcodec_license() });
     let license_expression = if license_text.to_ascii_lowercase().contains("gpl") {
         "GPL-2.0-or-later"

@@ -69,7 +69,7 @@ named where they apply).
 
 | Rung | Restream | srt-rs |
 |---|---|---|
-| 1 Language | Strong: Compio Owners are `!Send` and thread-homed; one Owner per address family, not per output. Unsafe is confined to FFmpeg/libc/socket boundaries. Builds refuse `panic = "abort"` (fault domains need unwinding, #240). **No workspace unsafe lints.** | Strong: sans-I/O single-owner protocol core; `srt-lifecycle` forbids `unsafe`; strict unsafe lints. |
+| 1 Language | Strong: Compio Owners are `!Send` and thread-homed; one Owner per address family, not per output. Unsafe is confined to FFmpeg/libc/socket boundaries. Builds refuse `panic = "abort"` (fault domains need unwinding, #240). Workspace lints deny `unsafe_op_in_unsafe_fn`, `unused_must_use` and `clippy::undocumented_unsafe_blocks`; FFI-free modules `forbid(unsafe_code)`. | Strong: sans-I/O single-owner protocol core; `srt-lifecycle` forbids `unsafe`; strict unsafe lints. |
 | 2 API design | Good, with duplicated state the types do not prevent (listed below). Per-entity panic boundaries and per-client admission bounds (#237, #239; [isolation audit](isolation-audit.md)); std locks only through poison-tolerant `crate::sync`, enforced by `clippy.toml` (#240). | Strong: logical peer/caller ids, transactional first attach, bounded caller pool, generational dense arena that owns readiness. |
 | 3 Ecosystem | Many property tests and live fault cases; cargo-fuzz smoke over seven media/RTMP/TS parsers; **no Miri or sanitizer job in CI**. | Mature: proptests with checked-in seeds, Miri, ASan, structured cargo-fuzz targets, libsrt interop. |
 | 4 Model checking | Seven Loom models in the mandatory concurrency gate. **No Kani.** | One Loom model (reuseport layout barrier, run by `cargo xtask ci`). **No Kani.** |
@@ -83,7 +83,7 @@ duplicated state in Restream and Kani at rung 4 in both repositories.
 Each item names the code it changes and the tests it lets us delete. Hot-path
 items need before/after benchmark or codegen evidence.
 
-### Rung 1: adopt srt-rs's workspace lints
+### Rung 1: adopt srt-rs's workspace lints (done)
 
 Restream's `[lints]` sets only `unexpected_cfgs`. Adopt what srt-rs already
 enforces: `unsafe_op_in_unsafe_fn = "deny"`, `clippy::undocumented_unsafe_blocks
@@ -91,6 +91,14 @@ enforces: `unsafe_op_in_unsafe_fn = "deny"`, `clippy::undocumented_unsafe_blocks
 "deny"`, and `#![forbid(unsafe_code)]` in modules with no FFI or syscalls
 (the parsers, the scheduler, the reconciler). Fix the existing sites in the
 same change; no allow-list.
+
+Done: `[lints]` in `Cargo.toml`; every one of the 91 existing `unsafe` sites
+(lib, tests, `test_harness`) states its `SAFETY:` argument;
+`#[forbid(unsafe_code)]` sits on the `mod` declarations of `codec`, `mpegts`
+(with `mpegts_probe`), `hls::fmp4`, `hls::upload_policy`, `rtmp::{flv,
+ingest_media, timestamps}`, `egress::scheduler` and both `reconcile`
+modules. The audit removed one test that mutated the process environment
+while sibling tests ran; its assertion moved under `ENV_LOCK`.
 
 ### Rung 2: the strong Rust forms
 

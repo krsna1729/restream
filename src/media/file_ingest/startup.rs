@@ -55,6 +55,8 @@ pub(super) fn prime_container_metadata(
     for stream in input.streams() {
         let params = stream.parameters();
         match params.medium() {
+            // SAFETY: the parameters pointer is null-checked and only read while `stream` (and
+            // `input`) are alive.
             media::Type::Video if video_meta.is_none() => unsafe {
                 let ptr = params.as_ptr();
                 if ptr.is_null() {
@@ -79,6 +81,8 @@ pub(super) fn prime_container_metadata(
                 }
             },
             media::Type::Audio => {
+                // SAFETY: the parameters pointer is null-checked and only read while `stream`
+                // (and `input`) are alive.
                 let (sample_rate, channels) = unsafe {
                     let ptr = params.as_ptr();
                     if ptr.is_null() {
@@ -157,6 +161,8 @@ fn h264_state_from_stream(stream: &ffmpeg_next::Stream<'_>) -> Option<(Vec<u8>, 
         return None;
     }
 
+    // SAFETY: pointers are null-checked; FFmpeg guarantees `extradata_size` readable bytes,
+    // borrowed only while `stream` lives.
     let extradata = unsafe {
         let params = stream.parameters().as_ptr();
         if params.is_null() || (*params).extradata.is_null() || (*params).extradata_size <= 0 {

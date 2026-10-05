@@ -233,7 +233,7 @@ fn run_ffmpeg_transcoder_stage_with_normalizer(
         .map(crate::domain::audio_routing::parse_audio_operation)
         .unwrap_or_else(|| parse_audio_routing(preset));
 
-    let mut custom_input = CustomInput::new(&*in_queue)?;
+    let mut custom_input = CustomInput::new(&in_queue)?;
     let ictx = custom_input
         .input
         .as_mut()
@@ -386,7 +386,7 @@ fn run_ffmpeg_transcode_with_scale_with_normalizer(
     use crate::media::avio::CustomInput;
     use ffmpeg_next::format::Pixel;
 
-    let mut custom = CustomInput::new(&*in_queue)?;
+    let mut custom = CustomInput::new(&in_queue)?;
     let ictx = custom
         .input
         .as_mut()

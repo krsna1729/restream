@@ -76,6 +76,8 @@ fn probe_effective_socket_buffers(requested: usize) -> Value {
     // requested size), so the readback answers what the kernel grants here.
     let applied = [libc::SO_RCVBUF, libc::SO_SNDBUF].iter().all(|name| {
         let value = requested as libc::c_int;
+        // SAFETY: the value pointer is a live c_int local of the length passed; `fd` is an open
+        // socket for the call.
         let rc = unsafe {
             libc::setsockopt(
                 fd,
@@ -90,6 +92,8 @@ fn probe_effective_socket_buffers(requested: usize) -> Value {
     let read_back = |name: libc::c_int| -> Option<u64> {
         let mut value: libc::c_int = 0;
         let mut len = std::mem::size_of_val(&value) as libc::socklen_t;
+        // SAFETY: `value` and `len` are live locals of the sizes passed; the fd is an open
+        // socket for the call.
         let rc = unsafe {
             libc::getsockopt(
                 fd,

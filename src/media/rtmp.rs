@@ -11,6 +11,7 @@ mod egress_packets;
 pub(crate) mod egress_payload_cache;
 mod egress_transport;
 mod enhanced;
+#[forbid(unsafe_code)]
 mod flv;
 #[cfg(fuzzing)]
 #[doc(hidden)]
@@ -35,6 +36,7 @@ mod handshake;
     clippy::panic
 )]
 mod ingest;
+#[forbid(unsafe_code)]
 mod ingest_media;
 mod listener;
 // Client play commands (isolation audit F6).
@@ -46,6 +48,7 @@ mod listener;
     clippy::panic
 )]
 mod play;
+#[forbid(unsafe_code)]
 mod timestamps;
 
 pub(crate) use listener::start_rtmp_server_on_with_shutdown;

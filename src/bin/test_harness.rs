@@ -199,12 +199,16 @@ fn main() {
     runtime.block_on(async {
         if let Err(error) = maybe_reexec_in_port_namespace() {
             eprintln!("test harness failed: {error}");
+            // SAFETY: _exit(2) only ends the process; skipping destructors and atexit is the
+            // point here.
             unsafe { libc::_exit(1) };
         }
         if let Err(error) = run().await {
             eprintln!("test harness failed: {error}");
             // Native FFmpeg/SRT worker threads can still be alive on a failed
             // test. Avoid process-global C teardown while those threads exist.
+            // SAFETY: _exit(2) only ends the process; skipping destructors and atexit is the
+            // point here.
             unsafe { libc::_exit(1) };
         }
     });
@@ -286,6 +290,8 @@ async fn run() -> Result<(), String> {
             // race with global cleanup and cause spurious segfaults on exit.
             // Use _exit to also skip atexit handlers (FFmpeg codec deregistration
             // can deadlock with OS threads).
+            // SAFETY: _exit(2) only ends the process; skipping destructors and atexit is the
+            // point here.
             unsafe { libc::_exit(0) };
         }
         Err(error) => Err(error),
