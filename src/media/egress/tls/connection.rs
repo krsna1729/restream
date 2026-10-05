@@ -328,13 +328,14 @@ impl TlsTcpConnection {
     }
 
     fn advance_tls_handshake(&mut self) -> io::Result<()> {
-        if let ConnectionState::Tls(Some(stream)) = &mut self.state
-            && (stream.conn.is_handshaking() || stream.conn.wants_write())
-        {
-            stream.conn.complete_io(&mut stream.sock)?;
+        if let ConnectionState::Tls(Some(stream)) = &mut self.state {
             if stream.conn.is_handshaking() || stream.conn.wants_write() {
-                return Err(io::ErrorKind::WouldBlock.into());
+                stream.conn.complete_io(&mut stream.sock)?;
+                if stream.conn.is_handshaking() || stream.conn.wants_write() {
+                    return Err(io::ErrorKind::WouldBlock.into());
+                }
             }
+            consume_post_handshake_records(stream)?;
         }
         self.maybe_handoff_ktls()?;
         if matches!(self.state, ConnectionState::Tls(_)) {
@@ -452,6 +453,33 @@ impl TlsTcpConnection {
     pub(crate) fn is_ktls(&self) -> bool {
         matches!(self.state, ConnectionState::Ktls(_))
     }
+}
+
+/// A TLS 1.3 server sends session tickets once the handshake is done.
+/// Records that reach the receive buffer before the kTLS hand-off must go
+/// through rustls: the hand-off waits for an empty receive buffer, and
+/// nothing else reads it in this state, so the connection would otherwise
+/// sit in userspace TLS until its request or connect timeout. Only whole
+/// records are fed (a partial one waits for its next receive event), so the
+/// hand-off never splits a record between rustls and the kernel.
+fn consume_post_handshake_records(
+    stream: &mut StreamOwned<ClientConnection, CompioTcpStream>,
+) -> io::Result<()> {
+    let whole = stream.sock.complete_tls_records_len();
+    if whole == 0 {
+        return Ok(());
+    }
+    let mut records = Read::take(&mut stream.sock, whole as u64);
+    while records.limit() > 0 {
+        if stream.conn.read_tls(&mut records)? == 0 {
+            break;
+        }
+        stream
+            .conn
+            .process_new_packets()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    }
+    Ok(())
 }
 
 impl Drop for TlsTcpConnection {

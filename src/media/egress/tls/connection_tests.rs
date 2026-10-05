@@ -583,3 +583,126 @@ fn unsupported_tls_suite_fails_without_userspace_fallback() {
     ));
     server.join().unwrap();
 }
+
+/// Move the client's staged bytes to an in-memory TLS server and the
+/// server's answer back into the client's receive buffer.
+fn exchange_with(
+    client: &TlsTcpConnection,
+    server: &mut tokio_rustls::rustls::ServerConnection,
+) -> Vec<u8> {
+    let sent = client.tcp_stream().take_staged_for_test();
+    let mut input = &sent[..];
+    while !input.is_empty() {
+        server.read_tls(&mut input).unwrap();
+        server.process_new_packets().unwrap();
+    }
+    let mut answer = Vec::new();
+    while server.wants_write() {
+        server.write_tls(&mut answer).unwrap();
+    }
+    answer
+}
+
+/// A client `TlsTcpConnection` on a Compio stream whose bytes the test
+/// moves by hand, driven through the handshake to the point where its
+/// Finished is staged but still being sent, and the server's session
+/// tickets (returned) are in hand. `None` without kTLS for the suite.
+fn client_awaiting_handoff(
+    runtime: &compio::runtime::Runtime,
+) -> Option<(TlsTcpConnection, Vec<u8>, TcpStream)> {
+    if !super::ktls::supports(
+        tokio_rustls::rustls::ProtocolVersion::TLSv1_3,
+        tokio_rustls::rustls::CipherSuite::TLS13_AES_256_GCM_SHA384,
+    ) {
+        return None;
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let client_socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (peer, _) = listener.accept().unwrap();
+    client_socket.set_nonblocking(true).unwrap();
+    let socket = runtime
+        .enter(|| compio::net::TcpStream::from_std(client_socket))
+        .unwrap();
+    let mut client = TlsTcpConnection::tls_with_config(
+        CompioTcpStream::from_compio(socket),
+        "localhost",
+        test_client_config_tls13_aes256_gcm(),
+        &TEST_COUNTERS,
+    )
+    .unwrap();
+    let cert_key = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+    let server_config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![cert_key.cert.der().clone()],
+            PrivatePkcs8KeyDer::from(cert_key.signing_key.serialize_der()).into(),
+        )
+        .unwrap();
+    assert!(
+        server_config.send_tls13_tickets > 0,
+        "the server sends tickets"
+    );
+    let mut server = tokio_rustls::rustls::ServerConnection::new(Arc::new(server_config)).unwrap();
+
+    // ClientHello out; the server's flight back.
+    assert!(client.write(b"GET").is_err());
+    let flight = exchange_with(&client, &mut server);
+    client.tcp_stream().push_received_for_test(&flight);
+    client.tcp_stream().drain_for_test();
+    // The client completes and stages its Finished; it is still being sent.
+    assert!(client.write(b"GET").is_err());
+    let tickets = exchange_with(&client, &mut server);
+    assert!(!server.is_handshaking());
+    assert!(
+        !tickets.is_empty(),
+        "the server answered Finished with tickets"
+    );
+    Some((client, tickets, peer))
+}
+
+/// A TLS 1.3 server sends its session tickets once it has the client's
+/// Finished. When they reach the receive buffer before the hand-off (the
+/// Finished still being sent, as under load), the hand-off must still happen
+/// when that write completes: nothing else reads the buffer in this state,
+/// so the connection used to sit in userspace TLS until its timeout.
+#[test]
+fn session_tickets_received_before_the_ktls_handoff_do_not_hold_it_back() {
+    let runtime = compio::runtime::Runtime::new().unwrap();
+    let Some((mut client, tickets, _peer)) = client_awaiting_handoff(&runtime) else {
+        return;
+    };
+    client.tcp_stream().push_received_for_test(&tickets);
+    assert!(
+        client.write(b"GET").is_err(),
+        "the Finished is not sent yet"
+    );
+    client.tcp_stream().drain_for_test();
+
+    assert_eq!(client.write(b"GET").unwrap(), 3);
+    assert!(client.is_ktls(), "the connection stayed in userspace TLS");
+}
+
+/// Only whole records go to rustls before the hand-off. A record whose end
+/// has not arrived stays in the buffer and holds the hand-off back, or its
+/// start would stay in rustls and its end go to kernel TLS.
+#[test]
+fn a_partial_record_before_the_ktls_handoff_waits_for_its_end() {
+    let runtime = compio::runtime::Runtime::new().unwrap();
+    let Some((mut client, tickets, _peer)) = client_awaiting_handoff(&runtime) else {
+        return;
+    };
+    let (head, tail) = tickets.split_at(tickets.len() - 3);
+    client.tcp_stream().push_received_for_test(head);
+    client.tcp_stream().drain_for_test();
+    assert!(client.write(b"GET").is_err());
+    assert!(!client.is_ktls(), "handed off with a record cut in two");
+    let last_record_start = head.len() - client.tcp_stream().pending_receive_bytes();
+    assert!(
+        tickets.len() - last_record_start > 3,
+        "only the cut record is left"
+    );
+
+    client.tcp_stream().push_received_for_test(tail);
+    assert_eq!(client.write(b"GET").unwrap(), 3);
+    assert!(client.is_ktls());
+}

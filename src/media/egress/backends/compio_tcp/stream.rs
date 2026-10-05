@@ -161,6 +161,54 @@ impl CompioTcpStream {
             .map_or(0, |buffers| buffers.borrow().received.len())
     }
 
+    /// Length of the run of whole TLS records (5-byte header, then the
+    /// length it gives) at the front of the receive buffer. Before the kTLS
+    /// hand-off only whole records may go to rustls, so that no record is
+    /// split between rustls and kernel TLS.
+    pub(crate) fn complete_tls_records_len(&self) -> usize {
+        let Some(buffers) = self.io_buffers() else {
+            return 0;
+        };
+        let buffers = buffers.borrow();
+        let received = &buffers.received;
+        let mut whole = 0;
+        while let (Some(&high), Some(&low)) = (received.get(whole + 3), received.get(whole + 4)) {
+            let end = whole + 5 + usize::from(u16::from_be_bytes([high, low]));
+            if end > received.len() {
+                break;
+            }
+            whole = end;
+        }
+        whole
+    }
+
+    /// Test transport: the staged TX bytes, as the transmit worker would
+    /// take them (they stay counted as pending until `drain_for_test`).
+    #[cfg(test)]
+    pub(crate) fn take_staged_for_test(&self) -> Vec<u8> {
+        let buffers = self.io_buffers().expect("a Compio stream");
+        let mut buffers = buffers.borrow_mut();
+        buffers.seal_copied();
+        std::mem::take(&mut buffers.outgoing)
+            .iter()
+            .flat_map(|segment| segment.iter().copied())
+            .collect()
+    }
+
+    /// Test transport: the transmit worker finished every staged write.
+    #[cfg(test)]
+    pub(crate) fn drain_for_test(&self) {
+        let buffers = self.io_buffers().expect("a Compio stream");
+        buffers.borrow_mut().pending_write_bytes = 0;
+    }
+
+    /// Test transport: bytes the receive worker read from the socket.
+    #[cfg(test)]
+    pub(crate) fn push_received_for_test(&self, bytes: &[u8]) {
+        let buffers = self.io_buffers().expect("a Compio stream");
+        buffers.borrow_mut().received.extend(bytes);
+    }
+
     /// Whether the adapter holds receive state the protocol has not consumed
     /// yet (bytes, EOF, or an error). A receive completion is an edge event,
     /// so the scheduler must revisit a read-waiting leaf in this state itself.
