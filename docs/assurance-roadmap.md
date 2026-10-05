@@ -122,7 +122,7 @@ Use these before any checker, wherever the weak form exists today:
 1. **`EgressManager` keeps one map, not two** (done). `desired` and `desired_specs`
    (`src/media/egress/manager.rs`) must agree on keys and generations; fold
    the spec into `DesiredOutput`. Disagreement then has no representation.
-2. **`ReadyQueue` owns membership.** `ScheduleState::enqueued`
+2. **`ReadyQueue` owns membership** (done). `ScheduleState::enqueued`
    (`src/media/egress/scheduler.rs`) mirrors queue membership, and backends
    repeat the check/set/push sequence inline. Make the queue the only
    authority (dense bitset for membership; `pop` returns a non-`Copy` item
@@ -130,6 +130,14 @@ Use these before any checker, wherever the weak form exists today:
    caller-discipline sequences and the discipline proptest; keep one check of
    the queue itself. Hot path: benchmark first. srt-rs's dense arena
    (`ready_queued`, generational `PeerSlotId`) is the pattern to copy.
+
+   Done: `ReadyQueue` records the `LeafKey` each slot has queued; `push` of a
+   queued key is a no-op, `pop`/`remove` clear it, and a stale epoch's entry
+   is skipped rather than visited. `ScheduleState::enqueued`, `can_enqueue`,
+   `try_enqueue`, the visit seam that cleared the flag and the discipline
+   proptest are gone; RTMP and SRT queue keys instead of events (generation
+   and readiness live on the leaf). One proptest checks the queue against a
+   FIFO model.
 3. **HLS persistent consumers are a lease** (done: `PersistentLease`). `add_persistent`/
    `remove_persistent` on an `AtomicU64` (`src/media/engine_hls.rs`) allow an
    unmatched remove that wraps the counter (a test documents it). Return a

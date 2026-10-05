@@ -803,17 +803,12 @@ fn shard_work_queues_have_a_hard_leaf_bound() {
     let mut backend =
         RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096)
             .with_leaf_capacity(1);
-    let event = TcpReadyLeaf {
-        fd: -1,
-        key: LeafKey::for_test(0, 0),
-        generation: 0,
-        readable: false,
-        writable: true,
-    };
-    let capacity = backend.queue_capacity;
+    use crate::media::egress::scheduler::Push;
 
-    assert!(push_bounded(&mut backend.ready, event, capacity));
-    assert!(!push_bounded(&mut backend.ready, event, capacity));
+    // The ready queue is sized to the leaf table: a one-slot shard queues
+    // one leaf, and a second distinct key is refused, not grown into.
+    assert_eq!(backend.ready.push(LeafKey::for_test(0, 0)), Push::Queued);
+    assert_eq!(backend.ready.push(LeafKey::for_test(1, 0)), Push::Full);
     assert_eq!(backend.ready.len(), 1);
 }
 

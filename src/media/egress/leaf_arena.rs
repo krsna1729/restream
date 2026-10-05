@@ -24,8 +24,7 @@ impl LeafKey {
         Self { slot, epoch }
     }
 
-    /// The slot index, for test fakes that keep their own slab.
-    #[cfg(test)]
+    /// The slot index (dense per shard): the ready queue's membership index.
     pub(crate) const fn slot(self) -> usize {
         self.slot as usize
     }

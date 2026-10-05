@@ -6,7 +6,7 @@ use crate::media::egress::command::{EgressCommand, OutputId, ShardId};
 use crate::media::egress::feed::FeedCursor;
 use crate::media::egress::leaf_arena::{LeafArena, LeafKey};
 use crate::media::egress::policy::WorkBudget;
-use crate::media::egress::scheduler::{ReadyQueue, ScheduleState, try_enqueue};
+use crate::media::egress::scheduler::{ReadyQueue, ScheduleState};
 use crate::media::egress::test_driver::{FakeEngine, FakeFeed, FakeTransport};
 use bytes::Bytes;
 use std::sync::{Arc, Condvar, Mutex};
@@ -93,7 +93,6 @@ impl SinkHarnessBackend {
         let Some(leaf) = self.leaves.get_mut(key) else {
             return;
         };
-        leaf.schedule.enqueued = false;
         let progress = leaf.kind.advance(&self.feed, &mut leaf.cursor);
 
         match progress {
@@ -101,12 +100,12 @@ impl SinkHarnessBackend {
                 HarnessEngine::Sink { transport, .. } => {
                     leaf.schedule.mark_serviced();
                     self.probe.record_sink(transport.stats());
-                    try_enqueue(&mut leaf.schedule, &mut self.queue, key);
+                    self.queue.push(key);
                 }
                 HarnessEngine::Network { .. } => {
                     leaf.schedule.mark_serviced();
                     self.probe.record_network_visit();
-                    try_enqueue(&mut leaf.schedule, &mut self.queue, key);
+                    self.queue.push(key);
                 }
             },
             EngineProgress::Needs(_) => {
@@ -116,7 +115,7 @@ impl SinkHarnessBackend {
                 }
             }
             EngineProgress::Yield => {
-                try_enqueue(&mut leaf.schedule, &mut self.queue, key);
+                self.queue.push(key);
             }
             EngineProgress::HandshakeComplete
             | EngineProgress::FeedOverrun
@@ -137,16 +136,14 @@ impl EgressShardBackend for SinkHarnessBackend {
                     cursor: FeedCursor::new(0, 0),
                 })
                 .expect("harness capacity");
-            if let Some(leaf) = self.leaves.get_mut(key) {
-                try_enqueue(&mut leaf.schedule, &mut self.queue, key);
-            }
+            self.queue.push(key);
         }
         EgressShardCommandEffect::Continue
     }
 
     fn on_media_tick(&mut self) -> EgressShardCommandEffect {
         for _ in 0..4 {
-            let Some(key) = self.queue.dequeue_next() else {
+            let Some(key) = self.queue.pop() else {
                 return EgressShardCommandEffect::Continue;
             };
             self.visit_ready_leaf(key);

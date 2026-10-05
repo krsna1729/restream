@@ -1,17 +1,11 @@
 //! Egress scheduler: `ReadyQueue` and `ScheduleState`.
 //!
-//! Implements bounded round-robin (with optional deficit extension).
-//! Core invariant: each leaf appears in the ready queue at most once.
-//!
-//! The `enqueued` flag is the authority; it changes only through the
-//! `enqueue` / `dequeue_next` helpers so the invariant is verifiable.
+//! Core invariant: each leaf appears in the ready queue at most once. The
+//! queue itself owns that: it records which key each slot has queued, so a
+//! push of a queued key is a no-op and no caller keeps a flag in step.
 
 use std::collections::VecDeque;
 use std::time::Instant;
-
-// ---------------------------------------------------------------------------
-// LeafKey
-// ---------------------------------------------------------------------------
 
 use super::leaf_arena::LeafKey;
 
@@ -22,9 +16,6 @@ use super::leaf_arena::LeafKey;
 /// Scheduling metadata carried on every leaf's `LeafCommon`.
 #[derive(Debug, Clone)]
 pub struct ScheduleState {
-    /// `true` iff this leaf is currently in the shard's ready queue.
-    /// Must be the only place that changes.
-    pub enqueued: bool,
     /// Accumulated byte deficit for deficit-round-robin scheduling.
     /// Reset after each successful service.
     pub deficit_bytes: usize,
@@ -35,24 +26,19 @@ pub struct ScheduleState {
     /// this leaf. Set unconditionally from every visit outcome in
     /// `apply_progress_to_common` (`visit.rs`); `false` for outcomes that
     /// don't carry a wait condition at all (`HandshakeComplete`,
-    /// `FeedOverrun`, `PeerClosed`, `Failed`, `Yield`).
-    ///
-    /// Advisory only, not authoritative like `enqueued`: a feed-wake
-    /// direct-enqueue and a real poller-discovered enqueue both still
-    /// check `!enqueued` before pushing, so this flag being stale between
-    /// visits can never cause a double enqueue.
+    /// `FeedOverrun`, `PeerClosed`, `Failed`, `Yield`). Advisory: a stale
+    /// value can never double-queue a leaf, because the ready queue
+    /// refuses a key it holds.
     pub wants_feed_wake: bool,
     /// Whether this leaf currently has one entry in the shard's feed-waiting
-    /// queue. Unlike `enqueued`, this is queue bookkeeping rather than ready
-    /// visibility; it prevents repeated readiness visits from growing the
-    /// parked queue without bound before the next feed wake.
+    /// queue; it prevents repeated readiness visits from growing the parked
+    /// queue without bound before the next feed wake.
     pub feed_wake_queued: bool,
 }
 
 impl ScheduleState {
     pub fn new() -> Self {
         Self {
-            enqueued: false,
             deficit_bytes: 0,
             last_service_at: None,
             wants_feed_wake: false,
@@ -76,19 +62,33 @@ impl Default for ScheduleState {
 // ReadyQueue
 // ---------------------------------------------------------------------------
 
-/// The shard's scheduler ready queue.
-///
-/// Maintains the ordering of leaves that are ready to make progress and
-/// enforces the one-entry-per-leaf invariant through the `enqueued` bit.
-///
-/// The caller is responsible for keeping `ScheduleState::enqueued` in sync:
-/// call `set_enqueued(leaf_state, true)` before `push_back`, and
-/// `set_enqueued(leaf_state, false)` after `dequeue_next`.
 const DEFAULT_READY_CAPACITY: usize = 4096;
 
+/// What `ReadyQueue::push` did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Push {
+    Queued,
+    /// The key was already queued; it keeps its place.
+    AlreadyQueued,
+    /// The queue is at capacity; the key is not queued.
+    Full,
+}
+
+impl Push {
+    /// The key is in the queue after the push.
+    pub fn is_queued(self) -> bool {
+        !matches!(self, Self::Full)
+    }
+}
+
+/// The shard's FIFO of leaves ready to make progress, holding each key at
+/// most once. `member[slot]` is the key that slot has queued: a key from a
+/// removed leaf (an older epoch) left in `order` is skipped by `pop` and
+/// never blocks the slot's next occupant.
 #[derive(Debug)]
 pub struct ReadyQueue {
-    inner: VecDeque<LeafKey>,
+    order: VecDeque<LeafKey>,
+    member: Vec<Option<LeafKey>>,
     capacity: usize,
 }
 
@@ -99,57 +99,79 @@ impl ReadyQueue {
 
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            inner: VecDeque::with_capacity(capacity),
+            order: VecDeque::with_capacity(capacity),
+            member: vec![None; capacity],
             capacity,
         }
     }
 
-    /// Enqueue `key` at the tail. Caller must have set `enqueued = true`.
-    ///
-    /// This deliberately does not look up `enqueued` itself — the shard loop
-    /// manages that bit. Separation keeps the hot path free of map lookups.
-    pub fn push_back(&mut self, key: LeafKey) -> bool {
-        if self.inner.len() == self.capacity {
-            return false;
+    pub fn contains(&self, key: LeafKey) -> bool {
+        self.member.get(key.slot()) == Some(&Some(key))
+    }
+
+    /// Queue `key` at the tail unless it is already queued. Push only keys
+    /// of live leaves: a removed leaf's key pushed after its slot's next
+    /// occupant would replace that occupant's entry (a lost wakeup).
+    pub fn push(&mut self, key: LeafKey) -> Push {
+        if self.contains(key) {
+            return Push::AlreadyQueued;
         }
-        self.inner.push_back(key);
-        true
-    }
-
-    /// Dequeue the next ready leaf key. Caller must set `enqueued = false`
-    /// on the returned leaf.
-    pub fn dequeue_next(&mut self) -> Option<LeafKey> {
-        self.inner.pop_front()
-    }
-
-    /// Re-append a still-runnable leaf to the tail (after a partial visit).
-    /// Caller must ensure `enqueued` remains `true`.
-    pub fn push_back_runnable(&mut self, key: LeafKey) -> bool {
-        if self.inner.len() == self.capacity {
-            return false;
+        if self.order.len() >= self.capacity {
+            return Push::Full;
         }
-        self.inner.push_back(key);
-        true
+        let slot = key.slot();
+        if slot >= self.member.len() {
+            self.member.resize(slot.saturating_add(1), None);
+        }
+        if let Some(entry) = self.member.get_mut(slot) {
+            *entry = Some(key);
+        }
+        self.order.push_back(key);
+        Push::Queued
     }
 
-    /// Number of currently ready leaves.
+    /// Take the next queued key; it may be pushed again at once.
+    pub fn pop(&mut self) -> Option<LeafKey> {
+        while let Some(key) = self.order.pop_front() {
+            if let Some(entry) = self.member.get_mut(key.slot())
+                && *entry == Some(key)
+            {
+                *entry = None;
+                return Some(key);
+            }
+        }
+        None
+    }
+
+    /// The key `pop` would return next.
+    pub fn front(&self) -> Option<LeafKey> {
+        self.order.iter().copied().find(|key| self.contains(*key))
+    }
+
+    /// Drop `key` (its leaf was removed).
+    pub fn remove(&mut self, key: LeafKey) {
+        if self.contains(key) {
+            if let Some(entry) = self.member.get_mut(key.slot()) {
+                *entry = None;
+            }
+            self.order.retain(|queued| *queued != key);
+        }
+    }
+
+    /// Queue entries, including any not yet skipped stale entry; for
+    /// work-remaining checks, never zero while a key is queued.
     pub fn len(&self) -> usize {
-        self.inner.len()
+        self.order.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.order.is_empty()
     }
 
-    /// Remove stale entries before a leaf slot is reused.
-    pub fn remove_key(&mut self, key: LeafKey) {
-        self.inner.retain(|queued| *queued != key);
-    }
-
-    /// Drain all keys (e.g. during shard shutdown). Caller is responsible for
-    /// clearing `enqueued` on each drained leaf.
-    pub fn drain(&mut self) -> impl Iterator<Item = LeafKey> + '_ {
-        self.inner.drain(..)
+    /// Empty the queue (shard shutdown).
+    pub fn clear(&mut self) {
+        self.order.clear();
+        self.member.iter_mut().for_each(|entry| *entry = None);
     }
 }
 
@@ -169,29 +191,6 @@ pub enum VisitDecision {
     Close,
 }
 
-/// Check whether a leaf's `ScheduleState` allows it to be enqueued.
-///
-/// Callers should call this before `push_back` to preserve the invariant.
-pub fn can_enqueue(schedule: &ScheduleState) -> bool {
-    !schedule.enqueued
-}
-
-/// Mark a leaf as enqueued and push it to the queue.
-///
-/// Returns `false` (and does not push) if the leaf was already enqueued.
-pub fn try_enqueue(schedule: &mut ScheduleState, queue: &mut ReadyQueue, key: LeafKey) -> bool {
-    if schedule.enqueued {
-        return false;
-    }
-    schedule.enqueued = true;
-    if queue.push_back(key) {
-        true
-    } else {
-        schedule.enqueued = false;
-        false
-    }
-}
-
 impl Default for ReadyQueue {
     fn default() -> Self {
         Self::new()
@@ -205,130 +204,56 @@ impl Default for ReadyQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
-    /// Simulate a minimal slab of leaves (just their ScheduleState).
-    struct FakeSlab {
-        states: Vec<ScheduleState>,
-    }
-
-    impl FakeSlab {
-        fn new(n: usize) -> Self {
-            Self {
-                states: vec![ScheduleState::new(); n],
-            }
-        }
+    fn key(slot: u32, epoch: u32) -> LeafKey {
+        LeafKey::for_test(slot, epoch)
     }
 
     #[test]
-    fn try_enqueue_deduplicates() {
-        let mut slab = FakeSlab::new(3);
-        let mut queue = ReadyQueue::new();
-
-        // Enqueue leaf 0 once.
-        assert!(try_enqueue(
-            &mut slab.states[0],
-            &mut queue,
-            LeafKey::for_test(0, 0)
-        ));
-        // Second attempt returns false and does not double-enqueue.
-        assert!(!try_enqueue(
-            &mut slab.states[0],
-            &mut queue,
-            LeafKey::for_test(0, 0)
-        ));
-
+    fn a_queued_key_is_not_queued_twice() {
+        let mut queue = ReadyQueue::with_capacity(4);
+        assert_eq!(queue.push(key(0, 0)), Push::Queued);
+        assert_eq!(queue.push(key(0, 0)), Push::AlreadyQueued);
         assert_eq!(queue.len(), 1);
+        assert_eq!(queue.pop(), Some(key(0, 0)));
+        assert_eq!(
+            queue.push(key(0, 0)),
+            Push::Queued,
+            "popped keys may return"
+        );
     }
 
     #[test]
-    fn ready_queue_has_a_hard_capacity() {
+    fn the_queue_has_a_hard_capacity() {
         let mut queue = ReadyQueue::with_capacity(1);
-        assert!(queue.push_back(LeafKey::for_test(0, 0)));
-        assert!(!queue.push_back(LeafKey::for_test(1, 0)));
-        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.push(key(0, 0)), Push::Queued);
+        assert_eq!(queue.push(key(1, 0)), Push::Full);
+        assert!(!queue.contains(key(1, 0)));
     }
 
     #[test]
-    fn round_robin_ordering() {
-        let mut slab = FakeSlab::new(4);
-        let mut queue = ReadyQueue::new();
-
-        for i in 0..4 {
-            try_enqueue(
-                &mut slab.states[i],
-                &mut queue,
-                LeafKey::for_test(i as u32, 0),
-            );
-        }
-
-        // Should come out FIFO.
-        for expected in 0..4usize {
-            let key = queue.dequeue_next().unwrap();
-            slab.states[key.slot()].enqueued = false;
-            assert_eq!(key.slot(), expected);
-        }
-        assert!(queue.is_empty());
+    fn a_removed_leafs_entry_never_blocks_or_aliases_its_slots_next_leaf() {
+        let mut queue = ReadyQueue::with_capacity(4);
+        assert_eq!(queue.push(key(2, 0)), Push::Queued);
+        // The slot is reused without a remove: the new key queues anyway,
+        // and the old entry is skipped, not visited.
+        assert_eq!(queue.push(key(2, 1)), Push::Queued);
+        assert!(!queue.contains(key(2, 0)));
+        assert_eq!(queue.pop(), Some(key(2, 1)));
+        assert_eq!(queue.pop(), None);
     }
 
     #[test]
-    fn blocked_leaf_not_reenqueued() {
-        let mut slab = FakeSlab::new(2);
-        let mut queue = ReadyQueue::new();
-
-        try_enqueue(&mut slab.states[0], &mut queue, LeafKey::for_test(0, 0));
-        try_enqueue(&mut slab.states[1], &mut queue, LeafKey::for_test(1, 0));
-
-        // Dequeue leaf 0 and decide to suspend it (transport blocked).
-        let key = queue.dequeue_next().unwrap();
-        assert_eq!(key.slot(), 0);
-        slab.states[0].enqueued = false; // suspend: clear enqueued, do NOT re-push.
-
-        // Leaf 1 is still in queue.
-        assert_eq!(queue.len(), 1);
-        let key = queue.dequeue_next().unwrap();
-        assert_eq!(key.slot(), 1);
-        // If leaf 1 has more work, re-append it.
-        queue.push_back_runnable(key);
-        assert_eq!(queue.len(), 1);
-    }
-
-    #[test]
-    fn always_writable_leaf_rotates() {
-        // An always-writable leaf must not stay at the head.
-        let mut slab = FakeSlab::new(3);
-        let mut queue = ReadyQueue::new();
-
-        for i in 0..3 {
-            try_enqueue(
-                &mut slab.states[i],
-                &mut queue,
-                LeafKey::for_test(i as u32, 0),
-            );
+    fn remove_takes_a_key_out_of_order_and_membership() {
+        let mut queue = ReadyQueue::with_capacity(4);
+        for slot in 0..3 {
+            queue.push(key(slot, 0));
         }
-
-        // Service leaf 0, simulate it still has work → re-append at tail.
-        let key0 = queue.dequeue_next().unwrap();
-        assert_eq!(key0.slot(), 0);
-        queue.push_back_runnable(key0); // still runnable, goes to tail.
-
-        // Next service is leaf 1, not leaf 0 again.
-        let key1 = queue.dequeue_next().unwrap();
-        assert_eq!(key1.slot(), 1);
-    }
-
-    #[test]
-    fn drain_clears_queue() {
-        let mut slab = FakeSlab::new(5);
-        let mut queue = ReadyQueue::new();
-        for i in 0..5 {
-            try_enqueue(
-                &mut slab.states[i],
-                &mut queue,
-                LeafKey::for_test(i as u32, 0),
-            );
-        }
-        let drained: Vec<_> = queue.drain().collect();
-        assert_eq!(drained.len(), 5);
+        queue.remove(key(1, 0));
+        assert_eq!(queue.front(), Some(key(0, 0)));
+        assert_eq!(queue.pop(), Some(key(0, 0)));
+        assert_eq!(queue.pop(), Some(key(2, 0)));
         assert!(queue.is_empty());
     }
 
@@ -341,130 +266,73 @@ mod tests {
         assert!(s.last_service_at.is_some());
     }
 
-    #[test]
-    fn can_enqueue_reflects_flag() {
-        let mut s = ScheduleState::new();
-        assert!(can_enqueue(&s));
-        s.enqueued = true;
-        assert!(!can_enqueue(&s));
-    }
-
-    // -------------------------------------------------------------------
-    // Proptest: the enqueued invariant under arbitrary operation sequences
-    // -------------------------------------------------------------------
-    //
-    // The hand-written tests above each check one specific sequence. This
-    // exercises the same `ScheduleState`/`ReadyQueue`/`try_enqueue` contract
-    // against thousands of randomly generated sequences, checking the one
-    // invariant every egress shard backend depends on for correctness (a
-    // leaf visited twice concurrently would double-borrow/double-visit it;
-    // a leaf silently dropped from the ready set stalls forever): a leaf's
-    // `enqueued` flag is `true` if and only if it currently appears in the
-    // ready queue's contents, and it never appears more than once.
-    //
-    // `poll_ready()`/`enqueue_feed_waiting_leaves()` in the real RTMP/SRT
-    // shard backends reimplement this same "check enqueued, set true, push"
-    // pattern inline (for hot-path reasons — see their doc comments) rather
-    // than calling `try_enqueue` directly, so this proptest validates the
-    // pattern's correctness in the abstract rather than those call sites
-    // literally; the backends' own deterministic tests (e.g.
-    // `feed_wake_enqueues_the_leaf_without_any_poller_call`,
-    // `feed_wake_never_enqueues_a_handshaking_leaf`) cover the concrete
-    // wiring.
-    use proptest::prelude::*;
-
     #[derive(Debug, Clone, Copy)]
-    enum QueueOp {
-        /// Attempt to enqueue a leaf (as either a real poll discovery or a
-        /// feed-wake direct enqueue would) — must be a no-op if already
-        /// enqueued.
-        TryEnqueue(usize),
-        /// Dequeue the next ready leaf and suspend it (transport blocked):
-        /// clear `enqueued`, do not re-push.
-        DequeueAndSuspend,
-        /// Dequeue the next ready leaf and treat it as still runnable:
-        /// re-append to the tail, `enqueued` stays `true`.
-        DequeueAndRequeue,
-    }
-
-    fn queue_op_strategy(leaf_count: usize) -> impl Strategy<Value = QueueOp> {
-        prop_oneof![
-            (0..leaf_count).prop_map(QueueOp::TryEnqueue),
-            Just(QueueOp::DequeueAndSuspend),
-            Just(QueueOp::DequeueAndRequeue),
-        ]
+    enum Op {
+        Push(u32, u32),
+        Pop,
+        Remove(u32, u32),
     }
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(2000))]
 
-        /// For any sequence of enqueue/dequeue/suspend/requeue operations
-        /// over a small pool of leaves: every leaf's `enqueued` flag always
-        /// agrees with whether it's actually present in the queue, and the
-        /// queue never holds a duplicate.
+        /// Against a model (FIFO of distinct live keys, at most one live key
+        /// per slot): pops come out in push order, each key at most once,
+        /// a stale key never comes out, and capacity holds.
         #[test]
-        fn enqueued_flag_always_matches_queue_membership(
-            leaf_count in 1usize..6,
-            ops in prop::collection::vec(queue_op_strategy(5), 0..64),
+        fn the_queue_matches_a_fifo_of_distinct_keys(
+            ops in prop::collection::vec(
+                prop_oneof![
+                    (0u32..4, 0u32..3).prop_map(|(s, e)| Op::Push(s, e)),
+                    Just(Op::Pop),
+                    (0u32..4, 0u32..3).prop_map(|(s, e)| Op::Remove(s, e)),
+                ],
+                0..80,
+            ),
         ) {
-            let mut slab = FakeSlab::new(leaf_count);
-            let mut queue = ReadyQueue::new();
-
+            let capacity = 6;
+            let mut queue = ReadyQueue::with_capacity(capacity);
+            let mut model: VecDeque<LeafKey> = VecDeque::new();
+            let mut entries = 0usize;
+            // Slot epochs only increase (a removed leaf's key never returns).
+            let mut newest = [0u32; 4];
             for op in ops {
                 match op {
-                    QueueOp::TryEnqueue(index) => {
-                        if index >= leaf_count {
+                    Op::Push(slot, epoch) => {
+                        if epoch < newest[slot as usize] {
                             continue;
                         }
-                        try_enqueue(&mut slab.states[index], &mut queue, LeafKey::for_test(index as u32, 0));
-                    }
-                    QueueOp::DequeueAndSuspend => {
-                        if let Some(key) = queue.dequeue_next() {
-                            slab.states[key.slot()].enqueued = false;
+                        newest[slot as usize] = epoch;
+                        let k = key(slot, epoch);
+                        let result = queue.push(k);
+                        if model.contains(&k) {
+                            prop_assert_eq!(result, Push::AlreadyQueued);
+                        } else if entries >= capacity {
+                            prop_assert_eq!(result, Push::Full);
+                        } else {
+                            prop_assert_eq!(result, Push::Queued);
+                            // A newer key for the slot supersedes the old.
+                            model.retain(|queued| queued.slot() != k.slot());
+                            model.push_back(k);
+                            entries += 1;
                         }
                     }
-                    QueueOp::DequeueAndRequeue => {
-                        if let Some(key) = queue.dequeue_next() {
-                            // Still runnable: enqueued stays true, goes to tail.
-                            queue.push_back_runnable(key);
-                        }
+                    Op::Pop => {
+                        let popped = queue.pop();
+                        prop_assert_eq!(popped, model.pop_front());
+                        entries = queue.len();
+                    }
+                    Op::Remove(slot, epoch) => {
+                        let k = key(slot, epoch);
+                        queue.remove(k);
+                        model.retain(|queued| *queued != k);
+                        entries = queue.len();
                     }
                 }
-
-                // Invariant check after every single operation, not just at
-                // the end: a violation must be caught at the exact op that
-                // introduced it for the shrunk proptest failure to be
-                // minimal and readable.
-                let mut membership_counts = vec![0usize; leaf_count];
-                for key in queue.drain() {
-                    membership_counts[key.slot()] += 1;
+                for k in &model {
+                    prop_assert!(queue.contains(*k));
                 }
-                for (index, count) in membership_counts.iter().enumerate() {
-                    prop_assert!(
-                        *count <= 1,
-                        "leaf {index} appeared {count} times in the ready queue"
-                    );
-                    let in_queue = *count == 1;
-                    prop_assert_eq!(
-                        slab.states[index].enqueued,
-                        in_queue,
-                        "leaf {}: enqueued={} but queue membership={}",
-                        index,
-                        slab.states[index].enqueued,
-                        in_queue,
-                    );
-                }
-                // `drain()` above emptied the queue to inspect it; rebuild
-                // it from the membership snapshot so the next op sees the
-                // same state it would have without the inspection (order
-                // among still-enqueued leaves is not part of the invariant
-                // being checked here, so re-pushing in index order is
-                // fine).
-                for (index, in_queue) in membership_counts.iter().enumerate() {
-                    if *in_queue == 1 {
-                        queue.push_back(LeafKey::for_test(index as u32, 0));
-                    }
-                }
+                prop_assert!(queue.len() <= capacity);
             }
         }
     }

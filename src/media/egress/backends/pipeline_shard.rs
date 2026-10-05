@@ -21,7 +21,7 @@ use crate::media::egress::journal::RingFeed;
 use crate::media::egress::leaf::LeafCommon;
 use crate::media::egress::leaf_arena::{LeafArena, LeafKey};
 use crate::media::egress::policy::{LeafLimits, WorkBudget, WorkBudgetConfig};
-use crate::media::egress::scheduler::{ReadyQueue, VisitDecision, try_enqueue};
+use crate::media::egress::scheduler::{ReadyQueue, VisitDecision};
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 
@@ -189,8 +189,8 @@ where
     }
 
     fn enqueue(&mut self, key: LeafKey) {
-        if let Some(leaf) = self.leaves.get_mut(key) {
-            try_enqueue(&mut leaf.common.schedule, &mut self.ready, key);
+        if self.leaves.get(key).is_some() {
+            self.ready.push(key);
         }
     }
 
@@ -201,7 +201,7 @@ where
     }
 
     fn remove_leaf_key(&mut self, key: LeafKey) {
-        self.ready.remove_key(key);
+        self.ready.remove(key);
         if let Some(mut leaf) = self.leaves.remove(key) {
             leaf.engine.close(&mut leaf.transport, CloseReason::Removed);
         }
@@ -209,14 +209,15 @@ where
 
     /// The only readiness signal this backend has — see the module doc.
     fn enqueue_all_leaves(&mut self) {
-        for (key, leaf) in self.leaves.iter_mut() {
-            try_enqueue(&mut leaf.common.schedule, &mut self.ready, key);
+        let ready = &mut self.ready;
+        for (key, _) in self.leaves.iter() {
+            ready.push(key);
         }
     }
 
     fn drain_ready_leaves(&mut self) {
         for _ in 0..MEDIA_TICK_VISIT_BUDGET {
-            let Some(key) = self.ready.dequeue_next() else {
+            let Some(key) = self.ready.pop() else {
                 return;
             };
             let Some(leaf) = self.leaves.get_mut(key) else {
@@ -267,7 +268,7 @@ where
     }
 
     fn on_shutdown(&mut self) {
-        self.ready.drain().for_each(drop);
+        self.ready.clear();
         for mut leaf in self.leaves.drain() {
             leaf.engine
                 .close(&mut leaf.transport, CloseReason::ShardShutdown);
