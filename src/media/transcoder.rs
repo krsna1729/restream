@@ -235,8 +235,7 @@ fn run_ffmpeg_transcoder_stage_with_normalizer(
 
     let mut custom_input = CustomInput::new(&in_queue)?;
     let ictx = custom_input
-        .input
-        .as_mut()
+        .input_mut()
         .ok_or("Failed to get CustomInput context")?;
 
     let mut audio_stream_index = 0usize;
@@ -388,8 +387,7 @@ fn run_ffmpeg_transcode_with_scale_with_normalizer(
 
     let mut custom = CustomInput::new(&in_queue)?;
     let ictx = custom
-        .input
-        .as_mut()
+        .input_mut()
         .ok_or("Failed to get CustomInput context")?;
 
     // Identify streams

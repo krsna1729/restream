@@ -202,8 +202,7 @@ fn run_ffmpeg_h264_stage_with_normalizer(
 
     let mut custom = CustomInput::new(&in_queue)?;
     let ictx = custom
-        .input
-        .as_mut()
+        .input_mut()
         .ok_or("failed to get CustomInput context")?;
 
     // Identify streams

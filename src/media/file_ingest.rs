@@ -289,8 +289,7 @@ fn run_internal_file_ingest_once(
     let mut custom_output =
         CustomOutput::new(&queue, "mpegts").map_err(|e| format!("TS mux setup failed: {e}"))?;
     let octx = custom_output
-        .output
-        .as_mut()
+        .output_mut()
         .ok_or_else(|| "Failed to acquire TS output context".to_string())?;
 
     let mut startup_video_state_primed = false;

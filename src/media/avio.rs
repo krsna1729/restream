@@ -400,7 +400,7 @@ impl MemoryQueue {
 /// a raw pointer, so the queue must outlive this context, which the borrow
 /// makes the compiler check.
 pub struct CustomInput<'q> {
-    pub input: Option<ffmpeg::format::context::Input>,
+    input: Option<ffmpeg::format::context::Input>,
     avio_ctx: *mut ffmpeg::ffi::AVIOContext,
     _queue: std::marker::PhantomData<&'q MemoryQueue>,
 }
@@ -497,6 +497,15 @@ impl<'q> CustomInput<'q> {
     }
 }
 
+impl CustomInput<'_> {
+    /// The demuxer reading from the queue. Lent, never handed out: the
+    /// context must not outlive this wrapper, which owns its AVIO buffer and
+    /// borrows the queue its callback reads.
+    pub fn input_mut(&mut self) -> Option<&mut ffmpeg::format::context::Input> {
+        self.input.as_mut()
+    }
+}
+
 impl Drop for CustomInput<'_> {
     fn drop(&mut self) {
         // SAFETY: Detaches the custom AVIO context from the AVFormatContext
@@ -523,7 +532,7 @@ impl Drop for CustomInput<'_> {
 
 /// Borrows its queue for `'q`; see [`CustomInput`].
 pub struct CustomOutput<'q> {
-    pub output: Option<ffmpeg::format::context::Output>,
+    output: Option<ffmpeg::format::context::Output>,
     avio_ctx: *mut ffmpeg::ffi::AVIOContext,
     _queue: std::marker::PhantomData<&'q MemoryQueue>,
 }
@@ -601,6 +610,14 @@ impl<'q> CustomOutput<'q> {
                 _queue: std::marker::PhantomData,
             })
         }
+    }
+}
+
+impl CustomOutput<'_> {
+    /// The muxer writing into the queue; lent for the reason given on
+    /// [`CustomInput::input_mut`].
+    pub fn output_mut(&mut self) -> Option<&mut ffmpeg::format::context::Output> {
+        self.output.as_mut()
     }
 }
 
