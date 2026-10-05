@@ -1,6 +1,92 @@
 use super::*;
 use crate::media::egress::command::{FeedId, ProtocolSpec};
 use crate::media::egress::policy::LeafPolicy;
+use std::cell::{Cell, RefCell};
+
+/// Per-shard bounded queues, as the shard channels are: the depth the
+/// manager admits against is the queue's own. `failing` makes every send to
+/// that shard fail as a closed channel would.
+struct QueueSink {
+    capacity: usize,
+    queues: RefCell<Vec<Vec<EgressCommand>>>,
+    failing: Cell<Option<ShardId>>,
+}
+
+impl QueueSink {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            queues: RefCell::new(Vec::new()),
+            failing: Cell::new(None),
+        }
+    }
+
+    /// From now on every send to `shard_id` fails as a closed channel.
+    fn close(&self, shard_id: ShardId) {
+        self.failing.set(Some(shard_id));
+    }
+
+    fn depth(&self, shard_id: ShardId) -> usize {
+        self.queues
+            .borrow()
+            .get(shard_id.index() as usize)
+            .map_or(0, Vec::len)
+    }
+
+    /// The shard thread takes its oldest command.
+    fn take_one(&self, shard_id: ShardId) -> Option<EgressCommand> {
+        let mut queues = self.queues.borrow_mut();
+        let queue = queues.get_mut(shard_id.index() as usize)?;
+        (!queue.is_empty()).then(|| queue.remove(0))
+    }
+}
+
+impl CommandSink for QueueSink {
+    type Error = SendFailure;
+
+    fn free_slots(&self, shard_id: ShardId) -> Option<usize> {
+        Some(self.capacity.saturating_sub(self.depth(shard_id)))
+    }
+
+    fn send(&self, shard_id: ShardId, command: EgressCommand) -> Result<(), SendFailure> {
+        if self.failing.get() == Some(shard_id) {
+            return Err(SendFailure::Closed);
+        }
+        if self.depth(shard_id) >= self.capacity {
+            return Err(SendFailure::Full);
+        }
+        let mut queues = self.queues.borrow_mut();
+        let index = shard_id.index() as usize;
+        if queues.len() <= index {
+            queues.resize_with(index + 1, Vec::new);
+        }
+        queues[index].push(command);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SendFailure {
+    Closed,
+    Full,
+}
+
+/// Dispatch and keep only the manager's own verdict; these tests never
+/// reach a send failure.
+fn apply(
+    manager: &mut EgressManager,
+    sink: &QueueSink,
+    command: EgressCommand,
+) -> Result<ManagerCommandOutcome, EgressManagerCommandError> {
+    manager
+        .dispatch_command(command, sink)
+        .map_err(|error| match error {
+            EgressManagerDispatchError::Command(error) => error,
+            EgressManagerDispatchError::Dispatch { source, .. } => {
+                panic!("unexpected send failure {source:?}")
+            }
+        })
+}
 
 fn manager(shards: u32) -> EgressManager {
     EgressManager::new(EgressManagerConfig::new(shards, 128).unwrap())
@@ -89,10 +175,11 @@ fn spec_assignment_uses_spec_output_id() {
 #[test]
 fn add_command_records_desired_output_and_enqueues_to_assigned_shard() {
     let mut manager = manager(8);
+    let sink = QueueSink::new(128);
     let output_spec = spec("out-add");
     let expected_shard = manager.assign_spec(&output_spec);
 
-    let outcome = manager.apply_command(EgressCommand::Add(output_spec.clone()));
+    let outcome = apply(&mut manager, &sink, EgressCommand::Add(output_spec.clone()));
 
     assert_eq!(
         outcome,
@@ -108,50 +195,53 @@ fn add_command_records_desired_output_and_enqueues_to_assigned_shard() {
         )),
         Some((output_spec.id, 1, expected_shard))
     );
-    assert_eq!(manager.command_depth(expected_shard), 1);
+    assert_eq!(sink.depth(expected_shard), 1);
 }
 
 #[test]
 fn duplicate_generation_is_idempotent_without_reenqueue() {
     let mut manager = manager(4);
+    let sink = QueueSink::new(128);
     let output_spec = spec("out-dup");
     let shard_id = manager.assign_spec(&output_spec);
 
     assert!(matches!(
-        manager.apply_command(EgressCommand::Add(output_spec.clone())),
+        apply(&mut manager, &sink, EgressCommand::Add(output_spec.clone())),
         Ok(ManagerCommandOutcome::Enqueued { .. })
     ));
-    let duplicate = manager.apply_command(EgressCommand::Update(output_spec));
+    let duplicate = apply(&mut manager, &sink, EgressCommand::Update(output_spec));
 
     assert_eq!(
         duplicate,
         Ok(ManagerCommandOutcome::AlreadyCurrent { shard_id })
     );
-    assert_eq!(manager.command_depth(shard_id), 1);
+    assert_eq!(sink.depth(shard_id), 1);
 }
 
 #[test]
 fn duplicate_add_is_idempotent_without_reenqueue() {
     let mut manager = manager(4);
+    let sink = QueueSink::new(128);
     let output_spec = spec("out-add-dup");
     let shard_id = manager.assign_spec(&output_spec);
 
     assert!(matches!(
-        manager.apply_command(EgressCommand::Add(output_spec.clone())),
+        apply(&mut manager, &sink, EgressCommand::Add(output_spec.clone())),
         Ok(ManagerCommandOutcome::Enqueued { .. })
     ));
-    let duplicate = manager.apply_command(EgressCommand::Add(output_spec));
+    let duplicate = apply(&mut manager, &sink, EgressCommand::Add(output_spec));
 
     assert_eq!(
         duplicate,
         Ok(ManagerCommandOutcome::AlreadyCurrent { shard_id })
     );
-    assert_eq!(manager.command_depth(shard_id), 1);
+    assert_eq!(sink.depth(shard_id), 1);
 }
 
 #[test]
 fn stale_generation_is_ignored_without_reenqueue() {
     let mut manager = manager(4);
+    let sink = QueueSink::new(128);
     let mut current = spec("out-stale");
     current.generation = 3;
     let mut stale = spec("out-stale");
@@ -159,21 +249,22 @@ fn stale_generation_is_ignored_without_reenqueue() {
     let shard_id = manager.assign_spec(&current);
 
     assert!(matches!(
-        manager.apply_command(EgressCommand::Add(current)),
+        apply(&mut manager, &sink, EgressCommand::Add(current)),
         Ok(ManagerCommandOutcome::Enqueued { .. })
     ));
-    let stale_result = manager.apply_command(EgressCommand::Update(stale));
+    let stale_result = apply(&mut manager, &sink, EgressCommand::Update(stale));
 
     assert_eq!(
         stale_result,
         Ok(ManagerCommandOutcome::IgnoredStale { shard_id })
     );
-    assert_eq!(manager.command_depth(shard_id), 1);
+    assert_eq!(sink.depth(shard_id), 1);
 }
 
 #[test]
 fn newer_generation_replaces_desired_output_and_enqueues_once() {
     let mut manager = manager(4);
+    let sink = QueueSink::new(128);
     let mut first = spec("out-update");
     first.generation = 1;
     let mut second = spec("out-update");
@@ -181,11 +272,11 @@ fn newer_generation_replaces_desired_output_and_enqueues_once() {
     let shard_id = manager.assign_spec(&first);
 
     assert!(matches!(
-        manager.apply_command(EgressCommand::Add(first.clone())),
+        apply(&mut manager, &sink, EgressCommand::Add(first.clone())),
         Ok(ManagerCommandOutcome::Enqueued { .. })
     ));
     assert!(matches!(
-        manager.apply_command(EgressCommand::Update(second.clone())),
+        apply(&mut manager, &sink, EgressCommand::Update(second.clone())),
         Ok(ManagerCommandOutcome::Enqueued { .. })
     ));
 
@@ -197,32 +288,42 @@ fn newer_generation_replaces_desired_output_and_enqueues_once() {
         )),
         Some((first.id, 2, shard_id))
     );
-    assert_eq!(manager.command_depth(shard_id), 2);
+    assert_eq!(sink.depth(shard_id), 2);
 }
 
 #[test]
 fn remove_command_is_idempotent_after_first_enqueue() {
     let mut manager = manager(4);
+    let sink = QueueSink::new(128);
     let output_spec = spec("out-remove");
     let output_id = output_spec.id.clone();
     let shard_id = manager.assign_spec(&output_spec);
 
     assert!(matches!(
-        manager.apply_command(EgressCommand::Add(output_spec)),
+        apply(&mut manager, &sink, EgressCommand::Add(output_spec)),
         Ok(ManagerCommandOutcome::Enqueued { .. })
     ));
-    let removed = manager.apply_command(EgressCommand::Remove(output_id.clone()));
-    let duplicate = manager.apply_command(EgressCommand::Remove(output_id.clone()));
+    let removed = apply(
+        &mut manager,
+        &sink,
+        EgressCommand::Remove(output_id.clone()),
+    );
+    let duplicate = apply(
+        &mut manager,
+        &sink,
+        EgressCommand::Remove(output_id.clone()),
+    );
 
     assert_eq!(removed, Ok(ManagerCommandOutcome::Enqueued { shard_id }));
     assert_eq!(duplicate, Ok(ManagerCommandOutcome::AlreadyRemoved));
     assert!(manager.desired_output(&output_id).is_none());
-    assert_eq!(manager.command_depth(shard_id), 2);
+    assert_eq!(sink.depth(shard_id), 2);
 }
 
 #[test]
 fn sink_spec_uses_common_lifecycle_command_contract() {
     let mut manager = manager(4);
+    let sink = QueueSink::new(128);
     let first = sink_spec("out-sink-lifecycle", 2);
     let duplicate = sink_spec("out-sink-lifecycle", 2);
     let stale = sink_spec("out-sink-lifecycle", 1);
@@ -231,19 +332,19 @@ fn sink_spec_uses_common_lifecycle_command_contract() {
     let shard_id = manager.assign_spec(&first);
 
     assert_eq!(
-        manager.apply_command(EgressCommand::Add(first)),
+        apply(&mut manager, &sink, EgressCommand::Add(first)),
         Ok(ManagerCommandOutcome::Enqueued { shard_id })
     );
     assert_eq!(
-        manager.apply_command(EgressCommand::Update(duplicate)),
+        apply(&mut manager, &sink, EgressCommand::Update(duplicate)),
         Ok(ManagerCommandOutcome::AlreadyCurrent { shard_id })
     );
     assert_eq!(
-        manager.apply_command(EgressCommand::Update(stale)),
+        apply(&mut manager, &sink, EgressCommand::Update(stale)),
         Ok(ManagerCommandOutcome::IgnoredStale { shard_id })
     );
     assert_eq!(
-        manager.apply_command(EgressCommand::Update(updated)),
+        apply(&mut manager, &sink, EgressCommand::Update(updated)),
         Ok(ManagerCommandOutcome::Enqueued { shard_id })
     );
     assert_eq!(
@@ -255,16 +356,24 @@ fn sink_spec_uses_common_lifecycle_command_contract() {
         Some((output_id.clone(), 3, shard_id))
     );
     assert_eq!(
-        manager.apply_command(EgressCommand::Remove(output_id.clone())),
+        apply(
+            &mut manager,
+            &sink,
+            EgressCommand::Remove(output_id.clone())
+        ),
         Ok(ManagerCommandOutcome::Enqueued { shard_id })
     );
     assert_eq!(
-        manager.apply_command(EgressCommand::Remove(output_id.clone())),
+        apply(
+            &mut manager,
+            &sink,
+            EgressCommand::Remove(output_id.clone())
+        ),
         Ok(ManagerCommandOutcome::AlreadyRemoved)
     );
     assert!(manager.desired_output(&output_id).is_none());
     assert_eq!(
-        manager.apply_command(EgressCommand::Shutdown),
+        apply(&mut manager, &sink, EgressCommand::Shutdown),
         Ok(ManagerCommandOutcome::Broadcast {
             shard_count: NonZeroU32::new(4).unwrap()
         })
@@ -274,15 +383,20 @@ fn sink_spec_uses_common_lifecycle_command_contract() {
 #[test]
 fn remove_preserves_desired_output_when_channel_is_full() {
     let mut manager = EgressManager::new(EgressManagerConfig::new(1, 1).unwrap());
+    let sink = QueueSink::new(1);
     let output_spec = spec("out-remove-full");
     let output_id = output_spec.id.clone();
 
     assert!(matches!(
-        manager.apply_command(EgressCommand::Add(output_spec.clone())),
+        apply(&mut manager, &sink, EgressCommand::Add(output_spec.clone())),
         Ok(ManagerCommandOutcome::Enqueued { .. })
     ));
     assert_eq!(
-        manager.apply_command(EgressCommand::Remove(output_id.clone())),
+        apply(
+            &mut manager,
+            &sink,
+            EgressCommand::Remove(output_id.clone())
+        ),
         Err(EgressManagerCommandError::CommandChannelFull {
             shard_id: ShardId::new(0)
         })
@@ -301,17 +415,18 @@ fn remove_preserves_desired_output_when_channel_is_full() {
 #[test]
 fn full_command_channel_fails_visibly_without_state_change() {
     let mut manager = EgressManager::new(EgressManagerConfig::new(1, 1).unwrap());
+    let sink = QueueSink::new(1);
     let first = spec("out-first");
     let second = spec("out-second");
 
     assert_eq!(
-        manager.apply_command(EgressCommand::Add(first.clone())),
+        apply(&mut manager, &sink, EgressCommand::Add(first.clone())),
         Ok(ManagerCommandOutcome::Enqueued {
             shard_id: ShardId::new(0)
         })
     );
     assert_eq!(
-        manager.apply_command(EgressCommand::Add(second.clone())),
+        apply(&mut manager, &sink, EgressCommand::Add(second.clone())),
         Err(EgressManagerCommandError::CommandChannelFull {
             shard_id: ShardId::new(0)
         })
@@ -324,16 +439,17 @@ fn full_command_channel_fails_visibly_without_state_change() {
 #[test]
 fn completing_command_capacity_allows_next_admission() {
     let mut manager = EgressManager::new(EgressManagerConfig::new(1, 1).unwrap());
+    let sink = QueueSink::new(1);
     let first = spec("out-first");
     let second = spec("out-second");
 
     assert!(matches!(
-        manager.apply_command(EgressCommand::Add(first)),
+        apply(&mut manager, &sink, EgressCommand::Add(first)),
         Ok(ManagerCommandOutcome::Enqueued { .. })
     ));
-    manager.complete_one_command(ShardId::new(0));
+    assert!(sink.take_one(ShardId::new(0)).is_some());
     assert!(matches!(
-        manager.apply_command(EgressCommand::Add(second)),
+        apply(&mut manager, &sink, EgressCommand::Add(second)),
         Ok(ManagerCommandOutcome::Enqueued { .. })
     ));
 }
@@ -341,9 +457,10 @@ fn completing_command_capacity_allows_next_admission() {
 #[test]
 fn shutdown_broadcasts_once_to_every_shard() {
     let mut manager = manager(3);
+    let sink = QueueSink::new(128);
 
-    let first = manager.apply_command(EgressCommand::Shutdown);
-    let second = manager.apply_command(EgressCommand::Shutdown);
+    let first = apply(&mut manager, &sink, EgressCommand::Shutdown);
+    let second = apply(&mut manager, &sink, EgressCommand::Shutdown);
 
     assert_eq!(
         first,
@@ -352,20 +469,25 @@ fn shutdown_broadcasts_once_to_every_shard() {
         })
     );
     assert_eq!(second, Ok(ManagerCommandOutcome::AlreadyShuttingDown));
-    assert_eq!(manager.command_depth(ShardId::new(0)), 1);
-    assert_eq!(manager.command_depth(ShardId::new(1)), 1);
-    assert_eq!(manager.command_depth(ShardId::new(2)), 1);
+    assert_eq!(sink.depth(ShardId::new(0)), 1);
+    assert_eq!(sink.depth(ShardId::new(1)), 1);
+    assert_eq!(sink.depth(ShardId::new(2)), 1);
 }
 
 #[test]
 fn shutdown_does_not_partially_broadcast_when_any_shard_is_full() {
     let mut manager = EgressManager::new(EgressManagerConfig::new(3, 1).unwrap());
+    let sink = QueueSink::new(1);
 
     assert!(matches!(
-        manager.apply_command(EgressCommand::DrainShard(ShardId::new(1))),
+        apply(
+            &mut manager,
+            &sink,
+            EgressCommand::DrainShard(ShardId::new(1))
+        ),
         Ok(ManagerCommandOutcome::Enqueued { .. })
     ));
-    let shutdown = manager.apply_command(EgressCommand::Shutdown);
+    let shutdown = apply(&mut manager, &sink, EgressCommand::Shutdown);
 
     assert_eq!(
         shutdown,
@@ -373,34 +495,27 @@ fn shutdown_does_not_partially_broadcast_when_any_shard_is_full() {
             shard_id: ShardId::new(1)
         })
     );
-    assert_eq!(manager.command_depth(ShardId::new(0)), 0);
-    assert_eq!(manager.command_depth(ShardId::new(1)), 1);
-    assert_eq!(manager.command_depth(ShardId::new(2)), 0);
+    assert_eq!(sink.depth(ShardId::new(0)), 0);
+    assert_eq!(sink.depth(ShardId::new(1)), 1);
+    assert_eq!(sink.depth(ShardId::new(2)), 0);
     assert_eq!(
-        manager.apply_command(EgressCommand::Shutdown),
+        apply(&mut manager, &sink, EgressCommand::Shutdown),
         Err(EgressManagerCommandError::CommandChannelFull {
             shard_id: ShardId::new(1)
         })
     );
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SendFailure {
-    Closed,
-}
-
 #[test]
 fn failed_add_dispatch_preserves_manager_state() {
     let mut manager = manager(4);
+    let sink = QueueSink::new(128);
     let output_spec = spec("out-dispatch-add");
     let output_id = output_spec.id.clone();
     let expected_shard = manager.assign_spec(&output_spec);
 
-    let result = manager.dispatch_command(EgressCommand::Add(output_spec), |shard_id, command| {
-        assert_eq!(shard_id, expected_shard);
-        assert!(matches!(command, EgressCommand::Add(_)));
-        Err(SendFailure::Closed)
-    });
+    sink.close(expected_shard);
+    let result = manager.dispatch_command(EgressCommand::Add(output_spec), &sink);
 
     assert_eq!(
         result,
@@ -410,28 +525,23 @@ fn failed_add_dispatch_preserves_manager_state() {
         })
     );
     assert!(manager.desired_output(&output_id).is_none());
-    assert_eq!(manager.command_depth(expected_shard), 0);
+    assert_eq!(sink.depth(expected_shard), 0);
 }
 
 #[test]
 fn failed_remove_dispatch_preserves_desired_output() {
     let mut manager = manager(4);
+    let sink = QueueSink::new(128);
     let output_spec = spec("out-dispatch-remove");
     let output_id = output_spec.id.clone();
     let expected_shard = manager.assign_spec(&output_spec);
 
     assert!(matches!(
-        manager.apply_command(EgressCommand::Add(output_spec.clone())),
+        apply(&mut manager, &sink, EgressCommand::Add(output_spec.clone())),
         Ok(ManagerCommandOutcome::Enqueued { .. })
     ));
-    let result = manager.dispatch_command(
-        EgressCommand::Remove(output_id.clone()),
-        |shard_id, command| {
-            assert_eq!(shard_id, expected_shard);
-            assert!(matches!(command, EgressCommand::Remove(_)));
-            Err(SendFailure::Closed)
-        },
-    );
+    sink.close(expected_shard);
+    let result = manager.dispatch_command(EgressCommand::Remove(output_id.clone()), &sink);
 
     assert_eq!(
         result,
@@ -448,21 +558,16 @@ fn failed_remove_dispatch_preserves_desired_output() {
         )),
         Some((output_id, 1, expected_shard))
     );
-    assert_eq!(manager.command_depth(expected_shard), 1);
+    assert_eq!(sink.depth(expected_shard), 1, "only the add was queued");
 }
 
 #[test]
 fn failed_shutdown_dispatch_preserves_shutdown_state() {
     let mut manager = manager(3);
+    let sink = QueueSink::new(128);
 
-    let result = manager.dispatch_command(EgressCommand::Shutdown, |shard_id, command| {
-        assert!(matches!(command, EgressCommand::Shutdown));
-        if shard_id == ShardId::new(1) {
-            Err(SendFailure::Closed)
-        } else {
-            Ok(())
-        }
-    });
+    sink.close(ShardId::new(1));
+    let result = manager.dispatch_command(EgressCommand::Shutdown, &sink);
 
     assert_eq!(
         result,
@@ -472,9 +577,9 @@ fn failed_shutdown_dispatch_preserves_shutdown_state() {
         })
     );
     assert!(!manager.shutting_down);
-    assert_eq!(manager.command_depth(ShardId::new(0)), 0);
-    assert_eq!(manager.command_depth(ShardId::new(1)), 0);
-    assert_eq!(manager.command_depth(ShardId::new(2)), 0);
+    // Shard 0 got its shutdown before shard 1 failed; a retry sends again.
+    assert_eq!(sink.depth(ShardId::new(0)), 1);
+    assert_eq!(sink.depth(ShardId::new(2)), 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -507,16 +612,9 @@ fn resizing_shard_count_moves_only_a_minority_of_outputs() {
     );
 }
 
-fn roomy(shards: u32) -> EgressManager {
-    EgressManager::new(EgressManagerConfig::new(shards, 8192).unwrap())
-}
-
 fn add(manager: &mut EgressManager, id: &str) -> ShardId {
     manager
-        .dispatch_command(
-            EgressCommand::Add(spec(id)),
-            |_, _| Ok::<_, SendFailure>(()),
-        )
+        .dispatch_command(EgressCommand::Add(spec(id)), &QueueSink::new(1))
         .unwrap();
     manager
         .desired_output(&OutputId::new(id))
@@ -526,7 +624,7 @@ fn add(manager: &mut EgressManager, id: &str) -> ShardId {
 
 #[test]
 fn growth_keeps_every_live_output_and_places_only_new_ones_on_new_shards() {
-    let mut manager = roomy(2);
+    let mut manager = manager(2);
     let before: Vec<(String, ShardId)> = (0..200)
         .map(|i| (format!("old-{i}"), add(&mut manager, &format!("old-{i}"))))
         .collect();
@@ -553,20 +651,20 @@ fn growth_keeps_every_live_output_and_places_only_new_ones_on_new_shards() {
 
 #[test]
 fn updating_a_live_output_stays_on_its_recorded_shard_after_resizing() {
-    let mut manager = roomy(2);
+    let mut manager = manager(2);
     let original = add(&mut manager, "stable");
     manager.grow_to(NonZeroU32::new(8).unwrap());
     let mut update = spec("stable");
     update.generation = 2;
-    let mut sent = Vec::new();
+    let sink = QueueSink::new(128);
     manager
-        .dispatch_command(EgressCommand::Update(update), |shard, command| {
-            sent.push((shard, command));
-            Ok::<_, SendFailure>(())
-        })
+        .dispatch_command(EgressCommand::Update(update), &sink)
         .unwrap();
-    assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].0, original);
+    assert_eq!(
+        sink.depth(original),
+        1,
+        "the update went to the recorded shard"
+    );
     assert_eq!(
         manager
             .desired_output(&OutputId::new("stable"))
@@ -578,7 +676,7 @@ fn updating_a_live_output_stays_on_its_recorded_shard_after_resizing() {
 
 #[test]
 fn retiring_a_shard_stops_new_placement_and_waits_for_its_last_output() {
-    let mut manager = roomy(3);
+    let mut manager = manager(3);
     let live: Vec<(String, ShardId)> = (0..60)
         .map(|i| (format!("live-{i}"), add(&mut manager, &format!("live-{i}"))))
         .collect();
@@ -598,9 +696,7 @@ fn retiring_a_shard_stops_new_placement_and_waits_for_its_last_output() {
     }
     let remove = |manager: &mut EgressManager, id: &String| {
         manager
-            .dispatch_command(EgressCommand::Remove(OutputId::new(id)), |_, _| {
-                Ok::<_, SendFailure>(())
-            })
+            .dispatch_command(EgressCommand::Remove(OutputId::new(id)), &QueueSink::new(1))
             .unwrap();
     };
     for id in &tail[..tail.len() - 1] {
@@ -622,21 +718,18 @@ fn output_count_reflects_live_desired_outputs() {
     assert_eq!(manager.output_count(), 0);
 
     manager
-        .dispatch_command(EgressCommand::Add(spec("out-1")), |_, _| {
-            Ok::<_, SendFailure>(())
-        })
+        .dispatch_command(EgressCommand::Add(spec("out-1")), &QueueSink::new(1))
         .unwrap();
     manager
-        .dispatch_command(EgressCommand::Add(spec("out-2")), |_, _| {
-            Ok::<_, SendFailure>(())
-        })
+        .dispatch_command(EgressCommand::Add(spec("out-2")), &QueueSink::new(1))
         .unwrap();
     assert_eq!(manager.output_count(), 2);
 
     manager
-        .dispatch_command(EgressCommand::Remove(OutputId::new("out-1")), |_, _| {
-            Ok::<_, SendFailure>(())
-        })
+        .dispatch_command(
+            EgressCommand::Remove(OutputId::new("out-1")),
+            &QueueSink::new(1),
+        )
         .unwrap();
     assert_eq!(manager.output_count(), 1);
 }
@@ -707,7 +800,7 @@ mod proptests {
                 0..120,
             ),
         ) {
-            let mut manager = roomy(3);
+            let mut manager = manager(3);
             let mut recorded = std::collections::HashMap::new();
             for op in ops {
                 match op {
@@ -715,7 +808,7 @@ mod proptests {
                         let id = format!("out-{index}");
                         let placement = manager.placement_count().get();
                         if manager
-                            .dispatch_command(EgressCommand::Add(spec(&id)), |_, _| Ok::<_, SendFailure>(()))
+                            .dispatch_command(EgressCommand::Add(spec(&id)), &QueueSink::new(1))
                             .is_ok()
                         {
                             let shard = manager.desired_output(&OutputId::new(&id)).unwrap().shard_id();
@@ -729,7 +822,7 @@ mod proptests {
                         let id = format!("out-{index}");
                         let _ = manager.dispatch_command(
                             EgressCommand::Remove(OutputId::new(&id)),
-                            |_, _| Ok::<_, SendFailure>(()),
+                            &QueueSink::new(1),
                         );
                         recorded.remove(&id);
                     }

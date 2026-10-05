@@ -145,13 +145,13 @@ impl EgressShardGroup {
             .map_err(|source| EgressShardGroupError::SendFailed { shard_id, source })
     }
 
-    /// Commands queued for `shard_id` and not yet taken by its thread (0 for
-    /// an unknown shard).
-    pub fn queued_commands(&self, shard_id: ShardId) -> usize {
+    /// Commands `shard_id`'s channel can take now (`None` for an unknown
+    /// shard).
+    pub fn free_command_slots(&self, shard_id: ShardId) -> Option<usize> {
         usize::try_from(shard_id.index())
             .ok()
             .and_then(|index| self.handles.get(index))
-            .map_or(0, EgressShardHandle::queued_commands)
+            .map(EgressShardHandle::free_command_slots)
     }
 
     pub fn snapshots(&self) -> Vec<EgressShardSnapshot> {

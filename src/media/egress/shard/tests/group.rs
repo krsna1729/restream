@@ -94,7 +94,7 @@ fn manager_dispatch_to_group_routes_add_to_assigned_thread() {
     let output = spec_for_shard(&manager, ShardId::new(1));
     let output_id = output.id.clone();
 
-    let result = manager.dispatch_to_group(EgressCommand::Add(output.clone()), &group);
+    let result = manager.dispatch_command(EgressCommand::Add(output.clone()), &group);
     shard_one.wait_for_commands(1);
     let snapshots = group.shutdown_and_join();
 
@@ -135,20 +135,19 @@ fn manager_dispatch_to_group_preserves_state_when_group_rejects_shard() {
     let output = spec_for_shard(&manager, ShardId::new(1));
     let output_id = output.id.clone();
 
-    let result = manager.dispatch_to_group(EgressCommand::Add(output), &group);
+    let result = manager.dispatch_command(EgressCommand::Add(output), &group);
     let snapshots = group.shutdown_and_join();
 
+    // The group has no channel for shard 1: refused before any send.
     assert_eq!(
         result,
-        Err(EgressManagerDispatchError::Dispatch {
-            shard_id: ShardId::new(1),
-            source: EgressShardGroupError::UnknownShard {
+        Err(EgressManagerDispatchError::Command(
+            EgressManagerCommandError::UnknownShard {
                 shard_id: ShardId::new(1)
-            },
-        })
+            }
+        ))
     );
     assert!(manager.desired_output(&output_id).is_none());
-    assert_eq!(manager.command_depth(ShardId::new(1)), 0);
     assert_eq!(shard_zero.state().commands, vec!["shutdown".to_string()]);
     assert_eq!(snapshots.len(), 1);
 }
@@ -173,33 +172,33 @@ fn manager_dispatch_to_group_converges_after_shard_queue_full() {
     let rejected_id = outputs[2].id.clone();
 
     assert!(matches!(
-        manager.dispatch_to_group(EgressCommand::Add(outputs[0].clone()), &group),
+        manager.dispatch_command(EgressCommand::Add(outputs[0].clone()), &group),
         Ok(ManagerCommandOutcome::Enqueued { shard_id }) if shard_id == ShardId::new(0)
     ));
     gate.wait_until_entered();
     assert!(matches!(
-        manager.dispatch_to_group(EgressCommand::Add(outputs[1].clone()), &group),
+        manager.dispatch_command(EgressCommand::Add(outputs[1].clone()), &group),
         Ok(ManagerCommandOutcome::Enqueued { shard_id }) if shard_id == ShardId::new(0)
     ));
-    let full = manager.dispatch_to_group(EgressCommand::Add(outputs[2].clone()), &group);
+    let full = manager.dispatch_command(EgressCommand::Add(outputs[2].clone()), &group);
 
+    // The real channel is full (one command taken and blocked, one queued):
+    // refused before the send, from the channel's own length.
     assert_eq!(
         full,
-        Err(EgressManagerDispatchError::Dispatch {
-            shard_id: ShardId::new(0),
-            source: EgressShardGroupError::SendFailed {
-                shard_id: ShardId::new(0),
-                source: EgressShardSendError::Full,
-            },
-        })
+        Err(EgressManagerDispatchError::Command(
+            EgressManagerCommandError::CommandChannelFull {
+                shard_id: ShardId::new(0)
+            }
+        ))
     );
     assert!(manager.desired_output(&rejected_id).is_none());
-    assert_eq!(manager.command_depth(ShardId::new(0)), 2);
+    assert_eq!(group.free_command_slots(ShardId::new(0)), Some(0));
 
     gate.release();
     wait_for_command_depth_at_least(&group, ShardId::new(0), 2);
     assert!(matches!(
-        manager.dispatch_to_group(EgressCommand::Add(outputs[2].clone()), &group),
+        manager.dispatch_command(EgressCommand::Add(outputs[2].clone()), &group),
         Ok(ManagerCommandOutcome::Enqueued { shard_id }) if shard_id == ShardId::new(0)
     ));
     let snapshots = group.shutdown_and_join();
@@ -238,17 +237,17 @@ fn manager_dispatch_to_group_rejects_new_assignments_to_draining_shard() {
     let rejected_id = outputs[1].id.clone();
 
     assert!(matches!(
-        manager.dispatch_to_group(EgressCommand::Add(outputs[0].clone()), &group),
+        manager.dispatch_command(EgressCommand::Add(outputs[0].clone()), &group),
         Ok(ManagerCommandOutcome::Enqueued { shard_id }) if shard_id == ShardId::new(0)
     ));
     shard_zero.wait_for_commands(1);
     assert!(matches!(
-        manager.dispatch_to_group(EgressCommand::DrainShard(ShardId::new(0)), &group),
+        manager.dispatch_command(EgressCommand::DrainShard(ShardId::new(0)), &group),
         Ok(ManagerCommandOutcome::Enqueued { shard_id }) if shard_id == ShardId::new(0)
     ));
     shard_zero.wait_for_commands(2);
 
-    let rejected = manager.dispatch_to_group(EgressCommand::Add(outputs[1].clone()), &group);
+    let rejected = manager.dispatch_command(EgressCommand::Add(outputs[1].clone()), &group);
 
     assert_eq!(
         rejected,
@@ -265,13 +264,13 @@ fn manager_dispatch_to_group_rejects_new_assignments_to_draining_shard() {
     );
 
     assert!(matches!(
-        manager.dispatch_to_group(EgressCommand::Remove(active_id.clone()), &group),
+        manager.dispatch_command(EgressCommand::Remove(active_id.clone()), &group),
         Ok(ManagerCommandOutcome::Enqueued { shard_id }) if shard_id == ShardId::new(0)
     ));
     shard_zero.wait_for_commands(3);
     assert!(manager.desired_output(&active_id).is_none());
     assert!(matches!(
-        manager.dispatch_to_group(EgressCommand::Shutdown, &group),
+        manager.dispatch_command(EgressCommand::Shutdown, &group),
         Ok(ManagerCommandOutcome::Broadcast { shard_count }) if shard_count == NonZeroU32::new(2).unwrap()
     ));
     let snapshots = group.shutdown_and_join();
@@ -392,11 +391,11 @@ fn manager_replays_only_replaced_shard_outputs_after_panic() {
     .unwrap();
 
     assert!(matches!(
-        manager.dispatch_to_group(EgressCommand::Add(panicked_output), &group),
+        manager.dispatch_command(EgressCommand::Add(panicked_output), &group),
         Ok(ManagerCommandOutcome::Enqueued { shard_id }) if shard_id == ShardId::new(0)
     ));
     assert!(matches!(
-        manager.dispatch_to_group(EgressCommand::Add(survivor_output), &group),
+        manager.dispatch_command(EgressCommand::Add(survivor_output), &group),
         Ok(ManagerCommandOutcome::Enqueued { shard_id }) if shard_id == ShardId::new(1)
     ));
     survivor.wait_for_commands(1);
@@ -409,9 +408,7 @@ fn manager_replays_only_replaced_shard_outputs_after_panic() {
         }),
         vec![ShardId::new(0)]
     );
-    let replay = manager.dispatch_recreate_shard(ShardId::new(0), |shard_id, command| {
-        group.try_send_to(shard_id, command)
-    });
+    let replay = manager.dispatch_recreate_shard(ShardId::new(0), &group);
 
     assert_eq!(
         replay,

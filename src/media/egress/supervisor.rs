@@ -54,13 +54,9 @@ impl EgressSupervisor {
     {
         let replaced = group.replace_panicked(self.config.shard_config, factory_for);
         let mut recoveries = Vec::with_capacity(replaced.len());
-        // A replaced shard starts with an empty queue; replay is admitted
-        // against the real queue lengths, not the dead shard's depth.
-        manager.observe_queued_commands(|shard_id| group.queued_commands(shard_id));
+        // Replay is admitted against the replacement's own (empty) channel.
         for shard_id in replaced {
-            let outcome = manager.dispatch_recreate_shard(shard_id, |shard_id, command| {
-                group.try_send_to(shard_id, command)
-            });
+            let outcome = manager.dispatch_recreate_shard(shard_id, &*group);
             match outcome {
                 Ok(ManagerCommandOutcome::Replayed {
                     shard_id,

@@ -128,10 +128,12 @@ Use these before any checker, wherever the weak form exists today:
    non-`Clone` `PersistentLease` that decrements on `Drop`; delete the
    remove API and the wrap test; keep "lease held ⇒ not idle" and
    "lease dropped ⇒ may go idle".
-4. **No shadow command depth.** `command_depths`
-   (`src/media/egress/manager.rs`) shadows the bounded shard channels and
-   must be reset to the real lengths. Let the channel own capacity
-   (`try_send`), or a `CommandPermit` where a send needs a reservation first.
+4. **No shadow command depth** (done: `CommandSink`). `command_depths`
+   (`src/media/egress/manager.rs`) shadowed the bounded shard channels and
+   had to be reset to the real lengths. The manager now asks the channel
+   (`CommandSink::free_slots`, flume capacity minus length) before it sends;
+   the shadow, its reset/complete calls and the test-only `apply_command`
+   are gone.
 5. **`WorkBudget` debits itself.** Its fields are public counters checked by
    each engine (`src/media/egress/policy.rs`). Make it an active resource with
    private remaining units/bytes and `claim`/`take_*` operations, ideally
