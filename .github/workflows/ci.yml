@@ -343,6 +343,67 @@ jobs:
             cargo +nightly fuzz run "$target" -- -max_total_time=30 -timeout=5
           done
 
+  miri:
+    name: Miri (ownership-sensitive pure modules)
+    runs-on: ubuntu-24.04
+    needs: test
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/ci-bootstrap
+        with:
+          node_version: '22'
+          npm_ci: 'true'
+          system_deps_profile: media
+          native_prefix: 'true'
+          rust_cache: 'true'
+      - name: Build frontend assets for the library
+        run: npm run build:frontend
+      - name: Install nightly with Miri
+        run: rustup toolchain install nightly --profile minimal --component miri,rust-src
+      # Pure Rust with raw pointers, epochs or atomics; Miri cannot run FFmpeg,
+      # io_uring or sockets, so the set is explicit (see docs/testing.md).
+      - name: Run Miri over the selected modules
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation
+          PROPTEST_CASES: '8'
+        run: >
+          cargo +nightly miri test --lib --
+          media::egress::leaf_arena media::egress::scheduler media::ring_buffer
+          media::codec::bits media::egress::tls::ktls::tests::ancillary
+
+  asan:
+    name: AddressSanitizer (FFI and syscall modules)
+    runs-on: ubuntu-24.04
+    needs: test
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/ci-bootstrap
+        with:
+          node_version: '22'
+          npm_ci: 'true'
+          system_deps_profile: media
+          native_prefix: 'true'
+          rust_cache: 'true'
+      - name: Build frontend assets for the library
+        run: npm run build:frontend
+      - name: Install nightly with rust-src
+        run: rustup toolchain install nightly --profile minimal --component rust-src
+      # Rust code instrumented (build-std); the linked FFmpeg is not, so this
+      # catches Rust-side misuse of FFmpeg, kTLS and socket memory. Leak
+      # detection is off: FFmpeg keeps process-lifetime allocations.
+      - name: Run the FFI-heavy tests under ASan
+        env:
+          RUSTFLAGS: -Zsanitizer=address
+          RUSTDOCFLAGS: -Zsanitizer=address
+          ASAN_OPTIONS: detect_leaks=0
+        run: >
+          cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu --lib --
+          media::avio media::transcoder media::h264_transcoder media::file_ingest
+          media::egress::tls media::egress::backends::compio_tcp
+          media::external_transcoder media::timing media::rtmp::listener
+
   integration-build:
     name: Transport live-harness build
     runs-on: ubuntu-24.04

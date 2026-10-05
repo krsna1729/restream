@@ -71,7 +71,7 @@ named where they apply).
 |---|---|---|
 | 1 Language | Strong: Compio Owners are `!Send` and thread-homed; one Owner per address family, not per output. Unsafe is confined to FFmpeg/libc/socket boundaries. Builds refuse `panic = "abort"` (fault domains need unwinding, #240). Workspace lints deny `unsafe_op_in_unsafe_fn`, `unused_must_use` and `clippy::undocumented_unsafe_blocks`; FFI-free modules `forbid(unsafe_code)`. | Strong: sans-I/O single-owner protocol core; `srt-lifecycle` forbids `unsafe`; strict unsafe lints. |
 | 2 API design | Good, with duplicated state the types do not prevent (listed below). Per-entity panic boundaries and per-client admission bounds (#237, #239; [isolation audit](isolation-audit.md)); std locks only through poison-tolerant `crate::sync`, enforced by `clippy.toml` (#240). | Strong: logical peer/caller ids, transactional first attach, bounded caller pool, generational dense arena that owns readiness. |
-| 3 Ecosystem | Many property tests and live fault cases; cargo-fuzz smoke over seven media/RTMP/TS parsers; **no Miri or sanitizer job in CI**. | Mature: proptests with checked-in seeds, Miri, ASan, structured cargo-fuzz targets, libsrt interop. |
+| 3 Ecosystem | Many property tests and live fault cases; cargo-fuzz smoke over seven media/RTMP/TS parsers; narrow Miri and ASan CI jobs ([testing](testing.md#miri-and-addresssanitizer)). | Mature: proptests with checked-in seeds, Miri, ASan, structured cargo-fuzz targets, libsrt interop. |
 | 4 Model checking | Seven Loom models in the mandatory concurrency gate. **No Kani.** | One Loom model (reuseport layout barrier, run by `cargo xtask ci`). **No Kani.** |
 | 5–6 TLA+, Lean | None. | None. |
 
@@ -177,7 +177,7 @@ would add wrapping for little gain), and every test of external behavior
 (RTMP serialization, libsrt interop, slow-peer isolation, Compio wakeups,
 kTLS handoff, capacity).
 
-### Rung 3: narrow memory-safety jobs for Restream
+### Rung 3: narrow memory-safety jobs for Restream (done)
 
 Add a small Miri target for pure, ownership-sensitive Rust that needs no
 FFmpeg or kernel, and an AddressSanitizer job over selected native/FFI-heavy
@@ -187,6 +187,13 @@ AVCC/ASC, RTMP server responses, ingest requests, MPEG-TS demux) exist and a
 crash found by them is fixed with a regression test first; see
 [testing](testing.md#parser-fuzz-targets). Fuzz belongs at externally supplied
 bytes: no theorem prover for parser robustness.
+
+Done: CI `Miri` runs the leaf arena, scheduler, ring buffer, bit reader and
+kTLS control-message parser; CI `AddressSanitizer` runs 196 FFI and syscall
+tests (avio, transcoders, file ingest, TLS, Compio TCP, external transcoder,
+TSC timing, RTMP listener) with build-std instrumentation. A deliberate
+use-after-free probe was reported as `heap-use-after-free`, so the job is
+live. Leak detection is off (FFmpeg's process-lifetime allocations).
 
 ### Rung 4: Kani on a handful of primitives
 

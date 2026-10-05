@@ -71,6 +71,27 @@ cargo +nightly fuzz run <target> -- -max_total_time=60
 CI (`Parser fuzz smoke`) runs every target for 30 s. A crash becomes a
 regression unit test next to the parser before the fix lands.
 
+### Miri and AddressSanitizer
+
+Two narrow memory-safety jobs complement the fuzz targets. Neither copies a
+whole-suite matrix: Miri cannot execute FFmpeg, io_uring or sockets, and the
+linked FFmpeg is not instrumented under ASan.
+
+| CI job | Modules | Why these |
+|---|---|---|
+| `Miri (ownership-sensitive pure modules)` | `egress::leaf_arena`, `egress::scheduler`, `ring_buffer`, `codec::bits`, the kTLS control-message parser | raw pointers, epoch keys, atomics; pure Rust |
+| `AddressSanitizer (FFI and syscall modules)` | `avio`, `transcoder`, `h264_transcoder`, `file_ingest`, `egress::tls`, `compio_tcp`, `external_transcoder`, `timing`, `rtmp::listener` | Rust-side use of FFmpeg, kTLS and socket memory |
+
+```sh
+MIRIFLAGS=-Zmiri-disable-isolation PROPTEST_CASES=8 \
+  cargo +nightly miri test --lib -- media::egress::leaf_arena media::ring_buffer
+RUSTFLAGS=-Zsanitizer=address ASAN_OPTIONS=detect_leaks=0 \
+  cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu --lib -- media::avio
+```
+
+`egress::journal` is left out of Miri: it exceeds 25 minutes there. A module
+gains `unsafe` or an FFI call: add it to the matching job.
+
 ## Frontend test split
 
 Frontend confidence is intentionally split between TypeScript ownership and
