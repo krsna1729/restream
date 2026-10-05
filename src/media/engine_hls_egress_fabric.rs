@@ -8,7 +8,7 @@ use crate::media::egress::backends::compio_tcp::CompioTcpPoller;
 use crate::media::egress::backends::hls_put_shard::HlsPutShardBackend;
 use crate::media::egress::command::{EgressCommand, FeedId};
 use crate::media::egress::manager::{
-    EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome,
+    EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome, PlacementPolicy,
 };
 use crate::media::egress::runtime::{
     EgressFabricRuntime, EgressFabricRuntimeError, ResizeReason, subscribe_fabric_wakes,
@@ -85,8 +85,11 @@ impl MediaEngine {
                         HlsPutFabricEnsureError::Group(error)
                     }
                 })?;
+            // HLS outputs of one feed cost alike; least-loaded placement
+            // spreads them over shards that join the pool after the first.
             let manager_config = EgressManagerConfig::new(1, config.command_channel_capacity)
-                .expect("egress fabric manager config is clamped nonzero");
+                .expect("egress fabric manager config is clamped nonzero")
+                .with_placement_policy(PlacementPolicy::LeastLoaded);
             let runtime = EgressFabricRuntime::new(manager_config, group)
                 .map_err(HlsPutFabricEnsureError::Runtime)?
                 .adaptive(config.shards);

@@ -5,7 +5,9 @@ use std::sync::OnceLock;
 use sysinfo::{Disks, Networks, System};
 
 use crate::api::state::AppState;
+use crate::media::egress::backends::hls_put_shard::HLS_PUT_TLS_COUNTERS;
 use crate::media::egress::backends::rtmp::RTMPS_TLS_COUNTERS;
+use crate::media::egress::tls::TlsTelemetrySnapshot;
 use crate::media::uring_capabilities::UringCapabilities;
 use crate::system_sampling::{ProcessResourceSnapshot, sample_process_resources};
 
@@ -42,6 +44,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
         .collect::<Vec<_>>();
     let io_uring = uring_capabilities();
     let rtmps = RTMPS_TLS_COUNTERS.snapshot();
+    let hls_put_tls = HLS_PUT_TLS_COUNTERS.snapshot();
 
     let media_root = {
         let absolute = configured_media_root(&state.media_dir);
@@ -147,23 +150,8 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
             "mediaExecutor": crate::media::executor::snapshot(),
             "egressShards": egress_shards,
             "ioUring": io_uring,
-            "rtmps": {
-                "connections": rtmps.connections,
-                "tls12": rtmps.tls12,
-                "tls13": rtmps.tls13,
-                "ktlsRequested": rtmps.ktls_requested,
-                "ktlsAttempts": rtmps.ktls_attempts,
-                "ktlsSuccess": rtmps.ktls_success,
-                "ktlsUnsupported": rtmps.ktls_unsupported,
-                "ktlsError": rtmps.ktls_error,
-                "userspaceTlsConnections": rtmps.userspace_tls_connections,
-                "ktlsCapabilities": {
-                    "tls12Aes128Gcm": rtmps.ktls_tls12_aes128_gcm,
-                    "tls12Aes256Gcm": rtmps.ktls_tls12_aes256_gcm,
-                    "tls13Aes128Gcm": rtmps.ktls_tls13_aes128_gcm,
-                    "tls13Aes256Gcm": rtmps.ktls_tls13_aes256_gcm,
-                },
-            },
+            "rtmps": tls_counters_json(&rtmps),
+            "hlsPutTls": tls_counters_json(&hls_put_tls),
             "disk": {
                 "usedPercent": disk_pct,
             },
@@ -191,23 +179,8 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
             "mediaExecutor": crate::media::executor::snapshot(),
             "egressShards": egress_shards,
             "ioUring": io_uring,
-            "rtmps": {
-                "connections": rtmps.connections,
-                "tls12": rtmps.tls12,
-                "tls13": rtmps.tls13,
-                "ktlsRequested": rtmps.ktls_requested,
-                "ktlsAttempts": rtmps.ktls_attempts,
-                "ktlsSuccess": rtmps.ktls_success,
-                "ktlsUnsupported": rtmps.ktls_unsupported,
-                "ktlsError": rtmps.ktls_error,
-                "userspaceTlsConnections": rtmps.userspace_tls_connections,
-                "ktlsCapabilities": {
-                    "tls12Aes128Gcm": rtmps.ktls_tls12_aes128_gcm,
-                    "tls12Aes256Gcm": rtmps.ktls_tls12_aes256_gcm,
-                    "tls13Aes128Gcm": rtmps.ktls_tls13_aes128_gcm,
-                    "tls13Aes256Gcm": rtmps.ktls_tls13_aes256_gcm,
-                },
-            },
+            "rtmps": tls_counters_json(&rtmps),
+            "hlsPutTls": tls_counters_json(&hls_put_tls),
             "disk": {
                 "totalBytes": total_disk,
                 "usedBytes": used_disk,
@@ -230,6 +203,27 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
             }
         })
     }
+}
+
+/// One TLS egress transport's process-lifetime counters (RTMPS, HLS PUT).
+fn tls_counters_json(tls: &TlsTelemetrySnapshot) -> serde_json::Value {
+    serde_json::json!({
+        "connections": tls.connections,
+        "tls12": tls.tls12,
+        "tls13": tls.tls13,
+        "ktlsRequested": tls.ktls_requested,
+        "ktlsAttempts": tls.ktls_attempts,
+        "ktlsSuccess": tls.ktls_success,
+        "ktlsUnsupported": tls.ktls_unsupported,
+        "ktlsError": tls.ktls_error,
+        "userspaceTlsConnections": tls.userspace_tls_connections,
+        "ktlsCapabilities": {
+            "tls12Aes128Gcm": tls.ktls_tls12_aes128_gcm,
+            "tls12Aes256Gcm": tls.ktls_tls12_aes256_gcm,
+            "tls13Aes128Gcm": tls.ktls_tls13_aes128_gcm,
+            "tls13Aes256Gcm": tls.ktls_tls13_aes256_gcm,
+        },
+    })
 }
 
 fn uring_capabilities() -> &'static serde_json::Value {

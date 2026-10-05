@@ -132,9 +132,35 @@ repeats, 2026-10-04:
 
 Most of the old cost was the per-output shape (a timer, a snapshot and a
 client per output), not Tokio: fixing that on Tokio cut CPU by about a third.
-The shard path is correct and compliant but costs about 24 points more CPU at
-this rung, so Reqwest stays the default. Not measured: HTTPS, where the shard
-path's kernel TLS may change the balance, and rungs above 1000.
+The shard path as first merged cost about 24 points more CPU at this rung, so
+Reqwest stayed the default.
+
+Profiling it at HTTPS rungs found four costs, now fixed: a scan of every
+slot per event for the next deadline (a min-heap now), shards that joined the
+pool late carrying few outputs (least-loaded placement), kernel TLS pushing
+each 16 KiB record as its own segment (`MSG_MORE` until the request's last
+byte) and a 64 KiB send bound (512 KiB for uploads). A fifth finding was a
+TLS bug on both shard transports: session tickets that arrived before the
+kernel-TLS hand-off stalled the connection until its request timeout (#267).
+
+Same bench binary for both transports (only `RESTREAM_HLS_PUT_FABRIC`
+differs), 8 Mbit/s, settle 45 s, 30 s window, interleaved rounds,
+2026-10-05:
+
+| Rung | Transport | Delivered | p50 lag | p99 lag | CPU avg |
+|---|---|---|---|---|---|
+| HTTPS×600 (3 rounds) | Reqwest (default) | 600 ×3 | 251–318 ms | 1.06–1.34 s | 62.7–64.4% |
+| HTTPS×600 (3 rounds) | Egress-fabric shards, kernel TLS | 600 ×3 | 90–101 ms | 0.18–0.24 s | 56.1–68.1% |
+| HTTP×1000 (2 rounds) | Reqwest (default) | 1000 ×2 | 150–176 ms | 0.68–0.74 s | 48.9–51.2% |
+| HTTP×1000 (2 rounds) | Egress-fabric shards | 1000 ×2 | 36–47 ms | 0.19–0.24 s | 53.2–54.9% |
+
+Over HTTPS the shard path now matches Reqwest on CPU (paired differences
++3.6, −6.6, +0.9 points) with about a fifth of its p99 lag; over HTTP it costs
+about 4 points more with about a third of the lag. HTTPS×1000 saturates this
+6-CPU host for both transports (the sink decrypts 8 Gbit/s on three CPUs), so
+the HTTPS comparison is at 600. Not measured: rungs above 1000 and a real
+network, where the loopback receive work charged to the sender disappears for
+both.
 
 ## Reference results
 

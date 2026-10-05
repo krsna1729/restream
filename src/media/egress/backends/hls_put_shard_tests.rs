@@ -1,5 +1,4 @@
-use std::io::{Read as _, Write as _};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -65,7 +64,7 @@ impl Origin {
 }
 
 fn serve(
-    mut stream: TcpStream,
+    mut stream: impl std::io::Read + std::io::Write,
     connection: usize,
     seen: &Mutex<Vec<Seen>>,
     answer: &(dyn Fn(usize, &str) -> (u16, bool) + Send + Sync),
@@ -129,15 +128,27 @@ struct Output {
 }
 
 fn start_output(port: u16) -> Output {
+    start_output_with(
+        format!("http://127.0.0.1:{port}/live/out.m3u8"),
+        crate::media::egress::tls::rustls_client_config(),
+        Bytes::from_static(b"segment-zero"),
+    )
+}
+
+fn start_output_with(
+    url: String,
+    client_config: Arc<tokio_rustls::rustls::ClientConfig>,
+    first_segment: Bytes,
+) -> Output {
     let store = Arc::new(HlsStore::new());
-    store.push_segment(1.5, Bytes::from_static(b"segment-zero"));
+    store.push_segment(1.5, first_segment);
     let config = EgressShardConfig::new(16, 4, 4, 4, Duration::from_millis(5)).unwrap();
     let backend_store = store.clone();
     let handle = EgressShardHandle::spawn_with(ShardId::new(0), config, move || {
         HlsPutShardBackend::new(
             CompioTcpPoller::new(64).unwrap(),
             backend_store,
-            crate::media::egress::tls::rustls_client_config(),
+            client_config,
             8,
         )
         .unwrap()
@@ -149,9 +160,7 @@ fn start_output(port: u16) -> Output {
             id: OutputId::new("out-hls"),
             generation: 1,
             feed: FeedId::new("hls:pipe"),
-            protocol: ProtocolSpec::HlsPut {
-                url: format!("http://127.0.0.1:{port}/live/out.m3u8"),
-            },
+            protocol: ProtocolSpec::HlsPut { url },
             policy: LeafPolicy::default(),
             progress: EgressProgressSink {
                 bytes_sent: Some(bytes_sent.clone()),
@@ -428,4 +437,172 @@ fn a_retry_reuses_the_slots_lookup_in_flight() {
         matches!(slot.conn, Conn::Resolving { token, .. } if Some(token) == first),
         "the retry waits on the running lookup"
     );
+}
+
+fn scheduled_output(effect: EgressShardCommandEffect) -> Option<String> {
+    match effect {
+        EgressShardCommandEffect::ScheduleTimer { output_id, .. } => {
+            Some(output_id.as_str().to_owned())
+        }
+        _ => None,
+    }
+}
+
+/// The shard holds one timer, at the earliest slot deadline. It must
+/// follow that deadline as slots move theirs and go away, past the heap
+/// entries they leave behind: a removed or moved slot's old, earlier entry
+/// must not hold the timer, and a slot with a deadline must not be missed.
+#[test]
+fn the_shard_timer_follows_the_earliest_live_deadline() {
+    let mut backend = backend(3);
+    for id in ["a", "b", "c"] {
+        backend.on_command(EgressCommand::Add(hls_spec(id, 1)));
+    }
+    let key = |backend: &HlsPutShardBackend<_>, id: &str| backend.by_output[&OutputId::new(id)];
+    let base = Instant::now() + Duration::from_secs(60);
+    let set = |backend: &mut HlsPutShardBackend<_>, id: &str, at: Instant| {
+        let key = key(backend, id);
+        if let Some(slot) = backend.slots.get_mut(key) {
+            slot.conn = Conn::Resolving {
+                token: u64::MAX,
+                deadline: at,
+            };
+        }
+        backend.index_deadline(key);
+    };
+    set(&mut backend, "a", base);
+    set(&mut backend, "b", base + Duration::from_secs(1));
+    set(&mut backend, "c", base + Duration::from_secs(2));
+    backend.scheduled = None;
+    assert_eq!(
+        scheduled_output(backend.timer_effect()).as_deref(),
+        Some("a")
+    );
+
+    // a moves later than b: its earlier entry is stale.
+    set(&mut backend, "a", base + Duration::from_secs(3));
+    assert_eq!(
+        scheduled_output(backend.timer_effect()).as_deref(),
+        Some("b")
+    );
+
+    // b goes away: its entry belongs to no slot.
+    let b = key(&backend, "b");
+    backend.close_slot(b);
+    assert_eq!(
+        scheduled_output(backend.timer_effect()).as_deref(),
+        Some("c")
+    );
+
+    // c loses its deadline without being indexed (the connection drops).
+    let c = key(&backend, "c");
+    if let Some(slot) = backend.slots.get_mut(c) {
+        slot.conn = Conn::Idle;
+    }
+    assert_eq!(
+        scheduled_output(backend.timer_effect()).as_deref(),
+        Some("a")
+    );
+
+    // Nothing due before a's deadline; at it, only a is driven.
+    backend.drive_due(base + Duration::from_secs(2));
+    assert!(matches!(
+        backend.slots.get(key(&backend, "a")).map(|slot| &slot.conn),
+        Some(Conn::Resolving {
+            token: u64::MAX,
+            ..
+        })
+    ));
+    backend.drive_due(base + Duration::from_secs(3));
+    assert!(
+        !matches!(
+            backend.slots.get(key(&backend, "a")).map(|slot| &slot.conn),
+            Some(Conn::Resolving {
+                token: u64::MAX,
+                ..
+            })
+        ),
+        "a's expired lookup was not driven at its deadline"
+    );
+}
+
+/// An HTTPS origin: `Origin` with each connection behind a rustls server
+/// using a fresh self-signed certificate for 127.0.0.1. Returns the origin
+/// and a client config that trusts only that certificate (through the
+/// production extra-roots path).
+fn tls_origin() -> (Origin, Arc<tokio_rustls::rustls::ClientConfig>) {
+    use tokio_rustls::rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
+    let cert_key = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()]).unwrap();
+    let pem = std::env::temp_dir().join(format!(
+        "restream-hls-tls-origin-{}.pem",
+        std::process::id()
+    ));
+    std::fs::write(&pem, cert_key.cert.pem()).unwrap();
+    let client_config =
+        crate::media::egress::tls::client_config::rustls_client_config_with_extra_roots(
+            pem.to_str().unwrap(),
+        )
+        .unwrap();
+    let server_config = Arc::new(
+        tokio_rustls::rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![CertificateDer::from(cert_key.cert.der().to_vec())],
+                PrivatePkcs8KeyDer::from(cert_key.signing_key.serialize_der()).into(),
+            )
+            .unwrap(),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = Arc::new(Mutex::new(Vec::<Seen>::new()));
+    let seen_for_accept = seen.clone();
+    std::thread::spawn(move || {
+        for (connection, stream) in listener.incoming().enumerate() {
+            let Ok(stream) = stream else { return };
+            let (seen, server_config) = (seen_for_accept.clone(), server_config.clone());
+            std::thread::spawn(move || {
+                let tls = tokio_rustls::rustls::ServerConnection::new(server_config).unwrap();
+                let stream = tokio_rustls::rustls::StreamOwned::new(tls, stream);
+                serve(stream, connection, &seen, &|_, _| (200, false));
+            });
+        }
+    });
+    (Origin { port, seen }, client_config)
+}
+
+/// A segment several times the 64 KiB transmit staging bound goes out in
+/// many sends; all but the last carry MSG_MORE. Over kernel TLS the last
+/// send must not, or the final record stays open in the kernel and the
+/// origin never receives the end of the body.
+#[test]
+fn an_https_segment_larger_than_the_staging_bound_arrives_whole() {
+    use tokio_rustls::rustls::{CipherSuite, ProtocolVersion};
+    // The client offers only suites kTLS supports (see `crypto_provider`).
+    if ![
+        CipherSuite::TLS13_AES_128_GCM_SHA256,
+        CipherSuite::TLS13_AES_256_GCM_SHA384,
+    ]
+    .into_iter()
+    .any(|suite| crate::media::egress::tls::ktls::supports(ProtocolVersion::TLSv1_3, suite))
+    {
+        return;
+    }
+    let (origin, client_config) = tls_origin();
+    let segment: Vec<u8> = (0..300 * 1024).map(|i| (i % 251) as u8).collect();
+    let output = start_output_with(
+        format!("https://127.0.0.1:{}/live/out.m3u8", origin.port),
+        client_config,
+        Bytes::from(segment.clone()),
+    );
+    let seen = origin.wait_for("the large segment", |seen| {
+        seen.iter().any(|request| request.target.ends_with(".ts"))
+    });
+    let uploaded = seen
+        .iter()
+        .find(|request| request.target.ends_with(".ts"))
+        .unwrap();
+    assert_eq!(uploaded.body.len(), segment.len());
+    assert!(uploaded.body == segment, "the segment arrived altered");
+    assert!(!output.terminated.load(Ordering::Relaxed));
+    let _ = output.handle.try_send(EgressCommand::Shutdown);
 }

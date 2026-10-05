@@ -858,3 +858,77 @@ mod proptests {
         Resize(u32),
     }
 }
+
+fn least_loaded_manager(shards: u32) -> EgressManager {
+    EgressManager::new(
+        EgressManagerConfig::new(shards, 1024)
+            .unwrap()
+            .with_placement_policy(PlacementPolicy::LeastLoaded),
+    )
+}
+
+fn shard_loads(manager: &EgressManager, shards: u32) -> Vec<usize> {
+    (0..shards)
+        .map(|shard| manager.desired_count_for_shard(ShardId::new(shard)))
+        .collect()
+}
+
+/// The pool grows while outputs arrive (one shard, then three). Under
+/// least-loaded placement the shards that joined late take the new outputs
+/// until every shard carries the same number; the first shard does not keep
+/// the excess of everything placed before the growth.
+#[test]
+fn least_loaded_placement_evens_out_shards_that_join_after_the_first_outputs() {
+    let mut manager = least_loaded_manager(1);
+    for i in 0..120 {
+        add(&mut manager, &format!("early-{i}"));
+    }
+    manager.grow_to(NonZeroU32::new(3).unwrap());
+    for i in 0..240 {
+        add(&mut manager, &format!("late-{i}"));
+    }
+    assert_eq!(shard_loads(&manager, 3), vec![120, 120, 120]);
+}
+
+/// Removals free capacity where they happen: the next outputs go to the
+/// shard that lost outputs, and an update keeps an output where it is.
+#[test]
+fn least_loaded_placement_refills_the_shard_that_lost_outputs() {
+    let mut manager = least_loaded_manager(2);
+    let placed: Vec<(String, ShardId)> = (0..20)
+        .map(|i| {
+            let id = format!("out-{i}");
+            let shard = add(&mut manager, &id);
+            (id, shard)
+        })
+        .collect();
+    assert_eq!(shard_loads(&manager, 2), vec![10, 10]);
+    let sink = QueueSink::new(64);
+    let on_one: Vec<&String> = placed
+        .iter()
+        .filter(|(_, shard)| *shard == ShardId::new(1))
+        .map(|(id, _)| id)
+        .take(4)
+        .collect();
+    for id in on_one {
+        manager
+            .dispatch_command(EgressCommand::Remove(OutputId::new(id)), &sink)
+            .unwrap();
+    }
+    let (kept, kept_shard) = &placed[0];
+    let mut update = spec(kept);
+    update.generation = 2;
+    manager
+        .dispatch_command(EgressCommand::Update(update), &sink)
+        .unwrap();
+    assert_eq!(
+        manager
+            .desired_output(&OutputId::new(kept))
+            .map(DesiredOutput::shard_id),
+        Some(*kept_shard)
+    );
+    for i in 0..4 {
+        assert_eq!(add(&mut manager, &format!("refill-{i}")), ShardId::new(1));
+    }
+    assert_eq!(shard_loads(&manager, 2), vec![10, 10]);
+}

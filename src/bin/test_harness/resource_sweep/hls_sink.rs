@@ -47,6 +47,83 @@ struct Arrivals {
     segments: HashMap<String, BTreeMap<u64, Instant>>,
 }
 
+/// `RESOURCE_SWEEP_HLS_TLS=1`: the sink serves HTTPS with the checked-in
+/// RTMPS fixture certificate (SAN 127.0.0.1), which the harness already
+/// passes to Restream as `RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM`, and HLS
+/// outputs target `https://`.
+pub(crate) fn hls_sink_tls() -> bool {
+    std::env::var("RESOURCE_SWEEP_HLS_TLS")
+        .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "on"))
+}
+
+/// A TCP listener whose connections reach axum after their TLS handshake.
+/// Each handshake runs in its own task, as at a real ingest: a burst of
+/// connecting outputs is not served one handshake at a time, which would
+/// charge the sink's queueing to the uploader's request deadline. A failed
+/// handshake is dropped.
+struct TlsListener {
+    local: std::net::SocketAddr,
+    handshaken: tokio::sync::mpsc::Receiver<(
+        tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
+        std::net::SocketAddr,
+    )>,
+}
+
+impl TlsListener {
+    fn new(tcp: TcpListener, cancel: CancellationToken) -> Result<Self, String> {
+        use tokio_rustls::rustls::pki_types::pem::PemObject;
+        use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
+        let (cert, key) = restream::test_fixtures::rtmps_harness_cert_fixture()?;
+        let certs = CertificateDer::pem_file_iter(&cert)
+            .and_then(Iterator::collect::<Result<Vec<_>, _>>)
+            .map_err(|error| format!("HLS sink certificate {}: {error}", cert.display()))?;
+        let key = PrivateKeyDer::from_pem_file(&key)
+            .map_err(|error| format!("HLS sink key {}: {error}", key.display()))?;
+        let config = tokio_rustls::rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .map_err(|error| format!("HLS sink TLS config: {error}"))?;
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+        let local = tcp.local_addr().map_err(|error| error.to_string())?;
+        let (tx, handshaken) = tokio::sync::mpsc::channel(1024);
+        tokio::spawn(async move {
+            loop {
+                let accepted = tokio::select! {
+                    () = cancel.cancelled() => return,
+                    accepted = tcp.accept() => accepted,
+                };
+                let Ok((stream, addr)) = accepted else {
+                    continue;
+                };
+                let (acceptor, tx) = (acceptor.clone(), tx.clone());
+                tokio::spawn(async move {
+                    if let Ok(stream) = acceptor.accept(stream).await {
+                        let _ = tx.send((stream, addr)).await;
+                    }
+                });
+            }
+        });
+        Ok(Self { local, handshaken })
+    }
+}
+
+impl axum::serve::Listener for TlsListener {
+    type Io = tokio_rustls::server::TlsStream<tokio::net::TcpStream>;
+    type Addr = std::net::SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        match self.handshaken.recv().await {
+            Some(connection) => connection,
+            // The accept task ended (shutdown): serve nothing more.
+            None => std::future::pending().await,
+        }
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        Ok(self.local)
+    }
+}
+
 pub(crate) struct HlsCountingSink {
     arrivals: Arc<Mutex<Arrivals>>,
     cancel: CancellationToken,
@@ -69,14 +146,26 @@ impl HlsCountingSink {
             .map_err(|error| format!("harness HLS PUT sink on {port}: {error}"))?;
         let cancel = CancellationToken::new();
         let shutdown = cancel.clone();
-        tokio::spawn(async move {
-            if let Err(error) = axum::serve(listener, app)
-                .with_graceful_shutdown(shutdown.cancelled_owned())
-                .await
-            {
-                eprintln!("[hls-sink] server failed: {error}");
-            }
-        });
+        if hls_sink_tls() {
+            let listener = TlsListener::new(listener, cancel.clone())?;
+            tokio::spawn(async move {
+                if let Err(error) = axum::serve(listener, app)
+                    .with_graceful_shutdown(shutdown.cancelled_owned())
+                    .await
+                {
+                    eprintln!("[hls-sink] TLS server failed: {error}");
+                }
+            });
+        } else {
+            tokio::spawn(async move {
+                if let Err(error) = axum::serve(listener, app)
+                    .with_graceful_shutdown(shutdown.cancelled_owned())
+                    .await
+                {
+                    eprintln!("[hls-sink] server failed: {error}");
+                }
+            });
+        }
         Ok(Self { arrivals, cancel })
     }
 

@@ -80,13 +80,14 @@ impl HlsPutTarget {
 /// The byte transport an exchange runs over: a shard connection in
 /// production, an in-memory peer in tests.
 pub(crate) trait UploadIo {
-    fn write_shared(&mut self, parts: &[TxPart<'_>]) -> io::Result<usize>;
+    /// Queue the rest of one request (see `write_shared_message`).
+    fn write_message(&mut self, parts: &[TxPart<'_>]) -> io::Result<usize>;
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
 }
 
 impl UploadIo for TlsTcpConnection {
-    fn write_shared(&mut self, parts: &[TxPart<'_>]) -> io::Result<usize> {
-        TlsTcpConnection::write_shared(self, parts)
+    fn write_message(&mut self, parts: &[TxPart<'_>]) -> io::Result<usize> {
+        TlsTcpConnection::write_shared_message(self, parts)
     }
 
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
@@ -146,10 +147,10 @@ impl Exchange {
         while self.written < self.total() {
             let result = if let Some(head) = self.head.get(self.written..).filter(|h| !h.is_empty())
             {
-                io.write_shared(&[TxPart::Copy(head), TxPart::Share(self.body.clone())])
+                io.write_message(&[TxPart::Copy(head), TxPart::Share(self.body.clone())])
             } else {
                 let offset = self.written.saturating_sub(self.head.len());
-                io.write_shared(&[TxPart::Share(self.body.slice(offset..))])
+                io.write_message(&[TxPart::Share(self.body.slice(offset..))])
             };
             match result {
                 Ok(0) => break,
