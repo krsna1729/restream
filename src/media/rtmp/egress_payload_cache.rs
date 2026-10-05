@@ -181,6 +181,7 @@ fn convert_raw(packet: &MediaPacket, enhanced_hevc: bool) -> ConvertedPayload {
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
     use crate::media::packet::PayloadFormat;
@@ -290,9 +291,7 @@ mod tests {
         let mut cache = RtmpPayloadCache::default();
         let first = raw(MediaType::Audio, &adts_frame(), false, 500);
         let mut other_frame = adts_frame();
-        if let Some(byte) = other_frame.get_mut(9) {
-            *byte = 0x77;
-        }
+        other_frame[9] = 0x77;
         let second = raw(MediaType::Audio, &other_frame, false, 500);
         let a = cache.convert(&first, false);
         let b = cache.convert(&second, false);

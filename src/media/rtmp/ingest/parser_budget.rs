@@ -109,7 +109,7 @@ pub(super) fn held_bytes(buffered: usize, results: &[ServerSessionResult]) -> us
             ) => data.len(),
             _ => 0,
         })
-        .sum();
+        .fold(0, usize::saturating_add);
     buffered.saturating_add(awaiting)
 }
 

@@ -15,6 +15,14 @@ mod flv;
 #[cfg(fuzzing)]
 #[doc(hidden)]
 pub mod fuzz_entry;
+// Publisher C0/C1/C2 bytes, before admission (isolation audit F6).
+#[deny(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 mod handshake;
 // RTMP ingest reads every publisher byte: no unchecked indexing, arithmetic
 // or unwrapping (isolation audit F6). The attribute sits here to keep
@@ -29,6 +37,14 @@ mod handshake;
 mod ingest;
 mod ingest_media;
 mod listener;
+// Client play commands (isolation audit F6).
+#[deny(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 mod play;
 mod timestamps;
 
