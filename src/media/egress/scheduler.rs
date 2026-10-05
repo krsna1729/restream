@@ -175,6 +175,129 @@ impl ReadyQueue {
     }
 }
 
+/// Rung 4 (docs/assurance-roadmap.md): for every bounded sequence of pushes,
+/// pops and removals over a few slots whose leaf is replaced (epoch
+/// advanced) on removal, as a shard uses the queue: membership is exactly
+/// what was queued and not yet popped or removed, each key is queued at most
+/// once, `pop` is FIFO, and `push` reports Queued, AlreadyQueued or Full
+/// exactly when it should.
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+
+    const SLOTS: u32 = 2;
+    const STEPS: usize = 3;
+
+    /// The keys queued and not yet popped or removed, oldest first; at most
+    /// one per slot (each slot's leaf has one live key).
+    struct Model {
+        keys: [Option<LeafKey>; SLOTS as usize],
+        len: usize,
+    }
+
+    impl Model {
+        fn contains(&self, key: LeafKey) -> bool {
+            self.keys[..self.len].contains(&Some(key))
+        }
+
+        fn push(&mut self, key: LeafKey) {
+            self.keys[self.len] = Some(key);
+            self.len += 1;
+        }
+
+        fn pop(&mut self) -> Option<LeafKey> {
+            let front = self.keys[..self.len].first().copied().flatten();
+            if front.is_some() {
+                self.keys.copy_within(1..self.len, 0);
+                self.len -= 1;
+                self.keys[self.len] = None;
+            }
+            front
+        }
+    }
+
+    /// Pushes and pops in any order over a fixed key sequence (step `i`
+    /// offers slot `i % SLOTS`, so keys repeat): FIFO, AlreadyQueued and Full
+    /// exactly when they should. The choices are symbolic; the keys stay
+    /// concrete, which keeps the containers' internals tractable for CBMC.
+    #[kani::proof]
+    #[kani::unwind(5)]
+    #[kani::solver(kissat)]
+    fn pushes_and_pops_are_fifo_once_per_key_at_capacity_one() {
+        check_pushes_and_pops(1);
+    }
+
+    #[kani::proof]
+    #[kani::unwind(5)]
+    #[kani::solver(kissat)]
+    fn pushes_and_pops_are_fifo_once_per_key_at_capacity_two() {
+        check_pushes_and_pops(2);
+    }
+
+    fn check_pushes_and_pops(capacity: usize) {
+        let mut queue = ReadyQueue::with_capacity(capacity);
+        let mut model = Model {
+            keys: [None; SLOTS as usize],
+            len: 0,
+        };
+        for step in 0..STEPS {
+            let key = LeafKey::for_test(step as u32 % SLOTS, 0);
+            if kani::any() {
+                let queued_before = model.contains(key);
+                let len_before = queue.len();
+                let push = queue.push(key);
+                if queued_before {
+                    assert!(push == Push::AlreadyQueued);
+                } else if len_before < capacity {
+                    assert!(push == Push::Queued);
+                    model.push(key);
+                } else {
+                    assert!(push == Push::Full);
+                }
+            } else {
+                assert!(queue.pop() == model.pop());
+            }
+            assert!(queue.len() == model.len);
+        }
+    }
+
+    /// Removal: two leaves queued, one removed, then the next leaf in the
+    /// removed slot (a new epoch) queued. The removed key is never a member
+    /// again, the other keeps its place, and the new key queues behind it.
+    fn check_removal(remove_first: bool) {
+        let mut queue = ReadyQueue::with_capacity(SLOTS as usize);
+        let (first, second) = (LeafKey::for_test(0, 0), LeafKey::for_test(1, 0));
+        assert!(queue.push(first) == Push::Queued);
+        assert!(queue.push(second) == Push::Queued);
+        let (removed, kept) = if remove_first {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        queue.remove(removed);
+        assert!(!queue.contains(removed));
+        assert!(queue.len() == 1);
+        let next = LeafKey::for_test(removed.slot() as u32, 1);
+        assert!(queue.push(next) == Push::Queued);
+        assert!(!queue.contains(removed));
+        assert!(queue.pop() == Some(kept));
+        assert!(queue.pop() == Some(next));
+        assert!(queue.pop().is_none());
+    }
+
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn removing_the_older_leaf_never_leaves_it_queued() {
+        check_removal(true);
+    }
+
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn removing_the_newer_leaf_never_leaves_it_queued() {
+        check_removal(false);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Scheduler helpers — shard-loop logic
 // ---------------------------------------------------------------------------

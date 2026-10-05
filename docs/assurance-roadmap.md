@@ -72,11 +72,12 @@ named where they apply).
 | 1 Language | Strong: Compio Owners are `!Send` and thread-homed; one Owner per address family, not per output. Unsafe is confined to FFmpeg/libc/socket boundaries. Builds refuse `panic = "abort"` (fault domains need unwinding, #240). Workspace lints deny `unsafe_op_in_unsafe_fn`, `unused_must_use` and `clippy::undocumented_unsafe_blocks`; FFI-free modules `forbid(unsafe_code)`. | Strong: sans-I/O single-owner protocol core; `srt-lifecycle` forbids `unsafe`; strict unsafe lints. |
 | 2 API design | Good, with duplicated state the types do not prevent (listed below). Per-entity panic boundaries and per-client admission bounds (#237, #239; [isolation audit](isolation-audit.md)); std locks only through poison-tolerant `crate::sync`, enforced by `clippy.toml` (#240). | Strong: logical peer/caller ids, transactional first attach, bounded caller pool, generational dense arena that owns readiness. |
 | 3 Ecosystem | Many property tests and live fault cases; cargo-fuzz smoke over seven media/RTMP/TS parsers; narrow Miri and ASan CI jobs ([testing](testing.md#miri-and-addresssanitizer)). | Mature: proptests with checked-in seeds, Miri, ASan, structured cargo-fuzz targets, libsrt interop. |
-| 4 Model checking | Seven Loom models in the mandatory concurrency gate. **No Kani.** | One Loom model (reuseport layout barrier, run by `cargo xtask ci`). **No Kani.** |
+| 4 Model checking | Seven Loom models in the mandatory concurrency gate. Kani: seven proofs over `LeafArena`, `ReadyQueue` and `WorkBudget` in CI ([testing](testing.md#kani-proofs)). | One Loom model (reuseport layout barrier, run by `cargo xtask ci`). **No Kani.** |
 | 5–6 TLA+, Lean | None. | None. |
 
-Rungs 1–3 are close to their useful limit. The real gaps are rung-2
-duplicated state in Restream and Kani at rung 4 in both repositories.
+Rungs 1–3 are close to their useful limit. Restream's rung-2 duplicated
+state is resolved (items 1–6 below) and its rung-4 primitives have Kani
+proofs; the open rung-4 gap is Kani in srt-rs.
 
 ## Relevant work: Rust and its ecosystem
 

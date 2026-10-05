@@ -381,6 +381,37 @@ jobs:
           RUSTFLAGS: ''
         run: cargo +nightly miri test --lib -- $MIRI_FILTERS
 
+  kani:
+    name: Kani (bounded proofs of egress primitives)
+    runs-on: ubuntu-24.04
+    needs: test
+    timeout-minutes: 45
+    env:
+      # Every proof `cargo kani --lib` finds; a proof that stops compiling
+      # (a cfg typo, a moved module) must fail the job, not vanish.
+      KANI_PROOFS: '7'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/ci-bootstrap
+        with:
+          node_version: '22'
+          npm_ci: 'true'
+          system_deps_profile: media
+          native_prefix: 'true'
+          rust_cache: 'false'
+          toolchain_cache: 'false'
+      - name: Build frontend assets for the library
+        run: npm run build:frontend
+      - name: Install Kani
+        run: |
+          cargo install --locked kani-verifier --version 0.68.0
+          cargo kani setup
+      - name: Run every Kani proof
+        # No RUSTFLAGS override: Kani passes an empty one on as an argument.
+        run: |
+          cargo kani --lib -Z stubbing 2>&1 | tee kani.log
+          grep -q "Complete - $KANI_PROOFS successfully verified harnesses, 0 failures, $KANI_PROOFS total" kani.log
+
   asan:
     name: AddressSanitizer (FFI and syscall modules)
     runs-on: ubuntu-24.04

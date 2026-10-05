@@ -7,8 +7,9 @@
 
 // Per-entity fault domains (`panic_boundary`) contain a panic by unwinding.
 // With `panic = "abort"` every contained panic would end the process, so
-// that configuration must not build.
-#[cfg(panic = "abort")]
+// that configuration must not build. Kani builds abort by design and run no
+// boundary: a panic in a proof is a failed property.
+#[cfg(all(panic = "abort", not(kani)))]
 compile_error!(
     "restream requires panic = \"unwind\": per-connection, per-peer and per-output \
      panic boundaries (src/panic_boundary.rs) depend on it"

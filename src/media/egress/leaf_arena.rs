@@ -19,7 +19,7 @@ pub struct LeafKey {
 impl LeafKey {
     /// A key for tests that address slots directly (scheduler, poller). It
     /// resolves in an arena only while that slot's epoch matches.
-    #[cfg(test)]
+    #[cfg(any(test, kani))]
     pub(crate) const fn for_test(slot: u32, epoch: u32) -> Self {
         Self { slot, epoch }
     }
@@ -200,3 +200,92 @@ impl<T> LeafArena<T> {
 #[cfg(test)]
 #[path = "leaf_arena_tests.rs"]
 mod tests;
+
+/// Rung 4 (docs/assurance-roadmap.md): for every bounded sequence of
+/// inserts, reserves, fills and removals with fresh and stale keys, a key
+/// resolves exactly while its slot holds that key's leaf (a removed key
+/// never resolves again) and the arena holds at most its capacity.
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+
+    const CAPACITY: usize = 2;
+    const STEPS: usize = 4;
+
+    /// One key the arena handed out, as the caller sees it.
+    #[derive(Clone, Copy)]
+    struct Issued {
+        key: LeafKey,
+        value: Option<u8>,
+        live: bool,
+    }
+
+    #[kani::proof]
+    #[kani::unwind(6)]
+    #[kani::solver(kissat)]
+    fn a_key_resolves_exactly_while_its_leaf_is_live() {
+        let mut arena = LeafArena::<u8>::with_capacity(CAPACITY);
+        let mut issued = [None::<Issued>; STEPS];
+        let mut count = 0;
+        let mut live = 0;
+        for _ in 0..STEPS {
+            let operation: u8 = kani::any();
+            kani::assume(operation < 4);
+            if operation < 2 {
+                let value: u8 = kani::any();
+                let key = if operation == 0 {
+                    arena.insert_with(|_| value)
+                } else {
+                    arena.reserve()
+                };
+                assert_eq!(key.is_some(), live < CAPACITY);
+                if let Some(key) = key {
+                    let value = (operation == 0).then_some(value);
+                    issued[count] = Some(Issued {
+                        key,
+                        value,
+                        live: true,
+                    });
+                    count += 1;
+                    live += 1;
+                }
+            } else if count > 0 {
+                let index: usize = kani::any();
+                kani::assume(index < count);
+                let Some(target) = issued[index] else {
+                    unreachable!()
+                };
+                if operation == 2 {
+                    let value: u8 = kani::any();
+                    let filled = arena.fill(target.key, value).is_ok();
+                    assert_eq!(filled, target.live && target.value.is_none());
+                    if filled {
+                        issued[index] = Some(Issued {
+                            value: Some(value),
+                            ..target
+                        });
+                    }
+                } else {
+                    let removed = arena.remove(target.key);
+                    assert_eq!(removed, if target.live { target.value } else { None });
+                    if target.live {
+                        live -= 1;
+                    }
+                    issued[index] = Some(Issued {
+                        live: false,
+                        ..target
+                    });
+                }
+            }
+            assert_eq!(arena.len(), live);
+        }
+        for entry in issued.iter().flatten() {
+            let expected = if entry.live {
+                entry.value.as_ref()
+            } else {
+                None
+            };
+            assert_eq!(arena.get(entry.key), expected);
+        }
+    }
+}
