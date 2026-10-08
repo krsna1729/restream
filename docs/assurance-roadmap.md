@@ -72,12 +72,14 @@ named where they apply).
 | 1 Language | Strong: Compio Owners are `!Send` and thread-homed; one Owner per address family, not per output. Unsafe is confined to FFmpeg/libc/socket boundaries. Builds refuse `panic = "abort"` (fault domains need unwinding, #240). Workspace lints deny `unsafe_op_in_unsafe_fn`, `unused_must_use` and `clippy::undocumented_unsafe_blocks`; FFI-free modules `forbid(unsafe_code)`. | Strong: sans-I/O single-owner protocol core; `srt-lifecycle` forbids `unsafe`; strict unsafe lints. |
 | 2 API design | Good, with duplicated state the types do not prevent (listed below). Per-entity panic boundaries and per-client admission bounds (#237, #239; [isolation audit](isolation-audit.md)); std locks only through poison-tolerant `crate::sync`, enforced by `clippy.toml` (#240). | Strong: logical peer/caller ids, transactional first attach, bounded caller pool, generational dense arena that owns readiness. |
 | 3 Ecosystem | Many property tests and live fault cases; cargo-fuzz smoke over seven media/RTMP/TS parsers; narrow Miri and ASan CI jobs ([testing](testing.md#miri-and-addresssanitizer)). | Mature: proptests with checked-in seeds, Miri, ASan, structured cargo-fuzz targets, libsrt interop. |
-| 4 Model checking | Seven Loom models in the mandatory concurrency gate. Kani: seven proofs over `LeafArena`, `ReadyQueue` and `WorkBudget` in CI ([testing](testing.md#kani-proofs)). | One Loom model (reuseport layout barrier, run by `cargo xtask ci`). **No Kani.** |
+| 4 Model checking | Seven Loom models in the mandatory concurrency gate. Kani: seven proofs over `LeafArena`, `ReadyQueue` and `WorkBudget` in CI ([testing](testing.md#kani-proofs)). | One Loom model (reuseport layout barrier, run by `cargo xtask ci`). Kani: three `DenseSlotArena` Socket-ID proofs in CI (srt-rs #143). |
 | 5–6 TLA+, Lean | None. | None. |
 
 Rungs 1–3 are close to their useful limit. Restream's rung-2 duplicated
-state is resolved (items 1–6 below) and its rung-4 primitives have Kani
-proofs; the open rung-4 gap is Kani in srt-rs.
+state is resolved (items 1–6 below). Rung 4 has Kani proofs in both
+repositories (Restream: `LeafArena`, `ReadyQueue`, `WorkBudget`; srt-rs:
+`DenseSlotArena`); the other srt-rs primitives in the rung-4 table are not
+yet covered.
 
 ## Relevant work: Rust and its ecosystem
 
@@ -223,6 +225,16 @@ function, not a framework:
 | Restream | `ReadyQueue` (after item 2) | membership ⇔ queued; each key at most once |
 | Restream | generational arena (after item 6) | generation mismatch ⇒ no mutable access |
 | Restream | `WorkBudget` (after item 5) | granted work never exceeds the budget |
+
+Status: Restream's three rows have seven proofs in CI (#269,
+[testing](testing.md#kani-proofs)); srt-rs's `DenseSlotArena` row has three
+(srt-rs #143). The other srt-rs rows are open. Two scaling lessons from the
+first proofs: CBMC also models the std containers, so symbolic keys that
+reach `VecDeque` copies, `retain` or a removal at a symbolic index exhaust
+11 GB within a few steps (keep keys concrete and make the choices symbolic);
+and a large fixed allocation (srt-rs's 64-slot routing floor) can exhaust it
+on a concrete trace, so Kani builds use a smaller floor. Each proof states
+its bound, and `kani::cover!` shows it reaches the branches it claims.
 
 Loom stays narrow: only cross-thread primitives that remain after the
 fixed-owner design (wakes, snapshot swaps, shutdown signals, the reuseport
