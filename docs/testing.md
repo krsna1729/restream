@@ -96,6 +96,37 @@ RUSTFLAGS=-Zsanitizer=address ASAN_OPTIONS=detect_leaks=0 \
 minutes there; neither has project `unsafe`). A module gains `unsafe` or an
 FFI call: add it to the matching job.
 
+### Kani proofs
+
+Rung 4 of the [assurance roadmap](assurance-roadmap.md): bounded model checks
+of production functions, run by the `Kani (bounded proofs of egress
+primitives)` CI job (`cargo kani --lib -Z stubbing`, Kani 0.68). Each proof
+sits in a `#[cfg(kani)] mod kani_proofs` beside its code.
+
+| Primitive | Proof | Property |
+|---|---|---|
+| `egress::leaf_arena` | `a_key_resolves_exactly_while_its_leaf_is_live` | any 4 inserts, reserves, fills and removals with fresh and stale keys: a key resolves exactly while its leaf is live; `len` equals the live count and never exceeds capacity |
+| `egress::scheduler::ReadyQueue` | `pushes_and_pops_are_fifo_once_per_key_at_capacity_{one,two}` | any order of pushes and pops over a fixed sequence of epoch-0 keys (slots 0, 1, 0 at capacity 1; 0, 1, 2 at capacity 2): FIFO, each key queued at most once, `AlreadyQueued` and `Full` exactly when due |
+| `egress::scheduler::ReadyQueue` | `removing_the_{older,newer}_leaf_never_leaves_it_queued` | two concrete traces: a removed leaf's key is never a member again; the other keeps its place; the slot's next leaf queues behind it |
+| `egress::policy::WorkBudget` | `a_visit_never_takes_more_than_its_budget`, `debits_saturate` | a visit that asks only while not exhausted, at most `remaining_bytes()` per unit, never exceeds its unit or byte limit, for any limits; debits saturate (`Instant::now` is stubbed) |
+
+Bounds are small (a few steps over two or three slots) because CBMC must also
+model the std containers. Symbolic keys that reach `VecDeque` copies and
+`retain` exhaust memory, so the `ReadyQueue` proofs make the operation choice
+symbolic and keep the keys concrete; `pop`'s skip of a stale entry is covered
+by unit tests, not by these proofs. `kani::cover!` statements show each proof
+reaches its interesting branches (a full queue, a key already queued, a stale
+arena key, a slot reused at a new epoch, a visit ended by units and by bytes);
+the CI job fails if any is unsatisfiable. Kani builds abort on panic by design, so
+the `panic = "abort"` build guard in `src/lib.rs` skips `cfg(kani)`. A change
+that breaks one of these properties fails its proof; a new primitive proof
+raises `KANI_PROOFS` in the job.
+
+```sh
+cargo install --locked kani-verifier --version 0.68.0 && cargo kani setup
+cargo kani --lib -Z stubbing --harness a_key_resolves_exactly_while_its_leaf_is_live
+```
+
 ## Frontend test split
 
 Frontend confidence is intentionally split between TypeScript ownership and

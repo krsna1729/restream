@@ -318,6 +318,72 @@ impl WorkBudget {
     }
 }
 
+/// Rung 4 (docs/assurance-roadmap.md): a visit that takes work only while
+/// its budget is not exhausted, and at most `remaining_bytes()` per unit,
+/// never takes more than its unit or byte limit, for any limits and any
+/// amounts asked for; debits saturate instead of wrapping.
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+
+    /// Kani cannot read the clock: every `Instant::now()` is one instant,
+    /// so only the unit and byte limits end a visit.
+    // Used through `#[kani::stub]`, which rustc does not count as a use.
+    #[allow(dead_code)]
+    fn fixed_now() -> Instant {
+        // SAFETY: the all-zero `Instant` is a valid value on Linux (zero
+        // seconds and nanoseconds since boot).
+        unsafe { std::mem::zeroed() }
+    }
+
+    #[kani::proof]
+    #[kani::stub(std::time::Instant::now, fixed_now)]
+    #[kani::unwind(7)]
+    #[kani::solver(kissat)]
+    fn a_visit_never_takes_more_than_its_budget() {
+        let max_units: usize = kani::any();
+        kani::assume(max_units <= 4);
+        let max_bytes: usize = kani::any();
+        let mut budget = WorkBudget::new(max_units, max_bytes, Duration::from_secs(1));
+        let (mut units, mut bytes) = (0_usize, 0_usize);
+        for _ in 0..5 {
+            if budget.is_exhausted() {
+                break;
+            }
+            let wanted: usize = kani::any();
+            let taken = wanted.min(budget.remaining_bytes());
+            budget.debit_bytes(taken);
+            budget.debit_unit();
+            units += 1;
+            bytes += taken;
+        }
+        kani::cover!(units == max_units.max(1), "the unit limit ends the visit");
+        kani::cover!(
+            units < max_units.max(1) && budget.remaining_bytes() == 0,
+            "the byte limit ends the visit"
+        );
+        // `new` raises a zero unit limit to one: a visit may always do one unit.
+        assert!(units <= max_units.max(1));
+        assert!(bytes <= max_bytes);
+        assert_eq!(budget.spent_units(), units);
+        assert_eq!(budget.spent_bytes(), bytes);
+    }
+
+    #[kani::proof]
+    #[kani::stub(std::time::Instant::now, fixed_now)]
+    fn debits_saturate() {
+        let mut budget = WorkBudget::new(1, kani::any(), Duration::from_secs(1));
+        let (first, second): (usize, usize) = (kani::any(), kani::any());
+        budget.debit_bytes(first);
+        budget.debit_bytes(second);
+        assert_eq!(budget.spent_bytes(), first.saturating_add(second));
+        assert_eq!(
+            budget.remaining_bytes(),
+            budget.max_bytes().saturating_sub(budget.spent_bytes())
+        );
+    }
+}
+
 /// Per-visit limits retained while a shard is being created. Unlike
 /// `WorkBudget`, this has no absolute deadline that can expire during startup.
 #[derive(Debug, Clone, Copy)]

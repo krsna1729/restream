@@ -12,7 +12,7 @@ resolver = "3"
 members = ["crates/xtask"]
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)', 'cfg(fuzzing)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)', 'cfg(fuzzing)', 'cfg(kani)'] }
 unsafe_op_in_unsafe_fn = "deny"
 unused_must_use = "deny"
 
