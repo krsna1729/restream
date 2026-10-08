@@ -232,7 +232,8 @@ that stale keys never resolve, fill or remove (`get_mut` uses the same epoch
 filter but is not in the proof). srt-rs's `DenseSlotArena` row has three
 proofs (srt-rs #143): any 3 allocations and removals symbolically, slot reuse
 and preferred-ID reuse as concrete traces. The other srt-rs rows are open.
-In Restream, `kani::cover!` shows each proof reaches the branches it claims.
+In Restream, `kani::cover!` shows each symbolic proof reaches the branches it
+claims.
 
 Scaling lessons from the first proofs: CBMC also models the std containers.
 Symbolic keys that reach `VecDeque` copies or `retain` exhausted the 11 GB
