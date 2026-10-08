@@ -240,6 +240,13 @@ mod kani_proofs {
                 };
                 assert_eq!(key.is_some(), live < CAPACITY);
                 if let Some(key) = key {
+                    kani::cover!(
+                        issued[..count]
+                            .iter()
+                            .flatten()
+                            .any(|entry| entry.key.slot == key.slot),
+                        "a slot is reused at a new epoch"
+                    );
                     let value = (operation == 0).then_some(value);
                     issued[count] = Some(Issued {
                         key,
@@ -256,6 +263,7 @@ mod kani_proofs {
                     unreachable!()
                 };
                 if operation == 2 {
+                    kani::cover!(!target.live, "a stale key's fill is refused");
                     let value: u8 = kani::any();
                     let filled = arena.fill(target.key, value).is_ok();
                     assert_eq!(filled, target.live && target.value.is_none());
@@ -266,6 +274,7 @@ mod kani_proofs {
                         });
                     }
                 } else {
+                    kani::cover!(!target.live, "a stale key's remove frees nothing");
                     let removed = arena.remove(target.key);
                     assert_eq!(removed, if target.live { target.value } else { None });
                     if target.live {

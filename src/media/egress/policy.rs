@@ -328,6 +328,8 @@ mod kani_proofs {
 
     /// Kani cannot read the clock: every `Instant::now()` is one instant,
     /// so only the unit and byte limits end a visit.
+    // Used through `#[kani::stub]`, which rustc does not count as a use.
+    #[allow(dead_code)]
     fn fixed_now() -> Instant {
         // SAFETY: the all-zero `Instant` is a valid value on Linux (zero
         // seconds and nanoseconds since boot).
@@ -355,6 +357,12 @@ mod kani_proofs {
             units += 1;
             bytes += taken;
         }
+        kani::cover!(units == max_units.max(1), "the unit limit ends the visit");
+        kani::cover!(
+            units < max_units.max(1) && budget.remaining_bytes() == 0,
+            "the byte limit ends the visit"
+        );
+        // `new` raises a zero unit limit to one: a visit may always do one unit.
         assert!(units <= max_units.max(1));
         assert!(bytes <= max_bytes);
         assert_eq!(budget.spent_units(), units);

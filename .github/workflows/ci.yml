@@ -411,6 +411,11 @@ jobs:
         run: |
           cargo kani --lib -Z stubbing 2>&1 | tee kani.log
           grep -q "Complete - $KANI_PROOFS successfully verified harnesses, 0 failures, $KANI_PROOFS total" kani.log
+          # Every cover reached (and some reported: a format change must not
+          # pass silently): a proof whose interesting branch became
+          # unreachable proves nothing about it.
+          grep -E '^ \*\* [0-9]+ of [0-9]+ cover properties satisfied' kani.log \
+            | awk '{ n++ } $2 != $4 { bad = 1 } END { exit bad || n == 0 }'
 
   asan:
     name: AddressSanitizer (FFI and syscall modules)

@@ -185,7 +185,7 @@ impl ReadyQueue {
 mod kani_proofs {
     use super::*;
 
-    const SLOTS: u32 = 2;
+    const SLOTS: u32 = 3;
     const STEPS: usize = 3;
 
     /// The keys queued and not yet popped or removed, oldest first; at most
@@ -216,54 +216,70 @@ mod kani_proofs {
         }
     }
 
-    /// Pushes and pops in any order over a fixed key sequence (step `i`
-    /// offers slot `i % SLOTS`, so keys repeat): FIFO, AlreadyQueued and Full
-    /// exactly when they should. The choices are symbolic; the keys stay
-    /// concrete, which keeps the containers' internals tractable for CBMC.
+    /// Pushes and pops in any order over a fixed key sequence: FIFO, each
+    /// key queued at most once, AlreadyQueued and Full exactly when due.
+    /// The choices are symbolic; the keys (epoch 0) stay concrete, which
+    /// keeps the containers' internals tractable for CBMC. Capacity 1 over
+    /// slots 0, 1, 0 reaches Full and AlreadyQueued; capacity 2 over slots
+    /// 0, 1, 2 reaches Full.
     #[kani::proof]
     #[kani::unwind(5)]
     #[kani::solver(kissat)]
     fn pushes_and_pops_are_fifo_once_per_key_at_capacity_one() {
-        check_pushes_and_pops(1);
+        let seen = check_pushes_and_pops(1, [0, 1, 0]);
+        kani::cover!(seen.full, "a push finds the queue full");
+        kani::cover!(seen.already_queued, "a push finds its key queued");
     }
 
     #[kani::proof]
     #[kani::unwind(5)]
     #[kani::solver(kissat)]
     fn pushes_and_pops_are_fifo_once_per_key_at_capacity_two() {
-        check_pushes_and_pops(2);
+        let seen = check_pushes_and_pops(2, [0, 1, 2]);
+        kani::cover!(seen.full, "a push finds the queue full");
     }
 
-    fn check_pushes_and_pops(capacity: usize) {
+    #[derive(Default)]
+    struct Seen {
+        full: bool,
+        already_queued: bool,
+    }
+
+    fn check_pushes_and_pops(capacity: usize, slots: [u32; STEPS]) -> Seen {
         let mut queue = ReadyQueue::with_capacity(capacity);
         let mut model = Model {
             keys: [None; SLOTS as usize],
             len: 0,
         };
-        for step in 0..STEPS {
-            let key = LeafKey::for_test(step as u32 % SLOTS, 0);
+        let mut seen = Seen::default();
+        for slot in slots {
+            let key = LeafKey::for_test(slot, 0);
             if kani::any() {
                 let queued_before = model.contains(key);
                 let len_before = queue.len();
                 let push = queue.push(key);
                 if queued_before {
                     assert!(push == Push::AlreadyQueued);
+                    seen.already_queued = true;
                 } else if len_before < capacity {
                     assert!(push == Push::Queued);
                     model.push(key);
                 } else {
                     assert!(push == Push::Full);
+                    seen.full = true;
                 }
             } else {
                 assert!(queue.pop() == model.pop());
             }
             assert!(queue.len() == model.len);
         }
+        seen
     }
 
-    /// Removal: two leaves queued, one removed, then the next leaf in the
-    /// removed slot (a new epoch) queued. The removed key is never a member
-    /// again, the other keeps its place, and the new key queues behind it.
+    /// Removal, as two concrete traces (one per removed leaf): two leaves
+    /// queued, one removed, then the next leaf in the removed slot (a new
+    /// epoch) queued. The removed key is never a member again, the other
+    /// keeps its place, and the new key queues behind it.
     fn check_removal(remove_first: bool) {
         let mut queue = ReadyQueue::with_capacity(SLOTS as usize);
         let (first, second) = (LeafKey::for_test(0, 0), LeafKey::for_test(1, 0));
