@@ -227,14 +227,20 @@ function, not a framework:
 | Restream | `WorkBudget` (after item 5) | granted work never exceeds the budget |
 
 Status: Restream's three rows have seven proofs in CI (#269,
-[testing](testing.md#kani-proofs)); srt-rs's `DenseSlotArena` row has three
-(srt-rs #143). The other srt-rs rows are open. Two scaling lessons from the
-first proofs: CBMC also models the std containers, so symbolic keys that
-reach `VecDeque` copies, `retain` or a removal at a symbolic index exhaust
-11 GB within a few steps (keep keys concrete and make the choices symbolic);
-and a large fixed allocation (srt-rs's 64-slot routing floor) can exhaust it
-on a concrete trace, so Kani builds use a smaller floor. Each proof states
-its bound, and `kani::cover!` shows it reaches the branches it claims.
+[testing](testing.md#kani-proofs)); for the generational arena they check
+that stale keys never resolve, fill or remove (`get_mut` uses the same epoch
+filter but is not in the proof). srt-rs's `DenseSlotArena` row has three
+proofs (srt-rs #143): any 3 allocations and removals symbolically, slot reuse
+and preferred-ID reuse as concrete traces. The other srt-rs rows are open.
+In Restream, `kani::cover!` shows each proof reaches the branches it claims.
+
+Scaling lessons from the first proofs: CBMC also models the std containers.
+Symbolic keys that reach `VecDeque` copies or `retain` exhausted the 11 GB
+test host within a few steps, and a removal at a symbolic index (a symbolic
+preferred ID) did not finish in 40 minutes, so keep keys concrete and make
+the choices symbolic. A large fixed allocation (srt-rs's 64-slot routing
+floor) exhausted memory even on a concrete trace, so Kani builds use a
+2-slot floor.
 
 Loom stays narrow: only cross-thread primitives that remain after the
 fixed-owner design (wakes, snapshot swaps, shutdown signals, the reuseport
