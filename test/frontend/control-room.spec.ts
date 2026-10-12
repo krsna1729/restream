@@ -330,3 +330,55 @@ test("media and system: probe, rename and delete an upload; read the host and it
     "Commit",
   );
 });
+
+test("settings: save a name and a profile, refuse a short passphrase, forget a failed client", async ({
+  page,
+}) => {
+  // One failed sign-in from this client, so there is an attempt to forget.
+  const failed = await page.request.post("/api/v1/auth/login", {
+    data: { password: "not-the-password" },
+  });
+  expect(failed.status()).toBe(401);
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  const before = await (await page.request.get("/api/v1/settings")).json();
+  const name = `cr-${Date.now()}`;
+
+  await page.goto("/control-room.html?w=settings");
+  try {
+    const general = page.getByRole("region", { name: "General" });
+    await general.getByLabel("Server name").fill(name);
+    await general.getByRole("button", { name: "Save" }).click();
+    await expect(general.getByRole("status")).toHaveText("saved");
+
+    const profiles = page.getByRole("region", { name: "Transcode profiles" });
+    await profiles.getByRole("button", { name: "Add profile" }).click();
+    await profiles.getByRole("button", { name: "Save" }).click();
+    await expect(profiles.getByRole("status")).toHaveText("saved");
+
+    const stored = await (await page.request.get("/api/v1/settings")).json();
+    expect(stored.serverName).toBe(name);
+    expect(Object.keys(stored.transcodeProfiles)).toContain("new_profile");
+
+    const srt = page.getByRole("region", { name: "SRT ingest" });
+    await srt.getByLabel("Encryption").selectOption("encrypted");
+    await srt.getByLabel(/Passphrase/).fill("short");
+    await expect(srt.getByRole("button", { name: "Save" })).toBeDisabled();
+    await expect(srt).toContainText("10 to 79 bytes");
+
+    // The engine accepts the reset the page sends (its own scope key).
+    const attempts = page.getByRole("table", { name: "Failed attempts" });
+    const forget = attempts.getByRole("button", { name: /Forget .* for Dashboard login/ });
+    await expect(forget.first()).toBeVisible();
+    await forget.first().click();
+    await expect(
+      page.getByRole("region", { name: "Failed attempts" }),
+    ).toContainText("No client has failed recently");
+  } finally {
+    await page.request.patch("/api/v1/settings", {
+      data: { serverName: before.serverName, transcodeProfiles: before.transcodeProfiles },
+    });
+  }
+});

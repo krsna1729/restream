@@ -663,14 +663,18 @@ async function getRestreamHistory(
   return res;
 }
 
-async function patchConfig(body: {
+/** The settings a `PATCH /settings` may change; absent ones stay. */
+export interface ConfigPatch {
   serverName?: string;
   ingestHost?: string;
   ingestSecurity?: Partial<IngestSecurityConfig>;
   recordingSettings?: RecordingSettings;
   srtIngest?: SrtGlobalIngestConfig;
   transcodeProfiles?: TranscodeProfiles;
-}): Promise<{
+}
+
+/** The settings the engine stored after a patch. */
+export interface StoredConfig {
   serverName: string;
   ingestHost: string;
   dashboardPasswordChangeRecommended?: boolean;
@@ -678,16 +682,10 @@ async function patchConfig(body: {
   recordingSettings: RecordingSettings;
   srtIngest: SrtGlobalIngestConfig;
   transcodeProfiles?: TranscodeProfiles;
-} | null> {
-  return apiRequest<{
-    serverName: string;
-    ingestHost: string;
-    dashboardPasswordChangeRecommended?: boolean;
-    ingestSecurity: IngestSecurityConfig;
-    recordingSettings: RecordingSettings;
-    srtIngest: SrtGlobalIngestConfig;
-    transcodeProfiles?: TranscodeProfiles;
-  }>("/api/v1/settings", { method: "PATCH", body });
+}
+
+async function patchConfig(body: ConfigPatch): Promise<StoredConfig | null> {
+  return apiRequest<StoredConfig>("/api/v1/settings", { method: "PATCH", body });
 }
 
 async function startRecording(

@@ -290,9 +290,11 @@ items).
   (correlated signals, in-page history), Incidents (ranked open alerts,
   timeline, evidence packet), Capacity (service centers, Flow Doctor,
   scenario projection by the engine), Media (library, probe and ingest
-  readiness, upload/rename/delete, storage) and System (host checks,
-  execution classes as reported, SRT ingress owners, provenance, SBOM).
-  Left: Settings and Changes. See [Frontend](frontend.md#control-room).
+  readiness, upload/rename/delete, storage), System (host checks,
+  execution classes as reported, SRT ingress owners, provenance, SBOM) and
+  Settings (names, SRT ingest, transcode profiles, failed-attempt limits and
+  list, password, log out). Left: Changes. See
+  [Frontend](frontend.md#control-room).
 - Gates: Playwright per workspace against a running engine.
 - Depends on: Q-042 (state). Q-043 (done) added the output `diagnosis` for
   the Incidents evidence packet.
