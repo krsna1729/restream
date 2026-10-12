@@ -653,19 +653,6 @@ fn frontend_tooling_and_vendored_assets_are_reproducible() {
     assert!(package_lock.contains("\"lockfileVersion\""));
     assert!(package_lock.contains("\"hls.js\""));
 
-    let tsconfig = include_str!("../tsconfig.json");
-    for required in [
-        "\"strict\": true",
-        "\"rootDir\": \"web/ts\"",
-        "\"outDir\": \"public/js\"",
-        "\"sourceMap\": false",
-    ] {
-        assert!(
-            tsconfig.contains(required),
-            "tsconfig must contain {required}"
-        );
-    }
-
     let hls_sync = include_str!("../scripts/dev/frontend/prepare-assets.mjs");
     assert!(hls_sync.contains("sourceMappingURL=hls\\.min\\.js\\.map"));
     let generated_hls_bundle =
@@ -754,8 +741,7 @@ fn source_distribution_manifest_matches_declared_build_inputs() {
         ".local/build/static/prefix/",
         "package-lock.json",
         "tsconfig.json",
-        "tsconfig.v2.json",
-        "vite.v2.config.ts",
+        "vite.config.ts",
         "./scripts/build/native-deps.sh",
         "npm run build:frontend",
         "hls.min.js.map",

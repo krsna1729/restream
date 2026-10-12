@@ -14,9 +14,6 @@ import type {
 } from "../features/pipeline-operate-view-model.js";
 import type { PipelineInputsPanelActions } from "../features/pipeline-inputs-contract.js";
 
-const DASHBOARD_V2_BUNDLE = "./dashboard-v2-entry.js";
-const DASHBOARD_V2_CHECKPOINTS_BUNDLE = "./dashboard-v2-checkpoints-entry.js";
-
 export interface DashboardV2OverviewActions {
   readonly addPipeline: () => void;
   readonly inspectPipeline: (pipelineId: string) => void;
@@ -116,61 +113,11 @@ export interface DashboardV2SettingsActions {
   readonly openStatus: () => void;
 }
 
-interface DashboardV2Module {
-  renderDashboardV2Overview(
-    model: OverviewViewModel,
-    actions: DashboardV2OverviewActions,
-  ): void;
-  renderDashboardV2PipelineSelector(
-    model: PipelineOperateSelectorModel,
-    actions: DashboardV2PipelineSelectorActions,
-  ): void;
-  renderDashboardV2PipelineHeader(
-    model: PipelineOperateHeaderModel | null,
-    actions: DashboardV2PipelineHeaderActions,
-    placeholder?: DashboardV2PipelineDetailsPlaceholder | null,
-  ): void;
-  renderDashboardV2PipelineInputStatus(
-    model: PipelineOperateInputStatusModel | null,
-    actions: DashboardV2PipelineInputStatusActions,
-  ): void;
-  renderDashboardV2PipelineOutputOverview(
-    model: PipelineOutputOverviewModel | null,
-    actions: DashboardV2PipelineOutputOverviewActions,
-  ): void;
-  clearDashboardV2PipelineOperate(): void;
-}
-
-interface DashboardV2CheckpointsModule {
-  renderDashboardV2PipelineInspectCheckpoint(
-    model: PipelineInspectCheckpointModel | null,
-    actions: DashboardV2PipelineInspectActions,
-  ): void;
-  renderDashboardV2ControlRoomCheckpoint(
-    model: ControlRoomCheckpointModel | null,
-    actions: DashboardV2ControlRoomActions,
-  ): void;
-  renderDashboardV2IncidentsCheckpoint(
-    model: IncidentsCheckpointModel | null,
-    actions: DashboardV2IncidentsActions,
-  ): void;
-  renderDashboardV2TelemetryCheckpoint(
-    model: TelemetryCheckpointModel | null,
-    actions: DashboardV2TelemetryActions,
-  ): void;
-  renderDashboardV2StatusCheckpoint(
-    model: StatusCheckpointModel | null,
-    actions: DashboardV2StatusActions,
-  ): void;
-  renderDashboardV2MediaCheckpoint(
-    model: MediaCheckpointModel | null,
-    actions: DashboardV2MediaActions,
-  ): void;
-  renderDashboardV2SettingsCheckpoint(
-    model: SettingsCheckpointModel | null,
-    actions: DashboardV2SettingsActions,
-  ): void;
-}
+// Lazy-loaded React views: separate modules of the one build, fetched on
+// first use.
+type DashboardV2Module = typeof import("./dashboard-v2-entry.js");
+type DashboardV2CheckpointsModule =
+  typeof import("./dashboard-v2-checkpoints-entry.js");
 
 let dashboardV2Module: DashboardV2Module | null = null;
 let dashboardV2ModulePromise: Promise<void> | null = null;
@@ -236,9 +183,9 @@ function ensureDashboardV2Module(): void {
   if (dashboardV2Module || dashboardV2ModulePromise) {
     return;
   }
-  dashboardV2ModulePromise = import(DASHBOARD_V2_BUNDLE)
+  dashboardV2ModulePromise = import("./dashboard-v2-entry.js")
     .then((module) => {
-      dashboardV2Module = module as DashboardV2Module;
+      dashboardV2Module = module;
       renderLatestOverview();
       renderLatestPipelineSelector();
       renderLatestPipelineHeader();
@@ -254,7 +201,7 @@ function ensureDashboardV2Module(): void {
     });
 }
 
-// The seven checkpoints rendered by DASHBOARD_V2_CHECKPOINTS_BUNDLE
+// The seven checkpoints rendered by the checkpoints module
 // (pipeline inspect, control room, incidents, telemetry, status, media,
 // settings) all follow the same lifecycle: an independent active flag, a
 // latest model, latest actions, and a render call gated on the checkpoints
@@ -386,9 +333,11 @@ function ensureDashboardV2CheckpointsModule(): void {
   if (dashboardV2CheckpointsModule || dashboardV2CheckpointsModulePromise) {
     return;
   }
-  dashboardV2CheckpointsModulePromise = import(DASHBOARD_V2_CHECKPOINTS_BUNDLE)
+  dashboardV2CheckpointsModulePromise = import(
+    "./dashboard-v2-checkpoints-entry.js"
+  )
     .then((module) => {
-      dashboardV2CheckpointsModule = module as DashboardV2CheckpointsModule;
+      dashboardV2CheckpointsModule = module;
       pipelineInspectSlot.renderLatest();
       controlRoomSlot.renderLatest();
       incidentsSlot.renderLatest();

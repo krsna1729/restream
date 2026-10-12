@@ -4,7 +4,8 @@
     "module": "ES2020",
     "lib": ["ES2021", "DOM"],
     "moduleResolution": "bundler",
-    "outDir": "public/js",
+    "jsx": "react-jsx",
+    "noEmit": true,
     "rootDir": "web/ts",
     "strict": true,
     "esModuleInterop": true,
@@ -13,5 +14,5 @@
     "sourceMap": false,
     "removeComments": true
   },
-  "include": ["web/ts/**/*.ts", "web/ts/**/*.d.ts"]
+  "include": ["web/ts/**/*.ts", "web/ts/**/*.tsx", "web/ts/**/*.d.ts"]
 }

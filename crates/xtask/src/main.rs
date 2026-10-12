@@ -176,16 +176,12 @@ fn api_contract() -> StepResult {
     )
 }
 
-/// Emits the frontend as plain JavaScript into `out` for `node --test`.
+/// Emits the frontend as plain JavaScript into `out` for `node --test`
+/// (the same compile `npm run test:frontend` uses).
 fn compile_frontend_for_node(out: &Path) -> StepResult {
-    match std::fs::remove_dir_all(out) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(format!("cannot clear {}: {error}", out.display())),
-    }
     run(
-        "npx",
-        &["tsc", "-p", "tsconfig.json", "--outDir", path_str(out)?],
+        "scripts/dev/frontend/compile-for-node.sh",
+        &[path_str(out)?],
         &[],
     )
 }

@@ -82,7 +82,7 @@ frontend_assets_exist() {
         [[ -s public/js/app/dashboard-entry.js ]] &&
         [[ -s public/js/app/dashboard-v2-entry.js ]] &&
         [[ -s public/js/app/dashboard-v2-checkpoints-entry.js ]] &&
-        [[ -s public/js/app/dashboard-v2-jsx-runtime.js ]] &&
+        [[ -s public/js/vendor/react/jsx-runtime.js ]] &&
         [[ -s public/js/lib/hls.min.js ]]
 }
 
@@ -91,7 +91,7 @@ frontend_assets_fresh() {
     local newest_input
     newest_input="$(
         find web scripts/dev/frontend package.json package-lock.json tsconfig.json \
-            tsconfig.v2.json vite.v2.config.ts \
+            vite.config.ts \
             -type f -not -path '*/node_modules/*' -printf '%T@\n' 2>/dev/null |
             sort -nr |
             head -n1
@@ -137,7 +137,7 @@ for asset in \
     public/js/app/dashboard-entry.js \
     public/js/app/dashboard-v2-entry.js \
     public/js/app/dashboard-v2-checkpoints-entry.js \
-    public/js/app/dashboard-v2-jsx-runtime.js \
+    public/js/vendor/react/jsx-runtime.js \
     public/js/lib/hls.min.js; do
     [[ -s "$asset" ]] || {
         echo "prepare-build-tree: required generated asset is missing: $asset" >&2
