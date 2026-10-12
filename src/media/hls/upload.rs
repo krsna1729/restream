@@ -15,8 +15,9 @@ use reqwest::{Client, Url};
 
 use super::HlsStore;
 use super::upload_policy::{
-    MAX_PENDING_SEGMENTS, Next, ResultEffect, Stopped, UploadOutcome, UploadPolicy, UploadRequest,
-    UploadTarget, backoff,
+    Next, ResultEffect, Stopped, UploadOutcome, UploadPolicy, UploadRequest, UploadTarget,
+    backlog_dropped_message, backoff, dropped_message, phase, rejected_message,
+    status_failure_message,
 };
 use crate::domain::stage::StageKey;
 use crate::domain::state::EgressPhase;
@@ -224,10 +225,7 @@ pub async fn start_hls_put_upload(
                     }
                     Ok(status) => (
                         UploadOutcome::Status(status.as_u16()),
-                        Some(format!(
-                            "PUT {} returned HTTP {status}",
-                            object_name(&request)
-                        )),
+                        Some(status_failure_message(&request, status.as_u16())),
                     ),
                     Err(error) => (UploadOutcome::Transport, Some(error)),
                 };
@@ -305,7 +303,7 @@ impl Report<'_> {
                 self.output_id,
                 self.registration,
                 "upload_segment",
-                format!("{cause}; segment dropped after failing for its duration ({total} so far)"),
+                dropped_message(cause, total),
             )
             .await;
     }
@@ -324,18 +322,13 @@ impl Report<'_> {
                 self.output_id,
                 self.registration,
                 "upload_segment",
-                format!(
-                    "upload backlog over {MAX_PENDING_SEGMENTS} segments; oldest dropped ({total} so far)"
-                ),
+                backlog_dropped_message(total),
             )
             .await;
     }
 
     async fn result(&self, request: &UploadRequest, effect: ResultEffect, failure: Option<String>) {
-        let kind = match request.target {
-            UploadTarget::Segment { .. } => "upload_segment",
-            UploadTarget::Playlist { .. } => "upload_playlist",
-        };
+        let kind = phase(&request.target);
         match effect {
             ResultEffect::Acknowledged { bytes } => {
                 self.engine.clear_egress_retry_state(self.output_id).await;
@@ -380,21 +373,11 @@ impl Report<'_> {
                         self.output_id,
                         self.registration,
                         kind,
-                        format!(
-                            "HLS ingest rejected {} with HTTP {status}",
-                            request.file_name
-                        ),
+                        rejected_message(&request.file_name, status),
                     )
                     .await;
             }
         }
-    }
-}
-
-fn object_name(request: &UploadRequest) -> &str {
-    match request.target {
-        UploadTarget::Playlist { .. } => "playlist",
-        UploadTarget::Segment { .. } => &request.file_name,
     }
 }
 

@@ -51,9 +51,10 @@ pub struct EgressFabricConfig {
     pub visit_max_us: u64,
     pub max_pending_bytes: usize,
     pub drain_timeout_ms: u64,
-    /// Upload HTTP/HTTPS HLS outputs from egress-fabric shards instead of
-    /// the Reqwest uploader on Tokio (`RESTREAM_HLS_PUT_FABRIC`). Off until
-    /// measured against the Reqwest uploader.
+    /// Upload HTTP/HTTPS HLS outputs from egress-fabric shards (the
+    /// default) or, with `RESTREAM_HLS_PUT_FABRIC=0`, from the Reqwest
+    /// uploader on Tokio. Over HTTPS the shards match Reqwest's CPU with
+    /// about a fifth of its p99 segment lag (docs/capacity-ramp.md).
     pub hls_put_fabric: bool,
 }
 
@@ -105,7 +106,7 @@ impl Default for EgressFabricConfig {
             max_pending_bytes: 256 * 1024,
             drain_timeout_ms: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT
                 .as_millis() as u64,
-            hls_put_fabric: false,
+            hls_put_fabric: true,
         }
     }
 }

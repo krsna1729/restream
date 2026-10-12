@@ -224,6 +224,27 @@ pub struct EgressProgressSink {
     /// — without it, a fabric leaf that fails never tells the application
     /// layer, and the output silently sits stale instead of retrying.
     pub terminated_unexpectedly: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Per-request status of a request-based leaf (HLS PUT): the shard
+    /// records failures and retries; the application-side task forwards
+    /// them to the engine (`run_hls_put_fabric`), as the Tokio uploader
+    /// reports them itself.
+    pub upload_status: Option<std::sync::Arc<std::sync::Mutex<UploadStatus>>>,
+}
+
+/// What a request-based leaf reports per request, in the engine's terms.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct UploadStatus {
+    /// Failures recorded so far: a reader forwards each new one once.
+    pub failures: u64,
+    /// The latest failure: its status phase (`upload_segment`,
+    /// `upload_playlist`) and message.
+    pub last_failure: Option<(&'static str, String)>,
+    /// The retry in progress (attempts, backoff in milliseconds); cleared
+    /// when a request is acknowledged.
+    pub retry: Option<(u32, u64)>,
+    /// The latest request was acknowledged (none failed after it): the
+    /// output is delivering again and its error clears.
+    pub healthy: bool,
 }
 
 impl std::fmt::Debug for EgressProgressSink {
@@ -240,6 +261,7 @@ impl std::fmt::Debug for EgressProgressSink {
                 "terminated_unexpectedly",
                 &self.terminated_unexpectedly.is_some(),
             )
+            .field("upload_status", &self.upload_status.is_some())
             .finish()
     }
 }
@@ -295,12 +317,50 @@ impl EgressProgressSink {
         }
     }
 
+    /// Record a failed request: its phase and message, and the retry it
+    /// starts (`None` for a failure that is not retried).
+    pub fn record_upload_failure(
+        &self,
+        phase: &'static str,
+        message: String,
+        retry: Option<(u32, u64)>,
+    ) {
+        if let Some(slot) = &self.upload_status {
+            let mut status = crate::sync::lock(slot);
+            status.failures = status.failures.saturating_add(1);
+            status.last_failure = Some((phase, message));
+            status.healthy = false;
+            if retry.is_some() {
+                status.retry = retry;
+            }
+        }
+    }
+
+    /// A request failed for good (the ingest rejected it): no retry is in
+    /// progress.
+    pub fn clear_upload_retry(&self) {
+        if let Some(slot) = &self.upload_status {
+            crate::sync::lock(slot).retry = None;
+        }
+    }
+
+    /// A request was acknowledged: no retry is in progress.
+    pub fn record_upload_acknowledged(&self) {
+        if let Some(slot) = &self.upload_status {
+            let mut status = crate::sync::lock(slot);
+            status.retry = None;
+            status.healthy = true;
+        }
+    }
+
     /// Mark this leaf as unexpectedly terminated. See
     /// `terminated_unexpectedly` for exactly when to call this.
     #[inline]
     pub fn mark_terminated_unexpectedly(&self) {
         if let Some(flag) = &self.terminated_unexpectedly {
-            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+            // Release: a reader that sees the flag also sees what the shard
+            // recorded before it (the upload status).
+            flag.store(true, std::sync::atomic::Ordering::Release);
         }
     }
 }

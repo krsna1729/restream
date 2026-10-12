@@ -231,6 +231,7 @@ impl EgressReconciler {
                                 backpressure_reason: Some(egress.backpressure_reason.clone()),
                                 quality: Some(egress.quality.clone()),
                                 terminated_unexpectedly: Some(terminated.clone()),
+                                upload_status: None,
                             }
                         })
                         .await
@@ -288,6 +289,7 @@ impl EgressReconciler {
                         backpressure_reason: Some(egress.backpressure_reason.clone()),
                         quality: Some(egress.quality.clone()),
                         terminated_unexpectedly: Some(terminated.clone()),
+                        upload_status: None,
                     }
                 })
                 .await
@@ -398,10 +400,36 @@ impl EgressReconciler {
             None
         };
 
+        // HTTPS on the fabric needs kernel TLS (no userspace fallback);
+        // without it HTTPS outputs stay on the Reqwest uploader.
         let use_hls_put_fabric = self.engine.config.egress_fabric.hls_put_fabric
-            && matches!(url_scheme, OutputUrlScheme::Http | OutputUrlScheme::Https);
+            && match url_scheme {
+                OutputUrlScheme::Http => true,
+                OutputUrlScheme::Https => {
+                    // The first call probes the kernel (sockets, setsockopt):
+                    // keep it off the Tokio worker. Later calls hit the cache.
+                    let available = tokio::task::spawn_blocking(
+                        crate::media::egress::tls::ktls::egress_available,
+                    )
+                    .await
+                    .unwrap_or(false);
+                    if !available {
+                        static LOGGED: std::sync::Once = std::sync::Once::new();
+                        LOGGED.call_once(|| {
+                            warn!(
+                                "kernel TLS unavailable; HTTPS HLS outputs use the Reqwest uploader"
+                            );
+                        });
+                    }
+                    available
+                }
+                _ => false,
+            };
         let hls_put_fabric = if use_hls_put_fabric {
             let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let upload_status = Arc::new(std::sync::Mutex::new(
+                crate::media::egress::leaf::UploadStatus::default(),
+            ));
             let mut spec = crate::media::egress::OutputSpec {
                 id: crate::media::egress::OutputId::new(output.id.clone()),
                 generation: registration.attempt_id,
@@ -420,6 +448,7 @@ impl EgressReconciler {
                         metrics: Some(egress.metrics.clone()),
                         last_progress_ms: Some(egress.last_progress_ms.clone()),
                         terminated_unexpectedly: Some(terminated.clone()),
+                        upload_status: Some(upload_status.clone()),
                         ..Default::default()
                     }
                 })
@@ -427,7 +456,11 @@ impl EgressReconciler {
             {
                 spec.progress = sink;
             }
-            Some(HlsPutFabricTask { spec, terminated })
+            Some(HlsPutFabricTask {
+                spec,
+                terminated,
+                upload_status,
+            })
         } else {
             None
         };

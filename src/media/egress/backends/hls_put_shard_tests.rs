@@ -125,6 +125,13 @@ struct Output {
     store: Arc<HlsStore>,
     bytes_sent: Arc<AtomicU64>,
     terminated: Arc<AtomicBool>,
+    upload_status: Arc<Mutex<crate::media::egress::leaf::UploadStatus>>,
+}
+
+impl Output {
+    fn upload_status(&self) -> crate::media::egress::leaf::UploadStatus {
+        crate::sync::lock(&self.upload_status).clone()
+    }
 }
 
 fn start_output(port: u16) -> Output {
@@ -155,6 +162,9 @@ fn start_output_with(
     });
     let bytes_sent = Arc::new(AtomicU64::new(0));
     let terminated = Arc::new(AtomicBool::new(false));
+    let upload_status = Arc::new(Mutex::new(
+        crate::media::egress::leaf::UploadStatus::default(),
+    ));
     handle
         .try_send(EgressCommand::Add(OutputSpec {
             id: OutputId::new("out-hls"),
@@ -165,6 +175,7 @@ fn start_output_with(
             progress: EgressProgressSink {
                 bytes_sent: Some(bytes_sent.clone()),
                 terminated_unexpectedly: Some(terminated.clone()),
+                upload_status: Some(upload_status.clone()),
                 ..Default::default()
             },
         }))
@@ -174,6 +185,7 @@ fn start_output_with(
         store,
         bytes_sent,
         terminated,
+        upload_status,
     }
 }
 
@@ -245,6 +257,29 @@ fn a_rejection_ends_the_leaf_and_reports_it() {
     assert!(!output.handle.shutdown_and_join().panicked);
 }
 
+/// A rejection after a retried failure ends the retry: the output reports
+/// the rejection, not a retry still in progress.
+#[test]
+fn a_rejection_after_a_retry_reports_no_retry() {
+    let origin = Origin::start(|nth, _| (if nth == 0 { 503 } else { 401 }, false));
+    let output = start_output(origin.port);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !output.terminated.load(Ordering::Acquire) {
+        assert!(Instant::now() < deadline, "the rejection was not reported");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let status = output.upload_status();
+    assert_eq!(status.failures, 2);
+    assert_eq!(status.retry, None, "the rejection left a retry in progress");
+    let (phase, message) = status.last_failure.expect("the rejection is recorded");
+    assert_eq!(phase, "upload_segment");
+    assert!(
+        message.contains("rejected") && message.ends_with("with HTTP 401"),
+        "{message}"
+    );
+    assert!(!output.handle.shutdown_and_join().panicked);
+}
+
 /// A 503 is retried on a fresh connection and the session recovers.
 #[test]
 fn a_server_error_is_retried_on_a_new_connection() {
@@ -257,6 +292,42 @@ fn a_server_error_is_retried_on_a_new_connection() {
         "the same segment again"
     );
     assert_ne!(seen[0].connection, seen[1].connection, "a fresh connection");
+    assert!(!output.terminated.load(Ordering::Relaxed));
+    // Reported as the Tokio uploader reports it: the failure with its
+    // object and status, and no retry left once the upload succeeded.
+    let status = output.upload_status();
+    assert_eq!(status.failures, 1);
+    let (phase, message) = status.last_failure.expect("the failure is recorded");
+    assert_eq!(phase, "upload_segment");
+    assert!(
+        message.ends_with("-0.ts returned HTTP 503 Service Unavailable"),
+        "{message}"
+    );
+    assert_eq!(status.retry, None, "the success cleared the retry");
+    assert!(!output.handle.shutdown_and_join().panicked);
+}
+
+/// While a request is being retried the output reports the retry (its
+/// attempts and backoff), as the Tokio uploader does.
+#[test]
+fn a_retry_in_progress_is_reported() {
+    let origin = Origin::start(|_, _| (503, false));
+    let output = start_output(origin.port);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while output.upload_status().retry.is_none() {
+        assert!(Instant::now() < deadline, "no retry was reported");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let status = output.upload_status();
+    let (attempts, backoff_ms) = status.retry.expect("checked above");
+    assert!(attempts >= 1);
+    let expected =
+        u64::try_from(crate::media::hls::upload_policy::backoff(attempts).as_millis()).unwrap();
+    assert_eq!(backoff_ms, expected);
+    assert_eq!(
+        status.last_failure.map(|(phase, _)| phase),
+        Some("upload_segment")
+    );
     assert!(!output.terminated.load(Ordering::Relaxed));
     assert!(!output.handle.shutdown_and_join().panicked);
 }
