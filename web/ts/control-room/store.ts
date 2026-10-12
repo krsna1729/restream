@@ -2,7 +2,7 @@
 // plus engine telemetry and host metrics (sampled). Views read it through
 // `useLive`; nothing else holds a copy.
 
-import { useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { getEngineTelemetry, getSystemMetrics } from "../core/api.js";
 import type { EngineTelemetrySnapshot } from "../core/api-types.js";
@@ -27,6 +27,19 @@ export interface LiveSnapshot {
 }
 
 export const SAMPLE_INTERVAL_MS = 2000;
+
+/** A sampled value older than this missed at least two samples. */
+export const SAMPLE_STALE_AFTER_MS = SAMPLE_INTERVAL_MS * 2.5;
+
+/** Wall-clock ms, re-rendering every `intervalMs`, for ages on screen. */
+export function useNow(intervalMs: number): number {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), intervalMs);
+    return () => window.clearInterval(timer);
+  }, [intervalMs]);
+  return now;
+}
 
 const EMPTY: LiveSnapshot = {
   state: null,

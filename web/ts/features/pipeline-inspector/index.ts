@@ -30,7 +30,6 @@ import {
   selectedPipeline,
   setForceRuntimeScope,
 } from "./view-helpers.js";
-import { fetchProcessingGraph, renderGraphInto } from "../graph.js";
 import {
   isOutputFlapping,
   isOutputIntentStopped,

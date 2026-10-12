@@ -2,7 +2,7 @@ import { escapeHtml, getUrlParam } from "../../core/utils.js";
 import { state } from "../../core/state.js";
 import type { ResourceMapSnapshot } from "../../core/api.js";
 import type { OutputView, PipelineView } from "../../types.js";
-import { fetchProcessingGraph, renderGraphInto } from "../graph.js";
+import { renderGraphInto } from "../graph.js";
 import {
   isOutputFlapping,
   isOutputRetrying,

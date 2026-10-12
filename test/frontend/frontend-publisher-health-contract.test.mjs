@@ -44,7 +44,7 @@ function makePipelineView() {
         protocol: "srt",
         remoteAddr: "198.51.100.10:9000",
         quality: {
-          msRTT: 34,
+          msRtt: 34,
           mbpsReceiveRate: 5.2,
         },
       },
@@ -143,7 +143,7 @@ test("publisher health modal reuses dashboard runtime refresh instead of startin
                   publisher: {
                     protocol: "srt",
                     remoteAddr: "198.51.100.10:9000",
-                    quality: { msRTT: 34, mbpsReceiveRate: 5.2 },
+                    quality: { msRtt: 34, mbpsReceiveRate: 5.2 },
                   },
                   audioTracks: [],
                   video: null,
@@ -198,7 +198,7 @@ test("publisher health modal reuses dashboard runtime refresh instead of startin
             publisher: {
               protocol: "srt",
               remoteAddr: "198.51.100.10:9000",
-              quality: { msRTT: 34, mbpsReceiveRate: 5.2 },
+              quality: { msRtt: 34, mbpsReceiveRate: 5.2 },
             },
             audioTracks: [],
           },

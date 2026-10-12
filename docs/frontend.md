@@ -162,9 +162,14 @@ below and its DOM-id tests are deleted (Q-044).
   The header shows the stream's connection (`live · rev N` or
   `reconnecting`; a steady system sends no deltas, so the time since the
   last change says nothing) and the age of the oldest sampled source.
-- Location: `?w=<workspace>` (`web/ts/control-room/route.ts`); an absent or
-  unknown workspace opens Fleet. Navigation uses `pushState` and follows
-  `popstate`; other query parameters are kept.
+- Location: `?w=<workspace>` and, for a pipeline view, `&p=<pipeline id>`
+  (`web/ts/control-room/route.ts`); an absent or unknown workspace opens
+  Fleet, and the pipeline is kept across workspaces. Links (`place-link.tsx`)
+  are real `href`s; a plain click uses `pushState` and the app follows
+  `popstate`. Other query parameters are kept.
+- Errors: the page renders the `#error-alert`/`#error-msg` and
+  `#saving-badge` elements that `core/api.ts` reports into, so a failed
+  mutation is shown, not only logged.
 - Workspaces ship on live data only. Fleet: delivery counts, then degraded
   outputs grouped by cause (an upstream cause, with its stage or shard,
   covers every output it stalls; destination causes stay per output) and
@@ -173,9 +178,22 @@ below and its DOM-id tests are deleted (Q-044).
   healthy. Headroom from `/metrics/system`: measured host use; egress flow
   only when shards measured it (`flowMeasured`); and, labeled as such, the
   capacity model's projection onto service centers from calibration priors
-  (observe-only until Q-035/Q-031 measure the coefficients).
+  (observe-only until Q-035/Q-031 measure the coefficients). Pipelines: the
+  inventory (attention first, then size), searchable by name or id and
+  filterable by the same health rule as Fleet's count, with outputs by
+  protocol. Operate (one pipeline): the source deck from
+  `/pipelines/{id}/inputs` with Promote; the media graph from
+  `/pipelines/{id}/graph`, laid out by longest path, each shared stage drawn
+  once with its consumer count and destinations folded per upstream stage
+  and protocol (egress nodes join outputs on their `outputId`); the
+  destination matrix from the state stream (feed lag from the running egress,
+  rate from the telemetry rates) with Start/Stop. Inputs and graph are polled
+  every 2 s only while Operate shows that pipeline; each panel shows the age
+  of its last successful update and turns amber once that is older than 2.5
+  poll intervals.
 
 Proof: `test/frontend/control-room-fleet.test.mjs`,
+`test/frontend/control-room-operate.test.mjs`,
 `test/frontend/frontend-runtime-state-stream.test.mjs` (stream liveness) and
 `test/frontend/control-room.spec.ts` (against a running engine).
 

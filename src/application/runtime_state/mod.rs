@@ -25,6 +25,7 @@ use serde::Serialize;
 
 use crate::application::diagnosis::{Diagnosis, OutputSignals, ShardHealth, diagnose};
 use crate::application::models::Output;
+use crate::domain::output_spec::EgressProtocol;
 use crate::domain::state::{DesiredOutputState, EgressPhase};
 use crate::media::engine::MediaEngine;
 
@@ -92,6 +93,10 @@ pub struct OutputState {
     pub id: String,
     pub pipeline_id: String,
     pub name: String,
+    pub protocol: EgressProtocol,
+    /// The egress shard carrying the running attempt; `null` off the fabric
+    /// or when none runs.
+    pub shard: Option<u32>,
     /// The operator's intent.
     pub desired: DesiredOutputState,
     /// The running egress attempt's phase; `null` when none runs.
@@ -390,6 +395,10 @@ fn project_output(
         pipeline_id: output.pipeline_id.clone(),
         name: output.name.clone(),
         desired: output.desired_state,
+        protocol: EgressProtocol::from_url(&output.url),
+        shard: active
+            .and_then(|egress| egress.fabric.as_ref())
+            .map(|slot| slot.shard),
         actual,
         convergence,
         flow,

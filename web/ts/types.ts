@@ -98,10 +98,10 @@ export interface SrtPipelineIngestConfig {
 }
 
 export interface PublisherQuality {
-  inboundRTPPacketsLost?: number;
-  inboundRTPPacketsInError?: number;
-  inboundRTPPacketsJitter?: number;
-  msRTT?: number;
+  inboundRtpPacketsLost?: number;
+  inboundRtpPacketsInError?: number;
+  inboundRtpPacketsJitter?: number;
+  msRtt?: number | null;
   mbpsReceiveRate?: number;
   packetsReceivedLoss?: number;
   packetsReceivedDrop?: number;

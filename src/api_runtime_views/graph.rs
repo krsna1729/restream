@@ -234,7 +234,7 @@ pub(crate) async fn processing_graph(
         let protocol = MediaEngine::egress_protocol_from_url(&output.url);
         let protocol_label = MediaEngine::graph_protocol_label(protocol);
 
-        nodes.push(api_view_models::processing_graph_node(
+        let mut egress_node = api_view_models::processing_graph_node(
             output_node_id.clone(),
             "egress",
             format!("{protocol_label} sender: {}", output.name.as_str()),
@@ -246,7 +246,10 @@ pub(crate) async fn processing_graph(
             }),
             egress
                 .map(|egress| serde_json::to_value(egress.metrics.snapshot()).unwrap_or_default()),
-        ));
+        );
+        // Clients join egress nodes to outputs on this, running or not.
+        egress_node["outputId"] = serde_json::Value::String(output.id.clone());
+        nodes.push(egress_node);
 
         let output_for_plan = [PlannedOutput::new(
             output.id.as_str(),

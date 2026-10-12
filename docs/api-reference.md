@@ -456,7 +456,9 @@ Returns `404` without an active ingest.
 ### `GET /api/v1/pipelines/:pipelineId/graph`
 
 Returns the current processing DAG: ingest, source ring, transcoder stages,
-egresses, HLS, and recording nodes where present.
+egresses, HLS, and recording nodes where present. Every `egress` node carries
+`outputId`, whether or not its egress runs; its `details` are present only
+while one runs.
 
 ### `POST /api/v1/pipelines/:pipelineId/diagnostics/run`
 
@@ -729,6 +731,8 @@ Rebuilds the projection and returns it:
   "outputs": [
     {
       "id": "...", "pipelineId": "...", "name": "...",
+      "protocol": "rtmp",
+      "shard": 0,
       "desired": "running",
       "actual": "sending",
       "convergence": "converged",
@@ -742,6 +746,10 @@ Rebuilds the projection and returns it:
 }
 ```
 
+- `protocol`: from the URL scheme: `rtmp` (also `rtmps`), `srt`, `hls`,
+  `sink`, `pipeline` or `unknown`.
+- `shard`: the egress shard carrying the running attempt; `null` off the
+  fabric or when none runs.
 - `desired`: the operator's intent (`running`, `stopped`).
 - `epoch`: identifies the server run (see the stream below).
 - `actual`: the phase of the running egress attempt, or `null` when none

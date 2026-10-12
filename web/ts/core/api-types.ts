@@ -342,3 +342,38 @@ export interface RateLimitAttempt {
 export interface RateLimitState {
   attempts: RateLimitAttempt[];
 }
+
+/** One node of `GET /api/v1/pipelines/{id}/graph` (runtime topology). */
+export interface GraphNode {
+  id: string;
+  type: string;
+  label: string;
+  active: boolean;
+  stageKey?: string;
+  /** On `egress` nodes: the output the node sends for. */
+  outputId?: string;
+  details?: Record<string, unknown> | null;
+  metrics?: {
+    packetsIn: number;
+    packetsOut: number;
+    bytesIn: number;
+    bytesOut: number;
+    processingUs: number;
+    avgUsPerPacket: number;
+    packetsPerSec: number;
+    uptimeSec?: number;
+    uptimeSecs?: number;
+  } | null;
+}
+
+export interface GraphEdge {
+  from: string;
+  to: string;
+  label: string;
+}
+
+export interface GraphData {
+  pipelineId: string;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}

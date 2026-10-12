@@ -125,14 +125,14 @@ function getPublisherQualityMetrics(publisher: Publisher | null): QualityMetric[
             label: 'Packets lost (inbound RTP)',
             description:
                 'Cumulative packets lost on the inbound RTP stream. High values indicate network packet loss.',
-            rawValue: q.inboundRTPPacketsLost,
+            rawValue: q.inboundRtpPacketsLost,
             alertCheck: (v) => v >= 100,
         });
         addNumericMetric({
             code: 'rtp_err',
             label: 'Packets in error (inbound RTP)',
             description: 'Cumulative RTP packets received with corrupt headers or invalid sequences.',
-            rawValue: q.inboundRTPPacketsInError,
+            rawValue: q.inboundRtpPacketsInError,
             alertCheck: (v) => v >= 20,
         });
         addNumericMetric({
@@ -140,7 +140,7 @@ function getPublisherQualityMetrics(publisher: Publisher | null): QualityMetric[
             label: 'Jitter (inbound RTP)',
             description:
                 'Variation in packet arrival time. High jitter can cause choppy playback even without loss.',
-            rawValue: q.inboundRTPPacketsJitter,
+            rawValue: q.inboundRtpPacketsJitter,
             alertCheck: (v) => v >= 30,
         });
         addNumericMetric({
@@ -148,7 +148,7 @@ function getPublisherQualityMetrics(publisher: Publisher | null): QualityMetric[
             label: 'RTT (ms)',
             description:
                 'SRT round-trip time between publisher and receiver. Alert threshold: 200 ms.',
-            rawValue: q.msRTT,
+            rawValue: q.msRtt,
             alertCheck: (v) => v >= 200,
         });
         addNumericMetric({
