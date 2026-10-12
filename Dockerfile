@@ -65,7 +65,7 @@ WORKDIR /workspace
 COPY web/ web/
 COPY scripts/dev/frontend/prepare-assets.mjs scripts/dev/frontend/prepare-assets.mjs
 COPY tsconfig.json tsconfig.json
-COPY tsconfig.v2.json vite.v2.config.ts ./
+COPY vite.config.ts vite.config.ts
 
 RUN npm run build:frontend
 

@@ -22,7 +22,7 @@ items).
 - [Q-035 MEDIA attribution](#q-035-observability-sonnet-attribute-media-pool-time-to-feed-and-stage)
 - [Q-036 enforced runtime truth table](#q-036-docs-sonnet-make-runtime-crossings-an-enforced-truth-table)
 - [Q-042 runtime truth](#q-042-architecture-opus-feed-the-dashboard-from-the-revisioned-runtime-state)
-- [Q-044 frontend cut](#q-044-frontend-opus-hard-cut-the-frontend-to-one-build)
+- [Q-044 frontend cut](#q-044-frontend-opus-hard-cut-the-frontend-to-one-react-root)
 - [Q-045 frontend product](#q-045-frontend-opus-build-the-control-room-on-live-data)
 - [Q-046 agent guidance](#q-046-docs-sonnet-slim-agentsmd-to-a-root-contract)
 - [Q-047 MoQ](#q-047-protocol-opus-moq-interop-spike-parked)
@@ -257,16 +257,22 @@ items).
 - Not planned: a `/api/commands` endpoint. Mutations stay on their REST
   routes, and their effects reach clients through the stream.
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
-### Q-044 [frontend] [opus] Hard-cut the frontend to one build
-- Goal: one Vite build and one React root. Delete
-  `web/ts/app/dashboard-v2-loader.ts` (23 KB), the 42 KB
-  `web/pages/index.html` shell, the legacy `tsc` emit (`build:frontend`
-  runs `tsc` and `vite.v2`), `tsconfig.v2.json`/`vite.v2.config.ts`
-  naming, and DOM-ID drift tests.
+### Q-044 [frontend] [opus] Hard-cut the frontend to one React root
+- Done so far: one Vite build (`vite.config.ts`, every `web/ts` module an
+  entry, `preserveModules`, dependencies under `public/js/vendor/`); `tsc`
+  only type-checks. `tsconfig.v2.json`, `vite.v2.config.ts`, the
+  `build:frontend:v2` script and the untyped bundle-path imports in
+  `dashboard-v2-loader.ts` are gone. Overview page payload 278.5 -> 262.4
+  KB gzip.
+- Remaining: one React root. The vanilla views (`web/ts/features/*`) still
+  render into the 42 KB `web/pages/index.html` shell by DOM id, and
+  `dashboard-v2-loader.ts` mounts twelve React islands into it. Replace
+  each view with a React workspace on live data (Q-045), then delete the
+  shell, the loader, the DOM-id drift check (`scripts/check/dom-id-drift.mjs`)
+  and the tests that pin DOM ids.
 - Gates: `npm run test:frontend`, Playwright; a tokei-measured reduction of
   frontend source plus test glue.
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
-
 ### Q-045 [frontend] [opus] Build the control room on live data
 - Goal: the workspaces of the
   [control-room mockup](design/control-room-mockup.html): Fleet, Pipelines,

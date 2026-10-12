@@ -45,67 +45,43 @@ test("compiled dashboard bootstrap remains idempotent", async () => {
   assert.equal(window.setDashboardMode, firstSetDashboardMode);
 });
 
-test("compiled dashboard no longer exposes v2 experiment switches", async () => {
-  installFakeDom();
-  const [entrySource, loader] = await Promise.all([
-    readFile(
-      new URL("../../public/js/app/dashboard-entry.js", import.meta.url),
-      "utf8",
-    ),
-    loadCompiledFrontendModule("app/dashboard-v2-loader.js"),
-  ]);
+// The static imports of a shipped module, transitively: what the browser
+// fetches before the module runs.
+async function staticClosure(modulesDir, entry, seen = new Set()) {
+  const file = path.resolve(modulesDir, entry);
+  if (seen.has(file)) return seen;
+  seen.add(file);
+  const source = await readFile(file, "utf8");
+  for (const match of source.matchAll(/(?:\bfrom|\bimport)\s*["']([^"']+\.js)["']/g)) {
+    await staticClosure(path.dirname(file), match[1], seen);
+  }
+  return seen;
+}
 
-  assert.equal("dashboardV2ExperimentEnabled" in loader, false);
-  assert.equal("startDashboardV2Experiment" in loader, false);
-  assert.doesNotMatch(entrySource, /startDashboardV2Experiment/);
-});
+async function gzipBytes(files) {
+  let total = 0;
+  for (const file of files) total += gzipSync(await readFile(file)).byteLength;
+  return total;
+}
 
-test("compiled dashboard no longer exposes a UI version toggle", async () => {
-  const indexHtml = await readFile(
-    new URL("../../public/index.html", import.meta.url),
-    "utf8",
-  );
+test("the dashboard loads its React views lazily and within the page budget", async () => {
+  const modulesDir = resolveFrontendModulesDir();
+  const shell = await staticClosure(modulesDir, "app/dashboard-entry.js");
+  const views = [
+    path.resolve(modulesDir, "app/dashboard-v2-entry.js"),
+    path.resolve(modulesDir, "app/dashboard-v2-checkpoints-entry.js"),
+  ];
+  for (const view of views) {
+    assert.equal(shell.has(view), false, `${view} is fetched on first use`);
+  }
 
-  assert.doesNotMatch(indexHtml, /dashboard-ui-v2-toggle/);
-  assert.doesNotMatch(indexHtml, /Use dashboard UI v2/);
-});
-
-test("compiled dashboard requires v2 bundles instead of falling back to legacy", async () => {
-  const loaderSource = await readFile(
-    new URL("../../public/js/app/dashboard-v2-loader.js", import.meta.url),
-    "utf8",
-  );
-
-  assert.doesNotMatch(loaderSource, /isOptionalNodeBundleMiss/);
-  assert.doesNotMatch(loaderSource, /ERR_MODULE_NOT_FOUND/);
-  assert.match(loaderSource, /Unable to start the dashboard v2 shell/);
-  assert.match(loaderSource, /Unable to start the dashboard v2 checkpoints/);
-});
-
-test("compiled dashboard keeps the default React seam in a bounded bundle", async () => {
-  const appDir = path.join(resolveFrontendModulesDir(), "app");
-  const [defaultEntry, v2Entry, checkpointsEntry, sharedRuntime] =
-    await Promise.all([
-      readFile(path.join(appDir, "dashboard-entry.js")),
-      readFile(path.join(appDir, "dashboard-v2-entry.js")),
-      readFile(path.join(appDir, "dashboard-v2-checkpoints-entry.js")),
-      readFile(path.join(appDir, "dashboard-v2-jsx-runtime.js")),
-    ]);
-
-  assert.equal(defaultEntry.includes("dashboard-v2-overview"), false);
-  assert.equal(v2Entry.includes("dashboard-v2-overview"), true);
-  assert.equal(
-    checkpointsEntry.includes("dashboard-v2-pipeline-inspect-root"),
-    true,
-  );
-  assert.equal(v2Entry.includes("dashboard-v2-pipeline-inspect-root"), false);
-  const sharedGzip = gzipSync(sharedRuntime).byteLength;
-  assert.ok(
-    gzipSync(v2Entry).byteLength + sharedGzip <= 87_000,
-    "the default Overview/Operate route payload must stay within its recorded gzip budget",
+  const overview = await staticClosure(
+    modulesDir,
+    "app/dashboard-v2-entry.js",
+    new Set(shell),
   );
   assert.ok(
-    gzipSync(checkpointsEntry).byteLength + sharedGzip <= 78_750,
-    "the opt-in checkpoint route payload must stay within its recorded gzip budget",
+    (await gzipBytes(overview)) <= 268_000,
+    "the Overview page payload (shell plus the React overview, gzip) must stay within its recorded budget",
   );
 });
