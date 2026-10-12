@@ -297,6 +297,14 @@ state. It starts missing work, stops work that is no longer desired, and
 applies bounded retry/backoff policy to failed outputs. Each long-lived media
 operation has a cancellation boundary and publishes operator-visible status.
 
+Mutations take one path: persist, then request a pass
+(`application::topology::ReconcileRequests`), then reconcile. API and agent
+handlers do not tear down or switch runtime state themselves. Each pass
+(`converge_topology`) stops egresses whose output row is gone, tears down the
+ingest sessions (and so file-ingest children), ring, stages and HLS of a
+deleted pipeline, and applies a persisted input promotion when one was
+requested. A request wakes the pass at once instead of at the next tick.
+
 Failure isolation follows these rules:
 
 - malformed media or a destination failure must not crash the engine;

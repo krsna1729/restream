@@ -236,12 +236,18 @@ remote address, media metadata, and transport quality. A connected unselected
 input reports `forwardingState: "standby"`; a promoted input may briefly report
 `"awaitingKeyframe"` before becoming `"active"`.
 
-Promotion returns the normalized input plus `connected`. When the target is
-already connected, the current writer is demoted and drained before the target
-replays its latest complete compressed GOP on its next packet arrival. If no
-complete GOP is cached, it waits for its next video keyframe. Promotion of an
-idle configured input changes selection and returns `connected: false`; its
-next publisher session becomes the selected source.
+Promotion persists the selection and returns the normalized input plus
+`connected`, which is whether the target has a live session. The reconciler
+applies the switch right after the response: when the target is connected, the
+current writer is demoted and drained before the target replays its latest
+complete compressed GOP on its next packet arrival. If no complete GOP is
+cached, it waits for its next video keyframe. Promotion of an idle configured
+input changes selection and returns `connected: false`; its next publisher
+session becomes the selected source.
+
+Deleting an output or a pipeline removes the row and returns; the reconciler
+then stops the output's egress, or the pipeline's egresses, ingest sessions,
+file ingests, stages and HLS runtime.
 
 ## Outputs
 

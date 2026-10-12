@@ -12,6 +12,7 @@ use crate::application::reconcile::{
     build_recording_reconcile_plan, collect_needed_stage_keys, load_output_runtime_snapshot,
     output_stage_sweep_input,
 };
+use crate::application::topology::{ReconcileRequests, converge_topology};
 use crate::config::AppConfig;
 use crate::domain::stage::StageKey;
 use crate::infrastructure::sqlite_ports::SqliteMetaStore;
@@ -30,9 +31,11 @@ pub(super) struct Reconciler {
     sessions: Arc<RwLock<HashSet<String>>>,
     recording_metadata: RecordingMetadataReporter,
     egress: EgressReconciler,
+    requests: Arc<ReconcileRequests>,
 }
 
 impl Reconciler {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<AppConfig>,
         pool: SqlitePool,
@@ -41,6 +44,7 @@ impl Reconciler {
         meta_store: SqliteMetaStore,
         sessions: Arc<RwLock<HashSet<String>>>,
         recording_metadata: RecordingMetadataReporter,
+        requests: Arc<ReconcileRequests>,
     ) -> Self {
         let egress = EgressReconciler::new(engine.clone(), pool.clone(), config.tuning);
         Self {
@@ -52,6 +56,7 @@ impl Reconciler {
             sessions,
             recording_metadata,
             egress,
+            requests,
         }
     }
 
@@ -64,6 +69,7 @@ impl Reconciler {
             .wait_for_reconcile_tick(
                 shutdown,
                 Duration::from_millis(tuning.reconciler_interval_ms),
+                self.requests.woken(),
             )
             .await
         {
@@ -83,6 +89,7 @@ impl Reconciler {
                 }
             };
 
+            converge_topology(&self.pool, &self.engine, &self.requests, &outputs).await;
             self.egress.reconcile(&outputs).await;
             self.engine.resize_srt_fabrics().await;
             self.engine.resize_rtmp_fabrics().await;

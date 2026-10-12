@@ -377,8 +377,10 @@ pub async fn pipelines_update_handler(
     }
 }
 
-/// Deletes a pipeline only after tearing down runtime state that still points
-/// at its outputs, ingest, stages, and HLS helpers.
+/// Deletes a pipeline row (its outputs and inputs cascade); the reconciler then
+/// tears down its egresses, ingest sessions, file-ingest children, stages and
+/// HLS runtime (Q-039). Persisting first means a pass between the two steps
+/// can no longer restart outputs of a pipeline that is being deleted.
 pub async fn pipelines_delete_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -388,33 +390,9 @@ pub async fn pipelines_delete_handler(
         return response;
     }
 
-    // The engine owns live runtime state, so we tear that down before removing
-    // the persisted pipeline row.
-    if let Ok(outputs) = crate::application::outputs::list_outputs(&state.db).await {
-        for output in outputs.iter().filter(|o| o.pipeline_id == id) {
-            state.engine.unregister_egress(&output.id).await;
-        }
-    }
-
-    if let Ok(pipeline) = state.pipeline_service.get_by_id(&id).await
-        && let Ok(ingests) = state.ingest_service.list_ingests().await
-    {
-        for ingest in ingests
-            .iter()
-            .filter(|i| i.stream_key == pipeline.stream_key)
-        {
-            let _ = state.engine.stop_file_ingest_child(&ingest.id).await;
-        }
-    }
-
-    state.engine.remove_pipeline(&id).await;
-    state.engine.unregister_ingest(&id).await;
-    state.engine.cleanup_pipeline_stages(&id).await;
-    state.engine.shutdown_hls_preview_segmenter(&id).await;
-    state.engine.shutdown_hls_segmenter(&id).await;
-
     match state.pipeline_service.delete_pipeline(&id).await {
         Ok(true) => {
+            state.reconcile.wake();
             refresh_srt_ingest_policy_store(&state).await;
             Json(serde_json::json!({"message": format!("Pipeline {} deleted", id)})).into_response()
         }

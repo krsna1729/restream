@@ -22,7 +22,6 @@ items).
 - [Q-035 MEDIA attribution](#q-035-observability-sonnet-attribute-media-pool-time-to-feed-and-stage)
 - [Q-036 enforced runtime truth table](#q-036-docs-sonnet-make-runtime-crossings-an-enforced-truth-table)
 - [Q-037 measurement polling](#q-037-measurement-opus-measure-restream-not-its-status-api)
-- [Q-039 mutation bypass](#q-039-architecture-opus-route-every-mutation-through-the-reconciler)
 - [Q-040 control core](#q-040-architecture-opus-replace-the-1-s-reconcile-sweep-with-commands-and-a-dirty-set)
 - [Q-041 stage ownership](#q-041-architecture-opus-own-stages-by-the-plan-not-a-sweep)
 - [Q-042 runtime truth](#q-042-architecture-opus-one-revisioned-runtime-state-with-delta-events)
@@ -259,19 +258,6 @@ items).
   external receiver stays the delivery oracle.
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
 
-### Q-039 [architecture] [opus] Route every mutation through the reconciler
-- Goal: one write path: persist, mark dirty, reconcile.
-- Files: `src/api/pipeline_inputs.rs:253` (input promotion calls
-  `engine.select_pipeline_input` directly),
-  `src/application/services/agent_service.rs:275` (agent apply calls
-  `engine.unregister_egress` directly). Deletes also tear down directly:
-  `src/api/outputs.rs:552` after the row is deleted, and
-  `src/api/pipelines.rs:395` before it is.
-- Gates: tests show a promotion, an agent apply and an output or pipeline
-  delete persist first and that
-  reconcile converges them; a restart after either keeps the result.
-- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
-
 ### Q-040 [architecture] [opus] Replace the 1 s reconcile sweep with commands and a dirty set
 - Goal: changes drive work, not a timer. Commands mark a pipeline dirty;
   a deadline queue holds retries; generations reject stale results.
@@ -280,7 +266,8 @@ items).
   `egress.rs:53`, so uploaders must re-assert it).
 - Gates: concurrency contract gate; idle reconcile CPU at 1000 outputs
   measured before/after; the fault.resilience live mode passes.
-- Depends on: Q-039.
+- Start from: `application::topology::ReconcileRequests` (wake plus dirty
+  input selections), which mutation handlers already call.
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
 
 ### Q-041 [architecture] [opus] Own stages by the plan, not a sweep

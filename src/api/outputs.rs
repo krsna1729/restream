@@ -536,8 +536,7 @@ pub async fn outputs_update_handler(
     Ok(Json(output_response_body("Output updated", &updated)).into_response())
 }
 
-/// Deletes one output and clears any runtime egress registration that may still
-/// be associated with its id.
+/// Deletes one output; the reconciler then stops its egress (Q-039).
 pub async fn outputs_delete_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -552,7 +551,7 @@ pub async fn outputs_delete_handler(
     if !deleted {
         return Ok((StatusCode::NOT_FOUND, "Output not found").into_response());
     }
-    state.engine.unregister_egress(&output_id).await;
+    state.reconcile.wake();
     Ok(Json(serde_json::json!({"message": "Output deleted"})).into_response())
 }
 

@@ -222,6 +222,20 @@ impl MediaEngine {
             .cancel_token
     }
 
+    /// Output ids with a registered egress (a live or starting attempt).
+    pub async fn registered_egress_output_ids(&self) -> Vec<String> {
+        let mut ids = self
+            .egresses
+            .cancel_tokens
+            .read()
+            .await
+            .keys()
+            .cloned()
+            .collect::<std::collections::HashSet<_>>();
+        ids.extend(self.egresses.active.read().await.keys().cloned());
+        ids.into_iter().collect()
+    }
+
     pub async fn unregister_egress(&self, output_id: &str) {
         let previous_recent = self.egresses.recent.read().await.get(output_id).cloned();
         let mut tokens = self.egresses.cancel_tokens.write().await;

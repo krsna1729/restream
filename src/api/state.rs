@@ -110,6 +110,8 @@ pub struct AppState {
     pub media_library_service: MediaLibraryService,
     pub agent_service: AgentService,
     pub alert_tracker: alerts::AlertTracker,
+    /// Mutation handlers persist, then ask the reconciler to converge here.
+    pub reconcile: Arc<crate::application::topology::ReconcileRequests>,
     pub log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
     secure_session_cookies: bool,
     #[cfg(feature = "agent-execution")]
@@ -167,6 +169,7 @@ impl AppState {
             media_library_service,
             agent_service,
             alert_tracker: alerts::AlertTracker::new(),
+            reconcile: Arc::new(crate::application::topology::ReconcileRequests::new()),
             log_broadcast,
             secure_session_cookies: runtime.secure_session_cookies,
             #[cfg(feature = "agent-execution")]

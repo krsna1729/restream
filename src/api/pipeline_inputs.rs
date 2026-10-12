@@ -248,10 +248,17 @@ pub async fn pipeline_input_promote_handler(
         Ok(input) => input,
         Err(error) => return ApiError::from(error).into_response(),
     };
+    // The reconciler switches the forwarded input (Q-039); report whether the
+    // target has a live session to switch to.
+    state.reconcile.input_selection_changed(&pipeline_id);
     let connected = state
         .engine
-        .select_pipeline_input(&pipeline_id, &input_id)
-        .await;
+        .ingests
+        .sessions
+        .read()
+        .await
+        .get(&input_id)
+        .is_some_and(|session| session.pipeline_id == pipeline_id);
     let host = state.pipeline_service.get_ingest_host().await;
     Json(serde_json::json!({
         "input": input_json(&state, &input, &host).await,

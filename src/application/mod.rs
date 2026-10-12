@@ -19,4 +19,5 @@ pub mod recording;
 pub mod services;
 pub mod settings;
 pub mod srt_ingest;
+pub mod topology;
 pub mod transcode_profiles;
