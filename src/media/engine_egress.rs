@@ -190,21 +190,21 @@ impl MediaEngine {
         registration
     }
 
-    /// Records fabric ownership and shard assignment for an
-    /// already-registered output. Kept as a separate call rather than a
-    /// `register_egress_attempt_with_meta` parameter because whether a
-    /// fabric task actually started (as opposed to failing during startup
-    /// preparation, which leaves `fabric` `None` and records an error
-    /// through `record_egress_error_if_current` instead) isn't known until
-    /// after registration in the bootstrap egress reconciler.
+    /// Records where the fabric placed this attempt's leaf: its feed and
+    /// the shard the fabric manager chose for the `Add` (placement follows
+    /// the live pool size and policy, so it is never recomputed). A no-op
+    /// when `registration` is no longer the output's current attempt.
     pub async fn set_egress_fabric_attribution(
         &self,
         output_id: &str,
-        fabric: Option<crate::media::engine::FabricSlot>,
+        registration: &EgressRegistration,
+        fabric: crate::media::engine::FabricSlot,
     ) {
         let mut egresses = self.egresses.active.write().await;
-        if let Some(egress) = egresses.get_mut(output_id) {
-            egress.fabric = fabric;
+        if let Some(egress) = egresses.get_mut(output_id)
+            && egress.attempt_id == registration.attempt_id
+        {
+            egress.fabric = Some(fabric);
         }
     }
 

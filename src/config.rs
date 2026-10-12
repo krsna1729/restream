@@ -206,10 +206,6 @@ impl EgressFabricConfig {
         }
     }
 
-    pub(crate) fn shard_count(&self) -> NonZeroU32 {
-        NonZeroU32::new(self.shards).expect("egress fabric shard count is clamped nonzero")
-    }
-
     /// SRT starts small, exactly like RTMP; the benchmark seam can pin a count.
     pub(crate) fn srt_shard_count(&self) -> NonZeroU32 {
         NonZeroU32::new(wi37_srt_shard_override().unwrap_or(1))

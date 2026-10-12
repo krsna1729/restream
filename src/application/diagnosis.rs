@@ -85,8 +85,7 @@ pub enum ShardHealth {
 /// engine state (runtime state) or from the health view (alerts).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OutputSignals {
-    /// Desired running and not paused by an exhausted budget: only then can
-    /// it be degraded.
+    /// Desired running: only then can it be degraded.
     pub wants_running: bool,
     pub retries_exhausted: bool,
     pub has_ingest: bool,
@@ -125,6 +124,12 @@ pub fn diagnose(signals: &OutputSignals) -> Option<Diagnosis> {
             ruled_out,
         })
     };
+    // An exhausted output runs no egress, so no layer can be inspected, and
+    // the operator's action is the same whatever the publisher does: start
+    // it again.
+    if signals.retries_exhausted {
+        return found(Layer::Destination, Cause::RetriesExhausted, ruled_out);
+    }
 
     if !signals.has_ingest {
         return found(Layer::Ingest, Cause::NoPublisher, ruled_out);
@@ -158,9 +163,7 @@ pub fn diagnose(signals: &OutputSignals) -> Option<Diagnosis> {
         }
     }
 
-    let destination = if signals.retries_exhausted {
-        Some(Cause::RetriesExhausted)
-    } else if let Some((attempts, max)) = signals.retry
+    let destination = if let Some((attempts, max)) = signals.retry
         && max > 0
         && u64::from(attempts) * 100 >= max * RETRY_BUDGET_WARN_PCT
     {
@@ -197,6 +200,20 @@ mod tests {
     fn a_healthy_or_stopped_output_has_no_diagnosis() {
         assert_eq!(diagnose(&running()), None);
         assert_eq!(diagnose(&OutputSignals::default()), None, "stopped");
+    }
+
+    #[test]
+    fn an_exhausted_output_is_exhausted_with_or_without_a_publisher() {
+        for has_ingest in [true, false] {
+            let diagnosis = diagnose(&OutputSignals {
+                retries_exhausted: true,
+                has_ingest,
+                ..running()
+            })
+            .unwrap();
+            assert_eq!(diagnosis.cause, Cause::RetriesExhausted);
+            assert!(diagnosis.ruled_out.is_empty());
+        }
     }
 
     #[test]

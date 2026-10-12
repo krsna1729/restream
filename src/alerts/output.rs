@@ -127,6 +127,10 @@ pub(super) fn output_alert(
         | Cause::ShardPanicked { .. }
         | Cause::ShardStalled { .. }
         | Cause::ShardStopped { .. } => return None,
+        // The health view carries no restart-budget flag (`retries_exhausted`
+        // stays false here); an exhausted output shows as `failed` and is
+        // `rejected`. The runtime state reports `retriesExhausted`.
+        Cause::RetriesExhausted => return None,
         // Transient pressure within the deadline: shown in the runtime
         // state, not an alert.
         Cause::Backpressured { stalled: false } => return None,
@@ -171,16 +175,6 @@ pub(super) fn output_alert(
                 generated_at,
             )
         }
-        Cause::RetriesExhausted => Alert::new(
-            id("retries_exhausted"),
-            Severity::Warning,
-            Scope::Output,
-            format!("Output '{output_id}' stopped retrying"),
-            "The output spent its restart budget.",
-            vec![format!("output.status = {status}")],
-            "Fix the destination, then start the output again.",
-            generated_at,
-        ),
         Cause::Rejected { phase, error } if str_field("phase") == Some("failed") => {
             let phase = phase.as_deref().unwrap_or("unknown");
             Alert::new(

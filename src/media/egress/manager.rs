@@ -444,6 +444,18 @@ pub enum ManagerCommandOutcome {
     },
 }
 
+impl ManagerCommandOutcome {
+    /// The shard this command's spec lives on: where an `Add` was placed,
+    /// or where the same generation already runs. `None` for outcomes that
+    /// place nothing (a stale generation runs on behalf of a newer spec).
+    pub fn placed_shard(&self) -> Option<ShardId> {
+        match self {
+            Self::Enqueued { shard_id } | Self::AlreadyCurrent { shard_id } => Some(*shard_id),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EgressManagerCommandError {
     UnknownShard { shard_id: ShardId },
