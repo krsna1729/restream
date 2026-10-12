@@ -115,7 +115,9 @@ pub(crate) async fn add_mixed_output_cases(
 ) -> Result<(), String> {
     for case in cases {
         let mut direct_urls = Vec::new();
-        if env.use_direct_signal_sinks() {
+        // FFmpeg cannot listen for RTMPS, so an RTMPS output publishes to
+        // the MediaMTX RTMPS sink and has no signal capture.
+        if env.use_direct_signal_sinks() && case.protocol() != MixedOutputProtocol::Rtmps {
             for index in 1..=env.n_per_group {
                 let sink =
                     spawn_ffmpeg_signal_sink(env, cfg, case, index, *next_signal_sink_offset)

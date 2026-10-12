@@ -64,7 +64,7 @@ pub(super) use mixed_live_scenarios::{
 #[cfg(test)]
 pub(super) use mixed_matrix_runner::{
     matrix_case_progress_rows, mixed_matrix_cases_can_share_wave, mixed_runtime_log_noise_lines,
-    mixed_runtime_log_noise_matches, write_matrix_scenario_progress,
+    mixed_runtime_log_noise_matches, mixed_signal_waves, write_matrix_scenario_progress,
 };
 pub(super) use mixed_matrix_runner::{
     mixed_fast_breadth_correctness, mixed_signal_correctness, verify_mixed_runtime_log_hygiene,
