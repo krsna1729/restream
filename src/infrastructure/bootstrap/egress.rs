@@ -49,10 +49,7 @@ impl EgressReconciler {
                 self.tuning.ingest_disconnect_grace_ms,
             )
             .await;
-            if snapshot.is_active
-                || output.desired_state != DesiredOutputState::Running
-                || output.retries_exhausted
-            {
+            if snapshot.is_active || !output.wants_running() {
                 self.engine.clear_egress_retry_state(&output.id).await;
             }
             let failure = {
@@ -96,7 +93,7 @@ impl EgressReconciler {
                                 output_id = %output.id,
                                 output_name = %output.name,
                                 max_retries = self.tuning.output_max_retries,
-                                "output exceeded max retries — marking failed",
+                                "output exceeded max retries — retries exhausted; restarts stop until the operator starts or stops it",
                             );
                         }
                         Err(err) => {

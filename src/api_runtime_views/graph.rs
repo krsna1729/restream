@@ -124,9 +124,7 @@ pub(crate) async fn processing_graph(
     let visible_outputs = pipeline_outputs
         .iter()
         .filter(|output| {
-            ingest.is_some()
-                && (output.desired_state == DesiredOutputState::Running
-                    || egresses.contains_key(&output.id))
+            ingest.is_some() && (output.wants_running() || egresses.contains_key(&output.id))
         })
         .map(|output| {
             PlannedOutput::new(
