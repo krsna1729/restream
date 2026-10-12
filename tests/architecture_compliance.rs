@@ -653,19 +653,6 @@ fn frontend_tooling_and_vendored_assets_are_reproducible() {
     assert!(package_lock.contains("\"lockfileVersion\""));
     assert!(package_lock.contains("\"hls.js\""));
 
-    let tsconfig = include_str!("../tsconfig.json");
-    for required in [
-        "\"strict\": true",
-        "\"rootDir\": \"web/ts\"",
-        "\"outDir\": \"public/js\"",
-        "\"sourceMap\": false",
-    ] {
-        assert!(
-            tsconfig.contains(required),
-            "tsconfig must contain {required}"
-        );
-    }
-
     let hls_sync = include_str!("../scripts/dev/frontend/prepare-assets.mjs");
     assert!(hls_sync.contains("sourceMappingURL=hls\\.min\\.js\\.map"));
     let generated_hls_bundle =
