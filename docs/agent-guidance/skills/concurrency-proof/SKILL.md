@@ -19,9 +19,9 @@ does not prove the production path.
   enforces it.
 - Benchmark hot-path changes; otherwise state that the change is off the hot path.
 
-Follow [AGENTS.md](../../../../AGENTS.md) for host/build safety. CI runs the
-fast gate on every PR and the live contract gate on master pushes; locally,
-run only the new step or loom case you added:
+Follow [AGENTS.md](../../../../AGENTS.md) for host/build safety. Locally, run
+only the new step or loom case you added (`cargo test <new test name>`). CI
+runs the fast gate on every PR and the live contract gate on master pushes:
 
 ```sh
 cargo xtask concurrency fast
