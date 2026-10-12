@@ -31,14 +31,6 @@ async fn empty_write_batch_does_not_add_data() {
     assert_eq!(queue.read_nonblocking(&mut output), 0);
 }
 
-#[test]
-fn custom_output_drop_does_not_double_close_avio() {
-    ffmpeg::init().expect("FFmpeg init");
-    let queue = MemoryQueue::new();
-    let output = CustomOutput::new(&queue, "mpegts").expect("custom output");
-    drop(output);
-}
-
 // --- Regression: issue #2 (Round 3) — MemoryQueue::read must not panic
 // if the Mutex is poisoned by a panicking writer thread.
 // Before the fix, `cvar.wait(inner).unwrap()` would propagate the poison

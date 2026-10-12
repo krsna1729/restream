@@ -124,7 +124,6 @@ pub(super) struct ResourceSweepEnv {
     pub(super) lifecycle: ResourceSweepLifecycle,
     pub(super) no_cleanup: bool,
     pub(super) srt_crypto: HarnessSrtCrypto,
-    pub(super) backend_policy_env: Vec<(&'static str, String)>,
     /// mediamtx RTMPS cert/key paths (`RESOURCE_SWEEP_RTMPS_CERT`/`_KEY`).
     /// `None` (the default) keeps mediamtx's `rtmpEncryption: "no"` as
     /// every other resource-sweep mode already expects; set both to run
@@ -178,7 +177,6 @@ impl ResourceSweepEnv {
                 .ok()
                 .is_some_and(|v| v == "1"),
             srt_crypto: harness_srt_crypto_from_env(),
-            backend_policy_env: Vec::new(),
             rtmps_tls: match (
                 std::env::var_os("RESOURCE_SWEEP_RTMPS_CERT"),
                 std::env::var_os("RESOURCE_SWEEP_RTMPS_KEY"),

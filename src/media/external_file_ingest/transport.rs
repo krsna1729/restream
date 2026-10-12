@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 use tokio::io::AsyncReadExt;
 use tokio::process::ChildStdout;
 
-use crate::media::file_ingest::ContinuousTimestampState;
+use super::continuity::ContinuousTimestampState;
 use crate::media::input_gate::{InputPacketBoundary, InputTimestampMapper};
 use crate::media::mpegts::TsDemuxer;
 use crate::media::packet::MediaType;

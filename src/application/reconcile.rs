@@ -192,7 +192,6 @@ pub struct OutputStageSweepInput<'a> {
 
 pub fn collect_needed_stage_keys<'a>(
     outputs: impl IntoIterator<Item = OutputStageSweepInput<'a>>,
-    policy: &crate::planner::BackendPolicy,
 ) -> HashSet<StageKey> {
     let mut needed_stages = HashSet::new();
     for output in outputs {
@@ -205,7 +204,6 @@ pub fn collect_needed_stage_keys<'a>(
                 output.ingest_video_codec.as_deref(),
                 &[planned_output],
                 false,
-                policy,
             );
             for stage in plan.stages {
                 if stage.kind != crate::domain::stage::StageKind::Source {
@@ -589,30 +587,27 @@ mod tests {
 
     #[test]
     fn stage_sweep_collects_only_needed_stage_keys() {
-        let stages = collect_needed_stage_keys(
-            [
-                OutputStageSweepInput {
-                    pipeline_id: "pipe",
-                    config: OutputConfig::preset("720p")
-                        .with_audio(AudioRouting::SelectTracks { tracks: vec![0] }),
-                    url: "rtmp://example/live",
-                    desired_state: DesiredOutputState::Running,
-                    is_active: false,
-                    effective_has_ingest: true,
-                    ingest_video_codec: Some("hevc".to_string()),
-                },
-                OutputStageSweepInput {
-                    pipeline_id: "pipe",
-                    config: OutputConfig::source(),
-                    url: "srt://example:9000",
-                    desired_state: DesiredOutputState::Stopped,
-                    is_active: false,
-                    effective_has_ingest: true,
-                    ingest_video_codec: Some("hevc".to_string()),
-                },
-            ],
-            &crate::planner::BackendPolicy::default(),
-        );
+        let stages = collect_needed_stage_keys([
+            OutputStageSweepInput {
+                pipeline_id: "pipe",
+                config: OutputConfig::preset("720p")
+                    .with_audio(AudioRouting::SelectTracks { tracks: vec![0] }),
+                url: "rtmp://example/live",
+                desired_state: DesiredOutputState::Running,
+                is_active: false,
+                effective_has_ingest: true,
+                ingest_video_codec: Some("hevc".to_string()),
+            },
+            OutputStageSweepInput {
+                pipeline_id: "pipe",
+                config: OutputConfig::source(),
+                url: "srt://example:9000",
+                desired_state: DesiredOutputState::Stopped,
+                is_active: false,
+                effective_has_ingest: true,
+                ingest_video_codec: Some("hevc".to_string()),
+            },
+        ]);
 
         let h264_720p = StageKind::video_preset_with_codec("720p", "h264");
         assert!(stages.contains(&StageKey::new("pipe", h264_720p.clone())));

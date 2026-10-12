@@ -3,6 +3,7 @@
 //! The application layer chooses when an ingest starts. This module owns the
 //! spawned process, MPEG-TS transport, retry loop, and runtime cleanup.
 
+mod continuity;
 mod process;
 mod transport;
 

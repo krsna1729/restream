@@ -83,7 +83,7 @@ mod tests {
     fn snapshot_projection_omits_absent_capacity_fields() {
         let snapshot = StageRuntimeSnapshot {
             key: StageKey::new("pipe-1", StageKind::source()),
-            backend: StageBackendKind::InternalFfmpeg,
+            backend: StageBackendKind::ExternalFfmpeg,
             phase: StagePhase::Producing,
             backend_pid: None,
             bytes_in: 0,

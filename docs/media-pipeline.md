@@ -187,30 +187,9 @@ stdout threads pull/mux the source ring and demux the child output with
 `TsDemuxer`, publishing `MediaPacket`s into `output_ring`. Tokio supervises
 the child lifecycle, not continuous pipe/media work.
 
-This is the **default** backend. It is robust because FFmpeg errors are
+This is the only FFmpeg stage backend. FFmpeg errors are
 isolated to the subprocess and logged to stderr; a crash restarts cleanly on
 the next reconciler cycle.
-
-### Internal transcoder (opt-in)
-
-Set `RESTREAM_INTERNAL_VIDEO_PRESETS=1` to use the in-process libavcodec path
-(`src/media/transcoder.rs`) for video-preset stages. HEVC-to-H.264 bridge
-stages and complex audio stages have separate rollout flags:
-`RESTREAM_INTERNAL_HEVC_TO_H264` and `RESTREAM_INTERNAL_AUDIO_COMPLEX`.
-`RESTREAM_INTERNAL_HLS_PREVIEW` still exists as a backend-family toggle for
-`StageKind::Preview`, but HLS preview now reuses the shared HEVC→H.264 codec
-edge (or source) instead of creating that kind. The data flow is identical —
-the same `source_ring → output_ring` contract holds — but uses
-`MemoryQueue`/`avio` callbacks instead of a subprocess pipe.
-
-Current behavior: for `video:*` presets, the internal path uses
-`run_ffmpeg_transcode_with_scale` and performs decode→scale→encode in-process
-(`libx264` for H.264 input, `libx265` for H.265 input), while audio streams are
-passed through. Source passthrough still bypasses the video transcoder.
-
-The external FFmpeg subprocess backend remains the default. Backend selection
-is explicit per stage family; there is no global switch that silently changes
-every transform path.
 
 ### Muxing stages summary
 
@@ -219,7 +198,6 @@ every transform path.
 | SRT Ingest | `TsDemuxer` — demux MPEG-TS into `MediaPacket`s, gate, timestamps, ring publish | Compio SRT Ingress Owner (inline) |
 | RTMP Ingest | `RtmpPublisherMedia` — chunk parse, FLV classification, sequence headers, gate, ring publish | Compio RTMP Ingress Owner (inline) |
 | External transcoder | subprocess FFmpeg stdin→stdout; `StageInputPump` writes stdin, `TsDemuxer` reads stdout | Dedicated OS threads (`restream-ffin`, `restream-ffout`) |
-| Internal transcoder | in-process FFmpeg via `MemoryQueue`+`avio`; `StageInputPump` refills on FFmpeg thread | Guarded FFmpeg OS threads |
 | SRT Egress | Shared `TsMuxer` task per unique `(pipeline, preset)` feeding shared `TsChunkRing` | Media Executor (`restream-media`) |
 | HLS | MPEG-TS mux/segmenting for remote outputs; separate fMP4 packaging for preview | Media Executor (`restream-media`) |
 | Recording | MPEG-TS feeder task to `MemoryQueue`; raw `.ts` disk write | Feeder: Media Executor; Writer: OS thread |
@@ -245,9 +223,7 @@ every transform path.
 
 The external transcoder stage applies `scale=WxH` and re-encodes preserving the
 input codec: `libx265 -preset veryfast` for H.265 input, `libx264 -preset
-veryfast` for H.264 input. The internal video-preset backend (when enabled
-with `RESTREAM_INTERNAL_VIDEO_PRESETS=1`) uses the same preset table via
-`run_ffmpeg_transcode_with_scale`.
+veryfast` for H.264 input.
 
 | Preset | Resolution | Scale filter |
 |---|---|---|

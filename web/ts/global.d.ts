@@ -105,7 +105,6 @@ declare global {
     saveIngestSecurity: () => Promise<void>;
     saveRecordingSettings: () => Promise<void>;
     saveSrtIngest: () => Promise<void>;
-    saveBackendPolicy: () => Promise<void>;
     saveTranscodeProfiles: () => Promise<void>;
     addTranscodeProfile: () => void;
     saveDashboardPassword: () => Promise<void>;

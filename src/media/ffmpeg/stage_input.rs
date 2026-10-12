@@ -328,7 +328,7 @@ mod tests {
     fn pump_suppresses_first_input_for_filtered_audio_until_eos() {
         let ring = Arc::new(RingBuffer::new(8));
         let lifecycle = Arc::new(StageLifecycle::new(StagePhase::BackendSpawned {
-            backend: StageBackendKind::InternalFfmpeg,
+            backend: StageBackendKind::ExternalFfmpeg,
             pid: None,
         }));
         let metrics = Arc::new(StageMetrics::new());
@@ -353,7 +353,7 @@ mod tests {
         assert_eq!(
             lifecycle.current_phase(),
             StagePhase::BackendSpawned {
-                backend: StageBackendKind::InternalFfmpeg,
+                backend: StageBackendKind::ExternalFfmpeg,
                 pid: None,
             }
         );
@@ -365,7 +365,7 @@ mod tests {
         ring.set_video_parameter_sets(h264_parameter_sets());
         let video = video_meta();
         let lifecycle = Arc::new(StageLifecycle::new(StagePhase::BackendSpawned {
-            backend: StageBackendKind::InternalFfmpeg,
+            backend: StageBackendKind::ExternalFfmpeg,
             pid: None,
         }));
         let metrics = Arc::new(StageMetrics::new());

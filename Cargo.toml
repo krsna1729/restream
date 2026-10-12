@@ -144,10 +144,6 @@ name = "api_health"
 harness = false
 
 [[bench]]
-name = "transcoder_throughput"
-harness = false
-
-[[bench]]
 name = "avio_throughput"
 harness = false
 

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::{LazyLock, OnceLock};
 
 use restream::domain::stage::StageKind;
-use restream::planner::{BackendPolicy, PlannedOutput, plan_pipeline_graph};
+use restream::planner::{PlannedOutput, plan_pipeline_graph};
 use serde::Deserialize;
 
 use super::*;
@@ -481,13 +481,7 @@ pub(crate) fn expected_mixed_stage_count_for_outputs(
             )
         })
         .collect::<Vec<_>>();
-    let plan = plan_pipeline_graph(
-        "pipe",
-        Some(case.expected_video_codec()),
-        &outputs,
-        false,
-        &BackendPolicy::default(),
-    );
+    let plan = plan_pipeline_graph("pipe", Some(case.expected_video_codec()), &outputs, false);
 
     let mut counts = MixedStageCount {
         video: 0,

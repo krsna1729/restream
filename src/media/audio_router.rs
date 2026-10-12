@@ -12,8 +12,8 @@ use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 /// Lightweight audio routing stage with no FFmpeg or MPEG-TS round-trip.
 ///
 /// `SelectTracks` filters and reindexes reference-counted packets in a tight
-/// async loop. `Remap` and `Downmix` require DSP and are assigned to the FFmpeg
-/// backend by `BackendPolicy`.
+/// async loop. `Remap` and `Downmix` require DSP and run on the external FFmpeg
+/// backend.
 pub async fn start_audio_router(
     pipeline_id: String,
     routing: AudioRouting,
@@ -196,10 +196,7 @@ pub fn apply_audio_routing(routing: &AudioRouting, input_tracks: &[AudioMeta]) -
     }
 }
 
-pub(super) fn route_audio_packet(
-    routing: &AudioRouting,
-    packet: &MediaPacket,
-) -> Option<MediaPacket> {
+fn route_audio_packet(routing: &AudioRouting, packet: &MediaPacket) -> Option<MediaPacket> {
     match routing {
         AudioRouting::Passthrough => Some(packet.clone()),
         AudioRouting::SelectTracks { tracks } => match packet.media_type {
@@ -226,3 +223,6 @@ pub(super) fn route_audio_packet(
         AudioRouting::Downmix { .. } => Some(packet.clone()),
     }
 }
+
+#[cfg(test)]
+mod tests;

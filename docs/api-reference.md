@@ -625,17 +625,13 @@ matches the configured stream key, and `409` if that ingest ID already has a
 running file ingest or the target pipeline already has another active
 publisher.
 
-By default the backend is an FFmpeg subprocess (see `FFMPEG_BIN_PATH` in
+File ingest runs an FFmpeg subprocess (see `FFMPEG_BIN_PATH` in
 [Configuration](configuration.md)). The
 application service owns its argument construction; the API contract is the
 requested loop, start-time, and optimization behavior rather than a copied
 process command.
 
-Set `RESTREAM_USE_INTERNAL_FILE_INGEST=1` to switch passthrough
-`liveOptimized=false` starts to the in-process remux path instead.
-
-When `liveOptimized=true`, start always uses the FFmpeg subprocess and
-re-encodes toward a live-friendly GOP cadence:
+When `liveOptimized=true`, it re-encodes toward a live-friendly GOP cadence:
 
 - video: H.264 (`libx264`)
 - audio: AAC
@@ -1329,24 +1325,13 @@ Authenticated JSON endpoint returning a complete, ordered diagnostics report.
 Authenticated settings/configuration read endpoint.
 Supports `?jobs=latest` for consumers that only need the newest job per output,
 and `?view=dashboard` for the slim dashboard config shape used by runtime
-overview/control flows. Responses include `backendPolicy`:
-
-```json
-{
-  "backendPolicy": {
-    "internalVideoPresets": false,
-    "internalHevcToH264": false,
-    "internalHlsPreview": false,
-    "internalComplexAudio": false
-  }
-}
-```
+overview/control flows.
 
 ### `PATCH /api/v1/settings`
 
-Authenticated settings/configuration update endpoint. The `backendPolicy`
-object is optional; when supplied it is persisted and becomes the runtime policy
-for newly started or reconciled transcoding stages.
+Authenticated settings/configuration update endpoint. A `backendPolicy`
+object from older dashboards is accepted and ignored: every FFmpeg stage runs
+as an external process.
 
 ## Engineer v1 Endpoints
 

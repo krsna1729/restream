@@ -52,9 +52,7 @@ pub async fn resolve_hls_preview_graph(
 
         match resolved_codec {
             Some(codec) => {
-                let backend_policy = engine.backend_policy();
-                let preview_plan =
-                    plan_hls_preview_graph(pipeline_id, Some(codec), &backend_policy);
+                let preview_plan = plan_hls_preview_graph(pipeline_id, Some(codec));
                 let Some(preview_plan) = preview_plan else {
                     return Some(HlsPreviewGraph {
                         video_ring: source_ring,
@@ -106,8 +104,7 @@ pub async fn resolve_input_hls_preview_graph(
         .as_ref()
         .map(|video| video.codec.as_str())
         .or((!codec_hint.is_empty()).then_some(codec_hint));
-    let backend_policy = engine.backend_policy();
-    let preview_plan = plan_hls_preview_graph(resource_id, codec, &backend_policy);
+    let preview_plan = plan_hls_preview_graph(resource_id, codec);
     let Some(key) = preview_plan.as_ref().and_then(preview_transcode_key) else {
         return HlsPreviewGraph {
             video_ring: source_ring,

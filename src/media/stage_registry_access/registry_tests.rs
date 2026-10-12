@@ -30,7 +30,7 @@ async fn register_and_remove_input_queue_round_trips_on_existing_runtime() {
         .get_or_create_non_ring_stage_runtime(
             key.clone(),
             StagePhase::Registered,
-            StageBackendKind::InternalFfmpeg,
+            StageBackendKind::ExternalFfmpeg,
             CancellationToken::new(),
         )
         .await;
@@ -66,7 +66,7 @@ async fn register_and_remove_pipe_metrics_round_trips_on_existing_runtime() {
         .get_or_create_non_ring_stage_runtime(
             key.clone(),
             StagePhase::Registered,
-            StageBackendKind::InternalFfmpeg,
+            StageBackendKind::ExternalFfmpeg,
             CancellationToken::new(),
         )
         .await;
@@ -102,14 +102,14 @@ async fn get_or_create_non_ring_stage_runtime_creates_on_first_call() {
         .get_or_create_non_ring_stage_runtime(
             key.clone(),
             StagePhase::Registered,
-            StageBackendKind::InternalFfmpeg,
+            StageBackendKind::ExternalFfmpeg,
             CancellationToken::new(),
         )
         .await;
     assert_eq!(lifecycle.current_phase(), StagePhase::Registered);
     assert_eq!(
         lifecycle.current_backend(),
-        StageBackendKind::InternalFfmpeg
+        StageBackendKind::ExternalFfmpeg
     );
 }
 
@@ -121,7 +121,7 @@ async fn get_or_create_non_ring_stage_runtime_reuses_when_not_cancelled() {
         .get_or_create_non_ring_stage_runtime(
             key.clone(),
             StagePhase::Registered,
-            StageBackendKind::InternalFfmpeg,
+            StageBackendKind::ExternalFfmpeg,
             CancellationToken::new(),
         )
         .await;
@@ -146,7 +146,7 @@ async fn get_or_create_non_ring_stage_runtime_replaces_when_cancelled() {
         .get_or_create_non_ring_stage_runtime(
             key.clone(),
             StagePhase::Registered,
-            StageBackendKind::InternalFfmpeg,
+            StageBackendKind::ExternalFfmpeg,
             stale_cancel.clone(),
         )
         .await;
@@ -198,7 +198,7 @@ async fn remove_stage_runtime_removes_entry() {
         .get_or_create_non_ring_stage_runtime(
             key.clone(),
             StagePhase::Registered,
-            StageBackendKind::InternalFfmpeg,
+            StageBackendKind::ExternalFfmpeg,
             CancellationToken::new(),
         )
         .await;
@@ -237,7 +237,7 @@ async fn get_or_create_stage_lifecycle_with_backend_prefers_existing_runtime_lif
         .get_or_create_non_ring_stage_runtime(
             key.clone(),
             StagePhase::Registered,
-            StageBackendKind::InternalFfmpeg,
+            StageBackendKind::ExternalFfmpeg,
             CancellationToken::new(),
         )
         .await;
@@ -306,7 +306,7 @@ async fn stage_lifecycle_snapshot_prefers_runtime_map_when_both_present() {
         .get_or_create_non_ring_stage_runtime(
             key.clone(),
             StagePhase::Producing,
-            StageBackendKind::InternalFfmpeg,
+            StageBackendKind::ExternalFfmpeg,
             CancellationToken::new(),
         )
         .await;
@@ -323,7 +323,7 @@ async fn stage_runtime_snapshot_has_no_capacity_fields_outside_capacity_phases()
         .get_or_create_non_ring_stage_runtime(
             key.clone(),
             StagePhase::Producing,
-            StageBackendKind::InternalFfmpeg,
+            StageBackendKind::ExternalFfmpeg,
             CancellationToken::new(),
         )
         .await;
@@ -374,7 +374,7 @@ async fn egress_blocked_by_stage_snapshot_is_none_when_producing() {
         .get_or_create_non_ring_stage_runtime(
             key.clone(),
             StagePhase::Producing,
-            StageBackendKind::InternalFfmpeg,
+            StageBackendKind::ExternalFfmpeg,
             CancellationToken::new(),
         )
         .await;
@@ -394,7 +394,7 @@ async fn egress_blocked_by_stage_snapshot_is_some_when_not_yet_producing() {
         .get_or_create_non_ring_stage_runtime(
             key.clone(),
             StagePhase::FirstInput,
-            StageBackendKind::InternalFfmpeg,
+            StageBackendKind::ExternalFfmpeg,
             CancellationToken::new(),
         )
         .await;

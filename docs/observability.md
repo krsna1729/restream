@@ -558,7 +558,7 @@ These should be fixed before adding new timing work:
 - `MemoryQueue::stats()` exposes current depth, capacity, high-water bytes,
   blocked write count, blocked write time, and closed state. These counters
   still need to be surfaced in higher-level graph/API snapshots where useful.
-- HLS, recording, and in-process transcoder input share the TS packet feeder.
+- HLS and recording share the TS packet feeder.
   Diagnostics must still avoid implying those mux paths are healthy merely
   because their task/token is active.
 

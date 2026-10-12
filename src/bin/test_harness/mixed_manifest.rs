@@ -637,7 +637,7 @@ pub(crate) fn mixed_output_protocol_name(protocol: MixedOutputProtocol) -> &'sta
 mod tests {
     use super::*;
     use restream::domain::stage::StageKind;
-    use restream::planner::{BackendPolicy, PlannedOutput, plan_pipeline_graph};
+    use restream::planner::{PlannedOutput, plan_pipeline_graph};
 
     fn planned_stage_count_from_graph(
         case: MixedInputCase,
@@ -660,13 +660,7 @@ mod tests {
                 })
             })
             .collect::<Vec<_>>();
-        let plan = plan_pipeline_graph(
-            "pipe",
-            Some(case.expected_video_codec()),
-            &outputs,
-            false,
-            &BackendPolicy::default(),
-        );
+        let plan = plan_pipeline_graph("pipe", Some(case.expected_video_codec()), &outputs, false);
 
         let mut counts = MixedStageCount {
             video: 0,

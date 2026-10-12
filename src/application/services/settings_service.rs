@@ -11,7 +11,7 @@ use crate::application::pipeline_inputs::PipelineInputStore;
 use crate::application::ports::{IngestHostStore, JobStore, MetaStore, MetaStoreWriter};
 use crate::application::recording::load_recording_enabled_map;
 use crate::application::recording::save_recording_settings;
-use crate::application::settings::{BACKEND_POLICY_META_KEY, load_settings_snapshot};
+use crate::application::settings::load_settings_snapshot;
 use crate::application::srt_ingest::{
     list_pipeline_inputs, load_global_srt_ingest_config, srt_ingest_policy_entries,
 };
@@ -23,7 +23,6 @@ use crate::domain::recording::RecordingSettings;
 use crate::domain::transcode_profile::TranscodeProfiles;
 use crate::media::security::IngestSecurityService;
 use crate::media::srt::SrtIngestPolicyStore;
-use crate::planner::BackendPolicy;
 
 use super::error::{ServiceError, ServiceResult};
 use super::pipeline_service::PipelineService;
@@ -67,16 +66,10 @@ impl SettingsService {
     pub async fn load_snapshot(
         &self,
         security: &IngestSecurityService,
-        default_backend_policy: BackendPolicy,
     ) -> ServiceResult<crate::application::settings::SettingsSnapshot> {
-        load_settings_snapshot(
-            &*self.meta_store,
-            &*self.ingest_host_store,
-            security,
-            default_backend_policy,
-        )
-        .await
-        .map_err(|e| ServiceError::internal(format!("load settings: {e}")))
+        load_settings_snapshot(&*self.meta_store, &*self.ingest_host_store, security)
+            .await
+            .map_err(|e| ServiceError::internal(format!("load settings: {e}")))
     }
 
     /// Lists pipelines for settings views that need the current catalog while
@@ -162,14 +155,6 @@ impl SettingsService {
         save_transcode_profiles(self.meta_writer.as_ref(), profiles)
             .await
             .map_err(|e| ServiceError::internal(format!("save transcode profiles: {e}")))
-    }
-
-    /// Serializes and persists the default backend policy that planner-facing
-    /// settings screens expose to operators.
-    pub async fn save_backend_policy(&self, policy: BackendPolicy) -> ServiceResult<()> {
-        let raw = serde_json::to_string(&policy)
-            .map_err(|e| ServiceError::internal(format!("serialize backend policy: {e}")))?;
-        self.set_meta(BACKEND_POLICY_META_KEY, &raw).await
     }
 
     /// Rebuilds the in-memory SRT ingest policy store from persisted global
@@ -332,10 +317,7 @@ mod tests {
             .unwrap();
 
         let security = IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG);
-        let snapshot = service
-            .load_snapshot(&security, BackendPolicy::default())
-            .await
-            .unwrap();
+        let snapshot = service.load_snapshot(&security).await.unwrap();
 
         assert_eq!(snapshot.server_name, "Studio");
         assert_eq!(snapshot.ingest_host, "edge.local");

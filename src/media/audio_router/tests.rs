@@ -1,3 +1,351 @@
+use super::*;
+use crate::media::metadata::AudioMeta;
+use crate::media::packet::PayloadFormat;
+use crate::media::ring_buffer::Reader;
+use proptest::prelude::*;
+use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
+
+// --- apply_audio_routing tests ---
+
+#[test]
+fn apply_routing_passthrough_preserves_all_tracks() {
+    let tracks = vec![
+        AudioMeta {
+            codec: "aac".into(),
+            sample_rate: 48000,
+            channels: 2,
+            channel_layout: None,
+            track_index: 0,
+            pid: Some(0x101),
+            language: Some("eng".to_string()),
+            title: None,
+            profile: None,
+        },
+        AudioMeta {
+            codec: "aac".into(),
+            sample_rate: 44100,
+            channels: 1,
+            channel_layout: None,
+            track_index: 1,
+            pid: Some(0x102),
+            language: Some("spa".to_string()),
+            title: None,
+            profile: None,
+        },
+    ];
+    let result = apply_audio_routing(&AudioRouting::Passthrough, &tracks);
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0].track_index, 0);
+    assert_eq!(result[1].track_index, 1);
+}
+
+#[test]
+fn apply_routing_select_tracks_filters_and_reindexes() {
+    let tracks = vec![
+        AudioMeta {
+            codec: "aac".into(),
+            sample_rate: 48000,
+            channels: 2,
+            channel_layout: None,
+            track_index: 0,
+            pid: Some(0x101),
+            language: Some("eng".to_string()),
+            title: None,
+            profile: None,
+        },
+        AudioMeta {
+            codec: "aac".into(),
+            sample_rate: 44100,
+            channels: 1,
+            channel_layout: None,
+            track_index: 1,
+            pid: Some(0x102),
+            language: Some("spa".to_string()),
+            title: None,
+            profile: None,
+        },
+        AudioMeta {
+            codec: "aac".into(),
+            sample_rate: 32000,
+            channels: 1,
+            channel_layout: None,
+            track_index: 2,
+            pid: Some(0x103),
+            language: None,
+            title: None,
+            profile: None,
+        },
+    ];
+    // Select tracks 0 and 2
+    let routing = AudioRouting::SelectTracks { tracks: vec![0, 2] };
+    let result = apply_audio_routing(&routing, &tracks);
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0].track_index, 0); // re-indexed: track 0 → index 0
+    assert_eq!(result[1].track_index, 1); // re-indexed: track 2 → index 1
+    assert_eq!(result[0].sample_rate, 48000);
+    assert_eq!(result[1].sample_rate, 32000);
+}
+
+/// Verify that stage keys for different video presets with the same audio
+/// routing produce different cache keys, preventing cross-contamination.
+/// See docs/media-pipeline.md "Audio Stage Cache Concern".
+#[test]
+fn stage_keys_isolate_video_presets() {
+    use crate::planner::EncodingStagePlan;
+
+    let plan_720 = EncodingStagePlan::from_encoding("pipe1", "720p+atrack:0");
+    let plan_1080 = EncodingStagePlan::from_encoding("pipe1", "1080p+atrack:0");
+
+    let audio_720 = plan_720.audio_stage().unwrap();
+    let audio_1080 = plan_1080.audio_stage().unwrap();
+    assert_ne!(
+        audio_720, audio_1080,
+        "audio stages with different video upstreams must have different keys"
+    );
+
+    let plan_720_dup = EncodingStagePlan::from_encoding("pipe1", "720p+atrack:0");
+    assert_eq!(audio_720, plan_720_dup.audio_stage().unwrap());
+}
+
+/// Verify video stage keys are shared across outputs with different audio routing.
+#[test]
+fn video_stage_shared_across_audio_variants() {
+    use crate::domain::stage::StageKind;
+    use crate::planner::EncodingStagePlan;
+    let expected = StageKind::video_preset("720p");
+    for encoding in &["720p", "720p+atrack:0", "720p+remap:0:1"] {
+        let plan = EncodingStagePlan::from_encoding("pipe1", encoding);
+        let video = plan.video_stage().unwrap();
+        assert_eq!(video.kind, expected, "encoding={}", encoding);
+    }
+}
+
+#[test]
+fn test_apply_audio_routing_reindexes() {
+    let input_tracks = vec![
+        AudioMeta {
+            codec: "aac".to_string(),
+            channels: 2,
+            sample_rate: 48000,
+            track_index: 0,
+            channel_layout: None,
+            pid: Some(0x101),
+            language: Some("eng".to_string()),
+            title: None,
+            profile: None,
+        },
+        AudioMeta {
+            codec: "aac".to_string(),
+            channels: 2,
+            sample_rate: 48000,
+            track_index: 1,
+            channel_layout: None,
+            pid: Some(0x102),
+            language: Some("spa".to_string()),
+            title: None,
+            profile: None,
+        },
+        AudioMeta {
+            codec: "aac".to_string(),
+            channels: 2,
+            sample_rate: 48000,
+            track_index: 2,
+            channel_layout: None,
+            pid: Some(0x103),
+            language: None,
+            title: None,
+            profile: None,
+        },
+    ];
+
+    let routing = AudioRouting::SelectTracks { tracks: vec![2] };
+    let output_tracks = apply_audio_routing(&routing, &input_tracks);
+    assert_eq!(output_tracks.len(), 1);
+    assert_eq!(output_tracks[0].track_index, 0); // re-indexed from 2 to 0
+}
+
+#[test]
+fn apply_routing_remap_selects_and_zeroes_track_index() {
+    let tracks = vec![generated_audio_track(0), generated_audio_track(1)];
+    let routing = AudioRouting::Remap {
+        track: 1,
+        left: 0,
+        right: 1,
+    };
+    let result = apply_audio_routing(&routing, &tracks);
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].track_index, 0);
+    assert_eq!(result[0].pid, Some(0x101));
+}
+
+#[test]
+fn apply_routing_remap_out_of_range_track_yields_no_tracks() {
+    let tracks = vec![generated_audio_track(0)];
+    let routing = AudioRouting::Remap {
+        track: 5,
+        left: 0,
+        right: 1,
+    };
+    assert!(apply_audio_routing(&routing, &tracks).is_empty());
+}
+
+#[test]
+fn apply_routing_downmix_selects_track_and_forces_stereo() {
+    let mut mono_track = generated_audio_track(0);
+    mono_track.channels = 1;
+    mono_track.channel_layout = Some("mono".to_string());
+    let tracks = vec![mono_track, generated_audio_track(1)];
+    let routing = AudioRouting::Downmix { track: 1 };
+    let result = apply_audio_routing(&routing, &tracks);
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].track_index, 0);
+    assert_eq!(result[0].channels, 2);
+    assert_eq!(result[0].channel_layout, Some("stereo".to_string()));
+}
+
+#[test]
+fn apply_routing_downmix_out_of_range_track_yields_no_tracks() {
+    let tracks = vec![generated_audio_track(0)];
+    let routing = AudioRouting::Downmix { track: 3 };
+    assert!(apply_audio_routing(&routing, &tracks).is_empty());
+}
+
+#[test]
+fn route_audio_packet_remap_matches_configured_track_and_zeroes_index() {
+    let routing = AudioRouting::Remap {
+        track: 2,
+        left: 0,
+        right: 1,
+    };
+    let pkt = generated_router_packet(false, 2, 42);
+    let routed = route_audio_packet(&routing, &pkt).expect("matching track must route");
+    assert_eq!(routed.track_index, 0);
+    assert_eq!(routed.pts, 42);
+}
+
+#[test]
+fn route_audio_packet_remap_drops_non_matching_audio_track() {
+    let routing = AudioRouting::Remap {
+        track: 2,
+        left: 0,
+        right: 1,
+    };
+    let pkt = generated_router_packet(false, 0, 42);
+    assert!(route_audio_packet(&routing, &pkt).is_none());
+}
+
+#[test]
+fn route_audio_packet_remap_passes_video_through_untouched() {
+    let routing = AudioRouting::Remap {
+        track: 2,
+        left: 0,
+        right: 1,
+    };
+    let pkt = generated_router_packet(true, 7, 42);
+    let routed = route_audio_packet(&routing, &pkt).expect("video always passes through");
+    assert_eq!(routed.track_index, 7);
+}
+
+#[test]
+fn route_audio_packet_downmix_always_passes_the_packet_through() {
+    let routing = AudioRouting::Downmix { track: 1 };
+    let audio_pkt = generated_router_packet(false, 1, 10);
+    let video_pkt = generated_router_packet(true, 0, 10);
+    assert!(route_audio_packet(&routing, &audio_pkt).is_some());
+    assert!(route_audio_packet(&routing, &video_pkt).is_some());
+}
+
+fn generated_audio_track(index: usize) -> AudioMeta {
+    AudioMeta {
+        codec: "aac".to_string(),
+        channels: 2,
+        sample_rate: 48_000,
+        track_index: index as u32,
+        channel_layout: None,
+        pid: Some(0x100 + index as u16),
+        language: None,
+        title: None,
+        profile: None,
+    }
+}
+
+fn generated_router_packet(is_video: bool, track_index: u32, pts: i64) -> MediaPacket {
+    MediaPacket {
+        media_type: if is_video {
+            MediaType::Video
+        } else {
+            MediaType::Audio
+        },
+        track_index,
+        pts,
+        dts: pts,
+        is_keyframe: is_video,
+        format: PayloadFormat::Raw,
+        payload: bytes::Bytes::from_static(&[0x01, 0x02, 0x03]),
+    }
+}
+
+proptest! {
+    #[test]
+    fn audio_router_select_tracks_preserves_video_and_reindexes_selected_audio(
+        selected_mask in prop::array::uniform4(any::<bool>()),
+        packets in prop::collection::vec((any::<bool>(), 0_u32..4, 0_i64..10_000), 1..64),
+    ) {
+        let selected_tracks = selected_mask
+            .iter()
+            .enumerate()
+            .filter_map(|(index, selected)| selected.then_some(index))
+            .collect::<Vec<_>>();
+        let routing = AudioRouting::SelectTracks {
+            tracks: selected_tracks.clone(),
+        };
+        let input_tracks = (0..4).map(generated_audio_track).collect::<Vec<_>>();
+        let output_tracks = apply_audio_routing(&routing, &input_tracks);
+
+        prop_assert_eq!(output_tracks.len(), selected_tracks.len());
+        for (output_index, source_index) in selected_tracks.iter().enumerate() {
+            prop_assert_eq!(output_tracks[output_index].track_index, output_index as u32);
+            prop_assert_eq!(output_tracks[output_index].pid, Some(0x100 + *source_index as u16));
+        }
+
+        let mut routed_packets = Vec::new();
+        for (is_video, track_index, pts) in packets {
+            let input = generated_router_packet(is_video, track_index, pts);
+            if let Some(output) = route_audio_packet(&routing, &input) {
+                if is_video {
+                    prop_assert_eq!(output.media_type, MediaType::Video);
+                    prop_assert_eq!(output.track_index, track_index);
+                } else {
+                    let expected_index = selected_tracks
+                        .iter()
+                        .position(|track| *track == track_index as usize)
+                        .expect("only selected audio packets should be routed");
+                    prop_assert_eq!(output.media_type, MediaType::Audio);
+                    prop_assert_eq!(output.track_index, expected_index as u32);
+                }
+                prop_assert_eq!(output.pts, input.pts);
+                prop_assert_eq!(output.dts, input.dts);
+                prop_assert_eq!(&output.payload, &input.payload);
+                routed_packets.push(output);
+            } else {
+                prop_assert!(!is_video, "video packets must always pass through");
+                prop_assert!(
+                    !selected_tracks.contains(&(track_index as usize)),
+                    "selected audio track {track_index} was dropped"
+                );
+            }
+        }
+
+        prop_assert!(
+            routed_packets.iter().all(|packet| {
+                packet.media_type == MediaType::Video
+                    || (packet.track_index as usize) < selected_tracks.len()
+            }),
+            "routed audio packets must be re-indexed into the selected output track range"
+        );
+    }
+}
 
 #[tokio::test]
 async fn test_audio_router_reindexes_packets() {
@@ -405,8 +753,8 @@ async fn audio_router_preserves_upstream_video_parameter_sets() {
 
     source_ring.set_codec_hint("h264");
     source_ring.set_video_parameter_sets(vec![
-        0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x68,
-        0xCE, 0x38, 0x80,
+        0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x68, 0xCE,
+        0x38, 0x80,
     ]);
 
     let handle = tokio::spawn(start_audio_router(
@@ -523,8 +871,8 @@ async fn audio_router_copies_late_upstream_parameter_sets_without_inband_headers
 
     tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     source_ring.set_video_parameter_sets(vec![
-        0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x68,
-        0xCE, 0x38, 0x80,
+        0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x68, 0xCE,
+        0x38, 0x80,
     ]);
     source_ring.push(MediaPacket {
         media_type: MediaType::Video,
@@ -550,115 +898,4 @@ async fn audio_router_copies_late_upstream_parameter_sets_without_inband_headers
 
     cancel.cancel();
     let _ = handle.await;
-}
-
-// M7: pts=0 from AV_NOPTS_VALUE would cause a massive backward jump on a
-// long-running stream. Verify the timestamp conversion formula itself is
-// correct and that skipping None-pts packets is the right behavior.
-//
-// We can't inject AV_NOPTS_VALUE into a live FFmpeg pipeline in a unit
-// test, but we can verify that the i128-based conversion that follows
-// a valid pts produces the expected millisecond value, confirming that
-// pts=0 would produce 0ms (a backward jump from, e.g., 3600000ms).
-#[test]
-fn pts_zero_would_produce_zero_ms_timestamp() {
-    // Simulate the conversion for pts=0 with a 90kHz timebase (tb=1/90000).
-    let pts: i64 = 0;
-    let tb_num: i64 = 1;
-    let tb_den: i64 = 90000;
-    let pts_ms = (pts as i128 * tb_num as i128 * 1000 / tb_den as i128) as i64;
-    assert_eq!(pts_ms, 0, "pts=0 produces 0ms — correct to skip, not use");
-
-    // A real 1-hour stream has pts ≈ 324_000_000 ticks at 90kHz.
-    let pts_1h: i64 = 3_600 * 90_000;
-    let pts_ms_1h = (pts_1h as i128 * tb_num as i128 * 1000 / tb_den as i128) as i64;
-    assert_eq!(pts_ms_1h, 3_600_000, "1h at 90kHz = 3600000ms");
-    // Substituting 0 for AV_NOPTS_VALUE would create a -3600000ms backward jump.
-    assert_eq!(pts_ms - pts_ms_1h, -3_600_000);
-}
-
-// Adversarial hunt: run_ffmpeg_transcode_with_scale_with_normalizer (the
-// decode->scale->encode path) used to fall back to an unwrap-or-zero
-// default on the encoder's output pts, instead of skipping None-pts
-// packets like the passthrough path does — an inconsistency between two
-// code paths in the same file where only one was hardened against the M7
-// backward-jump bug. Both encoder-output loops now skip on a None pts,
-// matching run_ffmpeg_transcoder_stage_with_normalizer exactly. This test
-// documents that the same formula/consequence reasoning as
-// pts_zero_would_produce_zero_ms_timestamp applies to the scale-encode
-// path: a real FFmpeg pipeline can't be made to emit AV_NOPTS_VALUE from a
-// unit test, but skip-vs-default is the only difference that matters, and
-// both loops must agree on it.
-#[test]
-fn scale_encode_path_skips_none_pts_like_passthrough_path() {
-    let source = include_str!("../../transcoder.rs");
-    // Build search needles from fragments that never appear contiguously
-    // in this test's own source text, so counting matches in the whole
-    // file (including this test) can't pick up the needle argument
-    // itself as a false positive.
-    let skip_needle = format!("{}{}", "let Some(pts_ms) = enc_pkt.p", "ts() else {");
-    let fallback_needle = format!("{}{}", "enc_pkt.pts().unwrap_o", "r(0)");
-
-    let occurrences = source.matches(&skip_needle).count();
-    assert_eq!(
-        occurrences, 2,
-        "run_ffmpeg_transcode_with_scale_with_normalizer must skip None-pts \
-         packets identically in both the main receive loop and the EOF \
-         flush loop — a zero-default fallback in either would reintroduce \
-         the M7 backward-jump bug for the scale-encode path"
-    );
-    assert!(
-        !source.contains(&fallback_needle),
-        "defaulting encoder-output pts to 0 on AV_NOPTS_VALUE produces a \
-         massive backward timestamp jump on a long-running stream; \
-         None-pts packets must be skipped instead"
-    );
-}
-
-// M6: ts_batch must be cleared at the top of each burst arm so stale bytes
-// never accumulate across iterations. Verify the invariant by simulating
-// the burst pattern: partial batch from one burst must not appear in the next.
-#[test]
-fn ts_batch_cleared_before_each_burst() {
-    let mut ts_batch: Vec<u8> = Vec::with_capacity(MEDIA_TS_BATCH_TARGET_BYTES);
-
-    // Simulate two burst cycles: first accumulates data, second must start empty.
-    let burst1 = b"packet_data_burst1";
-    ts_batch.extend_from_slice(burst1);
-    assert!(!ts_batch.is_empty());
-
-    // Write and clear (as the arm does after write()).
-    // Then simulate loop top: clear is now at the TOP of the arm.
-    ts_batch.clear(); // ← this is the arm-top clear (M6 fix)
-    assert!(
-        ts_batch.is_empty(),
-        "ts_batch must be empty at burst start — stale data would corrupt the stream"
-    );
-
-    let burst2 = b"packet_data_burst2";
-    ts_batch.extend_from_slice(burst2);
-    assert_eq!(&ts_batch[..], burst2, "burst2 must not contain burst1 data");
-}
-
-#[test]
-fn internal_video_preset_uses_planned_output_codec() {
-    use crate::domain::stage::{StageKey, StageKind};
-    use crate::media::ffmpeg::stage_plan::{StageInputSpec, VideoCodecKind};
-
-    let plan = FfmpegStagePlan::video_preset(
-        StageKey::new("pipe-1", StageKind::video_preset("720p")),
-        "pipe-1",
-        "720p",
-        StageInputSpec {
-            codec_hint: VideoCodecKind::Hevc,
-            video_meta: None,
-            audio_tracks: Vec::new(),
-        },
-        VideoCodecKind::H264,
-    );
-
-    assert_eq!(
-        internal_video_encoder_id_for_plan(&plan),
-        ffmpeg_next::codec::Id::H264
-    );
 }

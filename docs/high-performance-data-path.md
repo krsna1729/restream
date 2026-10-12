@@ -120,15 +120,11 @@ Lightweight audio-router stages and diagnostic direct RTMP play scheduling
 remain control-runtime tasks; this migration does not move those paths.
 Compio/io_uring owns production RTMP, RTMPS, and SRT transport sockets and
 connection protocol state. Calls that may block are isolated on guarded OS
-threads. The default codec-heavy transform path launches an FFmpeg child and
-handles its pipes asynchronously; selected stage families can use in-process
-FFmpeg when their feature/configuration path is enabled.
+threads. Codec-heavy transforms launch an FFmpeg child and move its pipes on
+dedicated threads.
 
-The external boundary has a process-start cost and pipe traffic, but isolates
-codec failure and avoids blocking the async scheduler. The in-process boundary
-removes process and pipe overhead, but requires explicit panic containment,
-cancellation, and native-thread accounting. Backend changes therefore require
-both correctness proof and representative measurement.
+The process boundary has a process-start cost and pipe traffic, but isolates
+codec failure and avoids blocking the async scheduler.
 
 ## Measurement workflow
 

@@ -3,11 +3,10 @@ use std::collections::HashMap;
 
 use super::{
     AppConfig, DEFAULT_MEDIA_DIR, EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR, EgressFabricConfig,
-    EgressShardProfile, RuntimeTuning, ServerPorts, TokioRuntimeConfig, backend_policy_from_env,
+    EgressShardProfile, RuntimeTuning, ServerPorts, TokioRuntimeConfig,
     default_egress_fabric_shards, default_tokio_worker_threads, derive_external_ffmpeg_permits,
     env_optional_positive_usize, target_egress_fabric_shards,
 };
-use crate::planner::BackendPolicy;
 
 thread_local! {
     /// Per-test environment overrides read by `config::env_var`: `Some(value)`
@@ -356,62 +355,6 @@ fn tokio_runtime_config_tracks_cpu_limits_and_overrides() {
 }
 
 #[test]
-fn backend_policy_is_loaded_by_config_module() {
-    with_env_vars(
-        &[
-            ("RESTREAM_INTERNAL_VIDEO_PRESETS", "true"),
-            ("RESTREAM_INTERNAL_HEVC_TO_H264", "1"),
-            ("RESTREAM_INTERNAL_HLS_PREVIEW", "yes"),
-            ("RESTREAM_INTERNAL_AUDIO_COMPLEX", "off"),
-        ],
-        || {
-            let policy = backend_policy_from_env();
-            assert!(policy.internal_video_presets);
-            assert!(policy.internal_hevc_to_h264);
-            assert!(policy.internal_hls_preview);
-            assert!(!policy.internal_complex_audio);
-        },
-    );
-}
-
-#[test]
-fn legacy_global_internal_transcoder_env_does_not_enable_stage_families() {
-    with_env_overlay(
-        &[("RESTREAM_USE_INTERNAL_TRANSCODER", "1")],
-        &[
-            "RESTREAM_INTERNAL_VIDEO_PRESETS",
-            "RESTREAM_INTERNAL_HEVC_TO_H264",
-            "RESTREAM_INTERNAL_HLS_PREVIEW",
-            "RESTREAM_INTERNAL_AUDIO_COMPLEX",
-        ],
-        || {
-            let policy = backend_policy_from_env();
-            assert_eq!(policy, BackendPolicy::default());
-        },
-    );
-}
-
-#[test]
-fn backend_policy_does_not_use_global_internal_switch_for_all_stages() {
-    with_env_overlay(
-        &[("RESTREAM_USE_INTERNAL_TRANSCODER", "1")],
-        &[
-            "RESTREAM_INTERNAL_VIDEO_PRESETS",
-            "RESTREAM_INTERNAL_HEVC_TO_H264",
-            "RESTREAM_INTERNAL_HLS_PREVIEW",
-            "RESTREAM_INTERNAL_AUDIO_COMPLEX",
-        ],
-        || {
-            let policy = backend_policy_from_env();
-            assert!(!policy.internal_video_presets);
-            assert!(!policy.internal_hevc_to_h264);
-            assert!(!policy.internal_hls_preview);
-            assert!(!policy.internal_complex_audio);
-        },
-    );
-}
-
-#[test]
 fn srt_connect_timeout_defaults_and_allows_override() {
     with_env_overlay(&[], &["RESTREAM_SRT_CONNECT_TIMEOUT_MS"], || {
         assert_eq!(AppConfig::from_env().srt_connect_timeout_ms, 10_000);
@@ -517,7 +460,6 @@ fn effective_summary_covers_runtime_knobs_without_secret_values() {
         config.egress_fabric.shards
     );
     assert_eq!(summary["paths"]["ffmpegBin"], "/usr/bin/ffmpeg");
-    assert_eq!(summary["backendPolicy"]["internalHlsPreview"], false);
     assert_eq!(
         summary["ffmpeg"]["externalPermits"],
         config.external_ffmpeg_permits

@@ -142,11 +142,6 @@
         "env": "BRANCH_MATRIX_EGRESS_COUNT",
         "default": 10
       },
-      "backend": {
-        "env": "RESTREAM_INTERNAL_VIDEO_PRESETS",
-        "falseLabel": "external",
-        "trueLabel": "internal"
-      },
       "scenarioFilterEnv": "BRANCH_MATRIX_SCENARIOS",
       "metrics": [
         "pipelines",

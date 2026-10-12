@@ -27,8 +27,6 @@ in SQLite.
 | Tokio scheduler workers | Derived from the effective CPU mask/quota | `RESTREAM_TOKIO_WORKER_THREADS` |
 | glibc malloc arenas | **Provisional** `2` (set at startup with `mallopt`, return value checked; the effective setting is logged as `restream.malloc.arenas` and shown as `runtime.malloc.arena_max` in host settings). Measured on one 6-CPU host only: −34 to −47 MB RSS at 50 SRT / 500 RTMP outputs, frozen-SRT-destination surge 66–72 MB → 30–47 MB, no measurable CPU change. Arenas reduce allocator lock contention, so qualify per host (`docs/capacity-ramp.md`) before treating 2 as final | `RESTREAM_MALLOC_ARENA_MAX` (`default` = glibc policy, or a positive count); an operator `MALLOC_ARENA_MAX` takes precedence and is applied by glibc |
 | Tokio blocking-thread ceiling | `512` | `RESTREAM_TOKIO_MAX_BLOCKING_THREADS` |
-| Transcoder backend | External FFmpeg subprocess | `RESTREAM_INTERNAL_VIDEO_PRESETS`, `RESTREAM_INTERNAL_HEVC_TO_H264`, `RESTREAM_INTERNAL_HLS_PREVIEW`, and `RESTREAM_INTERNAL_AUDIO_COMPLEX` (`1`/`true`/`yes`/`on` enable each in-process stage family independently) |
-| File-ingest backend | External FFmpeg subprocess | `RESTREAM_USE_INTERNAL_FILE_INGEST` (`1`/`true`/`yes`/`on` to enable in-process remux + demux for passthrough file ingest) |
 | External transcoder and file-ingest executable | `ffmpeg` on `PATH`; else the copy installed by `restream ffmpeg-fetch` in `.restream/runtime/ffmpeg/` | `FFMPEG_BIN_PATH` |
 | External FFmpeg codec threads | FFmpeg-selected | `RESTREAM_EXTERNAL_FFMPEG_THREADS` |
 | Recording remux FFmpeg threads | FFmpeg-selected | `RESTREAM_RECORDING_FFMPEG_THREADS` |
@@ -306,21 +304,9 @@ Output config describes video and audio separately:
 
 Built-in video profiles are `source`, `720p`, `1080p`, and the internal `h264`
 conversion profile. `source` is passthrough and bypasses the video transcoder.
-For non-source built-in video profiles, the default backend is an external
-FFmpeg subprocess that performs decode/scale/encode. Set
-`RESTREAM_INTERNAL_VIDEO_PRESETS=1` to opt those video-preset stages into the
-in-process backend; audio streams are copied. HEVC-to-H.264 bridge stages
-and complex audio stages are controlled separately by
-`RESTREAM_INTERNAL_HEVC_TO_H264` and `RESTREAM_INTERNAL_AUDIO_COMPLEX`.
-HEVC HLS preview reuses the shared `hevc_to_h264` bridge (that HEVC-to-H.264
-flag), not a dedicated preview stage. `RESTREAM_INTERNAL_HLS_PREVIEW` remains
-a backend-family toggle for `StageKind::Preview`, but the current planner does
-not create that kind. The Admin → Backend checkbox for HLS preview is therefore
-inert until a dedicated preview stage exists again.
-These environment variables are startup defaults. Operators can override the
-same four backend-family choices from Admin -> Backend or by patching
-`backendPolicy` through `/api/v1/settings`; persisted settings take precedence
-on restart and apply to newly started or reconciled stages.
+Every non-source built-in video profile, HEVC-to-H.264 bridge and complex
+audio stage runs in an external FFmpeg subprocess that performs
+decode/scale/encode. HEVC HLS preview reuses the shared `hevc_to_h264` bridge.
 `custom` remains stored configuration only. It is rejected by output create/update
 so operators do not accidentally select a passthrough path that looks like custom
 FFmpeg execution.
@@ -353,8 +339,7 @@ Each definition stores:
 service owns the exact subprocess arguments; this reference documents the
 user-visible settings and resulting behavior.
 
-`liveOptimized=true` forces the subprocess backend even when
-`RESTREAM_USE_INTERNAL_FILE_INGEST=1`. In that mode the FFmpeg executable
+File ingest always runs an FFmpeg subprocess. With `liveOptimized=true` it
 re-encodes video to H.264, audio to AAC, disables scene-cut GOP drift, and
 forces keyframes at the configured `targetGopSeconds` cadence for steadier HLS
 preview and recording from sparse-GOP source files.

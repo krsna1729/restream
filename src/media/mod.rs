@@ -1,16 +1,14 @@
 //! Media stack — RTMP/SRT ingest, ring-buffer fan-out, muxing, transcoding, HLS, and recording.
 //!
-//! Two FFmpeg backends exist:
-//!
-//! - **External (production default):** managed `ffmpeg` child processes for
-//!   transcode ([`external_transcoder`]) and file ingest (`external_file_ingest`).
-//! - **In-process:** FFmpeg via `MemoryQueue`-backed AVIO on guarded OS threads
-//!   ([`transcoder`], [`h264_transcoder`], optional internal [`file_ingest`]).
+//! Transcoding and file ingest run as managed `ffmpeg` child processes
+//! ([`external_transcoder`], `external_file_ingest`).
 //!
 //! Live packets flow through [`ring_buffer`] (lock-free SPMC). MediaMTX is not a
 //! runtime dependency; it appears only as an optional live-harness peer.
 //! Supports H.264, H.265/HEVC, and multi-track audio.
 
+pub mod audio_router;
+#[forbid(unsafe_code)]
 pub mod avio;
 #[forbid(unsafe_code)]
 pub mod codec;
@@ -35,8 +33,6 @@ pub(crate) mod external_file_ingest;
 pub mod external_transcoder;
 pub mod feeder;
 pub mod file_analysis;
-pub mod file_ingest;
-pub mod h264_transcoder;
 pub mod hls;
 pub use hls::fmp4 as hls_fmp4;
 pub use hls::preview as hls_preview_runtime;
@@ -67,7 +63,6 @@ pub mod startup_policy;
 pub mod ffmpeg;
 pub mod tcp_stats;
 pub mod timing;
-pub mod transcoder;
 pub mod ts_chunk_ring;
 pub mod uring_capabilities;
 

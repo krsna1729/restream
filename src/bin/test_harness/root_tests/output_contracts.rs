@@ -139,45 +139,6 @@ fn sweep_output_kind_centralizes_urls_and_multi_audio_encoding() {
 }
 
 #[test]
-fn internal_backend_smoke_filters_hevc_codec_edge_output_groups() {
-    let source = include_str!("../../../../scripts/harness/rollouts/internal-backend-smoke.sh");
-
-    assert!(source.contains("RESTREAM_INTERNAL_HEVC_TO_H264=1"));
-    assert!(source.contains("N_PER_GROUP=1"));
-    assert!(source.contains("MIXED_OUTPUT_GROUPS=rtmp.720p.a0"));
-    assert!(source.contains("ONLY_CHECKS=load,ffprobe,stage-sharing"));
-    assert!(source.contains("MIXED_OUTPUT_GROUPS=rtmp.720p.a0,rtmp.720p.a1"));
-}
-
-#[test]
-fn backend_policy_matrix_is_separate_from_symmetric_mixed_matrix() {
-    let matrix_spec = mode_spec("mixed.matrix").expect("mixed.matrix must be listed");
-    let policy_spec =
-        mode_spec("backend-policy-matrix").expect("backend-policy-matrix must be listed");
-
-    assert!(matrix_spec.suite_default);
-    assert!(!policy_spec.suite_default);
-    assert!(policy_spec.requires_bench_profile);
-}
-
-#[test]
-fn backend_policy_matrix_default_variants_cover_internal_stage_families() {
-    let variants = selected_backend_policy_variants().expect("default variants should parse");
-    let names: Vec<_> = variants.iter().map(|variant| variant.name()).collect();
-
-    assert_eq!(
-        names,
-        vec![
-            "external-all",
-            "internal-video-presets",
-            "internal-hevc-to-h264",
-            "internal-complex-audio",
-            "internal-all",
-        ]
-    );
-}
-
-#[test]
 fn resource_output_progress_timeout_scales_and_caps() {
     assert_eq!(
         scaled_output_progress_timeout(1, 30, 4, 240),

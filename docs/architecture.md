@@ -139,8 +139,7 @@ diagnostic direct-RTMP-play request/reply scheduler; neither is migrated here.
 - The media executor pool runs continuous container packaging off the control runtime and
   off the transport owners: shared SRT TS muxing (`TsChunkRing`), HLS segmenting
   (MPEG-TS and fMP4 preview), recording muxing, and external file-ingest demux.
-- In-process FFmpeg codec work runs on guarded OS threads; recording disk I/O
-  uses a dedicated file-writer thread. External transcoders use managed FFmpeg
+- Recording disk I/O uses a dedicated file-writer thread. External transcoders use managed FFmpeg
   children with dedicated stdin/stdout threads. External file ingest uses a
   managed child, with stdout readiness/demux on the media runtime and stderr
   capture and child supervision on CONTROL.
@@ -284,9 +283,8 @@ The current stage families include video presets, HEVC-to-H.264 conversion,
 track selection, and audio remap/downmix. HLS preview reuses those shared
 media stages (the HEVC→H.264 codec edge for HEVC ingest, source otherwise)
 instead of a dedicated preview transcoder. Lightweight track selection is
-native packet routing. Codec-heavy video and complex audio work use the
-configured FFmpeg backend. Backend-selection flags are scoped by stage family
-so enabling one in-process path does not silently switch another.
+native packet routing. Codec-heavy video and complex audio work run in
+external FFmpeg processes.
 
 Stage identity is owned by `src/domain/stage.rs`; dependency resolution lives
 with the engine stage modules. Do not reproduce their string grammar in another
@@ -457,5 +455,5 @@ owns volatile inventory; these paths identify stable owners.
 | `src/media/rtmp.rs`, `src/media/srt*.rs`, `src/media/mpegts.rs` | Protocol and container adapters |
 | `src/media/egress/` | Egress fabric: shard runtime/scheduler, protocol-neutral leaf lifecycle, RTMP/RTMPS/SRT/sink/pipeline backends. The only egress path; see [egress architecture](egress-architecture.md) |
 | `src/media/hls/`, `src/media/recording/` | HLS and recording lifecycle |
-| `src/media/transcoder.rs`, `src/media/external_transcoder.rs` | In-process and child-process transform backends |
+| `src/media/external_transcoder.rs`, `src/media/audio_router.rs` | Child-process FFmpeg transforms; packet-only audio track selection |
 | `src/agent_core/`, `src/agent_backends/`, `src/agent_mcp/` | Agent contracts, backends, and MCP transport |

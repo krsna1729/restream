@@ -15,9 +15,7 @@ use crate::domain::audio_routing::{AudioRouting, parse_audio_operation};
 use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
 use crate::media::engine_registries::StageRuntime;
-use crate::media::ffmpeg::backend::{
-    ExternalFfmpegBackend, FfmpegStageBackend, InternalFfmpegBackend, StageRunContext,
-};
+use crate::media::ffmpeg::backend::StageRunContext;
 use crate::media::ffmpeg::stage_input::StageInputPump;
 use crate::media::ffmpeg::stage_output::StageOutputNormalizer;
 use crate::media::ffmpeg::stage_plan::{
@@ -28,7 +26,6 @@ use crate::media::metadata::{AudioMeta, VideoMeta};
 use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_lifecycle::{StageBackendKind, StageLifecycle, StagePhase};
 use crate::media::stage_metrics::StageMetrics;
-use crate::planner::BackendPolicy;
 use crate::runtime::stage::StageRuntimeSnapshot;
 
 /// Handle to an admitted stage. Consumers read from `ring`; the runtime manager
@@ -46,21 +43,11 @@ pub struct StageHandle {
 #[derive(Clone)]
 pub struct StageRuntimeManager {
     engine: Arc<MediaEngine>,
-    /// Backend selection policy, injected from `AppConfig` at construction time.
-    /// Never re-reads env vars during execution.
-    policy: BackendPolicy,
 }
 
 impl StageRuntimeManager {
-    /// Create a manager using the engine's embedded `AppConfig` as the policy source.
     pub fn new(engine: Arc<MediaEngine>) -> Self {
-        let policy = engine.backend_policy();
-        Self { engine, policy }
-    }
-
-    /// Create a manager with an explicitly provided policy (useful in tests).
-    pub fn with_policy(engine: Arc<MediaEngine>, policy: BackendPolicy) -> Self {
-        Self { engine, policy }
+        Self { engine }
     }
 
     /// Ensure a stage exists for the given key, creating its output ring,
@@ -76,7 +63,7 @@ impl StageRuntimeManager {
         source_ring: Arc<RingBuffer>,
         input_codec_override: Option<&str>,
     ) -> (StageHandle, bool) {
-        let backend_kind = self.policy.select_backend(&key.kind);
+        let backend_kind = crate::planner::select_backend(&key.kind);
         let lifecycle = self
             .engine
             .get_or_create_stage_lifecycle_with_backend(
@@ -149,11 +136,6 @@ impl StageRuntimeManager {
         )
     }
 
-    /// Compute the backend policy choice for a stage without acquiring permits.
-    pub fn select_backend(&self, kind: &StageKind) -> StageBackendKind {
-        self.policy.select_backend(kind)
-    }
-
     /// Spawn the selected backend for a freshly-created stage. This consumes the
     /// handle and starts the long-lived worker; existing stages must not be
     /// respawned.
@@ -184,7 +166,7 @@ impl StageRuntimeManager {
         include_audio: bool,
     ) {
         let key = handle.key.clone();
-        let backend = self.select_backend(&key.kind);
+        let backend = crate::planner::select_backend(&key.kind);
 
         if let Some(audio_op) = key.kind.audio_operation()
             && backend == StageBackendKind::AudioRouter
@@ -203,7 +185,7 @@ impl StageRuntimeManager {
                 crate::media::executor::MediaServiceClass::AudioRouter,
                 cancel.clone(),
                 async move {
-                    crate::media::transcoder::start_audio_router(
+                    crate::media::audio_router::start_audio_router(
                         pipeline_id,
                         routing,
                         source_ring,
@@ -303,28 +285,19 @@ impl StageRuntimeManager {
             };
 
             match backend {
-                StageBackendKind::InternalFfmpeg => {
-                    info!(
-                        pipeline_id = %pipeline_id,
-                        stage = %key,
-                        "spawning internal ffmpeg stage"
-                    );
-                    if let Err(e) = InternalFfmpegBackend
-                        .run(plan, input_pump, output_normalizer, ctx)
-                        .await
-                    {
-                        tracing::error!(stage = %key, error = %e, "internal ffmpeg stage failed");
-                    }
-                }
                 StageBackendKind::ExternalFfmpeg => {
                     info!(
                         pipeline_id = %pipeline_id,
                         stage = %key,
                         "spawning external ffmpeg stage"
                     );
-                    if let Err(e) = ExternalFfmpegBackend
-                        .run(plan, input_pump, output_normalizer, ctx)
-                        .await
+                    if let Err(e) = crate::media::external_transcoder::run_external_ffmpeg_backend(
+                        plan,
+                        input_pump,
+                        output_normalizer,
+                        ctx,
+                    )
+                    .await
                     {
                         tracing::error!(stage = %key, error = %e, "external ffmpeg stage failed");
                     }
@@ -400,7 +373,7 @@ impl StageRuntimeManager {
         if !input_tracks.is_empty() {
             let output_tracks = if let Some(audio_op) = key.kind.audio_operation() {
                 let routing = parse_audio_operation(audio_op);
-                crate::media::transcoder::apply_audio_routing(&routing, &input_tracks)
+                crate::media::audio_router::apply_audio_routing(&routing, &input_tracks)
             } else {
                 (*input_tracks).clone()
             };

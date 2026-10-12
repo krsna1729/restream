@@ -27,7 +27,6 @@ test(
     const settings = await loadCompiledFrontendModule("features/settings.js");
     const { state } = await loadCompiledFrontendModule("core/state.js");
     state.config = {
-      backendPolicy: {},
       ingestHost: "127.0.0.1",
       ingestSecurity: {},
       recordingSettings: {},
@@ -73,7 +72,6 @@ test(
     const settings = await loadCompiledFrontendModule("features/settings.js");
     const { state } = await loadCompiledFrontendModule("core/state.js");
     state.config = {
-      backendPolicy: {},
       ingestHost: "",
       ingestSecurity: {},
       recordingSettings: {},

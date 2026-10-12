@@ -138,39 +138,133 @@ async fn hls_segment_bad_name_returns_400() {
 }
 
 #[tokio::test]
-async fn internal_file_ingest_preview_hls_serves_playlist_and_segment() {
-    let (app, pool, engine) = test_app_with_engine().await;
+async fn hls_playlist_route_returns_blocked_stage_cause_when_applicable() {
+    use restream::domain::stage::StageKind;
+    use restream::media::metadata::VideoMeta;
+    use restream::media::ring_buffer::RingBuffer;
+    use restream::media::stage_lifecycle::StagePhase;
+
+    let (app, _, engine) = test_app_with_engine().await;
     let cookie = login(&app).await;
+
+    // Register active ingest and preview consumer/store.
+    engine
+        .try_register_ingest("test_blocked_pipe", "stream-key", "rtmp")
+        .await
+        .unwrap();
+    engine
+        .update_ingest_meta(
+            "test_blocked_pipe",
+            Some(VideoMeta {
+                codec: "hevc".to_string(),
+                ..Default::default()
+            }),
+            None,
+            None,
+        )
+        .await;
+    engine.ensure_hls_preview_runtime("test_blocked_pipe").await;
+
+    // Register a blocked preview stage
+    let stage_key = StageKey::new(
+        "test_blocked_pipe",
+        StageKind::codec_edge("hevc_to_h264", StageKind::source()),
+    );
+    let source_ring = Arc::new(RingBuffer::new(16));
+    let manager = restream::media::stage_runtime::StageRuntimeManager::new(engine.clone());
+    let (handle, _) = manager
+        .ensure_stage(stage_key.clone(), source_ring, None)
+        .await;
+
+    // Transition stage to WaitingForCapacity
+    handle.lifecycle.transition(StagePhase::WaitingForCapacity {
+        backend: restream::media::stage_lifecycle::StageBackendKind::ExternalFfmpeg,
+    });
+
+    let resp = app
+        .oneshot(auth_req("GET", "/hls/test_blocked_pipe", &cookie, None))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert!(
+        resp.headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("application/json"))
+    );
+    let body = body_json(resp).await;
+    let body_str = body["error"].as_str().unwrap();
+    assert!(
+        body_str.contains("blocked by video stage:"),
+        "body_str={body_str}"
+    );
+    assert!(
+        body_str.contains("waitingForCapacity"),
+        "body_str={body_str}"
+    );
+    assert_eq!(body["status"], 404);
+    assert_eq!(body["code"], "hlsNoSegments");
+    assert_eq!(body["blockedBy"]["phase"], "waitingForCapacity");
+}
+
+/// File ingest (an external `ffmpeg` child) feeds the dashboard preview: the
+/// HLS master lists video and all 16 alternate audio renditions, and the
+/// video and audio segments are served.
+#[tokio::test]
+async fn file_ingest_preview_hls_serves_playlist_and_segment() {
+    let (app, cookie, media_dir, pool, _engine) =
+        authenticated_app_with_temp_media_and_engine().await;
     let pipeline_id = "pipe-file-preview";
     let stream_key = "file-preview-key";
-    let ingest_id = "ingest-file-preview";
-
     db::create_pipeline(&pool, pipeline_id, "File Preview", stream_key, None, None)
         .await
         .expect("create pipeline");
-
-    let ring_buffer = engine.get_or_create_pipeline(pipeline_id).await;
-    let registration = engine
-        .try_register_ingest_attempt(pipeline_id, stream_key, "file")
-        .await
-        .expect("register ingest");
-
-    engine.mark_file_ingest_running(ingest_id).await;
-    restream::media::file_ingest::spawn_internal_file_ingest(
-        engine.clone(),
-        tokio::runtime::Handle::current(),
-        ingest_id.to_string(),
-        pipeline_id.to_string(),
+    std::fs::copy(
         restream::test_fixtures::checked_in_fixture(
             "test/fixtures/media-library/colorbar-timer-2v16a.mp4",
         )
         .expect("checked-in integration media fixture"),
-        String::new(),
-        false,
-        ring_buffer,
-        registration.clone(),
+        media_dir.join("colorbar-timer-2v16a.mp4"),
     )
-    .expect("spawn internal ingest");
+    .expect("copy fixture into media dir");
+
+    let create = serde_json::json!({
+        "filename": "colorbar-timer-2v16a.mp4",
+        "streamKey": stream_key,
+        "loop": true,
+    });
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            "/api/v1/ingests",
+            &cookie,
+            Some(&create.to_string()),
+        ))
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "create ingest: {}",
+        resp.status()
+    );
+    let ingest_id = body_json(resp).await["id"].as_str().unwrap().to_string();
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            &format!("/api/v1/ingests/{ingest_id}/start"),
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "start ingest: {}",
+        resp.status()
+    );
 
     let mut playlist_body = None;
     for _ in 0..40 {
@@ -313,77 +407,15 @@ async fn internal_file_ingest_preview_hls_serves_playlist_and_segment() {
         "audio segment payload should not be empty"
     );
 
-    registration.cancel_token.cancel();
-    sleep(Duration::from_millis(250)).await;
-}
-
-#[tokio::test]
-async fn hls_playlist_route_returns_blocked_stage_cause_when_applicable() {
-    use restream::domain::stage::StageKind;
-    use restream::media::metadata::VideoMeta;
-    use restream::media::ring_buffer::RingBuffer;
-    use restream::media::stage_lifecycle::StagePhase;
-
-    let (app, _, engine) = test_app_with_engine().await;
-    let cookie = login(&app).await;
-
-    // Register active ingest and preview consumer/store.
-    engine
-        .try_register_ingest("test_blocked_pipe", "stream-key", "rtmp")
-        .await
-        .unwrap();
-    engine
-        .update_ingest_meta(
-            "test_blocked_pipe",
-            Some(VideoMeta {
-                codec: "hevc".to_string(),
-                ..Default::default()
-            }),
-            None,
-            None,
-        )
-        .await;
-    engine.ensure_hls_preview_runtime("test_blocked_pipe").await;
-
-    // Register a blocked preview stage
-    let stage_key = StageKey::new(
-        "test_blocked_pipe",
-        StageKind::codec_edge("hevc_to_h264", StageKind::source()),
-    );
-    let source_ring = Arc::new(RingBuffer::new(16));
-    let manager = restream::media::stage_runtime::StageRuntimeManager::new(engine.clone());
-    let (handle, _) = manager
-        .ensure_stage(stage_key.clone(), source_ring, None)
-        .await;
-
-    // Transition stage to WaitingForCapacity
-    handle.lifecycle.transition(StagePhase::WaitingForCapacity {
-        backend: restream::media::stage_lifecycle::StageBackendKind::ExternalFfmpeg,
-    });
-
     let resp = app
-        .oneshot(auth_req("GET", "/hls/test_blocked_pipe", &cookie, None))
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            &format!("/api/v1/ingests/{ingest_id}/stop"),
+            &cookie,
+            None,
+        ))
         .await
         .unwrap();
-
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    assert!(
-        resp.headers()
-            .get(header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.starts_with("application/json"))
-    );
-    let body = body_json(resp).await;
-    let body_str = body["error"].as_str().unwrap();
-    assert!(
-        body_str.contains("blocked by video stage:"),
-        "body_str={body_str}"
-    );
-    assert!(
-        body_str.contains("waitingForCapacity"),
-        "body_str={body_str}"
-    );
-    assert_eq!(body["status"], 404);
-    assert_eq!(body["code"], "hlsNoSegments");
-    assert_eq!(body["blockedBy"]["phase"], "waitingForCapacity");
+    assert!(resp.status().is_success(), "stop ingest: {}", resp.status());
 }

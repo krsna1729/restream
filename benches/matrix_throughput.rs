@@ -129,10 +129,7 @@ async fn setup_matrix_path(
     Vec<MediaPacket>,
     usize,
 ) {
-    let mut config = restream::AppConfig::from_env();
-    config.backend_policy.internal_video_presets = true;
-    config.backend_policy.internal_hevc_to_h264 = true;
-    let engine = Arc::new(MediaEngine::new_with_config(Arc::new(config)));
+    let engine = Arc::new(MediaEngine::new());
     let source_ring = engine.get_or_create_pipeline("pipe").await;
 
     // Register active ingest

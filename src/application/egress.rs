@@ -48,7 +48,6 @@ pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> 
     let ingest_codec_override = (output_protocol.is_rtmp() && ingest_is_hevc).then_some("hevc");
 
     let url_scheme = OutputUrlScheme::from_url(&output.url);
-    let backend_policy = engine.backend_policy();
     let planned_output = PlannedOutput::new(
         output.id.as_str(),
         output.config.clone(),
@@ -59,7 +58,6 @@ pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> 
             &output.pipeline_id,
             ingest_video_codec.as_deref(),
             &planned_output,
-            &backend_policy,
         )
     } else {
         crate::planner::plan_pipeline_graph(
@@ -67,7 +65,6 @@ pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> 
             ingest_video_codec.as_deref(),
             std::slice::from_ref(&planned_output),
             false,
-            &backend_policy,
         )
     };
 
@@ -690,7 +687,6 @@ mod tests {
         use crate::media::mpegts::TsDemuxer;
         use crate::media::packet::MediaType;
         use crate::media::ring_buffer::Reader;
-        use crate::planner::BackendPolicy;
         use crate::test_fixtures::bench_transport_fixture;
 
         let path = bench_transport_fixture("h265", "1_5m", true)
@@ -713,14 +709,7 @@ mod tests {
         );
 
         let pipeline_id = "pipe-hevc-selected-audio-progress";
-        let engine = Arc::new(MediaEngine::new_with_config(Arc::new(crate::AppConfig {
-            backend_policy: BackendPolicy {
-                internal_video_presets: true,
-                internal_hevc_to_h264: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        })));
+        let engine = Arc::new(MediaEngine::new());
         engine
             .try_register_ingest(pipeline_id, "stream-key", "file")
             .await

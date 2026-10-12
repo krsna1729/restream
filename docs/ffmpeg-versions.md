@@ -63,8 +63,9 @@ FFmpeg executable that is not part of the build: a system `ffmpeg`, the copy
 installed by `restream ffmpeg-fetch`, or `FFMPEG_BIN_PATH`. Its user-facing
 contract belongs in [Configuration](configuration.md).
 
-The linked in-process FFmpeg libraries are selected at build time and cannot be
-changed with the runtime executable override.
+The linked FFmpeg libraries (media-file analysis and the version report) are
+selected at build time and cannot be changed with the runtime executable
+override.
 
 ## Troubleshooting
 

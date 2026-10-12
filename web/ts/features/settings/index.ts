@@ -10,10 +10,8 @@ import {
 } from "./profiles.js";
 
 import {
-  populateBackendPolicySettings,
   populateRecordingSettings,
   populateSrtIngestSettings,
-  saveBackendPolicy,
   saveIngestHost,
   saveRecordingSettings,
   saveServerName,
@@ -32,7 +30,7 @@ import {
   settingsRateLimitPresentation,
   syncDashboardPasswordPrompt,
 } from "./security.js";
-const SETTINGS_SECTION_COUNT = 5;
+const SETTINGS_SECTION_COUNT = 4;
 
 let settingsCheckpointCallback:
   | ((model: SettingsCheckpointModel | null) => void)
@@ -79,12 +77,6 @@ const SETTINGS_DISCLOSURES: readonly SettingsDisclosureConfig[] = [
     ariaLabel: "Global SRT ingest settings",
   },
   {
-    id: "backend-policy-section",
-    title: "Transcoding Backend",
-    summary: "Backend selection for newly started transcoding stages.",
-    ariaLabel: "Transcoding backend settings",
-  },
-  {
     id: "transcode-profiles-section",
     title: "Transcode Profiles",
     summary: "Encoder presets used by HEVC/H.264 and resolution workflows.",
@@ -96,8 +88,7 @@ function needsFullSettingsConfig(): boolean {
   return (
     (state.config as any)?.ingestSecurity === undefined ||
     (state.config as any)?.recordingSettings === undefined ||
-    (state.config as any)?.srtIngest === undefined ||
-    (state.config as any)?.backendPolicy === undefined
+    (state.config as any)?.srtIngest === undefined
   );
 }
 
@@ -130,7 +121,6 @@ export async function loadSettings({
   populateIngestSecuritySettings();
   populateRecordingSettings();
   populateSrtIngestSettings();
-  populateBackendPolicySettings();
   syncDashboardPasswordPrompt();
   void refreshRateLimitState();
   loadTranscodeProfiles();
@@ -234,7 +224,6 @@ function settingsNavHtml(id = ""): string {
               <option value="server-settings-section">Server</option>
               <option value="recording-settings-section">Recording</option>
               <option value="srt-settings-section">SRT</option>
-              <option value="backend-policy-section">Backend</option>
               <option value="transcode-profiles-section">Profiles</option>
           </select>
       </label>
@@ -535,38 +524,6 @@ function renderSettingsRoute(
 
                 <div class="divider my-0"></div>
 
-                <div id="backend-policy-section" class="space-y-2">
-                    <div class="text-sm font-medium">Transcoding Backend</div>
-                    <p class="text-base-content/60 text-sm">Policy for newly started or reconciled stages.</p>
-                    <div class="grid gap-2 sm:grid-cols-2">
-                        <label class="border-base-content/10 bg-base-100 flex items-start gap-3 rounded-lg border px-3 py-3">
-                            <input type="checkbox" id="backend-policy-internal-video-presets" class="checkbox checkbox-sm mt-0.5" />
-                            <span class="text-sm">Use internal backend for video presets</span>
-                        </label>
-                        <label class="border-base-content/10 bg-base-100 flex items-start gap-3 rounded-lg border px-3 py-3">
-                            <input type="checkbox" id="backend-policy-internal-hevc-to-h264" class="checkbox checkbox-sm mt-0.5" />
-                            <span class="text-sm">Use internal backend for HEVC to H.264</span>
-                        </label>
-                        <label class="border-base-content/10 bg-base-100 flex items-start gap-3 rounded-lg border px-3 py-3">
-                            <input type="checkbox" id="backend-policy-internal-hls-preview" class="checkbox checkbox-sm mt-0.5" />
-                            <span>
-                                <span class="text-sm">Use internal backend for HLS preview</span>
-                                <span class="text-base-content/60 mt-1 block text-xs">Applies only to a dedicated preview stage. HEVC dashboard preview follows the HEVC to H.264 setting.</span>
-                            </span>
-                        </label>
-                        <label class="border-base-content/10 bg-base-100 flex items-start gap-3 rounded-lg border px-3 py-3">
-                            <input type="checkbox" id="backend-policy-internal-complex-audio" class="checkbox checkbox-sm mt-0.5" />
-                            <span class="text-sm">Use internal backend for complex audio</span>
-                        </label>
-                    </div>
-                    <div class="flex items-center gap-3">
-                        <button class="btn btn-accent btn-sm" data-settings-action="save-backend-policy" aria-label="Save transcoding backend policy">Save</button>
-                        <span id="backend-policy-saved" class="text-success hidden text-sm">Saved</span>
-                    </div>
-                </div>
-
-                <div class="divider my-0"></div>
-
                 <div id="transcode-profiles-section" class="space-y-3">
                     <div class="flex flex-wrap items-baseline gap-3">
                         <span class="shrink-0 text-sm font-medium">Transcode Profiles</span>
@@ -631,9 +588,6 @@ function renderSettingsRoute(
       case "save-srt-ingest":
         void saveSrtIngest();
         break;
-      case "save-backend-policy":
-        void saveBackendPolicy();
-        break;
       case "save-transcode-profiles":
         void saveTranscodeProfiles();
         break;
@@ -665,7 +619,6 @@ export {
   resetRateLimitStateFromUi,
   saveRecordingSettings,
   saveSrtIngest,
-  saveBackendPolicy,
   loadTranscodeProfiles,
   addTranscodeProfile,
   saveTranscodeProfiles,

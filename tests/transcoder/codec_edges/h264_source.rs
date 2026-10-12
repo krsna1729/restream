@@ -18,15 +18,7 @@ fn rtmp_shaped_h264_packets_drive_source_stage() {
     rt.block_on(async {
         let engine = Arc::new(MediaEngine::new());
         let source = engine.get_or_create_pipeline("rtmp-h264").await;
-        let policy = restream::planner::BackendPolicy {
-            internal_video_presets: true,
-            internal_hevc_to_h264: true,
-            ..restream::planner::BackendPolicy::default()
-        };
-        let manager = restream::media::stage_runtime::StageRuntimeManager::with_policy(
-            engine.clone(),
-            policy,
-        );
+        let manager = restream::media::stage_runtime::StageRuntimeManager::new(engine.clone());
         let stage_key = StageKey::new("rtmp-h264", StageKind::source());
         let (handle, is_new) = manager
             .ensure_stage(stage_key.clone(), source.clone(), None)

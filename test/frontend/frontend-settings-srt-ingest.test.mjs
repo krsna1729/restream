@@ -124,7 +124,6 @@ test(
         ingestSecurity: {},
         recordingSettings: {},
         srtIngest: capturedBody.srtIngest,
-        backendPolicy: {},
       });
     };
 
@@ -171,7 +170,6 @@ test(
         ingestSecurity: {},
         recordingSettings: {},
         srtIngest: capturedBody.srtIngest,
-        backendPolicy: {},
       });
     };
 

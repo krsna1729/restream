@@ -20,13 +20,11 @@ function appendElement(document, tagName, id) {
   return element;
 }
 
-// Regression coverage for real, previously-shipped bugs: populateRecordingSettings/
-// saveRecordingSettings and populateBackendPolicySettings/saveBackendPolicy read/wrote
-// element ids (settings-rec-*, settings-backend-*) that don't exist anywhere in the
-// rendered markup, and sent payload shapes (enabled/outputDir/format/...,
-// allowExternalTranscoderExec/preferredEngine/strictMode) that don't exist on the
-// backend RecordingSettings/BackendPolicy models at all. Both save buttons were
-// silently no-ops / would fail server-side deserialization on every click.
+// Regression coverage for a real, previously-shipped bug: populateRecordingSettings/
+// saveRecordingSettings read/wrote element ids (settings-rec-*) that don't exist
+// anywhere in the rendered markup, and sent a payload shape
+// (enabled/outputDir/format/...) that doesn't exist on the backend
+// RecordingSettings model. The save button was a silent no-op.
 
 test(
   "populateRecordingSettings reads state into the real recording-retain-source-ts id",
@@ -72,7 +70,6 @@ test(
         ingestSecurity: {},
         recordingSettings: capturedBody.recordingSettings,
         srtIngest: {},
-        backendPolicy: {},
       });
     };
 
@@ -85,112 +82,5 @@ test(
     await configSections.saveRecordingSettings();
 
     assert.deepEqual(capturedBody.recordingSettings, { retainSourceTs: true });
-  },
-);
-
-test(
-  "populateBackendPolicySettings reads state into the real backend-policy-internal-* ids",
-  { concurrency: false },
-  async () => {
-    const { document } = installFakeDom();
-    const videoPresets = appendElement(
-      document,
-      "input",
-      "backend-policy-internal-video-presets",
-    );
-    const hevcToH264 = appendElement(
-      document,
-      "input",
-      "backend-policy-internal-hevc-to-h264",
-    );
-    const hlsPreview = appendElement(
-      document,
-      "input",
-      "backend-policy-internal-hls-preview",
-    );
-    const complexAudio = appendElement(
-      document,
-      "input",
-      "backend-policy-internal-complex-audio",
-    );
-
-    const configSections = await loadCompiledFrontendModule(
-      "features/settings/config-sections.js",
-    );
-    const { state } = await loadCompiledFrontendModule("core/state.js");
-    state.config = {
-      backendPolicy: {
-        internalVideoPresets: true,
-        internalHevcToH264: false,
-        internalHlsPreview: true,
-        internalComplexAudio: false,
-      },
-    };
-
-    configSections.populateBackendPolicySettings();
-
-    assert.equal(videoPresets.checked, true);
-    assert.equal(hevcToH264.checked, false);
-    assert.equal(hlsPreview.checked, true);
-    assert.equal(complexAudio.checked, false);
-  },
-);
-
-test(
-  "saveBackendPolicy sends the real BackendPolicy shape, not allowExternalTranscoderExec/preferredEngine",
-  { concurrency: false },
-  async () => {
-    const { document } = installFakeDom();
-    appendElement(
-      document,
-      "input",
-      "backend-policy-internal-video-presets",
-    ).checked = true;
-    appendElement(
-      document,
-      "input",
-      "backend-policy-internal-hevc-to-h264",
-    ).checked = true;
-    appendElement(
-      document,
-      "input",
-      "backend-policy-internal-hls-preview",
-    ).checked = false;
-    appendElement(
-      document,
-      "input",
-      "backend-policy-internal-complex-audio",
-    ).checked = false;
-    appendElement(document, "span", "backend-policy-saved").classList.add(
-      "hidden",
-    );
-
-    let capturedBody = null;
-    globalThis.fetch = async (_url, init) => {
-      capturedBody = JSON.parse(init.body);
-      return makeResponse({
-        serverName: "s",
-        ingestHost: "",
-        ingestSecurity: {},
-        recordingSettings: {},
-        srtIngest: {},
-        backendPolicy: capturedBody.backendPolicy,
-      });
-    };
-
-    const configSections = await loadCompiledFrontendModule(
-      "features/settings/config-sections.js",
-    );
-    const { state } = await loadCompiledFrontendModule("core/state.js");
-    state.config = { backendPolicy: {} };
-
-    await configSections.saveBackendPolicy();
-
-    assert.deepEqual(capturedBody.backendPolicy, {
-      internalVideoPresets: true,
-      internalHevcToH264: true,
-      internalHlsPreview: false,
-      internalComplexAudio: false,
-    });
   },
 );

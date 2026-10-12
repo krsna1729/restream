@@ -7,7 +7,6 @@ use std::time::Duration;
 use crate::capacity::CapacityLimits;
 use crate::media::egress::policy::WorkBudgetConfig;
 use crate::media::egress::shard::EgressShardConfig;
-use crate::planner::BackendPolicy;
 
 /// Default location for media-library files relative to the process working directory.
 ///
@@ -299,7 +298,6 @@ pub struct AppConfig {
     pub db_path: String,
     pub media_dir: String,
     pub log_retention_days: u64,
-    pub backend_policy: BackendPolicy,
     pub rtmp_backlog: u32,
     pub rtmp_max_connections: usize,
     /// Number of parallel RTMP ingress Compio owner threads on the listening port.
@@ -369,7 +367,6 @@ pub struct AppConfig {
     /// Peers one client IP may hold on the SRT listener (srt-rs
     /// `admission.max_peers_per_ip`), so one client cannot take every slot.
     pub srt_max_peers_per_ip: usize,
-    pub use_internal_file_ingest: bool,
     pub initial_admin_password: Option<String>,
     pub secure_session_cookies: bool,
     pub rtmps_extra_trust_roots_pem_path: Option<String>,
@@ -618,15 +615,6 @@ impl TokioRuntimeConfig {
     }
 }
 
-pub fn backend_policy_from_env() -> BackendPolicy {
-    BackendPolicy {
-        internal_video_presets: env_bool("RESTREAM_INTERNAL_VIDEO_PRESETS").unwrap_or(false),
-        internal_hevc_to_h264: env_bool("RESTREAM_INTERNAL_HEVC_TO_H264").unwrap_or(false),
-        internal_hls_preview: env_bool("RESTREAM_INTERNAL_HLS_PREVIEW").unwrap_or(false),
-        internal_complex_audio: env_bool("RESTREAM_INTERNAL_AUDIO_COMPLEX").unwrap_or(false),
-    }
-}
-
 impl Default for AppConfig {
     fn default() -> Self {
         let ports = ServerPorts {
@@ -652,12 +640,6 @@ impl Default for AppConfig {
             db_path: ".restream/data/restream.db".to_string(),
             media_dir: DEFAULT_MEDIA_DIR.to_string(),
             log_retention_days: 7,
-            backend_policy: BackendPolicy {
-                internal_video_presets: false,
-                internal_hevc_to_h264: false,
-                internal_hls_preview: false,
-                internal_complex_audio: false,
-            },
             rtmp_backlog: 1024,
             rtmp_max_connections: 512,
             rtmp_ingress_owners: 1,
@@ -693,7 +675,6 @@ impl Default for AppConfig {
             srt_egress_gso: true,
             srt_ingress_owners: 1,
             srt_max_peers_per_ip: 64,
-            use_internal_file_ingest: false,
             initial_admin_password: None,
             secure_session_cookies: false,
             rtmps_extra_trust_roots_pem_path: None,
@@ -718,7 +699,6 @@ impl AppConfig {
         let media_dir =
             env_var("RESTREAM_MEDIA_DIR").unwrap_or_else(|| DEFAULT_MEDIA_DIR.to_string());
         let log_retention_days = env_u64("RESTREAM_LOG_RETENTION_DAYS", 7);
-        let backend_policy = backend_policy_from_env();
         let rtmp_backlog = env_u32("RESTREAM_RTMP_LISTENER_BACKLOG", 1024);
         let rtmp_max_connections = env_usize("RESTREAM_RTMP_MAX_CONNECTIONS", 512).clamp(1, 16384);
         let rtmp_ingress_owners = env_usize("RESTREAM_RTMP_INGRESS_OWNERS", 1).clamp(1, 64);
@@ -784,7 +764,6 @@ impl AppConfig {
         let srt_egress_gso = env_bool("RESTREAM_SRT_EGRESS_GSO").unwrap_or(true);
         let srt_ingress_owners = env_usize("RESTREAM_SRT_INGRESS_OWNERS", 1).clamp(1, cpus.max(1));
         let srt_max_peers_per_ip = env_usize("RESTREAM_SRT_MAX_PEERS_PER_IP", 64).clamp(1, 4096);
-        let use_internal_file_ingest = env_present("RESTREAM_USE_INTERNAL_FILE_INGEST");
         let initial_admin_password = env_var("RESTREAM_INITIAL_ADMIN_PASSWORD");
         let secure_session_cookies = env_bool("RESTREAM_SECURE_SESSION_COOKIES").unwrap_or(false);
         let rtmps_extra_trust_roots_pem_path = env_var("RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM");
@@ -819,7 +798,6 @@ impl AppConfig {
             db_path,
             media_dir,
             log_retention_days,
-            backend_policy,
             rtmp_backlog,
             rtmp_max_connections,
             rtmp_ingress_owners,
@@ -855,7 +833,6 @@ impl AppConfig {
             srt_egress_gso,
             srt_ingress_owners,
             srt_max_peers_per_ip,
-            use_internal_file_ingest,
             initial_admin_password,
             secure_session_cookies,
             rtmps_extra_trust_roots_pem_path,
@@ -917,13 +894,6 @@ impl AppConfig {
             "logging": {
                 "retentionDays": self.log_retention_days,
                 "noColor": self.no_color,
-            },
-            "backendPolicy": {
-                "internalVideoPresets": self.backend_policy.internal_video_presets,
-                "internalHevcToH264": self.backend_policy.internal_hevc_to_h264,
-                "internalHlsPreview": self.backend_policy.internal_hls_preview,
-                "internalComplexAudio": self.backend_policy.internal_complex_audio,
-                "useInternalFileIngest": self.use_internal_file_ingest,
             },
             "ffmpeg": {
                 "externalPermits": self.external_ffmpeg_permits,

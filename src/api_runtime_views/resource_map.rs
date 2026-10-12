@@ -242,7 +242,7 @@ fn execution_for_stage(stage: &Value) -> &'static str {
         .unwrap_or_default();
     match backend {
         "externalFfmpeg" | "ExternalFfmpeg" => "child_process",
-        "internalFfmpeg" | "InternalFfmpeg" | "recording" | "Recording" => "os_thread",
+        "recording" | "Recording" => "os_thread",
         "audioRouter" | "AudioRouter" | "hlsSegmenter" | "HlsSegmenter" => "tokio_task",
         _ => "shared",
     }

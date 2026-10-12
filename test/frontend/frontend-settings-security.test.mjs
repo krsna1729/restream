@@ -112,7 +112,6 @@ test(
         ingestSecurity: capturedBody.ingestSecurity,
         recordingSettings: {},
         srtIngest: {},
-        backendPolicy: {},
       });
     };
 

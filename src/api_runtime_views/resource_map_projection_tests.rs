@@ -182,7 +182,6 @@ fn execution_for_stage_maps_every_known_backend_and_defaults_to_shared() {
         execution_for_stage(&backend("ExternalFfmpeg")),
         "child_process"
     );
-    assert_eq!(execution_for_stage(&backend("internalFfmpeg")), "os_thread");
     assert_eq!(execution_for_stage(&backend("recording")), "os_thread");
     assert_eq!(execution_for_stage(&backend("Recording")), "os_thread");
     assert_eq!(execution_for_stage(&backend("audioRouter")), "tokio_task");

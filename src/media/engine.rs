@@ -1,8 +1,8 @@
 //! Central media engine state and public runtime contracts.
 
 use ffmpeg_next as ffmpeg;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -189,7 +189,6 @@ pub struct MediaEngine {
     pub stages: StageRegistry,
     pub runtime: RuntimeInfra,
     pub config: Arc<crate::AppConfig>,
-    backend_policy: RwLock<crate::planner::BackendPolicy>,
 }
 
 impl Default for MediaEngine {
@@ -219,18 +218,8 @@ impl MediaEngine {
             file_ingests: FileIngestRegistry::new(),
             stages: StageRegistry::new(),
             runtime: RuntimeInfra::new(&config),
-            backend_policy: RwLock::new(config.backend_policy),
             config,
         }
-    }
-
-    pub fn backend_policy(&self) -> crate::planner::BackendPolicy {
-        // A plain `Copy` value: a poisoned lock still holds a whole one.
-        *crate::sync::read(&self.backend_policy)
-    }
-
-    pub fn set_backend_policy(&self, policy: crate::planner::BackendPolicy) {
-        *crate::sync::write(&self.backend_policy) = policy;
     }
 
     pub(crate) fn now_epoch_ms() -> u64 {
