@@ -138,3 +138,74 @@ test("operate: find a pipeline, start and stop an output, promote an input", asy
     await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
   }
 });
+
+test("inspect and monitor: one pipeline's anatomy and signals on one clock", async ({
+  page,
+}) => {
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+
+  const name = `cr-inspect-${Date.now()}`;
+  const created = await page.request.post("/api/v1/pipelines", {
+    data: { name, streamKey: `crinspect_${Date.now()}` },
+  });
+  expect(created.ok()).toBe(true);
+  const pipelineId: string = (await created.json()).pipeline.id;
+
+  try {
+    const output = await page.request.post(
+      `/api/v1/pipelines/${pipelineId}/outputs`,
+      {
+        data: {
+          name: "cr-out",
+          url: "rtmp://127.0.0.1:9/live/cr",
+          config: { video: { mode: "source" }, audio: { mode: "all" } },
+        },
+      },
+    );
+    expect(output.ok()).toBe(true);
+    const outputId: string = (await output.json()).output.id;
+
+    // The nav keeps the pipeline when the workspace changes.
+    await page.goto(`/control-room.html?w=operate&p=${pipelineId}`);
+    await page
+      .getByRole("navigation", { name: "Workspaces" })
+      .getByRole("link", { name: "Inspect" })
+      .click();
+    await expect(page).toHaveURL(new RegExp(`w=inspect&p=${pipelineId}`));
+    await expect(page.getByRole("heading", { name })).toBeVisible();
+
+    const map = page.getByRole("region", { name: /Resource map/ });
+    await expect(
+      map.getByRole("row").filter({ hasText: "restream" }),
+    ).toContainText("measured");
+    await expect(
+      page.getByRole("region", { name: "How sure the numbers are" }),
+    ).toContainText("process rss");
+    // No publisher: no source ring, said rather than drawn as empty.
+    await expect(
+      page.getByRole("region", { name: "Source ring" }),
+    ).toContainText("No source ring runs.");
+
+    await page
+      .getByRole("navigation", { name: "Workspaces" })
+      .getByRole("link", { name: "Monitor" })
+      .click();
+    const signals = page.getByRole("region", { name: /Correlated signals/ });
+    // Nothing wanted yet: no delivery figure rather than 0% or 100%.
+    const delivering = signals.getByLabel("Wanted outputs delivering now");
+    await expect(delivering).toHaveText("--");
+
+    const start = await page.request.post(
+      `/api/v1/pipelines/${pipelineId}/outputs/${outputId}/start`,
+    );
+    expect(start.ok()).toBe(true);
+    // Wanted but without a publisher: none of it delivers.
+    await expect(delivering).toHaveText("0%");
+    await expect(signals).toContainText(/[2-9] samples|\d\d+ samples/);
+  } finally {
+    await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
+  }
+});

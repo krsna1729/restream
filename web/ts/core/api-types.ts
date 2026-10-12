@@ -163,6 +163,11 @@ export interface ResourceMapNode {
   metrics?: TelemetryMetrics;
   queue?: TelemetryMetrics | null;
   hotspots?: string[];
+  /** `egress_shard` nodes: `healthy`, `stalled`, `panicked` or `stopped`. */
+  state?: string;
+  protocol?: string;
+  shardIndex?: number;
+  feedId?: string;
 }
 
 export interface ResourceMapSnapshot {

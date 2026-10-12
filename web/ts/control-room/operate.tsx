@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import { useMemo, useState } from "react";
 
 import {
   getPipelineInputs,
@@ -11,154 +10,29 @@ import {
 import type { GraphData } from "../core/api-types.js";
 import type { OutputState } from "../core/generated/runtime-state.js";
 import type { PipelineInput, PipelineInputsResponse } from "../types.js";
-import { buildFleetModel, describeCause } from "./fleet-model.js";
-import { formatAge, formatBps } from "./format.js";
+import { describeCause } from "./fleet-model.js";
+import { formatBps } from "./format.js";
 import { buildDestinationRows, buildMediaGraph } from "./operate-model.js";
 import type { DestinationRow, GraphColumn } from "./operate-model.js";
-import { go, PlaceLink } from "./place-link.js";
-import { HealthBadge } from "./pipelines.js";
-import { SAMPLE_INTERVAL_MS, SAMPLE_STALE_AFTER_MS, useNow } from "./store.js";
+import { PipelineScope } from "./pipeline-scope.js";
+import { Freshness, usePolled } from "./polled.js";
 import type { LiveSnapshot } from "./store.js";
 
-interface Polled<T> {
-  readonly value: T | null;
-  /** Wall-clock ms of the last successful load. */
-  readonly atMs: number | null;
-  readonly refresh: () => void;
-}
-
-/**
- * `load` now and every sample interval while mounted; `refresh` loads now.
- * A failed load keeps the last value; `atMs` shows its age. The caller is
- * keyed by its subject, so a new subject remounts and starts from nothing:
- * one pipeline's data never shows under another's name.
- */
-function usePolled<T>(load: () => Promise<T | null>): Polled<T> {
-  const [loaded, setLoaded] = useState<{ value: T; atMs: number } | null>(null);
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    let alive = true;
-    let timer: number | undefined;
-    const loop = async () => {
-      try {
-        const next = await load();
-        if (alive && next !== null) setLoaded({ value: next, atMs: Date.now() });
-      } catch (error) {
-        console.error("control room poll failed", error);
-      } finally {
-        if (alive) timer = window.setTimeout(loop, SAMPLE_INTERVAL_MS);
-      }
-    };
-    void loop();
-    return () => {
-      alive = false;
-      window.clearTimeout(timer);
-    };
-  }, [tick]);
-  return {
-    value: loaded?.value ?? null,
-    atMs: loaded?.atMs ?? null,
-    refresh: () => setTick((n) => n + 1),
-  };
-}
-
-/** How old a polled panel's data is; amber once it missed two polls. */
-function Freshness({ atMs }: { atMs: number | null }) {
-  const now = useNow(1000);
-  if (atMs === null) return null;
-  const stale = now - atMs > SAMPLE_STALE_AFTER_MS;
-  return (
-    <span
-      className={`badge badge-sm ${stale ? "badge-warning" : "badge-ghost"}`}
-      title="time since the last successful update"
-    >
-      {stale ? "stale · " : ""}
-      {formatAge(atMs, now)}
-    </span>
-  );
-}
-
 /** The live pipeline cockpit: sources, the media path and destinations. */
-export function Operate({
-  live,
-  pipelineId,
-}: {
-  live: LiveSnapshot;
-  pipelineId: string | null;
-}) {
-  const state = live.state;
-  const row = useMemo(
-    () =>
-      state
-        ? (buildFleetModel(state, live.rates).pipelines.find(
-            (candidate) => candidate.id === pipelineId,
-          ) ?? null)
-        : null,
-    [state, live.rates, pipelineId],
-  );
-  if (state === null) {
-    return <p className="opacity-70">Waiting for runtime state…</p>;
-  }
-  if (pipelineId === null || row === null) {
-    return (
-      <section aria-labelledby="operate-pick" className="space-y-2">
-        <h2 id="operate-pick" className="text-xl font-semibold">
-          {pipelineId === null
-            ? "Choose a pipeline to operate"
-            : "That pipeline no longer exists"}
-        </h2>
-        <ul className="menu rounded-box bg-base-200">
-          {state.pipelines.map((pipeline) => (
-            <li key={pipeline.id}>
-              <PlaceLink place={{ workspace: "operate", pipelineId: pipeline.id }}>
-                {pipeline.name}
-              </PlaceLink>
-            </li>
-          ))}
-        </ul>
-      </section>
-    );
-  }
+export function Operate(props: { live: LiveSnapshot; pipelineId: string | null }) {
   return (
-    <Cockpit
-      key={pipelineId}
-      live={live}
-      pipelineId={pipelineId}
-      header={
-        <div className="flex flex-wrap items-center gap-3">
-          <h2 className="text-xl font-semibold">{row.name}</h2>
-          <HealthBadge row={row} />
-          <span className="text-sm opacity-70">
-            {row.source
-              ? `${row.source.protocol.toUpperCase()} in · ${formatBps(row.ingestBps)}`
-              : "no input connected"}{" "}
-            · {formatBps(row.egressBps)} out
-          </span>
-          <select
-            className="select select-sm select-bordered ml-auto"
-            aria-label="Pipeline"
-            value={pipelineId}
-            onChange={(event) =>
-              go({ workspace: "operate", pipelineId: event.target.value })
-            }
-          >
-            {state.pipelines.map((pipeline) => (
-              <option key={pipeline.id} value={pipeline.id}>
-                {pipeline.name}
-              </option>
-            ))}
-          </select>
-        </div>
-      }
-    />
+    <PipelineScope
+      live={props.live}
+      workspace="operate"
+      pipelineId={props.pipelineId}
+      verb="operate"
+    >
+      {(pipelineId) => <Cockpit live={props.live} pipelineId={pipelineId} />}
+    </PipelineScope>
   );
 }
 
-function Cockpit(props: {
-  live: LiveSnapshot;
-  pipelineId: string;
-  header: ReactNode;
-}) {
+function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
   const { pipelineId } = props;
   const outputs = props.live.state?.outputs ?? [];
   const inputs = usePolled<PipelineInputsResponse>(() =>
@@ -174,8 +48,7 @@ function Cockpit(props: {
     [pipelineId, outputs, graph.value],
   );
   return (
-    <div className="space-y-4">
-      {props.header}
+    <>
       <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
         <SourceDeck
           pipelineId={pipelineId}
@@ -190,7 +63,7 @@ function Cockpit(props: {
         rows={rows}
         egressBps={props.live.rates?.egressBps ?? null}
       />
-    </div>
+    </>
   );
 }
 

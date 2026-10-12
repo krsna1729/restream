@@ -188,12 +188,26 @@ below and its DOM-id tests are deleted (Q-044).
   and protocol (egress nodes join outputs on their `outputId`); the
   destination matrix from the state stream (feed lag from the running egress,
   rate from the telemetry rates) with Start/Stop. Inputs and graph are polled
-  every 2 s only while Operate shows that pipeline; each panel shows the age
-  of its last successful update and turns amber once that is older than 2.5
-  poll intervals.
+  every 2 s only while Operate shows that pipeline (`polled.tsx`); each panel
+  shows the age of its last successful update and turns amber once that is
+  older than 2.5 poll intervals. Inspect (one pipeline): the resource map
+  (`/engine/resource-map?pipeline_id=…&view=detail&top_n=200`), nodes under
+  pressure first, then by memory held, each with its confidence (measured,
+  derived, estimated, unmeasured), a detail panel and the count of nodes the
+  server left out; the source ring (fill and retained payload) from the
+  graph; the egress shards this pipeline's outputs run on (the server scopes
+  them by feed and shard); and the map's attribution legend. Monitor (one
+  pipeline): ingest and egress rate, the share of wanted outputs delivering,
+  the worst feed lag, ring fill and the slowest of its shards' progress age,
+  sampled every 2 s on one clock and kept in the page for the last 15
+  minutes (the engine keeps no history). A stale or missing source, a state
+  stream that is not live, or a truncated map is a gap in its line, never a
+  zero or a frozen value. Operate, Inspect and Monitor share one pipeline
+  header and picker (`pipeline-scope.tsx`).
 
 Proof: `test/frontend/control-room-fleet.test.mjs`,
 `test/frontend/control-room-operate.test.mjs`,
+`test/frontend/control-room-inspect.test.mjs`,
 `test/frontend/frontend-runtime-state-stream.test.mjs` (stream liveness) and
 `test/frontend/control-room.spec.ts` (against a running engine).
 

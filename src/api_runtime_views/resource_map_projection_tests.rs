@@ -5,9 +5,33 @@ use serde_json::{Value, json};
 use super::{
     DEFAULT_TOP_N, MAX_TOP_N, ResourceMapOptions, ResourceMapView, append_hotspots, egress_node,
     execution_for_stage, group_key, group_label, merge_thread_counts, node_score, number_field,
-    queue_hotspots, source_ring_node, stage_backend_pid, stage_node, top_nodes,
+    placed_shard_nodes, queue_hotspots, source_ring_node, stage_backend_pid, stage_node, top_nodes,
 };
 use crate::system_sampling::ChildProcessResourceSnapshot;
+
+#[test]
+fn a_pipeline_view_keeps_only_the_shards_its_outputs_are_placed_on() {
+    let shard = |feed: &str, index: u64| json!({ "kind": "egress_shard", "feedId": feed, "shardIndex": index });
+    // Every feed numbers its shards from 0: pipeline B's shard 0 and A's
+    // transcoded rendition's shard 0 are other threads than A's source shard 0.
+    let shards = vec![
+        shard("rtmp:a:source", 0),
+        shard("rtmp:a:source", 1),
+        shard("rtmp:a:720p", 0),
+        shard("rtmp:b:source", 0),
+    ];
+    let egresses = [
+        json!({ "pipelineId": "a", "fabricFeed": "rtmp:a:source", "shardId": 0 }),
+        // Not on the fabric: no shard.
+        json!({ "pipelineId": "a", "fabricFeed": null, "shardId": null }),
+    ];
+
+    let placed = placed_shard_nodes(shards.clone(), Some(&egresses));
+    assert_eq!(placed, vec![shard("rtmp:a:source", 0)]);
+
+    assert!(placed_shard_nodes(shards.clone(), Some(&[])).is_empty());
+    assert_eq!(placed_shard_nodes(shards.clone(), None), shards);
+}
 
 #[test]
 fn stage_node_reports_child_process_resources_when_pid_is_known() {

@@ -25,6 +25,7 @@ export TMPDIR="$TMP_BASE"
 
 TEST_FILES=(
   test/frontend/control-room-fleet.test.mjs
+  test/frontend/control-room-inspect.test.mjs
   test/frontend/control-room-operate.test.mjs
   test/frontend/frontend-api-contract.test.mjs
   test/frontend/frontend-architecture-layering.test.mjs

@@ -2,7 +2,13 @@
 // for pipeline workspaces, `&p=<pipeline id>`), so reload, back/forward and
 // shared links land on the same view.
 
-export const WORKSPACES = ["fleet", "pipelines", "operate"] as const;
+export const WORKSPACES = [
+  "fleet",
+  "pipelines",
+  "operate",
+  "inspect",
+  "monitor",
+] as const;
 
 export type Workspace = (typeof WORKSPACES)[number];
 
@@ -10,6 +16,8 @@ export const WORKSPACE_LABELS: Record<Workspace, string> = {
   fleet: "Fleet",
   pipelines: "Pipelines",
   operate: "Operate",
+  inspect: "Inspect",
+  monitor: "Monitor",
 };
 
 export interface Place {
