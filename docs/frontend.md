@@ -203,11 +203,25 @@ below and its DOM-id tests are deleted (Q-044).
   minutes (the engine keeps no history). A stale or missing source, a state
   stream that is not live, or a truncated map is a gap in its line, never a
   zero or a frozen value. Operate, Inspect and Monitor share one pipeline
-  header and picker (`pipeline-scope.tsx`).
+  header and picker (`pipeline-scope.tsx`). Incidents (fleet): every open
+  alert (`/alerts`), critical first, then the widest scope, then the oldest;
+  the selected one's lifecycle events (`/events`) from a minute before it
+  opened; and its evidence packet: what failed (the diagnosis layer and
+  cause), what did not (the layers ruled out), the evidence lines and the
+  recommended action. Alerts that close while the page is open stay listed
+  as resolved (the engine keeps no incident history). Capacity (fleet): the
+  `/metrics/system` capacity snapshot (load per service center, labelled
+  calibration priors, observe-only), the Flow Doctor (measured from the
+  busiest shard, or projected when none runs) and a scenario form whose
+  baseline and projection both come from `/capacity/scenario`, priced on the
+  priors from one workload sample: the page computes no capacity number. A
+  timeline says when the engine's event log no longer reaches back to a
+  minute before the incident opened.
 
 Proof: `test/frontend/control-room-fleet.test.mjs`,
 `test/frontend/control-room-operate.test.mjs`,
 `test/frontend/control-room-inspect.test.mjs`,
+`test/frontend/control-room-incidents.test.mjs`,
 `test/frontend/frontend-runtime-state-stream.test.mjs` (stream liveness) and
 `test/frontend/control-room.spec.ts` (against a running engine).
 

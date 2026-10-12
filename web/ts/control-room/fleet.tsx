@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 
+import type { CapacitySnapshot } from "../core/generated/runtime-state.js";
 import type { SystemMetrics } from "../types.js";
 import { buildFleetModel, describeCause } from "./fleet-model.js";
 import type { AttentionItem, FleetModel } from "./fleet-model.js";
@@ -127,15 +128,7 @@ function Headroom({ metrics }: { metrics: SystemMetrics | null }) {
     ["Memory", metrics?.memory?.usedPercent],
     ["Disk", metrics?.disk?.usedPercent],
   ];
-  const projected: Array<[string, number | null | undefined]> = capacity
-    ? [
-        ["Hottest shard", capacity.hottestShardUtil * 100],
-        ["NIC", capacity.nicUtil * 100],
-        ["FFmpeg", capacity.ffmpegUtil * 100],
-        ["Memory", capacity.memoryUtil * 100],
-        ["Disk", capacity.diskUtil * 100],
-      ]
-    : [];
+  const projected = capacity ? serviceCenterRows(capacity) : [];
   return (
     <section className="card bg-base-200" aria-labelledby="fleet-headroom">
       <div className="card-body gap-3">
@@ -176,7 +169,20 @@ function Headroom({ metrics }: { metrics: SystemMetrics | null }) {
   );
 }
 
-function Meters(props: {
+/** The projected service-center loads of one capacity snapshot, in percent. */
+export function serviceCenterRows(
+  capacity: CapacitySnapshot,
+): Array<[string, number | null | undefined]> {
+  return [
+    ["Hottest shard", capacity.hottestShardUtil * 100],
+    ["NIC", capacity.nicUtil * 100],
+    ["FFmpeg", capacity.ffmpegUtil * 100],
+    ["Memory", capacity.memoryUtil * 100],
+    ["Disk", capacity.diskUtil * 100],
+  ];
+}
+
+export function Meters(props: {
   title: string;
   rows: Array<[string, number | null | undefined]>;
 }) {

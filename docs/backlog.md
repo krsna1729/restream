@@ -286,8 +286,10 @@ items).
 - Done so far: `/control-room.html` (one React root, one live store over
   the state stream, `?w=`/`&p=` route) with Fleet, Pipelines (inventory),
   Operate (source deck with promote, media graph, destination matrix with
-  start/stop), Inspect (resource map, ring, shards, attribution) and Monitor
-  (correlated signals, in-page history). See
+  start/stop), Inspect (resource map, ring, shards, attribution), Monitor
+  (correlated signals, in-page history), Incidents (ranked open alerts,
+  timeline, evidence packet) and Capacity (service centers, Flow Doctor,
+  scenario projection by the engine). See
   [Frontend](frontend.md#control-room).
 - Gates: Playwright per workspace against a running engine.
 - Depends on: Q-042 (state). Q-043 (done) added the output `diagnosis` for

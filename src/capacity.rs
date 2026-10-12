@@ -272,10 +272,9 @@ fn ratio(numerator: f64, denominator: f64) -> f64 {
 }
 
 impl MediaEngine {
-    /// Observe the current runtime topology and counters without making an
-    /// admission decision. The snapshot is intentionally a control-plane
-    /// operation; no native shard hot path reads these locks.
-    pub async fn capacity_snapshot(&self) -> CapacitySnapshot {
+    /// The observed workload: ingest rates, outputs by protocol, stages and
+    /// the egress shard count.
+    async fn capacity_workload(&self) -> Workload {
         let ingests = self.ingests.active.read().await;
         let mut media_bps = 0_u64;
         let mut media_pps = 0_u64;
@@ -312,11 +311,18 @@ impl MediaEngine {
             .len()
             .min(u32::MAX as usize) as u32;
         workload.shard_count = self.config.egress_fabric.shards.max(1);
+        workload
+    }
+
+    /// Observe the current runtime topology and counters without making an
+    /// admission decision. The snapshot is intentionally a control-plane
+    /// operation; no native shard hot path reads these locks.
+    pub async fn capacity_snapshot(&self) -> CapacitySnapshot {
         let mut snapshot = CapacityModel {
             limits: self.config.capacity_limits,
-            safe_utilization: 0.8,
+            ..CapacityModel::default()
         }
-        .project(workload);
+        .project(self.capacity_workload().await);
         if let Some((queue, capacity, progress_age_ms, stalled)) = self
             .egress_fabric_shard_statuses(std::time::Duration::from_secs(5))
             .await
@@ -351,6 +357,30 @@ impl MediaEngine {
             snapshot.flow_measured = true;
         }
         snapshot
+    }
+
+    /// One sample of the current workload projected onto the calibrated
+    /// priors twice: as it is (`baseline`) and with `outputs` more outputs
+    /// and `stages` more shared stages (`projected`). Both are priors only,
+    /// so they compare like with like; the measured flow of running shards
+    /// is [`Self::capacity_snapshot`]'s, and nothing measures a change that
+    /// has not happened.
+    pub async fn capacity_scenario(
+        &self,
+        outputs: u32,
+        stages: u32,
+    ) -> (CapacitySnapshot, CapacitySnapshot) {
+        let workload = self.capacity_workload().await;
+        let model = CapacityModel {
+            limits: self.config.capacity_limits,
+            ..CapacityModel::default()
+        };
+        let changed = Workload {
+            outputs: workload.outputs.saturating_add(outputs),
+            stage_count: workload.stage_count.saturating_add(stages),
+            ..workload
+        };
+        (model.project(workload), model.project(changed))
     }
 }
 

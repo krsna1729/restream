@@ -1114,6 +1114,21 @@ The capacity model is diagnostic only and does not make admission decisions.
 The response also includes a cached `ioUring` capability object from startup;
 `available: false` records a host without usable io_uring support.
 
+### `GET /api/v1/capacity/scenario`
+
+Authenticated, observe-only projection of a topology change. Query:
+`add_outputs` and `add_stages` (non-negative integers, default `0`). The
+response is `{ addOutputs, addStages, baseline, projected }`. Both price one
+sample of the current workload on the calibration priors: `baseline` as it
+is, `projected` with the added outputs and shared stages. Neither carries a
+measured flow (`flowMeasured` is `false`), so they compare like with like;
+the measured flow of running shards is in `/metrics/system`'s `capacity`,
+which a scenario does not change. `projected.flow.status` (`healthy`,
+`saturated`, `overloaded`) is the model's judgement of the projected hottest
+center. The model multiplies the current ingest by the
+output count, so it does not take an output's protocol or pipeline. It
+decides and admits nothing.
+
 ### `GET /api/v1/engine`
 
 Authenticated build/runtime information:
