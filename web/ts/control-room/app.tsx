@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { withBasePath } from "../core/base-path.js";
 import { Fleet } from "./fleet.js";
 import { formatAge } from "./format.js";
+import { Inspect } from "./inspect.js";
+import { Monitor } from "./monitor.js";
 import { Operate } from "./operate.js";
 import { PlaceLink } from "./place-link.js";
 import { Pipelines } from "./pipelines.js";
@@ -86,6 +88,12 @@ export function App() {
         {place.workspace === "pipelines" && <Pipelines live={live} />}
         {place.workspace === "operate" && (
           <Operate live={live} pipelineId={place.pipelineId} />
+        )}
+        {place.workspace === "inspect" && (
+          <Inspect live={live} pipelineId={place.pipelineId} />
+        )}
+        {place.workspace === "monitor" && (
+          <Monitor live={live} pipelineId={place.pipelineId} />
         )}
       </main>
     </div>
