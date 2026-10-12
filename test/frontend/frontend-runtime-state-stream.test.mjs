@@ -121,8 +121,10 @@ test("a client that misses events resyncs from its last revision", async () => {
 test("a dropped connection resumes after a delay, from the last revision", async () => {
   const { openRuntimeStateStream } = await loadStream();
   const sources = [];
+  const statuses = [];
   const stream = openRuntimeStateStream({
     onState: () => {},
+    onStatus: (status) => statuses.push(status),
     reconnectDelayMs: 5,
     createEventSource: (url) => {
       const source = new FakeSource(url);
@@ -130,11 +132,49 @@ test("a dropped connection resumes after a delay, from the last revision", async
       return source;
     },
   });
+  sources[0].emit("open", {});
   sources[0].emit("snapshot", { epoch: "e1", revision: 2, pipelines: [], outputs: [] });
   sources[0].onerror();
   assert.equal(sources.length, 1, "no immediate reconnect loop");
+  // An event from the closed connection does not mark the stream live.
+  sources[0].emit("open", {});
+  assert.deepEqual(statuses, ["live", "reconnecting"]);
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(sources.length, 2);
   assert.match(sources[1].url, /since=e1\.2$/);
+  sources[1].emit("open", {});
+  assert.deepEqual(statuses, ["live", "reconnecting", "live"]);
+  stream.close();
+});
+
+test("a silent connection is replaced; heartbeats keep it", async () => {
+  const { openRuntimeStateStream } = await loadStream();
+  const sources = [];
+  const statuses = [];
+  const stream = openRuntimeStateStream({
+    onState: () => {},
+    onStatus: (status) => statuses.push(status),
+    silenceTimeoutMs: 30,
+    createEventSource: (url) => {
+      const source = new FakeSource(url);
+      sources.push(source);
+      return source;
+    },
+  });
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  sources[0].emit("open", {});
+  sources[0].emit("snapshot", { epoch: "e1", revision: 4, pipelines: [], outputs: [] });
+  // Heartbeats inside the window keep a quiet connection.
+  for (let i = 0; i < 3; i += 1) {
+    await sleep(15);
+    sources[0].emit("heartbeat", {});
+  }
+  assert.equal(sources.length, 1);
+  // Then nothing arrives: a half-open connection raises no error.
+  await sleep(50);
+  assert.equal(sources[0].closed, true);
+  assert.equal(sources.length, 2);
+  assert.match(sources[1].url, /since=e1\.4$/);
+  assert.deepEqual(statuses, ["live", "reconnecting"]);
   stream.close();
 });

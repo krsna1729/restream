@@ -16,6 +16,7 @@ backlog Q-045).
 - [6. Motion & Interaction](#6-motion--interaction)
 - [7. Depth & Surface](#7-depth--surface)
 - [8. Accessibility Constraints & Accepted Debt](#8-accessibility-constraints--accepted-debt)
+- [Control Room](#control-room)
 - [Dashboard Route Contract](#dashboard-route-contract)
 - [Visual and Accessibility Baseline](#visual-and-accessibility-baseline)
 
@@ -145,10 +146,44 @@ surfaces.
 |---|---|---|---|
 | Legacy monitor card radius exceeds 8px | `web/ts/features/control-room.ts` | Existing visual contract outside this feature | Consolidate during a dedicated control-room redesign |
 
+## Control Room
+
+`/control-room.html` is the replacement dashboard (Q-045): one React root
+(`web/ts/control-room/main.tsx`) beside the current shell until it covers
+the current views; then it becomes `/` and the shell, its route contract
+below and its DOM-id tests are deleted (Q-044).
+
+- Data: one store (`web/ts/control-room/store.ts`). It follows the
+  revisioned runtime state stream (`/api/v1/state/stream`) and samples engine
+  telemetry and host metrics every 2 s while a view is subscribed. Views
+  read it through `useLive`; they hold no copy. Rates come from two
+  successive telemetry samples of one ingest session or output (`rates.ts`);
+  a counter that went down, or a failover to another input, has no rate.
+  The header shows the stream's connection (`live · rev N` or
+  `reconnecting`; a steady system sends no deltas, so the time since the
+  last change says nothing) and the age of the oldest sampled source.
+- Location: `?w=<workspace>` (`web/ts/control-room/route.ts`); an absent or
+  unknown workspace opens Fleet. Navigation uses `pushState` and follows
+  `popstate`; other query parameters are kept.
+- Workspaces ship on live data only. Fleet: delivery counts, then degraded
+  outputs grouped by cause (an upstream cause, with its stage or shard,
+  covers every output it stalls; destination causes stay per output) and
+  ranked by outputs affected, upstream first on a tie; wanted outputs that
+  neither deliver nor carry a diagnosis count as starting, never as
+  healthy. Headroom from `/metrics/system`: measured host use; egress flow
+  only when shards measured it (`flowMeasured`); and, labeled as such, the
+  capacity model's projection onto service centers from calibration priors
+  (observe-only until Q-035/Q-031 measure the coefficients).
+
+Proof: `test/frontend/control-room-fleet.test.mjs`,
+`test/frontend/frontend-runtime-state-stream.test.mjs` (stream liveness) and
+`test/frontend/control-room.spec.ts` (against a running engine).
+
 ## Dashboard Route Contract
 
-The URL is the canonical owner of dashboard location. A redesign must reuse
-`web/ts/core/pipeline-workspace.ts` rather than introduce a parallel router.
+The URL is the canonical owner of dashboard location. Within the current
+shell, views reuse `web/ts/core/pipeline-workspace.ts` rather than a
+parallel router; the control room page has its own contract (above).
 
 ### Canonical locations
 

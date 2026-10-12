@@ -473,6 +473,7 @@ deadline slack, errors, and retransmit amplification.
       "amplification": 1,
       "status": "healthy"
     },
+    "flowMeasured": true,
     "observeOnly": true
   }
 }

@@ -782,6 +782,9 @@ matches.
   `epoch` too), with
   `pipelines` and `outputs` (whole entities to insert or replace) and
   `removedPipelines` and `removedOutputs` (ids).
+- `event: heartbeat` (data `{}`): every 20 seconds. A steady system sends no
+  deltas; the dashboard client treats a connection that sends no event for
+  50 seconds (two and a half heartbeats) as dead and reconnects with `since`.
 
 A new connection starts with a snapshot. To resume, send the last event id
 as `?since=<epoch>.<revision>` or `Last-Event-ID`. The server then replays
@@ -1089,7 +1092,9 @@ Every response includes an observe-only `capacity` object with measured
 `ingressPps`, `mediaBps`, and fanout `egressPps`, plus calibrated service-center
 utilization (`hottestShardUtil`, `nicUtil`, `memoryUtil`, `ffmpegUtil`, and
 `diskUtil`). `hottestCenter` and `projectedUtilization` identify the projected
-bottleneck. `flow` is the Flow Doctor view of the hottest observed shard;
+bottleneck. `flow` is the Flow Doctor view of the hottest observed shard when
+`flowMeasured` is `true` (egress shards are running); otherwise it is the
+projection's hottest center priced from the calibration priors.
 `activeLeaves`, `uniqueStages`, and `observeOnly` provide context.
 The capacity model is diagnostic only and does not make admission decisions.
 The response also includes a cached `ioUring` capability object from startup;
