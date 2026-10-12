@@ -7,7 +7,10 @@ import type {
   ResourceMapNode,
   ResourceMapSnapshot,
 } from "../core/api-types.js";
-import type { OutputState } from "../core/generated/runtime-state.js";
+
+/** The most nodes a map request asks for (the server's maximum); the rest
+ * are counted in `limits.truncatedNodeCount`, not listed. */
+export const MAP_TOP_N = 200;
 
 export interface ResourceRow {
   readonly node: ResourceMapNode;
@@ -26,6 +29,8 @@ export interface RingView {
 export interface ShardView {
   readonly id: string;
   readonly protocol: string;
+  /** The prepared feed the shard serves: one per pipeline rendition. */
+  readonly feed: string;
   readonly index: number;
   readonly state: string;
   readonly progressAgeMs: number | null;
@@ -74,26 +79,17 @@ export function ringFromGraph(graph: GraphData): RingView | null {
 }
 
 /**
- * The egress shards that carry `outputs`, by protocol then index. Shards are
- * a process-wide resource, so they come from the runtime-wide map; an
- * output's state names the shard it runs on.
+ * The egress shards in a pipeline's map: the server lists the ones its
+ * running outputs are placed on. By protocol, feed, then index (every feed
+ * numbers its shards from 0).
  */
-export function shardsFrom(
-  snapshot: ResourceMapSnapshot,
-  outputs: readonly OutputState[],
-): readonly ShardView[] {
-  const placed = new Set(
-    outputs.flatMap((o) => (o.shard === null ? [] : [`${o.protocol}:${o.shard}`])),
-  );
+export function shardsFrom(snapshot: ResourceMapSnapshot): readonly ShardView[] {
   return snapshot.nodes
-    .filter(
-      (node) =>
-        node.kind === "egress_shard" &&
-        placed.has(`${node.protocol}:${node.shardIndex}`),
-    )
+    .filter((node) => node.kind === "egress_shard")
     .map((node) => ({
       id: node.id,
       protocol: node.protocol ?? "unknown",
+      feed: node.feedId ?? "unknown",
       index: node.shardIndex ?? -1,
       state: node.state ?? "unknown",
       progressAgeMs: finiteOrNull(node.metrics?.progressAgeMs),
@@ -101,5 +97,10 @@ export function shardsFrom(
       commandCapacity: finiteOrNull(node.metrics?.commandCapacity),
       mediaTicks: finiteOrNull(node.metrics?.mediaTicks),
     }))
-    .sort((a, b) => a.protocol.localeCompare(b.protocol) || a.index - b.index);
+    .sort(
+      (a, b) =>
+        a.protocol.localeCompare(b.protocol) ||
+        a.feed.localeCompare(b.feed) ||
+        a.index - b.index,
+    );
 }

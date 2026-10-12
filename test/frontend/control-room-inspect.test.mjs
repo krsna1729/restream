@@ -18,9 +18,11 @@ function memory(bytes, confidence = "derived") {
 }
 
 function shard(protocol, index, overrides = {}) {
-  return resource(`shard-${protocol}-${index}`, {
+  const feedId = overrides.feedId ?? `${protocol}:p:source`;
+  return resource(`shard-${feedId}-${index}`, {
     kind: "egress_shard",
     protocol,
+    feedId,
     shardIndex: index,
     state: "healthy",
     metrics: { progressAgeMs: 5, commandDepth: 1, commandCapacity: 1024, mediaTicks: 9 },
@@ -94,31 +96,23 @@ function output(id, pipelineId, overrides = {}) {
   };
 }
 
-test("shards: only the ones this pipeline's outputs are placed on, by protocol then index", () => {
-  const map = snapshot([
-    shard("srt", 1),
-    // Not a shard, though it names one.
-    resource("output", { protocol: "rtmp", shardIndex: 0 }),
-    shard("rtmp", 0, { state: "stalled", metrics: { progressAgeMs: 900 } }),
-    shard("srt", 0),
-    // Another pipeline's shard.
-    shard("rtmp", 3),
-  ]);
-  const shards = shardsFrom(map, [
-    output("a", "p", { protocol: "rtmp", shard: 0 }),
-    output("b", "p", { protocol: "srt", shard: 1 }),
-    output("c", "p", { protocol: "srt", shard: 0 }),
-    // Not placed (not running): no shard.
-    output("d", "p", { protocol: "rtmp", shard: null }),
-  ]);
-  assert.deepEqual(
-    shards.map((s) => `${s.protocol}:${s.index}:${s.state}`),
-    ["rtmp:0:stalled", "srt:0:healthy", "srt:1:healthy"],
+test("shards: by protocol, then feed (each numbers from 0), then index", () => {
+  const shards = shardsFrom(
+    snapshot([
+      shard("srt", 1),
+      // Not a shard, though it names one.
+      resource("output", { protocol: "rtmp", shardIndex: 0 }),
+      shard("rtmp", 0, { state: "stalled", metrics: { progressAgeMs: 900 } }),
+      shard("rtmp", 0, { feedId: "rtmp:p:720p" }),
+      shard("srt", 0),
+    ]),
   );
-  assert.equal(shards[0].progressAgeMs, 900);
-  assert.equal(shards[0].commandDepth, null);
-  // Same index, other protocol: not this pipeline's.
-  assert.deepEqual(shardsFrom(map, [output("x", "p", { protocol: "hls", shard: 0 })]), []);
+  assert.deepEqual(
+    shards.map((s) => `${s.feed}:${s.index}:${s.state}`),
+    ["rtmp:p:720p:0:healthy", "rtmp:p:source:0:stalled", "srt:p:source:0:healthy", "srt:p:source:1:healthy"],
+  );
+  assert.equal(shards[1].progressAgeMs, 900);
+  assert.equal(shards[1].commandDepth, null);
 });
 
 test("a sample covers one pipeline: its outputs, rates, lag, ring and shards", () => {
@@ -126,7 +120,7 @@ test("a sample covers one pipeline: its outputs, rates, lag, ring and shards", (
     atMs: 1_000,
     pipelineId: "p",
     outputs: [
-      output("a", "p", { shard: 1 }),
+      output("a", "p", { shard: 0 }),
       output("b", "p", { convergence: "starting", flow: "idle" }),
       output("off", "p", { desired: "stopped", flow: "idle" }),
       output("other", "q"),
@@ -144,10 +138,9 @@ test("a sample covers one pipeline: its outputs, rates, lag, ring and shards", (
       ],
       edges: [],
     },
-    // Shard 0 is slower but carries another pipeline's outputs only.
     resources: snapshot([
-      shard("rtmp", 0, { metrics: { progressAgeMs: 900 } }),
-      shard("rtmp", 1, { metrics: { progressAgeMs: 40 } }),
+      shard("rtmp", 0, { metrics: { progressAgeMs: 40 } }),
+      shard("rtmp", 0, { feedId: "rtmp:p:720p", metrics: { progressAgeMs: 7 } }),
     ]),
   });
   assert.deepEqual(sample, {
@@ -160,6 +153,17 @@ test("a sample covers one pipeline: its outputs, rates, lag, ring and shards", (
     ringFillPercent: 25,
     maxShardProgressMs: 40,
   });
+
+  // A truncated map may have dropped the slowest shard: a gap.
+  const truncated = takeSample({
+    atMs: 1_500,
+    pipelineId: "p",
+    outputs: [],
+    rates: null,
+    graph: null,
+    resources: { ...snapshot([shard("rtmp", 0)]), limits: { truncatedNodeCount: 3 } },
+  });
+  assert.equal(truncated.maxShardProgressMs, null);
 
   // No source: a gap, never a zero.
   const empty = takeSample({
@@ -176,14 +180,15 @@ test("a sample covers one pipeline: its outputs, rates, lag, ring and shards", (
   );
 });
 
-test("history keeps the newest samples up to its cap", () => {
+test("history keeps the window by time, however late the timer fires", () => {
   let history = [];
-  for (let i = 0; i < 5; i += 1) {
-    history = appendSample(history, { atMs: i }, 3);
+  // A hidden tab: samples 10 s apart, then 70 s and 10 s.
+  for (const atMs of [0, 10_000, 20_000, 90_000, 100_000]) {
+    history = appendSample(history, { atMs }, 60_000);
   }
   assert.deepEqual(
     history.map((sample) => sample.atMs),
-    [2, 3, 4],
+    [90_000, 100_000],
   );
 });
 
@@ -194,9 +199,10 @@ test("a sparkline spans the window, peaks at the top and breaks at a gap", () =>
     { atMs: 75, ingestBps: null },
     { atMs: 100, ingestBps: 5 },
   ];
+  // The lone last value is a zero-length segment: a dot, not nothing.
   assert.deepEqual(sparkline(history, "ingestBps", 0, 100, 200, 40), [
     "0.0,40.0 100.0,0.0",
-    "200.0,20.0",
+    "200.0,20.0 200.0,20.0",
   ]);
   // All zero: a flat line on the floor, not a division by zero.
   assert.deepEqual(

@@ -1435,17 +1435,21 @@ The summary contains measured process and child-process fields such as CPU,
 RSS, thread count, file descriptor count, child FFmpeg count, and active SRT
 sender thread permits, plus egress-fabric shard counters
 (`fabricShardThreadCount`, `fabricShardStalledCount`,
-`fabricShardPanickedCount`, global-scope only — a fabric shard thread is
-shared across every pipeline, not owned by one). Nodes include execution
-ownership (`tokio_task`, `os_thread`, `shard_thread`, `child_process`,
-`shared`, or `process`) plus memory attribution with a confidence marker.
-An egress output node's `execution` is always `shard_thread` (not
-`os_thread`/`tokio_task`) — every network egress output is fabric-owned,
-running on a shared shard thread it doesn't exclusively own, so
-`threads.appOwned` is `0` for it. Global-scope responses also include
-one `egress_shard` node per live fabric shard (`state`: `healthy`,
-`stalled`, `stopped`, or `panicked`; see `egressFabricShards` under
-`/api/v1/engine/health` above for the same underlying data). The memory
+`fabricShardPanickedCount`) over the shards the response lists. Nodes include
+execution ownership (`tokio_task`, `os_thread`, `shard_thread`,
+`child_process`, `shared`, or `process`) plus memory attribution with a
+confidence marker. An egress output node's `execution` is always
+`shard_thread` (not `os_thread`/`tokio_task`) — every network egress output
+is fabric-owned, running on a shared shard thread it doesn't exclusively
+own, so `threads.appOwned` is `0` for it. Responses include `egress_shard`
+nodes (`feedId`, `shardIndex`, `state`: `healthy`, `stalled`, `stopped`, or
+`panicked`; see `egressFabricShards` under `/api/v1/engine/health` above for
+the same underlying data): global scope lists every live fabric shard;
+pipeline scope lists the shards this pipeline's running outputs are placed
+on, matched on feed and shard index (every feed numbers its shards from 0,
+and a shard thread serves only its feed). A shard node holds no attributed
+memory, so with more nodes than `top_n` it is among the first cut; read
+`limits.truncatedNodeCount`. The memory
 attribution confidence marker is one of:
 
 - `measured`: process RSS, child FFmpeg RSS, process thread/fd counts

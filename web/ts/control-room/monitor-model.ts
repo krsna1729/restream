@@ -73,26 +73,32 @@ export function takeSample(input: {
         }),
     ),
     ringFillPercent: ring ? (100 * ring.fill) / ring.capacity : null,
-    maxShardProgressMs: input.resources
-      ? max(shardsFrom(input.resources, outputs).map((shard) => shard.progressAgeMs))
-      : null,
+    // A truncated map may have dropped the slowest shard: a gap, not a guess.
+    maxShardProgressMs:
+      input.resources && !(input.resources.limits?.truncatedNodeCount ?? 0)
+        ? max(shardsFrom(input.resources).map((shard) => shard.progressAgeMs))
+        : null,
   };
 }
 
-/** `history` with `sample` appended, keeping the newest `cap` samples. */
+/**
+ * `history` with `sample` appended, keeping the samples no older than
+ * `windowMs` before it. Bounded by time, not count: a hidden tab's timers
+ * slow down, and the window must still mean what its label says.
+ */
 export function appendSample(
   history: readonly MonitorSample[],
   sample: MonitorSample,
-  cap: number,
+  windowMs: number,
 ): readonly MonitorSample[] {
-  const next = [...history, sample];
-  return next.length > cap ? next.slice(next.length - cap) : next;
+  return [...history.filter((kept) => kept.atMs >= sample.atMs - windowMs), sample];
 }
 
 /**
  * SVG polyline point lists for one signal over `[fromMs, toMs]`, scaled to
  * `width` x `height` with 0 at the bottom and the window's maximum at the
- * top. A missing value breaks the line rather than drawing a zero.
+ * top. A missing value breaks the line rather than drawing a zero; a lone
+ * value between gaps is a zero-length segment, drawn as a dot by a round cap.
  */
 export function sparkline(
   history: readonly MonitorSample[],
@@ -104,19 +110,20 @@ export function sparkline(
 ): readonly string[] {
   const top = max(history.map((sample) => sample[signal])) ?? 0;
   const span = Math.max(1, toMs - fromMs);
-  const segments: string[] = [];
-  let points: string[] = [];
+  const segments: string[][] = [[]];
   for (const sample of history) {
     const value = sample[signal];
     if (value === null) {
-      if (points.length > 0) segments.push(points.join(" "));
-      points = [];
+      segments.push([]);
       continue;
     }
     const x = ((sample.atMs - fromMs) / span) * width;
     const y = top > 0 ? height - (value / top) * height : height;
-    points.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+    segments[segments.length - 1]?.push(`${x.toFixed(1)},${y.toFixed(1)}`);
   }
-  if (points.length > 0) segments.push(points.join(" "));
-  return segments;
+  return segments
+    .filter((points) => points.length > 0)
+    .map((points) =>
+      points.length === 1 ? `${points[0]} ${points[0]}` : points.join(" "),
+    );
 }

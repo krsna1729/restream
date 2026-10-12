@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { getProcessingGraph, getResourceMap } from "../core/api.js";
 import type { GraphData, ResourceMapSnapshot } from "../core/api-types.js";
 import { formatBps, formatPercent } from "./format.js";
+import { MAP_TOP_N } from "./inspect-model.js";
 import { appendSample, SIGNALS, sparkline, takeSample } from "./monitor-model.js";
 import type { MonitorSample, Signal } from "./monitor-model.js";
 import { PipelineScope } from "./pipeline-scope.js";
@@ -12,7 +13,6 @@ import { SAMPLE_INTERVAL_MS, SAMPLE_STALE_AFTER_MS } from "./store.js";
 import type { LiveSnapshot } from "./store.js";
 
 const WINDOW_MS = 15 * 60 * 1000;
-const WINDOW_SAMPLES = WINDOW_MS / SAMPLE_INTERVAL_MS;
 const PLOT_WIDTH = 600;
 const PLOT_HEIGHT = 40;
 
@@ -64,13 +64,14 @@ function fresh<T>(polled: Polled<T>, nowMs: number): T | null {
 
 function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
   const graph = usePolled<GraphData>(() => getProcessingGraph(props.pipelineId));
-  // Shards are process-wide: only the runtime-wide map lists them.
   const resources = usePolled<ResourceMapSnapshot>(() =>
-    getResourceMap(null, { view: "detail" }),
+    getResourceMap(props.pipelineId, { view: "detail", topN: MAP_TOP_N }),
   );
   // The sampler reads the newest sources without restarting its clock.
   const latest = useRef({ live: props.live, graph, resources });
-  latest.current = { live: props.live, graph, resources };
+  useEffect(() => {
+    latest.current = { live: props.live, graph, resources };
+  });
   const [history, setHistory] = useState<readonly MonitorSample[]>([]);
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -81,12 +82,13 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
       const sample = takeSample({
         atMs: now,
         pipelineId: props.pipelineId,
-        outputs: live.state?.outputs ?? [],
+        // While the state stream is down, its last snapshot is not now.
+        outputs: live.stream === "live" ? (live.state?.outputs ?? []) : [],
         rates: ratesFresh ? live.rates : null,
         graph: fresh(graph, now),
         resources: fresh(resources, now),
       });
-      setHistory((previous) => appendSample(previous, sample, WINDOW_SAMPLES));
+      setHistory((previous) => appendSample(previous, sample, WINDOW_MS));
     }, SAMPLE_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [props.pipelineId]);
@@ -134,7 +136,9 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
                           points={points}
                           fill="none"
                           stroke="currentColor"
-                          strokeWidth="1.5"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
                           vectorEffect="non-scaling-stroke"
                         />
                       ),

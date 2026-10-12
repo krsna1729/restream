@@ -421,6 +421,30 @@ fn fabric_shard_node(
     })
 }
 
+/// Shard threads are a process resource shared by every output on a feed.
+/// A pipeline's view (`egresses` is its running outputs) keeps the shards
+/// those outputs are placed on, matched on (feed, shard): every feed numbers
+/// its shards from 0. The runtime view (`None`) keeps them all.
+fn placed_shard_nodes(shard_nodes: Vec<Value>, egresses: Option<&[Value]>) -> Vec<Value> {
+    let Some(egresses) = egresses else {
+        return shard_nodes;
+    };
+    let slot = |node: &Value, feed: &str, shard: &str| {
+        Some((
+            node.get(feed)?.as_str()?.to_owned(),
+            node.get(shard)?.as_u64()?,
+        ))
+    };
+    let placed = egresses
+        .iter()
+        .filter_map(|egress| slot(egress, "fabricFeed", "shardId"))
+        .collect::<std::collections::HashSet<_>>();
+    shard_nodes
+        .into_iter()
+        .filter(|node| slot(node, "feedId", "shardIndex").is_some_and(|key| placed.contains(&key)))
+        .collect()
+}
+
 fn source_ring_node(ring: &Value) -> Value {
     let pipeline_id = ring
         .get("pipelineId")
@@ -551,20 +575,29 @@ pub(crate) async fn resource_map(
         nodes.push(source_ring_node(&ring));
     }
 
-    // Shard threads are a global, fixed-size process resource shared across
-    // every pipeline's fabric-owned outputs — not owned by any one
-    // pipeline, so (like the runtime_process/child_process_group nodes
-    // above) they only make sense in the global view.
-    let fabric_shard_statuses = if pipeline_id.is_none() {
+    let shard_nodes = placed_shard_nodes(
         engine
             .egress_fabric_shard_statuses(
                 crate::media::engine_egress_fabric_diagnostics::SHARD_STALL_AFTER,
             )
             .await
-    } else {
-        Vec::new()
+            .iter()
+            .map(fabric_shard_node)
+            .collect(),
+        pipeline_id.map(|_| egresses.as_slice()),
+    );
+    let shards_in = |state: &str| {
+        shard_nodes
+            .iter()
+            .filter(|node| node.get("state").and_then(Value::as_str) == Some(state))
+            .count()
     };
-    nodes.extend(fabric_shard_statuses.iter().map(fabric_shard_node));
+    let (shard_count, stalled_shards, panicked_shards) = (
+        shard_nodes.len(),
+        shards_in("stalled"),
+        shards_in("panicked"),
+    );
+    nodes.extend(shard_nodes);
 
     nodes.extend(
         stages
@@ -644,15 +677,9 @@ pub(crate) async fn resource_map(
             "ingestCount": ingests.len(),
             "stageCount": stages.len(),
             "egressCount": egresses.len(),
-            "fabricShardThreadCount": fabric_shard_statuses.len(),
-            "fabricShardStalledCount": fabric_shard_statuses
-                .iter()
-                .filter(|status| status.state_str() == "stalled")
-                .count(),
-            "fabricShardPanickedCount": fabric_shard_statuses
-                .iter()
-                .filter(|status| status.state_str() == "panicked")
-                .count(),
+            "fabricShardThreadCount": shard_count,
+            "fabricShardStalledCount": stalled_shards,
+            "fabricShardPanickedCount": panicked_shards,
         },
         "memoryAccounting": memory_accounting_response,
         "nodes": returned_nodes,

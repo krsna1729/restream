@@ -3,7 +3,12 @@ import { useMemo, useState } from "react";
 import { getProcessingGraph, getResourceMap } from "../core/api.js";
 import type { GraphData, ResourceMapSnapshot } from "../core/api-types.js";
 import { formatBytes, formatPercent } from "./format.js";
-import { buildResourceRows, ringFromGraph, shardsFrom } from "./inspect-model.js";
+import {
+  buildResourceRows,
+  MAP_TOP_N,
+  ringFromGraph,
+  shardsFrom,
+} from "./inspect-model.js";
 import type { ResourceRow, RingView, ShardView } from "./inspect-model.js";
 import { PipelineScope } from "./pipeline-scope.js";
 import { Freshness, usePolled } from "./polled.js";
@@ -24,35 +29,21 @@ export function Inspect(props: { live: LiveSnapshot; pipelineId: string | null }
       pipelineId={props.pipelineId}
       verb="inspect"
     >
-      {(pipelineId) => <Anatomy live={props.live} pipelineId={pipelineId} />}
+      {(pipelineId) => <Anatomy pipelineId={pipelineId} />}
     </PipelineScope>
   );
 }
 
-function Anatomy({ live, pipelineId }: { live: LiveSnapshot; pipelineId: string }) {
+function Anatomy({ pipelineId }: { pipelineId: string }) {
   const map = usePolled<ResourceMapSnapshot>(() =>
-    getResourceMap(pipelineId, { view: "detail" }),
-  );
-  // Shards are process-wide: only the runtime-wide map lists them.
-  const runtime = usePolled<ResourceMapSnapshot>(() =>
-    getResourceMap(null, { view: "detail" }),
+    getResourceMap(pipelineId, { view: "detail", topN: MAP_TOP_N }),
   );
   const graph = usePolled<GraphData>(() => getProcessingGraph(pipelineId));
-  const outputs = live.state?.outputs;
-  const shards = useMemo(
-    () =>
-      runtime.value
-        ? shardsFrom(
-            runtime.value,
-            (outputs ?? []).filter((o) => o.pipelineId === pipelineId),
-          )
-        : null,
-    [runtime.value, outputs, pipelineId],
-  );
   const rows = useMemo(
     () => (map.value ? buildResourceRows(map.value) : null),
     [map.value],
   );
+  const truncated = map.value?.limits?.truncatedNodeCount ?? 0;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected =
     rows?.find((row) => row.node.id === selectedId) ?? rows?.[0] ?? null;
@@ -68,7 +59,14 @@ function Anatomy({ live, pipelineId }: { live: LiveSnapshot; pipelineId: string 
                   under pressure first, then by memory held
                 </span>
               </h3>
-              <Freshness atMs={map.atMs} />
+              <span className="flex items-center gap-2">
+                {truncated > 0 && (
+                  <span className="badge badge-sm badge-warning">
+                    {truncated} lighter nodes not shown
+                  </span>
+                )}
+                <Freshness atMs={map.atMs} />
+              </span>
             </div>
             {rows === null ? (
               <p className="opacity-70">Loading resource map…</p>
@@ -88,7 +86,10 @@ function Anatomy({ live, pipelineId }: { live: LiveSnapshot; pipelineId: string 
           ring={graph.value ? ringFromGraph(graph.value) : null}
           atMs={graph.atMs}
         />
-        <ShardsPanel shards={shards} atMs={runtime.atMs} />
+        <ShardsPanel
+          shards={map.value ? shardsFrom(map.value) : null}
+          truncated={truncated > 0}
+        />
         <AttributionPanel attribution={map.value?.attribution ?? null} />
       </div>
     </>
@@ -232,22 +233,26 @@ function RingPanel(props: { ring: RingView | null; atMs: number | null }) {
 
 function ShardsPanel(props: {
   shards: readonly ShardView[] | null;
-  atMs: number | null;
+  truncated: boolean;
 }) {
   const { shards } = props;
   return (
     <section className="card bg-base-200" aria-labelledby="inspect-shards">
       <div className="card-body gap-2 p-4">
-        <div className="flex items-center justify-between gap-2">
-          <h3 id="inspect-shards" className="card-title text-base">
-            Egress shards
-          </h3>
-          <Freshness atMs={props.atMs} />
-        </div>
+        <h3 id="inspect-shards" className="card-title text-base">
+          Egress shards
+        </h3>
+        {props.truncated && (
+          <p className="text-sm opacity-70">
+            The map is truncated: some shards may not be listed.
+          </p>
+        )}
         {shards === null ? (
           <p className="opacity-70">Loading…</p>
         ) : shards.length === 0 ? (
-          <p className="opacity-70">No output of this pipeline runs on a shard.</p>
+          !props.truncated && (
+            <p className="opacity-70">No output of this pipeline runs on a shard.</p>
+          )
         ) : (
           <ul className="space-y-2">
             {shards.map((shard) => (
@@ -266,6 +271,7 @@ function ShardsPanel(props: {
                     {shard.state}
                   </span>
                 </div>
+                <div className="break-all text-xs opacity-70">feed {shard.feed}</div>
                 <div className="mt-1 opacity-70">
                   progress {shard.progressAgeMs ?? "--"} ms · commands{" "}
                   {shard.commandDepth ?? "--"} / {shard.commandCapacity ?? "--"} ·{" "}
