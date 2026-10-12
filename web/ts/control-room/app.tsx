@@ -8,10 +8,7 @@ import { PlaceLink } from "./place-link.js";
 import { Pipelines } from "./pipelines.js";
 import { WORKSPACES, WORKSPACE_LABELS, parsePlace } from "./route.js";
 import type { Place } from "./route.js";
-import { SAMPLE_INTERVAL_MS, useLive } from "./store.js";
-
-// A sampled source older than this missed at least two samples.
-const SAMPLE_STALE_AFTER_MS = SAMPLE_INTERVAL_MS * 2.5;
+import { SAMPLE_STALE_AFTER_MS, useLive, useNow } from "./store.js";
 
 /** The place in the URL; links move it with `go`, which fires `popstate`. */
 function usePlace(): Place {
@@ -22,15 +19,6 @@ function usePlace(): Place {
     return () => window.removeEventListener("popstate", onPop);
   }, []);
   return place;
-}
-
-function useNow(intervalMs: number): number {
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), intervalMs);
-    return () => window.clearInterval(timer);
-  }, [intervalMs]);
-  return now;
 }
 
 export function App() {
@@ -66,7 +54,8 @@ export function App() {
             ))}
           </ul>
         </nav>
-        {/* core/api.ts marks mutations in flight here. */}
+        {/* core/api.ts toggles this element's class; React must own neither
+            its class (keep it a constant) nor its children. */}
         <span id="saving-badge" className="badge badge-info hidden">
           saving…
         </span>
@@ -83,7 +72,8 @@ export function App() {
           Classic dashboard
         </a>
       </header>
-      {/* core/api.ts reports failed requests here. */}
+      {/* core/utils.ts toggles the class and writes #error-msg's text; React
+          must own neither (constant class, no children). */}
       <div
         id="error-alert"
         role="alert"

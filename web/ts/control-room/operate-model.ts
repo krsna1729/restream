@@ -41,12 +41,6 @@ export interface DestinationRow {
   readonly feedLagUnits: number | null;
 }
 
-// The server names an output's egress node `<pipeline>_output_<output>`
-// (src/api_runtime_views/graph.rs).
-function egressNodeId(pipelineId: string, outputId: string): string {
-  return `${pipelineId}_output_${outputId}`;
-}
-
 function finiteOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -59,10 +53,7 @@ export function buildMediaGraph(
   graph: GraphData,
   outputs: readonly OutputState[],
 ): readonly GraphColumn[] {
-  const outputByNode = new Map<string, OutputState>();
-  for (const output of outputs) {
-    outputByNode.set(egressNodeId(graph.pipelineId, output.id), output);
-  }
+  const outputById = new Map(outputs.map((output) => [output.id, output]));
   const incoming = new Map<string, string[]>();
   const consumers = new Map<string, number>();
   for (const edge of graph.edges) {
@@ -110,7 +101,7 @@ export function buildMediaGraph(
       else stagesByDepth.set(depth, [stage]);
       continue;
     }
-    const output = outputByNode.get(node.id);
+    const output = node.outputId ? outputById.get(node.outputId) : undefined;
     const protocol = output?.protocol ?? null;
     const upstream = [...(incoming.get(node.id) ?? [])].sort().join(",");
     const key = `${upstream}|${protocol ?? ""}`;
@@ -146,9 +137,10 @@ export function buildDestinationRows(
   outputs: readonly OutputState[],
   graph: GraphData | null,
 ): readonly DestinationRow[] {
+  // Egress nodes name their output; `details` exist while an egress runs.
   const details = new Map<string, Record<string, unknown>>();
   for (const node of graph?.nodes ?? []) {
-    if (node.type === "egress" && node.details) details.set(node.id, node.details);
+    if (node.outputId && node.details) details.set(node.outputId, node.details);
   }
   const rank = (row: DestinationRow): number => {
     if (row.output.diagnosis) return 0;
@@ -158,7 +150,7 @@ export function buildDestinationRows(
   return outputs
     .filter((output) => output.pipelineId === pipelineId)
     .map((output) => {
-      const running = details.get(egressNodeId(pipelineId, output.id));
+      const running = details.get(output.id);
       return {
         output,
         delivering: isDelivering(output),

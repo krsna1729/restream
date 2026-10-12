@@ -350,6 +350,8 @@ export interface GraphNode {
   label: string;
   active: boolean;
   stageKey?: string;
+  /** On `egress` nodes: the output the node sends for. */
+  outputId?: string;
   details?: Record<string, unknown> | null;
   metrics?: {
     packetsIn: number;

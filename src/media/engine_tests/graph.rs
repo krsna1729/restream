@@ -250,6 +250,7 @@ async fn processing_graph_shows_recirculation_target_input_edge() {
     assert!(
         nodes.iter().any(|node| {
             node["id"] == "pipeline-recirc-source_output_out-recirc"
+                && node["outputId"] == "out-recirc"
                 && node["active"] == true
                 && node["details"]["status"] == "running"
                 && node["details"]["phase"] == "sending"

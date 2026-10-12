@@ -456,7 +456,9 @@ Returns `404` without an active ingest.
 ### `GET /api/v1/pipelines/:pipelineId/graph`
 
 Returns the current processing DAG: ingest, source ring, transcoder stages,
-egresses, HLS, and recording nodes where present.
+egresses, HLS, and recording nodes where present. Every `egress` node carries
+`outputId`, whether or not its egress runs; its `details` are present only
+while one runs.
 
 ### `POST /api/v1/pipelines/:pipelineId/diagnostics/run`
 

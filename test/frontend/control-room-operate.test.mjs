@@ -38,11 +38,15 @@ function node(id, type, details = null) {
   return { id, type, label: id, active: true, details, metrics: null };
 }
 
+// The node id is opaque: the join is on `outputId`.
+function egress(outputId, details = null) {
+  return { ...node(`egress-${outputId}`, "egress", details), outputId };
+}
+
 function edge(from, to) {
   return { from, to, label: "" };
 }
 
-// The server's shape: one node per output named `<pipeline>_output_<id>`.
 function graph(nodes, edges) {
   return { pipelineId: "p", nodes, edges };
 }
@@ -59,18 +63,18 @@ test("a shared stage is drawn once with its consumers; destinations group by pro
         node("ingest", "ingest"),
         node("demux", "demux"),
         node("ring", "ring_buffer"),
-        node("p_output_a", "egress"),
-        node("p_output_b", "egress"),
-        node("p_output_c", "egress"),
-        node("p_output_ghost", "egress"),
+        egress("a"),
+        egress("b"),
+        egress("c"),
+        egress("ghost"),
       ],
       [
         edge("ingest", "demux"),
         edge("demux", "ring"),
-        edge("ring", "p_output_a"),
-        edge("ring", "p_output_b"),
-        edge("ring", "p_output_c"),
-        edge("ring", "p_output_ghost"),
+        edge("ring", "egress-a"),
+        edge("ring", "egress-b"),
+        edge("ring", "egress-c"),
+        edge("ring", "egress-ghost"),
       ],
     ),
     outputs,
@@ -130,8 +134,8 @@ test("destinations: degraded first, then wanted but not delivering, then by name
     ],
     graph(
       [
-        node("p_output_zulu", "egress", { feedLagUnits: 3 }),
-        node("p_output_alpha", "egress", null),
+        egress("zulu", { feedLagUnits: 3 }),
+        egress("alpha"),
       ],
       [],
     ),

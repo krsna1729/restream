@@ -185,9 +185,11 @@ below and its DOM-id tests are deleted (Q-044).
   `/pipelines/{id}/inputs` with Promote; the media graph from
   `/pipelines/{id}/graph`, laid out by longest path, each shared stage drawn
   once with its consumer count and destinations folded per upstream stage
-  and protocol; the destination matrix from the state stream (feed lag and
-  rate from the running egress) with Start/Stop. Inputs and graph are polled
-  every 2 s only while Operate shows that pipeline.
+  and protocol (egress nodes join outputs on their `outputId`); the
+  destination matrix from the state stream (feed lag from the running egress,
+  rate from the telemetry rates) with Start/Stop. Inputs and graph are polled
+  every 2 s only while Operate shows that pipeline; each panel shows the age
+  of its last successful update and turns amber once two polls failed.
 
 Proof: `test/frontend/control-room-fleet.test.mjs`,
 `test/frontend/control-room-operate.test.mjs`,
