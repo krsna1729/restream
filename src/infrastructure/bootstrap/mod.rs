@@ -204,6 +204,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
         meta_store,
         sessions_for_reconciler,
         recording_metadata,
+        state.reconcile.clone(),
     );
     let mut runtime = runtime::RuntimeTasks::launch(runtime::RuntimeLaunch {
         config,

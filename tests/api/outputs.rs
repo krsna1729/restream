@@ -241,13 +241,14 @@ async fn pipeline_recirculation_output_lifecycle_uses_api_status_and_cleanup() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(token.is_cancelled());
     assert!(
         db::get_output(&pool, "p_life_src", &output_id)
             .await
             .unwrap()
             .is_none()
     );
+    converge_once(&pool, &engine).await;
+    assert!(token.is_cancelled());
 }
 
 #[tokio::test]
@@ -517,7 +518,7 @@ async fn an_output_with_exhausted_retries_can_be_edited() {
 
 #[tokio::test]
 async fn delete_output_cancels_egress() {
-    let (app, _, engine) = test_app_with_engine().await;
+    let (app, pool, engine) = test_app_with_engine().await;
     let cookie = login(&app).await;
 
     let resp = app
@@ -564,7 +565,8 @@ async fn delete_output_cancels_egress() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    // Egress cancellation token should be cancelled
+    // The row is gone; the next reconcile pass stops its egress.
+    converge_once(&pool, &engine).await;
     assert!(token.is_cancelled(), "deleting output should cancel egress");
 }
 
@@ -588,4 +590,12 @@ async fn delete_output_returns_not_found_for_missing_row() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// One reconcile pass over the persisted topology, as the reconciler runs it.
+async fn converge_once(pool: &SqlitePool, engine: &MediaEngine) {
+    let outputs = restream::application::outputs::list_outputs(pool)
+        .await
+        .unwrap();
+    restream::application::topology::converge_topology(pool, engine, &outputs).await;
 }

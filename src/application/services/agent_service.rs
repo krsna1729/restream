@@ -19,8 +19,6 @@ use sqlx::SqlitePool;
 use crate::domain::output_spec::OutputConfig;
 #[cfg(feature = "agent-execution")]
 use crate::domain::state::DesiredOutputState;
-#[cfg(feature = "agent-execution")]
-use crate::media::engine::MediaEngine;
 
 const CUSTOM_ENCODING_META_KEY: &str = "custom_encoding";
 
@@ -192,7 +190,7 @@ impl AgentService {
     #[cfg(feature = "agent-execution")]
     pub(crate) async fn apply_output_mutation(
         &self,
-        engine: &Arc<MediaEngine>,
+        requests: &crate::application::topology::ReconcileRequests,
         pipeline_id: &str,
         mutation: AgentOutputMutation,
     ) -> Result<AgentOutputMutationOutcome, String> {
@@ -269,7 +267,6 @@ impl AgentService {
                 let previous = self
                     .load_output_for_mutation(pipeline_id, &output_id)
                     .await?;
-                engine.unregister_egress(&output_id).await;
                 let deleted =
                     crate::application::outputs::delete_output(&self.db, pipeline_id, &output_id)
                         .await
@@ -279,6 +276,8 @@ impl AgentService {
                         "output '{output_id}' not found on pipeline '{pipeline_id}'"
                     ));
                 }
+                // The reconciler stops the egress of the deleted row (Q-039).
+                requests.wake();
                 Ok(AgentOutputMutationOutcome::Removed(previous))
             }
             AgentOutputMutation::SetDesiredState {
@@ -435,7 +434,7 @@ mod tests {
         let service = SqliteServiceFactory::new(&pool).agent_service();
         service
             .apply_output_mutation(
-                &Arc::new(crate::media::engine::MediaEngine::new()),
+                &crate::application::topology::ReconcileRequests::new(),
                 "pipe-1",
                 AgentOutputMutation::Update {
                     output_id: "out-1".to_string(),
@@ -455,5 +454,59 @@ mod tests {
             .unwrap();
         assert_eq!(output.url, "rtmp://fixed.example/live");
         assert!(!output.retries_exhausted, "the reconciler may restart it");
+    }
+
+    #[cfg(feature = "agent-execution")]
+    #[tokio::test]
+    async fn an_agent_remove_persists_then_the_reconciler_stops_the_egress() {
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        crate::db::setup_database_schema(&pool).await.unwrap();
+        crate::db::create_pipeline(&pool, "pipe-1", "Pipeline", "key-1", None, None)
+            .await
+            .unwrap();
+        crate::db::create_output(
+            &pool,
+            "out-1",
+            "pipe-1",
+            "Output",
+            "rtmp://example/live",
+            None,
+            DesiredOutputState::Running,
+            &OutputConfig::source(),
+        )
+        .await
+        .unwrap();
+        let engine = crate::media::engine::MediaEngine::new();
+        let egress = engine
+            .register_egress("out-1", "pipe-1", "rtmp://example/live")
+            .await;
+        let requests = crate::application::topology::ReconcileRequests::new();
+
+        SqliteServiceFactory::new(&pool)
+            .agent_service()
+            .apply_output_mutation(
+                &requests,
+                "pipe-1",
+                AgentOutputMutation::Remove {
+                    output_id: "out-1".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            crate::db::get_output(&pool, "pipe-1", "out-1")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(1), requests.woken())
+            .await
+            .expect("the remove asks for a reconcile pass");
+
+        let outputs = crate::application::outputs::list_outputs(&pool)
+            .await
+            .unwrap();
+        crate::application::topology::converge_topology(&pool, &engine, &outputs).await;
+        assert!(egress.is_cancelled());
     }
 }

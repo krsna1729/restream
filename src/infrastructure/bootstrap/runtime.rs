@@ -118,6 +118,7 @@ impl RuntimeTasks {
         &mut self,
         shutdown: &CancellationToken,
         interval: Duration,
+        requested: impl std::future::Future<Output = ()>,
     ) -> bool {
         let now = tokio::time::Instant::now();
         self.rtmp.restart_if_due(now);
@@ -137,6 +138,7 @@ impl RuntimeTasks {
             () = self.rtmp.exited() => true,
             () = self.srt.exited() => true,
             _ = tokio::time::sleep_until(wake) => true,
+            () = requested => true,
         }
     }
 

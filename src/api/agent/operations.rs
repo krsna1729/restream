@@ -309,7 +309,7 @@ async fn apply_change(
     };
     let outcome = state
         .agent_service
-        .apply_output_mutation(&state.engine, pipeline_id, mutation)
+        .apply_output_mutation(&state.reconcile, pipeline_id, mutation)
         .await?;
     Ok(mutation_json(&change.kind, pipeline_id, outcome))
 }

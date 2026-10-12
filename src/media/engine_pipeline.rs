@@ -140,6 +140,42 @@ impl MediaEngine {
         self.ingests.pipelines.write().await.remove(pipeline_id);
     }
 
+    /// Pipeline ids that hold runtime state: a source ring or a shared stage.
+    /// Input-preview resource ids can key a ring too, but are not pipelines.
+    pub async fn runtime_pipeline_ids(&self) -> HashSet<String> {
+        let mut ids = self
+            .ingests
+            .pipelines
+            .read()
+            .await
+            .keys()
+            .cloned()
+            .collect::<HashSet<_>>();
+        ids.extend(
+            self.stages
+                .runtimes
+                .read()
+                .await
+                .keys()
+                .map(|key| key.pipeline.as_str().to_string()),
+        );
+        ids.retain(|id| {
+            crate::media::engine_hls::input_id_from_hls_preview_resource_id(id).is_none()
+        });
+        ids
+    }
+
+    /// Tears down the runtime of a deleted pipeline: its ingest sessions
+    /// (cancelling a session also stops its file-ingest child), source ring,
+    /// shared stages and HLS segmenters. Egresses go by output id.
+    pub async fn teardown_pipeline_runtime(&self, pipeline_id: &str) {
+        self.remove_pipeline(pipeline_id).await;
+        self.unregister_ingest(pipeline_id).await;
+        self.cleanup_pipeline_stages(pipeline_id).await;
+        self.shutdown_hls_preview_segmenter(pipeline_id).await;
+        self.shutdown_hls_segmenter(pipeline_id).await;
+    }
+
     /// Eagerly remove every shared stage owned by a deleted pipeline.
     pub async fn cleanup_pipeline_stages(&self, pipeline_id: &str) {
         let mut runtimes = self.stages.runtimes.write().await;
