@@ -1,6 +1,8 @@
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::agent_core::{AgentToolKind, agent_tool_names};
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentCapabilities {
@@ -26,34 +28,9 @@ pub fn capabilities() -> AgentCapabilities {
         version: 1,
         compiled_in: true,
         execution_enabled,
-        read_tools: vec![
-            "get_agent_context",
-            "investigate_pipeline_issue",
-            "trace_output_path",
-            "find_first_unhealthy_node",
-            "explain_degradation",
-            "estimate_change_impact",
-            "inspect_resource_map",
-            "inspect_desired_vs_actual",
-            "inspect_diagnostics_summary",
-        ],
-        planning_tools: vec![
-            "plan_pipeline_change",
-            "validate_change",
-            "preview_graph_diff",
-            "estimate_change_impact",
-        ],
-        execution_tools: if execution_enabled {
-            vec![
-                "create_agent_operation",
-                "get_agent_operation",
-                "approve_agent_operation",
-                "apply_agent_operation",
-                "verify_agent_operation",
-            ]
-        } else {
-            Vec::new()
-        },
+        read_tools: agent_tool_names(AgentToolKind::Read),
+        planning_tools: agent_tool_names(AgentToolKind::Planning),
+        execution_tools: agent_tool_names(AgentToolKind::Execution),
         routes: route_catalog(),
         schemas: schema_catalog(),
         redaction: redaction_policy(),

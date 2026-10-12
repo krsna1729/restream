@@ -74,6 +74,9 @@ jobs:
           # Must compile; must not invent an in-process MCP backend.
           cargo check \
             --lib --no-default-features --features mcp-embedded
+          # Agent tool list: discovery, MCP catalog and dispatch agree.
+          cargo test --lib --no-default-features \
+            --features mcp-embedded,agent-execution -- agent_mcp
 
   architecture-guardrails:
     name: Source architecture audit

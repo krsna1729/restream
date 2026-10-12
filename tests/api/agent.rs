@@ -61,8 +61,21 @@ async fn agent_capabilities_reports_read_planning_only() {
     assert_eq!(body["feature"], "agent-plane");
     assert_eq!(body["compiledIn"], true);
     assert_eq!(body["executionEnabled"], cfg!(feature = "agent-execution"));
-    assert!(body["readTools"].as_array().unwrap().len() >= 5);
-    assert!(body["planningTools"].as_array().unwrap().len() >= 3);
+    // Discovery lists exactly the tools the agent can call.
+    use restream::agent_core::{AgentToolKind, agent_tool_names};
+    for (field, kind) in [
+        ("readTools", AgentToolKind::Read),
+        ("planningTools", AgentToolKind::Planning),
+        ("executionTools", AgentToolKind::Execution),
+    ] {
+        let listed: Vec<&str> = body[field]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool.as_str().unwrap())
+            .collect();
+        assert_eq!(listed, agent_tool_names(kind), "{field}");
+    }
     assert!(
         body["routes"]
             .as_array()

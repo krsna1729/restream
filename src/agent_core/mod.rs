@@ -6,10 +6,12 @@
 
 pub(crate) mod backend;
 pub(crate) mod errors;
+pub(crate) mod tools;
 pub(crate) mod types;
 
 pub use backend::{AgentBackend, AgentFuture, AgentResult};
 pub use errors::AgentError;
+pub use tools::{AGENT_TOOLS, AgentTool, AgentToolKind, agent_tool_names};
 pub use types::{
     ApprovalRequest, InvestigationRequest, OperationCreateRequest, PlanRequest, ProposedChange,
     VerifyRequest,

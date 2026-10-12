@@ -198,3 +198,31 @@ pub fn available_tool_catalog() -> Vec<McpToolDefinition> {
         .filter(|tool| tool.compiled_in)
         .collect()
 }
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::*;
+    use crate::agent_core::{AGENT_TOOLS, AgentToolKind};
+
+    /// The MCP catalog serves exactly the agent tools capability discovery
+    /// advertises: discovery once listed seven tools no MCP client could call.
+    #[test]
+    fn the_mcp_catalog_is_exactly_the_agent_tool_list() {
+        let catalog: Vec<(&str, bool)> = tool_catalog()
+            .iter()
+            .map(|tool| (tool.name, tool.requires_feature == "agent-execution"))
+            .collect();
+        let tools: Vec<(&str, bool)> = AGENT_TOOLS
+            .iter()
+            .map(|tool| (tool.name, tool.kind == AgentToolKind::Execution))
+            .collect();
+        assert_eq!(catalog, tools);
+        for tool in tool_catalog() {
+            assert!(
+                !tool.mutates || tool.requires_feature == "agent-execution",
+                "{} mutates but is not an execution tool",
+                tool.name
+            );
+        }
+    }
+}
