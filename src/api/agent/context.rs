@@ -9,7 +9,7 @@ use super::super::{
 use super::agent_health_snapshot;
 use crate::api_runtime_views::ResourceMapOptions;
 use crate::application::models::{Ingest, Job, Output, Pipeline};
-use crate::domain::{output_spec::OutputUrlScheme, state::DesiredOutputState};
+use crate::domain::output_spec::OutputUrlScheme;
 use crate::{alerts, api_view_models, events};
 
 pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
