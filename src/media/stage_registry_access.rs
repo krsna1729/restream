@@ -164,9 +164,9 @@ impl MediaEngine {
     /// Last lease of a stage runtime dropped (its token is already cancelled).
     pub(crate) async fn release_stage_runtime(&self, key: &StageKey, lease_id: u64) {
         let mut runtimes = self.stages.runtimes.write().await;
-        if !runtimes
+        if runtimes
             .get(key)
-            .is_some_and(|runtime| runtime.lease_id == lease_id)
+            .is_none_or(|runtime| runtime.lease_id != lease_id)
         {
             return;
         }
