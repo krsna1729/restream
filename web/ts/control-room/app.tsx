@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 
 import { withBasePath } from "../core/base-path.js";
+import { Capacity } from "./capacity.js";
 import { Fleet } from "./fleet.js";
 import { formatAge } from "./format.js";
+import { Incidents } from "./incidents.js";
 import { Inspect } from "./inspect.js";
 import { Monitor } from "./monitor.js";
 import { Operate } from "./operate.js";
@@ -95,6 +97,8 @@ export function App() {
         {place.workspace === "monitor" && (
           <Monitor live={live} pipelineId={place.pipelineId} />
         )}
+        {place.workspace === "incidents" && <Incidents live={live} />}
+        {place.workspace === "capacity" && <Capacity live={live} />}
       </main>
     </div>
   );

@@ -3,7 +3,7 @@
 // Value imports (apiRequest, getConfig, …) still come from ./api.js.
 
 import type { ConfigPipeline, ConfigOutput, OutputConfig } from "../types.js";
-import type { Diagnosis } from "./generated/runtime-state.js";
+import type { CapacitySnapshot, Diagnosis } from "./generated/runtime-state.js";
 
 export interface OverviewSnapshot {
   generatedAt: string;
@@ -58,6 +58,15 @@ export interface LifecycleEventsSnapshot {
   generatedAt: string;
   count: number;
   events: LifecycleEvent[];
+}
+
+/** A capacity scenario: the current priors and the same priors with the
+ * change added. Observe-only; `projected.flowMeasured` is always false. */
+export interface CapacityScenario {
+  addOutputs: number;
+  addStages: number;
+  current: CapacitySnapshot;
+  projected: CapacitySnapshot;
 }
 
 export type TelemetryMetrics = Record<string, number | string | boolean | null>;

@@ -209,3 +209,63 @@ test("inspect and monitor: one pipeline's anatomy and signals on one clock", asy
     await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
   }
 });
+
+test("incidents and capacity: an alert's evidence packet and an engine-made projection", async ({
+  page,
+}) => {
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+
+  const name = `cr-incident-${Date.now()}`;
+  const created = await page.request.post("/api/v1/pipelines", {
+    data: { name, streamKey: `crincident_${Date.now()}` },
+  });
+  expect(created.ok()).toBe(true);
+  const pipelineId: string = (await created.json()).pipeline.id;
+
+  try {
+    // Wanted output, no publisher: the engine raises "No active publisher".
+    const output = await page.request.post(
+      `/api/v1/pipelines/${pipelineId}/outputs`,
+      {
+        data: {
+          name: "cr-out",
+          url: "rtmp://127.0.0.1:9/live/cr",
+          config: { video: { mode: "source" }, audio: { mode: "all" } },
+        },
+      },
+    );
+    expect(output.ok()).toBe(true);
+    const outputId: string = (await output.json()).output.id;
+    expect(
+      (await page.request.post(
+        `/api/v1/pipelines/${pipelineId}/outputs/${outputId}/start`,
+      )).ok(),
+    ).toBe(true);
+
+    await page.goto("/control-room.html?w=incidents");
+    const queue = page.getByRole("region", { name: /^Open/ });
+    const incident = queue.getByRole("button").filter({ hasText: `pipeline ${name}` }).first();
+    await expect(incident).toBeVisible();
+    await incident.click();
+    const packet = page.getByRole("region", { name: "Evidence packet" });
+    await expect(packet).toContainText(`pipeline ${name}`);
+    await expect(packet.getByText("Operator action")).toBeVisible();
+
+    await page
+      .getByRole("navigation", { name: "Workspaces" })
+      .getByRole("link", { name: "Capacity" })
+      .click();
+    await expect(page.getByRole("heading", { name: /Flow Doctor/ })).toBeVisible();
+    const scenario = page.getByRole("region", { name: /Scenario/ });
+    await scenario.getByLabel("More outputs").fill("5000");
+    await scenario.getByRole("button", { name: "Project" }).click();
+    const result = scenario.getByLabel("Scenario result");
+    await expect(result).toContainText("With 5000 more outputs and 0 more stages");
+    await expect(result).toContainText("Projected hottest center");
+  } finally {
+    await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
+  }
+});

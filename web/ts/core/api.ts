@@ -27,6 +27,7 @@ import type {
   PipelineTelemetrySnapshot,
   StageTelemetrySnapshot,
   ResourceMapSnapshot,
+  CapacityScenario,
   PipelineSummarySnapshot,
   BuildLogsStreamUrlOptions,
   PipelineMutationResponse,
@@ -283,6 +284,17 @@ async function getResourceMap(
       ? `/api/v1/engine/resource-map?${suffix}`
       : "/api/v1/engine/resource-map",
   );
+}
+
+async function getCapacityScenario(change: {
+  addOutputs: number;
+  addStages: number;
+}): Promise<CapacityScenario | null> {
+  const query = new URLSearchParams({
+    add_outputs: String(change.addOutputs),
+    add_stages: String(change.addStages),
+  });
+  return apiRequest<CapacityScenario>(`/api/v1/capacity/scenario?${query}`);
 }
 
 async function getPipelineSummary(
@@ -738,46 +750,6 @@ async function renameMediaFile(
   });
 }
 
-async function listIngests(): Promise<IngestConfig[] | null> {
-  return apiRequest<IngestConfig[]>("/api/v1/ingests");
-}
-
-async function createIngest(data: {
-  filename: string;
-  streamKey: string;
-  loop: boolean;
-  startTime: string;
-}): Promise<IngestConfig | null> {
-  return apiRequest<IngestConfig>("/api/v1/ingests", {
-    method: "POST",
-    body: data,
-  });
-}
-
-async function updateIngest(
-  id: string,
-  data: {
-    filename: string;
-    streamKey: string;
-    loop: boolean;
-    startTime: string;
-  },
-): Promise<IngestConfig | null> {
-  return apiRequest<IngestConfig>(`/api/v1/ingests/${encodeURIComponent(id)}`, {
-    method: "PUT",
-    body: data,
-  });
-}
-
-async function deleteIngest(id: string): Promise<{ deleted: boolean } | null> {
-  return apiRequest<{ deleted: boolean }>(
-    `/api/v1/ingests/${encodeURIComponent(id)}`,
-    {
-      method: "DELETE",
-    },
-  );
-}
-
 async function startIngest(id: string): Promise<IngestConfig | null> {
   return apiRequest<IngestConfig>(
     `/api/v1/ingests/${encodeURIComponent(id)}/start`,
@@ -804,36 +776,11 @@ async function getPipelineFileIngest(
   );
 }
 
-async function putPipelineFileIngest(
-  pipeId: string,
-  data: {
-    filename: string;
-    loopFlag: boolean;
-    startTime: string;
-    liveOptimized: boolean;
-    targetGopSeconds: number;
-  },
-): Promise<PipelineFileIngestConfig | null> {
-  return apiRequest<PipelineFileIngestConfig>(
-    `/api/v1/pipelines/${encodeURIComponent(pipeId)}/file-ingest`,
-    { method: "PUT", body: data },
-  );
-}
-
 async function getMediaFileAnalysis(
   filename: string,
 ): Promise<MediaFileAnalysis | null> {
   return apiRequest<MediaFileAnalysis>(
     `/api/v1/media/${encodeURIComponent(filename)}/analysis`,
-  );
-}
-
-async function deletePipelineFileIngest(
-  pipeId: string,
-): Promise<{ deleted: boolean } | null> {
-  return apiRequest<{ deleted: boolean }>(
-    `/api/v1/pipelines/${encodeURIComponent(pipeId)}/file-ingest`,
-    { method: "DELETE" },
   );
 }
 
@@ -906,6 +853,7 @@ export {
   getPipelineSummary,
   getStageTelemetry,
   getResourceMap,
+  getCapacityScenario,
   getStreamKeys,
   getEngineStatus,
   getEngineHealth,
@@ -937,16 +885,10 @@ export {
   uploadMediaFile,
   deleteMediaFile,
   renameMediaFile,
-  listIngests,
-  createIngest,
-  updateIngest,
-  deleteIngest,
   startIngest,
   stopIngest,
   getPipelineFileIngest,
-  putPipelineFileIngest,
   getMediaFileAnalysis,
-  deletePipelineFileIngest,
   logout,
   changePassword,
   dismissPasswordChangePrompt,
@@ -979,6 +921,7 @@ export type {
   ResourceMapMemory,
   ResourceMapNode,
   ResourceMapSnapshot,
+  CapacityScenario,
   PipelineSummarySnapshot,
   BuildLogsStreamUrlOptions,
   PipelineMutationResponse,

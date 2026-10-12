@@ -531,3 +531,63 @@ async fn engine_resource_map_requires_auth_and_returns_structured_data() {
     );
     assert!(detail_body["memoryAccounting"].is_object());
 }
+
+#[tokio::test]
+async fn capacity_scenario_projects_the_change_without_claiming_a_measurement() {
+    let (app, cookie) = authenticated_app().await;
+
+    let unauth = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/capacity/scenario?add_outputs=1")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            "/api/v1/capacity/scenario?add_outputs=1000&add_stages=2",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let (current, projected) = (&body["current"], &body["projected"]);
+    assert_eq!(
+        projected["activeLeaves"].as_u64(),
+        current["activeLeaves"].as_u64().map(|leaves| leaves + 1000)
+    );
+    assert_eq!(
+        projected["uniqueStages"].as_u64(),
+        current["uniqueStages"].as_u64().map(|stages| stages + 2)
+    );
+    // More outputs hold more memory: the projection moves, and only up.
+    assert!(projected["memoryUtil"].as_f64() > current["memoryUtil"].as_f64());
+    // A change that has not happened has no measured flow.
+    assert_eq!(projected["flowMeasured"].as_bool(), Some(false));
+    assert_eq!(projected["observeOnly"].as_bool(), Some(true));
+
+    // No change: the projection is the current priors.
+    let same = app
+        .clone()
+        .oneshot(auth_req("GET", "/api/v1/capacity/scenario", &cookie, None))
+        .await
+        .unwrap();
+    let same = body_json(same).await;
+    assert_eq!(
+        same["projected"]["memoryUtil"],
+        same["current"]["memoryUtil"]
+    );
+    assert_eq!(
+        same["projected"]["activeLeaves"],
+        same["current"]["activeLeaves"]
+    );
+}

@@ -373,6 +373,38 @@ pub async fn v1_engine_resource_map_handler(
     Json(snapshot).into_response()
 }
 
+#[derive(Deserialize)]
+pub struct CapacityScenarioQuery {
+    #[serde(default)]
+    pub add_outputs: u32,
+    #[serde(default)]
+    pub add_stages: u32,
+}
+
+/// Projects the current workload plus a topology change onto the capacity
+/// priors. Observe-only: the projection decides nothing and admits nothing.
+pub async fn v1_capacity_scenario_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<CapacityScenarioQuery>,
+) -> impl IntoResponse {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
+    }
+    let current = state.engine.capacity_snapshot().await;
+    let projected = state
+        .engine
+        .capacity_scenario(query.add_outputs, query.add_stages)
+        .await;
+    Json(serde_json::json!({
+        "addOutputs": query.add_outputs,
+        "addStages": query.add_stages,
+        "current": current,
+        "projected": projected,
+    }))
+    .into_response()
+}
+
 /// Returns the system metrics snapshot directly, using the query only to choose
 /// between the summary and full transport views.
 pub async fn metrics_system_handler(
