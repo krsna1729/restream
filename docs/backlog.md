@@ -21,13 +21,13 @@ items).
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
 - [Q-035 MEDIA attribution](#q-035-observability-sonnet-attribute-media-pool-time-to-feed-and-stage)
 - [Q-036 enforced runtime truth table](#q-036-docs-sonnet-make-runtime-crossings-an-enforced-truth-table)
-- [Q-041 stage ownership](#q-041-architecture-opus-own-stages-by-the-plan-not-a-sweep)
 - [Q-042 runtime truth](#q-042-architecture-opus-one-revisioned-runtime-state-with-delta-events)
 - [Q-043 evidence engine](#q-043-observability-opus-one-evidence-classification)
 - [Q-044 frontend cut](#q-044-frontend-opus-hard-cut-the-frontend-to-one-build)
 - [Q-045 frontend product](#q-045-frontend-opus-build-the-control-room-on-live-data)
 - [Q-046 agent guidance](#q-046-docs-sonnet-slim-agentsmd-to-a-root-contract)
 - [Q-047 MoQ](#q-047-protocol-opus-moq-interop-spike-parked)
+- [Q-048 mixed.signal sinks](#q-048-test-sonnet-make-mixedsignal-pass-on-master)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -243,17 +243,6 @@ items).
 - Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
   review).
 
-### Q-041 [architecture] [opus] Own stages by the plan, not a sweep
-- Goal: shared stages are reference-counted by the pipeline plan and stop
-  when the last consumer leaves. Delete the sweep and its grace period.
-- Files: `src/media/engine_pipeline.rs:194` (`sweep_unused_stages`,
-  `UNUSED_STAGE_GRACE` = 5 s re-derives use from all outputs).
-- Gates: tests for add/remove/replace of consumers on a shared stage; no
-  stage outlives its last consumer; live harness mixed-anchor passes.
-- Unblocks: per-pipeline output passes. The reconciler's output pass is
-  on demand (Q-040) but still whole, because this sweep needs every output.
-- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
-
 ### Q-042 [architecture] [opus] One revisioned runtime state with delta events
 - Goal: each entity has desired, actual, convergence, flow, queue and
   evidence state under one revision. A delta SSE stream feeds
@@ -311,3 +300,15 @@ items).
   adapter; moxygen and MediaMTX as oracles.
 - Parked until transport convergence (Q-025).
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
+
+### Q-048 [test] [sonnet] Make mixed.signal pass on master
+- Goal: the `mixed.signal` live suite is a usable stage/codec gate again.
+- Evidence: on master 93d934af it fails the same 4 cases as on the Q-041
+  branch. `mixed.live.rtmp.h264.a1.bf0` and `.bf2` select an RTMPS output
+  that `spawn_ffmpeg_signal_sink` rejects
+  (`src/bin/test_harness/mixed_sinks.rs:343`). `mixed.live.srt.h264.a2.bf0`
+  and `mixed.asset.file.h265.a2.bf2` fail because the FFmpeg signal sink
+  exits with status 146 or times out on 1080p outputs.
+- Gates: `mixed.signal` passes on master; RTMPS cases either get a TLS
+  signal sink or are excluded from the signal selection by the catalog.
+- Status: open (Filed: 2026-10-12 by claude, found while gating Q-041).

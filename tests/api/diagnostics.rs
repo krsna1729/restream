@@ -83,7 +83,7 @@ async fn pipeline_graph_stage_nodes_include_lifecycle_details() {
         StageKind::video_preset_with_codec("720p", "h264"),
     );
     let manager = restream::media::stage_runtime::StageRuntimeManager::new(engine);
-    let (handle, _) = manager
+    let (handle, _lease206, _) = manager
         .ensure_stage(
             stage_key.clone(),
             Arc::new(restream::media::ring_buffer::RingBuffer::new(8)),

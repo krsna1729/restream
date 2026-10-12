@@ -3,11 +3,8 @@
 
 use crate::application::models::Output;
 use crate::application::ports::{MetaStore, PipelineStore, PipelineStoreError};
-use crate::domain::output_spec::OutputConfig;
-use crate::domain::stage::StageKey;
 use crate::domain::state::DesiredOutputState;
 use crate::media::engine::MediaEngine;
-use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutputRetryPolicy {
@@ -180,55 +177,6 @@ pub async fn load_output_runtime_snapshot(
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct OutputStageSweepInput<'a> {
-    pub pipeline_id: &'a str,
-    pub config: OutputConfig,
-    pub url: &'a str,
-    pub wants_running: bool,
-    pub is_active: bool,
-    pub effective_has_ingest: bool,
-    pub ingest_video_codec: Option<String>,
-}
-
-pub fn collect_needed_stage_keys<'a>(
-    outputs: impl IntoIterator<Item = OutputStageSweepInput<'a>>,
-) -> HashSet<StageKey> {
-    let mut needed_stages = HashSet::new();
-    for output in outputs {
-        if output.effective_has_ingest && (output.is_active || output.wants_running) {
-            let planned_output = crate::planner::PlannedOutput::new("", output.config, output.url);
-            let plan = crate::planner::plan_pipeline_graph(
-                output.pipeline_id,
-                output.ingest_video_codec.as_deref(),
-                &[planned_output],
-                false,
-            );
-            for stage in plan.stages {
-                if stage.kind != crate::domain::stage::StageKind::Source {
-                    needed_stages.insert(stage.key);
-                }
-            }
-        }
-    }
-    needed_stages
-}
-
-pub fn output_stage_sweep_input<'a>(
-    output: &'a Output,
-    snapshot: &OutputRuntimeSnapshot,
-) -> OutputStageSweepInput<'a> {
-    OutputStageSweepInput {
-        pipeline_id: output.pipeline_id.as_str(),
-        config: output.config.clone(),
-        url: &output.url,
-        wants_running: output.wants_running(),
-        is_active: snapshot.is_active,
-        effective_has_ingest: snapshot.effective_has_ingest,
-        ingest_video_codec: snapshot.ingest_video_codec.clone(),
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordingCommand {
     Start {
@@ -281,9 +229,7 @@ mod tests {
     use super::*;
     use crate::application::models::Pipeline;
     use crate::application::ports::{MetaLookupFuture, PipelineListFuture};
-    use crate::domain::audio_routing::AudioRouting;
     use crate::domain::output_spec::OutputConfig;
-    use crate::domain::stage::StageKind;
     use crate::media::metadata::VideoMeta;
     // `Strategy` brings `prop_map` into scope for the `proptest!` block below.
     use proptest::strategy::Strategy;
@@ -608,57 +554,6 @@ mod tests {
         assert_eq!(next_output_retry_count(Some(4), true), 1);
     }
 
-    #[test]
-    fn stage_sweep_collects_only_needed_stage_keys() {
-        // Desired running but retries exhausted, and inactive: its 1080p
-        // stage has no consumer and must be swept.
-        let exhausted = Output {
-            id: "out-dead".to_string(),
-            pipeline_id: "pipe".to_string(),
-            name: "dead".to_string(),
-            url: "rtmp://dead.example/live".to_string(),
-            monitoring_url: None,
-            desired_state: DesiredOutputState::Running,
-            retries_exhausted: true,
-            config: OutputConfig::preset("1080p"),
-        };
-        let inactive = OutputRuntimeSnapshot {
-            is_active: false,
-            effective_has_ingest: true,
-            ingest_video_codec: Some("hevc".to_string()),
-        };
-        let stages = collect_needed_stage_keys([
-            OutputStageSweepInput {
-                pipeline_id: "pipe",
-                config: OutputConfig::preset("720p")
-                    .with_audio(AudioRouting::SelectTracks { tracks: vec![0] }),
-                url: "rtmp://example/live",
-                wants_running: true,
-                is_active: false,
-                effective_has_ingest: true,
-                ingest_video_codec: Some("hevc".to_string()),
-            },
-            OutputStageSweepInput {
-                pipeline_id: "pipe",
-                config: OutputConfig::source(),
-                url: "srt://example:9000",
-                wants_running: false,
-                is_active: false,
-                effective_has_ingest: true,
-                ingest_video_codec: Some("hevc".to_string()),
-            },
-            output_stage_sweep_input(&exhausted, &inactive),
-        ]);
-
-        let h264_720p = StageKind::video_preset_with_codec("720p", "h264");
-        assert!(stages.contains(&StageKey::new("pipe", h264_720p.clone())));
-        assert!(stages.contains(&StageKey::new(
-            "pipe",
-            StageKind::audio_route("atrack:0", h264_720p)
-        )));
-        assert_eq!(stages.len(), 2);
-    }
-
     #[tokio::test]
     async fn output_runtime_snapshot_reads_active_ingest_and_codec() {
         let engine = MediaEngine::new();
@@ -719,33 +614,6 @@ mod tests {
         assert!(!snapshot.is_active);
         assert!(snapshot.effective_has_ingest);
         assert_eq!(snapshot.ingest_video_codec, None);
-    }
-
-    #[test]
-    fn output_stage_sweep_input_uses_snapshot_fields() {
-        let output = crate::application::models::Output {
-            id: "out-1".to_string(),
-            pipeline_id: "pipe".to_string(),
-            name: "Output".to_string(),
-            url: "rtmp://example/live".to_string(),
-            monitoring_url: None,
-            desired_state: DesiredOutputState::Running,
-            retries_exhausted: false,
-            config: OutputConfig::preset("720p"),
-        };
-        let snapshot = OutputRuntimeSnapshot {
-            is_active: true,
-            effective_has_ingest: false,
-            ingest_video_codec: Some("hevc".to_string()),
-        };
-
-        let input = output_stage_sweep_input(&output, &snapshot);
-
-        assert_eq!(input.pipeline_id, "pipe");
-        assert_eq!(input.config.stage_encoding_label(), "720p");
-        assert!(input.is_active);
-        assert!(!input.effective_has_ingest);
-        assert_eq!(input.ingest_video_codec.as_deref(), Some("hevc"));
     }
 
     struct FakePipelineStore {

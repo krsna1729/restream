@@ -41,13 +41,13 @@ async fn ensure_stage_creates_ring_and_returns_existing_on_reuse() {
     let source = Arc::new(RingBuffer::new(16));
     let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
 
-    let (handle1, created1) = manager
+    let (handle1, _lease101, created1) = manager
         .ensure_stage(key.clone(), source.clone(), None)
         .await;
     assert!(created1);
     assert_eq!(handle1.ring.codec_hint_str(), "h264");
 
-    let (handle2, created2) = manager
+    let (handle2, _lease102, created2) = manager
         .ensure_stage(key.clone(), source.clone(), None)
         .await;
     assert!(!created2);
@@ -72,13 +72,13 @@ async fn ensure_stage_replaces_cancelled_runtime() {
     let source = Arc::new(RingBuffer::new(16));
     let key = StageKey::new("pipe-replace", StageKind::video_preset("720p"));
 
-    let (handle1, created1) = manager
+    let (handle1, _lease103, created1) = manager
         .ensure_stage(key.clone(), source.clone(), None)
         .await;
     assert!(created1);
     handle1.cancel.cancel();
 
-    let (handle2, created2) = manager
+    let (handle2, _lease104, created2) = manager
         .ensure_stage(key.clone(), source.clone(), None)
         .await;
 
@@ -103,7 +103,7 @@ async fn ensure_stage_uses_engine_typed_transcoder_ring_capacity() {
     let source = Arc::new(RingBuffer::new(16));
     let key = StageKey::new("pipe-typed", StageKind::video_preset("720p"));
 
-    let (handle, created) = manager.ensure_stage(key, source, None).await;
+    let (handle, _lease105, created) = manager.ensure_stage(key, source, None).await;
     assert!(created);
     assert_eq!(handle.ring.capacity(), 768);
 }
@@ -230,7 +230,7 @@ async fn snapshot_reflects_lifecycle_and_metrics() {
     let source = Arc::new(RingBuffer::new(16));
     let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
 
-    let (handle, _) = manager.ensure_stage(key.clone(), source, None).await;
+    let (handle, _lease106, _) = manager.ensure_stage(key.clone(), source, None).await;
     handle.metrics.record_in_batch(2, 1024);
     handle.metrics.record_out(512);
     handle.lifecycle.transition(StagePhase::WaitingForCapacity {

@@ -8,15 +8,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::application::ports::PipelineStore;
-use crate::application::reconcile::{
-    build_recording_reconcile_plan, collect_needed_stage_keys, load_output_runtime_snapshot,
-    output_stage_sweep_input,
-};
+use crate::application::reconcile::build_recording_reconcile_plan;
 use crate::application::topology::{
     ReconcileRequests, apply_requested_selections, converge_topology,
 };
 use crate::config::AppConfig;
-use crate::domain::stage::StageKey;
 use crate::infrastructure::sqlite_ports::SqliteMetaStore;
 use crate::media::engine::MediaEngine;
 use crate::media::recording::RecordingMetadataReporter;
@@ -67,10 +63,10 @@ impl Reconciler {
     }
 
     /// Runs until shutdown. Two cadences (Q-040):
-    /// - the output pass (rows, topology, egress start/stop/retry, stage
-    ///   sweep) runs only when requested or due: a mutation or lifecycle
-    ///   event, a deadline it scheduled itself (retry backoff, a deferred
-    ///   stage sweep), and a slow backstop pass every
+    /// - the output pass (rows, topology, egress start/stop/retry) runs only
+    ///   when requested or due: a mutation or lifecycle event, a deadline it
+    ///   scheduled itself (retry backoff, ingest-disconnect grace), and a
+    ///   slow backstop pass every
     ///   [`BACKSTOP_INTERVALS`] intervals for anything no trigger covers.
     ///   Passes are at least one interval apart, so a storm of events or
     ///   deadlines (a destination outage) costs no more than the old timer;
@@ -155,9 +151,6 @@ impl Reconciler {
         if let Some(wait) = self.egress.reconcile(&outputs).await {
             self.requests.wake_at(Instant::now() + wait);
         }
-        if let Some(wait) = self.sweep_unused_stages(&outputs).await {
-            self.requests.wake_at(Instant::now() + wait);
-        }
     }
 
     async fn prune_sessions_and_logs(&self) {
@@ -177,28 +170,6 @@ impl Reconciler {
             }
             Err(error) => warn!(err = %error, "failed to list sessions for prune"),
         }
-    }
-
-    async fn sweep_unused_stages(
-        &self,
-        outputs: &[crate::application::models::Output],
-    ) -> Option<Duration> {
-        let mut stage_inputs = Vec::with_capacity(outputs.len());
-        for output in outputs {
-            let snapshot = load_output_runtime_snapshot(
-                &self.engine,
-                output,
-                self.config.tuning.ingest_disconnect_grace_ms,
-            )
-            .await;
-            stage_inputs.push(output_stage_sweep_input(output, &snapshot));
-        }
-        let mut needed_stages: HashSet<StageKey> = collect_needed_stage_keys(stage_inputs);
-        needed_stages.extend(self.engine.active_hls_preview_stage_keys().await);
-        self.engine
-            .sweep_unused_transcoder_stages(&needed_stages)
-            .await;
-        self.engine.sweep_unused_stages().await
     }
 
     async fn reconcile_recordings(&self, tick: u64) -> bool {
@@ -273,8 +244,6 @@ impl Reconciler {
                 self.engine
                     .shutdown_hls_preview_segmenter(&pipeline_id)
                     .await;
-                // Its preview stage is no longer needed: sweep it now.
-                self.requests.wake();
             }
         }
     }

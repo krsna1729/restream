@@ -39,6 +39,7 @@ const COMMON_TESTS: &[(&str, &[&str])] = &[
     ("lib-stale-ingest-disconnect", &["test", "stale_ingest_disconnect_cannot_poison_replacement_attempt", "--lib", "--", "--nocapture"]),
     ("lib-stale-egress-unregister", &["test", "stale_egress_unregister_cannot_clobber_replacement_attempt", "--lib", "--", "--nocapture"]),
     ("lib-stale-egress-error", &["test", "stale_egress_error_cannot_poison_replacement_attempt", "--lib", "--", "--nocapture"]),
+    ("lib-stage-leases", &["test", "engine_stage_tests::runtime", "--lib", "--", "--nocapture"]),
     ("lib-reconcile-triggers", &["test", "application::topology::tests", "--lib", "--", "--nocapture"]),
     ("api-mutation-requests-pass", &["test", "a_successful_mutation_requests_a_reconcile_pass", "--test", "api", "--", "--nocapture"]),
     ("lib-stale-egress-queue", &["test", "stale_egress_queue_removal_cannot_drop_replacement_queue", "--lib", "--", "--nocapture"]),

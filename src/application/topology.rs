@@ -22,7 +22,7 @@ use crate::media::engine::MediaEngine;
 /// Requests to the reconciler (Q-039, Q-040). The output pass runs only when
 /// something asked for it: a mutation or engine lifecycle event
 /// ([`Self::wake`]), or a deadline that came due ([`Self::wake_at`]: retry
-/// backoff, ingest-disconnect grace, a deferred stage sweep). A deadline only
+/// backoff, ingest-disconnect grace). A deadline only
 /// wakes the pass, which re-reads current state, so a stale deadline costs one
 /// pass and can never act on old state.
 #[derive(Default)]
@@ -95,7 +95,8 @@ impl ReconcileRequests {
 
 /// Engine lifecycle events that change what the output pass decides: an
 /// ingest arriving or leaving (outputs start or stop; a departure also once
-/// its grace ends) and an egress or stage ending (retry, or sweep its stages).
+/// its grace ends) and an egress ending (retry it). Stages need no pass: their
+/// consumers' leases stop them (Q-041).
 /// `EgressFailed` is not one: it reports each error of a still-active egress
 /// (every upload retry), and the egress ending emits `EgressStopped`.
 pub fn request_pass_for_event(
@@ -112,9 +113,7 @@ pub fn request_pass_for_event(
                 Instant::now() + ingest_disconnect_grace + std::time::Duration::from_millis(10),
             );
         }
-        EventKind::IngestConnected { .. }
-        | EventKind::EgressStopped { .. }
-        | EventKind::StageStopped { .. } => requests.wake(),
+        EventKind::IngestConnected { .. } | EventKind::EgressStopped { .. } => requests.wake(),
         _ => {}
     }
 }

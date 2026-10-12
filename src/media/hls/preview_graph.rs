@@ -11,6 +11,7 @@ use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
 use crate::media::metadata::VideoMeta;
 use crate::media::ring_buffer::RingBuffer;
+use crate::media::stage_lease::StageLease;
 use crate::media::stage_runtime::StageRuntimeManager;
 use crate::planner::plan_hls_preview_graph;
 use crate::runtime::graph::StageGraphPlan;
@@ -21,6 +22,9 @@ pub struct HlsPreviewGraph {
     pub video_ring: Arc<RingBuffer>,
     /// Override video metadata to use in the HLS master playlist.
     pub video_meta: Option<VideoMeta>,
+    /// Lease on the shared transcode stage, when the preview reads one; the
+    /// segmenter holds it for its lifetime.
+    pub stage: Option<StageLease>,
 }
 
 /// Resolve and start the HLS preview runtime graph for a pipeline.
@@ -57,12 +61,14 @@ pub async fn resolve_hls_preview_graph(
                     return Some(HlsPreviewGraph {
                         video_ring: source_ring,
                         video_meta: None,
+                        stage: None,
                     });
                 };
                 let Some(key) = preview_transcode_key(&preview_plan) else {
                     return Some(HlsPreviewGraph {
                         video_ring: source_ring,
                         video_meta: None,
+                        stage: None,
                     });
                 };
                 let source_video = ingest_video_meta(&engine, pipeline_id).await;
@@ -109,6 +115,7 @@ pub async fn resolve_input_hls_preview_graph(
         return HlsPreviewGraph {
             video_ring: source_ring,
             video_meta: source_video,
+            stage: None,
         };
     };
 
@@ -136,13 +143,14 @@ async fn ensure_shared_bridge_graph(
     source_video: Option<VideoMeta>,
 ) -> HlsPreviewGraph {
     let manager = StageRuntimeManager::new(engine);
-    let (handle, created) = manager.ensure_stage(key, source_ring.clone(), None).await;
+    let (handle, lease, created) = manager.ensure_stage(key, source_ring.clone(), None).await;
     if created {
         manager.spawn_codec_edge_stage(handle.clone(), source_ring);
     }
     HlsPreviewGraph {
         video_ring: handle.ring,
         video_meta: Some(h264_preview_video_meta(source_video)),
+        stage: Some(lease),
     }
 }
 

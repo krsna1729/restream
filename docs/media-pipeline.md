@@ -142,6 +142,20 @@ H.264 preset stage (for example `video:720p:codec:h264`), while Enhanced RTMP
 and SRT can create or share an H.265 preset stage (for example
 `video:720p:codec:hevc`).
 
+### Stage lifetime
+
+A shared stage (transcoder, codec edge, audio route, SRT TS muxer) lives
+exactly as long as its consumers (`media::stage_lease`). Each consumer holds
+a `StageLease` on every stage it reads: an egress for its whole attempt
+(`EgressTask`), an HLS preview for its segmenter, an SRT player for its
+session. The registry keeps only a `Weak`, so a consumer reuses a stage only
+while another holds it. The last lease to drop cancels the stage at once and
+removes its entry, unless a newer stage has taken the key. A stage that ends
+on its own is cancelled and never reused, so the next consumer starts a new
+one. There is no sweep and no grace period. An output waiting out its retry
+backoff holds no lease, so a transcoder used only by that output restarts
+with its next attempt.
+
 ### Passthrough rule
 
 `source` encodings **never** enter any transcoder stage. The egress reads

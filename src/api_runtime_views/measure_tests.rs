@@ -53,7 +53,7 @@ async fn the_snapshot_equals_the_sums_of_the_payloads_it_replaces() {
     egress_with_delivery(&engine, "b-ok", "pipe-b", Some((8e6, 0.99))).await;
 
     let stage = StageKey::new("pipe-a", StageKind::video_preset("720p"));
-    let (handle, _) = StageRuntimeManager::new(engine.clone())
+    let (handle, _lease1, _) = StageRuntimeManager::new(engine.clone())
         .ensure_stage(stage.clone(), Arc::new(RingBuffer::new(4)), None)
         .await;
     handle.ring.push(packet(700));

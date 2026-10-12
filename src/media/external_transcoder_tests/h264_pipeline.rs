@@ -45,7 +45,7 @@ async fn external_720p_stage_emits_live_packets_for_h264_marker_fixture() {
     }
     let stage_key = StageKey::new("pipe-ext-h264-marker", StageKind::video_preset("720p"));
     let manager = crate::media::stage_runtime::StageRuntimeManager::new(engine);
-    let (handle, is_new) = manager
+    let (handle, _lease28, is_new) = manager
         .ensure_stage(stage_key.clone(), source_ring.clone(), None)
         .await;
     assert!(is_new);
@@ -166,7 +166,7 @@ async fn external_720p_stage_emits_live_packets_for_h264_marker_fixture_without_
     }
     let stage_key = StageKey::new(pipeline_id, StageKind::video_preset("720p"));
     let manager = crate::media::stage_runtime::StageRuntimeManager::new(engine);
-    let (handle, is_new) = manager
+    let (handle, _lease29, is_new) = manager
         .ensure_stage(stage_key.clone(), source_ring.clone(), None)
         .await;
     assert!(is_new);
@@ -284,7 +284,7 @@ async fn external_1080p_stage_remuxes_marker_fixture_with_monotone_dts() {
         StageKind::video_preset("1080p"),
     );
     let manager = crate::media::stage_runtime::StageRuntimeManager::new(engine);
-    let (handle, is_new) = manager
+    let (handle, _lease30, is_new) = manager
         .ensure_stage(stage_key.clone(), source_ring.clone(), None)
         .await;
     assert!(is_new);

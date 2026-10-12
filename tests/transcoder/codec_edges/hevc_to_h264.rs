@@ -23,7 +23,7 @@ fn rtmp_shaped_hevc_packets_drive_h264_edge_stage() {
             "rtmp-hevc",
             StageKind::codec_edge("hevc_to_h264", StageKind::source()),
         );
-        let (handle, is_new) = manager
+        let (handle, _lease204, is_new) = manager
             .ensure_stage(stage_key.clone(), source.clone(), None)
             .await;
         assert!(is_new);

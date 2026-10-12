@@ -117,8 +117,8 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
         .map(|(stage_key, stage)| {
             api_view_models::ts_muxer_ring_telemetry_json(
                 stage_key,
-                &stage.ring,
-                !stage.cancel.is_cancelled(),
+                &stage.muxer.ring,
+                !stage.muxer.cancel.is_cancelled(),
             )
         })
         .collect();
@@ -419,7 +419,7 @@ mod tests {
         let engine = Arc::new(MediaEngine::new());
         let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
         let manager = StageRuntimeManager::new(engine.clone());
-        manager
+        let _stage = manager
             .ensure_stage(key.clone(), Arc::new(RingBuffer::new(4)), None)
             .await;
         let pipe_metrics = Arc::new(PipeMetrics::default());
@@ -441,7 +441,7 @@ mod tests {
         let engine = Arc::new(MediaEngine::new());
         let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
         let manager = StageRuntimeManager::new(engine.clone());
-        manager
+        let _stage = manager
             .ensure_stage(key.clone(), Arc::new(RingBuffer::new(4)), None)
             .await;
         let input_queue = Arc::new(MemoryQueue::new_with_capacity(128));
@@ -466,7 +466,7 @@ mod tests {
         let engine = Arc::new(MediaEngine::new());
         let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
         let manager = StageRuntimeManager::new(engine.clone());
-        let (handle, _) = manager
+        let (handle, _lease2, _) = manager
             .ensure_stage(key.clone(), Arc::new(RingBuffer::new(4)), None)
             .await;
         handle.metrics.record_in(64);

@@ -172,7 +172,7 @@ async fn hls_playlist_route_returns_blocked_stage_cause_when_applicable() {
     );
     let source_ring = Arc::new(RingBuffer::new(16));
     let manager = restream::media::stage_runtime::StageRuntimeManager::new(engine.clone());
-    let (handle, _) = manager
+    let (handle, _lease205, _) = manager
         .ensure_stage(stage_key.clone(), source_ring, None)
         .await;
 

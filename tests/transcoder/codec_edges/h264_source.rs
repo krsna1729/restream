@@ -20,7 +20,7 @@ fn rtmp_shaped_h264_packets_drive_source_stage() {
         let source = engine.get_or_create_pipeline("rtmp-h264").await;
         let manager = restream::media::stage_runtime::StageRuntimeManager::new(engine.clone());
         let stage_key = StageKey::new("rtmp-h264", StageKind::source());
-        let (handle, is_new) = manager
+        let (handle, _lease203, is_new) = manager
             .ensure_stage(stage_key.clone(), source.clone(), None)
             .await;
         assert!(is_new);

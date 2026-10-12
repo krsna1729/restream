@@ -337,7 +337,9 @@ async fn processing_graph_omits_stale_codec_edge_when_output_no_longer_needs_it(
         retries_exhausted: false,
         config: crate::domain::output_spec::OutputConfig::source(),
     };
-    let _ = crate::application::egress::prepare_output_ring(&engine, &stale_source_output).await;
+    // Held: a consumer of the HEVC-era path still leases its stages.
+    let _stale =
+        crate::application::egress::prepare_output_ring(&engine, &stale_source_output).await;
 
     let output = crate::application::models::Output {
         id: "out-graph-stale-codec".to_string(),
