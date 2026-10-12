@@ -179,15 +179,11 @@ pub(crate) enum KtlsCipher {
 static KTLS_CAPABILITY_CACHE: LazyLock<Mutex<HashMap<(bool, KtlsCipher), bool>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Returns `true` only if the running kernel has already proven it accepts
-/// this exact `(version, cipher)` for both `TLS_TX` and `TLS_RX`. The first
-/// call for a combination runs a once-per-process probe against a connected
-/// local TCP pair with dummy key material; later calls reuse the cached
-/// verdict without touching the kernel.
-/// Whether this host can carry TLS egress on kernel TLS at all: some
-/// AES-GCM suite the egress client offers passes the probe. TLS egress on
-/// the fabric has no userspace fallback, so callers pick another transport
-/// when this is false.
+/// Whether this host can carry every TLS egress session on kernel TLS:
+/// each (version, AES-GCM size) the egress client can negotiate passes the
+/// probe. The fabric's TLS has no userspace fallback and the server picks
+/// the pair, so one unsupported pair would fail those sessions; callers
+/// pick another transport when this is false.
 pub(crate) fn egress_available() -> bool {
     [
         (
@@ -200,17 +196,22 @@ pub(crate) fn egress_available() -> bool {
         ),
         (
             ProtocolVersion::TLSv1_2,
-            CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+            CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
         ),
         (
             ProtocolVersion::TLSv1_2,
-            CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+            CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
         ),
     ]
     .into_iter()
-    .any(|(version, suite)| supports(version, suite))
+    .all(|(version, suite)| supports(version, suite))
 }
 
+/// Returns `true` only if the running kernel has already proven it accepts
+/// this exact `(version, cipher)` for both `TLS_TX` and `TLS_RX`. The first
+/// call for a combination runs a once-per-process probe against a connected
+/// local TCP pair with dummy key material; later calls reuse the cached
+/// verdict without touching the kernel.
 pub(crate) fn supports(version: ProtocolVersion, suite: CipherSuite) -> bool {
     let Some((tls13, cipher)) = capability_for(version, suite) else {
         return false;

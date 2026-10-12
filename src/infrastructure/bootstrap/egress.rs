@@ -406,7 +406,13 @@ impl EgressReconciler {
             && match url_scheme {
                 OutputUrlScheme::Http => true,
                 OutputUrlScheme::Https => {
-                    let available = crate::media::egress::tls::ktls::egress_available();
+                    // The first call probes the kernel (sockets, setsockopt):
+                    // keep it off the Tokio worker. Later calls hit the cache.
+                    let available = tokio::task::spawn_blocking(
+                        crate::media::egress::tls::ktls::egress_available,
+                    )
+                    .await
+                    .unwrap_or(false);
                     if !available {
                         static LOGGED: std::sync::Once = std::sync::Once::new();
                         LOGGED.call_once(|| {
