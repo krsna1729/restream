@@ -478,14 +478,14 @@ impl SrtServer {
             return Err("no active ingest".to_string());
         }
         let ring = self.engine.get_or_create_pipeline(pipeline_id).await;
-        let muxer = self
+        let (muxer, lease) = self
             .engine
             .get_or_create_ts_muxer_stage(pipeline_id, "play", ring)
             .await;
-        Ok(SrtReaderMedia::new(TsChunkReader::new(
-            format!("srt_play:{pipeline_id}"),
-            &muxer,
-        )))
+        Ok(SrtReaderMedia::new(
+            TsChunkReader::new(format!("srt_play:{pipeline_id}"), &muxer),
+            lease,
+        ))
     }
 
     /// Ingest bookkeeping after the Owner has flushed the publisher's media.

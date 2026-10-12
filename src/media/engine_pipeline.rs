@@ -3,11 +3,12 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use tracing::{debug, info};
+use tracing::info;
 
 use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
 use crate::media::ring_buffer::RingBuffer;
+use crate::media::stage_lease::StageLease;
 
 impl MediaEngine {
     pub async fn get_or_create_pipeline(&self, pipeline_id: &str) -> Arc<RingBuffer> {
@@ -85,45 +86,45 @@ impl MediaEngine {
         Some(new_rb_clone)
     }
 
-    /// Get or create a shared transcoder stage for a typed pipeline stage.
+    /// Get or create a shared transcoder stage for a typed pipeline stage, and
+    /// the caller's lease on it: the stage stops when its last lease drops.
     pub async fn get_or_create_transcoder(
         self: &Arc<Self>,
         pipeline_id: &str,
         stage_kind: StageKind,
         source_buffer: Arc<RingBuffer>,
         input_codec_override: Option<&str>,
-    ) -> Arc<RingBuffer> {
+    ) -> (Arc<RingBuffer>, StageLease) {
         let key = StageKey::new(pipeline_id, stage_kind.clone());
         let manager = crate::media::stage_runtime::StageRuntimeManager::new(self.clone());
-        let (handle, created) = manager
-            .ensure_stage(key.clone(), source_buffer.clone(), input_codec_override)
+        let (handle, lease, created) = manager
+            .ensure_stage(key, source_buffer.clone(), input_codec_override)
             .await;
 
         if created {
-            manager.spawn_stage(handle.clone(), source_buffer.clone(), input_codec_override);
+            manager.spawn_stage(handle.clone(), source_buffer, input_codec_override);
         }
 
-        handle.ring
+        (handle.ring, lease)
     }
 
-    /// Get or create a shared H.265→H.264 transcoder stage for a pipeline.
+    /// Get or create a shared H.265→H.264 transcoder stage for a pipeline, and
+    /// the caller's lease on it.
     pub async fn get_or_create_h264_transcoder(
         self: &Arc<Self>,
         pipeline_id: &str,
         upstream: StageKind,
         source_buffer: Arc<RingBuffer>,
-    ) -> Arc<RingBuffer> {
+    ) -> (Arc<RingBuffer>, StageLease) {
         let key = StageKey::new(pipeline_id, StageKind::codec_edge("hevc_to_h264", upstream));
         let manager = crate::media::stage_runtime::StageRuntimeManager::new(self.clone());
-        let (handle, created) = manager
-            .ensure_stage(key.clone(), source_buffer.clone(), None)
-            .await;
+        let (handle, lease, created) = manager.ensure_stage(key, source_buffer.clone(), None).await;
 
         if created {
-            manager.spawn_codec_edge_stage(handle.clone(), source_buffer.clone());
+            manager.spawn_codec_edge_stage(handle.clone(), source_buffer);
         }
 
-        handle.ring
+        (handle.ring, lease)
     }
 
     /// Return the active processing stages for a pipeline as `(kind, is_alive)` pairs.
@@ -193,23 +194,6 @@ impl MediaEngine {
         self.remove_stage_artifacts(&removed).await;
     }
 
-    pub async fn sweep_unused_transcoder_stages(&self, active_keys: &HashSet<StageKey>) {
-        let mut runtimes = self.stages.runtimes.write().await;
-        let mut removed = Vec::new();
-        runtimes.retain(|key, runtime| {
-            if runtime.ring.is_some() && !active_keys.contains(key) {
-                debug!("Sweeping unused transcoder stage: {}", key);
-                runtime.cancel.cancel();
-                removed.push(key.clone());
-                false
-            } else {
-                true
-            }
-        });
-        drop(runtimes);
-        self.remove_stage_artifacts(&removed).await;
-    }
-
     async fn remove_stage_artifacts(&self, keys: &[StageKey]) {
         if keys.is_empty() {
             return;
@@ -220,59 +204,5 @@ impl MediaEngine {
             metrics.remove(key);
             lifecycles.remove(key);
         }
-    }
-
-    /// New stages are exempt from the unused-stage sweep for this long. A
-    /// legacy consumer registers a `Reader` synchronously at creation, but a
-    /// fabric consumer's liveness marker (`fabric.srt.active_outputs`) is
-    /// only set later, from the async task that creates the fabric runtime
-    /// — a reconcile tick can land in that gap and see neither signal.
-    const UNUSED_STAGE_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
-
-    /// Cancels TS muxer stages with no consumer. Stages younger than the
-    /// grace are kept; returns how long until the youngest of them ages out,
-    /// so the reconciler can sweep again then instead of on a timer.
-    pub async fn sweep_unused_stages(&self) -> Option<std::time::Duration> {
-        // Liveness has two independent signals: legacy consumers register a
-        // `Reader` on the ring (tracked in `stage.ring.readers`), while
-        // fabric consumers read via `EgressFeed::read_from` and never
-        // register one. A stage feeding only fabric outputs would otherwise
-        // look permanently unused and get cancelled on the next reconcile
-        // tick regardless of how recently it started.
-        let active_fabric_feeds: std::collections::HashSet<String> = {
-            let registry = self.fabric.srt.lock().await;
-            registry
-                .active_outputs
-                .keys()
-                .map(|feed_id| feed_id.as_str().to_string())
-                .collect()
-        };
-
-        let mut next_sweep: Option<std::time::Duration> = None;
-        let mut stages = self.stages.ts_muxers.write().await;
-        stages.retain(|key, stage| {
-            let age = stage.created_at.elapsed();
-            if age < Self::UNUSED_STAGE_GRACE {
-                let remaining = Self::UNUSED_STAGE_GRACE - age;
-                next_sweep = Some(next_sweep.map_or(remaining, |next| next.min(remaining)));
-                return true;
-            }
-
-            let has_readers = {
-                let mut readers = crate::sync::lock(&stage.ring.readers);
-                readers.retain(|reader| reader.upgrade().is_some());
-                !readers.is_empty()
-            };
-            let has_fabric_consumer = active_fabric_feeds.contains(&format!("srt:{key}"));
-
-            if !has_readers && !has_fabric_consumer {
-                debug!("Sweeping unused TS muxer stage: {}", key);
-                stage.cancel.cancel();
-                false
-            } else {
-                true
-            }
-        });
-        next_sweep
     }
 }

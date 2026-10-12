@@ -325,12 +325,9 @@ pub(crate) async fn run_external_ffmpeg_backend(
     }
 
     reap_external_child(&mut child, cancelled, io_threads).await;
+    // A cancelled entry is never reused; the consumers' lease drops remove
+    // it, and only if no newer stage took its key.
     ctx.cancel.cancel();
-
-    ctx.engine.remove_stage_metrics(&stage_key).await;
-    ctx.engine.remove_pipe_metrics(&stage_key).await;
-    ctx.engine.remove_stage_lifecycle(&stage_key).await;
-    ctx.engine.remove_stage_runtime(&stage_key).await;
     ctx.engine
         .runtime
         .event_log

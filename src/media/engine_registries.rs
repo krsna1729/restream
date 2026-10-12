@@ -312,12 +312,20 @@ pub struct StageRuntime {
     pub metrics: Arc<StageMetrics>,
     pub input_queue: Option<Arc<MemoryQueue>>,
     pub pipe_metrics: Option<Arc<PipeMetrics>>,
+    /// Consumers' leases (`Weak::new()` for stages no consumer leases).
+    pub lease: std::sync::Weak<crate::media::stage_lease::LeaseCell>,
+}
+
+/// A shared TS muxer and its consumers' leases.
+pub struct TsMuxerStage {
+    pub muxer: Arc<TsChunkRing>,
+    pub lease: std::sync::Weak<crate::media::stage_lease::LeaseCell>,
 }
 
 pub struct StageRegistry {
     pub runtimes: TokioRwLock<HashMap<StageKey, StageRuntime>>,
     pub metrics: TokioRwLock<HashMap<StageKey, Arc<StageMetrics>>>,
-    pub ts_muxers: TokioRwLock<HashMap<String, Arc<TsChunkRing>>>,
+    pub ts_muxers: TokioRwLock<HashMap<String, TsMuxerStage>>,
     pub srt_muxer_shards: TokioRwLock<HashMap<String, SrtMuxerShardPool>>,
     pub lifecycles: TokioRwLock<HashMap<StageKey, Arc<StageLifecycle>>>,
 }

@@ -201,7 +201,7 @@ async fn setup_matrix_path(
 
     let (target_ring, transcoder_cancel, transcoder_handle) = if trans {
         let stage_kind = StageKind::video_preset("720p");
-        let trans_ring = engine
+        let (trans_ring, _lease207) = engine
             .get_or_create_transcoder("pipe", stage_kind, source_ring.clone(), None)
             .await;
         let cancel = {

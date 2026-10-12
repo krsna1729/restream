@@ -236,7 +236,7 @@ async fn stage_runtime_snapshot_reads_runtime_after_side_maps_removed() {
     let engine = Arc::new(MediaEngine::new());
     let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
     let manager = StageRuntimeManager::new(engine.clone());
-    let (handle, _) = manager
+    let (handle, _lease27, _) = manager
         .ensure_stage(key.clone(), Arc::new(RingBuffer::new(4)), None)
         .await;
     handle.metrics.record_in(42);

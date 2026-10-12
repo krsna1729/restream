@@ -35,7 +35,7 @@ async fn replacement_video_stage_preserves_codec_hint_and_audio_tracks() {
     ]);
 
     let stage_kind = StageKind::video_preset("720p");
-    let first = engine
+    let (first, _lease201) = engine
         .get_or_create_transcoder(
             "replacement-meta",
             stage_kind.clone(),
@@ -60,7 +60,7 @@ async fn replacement_video_stage_preserves_codec_hint_and_audio_tracks() {
     // Simulate registry cancellation/replacement.
     engine.cleanup_pipeline_stages("replacement-meta").await;
 
-    let replacement = engine
+    let (replacement, _lease202) = engine
         .get_or_create_transcoder("replacement-meta", stage_kind, source, Some("hevc"))
         .await;
 

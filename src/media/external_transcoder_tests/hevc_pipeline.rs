@@ -39,7 +39,7 @@ async fn external_720p_stage_emits_live_packets_for_hevc_sample() {
         StageKind::codec_edge("hevc_to_h264", StageKind::source()),
     );
     let manager = crate::media::stage_runtime::StageRuntimeManager::new(engine);
-    let (handle, is_new) = manager
+    let (handle, _lease35, is_new) = manager
         .ensure_stage(stage_key.clone(), source_ring.clone(), None)
         .await;
     assert!(is_new);
@@ -142,7 +142,7 @@ async fn chained_hevc_preview_stages_emit_live_h264_packets() {
     }
 
     let hevc_stage_key = StageKey::new("pipe-ext-preview-chain", StageKind::video_preset("1080p"));
-    let hevc_preview_upstream = engine
+    let (hevc_preview_upstream, _lease36) = engine
         .get_or_create_transcoder(
             "pipe-ext-preview-chain",
             StageKind::video_preset("1080p"),
@@ -154,7 +154,7 @@ async fn chained_hevc_preview_stages_emit_live_h264_packets() {
         "pipe-ext-preview-chain",
         StageKind::codec_edge("hevc_to_h264", StageKind::video_preset("1080p")),
     );
-    let h264_preview_ring = engine
+    let (h264_preview_ring, _lease37) = engine
         .get_or_create_h264_transcoder(
             "pipe-ext-preview-chain",
             StageKind::video_preset("1080p"),
@@ -292,7 +292,7 @@ async fn hevc_scaled_rtmp_audio_routes_emit_both_selected_tracks() {
         source_ring.set_video_parameter_sets(parameter_sets);
     }
 
-    let scaled_hevc = engine
+    let (scaled_hevc, _lease38) = engine
         .get_or_create_transcoder(
             pipeline_id,
             StageKind::video_preset("720p"),
@@ -300,14 +300,14 @@ async fn hevc_scaled_rtmp_audio_routes_emit_both_selected_tracks() {
             Some("hevc"),
         )
         .await;
-    let scaled_h264 = engine
+    let (scaled_h264, _lease39) = engine
         .get_or_create_h264_transcoder(
             pipeline_id,
             StageKind::video_preset("720p"),
             scaled_hevc.clone(),
         )
         .await;
-    let track0_ring = engine
+    let (track0_ring, _lease40) = engine
         .get_or_create_transcoder(
             pipeline_id,
             StageKind::audio_route(
@@ -318,7 +318,7 @@ async fn hevc_scaled_rtmp_audio_routes_emit_both_selected_tracks() {
             None,
         )
         .await;
-    let track1_ring = engine
+    let (track1_ring, _lease41) = engine
         .get_or_create_transcoder(
             pipeline_id,
             StageKind::audio_route(
@@ -462,7 +462,7 @@ async fn hevc_hls_preview_stage_uses_hevc_input_and_emits_h264() {
         StageKind::codec_edge("hevc_to_h264", StageKind::source()),
     );
     let manager = crate::media::stage_runtime::StageRuntimeManager::new(engine);
-    let (handle, is_new) = manager
+    let (handle, _lease42, is_new) = manager
         .ensure_stage(stage_key.clone(), source_ring.clone(), None)
         .await;
     assert!(is_new);
@@ -561,7 +561,7 @@ async fn hevc_codec_edge_starts_for_video_only_ingest() {
         StageKind::codec_edge("hevc_to_h264", StageKind::source()),
     );
     let manager = crate::media::stage_runtime::StageRuntimeManager::new(engine);
-    let (handle, is_new) = manager
+    let (handle, _lease43, is_new) = manager
         .ensure_stage(stage_key.clone(), source_ring.clone(), None)
         .await;
     assert!(is_new);

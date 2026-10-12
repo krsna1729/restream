@@ -93,7 +93,7 @@ async fn empty_srt_muxer_shard_cancels_and_removes_ts_stage() {
     let stage_key = engine
         .assign_srt_egress_muxer_stage("pipe-1", "source", "out-1", 1)
         .await;
-    let ts_ring = engine
+    let (ts_ring, _lease7) = engine
         .get_or_create_ts_muxer_stage("pipe-1", &stage_key, source_ring)
         .await;
 

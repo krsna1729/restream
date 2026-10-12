@@ -41,7 +41,7 @@ async fn primary_playlist_reports_graph_planned_blocked_stage_cause() {
         StageKind::codec_edge("hevc_to_h264", StageKind::source()),
     );
     let manager = StageRuntimeManager::new(engine.clone());
-    let (handle, _) = manager
+    let (handle, _lease4, _) = manager
         .ensure_stage(stage_key.clone(), Arc::new(RingBuffer::new(16)), None)
         .await;
     handle.lifecycle.transition(StagePhase::WaitingForCapacity {

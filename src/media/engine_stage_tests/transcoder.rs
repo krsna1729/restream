@@ -18,7 +18,7 @@ async fn same_encoding_outputs_share_one_transcoder_stage() {
     let engine = Arc::new(MediaEngine::new());
     let source = engine.get_or_create_pipeline("pipe-share").await;
 
-    let a = engine
+    let (a, _lease8) = engine
         .get_or_create_transcoder(
             "pipe-share",
             StageKind::video_preset("720p"),
@@ -26,7 +26,7 @@ async fn same_encoding_outputs_share_one_transcoder_stage() {
             None,
         )
         .await;
-    let b = engine
+    let (b, _lease9) = engine
         .get_or_create_transcoder(
             "pipe-share",
             StageKind::video_preset("720p"),
@@ -34,7 +34,7 @@ async fn same_encoding_outputs_share_one_transcoder_stage() {
             None,
         )
         .await;
-    let c = engine
+    let (c, _lease10) = engine
         .get_or_create_transcoder(
             "pipe-share",
             StageKind::video_preset("1080p"),
@@ -60,7 +60,7 @@ async fn audio_stages_are_isolated_per_video_preset() {
     let engine = Arc::new(MediaEngine::new());
     let source = engine.get_or_create_pipeline("pipe-audio").await;
 
-    let v720 = engine
+    let (v720, _lease11) = engine
         .get_or_create_transcoder(
             "pipe-audio",
             StageKind::video_preset("720p"),
@@ -68,7 +68,7 @@ async fn audio_stages_are_isolated_per_video_preset() {
             None,
         )
         .await;
-    let v1080 = engine
+    let (v1080, _lease12) = engine
         .get_or_create_transcoder(
             "pipe-audio",
             StageKind::video_preset("1080p"),
@@ -77,7 +77,7 @@ async fn audio_stages_are_isolated_per_video_preset() {
         )
         .await;
 
-    let a720 = engine
+    let (a720, _lease13) = engine
         .get_or_create_transcoder(
             "pipe-audio",
             StageKind::audio_route("atrack:0", StageKind::video_preset("720p")),
@@ -85,7 +85,7 @@ async fn audio_stages_are_isolated_per_video_preset() {
             None,
         )
         .await;
-    let a1080 = engine
+    let (a1080, _lease14) = engine
         .get_or_create_transcoder(
             "pipe-audio",
             StageKind::audio_route("atrack:0", StageKind::video_preset("1080p")),
@@ -93,7 +93,7 @@ async fn audio_stages_are_isolated_per_video_preset() {
             None,
         )
         .await;
-    let a720_again = engine
+    let (a720_again, _lease15) = engine
         .get_or_create_transcoder(
             "pipe-audio",
             StageKind::audio_route("atrack:0", StageKind::video_preset("720p")),
@@ -121,7 +121,7 @@ async fn cleanup_pipeline_stages_removes_all_stage_entries() {
     let source = engine.get_or_create_pipeline("pipe-del").await;
     let other = engine.get_or_create_pipeline("pipe-keep").await;
 
-    let s1 = engine
+    let (s1, _lease16) = engine
         .get_or_create_transcoder(
             "pipe-del",
             StageKind::video_preset("720p"),
@@ -129,7 +129,7 @@ async fn cleanup_pipeline_stages_removes_all_stage_entries() {
             None,
         )
         .await;
-    let s2 = engine
+    let (s2, _lease17) = engine
         .get_or_create_transcoder(
             "pipe-del",
             StageKind::video_preset("1080p"),
@@ -137,7 +137,7 @@ async fn cleanup_pipeline_stages_removes_all_stage_entries() {
             None,
         )
         .await;
-    let other_stage = engine
+    let (other_stage, _lease18) = engine
         .get_or_create_transcoder("pipe-keep", StageKind::video_preset("720p"), other, None)
         .await;
 
@@ -173,7 +173,7 @@ async fn transcoder_stage_registry_uses_typed_stage_keys() {
     let engine = Arc::new(MediaEngine::new());
     let source = engine.get_or_create_pipeline("pipe-typed").await;
 
-    let _stage = engine
+    let (_stage, _lease19) = engine
         .get_or_create_transcoder("pipe-typed", StageKind::video_preset("720p"), source, None)
         .await;
 
@@ -213,90 +213,6 @@ async fn remove_pipeline_frees_source_ring_buffer() {
 }
 
 #[tokio::test]
-async fn sweep_unused_transcoder_stages_removes_only_unused() {
-    let engine = Arc::new(MediaEngine::new());
-    let source = engine.get_or_create_pipeline("pipe-sweep").await;
-
-    let s1 = engine
-        .get_or_create_transcoder(
-            "pipe-sweep",
-            StageKind::video_preset("720p"),
-            source.clone(),
-            None,
-        )
-        .await;
-    let s2 = engine
-        .get_or_create_transcoder(
-            "pipe-sweep",
-            StageKind::video_preset("1080p"),
-            source.clone(),
-            None,
-        )
-        .await;
-
-    let mut active = std::collections::HashSet::new();
-    active.insert(StageKey::new("pipe-sweep", StageKind::video_preset("720p")));
-
-    engine.sweep_unused_transcoder_stages(&active).await;
-
-    let stages = engine.active_transcoder_stages("pipe-sweep").await;
-    assert_eq!(stages.len(), 1);
-    assert_eq!(stages[0].0, StageKind::video_preset("720p"));
-    let runtime_keys: Vec<_> = engine
-        .stages
-        .runtimes
-        .read()
-        .await
-        .keys()
-        .filter(|key| key.pipeline.as_str() == "pipe-sweep")
-        .cloned()
-        .collect();
-    assert_eq!(
-        runtime_keys,
-        vec![StageKey::new("pipe-sweep", StageKind::video_preset("720p"))],
-        "runtime registry must remove swept stage objects"
-    );
-    // s2 was swept and cancelled
-    let _ = (s1, s2);
-}
-
-#[tokio::test]
-async fn sweep_unused_transcoder_stages_removes_codec_edge_stages() {
-    let engine = Arc::new(MediaEngine::new());
-    let source = engine.get_or_create_pipeline("pipe-sweep-codec").await;
-
-    let _stage = engine
-        .get_or_create_h264_transcoder("pipe-sweep-codec", StageKind::source(), source)
-        .await;
-    let stages_before = engine.active_transcoder_stages("pipe-sweep-codec").await;
-    assert!(
-        stages_before.iter().any(|(stage, live)| *stage
-            == StageKind::codec_edge("hevc_to_h264", StageKind::source())
-            && *live),
-        "codec-edge stage must be registered before the sweep"
-    );
-
-    let active: std::collections::HashSet<StageKey> = std::collections::HashSet::new();
-    engine.sweep_unused_transcoder_stages(&active).await;
-
-    let stages_after = engine.active_transcoder_stages("pipe-sweep-codec").await;
-    assert!(
-        stages_after.is_empty(),
-        "unused codec-edge stages must be removed from the shared stage registry"
-    );
-    assert!(
-        engine
-            .stages
-            .runtimes
-            .read()
-            .await
-            .keys()
-            .all(|key| key.pipeline.as_str() != "pipe-sweep-codec"),
-        "codec-edge runtime objects must be removed with swept stages"
-    );
-}
-
-#[tokio::test]
 async fn concurrent_get_or_create_transcoder_yields_single_stage() {
     // Bug #4 regression: the old read-lock-then-write-lock TOCTOU window
     // allowed concurrent callers to both see "key absent" and both insert,
@@ -330,8 +246,9 @@ async fn concurrent_get_or_create_transcoder_yields_single_stage() {
     }
 
     // All returned Arc<RingBuffer>s must point to the SAME allocation
-    let first_ptr = StdArc::as_ptr(&results[0]);
-    for rb in &results[1..] {
+    // Each result holds its lease, so the stage outlives every caller.
+    let first_ptr = StdArc::as_ptr(&results[0].0);
+    for (rb, _lease) in &results[1..] {
         assert_eq!(
             StdArc::as_ptr(rb),
             first_ptr,
@@ -354,7 +271,7 @@ async fn concurrent_get_or_create_transcoder_yields_single_stage() {
 async fn hevc_input_video_preset_ring_tagged_hevc() {
     let engine = Arc::new(MediaEngine::new());
     let source = engine.get_or_create_pipeline("p-hevc").await;
-    let ring = engine
+    let (ring, _lease20) = engine
         .get_or_create_transcoder(
             "p-hevc",
             StageKind::video_preset("720p"),
@@ -373,7 +290,7 @@ async fn hevc_input_video_preset_ring_tagged_hevc() {
 async fn h264_input_video_preset_ring_tagged_h264() {
     let engine = Arc::new(MediaEngine::new());
     let source = engine.get_or_create_pipeline("p-h264").await;
-    let ring = engine
+    let (ring, _lease21) = engine
         .get_or_create_transcoder("p-h264", StageKind::video_preset("720p"), source, None)
         .await;
     assert_eq!(
@@ -388,10 +305,10 @@ async fn h264_transcoder_different_upstreams_are_independent_stages() {
     let engine = Arc::new(MediaEngine::new());
     let source = engine.get_or_create_pipeline("p-dual").await;
 
-    let from_source = engine
+    let (from_source, _lease22) = engine
         .get_or_create_h264_transcoder("p-dual", StageKind::source(), source.clone())
         .await;
-    let from_720 = engine
+    let (from_720, _lease23) = engine
         .get_or_create_h264_transcoder("p-dual", StageKind::video_preset("720p"), source.clone())
         .await;
 
@@ -406,14 +323,14 @@ async fn h264_transcoder_same_upstream_is_shared() {
     let engine = Arc::new(MediaEngine::new());
     let source = engine.get_or_create_pipeline("p-shared-h264").await;
 
-    let ring1 = engine
+    let (ring1, _lease24) = engine
         .get_or_create_h264_transcoder(
             "p-shared-h264",
             StageKind::video_preset("720p"),
             source.clone(),
         )
         .await;
-    let ring2 = engine
+    let (ring2, _lease25) = engine
         .get_or_create_h264_transcoder(
             "p-shared-h264",
             StageKind::video_preset("720p"),
@@ -432,7 +349,7 @@ async fn h264_transcoder_output_ring_tagged_h264() {
     let engine = Arc::new(MediaEngine::new());
     let source = engine.get_or_create_pipeline("p-h264-tag").await;
 
-    let ring = engine
+    let (ring, _lease26) = engine
         .get_or_create_h264_transcoder("p-h264-tag", StageKind::source(), source)
         .await;
 

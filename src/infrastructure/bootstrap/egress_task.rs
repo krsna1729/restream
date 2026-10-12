@@ -99,6 +99,9 @@ pub(super) struct EgressTask {
     pub(super) engine: Arc<MediaEngine>,
     pub(super) pool: SqlitePool,
     pub(super) last_failed: FailureTracker,
+    /// Leases on the shared stages this output reads through: they stop
+    /// when the last egress (or other consumer) using them ends.
+    pub(super) _stages: Vec<crate::media::stage_lease::StageLease>,
     pub(super) tuning: RuntimeTuning,
     pub(super) correlation_id: String,
     pub(super) job_id: String,

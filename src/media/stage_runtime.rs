@@ -24,6 +24,7 @@ use crate::media::ffmpeg::stage_plan::{
 };
 use crate::media::metadata::{AudioMeta, VideoMeta};
 use crate::media::ring_buffer::RingBuffer;
+use crate::media::stage_lease::StageLease;
 use crate::media::stage_lifecycle::{StageBackendKind, StageLifecycle, StagePhase};
 use crate::media::stage_metrics::StageMetrics;
 use crate::runtime::stage::StageRuntimeSnapshot;
@@ -51,8 +52,9 @@ impl StageRuntimeManager {
     }
 
     /// Ensure a stage exists for the given key, creating its output ring,
-    /// lifecycle, and metrics if absent. Returns the existing handle and `false`
-    /// if the stage is already alive, or a freshly-created handle and `true`.
+    /// lifecycle, and metrics if absent. Returns the handle, the caller's lease
+    /// (the stage stops when its last lease drops), and whether this call
+    /// created the stage (the caller then spawns it).
     ///
     /// `input_codec_override` is the codec hint of the *source* ring when it
     /// differs from the ingest codec (e.g. an HEVC source ring feeding a
@@ -62,7 +64,7 @@ impl StageRuntimeManager {
         key: StageKey,
         source_ring: Arc<RingBuffer>,
         input_codec_override: Option<&str>,
-    ) -> (StageHandle, bool) {
+    ) -> (StageHandle, StageLease, bool) {
         let backend_kind = crate::planner::select_backend(&key.kind);
         let lifecycle = self
             .engine
@@ -80,6 +82,7 @@ impl StageRuntimeManager {
         if let Some(runtime) = runtimes.get(&key)
             && !runtime.cancel.is_cancelled()
             && let Some(ring) = runtime.ring.as_ref()
+            && let Some(lease) = StageLease::upgrade(&runtime.lease)
         {
             return (
                 StageHandle {
@@ -89,12 +92,14 @@ impl StageRuntimeManager {
                     lifecycle: runtime.lifecycle.clone(),
                     metrics: runtime.metrics.clone(),
                 },
+                lease,
                 false,
             );
         }
 
         let output_ring = Arc::new(RingBuffer::new(self.engine.config.transcoder_ring_capacity));
         let cancel = CancellationToken::new();
+        let lease = StageLease::runtime(&self.engine, key.clone(), cancel.clone());
         runtimes.insert(
             key.clone(),
             StageRuntime {
@@ -104,6 +109,7 @@ impl StageRuntimeManager {
                 metrics: metrics.clone(),
                 input_queue: None,
                 pipe_metrics: None,
+                lease: lease.downgrade(),
             },
         );
         drop(runtimes); // release write locks before any await-heavy setup
@@ -132,6 +138,7 @@ impl StageRuntimeManager {
                 lifecycle,
                 metrics,
             },
+            lease,
             true,
         )
     }
@@ -228,10 +235,9 @@ impl StageRuntimeManager {
             )
             .await
             else {
-                engine.remove_stage_metrics(&key).await;
-                engine.remove_pipe_metrics(&key).await;
-                engine.remove_stage_lifecycle(&key).await;
-                engine.remove_stage_runtime(&key).await;
+                // The stage ends here. Its entry (and metrics) go when its
+                // consumers' leases drop; a cancelled entry is never reused.
+                cancel.cancel();
                 return;
             };
 

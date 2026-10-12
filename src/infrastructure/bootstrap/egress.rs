@@ -40,10 +40,9 @@ impl EgressReconciler {
         }
     }
 
-    /// Starts, stops and retries outputs. Returns how long until the next
-    /// pass is needed: the earliest end of a retry backoff, or zero after an
-    /// output exhausted its retries (its stages are swept by the next pass,
-    /// which sees the flag).
+    /// Starts, stops and retries outputs. Returns how long until the earliest
+    /// output waiting out its retry backoff may start, so the reconciler can
+    /// run then.
     pub async fn reconcile(&self, outputs: &[Output]) -> Option<std::time::Duration> {
         let mut next_retry: Option<u64> = None;
         for output in outputs {
@@ -92,7 +91,6 @@ impl EgressReconciler {
                     .await
                     {
                         Ok(_) => {
-                            next_retry = Some(0);
                             self.last_failed.lock().await.remove(&output.id);
                             self.engine.clear_egress_retry_state(&output.id).await;
                             warn!(
@@ -183,7 +181,9 @@ impl EgressReconciler {
         );
 
         let url_scheme = OutputUrlScheme::from_url(&output.url);
-        let prepared = crate::application::egress::prepare_output_ring(&self.engine, output).await;
+        let mut prepared =
+            crate::application::egress::prepare_output_ring(&self.engine, output).await;
+        let mut stages = std::mem::take(&mut prepared.stages);
         let use_srt_fabric = matches!(url_scheme, OutputUrlScheme::Srt);
         let encoding = if use_srt_fabric {
             prepared.media_stage_key.kind.to_string()
@@ -284,6 +284,7 @@ impl EgressReconciler {
                 registration.attempt_id,
             )
             .await;
+            stages.push(feed.muxer_lease);
             let mut spec = crate::application::egress::srt_fabric_output_spec(
                 output,
                 registration.attempt_id,
@@ -506,6 +507,7 @@ impl EgressReconciler {
             url: output.url.clone(),
             ring: prepared.ring,
             terminal_stage_key: prepared.terminal_stage_key,
+            _stages: stages,
             registration,
             engine: self.engine.clone(),
             pool: self.pool.clone(),

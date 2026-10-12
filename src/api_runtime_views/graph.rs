@@ -280,10 +280,10 @@ pub(crate) async fn processing_graph(
             let mux_key = format!("{pipeline_id}:{stage_encoding_label}");
             let mux_active = ts_muxers
                 .get(&mux_key)
-                .is_some_and(|stage| !stage.cancel.is_cancelled());
+                .is_some_and(|stage| !stage.muxer.cancel.is_cancelled());
             let mux_payload_stats = ts_muxers
                 .get(&mux_key)
-                .map(|stage| api_view_models::ring_payload_stats_json(&stage.ring));
+                .map(|stage| api_view_models::ring_payload_stats_json(&stage.muxer.ring));
             if added_packetizers.insert(mux_node_id.clone()) {
                 nodes.push(api_view_models::processing_graph_node(
                     mux_node_id.clone(),

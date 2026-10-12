@@ -144,9 +144,9 @@ pub async fn start_audio_router(
     }
 
     output_buffer.mark_end_of_stream();
-    engine.remove_stage_metrics(&stage_key).await;
-    engine.remove_stage_lifecycle(&stage_key).await;
-    engine.remove_stage_runtime(&stage_key).await;
+    // A cancelled entry is never reused; the consumers' lease drops remove
+    // it, and only if no newer stage took its key.
+    cancel.cancel();
     engine
         .runtime
         .event_log

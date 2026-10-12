@@ -7,8 +7,10 @@ use crate::media::avio::MemoryQueue;
 use crate::media::engine::{ActiveEgress, MediaEngine, hls_preview_registry_key};
 use crate::media::engine_hls::input_id_from_hls_preview_resource_id;
 use crate::media::engine_registries::StageRuntime;
+use crate::media::engine_registries::TsMuxerStage;
 use crate::media::pipe_metrics::PipeMetrics;
 use crate::media::ring_buffer::RingBuffer;
+use crate::media::stage_lease::StageLease;
 use crate::media::stage_lifecycle::{
     StageBackendKind, StageLifecycle, StageLifecycleSnapshot, StagePhase,
 };
@@ -68,6 +70,7 @@ impl MediaEngine {
                 metrics: metrics.clone(),
                 input_queue: None,
                 pipe_metrics: None,
+                lease: std::sync::Weak::new(),
             },
         );
         (lifecycle, metrics)
@@ -107,22 +110,26 @@ impl MediaEngine {
         }
     }
 
+    /// The shared TS muxer for `stage_key`, and the caller's lease on it: the
+    /// muxer stops when its last lease drops.
     pub async fn get_or_create_ts_muxer_stage(
         self: &Arc<Self>,
         pipeline_id: &str,
         stage_key: &str,
         source_ring: Arc<RingBuffer>,
-    ) -> Arc<TsChunkRing> {
+    ) -> (Arc<TsChunkRing>, StageLease) {
         let key = format!("{}:{}", pipeline_id, stage_key);
 
         let mut stages = self.stages.ts_muxers.write().await;
         if let Some(stage) = stages.get(&key)
-            && !stage.cancel.is_cancelled()
+            && !stage.muxer.cancel.is_cancelled()
+            && let Some(lease) = StageLease::upgrade(&stage.lease)
         {
-            return stage.clone();
+            return (stage.muxer.clone(), lease);
         }
 
         let cancel = CancellationToken::new();
+        let lease = StageLease::ts_muxer(self, key.clone(), cancel.clone());
         let shared_muxer = crate::media::srt::start_shared_ts_muxer(
             pipeline_id,
             stage_key,
@@ -131,8 +138,40 @@ impl MediaEngine {
             cancel,
         );
 
-        stages.insert(key, shared_muxer.clone());
-        shared_muxer
+        stages.insert(
+            key,
+            TsMuxerStage {
+                muxer: shared_muxer.clone(),
+                lease: lease.downgrade(),
+            },
+        );
+        (shared_muxer, lease)
+    }
+
+    /// Last lease of a TS muxer dropped (its token is already cancelled).
+    pub(crate) async fn release_ts_muxer_stage(&self, key: &str, cell: usize) {
+        let mut stages = self.stages.ts_muxers.write().await;
+        if stages
+            .get(key)
+            .is_some_and(|stage| crate::media::stage_lease::is_cell(&stage.lease, cell))
+        {
+            stages.remove(key);
+        }
+    }
+
+    /// Last lease of a stage runtime dropped (its token is already cancelled).
+    pub(crate) async fn release_stage_runtime(&self, key: &StageKey, cell: usize) {
+        let mut runtimes = self.stages.runtimes.write().await;
+        if !runtimes
+            .get(key)
+            .is_some_and(|runtime| crate::media::stage_lease::is_cell(&runtime.lease, cell))
+        {
+            return;
+        }
+        runtimes.remove(key);
+        drop(runtimes);
+        self.stages.metrics.write().await.remove(key);
+        self.stages.lifecycles.write().await.remove(key);
     }
 
     fn srt_muxer_cohort_key(pipeline_id: &str, encoding: &str) -> String {
@@ -222,7 +261,7 @@ impl MediaEngine {
         let key = format!("{}:{}", pipeline_id, stage_key);
         let mut stages = self.stages.ts_muxers.write().await;
         if let Some(stage) = stages.remove(&key) {
-            stage.cancel.cancel();
+            stage.muxer.cancel.cancel();
         }
     }
 

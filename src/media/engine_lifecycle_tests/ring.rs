@@ -39,7 +39,7 @@ async fn ts_muxer_ring_uses_engine_typed_config_capacity() {
     let engine = Arc::new(MediaEngine::new_with_config(config));
     let source = Arc::new(RingBuffer::new(16));
 
-    let ts_ring = engine
+    let (ts_ring, _lease5) = engine
         .get_or_create_ts_muxer_stage("typed-ts", "source", source)
         .await;
 

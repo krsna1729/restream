@@ -100,7 +100,7 @@ pub(crate) async fn measure_snapshot(engine: &MediaEngine, pipelines: usize) -> 
         .read()
         .await
         .values()
-        .map(|stage| stage.ring.payload_stats().payload_bytes as u64)
+        .map(|stage| stage.muxer.ring.payload_stats().payload_bytes as u64)
         .sum::<u64>();
     let (egresses, delivery) = {
         let active = engine.egresses.active.read().await;

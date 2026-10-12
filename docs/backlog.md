@@ -21,7 +21,6 @@ items).
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
 - [Q-035 MEDIA attribution](#q-035-observability-sonnet-attribute-media-pool-time-to-feed-and-stage)
 - [Q-036 enforced runtime truth table](#q-036-docs-sonnet-make-runtime-crossings-an-enforced-truth-table)
-- [Q-041 stage ownership](#q-041-architecture-opus-own-stages-by-the-plan-not-a-sweep)
 - [Q-042 runtime truth](#q-042-architecture-opus-one-revisioned-runtime-state-with-delta-events)
 - [Q-043 evidence engine](#q-043-observability-opus-one-evidence-classification)
 - [Q-044 frontend cut](#q-044-frontend-opus-hard-cut-the-frontend-to-one-build)
@@ -242,17 +241,6 @@ items).
   once led design work to a wrong runtime model.
 - Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
   review).
-
-### Q-041 [architecture] [opus] Own stages by the plan, not a sweep
-- Goal: shared stages are reference-counted by the pipeline plan and stop
-  when the last consumer leaves. Delete the sweep and its grace period.
-- Files: `src/media/engine_pipeline.rs:194` (`sweep_unused_stages`,
-  `UNUSED_STAGE_GRACE` = 5 s re-derives use from all outputs).
-- Gates: tests for add/remove/replace of consumers on a shared stage; no
-  stage outlives its last consumer; live harness mixed-anchor passes.
-- Unblocks: per-pipeline output passes. The reconciler's output pass is
-  on demand (Q-040) but still whole, because this sweep needs every output.
-- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
 
 ### Q-042 [architecture] [opus] One revisioned runtime state with delta events
 - Goal: each entity has desired, actual, convergence, flow, queue and

@@ -81,7 +81,7 @@ async fn matrix_routing_transcoder_stage_isolation() {
 
     source.push(test_video_packet(0, 0, true));
 
-    let tc_ring = engine
+    let (tc_ring, _lease6) = engine
         .get_or_create_transcoder(
             "iso-pipe",
             StageKind::video_preset("720p"),

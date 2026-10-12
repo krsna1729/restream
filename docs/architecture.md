@@ -305,12 +305,11 @@ ingest sessions (and so file-ingest children), ring, stages and HLS of a
 deleted pipeline; a requested input promotion is applied first in the pass,
 from its persisted row.
 
-The output pass (rows, topology, egress start/stop/retry, stage sweep) runs
+The output pass (rows, topology, egress start/stop/retry) runs
 only when something asks for it: a successful mutating HTTP request (one
 middleware covers every handler), an engine lifecycle event (ingest connect or
-disconnect, egress stop, stage stop), or a deadline the pass scheduled itself
-(an output's retry backoff ending, an ingest-disconnect grace ending, a young
-unused stage aging out, an output exhausting its retries). An egress error is
+disconnect, egress stop), or a deadline the pass scheduled itself (an
+output's retry backoff ending, an ingest-disconnect grace ending). An egress error is
 not a trigger: a still-active egress reports one per upload retry, and its
 end emits a stop. A backstop pass runs every 10 reconcile intervals, and
 passes are at least one interval apart: an outage across many destinations
@@ -318,9 +317,9 @@ costs no more passes than the old timer, and a request after a quiet
 interval still runs at once. Deadlines only wake the pass, which re-reads current
 state, so a stale deadline costs one pass and never acts on old state.
 Housekeeping that reads no outputs (sessions, fabric sizing, recordings, idle
-HLS, file-ingest reaping) stays on the interval. Passes are still whole: the
-transcoder-stage sweep is global, so a pass for one pipeline would need every
-output (Q-041 removes the sweep).
+HLS, file-ingest reaping) stays on the interval. The pass does not manage
+shared stages: each consumer leases the stages it reads, and the last lease
+to drop stops the stage (see [media pipeline](media-pipeline.md#transcoder-stages)).
 
 Failure isolation follows these rules:
 

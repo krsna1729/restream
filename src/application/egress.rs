@@ -11,6 +11,7 @@ use crate::media::egress::policy::LeafPolicy;
 use crate::media::egress::{FeedId, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::engine::MediaEngine;
 use crate::media::ring_buffer::RingBuffer;
+use crate::media::stage_lease::StageLease;
 use crate::planner::PlannedOutput;
 use std::sync::Arc;
 
@@ -22,12 +23,17 @@ pub struct PreparedOutput {
     pub media_stage_key: StageKey,
     /// Terminal graph stage reported in dependency status.
     pub terminal_stage_key: StageKey,
+    /// Leases on every shared stage the output reads through; the egress
+    /// holds them for its lifetime.
+    pub stages: Vec<StageLease>,
 }
 
 pub struct PreparedSrtFabricFeed {
     pub feed_id: FeedId,
     pub feed: Arc<TsFeed>,
     pub muxer_stage_key: String,
+    /// The SRT leaf's lease on the shared muxer.
+    pub muxer_lease: StageLease,
 }
 
 /// Prepare the output ring and graph terminal stage for dependency tracking.
@@ -68,6 +74,7 @@ pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> 
         )
     };
 
+    let mut stages = Vec::new();
     let mut current_bufs = std::collections::HashMap::new();
     current_bufs.insert(
         StageKey::new(output.pipeline_id.as_str(), StageKind::Source),
@@ -88,7 +95,7 @@ pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> 
             .cloned()
             .unwrap_or_else(|| source_buf.clone());
 
-        let stage_buf = match &stage.kind {
+        let (stage_buf, lease) = match &stage.kind {
             StageKind::VideoPreset { .. } => {
                 engine
                     .get_or_create_transcoder(
@@ -120,6 +127,7 @@ pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> 
             }
         };
 
+        stages.push(lease);
         current_bufs.insert(stage.key.clone(), stage_buf);
     }
 
@@ -142,6 +150,7 @@ pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> 
         ring: terminal_buf,
         media_stage_key,
         terminal_stage_key,
+        stages,
     }
 }
 
@@ -155,7 +164,7 @@ pub async fn prepare_srt_fabric_feed(
     let muxer_stage_key = engine
         .assign_srt_egress_muxer_stage(&output.pipeline_id, &encoding, &output.id, attempt_id)
         .await;
-    let shared_muxer = engine
+    let (shared_muxer, muxer_lease) = engine
         .get_or_create_ts_muxer_stage(&output.pipeline_id, &muxer_stage_key, prepared.ring.clone())
         .await;
     let feed_id = FeedId::new(format!("srt:{}:{muxer_stage_key}", output.pipeline_id));
@@ -164,6 +173,7 @@ pub async fn prepare_srt_fabric_feed(
         feed_id,
         feed: Arc::new(TsFeed::new(&shared_muxer, Arc::new(FeedEpoch::new()))),
         muxer_stage_key,
+        muxer_lease,
     }
 }
 
@@ -464,7 +474,7 @@ mod tests {
             )
             .await;
         let source = engine.get_or_create_pipeline("pipe-hevc").await;
-        let expected = engine
+        let (expected, _lease3) = engine
             .get_or_create_h264_transcoder("pipe-hevc", StageKind::source(), source)
             .await;
         let output = test_output(
@@ -523,8 +533,12 @@ mod tests {
             "rtmp://example/live/b",
         );
 
-        let ring_a = prepare_output_ring(&engine, &output_a).await.ring;
-        let ring_b = prepare_output_ring(&engine, &output_b).await.ring;
+        // Held: its leases keep the stages running.
+        let output_a_prepared = prepare_output_ring(&engine, &output_a).await;
+        let ring_a = output_a_prepared.ring.clone();
+        // Held: its leases keep the stages running.
+        let output_b_prepared = prepare_output_ring(&engine, &output_b).await;
+        let ring_b = output_b_prepared.ring.clone();
         let stages = engine.active_transcoder_stages("pipe-hevc-audio").await;
 
         assert!(
@@ -584,8 +598,12 @@ mod tests {
             "rtmp://example/live/a",
         );
 
-        let srt_ring = prepare_output_ring(&engine, &srt).await.ring;
-        let rtmp_ring = prepare_output_ring(&engine, &rtmp).await.ring;
+        // Held: its leases keep the stages running.
+        let srt_prepared = prepare_output_ring(&engine, &srt).await;
+        let srt_ring = srt_prepared.ring.clone();
+        // Held: its leases keep the stages running.
+        let rtmp_prepared = prepare_output_ring(&engine, &rtmp).await;
+        let rtmp_ring = rtmp_prepared.ring.clone();
         let stages = engine.active_transcoder_stages("pipe-hevc-mixed").await;
 
         assert!(!Arc::ptr_eq(&srt_ring, &rtmp_ring));

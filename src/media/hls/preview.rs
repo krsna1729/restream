@@ -27,6 +27,7 @@ impl MediaEngine {
                 None => crate::media::hls::preview_graph::HlsPreviewGraph {
                     video_ring: self.get_or_create_pipeline(pipeline_id).await,
                     video_meta: None,
+                    stage: None,
                 },
             };
             let store_for_task = store.clone();
@@ -44,6 +45,7 @@ impl MediaEngine {
                 )
                 .await;
                 engine.shutdown_hls_preview_segmenter(&pid).await;
+                drop(graph.stage);
             });
         }
 
@@ -85,6 +87,7 @@ impl MediaEngine {
                 )
                 .await;
                 engine.shutdown_hls_preview_segmenter(&segmenter_id).await;
+                drop(graph.stage);
             });
         }
         self.touch_hls_preview(&resource_id).await;

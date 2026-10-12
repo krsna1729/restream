@@ -53,6 +53,7 @@ pub mod security;
 pub mod snapshots;
 pub mod srt;
 pub(crate) mod srt_stream_id;
+pub mod stage_lease;
 pub mod stage_lifecycle;
 pub mod stage_metrics;
 pub mod stage_registry_access;

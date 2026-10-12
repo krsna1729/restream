@@ -134,112 +134,146 @@ async fn diag_semaphore_prevents_concurrent_runs_on_same_pipeline() {
     );
 }
 
-// ── sweep_unused_stages reader tracking ─────────────────────────
+// ── stage leases (Q-041) ───────────────────────────────────────
+
+/// Polls until `done` holds: a lease release runs on a spawned task.
+async fn eventually(mut done: impl AsyncFnMut() -> bool) -> bool {
+    for _ in 0..200 {
+        if done().await {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    false
+}
 
 #[tokio::test]
-async fn sweep_unused_stages_retains_active_readers() {
-    let engine = MediaEngine::new();
-    let key = "pipeline:stage-sweep".to_string();
-    let cancel = CancellationToken::new();
-    let mut stage = TsChunkRing::new(16, cancel);
-    // Past the sweep's new-stage grace window so the reader signal is what
-    // the assertions below are actually exercising.
-    stage.created_at -= Duration::from_secs(10);
-    let stage = Arc::new(stage);
-
-    let _reader =
-        crate::media::ring_buffer::Reader::new("sweep-test".to_string(), stage.ring.clone());
-
-    engine
-        .stages
-        .ts_muxers
-        .write()
-        .await
-        .insert(key.clone(), stage);
-
-    engine.sweep_unused_stages().await;
+async fn a_shared_muxer_lives_exactly_as_long_as_its_leases() {
+    let engine = Arc::new(MediaEngine::new());
+    let source = engine.get_or_create_pipeline("pipe").await;
+    let (first_ring, first) = engine
+        .get_or_create_ts_muxer_stage("pipe", "h264", source.clone())
+        .await;
+    let (second_ring, second) = engine
+        .get_or_create_ts_muxer_stage("pipe", "h264", source.clone())
+        .await;
     assert!(
-        engine.stages.ts_muxers.read().await.contains_key(&key),
-        "stage with active reader must be retained"
+        Arc::ptr_eq(&first_ring, &second_ring),
+        "consumers share one muxer"
     );
 
-    drop(_reader);
-    engine.sweep_unused_stages().await;
+    drop(first);
+    tokio::task::yield_now().await;
+    assert!(!first_ring.cancel.is_cancelled(), "one consumer remains");
     assert!(
-        !engine.stages.ts_muxers.read().await.contains_key(&key),
-        "stage without readers must be removed"
+        engine
+            .stages
+            .ts_muxers
+            .read()
+            .await
+            .contains_key("pipe:h264")
+    );
+
+    drop(second);
+    assert!(
+        first_ring.cancel.is_cancelled(),
+        "the last consumer stops it at once"
+    );
+    assert!(
+        eventually(async || !engine
+            .stages
+            .ts_muxers
+            .read()
+            .await
+            .contains_key("pipe:h264"))
+        .await,
+        "and its entry goes"
+    );
+
+    let (third_ring, _third) = engine
+        .get_or_create_ts_muxer_stage("pipe", "h264", source)
+        .await;
+    assert!(
+        !Arc::ptr_eq(&first_ring, &third_ring),
+        "a new consumer gets a new muxer"
+    );
+    assert!(!third_ring.cancel.is_cancelled());
+}
+
+#[tokio::test]
+async fn a_released_lease_never_removes_a_newer_stage_under_its_key() {
+    let engine = Arc::new(MediaEngine::new());
+    let manager = crate::media::stage_runtime::StageRuntimeManager::new(engine.clone());
+    let key = StageKey::new("pipe", StageKind::video_preset_with_codec("720p", "h264"));
+    let source = Arc::new(RingBuffer::new(16));
+
+    let (old, old_lease, created) = manager
+        .ensure_stage(key.clone(), source.clone(), None)
+        .await;
+    assert!(created);
+    // The old stage ends on its own (backend exit) while its consumer
+    // still holds the lease; the next consumer starts a new stage.
+    old.cancel.cancel();
+    let (new, _new_lease, created) = manager.ensure_stage(key.clone(), source, None).await;
+    assert!(created, "a cancelled stage is never reused");
+
+    drop(old_lease);
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    let runtimes = engine.stages.runtimes.read().await;
+    let current = runtimes
+        .get(&key)
+        .expect("the newer stage stays registered");
+    assert!(Arc::ptr_eq(&current.lifecycle, &new.lifecycle));
+    assert!(!new.cancel.is_cancelled());
+}
+
+#[tokio::test]
+async fn the_last_lease_removes_a_runtime_stage_and_its_metrics() {
+    let engine = Arc::new(MediaEngine::new());
+    let manager = crate::media::stage_runtime::StageRuntimeManager::new(engine.clone());
+    let key = StageKey::new("pipe", StageKind::video_preset_with_codec("720p", "h264"));
+    let (handle, lease, _) = manager
+        .ensure_stage(key.clone(), Arc::new(RingBuffer::new(16)), None)
+        .await;
+    let (_, again, created) = manager
+        .ensure_stage(key.clone(), Arc::new(RingBuffer::new(16)), None)
+        .await;
+    assert!(!created, "a live stage is shared");
+
+    drop(lease);
+    tokio::task::yield_now().await;
+    assert!(!handle.cancel.is_cancelled());
+    drop(again);
+    assert!(handle.cancel.is_cancelled());
+    assert!(
+        eventually(async || {
+            !engine.stages.runtimes.read().await.contains_key(&key)
+                && !engine.stages.metrics.read().await.contains_key(&key)
+                && !engine.stages.lifecycles.read().await.contains_key(&key)
+        })
+        .await
     );
 }
 
-/// Regression: a stage feeding only fabric SRT outputs has no `Reader`
-/// registered (fabric consumes via `EgressFeed::read_from`, not the reader
-/// registry), so the reader-count check alone would sweep it on the very
-/// next reconcile tick regardless of how recently it started — starving the
-/// fabric leaves of all media before they ever see a byte. Live evidence:
-/// the egress migration record (git history) Phase 4 status.
-#[tokio::test]
-async fn sweep_unused_stages_retains_stage_with_live_fabric_consumer_and_no_readers() {
-    let engine = MediaEngine::new();
-    let key = "pipeline:stage-fabric-sweep".to_string();
-    let cancel = CancellationToken::new();
-    let mut stage = TsChunkRing::new(16, cancel);
-    stage.created_at -= Duration::from_secs(10);
-    let stage = Arc::new(stage);
-
-    engine
-        .stages
-        .ts_muxers
-        .write()
-        .await
-        .insert(key.clone(), stage);
-
-    // No Reader registered — mirrors the fabric consumption model — but a
-    // live fabric runtime exists for the feed derived from this stage key.
-    let feed_id = crate::media::egress::command::FeedId::new(format!("srt:{key}"));
-    engine
-        .fabric
-        .srt
-        .lock()
-        .await
-        .active_outputs
-        .insert(feed_id, 1);
-
-    engine.sweep_unused_stages().await;
+/// An SRT player's lease drops on its Compio Owner thread, outside Tokio.
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn a_lease_dropped_off_tokio_still_releases_its_stage() {
+    let engine = Arc::new(MediaEngine::new());
+    let source = engine.get_or_create_pipeline("pipe").await;
+    let (ring, lease) = engine
+        .get_or_create_ts_muxer_stage("pipe", "play", source)
+        .await;
+    std::thread::spawn(move || drop(lease)).join().unwrap();
+    assert!(ring.cancel.is_cancelled());
     assert!(
-        engine.stages.ts_muxers.read().await.contains_key(&key),
-        "stage with a live fabric consumer must be retained even with zero readers"
-    );
-
-    engine.fabric.srt.lock().await.active_outputs.clear();
-    engine.sweep_unused_stages().await;
-    assert!(
-        !engine.stages.ts_muxers.read().await.contains_key(&key),
-        "stage must be swept once its fabric consumer is gone and it still has no readers"
-    );
-}
-
-/// The grace window itself: a freshly created stage (no reader yet, no
-/// fabric consumer registered yet — the exact gap between
-/// `prepare_srt_fabric_feed` creating the stage and the async task that
-/// creates the fabric runtime registering `active_outputs`) must survive a
-/// sweep, since neither liveness signal has had a chance to attach.
-#[tokio::test]
-async fn sweep_unused_stages_exempts_brand_new_stage_from_both_liveness_checks() {
-    let engine = MediaEngine::new();
-    let key = "pipeline:stage-brand-new".to_string();
-    let cancel = CancellationToken::new();
-    let stage = Arc::new(TsChunkRing::new(16, cancel)); // created_at = now
-
-    engine
-        .stages
-        .ts_muxers
-        .write()
+        eventually(async || !engine
+            .stages
+            .ts_muxers
+            .read()
+            .await
+            .contains_key("pipe:play"))
         .await
-        .insert(key.clone(), stage);
-
-    engine.sweep_unused_stages().await;
-    assert!(
-        engine.stages.ts_muxers.read().await.contains_key(&key),
-        "a stage younger than the grace window must survive even with no reader and no fabric consumer"
     );
 }
