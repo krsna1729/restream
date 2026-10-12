@@ -30,7 +30,7 @@ import {
   settingsRateLimitPresentation,
   syncDashboardPasswordPrompt,
 } from "./security.js";
-const SETTINGS_SECTION_COUNT = 5;
+const SETTINGS_SECTION_COUNT = 4;
 
 let settingsCheckpointCallback:
   | ((model: SettingsCheckpointModel | null) => void)

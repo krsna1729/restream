@@ -135,7 +135,7 @@ test("seed: default v2 mounts Settings body in the v2-owned route host @desktop"
   await expect(page).toHaveURL(/\?mode=settings$/);
   await expect(page.locator("#dashboard-v2-settings-title")).toBeVisible();
   await expect(page.locator("#dashboard-v2-settings-root")).toContainText(
-    "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
+    "Synthetic Restream settings · 4 sections · 3 profiles · 1 auth attempt",
   );
   await expect(
     page.locator(
@@ -150,7 +150,7 @@ test("seed: default v2 mounts Settings body in the v2-owned route host @desktop"
     "Dashboard · Server configuration",
   );
   expect(await getCdpStatusTexts(page)).toContain(
-    "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
+    "Synthetic Restream settings · 4 sections · 3 profiles · 1 auth attempt",
   );
   const settings = page.locator("#dashboard-v2-settings-content");
   const authSearch = settings.getByLabel("Search authentication attempts");
@@ -223,7 +223,7 @@ test("seed: default v2 mounts Settings body in the v2-owned route host @desktop"
   await expect(authSearch).toBeVisible();
   await authSearch.fill("dashboard");
   await expect(page.locator("#dashboard-v2-settings-root")).toContainText(
-    "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
+    "Synthetic Restream settings · 4 sections · 3 profiles · 1 auth attempt",
   );
   await expect(authSearchSummary).toHaveText(
     '1/1 auth attempts match "dashboard"',
@@ -234,7 +234,7 @@ test("seed: default v2 mounts Settings body in the v2-owned route host @desktop"
 
   await authSearch.fill("banned");
   await expect(page.locator("#dashboard-v2-settings-root")).toContainText(
-    "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
+    "Synthetic Restream settings · 4 sections · 3 profiles · 1 auth attempt",
   );
   await expect(authSearchSummary).toHaveText(
     '0/1 auth attempts match "banned"',
@@ -464,11 +464,11 @@ test("seed: default v2 Settings bounds dense auth attempts until requested @desk
     checkpoint.locator("#dashboard-v2-settings-title"),
   ).toBeVisible();
   await expect(page.locator("#dashboard-v2-settings-root")).toContainText(
-    "Synthetic Restream settings · 5 sections · 3 profiles · 12 auth attempts",
+    "Synthetic Restream settings · 4 sections · 3 profiles · 12 auth attempts",
   );
   await expect(
     checkpoint.getByText(
-      "Synthetic Restream settings · 5 sections · 3 profiles · 12 auth attempts",
+      "Synthetic Restream settings · 4 sections · 3 profiles · 12 auth attempts",
     ).first(),
   ).toBeVisible();
   await expect(
@@ -499,7 +499,6 @@ test("seed: default v2 Settings bounds dense auth attempts until requested @desk
       "Server",
       "Recording",
       "SRT",
-      "Backend",
       "Profiles",
     ]),
   );
@@ -508,7 +507,6 @@ test("seed: default v2 Settings bounds dense auth attempts until requested @desk
       "Jump to server settings",
       "Jump to recording settings",
       "Jump to SRT settings",
-      "Jump to backend settings",
       "Jump to transcode profile settings",
     ]),
   );
@@ -521,13 +519,12 @@ test("seed: default v2 Settings bounds dense auth attempts until requested @desk
       "Ingest Security",
       "Authentication Attempts",
       "Global SRT Ingest",
-      "Transcoding Backend",
       "Transcode Profiles",
     ]),
   );
   await expect(
     settings.locator("[data-settings-v2-disclosure] > summary[aria-label]"),
-  ).toHaveCount(7);
+  ).toHaveCount(6);
   await expect(
     settings.locator('summary[aria-label="Dashboard password settings"]'),
   ).toBeVisible();
@@ -678,7 +675,7 @@ test("seed: default dashboard mounts route bodies in v2-owned hosts @desktop", a
       panelId: "settings-mode-panel",
       routeKey: "settings",
       rootId: "dashboard-v2-settings-root",
-      text: "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
+      text: "Synthetic Restream settings · 4 sections · 3 profiles · 1 auth attempt",
     },
     {
       hostId: "dashboard-v2-status-content",
