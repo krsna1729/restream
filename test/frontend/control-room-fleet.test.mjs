@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
-const { buildFleetModel } = await loadCompiledFrontendModule(
+const { buildFleetModel, pipelineHealth } = await loadCompiledFrontendModule(
   "control-room/fleet-model.js",
 );
 const { telemetryRates } = await loadCompiledFrontendModule(
@@ -41,6 +41,8 @@ function state(pipelines, outputs) {
 }
 
 test("one upstream cause is one attention item covering every output it stalls", () => {
+  const blocked720 = { code: "stageNotProducing", stage: "720p", phase: "starting" };
+  const blocked1080 = { code: "stageNotProducing", stage: "1080p", phase: "starting" };
   const model = buildFleetModel(
     state(
       [
@@ -48,9 +50,11 @@ test("one upstream cause is one attention item covering every output it stalls",
         { id: "b", name: "B", ingest: INGEST },
       ],
       [
-        output("a1", "a", diagnosed("feed", { code: "noProgress" })),
-        output("a2", "a", diagnosed("feed", { code: "noProgress" })),
-        output("a3", "a", diagnosed("feed", { code: "noProgress" })),
+        output("a1", "a", diagnosed("feed", blocked720)),
+        output("a2", "a", diagnosed("feed", blocked720)),
+        output("a3", "a", diagnosed("feed", blocked720)),
+        // Another blocked stage in the same pipeline is another cause.
+        output("a4", "a", diagnosed("feed", blocked1080)),
         // Two destination faults of one cause stay separate: each is its own
         // remote.
         output("b1", "b", diagnosed("destination", { code: "retriesExhausted" })),
@@ -63,10 +67,12 @@ test("one upstream cause is one attention item covering every output it stalls",
     model.attention.map((item) => [item.pipelineId, item.layer, item.outputs]),
     [
       ["a", "feed", ["a1", "a2", "a3"]],
+      ["a", "feed", ["a4"]],
       ["b", "destination", ["b1"]],
       ["b", "destination", ["b2"]],
     ],
   );
+  assert.equal(model.attention[1].cause.stage, "1080p");
   assert.deepEqual(
     model.pipelines.map((row) => row.id),
     ["a", "b"],
@@ -104,31 +110,45 @@ test("delivery counts only wanted outputs that converged and flow", () => {
       [
         output("a1", "a"),
         output("a2", "a", { desired: "stopped", flow: "idle" }),
-        output("a3", "a", { convergence: "retrying", flow: "idle" }),
-        output("b1", "b", { convergence: "waitingForIngest", flow: "idle" }),
+        output("a3", "a", { convergence: "starting", flow: "idle" }),
+        // Delivering with a diagnosis: counted once, as attention.
+        output("a4", "a", {
+          ...diagnosed("destination", { code: "backpressured", stalled: false }),
+          flow: "flowing",
+        }),
+        output("b1", "b", diagnosed("ingest", { code: "noPublisher" })),
       ],
     ),
     null,
   );
-  assert.equal(model.outputsWanted, 3);
-  assert.equal(model.outputsDelivering, 1);
+  assert.equal(model.outputsWanted, 4);
+  assert.equal(model.outputsDelivering, 2);
+  assert.equal(model.outputsPending, 1, "a starting output is neither delivering nor diagnosed");
   assert.equal(model.pipelinesReceiving, 1);
-  // A retrying output keeps A unhealthy; B has no input.
+  // A starting output keeps A unhealthy; B has no input.
   assert.equal(model.pipelinesHealthy, 0);
   assert.equal(model.egressBps, null, "no rates sampled yet");
 });
 
-function telemetry(atMs, ingestBytes, egressBytes) {
+test("a row is healthy only when every wanted output delivers", () => {
+  const row = { attention: 0, pending: 0, source: { protocol: "srt", videoCodec: null } };
+  assert.equal(pipelineHealth({ ...row, attention: 1, pending: 2 }).label, "1 degraded");
+  assert.equal(pipelineHealth({ ...row, pending: 2 }).label, "2 starting");
+  assert.equal(pipelineHealth({ ...row, source: null }).label, "idle");
+  assert.equal(pipelineHealth(row).label, "healthy");
+});
+
+function telemetry(atMs, ingestBytes, egressBytes, streamKey = "k1") {
   return {
     generatedAt: new Date(atMs).toISOString(),
-    ingests: [{ pipelineId: "a", protocol: "srt", uptimeSecs: 1, bytesReceived: ingestBytes, metrics: {} }],
+    ingests: [{ pipelineId: "a", protocol: "srt", streamKey, uptimeSecs: 1, bytesReceived: ingestBytes, metrics: {} }],
     stages: [],
     egresses: [{ outputId: "a1", bytesOut: egressBytes }],
     activeTranscoderBuffers: 0,
   };
 }
 
-test("rates come from two samples and skip counters that restarted", () => {
+test("rates come from two samples of one session", () => {
   const first = telemetry(0, 1_000, 5_000);
   assert.equal(telemetryRates(null, first), null);
 
@@ -137,6 +157,11 @@ test("rates come from two samples and skip counters that restarted", () => {
   // The egress counter went down: a new session, so no rate rather than a
   // negative one.
   assert.equal(rates.egressBps.has("a1"), false);
+
+  // After a failover the pipeline's counter is another input's, even when
+  // it is higher.
+  const failover = telemetryRates(first, telemetry(2_000, 9_000_000, 6_000, "k2"));
+  assert.equal(failover.ingestBps.has("a"), false);
 
   assert.equal(telemetryRates(first, telemetry(0, 2_000, 6_000)), null);
 });

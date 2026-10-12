@@ -70,7 +70,12 @@ export type DesiredOutputState = "running" | "stopped";
 
 export type EgressPhase = "starting" | "waitingUpstream" | "connecting" | "sending" | "discarding" | "segmenting" | "uploading" | "retrying" | "failed" | "stopped";
 
-export type CapacitySnapshot = { ingressPps: number, mediaBps: number, egressPps: number, hottestShardUtil: number, nicUtil: number, memoryUtil: number, ffmpegUtil: number, diskUtil: number, activeLeaves: number, uniqueStages: number, hottestCenter: ServiceCenter, projectedUtilization: number, flow: FlowDiagnosis, observeOnly: boolean, };
+export type CapacitySnapshot = { ingressPps: number, mediaBps: number, egressPps: number, hottestShardUtil: number, nicUtil: number, memoryUtil: number, ffmpegUtil: number, diskUtil: number, activeLeaves: number, uniqueStages: number, hottestCenter: ServiceCenter, projectedUtilization: number, flow: FlowDiagnosis, 
+/**
+ * `flow` comes from running egress shards; otherwise it is the
+ * projection's hottest center, priced from the priors.
+ */
+flowMeasured: boolean, observeOnly: boolean, };
 
 export type ServiceCenter = "ingress" | "egress" | "cpu" | "nic" | "memory" | "ffmpeg" | "disk";
 

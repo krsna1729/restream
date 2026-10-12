@@ -10,10 +10,10 @@ import {
   workspaceSearch,
 } from "./route.js";
 import type { Workspace } from "./route.js";
-import { useLive } from "./store.js";
+import { SAMPLE_INTERVAL_MS, useLive } from "./store.js";
 
-// Data older than this is flagged: the stream or the sampler is not keeping up.
-const STALE_AFTER_MS = 10_000;
+// A sampled source older than this missed at least two samples.
+const SAMPLE_STALE_AFTER_MS = SAMPLE_INTERVAL_MS * 2.5;
 
 function useWorkspace(): [Workspace, (next: Workspace) => void] {
   const [workspace, setWorkspace] = useState(() =>
@@ -49,8 +49,16 @@ export function App() {
   const live = useLive();
   const [workspace, navigate] = useWorkspace();
   const now = useNow(1000);
+  // The oldest sampled source: one failing endpoint shows here even while
+  // the other keeps answering.
+  const sampledAtMs =
+    live.telemetryAtMs === null || live.metricsAtMs === null
+      ? null
+      : Math.min(live.telemetryAtMs, live.metricsAtMs);
   const stale =
-    live.stateAtMs === null || now - live.stateAtMs > STALE_AFTER_MS;
+    live.stream !== "live" ||
+    sampledAtMs === null ||
+    now - sampledAtMs > SAMPLE_STALE_AFTER_MS;
   return (
     <div className="flex min-h-screen flex-col">
       <header className="navbar gap-4 bg-base-200 px-4">
@@ -78,12 +86,10 @@ export function App() {
           role="status"
           className={`badge ${stale ? "badge-warning" : "badge-ghost"}`}
         >
-          {live.stateAtMs === null
-            ? "connecting…"
-            : `state ${formatAge(live.stateAtMs, now)} · sample ${formatAge(
-                live.sampledAtMs,
-                now,
-              )}`}
+          {live.stream === "live"
+            ? `live · rev ${live.state?.revision ?? "--"}`
+            : live.stream}{" "}
+          · sample {formatAge(sampledAtMs, now)}
         </span>
         <a className="link text-sm" href={withBasePath("/")}>
           Classic dashboard

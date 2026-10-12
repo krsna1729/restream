@@ -59,8 +59,13 @@ type EventSourceLike = {
   onerror: ((event: Event) => void) | null;
 };
 
+/** Whether the stream is connected; state changes alone cannot tell, as a
+ * steady system sends no deltas. */
+export type RuntimeStateStreamStatus = "connecting" | "live" | "reconnecting";
+
 export type RuntimeStateStreamOptions = {
   onState: (state: RuntimeState) => void;
+  onStatus?: (status: RuntimeStateStreamStatus) => void;
   /** Injected in tests; defaults to the browser `EventSource`. */
   createEventSource?: (url: string) => EventSourceLike;
   /** Delay before reconnecting after a connection error (default 1000). */
@@ -87,6 +92,12 @@ export function openRuntimeStateStream(
   let closed = false;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   const reconnectDelayMs = options.reconnectDelayMs ?? 1000;
+  let status: RuntimeStateStreamStatus = "connecting";
+  const setStatus = (next: RuntimeStateStreamStatus) => {
+    if (next === status) return;
+    status = next;
+    options.onStatus?.(next);
+  };
 
   const connect = () => {
     if (closed) return;
@@ -100,6 +111,7 @@ export function openRuntimeStateStream(
       if (source !== opened) return;
       opened.close();
       source = null;
+      setStatus("reconnecting");
       if (delayMs === 0) {
         connect();
       } else {
@@ -111,6 +123,9 @@ export function openRuntimeStateStream(
     };
     // Missed deltas: ask for them (or a snapshot) right away.
     const resync = () => reconnect(0);
+    opened.addEventListener("open", () => {
+      if (source === opened) setStatus("live");
+    });
     opened.addEventListener("snapshot", (event) => {
       if (source !== opened) return;
       state = JSON.parse((event as MessageEvent).data) as RuntimeState;

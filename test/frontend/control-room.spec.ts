@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 // The control room against a running engine: Fleet follows the runtime state
 // stream, so a change made through the API shows without a reload.
 
-test("fleet ranks a stalled pipeline and clears it when the output stops", async ({
+test("fleet shows a no-publisher cause live and drops it when the output stops", async ({
   page,
 }) => {
   const login = await page.request.post("/api/v1/auth/login", {
@@ -52,6 +52,7 @@ test("fleet ranks a stalled pipeline and clears it when the output stops", async
     const row = page.getByRole("row").filter({ hasText: name });
     await expect(row).toContainText("no input");
     await expect(row).toContainText("0 / 1");
+    await expect(page.getByRole("status")).toContainText("live · rev");
 
     const stop = await page.request.post(
       `/api/v1/pipelines/${pipelineId}/outputs/${outputId}/stop`,

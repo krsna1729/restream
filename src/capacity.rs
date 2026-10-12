@@ -107,6 +107,9 @@ pub struct CapacitySnapshot {
     pub hottest_center: ServiceCenter,
     pub projected_utilization: f32,
     pub flow: FlowDiagnosis,
+    /// `flow` comes from running egress shards; otherwise it is the
+    /// projection's hottest center, priced from the priors.
+    pub flow_measured: bool,
     pub observe_only: bool,
 }
 
@@ -185,6 +188,7 @@ impl CapacityModel {
             hottest_center,
             projected_utilization: projected_utilization as f32,
             flow,
+            flow_measured: false,
             observe_only: true,
         }
     }
@@ -344,6 +348,7 @@ impl MediaEngine {
             snapshot.projected_utilization =
                 snapshot.projected_utilization.max(flow.utilization as f32);
             snapshot.flow = flow;
+            snapshot.flow_measured = true;
         }
         snapshot
     }
@@ -370,6 +375,7 @@ mod tests {
         assert_eq!(snapshot.active_leaves, 100);
         assert_eq!(snapshot.egress_pps, 10_000.0);
         assert!(snapshot.nic_util > 0.0);
+        assert!(!snapshot.flow_measured, "a projection measures no flow");
     }
 
     #[test]

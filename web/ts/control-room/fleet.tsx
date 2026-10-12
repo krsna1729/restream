@@ -1,8 +1,17 @@
 import { useMemo } from "react";
 
 import type { SystemMetrics } from "../types.js";
-import { buildFleetModel, describeCause } from "./fleet-model.js";
-import type { AttentionItem, FleetModel } from "./fleet-model.js";
+import {
+  buildFleetModel,
+  describeCause,
+  pipelineHealth,
+} from "./fleet-model.js";
+import type {
+  AttentionItem,
+  FleetModel,
+  FleetPipelineRow,
+  PipelineHealth,
+} from "./fleet-model.js";
 import { formatBps, formatPercent } from "./format.js";
 import type { LiveSnapshot } from "./store.js";
 
@@ -26,14 +35,25 @@ export function Fleet({ live }: { live: LiveSnapshot }) {
   );
 }
 
-function Headline({ model }: { model: FleetModel }) {
+function headline(model: FleetModel): string {
   const issues = model.attention.length;
+  const pending = model.outputsPending;
+  const starting = `${pending} output${pending === 1 ? "" : "s"} starting or not flowing yet`;
+  if (issues > 0) {
+    const causes = `${issues} ${issues === 1 ? "cause needs" : "causes need"} attention`;
+    return pending > 0 ? `${causes} · ${starting}` : causes;
+  }
+  if (pending > 0) return starting;
+  return model.outputsWanted === 0
+    ? "No output is wanted running"
+    : "Every wanted output is delivering";
+}
+
+function Headline({ model }: { model: FleetModel }) {
   return (
     <section aria-labelledby="fleet-headline">
       <h2 id="fleet-headline" className="text-xl font-semibold">
-        {issues === 0
-          ? "Every wanted output is delivering"
-          : `${issues} ${issues === 1 ? "cause needs" : "causes need"} attention`}
+        {headline(model)}
       </h2>
       <div className="stats stats-vertical mt-3 w-full shadow sm:stats-horizontal">
         <Stat
@@ -47,9 +67,9 @@ function Headline({ model }: { model: FleetModel }) {
           detail="of the outputs wanted running"
         />
         <Stat
-          title="Useful egress"
+          title="Egress"
           value={formatBps(model.egressBps)}
-          detail="bytes leaving every output"
+          detail="bit rate across active outputs"
         />
       </div>
     </section>
@@ -133,20 +153,22 @@ function Headroom({ metrics }: { metrics: SystemMetrics | null }) {
         </p>
         {capacity && (
           <>
-            <p className="text-sm">
-              Egress flow (measured):{" "}
-              <span
-                className={`badge badge-sm ${
-                  capacity.flow.status === "healthy"
-                    ? "badge-success"
-                    : "badge-warning"
-                }`}
-              >
-                {capacity.flow.status}
-              </span>{" "}
-              · command queue {formatPercent(capacity.flow.utilization * 100)} ·
-              progress age {Math.round(capacity.flow.delayMs)} ms
-            </p>
+            {capacity.flowMeasured && (
+              <p className="text-sm">
+                Egress flow (measured):{" "}
+                <span
+                  className={`badge badge-sm ${
+                    capacity.flow.status === "healthy"
+                      ? "badge-success"
+                      : "badge-warning"
+                  }`}
+                >
+                  {capacity.flow.status}
+                </span>{" "}
+                · command queue {formatPercent(capacity.flow.utilization * 100)}{" "}
+                · progress age {Math.round(capacity.flow.delayMs)} ms
+              </p>
+            )}
             <Meters
               title={`Projected service-center load · calibration priors, observe-only · hottest: ${capacity.hottestCenter}`}
               rows={projected}
@@ -228,21 +250,7 @@ function PipelineTable({ model }: { model: FleetModel }) {
                   {formatBps(row.ingestBps)} → {formatBps(row.egressBps)}
                 </td>
                 <td>
-                  <span
-                    className={`badge badge-sm ${
-                      row.attention > 0
-                        ? "badge-warning"
-                        : row.source === null
-                          ? "badge-ghost"
-                          : "badge-success"
-                    }`}
-                  >
-                    {row.attention > 0
-                      ? `${row.attention} degraded`
-                      : row.source === null
-                        ? "idle"
-                        : "healthy"}
-                  </span>
+                  <HealthBadge row={row} />
                 </td>
               </tr>
             ))}
@@ -250,5 +258,21 @@ function PipelineTable({ model }: { model: FleetModel }) {
         </table>
       </div>
     </section>
+  );
+}
+
+const HEALTH_BADGE: Record<PipelineHealth["tone"], string> = {
+  warning: "badge-warning",
+  info: "badge-info",
+  idle: "badge-ghost",
+  ok: "badge-success",
+};
+
+function HealthBadge({ row }: { row: FleetPipelineRow }) {
+  const health = pipelineHealth(row);
+  return (
+    <span className={`badge badge-sm ${HEALTH_BADGE[health.tone]}`}>
+      {health.label}
+    </span>
   );
 }

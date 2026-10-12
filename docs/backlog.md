@@ -268,8 +268,9 @@ items).
   `dashboard-v2-loader.ts` mounts twelve React islands into it. The control
   room (Q-045) grows beside it as its own page; when it covers the current
   views it becomes `/`, and the shell, the loader, the vanilla views, the
-  DOM-id drift check (`scripts/check/dom-id-drift.mjs`) and the tests that
-  pin DOM ids are deleted in one change.
+  DOM-id drift check (`scripts/check/dom-id-drift.mjs`), the tests that
+  pin DOM ids and the shell's router (`web/ts/core/pipeline-workspace.ts`,
+  the `?mode=` contract) are deleted in one change: one router remains.
 - Gates: `npm run test:frontend`, Playwright; a tokei-measured reduction of
   frontend source plus test glue.
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).

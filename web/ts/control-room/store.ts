@@ -7,31 +7,38 @@ import { useSyncExternalStore } from "react";
 import { getEngineTelemetry, getSystemMetrics } from "../core/api.js";
 import type { EngineTelemetrySnapshot } from "../core/api-types.js";
 import { openRuntimeStateStream } from "../core/state-stream.js";
-import type { RuntimeState } from "../core/state-stream.js";
+import type {
+  RuntimeState,
+  RuntimeStateStreamStatus,
+} from "../core/state-stream.js";
 import type { SystemMetrics } from "../types.js";
 import { telemetryRates } from "./rates.js";
 import type { TelemetryRates } from "./rates.js";
 
 export interface LiveSnapshot {
   readonly state: RuntimeState | null;
+  readonly stream: RuntimeStateStreamStatus;
   readonly telemetry: EngineTelemetrySnapshot | null;
   readonly rates: TelemetryRates | null;
   readonly metrics: SystemMetrics | null;
-  /** Wall-clock ms of the last successful sample of each source. */
-  readonly stateAtMs: number | null;
-  readonly sampledAtMs: number | null;
+  /** Wall-clock ms of the last successful sample of each sampled source. */
+  readonly telemetryAtMs: number | null;
+  readonly metricsAtMs: number | null;
 }
 
-const SAMPLE_INTERVAL_MS = 2000;
+export const SAMPLE_INTERVAL_MS = 2000;
 
-let snapshot: LiveSnapshot = {
+const EMPTY: LiveSnapshot = {
   state: null,
+  stream: "connecting",
   telemetry: null,
   rates: null,
   metrics: null,
-  stateAtMs: null,
-  sampledAtMs: null,
+  telemetryAtMs: null,
+  metricsAtMs: null,
 };
+
+let snapshot = EMPTY;
 const listeners = new Set<() => void>();
 let stop: (() => void) | null = null;
 
@@ -46,28 +53,37 @@ async function sample(signal: AbortSignal): Promise<void> {
     getSystemMetrics({ view: "summary" }),
   ]);
   if (signal.aborted) return;
+  const now = Date.now();
+  // A failed source keeps its last value; its timestamp shows the age.
   publish({
-    telemetry: telemetry ?? snapshot.telemetry,
-    // A failed sample keeps the last rates: the timestamp shows their age.
-    rates: telemetry
-      ? (telemetryRates(snapshot.telemetry, telemetry) ?? snapshot.rates)
-      : snapshot.rates,
-    metrics: metrics ?? snapshot.metrics,
-    sampledAtMs: telemetry || metrics ? Date.now() : snapshot.sampledAtMs,
+    ...(telemetry && {
+      telemetry,
+      rates: telemetryRates(snapshot.telemetry, telemetry) ?? snapshot.rates,
+      telemetryAtMs: now,
+    }),
+    ...(metrics && { metrics, metricsAtMs: now }),
   });
 }
 
-// Sources run while at least one view is subscribed.
+// Sources run while at least one view is subscribed. A restart begins from
+// nothing: a rate across the gap would be shown as current.
 function start(): () => void {
+  snapshot = EMPTY;
   const stream = openRuntimeStateStream({
-    onState: (state) => publish({ state, stateAtMs: Date.now() }),
+    onState: (state) => publish({ state }),
+    onStatus: (status) => publish({ stream: status }),
   });
   const abort = new AbortController();
   let timer: number | undefined;
   const loop = async () => {
-    await sample(abort.signal);
-    if (!abort.signal.aborted) {
-      timer = window.setTimeout(loop, SAMPLE_INTERVAL_MS);
+    try {
+      await sample(abort.signal);
+    } catch (error) {
+      console.error("control room sample failed", error);
+    } finally {
+      if (!abort.signal.aborted) {
+        timer = window.setTimeout(loop, SAMPLE_INTERVAL_MS);
+      }
     }
   };
   void loop();

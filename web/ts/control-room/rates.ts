@@ -1,7 +1,10 @@
 // Byte rates from two successive engine telemetry samples. Telemetry carries
 // cumulative byte counters; a rate needs two samples of the same counter.
 
-import type { EngineTelemetrySnapshot } from "../core/api-types.js";
+import type {
+  EngineTelemetrySnapshot,
+  TelemetryIngest,
+} from "../core/api-types.js";
 
 export interface TelemetryRates {
   /** Ingest bits per second, by pipeline id. */
@@ -34,15 +37,19 @@ export function telemetryRates(
     (Date.parse(next.generatedAt) - Date.parse(previous.generatedAt)) / 1000;
   if (!Number.isFinite(seconds) || seconds <= 0) return null;
 
+  // An ingest is one publisher session of one pipeline; after a failover the
+  // pipeline's counter belongs to another input and has no earlier sample.
+  const ingestKey = (ingest: TelemetryIngest) =>
+    `${ingest.pipelineId}\u0000${ingest.protocol}\u0000${ingest.streamKey ?? ""}`;
   const ingestBefore = new Map<string, number>();
   for (const ingest of previous.ingests) {
-    if (ingest.pipelineId) ingestBefore.set(ingest.pipelineId, ingest.bytesReceived);
+    if (ingest.pipelineId) ingestBefore.set(ingestKey(ingest), ingest.bytesReceived);
   }
   const ingestBps = new Map<string, number>();
   for (const ingest of next.ingests) {
     if (!ingest.pipelineId) continue;
     const rate = counterRate(
-      ingestBefore.get(ingest.pipelineId),
+      ingestBefore.get(ingestKey(ingest)),
       ingest.bytesReceived,
       seconds,
     );

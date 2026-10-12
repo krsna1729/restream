@@ -22,11 +22,16 @@ export interface FleetPipelineRow {
   readonly wanted: number;
   /** Wanted outputs that converged and carry media. */
   readonly delivering: number;
+  /** Wanted outputs with a diagnosed fault. */
   readonly attention: number;
+  /** Wanted outputs neither delivering nor diagnosed: starting, or not
+   * flowing yet. */
+  readonly pending: number;
 }
 
 export interface AttentionItem {
-  /** Stable across samples: pipeline, layer and cause code. */
+  /** Stable across samples: pipeline, layer and the whole cause (two blocked
+   * stages are two causes); per output for destination faults. */
   readonly key: string;
   readonly pipelineId: string;
   readonly pipelineName: string;
@@ -44,6 +49,7 @@ export interface FleetModel {
   readonly pipelinesReceiving: number;
   readonly outputsWanted: number;
   readonly outputsDelivering: number;
+  readonly outputsPending: number;
   readonly egressBps: number | null;
 }
 
@@ -81,6 +87,7 @@ export function buildFleetModel(
   let pipelinesReceiving = 0;
   let outputsWanted = 0;
   let outputsDelivering = 0;
+  let outputsPending = 0;
   let fleetEgressBps: number | null = null;
 
   for (const pipeline of state.pipelines) {
@@ -88,21 +95,27 @@ export function buildFleetModel(
     let wanted = 0;
     let delivering = 0;
     let attention = 0;
+    let pending = 0;
     let egressBps: number | null = null;
     for (const output of outputs) {
       const rate = rates?.egressBps.get(output.id);
       if (rate !== undefined) egressBps = (egressBps ?? 0) + rate;
       if (output.desired !== "running") continue;
       wanted += 1;
-      if (isDelivering(output)) delivering += 1;
-      if (output.diagnosis === null) continue;
-      attention += 1;
-      addAttention(attentionByKey, pipeline, output);
+      const flowing = isDelivering(output);
+      if (flowing) delivering += 1;
+      if (output.diagnosis !== null) {
+        attention += 1;
+        addAttention(attentionByKey, pipeline, output);
+      } else if (!flowing) {
+        pending += 1;
+      }
     }
     if (pipeline.ingest !== null) pipelinesReceiving += 1;
     if (pipeline.ingest !== null && delivering === wanted) pipelinesHealthy += 1;
     outputsWanted += wanted;
     outputsDelivering += delivering;
+    outputsPending += pending;
     if (egressBps !== null) fleetEgressBps = (fleetEgressBps ?? 0) + egressBps;
     rows.push({
       id: pipeline.id,
@@ -116,6 +129,7 @@ export function buildFleetModel(
       wanted,
       delivering,
       attention,
+      pending,
     });
   }
 
@@ -141,6 +155,7 @@ export function buildFleetModel(
     pipelinesReceiving,
     outputsWanted,
     outputsDelivering,
+    outputsPending,
     egressBps: fleetEgressBps,
   };
 }
@@ -155,7 +170,7 @@ function addAttention(
   // Destination faults are per output; upstream faults are shared by every
   // output of the pipeline that reports them.
   const scope = diagnosis.layer === "destination" ? `:${output.id}` : "";
-  const key = `${pipeline.id}:${diagnosis.layer}:${diagnosis.cause.code}${scope}`;
+  const key = `${pipeline.id}:${diagnosis.layer}:${JSON.stringify(diagnosis.cause)}${scope}`;
   const existing = byKey.get(key);
   if (existing) {
     existing.outputs.push(output.name);
@@ -170,6 +185,23 @@ function addAttention(
     ruledOut: diagnosis.ruledOut,
     outputs: [output.name],
   });
+}
+
+export interface PipelineHealth {
+  readonly tone: "warning" | "info" | "idle" | "ok";
+  readonly label: string;
+}
+
+/** A row is healthy only when every wanted output delivers. */
+export function pipelineHealth(row: FleetPipelineRow): PipelineHealth {
+  if (row.attention > 0) {
+    return { tone: "warning", label: `${row.attention} degraded` };
+  }
+  if (row.pending > 0) {
+    return { tone: "info", label: `${row.pending} starting` };
+  }
+  if (row.source === null) return { tone: "idle", label: "idle" };
+  return { tone: "ok", label: "healthy" };
 }
 
 /** One operator sentence for a diagnosis cause. */
