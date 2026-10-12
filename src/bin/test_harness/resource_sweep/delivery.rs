@@ -173,10 +173,6 @@ pub(super) fn summarize(samples: &[DeliverySample]) -> DeliverySummary {
     }
 }
 
-/// One tick: receiver bytes per destination plus Restream's per-pipeline
-/// publisher bytes. MediaMTX peers report per path; the harness SRT sink
-/// (`MSR_PEER=sink`) reports per connection, so SRT fan-out can be measured
-/// with a receiver that is not the bottleneck.
 /// Fetches `/api/v1/measure` and samples delivery against it.
 pub(super) async fn sample(
     env: &ResourceSweepEnv,
@@ -187,8 +183,11 @@ pub(super) async fn sample(
     sample_with(env, &measure, sinks).await
 }
 
-/// Receiver-side bytes per destination, plus Restream's own counters from a
-/// `/api/v1/measure` snapshot taken this tick.
+/// One tick: receiver bytes per destination plus Restream's publisher bytes
+/// and own delivery view from a `/api/v1/measure` snapshot taken this tick.
+/// MediaMTX peers report per path; the harness SRT sink (`MSR_PEER=sink`)
+/// reports per connection, so SRT fan-out can be measured with a receiver
+/// that is not the bottleneck.
 pub(super) async fn sample_with(
     env: &ResourceSweepEnv,
     measure: &Value,

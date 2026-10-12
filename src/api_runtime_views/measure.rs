@@ -63,8 +63,23 @@ pub(crate) async fn measure_snapshot(engine: &MediaEngine, pipelines: usize) -> 
         .values()
         .map(|ring| ring.payload_stats().payload_bytes as u64)
         .sum::<u64>();
-    let (active_transcoder_buffers, transcoder_ring_payload_bytes, queue_len, queue_high_water) = {
+    let (
+        stages,
+        active_transcoder_buffers,
+        transcoder_ring_payload_bytes,
+        queue_len,
+        queue_high_water,
+    ) = {
+        // One read of `runtimes` for every stage field, so they agree within
+        // a sample. `metrics` nests inside it; no writer takes them reversed.
         let runtimes = engine.stages.runtimes.read().await;
+        let metrics = engine.stages.metrics.read().await;
+        let stages = runtimes.len()
+            + metrics
+                .keys()
+                .filter(|key| !runtimes.contains_key(*key))
+                .count();
+        drop(metrics);
         let ring_bytes = runtimes
             .values()
             .filter_map(|runtime| runtime.ring.as_ref())
@@ -77,16 +92,7 @@ pub(crate) async fn measure_snapshot(engine: &MediaEngine, pipelines: usize) -> 
             .fold((0_u64, 0_u64), |(len, high), stats| {
                 (len + stats.len as u64, high + stats.high_water_bytes as u64)
             });
-        (runtimes.len(), ring_bytes, len, high_water)
-    };
-    let stages = {
-        let runtimes = engine.stages.runtimes.read().await;
-        let metrics = engine.stages.metrics.read().await;
-        runtimes.len()
-            + metrics
-                .keys()
-                .filter(|key| !runtimes.contains_key(*key))
-                .count()
+        (stages, runtimes.len(), ring_bytes, len, high_water)
     };
     let ts_muxer_ring_payload_bytes = engine
         .stages

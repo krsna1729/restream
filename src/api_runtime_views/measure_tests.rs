@@ -61,6 +61,16 @@ async fn the_snapshot_equals_the_sums_of_the_payloads_it_replaces() {
     queue.write_sync(b"queued bytes");
     engine.register_input_queue(stage, queue).await;
 
+    // A stage known only by its metrics (no runtime) still counts as a stage.
+    let _ = engine
+        .get_or_create_stage_metrics(StageKey::new("pipe-b", StageKind::video_preset("480p")))
+        .await;
+    for (pipeline, bytes) in [("pipe-a", 1_234_u64), ("pipe-b", 4_321)] {
+        engine.ingests.active.read().await[pipeline]
+            .bytes_received
+            .store(bytes, std::sync::atomic::Ordering::Relaxed);
+    }
+
     let snapshot = measure_snapshot(&engine, 2).await;
     let telemetry = super::super::engine_telemetry(&engine).await;
     let accounting = &telemetry["memoryAccounting"];
@@ -87,6 +97,18 @@ async fn the_snapshot_equals_the_sums_of_the_payloads_it_replaces() {
         snapshot.stages,
         telemetry["stages"].as_array().unwrap().len()
     );
+    assert_eq!(
+        snapshot.stages, 2,
+        "one runtime stage and one metrics-only stage"
+    );
+    let ingest_bytes = telemetry["ingests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|ingest| ingest["bytesReceived"].as_u64().unwrap())
+        .sum::<u64>();
+    assert_eq!(snapshot.ingest_bytes_received, ingest_bytes);
+    assert_eq!(snapshot.ingest_bytes_received, 5_555);
     assert_eq!(
         snapshot.active_transcoder_buffers as u64,
         telemetry["activeTranscoderBuffers"].as_u64().unwrap()
