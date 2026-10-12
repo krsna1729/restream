@@ -7,6 +7,7 @@
 //! its entry. No sweep re-derives use from the outputs, and no grace period
 //! covers consumers that have not announced themselves yet.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
 use tokio_util::sync::CancellationToken;
@@ -19,6 +20,9 @@ use crate::media::engine::MediaEngine;
 pub struct StageLease(#[allow(dead_code)] Arc<LeaseCell>);
 
 pub struct LeaseCell {
+    /// Unique for the process: the registry entry records it, so a release
+    /// removes only the entry this cell created (an address can be reused).
+    id: u64,
     engine: Weak<MediaEngine>,
     /// Captured at creation (always on Tokio): the last lease can drop on a
     /// Compio Owner thread (an SRT player), and the release runs on Tokio.
@@ -50,7 +54,9 @@ impl StageLease {
     }
 
     fn new(engine: &Arc<MediaEngine>, stage: LeasedStage, cancel: CancellationToken) -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         Self(Arc::new(LeaseCell {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             engine: Arc::downgrade(engine),
             runtime: tokio::runtime::Handle::try_current().ok(),
             stage,
@@ -61,6 +67,11 @@ impl StageLease {
     /// The registry's reference: upgrades while any consumer holds the lease.
     pub(crate) fn downgrade(&self) -> Weak<LeaseCell> {
         Arc::downgrade(&self.0)
+    }
+
+    /// The id the registry entry records for this lease (never 0).
+    pub(crate) fn id(&self) -> u64 {
+        self.0.id
     }
 
     /// Another hold on a live stage, if any consumer still holds one.
@@ -76,24 +87,18 @@ impl Drop for LeaseCell {
             // A cancelled entry is never reused; the next consumer replaces it.
             return;
         };
-        // The entry's `Weak` keeps this allocation, so its address identifies
-        // this lease until the entry is gone: a newer stage under the same
-        // key has another cell and is left alone.
-        let cell = std::ptr::from_ref::<Self>(self) as usize;
+        // A newer stage under the same key records another id and is left
+        // alone, even if its cell reuses this allocation.
+        let id = self.id;
         let stage = match &self.stage {
             LeasedStage::Runtime(key) => LeasedStage::Runtime(key.clone()),
             LeasedStage::TsMuxer(key) => LeasedStage::TsMuxer(key.clone()),
         };
         runtime.spawn(async move {
             match stage {
-                LeasedStage::Runtime(key) => engine.release_stage_runtime(&key, cell).await,
-                LeasedStage::TsMuxer(key) => engine.release_ts_muxer_stage(&key, cell).await,
+                LeasedStage::Runtime(key) => engine.release_stage_runtime(&key, id).await,
+                LeasedStage::TsMuxer(key) => engine.release_ts_muxer_stage(&key, id).await,
             }
         });
     }
-}
-
-/// Whether `weak` is the registry reference of the lease cell at `cell`.
-pub(crate) fn is_cell(weak: &Weak<LeaseCell>, cell: usize) -> bool {
-    weak.as_ptr() as usize == cell
 }

@@ -277,3 +277,56 @@ async fn a_lease_dropped_off_tokio_still_releases_its_stage() {
         .await
     );
 }
+
+/// Review of #284: an entry removed while its lease is held (pipeline
+/// delete, an emptied SRT muxer shard) leaves no `Weak`, so the cell's
+/// allocation can go to the next lease under the same key. The release
+/// must still leave that newer stage alone.
+#[tokio::test]
+async fn a_release_after_its_entry_was_removed_spares_the_next_stage() {
+    let engine = Arc::new(MediaEngine::new());
+    let manager = crate::media::stage_runtime::StageRuntimeManager::new(engine.clone());
+    let key = StageKey::new("pipe", StageKind::video_preset_with_codec("720p", "h264"));
+    let source = Arc::new(RingBuffer::new(16));
+
+    let (_, old_lease, _) = manager
+        .ensure_stage(key.clone(), source.clone(), None)
+        .await;
+    engine.cleanup_pipeline_stages("pipe").await;
+    // On this current-thread runtime the release task cannot run before the
+    // next stage registers, whatever address its cell gets.
+    drop(old_lease);
+    let (new, _new_lease, created) = manager.ensure_stage(key.clone(), source, None).await;
+    assert!(created);
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    let runtimes = engine.stages.runtimes.read().await;
+    let current = runtimes.get(&key).expect("the next stage stays registered");
+    assert!(Arc::ptr_eq(&current.lifecycle, &new.lifecycle));
+}
+
+/// Review of #284: a stage that ended stays registered (cancelled) until
+/// its consumers' leases drop; its replacement must start with its own
+/// lifecycle and metrics, not report the dead backend's progress.
+#[tokio::test]
+async fn a_replacement_stage_starts_with_fresh_lifecycle_and_metrics() {
+    let engine = Arc::new(MediaEngine::new());
+    let manager = crate::media::stage_runtime::StageRuntimeManager::new(engine.clone());
+    let key = StageKey::new("pipe", StageKind::video_preset_with_codec("720p", "h264"));
+    let source = Arc::new(RingBuffer::new(16));
+
+    let (old, _old_lease, _) = manager
+        .ensure_stage(key.clone(), source.clone(), None)
+        .await;
+    old.lifecycle.record_first_output();
+    old.cancel.cancel();
+    let (new, _new_lease, created) = manager.ensure_stage(key, source, None).await;
+    assert!(created);
+    assert!(!Arc::ptr_eq(&old.lifecycle, &new.lifecycle));
+    assert!(!Arc::ptr_eq(&old.metrics, &new.metrics));
+    assert_eq!(
+        new.lifecycle.snapshot().phase,
+        crate::media::stage_lifecycle::StagePhase::Registered
+    );
+}

@@ -71,6 +71,7 @@ impl MediaEngine {
                 input_queue: None,
                 pipe_metrics: None,
                 lease: std::sync::Weak::new(),
+                lease_id: 0,
             },
         );
         (lifecycle, metrics)
@@ -143,28 +144,29 @@ impl MediaEngine {
             TsMuxerStage {
                 muxer: shared_muxer.clone(),
                 lease: lease.downgrade(),
+                lease_id: lease.id(),
             },
         );
         (shared_muxer, lease)
     }
 
     /// Last lease of a TS muxer dropped (its token is already cancelled).
-    pub(crate) async fn release_ts_muxer_stage(&self, key: &str, cell: usize) {
+    pub(crate) async fn release_ts_muxer_stage(&self, key: &str, lease_id: u64) {
         let mut stages = self.stages.ts_muxers.write().await;
         if stages
             .get(key)
-            .is_some_and(|stage| crate::media::stage_lease::is_cell(&stage.lease, cell))
+            .is_some_and(|stage| stage.lease_id == lease_id)
         {
             stages.remove(key);
         }
     }
 
     /// Last lease of a stage runtime dropped (its token is already cancelled).
-    pub(crate) async fn release_stage_runtime(&self, key: &StageKey, cell: usize) {
+    pub(crate) async fn release_stage_runtime(&self, key: &StageKey, lease_id: u64) {
         let mut runtimes = self.stages.runtimes.write().await;
         if !runtimes
             .get(key)
-            .is_some_and(|runtime| crate::media::stage_lease::is_cell(&runtime.lease, cell))
+            .is_some_and(|runtime| runtime.lease_id == lease_id)
         {
             return;
         }

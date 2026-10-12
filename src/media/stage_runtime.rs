@@ -66,7 +66,7 @@ impl StageRuntimeManager {
         input_codec_override: Option<&str>,
     ) -> (StageHandle, StageLease, bool) {
         let backend_kind = crate::planner::select_backend(&key.kind);
-        let lifecycle = self
+        let mut lifecycle = self
             .engine
             .get_or_create_stage_lifecycle_with_backend(
                 key.clone(),
@@ -74,7 +74,7 @@ impl StageRuntimeManager {
                 backend_kind,
             )
             .await;
-        let metrics = self.engine.get_or_create_stage_metrics(key.clone()).await;
+        let mut metrics = self.engine.get_or_create_stage_metrics(key.clone()).await;
 
         // Single write-lock acquisition to atomically check-and-insert, avoiding
         // the TOCTOU race where two callers create duplicate stages.
@@ -97,6 +97,16 @@ impl StageRuntimeManager {
             );
         }
 
+        if runtimes.contains_key(&key) {
+            // Replacing a stage that ended (or lost its last lease): the
+            // helpers above returned its lifecycle and metrics, which must
+            // not carry over to the new backend.
+            lifecycle = Arc::new(StageLifecycle::new_with_backend(
+                StagePhase::Registered,
+                backend_kind,
+            ));
+            metrics = Arc::new(StageMetrics::new());
+        }
         let output_ring = Arc::new(RingBuffer::new(self.engine.config.transcoder_ring_capacity));
         let cancel = CancellationToken::new();
         let lease = StageLease::runtime(&self.engine, key.clone(), cancel.clone());
@@ -110,6 +120,7 @@ impl StageRuntimeManager {
                 input_queue: None,
                 pipe_metrics: None,
                 lease: lease.downgrade(),
+                lease_id: lease.id(),
             },
         );
         drop(runtimes); // release write locks before any await-heavy setup

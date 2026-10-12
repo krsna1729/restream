@@ -314,12 +314,16 @@ pub struct StageRuntime {
     pub pipe_metrics: Option<Arc<PipeMetrics>>,
     /// Consumers' leases (`Weak::new()` for stages no consumer leases).
     pub lease: std::sync::Weak<crate::media::stage_lease::LeaseCell>,
+    /// `StageLease::id` of `lease`; 0 when unleased.
+    pub lease_id: u64,
 }
 
 /// A shared TS muxer and its consumers' leases.
 pub struct TsMuxerStage {
     pub muxer: Arc<TsChunkRing>,
     pub lease: std::sync::Weak<crate::media::stage_lease::LeaseCell>,
+    /// `StageLease::id` of `lease`.
+    pub lease_id: u64,
 }
 
 pub struct StageRegistry {
