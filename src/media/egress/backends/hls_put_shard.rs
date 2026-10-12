@@ -36,7 +36,7 @@ use crate::media::egress::shard::{
 use crate::media::egress::tls::{TlsCounters, TlsTcpConnection};
 use crate::media::hls::HlsStore;
 use crate::media::hls::upload_policy::{
-    Next, ResultEffect, Stopped, UploadOutcome, UploadPolicy, UploadRequest,
+    self, Next, ResultEffect, Stopped, UploadOutcome, UploadPolicy, UploadRequest,
 };
 
 /// HTTPS connection and kTLS counters for HLS PUT, reported beside RTMPS.
@@ -144,6 +144,13 @@ struct Slot {
     conn: Conn,
     /// Taken from the policy, waiting for a connection.
     waiting_request: Option<UploadRequest>,
+    /// The request whose exchange is running, kept for its status report.
+    in_flight: Option<UploadRequest>,
+    /// Why the last request failed, so a drop reports its cause.
+    last_failure: Option<String>,
+    /// The policy's drop counts already reported.
+    dropped_seen: u64,
+    backlog_dropped_seen: u64,
     exchange: Option<Exchange>,
     connect_timeout: Duration,
     resolve_timeout: Duration,
@@ -266,6 +273,10 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             policy,
             conn: Conn::Idle,
             waiting_request: None,
+            in_flight: None,
+            last_failure: None,
+            dropped_seen: 0,
+            backlog_dropped_seen: 0,
             exchange: None,
             connect_timeout: spec.policy.connect_timeout,
             resolve_timeout: spec.policy.resolve_timeout,
@@ -353,11 +364,11 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
         } else {
             tracing::warn!(output_id = %slot.output_id, error = why, "hls put connect failed");
         }
-        if slot.waiting_request.take().is_some() {
+        if let Some(request) = slot.waiting_request.take() {
             let effect = slot
                 .policy
                 .on_result(UploadOutcome::Transport, Instant::now());
-            report(slot, effect, Some(why));
+            report(slot, &request, effect, Some(why));
         }
         self.enqueue(key);
     }
@@ -470,6 +481,9 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
     /// `resolved`; the other paths only clear one.
     fn drive(&mut self, key: LeafKey, now: Instant) {
         self.drive_slot(key, now);
+        if let Some(slot) = self.slots.get_mut(key) {
+            report_drops(slot);
+        }
         self.index_deadline(key);
     }
 
@@ -547,7 +561,12 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
                             self.tx_bytes = self.tx_bytes.saturating_add(bytes);
                             self.tx_units = self.tx_units.saturating_add(1);
                         }
-                        report(slot, effect, None);
+                        if let Some(request) = slot.in_flight.take() {
+                            let failure = (!(200..300).contains(&response.status)).then(|| {
+                                upload_policy::status_failure_message(&request, response.status)
+                            });
+                            report(slot, &request, effect, failure.as_deref());
+                        }
                         if !response.keep_alive {
                             self.drop_connection(key);
                         }
@@ -578,6 +597,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
                     && let Some(request) = slot.waiting_request.take()
                 {
                     slot.exchange = Some(exchange_for(slot, &request, now));
+                    slot.in_flight = Some(request);
                     continue;
                 }
                 return;
@@ -599,6 +619,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
                     };
                     if matches!(slot.conn, Conn::Open(_)) {
                         slot.exchange = Some(exchange_for(slot, &request, now));
+                        slot.in_flight = Some(request);
                     } else {
                         slot.waiting_request = Some(request);
                     }
@@ -624,7 +645,9 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             return;
         };
         let effect = slot.policy.on_result(UploadOutcome::Transport, now);
-        report(slot, effect, Some(why));
+        if let Some(request) = slot.in_flight.take() {
+            report(slot, &request, effect, Some(why));
+        }
     }
 
     fn drive_ready(&mut self) {
@@ -737,22 +760,47 @@ fn peer_closed_idle(connection: &mut TlsTcpConnection, scratch: &mut [u8]) -> bo
     )
 }
 
-fn report(slot: &Slot, effect: Option<ResultEffect>, failure: Option<&str>) {
+/// Log a request's result and record it in the leaf's progress and upload
+/// status, in the terms the Tokio uploader reports (`hls::upload`).
+fn report(
+    slot: &mut Slot,
+    request: &UploadRequest,
+    effect: Option<ResultEffect>,
+    failure: Option<&str>,
+) {
+    let phase = upload_policy::phase(&request.target);
     match effect {
         Some(ResultEffect::Acknowledged { bytes }) => {
             let now_ms = crate::media::engine::MediaEngine::now_epoch_ms();
             slot.progress.record_sent(bytes, 1, now_ms);
+            slot.progress.record_upload_acknowledged();
+            slot.last_failure = None;
         }
         Some(ResultEffect::WillRetry { attempts }) => {
+            let error = failure.unwrap_or("upload failed");
             tracing::warn!(
                 output_id = %slot.output_id,
+                object = %request.file_name,
                 attempts,
-                error = failure.unwrap_or("upload failed"),
+                error,
                 "HLS upload failed; retrying"
             );
+            let backoff_ms =
+                u64::try_from(upload_policy::backoff(attempts).as_millis()).unwrap_or(u64::MAX);
+            slot.progress.record_upload_failure(
+                phase,
+                error.to_string(),
+                Some((attempts, backoff_ms)),
+            );
+            slot.last_failure = Some(error.to_string());
         }
         Some(ResultEffect::Rejected { status }) => {
             tracing::warn!(output_id = %slot.output_id, status, "HLS ingest rejected the upload");
+            slot.progress.record_upload_failure(
+                phase,
+                upload_policy::rejected_message(&request.file_name, status),
+                None,
+            );
         }
         Some(ResultEffect::EndNotDelivered) => {
             tracing::info!(
@@ -763,6 +811,38 @@ fn report(slot: &Slot, effect: Option<ResultEffect>, failure: Option<&str>) {
         }
         None => {}
     }
+}
+
+/// Report segments the policy dropped since the last report: by the backlog
+/// bound, or after failing for their duration (with the last failure's
+/// cause), as the Tokio uploader does.
+fn report_drops(slot: &mut Slot) {
+    let dropped = slot.policy.dropped_segments();
+    if dropped <= slot.dropped_seen {
+        return;
+    }
+    slot.dropped_seen = dropped;
+    let backlog = slot.policy.backlog_dropped_segments();
+    let message = if backlog > slot.backlog_dropped_seen {
+        slot.backlog_dropped_seen = backlog;
+        tracing::warn!(
+            output_id = %slot.output_id,
+            total = dropped,
+            "HLS upload backlog over its bound; oldest waiting segment dropped"
+        );
+        upload_policy::backlog_dropped_message(dropped)
+    } else {
+        let cause = slot.last_failure.as_deref().unwrap_or("upload failed");
+        tracing::warn!(
+            output_id = %slot.output_id,
+            total = dropped,
+            cause,
+            "HLS segment still failing after its duration; dropped"
+        );
+        upload_policy::dropped_message(cause, dropped)
+    };
+    slot.progress
+        .record_upload_failure("upload_segment", message, None);
 }
 
 impl<P: RtmpReadinessPoller + 'static> EgressShardBackend for HlsPutShardBackend<P> {

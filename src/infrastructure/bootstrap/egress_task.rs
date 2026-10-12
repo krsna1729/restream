@@ -75,6 +75,18 @@ pub(super) struct HlsPutFabricTask {
     pub(super) spec: OutputSpec,
     /// See `SrtFabricTask::terminated`.
     pub(super) terminated: Arc<std::sync::atomic::AtomicBool>,
+    /// The leaf's per-request status, forwarded to the engine while the
+    /// output runs (see `forward_upload_status`).
+    pub(super) upload_status: Arc<std::sync::Mutex<crate::media::egress::leaf::UploadStatus>>,
+}
+
+/// What `forward_upload_status` already passed on to the engine.
+#[derive(Default)]
+struct ForwardedUploadStatus {
+    failures: u64,
+    retry: Option<(u32, u64)>,
+    /// A failure was reported and no recovery since.
+    failing: bool,
 }
 
 pub(super) struct EgressTask {
@@ -532,7 +544,22 @@ impl EgressTask {
                 return;
             }
         }
-        if self.wait_for_stop_or_leaf_failure(&fabric.terminated).await {
+        let mut forwarded = ForwardedUploadStatus::default();
+        let failed = loop {
+            self.forward_upload_status(&fabric.upload_status, &mut forwarded)
+                .await;
+            if fabric.terminated.load(std::sync::atomic::Ordering::Relaxed) {
+                self.forward_upload_status(&fabric.upload_status, &mut forwarded)
+                    .await;
+                break true;
+            }
+            tokio::select! {
+                _ = self.registration.cancel_token.cancelled() => break false,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
+            }
+        };
+        // A rejection was already reported with its status and object.
+        if failed && forwarded.failures == 0 {
             self.engine
                 .record_egress_error_if_current(
                     &self.output_id,
@@ -548,6 +575,56 @@ impl EgressTask {
             .dispatch_hls_put_fabric_command(&feed_id, EgressCommand::Remove(fabric.spec.id))
             .await;
         let _ = self.engine.release_hls_put_fabric_runtime(&feed_id).await;
+    }
+
+    /// Pass the leaf's new failures and retry changes to the engine, as the
+    /// Tokio uploader reports them: each failure once (the latest, when
+    /// several landed between polls), the retry state when it changes.
+    async fn forward_upload_status(
+        &self,
+        status: &std::sync::Mutex<crate::media::egress::leaf::UploadStatus>,
+        forwarded: &mut ForwardedUploadStatus,
+    ) {
+        let (failure, retry, healthy) = {
+            let status = crate::sync::lock(status);
+            let failure = (status.failures > forwarded.failures)
+                .then(|| status.last_failure.clone())
+                .flatten();
+            forwarded.failures = status.failures;
+            (failure, status.retry, status.healthy)
+        };
+        let new_failure = failure.is_some();
+        if let Some((phase, message)) = failure {
+            self.engine
+                .record_egress_error_if_current(&self.output_id, &self.registration, phase, message)
+                .await;
+            forwarded.failing = true;
+        }
+        if healthy && forwarded.failing {
+            forwarded.failing = false;
+            self.engine
+                .mark_egress_recovered_if_current(&self.output_id, &self.registration)
+                .await;
+        }
+        // Reconcile clears the retry entry of an active output, so each new
+        // failure asserts it again, as the Tokio uploader does per failure.
+        if retry != forwarded.retry || (new_failure && retry.is_some()) {
+            forwarded.retry = retry;
+            match retry {
+                Some((attempts, backoff_ms)) => {
+                    self.engine
+                        .update_egress_retry_state_if_current(
+                            &self.output_id,
+                            &self.registration,
+                            attempts,
+                            backoff_ms,
+                            backoff_ms,
+                        )
+                        .await;
+                }
+                None => self.engine.clear_egress_retry_state(&self.output_id).await,
+            }
+        }
     }
 
     async fn run_sink_fabric(&self, fabric: SinkFabricTask) {

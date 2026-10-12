@@ -231,6 +231,7 @@ impl EgressReconciler {
                                 backpressure_reason: Some(egress.backpressure_reason.clone()),
                                 quality: Some(egress.quality.clone()),
                                 terminated_unexpectedly: Some(terminated.clone()),
+                                upload_status: None,
                             }
                         })
                         .await
@@ -288,6 +289,7 @@ impl EgressReconciler {
                         backpressure_reason: Some(egress.backpressure_reason.clone()),
                         quality: Some(egress.quality.clone()),
                         terminated_unexpectedly: Some(terminated.clone()),
+                        upload_status: None,
                     }
                 })
                 .await
@@ -402,6 +404,9 @@ impl EgressReconciler {
             && matches!(url_scheme, OutputUrlScheme::Http | OutputUrlScheme::Https);
         let hls_put_fabric = if use_hls_put_fabric {
             let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let upload_status = Arc::new(std::sync::Mutex::new(
+                crate::media::egress::leaf::UploadStatus::default(),
+            ));
             let mut spec = crate::media::egress::OutputSpec {
                 id: crate::media::egress::OutputId::new(output.id.clone()),
                 generation: registration.attempt_id,
@@ -420,6 +425,7 @@ impl EgressReconciler {
                         metrics: Some(egress.metrics.clone()),
                         last_progress_ms: Some(egress.last_progress_ms.clone()),
                         terminated_unexpectedly: Some(terminated.clone()),
+                        upload_status: Some(upload_status.clone()),
                         ..Default::default()
                     }
                 })
@@ -427,7 +433,11 @@ impl EgressReconciler {
             {
                 spec.progress = sink;
             }
-            Some(HlsPutFabricTask { spec, terminated })
+            Some(HlsPutFabricTask {
+                spec,
+                terminated,
+                upload_status,
+            })
         } else {
             None
         };

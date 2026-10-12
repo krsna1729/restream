@@ -448,6 +448,29 @@ impl MediaEngine {
         .is_some()
     }
 
+    /// A fabric output delivers again after a failure: back to its active
+    /// phase with the error cleared, as `record_egress_progress_if_current`
+    /// does for the Tokio uploader. The fabric counts bytes itself.
+    pub async fn mark_egress_recovered_if_current(
+        &self,
+        output_id: &str,
+        registration: &EgressRegistration,
+    ) -> bool {
+        self.with_current_egress(output_id, registration, |egress| {
+            let active_phase = if egress.protocol == "hls" {
+                EgressPhase::Uploading
+            } else {
+                EgressPhase::Sending
+            };
+            *crate::sync::lock(&egress.phase) = active_phase;
+            *crate::sync::lock(&egress.failure_phase) = None;
+            *crate::sync::lock(&egress.last_error) = None;
+            egress.last_error_ms.store(0, Ordering::Relaxed);
+        })
+        .await
+        .is_some()
+    }
+
     pub async fn record_egress_discard_progress_if_current(
         &self,
         output_id: &str,

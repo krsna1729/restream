@@ -463,6 +463,43 @@ fn classify(outcome: UploadOutcome) -> Class {
     }
 }
 
+/// The status phase of an upload: which object failed.
+pub(crate) fn phase(target: &UploadTarget) -> &'static str {
+    match target {
+        UploadTarget::Segment { .. } => "upload_segment",
+        UploadTarget::Playlist { .. } => "upload_playlist",
+    }
+}
+
+/// How a request's object is named in status messages.
+pub(crate) fn object_name(request: &UploadRequest) -> &str {
+    match request.target {
+        UploadTarget::Playlist { .. } => "playlist",
+        UploadTarget::Segment { .. } => &request.file_name,
+    }
+}
+
+/// Status messages both HLS transports report, word for word.
+pub(crate) fn status_failure_message(request: &UploadRequest, status: u16) -> String {
+    let object = object_name(request);
+    match reqwest::StatusCode::from_u16(status) {
+        Ok(code) => format!("PUT {object} returned HTTP {code}"),
+        Err(_) => format!("PUT {object} returned HTTP {status}"),
+    }
+}
+
+pub(crate) fn rejected_message(file_name: &str, status: u16) -> String {
+    format!("HLS ingest rejected {file_name} with HTTP {status}")
+}
+
+pub(crate) fn dropped_message(cause: &str, total: u64) -> String {
+    format!("{cause}; segment dropped after failing for its duration ({total} so far)")
+}
+
+pub(crate) fn backlog_dropped_message(total: u64) -> String {
+    format!("upload backlog over {MAX_PENDING_SEGMENTS} segments; oldest dropped ({total} so far)")
+}
+
 pub(crate) fn backoff(attempts: u32) -> Duration {
     let doublings = attempts.saturating_sub(1).min(16);
     BACKOFF_FIRST

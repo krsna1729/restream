@@ -149,9 +149,9 @@ differs), 8 Mbit/s, settle 45 s, 30 s window, interleaved rounds,
 
 | Rung | Transport | Delivered | p50 lag | p99 lag | CPU avg |
 |---|---|---|---|---|---|
-| HTTPS×600 (3 rounds) | Reqwest (default) | 600 ×3 | 251–318 ms | 1.06–1.34 s | 62.7–64.4% |
+| HTTPS×600 (3 rounds) | Reqwest (`RESTREAM_HLS_PUT_FABRIC=0`) | 600 ×3 | 251–318 ms | 1.06–1.34 s | 62.7–64.4% |
 | HTTPS×600 (3 rounds) | Egress-fabric shards, kernel TLS | 600 ×3 | 90–101 ms | 0.18–0.24 s | 56.1–68.1% |
-| HTTP×1000 (2 rounds) | Reqwest (default) | 1000 ×2 | 150–176 ms | 0.68–0.74 s | 48.9–51.2% |
+| HTTP×1000 (2 rounds) | Reqwest (`RESTREAM_HLS_PUT_FABRIC=0`) | 1000 ×2 | 150–176 ms | 0.68–0.74 s | 48.9–51.2% |
 | HTTP×1000 (2 rounds) | Egress-fabric shards | 1000 ×2 | 36–47 ms | 0.19–0.24 s | 53.2–54.9% |
 
 Over HTTPS the shard path now matches Reqwest on CPU (paired differences
@@ -160,7 +160,8 @@ about 4 points more with about a third of the lag. HTTPS×1000 saturates this
 6-CPU host for both transports (the sink decrypts 8 Gbit/s on three CPUs), so
 the HTTPS comparison is at 600. Not measured: rungs above 1000 and a real
 network, where the loopback receive work charged to the sender disappears for
-both.
+both. On these results the shard path became the default;
+`RESTREAM_HLS_PUT_FABRIC=0` selects Reqwest.
 
 ## Reference results
 

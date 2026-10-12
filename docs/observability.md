@@ -301,7 +301,7 @@ retry policy.
 
 Both summary and full `GET /metrics/system` responses include an `rtmps`
 object (RTMPS outputs) and an `hlsPutTls` object (HTTPS HLS PUT outputs on the
-egress fabric, `RESTREAM_HLS_PUT_FABRIC=1`), with the same fields. Their process-lifetime counters are `connections`, negotiated `tls12`
+egress fabric, the default transport), with the same fields. Their process-lifetime counters are `connections`, negotiated `tls12`
 and `tls13`, `ktlsRequested`, `ktlsAttempts`, `ktlsSuccess`,
 `ktlsUnsupported`, `ktlsError`, and `userspaceTlsConnections`.
 `ktlsCapabilities` reports cached current-host support probes for TLS 1.2/1.3
