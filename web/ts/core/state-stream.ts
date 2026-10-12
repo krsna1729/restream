@@ -73,7 +73,7 @@ export type RuntimeStateStream = {
 };
 
 /**
- * Follows `/api/v1/state/stream`. On a gap or a dropped connection it
+ * Follows the runtime state stream (`buildRuntimeStateStreamUrl`). On a gap or a dropped connection it
  * reconnects with `since` = the last applied revision.
  */
 export function openRuntimeStateStream(
