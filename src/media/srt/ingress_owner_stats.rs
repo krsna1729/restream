@@ -14,6 +14,7 @@ use super::OwnerLoop;
 /// sum over every Owner, and an exiting Owner withdraws its gauges.
 #[derive(Default)]
 pub(super) struct Published {
+    pub(super) owners: u64,
     pub(super) tx_capacity: u64,
     tx_in_flight: u64,
     tx_exhaustions: u64,
@@ -131,6 +132,7 @@ impl OwnerLoop {
     /// exits; its cumulative counters stay counted.
     pub(super) fn withdraw_gauges(&mut self) {
         let (stats, published) = (&self.stats.ingress_owner, &mut self.published);
+        publish(&stats.owners, &mut published.owners, 0);
         publish(&stats.tx_capacity, &mut published.tx_capacity, 0);
         publish(&stats.tx_in_flight, &mut published.tx_in_flight, 0);
         publish(&stats.rx_ring_depth, &mut published.rx_ring_depth, 0);

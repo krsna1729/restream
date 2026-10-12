@@ -198,17 +198,22 @@ async fn two_owners_share_the_port_and_each_session_command_reaches_its_owner() 
     );
     assert_eq!(snapshot.media_unattached_dropped, 0, "{snapshot:?}");
     assert_eq!(
-        snapshot.tx_capacity,
-        2 * super::ingress_owner::INGRESS_TX_CAPACITY as u64,
-        "each Owner adds its TX capacity"
+        (snapshot.owners, snapshot.tx_capacity),
+        (2, 2 * super::ingress_owner::INGRESS_TX_CAPACITY as u64),
+        "each Owner reports itself and adds its TX capacity"
     );
     let exit = handle.shutdown().await;
     assert!(exit.quiescent, "{exit:?}");
     assert!(exit.fault.is_none());
     let snapshot = stats.ingress_owner.snapshot();
     assert_eq!(
-        (snapshot.tx_capacity, snapshot.peers, snapshot.tx_in_flight),
-        (0, 0, 0),
+        (
+            snapshot.owners,
+            snapshot.tx_capacity,
+            snapshot.peers,
+            snapshot.tx_in_flight
+        ),
+        (0, 0, 0, 0),
         "stopped Owners withdraw their gauges"
     );
 }

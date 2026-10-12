@@ -708,10 +708,13 @@ async function stopRecording(
   );
 }
 
-
-
 async function listMediaFiles(): Promise<{ files: MediaFile[] } | null> {
   return apiRequest<{ files: MediaFile[] }>("/api/v1/media");
+}
+
+/** Where the browser downloads or plays a media file. */
+function mediaFileUrl(filename: string): string {
+  return withBasePath(`/media/${encodeURIComponent(filename)}`);
 }
 
 async function uploadMediaFile(
@@ -882,6 +885,7 @@ export {
   startRecording,
   stopRecording,
   listMediaFiles,
+  mediaFileUrl,
   uploadMediaFile,
   deleteMediaFile,
   renameMediaFile,

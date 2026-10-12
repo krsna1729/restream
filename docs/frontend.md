@@ -218,10 +218,25 @@ below and its DOM-id tests are deleted (Q-044).
   timeline says when the engine's event log no longer reaches back to a
   minute before the incident opened.
 
+Media (fleet): the media directory (`/media`) split into recordings and
+source files, newest first, with search over every stored name; the selected
+file's stored forms, its probe (`/media/{file}/analysis`, run once on select)
+and whether it can feed a live pipeline as it is (the engine's sparse-GOP
+judgement against its live GOP target); upload, rename and a confirmed
+delete (refused while a pipeline ingests the file); and the media disk from
+`/metrics/system`. System (fleet): the host checks from `/engine/health`
+(a warning first), kernel io_uring and TLS capability, the execution classes
+and how many of each the engine reports running (Tokio workers, media
+workers, RTMP and SRT ingress owners, egress fabric shards, FFmpeg
+children), the SRT ingress owners' counters with every non-zero one that
+means lost or late work, and the build, native libraries and SBOM from
+`/engine`.
+
 Proof: `test/frontend/control-room-fleet.test.mjs`,
 `test/frontend/control-room-operate.test.mjs`,
 `test/frontend/control-room-inspect.test.mjs`,
 `test/frontend/control-room-incidents.test.mjs`,
+`test/frontend/control-room-system.test.mjs`,
 `test/frontend/frontend-runtime-state-stream.test.mjs` (stream liveness) and
 `test/frontend/control-room.spec.ts` (against a running engine).
 

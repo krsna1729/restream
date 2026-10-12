@@ -6,11 +6,13 @@ import { Fleet } from "./fleet.js";
 import { formatAge } from "./format.js";
 import { Incidents } from "./incidents.js";
 import { Inspect } from "./inspect.js";
+import { Media } from "./media.js";
 import { Monitor } from "./monitor.js";
 import { Operate } from "./operate.js";
 import { PlaceLink } from "./place-link.js";
 import { Pipelines } from "./pipelines.js";
 import { WORKSPACES, WORKSPACE_LABELS, parsePlace } from "./route.js";
+import { System } from "./system.js";
 import type { Place } from "./route.js";
 import { SAMPLE_STALE_AFTER_MS, useLive, useNow } from "./store.js";
 
@@ -99,6 +101,8 @@ export function App() {
         )}
         {place.workspace === "incidents" && <Incidents live={live} />}
         {place.workspace === "capacity" && <Capacity live={live} />}
+        {place.workspace === "media" && <Media live={live} />}
+        {place.workspace === "system" && <System live={live} />}
       </main>
     </div>
   );

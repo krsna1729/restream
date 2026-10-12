@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import { expect, test } from "@playwright/test";
 
 // The control room against a running engine: Fleet follows the runtime state
@@ -268,4 +270,63 @@ test("incidents and capacity: an alert's evidence packet and an engine-made proj
   } finally {
     await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
   }
+});
+
+test("media and system: probe, rename and delete an upload; read the host and its owners", async ({
+  page,
+}) => {
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+
+  const stamp = Date.now();
+  const uploaded = `cr-media-${stamp}.mp4`;
+  const renamed = `cr-renamed-${stamp}.mp4`;
+  await page.goto("/control-room.html?w=media");
+  try {
+    // A checked-in file whose keyframes are 5 s apart: wider than the live
+    // GOP target, so it can only feed a pipeline through a re-encode.
+    await page.getByLabel("Media file to upload").setInputFiles({
+      name: uploaded,
+      mimeType: "video/mp4",
+      buffer: await readFile("test/fixtures/media-library/sparse-gop-5s.mp4"),
+    });
+    const sources = page.getByRole("list", { name: "Source files" });
+    await sources.getByRole("button", { name: new RegExp(uploaded) }).click();
+    const readiness = page.getByLabel("Ingest readiness");
+    await expect(readiness).toContainText("needs Live Optimized");
+    await expect(readiness).toContainText("5.0 s");
+
+    await page.getByLabel("New file name").fill(renamed);
+    await page.getByRole("button", { name: "Rename" }).click();
+    await expect(page.getByRole("heading", { name: renamed })).toBeVisible();
+
+    await page.getByRole("button", { name: "Delete…" }).click();
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(sources.getByRole("button", { name: new RegExp(renamed) })).toHaveCount(0);
+  } finally {
+    for (const name of [uploaded, renamed]) {
+      await page.request.delete(`/api/v1/media/${encodeURIComponent(name)}`);
+    }
+  }
+
+  await page
+    .getByRole("navigation", { name: "Workspaces" })
+    .getByRole("link", { name: "System" })
+    .click();
+  await expect(page.getByRole("list", { name: "Host checks" })).toContainText(
+    "Open file descriptors",
+  );
+  // The demo runs one owner per ingress listener; the page shows what the
+  // engine reports, not what it was configured with.
+  const topology = page.getByRole("region", { name: /Execution topology/ });
+  await expect(topology.getByText("RTMP ingress").locator("..")).toContainText("1");
+  await expect(topology.getByText("SRT ingress").locator("..")).toContainText("1");
+  await expect(page.getByRole("region", { name: /SRT ingress owners/ })).toContainText(
+    "No dropped or late work recorded",
+  );
+  await expect(page.getByRole("region", { name: "Build and provenance" })).toContainText(
+    "Commit",
+  );
 });

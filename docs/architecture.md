@@ -375,7 +375,9 @@ Rules for code behind a boundary:
   evaluated when the level is disabled.
 
 Engine health reports `containedPanics`, `rtmpListener.restarts` and
-`srtListener.restarts`. Shared resources, their per-entity bounds and the open findings are in
+`srtListener.restarts`, and how many ingress owners run now
+(`rtmpListener.ingressOwners`, `srtListener.ingressOwner.owners`; 0 while a
+listener is stopped). Shared resources, their per-entity bounds and the open findings are in
 the [isolation audit](isolation-audit.md).
 
 Concurrency proof expectations and the stage coverage map live in

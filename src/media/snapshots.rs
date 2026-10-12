@@ -256,6 +256,7 @@ ingress_owner_stats! {
     media_probe_hold_overflows,
     ;
     // Gauges and high-water marks.
+    owners,
     tx_capacity,
     tx_in_flight,
     tx_high_water,
@@ -276,6 +277,9 @@ pub struct RtmpListenerStats {
     pub rtmp_fd_exhaustion_errors: AtomicU64,
     /// Restarts after the listener ended without a shutdown request.
     pub restarts: std::sync::Arc<AtomicU64>,
+    /// Ingress owners accepting now: the configured count after the
+    /// connection-limit and parser-budget clamps, or 0 while stopped.
+    pub owners: AtomicU64,
 }
 
 impl serde::Serialize for SrtIngressOwnerSnapshot {
@@ -284,9 +288,10 @@ impl serde::Serialize for SrtIngressOwnerSnapshot {
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("SrtIngressOwnerSnapshot", 41)?;
+        let mut s = serializer.serialize_struct("SrtIngressOwnerSnapshot", 42)?;
         s.serialize_field("faulted", &self.faulted)?;
         s.serialize_field("managedRx", &self.managed_rx)?;
+        s.serialize_field("owners", &self.owners)?;
         s.serialize_field("serviceVisits", &self.service_visits)?;
         s.serialize_field("serviceActions", &self.service_actions)?;
         s.serialize_field("maintenanceActions", &self.maintenance_actions)?;

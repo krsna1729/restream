@@ -288,9 +288,11 @@ items).
   Operate (source deck with promote, media graph, destination matrix with
   start/stop), Inspect (resource map, ring, shards, attribution), Monitor
   (correlated signals, in-page history), Incidents (ranked open alerts,
-  timeline, evidence packet) and Capacity (service centers, Flow Doctor,
-  scenario projection by the engine). See
-  [Frontend](frontend.md#control-room).
+  timeline, evidence packet), Capacity (service centers, Flow Doctor,
+  scenario projection by the engine), Media (library, probe and ingest
+  readiness, upload/rename/delete, storage) and System (host checks,
+  execution classes as reported, SRT ingress owners, provenance, SBOM).
+  Left: Settings and Changes. See [Frontend](frontend.md#control-room).
 - Gates: Playwright per workspace against a running engine.
 - Depends on: Q-042 (state). Q-043 (done) added the output `diagnosis` for
   the Incidents evidence packet.
