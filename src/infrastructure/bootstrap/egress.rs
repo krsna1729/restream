@@ -13,7 +13,6 @@ use crate::application::reconcile::{
 };
 use crate::config::RuntimeTuning;
 use crate::domain::output_spec::OutputUrlScheme;
-use crate::domain::state::DesiredOutputState;
 use crate::media::engine::MediaEngine;
 
 #[path = "egress_task.rs"]

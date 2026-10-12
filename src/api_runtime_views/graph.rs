@@ -7,7 +7,6 @@ use super::graph_projection as api_view_models;
 use crate::application::models::Output;
 use crate::domain::output_spec::{RecirculationTarget, VideoCodecKind};
 use crate::domain::stage::{StageKey, StageKind};
-use crate::domain::state::DesiredOutputState;
 use crate::media::engine::MediaEngine;
 use crate::planner::{PlannedOutput, plan_pipeline_graph, plan_recording_graph};
 use std::collections::{HashMap, HashSet};
