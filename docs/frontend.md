@@ -189,7 +189,8 @@ below and its DOM-id tests are deleted (Q-044).
   destination matrix from the state stream (feed lag from the running egress,
   rate from the telemetry rates) with Start/Stop. Inputs and graph are polled
   every 2 s only while Operate shows that pipeline; each panel shows the age
-  of its last successful update and turns amber once two polls failed.
+  of its last successful update and turns amber once that is older than 2.5
+  poll intervals.
 
 Proof: `test/frontend/control-room-fleet.test.mjs`,
 `test/frontend/control-room-operate.test.mjs`,
