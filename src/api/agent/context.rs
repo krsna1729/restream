@@ -133,10 +133,16 @@ async fn media_inventory(state: &AppState) -> serde_json::Value {
 
 fn desired_output_reason(
     desired_state: DesiredOutputState,
+    retries_exhausted: bool,
     actual_status: &str,
     input_is_on: bool,
 ) -> &'static str {
-    if desired_state == DesiredOutputState::Running && !input_is_on {
+    if desired_state == DesiredOutputState::Running
+        && retries_exhausted
+        && actual_status != "running"
+    {
+        "retriesExhausted"
+    } else if desired_state == DesiredOutputState::Running && !input_is_on {
         "pendingInput"
     } else if (desired_state == DesiredOutputState::Running && actual_status == "running")
         || (desired_state == DesiredOutputState::Stopped && actual_status != "running")
@@ -159,6 +165,7 @@ fn desired_vs_actual(
     let mut drift_count = 0usize;
     let mut converged_count = 0usize;
     let mut pending_count = 0usize;
+    let mut exhausted_count = 0usize;
 
     for pipeline in pipelines {
         let pipeline_health = &health["pipelines"][&pipeline.id];
@@ -180,9 +187,15 @@ fn desired_vs_actual(
         {
             let runtime = &pipeline_health["outputs"][&output.id];
             let actual = runtime["status"].as_str().unwrap_or("stopped");
-            let reason = desired_output_reason(output.desired_state, actual, input_is_on);
+            let reason = desired_output_reason(
+                output.desired_state,
+                output.retries_exhausted,
+                actual,
+                input_is_on,
+            );
             match reason {
                 "pendingInput" => pending_count += 1,
+                "retriesExhausted" => exhausted_count += 1,
                 "converged" => converged_count += 1,
                 _ => drift_count += 1,
             }
@@ -200,6 +213,7 @@ fn desired_vs_actual(
                 "outputId": output.id,
                 "name": output.name,
                 "desiredState": output.desired_state,
+                "retriesExhausted": output.retries_exhausted,
                 "actualStatus": actual,
                 "actualPhase": runtime["phase"],
                 "converged": reason == "converged",
@@ -253,6 +267,7 @@ fn desired_vs_actual(
             "convergedOutputs": converged_count,
             "pendingOutputs": pending_count,
             "driftedOutputs": drift_count,
+            "retriesExhaustedOutputs": exhausted_count,
         },
         "pipelines": pipeline_reports,
     })
@@ -290,9 +305,12 @@ fn diagnostics_summary(
             let desired_running_outputs = outputs
                 .iter()
                 .filter(|output| {
-                    output.pipeline_id == pipeline.id
-                        && output.desired_state == DesiredOutputState::Running
+                    output.pipeline_id == pipeline.id && output.wants_running()
                 })
+                .count();
+            let exhausted_outputs = outputs
+                .iter()
+                .filter(|output| output.pipeline_id == pipeline.id && output.retries_exhausted)
                 .count();
             let actual_running_outputs = pipeline_health["outputs"]
                 .as_object()
@@ -318,6 +336,14 @@ fn diagnostics_summary(
                     "message": "One or more desired running outputs are not active.",
                     "desiredRunningOutputs": desired_running_outputs,
                     "actualRunningOutputs": actual_running_outputs
+                }));
+            }
+            if exhausted_outputs > 0 {
+                findings.push(serde_json::json!({
+                    "severity": "warning",
+                    "code": "outputRetriesExhausted",
+                    "message": "One or more outputs used up their restart retries; start or stop them to retry.",
+                    "retriesExhaustedOutputs": exhausted_outputs,
                 }));
             }
             serde_json::json!({
@@ -477,16 +503,20 @@ mod tests {
     #[test]
     fn desired_output_reason_distinguishes_converged_pending_and_drifted() {
         assert_eq!(
-            desired_output_reason(DesiredOutputState::Running, "running", true),
+            desired_output_reason(DesiredOutputState::Running, false, "running", true),
             "converged"
         );
         assert_eq!(
-            desired_output_reason(DesiredOutputState::Running, "stopped", false),
+            desired_output_reason(DesiredOutputState::Running, false, "stopped", false),
             "pendingInput"
         );
         assert_eq!(
-            desired_output_reason(DesiredOutputState::Stopped, "running", true),
+            desired_output_reason(DesiredOutputState::Stopped, false, "running", true),
             "desiredActualMismatch"
+        );
+        assert_eq!(
+            desired_output_reason(DesiredOutputState::Running, true, "stopped", true),
+            "retriesExhausted"
         );
     }
 }

@@ -507,7 +507,10 @@ pub async fn outputs_update_handler(
     };
     let existing =
         crate::application::outputs::get_by_id(&state.db, &pipeline_id, &output_id).await?;
+    // An output whose retries are exhausted is not running: its URL can be
+    // fixed before the operator starts it again.
     if existing.desired_state == DesiredOutputState::Running
+        && !existing.retries_exhausted
         && (existing.url != validated.url || existing.config != validated.output_config)
     {
         return Ok((
@@ -764,6 +767,7 @@ mod tests {
             name: "Primary Output".to_string(),
             url: "rtmp://example.com/live/stream".to_string(),
             desired_state: DesiredOutputState::Stopped,
+            retries_exhausted: false,
             config: OutputConfig::source(),
             monitoring_url: None,
         };

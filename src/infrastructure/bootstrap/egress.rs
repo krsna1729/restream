@@ -13,7 +13,6 @@ use crate::application::reconcile::{
 };
 use crate::config::RuntimeTuning;
 use crate::domain::output_spec::OutputUrlScheme;
-use crate::domain::state::DesiredOutputState;
 use crate::media::engine::MediaEngine;
 
 #[path = "egress_task.rs"]
@@ -49,7 +48,7 @@ impl EgressReconciler {
                 self.tuning.ingest_disconnect_grace_ms,
             )
             .await;
-            if snapshot.is_active || output.desired_state != DesiredOutputState::Running {
+            if snapshot.is_active || !output.wants_running() {
                 self.engine.clear_egress_retry_state(&output.id).await;
             }
             let failure = {
@@ -65,6 +64,7 @@ impl EgressReconciler {
 
             match decide_output_start_action(
                 output.desired_state,
+                output.retries_exhausted,
                 snapshot.is_active,
                 snapshot.effective_has_ingest,
                 failure,
@@ -77,11 +77,10 @@ impl EgressReconciler {
                     continue;
                 }
                 OutputStartAction::MarkFailed => {
-                    match crate::db::set_output_desired_state(
+                    match crate::db::mark_output_retries_exhausted(
                         &self.pool,
                         &output.pipeline_id,
                         &output.id,
-                        DesiredOutputState::Failed,
                     )
                     .await
                     {
@@ -93,7 +92,7 @@ impl EgressReconciler {
                                 output_id = %output.id,
                                 output_name = %output.name,
                                 max_retries = self.tuning.output_max_retries,
-                                "output exceeded max retries — marking failed",
+                                "output exceeded max retries — retries exhausted; restarts stop until the operator starts or stops it",
                             );
                         }
                         Err(err) => {
@@ -101,7 +100,7 @@ impl EgressReconciler {
                                 correlation_id = %crate::logging::next_correlation_id("out"),
                                 output_id = %output.id,
                                 error = %err,
-                                "failed to set output desired state to failed in db; will retry on next tick",
+                                "failed to record exhausted output retries in db; will retry on next tick",
                             );
                         }
                     }

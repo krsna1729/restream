@@ -50,10 +50,20 @@ pub struct Output {
     pub url: String,
     pub monitoring_url: Option<String>,
     pub desired_state: DesiredOutputState,
+    /// The reconciler gave up restarting this output (actual state, not
+    /// intent); any change of desired state clears it.
+    pub retries_exhausted: bool,
     pub config: OutputConfig,
 }
 
 impl Output {
+    /// The reconciler should keep this output (and the stages it needs)
+    /// running: the operator wants it running and its retries are not
+    /// exhausted.
+    pub fn wants_running(&self) -> bool {
+        self.desired_state == DesiredOutputState::Running && !self.retries_exhausted
+    }
+
     pub fn stage_encoding_label(&self) -> String {
         self.config.stage_encoding_label()
     }

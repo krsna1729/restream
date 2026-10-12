@@ -583,6 +583,8 @@ async fn verify_operation(
                     && runtime.is_some_and(output_runtime_is_running)
                 {
                     (true, "running")
+                } else if output.is_some_and(|output| output.retries_exhausted) {
+                    (false, "retriesExhausted")
                 } else if !pipeline_input_is_on(&health["pipelines"][pipeline_id]) {
                     (false, "pendingInput")
                 } else {

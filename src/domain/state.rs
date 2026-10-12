@@ -71,8 +71,6 @@ pub enum DesiredOutputState {
     /// The output has been explicitly stopped.
     #[default]
     Stopped,
-    /// The output has entered a terminal failure and will not auto-retry.
-    Failed,
 }
 
 impl DesiredOutputState {
@@ -80,7 +78,6 @@ impl DesiredOutputState {
         match self {
             Self::Running => "running",
             Self::Stopped => "stopped",
-            Self::Failed => "failed",
         }
     }
 }
@@ -95,7 +92,6 @@ impl From<&str> for DesiredOutputState {
     fn from(s: &str) -> Self {
         match s {
             "running" => Self::Running,
-            "failed" => Self::Failed,
             _ => Self::Stopped,
         }
     }
@@ -507,7 +503,6 @@ mod tests {
         for (s, expected) in [
             ("running", DesiredOutputState::Running),
             ("stopped", DesiredOutputState::Stopped),
-            ("failed", DesiredOutputState::Failed),
             ("unknown_garbage", DesiredOutputState::Stopped),
         ] {
             let state = DesiredOutputState::from(s);

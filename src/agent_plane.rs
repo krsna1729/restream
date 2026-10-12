@@ -194,6 +194,7 @@ fn redacted_output(output: &Output) -> Value {
         "urlRedacted": redacted_url(&output.url),
         "urlFingerprint": fingerprint(&output.url),
         "desiredState": output.desired_state,
+        "retriesExhausted": output.retries_exhausted,
         "config": output.config,
         "monitoringUrl": output.monitoring_url.as_ref().map(|url| redacted_url(url)),
     })

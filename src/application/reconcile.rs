@@ -76,13 +76,14 @@ pub enum OutputStartAction {
 
 pub fn decide_output_start_action(
     desired_state: DesiredOutputState,
+    retries_exhausted: bool,
     is_active: bool,
     effective_has_ingest: bool,
     failure: Option<OutputFailureWindow>,
     policy: OutputRetryPolicy,
     jitter_key: &str,
 ) -> OutputStartAction {
-    if desired_state != DesiredOutputState::Running || is_active {
+    if desired_state != DesiredOutputState::Running || retries_exhausted || is_active {
         return OutputStartAction::NotApplicable;
     }
     if !effective_has_ingest {
@@ -184,7 +185,7 @@ pub struct OutputStageSweepInput<'a> {
     pub pipeline_id: &'a str,
     pub config: OutputConfig,
     pub url: &'a str,
-    pub desired_state: DesiredOutputState,
+    pub wants_running: bool,
     pub is_active: bool,
     pub effective_has_ingest: bool,
     pub ingest_video_codec: Option<String>,
@@ -195,9 +196,7 @@ pub fn collect_needed_stage_keys<'a>(
 ) -> HashSet<StageKey> {
     let mut needed_stages = HashSet::new();
     for output in outputs {
-        if output.effective_has_ingest
-            && (output.is_active || output.desired_state == DesiredOutputState::Running)
-        {
+        if output.effective_has_ingest && (output.is_active || output.wants_running) {
             let planned_output = crate::planner::PlannedOutput::new("", output.config, output.url);
             let plan = crate::planner::plan_pipeline_graph(
                 output.pipeline_id,
@@ -223,7 +222,7 @@ pub fn output_stage_sweep_input<'a>(
         pipeline_id: output.pipeline_id.as_str(),
         config: output.config.clone(),
         url: &output.url,
-        desired_state: output.desired_state,
+        wants_running: output.wants_running(),
         is_active: snapshot.is_active,
         effective_has_ingest: snapshot.effective_has_ingest,
         ingest_video_codec: snapshot.ingest_video_codec.clone(),
@@ -308,6 +307,7 @@ mod tests {
         // pre-jitter value.
         let action = decide_output_start_action(
             DesiredOutputState::Running,
+            false,
             false,
             true,
             Some(OutputFailureWindow {
@@ -436,6 +436,7 @@ mod tests {
         assert_eq!(
             decide_output_start_action(
                 DesiredOutputState::Running,
+                false,
                 true,
                 true,
                 None,
@@ -447,6 +448,7 @@ mod tests {
         assert_eq!(
             decide_output_start_action(
                 DesiredOutputState::Stopped,
+                false,
                 false,
                 true,
                 None,
@@ -461,6 +463,7 @@ mod tests {
     fn start_action_starts_now_without_prior_failure() {
         let action = decide_output_start_action(
             DesiredOutputState::Running,
+            false,
             false,
             true,
             None,
@@ -477,6 +480,7 @@ mod tests {
         // [10_000, 20_000], so this holds regardless of jitter_key.
         let action = decide_output_start_action(
             DesiredOutputState::Running,
+            false,
             false,
             true,
             Some(OutputFailureWindow {
@@ -508,6 +512,7 @@ mod tests {
         let action = decide_output_start_action(
             DesiredOutputState::Running,
             false,
+            false,
             true,
             Some(OutputFailureWindow {
                 retries: 10,
@@ -520,10 +525,28 @@ mod tests {
         assert_eq!(action, OutputStartAction::MarkFailed);
     }
 
+    /// Exhausted retries stop restarts while intent stays `running`: the
+    /// reconciler no longer rewrites desired state to record its own failure.
+    #[test]
+    fn start_action_never_restarts_an_output_whose_retries_are_exhausted() {
+        let action = decide_output_start_action(
+            DesiredOutputState::Running,
+            true,
+            false,
+            true,
+            None,
+            test_retry_policy(),
+            "output-a",
+        );
+
+        assert_eq!(action, OutputStartAction::NotApplicable);
+    }
+
     #[test]
     fn start_action_skips_when_ingest_is_missing() {
         let action = decide_output_start_action(
             DesiredOutputState::Running,
+            false,
             false,
             false,
             None,
@@ -587,13 +610,30 @@ mod tests {
 
     #[test]
     fn stage_sweep_collects_only_needed_stage_keys() {
+        // Desired running but retries exhausted, and inactive: its 1080p
+        // stage has no consumer and must be swept.
+        let exhausted = Output {
+            id: "out-dead".to_string(),
+            pipeline_id: "pipe".to_string(),
+            name: "dead".to_string(),
+            url: "rtmp://dead.example/live".to_string(),
+            monitoring_url: None,
+            desired_state: DesiredOutputState::Running,
+            retries_exhausted: true,
+            config: OutputConfig::preset("1080p"),
+        };
+        let inactive = OutputRuntimeSnapshot {
+            is_active: false,
+            effective_has_ingest: true,
+            ingest_video_codec: Some("hevc".to_string()),
+        };
         let stages = collect_needed_stage_keys([
             OutputStageSweepInput {
                 pipeline_id: "pipe",
                 config: OutputConfig::preset("720p")
                     .with_audio(AudioRouting::SelectTracks { tracks: vec![0] }),
                 url: "rtmp://example/live",
-                desired_state: DesiredOutputState::Running,
+                wants_running: true,
                 is_active: false,
                 effective_has_ingest: true,
                 ingest_video_codec: Some("hevc".to_string()),
@@ -602,11 +642,12 @@ mod tests {
                 pipeline_id: "pipe",
                 config: OutputConfig::source(),
                 url: "srt://example:9000",
-                desired_state: DesiredOutputState::Stopped,
+                wants_running: false,
                 is_active: false,
                 effective_has_ingest: true,
                 ingest_video_codec: Some("hevc".to_string()),
             },
+            output_stage_sweep_input(&exhausted, &inactive),
         ]);
 
         let h264_720p = StageKind::video_preset_with_codec("720p", "h264");
@@ -643,6 +684,7 @@ mod tests {
             url: "rtmp://example/live/test".to_string(),
             monitoring_url: None,
             desired_state: DesiredOutputState::Running,
+            retries_exhausted: false,
             config: OutputConfig::source(),
         };
 
@@ -668,6 +710,7 @@ mod tests {
             url: "srt://example:9000".to_string(),
             monitoring_url: None,
             desired_state: DesiredOutputState::Running,
+            retries_exhausted: false,
             config: OutputConfig::source(),
         };
 
@@ -687,6 +730,7 @@ mod tests {
             url: "rtmp://example/live".to_string(),
             monitoring_url: None,
             desired_state: DesiredOutputState::Running,
+            retries_exhausted: false,
             config: OutputConfig::preset("720p"),
         };
         let snapshot = OutputRuntimeSnapshot {

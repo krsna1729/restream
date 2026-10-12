@@ -466,6 +466,55 @@ async fn output_crud_via_api() {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
+/// A running output's URL is locked, but one whose retries are exhausted
+/// is not running: the operator can fix the URL before starting it again.
+#[tokio::test]
+async fn an_output_with_exhausted_retries_can_be_edited() {
+    let (app, pool) = test_app().await;
+    let cookie = login(&app).await;
+    db::create_pipeline(&pool, "p1", "P", "key01", None, None)
+        .await
+        .unwrap();
+    db::create_output(
+        &pool,
+        "o1",
+        "p1",
+        "Out",
+        "rtmp://old.example/live",
+        None,
+        DesiredOutputState::Running,
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+    let body = r#"{"name":"Out","url":"rtmp://new.example/live","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#;
+    let edit = || {
+        auth_req(
+            "PATCH",
+            "/api/v1/pipelines/p1/outputs/o1",
+            &cookie,
+            Some(body),
+        )
+    };
+
+    let resp = app.clone().oneshot(edit()).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::CONFLICT,
+        "running output URL is locked"
+    );
+
+    db::mark_output_retries_exhausted(&pool, "p1", "o1")
+        .await
+        .unwrap();
+    let resp = app.clone().oneshot(edit()).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["output"]["url"], "rtmp://new.example/live");
+    assert_eq!(json["output"]["desiredState"], "running");
+    assert_eq!(json["output"]["retriesExhausted"], true);
+}
+
 #[tokio::test]
 async fn delete_output_cancels_egress() {
     let (app, _, engine) = test_app_with_engine().await;

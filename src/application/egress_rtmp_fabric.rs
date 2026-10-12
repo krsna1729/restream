@@ -164,6 +164,7 @@ mod tests {
             url: url.to_string(),
             monitoring_url: None,
             desired_state: DesiredOutputState::Running,
+            retries_exhausted: false,
             config: OutputConfig::source(),
         }
     }

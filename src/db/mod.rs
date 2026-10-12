@@ -28,7 +28,8 @@ pub use log_repo::{
 };
 pub use output_repo::{
     OutputRecord, create_output, delete_output, get_output, list_outputs,
-    list_outputs_for_pipeline, set_output_desired_state, update_output,
+    list_outputs_for_pipeline, mark_output_retries_exhausted, set_output_desired_state,
+    update_output,
 };
 pub use pipeline_input_repo::{
     create_pipeline_input, delete_pipeline_input, get_pipeline_input,

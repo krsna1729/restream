@@ -70,6 +70,7 @@ pub(crate) fn output_response_json(output: &Output) -> serde_json::Value {
         "url": output.url,
         "monitoringUrl": output.monitoring_url,
         "desiredState": output.desired_state,
+        "retriesExhausted": output.retries_exhausted,
         "config": output.config,
     })
 }

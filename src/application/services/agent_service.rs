@@ -241,7 +241,11 @@ impl AgentService {
                 )
                 .await
                 .map_err(|err| format!("failed to update output: {err}"))?;
-                if desired_state != previous.desired_state {
+                // Re-requesting Running also restarts an output whose
+                // retries are exhausted (the agent's "fix the URL and run").
+                if desired_state != previous.desired_state
+                    || (desired_state == DesiredOutputState::Running && previous.retries_exhausted)
+                {
                     current = match desired_state {
                         DesiredOutputState::Running => crate::application::outputs::request_start(
                             &self.db,
@@ -257,11 +261,6 @@ impl AgentService {
                         )
                         .await
                         .map_err(|err| format!("failed to update desired state: {err}"))?,
-                        DesiredOutputState::Failed => {
-                            return Err(
-                                "agent output updates cannot request failed state".to_string()
-                            );
-                        }
                     };
                 }
                 Ok(AgentOutputMutationOutcome::Updated { previous, current })
@@ -301,9 +300,6 @@ impl AgentService {
                         crate::application::outputs::request_stop(&self.db, pipeline_id, &output_id)
                             .await
                             .map_err(|err| format!("failed to set desired state: {err}"))?
-                    }
-                    DesiredOutputState::Failed => {
-                        return Err("agent output actions cannot request failed state".to_string());
                     }
                 };
                 Ok(AgentOutputMutationOutcome::DesiredStateUpdated { previous, current })
@@ -410,5 +406,54 @@ mod tests {
         assert_eq!(catalog.pipelines[0].id, "pipe-1");
         assert_eq!(catalog.outputs.len(), 1);
         assert_eq!(catalog.outputs[0].id, "out-1");
+    }
+
+    #[cfg(feature = "agent-execution")]
+    #[tokio::test]
+    async fn an_agent_update_to_running_restarts_an_output_whose_retries_are_exhausted() {
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        crate::db::setup_database_schema(&pool).await.unwrap();
+        crate::db::create_pipeline(&pool, "pipe-1", "Pipeline", "key-1", None, None)
+            .await
+            .unwrap();
+        crate::db::create_output(
+            &pool,
+            "out-1",
+            "pipe-1",
+            "Output",
+            "rtmp://dead.example/live",
+            None,
+            DesiredOutputState::Running,
+            &OutputConfig::source(),
+        )
+        .await
+        .unwrap();
+        crate::db::mark_output_retries_exhausted(&pool, "pipe-1", "out-1")
+            .await
+            .unwrap();
+
+        let service = SqliteServiceFactory::new(&pool).agent_service();
+        service
+            .apply_output_mutation(
+                &Arc::new(crate::media::engine::MediaEngine::new()),
+                "pipe-1",
+                AgentOutputMutation::Update {
+                    output_id: "out-1".to_string(),
+                    name: "Output".to_string(),
+                    url: "rtmp://fixed.example/live".to_string(),
+                    monitoring_url: None,
+                    desired_state: DesiredOutputState::Running,
+                    config: OutputConfig::source(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let output = crate::db::get_output(&pool, "pipe-1", "out-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(output.url, "rtmp://fixed.example/live");
+        assert!(!output.retries_exhausted, "the reconciler may restart it");
     }
 }
