@@ -24,7 +24,6 @@ items).
 - [Q-042 runtime truth](#q-042-architecture-opus-feed-the-dashboard-from-the-revisioned-runtime-state)
 - [Q-044 frontend cut](#q-044-frontend-opus-hard-cut-the-frontend-to-one-react-root)
 - [Q-045 frontend product](#q-045-frontend-opus-build-the-control-room-on-live-data)
-- [Q-046 agent guidance](#q-046-docs-sonnet-slim-agentsmd-to-a-root-contract)
 - [Q-047 MoQ](#q-047-protocol-opus-moq-interop-spike-parked)
 - [Q-048 mixed.signal sinks](#q-048-test-sonnet-make-mixedsignal-pass-on-master)
 
@@ -285,13 +284,6 @@ items).
 - Gates: Playwright per workspace against a running engine.
 - Depends on: Q-042 (state), Q-044 (cut). Q-043 (done) added the
   output `diagnosis` for the Incidents evidence packet.
-- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
-
-### Q-046 [docs] [sonnet] Slim AGENTS.md to a root contract
-- Goal: a small root contract; media, frontend and protocol rules move to
-  skills.
-- Gates: `node scripts/check/docs.mjs`; every command named in AGENTS.md
-  runs.
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
 
 ### Q-047 [protocol] [opus] MoQ interop spike (parked)

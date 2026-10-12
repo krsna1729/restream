@@ -74,6 +74,8 @@ document is one `git log -- <path>` away.
 - [AGENTS.md](../AGENTS.md) is the agent contract; [CLAUDE.md](../CLAUDE.md)
   points Claude Code at it.
 - [`agent-guidance/skills/`](agent-guidance/skills/) holds the task skills:
+  [media pipeline](agent-guidance/skills/media-pipeline/SKILL.md),
+  [frontend](agent-guidance/skills/frontend/SKILL.md),
   [concurrency proof](agent-guidance/skills/concurrency-proof/SKILL.md),
   [layering audit](agent-guidance/skills/layering-audit/SKILL.md),
   [perf sweep](agent-guidance/skills/perf-sweep/SKILL.md),

@@ -1,16 +1,16 @@
 # AGENTS.md
 
-Instructions for AI coding agents in this repository.
+Root contract for AI coding agents in this repository. Area rules live in
+skills; load the skill for the area you touch.
 
 ## Contents
 
 - [Core Rules](#core-rules)
+- [Skills](#skills)
 - [Repository Map](#repository-map)
 - [Commands](#commands)
 - [Inner Loop](#inner-loop)
 - [Build and Worktree Safety](#build-and-worktree-safety)
-- [Media Rules](#media-rules)
-- [Hot-Path Rules](#hot-path-rules)
 - [Testing](#testing)
 - [Rigor and Evidence](#rigor-and-evidence)
 - [Merge Strategy](#merge-strategy)
@@ -20,14 +20,35 @@ Instructions for AI coding agents in this repository.
 ## Core Rules
 
 - Keep changes small, intentional, and consistent with existing Rust/TypeScript patterns.
-- Read the relevant code and docs before editing, especially for media-pipeline behavior.
+- Read the relevant code and docs before editing.
 - Preserve unrelated user or agent changes. Check `git status` before broad edits, staging, or commits.
 - If overlapping work is visible in `git status`, diffs, or file contents, use hunk-based edits and hunk-based git operations. Do not overwrite, reformat, stage, or revert whole files unless explicitly asked.
-- Add or update tests for behavior changes. Benchmark before and after hot-path changes.
-- Concurrency, lifecycle, and thread-hop changes need proof: deterministic unit tests, loom/proptest where feasible, a live harness fault case for recovery behavior, and either a benchmark or an explicit note that the change is off the hot path.
+- Add or update tests for behavior changes.
+- No internal or external failure path may crash the engine; isolate faults and surface errors.
 - Update docs when changing commands, configuration, architecture, protocols, or user-visible behavior.
 - Prefer targeted fixes over rewrites. Add abstractions only when they remove real complexity.
-- For Rust or frontend layering/module-boundary refactors, use `docs/agent-guidance/skills/layering-audit/SKILL.md` and stop when the next split would add more indirection than ownership clarity.
+
+## Skills
+
+Canonical skill bodies live in `docs/agent-guidance/skills/<name>/SKILL.md`.
+They supply task-specific guidance within the user's scope and existing
+authorization; do not turn reviews into fixes or add approval stops merely
+because a skill is relevant.
+
+| Touching | Skill |
+|---|---|
+| `src/media/`, protocol paths, stages, ring buffers, any hot path | [media-pipeline](docs/agent-guidance/skills/media-pipeline/SKILL.md) |
+| `web/ts/`, `web/styles/`, frontend build, API contract | [frontend](docs/agent-guidance/skills/frontend/SKILL.md) |
+| RTMP/SRT/HLS behavior, codecs, live fault recovery | [protocol-test](docs/agent-guidance/skills/protocol-test/SKILL.md) |
+| synchronization, thread hops, cancellation, teardown/recovery | [concurrency-proof](docs/agent-guidance/skills/concurrency-proof/SKILL.md) |
+| benchmarks and resource regressions | [perf-sweep](docs/agent-guidance/skills/perf-sweep/SKILL.md) |
+| Rust or frontend layering and module boundaries | [layering-audit](docs/agent-guidance/skills/layering-audit/SKILL.md) |
+| the local MediaMTX demo | [respin](docs/agent-guidance/skills/respin/SKILL.md) |
+| live pipeline operations | [restream-ops-agent](docs/agent-guidance/skills/restream-ops-agent/SKILL.md) |
+
+Claude Code shims are generated locally by `cargo xtask setup-skills`
+(`.claude/` is gitignored; `scripts/agent/worktree.sh` runs it in new
+worktrees). After adding or editing a canonical skill, rerun it.
 
 ## Repository Map
 
@@ -47,16 +68,11 @@ Use the pinned Rust toolchain from `rust-toolchain.toml`.
 - Use `--profile bench` instead of `--release` for local or agent builds.
   Exception: performance evidence that gets committed (capacity ramps, A/B
   runs, profiles) uses real release binaries from
-  `cargo xtask build-release` (`target/qual-release/`); keep the bench
-  profile for the day-to-day inner loop.
-- Cargo hardcodes `target/release` as the output dir for a profile named
-  `bench` (long-standing `cargo bench` compatibility quirk); `cargo build
-  --profile bench` alone does not populate `target/bench/`. For measurement
-  harness modes that require binaries at `target/bench/`, build with
-  `cargo xtask build-bench` instead — the one canonical path to those
-  binaries.
-- Edit `web/ts/` and `web/styles/input.css`; do not hand-edit generated files in `public/js/`.
-- Default frontend verification is `npm run test:frontend`; use Playwright when browser-only behavior is touched.
+  `cargo xtask build-release` (`target/qual-release/`).
+- Cargo writes a profile named `bench` to `target/release`, so
+  `cargo build --profile bench` alone does not populate `target/bench/`.
+  Harness modes that need binaries at `target/bench/` require
+  `cargo xtask build-bench`, the one canonical path to those binaries.
 
 ```sh
 cargo build --profile bench
@@ -71,8 +87,6 @@ scripts/agent/worktree.sh --cleanup <id>
 cargo xtask setup-skills
 
 npm run test:frontend
-npm run test:frontend:coverage
-npx playwright test
 
 cargo bench --bench <name>
 scripts/harness/run.sh <mode>   # modes: target/bench/test_harness catalog list-modes
@@ -87,15 +101,6 @@ in on demand, and verify with the narrowest gate first.
 
 - Do not preload architecture docs for scoped fixes; read the doc a task
   touches when it touches it (see Key References).
-- Skill bodies load on invocation; the canonical versions live in
-  `docs/agent-guidance/skills/`. Claude Code shims are generated locally by
-  `cargo xtask setup-skills` (`.claude/` is gitignored;
-  `scripts/agent/worktree.sh` runs it automatically in new worktrees). After
-  adding or editing a canonical skill, run `cargo xtask setup-skills` to
-  refresh local shims.
-- Skills supply task-specific guidance within the user's scope and existing
-  authorization. Do not turn reviews into fixes or add approval stops merely
-  because a skill is relevant.
 - Correctness gates run in GitHub PR CI, not locally: push the branch, open
   the PR, and read the failing job. Locally, run only (a) performance
   measurement and (b) the targeted new or changed test or feature you are
@@ -133,64 +138,18 @@ pgrep -a -x cargo
 - Stop only processes owned by this task or covered by the user's restart
   request, after checking their PIDs and command lines. A matching process
   name does not establish ownership. Defer heavy work while other media runs.
-- Prefer `scripts/agent/worktree.sh <id>` over manual setup.
-- Use one worktree per agent or task.
+- Prefer `scripts/agent/worktree.sh <id>` over manual setup; use one worktree per agent or task.
 - Treat `target/`, `.cargo/`, and `node_modules/` as copied caches owned by the destination worktree; do not point multiple worktrees at one live `target/`.
 - Use `--no-share-static` when touching native or linkage-related inputs such as `build.rs`, Docker/static build scripts, or native `test/*.c` helpers.
 - Use `.agent-state/setup.env` as the source of truth for `WORK_ROOT` and the shared static root.
-
-## Media Rules
-
-Before changing `src/media/`, read:
-
-- `docs/architecture.md`
-- `docs/media-pipeline.md`
-- `docs/high-performance-data-path.md`
-- `docs/testing.md`
-
-Core invariants:
-
-- Tokio owns the control plane: API handlers, reconciliation, timers and application session state. Per-packet media work does not belong on Tokio: SRT and RTMP ingest media run to completion on their ingress owners; the shared TS mux and the HLS segmenter are still on Tokio and are moving to the owner that publishes the feed.
-- SRT transport sockets and protocol state (`PeerTable`, timers, ACK/NAK, TX) are owned by dedicated Compio `Owner` threads: one ingress owner thread per listener member (`RESTREAM_SRT_INGRESS_OWNERS`, default 1; more than one share the port as a `SO_REUSEPORT` group and pass srt-rs `ListenerTransfer`s between their threads, never through Tokio), and one Compio runtime with at most one `Owner` per address family per egress shard. Never move SRT sockets or `PeerTable` state onto Tokio; address SRT ingress sessions from Tokio only by `IngressPeer` (Owner index + `LogicalPeerId`) through bounded commands and events.
-- RTMP/RTMPS sockets stay on the native TCP/io_uring shard workers until the Compio TCP migration.
-- Blocking FFmpeg and other blocking calls belong on dedicated OS threads or the blocking pool, never on Tokio workers or an Owner thread.
-- Wrap OS-thread entry points that cross native FFmpeg/FFI boundaries with `catch_unwind(AssertUnwindSafe(...))`; the Compio Owner threads report an `Owner` fault as a bridge event, and a panic there closes the bridge, which Tokio treats as a listener stop.
-- No internal or external failure path may crash the engine; isolate faults and surface errors.
-- Keep media timestamps separate from wall-clock/application time.
-- Respect `MediaPacket.format`; consumers must handle `Flv` and `Raw` explicitly.
-- RTMP video timestamps are DTS; signed FLV composition offset derives PTS.
-- Normalize SRT Stream IDs before lookup.
-- Duplicate SRT publishers are not bonded ingest; bonding is an `srt-rs` group connection (one `LogicalPeerId`), never independent publishers sharing a StreamID.
-- HLS storage is in-memory unless an explicit design change says otherwise.
-
-Frontend assets are embedded with `rust-embed`, with a disk-first fallback during development.
-
-## Hot-Path Rules
-
-Hot paths include `src/media/`, ring buffers, mux/demux loops, AVIO queues, SRT/RTMP packet loops, HLS segmenting, and transcoder data paths.
-
-- Benchmark before and after hot-path changes with the relevant `benches/` suite.
-- Avoid per-packet allocation, logging, serialization, locks, async channel sends, and system calls.
-- Do not add logging inside packet-level loops in `src/media/ring_buffer.rs` or `src/media/avio.rs`.
-- Use burst APIs where available.
-- Hoist reusable buffers outside loops and clear them inside the loop.
-- Prefer `Bytes` and `BytesMut` ownership transfer over payload copies.
-- Do not add diagnostic readers or metrics that alter production pipeline behavior.
-- Keep protocol correctness tests at least as strong as performance validation.
-- For SIMD, benchmark scalar first, keep a scalar fallback, use runtime feature detection, and minimize `unsafe`.
 
 ## Testing
 
 - Passing test logs should stay quiet: no warnings, panic text, FFmpeg probe chatter, or stale-binary drift.
 - Use `cargo fmt --all` and `cargo fmt --all --check`; do not run `rustfmt` directly.
-- Resolve media through `src/test_fixtures.rs`; add new committed assets to `REQUIRED_CHECKED_IN_FIXTURES`.
-- Prefer checked-in fixtures over inline media generation for tests, benches, and harness runs.
+- Resolve media through `src/test_fixtures.rs`; add new committed assets to `REQUIRED_CHECKED_IN_FIXTURES`. Prefer checked-in fixtures over inline media generation.
 - Test-only code may adapt or observe production code, never re-implement it: inject fakes through an existing type parameter or constructor and call the production function, rather than adding a `#[cfg(test)]` sibling that repeats its logic.
-- Route dashboard API calls through `web/ts/core/api.ts`; update contract tests when routes or payloads change.
 - `cargo xtask test-hygiene` runs in CI (Rust unit hygiene and fixtures); suppress expected noise at the test helper, not in CI.
-- For concurrency or thread-hop changes, extend the step tables in `crates/xtask/src/concurrency.rs` (`cargo xtask concurrency fast`) or explain why the existing proof gate already covers the change.
-- If teardown or recovery semantics change, update the live harness assertion and the operator-visible status contract in the same change.
-- Gate selection by files touched: see the Inner Loop table above.
 - Scale and capacity runs are performance measurement and stay local: `cargo xtask capacity-ramp`, serially, on an idle host.
 
 ## Rigor and Evidence
@@ -219,17 +178,10 @@ its evidence in the commit message.
 
 ## Merge Strategy
 
-- Default to squash-and-merge for ordinary feature, cleanup, UI, CI-fix, and
-  agent-authored PRs where the branch history mostly records how the work
-  converged.
-- Use rebase-and-merge when the PR commits are intentionally curated,
-  independently reviewable, and useful as future history, such as phased
-  architecture or media-pipeline migrations.
-- Use a merge commit only when preserving branch topology matters, such as a
-  long-running integration branch or coordinated subsystem branch.
-- Rule of thumb: squash when the PR history is "how we got there"; rebase when
-  the commits are "the design of the change"; merge when the branch shape itself
-  is important.
+- Squash-and-merge by default: the branch history records how the work converged.
+- Rebase-and-merge when the commits are curated and are the design of the
+  change, such as phased architecture or media-pipeline migrations.
+- A merge commit only when the branch topology itself matters.
 
 ## Operational Guidance
 
@@ -246,7 +198,7 @@ its evidence in the commit message.
 - Testing: `docs/testing.md`
 - Concurrency proofing: `docs/concurrency-proofing.md`
 - Assurance roadmap: `docs/assurance-roadmap.md`
-- Agent skills (canonical, agent-neutral): `docs/agent-guidance/skills/`
+- Frontend: `docs/frontend.md`
 - Configuration: `docs/configuration.md`
 - Observability and logging: `docs/observability.md`
 - API: `docs/api-reference.md`

@@ -13,8 +13,9 @@ does not prove the production path.
 - Use loom for relevant wake/cancel or registry interleavings; bound the model.
 - For recovery or teardown changes, update the live harness fault assertion
   and operator-visible status contract together.
-- Extend the proof gate for a new primitive or thread hop, or explain how
-  existing coverage enforces it.
+- Extend the proof gate for a new primitive or thread hop (the step tables
+  in `crates/xtask/src/concurrency.rs`), or explain how existing coverage
+  enforces it.
 - Benchmark hot-path changes; otherwise state that the change is off the hot path.
 
 Follow [AGENTS.md](../../../../AGENTS.md) for host/build safety. Run the focused
