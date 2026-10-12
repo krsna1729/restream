@@ -706,3 +706,64 @@ async fn v1_events_filters_by_pipeline_id() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0]["pipelineId"].as_str().unwrap(), "pipe-a");
 }
+
+/// The reconciler runs an output pass only when asked (Q-040): every
+/// successful mutating request asks; reads and rejected requests do not.
+#[tokio::test]
+async fn a_successful_mutation_requests_a_reconcile_pass() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    db::setup_database_schema(&pool).await.unwrap();
+    let sessions = Arc::new(TokioRwLock::new(HashSet::new()));
+    restream::infrastructure::bootstrap::initialize_auth_for_test(&pool, &sessions, "admin").await;
+    let (log_broadcast, _) = broadcast::channel(32);
+    let state = Arc::new(api::AppState::test_new(
+        restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
+        pool.clone(),
+        Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG)),
+        Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
+            SrtGlobalIngestConfig::default(),
+            &[],
+        )),
+        sessions,
+        Arc::new(MediaEngine::new()),
+        log_broadcast,
+    ));
+    let app = api::create_router(state.clone());
+    let due = || state.reconcile.take_due(std::time::Instant::now());
+    let cookie = login(&app).await;
+    let _ = due(); // the login itself was a successful POST
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req("GET", "/api/v1/pipelines", &cookie, None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(!due(), "a read does not request a pass");
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "DELETE",
+            "/api/v1/pipelines/missing",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert!(!due(), "a rejected mutation does not request a pass");
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            "/api/v1/pipelines",
+            &cookie,
+            Some(r#"{"name":"P","streamKey":"key01_6c71124cde80358ca7c13081"}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert!(due(), "a persisted change requests a pass");
+}

@@ -7,8 +7,10 @@
 //! runtime step between the two halves is converged by the next pass, and a
 //! restart starts from the same rows.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use sqlx::SqlitePool;
 use tokio::sync::Notify;
@@ -17,10 +19,17 @@ use tracing::warn;
 use crate::application::models::Output;
 use crate::media::engine::MediaEngine;
 
-/// Requests from mutation handlers to the reconciler.
+/// Requests to the reconciler (Q-039, Q-040). The output pass runs only when
+/// something asked for it: a mutation or engine lifecycle event
+/// ([`Self::wake`]), or a deadline that came due ([`Self::wake_at`]: retry
+/// backoff, ingest-disconnect grace, a deferred stage sweep). A deadline only
+/// wakes the pass, which re-reads current state, so a stale deadline costs one
+/// pass and can never act on old state.
 #[derive(Default)]
 pub struct ReconcileRequests {
     wake: Notify,
+    dirty: AtomicBool,
+    deadlines: Mutex<BTreeSet<Instant>>,
     dirty_selections: Mutex<HashSet<String>>,
 }
 
@@ -29,10 +38,33 @@ impl ReconcileRequests {
         Self::default()
     }
 
-    /// Run a reconcile pass now instead of at the next interval tick. A wake
-    /// sent while no pass is waiting is kept for the next wait.
+    /// Run an output pass now. A wake sent while a pass runs is kept: the
+    /// loop runs one more pass after it.
     pub fn wake(&self) {
+        self.dirty.store(true, Ordering::Release);
         self.wake.notify_one();
+    }
+
+    /// Run an output pass at `at` (or right away if it is past).
+    pub fn wake_at(&self, at: Instant) {
+        crate::sync::lock(&self.deadlines).insert(at);
+        // The loop recomputes its sleep with the new deadline.
+        self.wake.notify_one();
+    }
+
+    /// Whether an output pass is due at `now`: consumes the dirty flag and
+    /// every deadline at or before `now`.
+    pub fn take_due(&self, now: Instant) -> bool {
+        let dirty = self.dirty.swap(false, Ordering::AcqRel);
+        let mut deadlines = crate::sync::lock(&self.deadlines);
+        let before = deadlines.len();
+        deadlines.retain(|at| *at > now);
+        dirty || deadlines.len() != before
+    }
+
+    /// The earliest pending deadline.
+    pub fn next_deadline(&self) -> Option<Instant> {
+        crate::sync::lock(&self.deadlines).first().copied()
     }
 
     /// The pipeline's persisted input selection changed: the next pass makes
@@ -58,6 +90,32 @@ impl ReconcileRequests {
 
     fn keep_dirty_selection(&self, pipeline_id: String) {
         crate::sync::lock(&self.dirty_selections).insert(pipeline_id);
+    }
+}
+
+/// Engine lifecycle events that change what the output pass decides: an
+/// ingest arriving or leaving (outputs start or stop; a departure also once
+/// its grace ends) and an egress or stage ending (retry, or sweep its stages).
+/// `EgressFailed` is not one: it reports each error of a still-active egress
+/// (every upload retry), and the egress ending emits `EgressStopped`.
+pub fn request_pass_for_event(
+    requests: &ReconcileRequests,
+    event: &crate::events::EventKind,
+    ingest_disconnect_grace: std::time::Duration,
+) {
+    use crate::events::EventKind;
+    match event {
+        EventKind::IngestDisconnected { .. } => {
+            requests.wake();
+            // The grace check is `elapsed < grace`; pass just after it ends.
+            requests.wake_at(
+                Instant::now() + ingest_disconnect_grace + std::time::Duration::from_millis(10),
+            );
+        }
+        EventKind::IngestConnected { .. }
+        | EventKind::EgressStopped { .. }
+        | EventKind::StageStopped { .. } => requests.wake(),
+        _ => {}
     }
 }
 

@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sqlx::SqlitePool;
 use tokio::sync::RwLock;
@@ -23,6 +23,10 @@ use crate::media::recording::RecordingMetadataReporter;
 
 use super::egress::EgressReconciler;
 use super::runtime::RuntimeTasks;
+
+/// Backstop output pass, in reconcile intervals, for state changes no
+/// trigger reports.
+const BACKSTOP_INTERVALS: u32 = 10;
 
 pub(super) struct Reconciler {
     config: Arc<AppConfig>,
@@ -62,46 +66,97 @@ impl Reconciler {
         }
     }
 
+    /// Runs until shutdown. Two cadences (Q-040):
+    /// - the output pass (rows, topology, egress start/stop/retry, stage
+    ///   sweep) runs only when requested or due: a mutation or lifecycle
+    ///   event, a deadline it scheduled itself (retry backoff, a deferred
+    ///   stage sweep), and a slow backstop pass every
+    ///   [`BACKSTOP_INTERVALS`] intervals for anything no trigger covers.
+    ///   Passes are at least one interval apart, so a storm of events or
+    ///   deadlines (a destination outage) costs no more than the old timer;
+    ///   a request after a quiet interval still runs at once, and one in the
+    ///   gap waits for its end;
+    /// - housekeeping that reads no outputs (sessions, fabric sizing,
+    ///   recordings, idle HLS, file-ingest reaping) runs every interval.
     pub async fn run(&self, runtime: &mut RuntimeTasks, shutdown: &CancellationToken) {
         let tuning = self.config.tuning;
-        let mut tick = 0_u64;
+        let interval = Duration::from_millis(tuning.reconciler_interval_ms);
+        let backstop = interval * BACKSTOP_INTERVALS;
         let session_prune_every_ticks = tuning.session_prune_every_ticks();
+        let mut tick = 0_u64;
+        // Both are due at once: converge right after startup.
+        let mut next_tick = Instant::now();
+        let mut next_backstop = next_tick;
+        let mut next_pass_allowed = next_tick;
 
-        while runtime
-            .wait_for_reconcile_tick(
-                shutdown,
-                Duration::from_millis(tuning.reconciler_interval_ms),
-                self.requests.woken(),
-            )
-            .await
-        {
-            tick += 1;
-            if tick.is_multiple_of(session_prune_every_ticks) {
-                self.prune_sessions_and_logs().await;
-            }
-
-            apply_requested_selections(&self.pool, &self.engine, &self.requests).await;
-            let outputs = match crate::db::list_outputs(&self.pool).await {
-                Ok(records) => records
+        loop {
+            let gap = Instant::now() < next_pass_allowed;
+            let pass_wake = if gap {
+                // Requests stay pending; the Notify is not polled, so its
+                // permit cannot spin the loop before the gap ends.
+                Some(next_pass_allowed)
+            } else {
+                [Some(next_backstop), self.requests.next_deadline()]
                     .into_iter()
-                    .map(crate::application::outputs::from_record)
-                    .collect::<Vec<_>>(),
-                Err(error) => {
-                    warn!(tick, err = %error, "DB error reading outputs");
-                    continue;
-                }
+                    .flatten()
+                    .min()
             };
-
-            converge_topology(&self.pool, &self.engine, &outputs).await;
-            self.egress.reconcile(&outputs).await;
-            self.engine.resize_srt_fabrics().await;
-            self.engine.resize_rtmp_fabrics().await;
-            self.sweep_unused_stages(&outputs).await;
-            if !self.reconcile_recordings(tick).await {
-                continue;
+            let wake = pass_wake.map_or(next_tick, |at| at.min(next_tick));
+            let wait = wake.saturating_duration_since(Instant::now());
+            let alive = if gap {
+                runtime
+                    .wait_for_reconcile_tick(shutdown, wait, std::future::pending())
+                    .await
+            } else {
+                runtime
+                    .wait_for_reconcile_tick(shutdown, wait, self.requests.woken())
+                    .await
+            };
+            if !alive {
+                break;
             }
-            self.sweep_idle_hls().await;
-            self.engine.reap_file_ingests().await;
+            let now = Instant::now();
+            if now >= next_pass_allowed && (self.requests.take_due(now) || now >= next_backstop) {
+                next_backstop = now + backstop;
+                self.output_pass(interval).await;
+                next_pass_allowed = Instant::now() + interval;
+            }
+            if now >= next_tick {
+                next_tick = now + interval;
+                tick += 1;
+                if tick.is_multiple_of(session_prune_every_ticks) {
+                    self.prune_sessions_and_logs().await;
+                }
+                self.engine.resize_srt_fabrics().await;
+                self.engine.resize_rtmp_fabrics().await;
+                if self.reconcile_recordings(tick).await {
+                    self.sweep_idle_hls().await;
+                    self.engine.reap_file_ingests().await;
+                }
+            }
+        }
+    }
+
+    async fn output_pass(&self, interval: Duration) {
+        apply_requested_selections(&self.pool, &self.engine, &self.requests).await;
+        let outputs = match crate::db::list_outputs(&self.pool).await {
+            Ok(records) => records
+                .into_iter()
+                .map(crate::application::outputs::from_record)
+                .collect::<Vec<_>>(),
+            Err(error) => {
+                warn!(err = %error, "DB error reading outputs; output pass retried");
+                self.requests.wake_at(Instant::now() + interval);
+                return;
+            }
+        };
+
+        converge_topology(&self.pool, &self.engine, &outputs).await;
+        if let Some(wait) = self.egress.reconcile(&outputs).await {
+            self.requests.wake_at(Instant::now() + wait);
+        }
+        if let Some(wait) = self.sweep_unused_stages(&outputs).await {
+            self.requests.wake_at(Instant::now() + wait);
         }
     }
 
@@ -124,7 +179,10 @@ impl Reconciler {
         }
     }
 
-    async fn sweep_unused_stages(&self, outputs: &[crate::application::models::Output]) {
+    async fn sweep_unused_stages(
+        &self,
+        outputs: &[crate::application::models::Output],
+    ) -> Option<Duration> {
         let mut stage_inputs = Vec::with_capacity(outputs.len());
         for output in outputs {
             let snapshot = load_output_runtime_snapshot(
@@ -140,7 +198,7 @@ impl Reconciler {
         self.engine
             .sweep_unused_transcoder_stages(&needed_stages)
             .await;
-        self.engine.sweep_unused_stages().await;
+        self.engine.sweep_unused_stages().await
     }
 
     async fn reconcile_recordings(&self, tick: u64) -> bool {
@@ -215,6 +273,8 @@ impl Reconciler {
                 self.engine
                     .shutdown_hls_preview_segmenter(&pipeline_id)
                     .await;
+                // Its preview stage is no longer needed: sweep it now.
+                self.requests.wake();
             }
         }
     }
