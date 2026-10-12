@@ -112,12 +112,11 @@ export function buildFleetModel(
       }
     }
     if (pipeline.ingest !== null) pipelinesReceiving += 1;
-    if (pipeline.ingest !== null && delivering === wanted) pipelinesHealthy += 1;
     outputsWanted += wanted;
     outputsDelivering += delivering;
     outputsPending += pending;
     if (egressBps !== null) fleetEgressBps = (fleetEgressBps ?? 0) + egressBps;
-    rows.push({
+    const row: FleetPipelineRow = {
       id: pipeline.id,
       name: pipeline.name,
       source: pipeline.ingest && {
@@ -130,7 +129,10 @@ export function buildFleetModel(
       delivering,
       attention,
       pending,
-    });
+    };
+    // The stat and the row badge share one rule.
+    if (pipelineHealth(row).tone === "ok") pipelinesHealthy += 1;
+    rows.push(row);
   }
 
   // Attention first, then the pipelines that carry the most outputs.

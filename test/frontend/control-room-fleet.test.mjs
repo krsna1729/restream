@@ -138,6 +138,34 @@ test("a row is healthy only when every wanted output delivers", () => {
   assert.equal(pipelineHealth(row).label, "healthy");
 });
 
+test("the healthy-pipeline count follows the row badge", () => {
+  const model = buildFleetModel(
+    state(
+      [
+        { id: "a", name: "A", ingest: INGEST },
+        { id: "b", name: "B", ingest: INGEST },
+      ],
+      [
+        // Every output of A delivers, but one is diagnosed: not healthy.
+        output("a1", "a", {
+          ...diagnosed("destination", { code: "backpressured", stalled: false }),
+          flow: "flowing",
+        }),
+        output("b1", "b"),
+      ],
+    ),
+    null,
+  );
+  assert.deepEqual(
+    model.pipelines.map((row) => [row.id, pipelineHealth(row).tone]),
+    [
+      ["a", "warning"],
+      ["b", "ok"],
+    ],
+  );
+  assert.equal(model.pipelinesHealthy, 1);
+});
+
 function telemetry(atMs, ingestBytes, egressBytes, streamKey = "k1") {
   return {
     generatedAt: new Date(atMs).toISOString(),

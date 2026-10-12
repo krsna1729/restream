@@ -70,6 +70,9 @@ export type RuntimeStateStreamOptions = {
   createEventSource?: (url: string) => EventSourceLike;
   /** Delay before reconnecting after a connection error (default 1000). */
   reconnectDelayMs?: number;
+  /** With no event for this long the connection counts as dead and is
+   * replaced (default 50 000: two and a half server heartbeats). */
+  silenceTimeoutMs?: number;
 };
 
 export type RuntimeStateStream = {
@@ -92,6 +95,8 @@ export function openRuntimeStateStream(
   let closed = false;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   const reconnectDelayMs = options.reconnectDelayMs ?? 1000;
+  const silenceTimeoutMs = options.silenceTimeoutMs ?? 50_000;
+  let silenceTimer: ReturnType<typeof setTimeout> | undefined;
   let status: RuntimeStateStreamStatus = "connecting";
   const setStatus = (next: RuntimeStateStreamStatus) => {
     if (next === status) return;
@@ -109,6 +114,7 @@ export function openRuntimeStateStream(
     source = opened;
     const reconnect = (delayMs: number) => {
       if (source !== opened) return;
+      clearTimeout(silenceTimer);
       opened.close();
       source = null;
       setStatus("reconnecting");
@@ -123,16 +129,30 @@ export function openRuntimeStateStream(
     };
     // Missed deltas: ask for them (or a snapshot) right away.
     const resync = () => reconnect(0);
+    // Any event proves the connection alive; a half-open one raises no
+    // error, so silence is the only sign.
+    const heard = () => {
+      clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(() => reconnect(0), silenceTimeoutMs);
+    };
+    heard();
     opened.addEventListener("open", () => {
-      if (source === opened) setStatus("live");
+      if (source !== opened) return;
+      heard();
+      setStatus("live");
+    });
+    opened.addEventListener("heartbeat", () => {
+      if (source === opened) heard();
     });
     opened.addEventListener("snapshot", (event) => {
       if (source !== opened) return;
+      heard();
       state = JSON.parse((event as MessageEvent).data) as RuntimeState;
       options.onState(state);
     });
     opened.addEventListener("delta", (event) => {
       if (source !== opened) return;
+      heard();
       const delta = JSON.parse((event as MessageEvent).data) as StateDelta;
       if (state === null) {
         resync();
@@ -158,6 +178,7 @@ export function openRuntimeStateStream(
     close: () => {
       closed = true;
       if (retryTimer !== null) clearTimeout(retryTimer);
+      clearTimeout(silenceTimer);
       source?.close();
       source = null;
     },

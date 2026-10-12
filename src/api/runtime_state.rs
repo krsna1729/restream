@@ -123,7 +123,9 @@ pub async fn v1_state_stream_handler(
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                 },
                 _ = heartbeat.tick() => {
-                    if tx.send(": ping\n\n".to_string()).await.is_err() {
+                    // A named event, not an SSE comment: the client sees it
+                    // and can tell a quiet stream from a dead connection.
+                    if tx.send("event: heartbeat\ndata: {}\n\n".to_string()).await.is_err() {
                         return;
                     }
                 }
