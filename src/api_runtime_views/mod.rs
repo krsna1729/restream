@@ -8,6 +8,7 @@
 mod common;
 mod graph;
 mod graph_projection;
+mod measure;
 mod resource_map;
 mod stage_projection;
 mod status;
@@ -19,6 +20,7 @@ pub(crate) use common::probe_snapshot;
 pub(crate) use graph::processing_graph;
 #[cfg(test)]
 pub(crate) use graph_projection::processing_graph_stage_node;
+pub(crate) use measure::measure_snapshot;
 pub(crate) use resource_map::{ResourceMapOptions, ResourceMapView, resource_map};
 #[cfg(test)]
 pub(crate) use stage_projection::stage_runtime_snapshot_json;

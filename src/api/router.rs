@@ -75,7 +75,7 @@ use super::static_assets::{
 use super::telemetry::{
     metrics_system_handler, pipeline_diagnostics_run_handler, status_get_handler,
     status_sbom_get_handler, v1_dashboard_runtime_handler, v1_engine_resource_map_handler,
-    v1_engine_telemetry_handler, v1_events_handler, v1_overview_handler,
+    v1_engine_telemetry_handler, v1_events_handler, v1_measure_handler, v1_overview_handler,
     v1_pipeline_telemetry_handler, v1_stage_telemetry_handler,
 };
 
@@ -131,6 +131,7 @@ pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
     "/api/v1/events",
     "/api/v1/overview",
     "/api/v1/engine/telemetry",
+    "/api/v1/measure",
     "/api/v1/agent/capabilities",
     "/api/v1/agent/context",
     "/api/v1/agent/investigations",
@@ -368,6 +369,7 @@ fn create_app_router() -> Router<Arc<AppState>> {
             get(v1_engine_resource_map_handler),
         )
         .route("/api/v1/engine/telemetry", get(v1_engine_telemetry_handler))
+        .route("/api/v1/measure", get(v1_measure_handler))
         .route(
             "/api/v1/agent/capabilities",
             get(agent_capabilities_handler),
