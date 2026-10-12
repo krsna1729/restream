@@ -171,9 +171,11 @@ impl MediaEngine {
             return;
         }
         runtimes.remove(key);
-        drop(runtimes);
+        // Under the runtimes lock (order: runtimes, then metrics, then
+        // lifecycles), so a concurrent ensure_stage cannot adopt these.
         self.stages.metrics.write().await.remove(key);
         self.stages.lifecycles.write().await.remove(key);
+        drop(runtimes);
     }
 
     fn srt_muxer_cohort_key(pipeline_id: &str, encoding: &str) -> String {
