@@ -480,25 +480,30 @@ impl EgressReconciler {
             None
         };
 
-        let is_fabric = rtmp_fabric.is_some()
-            || srt_fabric.is_some()
-            || sink_fabric.is_some()
-            || pipeline_fabric.is_some()
-            || hls_put_fabric.is_some();
-        let shard_id = is_fabric.then(|| {
+        let fabric_feed = rtmp_fabric
+            .as_ref()
+            .map(|task| &task.spec.feed)
+            .or(srt_fabric.as_ref().map(|task| &task.spec.feed))
+            .or(sink_fabric.as_ref().map(|task| &task.spec.feed))
+            .or(pipeline_fabric.as_ref().map(|task| &task.spec.feed))
+            .or(hls_put_fabric.as_ref().map(|task| &task.spec.feed));
+        let fabric = fabric_feed.map(|feed| {
             let shard_count = if srt_fabric.is_some() {
                 self.engine.config.egress_fabric.srt_shard_count()
             } else {
                 self.engine.config.egress_fabric.shard_count()
             };
-            crate::media::egress::manager::assign_output_to_shard(
-                &crate::media::egress::OutputId::new(output.id.clone()),
-                shard_count,
-            )
-            .index()
+            crate::media::engine::FabricSlot {
+                feed: feed.clone(),
+                shard: crate::media::egress::manager::assign_output_to_shard(
+                    &crate::media::egress::OutputId::new(output.id.clone()),
+                    shard_count,
+                )
+                .index(),
+            }
         });
         self.engine
-            .set_egress_fabric_attribution(&output.id, is_fabric, shard_id)
+            .set_egress_fabric_attribution(&output.id, fabric)
             .await;
 
         let task = EgressTask {

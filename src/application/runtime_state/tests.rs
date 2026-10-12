@@ -17,11 +17,14 @@ fn render_contract() -> String {
         Flow::decl(&cfg),
         RetryState::decl(&cfg),
         FailureEvidence::decl(&cfg),
+        crate::application::diagnosis::Diagnosis::decl(&cfg),
+        crate::application::diagnosis::Layer::decl(&cfg),
+        crate::application::diagnosis::Cause::decl(&cfg),
         DesiredOutputState::decl(&cfg),
         EgressPhase::decl(&cfg),
     ];
     let mut out = String::from(
-        "// Generated from src/application/runtime_state (ts-rs). Do not edit.\n\
+        "// Generated from src/application/runtime_state and diagnosis (ts-rs). Do not edit.\n\
          // Regenerate: cargo test --lib runtime_state::tests::write_generated -- --ignored\n\n",
     );
     for decl in decls {
@@ -87,6 +90,7 @@ fn projection_with(outputs: &[(&str, Convergence)]) -> Projection {
                 backpressure: None,
                 retry: None,
                 evidence: None,
+                diagnosis: None,
             },
         );
     }
@@ -246,6 +250,12 @@ async fn projection_derives_convergence_from_desired_and_runtime() {
     assert_eq!(convergence("stopped"), Convergence::Converged);
     assert_eq!(convergence("waiting"), Convergence::WaitingForIngest);
     assert_eq!(convergence("exhausted"), Convergence::RetriesExhausted);
+    let diagnosis = |projection: &Projection, id: &str| projection.outputs[id].diagnosis.clone();
+    assert_eq!(diagnosis(&projection, "stopped"), None);
+    assert_eq!(
+        diagnosis(&projection, "waiting").map(|d| d.cause),
+        Some(crate::application::diagnosis::Cause::NoPublisher)
+    );
 
     engine
         .try_register_ingest("pipe", "stream-key", "rtmp")
@@ -258,6 +268,29 @@ async fn projection_derives_convergence_from_desired_and_runtime() {
     let waiting = &projection.outputs["waiting"];
     assert_eq!(waiting.convergence, Convergence::Retrying);
     assert_eq!(waiting.retry.as_ref().map(|retry| retry.attempts), Some(2));
+    let rejected = waiting
+        .diagnosis
+        .clone()
+        .expect("a retrying output is degraded");
+    assert_eq!(
+        rejected.layer,
+        crate::application::diagnosis::Layer::Destination
+    );
+    assert!(matches!(
+        rejected.cause,
+        crate::application::diagnosis::Cause::Rejected { .. }
+    ));
+    assert_eq!(
+        rejected.ruled_out,
+        [
+            crate::application::diagnosis::Layer::Ingest,
+            crate::application::diagnosis::Layer::Feed
+        ]
+    );
+    assert_eq!(
+        diagnosis(&projection, "exhausted").map(|d| d.cause),
+        Some(crate::application::diagnosis::Cause::RetriesExhausted)
+    );
 
     engine
         .register_egress_attempt_with_meta(

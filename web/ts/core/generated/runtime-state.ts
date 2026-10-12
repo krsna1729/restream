@@ -1,4 +1,4 @@
-// Generated from src/application/runtime_state (ts-rs). Do not edit.
+// Generated from src/application/runtime_state and diagnosis (ts-rs). Do not edit.
 // Regenerate: cargo test --lib runtime_state::tests::write_generated -- --ignored
 
 export type RuntimeState = { 
@@ -30,7 +30,11 @@ actual: EgressPhase | null, convergence: Convergence, flow: Flow,
 /**
  * Why the egress is held back, when it is (`feedLag`, `socket`, ...).
  */
-backpressure: string | null, retry: RetryState | null, evidence: FailureEvidence | null, };
+backpressure: string | null, retry: RetryState | null, evidence: FailureEvidence | null, 
+/**
+ * Why a desired-running output is degraded; `null` when it is not.
+ */
+diagnosis: Diagnosis | null, };
 
 export type Convergence = "converged" | "starting" | "waitingForIngest" | "retrying" | "retriesExhausted" | "stopping";
 
@@ -51,6 +55,16 @@ phase: string | null,
  * Unix epoch milliseconds.
  */
 atMs: number, };
+
+export type Diagnosis = { layer: Layer, cause: Cause, 
+/**
+ * Layers checked and healthy, upstream of `layer`.
+ */
+ruledOut: Array<Layer>, };
+
+export type Layer = "ingest" | "feed" | "shard" | "destination";
+
+export type Cause = { "code": "noPublisher" } | { "code": "stageNotProducing", stage: string, phase: string, } | { "code": "shardPanicked", shard: number, } | { "code": "shardStalled", shard: number, } | { "code": "shardStopped", shard: number, } | { "code": "retriesExhausted" } | { "code": "retryBudgetNearlySpent", attempts: number, max: number, } | { "code": "rejected", phase: string | null, error: string, } | { "code": "backpressured", stalled: boolean, } | { "code": "noProgress" };
 
 export type DesiredOutputState = "running" | "stopped";
 

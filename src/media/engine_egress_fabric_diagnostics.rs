@@ -11,6 +11,12 @@ use crate::media::egress::command::FeedId;
 use crate::media::egress::shard::{EgressShardHealth, EgressShardHeartbeat};
 use crate::media::engine::MediaEngine;
 
+/// A fabric shard genuinely idle between polls (nothing to send right now)
+/// is not the same as a stalled one: this stays well above the polling
+/// cadence of the status views and the runtime state so ordinary idle gaps
+/// never misreport.
+pub(crate) const SHARD_STALL_AFTER: Duration = Duration::from_secs(10);
+
 /// A shard's health, tagged with which protocol's fabric registry it
 /// belongs to and which prepared feed it's serving.
 #[derive(Debug, Clone)]

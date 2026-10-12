@@ -6,7 +6,7 @@ use super::super::{
     state::AppState,
     telemetry::{process_resource_snapshot, system_status},
 };
-use super::{agent_health_snapshot, pipeline_input_is_on};
+use super::agent_health_snapshot;
 use crate::api_runtime_views::ResourceMapOptions;
 use crate::application::models::{Ingest, Job, Output, Pipeline};
 use crate::domain::{output_spec::OutputUrlScheme, state::DesiredOutputState};
@@ -44,6 +44,10 @@ pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
             crate::api_runtime_views::processing_graph(&state.engine, pipeline_id, &outputs).await,
         );
     }
+    // Output convergence and diagnosis come from the runtime state, the
+    // one classification the dashboard and alerts also read.
+    state.runtime_state.refresh(&state.db, &state.engine).await;
+    let runtime = state.runtime_state.snapshot().await;
     let desired_vs_actual = desired_vs_actual(
         &pipelines,
         &outputs,
@@ -51,6 +55,7 @@ pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
         &jobs,
         &recording_enabled,
         &health,
+        &runtime,
     );
     let diagnostics = diagnostics_summary(&pipelines, &outputs, &health, &graphs);
     let dependencies = dependency_summary(
@@ -131,28 +136,6 @@ async fn media_inventory(state: &AppState) -> serde_json::Value {
     })
 }
 
-fn desired_output_reason(
-    desired_state: DesiredOutputState,
-    retries_exhausted: bool,
-    actual_status: &str,
-    input_is_on: bool,
-) -> &'static str {
-    if desired_state == DesiredOutputState::Running
-        && retries_exhausted
-        && actual_status != "running"
-    {
-        "retriesExhausted"
-    } else if desired_state == DesiredOutputState::Running && !input_is_on {
-        "pendingInput"
-    } else if (desired_state == DesiredOutputState::Running && actual_status == "running")
-        || (desired_state == DesiredOutputState::Stopped && actual_status != "running")
-    {
-        "converged"
-    } else {
-        "desiredActualMismatch"
-    }
-}
-
 fn desired_vs_actual(
     pipelines: &[Pipeline],
     outputs: &[Output],
@@ -160,7 +143,14 @@ fn desired_vs_actual(
     jobs: &[Job],
     recording_enabled: &std::collections::HashMap<String, bool>,
     health: &serde_json::Value,
+    runtime: &crate::application::runtime_state::RuntimeState,
 ) -> serde_json::Value {
+    use crate::application::runtime_state::Convergence;
+    let runtime_outputs: std::collections::HashMap<&str, _> = runtime
+        .outputs
+        .iter()
+        .map(|output| (output.id.as_str(), output))
+        .collect();
     let mut pipeline_reports = Vec::new();
     let mut drift_count = 0usize;
     let mut converged_count = 0usize;
@@ -170,7 +160,6 @@ fn desired_vs_actual(
     for pipeline in pipelines {
         let pipeline_health = &health["pipelines"][&pipeline.id];
         let input_status = pipeline_health["input"]["status"].as_str().unwrap_or("off");
-        let input_is_on = pipeline_input_is_on(pipeline_health);
         let file_ingests = ingests
             .iter()
             .filter(|ingest| ingest.stream_key == pipeline.stream_key)
@@ -187,16 +176,11 @@ fn desired_vs_actual(
         {
             let runtime = &pipeline_health["outputs"][&output.id];
             let actual = runtime["status"].as_str().unwrap_or("stopped");
-            let reason = desired_output_reason(
-                output.desired_state,
-                output.retries_exhausted,
-                actual,
-                input_is_on,
-            );
-            match reason {
-                "pendingInput" => pending_count += 1,
-                "retriesExhausted" => exhausted_count += 1,
-                "converged" => converged_count += 1,
+            let projected = runtime_outputs.get(output.id.as_str());
+            match projected.map(|output| output.convergence) {
+                Some(Convergence::Converged) => converged_count += 1,
+                Some(Convergence::WaitingForIngest | Convergence::Starting) => pending_count += 1,
+                Some(Convergence::RetriesExhausted) => exhausted_count += 1,
                 _ => drift_count += 1,
             }
             let recent_jobs = jobs
@@ -216,8 +200,8 @@ fn desired_vs_actual(
                 "retriesExhausted": output.retries_exhausted,
                 "actualStatus": actual,
                 "actualPhase": runtime["phase"],
-                "converged": reason == "converged",
-                "reason": reason,
+                "convergence": projected.map(|output| output.convergence),
+                "diagnosis": projected.and_then(|output| output.diagnosis.as_ref()),
                 "config": output.config,
                 "recentJobs": recent_jobs,
             }));
@@ -493,30 +477,4 @@ async fn storage_summary(state: &AppState, media: &serde_json::Value) -> serde_j
         "disk": selected_disk,
         "databasePath": state.db_path,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::desired_output_reason;
-    use crate::domain::state::DesiredOutputState;
-
-    #[test]
-    fn desired_output_reason_distinguishes_converged_pending_and_drifted() {
-        assert_eq!(
-            desired_output_reason(DesiredOutputState::Running, false, "running", true),
-            "converged"
-        );
-        assert_eq!(
-            desired_output_reason(DesiredOutputState::Running, false, "stopped", false),
-            "pendingInput"
-        );
-        assert_eq!(
-            desired_output_reason(DesiredOutputState::Stopped, false, "running", true),
-            "desiredActualMismatch"
-        );
-        assert_eq!(
-            desired_output_reason(DesiredOutputState::Running, true, "stopped", true),
-            "retriesExhausted"
-        );
-    }
 }

@@ -1,6 +1,7 @@
 //! Application-layer orchestration for ingest, egress, reconciliation, and
 //! persistence-facing ports.
 
+pub mod diagnosis;
 pub mod egress;
 pub mod egress_rtmp_fabric;
 pub mod graph;

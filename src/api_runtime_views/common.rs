@@ -104,6 +104,9 @@ pub(super) struct EgressRuntimeView {
     quality: crate::media::snapshots::PublisherQuality,
     metrics: crate::media::stage_metrics::StageMetricsSnapshot,
     fabric: bool,
+    /// The fabric feed the output reads; with `shard_id` it names the
+    /// shard in `egressFabricShards`.
+    fabric_feed: Option<String>,
     shard_id: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     target_url: Option<String>,
@@ -158,8 +161,12 @@ pub(super) fn egress_runtime_view(
         retry_remaining_ms: None,
         quality: crate::sync::lock(&egress.quality).clone(),
         metrics: egress.metrics.snapshot(),
-        fabric: egress.is_fabric,
-        shard_id: egress.shard_id,
+        fabric: egress.fabric.is_some(),
+        fabric_feed: egress
+            .fabric
+            .as_ref()
+            .map(|slot| slot.feed.as_str().to_string()),
+        shard_id: egress.fabric.as_ref().map(|slot| slot.shard),
         target_url: include_target_url.then(|| egress.target_url.clone()),
         total_size: None,
         bitrate_kbps: None,
@@ -504,8 +511,10 @@ mod tests {
             terminal_stage_key: None,
             output_name: "out-fabric-1".to_string(),
             encoding: "source".to_string(),
-            is_fabric: true,
-            shard_id: Some(2),
+            fabric: Some(crate::media::engine::FabricSlot {
+                feed: crate::media::egress::command::FeedId::new("rtmp:pipe:source"),
+                shard: 2,
+            }),
             resync_count: Arc::new(AtomicU64::new(3)),
             feed_lag_units: Arc::new(AtomicU64::new(7)),
             backpressure_reason: Arc::new(std::sync::Mutex::new(Some("backpressured"))),

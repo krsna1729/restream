@@ -295,6 +295,33 @@ async fn srt_egress_bounded_rss_under_frozen_destination() -> Result<Value, Stri
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
+    // The runtime state names the frozen destination as the cause, with the
+    // ingest and the feed (and the shard, while an attempt runs on it)
+    // ruled out: the shard and the publisher are not blamed.
+    let mut diagnosis = Value::Null;
+    let diagnosis_deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while entered_retry_cycle && std::time::Instant::now() < diagnosis_deadline {
+        if let Ok(state) = api.get_json("/api/v1/state").await
+            && let Some(found) = state["outputs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|output| output["id"] == oid.as_str())
+            && found["diagnosis"]["layer"] == "destination"
+        {
+            diagnosis = found["diagnosis"].clone();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let ruled_out = diagnosis["ruledOut"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let diagnosed_destination = ["ingest", "feed"]
+        .iter()
+        .all(|layer| ruled_out.iter().any(|value| value == layer));
+
     // "Bounded RSS during indefinite stalls" (Phase 4 exit gate): sample
     // restream's RSS across an extended window of continuous
     // connect-failure retries. A bounded sample window standing in for
@@ -320,13 +347,14 @@ async fn srt_egress_bounded_rss_under_frozen_destination() -> Result<Value, Stri
         final_output.health.clone(),
     );
 
-    let passed = sigstop_ok && entered_retry_cycle && rss_bounded;
+    let passed = sigstop_ok && entered_retry_cycle && rss_bounded && diagnosed_destination;
 
     println!(
-        "[fault] SRT egress bounded RSS under frozen destination: {} (sigstopOk={} enteredRetryCycle={} bytesAtStallStart={} rssBeforeKb={} rssAfterKb={} rssGrowthKb={} elapsed={:.1}s)",
+        "[fault] SRT egress bounded RSS under frozen destination: {} (sigstopOk={} enteredRetryCycle={} diagnosedDestination={} bytesAtStallStart={} rssBeforeKb={} rssAfterKb={} rssGrowthKb={} elapsed={:.1}s)",
         if passed { "PASS" } else { "FAIL" },
         sigstop_ok,
         entered_retry_cycle,
+        diagnosed_destination,
         bytes_at_stall_start,
         rss_before_stall_kb,
         rss_after_stall_kb,
@@ -347,6 +375,8 @@ async fn srt_egress_bounded_rss_under_frozen_destination() -> Result<Value, Stri
         "passed": passed,
         "sigstopOk": sigstop_ok,
         "enteredRetryCycle": entered_retry_cycle,
+        "diagnosedDestination": diagnosed_destination,
+        "diagnosis": diagnosis,
         "bytesAtStallStart": bytes_at_stall_start,
         "rssBeforeStallKb": rss_before_stall_kb,
         "rssAfterStallKb": rss_after_stall_kb,

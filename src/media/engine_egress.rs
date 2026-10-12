@@ -174,8 +174,7 @@ impl MediaEngine {
                 terminal_stage_key,
                 output_name: output_name.unwrap_or("").to_string(),
                 encoding: encoding.unwrap_or("").to_string(),
-                is_fabric: false,
-                shard_id: None,
+                fabric: None,
                 resync_count: Arc::new(AtomicU64::new(0)),
                 feed_lag_units: Arc::new(AtomicU64::new(0)),
                 backpressure_reason: Arc::new(std::sync::Mutex::new(None)),
@@ -195,19 +194,17 @@ impl MediaEngine {
     /// already-registered output. Kept as a separate call rather than a
     /// `register_egress_attempt_with_meta` parameter because whether a
     /// fabric task actually started (as opposed to failing during startup
-    /// preparation, which leaves `is_fabric` `false` and records an error
+    /// preparation, which leaves `fabric` `None` and records an error
     /// through `record_egress_error_if_current` instead) isn't known until
     /// after registration in the bootstrap egress reconciler.
     pub async fn set_egress_fabric_attribution(
         &self,
         output_id: &str,
-        is_fabric: bool,
-        shard_id: Option<u32>,
+        fabric: Option<crate::media::engine::FabricSlot>,
     ) {
         let mut egresses = self.egresses.active.write().await;
         if let Some(egress) = egresses.get_mut(output_id) {
-            egress.is_fabric = is_fabric;
-            egress.shard_id = shard_id;
+            egress.fabric = fabric;
         }
     }
 

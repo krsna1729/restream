@@ -3,6 +3,7 @@
 // Value imports (apiRequest, getConfig, …) still come from ./api.js.
 
 import type { ConfigPipeline, ConfigOutput, OutputConfig } from "../types.js";
+import type { Diagnosis } from "./generated/runtime-state.js";
 
 export interface OverviewSnapshot {
   generatedAt: string;
@@ -31,6 +32,8 @@ export interface OperatorAlert {
   generatedAt: string;
   firstSeen?: string;
   lastSeen?: string;
+  /** Output alerts: the degraded layer, its cause and what was ruled out. */
+  diagnosis?: Diagnosis;
 }
 
 export interface AlertsSnapshot {

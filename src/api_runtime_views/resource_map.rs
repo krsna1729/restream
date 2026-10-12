@@ -13,10 +13,6 @@ use std::collections::HashMap;
 
 const DEFAULT_TOP_N: usize = 25;
 const MAX_TOP_N: usize = 200;
-/// See the matching constant/comment in `status.rs` — kept as a separate
-/// constant here rather than shared, since resource_map and health_snapshot
-/// are independent read paths with no other coupling.
-const FABRIC_SHARD_STALL_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResourceMapView {
@@ -561,7 +557,9 @@ pub(crate) async fn resource_map(
     // above) they only make sense in the global view.
     let fabric_shard_statuses = if pipeline_id.is_none() {
         engine
-            .egress_fabric_shard_statuses(FABRIC_SHARD_STALL_AFTER)
+            .egress_fabric_shard_statuses(
+                crate::media::engine_egress_fabric_diagnostics::SHARD_STALL_AFTER,
+            )
             .await
     } else {
         Vec::new()

@@ -468,7 +468,13 @@ async fn egress_attribution_reflects_fabric_ownership_and_assigned_shard() {
         .await;
 
     engine
-        .set_egress_fabric_attribution("out-1", true, Some(3))
+        .set_egress_fabric_attribution(
+            "out-1",
+            Some(crate::media::engine::FabricSlot {
+                feed: crate::media::egress::command::FeedId::new("rtmp:pipe-1:source"),
+                shard: 3,
+            }),
+        )
         .await;
 
     let snapshot = test_health_snapshot(&engine, &["pipe-1".to_string()], &HashMap::new()).await;
@@ -484,6 +490,6 @@ async fn egress_attribution_is_a_no_op_for_an_unregistered_output() {
     // Must not panic when the output was never registered (or was already
     // unregistered by the time the caller's fabric-routing decision lands).
     engine
-        .set_egress_fabric_attribution("missing-output", true, Some(1))
+        .set_egress_fabric_attribution("missing-output", None)
         .await;
 }

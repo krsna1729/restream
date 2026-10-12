@@ -22,7 +22,6 @@ items).
 - [Q-035 MEDIA attribution](#q-035-observability-sonnet-attribute-media-pool-time-to-feed-and-stage)
 - [Q-036 enforced runtime truth table](#q-036-docs-sonnet-make-runtime-crossings-an-enforced-truth-table)
 - [Q-042 runtime truth](#q-042-architecture-opus-feed-the-dashboard-from-the-revisioned-runtime-state)
-- [Q-043 evidence engine](#q-043-observability-opus-one-evidence-classification)
 - [Q-044 frontend cut](#q-044-frontend-opus-hard-cut-the-frontend-to-one-build)
 - [Q-045 frontend product](#q-045-frontend-opus-build-the-control-room-on-live-data)
 - [Q-046 agent guidance](#q-046-docs-sonnet-slim-agentsmd-to-a-root-contract)
@@ -258,15 +257,6 @@ items).
 - Not planned: a `/api/commands` endpoint. Mutations stay on their REST
   routes, and their effects reach clients through the stream.
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
-### Q-043 [observability] [opus] One evidence classification
-- Goal: one typed answer to "why is this degraded" (destination/network,
-  shard, feed or ingest, with the causes ruled out) shared by alerts, UI,
-  MCP and the harness probe.
-- First step: record how alerts are built today; this item does not yet
-  have file evidence.
-- Depends on: Q-042.
-- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews).
-
 ### Q-044 [frontend] [opus] Hard-cut the frontend to one build
 - Goal: one Vite build and one React root. Delete
   `web/ts/app/dashboard-v2-loader.ts` (23 KB), the 42 KB
@@ -287,7 +277,8 @@ items).
 - Rule: a workspace ships only on live backend data; the mockup's numbers
   are illustrative.
 - Gates: Playwright per workspace against a running engine.
-- Depends on: Q-042 (state), Q-043 (evidence), Q-044 (cut).
+- Depends on: Q-042 (state), Q-044 (cut). Q-043 (done) added the
+  output `diagnosis` for the Incidents evidence packet.
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
 
 ### Q-046 [docs] [sonnet] Slim AGENTS.md to a root contract
