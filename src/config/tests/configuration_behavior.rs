@@ -253,7 +253,7 @@ fn egress_fabric_config_defaults_disabled_and_builds_runtime_values() {
             let fabric = EgressFabricConfig::from_env();
             assert_eq!(fabric, EgressFabricConfig::default());
             assert_eq!(
-                fabric.shard_count().get(),
+                fabric.shards,
                 default_egress_fabric_shards(crate::system_sampling::effective_cpu_count())
             );
             assert_eq!(fabric.shard_config().command_channel_capacity().get(), 1024);

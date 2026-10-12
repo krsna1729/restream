@@ -3,7 +3,8 @@
 //! Each pipeline and output is projected into one typed record that holds
 //! the operator's intent (desired), what the engine is doing (actual), how
 //! the two relate (convergence), whether media moves (flow), queue pressure
-//! and the latest failure evidence. [`hub::StateHub`] keeps the current
+//! the latest failure evidence, and the diagnosis of a degraded output
+//! ([`crate::application::diagnosis`]). [`hub::StateHub`] keeps the current
 //! projection under a monotonically increasing revision and publishes the
 //! entity-level difference of each change as a [`StateDelta`], so a client
 //! fetches `/api/v1/state` once and then applies deltas from
@@ -22,6 +23,7 @@ use std::sync::atomic::Ordering;
 
 use serde::Serialize;
 
+use crate::application::diagnosis::{Diagnosis, OutputSignals, ShardHealth, diagnose};
 use crate::application::models::Output;
 use crate::domain::state::{DesiredOutputState, EgressPhase};
 use crate::media::engine::MediaEngine;
@@ -100,6 +102,8 @@ pub struct OutputState {
     pub backpressure: Option<String>,
     pub retry: Option<RetryState>,
     pub evidence: Option<FailureEvidence>,
+    /// Why a desired-running output is degraded; `null` when it is not.
+    pub diagnosis: Option<Diagnosis>,
 }
 
 /// How actual relates to desired.
@@ -208,6 +212,47 @@ pub async fn project(
             })
         })
         .collect();
+    let mut shards: HashMap<String, HashMap<u32, ShardHealth>> = HashMap::new();
+    for status in engine
+        .egress_fabric_shard_statuses(
+            crate::media::engine_egress_fabric_diagnostics::SHARD_STALL_AFTER,
+        )
+        .await
+    {
+        use crate::media::egress::shard::EgressShardHealth as Health;
+        let health = match status.state {
+            Health::Healthy => ShardHealth::Healthy,
+            Health::Stalled => ShardHealth::Stalled,
+            Health::Stopped => ShardHealth::Stopped,
+            Health::Panicked => ShardHealth::Panicked,
+        };
+        shards
+            .entry(status.feed_id)
+            .or_default()
+            .insert(status.shard_index, health);
+    }
+    // Outputs share stages: look each terminal stage up once, with the
+    // egress map released (the stage registries are separate locks).
+    let terminal_keys: std::collections::HashSet<_> = engine
+        .egresses
+        .active
+        .read()
+        .await
+        .values()
+        .filter_map(|egress| egress.terminal_stage_key.clone())
+        .collect();
+    let mut blocked = HashMap::new();
+    for key in terminal_keys {
+        if let Some(stage) = engine.egress_blocked_by_stage_snapshot(&key).await {
+            let phase = crate::runtime::stage::phase_name(&stage.phase).to_string();
+            blocked.insert(key, (stage.key.to_string(), phase));
+        }
+    }
+    let context = ProjectContext {
+        shards: &shards,
+        blocked: &blocked,
+        max_retries: u64::from(engine.config.tuning.output_max_retries),
+    };
 
     let mut projection = Projection::default();
     {
@@ -219,6 +264,7 @@ pub async fn project(
                 recent_evidence.get(&output.id),
                 retries.get(&output.id),
                 ingests.contains_key(&output.pipeline_id),
+                &context,
             );
             projection.outputs.insert(output.id.clone(), state);
         }
@@ -236,12 +282,22 @@ pub async fn project(
     projection
 }
 
+/// Engine state read once per projection and shared by every output.
+struct ProjectContext<'a> {
+    /// Feed id -> shard index -> health.
+    shards: &'a HashMap<String, HashMap<u32, ShardHealth>>,
+    /// Terminal stages not producing: key -> (blocking stage, phase).
+    blocked: &'a HashMap<crate::domain::stage::StageKey, (String, String)>,
+    max_retries: u64,
+}
+
 fn project_output(
     output: &Output,
     active: Option<&crate::media::engine::ActiveEgress>,
     recent_evidence: Option<&FailureEvidence>,
     retry: Option<&crate::media::engine::EgressRetryState>,
     has_ingest: bool,
+    context: &ProjectContext<'_>,
 ) -> OutputState {
     let actual = active.map(|egress| *crate::sync::lock(&egress.phase));
     // The same rule as the output status view: without ingest nothing is
@@ -294,6 +350,41 @@ fn project_output(
         }
         None => recent_evidence.cloned(),
     };
+    let backpressure = active
+        .and_then(|egress| *crate::sync::lock(&egress.backpressure_reason))
+        .map(str::to_string);
+    let diagnosis = diagnose(&OutputSignals {
+        wants_running: output.desired_state == DesiredOutputState::Running,
+        retries_exhausted: output.retries_exhausted,
+        has_ingest,
+        blocked_by: active
+            .and_then(|egress| egress.terminal_stage_key.as_ref())
+            .and_then(|key| context.blocked.get(key))
+            .cloned(),
+        shard: active
+            .and_then(|egress| egress.fabric.as_ref())
+            .map(|slot| {
+                let health = context
+                    .shards
+                    .get(slot.feed.as_str())
+                    .and_then(|feed| feed.get(&slot.shard))
+                    .copied()
+                    // A fabric output whose shard reports no heartbeat yet is
+                    // starting on it, not failing.
+                    .unwrap_or(ShardHealth::Healthy);
+                (slot.shard, health)
+            }),
+        failing: matches!(actual, Some(EgressPhase::Retrying | EgressPhase::Failed))
+            || (active.is_none() && retry.is_some()),
+        last_failure: evidence
+            .as_ref()
+            .map(|evidence| (evidence.phase.clone(), evidence.error.clone())),
+        retry: retry
+            .as_ref()
+            .map(|retry| (retry.attempts, context.max_retries)),
+        backpressure: backpressure.clone(),
+        stalled,
+    });
     OutputState {
         id: output.id.clone(),
         pipeline_id: output.pipeline_id.clone(),
@@ -302,11 +393,10 @@ fn project_output(
         actual,
         convergence,
         flow,
-        backpressure: active
-            .and_then(|egress| *crate::sync::lock(&egress.backpressure_reason))
-            .map(str::to_string),
+        backpressure,
         retry,
         evidence,
+        diagnosis,
     }
 }
 

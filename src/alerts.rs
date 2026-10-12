@@ -8,6 +8,8 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 
+mod output;
+
 // ─── Severity ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -67,6 +69,10 @@ pub struct Alert {
     /// When this alert condition was most recently observed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_seen: Option<String>,
+    /// For an output alert: the degraded layer, its cause and the layers
+    /// ruled out (`crate::application::diagnosis`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnosis: Option<crate::application::diagnosis::Diagnosis>,
 }
 
 impl Alert {
@@ -99,6 +105,7 @@ impl Alert {
             generated_at: generated_at.to_string(),
             first_seen: None,
             last_seen: None,
+            diagnosis: None,
         }
     }
 }
@@ -112,7 +119,6 @@ const CAPACITY_WAIT_WARN_MS: u64 = 5_000;
 const SRT_RECV_BUFFER_WARN_PCT: f64 = 80.0;
 const SRT_RECV_BUFFER_CRITICAL_PCT: f64 = 95.0;
 const COMMAND_CHANNEL_OVERLOAD_WARN_PCT: f64 = 80.0;
-const RETRY_ADMISSION_WARN_PCT: u32 = 80;
 
 // ─── Derivation ──────────────────────────────────────────────────────────────
 
@@ -130,6 +136,9 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
         .unwrap_or(10);
 
     let mut alerts: Vec<Alert> = Vec::new();
+    let shards = output::shard_health_map(snapshot);
+    // Outputs whose diagnosis is their shard, per (feed, shard index).
+    let mut shard_affected: HashMap<(String, u64), u64> = HashMap::new();
 
     // ── Engine-level checks ───────────────────────────────────────────────────
 
@@ -308,185 +317,17 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                 }
             }
 
-            // Per-output: non-running when there is an active publisher
-            if input_status == "on"
-                && let Some(outputs) = pipeline.get("outputs").and_then(|v| v.as_object())
-            {
-                for (output_id, output) in outputs {
-                    let status = output.get("status").and_then(|v| v.as_str()).unwrap_or("");
-                    if status != "running" {
-                        let retry_attempts = output.get("retryAttempts").and_then(|v| v.as_u64());
-                        // A "retrying" output with attempts near the configured
-                        // ceiling is a distinct, more urgent condition than an
-                        // ordinary backoff cycle — it's about to exhaust its
-                        // retry budget and give up, not just waiting out a
-                        // transient failure. Give it a specific alert instead
-                        // of the generic not_running one so an operator can
-                        // tell "still retrying normally" from "about to stop
-                        // retrying entirely."
-                        if status == "retrying"
-                            && let Some(attempts) = retry_attempts
-                            && output_max_retries > 0
-                            && attempts * 100
-                                >= output_max_retries * RETRY_ADMISSION_WARN_PCT as u64
-                        {
-                            let backoff_ms = output
-                                .get("retryBackoffMs")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0);
-                            alerts.push(Alert {
-                                pipeline_id: Some(pipeline_id.clone()),
-                                output_id: Some(output_id.clone()),
-                                ..Alert::new(
-                                    format!(
-                                        "pipeline:{}:output:{}:retry_admission_saturation",
-                                        pipeline_id, output_id
-                                    ),
-                                    Severity::Warning,
-                                    Scope::Output,
-                                    format!(
-                                        "Output '{}' is close to exhausting its retry budget",
-                                        output_id
-                                    ),
-                                    "The output has failed and retried repeatedly; once it \
-                                    reaches the configured retry ceiling it stops retrying and \
-                                    requires manual intervention to restart.",
-                                    vec![format!(
-                                        "retryAttempts = {attempts} / outputMaxRetries = {output_max_retries}, retryBackoffMs = {backoff_ms}"
-                                    )],
-                                    "Investigate why the destination keeps rejecting connections \
-                                    before the retry budget is exhausted, or raise RESTREAM_OUTPUT_MAX_RETRIES.",
-                                    &generated_at,
-                                )
-                            });
-                            continue;
-                        }
-
-                        alerts.push(Alert {
-                            pipeline_id: Some(pipeline_id.clone()),
-                            output_id: Some(output_id.clone()),
-                            ..Alert::new(
-                                format!(
-                                    "pipeline:{}:output:{}:not_running",
-                                    pipeline_id, output_id
-                                ),
-                                Severity::Warning,
-                                Scope::Output,
-                                format!("Output '{}' is not running", output_id),
-                                format!(
-                                    "Output status is '{}' while the pipeline has an active publisher.",
-                                    status
-                                ),
-                                vec![format!("output.status = {}", status)],
-                                "Check the destination URL, credentials, and network reachability.",
-                                &generated_at,
-                            )
-                        });
-                        continue;
-                    }
-
-                    let phase = output.get("phase").and_then(|v| v.as_str()).unwrap_or("");
-                    if phase == "failed" {
-                        let failure_phase = output
-                            .get("failurePhase")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-                        let last_error = output
-                            .get("lastError")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown error");
-                        alerts.push(Alert {
-                            pipeline_id: Some(pipeline_id.clone()),
-                            output_id: Some(output_id.clone()),
-                            ..Alert::new(
-                                format!("pipeline:{}:output:{}:failed_phase", pipeline_id, output_id),
-                                Severity::Warning,
-                                Scope::Output,
-                                format!("Output '{}' reported an egress failure", output_id),
-                                format!("Output failed during the '{}' phase.", failure_phase),
-                                vec![
-                                    format!("output.phase = {}", phase),
-                                    format!("lastError = {}", last_error),
-                                ],
-                                "Check destination reachability, credentials, and protocol settings.",
-                                &generated_at,
-                            )
-                        });
-                        continue;
-                    }
-
-                    if let Some(blocked_by_value) = output.get("blockedBy")
-                        && let Some(blocked_by) = blocked_by_value.as_object()
-                    {
-                        let stage = blocked_by
-                            .get("stage")
-                            .and_then(|v| v.as_str())
-                            .or_else(|| output.get("terminalStage").and_then(|v| v.as_str()))
-                            .unwrap_or("unknown");
-                        let blocked_phase = stage_phase_name(blocked_by_value);
-                        let backend = blocked_by
-                            .get("backend")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-                        alerts.push(Alert {
-                            pipeline_id: Some(pipeline_id.clone()),
-                            stage_id: Some(stage.to_string()),
-                            output_id: Some(output_id.clone()),
-                            ..Alert::new(
-                                format!(
-                                    "pipeline:{}:output:{}:blocked_by_stage",
-                                    pipeline_id, output_id
-                                ),
-                                Severity::Warning,
-                                Scope::Output,
-                                format!("Output '{}' is blocked by upstream stage", output_id),
-                                format!(
-                                    "The output is waiting on stage '{}' in phase '{}'.",
-                                    stage, blocked_phase
-                                ),
-                                vec![
-                                    format!("blockedBy.stage = {}", stage),
-                                    format!("blockedBy.phase = {}", blocked_phase),
-                                    format!("blockedBy.backend = {}", backend),
-                                ],
-                                blocked_output_action(blocked_phase),
-                                &generated_at,
-                            )
-                        });
-                        continue;
-                    }
-
-                    let last_progress_age_ms = output
-                        .get("lastProgressAgeMs")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0);
-                    let total_size = output
-                        .get("totalSize")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or_else(|| {
-                            output.get("bytesOut").and_then(|v| v.as_u64()).unwrap_or(0)
-                        });
-                    if total_size > 0 && last_progress_age_ms >= 10_000 {
-                        alerts.push(Alert {
-                            pipeline_id: Some(pipeline_id.clone()),
-                            output_id: Some(output_id.clone()),
-                            ..Alert::new(
-                                format!("pipeline:{}:output:{}:stale_progress", pipeline_id, output_id),
-                                Severity::Warning,
-                                Scope::Output,
-                                format!("Output '{}' has stopped making progress", output_id),
-                                "The output is still registered but has not completed a send recently.",
-                                vec![format!(
-                                    "lastProgressAgeMs = {} (threshold 10000)",
-                                    last_progress_age_ms
-                                )],
-                                "Check downstream network health or restart the output if it remains stale.",
-                                &generated_at,
-                            )
-                        });
-                    }
-                }
-            }
+            // Per-output: one diagnosis each (see `output`).
+            output::push_output_alerts(
+                pipeline_id,
+                pipeline,
+                input_status == "on",
+                &shards,
+                output_max_retries,
+                &generated_at,
+                &mut shard_affected,
+                &mut alerts,
+            );
         }
     }
 
@@ -632,6 +473,11 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
             .unwrap_or(0);
         let state = shard.get("state").and_then(|v| v.as_str()).unwrap_or("");
         let shard_label = format!("{protocol} fabric shard {shard_index} (feed {feed_id})");
+        let affected = shard_affected
+            .get(&(feed_id.to_string(), shard_index))
+            .copied()
+            .unwrap_or(0);
+        let affected_evidence = (affected > 0).then(|| format!("affectedOutputs = {affected}"));
 
         match state {
             "panicked" => {
@@ -641,7 +487,9 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                     Scope::Engine,
                     format!("Egress fabric shard panicked ({shard_label})"),
                     "The shard's OS thread panicked and every output assigned to it lost its connection until the supervisor replaces the shard.",
-                    vec![format!("state = panicked ({shard_label})")],
+                    std::iter::once(format!("state = panicked ({shard_label})"))
+                        .chain(affected_evidence)
+                        .collect(),
                     "Check logs for the panic message and stack trace at the time this shard stopped; outputs on this shard will reconnect once the supervisor replaces it.",
                     &generated_at,
                 ));
@@ -652,6 +500,7 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                 if let Some(age) = progress_age_ms {
                     evidence.push(format!("progressAgeMs = {age}"));
                 }
+                evidence.extend(affected_evidence);
                 alerts.push(Alert::new(
                     format!("engine:egress_fabric:{protocol}:{feed_id}:{shard_index}:stalled"),
                     Severity::Warning,
@@ -660,6 +509,23 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                     "The shard has produced no media ticks for longer than the stall threshold; every output assigned to it may be stuck.",
                     evidence,
                     "Check whether this shard's assigned outputs have healthy destinations; a genuinely idle shard with no assigned outputs is expected to age past the threshold and is not itself a problem.",
+                    &generated_at,
+                ));
+            }
+            // A stopped shard is expected once its outputs are gone; with
+            // outputs still assigned it is their cause.
+            "stopped" if affected > 0 => {
+                alerts.push(Alert::new(
+                    format!("engine:egress_fabric:{protocol}:{feed_id}:{shard_index}:stopped"),
+                    Severity::Warning,
+                    Scope::Engine,
+                    format!("Egress fabric shard stopped with outputs assigned ({shard_label})"),
+                    "The shard's loop has ended while outputs still run on it; they cannot deliver.",
+                    vec![
+                        format!("state = stopped ({shard_label})"),
+                        format!("affectedOutputs = {affected}"),
+                    ],
+                    "Check the logs for why the shard stopped; restart the affected outputs.",
                     &generated_at,
                 ));
             }

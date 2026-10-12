@@ -480,27 +480,6 @@ impl EgressReconciler {
             None
         };
 
-        let is_fabric = rtmp_fabric.is_some()
-            || srt_fabric.is_some()
-            || sink_fabric.is_some()
-            || pipeline_fabric.is_some()
-            || hls_put_fabric.is_some();
-        let shard_id = is_fabric.then(|| {
-            let shard_count = if srt_fabric.is_some() {
-                self.engine.config.egress_fabric.srt_shard_count()
-            } else {
-                self.engine.config.egress_fabric.shard_count()
-            };
-            crate::media::egress::manager::assign_output_to_shard(
-                &crate::media::egress::OutputId::new(output.id.clone()),
-                shard_count,
-            )
-            .index()
-        });
-        self.engine
-            .set_egress_fabric_attribution(&output.id, is_fabric, shard_id)
-            .await;
-
         let task = EgressTask {
             output_id: output.id.clone(),
             pipeline_id: output.pipeline_id.clone(),

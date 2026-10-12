@@ -63,17 +63,17 @@ async fn agent_health_snapshot(
     (recording_enabled, health)
 }
 
-#[cfg(feature = "agent-plane")]
+#[cfg(feature = "agent-execution")]
 fn pipeline_input_is_on(pipeline_health: &serde_json::Value) -> bool {
     pipeline_health["input"]["status"].as_str() == Some("on")
 }
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "agent-plane")]
+    #[cfg(feature = "agent-execution")]
     use super::pipeline_input_is_on;
 
-    #[cfg(feature = "agent-plane")]
+    #[cfg(feature = "agent-execution")]
     #[test]
     fn runtime_status_helpers_capture_agent_output_policy() {
         assert!(pipeline_input_is_on(&serde_json::json!({

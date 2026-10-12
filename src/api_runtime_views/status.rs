@@ -14,11 +14,6 @@ use std::sync::atomic::Ordering;
 
 use crate::host_tuning::{REQUIRED_RMEM_MAX, REQUIRED_WMEM_MAX};
 
-/// A fabric shard genuinely idle between polls (nothing to send right now)
-/// is not the same as a stalled one — this must stay well above the
-/// reconciler's 1s default tick so ordinary idle gaps never misreport.
-const EGRESS_FABRIC_SHARD_STALL_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
-
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct NofileLimitJson {
@@ -567,7 +562,9 @@ pub(crate) async fn health_snapshot_view(
     let nofile = nofile_limit_json(engine.config.tuning.nofile_limit, host_settings.nofile);
     let host_settings_rows = host_settings_json(engine, &host_settings, &nofile);
     let egress_fabric_shards = engine
-        .egress_fabric_shard_statuses(EGRESS_FABRIC_SHARD_STALL_AFTER)
+        .egress_fabric_shard_statuses(
+            crate::media::engine_egress_fabric_diagnostics::SHARD_STALL_AFTER,
+        )
         .await;
 
     EngineHealthView {

@@ -461,20 +461,34 @@ async fn egress_attribution_defaults_to_legacy_ownership() {
 }
 
 #[tokio::test]
-async fn egress_attribution_reflects_fabric_ownership_and_assigned_shard() {
+async fn egress_attribution_reflects_the_placed_shard_of_the_current_attempt() {
     let engine = MediaEngine::new();
-    engine
-        .register_egress("out-1", "pipe-1", "rtmp://example.com/live/key")
+    let stale = engine
+        .register_egress_attempt("out-1", "pipe-1", "rtmp://example.com/live/key", None)
         .await;
+    let current = engine
+        .register_egress_attempt("out-1", "pipe-1", "rtmp://example.com/live/key", None)
+        .await;
+    let slot = |shard| crate::media::engine::FabricSlot {
+        feed: crate::media::egress::command::FeedId::new("rtmp:pipe-1:source"),
+        shard,
+    };
 
     engine
-        .set_egress_fabric_attribution("out-1", true, Some(3))
+        .set_egress_fabric_attribution("out-1", &current, slot(3))
+        .await;
+    engine
+        .set_egress_fabric_attribution("out-1", &stale, slot(1))
         .await;
 
     let snapshot = test_health_snapshot(&engine, &["pipe-1".to_string()], &HashMap::new()).await;
     let output = &snapshot["pipelines"]["pipe-1"]["outputs"]["out-1"];
     assert_eq!(output["fabric"], true);
-    assert_eq!(output["shardId"], 3);
+    assert_eq!(output["fabricFeed"], "rtmp:pipe-1:source");
+    assert_eq!(
+        output["shardId"], 3,
+        "a replaced attempt does not overwrite it"
+    );
 }
 
 #[tokio::test]
@@ -483,7 +497,17 @@ async fn egress_attribution_is_a_no_op_for_an_unregistered_output() {
 
     // Must not panic when the output was never registered (or was already
     // unregistered by the time the caller's fabric-routing decision lands).
+    let registration = engine
+        .register_egress_attempt("other", "pipe-1", "rtmp://example.com/live/key", None)
+        .await;
     engine
-        .set_egress_fabric_attribution("missing-output", true, Some(1))
+        .set_egress_fabric_attribution(
+            "missing-output",
+            &registration,
+            crate::media::engine::FabricSlot {
+                feed: crate::media::egress::command::FeedId::new("rtmp:pipe-1:source"),
+                shard: 1,
+            },
+        )
         .await;
 }

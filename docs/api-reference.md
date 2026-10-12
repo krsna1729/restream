@@ -729,7 +729,8 @@ Rebuilds the projection and returns it:
       "flow": "flowing",
       "backpressure": null,
       "retry": null,
-      "evidence": null
+      "evidence": null,
+      "diagnosis": null
     }
   ]
 }
@@ -751,6 +752,21 @@ Rebuilds the projection and returns it:
   `idle`.
 - `evidence`: the latest failure (`error`, `phase`, `atMs`) of the running
   attempt, or else of the last one.
+- `diagnosis`: why a desired-running output is degraded, or `null`
+  (`application::diagnosis`). The output's media path has four layers,
+  upstream first: `ingest`, `feed` (the shared stages), `shard` (the
+  egress fabric shard, for fabric outputs) and `destination` (network and
+  remote end). The first unhealthy layer is `layer`; the healthy layers
+  checked before it are `ruledOut`. `cause.code` is one of the following.
+  - `ingest`: `noPublisher`.
+  - `feed`: `stageNotProducing` (`stage`, `phase`).
+  - `shard`: `shardPanicked`, `shardStalled`, `shardStopped` (`shard`).
+  - `destination`: `retriesExhausted`, `retryBudgetNearlySpent`
+    (`attempts`, `max`; at 80% of the budget), `rejected` (`phase`,
+    `error`), `backpressured` (`stalled`), `noProgress`.
+
+  Output alerts and the agent context (`desiredVsActual`) read the same
+  diagnosis.
 
 The revision rises by 1 for each change in the projection. It restarts at 0
 when the process restarts.
@@ -1336,6 +1352,14 @@ pruned automatically. Engine-level alerts include RTMP listener
 file-descriptor exhaustion, and a runtime nofile limit below the configured
 target.
 
+Output alerts come from the output's diagnosis (see Runtime State) and
+carry it as `diagnosis`, with a `ruled out: ...` evidence line. One cause
+raises one alert. An output whose cause is its pipeline's ingest has no
+alert of its own (the pipeline's `no_publisher` alert covers it). An output
+whose cause is its fabric shard has none either: the shard's engine alert
+(`panicked`, `stalled`, or `stopped` while outputs remain on it) counts it
+as `affectedOutputs`.
+
 ```json
 {
   "generatedAt": "...",
@@ -1490,6 +1514,7 @@ counters, egresses, and transcoder buffer count.
       "lastErrorAt": null,
       "failurePhase": null,
       "fabric": true,
+      "fabricFeed": "rtmp:pipe-1:source",
       "shardId": 1,
       "quality": {
         "tcpCongestionAlgorithm": "cubic",

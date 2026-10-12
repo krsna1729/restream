@@ -81,6 +81,15 @@ pub struct IngestRegistration {
     pub preview_ring: Arc<arc_swap::ArcSwapOption<RingBuffer>>,
 }
 
+/// Where a fabric output runs: its feed and the shard index assigned to it.
+/// `(feed, shard)` names one shard heartbeat (feed ids carry a per-protocol
+/// prefix, so they are unique across fabric registries).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FabricSlot {
+    pub feed: crate::media::egress::command::FeedId,
+    pub shard: u32,
+}
+
 pub struct ActiveEgress {
     pub attempt_id: u64,
     pub output_id: String,
@@ -111,11 +120,10 @@ pub struct ActiveEgress {
     /// does not cover (HLS PUT upload, recording), which have their own
     /// task shape and no shard/leaf concept. Set once, right after
     /// registration, from the same routing decision the bootstrap egress
-    /// reconciler already made — never inferred from `protocol`.
-    pub is_fabric: bool,
-    /// Fabric shard index this output is assigned to, when `is_fabric` is
-    /// true. `None` for non-fabric output types.
-    pub shard_id: Option<u32>,
+    /// reconciler already made — never inferred from `protocol`. `None`
+    /// for output types without a shard/leaf (the Reqwest HLS uploader,
+    /// recording).
+    pub fabric: Option<FabricSlot>,
     pub resync_count: Arc<AtomicU64>,
     /// Feed units the leaf's cursor is currently behind the feed head.
     /// Fabric outputs only; stays 0 for non-fabric output types, which have

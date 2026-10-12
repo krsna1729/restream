@@ -113,6 +113,26 @@ pub(super) struct EgressTask {
 }
 
 impl EgressTask {
+    /// Attributes this attempt to the shard the fabric placed its `Add` on.
+    async fn record_fabric_placement(
+        &self,
+        feed: &FeedId,
+        outcome: &crate::media::egress::manager::ManagerCommandOutcome,
+    ) {
+        if let Some(shard) = outcome.placed_shard() {
+            self.engine
+                .set_egress_fabric_attribution(
+                    &self.output_id,
+                    &self.registration,
+                    crate::media::engine::FabricSlot {
+                        feed: feed.clone(),
+                        shard: shard.index(),
+                    },
+                )
+                .await;
+        }
+    }
+
     pub(super) async fn run(self) {
         let url_scheme = OutputUrlScheme::from_url(&self.url);
         if !url_scheme.is_supported_output() {
@@ -370,7 +390,9 @@ impl EgressTask {
             .dispatch_srt_fabric_command(&fabric.feed_id, EgressCommand::Add(fabric.spec.clone()))
             .await
         {
-            Ok(_) => {
+            Ok(outcome) => {
+                self.record_fabric_placement(&fabric.spec.feed, &outcome)
+                    .await;
                 self.engine
                     .update_egress_phase_if_current(
                         &self.output_id,
@@ -452,7 +474,9 @@ impl EgressTask {
             .dispatch_rtmp_fabric_command(&fabric.feed_id, EgressCommand::Add(fabric.spec.clone()))
             .await
         {
-            Ok(_) => {
+            Ok(outcome) => {
+                self.record_fabric_placement(&fabric.spec.feed, &outcome)
+                    .await;
                 self.engine
                     .update_egress_phase_if_current(
                         &self.output_id,
@@ -525,7 +549,9 @@ impl EgressTask {
             .dispatch_hls_put_fabric_command(&feed_id, EgressCommand::Add(fabric.spec.clone()))
             .await
         {
-            Ok(_) => {
+            Ok(outcome) => {
+                self.record_fabric_placement(&fabric.spec.feed, &outcome)
+                    .await;
                 self.engine
                     .update_egress_phase_if_current(
                         &self.output_id,
@@ -652,7 +678,9 @@ impl EgressTask {
             .dispatch_sink_fabric_command(&fabric.feed_id, EgressCommand::Add(fabric.spec.clone()))
             .await
         {
-            Ok(_) => {
+            Ok(outcome) => {
+                self.record_fabric_placement(&fabric.spec.feed, &outcome)
+                    .await;
                 self.engine
                     .update_egress_phase_if_current(
                         &self.output_id,
@@ -784,7 +812,9 @@ impl EgressTask {
             )
             .await
         {
-            Ok(_) => {
+            Ok(outcome) => {
+                self.record_fabric_placement(&fabric.spec.feed, &outcome)
+                    .await;
                 self.engine
                     .update_egress_phase_if_current(
                         &self.output_id,
