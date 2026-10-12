@@ -278,7 +278,8 @@ items).
   `engine.unregister_egress` directly). Deletes also tear down directly:
   `src/api/outputs.rs:552` after the row is deleted, and
   `src/api/pipelines.rs:395` before it is.
-- Gates: tests show a promotion and an agent apply persist first and that
+- Gates: tests show a promotion, an agent apply and an output or pipeline
+  delete persist first and that
   reconcile converges them; a restart after either keeps the result.
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
 
