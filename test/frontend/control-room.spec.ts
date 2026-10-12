@@ -49,9 +49,10 @@ test("fleet shows a no-publisher cause live and drops it when the output stops",
     const item = attention.getByRole("listitem").filter({ hasText: name });
     await expect(item).toContainText("ingest: no publisher connected");
     await expect(item).toContainText("1 output: cr-out");
-    const row = page.getByRole("row").filter({ hasText: name });
-    await expect(row).toContainText("no input");
-    await expect(row).toContainText("0 / 1");
+    await expect(item.getByRole("link", { name })).toHaveAttribute(
+      "href",
+      new RegExp(`[?&]w=operate&p=${pipelineId}$`),
+    );
     await expect(page.getByRole("status")).toContainText("live · rev");
 
     const stop = await page.request.post(
@@ -60,7 +61,79 @@ test("fleet shows a no-publisher cause live and drops it when the output stops",
     expect(stop.ok()).toBe(true);
     // A stopped output is not wanted: the cause is gone, with no reload.
     await expect(item).toHaveCount(0);
-    await expect(row).toContainText("0 / 0");
+  } finally {
+    await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
+  }
+});
+
+test("operate: find a pipeline, start and stop an output, promote an input", async ({
+  page,
+}) => {
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+
+  const name = `cr-operate-${Date.now()}`;
+  const created = await page.request.post("/api/v1/pipelines", {
+    data: { name, streamKey: `croperate_${Date.now()}` },
+  });
+  expect(created.ok()).toBe(true);
+  const pipelineId: string = (await created.json()).pipeline.id;
+
+  try {
+    const output = await page.request.post(
+      `/api/v1/pipelines/${pipelineId}/outputs`,
+      {
+        data: {
+          name: "cr-out",
+          url: "srt://127.0.0.1:9?streamid=cr",
+          config: { video: { mode: "source" }, audio: { mode: "all" } },
+        },
+      },
+    );
+    expect(output.ok()).toBe(true);
+    const backup = await page.request.post(
+      `/api/v1/pipelines/${pipelineId}/inputs`,
+      { data: { label: "Backup" } },
+    );
+    expect(backup.ok()).toBe(true);
+
+    // The inventory finds it by name, in any case.
+    await page.goto("/control-room.html?w=pipelines");
+    await page.getByRole("searchbox", { name: "Search pipelines" }).fill(name.toUpperCase());
+    const rows = page.getByRole("row").filter({ hasText: pipelineId });
+    await expect(rows).toHaveCount(1);
+    await expect(rows).toContainText("no input");
+    await expect(rows).toContainText("SRT 1");
+    await rows.getByRole("link", { name }).click();
+    await expect(page).toHaveURL(new RegExp(`w=operate&p=${pipelineId}`));
+    await expect(page.getByRole("heading", { name })).toBeVisible();
+
+    // The media graph and the matrix come from the engine; the stopped
+    // output is in neither delivering count.
+    await expect(
+      page.getByRole("listitem", { name: "Destinations srt" }),
+    ).toContainText("0 / 1 delivering");
+    const matrixRow = page.getByRole("row").filter({ hasText: "cr-out" });
+    await expect(matrixRow).toContainText("stopped");
+
+    // Start from the matrix: desired follows over the state stream.
+    await matrixRow.getByRole("button", { name: "Start cr-out" }).click();
+    await expect(matrixRow.getByRole("cell").nth(2)).toHaveText("running");
+    await expect(matrixRow).toContainText("no publisher connected");
+    await matrixRow.getByRole("button", { name: "Stop cr-out" }).click();
+    await expect(matrixRow.getByRole("cell").nth(2)).toHaveText("stopped");
+
+    // Promote the backup: the deck shows it selected once the API answers.
+    const deck = page.getByRole("region", { name: /Source deck/ });
+    await deck.getByRole("button", { name: "Promote Backup" }).click();
+    await expect(
+      deck.getByRole("listitem", { name: "Input Backup" }),
+    ).toContainText("selected · offline");
+    await expect(
+      deck.getByRole("button", { name: "Promote Primary" }),
+    ).toBeVisible();
   } finally {
     await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
   }

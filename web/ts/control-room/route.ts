@@ -1,27 +1,42 @@
-// The control room's location lives in the URL query (`?w=<workspace>`), so
-// reload, back/forward and shared links land on the same workspace.
+// The control room's location lives in the URL query (`?w=<workspace>` and,
+// for pipeline workspaces, `&p=<pipeline id>`), so reload, back/forward and
+// shared links land on the same view.
 
-export const WORKSPACES = ["fleet"] as const;
+export const WORKSPACES = ["fleet", "pipelines", "operate"] as const;
 
 export type Workspace = (typeof WORKSPACES)[number];
 
 export const WORKSPACE_LABELS: Record<Workspace, string> = {
   fleet: "Fleet",
+  pipelines: "Pipelines",
+  operate: "Operate",
 };
+
+export interface Place {
+  readonly workspace: Workspace;
+  /** The pipeline a pipeline workspace shows; kept across workspaces. */
+  readonly pipelineId: string | null;
+}
 
 function isWorkspace(value: string | null): value is Workspace {
   return value !== null && (WORKSPACES as readonly string[]).includes(value);
 }
 
-/** The workspace a query string names; an absent or unknown one is Fleet. */
-export function parseWorkspace(search: string): Workspace {
-  const value = new URLSearchParams(search).get("w");
-  return isWorkspace(value) ? value : "fleet";
+/** The place a query string names; an absent or unknown workspace is Fleet. */
+export function parsePlace(search: string): Place {
+  const params = new URLSearchParams(search);
+  const workspace = params.get("w");
+  return {
+    workspace: isWorkspace(workspace) ? workspace : "fleet",
+    pipelineId: params.get("p") || null,
+  };
 }
 
-/** `search` with `w` set to `workspace`; other parameters are kept. */
-export function workspaceSearch(search: string, workspace: Workspace): string {
+/** `search` naming `place`; other parameters are kept. */
+export function placeSearch(search: string, place: Place): string {
   const params = new URLSearchParams(search);
-  params.set("w", workspace);
+  params.set("w", place.workspace);
+  if (place.pipelineId) params.set("p", place.pipelineId);
+  else params.delete("p");
   return `?${params.toString()}`;
 }

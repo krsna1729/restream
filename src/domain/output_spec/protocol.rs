@@ -1,6 +1,9 @@
 use crate::domain::ids::PipelineId;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Where an output sends media, from its URL scheme (`rtmps` is `rtmp`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
 pub enum EgressProtocol {
     Rtmp,
     Srt,

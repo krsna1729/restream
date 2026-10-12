@@ -284,8 +284,9 @@ items).
 - Rule: a workspace ships only on live backend data; the mockup's numbers
   are illustrative.
 - Done so far: `/control-room.html` (one React root, one live store over
-  the state stream, `?w=` workspace route) with Fleet. See
-  [Frontend](frontend.md#control-room).
+  the state stream, `?w=`/`&p=` route) with Fleet, Pipelines (inventory) and
+  Operate (source deck with promote, media graph, destination matrix with
+  start/stop). See [Frontend](frontend.md#control-room).
 - Gates: Playwright per workspace against a running engine.
 - Depends on: Q-042 (state). Q-043 (done) added the output `diagnosis` for
   the Incidents evidence packet.

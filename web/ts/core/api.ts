@@ -40,6 +40,7 @@ import type {
   YoutubeMonitoringStatus,
   RateLimitAttempt,
   RateLimitState,
+  GraphData,
 } from "./api-types.js";
 
 let activeMutationRequestCount = 0;
@@ -875,8 +876,10 @@ async function resetRateLimitState(body: {
   );
 }
 
-async function getProcessingGraph(pipelineId: string): Promise<unknown | null> {
-  return apiRequest(
+async function getProcessingGraph(
+  pipelineId: string,
+): Promise<GraphData | null> {
+  return apiRequest<GraphData>(
     `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/graph`,
   );
 }

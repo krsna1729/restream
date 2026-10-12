@@ -1,18 +1,10 @@
 import { useMemo } from "react";
 
 import type { SystemMetrics } from "../types.js";
-import {
-  buildFleetModel,
-  describeCause,
-  pipelineHealth,
-} from "./fleet-model.js";
-import type {
-  AttentionItem,
-  FleetModel,
-  FleetPipelineRow,
-  PipelineHealth,
-} from "./fleet-model.js";
+import { buildFleetModel, describeCause } from "./fleet-model.js";
+import type { AttentionItem, FleetModel } from "./fleet-model.js";
 import { formatBps, formatPercent } from "./format.js";
+import { PlaceLink } from "./place-link.js";
 import type { LiveSnapshot } from "./store.js";
 
 export function Fleet({ live }: { live: LiveSnapshot }) {
@@ -30,7 +22,6 @@ export function Fleet({ live }: { live: LiveSnapshot }) {
         <Attention items={model.attention} />
         <Headroom metrics={live.metrics} />
       </div>
-      <PipelineTable model={model} />
     </div>
   );
 }
@@ -103,8 +94,13 @@ function Attention({ items }: { items: readonly AttentionItem[] }) {
             {items.map((item) => (
               <li key={item.key} className="rounded bg-base-100 p-2">
                 <div className="font-medium">
-                  {item.pipelineName} · {item.layer}:{" "}
-                  {describeCause(item.cause)}
+                  <PlaceLink
+                    className="link"
+                    place={{ workspace: "operate", pipelineId: item.pipelineId }}
+                  >
+                    {item.pipelineName}
+                  </PlaceLink>{" "}
+                  · {item.layer}: {describeCause(item.cause)}
                 </div>
                 <div className="text-sm opacity-70">
                   {item.outputs.length} output
@@ -209,70 +205,5 @@ function Meters(props: {
         ))}
       </dl>
     </div>
-  );
-}
-
-function PipelineTable({ model }: { model: FleetModel }) {
-  return (
-    <section aria-labelledby="fleet-pipelines">
-      <h3 id="fleet-pipelines" className="mb-2 font-semibold">
-        Pipelines{" "}
-        <span className="text-xs font-normal opacity-70">
-          attention first, then size
-        </span>
-      </h3>
-      <div className="overflow-x-auto">
-        <table className="table table-sm">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Source</th>
-              <th>Outputs</th>
-              <th>Flow</th>
-              <th>Health</th>
-            </tr>
-          </thead>
-          <tbody>
-            {model.pipelines.map((row) => (
-              <tr key={row.id}>
-                <td className="font-medium">{row.name}</td>
-                <td>
-                  {row.source
-                    ? `${row.source.protocol.toUpperCase()}${
-                        row.source.videoCodec ? ` · ${row.source.videoCodec}` : ""
-                      }`
-                    : "no input"}
-                </td>
-                <td className="tabular-nums">
-                  {row.delivering} / {row.wanted}
-                </td>
-                <td className="tabular-nums">
-                  {formatBps(row.ingestBps)} → {formatBps(row.egressBps)}
-                </td>
-                <td>
-                  <HealthBadge row={row} />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
-
-const HEALTH_BADGE: Record<PipelineHealth["tone"], string> = {
-  warning: "badge-warning",
-  info: "badge-info",
-  idle: "badge-ghost",
-  ok: "badge-success",
-};
-
-function HealthBadge({ row }: { row: FleetPipelineRow }) {
-  const health = pipelineHealth(row);
-  return (
-    <span className={`badge badge-sm ${HEALTH_BADGE[health.tone]}`}>
-      {health.label}
-    </span>
   );
 }

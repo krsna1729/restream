@@ -3,9 +3,9 @@ import { escapeHtml } from "../../core/utils.js";
 import { RenderScope } from "../../core/render-scope.js";
 import type { RenderScopeToken } from "../../core/render-scope.js";
 import type { PipelineView } from "../../types.js";
-import { getResourceMap } from "../../core/api.js";
+import { getProcessingGraph, getResourceMap } from "../../core/api.js";
 import type { ResourceMapSnapshot } from "../../core/api.js";
-import { fetchProcessingGraph, renderGraphInto } from "../graph.js";
+import { renderGraphInto } from "../graph.js";
 import { renderResourceMapInto } from "./resource-view.js";
 
 // ---------------------------------------------------------------------------
@@ -269,7 +269,7 @@ export async function refreshPipelineInspectorGraph(): Promise<void> {
   }
   graphInFlight = (async () => {
     const [graph, resourceMap] = await Promise.all([
-      fetchProcessingGraph(requestPipelineId),
+      getProcessingGraph(requestPipelineId),
       getResourceMap(requestPipelineId, {
         view: "detail",
         topN: 50,

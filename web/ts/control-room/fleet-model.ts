@@ -4,6 +4,7 @@
 
 import type {
   Cause,
+  EgressProtocol,
   Layer,
   OutputState,
   PipelineState,
@@ -27,6 +28,8 @@ export interface FleetPipelineRow {
   /** Wanted outputs neither delivering nor diagnosed: starting, or not
    * flowing yet. */
   readonly pending: number;
+  /** Every output, wanted or not, by protocol. */
+  readonly protocols: ReadonlyMap<EgressProtocol, number>;
 }
 
 export interface AttentionItem {
@@ -97,7 +100,9 @@ export function buildFleetModel(
     let attention = 0;
     let pending = 0;
     let egressBps: number | null = null;
+    const protocols = new Map<EgressProtocol, number>();
     for (const output of outputs) {
+      protocols.set(output.protocol, (protocols.get(output.protocol) ?? 0) + 1);
       const rate = rates?.egressBps.get(output.id);
       if (rate !== undefined) egressBps = (egressBps ?? 0) + rate;
       if (output.desired !== "running") continue;
@@ -129,6 +134,7 @@ export function buildFleetModel(
       delivering,
       attention,
       pending,
+      protocols,
     };
     // The stat and the row badge share one rule.
     if (pipelineHealth(row).tone === "ok") pipelinesHealthy += 1;
@@ -232,4 +238,23 @@ export function describeCause(cause: Cause): string {
     case "noProgress":
       return "no progress";
   }
+}
+
+export type HealthFilter = PipelineHealth["tone"] | "all";
+
+/** Rows whose name or id holds `query` (any case) and whose health is
+ * `health`. */
+export function filterPipelineRows(
+  rows: readonly FleetPipelineRow[],
+  query: string,
+  health: HealthFilter,
+): readonly FleetPipelineRow[] {
+  const needle = query.trim().toLowerCase();
+  return rows.filter(
+    (row) =>
+      (needle === "" ||
+        row.name.toLowerCase().includes(needle) ||
+        row.id.toLowerCase().includes(needle)) &&
+      (health === "all" || pipelineHealth(row).tone === health),
+  );
 }

@@ -1,44 +1,5 @@
-import { getProcessingGraph } from "../core/api.js";
+import type { GraphData, GraphEdge, GraphNode } from "../core/api-types.js";
 import { formatByteAmount } from "../core/utils.js";
-
-interface GraphNode {
-  id: string;
-  type: string;
-  label: string;
-  active: boolean;
-  stageKey?: string;
-  details?: Record<string, unknown>;
-  metrics?: {
-    packetsIn: number;
-    packetsOut: number;
-    bytesIn: number;
-    bytesOut: number;
-    processingUs: number;
-    avgUsPerPacket: number;
-    packetsPerSec: number;
-    uptimeSec?: number;
-    uptimeSecs?: number;
-  };
-}
-
-interface GraphEdge {
-  from: string;
-  to: string;
-  label: string;
-}
-
-interface GraphData {
-  pipelineId: string;
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-}
-
-export async function fetchProcessingGraph(
-  pipeId: string,
-): Promise<GraphData | null> {
-  const data = (await getProcessingGraph(pipeId)) as GraphData | null;
-  return data;
-}
 
 function formatRate(value: unknown): string {
   const pps = Number(value);

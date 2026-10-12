@@ -3,37 +3,25 @@ import { useEffect, useState } from "react";
 import { withBasePath } from "../core/base-path.js";
 import { Fleet } from "./fleet.js";
 import { formatAge } from "./format.js";
-import {
-  WORKSPACES,
-  WORKSPACE_LABELS,
-  parseWorkspace,
-  workspaceSearch,
-} from "./route.js";
-import type { Workspace } from "./route.js";
+import { Operate } from "./operate.js";
+import { PlaceLink } from "./place-link.js";
+import { Pipelines } from "./pipelines.js";
+import { WORKSPACES, WORKSPACE_LABELS, parsePlace } from "./route.js";
+import type { Place } from "./route.js";
 import { SAMPLE_INTERVAL_MS, useLive } from "./store.js";
 
 // A sampled source older than this missed at least two samples.
 const SAMPLE_STALE_AFTER_MS = SAMPLE_INTERVAL_MS * 2.5;
 
-function useWorkspace(): [Workspace, (next: Workspace) => void] {
-  const [workspace, setWorkspace] = useState(() =>
-    parseWorkspace(window.location.search),
-  );
+/** The place in the URL; links move it with `go`, which fires `popstate`. */
+function usePlace(): Place {
+  const [place, setPlace] = useState(() => parsePlace(window.location.search));
   useEffect(() => {
-    const onPop = () => setWorkspace(parseWorkspace(window.location.search));
+    const onPop = () => setPlace(parsePlace(window.location.search));
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
-  const navigate = (next: Workspace) => {
-    if (next === workspace) return;
-    window.history.pushState(
-      {},
-      "",
-      workspaceSearch(window.location.search, next),
-    );
-    setWorkspace(next);
-  };
-  return [workspace, navigate];
+  return place;
 }
 
 function useNow(intervalMs: number): number {
@@ -47,7 +35,7 @@ function useNow(intervalMs: number): number {
 
 export function App() {
   const live = useLive();
-  const [workspace, navigate] = useWorkspace();
+  const place = usePlace();
   const now = useNow(1000);
   // The oldest sampled source: one failing endpoint shows here even while
   // the other keeps answering.
@@ -67,21 +55,21 @@ export function App() {
           <ul className="menu menu-horizontal gap-1 p-0">
             {WORKSPACES.map((id) => (
               <li key={id}>
-                <a
-                  href={workspaceSearch(window.location.search, id)}
-                  aria-current={id === workspace ? "page" : undefined}
-                  className={id === workspace ? "menu-active" : undefined}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    navigate(id);
-                  }}
+                <PlaceLink
+                  place={{ workspace: id, pipelineId: place.pipelineId }}
+                  current={id === place.workspace}
+                  className={id === place.workspace ? "menu-active" : undefined}
                 >
                   {WORKSPACE_LABELS[id]}
-                </a>
+                </PlaceLink>
               </li>
             ))}
           </ul>
         </nav>
+        {/* core/api.ts marks mutations in flight here. */}
+        <span id="saving-badge" className="badge badge-info hidden">
+          saving…
+        </span>
         <span
           role="status"
           className={`badge ${stale ? "badge-warning" : "badge-ghost"}`}
@@ -95,8 +83,20 @@ export function App() {
           Classic dashboard
         </a>
       </header>
+      {/* core/api.ts reports failed requests here. */}
+      <div
+        id="error-alert"
+        role="alert"
+        className="alert alert-error fixed bottom-4 right-4 z-50 hidden max-w-md"
+      >
+        <span id="error-msg" />
+      </div>
       <main className="mx-auto w-full max-w-7xl flex-1 p-4">
-        {workspace === "fleet" && <Fleet live={live} />}
+        {place.workspace === "fleet" && <Fleet live={live} />}
+        {place.workspace === "pipelines" && <Pipelines live={live} />}
+        {place.workspace === "operate" && (
+          <Operate live={live} pipelineId={place.pipelineId} />
+        )}
       </main>
     </div>
   );

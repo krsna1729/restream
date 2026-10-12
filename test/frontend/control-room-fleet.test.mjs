@@ -9,7 +9,7 @@ const { buildFleetModel, pipelineHealth } = await loadCompiledFrontendModule(
 const { telemetryRates } = await loadCompiledFrontendModule(
   "control-room/rates.js",
 );
-const { parseWorkspace } = await loadCompiledFrontendModule(
+const { parsePlace, placeSearch } = await loadCompiledFrontendModule(
   "control-room/route.js",
 );
 
@@ -20,6 +20,8 @@ function output(id, pipelineId, overrides = {}) {
     id,
     pipelineId,
     name: id,
+    protocol: "rtmp",
+    shard: null,
     desired: "running",
     actual: "sending",
     convergence: "converged",
@@ -194,7 +196,23 @@ test("rates come from two samples of one session", () => {
   assert.equal(telemetryRates(first, telemetry(0, 2_000, 6_000)), null);
 });
 
-test("an unknown or absent workspace opens Fleet", () => {
-  assert.equal(parseWorkspace(""), "fleet");
-  assert.equal(parseWorkspace("?w=nope"), "fleet");
+test("an unknown or absent workspace opens Fleet; the pipeline is kept", () => {
+  assert.equal(parsePlace("").workspace, "fleet");
+  assert.deepEqual(parsePlace("?w=nope&p=p1"), {
+    workspace: "fleet",
+    pipelineId: "p1",
+  });
+  assert.deepEqual(parsePlace("?w=operate&p="), {
+    workspace: "operate",
+    pipelineId: null,
+  });
+});
+
+test("a place without a pipeline drops `p`; other parameters stay", () => {
+  assert.equal(
+    placeSearch("?w=operate&p=p1&debug=1", { workspace: "fleet", pipelineId: null }),
+    "?w=fleet&debug=1",
+  );
+  const search = placeSearch("", { workspace: "operate", pipelineId: "a b" });
+  assert.deepEqual(parsePlace(search), { workspace: "operate", pipelineId: "a b" });
 });

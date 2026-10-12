@@ -759,10 +759,10 @@ test("ingest detail rendering and publisher quality helpers surface operator-fac
       packetsReceivedRetrans: 7,
       packetsReceivedUndecryptPerSec: 1,
       packetsReceivedUndecrypt: 2,
-      inboundRTPPacketsLost: 101,
-      inboundRTPPacketsInError: 21,
-      inboundRTPPacketsJitter: 31,
-      msRTT: 210,
+      inboundRtpPacketsLost: 101,
+      inboundRtpPacketsInError: 21,
+      inboundRtpPacketsJitter: 31,
+      msRtt: 210,
     },
   });
   const rtmpMetrics = publisherQuality.getPublisherQualityMetrics({
@@ -787,6 +787,13 @@ test("ingest detail rendering and publisher quality helpers surface operator-fac
     srtAlerts.some((alert) => alert.code === "srt_bond_wire_undecrypt"),
     "wire decryption failures on a bond raise an alert",
   );
+  // Field names as the server serializes PublisherQuality (camelCase).
+  for (const code of ["rtt", "rtp_loss", "rtp_err", "jitter"]) {
+    assert.ok(
+      srtAlerts.some((alert) => alert.code === code),
+      `${code} alerts from a server-shaped quality sample`,
+    );
+  }
   assert.ok(rtmpMetrics.some((metric) => metric.code === "tcp_rtt"));
 
   deps.setPipelineViewDependencies({

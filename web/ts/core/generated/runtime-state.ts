@@ -18,7 +18,12 @@ ingest: IngestState | null, };
 
 export type IngestState = { inputId: string, protocol: string, videoCodec: string | null, };
 
-export type OutputState = { id: string, pipelineId: string, name: string, 
+export type OutputState = { id: string, pipelineId: string, name: string, protocol: EgressProtocol, 
+/**
+ * The egress shard carrying the running attempt; `null` off the fabric
+ * or when none runs.
+ */
+shard: number | null, 
 /**
  * The operator's intent.
  */
@@ -67,6 +72,8 @@ export type Layer = "ingest" | "feed" | "shard" | "destination";
 export type Cause = { "code": "noPublisher" } | { "code": "stageNotProducing", stage: string, phase: string, } | { "code": "shardPanicked", shard: number, } | { "code": "shardStalled", shard: number, } | { "code": "shardStopped", shard: number, } | { "code": "retriesExhausted" } | { "code": "retryBudgetNearlySpent", attempts: number, max: number, } | { "code": "rejected", phase: string | null, error: string, } | { "code": "backpressured", stalled: boolean, } | { "code": "noProgress" };
 
 export type DesiredOutputState = "running" | "stopped";
+
+export type EgressProtocol = "rtmp" | "srt" | "hls" | "sink" | "pipeline" | "unknown";
 
 export type EgressPhase = "starting" | "waitingUpstream" | "connecting" | "sending" | "discarding" | "segmenting" | "uploading" | "retrying" | "failed" | "stopped";
 
