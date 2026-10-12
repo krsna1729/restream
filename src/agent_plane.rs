@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use crate::agent_core::{InvestigationRequest, PlanRequest, ProposedChange};
 use crate::application::models::{Ingest, Output, Pipeline};
 use crate::domain::output_spec::{OutputConfig, OutputUrlScheme, ProtocolCapabilities};
-use crate::planner::{BackendPolicy, PlannedOutput, plan_pipeline_graph};
+use crate::planner::{PlannedOutput, plan_pipeline_graph};
 
 const OUTPUT_URL_SCHEME_ERROR: &str = "Supported schemes are rtmp://, rtmps://, srt://, hls://, sink://, pipeline://, http://, and https://";
 
@@ -683,8 +683,7 @@ fn planned_candidate_stage_kinds(pipeline_id: &str, change: &ProposedChange) -> 
         config.clone(),
         change.url.clone().unwrap_or_default(),
     );
-    let policy = BackendPolicy::default();
-    plan_pipeline_graph(pipeline_id, Some("hevc"), &[output], false, &policy)
+    plan_pipeline_graph(pipeline_id, Some("hevc"), &[output], false)
         .stages
         .into_iter()
         .filter(|stage| stage.kind != crate::domain::stage::StageKind::Source)

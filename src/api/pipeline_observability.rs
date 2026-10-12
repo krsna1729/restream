@@ -77,12 +77,10 @@ pub async fn pipeline_graph_handler(
         crate::api_runtime_views::processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
             .await;
     let ingest_codec = state.engine.ingest_video_codec(&pipeline_id).await;
-    let backend_policy = state.engine.backend_policy();
     let desired_graphs = crate::application::graph::desired_pipeline_graphs(
         &pipeline_id,
         ingest_codec.as_deref(),
         &pipeline_outputs,
-        &backend_policy,
     );
     if let Some(graph_obj) = graph.as_object_mut() {
         graph_obj.insert(
@@ -153,12 +151,10 @@ pub async fn pipeline_diagnostics_context_handler(
     let pipeline_outputs =
         crate::application::outputs::list_for_pipeline(&state.db, &pipeline_id).await?;
     let ingest_codec = state.engine.ingest_video_codec(&pipeline_id).await;
-    let backend_policy = state.engine.backend_policy();
     let desired_graphs = crate::application::graph::desired_pipeline_graphs(
         &pipeline_id,
         ingest_codec.as_deref(),
         &pipeline_outputs,
-        &backend_policy,
     );
     let runtime_graph =
         crate::api_runtime_views::processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
@@ -391,7 +387,6 @@ fn graph_role_json(role: &GraphRole) -> serde_json::Value {
 fn stage_backend_name(backend: StageBackendKind) -> &'static str {
     match backend {
         StageBackendKind::AudioRouter => "audioRouter",
-        StageBackendKind::InternalFfmpeg => "internalFfmpeg",
         StageBackendKind::ExternalFfmpeg => "externalFfmpeg",
         StageBackendKind::HlsSegmenter => "hlsSegmenter",
         StageBackendKind::Recording => "recording",

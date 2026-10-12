@@ -468,9 +468,7 @@ impl MediaEngine {
                 } else {
                     active_codecs.get(&pipeline_id).map(String::as_str)
                 };
-            let backend_policy = self.backend_policy();
-            let Some(plan) =
-                crate::planner::plan_hls_preview_graph(&pipeline_id, ingest_codec, &backend_policy)
+            let Some(plan) = crate::planner::plan_hls_preview_graph(&pipeline_id, ingest_codec)
             else {
                 continue;
             };

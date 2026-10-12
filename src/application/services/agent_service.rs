@@ -13,7 +13,6 @@ use crate::application::ports::{
 };
 use crate::application::settings::{SettingsSnapshot, load_settings_snapshot};
 use crate::media::security::IngestSecurityService;
-use crate::planner::BackendPolicy;
 use sqlx::SqlitePool;
 
 #[cfg(feature = "agent-execution")]
@@ -132,7 +131,6 @@ impl AgentService {
             self.meta_store.as_ref(),
             self.ingest_host_store.as_ref(),
             security,
-            BackendPolicy::default(),
         )
         .await
         .ok();

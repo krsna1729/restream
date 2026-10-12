@@ -9,18 +9,18 @@ use tokio::process::{Child, Command};
 
 use super::{
     FfmpegStats, GeneralizedSinkMetrics, GeneralizedSinkServer, HarnessSrtCrypto, HarnessSrtMode,
-    HarnessSrtSinkPool, MSR_LANGUAGE_CODES, MSR_LANGUAGE_NAMES, MixedEnv, PublishTrackSelection,
-    RampApi, RtmpOutputMode, SignalTolerances, append_line, append_srt_crypto,
+    HarnessSrtSinkPool, MSR_LANGUAGE_CODES, MSR_LANGUAGE_NAMES, PublishTrackSelection, RampApi,
+    RtmpOutputMode, SignalTolerances, append_line, append_srt_crypto,
     apply_harness_srt_listener_env, apply_srt_listener_env, capture_signal_sample, cleanup_ramp_db,
     create_backup_input, create_output, create_output_with_rtmp_mode, decode_pcm_quality,
     default_restream_bin, default_work_db_path, env_secs, env_usize, ffprobe_live_sample,
     file_tail_lines, harness_admin_password, harness_port_defaults, harness_srt_crypto_from_env,
-    harness_srt_ffmpeg_url, harness_srt_standard_publish_url, mixed_input_case_for_command,
-    parse_srt_crypto_variants, probe_dims_ramp, remove_mediamtx_config_env, run_ffmpeg_filter_log,
-    run_mixed_input_case_with_env, safe_artifact_stem, signal_report_json,
-    spawn_publisher_with_selection, start_generalized_sink_server, start_output, stop_child,
-    stop_generalized_sink_server, sweep_fixture, validate_signal_quality_with_tolerances,
-    wait_for_api_input_live, wait_for_http_ok, wait_for_input_state, wait_for_outputs_progress,
+    harness_srt_ffmpeg_url, harness_srt_standard_publish_url, parse_srt_crypto_variants,
+    probe_dims_ramp, remove_mediamtx_config_env, run_ffmpeg_filter_log, safe_artifact_stem,
+    signal_report_json, spawn_publisher_with_selection, start_generalized_sink_server,
+    start_output, stop_child, stop_generalized_sink_server, sweep_fixture,
+    validate_signal_quality_with_tolerances, wait_for_api_input_live, wait_for_http_ok,
+    wait_for_input_state, wait_for_outputs_progress,
 };
 
 #[path = "resource_sweep/bitrate.rs"]
@@ -32,9 +32,7 @@ pub(crate) use msr::*;
 
 #[path = "resource_sweep/branch_matrix.rs"]
 mod branch_matrix;
-#[cfg(test)]
-pub(crate) use branch_matrix::selected_backend_policy_variants;
-pub(crate) use branch_matrix::{backend_policy_matrix, branch_matrix, srt_crypto_matrix};
+pub(crate) use branch_matrix::{branch_matrix, srt_crypto_matrix};
 #[path = "resource_sweep/catalog.rs"]
 mod catalog;
 pub(crate) use catalog::{
@@ -515,9 +513,6 @@ async fn start_resource_sweep_stack(
         .stdout(Stdio::from(restream_log))
         .stderr(Stdio::from(restream_err))
         .kill_on_drop(true);
-    for (key, value) in &env.backend_policy_env {
-        restream_cmd.env(key, value);
-    }
     // The fixture certificate the HTTPS HLS sink and the MediaMTX RTMPS
     // listener present, trusted as the generic harness spawn does.
     let (cert, _) = restream::test_fixtures::rtmps_harness_cert_fixture()?;

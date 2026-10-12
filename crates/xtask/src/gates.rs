@@ -299,9 +299,10 @@ fn is_lifecycle(file: &str) -> bool {
             "src/media/avio.rs",
             "src/media/recording.rs",
             "src/media/recording/*.rs",
-            "src/media/file_ingest.rs",
             "src/media/external_transcoder.rs",
             "src/media/external_transcoder/*.rs",
+            "src/media/external_file_ingest.rs",
+            "src/media/external_file_ingest/*.rs",
         ],
     )
 }

@@ -1,6 +1,6 @@
 import { patchConfig } from "../../core/api.js";
 import { state } from "../../core/state.js";
-import type { BackendPolicy, RecordingSettings, SrtGlobalIngestConfig } from "../../types.js";
+import type { RecordingSettings, SrtGlobalIngestConfig } from "../../types.js";
 
 function showSavedFeedback(id: string): void {
   const el = document.getElementById(id);
@@ -104,54 +104,5 @@ export async function saveSrtIngest(): Promise<void> {
   if (res) {
     state.config = { ...state.config, ...res };
     showSavedFeedback("srt-ingest-saved");
-  }
-}
-
-export function populateBackendPolicySettings(): void {
-  const videoPresetsInput = document.getElementById(
-    "backend-policy-internal-video-presets",
-  ) as HTMLInputElement | null;
-  const hevcToH264Input = document.getElementById(
-    "backend-policy-internal-hevc-to-h264",
-  ) as HTMLInputElement | null;
-  const hlsPreviewInput = document.getElementById(
-    "backend-policy-internal-hls-preview",
-  ) as HTMLInputElement | null;
-  const complexAudioInput = document.getElementById(
-    "backend-policy-internal-complex-audio",
-  ) as HTMLInputElement | null;
-
-  const policy = state.config?.backendPolicy;
-  if (videoPresetsInput) videoPresetsInput.checked = policy?.internalVideoPresets ?? false;
-  if (hevcToH264Input) hevcToH264Input.checked = policy?.internalHevcToH264 ?? false;
-  if (hlsPreviewInput) hlsPreviewInput.checked = policy?.internalHlsPreview ?? false;
-  if (complexAudioInput) complexAudioInput.checked = policy?.internalComplexAudio ?? false;
-}
-
-export async function saveBackendPolicy(): Promise<void> {
-  const videoPresetsInput = document.getElementById(
-    "backend-policy-internal-video-presets",
-  ) as HTMLInputElement | null;
-  const hevcToH264Input = document.getElementById(
-    "backend-policy-internal-hevc-to-h264",
-  ) as HTMLInputElement | null;
-  const hlsPreviewInput = document.getElementById(
-    "backend-policy-internal-hls-preview",
-  ) as HTMLInputElement | null;
-  const complexAudioInput = document.getElementById(
-    "backend-policy-internal-complex-audio",
-  ) as HTMLInputElement | null;
-
-  const backendPolicy: BackendPolicy = {
-    internalVideoPresets: videoPresetsInput?.checked ?? false,
-    internalHevcToH264: hevcToH264Input?.checked ?? false,
-    internalHlsPreview: hlsPreviewInput?.checked ?? false,
-    internalComplexAudio: complexAudioInput?.checked ?? false,
-  };
-
-  const res = await patchConfig({ backendPolicy });
-  if (res) {
-    state.config = { ...state.config, ...res };
-    showSavedFeedback("backend-policy-saved");
   }
 }

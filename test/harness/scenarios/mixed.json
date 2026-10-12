@@ -1632,8 +1632,7 @@
         "configIndex": 1,
         "branchOrder": 0,
         "branchLabel": "source only",
-        "rationale": "branch matrix for source only: backend/egress-count resource attribution using mixed rows",
-        "branchAxis": "@axes.branchBackend",
+        "rationale": "branch matrix for source only: egress-count resource attribution using mixed rows",
         "egressCount": {
           "env": "BRANCH_MATRIX_EGRESS_COUNT",
           "default": 10
@@ -1660,8 +1659,7 @@
         "configIndex": 1,
         "branchOrder": 1,
         "branchLabel": "one transcode family (720p)",
-        "rationale": "branch matrix for one transcode family (720p): backend/egress-count resource attribution using mixed rows",
-        "branchAxis": "@axes.branchBackend",
+        "rationale": "branch matrix for one transcode family (720p): egress-count resource attribution using mixed rows",
         "egressCount": {
           "env": "BRANCH_MATRIX_EGRESS_COUNT",
           "default": 10
@@ -1692,8 +1690,7 @@
         "configIndex": 1,
         "branchOrder": 2,
         "branchLabel": "source + one transcode family",
-        "rationale": "branch matrix for source + one transcode family: backend/egress-count resource attribution using mixed rows",
-        "branchAxis": "@axes.branchBackend",
+        "rationale": "branch matrix for source + one transcode family: egress-count resource attribution using mixed rows",
         "egressCount": {
           "env": "BRANCH_MATRIX_EGRESS_COUNT",
           "default": 10
@@ -1724,8 +1721,7 @@
         "configIndex": 1,
         "branchOrder": 3,
         "branchLabel": "two transcode families (720p + 1080p)",
-        "rationale": "branch matrix for two transcode families (720p + 1080p): backend/egress-count resource attribution using mixed rows",
-        "branchAxis": "@axes.branchBackend",
+        "rationale": "branch matrix for two transcode families (720p + 1080p): egress-count resource attribution using mixed rows",
         "egressCount": {
           "env": "BRANCH_MATRIX_EGRESS_COUNT",
           "default": 10
@@ -1760,8 +1756,7 @@
         "configIndex": 1,
         "branchOrder": 4,
         "branchLabel": "source + two transcode families",
-        "rationale": "branch matrix for source + two transcode families: backend/egress-count resource attribution using mixed rows",
-        "branchAxis": "@axes.branchBackend",
+        "rationale": "branch matrix for source + two transcode families: egress-count resource attribution using mixed rows",
         "egressCount": {
           "env": "BRANCH_MATRIX_EGRESS_COUNT",
           "default": 10
@@ -1785,7 +1780,6 @@
         ],
         "configIndex": 2,
         "rationale": "branch matrix HEVC bridge resource attribution using mixed HEVC source and legacy RTMP source output",
-        "branchAxis": "@axes.branchBackend",
         "egressCount": {
           "env": "BRANCH_MATRIX_EGRESS_COUNT",
           "default": 10
@@ -1880,14 +1874,6 @@
         "8M"
       ],
       "parse": "mbps"
-    },
-    "branchBackend": {
-      "env": "RESTREAM_INTERNAL_VIDEO_PRESETS",
-      "variants": [
-        "external",
-        "internal"
-      ],
-      "default": "external"
     },
     "srtCrypto": {
       "env": "SRT_CRYPTO_VARIANTS",

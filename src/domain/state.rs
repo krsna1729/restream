@@ -16,7 +16,6 @@ use crate::domain::stage::StageKey;
 pub enum StageBackendKind {
     AudioRouter,
     ExternalFfmpeg,
-    InternalFfmpeg,
     HlsSegmenter,
     Recording,
 }

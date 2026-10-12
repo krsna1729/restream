@@ -18,7 +18,6 @@ use crate::application::srt_ingest::SRT_INGEST_GLOBAL_CONFIG_META_KEY;
 use crate::domain::ingest_security::IngestSecurityConfig;
 use crate::domain::srt_ingest::SrtGlobalIngestConfig;
 use crate::domain::transcode_profile::TranscodeProfiles;
-use crate::planner::BackendPolicy;
 
 use super::state::{
     AppState, BOOTSTRAP_PASSWORD_PROMPT_META_KEY, DEFAULT_INGEST_HOST, require_authenticated,
@@ -39,7 +38,6 @@ pub struct ConfigPatchPayload {
     pub recording_settings: Option<crate::domain::recording::RecordingSettings>,
     pub srt_ingest: Option<SrtGlobalIngestConfig>,
     pub transcode_profiles: Option<TranscodeProfiles>,
-    pub backend_policy: Option<BackendPolicy>,
 }
 
 #[derive(Debug, Clone)]
@@ -84,7 +82,6 @@ fn config_response_json(
         "serverName": settings.server_name,
         "ingestHost": settings.ingest_host,
         "dashboardPasswordChangeRecommended": dashboard_password_change_recommended,
-        "backendPolicy": settings.backend_policy,
         "transcodeProfiles": settings.transcode_profiles,
         "pipelines": pipelines,
         "outputs": api_view_models::output_response_json_list(outputs),
@@ -336,18 +333,6 @@ pub async fn config_patch_handler(
         return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save profiles").into_response();
     }
 
-    if let Some(policy) = payload.backend_policy {
-        if state
-            .settings_service
-            .save_backend_policy(policy)
-            .await
-            .is_err()
-        {
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-        state.engine.set_backend_policy(policy);
-    }
-
     let settings = match state.settings_snapshot().await {
         Ok(settings) => settings,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
@@ -359,7 +344,6 @@ pub async fn config_patch_handler(
         "ingestSecurity": settings.ingest_security,
         "recordingSettings": settings.recording_settings,
         "srtIngest": settings.srt_ingest,
-        "backendPolicy": settings.backend_policy,
         "transcodeProfiles": settings.transcode_profiles
     }))
     .into_response()
@@ -417,7 +401,6 @@ mod tests {
             recording_settings: None,
             srt_ingest: None,
             transcode_profiles: None,
-            backend_policy: None,
         };
 
         let response =
@@ -434,7 +417,6 @@ mod tests {
             ingest_security: crate::domain::ingest_security::IngestSecurityConfig::default(),
             recording_settings: crate::domain::recording::RecordingSettings::default(),
             srt_ingest: crate::domain::srt_ingest::SrtGlobalIngestConfig::default(),
-            backend_policy: crate::planner::BackendPolicy::default(),
             transcode_profiles: crate::domain::transcode_profile::TranscodeProfiles::default(),
         };
 

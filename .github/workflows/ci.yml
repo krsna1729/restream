@@ -424,7 +424,7 @@ jobs:
     timeout-minutes: 60
     env:
       ASAN_FILTERS: >-
-        media::avio media::transcoder media::h264_transcoder media::file_ingest
+        media::avio
         media::egress::tls media::egress::backends::compio_tcp
         media::external_transcoder media::timing media::rtmp::listener
         media::rtmp::tests media::tcp_stats runtime_info
@@ -530,40 +530,6 @@ jobs:
         ["mixed.live.srt.h264.a1.bf0","mixed.live.srt.h264.a1.bf2","mixed.live.srt.h264.a2.bf0","mixed.live.srt.h264.a2.bf2","mixed.live.srt.h265.a1.bf0","mixed.live.srt.h265.a1.bf2","mixed.live.srt.h265.a2.bf0","mixed.live.srt.h265.a2.bf2","mixed.live.rtmp.h264.a1.bf0","mixed.live.rtmp.h264.a1.bf2","srt-crypto-matrix","fault.resilience","direct-play"]
     secrets:
       gh_token: ${{ github.token }}
-
-  internal-backend-smoke:
-    name: Internal media backend smoke
-    runs-on: ubuntu-24.04
-    needs: integration-build
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
-        with:
-          name: ci-harness-bin-${{ github.sha }}
-          path: .local/ci-harness-bin
-      - name: Install internal-backend harness binaries
-        run: |
-          mkdir -p target/bench
-          cp .local/ci-harness-bin/restream .local/ci-harness-bin/test_harness target/bench/
-          chmod 0755 target/bench/restream target/bench/test_harness
-      - name: Run internal media backend rollout smoke
-        env:
-          BENCH_BUILD: never
-          GH_TOKEN: ${{ github.token }}
-          INTERNAL_BACKEND_SMOKE_CONTINUE_ON_FAIL: "1"
-          # Hosted runners cannot preserve the SRT sysctls inside the optional
-          # user namespace; keep all live slices on the same host-network
-          # fallback instead of letting this nested runner regress separately.
-          TEST_HARNESS_USE_HOST_NET: "1"
-        run: scripts/ci/run-in-harness-runtime.sh scripts/harness/rollouts/internal-backend-smoke.sh
-      - name: Upload internal media backend artifacts
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: internal-backend-smoke
-          path: .local/artifacts/internal-backend-smoke/
-          if-no-files-found: ignore
 
   playwright:
     name: HLS browser playback E2E

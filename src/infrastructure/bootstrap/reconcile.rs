@@ -125,8 +125,7 @@ impl Reconciler {
             .await;
             stage_inputs.push(output_stage_sweep_input(output, &snapshot));
         }
-        let mut needed_stages: HashSet<StageKey> =
-            collect_needed_stage_keys(stage_inputs, &self.engine.backend_policy());
+        let mut needed_stages: HashSet<StageKey> = collect_needed_stage_keys(stage_inputs);
         needed_stages.extend(self.engine.active_hls_preview_stage_keys().await);
         self.engine
             .sweep_unused_transcoder_stages(&needed_stages)

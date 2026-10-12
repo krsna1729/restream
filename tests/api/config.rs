@@ -191,14 +191,11 @@ async fn config_patch_recording_settings_persists() {
 }
 
 #[tokio::test]
-async fn config_patch_backend_policy_persists_and_updates_runtime() {
-    let (app, pool, engine) = test_app_with_engine().await;
+async fn config_patch_accepts_the_retired_backend_policy_field() {
+    // Dashboards saved before the in-process FFmpeg backends were removed
+    // still send `backendPolicy`; the patch succeeds and the field is gone.
+    let (app, _pool) = test_app().await;
     let cookie = login(&app).await;
-
-    assert_eq!(
-        engine.backend_policy(),
-        restream::planner::BackendPolicy::default()
-    );
 
     let resp = app
         .clone()
@@ -207,32 +204,15 @@ async fn config_patch_backend_policy_persists_and_updates_runtime() {
             "/api/v1/settings",
             &cookie,
             Some(
-                r#"{"backendPolicy":{"internalVideoPresets":true,"internalHevcToH264":false,"internalHlsPreview":true,"internalComplexAudio":false}}"#,
+                r#"{"serverName":"Retired policy","backendPolicy":{"internalVideoPresets":true}}"#,
             ),
         ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
-    assert_eq!(json["backendPolicy"]["internalVideoPresets"], true);
-    assert_eq!(json["backendPolicy"]["internalHevcToH264"], false);
-    assert_eq!(json["backendPolicy"]["internalHlsPreview"], true);
-    assert_eq!(json["backendPolicy"]["internalComplexAudio"], false);
-
-    let expected = restream::planner::BackendPolicy {
-        internal_video_presets: true,
-        internal_hevc_to_h264: false,
-        internal_hls_preview: true,
-        internal_complex_audio: false,
-    };
-    assert_eq!(engine.backend_policy(), expected);
-
-    let stored = restream::application::settings::load_backend_policy(
-        &restream::infrastructure::sqlite_ports::SqliteMetaStore::new(pool),
-        restream::planner::BackendPolicy::default(),
-    )
-    .await;
-    assert_eq!(stored, expected);
+    assert_eq!(json["serverName"], "Retired policy");
+    assert!(json.get("backendPolicy").is_none());
 }
 
 #[tokio::test]

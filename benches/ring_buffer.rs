@@ -314,7 +314,7 @@ fn benchmark_vec_loop_reuse(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark the exact hot-loop pattern fixed in transcoder/h264_transcoder:
+/// Benchmark the burst-pull consumer hot loop:
 /// `Vec::with_capacity(32)` inside the burst arm vs hoisted + `.clear()`.
 ///
 /// Uses `Arc<MediaPacket>` to match the real element type on the hot path.
@@ -343,7 +343,7 @@ fn benchmark_burst_drain_alloc(c: &mut Criterion) {
                 r
             },
             |mut reader| {
-                // This is what the OLD transcoder/h264_transcoder code did:
+                // Unhoisted: allocate inside the burst arm.
                 let mut packets = Vec::with_capacity(32); // ← was inside the arm
                 let _ = reader.pull_burst(&mut packets, 32);
                 for pkt in &packets {

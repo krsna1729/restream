@@ -70,10 +70,6 @@ pub async fn run_app(config: Arc<AppConfig>) {
         external_ffmpeg_permits = config.external_ffmpeg_permits,
         ffmpeg_threads = ?config.ffmpeg_threads,
         recording_threads = ?config.recording_threads,
-        internal_video_presets = config.backend_policy.internal_video_presets,
-        internal_hevc_to_h264 = config.backend_policy.internal_hevc_to_h264,
-        internal_hls_preview = config.backend_policy.internal_hls_preview,
-        internal_complex_audio = config.backend_policy.internal_complex_audio,
         summary = %config.effective_summary(),
         "effective startup configuration",
     );
@@ -113,8 +109,6 @@ pub async fn run_app(config: Arc<AppConfig>) {
     let meta_store = crate::infrastructure::sqlite_ports::SqliteMetaStore::new(pool.clone());
     let sec_config =
         crate::application::ingest_security::load_ingest_security_config(&meta_store).await;
-    let backend_policy =
-        crate::application::settings::load_backend_policy(&meta_store, config.backend_policy).await;
     let security = Arc::new(crate::media::security::IngestSecurityService::new(
         sec_config,
     ));
@@ -168,7 +162,6 @@ pub async fn run_app(config: Arc<AppConfig>) {
     crate::application::transcode_profiles::load_transcode_profiles(&meta_store).await;
 
     let engine = Arc::new(MediaEngine::new_with_config(config.clone()));
-    engine.set_backend_policy(backend_policy);
     let pipeline_lookup: Arc<dyn crate::application::ports::PipelineStore> =
         Arc::new(pipeline_store);
     let ingest_authenticator = Arc::new(

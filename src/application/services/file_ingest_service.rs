@@ -277,42 +277,23 @@ impl FileIngestService {
 
         engine.mark_file_ingest_running(&ingest.id).await;
 
-        if crate::media::file_ingest::use_internal_file_ingest(&engine.config)
-            && !ingest.live_optimized
-        {
-            if let Err(err) = crate::media::file_ingest::spawn_internal_file_ingest(
-                engine.clone(),
-                tokio::runtime::Handle::current(),
-                ingest.id.clone(),
-                pipeline.id.clone(),
+        let runtime = ExternalFileIngestRuntime {
+            engine: engine.clone(),
+            ingest_id: ingest.id.clone(),
+            pipeline_id: pipeline.id.clone(),
+            source: ExternalFileIngestSource {
                 file_path,
-                ingest.start_time.clone(),
-                ingest.loop_flag,
-                ring_buffer,
-                registration,
-            ) {
-                Self::clear_started_ingest_on_failure(&engine, &ingest.id, &pipeline.id).await;
-                return Err(FileIngestStartError::Spawn(err));
-            }
-        } else {
-            let runtime = ExternalFileIngestRuntime {
-                engine: engine.clone(),
-                ingest_id: ingest.id.clone(),
-                pipeline_id: pipeline.id.clone(),
-                source: ExternalFileIngestSource {
-                    file_path,
-                    start_time: ingest.start_time.clone(),
-                    loop_enabled: ingest.loop_flag,
-                    live_optimized: ingest.live_optimized,
-                    target_gop_seconds: ingest.target_gop_seconds,
-                },
-                ring_buffer,
-                registration,
-            };
-            if let Err(err) = start_external_file_ingest(runtime) {
-                Self::clear_started_ingest_on_failure(&engine, &ingest.id, &pipeline.id).await;
-                return Err(FileIngestStartError::Spawn(err));
-            }
+                start_time: ingest.start_time.clone(),
+                loop_enabled: ingest.loop_flag,
+                live_optimized: ingest.live_optimized,
+                target_gop_seconds: ingest.target_gop_seconds,
+            },
+            ring_buffer,
+            registration,
+        };
+        if let Err(err) = start_external_file_ingest(runtime) {
+            Self::clear_started_ingest_on_failure(&engine, &ingest.id, &pipeline.id).await;
+            return Err(FileIngestStartError::Spawn(err));
         }
 
         Ok(ingest)

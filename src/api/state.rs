@@ -239,9 +239,7 @@ impl AppState {
         &self,
     ) -> crate::application::services::ServiceResult<crate::application::settings::SettingsSnapshot>
     {
-        self.settings_service
-            .load_snapshot(&self.security, self.engine.backend_policy())
-            .await
+        self.settings_service.load_snapshot(&self.security).await
     }
 
     pub async fn refresh_srt_ingest_policy_store(

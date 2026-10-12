@@ -377,11 +377,7 @@ async fn dependency_summary(
         }));
     }
 
-    let file_ingest_backend = if state.engine.config.use_internal_file_ingest {
-        "internal"
-    } else {
-        "ffmpeg-subprocess"
-    };
+    let file_ingest_backend = "ffmpeg-subprocess";
     let mut file_ingest = Vec::new();
     for ingest in ingests {
         let media_path = Path::new(&state.media_dir).join(&ingest.filename);

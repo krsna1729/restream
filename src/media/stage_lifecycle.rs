@@ -264,7 +264,7 @@ mod tests {
     #[test]
     fn first_output_can_transition_directly_from_backend_spawned() {
         let lc = StageLifecycle::new(StagePhase::BackendSpawned {
-            backend: StageBackendKind::InternalFfmpeg,
+            backend: StageBackendKind::ExternalFfmpeg,
             pid: None,
         });
 
@@ -278,13 +278,13 @@ mod tests {
     #[test]
     fn backend_spawned_transition_does_not_regress_after_first_input() {
         let lc = StageLifecycle::new(StagePhase::BackendSpawned {
-            backend: StageBackendKind::InternalFfmpeg,
+            backend: StageBackendKind::ExternalFfmpeg,
             pid: None,
         });
 
         lc.record_first_input();
         lc.transition(StagePhase::BackendSpawned {
-            backend: StageBackendKind::InternalFfmpeg,
+            backend: StageBackendKind::ExternalFfmpeg,
             pid: None,
         });
 
@@ -379,7 +379,7 @@ mod tests {
         lc.record_first_input();
 
         lc.transition(StagePhase::BackendSpawned {
-            backend: StageBackendKind::InternalFfmpeg,
+            backend: StageBackendKind::ExternalFfmpeg,
             pid: Some(222),
         });
 
@@ -400,7 +400,7 @@ mod tests {
     #[test]
     fn record_first_input_is_idempotent() {
         let lc = StageLifecycle::new(StagePhase::BackendSpawned {
-            backend: StageBackendKind::InternalFfmpeg,
+            backend: StageBackendKind::ExternalFfmpeg,
             pid: None,
         });
         lc.record_first_input();
@@ -449,11 +449,9 @@ mod tests {
 
     #[test]
     fn new_with_backend_and_current_backend_report_the_constructed_backend() {
-        let lc = StageLifecycle::new_with_backend(
-            StagePhase::Registered,
-            StageBackendKind::InternalFfmpeg,
-        );
-        assert_eq!(lc.current_backend(), StageBackendKind::InternalFfmpeg);
+        let lc =
+            StageLifecycle::new_with_backend(StagePhase::Registered, StageBackendKind::Recording);
+        assert_eq!(lc.current_backend(), StageBackendKind::Recording);
     }
 
     #[test]

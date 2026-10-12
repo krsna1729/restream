@@ -118,31 +118,6 @@ impl StageOutputNormalizer {
     }
 }
 
-pub(crate) enum StageOutputSink {
-    Existing(Box<StageOutputNormalizer>),
-    Ring {
-        out_ring: Arc<RingBuffer>,
-        metrics: Option<Arc<StageMetrics>>,
-    },
-}
-
-impl StageOutputSink {
-    pub(crate) fn from_ring(out_ring: Arc<RingBuffer>, metrics: Option<Arc<StageMetrics>>) -> Self {
-        Self::Ring { out_ring, metrics }
-    }
-
-    pub(crate) fn into_normalizer(self, stream_count: usize) -> StageOutputNormalizer {
-        match self {
-            Self::Existing(normalizer) => *normalizer,
-            Self::Ring { out_ring, metrics } => {
-                let normalizer_metrics = metrics.unwrap_or_else(|| Arc::new(StageMetrics::new()));
-                StageOutputNormalizer::new(out_ring, stream_count, normalizer_metrics)
-                    .with_video_track_count(1)
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,7 +167,7 @@ mod tests {
     fn normalizer_records_first_output_and_marks_stage_producing() {
         let ring = Arc::new(RingBuffer::new(8));
         let lifecycle = Arc::new(StageLifecycle::new(StagePhase::BackendSpawned {
-            backend: StageBackendKind::InternalFfmpeg,
+            backend: StageBackendKind::ExternalFfmpeg,
             pid: None,
         }));
         let mut normalizer = StageOutputNormalizer::new(ring, 1, Arc::new(StageMetrics::new()))

@@ -55,7 +55,6 @@ fn test_env() -> ResourceSweepEnv {
         lifecycle: ResourceSweepLifecycle::Continuous,
         no_cleanup: false,
         srt_crypto: HarnessSrtCrypto::plaintext(),
-        backend_policy_env: Vec::new(),
         rtmps_tls: None,
     }
 }

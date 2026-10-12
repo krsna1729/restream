@@ -139,7 +139,7 @@ fn planned_mixed_stage_count(
     duplicates_per_output: usize,
 ) -> MixedStageCount {
     use restream::domain::stage::StageKind;
-    use restream::planner::{BackendPolicy, PlannedOutput, plan_pipeline_graph};
+    use restream::planner::{PlannedOutput, plan_pipeline_graph};
 
     let outputs = mixed_output_cases_for_input(case)
         .iter()
@@ -158,13 +158,7 @@ fn planned_mixed_stage_count(
             })
         })
         .collect::<Vec<_>>();
-    let plan = plan_pipeline_graph(
-        "pipe",
-        Some(case.expected_video_codec()),
-        &outputs,
-        false,
-        &BackendPolicy::default(),
-    );
+    let plan = plan_pipeline_graph("pipe", Some(case.expected_video_codec()), &outputs, false);
 
     let mut counts = MixedStageCount {
         video: 0,
@@ -267,7 +261,6 @@ async fn run() -> Result<(), String> {
             "msr.dashboard" => msr_dashboard().await,
             "bitrate-sweep" => bitrate_sweep().await,
             "branch-matrix" => branch_matrix().await,
-            "backend-policy-matrix" => backend_policy_matrix().await,
             "srt-crypto-matrix" => srt_crypto_matrix().await,
             other => Err(unknown_command_error(other)),
         }

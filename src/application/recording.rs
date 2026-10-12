@@ -84,8 +84,7 @@ pub async fn spawn_recording_task(
     let cancel_token_for_task = cancel_token.clone();
     let engine_for_task = engine.clone();
     let pipeline_id_for_cleanup = pipeline_id.clone();
-    let backend_policy = engine.backend_policy();
-    let recording_plan = crate::planner::plan_recording_graph(&pipeline_id, &backend_policy);
+    let recording_plan = crate::planner::plan_recording_graph(&pipeline_id);
     let stage_key = recording_plan.terminal_stage;
     let recording_id = format!("recording_{:016x}", rand::random::<u64>());
 

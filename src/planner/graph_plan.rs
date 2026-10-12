@@ -10,7 +10,7 @@ use crate::domain::stage::{StageKey, StageKind};
 use crate::domain::state::StageBackendKind;
 use crate::runtime::graph::{GraphRole, StageGraphPlan};
 
-use super::{BackendPolicy, output_path::OutputPath};
+use super::{output_path::OutputPath, select_backend};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedOutput {
@@ -34,7 +34,6 @@ pub fn plan_pipeline_graph(
     ingest_codec: Option<&str>,
     outputs: &[PlannedOutput],
     hls_preview_active: bool,
-    policy: &BackendPolicy,
 ) -> StageGraphPlan {
     let pipeline_id_typed = PipelineId::new(pipeline_id);
     let terminal_stage = StageKey::new(pipeline_id_typed.clone(), StageKind::Source);
@@ -64,7 +63,7 @@ pub fn plan_pipeline_graph(
         }
 
         for stage_key in output_path.needed_stage_keys(ingest_codec) {
-            let backend = policy.select_backend(&stage_key.kind);
+            let backend = select_backend(&stage_key.kind);
             plan.add_stage(stage_key, backend);
         }
     }
@@ -74,7 +73,7 @@ pub fn plan_pipeline_graph(
         && is_hevc_preview_codec(codec)
     {
         let bridge_key = StageKey::new(pipeline_id_typed.clone(), hevc_source_bridge_kind());
-        let backend = policy.select_backend(&bridge_key.kind);
+        let backend = select_backend(&bridge_key.kind);
         plan.add_stage(bridge_key.clone(), backend);
         if outputs.is_empty() {
             plan.terminal_stage = bridge_key;
@@ -94,19 +93,17 @@ pub fn plan_hls_output_graph(
     pipeline_id: &str,
     ingest_codec: Option<&str>,
     output: &PlannedOutput,
-    policy: &BackendPolicy,
 ) -> StageGraphPlan {
     let mut plan = plan_pipeline_graph(
         pipeline_id,
         ingest_codec,
         std::slice::from_ref(output),
         false,
-        policy,
     );
     let media_terminal = plan.terminal_stage.clone();
     let hls_kind = StageKind::hls_segmenter(media_terminal.kind.clone());
     let hls_key = StageKey::new(PipelineId::new(pipeline_id), hls_kind.clone());
-    plan.add_stage(hls_key.clone(), policy.select_backend(&hls_kind));
+    plan.add_stage(hls_key.clone(), select_backend(&hls_kind));
     plan.terminal_stage = hls_key;
     plan.role = GraphRole::HlsOutput {
         output_id: output.id.clone(),
@@ -122,7 +119,6 @@ pub fn plan_hls_output_graph(
 pub fn plan_hls_preview_graph(
     pipeline_id: &str,
     ingest_codec: Option<&str>,
-    policy: &BackendPolicy,
 ) -> Option<StageGraphPlan> {
     let codec = ingest_codec?;
     let pipeline_id_typed = PipelineId::new(pipeline_id);
@@ -143,10 +139,10 @@ pub fn plan_hls_preview_graph(
     );
     if is_hevc_preview_codec(codec) {
         let bridge_key = StageKey::new(pipeline_id_typed.clone(), media_kind);
-        let backend = policy.select_backend(&bridge_key.kind);
+        let backend = select_backend(&bridge_key.kind);
         plan.add_stage(bridge_key, backend);
     }
-    let hls_backend = policy.select_backend(&terminal_kind);
+    let hls_backend = select_backend(&terminal_kind);
     plan.add_stage(StageKey::new(pipeline_id_typed, terminal_kind), hls_backend);
 
     Some(plan)
@@ -157,7 +153,7 @@ pub fn plan_hls_preview_graph(
 /// Recordings consume the source stage and write an input-scoped media artifact.
 /// The writer itself lives outside the FFmpeg stage runner, but its lifecycle
 /// and diagnostics should still use the shared graph vocabulary.
-pub fn plan_recording_graph(pipeline_id: &str, policy: &BackendPolicy) -> StageGraphPlan {
+pub fn plan_recording_graph(pipeline_id: &str) -> StageGraphPlan {
     let pipeline_id_typed = PipelineId::new(pipeline_id);
     let recording_key = StageKey::new(pipeline_id_typed.clone(), StageKind::recording());
     let mut plan = StageGraphPlan::new(
@@ -170,10 +166,7 @@ pub fn plan_recording_graph(pipeline_id: &str, policy: &BackendPolicy) -> StageG
         StageKey::new(pipeline_id_typed, StageKind::Source),
         StageBackendKind::AudioRouter,
     );
-    plan.add_stage(
-        recording_key,
-        policy.select_backend(&StageKind::recording()),
-    );
+    plan.add_stage(recording_key, select_backend(&StageKind::recording()));
     plan
 }
 
@@ -238,8 +231,7 @@ mod tests {
 
     #[test]
     fn plan_hls_preview_graph_returns_plan_for_hevc() {
-        let policy = BackendPolicy::default();
-        let plan = plan_hls_preview_graph("pipe_1", Some("hevc"), &policy);
+        let plan = plan_hls_preview_graph("pipe_1", Some("hevc"));
         assert!(plan.is_some());
         let plan = plan.unwrap();
         assert_eq!(plan.role, GraphRole::HlsPreview);
@@ -274,8 +266,7 @@ mod tests {
 
     #[test]
     fn plan_hls_preview_graph_models_h264_source_to_segmenter() {
-        let policy = BackendPolicy::default();
-        let plan = plan_hls_preview_graph("pipe_1", Some("h264"), &policy).unwrap();
+        let plan = plan_hls_preview_graph("pipe_1", Some("h264")).unwrap();
 
         assert_eq!(plan.role, GraphRole::HlsPreview);
         assert_eq!(
@@ -296,20 +287,18 @@ mod tests {
 
     #[test]
     fn plan_hls_preview_graph_returns_none_for_missing_codec() {
-        let policy = BackendPolicy::default();
-        assert!(plan_hls_preview_graph("pipe_1", None, &policy).is_none());
+        assert!(plan_hls_preview_graph("pipe_1", None).is_none());
     }
 
     #[test]
     fn plan_pipeline_graph_sets_terminal_stage_from_output_path() {
-        let policy = BackendPolicy::default();
         let output = PlannedOutput::new(
             "out_1",
             OutputConfig::preset("720p").with_audio(AudioRouting::SelectTracks { tracks: vec![0] }),
             "rtmp://example/live",
         );
 
-        let plan = plan_pipeline_graph("pipe_1", Some("hevc"), &[output], false, &policy);
+        let plan = plan_pipeline_graph("pipe_1", Some("hevc"), &[output], false);
 
         assert_eq!(
             plan.terminal_stage,
@@ -325,7 +314,6 @@ mod tests {
 
     #[test]
     fn plan_pipeline_graph_enhanced_rtmp_hevc_skips_codec_edge() {
-        let policy = BackendPolicy::default();
         let output = PlannedOutput::new(
             "out_1",
             OutputConfig::preset("720p")
@@ -334,7 +322,7 @@ mod tests {
             "rtmp://example/live",
         );
 
-        let plan = plan_pipeline_graph("pipe_1", Some("hevc"), &[output], false, &policy);
+        let plan = plan_pipeline_graph("pipe_1", Some("hevc"), &[output], false);
 
         assert!(
             plan.stages
@@ -355,8 +343,7 @@ mod tests {
 
     #[test]
     fn plan_pipeline_graph_h264_preview_only_keeps_source_terminal() {
-        let policy = BackendPolicy::default();
-        let plan = plan_pipeline_graph("pipe_1", Some("h264"), &[], true, &policy);
+        let plan = plan_pipeline_graph("pipe_1", Some("h264"), &[], true);
 
         assert_eq!(
             plan.terminal_stage,
@@ -372,8 +359,7 @@ mod tests {
 
     #[test]
     fn plan_pipeline_graph_hevc_preview_only_reuses_codec_edge() {
-        let policy = BackendPolicy::default();
-        let plan = plan_pipeline_graph("pipe_1", Some("hevc"), &[], true, &policy);
+        let plan = plan_pipeline_graph("pipe_1", Some("hevc"), &[], true);
 
         assert_eq!(
             plan.terminal_stage,
@@ -383,10 +369,9 @@ mod tests {
 
     #[test]
     fn hevc_hls_preview_reuses_legacy_rtmp_codec_edge() {
-        let policy = BackendPolicy::default();
-        let preview = plan_hls_preview_graph("pipe_1", Some("hevc"), &policy).unwrap();
+        let preview = plan_hls_preview_graph("pipe_1", Some("hevc")).unwrap();
         let output = PlannedOutput::new("out_1", OutputConfig::source(), "rtmp://example/live");
-        let pipeline = plan_pipeline_graph("pipe_1", Some("hevc"), &[output], true, &policy);
+        let pipeline = plan_pipeline_graph("pipe_1", Some("hevc"), &[output], true);
         let bridge = hevc_source_bridge_kind();
 
         assert_eq!(
@@ -416,8 +401,7 @@ mod tests {
 
     #[test]
     fn plan_recording_graph_uses_recording_role_and_backend() {
-        let policy = BackendPolicy::default();
-        let plan = plan_recording_graph("pipe_1", &policy);
+        let plan = plan_recording_graph("pipe_1");
 
         assert_eq!(plan.role, GraphRole::Recording);
         assert_eq!(
@@ -435,13 +419,12 @@ mod tests {
 
     #[test]
     fn hls_output_graph_terminates_at_protocol_segmenter() {
-        let policy = BackendPolicy::default();
         let output = PlannedOutput::new(
             "out_1",
             OutputConfig::preset("720p"),
             "https://example.com/live/out.m3u8",
         );
-        let plan = plan_hls_output_graph("pipe_1", Some("hevc"), &output, &policy);
+        let plan = plan_hls_output_graph("pipe_1", Some("hevc"), &output);
 
         assert_eq!(
             plan.role,
@@ -481,14 +464,12 @@ mod tests {
                     output_for_case(index, *video_case, *audio_case, *protocol_case)
                 })
                 .collect::<Vec<_>>();
-            let policy = BackendPolicy::default();
             let ingest_codec = if ingest_is_hevc { Some("hevc") } else { Some("h264") };
             let plan = plan_pipeline_graph(
                 "pipe_prop",
                 ingest_codec,
                 &outputs,
                 false,
-                &policy,
             );
             let stage_keys = plan
                 .stages
@@ -546,9 +527,8 @@ mod tests {
             audio_case in 0_u8..3,
         ) {
             let output = output_for_case(0, video_case, audio_case, 2);
-            let policy = BackendPolicy::default();
             let ingest_codec = if ingest_is_hevc { Some("hevc") } else { Some("h264") };
-            let plan = plan_hls_output_graph("pipe_prop", ingest_codec, &output, &policy);
+            let plan = plan_hls_output_graph("pipe_prop", ingest_codec, &output);
             let stage_keys = plan
                 .stages
                 .iter()
@@ -598,8 +578,7 @@ mod tests {
                 1 => "hevc",
                 _ => "h265",
             };
-            let policy = BackendPolicy::default();
-            let plan = plan_hls_preview_graph("pipe_prop", Some(codec), &policy)
+            let plan = plan_hls_preview_graph("pipe_prop", Some(codec))
                 .expect("known codec should produce a preview graph");
             let stage_keys = plan
                 .stages
