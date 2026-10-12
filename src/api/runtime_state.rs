@@ -69,11 +69,13 @@ pub async fn v1_state_stream_handler(
     // Subscribe before reading history, so no delta falls between them.
     let mut live = hub.subscribe();
     let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
-    // With no client the projector is idle, so the held state may be old:
-    // bring it current first. Connected now, the projector keeps it so.
-    hub.refresh(&state.db, &state.engine).await;
+    let (pool, engine) = (state.db.clone(), state.engine.clone());
 
     tokio::spawn(async move {
+        // With no client the projector is idle, so the held state may be
+        // old: bring it current first (still after subscribing). Connected
+        // now, the projector keeps it so.
+        hub.refresh(&pool, &engine).await;
         let mut sent_through = match since.as_deref() {
             Some(token) => match hub.since(token).await {
                 Since::Deltas(deltas) => {

@@ -59,7 +59,7 @@ impl StateHub {
         let started = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_nanos());
-        Self::with_epoch(format!("{started:x}{:x}", std::process::id()))
+        Self::with_epoch(format!("{started:x}-{:x}", std::process::id()))
     }
 
     pub fn with_epoch(epoch: String) -> Self {
