@@ -68,12 +68,13 @@ export function overallReadiness(rows: readonly ReadinessRow[]): CheckStatus {
 
 export interface ExecutionClass {
   readonly name: string;
-  /** How many run now; null when the engine did not report it. */
+  /** How many there are; null when the engine did not report it. */
   readonly count: number | null;
   readonly unit: string;
 }
 
-/** Each execution class and how many of it the engine reports running. */
+/** Each execution class and how many of it there are: running where the
+ * engine reports a live count, configured where it reports only that. */
 export function executionTopology(
   health: HealthData,
   metrics: SystemMetrics | null,
@@ -81,12 +82,18 @@ export function executionTopology(
   const tokio = health.hostSettings?.find(
     (row) => row.key === "runtime.tokio.worker_threads",
   )?.current;
+  const media = metrics?.mediaExecutor;
   return [
-    { name: "CONTROL", count: typeof tokio === "number" ? tokio : null, unit: "Tokio workers" },
+    {
+      name: "CONTROL",
+      count: typeof tokio === "number" ? tokio : null,
+      unit: "Tokio workers, configured",
+    },
     {
       name: "MEDIA",
-      count: metrics?.mediaExecutor?.configuredWorkers ?? null,
-      unit: "media workers",
+      // The media runtime starts with its first service; until then none run.
+      count: media?.workers?.length ?? null,
+      unit: `media workers running of ${media?.configuredWorkers ?? "--"}`,
     },
     {
       name: "RTMP ingress",

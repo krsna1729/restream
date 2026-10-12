@@ -58,33 +58,54 @@ export function storedForms(file: MediaFile): {
 export type Readiness =
   | { readonly kind: "ready"; readonly detail: string }
   | { readonly kind: "needsReencode"; readonly detail: string }
+  | { readonly kind: "unknown"; readonly detail: string }
   | { readonly kind: "noVideo"; readonly detail: string };
 
 /**
  * Whether a file can feed a live pipeline as it is. A sparse GOP (a gap
- * between keyframes longer than the live target) plays only through a
- * Live Optimized re-encode; a file without a video stream has no keyframes.
+ * between keyframes longer than the live target, within the engine's
+ * tolerance) plays only through a Live Optimized re-encode. The engine
+ * measures spacing only between two keyframes or more, so a file with
+ * fewer is judged here: none, or one in a file longer than the target,
+ * leaves a late joiner without a keyframe.
  */
 export function ingestReadiness(analysis: MediaFileAnalysis): Readiness {
   const target = analysis.liveGopTargetSeconds;
+  const reencode = `use it with Live Optimized, which re-encodes toward ${target} s`;
   if (!analysis.videoCodec) {
     return { kind: "noVideo", detail: "No video stream was found in this file." };
   }
   const max = analysis.maxKeyframeIntervalSec;
+  if (max === null || max === undefined) {
+    if (analysis.keyframeCount === 0) {
+      return { kind: "needsReencode", detail: `No keyframe was found: ${reencode}.` };
+    }
+    const duration = analysis.durationSec;
+    if (analysis.keyframeCount === 1 && duration != null && duration > target) {
+      return {
+        kind: "needsReencode",
+        detail: `Only one keyframe in ${formatSeconds(duration)}: ${reencode}.`,
+      };
+    }
+    return {
+      kind: "unknown",
+      detail: "The keyframe spacing could not be measured.",
+    };
+  }
   if (analysis.sparseForLive) {
     return {
       kind: "needsReencode",
-      detail: `Keyframes are up to ${formatSeconds(max)} apart, more than the ${target} s live target: use it with Live Optimized, which re-encodes toward ${target} s.`,
+      detail: `Keyframes are up to ${formatSeconds(max)} apart, more than the ${target} s live target: ${reencode}.`,
     };
   }
   return {
     kind: "ready",
-    detail: `Keyframes are at most ${formatSeconds(max)} apart, within the ${target} s live target: no re-encode is needed.`,
+    detail: `Keyframes are at most ${formatSeconds(max)} apart, within the engine's tolerance of the ${target} s live target: no re-encode is needed.`,
   };
 }
 
-function formatSeconds(value: number | null | undefined): string {
-  return value === null || value === undefined ? "--" : `${value.toFixed(1)} s`;
+function formatSeconds(value: number): string {
+  return `${value.toFixed(2)} s`;
 }
 
 /** `h:mm:ss`, or `m:ss` under an hour. */

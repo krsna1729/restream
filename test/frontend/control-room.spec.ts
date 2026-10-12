@@ -296,7 +296,7 @@ test("media and system: probe, rename and delete an upload; read the host and it
     await sources.getByRole("button", { name: new RegExp(uploaded) }).click();
     const readiness = page.getByLabel("Ingest readiness");
     await expect(readiness).toContainText("needs Live Optimized");
-    await expect(readiness).toContainText("5.0 s");
+    await expect(readiness).toContainText("5.00 s");
 
     await page.getByLabel("New file name").fill(renamed);
     await page.getByRole("button", { name: "Rename" }).click();
@@ -324,7 +324,7 @@ test("media and system: probe, rename and delete an upload; read the host and it
   await expect(topology.getByText("RTMP ingress").locator("..")).toContainText("1");
   await expect(topology.getByText("SRT ingress").locator("..")).toContainText("1");
   await expect(page.getByRole("region", { name: /SRT ingress owners/ })).toContainText(
-    "No dropped or late work recorded",
+    "No dropped or late work since the engine started",
   );
   await expect(page.getByRole("region", { name: "Build and provenance" })).toContainText(
     "Commit",

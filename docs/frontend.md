@@ -222,15 +222,17 @@ Media (fleet): the media directory (`/media`) split into recordings and
 source files, newest first, with search over every stored name; the selected
 file's stored forms, its probe (`/media/{file}/analysis`, run once on select)
 and whether it can feed a live pipeline as it is (the engine's sparse-GOP
-judgement against its live GOP target); upload, rename and a confirmed
+judgement against its live GOP target; with fewer than two keyframes the
+engine measures no spacing, so none, or one in a file longer than the
+target, needs Live Optimized); upload, rename and a confirmed
 delete (refused while a pipeline ingests the file); and the media disk from
-`/metrics/system`. System (fleet): the host checks from `/engine/health`
-(a warning first), kernel io_uring and TLS capability, the execution classes
-and how many of each the engine reports running (Tokio workers, media
-workers, RTMP and SRT ingress owners, egress fabric shards, FFmpeg
-children), the SRT ingress owners' counters with every non-zero one that
-means lost or late work, and the build, native libraries and SBOM from
-`/engine`.
+`/metrics/system`. System (fleet, `/engine/health` every 10 s): the host
+checks (a warning first), kernel io_uring and TLS capability, the execution
+classes (running media workers of those configured, RTMP and SRT ingress
+owners, egress fabric shards and FFmpeg children as the engine reports them;
+Tokio workers as configured), the SRT ingress owners' counters with every
+non-zero one that means lost or late work since the engine started, and the
+build, native libraries and SBOM from `/engine`.
 
 Proof: `test/frontend/control-room-fleet.test.mjs`,
 `test/frontend/control-room-operate.test.mjs`,

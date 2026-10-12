@@ -77,8 +77,27 @@ test("ingest readiness follows the engine's sparse-GOP judgement and needs video
   assert.equal(ingestReadiness(base).kind, "ready");
   const sparse = ingestReadiness({ ...base, maxKeyframeIntervalSec: 5, sparseForLive: true });
   assert.equal(sparse.kind, "needsReencode");
-  assert.match(sparse.detail, /5\.0 s/);
+  assert.match(sparse.detail, /5\.00 s/);
   assert.equal(ingestReadiness({ ...base, videoCodec: null }).kind, "noVideo");
+});
+
+test("fewer than two keyframes is never called safe: the engine measures no spacing", () => {
+  // What the engine reports below two keyframes: no spacing, not sparse.
+  const base = {
+    videoCodec: "h264",
+    maxKeyframeIntervalSec: null,
+    averageKeyframeIntervalSec: null,
+    sparseForLive: false,
+    liveGopTargetSeconds: 2,
+    durationSec: 600,
+  };
+  assert.equal(ingestReadiness({ ...base, keyframeCount: 0 }).kind, "needsReencode");
+  const one = ingestReadiness({ ...base, keyframeCount: 1 });
+  assert.equal(one.kind, "needsReencode");
+  assert.match(one.detail, /one keyframe in 600\.00 s/);
+  // One keyframe in a clip no longer than the target serves every joiner.
+  assert.equal(ingestReadiness({ ...base, keyframeCount: 1, durationSec: 1.5 }).kind, "unknown");
+  assert.equal(ingestReadiness({ ...base, keyframeCount: 1, durationSec: null }).kind, "unknown");
 });
 
 test("durations read as h:mm:ss, or m:ss under an hour", () => {
@@ -124,20 +143,24 @@ test("the topology shows each class's reported count, and unknown is not zero", 
     egressFabricShards: [{}, {}],
   };
   const metrics = {
-    mediaExecutor: { configuredWorkers: 4 },
+    // Three of four configured media workers run.
+    mediaExecutor: { configuredWorkers: 4, workers: [{}, {}, {}] },
     engine: { externalFfmpegCount: 1 },
   };
+  const topology = executionTopology(health, metrics);
   assert.deepEqual(
-    executionTopology(health, metrics).map((cls) => [cls.name, cls.count]),
+    topology.map((cls) => [cls.name, cls.count]),
     [
       ["CONTROL", 2],
-      ["MEDIA", 4],
+      ["MEDIA", 3],
       ["RTMP ingress", 0],
       ["SRT ingress", 3],
       ["Egress fabric", 2],
       ["FFmpeg", 1],
     ],
   );
+  assert.equal(topology[1].unit, "media workers running of 4");
+  assert.match(topology[0].unit, /configured/);
   assert.ok(executionTopology({}, null).every((cls) => cls.count === null));
 });
 

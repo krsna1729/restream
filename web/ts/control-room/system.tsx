@@ -31,10 +31,15 @@ const CHECK_LABEL: Record<CheckStatus, string> = {
   unknown: "a host check is unknown",
 };
 
+/** How often System reloads `/engine/health`: it samples host settings and
+ * every pipeline, and most of what this page shows changes rarely. */
+const HEALTH_INTERVAL_MS = 10_000;
+
 /** Whether this host suits the engine, what runs, and what this build is.
- * Every number is the engine's report, not a configured expectation. */
+ * Counts are the engine's report; a class it reports only as configured
+ * says so. */
 export function System({ live }: { live: LiveSnapshot }) {
-  const health = usePolled(() => getEngineHealth<HealthData>());
+  const health = usePolled(() => getEngineHealth<HealthData>(), HEALTH_INTERVAL_MS);
   const [status, setStatus] = useState<EngineStatus | null>(null);
   useEffect(() => {
     void getEngineStatus<EngineStatus>().then(setStatus);
@@ -49,7 +54,7 @@ export function System({ live }: { live: LiveSnapshot }) {
       <div className="flex flex-wrap items-center gap-3">
         <h2 className="text-xl font-semibold">System</h2>
         <span className={`badge ${CHECK_BADGE[overall]}`}>{CHECK_LABEL[overall]}</span>
-        <Freshness atMs={health.atMs} />
+        <Freshness atMs={health.atMs} staleAfterMs={health.staleAfterMs} />
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <section className="card bg-base-200" aria-labelledby="system-host">
@@ -147,7 +152,9 @@ function SrtOwners(props: { owner: SrtIngressOwnerHealth | null; restarts: numbe
       <div className="card-body gap-3 p-4">
         <h3 id="system-owners" className="card-title text-base">
           SRT ingress owners
-          <span className="text-sm font-normal opacity-70">summed over every owner</span>
+          <span className="text-sm font-normal opacity-70">
+            summed over every owner; counters since the engine started
+          </span>
         </h3>
         {owner === null ? (
           <p className="text-sm opacity-70">The SRT listener reports no owner.</p>
@@ -180,14 +187,21 @@ function SrtOwners(props: { owner: SrtIngressOwnerHealth | null; restarts: numbe
 
 function Attention({ findings }: { findings: readonly string[] }) {
   if (findings.length === 0) {
-    return <p className="text-sm text-success">No dropped or late work recorded.</p>;
+    return (
+      <p className="text-sm text-success">
+        No dropped or late work since the engine started.
+      </p>
+    );
   }
   return (
-    <ul className="list-inside list-disc text-sm text-warning" aria-label="Owner findings">
-      {findings.map((finding) => (
-        <li key={finding}>{finding}</li>
-      ))}
-    </ul>
+    <div className="text-sm text-warning">
+      <p>Since the engine started:</p>
+      <ul className="list-inside list-disc" aria-label="Owner findings">
+        {findings.map((finding) => (
+          <li key={finding}>{finding}</li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

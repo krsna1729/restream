@@ -440,8 +440,9 @@ export interface SystemMetrics {
     ignoredInterfaces?: string[];
     sampleMs?: number | null;
   };
-  /** MEDIA: the worker pool that runs per-packet media services. */
-  mediaExecutor?: { configuredWorkers?: number };
+  /** MEDIA: the worker pool that runs per-packet media services; `workers`
+   * lists the running ones (none until the first service starts). */
+  mediaExecutor?: { configuredWorkers?: number; workers?: unknown[] };
   ioUring?: { available?: boolean; deploymentTier?: string };
   rtmps?: { ktlsCapabilities?: Record<string, boolean> };
 }

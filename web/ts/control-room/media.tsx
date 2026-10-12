@@ -23,12 +23,14 @@ import type { LiveSnapshot } from "./store.js";
 const READINESS_BADGE = {
   ready: "badge-success",
   needsReencode: "badge-warning",
+  unknown: "badge-ghost",
   noVideo: "badge-error",
 } as const;
 
 const READINESS_LABEL = {
   ready: "safe to use live",
   needsReencode: "needs Live Optimized",
+  unknown: "readiness unknown",
   noVideo: "no video",
 } as const;
 
