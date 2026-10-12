@@ -1351,6 +1351,26 @@ as an external process.
 
 All engineer endpoints require the session cookie.
 
+### `GET /api/v1/measure`
+
+Fixed-shape counters for capacity measurement: the response size does not
+grow with output count. Byte fields are sums over every ring or queue of that
+kind; `delivery` folds every pipeline's per-feed delivery rows (as in
+pipeline telemetry), with `ratioMin` and `jainMin` `null` until an output has
+a delivery sample.
+
+```json
+{
+  "pipelines": 1, "ingests": 1, "egresses": 500, "stages": 0,
+  "activeTranscoderBuffers": 0, "ingestBytesReceived": 123456789,
+  "retainedPayloadBytes": 4194304, "sourceRingPayloadBytes": 4194304,
+  "transcoderRingPayloadBytes": 0, "tsMuxerRingPayloadBytes": 0,
+  "stageInputQueueLenBytes": 0, "stageInputQueueHighWaterBytes": 0,
+  "delivery": { "destinations": 500, "rated": 500, "delivered": 500,
+                "ratioMin": 0.97, "jainMin": 0.9999 }
+}
+```
+
 ### `GET /api/v1/engine/telemetry`
 
 Engine-wide telemetry: all active ingests, processing stages with throughput

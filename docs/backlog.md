@@ -21,7 +21,6 @@ items).
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
 - [Q-035 MEDIA attribution](#q-035-observability-sonnet-attribute-media-pool-time-to-feed-and-stage)
 - [Q-036 enforced runtime truth table](#q-036-docs-sonnet-make-runtime-crossings-an-enforced-truth-table)
-- [Q-037 measurement polling](#q-037-measurement-opus-measure-restream-not-its-status-api)
 - [Q-040 control core](#q-040-architecture-opus-replace-the-1-s-reconcile-sweep-with-commands-and-a-dirty-set)
 - [Q-041 stage ownership](#q-041-architecture-opus-own-stages-by-the-plan-not-a-sweep)
 - [Q-042 runtime truth](#q-042-architecture-opus-one-revisioned-runtime-state-with-delta-events)
@@ -244,19 +243,6 @@ items).
   once led design work to a wrong runtime model.
 - Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
   review).
-
-### Q-037 [measurement] [opus] Measure Restream, not its status API
-- Goal: capacity rungs measure the media path. The harness reads a cheap,
-  fixed-shape counter snapshot, not the full operator payloads.
-- Files: `src/bin/test_harness/resource_sweep/measurement.rs` (each rated
-  sample fetches `/api/v1/engine/telemetry`, `/engine/health` and
-  `/metrics/system`, lines 195-197; delivery adds health and per-pipeline
-  telemetry, 750-787), `src/api/`.
-- Gates: first an interleaved A/B of the polling cost at one rung. If it
-  is material, add `/api/measure` (fixed shape) and a before/after
-  `/api/probe`; rung results stay within noise of the A/B baseline. The
-  external receiver stays the delivery oracle.
-- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
 
 ### Q-040 [architecture] [opus] Replace the 1 s reconcile sweep with commands and a dirty set
 - Goal: changes drive work, not a timer. Commands mark a pipeline dirty;

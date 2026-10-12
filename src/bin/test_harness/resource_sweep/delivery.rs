@@ -36,7 +36,7 @@ pub(super) struct DeliverySample {
     pub(super) offered_bytes: u64,
     pub(super) pipelines: usize,
     /// Restream's own per-feed delivery telemetry at this tick, when the build
-    /// reports it (`/api/v1/pipelines/{id}/telemetry` `delivery`).
+    /// reports it (`/api/v1/measure` `delivery`).
     pub(super) reported: Option<ReportedDelivery>,
 }
 
@@ -173,13 +173,24 @@ pub(super) fn summarize(samples: &[DeliverySample]) -> DeliverySummary {
     }
 }
 
-/// One tick: receiver bytes per destination plus Restream's per-pipeline
-/// publisher bytes. MediaMTX peers report per path; the harness SRT sink
-/// (`MSR_PEER=sink`) reports per connection, so SRT fan-out can be measured
-/// with a receiver that is not the bottleneck.
+/// Fetches `/api/v1/measure` and samples delivery against it.
 pub(super) async fn sample(
     env: &ResourceSweepEnv,
     api: &RampApi,
+    sinks: HarnessSinks<'_>,
+) -> Result<DeliverySample, String> {
+    let measure = api.get_json("/api/v1/measure").await?;
+    sample_with(env, &measure, sinks).await
+}
+
+/// One tick: receiver bytes per destination plus Restream's publisher bytes
+/// and own delivery view from a `/api/v1/measure` snapshot taken this tick.
+/// MediaMTX peers report per path; the harness SRT sink (`MSR_PEER=sink`)
+/// reports per connection, so SRT fan-out can be measured with a receiver
+/// that is not the bottleneck.
+pub(super) async fn sample_with(
+    env: &ResourceSweepEnv,
+    measure: &Value,
     sinks: HarnessSinks<'_>,
 ) -> Result<DeliverySample, String> {
     let client = reqwest::Client::new();
@@ -227,47 +238,23 @@ pub(super) async fn sample(
             }
         }
     }
-    let health = api.get_json("/api/v1/engine/health").await?;
-    let pipelines = health["pipelines"].as_object();
-    let mut reported: Option<ReportedDelivery> = None;
-    for pipeline_id in pipelines.into_iter().flat_map(|pipelines| pipelines.keys()) {
-        let Ok(telemetry) = api
-            .get_json(&format!("/api/v1/pipelines/{pipeline_id}/telemetry"))
-            .await
-        else {
-            continue;
-        };
-        for feed in telemetry["delivery"].as_array().into_iter().flatten() {
-            let (Some(rated), Some(delivered)) =
-                (feed["rated"].as_u64(), feed["delivered"].as_u64())
-            else {
-                continue;
-            };
-            let entry = reported.get_or_insert(ReportedDelivery {
-                ratio_min: f64::INFINITY,
-                jain_min: f64::INFINITY,
-                ..ReportedDelivery::default()
-            });
-            entry.rated += rated as usize;
-            entry.delivered += delivered as usize;
-            if let Some(ratio) = feed["ratioMin"].as_f64() {
-                entry.ratio_min = entry.ratio_min.min(ratio);
-            }
-            if let Some(jain) = feed["jain"].as_f64() {
-                entry.jain_min = entry.jain_min.min(jain);
-            }
-        }
-    }
-    let offered_bytes = pipelines
-        .into_iter()
-        .flat_map(|pipelines| pipelines.values())
-        .filter_map(|pipeline| pipeline["input"]["bytesReceived"].as_u64())
-        .sum();
+    let reported_delivery = &measure["delivery"];
+    let reported =
+        (reported_delivery["destinations"].as_u64().unwrap_or(0) > 0).then(|| ReportedDelivery {
+            rated: reported_delivery["rated"].as_u64().unwrap_or(0) as usize,
+            delivered: reported_delivery["delivered"].as_u64().unwrap_or(0) as usize,
+            ratio_min: reported_delivery["ratioMin"]
+                .as_f64()
+                .unwrap_or(f64::INFINITY),
+            jain_min: reported_delivery["jainMin"]
+                .as_f64()
+                .unwrap_or(f64::INFINITY),
+        });
     Ok(DeliverySample {
         at: Instant::now(),
         destinations,
-        offered_bytes,
-        pipelines: pipelines.map_or(0, |pipelines| pipelines.len()),
+        offered_bytes: measure["ingestBytesReceived"].as_u64().unwrap_or(0),
+        pipelines: measure["pipelines"].as_u64().unwrap_or(0) as usize,
         reported,
     })
 }

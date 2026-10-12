@@ -192,8 +192,9 @@ pub(super) async fn sample_resource_window(
         let thread_count = read_proc_status_kb(stack.restream_pid, "Threads").unwrap_or(0);
         let rss_kb = read_proc_status_kb_checked(stack.restream_pid, "VmRSS", &env.restream_log)?;
         let rollup = read_smaps_rollup(stack.restream_pid)?;
-        let telemetry = stack.api.get_json("/api/v1/engine/telemetry").await?;
-        let health = stack.api.get_json("/api/v1/engine/health").await?;
+        // One fixed-shape snapshot per sample (Q-037): the full telemetry and
+        // health payloads cost enough Restream CPU to bias the measurement.
+        let measure = stack.api.get_json("/api/v1/measure").await?;
         let system = stack.api.get_json("/metrics/system?view=summary").await?;
         let restream_cpus = read_proc_status_text(stack.restream_pid, "Cpus_allowed_list");
         super::packet_contract::record(
@@ -204,39 +205,14 @@ pub(super) async fn sample_resource_window(
             restream_cpus.as_deref(),
         )
         .await?;
-        let accounting = &telemetry["memoryAccounting"];
-        let retained_kb = accounting["retainedPayloadBytes"].as_u64().unwrap_or(0) / 1024;
-        let source_ring_kb = accounting["sourceRings"]
-            .as_array()
-            .unwrap_or(&Vec::new())
-            .iter()
-            .map(|ring| ring["payloadStats"]["payloadBytes"].as_u64().unwrap_or(0))
-            .sum::<u64>()
-            / 1024;
-        let transcoder_ring_kb = accounting["transcoderRings"]
-            .as_array()
-            .unwrap_or(&Vec::new())
-            .iter()
-            .map(|ring| ring["payloadStats"]["payloadBytes"].as_u64().unwrap_or(0))
-            .sum::<u64>()
-            / 1024;
-        let tsmux_ring_kb = accounting["tsMuxerRings"]
-            .as_array()
-            .unwrap_or(&Vec::new())
-            .iter()
-            .map(|ring| ring["payloadStats"]["payloadBytes"].as_u64().unwrap_or(0))
-            .sum::<u64>()
-            / 1024;
-        let avio_queues = &accounting["avioQueues"];
-        let avio_len_kb = avio_queues["totalLenBytes"].as_u64().unwrap_or(0) / 1024;
-        let avio_hwm_kb = avio_queues["inputQueues"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .chain(avio_queues["egressQueues"].as_array().into_iter().flatten())
-            .map(|queue| queue["highWaterBytes"].as_u64().unwrap_or(0))
-            .sum::<u64>()
-            / 1024;
+        let kb = |field: &str| measure[field].as_u64().unwrap_or(0) / 1024;
+        let retained_kb = kb("retainedPayloadBytes");
+        let source_ring_kb = kb("sourceRingPayloadBytes");
+        let transcoder_ring_kb = kb("transcoderRingPayloadBytes");
+        let tsmux_ring_kb = kb("tsMuxerRingPayloadBytes");
+        let avio_len_kb = kb("stageInputQueueLenBytes");
+        let avio_hwm_kb = kb("stageInputQueueHighWaterBytes");
+        let count = |field: &str| measure[field].as_u64().unwrap_or(0) as usize;
         let sample = ResourceSample {
             scenario: meta.scenario.to_string(),
             label: meta.label.clone(),
@@ -268,20 +244,11 @@ pub(super) async fn sample_resource_window(
             tsmux_ring_kb,
             avio_len_kb,
             avio_hwm_kb,
-            active_transcoder_buffers: telemetry["activeTranscoderBuffers"].as_u64().unwrap_or(0),
-            ingests: telemetry["ingests"]
-                .as_array()
-                .map(|v| v.len())
-                .unwrap_or(0),
-            egresses: telemetry["egresses"]
-                .as_array()
-                .map(|v| v.len())
-                .unwrap_or(0),
-            stages: telemetry["stages"].as_array().map(|v| v.len()).unwrap_or(0),
-            pipeline_count: health["pipelines"]
-                .as_object()
-                .map(|v| v.len())
-                .unwrap_or(0),
+            active_transcoder_buffers: measure["activeTranscoderBuffers"].as_u64().unwrap_or(0),
+            ingests: count("ingests"),
+            egresses: count("egresses"),
+            stages: count("stages"),
+            pipeline_count: count("pipelines"),
             unattributed_kb: rss_kb.saturating_sub(retained_kb + avio_len_kb),
         };
         append_line(
@@ -292,7 +259,7 @@ pub(super) async fn sample_resource_window(
             ),
         )?;
         samples.push(sample);
-        if let Ok(delivery) = super::delivery::sample(env, api, sinks).await {
+        if let Ok(delivery) = super::delivery::sample_with(env, &measure, sinks).await {
             delivery_samples.push(delivery);
         }
     }

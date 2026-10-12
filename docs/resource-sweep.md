@@ -54,7 +54,9 @@ The sweep combines:
 
 - OS-level process memory from `/proc/<pid>/status` and `/proc/<pid>/smaps_rollup`
 - CPU deltas from `/proc/<pid>/stat`
-- internal payload accounting from `GET /api/v1/engine/telemetry`
+- internal counters, payload accounting and Restream's own delivery view from
+  `GET /api/v1/measure` (fixed shape, so sampling cost does not grow with
+  output count)
 - child FFmpeg RSS and CPU from `/proc`
 
 For transcode scenarios the CSV/JSON now split CPU into:

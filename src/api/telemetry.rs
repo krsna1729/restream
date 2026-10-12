@@ -494,6 +494,22 @@ pub async fn v1_engine_telemetry_handler(
     Json(crate::api_runtime_views::engine_telemetry(&state.engine).await).into_response()
 }
 
+/// Fixed-shape counters for capacity sampling (Q-037): counts and byte sums
+/// only, so a sample does not pay for the per-entity operator payloads.
+pub async fn v1_measure_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
+    }
+    let pipelines = match super::health::list_dashboard_runtime_pipeline_ids(&state).await {
+        Ok(ids) => ids.len(),
+        Err(error) => return error.into_response(),
+    };
+    Json(crate::api_runtime_views::measure_snapshot(&state.engine, pipelines).await).into_response()
+}
+
 pub async fn v1_pipeline_telemetry_handler(
     State(state): State<Arc<AppState>>,
     Path(pipeline_id): Path<String>,
