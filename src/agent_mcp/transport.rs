@@ -703,6 +703,22 @@ mod tests {
         }
     }
 
+    /// Every agent tool reaches its backend call: none falls through to
+    /// "unknown MCP tool".
+    #[tokio::test]
+    async fn every_agent_tool_dispatches() {
+        let handler = AgentToolHandler::new(Arc::new(DummyBackend));
+        let input = json!({
+            "intent": "probe",
+            "operationId": "op-1",
+            "approvedBy": "probe",
+        });
+        for tool in crate::agent_core::AGENT_TOOLS {
+            let result = handler.dispatch(tool.name, input.clone()).await;
+            assert!(result.is_ok(), "{} did not dispatch: {result:?}", tool.name);
+        }
+    }
+
     #[tokio::test]
     async fn http_initialize_returns_server_info() {
         let handler = AgentToolHandler::new(Arc::new(DummyBackend));
