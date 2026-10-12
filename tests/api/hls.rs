@@ -207,3 +207,215 @@ async fn hls_playlist_route_returns_blocked_stage_cause_when_applicable() {
     assert_eq!(body["code"], "hlsNoSegments");
     assert_eq!(body["blockedBy"]["phase"], "waitingForCapacity");
 }
+
+/// File ingest (an external `ffmpeg` child) feeds the dashboard preview: the
+/// HLS master lists video and all 16 alternate audio renditions, and the
+/// video and audio segments are served.
+#[tokio::test]
+async fn file_ingest_preview_hls_serves_playlist_and_segment() {
+    let (app, cookie, media_dir, pool, _engine) =
+        authenticated_app_with_temp_media_and_engine().await;
+    let pipeline_id = "pipe-file-preview";
+    let stream_key = "file-preview-key";
+    db::create_pipeline(&pool, pipeline_id, "File Preview", stream_key, None, None)
+        .await
+        .expect("create pipeline");
+    std::fs::copy(
+        restream::test_fixtures::checked_in_fixture(
+            "test/fixtures/media-library/colorbar-timer-2v16a.mp4",
+        )
+        .expect("checked-in integration media fixture"),
+        media_dir.join("colorbar-timer-2v16a.mp4"),
+    )
+    .expect("copy fixture into media dir");
+
+    let create = serde_json::json!({
+        "filename": "colorbar-timer-2v16a.mp4",
+        "streamKey": stream_key,
+        "loop": true,
+    });
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            "/api/v1/ingests",
+            &cookie,
+            Some(&create.to_string()),
+        ))
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "create ingest: {}",
+        resp.status()
+    );
+    let ingest_id = body_json(resp).await["id"].as_str().unwrap().to_string();
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            &format!("/api/v1/ingests/{ingest_id}/start"),
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "start ingest: {}",
+        resp.status()
+    );
+
+    let mut playlist_body = None;
+    for _ in 0..40 {
+        let resp = app
+            .clone()
+            .oneshot(auth_req(
+                "GET",
+                &format!("/hls/{pipeline_id}/index.m3u8"),
+                &cookie,
+                None,
+            ))
+            .await
+            .unwrap();
+
+        if resp.status() == StatusCode::OK {
+            let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+            let body = String::from_utf8(bytes.to_vec()).expect("playlist utf8");
+            if body
+                .lines()
+                .any(|line| !line.starts_with('#') && !line.is_empty())
+            {
+                playlist_body = Some(body);
+                break;
+            }
+        }
+
+        sleep(Duration::from_millis(250)).await;
+    }
+
+    let playlist = playlist_body.expect("playlist with at least one segment");
+    let segment = playlist
+        .lines()
+        .find(|line| !line.starts_with('#') && !line.is_empty())
+        .expect("segment path in playlist");
+
+    let mut master_playlist_body = None;
+    for _ in 0..40 {
+        let resp = app
+            .clone()
+            .oneshot(auth_req(
+                "GET",
+                &format!("/hls/{pipeline_id}/master.m3u8"),
+                &cookie,
+                None,
+            ))
+            .await
+            .unwrap();
+
+        if resp.status() == StatusCode::OK {
+            let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+            let body = String::from_utf8(bytes.to_vec()).expect("master playlist utf8");
+            if body.matches("#EXT-X-MEDIA:TYPE=AUDIO").count() >= 16
+                && body.contains("video/index.m3u8")
+                && body.contains("audio/15/index.m3u8")
+            {
+                master_playlist_body = Some(body);
+                break;
+            }
+        }
+
+        sleep(Duration::from_millis(250)).await;
+    }
+
+    let master_playlist =
+        master_playlist_body.expect("master playlist with video and 16 alternate audio tracks");
+    assert_eq!(
+        master_playlist.matches("#EXT-X-MEDIA:TYPE=AUDIO").count(),
+        16
+    );
+    assert!(master_playlist.contains("video/index.m3u8"));
+    assert!(master_playlist.contains("audio/15/index.m3u8"));
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            &format!("/hls/{pipeline_id}/{segment}"),
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let segment_body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert!(
+        !segment_body.is_empty(),
+        "segment payload should not be empty"
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            &format!("/hls/{pipeline_id}/video/index.m3u8"),
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let audio_playlist_resp = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            &format!("/hls/{pipeline_id}/audio/15/index.m3u8"),
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(audio_playlist_resp.status(), StatusCode::OK);
+    let audio_playlist_body = audio_playlist_resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let audio_playlist =
+        String::from_utf8(audio_playlist_body.to_vec()).expect("audio playlist utf8");
+    let audio_segment = audio_playlist
+        .lines()
+        .find(|line| !line.starts_with('#') && !line.is_empty())
+        .expect("audio segment path in playlist");
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            &format!("/hls/{pipeline_id}/audio/15/{audio_segment}"),
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let audio_segment_body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert!(
+        !audio_segment_body.is_empty(),
+        "audio segment payload should not be empty"
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            &format!("/api/v1/ingests/{ingest_id}/stop"),
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "stop ingest: {}", resp.status());
+}

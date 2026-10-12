@@ -16,7 +16,7 @@
 //! ┌─────────────── std::thread (OS threads, catch_unwind) ──────────────┐
 //! │  FFmpeg demuxer           RTMP/SRT ingest → RingBuffer push         │
 //! │  TS recording writer      MemoryQueue → .ts recording file          │
-//! │  FFmpeg transcoder        MemoryQueue → encode → MemoryQueue        │
+//! │  FFmpeg child pipes       ring → stdin; stdout → ring               │
 //! └─────────────────────────────────────────────────────────────────────┘
 //! ```
 //!

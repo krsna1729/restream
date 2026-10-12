@@ -8,6 +8,7 @@
 //! Supports H.264, H.265/HEVC, and multi-track audio.
 
 pub mod audio_router;
+#[forbid(unsafe_code)]
 pub mod avio;
 #[forbid(unsafe_code)]
 pub mod codec;

@@ -154,7 +154,7 @@ fn codec_edge_plan_can_passthrough_audio_tracks() {
 }
 
 #[test]
-fn external_and_internal_stage_plan_share_operation() {
+fn stage_plan_carries_the_stage_operation() {
     let key = StageKey::new("pipe-shared-plan", StageKind::video_preset("720p"));
     let video = VideoMeta {
         codec: "h264".to_string(),

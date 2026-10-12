@@ -217,8 +217,8 @@ What these numbers say:
   RSS and about `12%` total CPU.
 - External 720p transcode is mostly a child-process memory problem. The parent
   grows to `120.3 MB`, but the shared FFmpeg child adds another `166.5 MB`.
-- The HEVC bridge is the in-process CPU cliff. It reaches `158.7 MB` and
-  `71.82%` CPU without any child FFmpeg process.
+- Historical (in-process backend, since removed): the HEVC bridge reached
+  `158.7 MB` and `71.82%` CPU without any child FFmpeg process.
 
 ## Profiling Workflow
 

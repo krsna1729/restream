@@ -24,10 +24,10 @@ fn default_avio_queue_capacity() -> usize {
     DEFAULT_AVIO_QUEUE_CAPACITY
 }
 
-/// Produces a queue's input on the reading thread, on demand (WI11): FFmpeg's
-/// AVIO read callback calls it when the queue runs dry, so a stage's input is
-/// pulled from its source ring on the FFmpeg thread with no producer task or
-/// thread in between.
+/// Produces a queue's input on the reading thread, on demand (WI11): the
+/// external `ffmpeg` stdin-writer thread calls it when the queue runs dry, so
+/// a stage's input is pulled from its source ring on that thread with no
+/// producer task or thread in between.
 pub trait QueueRefill: Send {
     /// Block until more input is available and append it to `out` (which is
     /// empty on entry). Return `false` at end of input or on cancellation;
@@ -334,7 +334,7 @@ impl MemoryQueue {
         }
         let mut inner = crate::sync::lock(&self.inner);
         while inner.buf.is_empty() && !inner.closed {
-            // Use wait_timeout so the FFmpeg AVIO thread is not blocked indefinitely
+            // Use wait_timeout so the reading thread is not blocked indefinitely
             // if the producer panics without calling close().  Poison recovery via
             // unwrap_or_else ensures we don't panic on a poisoned mutex here.
             inner = self

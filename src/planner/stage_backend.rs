@@ -55,7 +55,7 @@ mod tests {
     }
 
     #[test]
-    fn selects_external_ffmpeg_for_video_by_default() {
+    fn selects_external_ffmpeg_for_video_presets() {
         assert_eq!(
             select_backend(&StageKind::video_preset("720p")),
             StageBackendKind::ExternalFfmpeg
@@ -63,14 +63,7 @@ mod tests {
     }
 
     #[test]
-    fn complex_audio_uses_external_by_default() {
-        let stage = StageKind::audio_route("downmix:0", StageKind::source());
-
-        assert_eq!(select_backend(&stage), StageBackendKind::ExternalFfmpeg);
-    }
-
-    #[test]
-    fn preview_uses_external_by_default() {
+    fn selects_external_ffmpeg_for_preview() {
         assert_eq!(
             select_backend(&StageKind::preview("h264", StageKind::source())),
             StageBackendKind::ExternalFfmpeg

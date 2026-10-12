@@ -283,9 +283,8 @@ The current stage families include video presets, HEVC-to-H.264 conversion,
 track selection, and audio remap/downmix. HLS preview reuses those shared
 media stages (the HEVC→H.264 codec edge for HEVC ingest, source otherwise)
 instead of a dedicated preview transcoder. Lightweight track selection is
-native packet routing. Codec-heavy video and complex audio work use the
-configured FFmpeg backend. Backend-selection flags are scoped by stage family
-so enabling one in-process path does not silently switch another.
+native packet routing. Codec-heavy video and complex audio work run in
+external FFmpeg processes.
 
 Stage identity is owned by `src/domain/stage.rs`; dependency resolution lives
 with the engine stage modules. Do not reproduce their string grammar in another
