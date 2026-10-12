@@ -96,6 +96,8 @@ impl ReconcileRequests {
 /// Engine lifecycle events that change what the output pass decides: an
 /// ingest arriving or leaving (outputs start or stop; a departure also once
 /// its grace ends) and an egress or stage ending (retry, or sweep its stages).
+/// `EgressFailed` is not one: it reports each error of a still-active egress
+/// (every upload retry), and the egress ending emits `EgressStopped`.
 pub fn request_pass_for_event(
     requests: &ReconcileRequests,
     event: &crate::events::EventKind,
@@ -112,8 +114,6 @@ pub fn request_pass_for_event(
         }
         EventKind::IngestConnected { .. }
         | EventKind::EgressStopped { .. }
-        | EventKind::EgressFailed { .. }
-        | EventKind::StageFailed { .. }
         | EventKind::StageStopped { .. } => requests.wake(),
         _ => {}
     }

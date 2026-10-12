@@ -71,7 +71,11 @@ impl Reconciler {
     ///   sweep) runs only when requested or due: a mutation or lifecycle
     ///   event, a deadline it scheduled itself (retry backoff, a deferred
     ///   stage sweep), and a slow backstop pass every
-    ///   [`BACKSTOP_INTERVALS`] intervals for anything no trigger covers;
+    ///   [`BACKSTOP_INTERVALS`] intervals for anything no trigger covers.
+    ///   Passes are at least one interval apart, so a storm of events or
+    ///   deadlines (a destination outage) costs no more than the old timer;
+    ///   a request after a quiet interval still runs at once, and one in the
+    ///   gap waits for its end;
     /// - housekeeping that reads no outputs (sessions, fabric sizing,
     ///   recordings, idle HLS, file-ingest reaping) runs every interval.
     pub async fn run(&self, runtime: &mut RuntimeTasks, shutdown: &CancellationToken) {
@@ -83,31 +87,39 @@ impl Reconciler {
         // Both are due at once: converge right after startup.
         let mut next_tick = Instant::now();
         let mut next_backstop = next_tick;
+        let mut next_pass_allowed = next_tick;
 
         loop {
-            let wake = [
-                Some(next_tick),
-                Some(next_backstop),
-                self.requests.next_deadline(),
-            ]
-            .into_iter()
-            .flatten()
-            .min()
-            .unwrap_or(next_tick);
-            if !runtime
-                .wait_for_reconcile_tick(
-                    shutdown,
-                    wake.saturating_duration_since(Instant::now()),
-                    self.requests.woken(),
-                )
-                .await
-            {
+            let gap = Instant::now() < next_pass_allowed;
+            let pass_wake = if gap {
+                // Requests stay pending; the Notify is not polled, so its
+                // permit cannot spin the loop before the gap ends.
+                Some(next_pass_allowed)
+            } else {
+                [Some(next_backstop), self.requests.next_deadline()]
+                    .into_iter()
+                    .flatten()
+                    .min()
+            };
+            let wake = pass_wake.map_or(next_tick, |at| at.min(next_tick));
+            let wait = wake.saturating_duration_since(Instant::now());
+            let alive = if gap {
+                runtime
+                    .wait_for_reconcile_tick(shutdown, wait, std::future::pending())
+                    .await
+            } else {
+                runtime
+                    .wait_for_reconcile_tick(shutdown, wait, self.requests.woken())
+                    .await
+            };
+            if !alive {
                 break;
             }
             let now = Instant::now();
-            if self.requests.take_due(now) || now >= next_backstop {
+            if now >= next_pass_allowed && (self.requests.take_due(now) || now >= next_backstop) {
                 next_backstop = now + backstop;
                 self.output_pass(interval).await;
+                next_pass_allowed = Instant::now() + interval;
             }
             if now >= next_tick {
                 next_tick = now + interval;

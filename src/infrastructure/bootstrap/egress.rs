@@ -40,9 +40,10 @@ impl EgressReconciler {
         }
     }
 
-    /// Starts, stops and retries outputs. Returns how long until the earliest
-    /// output waiting out its retry backoff may start, so the reconciler can
-    /// run then.
+    /// Starts, stops and retries outputs. Returns how long until the next
+    /// pass is needed: the earliest end of a retry backoff, or zero after an
+    /// output exhausted its retries (its stages are swept by the next pass,
+    /// which sees the flag).
     pub async fn reconcile(&self, outputs: &[Output]) -> Option<std::time::Duration> {
         let mut next_retry: Option<u64> = None;
         for output in outputs {
@@ -91,6 +92,7 @@ impl EgressReconciler {
                     .await
                     {
                         Ok(_) => {
+                            next_retry = Some(0);
                             self.last_failed.lock().await.remove(&output.id);
                             self.engine.clear_egress_retry_state(&output.id).await;
                             warn!(

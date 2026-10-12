@@ -260,4 +260,21 @@ fn lifecycle_events_request_the_passes_their_effects_need() {
         "a start changes nothing to converge"
     );
     assert_eq!(requests.next_deadline(), None);
+
+    // Each error of a still-active egress (every upload retry) must not
+    // drive a whole pass; its end does, through EgressStopped.
+    request_pass_for_event(
+        &requests,
+        &EventKind::EgressFailed {
+            pipeline_id: "pipe".into(),
+            output_id: "out".into(),
+            phase: "upload_segment".into(),
+            error: "upload failed".into(),
+        },
+        grace,
+    );
+    assert!(
+        !requests.take_due(Instant::now()),
+        "an egress error is not a pass"
+    );
 }
