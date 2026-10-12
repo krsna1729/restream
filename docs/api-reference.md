@@ -783,8 +783,8 @@ matches.
   `pipelines` and `outputs` (whole entities to insert or replace) and
   `removedPipelines` and `removedOutputs` (ids).
 - `event: heartbeat` (data `{}`): every 20 seconds. A steady system sends no
-  deltas; a client that sees no event for two heartbeat intervals treats the
-  connection as dead and reconnects with `since`.
+  deltas; the dashboard client treats a connection that sends no event for
+  50 seconds (two and a half heartbeats) as dead and reconnects with `since`.
 
 A new connection starts with a snapshot. To resume, send the last event id
 as `?since=<epoch>.<revision>` or `Last-Event-ID`. The server then replays
