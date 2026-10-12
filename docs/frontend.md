@@ -2,6 +2,9 @@
 
 The dashboard's design system, route contract and visual baseline. Source
 lives in `web/ts/` and `web/styles/input.css`; `public/js/` is generated.
+The target operator experience is the
+[control-room mockup](design/control-room-mockup.html) (illustrative data;
+backlog Q-045).
 
 ## Contents
 

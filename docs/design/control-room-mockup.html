@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Restream — Full Operator Control Room</title>
+<style>
+:root{
+  --bg:#061019;--bg2:#08141e;--panel:#0b1924;--panel2:#102331;--panel3:#132b3b;
+  --line:#203846;--line2:#2b4b5d;--text:#edf6fb;--muted:#8aa2b2;--dim:#61798a;
+  --green:#39d39a;--amber:#f2c35e;--red:#ff6d7c;--cyan:#5bd7ff;--blue:#6d9fff;--violet:#a18cff;
+  --r:12px;--shadow:0 10px 28px rgba(0,0,0,.26)
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:linear-gradient(180deg,#051019,#07131d 55%,#061019);color:var(--text);font:13px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+a{color:inherit;text-decoration:none}
+button,input,select{font:inherit}
+button{cursor:pointer}
+.app{display:grid;grid-template-columns:220px 1fr;min-height:100vh}
+.sidebar{position:sticky;top:0;height:100vh;background:linear-gradient(180deg,#08131d,#071018);border-right:1px solid var(--line);padding:15px 12px;overflow:auto}
+.brand{display:flex;gap:10px;align-items:center;padding:4px 7px 14px}
+.logo{width:32px;height:32px;border-radius:9px;background:linear-gradient(135deg,var(--cyan),var(--blue),var(--violet));position:relative;box-shadow:0 0 26px rgba(91,215,255,.18)}
+.logo:after{content:"";position:absolute;inset:8px;border:2px solid white;border-radius:4px}
+.brand h1{font-size:15px;margin:0}.brand small{display:block;font-size:10px;color:var(--muted)}
+.nav-group{margin-top:8px}.nav-label{padding:8px 9px 4px;color:#5f798a;text-transform:uppercase;letter-spacing:.12em;font-size:9px;font-weight:700}
+.nav a{display:flex;align-items:center;gap:10px;padding:9px 10px;margin:3px 0;border-radius:8px;border:1px solid transparent;color:#bcd0dc}
+.nav a:hover{background:#0e1d28;border-color:#193447}
+.nav a .ico{width:18px;text-align:center;color:#8eb1c5}
+.nav a .badge{margin-left:auto;font-size:9px;padding:2px 6px;border:1px solid var(--line2);border-radius:999px;color:var(--muted)}
+.host{margin-top:14px;border:1px solid var(--line);background:#0b1922;border-radius:10px;padding:10px}
+.host .row{display:flex;justify-content:space-between;gap:8px;margin-top:5px;color:var(--muted);font-size:10px}
+.main{min-width:0}
+.topbar{height:60px;position:sticky;top:0;z-index:50;background:rgba(6,16,25,.93);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;padding:0 18px}
+.search{flex:1;max-width:470px;border:1px solid var(--line);background:#0d1b26;border-radius:9px;padding:8px 10px;display:flex;gap:8px;align-items:center;color:var(--muted)}
+.search input{width:100%;border:0;outline:0;background:transparent;color:var(--text)}
+.topbar .right{margin-left:auto;display:flex;gap:8px;align-items:center}.topbtn{border:1px solid var(--line);background:#0f1d27;color:#d7e6ee;border-radius:8px;padding:7px 10px}
+.live{display:inline-flex;gap:6px;align-items:center;color:var(--muted);font-variant-numeric:tabular-nums}.dot{width:7px;height:7px;border-radius:50%;display:inline-block;background:var(--dim)}.dot.ok{background:var(--green)}.dot.warn{background:var(--amber)}.dot.bad{background:var(--red)}.dot.info{background:var(--cyan)}
+.content{padding:18px;max-width:1840px;margin:auto}
+.workspace{scroll-margin-top:72px;margin-bottom:34px;border-top:1px solid rgba(43,75,93,.45);padding-top:18px}
+.workspace:first-child{border-top:0;padding-top:0}
+.ws-head{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;margin-bottom:14px}
+.eyebrow{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--cyan);font-weight:800}
+h2{font-size:24px;margin:3px 0 2px;letter-spacing:-.4px}
+h3{font-size:13px;margin:0}.sub{color:var(--muted);max-width:980px}.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.btn{border:1px solid var(--line2);background:#102230;color:#d9e8f0;border-radius:8px;padding:8px 11px}.btn.primary{background:#1f67cb;border-color:#2f7eea;color:#fff}.btn.good{background:rgba(57,211,154,.1);border-color:rgba(57,211,154,.35);color:#8ae9c3}.btn.danger{background:rgba(255,109,124,.08);border-color:rgba(255,109,124,.3);color:#ff9fa9}
+.chip{display:inline-flex;gap:5px;align-items:center;padding:3px 7px;border:1px solid var(--line2);border-radius:999px;background:#122533;font-size:10px;color:#c0d4df}.chip.good{color:#83e9c0;border-color:rgba(57,211,154,.3);background:rgba(57,211,154,.07)}.chip.warn{color:#ffd985;border-color:rgba(242,195,94,.35);background:rgba(242,195,94,.08)}.chip.bad{color:#ff9da8;border-color:rgba(255,109,124,.35);background:rgba(255,109,124,.08)}.chip.info{color:#8ee6ff;border-color:rgba(91,215,255,.32);background:rgba(91,215,255,.08)}
+.panel{background:linear-gradient(180deg,#0d1b26,#0a1721);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);min-width:0}
+.panel-h{padding:11px 13px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:10px;align-items:center}.panel-b{padding:13px}.meta{font-size:10px;color:var(--muted)}
+.grid{display:grid;gap:10px}.g2{grid-template-columns:repeat(2,minmax(0,1fr))}.g3{grid-template-columns:repeat(3,minmax(0,1fr))}.g4{grid-template-columns:repeat(4,minmax(0,1fr))}.g5{grid-template-columns:repeat(5,minmax(0,1fr))}
+.metric{padding:12px 13px}.metric .label{font-size:10px;color:var(--muted);margin-bottom:5px}.metric .value{font-size:21px;font-weight:720;letter-spacing:-.3px}.metric .foot{font-size:10px;color:var(--muted);margin-top:4px}
+.kicker{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;font-weight:700}.tiny{font-size:10px}.muted{color:var(--muted)}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.num{text-align:right;font-variant-numeric:tabular-nums}
+.bar{height:7px;background:#142a38;border-radius:999px;overflow:hidden}.bar i{height:100%;display:block;border-radius:999px;background:linear-gradient(90deg,var(--green),var(--cyan))}.bar.warn i{background:linear-gradient(90deg,var(--amber),#ff9b67)}.bar.bad i{background:linear-gradient(90deg,var(--red),#ff9d74)}
+table{width:100%;border-collapse:collapse}th{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;text-align:left;padding:8px 9px;border-bottom:1px solid var(--line)}td{padding:9px;border-bottom:1px solid rgba(32,56,70,.7);white-space:nowrap}tbody tr:hover{background:#10202b}tbody tr:last-child td{border-bottom:0}
+.status{display:inline-flex;gap:6px;align-items:center}
+.attn{display:grid;grid-template-columns:18px 1fr auto;gap:8px;padding:9px;border-bottom:1px solid rgba(32,56,70,.65)}.attn:last-child{border-bottom:0}.attn .title{font-weight:650}.attn .detail,.attn .age{font-size:10px;color:var(--muted)}
+.service-row{display:grid;grid-template-columns:150px 1fr 50px;gap:10px;align-items:center;margin:9px 0}.service-row strong{text-align:right}
+.storynote{border:1px dashed #36566a;border-radius:10px;background:rgba(16,34,49,.45);padding:10px 12px;color:#a7bdc9;font-size:10px;margin-top:10px}.storynote b{color:#dbe9f1}
+.tabs{display:flex;gap:4px;padding:7px;border-bottom:1px solid var(--line);overflow:auto}.tabs span{padding:6px 9px;border-radius:7px;color:var(--muted);white-space:nowrap}.tabs .active{background:#132a3a;color:#fff}
+.card-list{display:grid;gap:8px}.mini-card{padding:10px;border:1px solid var(--line);border-radius:9px;background:#0d1b25}.mini-card.active{box-shadow:inset 3px 0 0 var(--green);border-color:rgba(57,211,154,.4)}.mini-card.warn{box-shadow:inset 3px 0 0 var(--amber);border-color:rgba(242,195,94,.35)}.mini-card.bad{box-shadow:inset 3px 0 0 var(--red);border-color:rgba(255,109,124,.35)}
+.kv{display:grid;grid-template-columns:1fr auto;gap:6px 10px;font-size:10px}.kv span:nth-child(odd){color:var(--muted)}.kv span:nth-child(even){text-align:right;font-variant-numeric:tabular-nums}
+.evidence{border-left:3px solid var(--amber);background:rgba(242,195,94,.06);padding:9px 10px;border-radius:0 8px 8px 0}.evidence.good{border-left-color:var(--green);background:rgba(57,211,154,.05)}.evidence.bad{border-left-color:var(--red);background:rgba(255,109,124,.06)}.evidence strong{display:block;margin-bottom:4px}.evidence p{margin:0;color:#cbd9df;font-size:10px}
+.list{margin:6px 0 0;padding-left:16px;color:var(--muted);font-size:10px}.list li{margin:4px 0}
+.spark{height:44px;width:118px}.spark polyline{fill:none;stroke:var(--cyan);stroke-width:2;vector-effect:non-scaling-stroke}.spark path{fill:rgba(91,215,255,.08)}
+.fleet-top{display:grid;grid-template-columns:1.5fr 1fr;gap:10px}.service-strip{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.service-card{padding:9px;border:1px solid var(--line);border-radius:8px;background:#0d1c27}.service-card .top{display:flex;justify-content:space-between;margin-bottom:7px;font-size:10px}
+.two-col{display:grid;grid-template-columns:1.25fr .75fr;gap:10px}.three-col{display:grid;grid-template-columns:250px minmax(0,1fr) 330px;gap:10px}
+.graph-shell{position:relative;min-height:510px;overflow:auto;background:radial-gradient(circle at 48% 38%,rgba(46,88,118,.12),transparent 38%),linear-gradient(rgba(33,55,70,.28) 1px,transparent 1px),linear-gradient(90deg,rgba(33,55,70,.28) 1px,transparent 1px);background-size:auto,24px 24px,24px 24px}
+.graph{position:relative;width:900px;height:500px;margin:auto}
+.edge{position:absolute;z-index:1;height:2px;background:#326f91;transform-origin:0 50%}.edge:after{content:"";position:absolute;right:-1px;top:-3px;border-left:6px solid #326f91;border-top:4px solid transparent;border-bottom:4px solid transparent}
+.node{position:absolute;z-index:2;width:145px;min-height:70px;border:1px solid #2c5067;border-radius:10px;background:linear-gradient(180deg,#112534,#0d1c27);padding:8px;box-shadow:0 8px 20px rgba(0,0,0,.2)}.node.ok{border-color:rgba(57,211,154,.45)}.node.warn{border-color:rgba(242,195,94,.55)}.node.bad{border-color:rgba(255,109,124,.55)}.node .type{font-size:8px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}.node .name{font-weight:650;margin:3px 0}.node .desc{font-size:9px;color:var(--muted)}.node .mini{display:flex;justify-content:space-between;margin-top:6px;font-size:8px;color:#9db4c1}
+.timeline{position:relative;padding-left:20px}.timeline:before{content:"";position:absolute;left:7px;top:4px;bottom:8px;width:1px;background:#2e5065}.ev{position:relative;display:grid;grid-template-columns:70px 1fr;gap:10px;padding:6px 0}.ev:before{content:"";position:absolute;left:-17px;top:11px;width:7px;height:7px;border-radius:50%;background:#67869a;border:2px solid #0a1721}.ev.warn:before{background:var(--amber)}.ev.bad:before{background:var(--red)}.ev.ok:before{background:var(--green)}.ev .t{font-size:9px;color:var(--muted);font-variant-numeric:tabular-nums}.ev .m{font-size:10px}
+.chart{height:220px;position:relative;border:1px solid var(--line);border-radius:8px;background:#08151e;overflow:hidden}.chart .labels{position:absolute;left:8px;top:7px;bottom:7px;width:88px;display:grid;grid-template-rows:repeat(5,1fr);align-items:center;color:var(--muted);font-size:8px}.chart .plot{position:absolute;left:90px;right:8px;top:8px;bottom:8px;background:repeating-linear-gradient(to bottom,transparent 0 38px,rgba(45,75,92,.22) 39px)}.chart svg{width:100%;height:100%}.chart polyline{fill:none;stroke-width:2;vector-effect:non-scaling-stroke}
+.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.field label{display:block;font-size:9px;color:var(--muted);margin-bottom:4px}.field input,.field select{width:100%;border:1px solid var(--line);background:#0b1822;color:var(--text);border-radius:7px;padding:7px}
+.code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:9px;background:#071018;border:1px solid var(--line);border-radius:8px;padding:9px;white-space:pre-wrap;color:#bed2de}
+.asset-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}.asset{border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#0c1923}.thumb{height:96px;background:radial-gradient(circle at 25% 35%,rgba(161,140,255,.62),transparent 22%),radial-gradient(circle at 70% 42%,rgba(91,215,255,.42),transparent 24%),linear-gradient(135deg,#11273a,#0b1722)}.asset .ab{padding:9px}.asset .name{font-weight:650}.asset .meta2{font-size:9px;color:var(--muted);margin-top:3px}
+.exec-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.exec{padding:9px;border:1px solid var(--line);border-radius:8px;background:#0d1b26}.exec .big{font-size:18px;font-weight:720;margin-top:3px}
+.change-step{padding:10px;border:1px solid var(--line);border-radius:9px;background:#0d1c27}.change-step .step{font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}.change-step .name{font-weight:650;margin-top:3px}
+.diff{display:grid;grid-template-columns:1fr 44px 1fr;gap:8px;align-items:start}.diff .pane{border:1px solid var(--line);border-radius:8px;background:#0b1720;padding:9px}.diff .arrow{font-size:22px;color:var(--muted);text-align:center;padding-top:35px}
+footer{padding:22px;color:#627d8e;text-align:center;font-size:9px}
+@media(max-width:1250px){.app{grid-template-columns:180px 1fr}.three-col{grid-template-columns:220px 1fr}.three-col>.panel:last-child{grid-column:1/-1}.fleet-top,.two-col{grid-template-columns:1fr}.service-strip{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:850px){.app{grid-template-columns:1fr}.sidebar{display:none}.content{padding:12px}.g5,.g4,.g3,.g2,.asset-grid,.exec-grid,.service-strip,.form-grid{grid-template-columns:1fr}.three-col{grid-template-columns:1fr}.topbar{padding:0 10px}.search{max-width:none}.ws-head{flex-direction:column}.diff{grid-template-columns:1fr}.diff .arrow{padding:0;transform:rotate(90deg)}}
+</style>
+</head>
+<body>
+<div class="app">
+<aside class="sidebar">
+  <div class="brand"><div class="logo"></div><div><h1>Restream</h1><small>operator control room</small></div></div>
+  <div class="nav">
+    <div class="nav-group"><div class="nav-label">Operate</div>
+      <a href="#fleet"><span class="ico">◉</span>Fleet<span class="badge">24</span></a>
+      <a href="#pipelines"><span class="ico">≡</span>Pipelines<span class="badge">816</span></a>
+      <a href="#operate"><span class="ico">⌘</span>Operate</a>
+      <a href="#inspect"><span class="ico">◎</span>Inspect</a>
+      <a href="#monitor"><span class="ico">⌁</span>Monitor</a>
+    </div>
+    <div class="nav-group"><div class="nav-label">Understand</div>
+      <a href="#incidents"><span class="ico">⚠</span>Incidents<span class="badge">3</span></a>
+      <a href="#capacity"><span class="ico">▥</span>Capacity</a>
+    </div>
+    <div class="nav-group"><div class="nav-label">Manage</div>
+      <a href="#media"><span class="ico">▣</span>Media</a>
+      <a href="#system"><span class="ico">⚙</span>System</a>
+      <a href="#changes"><span class="ico">↭</span>Change Studio</a>
+    </div>
+  </div>
+  <div class="host">
+    <div class="status"><span class="dot ok"></span><b>Runtime ready</b></div>
+    <div class="row"><span>Commit</span><span class="mono">29f3b38</span></div>
+    <div class="row"><span>Kernel</span><span>6.8</span></div>
+    <div class="row"><span>Uptime</span><span>4d 12h</span></div>
+  </div>
+</aside>
+
+<main class="main">
+  <div class="topbar">
+    <div class="search">⌕ <input placeholder="Search pipeline, output, stage, incident, media…"/></div>
+    <div class="right"><button class="topbtn">Command palette ⌘K</button><span class="live"><span class="dot ok"></span><span id="clock">13:42:18 UTC</span></span></div>
+  </div>
+
+  <div class="content">
+    <!-- FLEET -->
+    <section id="fleet" class="workspace">
+      <div class="ws-head">
+        <div><div class="eyebrow">Fleet / Mission control</div><h2>Broadcast plant is healthy, with 3 items requiring attention</h2><div class="sub">This is the NOC view: useful delivery first, then active risk, then capacity headroom. It should tell an operator where to look without opening a metric explorer.</div></div>
+        <div class="actions"><span class="chip good"><span class="dot ok"></span>23 / 24 pipelines healthy</span><span class="chip info">812 / 816 outputs delivering</span><button class="btn">Acknowledge all known</button></div>
+      </div>
+
+      <div class="fleet-top">
+        <div class="panel">
+          <div class="panel-h"><h3>Service-center headroom</h3><span class="meta">current workload · observe-only</span></div>
+          <div class="panel-b">
+            <div class="service-strip">
+              <div class="service-card"><div class="top"><span>Egress shards</span><b style="color:var(--amber)">74%</b></div><div class="bar warn"><i style="width:74%"></i></div></div>
+              <div class="service-card"><div class="top"><span>NIC</span><b>48%</b></div><div class="bar"><i style="width:48%"></i></div></div>
+              <div class="service-card"><div class="top"><span>FFmpeg</span><b>29%</b></div><div class="bar"><i style="width:29%"></i></div></div>
+              <div class="service-card"><div class="top"><span>Memory</span><b>34%</b></div><div class="bar"><i style="width:34%"></i></div></div>
+              <div class="service-card"><div class="top"><span>Disk</span><b>9%</b></div><div class="bar"><i style="width:9%"></i></div></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr auto;gap:14px;margin-top:13px;align-items:end">
+              <div><div class="kicker">Current limiting center</div><div style="font-size:18px;font-weight:720;color:var(--amber);margin:3px 0">EGRESS</div><div class="muted tiny">Hottest shard 0.74 utilization · flow currently healthy · no overload evidence.</div></div>
+              <svg class="spark" viewBox="0 0 120 44" preserveAspectRatio="none"><path d="M0 42 L0 33 L12 31 L24 31 L36 25 L48 27 L60 20 L72 22 L84 16 L96 18 L108 11 L120 12 L120 42 Z"></path><polyline points="0,33 12,31 24,31 36,25 48,27 60,20 72,22 84,16 96,18 108,11 120,12"/></svg>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-h"><h3>Needs attention</h3><span class="meta">ranked by blast radius</span></div>
+          <div class="attn"><div>⚠</div><div><div class="title">Temple Main · SRT input flapping</div><div class="detail">3 disconnects in recent window; currently active</div></div><div class="age">22s</div></div>
+          <div class="attn"><div>⚠</div><div><div class="title">Stage B · YouTube backup retrying</div><div class="detail">attempt 8 / 10 · next retry 4.2s</div></div><div class="age">4s</div></div>
+          <div class="attn"><div>⚠</div><div><div class="title">News HD · one SRT leaf backpressured</div><div class="detail">siblings healthy · delivery ratio 0.834</div></div><div class="age">31s</div></div>
+        </div>
+      </div>
+
+      <div class="grid g4" style="margin-top:10px">
+        <div class="panel metric"><div class="label">Live pipelines</div><div class="value">24</div><div class="foot">23 receiving media now</div></div>
+        <div class="panel metric"><div class="label">Useful egress</div><div class="value">3.7 Gbps</div><div class="foot">812 healthy leaves</div></div>
+        <div class="panel metric"><div class="label">Shared work</div><div class="value">9 stages</div><div class="foot">484 leaves consume shared feeds</div></div>
+        <div class="panel metric"><div class="label">Open incidents</div><div class="value" style="color:var(--amber)">3</div><div class="foot">0 critical · 3 warning</div></div>
+      </div>
+
+      <div class="panel" style="margin-top:10px;overflow:auto">
+        <div class="panel-h"><h3>Fleet pipelines</h3><span class="meta">attention first · then load</span></div>
+        <table><thead><tr><th>Name</th><th>Source</th><th>Standbys</th><th>Outputs</th><th>Health</th><th>Flow</th><th>Limiting center</th><th>Cost</th><th>Changed</th></tr></thead>
+        <tbody>
+          <tr><td><b>Temple Main</b></td><td><span class="status"><span class="dot ok"></span>SRT · 8.1 Mbps</span></td><td>2 / 3</td><td>48 / 48</td><td><span class="chip warn">input unstable</span></td><td>8.1 Mbps → 3.4 Gbps</td><td>Egress</td><td>11%</td><td>22s</td></tr>
+          <tr><td><b>Stage B</b></td><td><span class="status"><span class="dot ok"></span>RTMP · 5.9 Mbps</span></td><td>1 / 1</td><td>23 / 24</td><td><span class="chip warn">1 retrying</span></td><td>5.9 Mbps → 1.2 Gbps</td><td>NIC</td><td>5%</td><td>4s</td></tr>
+          <tr><td><b>News HD</b></td><td><span class="status"><span class="dot ok"></span>SRT bond · 6.2 Mbps</span></td><td>1 / 2</td><td>119 / 120</td><td><span class="chip warn">1 backpressured</span></td><td>6.2 Mbps → 4.1 Gbps</td><td>Egress</td><td>24%</td><td>31s</td></tr>
+          <tr><td><b>Auditorium</b></td><td>RTMP · 4.8 Mbps</td><td>0 / 1</td><td>72 / 72</td><td><span class="chip good">healthy</span></td><td>4.8 Mbps → 2.3 Gbps</td><td>NIC</td><td>4%</td><td>8m</td></tr>
+          <tr><td><b>Archive Feed</b></td><td>File · 12 Mbps</td><td>—</td><td>4 / 4</td><td><span class="chip good">healthy</span></td><td>12 Mbps → 34 Mbps</td><td>FFmpeg</td><td>7%</td><td>16m</td></tr>
+        </tbody></table>
+      </div>
+      <div class="storynote"><b>Judgement available at one glance:</b> useful delivery is intact, the fleet is not capacity-constrained, and the three anomalies have bounded blast radius. An operator should not need to inspect CPU graphs to reach that conclusion.</div>
+    </section>
+
+    <!-- PIPELINES LIST -->
+    <section id="pipelines" class="workspace">
+      <div class="ws-head">
+        <div><div class="eyebrow">Pipelines / Fleet inventory</div><h2>All pipelines</h2><div class="sub">Dense operational inventory for hundreds of pipelines. Search, filter, compare, and jump into a cockpit without card sprawl.</div></div>
+        <div class="actions"><button class="btn">Saved views</button><button class="btn primary">New pipeline</button></div>
+      </div>
+      <div class="panel">
+        <div class="panel-h">
+          <h3>Pipeline inventory</h3>
+          <div class="actions"><span class="chip">Health: all</span><span class="chip">Protocol: all</span><span class="chip">Output state: all</span><button class="btn">Columns</button></div>
+        </div>
+        <div style="overflow:auto">
+          <table><thead><tr><th>Pipeline</th><th>Authoritative source</th><th>Media</th><th>Standbys</th><th>Shared stages</th><th>Outputs</th><th>Useful delivery</th><th>Instability</th><th>Capacity footprint</th><th>Last change</th></tr></thead>
+          <tbody>
+            <tr><td><b>Temple Main</b><div class="muted tiny">pipe_01</div></td><td>SRT · primary</td><td>1080p H.264 / AAC</td><td>2 / 3</td><td>3</td><td>48</td><td>100%</td><td><span class="chip warn">3 input flaps</span></td><td>Egress 11%</td><td>22s</td></tr>
+            <tr><td><b>Stage B</b><div class="muted tiny">pipe_02</div></td><td>RTMP</td><td>1080p H.264 / AAC</td><td>1 / 1</td><td>2</td><td>24</td><td>95.8%</td><td><span class="chip warn">1 output retry</span></td><td>NIC 5%</td><td>4s</td></tr>
+            <tr><td><b>News HD</b><div class="muted tiny">pipe_03</div></td><td>SRT bond</td><td>1080p HEVC / AAC</td><td>1 / 2</td><td>4</td><td>120</td><td>99.2%</td><td><span class="chip warn">1 backpressured</span></td><td>Egress 24%</td><td>31s</td></tr>
+            <tr><td><b>Auditorium</b><div class="muted tiny">pipe_04</div></td><td>RTMP</td><td>720p H.264 / AAC</td><td>0 / 1</td><td>1</td><td>72</td><td>100%</td><td><span class="chip good">stable</span></td><td>NIC 4%</td><td>8m</td></tr>
+            <tr><td><b>Archive Feed</b><div class="muted tiny">pipe_05</div></td><td>File</td><td>2160p HEVC / AAC</td><td>—</td><td>4</td><td>4</td><td>100%</td><td><span class="chip good">stable</span></td><td>FFmpeg 7%</td><td>16m</td></tr>
+          </tbody></table>
+        </div>
+      </div>
+      <div class="grid g3" style="margin-top:10px">
+        <div class="panel"><div class="panel-h"><h3>Protocol mix</h3></div><div class="panel-b"><div class="service-row"><span>SRT outputs</span><div class="bar"><i style="width:56%"></i></div><strong>455</strong></div><div class="service-row"><span>RTMP/RTMPS</span><div class="bar"><i style="width:38%"></i></div><strong>309</strong></div><div class="service-row"><span>HLS PUT</span><div class="bar"><i style="width:8%"></i></div><strong>52</strong></div></div></div>
+        <div class="panel"><div class="panel-h"><h3>Shared-stage efficiency</h3></div><div class="panel-b"><div class="metric"><div class="label">Largest sharing group</div><div class="value">341 leaves</div><div class="foot">one 720p H.264 transform</div></div><div class="evidence good"><strong>Efficient topology</strong><p>484 destinations are consuming shared stage/feed work rather than independent transforms.</p></div></div></div>
+        <div class="panel"><div class="panel-h"><h3>Operational filters</h3></div><div class="panel-b"><div class="card-list"><div class="mini-card warn"><b>Needs attention</b><div class="muted tiny">3 pipelines</div></div><div class="mini-card"><b>Has warm standby</b><div class="muted tiny">17 pipelines</div></div><div class="mini-card"><b>Uses bonded SRT</b><div class="muted tiny">6 pipelines</div></div><div class="mini-card"><b>Recording active</b><div class="muted tiny">4 pipelines</div></div></div></div></div>
+      </div>
+    </section>
+
+    <!-- OPERATE -->
+    <section id="operate" class="workspace">
+      <div class="ws-head">
+        <div><div class="eyebrow">Pipeline / Temple Main / Operate</div><h2>Live pipeline cockpit</h2><div class="sub">The primary action surface: source authority, shared media path, destination groups, previews, and operator actions.</div></div>
+        <div class="actions"><span class="chip good"><span class="dot ok"></span>Running</span><button class="btn">Edit config</button><button class="btn danger">Stop pipeline</button></div>
+      </div>
+      <div class="three-col">
+        <div class="panel">
+          <div class="panel-h"><h3>Source deck</h3><span class="meta">3 / 4 connected</span></div>
+          <div class="panel-b card-list">
+            <div class="mini-card active"><div style="display:flex;justify-content:space-between"><b>Primary SRT</b><span class="chip good">active</span></div><div class="kv" style="margin-top:7px"><span>Rate</span><span>8.1 Mbps</span><span>RTT</span><span>21 ms</span><span>Recv buffer</span><span>14%</span><span>Last media</span><span>12 ms</span></div><button class="btn" style="width:100%;margin-top:8px">Preview</button></div>
+            <div class="mini-card"><div style="display:flex;justify-content:space-between"><b>Encoder B</b><span class="chip info">standby</span></div><div class="kv" style="margin-top:7px"><span>Rate</span><span>8.0 Mbps</span><span>RTT</span><span>24 ms</span><span>Loss</span><span>0.02%</span><span>Preview</span><span>ready</span></div><button class="btn good" style="width:100%;margin-top:8px">Promote</button></div>
+            <div class="mini-card warn"><div style="display:flex;justify-content:space-between"><b>Satellite bond</b><span class="chip warn">degraded leg</span></div><div class="kv" style="margin-top:7px"><span>Connected legs</span><span>2 / 3</span><span>Logical loss</span><span>0</span><span>Wire RTT</span><span>620 ms</span><span>State</span><span>standby</span></div><button class="btn good" style="width:100%;margin-top:8px">Promote</button></div>
+            <div class="mini-card" style="opacity:.58"><b>Input 4</b><div class="muted tiny">RTMP · offline · last seen 2d</div><button class="btn" style="width:100%;margin-top:8px">Configure</button></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-h"><h3>Live media graph</h3><span class="meta">shared work shown once</span></div>
+          <div class="tabs"><span class="active">Graph</span><span>Destinations</span><span>Timeline</span><span>Preview</span></div>
+          <div class="graph-shell">
+            <div class="graph">
+              <div class="edge" style="left:110px;top:94px;width:120px;transform:rotate(17deg)"></div>
+              <div class="edge" style="left:110px;top:184px;width:120px;transform:rotate(-14deg)"></div>
+              <div class="edge" style="left:110px;top:278px;width:120px;transform:rotate(-29deg)"></div>
+              <div class="edge" style="left:300px;top:155px;width:112px"></div>
+              <div class="edge" style="left:504px;top:155px;width:115px;transform:rotate(-27deg)"></div>
+              <div class="edge" style="left:504px;top:155px;width:115px;transform:rotate(27deg)"></div>
+              <div class="edge" style="left:504px;top:155px;width:115px;transform:rotate(58deg)"></div>
+              <div class="edge" style="left:696px;top:108px;width:100px"></div>
+              <div class="edge" style="left:696px;top:218px;width:100px"></div>
+              <div class="edge" style="left:696px;top:330px;width:100px"></div>
+
+              <div class="node ok" style="left:20px;top:50px"><div class="type">ingest</div><div class="name">Primary SRT</div><div class="desc">8.1 Mbps · RTT 21 ms</div><div class="mini"><span>recv 14%</span><span>loss 0/s</span></div></div>
+              <div class="node" style="left:20px;top:140px"><div class="type">standby ingest</div><div class="name">Encoder B</div><div class="desc">8.0 Mbps · preview ready</div><div class="mini"><span>24 ms</span><span>standby</span></div></div>
+              <div class="node warn" style="left:20px;top:232px"><div class="type">bonded standby</div><div class="name">Satellite</div><div class="desc">2 / 3 legs connected</div><div class="mini"><span>wire degraded</span><span>logical intact</span></div></div>
+              <div class="node ok" style="left:215px;top:120px"><div class="type">selection</div><div class="name">Input gate</div><div class="desc">Primary authoritative</div><div class="mini"><span>GOP cache ready</span><span>epoch 48</span></div></div>
+              <div class="node ok" style="left:413px;top:120px"><div class="type">shared buffer</div><div class="name">Source ring</div><div class="desc">37 / 4096 slots</div><div class="mini"><span>42 ms lag</span><span>0 overflow</span></div></div>
+              <div class="node ok" style="left:598px;top:52px"><div class="type">shared transform</div><div class="name">720p H.264</div><div class="desc">341 consumers</div><div class="mini"><span>2,790 pkt/s</span><span>14.3% CPU</span></div></div>
+              <div class="node ok" style="left:598px;top:180px"><div class="type">shared feed</div><div class="name">Source passthrough</div><div class="desc">143 consumers</div><div class="mini"><span>8.1 Mbps</span><span>healthy</span></div></div>
+              <div class="node ok" style="left:598px;top:305px"><div class="type">packetizer</div><div class="name">MPEG-TS mux</div><div class="desc">113 consumers</div><div class="mini"><span>0 overflow</span><span>healthy</span></div></div>
+              <div class="node ok" style="left:796px;top:52px"><div class="type">egress group</div><div class="name">RTMP / RTMPS</div><div class="desc">285 / 285 delivering</div><div class="mini"><span>p50 24 ms</span><span>4 shards</span></div></div>
+              <div class="node warn" style="left:796px;top:180px"><div class="type">egress group</div><div class="name">SRT</div><div class="desc">112 / 113 delivering</div><div class="mini"><span>1 backpressured</span><span>3 shards</span></div></div>
+              <div class="node ok" style="left:796px;top:305px"><div class="type">egress group</div><div class="name">HLS PUT</div><div class="desc">4 / 4 delivering</div><div class="mini"><span>p99 0.21 s</span><span>healthy</span></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-h"><h3>Selected · SRT group</h3><span class="chip warn">attention</span></div>
+          <div class="panel-b">
+            <div class="kicker">Useful delivery</div><div class="kv" style="margin-top:7px"><span>Destinations</span><span>112 / 113</span><span>Min delivery ratio</span><span style="color:var(--amber)">0.834</span><span>Worst feed lag</span><span style="color:var(--amber)">147</span><span>Recent resyncs</span><span>2</span></div>
+            <div class="kicker" style="margin-top:13px">Execution owner</div><div class="kv" style="margin-top:7px"><span>Fabric shards</span><span>3</span><span>Hottest shard</span><span>0.51</span><span>Command depth</span><span>2 / 1024</span><span>Progress age</span><span>2.1 ms</span></div>
+            <div class="evidence" style="margin-top:13px"><strong>Why this is warning</strong><p>One leaf is falling behind while its shared feed and owning shard remain healthy. The evidence points downstream of the shard, at the destination/network path.</p></div>
+            <ul class="list"><li>112 sibling leaves delivering normally</li><li>shared MPEG-TS feed has no overflow</li><li>shard command queue nearly empty</li><li>leaf send buffer and feed lag growing</li></ul>
+            <button class="btn primary" style="width:100%;margin-top:9px">Open destination detail</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:10px;overflow:auto">
+        <div class="panel-h"><h3>Destination matrix</h3><div class="actions"><span class="chip">All 484</span><span class="chip warn">Attention 2</span><span class="chip">SRT 113</span><span class="chip bad">Retrying 1</span></div></div>
+        <table><thead><tr><th>Destination</th><th>Protocol</th><th>Desired</th><th>Actual</th><th>Phase</th><th>Delivery</th><th>Feed lag</th><th>Transport evidence</th><th>Shard</th><th>Recent state</th></tr></thead>
+          <tbody>
+            <tr><td>YouTube Main</td><td>SRT</td><td>running</td><td><span class="status"><span class="dot ok"></span>running</span></td><td>sending</td><td>99.8%</td><td>1</td><td>RTT 18 ms · send buf 41 KiB</td><td>0</td><td>stable</td></tr>
+            <tr><td>Partner A</td><td>SRT</td><td>running</td><td><span class="status"><span class="dot warn"></span>running</span></td><td>sending</td><td style="color:var(--amber)">83.4%</td><td style="color:var(--amber)">147</td><td>send buf ↑ · retrans 3/s</td><td>2</td><td><span class="chip warn">backpressured</span></td></tr>
+            <tr><td>Facebook</td><td>RTMP</td><td>running</td><td><span class="status"><span class="dot ok"></span>running</span></td><td>publishing</td><td>99.7%</td><td>2</td><td>RTT 31 ms · cwnd healthy</td><td>1</td><td>stable</td></tr>
+            <tr><td>DR SRT</td><td>SRT</td><td>running</td><td><span class="status"><span class="dot bad"></span>retrying</span></td><td>failed</td><td>—</td><td>—</td><td>connection reset</td><td>1</td><td><span class="chip bad">8 / 10 retries</span></td></tr>
+            <tr><td>Akamai Push</td><td>HLS</td><td>running</td><td><span class="status"><span class="dot ok"></span>running</span></td><td>uploading</td><td>100%</td><td>—</td><td>p99 segment lag 0.21s</td><td>—</td><td>stable</td></tr>
+          </tbody></table>
+      </div>
+    </section>
+
+    <!-- INSPECT -->
+    <section id="inspect" class="workspace">
+      <div class="ws-head">
+        <div><div class="eyebrow">Pipeline / Temple Main / Inspect</div><h2>Execution and resource anatomy</h2><div class="sub">This is the engineering view underneath the cockpit. Every node tells you who owns it, whether its numbers are measured or derived, and where backlog starts.</div></div>
+        <div class="actions"><span class="chip">scope: Temple Main</span><button class="btn">Global resource map</button></div>
+      </div>
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-h"><h3>Resource map</h3><span class="meta">top nodes by pressure</span></div>
+          <div style="overflow:auto"><table><thead><tr><th>Node</th><th>Kind</th><th>Execution</th><th>CPU</th><th>Memory</th><th>Confidence</th><th>Threads</th><th>Hotspot</th></tr></thead>
+            <tbody>
+              <tr><td><b>720p H.264</b></td><td>stage</td><td>child_process</td><td>14.3%</td><td>94 MiB</td><td><span class="chip good">measured</span></td><td>1 child</td><td>processing</td></tr>
+              <tr><td><b>Source ring</b></td><td>source_ring</td><td>shared</td><td>—</td><td>18.3 MiB</td><td><span class="chip info">derived</span></td><td>0</td><td>retained payload</td></tr>
+              <tr><td><b>audio route</b></td><td>stage</td><td>tokio_task</td><td>—</td><td>3.4 MiB</td><td><span class="chip info">derived</span></td><td>shared</td><td>—</td></tr>
+              <tr><td><b>MPEG-TS packetizer</b></td><td>stage</td><td>media_worker</td><td>—</td><td>6.2 MiB</td><td><span class="chip info">derived</span></td><td>shared</td><td>—</td></tr>
+              <tr><td><b>SRT Partner A</b></td><td>egress</td><td>shard_thread</td><td>—</td><td>188 KiB queue</td><td><span class="chip info">derived</span></td><td>shared</td><td><span class="chip warn">backpressure</span></td></tr>
+            </tbody></table></div>
+        </div>
+        <div class="panel">
+          <div class="panel-h"><h3>Selected node · 720p H.264</h3><span class="chip good">healthy</span></div>
+          <div class="panel-b">
+            <div class="grid g2">
+              <div class="metric panel" style="box-shadow:none"><div class="label">Consumers</div><div class="value">341</div><div class="foot">shared output leaves</div></div>
+              <div class="metric panel" style="box-shadow:none"><div class="label">CPU</div><div class="value">14.3%</div><div class="foot">measured child PID</div></div>
+              <div class="metric panel" style="box-shadow:none"><div class="label">Packet rate</div><div class="value">2,790/s</div><div class="foot">steady</div></div>
+              <div class="metric panel" style="box-shadow:none"><div class="label">Average work</div><div class="value">51 µs</div><div class="foot">per input packet</div></div>
+            </div>
+            <div class="kv" style="margin-top:12px"><span>Lifecycle phase</span><span>running</span><span>Backend</span><span>external FFmpeg</span><span>Backend PID</span><span>44123</span><span>Input queue</span><span>12 / 4096 KiB</span><span>Blocked writes</span><span>0</span><span>Payload retained</span><span>9.2 MiB</span></div>
+            <div class="evidence good" style="margin-top:12px"><strong>Not a bottleneck</strong><p>Packets in/out are advancing, no queue growth is visible, and child-process CPU remains below its service limit.</p></div>
+          </div>
+        </div>
+      </div>
+      <div class="grid g3" style="margin-top:10px">
+        <div class="panel"><div class="panel-h"><h3>Source ring</h3><span class="chip good">healthy</span></div><div class="panel-b"><div class="kv"><span>Fill</span><span>37 / 4096</span><span>Estimated depth</span><span>1.46 s</span><span>Readers</span><span>346</span><span>Max reader lag</span><span>42 ms</span><span>Reader overflows</span><span>0</span><span>Retained payload</span><span>18.3 MiB</span></div></div></div>
+        <div class="panel"><div class="panel-h"><h3>Egress shard 2</h3><span class="chip good">healthy</span></div><div class="panel-b"><div class="kv"><span>Protocol</span><span>SRT</span><span>Outputs</span><span>39</span><span>Progress age</span><span>2.1 ms</span><span>Command depth</span><span>2 / 1024</span><span>Media ticks</span><span>1.92M</span><span>State</span><span>healthy</span></div></div></div>
+        <div class="panel"><div class="panel-h"><h3>Attribution confidence</h3></div><div class="panel-b"><div class="evidence good"><strong>Measured</strong><p>Process RSS, child-process RSS/CPU, process thread count, FD count.</p></div><div class="evidence" style="margin-top:8px;border-left-color:var(--cyan)"><strong>Derived</strong><p>Ring payload memory, AVIO queue memory, stage processing counters.</p></div><div class="evidence" style="margin-top:8px;border-left-color:#61798a"><strong>Unmeasured</strong><p>Per-shard CPU and shared Tokio-task CPU are not directly attributable yet.</p></div></div></div>
+      </div>
+    </section>
+
+    <!-- MONITOR -->
+    <section id="monitor" class="workspace">
+      <div class="ws-head">
+        <div><div class="eyebrow">Pipeline / Temple Main / Monitor</div><h2>Correlated live telemetry</h2><div class="sub">Signals that matter are aligned on the same time axis: useful delivery, transport, queues, shared-stage progress and execution pressure.</div></div>
+        <div class="actions"><span class="chip">15 min</span><span class="chip">5 s resolution</span><button class="btn">Pause</button><button class="btn">Compare</button></div>
+      </div>
+      <div class="panel">
+        <div class="panel-h"><h3>Operational correlation</h3><span class="meta">same clock · same incident cursor</span></div>
+        <div class="panel-b">
+          <div class="chart">
+            <div class="labels"><span>Input rate</span><span>Ring lag</span><span>SRT RTT</span><span>Shard delay</span><span>Delivery</span></div>
+            <div class="plot"><svg viewBox="0 0 700 200" preserveAspectRatio="none">
+              <polyline stroke="#5bd7ff" points="0,15 80,16 160,14 230,17 300,16 350,44 385,18 460,16 540,15 620,16 700,15"/>
+              <polyline stroke="#ff9b67" points="0,55 80,54 160,55 230,56 300,58 350,91 390,60 460,54 540,55 620,55 700,54"/>
+              <polyline stroke="#f2c35e" points="0,95 80,95 160,96 230,94 300,97 350,118 390,100 460,95 540,94 620,95 700,95"/>
+              <polyline stroke="#a18cff" points="0,135 80,136 160,134 230,135 300,135 350,145 390,136 460,134 540,135 620,135 700,134"/>
+              <polyline stroke="#39d39a" points="0,176 80,175 160,176 230,175 300,176 350,192 390,179 460,175 540,175 620,176 700,175"/>
+            </svg></div>
+          </div>
+          <div class="grid g5" style="margin-top:10px">
+            <div class="mini-card"><div class="kicker">Input rate</div><b>8.1 Mbps</b><div class="muted tiny">last 5s steady</div></div>
+            <div class="mini-card"><div class="kicker">Max reader lag</div><b>42 ms</b><div class="muted tiny">p99 47 ms</div></div>
+            <div class="mini-card"><div class="kicker">SRT RTT</div><b>21 ms</b><div class="muted tiny">p95 26 ms</div></div>
+            <div class="mini-card"><div class="kicker">Shard progress</div><b>2.1 ms</b><div class="muted tiny">healthy</div></div>
+            <div class="mini-card warn"><div class="kicker">Worst delivery</div><b>83.4%</b><div class="muted tiny">Partner A only</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="grid g3" style="margin-top:10px">
+        <div class="panel"><div class="panel-h"><h3>Input transport</h3></div><div class="panel-b"><div class="kv"><span>Protocol</span><span>SRT</span><span>RTT</span><span>21 ms</span><span>Receive rate</span><span>8.1 Mbps</span><span>Recv buffer</span><span>14%</span><span>Loss / s</span><span>0</span><span>Retrans / s</span><span>2</span></div></div></div>
+        <div class="panel"><div class="panel-h"><h3>Shared media path</h3></div><div class="panel-b"><div class="kv"><span>Source ring</span><span>37 / 4096</span><span>720p stage</span><span>2,790 pkt/s</span><span>TS packetizer</span><span>healthy</span><span>Reader overflow</span><span>0</span><span>Blocked AVIO writes</span><span>0</span></div></div></div>
+        <div class="panel"><div class="panel-h"><h3>Destination outlier</h3><span class="chip warn">Partner A</span></div><div class="panel-b"><div class="kv"><span>Offered</span><span>8.1 Mbps</span><span>Delivered</span><span>6.75 Mbps</span><span>Ratio</span><span>0.834</span><span>Feed lag</span><span>147</span><span>SRT send buf</span><span>188 KiB</span><span>Retrans</span><span>3/s</span></div></div></div>
+      </div>
+      <div class="storynote"><b>Telemetry end-state:</b> this view assumes bounded rolling history from the backend. Today many of these values already exist as snapshots; the missing ingredient is aligned retention so the UI can show which signal moved first.</div>
+    </section>
+
+    <!-- INCIDENTS -->
+    <section id="incidents" class="workspace">
+      <div class="ws-head">
+        <div><div class="eyebrow">Incidents</div><h2>Correlated operational history</h2><div class="sub">An incident is not “an alert row.” It is a bounded period with affected entities, evidence, timeline, current judgement, blast radius and recovery state.</div></div>
+        <div class="actions"><span class="chip warn">3 open</span><span class="chip">6 resolved</span><button class="btn">Last 1h</button><button class="btn">Export evidence</button></div>
+      </div>
+      <div class="three-col" style="grid-template-columns:310px 1fr 360px">
+        <div class="panel">
+          <div class="panel-h"><h3>Incident queue</h3><span class="meta">impact-ranked</span></div>
+          <div class="mini-card warn" style="border-radius:0;border-left:0;border-right:0"><b>Primary SRT instability</b><div class="muted tiny">Temple Main · open 4m 21s</div><div class="tiny" style="margin-top:6px">3 publisher disconnects; standby remains ready.</div></div>
+          <div class="mini-card warn" style="border-radius:0;border-left:0;border-right:0"><b>YouTube backup retry storm</b><div class="muted tiny">Stage B · open 4m 12s</div><div class="tiny" style="margin-top:6px">8 failed connects, nearing retry ceiling.</div></div>
+          <div class="mini-card warn" style="border-radius:0;border-left:0;border-right:0"><b>SRT delivery degradation</b><div class="muted tiny">News HD · open 6m 33s</div><div class="tiny" style="margin-top:6px">One leaf falling behind; siblings healthy.</div></div>
+          <div class="mini-card" style="border-radius:0;border-left:0;border-right:0"><b>Encoder failover</b><div class="muted tiny">Auditorium · resolved 12:48</div><div class="tiny" style="margin-top:6px">Primary disconnected; backup promoted in 742 ms.</div></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-h"><h3>Primary SRT instability</h3><span class="chip warn">open</span></div>
+          <div class="panel-b">
+            <div class="evidence"><strong>Current judgement</strong><p>Logical media is healthy now, but the primary publisher has disconnected three times in the recent flap window. Downstream remained healthy after failover.</p></div>
+            <div class="timeline" style="margin-top:10px">
+              <div class="ev warn"><div class="t">13:41:02.188</div><div class="m">Wire loss rises on satellite bond leg</div></div>
+              <div class="ev warn"><div class="t">13:41:03.021</div><div class="m">Primary input transport classified degraded</div></div>
+              <div class="ev"><div class="t">13:41:04.102</div><div class="m">Encoder B reconnects and enters standby</div></div>
+              <div class="ev bad"><div class="t">13:41:08.912</div><div class="m">Primary publisher disconnected</div></div>
+              <div class="ev warn"><div class="t">13:41:08.913</div><div class="m">Disconnect grace begins · 1.9 s remaining</div></div>
+              <div class="ev"><div class="t">13:41:09.101</div><div class="m">Operator promotes Encoder B</div></div>
+              <div class="ev"><div class="t">13:41:09.135</div><div class="m">Input gate awaiting keyframe</div></div>
+              <div class="ev ok"><div class="t">13:41:09.842</div><div class="m">Cached GOP replay starts; Encoder B active</div></div>
+              <div class="ev ok"><div class="t">13:41:10.110</div><div class="m">All outputs delivering again</div></div>
+            </div>
+            <div class="chart" style="height:185px;margin-top:10px">
+              <div class="labels"><span>Input</span><span>Recv buf</span><span>RTT</span><span>Ring lag</span><span>Delivery</span></div>
+              <div class="plot"><svg viewBox="0 0 700 165" preserveAspectRatio="none">
+                <polyline stroke="#5bd7ff" points="0,14 90,14 180,15 270,16 340,46 370,18 460,15 560,15 700,14"/>
+                <polyline stroke="#a18cff" points="0,48 90,48 180,50 270,50 340,79 380,51 470,48 570,48 700,48"/>
+                <polyline stroke="#f2c35e" points="0,82 90,83 180,82 270,84 340,108 380,88 470,82 570,82 700,82"/>
+                <polyline stroke="#ff9b67" points="0,116 90,115 180,116 270,118 340,140 385,119 470,115 570,116 700,115"/>
+                <polyline stroke="#39d39a" points="0,150 90,149 180,150 270,150 340,163 385,153 470,149 570,150 700,149"/>
+              </svg></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-h"><h3>Evidence packet</h3><span class="meta">human-readable</span></div>
+          <div class="panel-b">
+            <div class="kicker">Affected</div><div class="tiny" style="margin-top:4px">Pipeline: Temple Main · Input: primary SRT</div>
+            <div class="kicker" style="margin-top:12px">What failed</div><div class="tiny" style="margin-top:4px">Publisher continuity: 3 disconnects inside flap window.</div>
+            <div class="kicker" style="margin-top:12px">What did not fail</div><ul class="list"><li>source ring never overflowed</li><li>egress shards kept making progress</li><li>shared transforms stayed healthy</li><li>delivery recovered above 0.98 after promotion</li></ul>
+            <div class="kicker" style="margin-top:12px">Evidence confidence</div><div class="kv" style="margin-top:6px"><span>Disconnect events</span><span>measured</span><span>SRT quality</span><span>measured</span><span>Ring continuity</span><span>derived</span><span>Destination delivery</span><span>measured</span></div>
+            <div class="kicker" style="margin-top:12px">Operator action</div><div class="evidence good" style="margin-top:6px"><strong>Keep Encoder B active</strong><p>Investigate the primary publisher/network path. Do not restart egress: downstream is healthy.</p></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CAPACITY -->
+    <section id="capacity" class="workspace">
+      <div class="ws-head">
+        <div><div class="eyebrow">Capacity</div><h2>Service-center headroom and scenario planning</h2><div class="sub">Capacity is not one CPU number. The screen exposes which service center is closest to saturation and how a topology change moves each center.</div></div>
+        <div class="actions"><span class="chip info">observe-only model</span><button class="btn">Calibration provenance</button><button class="btn primary">New scenario</button></div>
+      </div>
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-h"><h3>Current service centers</h3><span class="meta">24 pipelines · 816 outputs</span></div>
+          <div class="panel-b">
+            <div class="grid g4">
+              <div class="metric panel" style="box-shadow:none"><div class="label">Ingress</div><div class="value">2,812 pps</div><div class="foot">21.4 Mbps</div></div>
+              <div class="metric panel" style="box-shadow:none"><div class="label">Egress work</div><div class="value">2.29M pps</div><div class="foot">fanout-amplified</div></div>
+              <div class="metric panel" style="box-shadow:none"><div class="label">Shared stages</div><div class="value">9</div><div class="foot">4 FFmpeg-backed</div></div>
+              <div class="metric panel" style="box-shadow:none"><div class="label">Shards</div><div class="value">7</div><div class="foot">3 SRT · 4 RTMP</div></div>
+            </div>
+            <div class="service-row"><span>Egress shards</span><div class="bar warn"><i style="width:74%"></i></div><strong style="color:var(--amber)">74%</strong></div>
+            <div class="service-row"><span>NIC</span><div class="bar"><i style="width:48%"></i></div><strong>48%</strong></div>
+            <div class="service-row"><span>FFmpeg</span><div class="bar"><i style="width:29%"></i></div><strong>29%</strong></div>
+            <div class="service-row"><span>Memory</span><div class="bar"><i style="width:34%"></i></div><strong>34%</strong></div>
+            <div class="service-row"><span>Disk</span><div class="bar"><i style="width:9%"></i></div><strong>9%</strong></div>
+            <div class="panel" style="box-shadow:none;margin-top:12px"><div class="panel-h"><h3>Flow Doctor · hottest shard</h3><span class="chip good">healthy</span></div><div class="panel-b grid g4"><div><div class="kicker">Queue</div><b>2 / 1024</b></div><div><div class="kicker">Progress age</div><b>2.1 ms</b></div><div><div class="kicker">Backlog slope</div><b>0</b></div><div><div class="kicker">Deadline slack</div><b>+997 ms</b></div></div></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-h"><h3>Scenario: +100 SRT outputs</h3><span class="chip warn">near headroom</span></div>
+          <div class="panel-b">
+            <div class="form-grid"><div class="field"><label>Pipeline</label><select><option>Temple Main</option></select></div><div class="field"><label>Protocol</label><select><option>SRT</option></select></div><div class="field"><label>Count</label><input value="100"/></div><div class="field"><label>Encoding</label><select><option>Source passthrough</option></select></div></div>
+            <div style="margin-top:12px"><div class="kv"><span>New shared stages</span><span>0</span><span>New leaves</span><span>100</span><span>Projected limiting center</span><span style="color:var(--amber)">EGRESS</span></div></div>
+            <div class="service-row"><span>Egress</span><div class="bar warn"><i style="width:93%"></i></div><strong>93%</strong></div>
+            <div class="service-row"><span>NIC</span><div class="bar"><i style="width:66%"></i></div><strong>66%</strong></div>
+            <div class="service-row"><span>Memory</span><div class="bar"><i style="width:36%"></i></div><strong>36%</strong></div>
+            <div class="service-row"><span>FFmpeg</span><div class="bar"><i style="width:29%"></i></div><strong>29%</strong></div>
+            <div class="evidence"><strong>Capacity warning</strong><p>This change does not create a new transform stage, but moves the current egress center from 74% to 93% projected utilization.</p></div>
+            <button class="btn" style="width:100%;margin-top:8px">Open topology diff</button>
+          </div>
+        </div>
+      </div>
+      <div class="storynote"><b>Backend truth must remain authoritative:</b> the UI should never implement the capacity equations. It should show model version, host fingerprint, calibration provenance and whether each projection is measured, calibrated, heuristic or observe-only.</div>
+    </section>
+
+    <!-- MEDIA -->
+    <section id="media" class="workspace">
+      <div class="ws-head">
+        <div><div class="eyebrow">Media</div><h2>Recordings and reusable assets</h2><div class="sub">Recording, conversion, analysis and file ingest are one lifecycle. Assets should be immediately usable as sources with their media characteristics already known.</div></div>
+        <div class="actions"><button class="btn">Recordings only</button><button class="btn primary">Upload media</button></div>
+      </div>
+      <div class="two-col" style="grid-template-columns:1fr 360px">
+        <div class="panel">
+          <div class="panel-h"><h3>Library</h3><span class="meta">18 assets · 214 GB</span></div>
+          <div class="panel-b"><div class="asset-grid">
+            <div class="asset"><div class="thumb"></div><div class="ab"><div class="name">Temple Main · 13:00</div><div class="meta2">MP4 · H.264 / AAC · 42m 18s · 4.6 GB</div><div style="margin-top:7px"><span class="chip good">converted</span> <span class="chip info">analyzed</span></div></div></div>
+            <div class="asset"><div class="thumb" style="filter:hue-rotate(35deg)"></div><div class="ab"><div class="name">News HD · 11:30</div><div class="meta2">TS · HEVC / AAC · 1h 03m · 7.8 GB</div><div style="margin-top:7px"><span class="chip warn">conversion queued</span></div></div></div>
+            <div class="asset"><div class="thumb" style="filter:hue-rotate(100deg)"></div><div class="ab"><div class="name">Emergency Slate</div><div class="meta2">MP4 · H.264 / AAC · 00:45 · 12 MB</div><div style="margin-top:7px"><span class="chip good">ready for ingest</span></div></div></div>
+            <div class="asset"><div class="thumb" style="filter:hue-rotate(150deg)"></div><div class="ab"><div class="name">Stage B rehearsal</div><div class="meta2">MP4 · H.264 / AAC · 18m 44s · 1.9 GB</div><div style="margin-top:7px"><span class="chip info">analyzed</span></div></div></div>
+            <div class="asset"><div class="thumb" style="filter:hue-rotate(210deg)"></div><div class="ab"><div class="name">Sponsor loop</div><div class="meta2">MP4 · H.264 / AAC · 04:00 · 255 MB</div><div style="margin-top:7px"><span class="chip good">ready for ingest</span></div></div></div>
+            <div class="asset"><div class="thumb" style="filter:hue-rotate(265deg)"></div><div class="ab"><div class="name">Archive original</div><div class="meta2">TS · H.264 / AAC · 2h 10m · 15.4 GB</div><div style="margin-top:7px"><span class="chip">original retained</span></div></div></div>
+          </div></div>
+        </div>
+        <div class="panel">
+          <div class="panel-h"><h3>Selected asset</h3><span class="chip good">ready</span></div>
+          <div class="panel-b">
+            <div class="thumb" style="height:155px;border-radius:9px"></div>
+            <h3 style="margin-top:10px">Temple Main · 13:00</h3><div class="muted tiny">browser.mp4 · converted from source.ts</div>
+            <div class="kv" style="margin-top:10px"><span>Video</span><span>H.264 · 1920×1080</span><span>Audio</span><span>AAC · stereo</span><span>Duration</span><span>42:18</span><span>GOP</span><span>2.0 s</span><span>Size</span><span>4.6 GB</span><span>Original TS</span><span>retained</span></div>
+            <button class="btn primary" style="width:100%;margin-top:10px">Use as pipeline source</button><button class="btn" style="width:100%;margin-top:6px">Download original</button>
+          </div>
+        </div>
+      </div>
+      <div class="grid g3" style="margin-top:10px">
+        <div class="panel"><div class="panel-h"><h3>Recording pipeline</h3></div><div class="panel-b"><div class="timeline"><div class="ev ok"><div class="t">13:00</div><div class="m">TS recording started</div></div><div class="ev ok"><div class="t">13:42</div><div class="m">recording stopped</div></div><div class="ev"><div class="t">13:42</div><div class="m">remux to browser MP4</div></div><div class="ev ok"><div class="t">13:43</div><div class="m">media analysis complete</div></div></div></div></div>
+        <div class="panel"><div class="panel-h"><h3>Ingest readiness</h3></div><div class="panel-b"><div class="kv"><span>Codec compatibility</span><span>ready</span><span>Timestamp profile</span><span>live optimized</span><span>GOP interval</span><span>2.0 s</span><span>Audio tracks</span><span>1</span></div><div class="evidence good" style="margin-top:9px"><strong>Safe to use live</strong><p>No conversion is required before this asset can be attached as a file-backed source.</p></div></div></div>
+        <div class="panel"><div class="panel-h"><h3>Storage pressure</h3></div><div class="panel-b"><div class="service-row"><span>Media directory</span><div class="bar"><i style="width:43%"></i></div><strong>43%</strong></div><div class="kv"><span>Used</span><span>214 GB</span><span>Free</span><span>286 GB</span><span>Active conversion</span><span>1</span></div></div></div>
+      </div>
+    </section>
+
+    <!-- SYSTEM -->
+    <section id="system" class="workspace">
+      <div class="ws-head">
+        <div><div class="eyebrow">System</div><h2>Runtime readiness, execution topology and provenance</h2><div class="sub">A streaming runtime is sensitive to kernel, socket, scheduler, codec and build identity. Those facts belong in the operational UI.</div></div>
+        <div class="actions"><span class="chip good">required host checks pass</span><button class="btn">Download SBOM</button></div>
+      </div>
+      <div class="grid g2">
+        <div class="panel"><div class="panel-h"><h3>Host readiness</h3><span class="meta">current process + kernel</span></div><div class="panel-b">
+          <div class="attn"><div style="color:var(--green)">✓</div><div><div class="title">Open file descriptors</div><div class="detail">satisfies configured high-fanout target</div></div><div class="age">65,536</div></div>
+          <div class="attn"><div style="color:var(--green)">✓</div><div><div class="title">Kernel receive buffer ceiling</div><div class="detail">sufficient for SRT UDP receive buffers</div></div><div class="age">25 MiB</div></div>
+          <div class="attn"><div style="color:var(--green)">✓</div><div><div class="title">Kernel send buffer ceiling</div><div class="detail">sufficient for SRT UDP send buffers</div></div><div class="age">25 MiB</div></div>
+          <div class="attn"><div style="color:var(--green)">✓</div><div><div class="title">CPU allowance</div><div class="detail">effective cpuset/cgroup capacity</div></div><div class="age">6 CPUs</div></div>
+          <div class="attn"><div style="color:var(--green)">✓</div><div><div class="title">RTMPS kTLS path</div><div class="detail">kernel TLS capability available</div></div><div class="age">ready</div></div>
+          <div class="attn"><div style="color:var(--green)">✓</div><div><div class="title">io_uring / native owner layer</div><div class="detail">kernel capability available</div></div><div class="age">ready</div></div>
+        </div></div>
+
+        <div class="panel"><div class="panel-h"><h3>Execution topology</h3><span class="meta">reported, not hardcoded</span></div><div class="panel-b">
+          <div class="exec-grid">
+            <div class="exec"><div class="kicker">CONTROL</div><div class="big">2</div><div class="muted tiny">Tokio workers</div></div>
+            <div class="exec"><div class="kicker">MEDIA</div><div class="big">4</div><div class="muted tiny">media workers</div></div>
+            <div class="exec"><div class="kicker">RTMP ingress</div><div class="big">1</div><div class="muted tiny">Compio owner</div></div>
+            <div class="exec"><div class="kicker">SRT ingress</div><div class="big">1</div><div class="muted tiny">Compio owner</div></div>
+            <div class="exec"><div class="kicker">Egress fabric</div><div class="big">7</div><div class="muted tiny">shard threads</div></div>
+            <div class="exec"><div class="kicker">FFmpeg</div><div class="big">3</div><div class="muted tiny">child processes</div></div>
+          </div>
+          <div class="service-row"><span>restream CPU</span><div class="bar"><i style="width:41%"></i></div><strong>123%</strong></div>
+          <div class="service-row"><span>external FFmpeg</span><div class="bar"><i style="width:26%"></i></div><strong>78%</strong></div>
+          <div class="service-row"><span>process RSS</span><div class="bar"><i style="width:38%"></i></div><strong>383 MB</strong></div>
+        </div></div>
+
+        <div class="panel"><div class="panel-h"><h3>Low-level owner health</h3><span class="meta">SRT ingress owner</span></div><div class="panel-b">
+          <div class="grid g4"><div><div class="kicker">Peers</div><b>24</b></div><div><div class="kicker">RX ring depth</div><b>4</b></div><div><div class="kicker">TX in flight</div><b>0</b></div><div><div class="kicker">Telemetry drops</div><b>0</b></div></div>
+          <div class="kv" style="margin-top:10px"><span>Budget exhausted</span><span>0</span><span>RX ring dropped</span><span>0</span><span>RX buffer exhaustion</span><span>0</span><span>Media slow passes &gt;5 ms</span><span>0</span><span>Event bridge full visits</span><span>0</span><span>Owner faulted</span><span>false</span></div>
+        </div></div>
+
+        <div class="panel"><div class="panel-h"><h3>Build and provenance</h3></div><div class="panel-b"><div class="kv"><span>Restream</span><span>0.1.0</span><span>Commit</span><span class="mono">29f3b38da81a</span><span>Rust</span><span>1.96</span><span>Kernel</span><span>6.8.0</span><span>FFmpeg</span><span>6.1</span><span>srt-rs</span><span class="mono">pinned SHA</span><span>SBOM</span><span>142 components</span><span>Contained panics</span><span>0</span></div><div class="evidence good" style="margin-top:10px"><strong>Provenance clean</strong><p>Runtime, native-library and build identity are internally consistent for this process.</p></div></div></div>
+      </div>
+    </section>
+
+    <!-- CHANGE STUDIO -->
+    <section id="changes" class="workspace">
+      <div class="ws-head">
+        <div><div class="eyebrow">Change Studio</div><h2>Preview, approve, apply, verify</h2><div class="sub">The human change workflow should use the same planner/validator/diff machinery as the agent plane without becoming an AI chat UI.</div></div>
+        <div class="actions"><span class="chip info">dry-run</span><button class="btn">Saved change sets</button></div>
+      </div>
+      <div class="grid g4">
+        <div class="change-step"><div class="step">01 · intent</div><div class="name">Define change</div><div class="muted tiny">Add DR destinations and move backups to 720p.</div></div>
+        <div class="change-step"><div class="step">02 · plan</div><div class="name">Validate topology</div><div class="muted tiny">Protocol/codec rules, cycles, stage sharing, capacity.</div></div>
+        <div class="change-step"><div class="step">03 · apply</div><div class="name">Controlled mutation</div><div class="muted tiny">Track convergence against accepted operation ID.</div></div>
+        <div class="change-step"><div class="step">04 · verify</div><div class="name">Prove convergence</div><div class="muted tiny">Useful delivery, graph state and alerts all settle.</div></div>
+      </div>
+      <div class="two-col" style="margin-top:10px">
+        <div class="panel">
+          <div class="panel-h"><h3>Proposed change</h3><span class="chip good">valid</span></div>
+          <div class="panel-b">
+            <div class="form-grid"><div class="field"><label>Pipeline</label><select><option>Temple Main</option></select></div><div class="field"><label>Action</label><select><option>Add destinations</option></select></div><div class="field"><label>Protocol</label><select><option>SRT</option></select></div><div class="field"><label>Count</label><input value="20"/></div><div class="field"><label>Video</label><select><option>720p H.264</option></select></div><div class="field"><label>Audio</label><select><option>All tracks</option></select></div></div>
+            <div class="evidence good" style="margin-top:10px"><strong>Planner judgement</strong><p>No cycles. No incompatible codec/protocol combination. Existing 720p H.264 stage can be reused; no new transcode stage is required.</p></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-h"><h3>Impact</h3><span class="meta">before → after</span></div>
+          <div class="panel-b"><div class="kv"><span>Affected objects</span><span>20 outputs</span><span>New shared stages</span><span>0</span><span>New leaves</span><span>20</span><span>Egress utilization</span><span>74% → 78%</span><span>NIC utilization</span><span>48% → 52%</span><span>Memory utilization</span><span>34% → 34%</span></div><div class="evidence good" style="margin-top:10px"><strong>Within current headroom</strong><p>The change remains below the calibrated safe threshold for every service center.</p></div></div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:10px">
+        <div class="panel-h"><h3>Topology diff</h3><span class="meta">shared work highlighted</span></div>
+        <div class="panel-b diff">
+          <div class="pane"><div class="kicker">Before</div><div class="code">source
+ ├─ 720p H.264 ─ RTMP × 218
+ ├─ source       ─ SRT  × 93
+ └─ source       ─ HLS  × 4</div></div>
+          <div class="arrow">→</div>
+          <div class="pane"><div class="kicker">After</div><div class="code">source
+ ├─ 720p H.264 ─ RTMP × 218
+ │              └─ SRT  × 20   + reuse
+ ├─ source       ─ SRT  × 93
+ └─ source       ─ HLS  × 4</div></div>
+        </div>
+      </div>
+
+      <div class="grid g3" style="margin-top:10px">
+        <div class="panel"><div class="panel-h"><h3>Apply</h3><span class="chip">not started</span></div><div class="panel-b"><div class="kv"><span>Operation ID</span><span class="mono">op_981</span><span>Desired revision</span><span>119</span><span>Affected</span><span>20 outputs</span></div><button class="btn primary" style="width:100%;margin-top:9px">Approve & apply</button></div></div>
+        <div class="panel"><div class="panel-h"><h3>Convergence</h3><span class="chip info">planned</span></div><div class="panel-b"><div class="timeline"><div class="ev"><div class="t">accepted</div><div class="m">desired state revision created</div></div><div class="ev"><div class="t">pending</div><div class="m">outputs reconcile onto existing stage</div></div><div class="ev"><div class="t">verify</div><div class="m">all 20 leaves report useful delivery</div></div></div></div></div>
+        <div class="panel"><div class="panel-h"><h3>Verification gates</h3></div><div class="panel-b"><div class="kv"><span>Desired state</span><span>must converge</span><span>Graph diff</span><span>must match</span><span>Delivery floor</span><span>≥ 0.98</span><span>New critical alerts</span><span>0</span><span>Capacity state</span><span>safe</span></div></div></div>
+      </div>
+    </section>
+
+  </div>
+  <footer>Restream full operator-control-room mockup · all workspaces are present in one self-contained HTML file · no external assets or network requests</footer>
+</main>
+</div>
+<script>
+function tick(){document.getElementById('clock').textContent=new Date().toISOString().slice(11,19)+' UTC'}tick();setInterval(tick,1000);
+</script>
+</body>
+</html>

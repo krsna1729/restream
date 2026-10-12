@@ -21,6 +21,17 @@ items).
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
 - [Q-035 MEDIA attribution](#q-035-observability-sonnet-attribute-media-pool-time-to-feed-and-stage)
 - [Q-036 enforced runtime truth table](#q-036-docs-sonnet-make-runtime-crossings-an-enforced-truth-table)
+- [Q-037 measurement polling](#q-037-measurement-opus-measure-restream-not-its-status-api)
+- [Q-038 desired vs actual](#q-038-architecture-opus-keep-failure-out-of-desired-state)
+- [Q-039 mutation bypass](#q-039-architecture-opus-route-every-mutation-through-the-reconciler)
+- [Q-040 control core](#q-040-architecture-opus-replace-the-1-s-reconcile-sweep-with-commands-and-a-dirty-set)
+- [Q-041 stage ownership](#q-041-architecture-opus-own-stages-by-the-plan-not-a-sweep)
+- [Q-042 runtime truth](#q-042-architecture-opus-one-revisioned-runtime-state-with-delta-events)
+- [Q-043 evidence engine](#q-043-observability-opus-one-evidence-classification)
+- [Q-044 frontend cut](#q-044-frontend-opus-hard-cut-the-frontend-to-one-build)
+- [Q-045 frontend product](#q-045-frontend-opus-build-the-control-room-on-live-data)
+- [Q-046 agent guidance](#q-046-docs-sonnet-slim-agentsmd-to-a-root-contract)
+- [Q-047 MoQ](#q-047-protocol-opus-moq-interop-spike-parked)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -235,3 +246,113 @@ items).
   once led design work to a wrong runtime model.
 - Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
   review).
+
+### Q-037 [measurement] [opus] Measure Restream, not its status API
+- Goal: capacity rungs measure the media path. The harness reads a cheap,
+  fixed-shape counter snapshot, not the full operator payloads.
+- Files: `src/bin/test_harness/resource_sweep/measurement.rs` (each rated
+  sample fetches `/api/v1/engine/telemetry`, `/engine/health` and
+  `/metrics/system`, lines 195-197; delivery adds health and per-pipeline
+  telemetry, 750-787), `src/api/`.
+- Gates: first an interleaved A/B of the polling cost at one rung. If it
+  is material, add `/api/measure` (fixed shape) and a before/after
+  `/api/probe`; rung results stay within noise of the A/B baseline. The
+  external receiver stays the delivery oracle.
+- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
+
+### Q-038 [architecture] [opus] Keep failure out of desired state
+- Goal: desired state is only the operator's intent (Running or Stopped).
+  Exhausted retries and failure are actual or convergence state.
+- Files: `src/infrastructure/bootstrap/egress.rs` (`MarkFailed` persists
+  `DesiredOutputState::Failed`), the store, the API views.
+- Gates: a unit test where exhausted retries leave desired = Running and
+  report actual = failed; an operator restart needs no desired-state
+  repair.
+- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
+
+### Q-039 [architecture] [opus] Route every mutation through the reconciler
+- Goal: one write path: persist, mark dirty, reconcile.
+- Files: `src/api/pipeline_inputs.rs:253` (input promotion calls
+  `engine.select_pipeline_input` directly), `src/agent_service.rs:275`
+  (agent apply calls `engine.unregister_egress` directly).
+- Gates: tests show a promotion and an agent apply persist first and that
+  reconcile converges them; a restart after either keeps the result.
+- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
+
+### Q-040 [architecture] [opus] Replace the 1 s reconcile sweep with commands and a dirty set
+- Goal: changes drive work, not a timer. Commands mark a pipeline dirty;
+  a deadline queue holds retries; generations reject stale results.
+- Files: `src/infrastructure/bootstrap/` (`reconciler_interval_ms` = 1000
+  walks every output; reconcile clears retry state of active outputs at
+  `egress.rs:53`, so uploaders must re-assert it).
+- Gates: concurrency contract gate; idle reconcile CPU at 1000 outputs
+  measured before/after; the fault.resilience live mode passes.
+- Depends on: Q-039.
+- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
+
+### Q-041 [architecture] [opus] Own stages by the plan, not a sweep
+- Goal: shared stages are reference-counted by the pipeline plan and stop
+  when the last consumer leaves. Delete the sweep and its grace period.
+- Files: `src/media/engine_pipeline.rs:194` (`sweep_unused_stages`,
+  `UNUSED_STAGE_GRACE` = 5 s re-derives use from all outputs).
+- Gates: tests for add/remove/replace of consumers on a shared stage; no
+  stage outlives its last consumer; live harness mixed-anchor passes.
+- Depends on: Q-040.
+- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
+
+### Q-042 [architecture] [opus] One revisioned runtime state with delta events
+- Goal: each entity has desired, actual, convergence, flow, queue and
+  evidence state under one revision. A delta SSE stream feeds
+  `/api/state`, `/api/events` and `/api/commands`; the TypeScript
+  contract is generated from Rust.
+- Gates: api-contract check on generated types; a client that misses
+  events resyncs from a revision.
+- Depends on: Q-040.
+- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
+
+### Q-043 [observability] [opus] One evidence classification
+- Goal: one typed answer to "why is this degraded" (destination/network,
+  shard, feed or ingest, with the causes ruled out) shared by alerts, UI,
+  MCP and the harness probe.
+- First step: record how alerts are built today; this item does not yet
+  have file evidence.
+- Depends on: Q-042.
+- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
+
+### Q-044 [frontend] [opus] Hard-cut the frontend to one build
+- Goal: one Vite build and one React root. Delete
+  `web/ts/app/dashboard-v2-loader.ts` (23 KB), the 42 KB
+  `web/pages/index.html` shell, the legacy `tsc` emit (`build:frontend`
+  runs `tsc` and `vite.v2`), `tsconfig.v2.json`/`vite.v2.config.ts`
+  naming, and DOM-ID drift tests.
+- Gates: `npm run test:frontend`, Playwright; a tokei-measured reduction of
+  frontend source plus test glue.
+- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
+
+### Q-045 [frontend] [opus] Build the control room on live data
+- Goal: the workspaces of the
+  [control-room mockup](design/control-room-mockup.html): Fleet, Pipelines,
+  Operate (source deck, live media graph, destination matrix), Inspect
+  (resource map, ring, shard), Monitor, Incidents (evidence packet),
+  Capacity (Flow Doctor, scenario), Media, System (readiness, owners,
+  provenance), Changes (preview, approve, apply, verify).
+- Rule: a workspace ships only on live backend data; the mockup's numbers
+  are illustrative.
+- Gates: Playwright per workspace against a running engine.
+- Depends on: Q-042 (state), Q-043 (evidence), Q-044 (cut).
+- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
+
+### Q-046 [docs] [sonnet] Slim AGENTS.md to a root contract
+- Goal: a small root contract; media, frontend and protocol rules move to
+  skills. Remove stale commands (`scripts/build/resource-limit.sh` and
+  `scripts/check/*` are gone; use `cargo xtask`).
+- Gates: `node scripts/check/docs.mjs`; every command named in AGENTS.md
+  runs.
+- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
+
+### Q-047 [protocol] [opus] MoQ interop spike (parked)
+- Goal: a pinned-SHA spike on `moq-dev/moq` (IETF MOQT with MSF/LOC)
+  with one retention layer (no ring to MoQ-cache copy) behind a Compio
+  adapter; moxygen and MediaMTX as oracles.
+- Parked until transport convergence (Q-025).
+- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
