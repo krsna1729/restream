@@ -207,6 +207,16 @@ impl MediaEngine {
         }
     }
 
+    /// Whether `input_id` has a live publisher session on `pipeline_id`.
+    pub async fn input_has_session(&self, pipeline_id: &str, input_id: &str) -> bool {
+        self.ingests
+            .sessions
+            .read()
+            .await
+            .get(input_id)
+            .is_some_and(|session| session.pipeline_id == pipeline_id)
+    }
+
     pub async fn connected_input_count(&self, pipeline_id: &str) -> usize {
         self.ingests
             .sessions

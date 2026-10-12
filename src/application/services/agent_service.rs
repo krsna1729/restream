@@ -506,7 +506,7 @@ mod tests {
         let outputs = crate::application::outputs::list_outputs(&pool)
             .await
             .unwrap();
-        crate::application::topology::converge_topology(&pool, &engine, &requests, &outputs).await;
+        crate::application::topology::converge_topology(&pool, &engine, &outputs).await;
         assert!(egress.is_cancelled());
     }
 }

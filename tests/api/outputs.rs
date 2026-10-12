@@ -597,11 +597,5 @@ async fn converge_once(pool: &SqlitePool, engine: &MediaEngine) {
     let outputs = restream::application::outputs::list_outputs(pool)
         .await
         .unwrap();
-    restream::application::topology::converge_topology(
-        pool,
-        engine,
-        &restream::application::topology::ReconcileRequests::new(),
-        &outputs,
-    )
-    .await;
+    restream::application::topology::converge_topology(pool, engine, &outputs).await;
 }

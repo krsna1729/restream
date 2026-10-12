@@ -253,12 +253,8 @@ pub async fn pipeline_input_promote_handler(
     state.reconcile.input_selection_changed(&pipeline_id);
     let connected = state
         .engine
-        .ingests
-        .sessions
-        .read()
-        .await
-        .get(&input_id)
-        .is_some_and(|session| session.pipeline_id == pipeline_id);
+        .input_has_session(&pipeline_id, &input_id)
+        .await;
     let host = state.pipeline_service.get_ingest_host().await;
     Json(serde_json::json!({
         "input": input_json(&state, &input, &host).await,

@@ -61,15 +61,35 @@ impl ReconcileRequests {
     }
 }
 
-/// Converge runtime with the persisted topology: tear down deleted pipelines,
-/// stop egresses whose output row is gone, and apply requested input
-/// selections. `outputs` are the rows this reconcile pass read.
-pub async fn converge_topology(
+/// Applies requested input selections from their persisted rows. The
+/// reconciler runs this first in a pass, so a manual failover waits only for
+/// a pass already in progress. A deleted pipeline has no input rows: no-op.
+pub async fn apply_requested_selections(
     pool: &SqlitePool,
     engine: &MediaEngine,
     requests: &ReconcileRequests,
-    outputs: &[Output],
 ) {
+    for pipeline_id in requests.take_dirty_selections() {
+        match crate::db::list_pipeline_inputs(pool, &pipeline_id).await {
+            Ok(inputs) => {
+                if let Some(selected) = inputs.iter().find(|input| input.selected) {
+                    engine
+                        .select_pipeline_input(&pipeline_id, &selected.id)
+                        .await;
+                }
+            }
+            Err(error) => {
+                warn!(pipeline_id = %pipeline_id, err = %error, "DB error reading inputs; selection retried next pass");
+                requests.keep_dirty_selection(pipeline_id);
+            }
+        }
+    }
+}
+
+/// Converge runtime with the persisted topology: tear down deleted pipelines
+/// and stop egresses whose output row is gone. `outputs` are the rows this
+/// reconcile pass read.
+pub async fn converge_topology(pool: &SqlitePool, engine: &MediaEngine, outputs: &[Output]) {
     // Snapshot runtime before reading rows. Runtime for a pipeline is created
     // only after its row commits, so an id seen here and missing from the rows
     // read below belongs to a deleted pipeline, never to a new one.
@@ -96,25 +116,6 @@ pub async fn converge_topology(
         if !wanted.contains(output_id.as_str()) {
             engine.unregister_egress(&output_id).await;
             engine.clear_egress_retry_state(&output_id).await;
-        }
-    }
-
-    for pipeline_id in requests.take_dirty_selections() {
-        if !pipelines.contains(&pipeline_id) {
-            continue;
-        }
-        match crate::db::list_pipeline_inputs(pool, &pipeline_id).await {
-            Ok(inputs) => {
-                if let Some(selected) = inputs.iter().find(|input| input.selected) {
-                    engine
-                        .select_pipeline_input(&pipeline_id, &selected.id)
-                        .await;
-                }
-            }
-            Err(error) => {
-                warn!(pipeline_id = %pipeline_id, err = %error, "DB error reading inputs; selection retried next pass");
-                requests.keep_dirty_selection(pipeline_id);
-            }
         }
     }
 }

@@ -61,13 +61,7 @@ async fn a_deleted_output_loses_its_egress_and_its_sibling_keeps_running() {
             .await
             .unwrap()
     );
-    converge_topology(
-        &pool,
-        &engine,
-        &ReconcileRequests::new(),
-        &outputs(&pool).await,
-    )
-    .await;
+    converge_topology(&pool, &engine, &outputs(&pool).await).await;
 
     assert!(deleted.is_cancelled());
     assert!(!kept.is_cancelled());
@@ -108,13 +102,7 @@ async fn a_deleted_pipeline_loses_its_runtime_and_other_pipelines_keep_theirs() 
             .await
             .unwrap()
     );
-    converge_topology(
-        &pool,
-        &engine,
-        &ReconcileRequests::new(),
-        &outputs(&pool).await,
-    )
-    .await;
+    converge_topology(&pool, &engine, &outputs(&pool).await).await;
 
     assert!(gone_ingest.cancel_token.is_cancelled());
     assert!(egress.is_cancelled(), "the output row cascaded away");
@@ -150,7 +138,8 @@ async fn a_persisted_promotion_switches_the_forwarded_input_on_request() {
         .await
         .unwrap()
         .unwrap();
-    converge_topology(&pool, &engine, &requests, &[]).await;
+    apply_requested_selections(&pool, &engine, &requests).await;
+    converge_topology(&pool, &engine, &[]).await;
     assert_eq!(
         forwarded_input(&engine, "pipe").as_deref(),
         Some("input_primary_pipe"),
@@ -158,7 +147,7 @@ async fn a_persisted_promotion_switches_the_forwarded_input_on_request() {
     );
 
     requests.input_selection_changed("pipe");
-    converge_topology(&pool, &engine, &requests, &[]).await;
+    apply_requested_selections(&pool, &engine, &requests).await;
     assert_eq!(
         forwarded_input(&engine, "pipe").as_deref(),
         Some("input-backup")
@@ -180,7 +169,8 @@ async fn a_pass_never_demotes_a_stream_key_session_without_a_request() {
         .await
         .unwrap();
 
-    converge_topology(&pool, &engine, &ReconcileRequests::new(), &[]).await;
+    apply_requested_selections(&pool, &engine, &ReconcileRequests::new()).await;
+    converge_topology(&pool, &engine, &[]).await;
 
     assert_eq!(forwarded_input(&engine, "pipe").as_deref(), Some("key-p"));
     assert!(!file_ingest.cancel_token.is_cancelled());

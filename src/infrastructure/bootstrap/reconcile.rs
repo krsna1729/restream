@@ -12,7 +12,9 @@ use crate::application::reconcile::{
     build_recording_reconcile_plan, collect_needed_stage_keys, load_output_runtime_snapshot,
     output_stage_sweep_input,
 };
-use crate::application::topology::{ReconcileRequests, converge_topology};
+use crate::application::topology::{
+    ReconcileRequests, apply_requested_selections, converge_topology,
+};
 use crate::config::AppConfig;
 use crate::domain::stage::StageKey;
 use crate::infrastructure::sqlite_ports::SqliteMetaStore;
@@ -78,6 +80,7 @@ impl Reconciler {
                 self.prune_sessions_and_logs().await;
             }
 
+            apply_requested_selections(&self.pool, &self.engine, &self.requests).await;
             let outputs = match crate::db::list_outputs(&self.pool).await {
                 Ok(records) => records
                     .into_iter()
@@ -89,7 +92,7 @@ impl Reconciler {
                 }
             };
 
-            converge_topology(&self.pool, &self.engine, &self.requests, &outputs).await;
+            converge_topology(&self.pool, &self.engine, &outputs).await;
             self.egress.reconcile(&outputs).await;
             self.engine.resize_srt_fabrics().await;
             self.engine.resize_rtmp_fabrics().await;
