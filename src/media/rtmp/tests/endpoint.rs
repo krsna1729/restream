@@ -127,6 +127,15 @@ fn parse_rtmp_url_ignores_query_and_fragment() {
 }
 
 #[test]
+fn parse_rtmp_url_takes_the_key_after_a_slash_in_the_query() {
+    let parts = parse_rtmp_url("rtmp://b.rtmp.youtube.com/live2?backup=1/abcd-1234").unwrap();
+    assert_eq!(parts.host, "b.rtmp.youtube.com");
+    assert_eq!(parts.app, "live2?backup=1");
+    assert_eq!(parts.stream_key, "abcd-1234");
+    assert!(parse_rtmp_url("rtmp://b.rtmp.youtube.com/live2?backup=1/").is_none());
+}
+
+#[test]
 fn parse_rtmp_url_drops_embedded_userinfo() {
     // Credentials embedded in the URL (rtmp://user:pass@host/...) must not
     // leak into app/stream_key and must not change the resolved host.

@@ -812,6 +812,23 @@ fn shard_work_queues_have_a_hard_leaf_bound() {
     assert_eq!(backend.ready.len(), 1);
 }
 
+/// A URL the leaf cannot connect to (no stream key) ends the attempt, so the
+/// output reports a failure and retries instead of staying `sending` with
+/// no connection.
+#[test]
+fn an_unusable_url_terminates_the_leaf() {
+    let mut backend =
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
+    let terminated = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut spec = output_spec("out-1", "rtmp://127.0.0.1:1/live", 1);
+    let output_id = spec.id.clone();
+    spec.progress.terminated_unexpectedly = Some(std::sync::Arc::clone(&terminated));
+    backend.on_command(EgressCommand::Add(spec));
+
+    assert!(terminated.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(backend.pending_connect(&output_id).is_none());
+}
+
 /// A readiness event or I/O completion still naming a removed leaf must not
 /// reach the output that reuses its slot. Both outputs are generation 1 and
 /// the shard has one slot, so before slot epochs the old event matched the
