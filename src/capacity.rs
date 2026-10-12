@@ -359,19 +359,28 @@ impl MediaEngine {
         snapshot
     }
 
-    /// The current workload with `outputs` more outputs and `stages` more
-    /// shared stages, projected onto the same calibrated priors as
-    /// [`Self::capacity_snapshot`]. Nothing measures a change that has not
-    /// happened, so `flow` is the projection's and `flowMeasured` is false.
-    pub async fn capacity_scenario(&self, outputs: u32, stages: u32) -> CapacitySnapshot {
-        let mut workload = self.capacity_workload().await;
-        workload.outputs = workload.outputs.saturating_add(outputs);
-        workload.stage_count = workload.stage_count.saturating_add(stages);
-        CapacityModel {
+    /// One sample of the current workload projected onto the calibrated
+    /// priors twice: as it is (`baseline`) and with `outputs` more outputs
+    /// and `stages` more shared stages (`projected`). Both are priors only,
+    /// so they compare like with like; the measured flow of running shards
+    /// is [`Self::capacity_snapshot`]'s, and nothing measures a change that
+    /// has not happened.
+    pub async fn capacity_scenario(
+        &self,
+        outputs: u32,
+        stages: u32,
+    ) -> (CapacitySnapshot, CapacitySnapshot) {
+        let workload = self.capacity_workload().await;
+        let model = CapacityModel {
             limits: self.config.capacity_limits,
             ..CapacityModel::default()
-        }
-        .project(workload)
+        };
+        let changed = Workload {
+            outputs: workload.outputs.saturating_add(outputs),
+            stage_count: workload.stage_count.saturating_add(stages),
+            ..workload
+        };
+        (model.project(workload), model.project(changed))
     }
 }
 

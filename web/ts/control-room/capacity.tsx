@@ -143,20 +143,22 @@ function Scenario() {
           </button>
         </form>
         <p className="text-xs opacity-70">
-          The model prices outputs and stages, not their protocol or pipeline: it
-          multiplies the current ingest by the output count.
+          Both sides are priced on the priors, so they compare like with like;
+          the measured flow is the Flow Doctor's. The model prices outputs and
+          stages, not their protocol or pipeline: it multiplies the current
+          ingest by the output count.
         </p>
         {result && (
           <div className="space-y-3" aria-label="Scenario result">
             <p className="text-sm">
               Projected hottest center: <b>{result.projected.hottestCenter}</b> ·{" "}
-              {formatPercent(result.current.projectedUtilization * 100)} →{" "}
+              {formatPercent(result.baseline.projectedUtilization * 100)} →{" "}
               <b>{formatPercent(result.projected.projectedUtilization * 100)}</b>{" "}
               <span className={`badge badge-sm ${FLOW_BADGE[result.projected.flow.status]}`}>
                 {result.projected.flow.status}
               </span>
             </p>
-            <Meters title="Now" rows={serviceCenterRows(result.current)} />
+            <Meters title="Now, on the priors" rows={serviceCenterRows(result.baseline)} />
             <Meters
               title={`With ${result.addOutputs} more outputs and ${result.addStages} more stages`}
               rows={serviceCenterRows(result.projected)}

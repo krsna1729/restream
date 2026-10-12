@@ -60,12 +60,13 @@ export interface LifecycleEventsSnapshot {
   events: LifecycleEvent[];
 }
 
-/** A capacity scenario: the current priors and the same priors with the
- * change added. Observe-only; `projected.flowMeasured` is always false. */
+/** A capacity scenario: one workload sample priced on the priors as it is
+ * (`baseline`) and with the change (`projected`). Both are priors only;
+ * neither carries a measured flow. Observe-only. */
 export interface CapacityScenario {
   addOutputs: number;
   addStages: number;
-  current: CapacitySnapshot;
+  baseline: CapacitySnapshot;
   projected: CapacitySnapshot;
 }
 

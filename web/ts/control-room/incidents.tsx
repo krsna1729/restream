@@ -11,6 +11,7 @@ import {
   evidencePacket,
   incidentTimeline,
   rankIncidents,
+  timelineMayBeIncomplete,
   updateResolved,
 } from "./incidents-model.js";
 import type { ResolvedIncident } from "./incidents-model.js";
@@ -191,6 +192,10 @@ function Detail(props: {
     () => (events.value ? incidentTimeline(alert, events.value.events) : null),
     [alert, events.value],
   );
+  const incomplete =
+    events.value !== null &&
+    timeline !== null &&
+    timelineMayBeIncomplete(alert, timeline, events.value.events.length, EVENT_LIMIT);
   return (
     <section className="card bg-base-200" aria-labelledby="incident-detail">
       <div className="card-body gap-3 p-4">
@@ -211,19 +216,27 @@ function Detail(props: {
           )}
         </div>
         <div className="rounded bg-base-100 p-3 text-sm">
-          <b>Current judgement</b>
+          <b>{props.isOpen ? "Current judgement" : "Last judgement"}</b>
           <p>{alert.cause}</p>
         </div>
         <div className="flex items-center justify-between">
           <h4 className="font-medium">Timeline</h4>
           <Freshness atMs={events.atMs} />
         </div>
+        {incomplete && timeline && (
+          <p className="text-xs opacity-70">
+            The engine keeps only its most recent events
+            {timeline[0]
+              ? `: anything before ${new Date(timeline[0].timestamp).toLocaleTimeString()} may no longer be kept.`
+              : ", so earlier ones may no longer be kept."}
+          </p>
+        )}
         {timeline === null ? (
           <p className="opacity-70">Loading events…</p>
         ) : timeline.length === 0 ? (
           <p className="opacity-70">
-            No lifecycle event for {affected(alert, props.names)} since a minute
-            before this opened.
+            No kept lifecycle event for {affected(alert, props.names)} since a
+            minute before this opened.
           </p>
         ) : (
           <ol className="space-y-1 text-sm" aria-label="Incident timeline">
@@ -278,8 +291,9 @@ function Evidence(props: { alert: OperatorAlert; names: Map<string, string> }) {
         <div>
           <h4 className="text-xs uppercase opacity-70">Evidence</h4>
           <ul className="list-inside list-disc break-words">
-            {packet.evidence.map((line) => (
-              <li key={line}>{line}</li>
+            {packet.evidence.map((line, index) => (
+              // Two alerts may repeat a line: the position keeps keys unique.
+              <li key={`${index}:${line}`}>{line}</li>
             ))}
           </ul>
         </div>

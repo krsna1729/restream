@@ -3,7 +3,13 @@ import test from "node:test";
 
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
-const { evidencePacket, incidentTimeline, rankIncidents, updateResolved } =
+const {
+  evidencePacket,
+  incidentTimeline,
+  rankIncidents,
+  timelineMayBeIncomplete,
+  updateResolved,
+} =
   await loadCompiledFrontendModule("control-room/incidents-model.js");
 
 function alert(id, overrides = {}) {
@@ -54,6 +60,8 @@ test("a closed alert becomes resolved, newest first and capped; reopening remove
     resolved.map((r) => r.alert.id),
     ["c"],
   );
+  // Nothing closed or reopened: the same list, so the queue need not redraw.
+  assert.equal(updateResolved(resolved, [alert("b")], [alert("b")], 4_000, 2), resolved);
 });
 
 test("the evidence packet says what failed, what was ruled out and what to do", () => {
@@ -109,4 +117,14 @@ test("the timeline: this pipeline and output, from a minute before it opened, ol
     ),
     [1, 2, 3, 4, 5],
   );
+});
+
+test("the timeline may miss the lead-up: cut at the limit, empty, or starting after the open", () => {
+  const opened = alert("x", { firstSeen: "2026-10-12T10:00:00Z" });
+  const before = event(1, "2026-10-12T09:59:30Z");
+  const after = event(2, "2026-10-12T10:00:30Z");
+  assert.equal(timelineMayBeIncomplete(opened, [before, after], 2, 200), false);
+  assert.equal(timelineMayBeIncomplete(opened, [before, after], 200, 200), true);
+  assert.equal(timelineMayBeIncomplete(opened, [], 0, 200), true);
+  assert.equal(timelineMayBeIncomplete(opened, [after], 1, 200), true);
 });

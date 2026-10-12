@@ -381,8 +381,9 @@ pub struct CapacityScenarioQuery {
     pub add_stages: u32,
 }
 
-/// Projects the current workload plus a topology change onto the capacity
-/// priors. Observe-only: the projection decides nothing and admits nothing.
+/// Projects one sample of the current workload, as it is and with a topology
+/// change, onto the capacity priors. Observe-only: it decides and admits
+/// nothing, and neither side carries a measured flow.
 pub async fn v1_capacity_scenario_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -391,15 +392,14 @@ pub async fn v1_capacity_scenario_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    let current = state.engine.capacity_snapshot().await;
-    let projected = state
+    let (baseline, projected) = state
         .engine
         .capacity_scenario(query.add_outputs, query.add_stages)
         .await;
     Json(serde_json::json!({
         "addOutputs": query.add_outputs,
         "addStages": query.add_stages,
-        "current": current,
+        "baseline": baseline,
         "projected": projected,
     }))
     .into_response()

@@ -63,6 +63,7 @@ export function rankIncidents(
 /**
  * `resolved` with the alerts of `previous` that `current` no longer lists,
  * newest first, keeping `cap`. An alert that reopens leaves the list.
+ * Unchanged (the same array) when nothing closed or reopened.
  */
 export function updateResolved(
   resolved: readonly ResolvedIncident[],
@@ -75,10 +76,9 @@ export function updateResolved(
   const closed = previous
     .filter((alert) => !open.has(alert.id))
     .map((alert) => ({ alert, resolvedAtMs: atMs }));
-  return [...closed, ...resolved.filter((entry) => !open.has(entry.alert.id))].slice(
-    0,
-    cap,
-  );
+  const kept = resolved.filter((entry) => !open.has(entry.alert.id));
+  if (closed.length === 0 && kept.length === resolved.length) return resolved;
+  return [...closed, ...kept].slice(0, cap);
 }
 
 export function evidencePacket(alert: OperatorAlert): EvidencePacket {
@@ -119,4 +119,24 @@ export function incidentTimeline(
         Date.parse(event.timestamp) >= fromMs,
     )
     .sort((a, b) => a.seq - b.seq);
+}
+
+/**
+ * Whether the timeline may be missing the incident's lead-up: the engine
+ * keeps only its most recent events across all pipelines, and a request
+ * returns at most `limit`. True when the request was cut at `limit`, or
+ * when no kept event is from before the incident opened.
+ */
+export function timelineMayBeIncomplete(
+  alert: OperatorAlert,
+  timeline: readonly LifecycleEvent[],
+  fetched: number,
+  limit: number,
+): boolean {
+  const first = timeline[0];
+  return (
+    fetched >= limit ||
+    first === undefined ||
+    Date.parse(first.timestamp) > seenMs(alert.firstSeen)
+  );
 }
