@@ -691,6 +691,10 @@ mod tests {
                 .expect_err("the leaf cannot connect without a stream key");
             assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{url}");
         }
+        validate_output_payload(&test_output_payload(
+            "rtmp://b.rtmp.youtube.com/live2?backup=1/stream-key",
+        ))
+        .expect("YouTube backup ingest carries its key after the query");
     }
 
     #[test]

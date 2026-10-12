@@ -328,6 +328,10 @@ URL behavior:
 Any other prefix is rejected during validation with a `400 Bad Request`.
 An `rtmp://` or `rtmps://` URL must name an app and a stream key
 (`rtmp://host[:port]/app/stream-key`); one without is rejected with `400`.
+When the query holds a `/`, the key is what follows the last `/` and the app
+keeps the query (YouTube backup: `rtmp://host/live2?backup=1/stream-key`).
+An output saved earlier without a stream key now fails at start and retries
+until `retriesExhausted`; any edit to it returns `400` until the URL is fixed.
 Pipeline recirculation URLs are parsed and checked for cycles and target-input
 ownership before the output can start.
 HTTP/HTTPS HLS upload uses one shared local segmenter per pipeline. Each output

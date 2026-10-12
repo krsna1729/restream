@@ -20,9 +20,24 @@ pub(crate) fn parse_rtmp_url(url: &str) -> Option<RtmpUrlParts> {
     let parsed = Url::parse(url).ok()?;
     let host = parsed.host_str()?.trim_matches(['[', ']']).to_string();
     let port = parsed.port().unwrap_or(1935);
-    let mut path_segments = parsed.path_segments()?;
-    let app = path_segments.next()?;
-    let stream_key = path_segments.collect::<Vec<_>>().join("/");
+    // OBS/librtmp convention: when the query holds a '/', the stream key is
+    // whatever follows the last '/' of `path?query`, and the app keeps the
+    // query (YouTube backup ingest: `rtmp://host/live2?backup=1/<key>`).
+    let key_in_query = parsed
+        .query()
+        .filter(|query| query.contains('/'))
+        .map(|query| format!("{}?{query}", parsed.path().trim_start_matches('/')));
+    let (app, stream_key) = match key_in_query.as_deref() {
+        Some(app_and_key) => {
+            let (app, key) = app_and_key.rsplit_once('/')?;
+            (app, key.to_string())
+        }
+        None => {
+            let mut path_segments = parsed.path_segments()?;
+            let app = path_segments.next()?;
+            (app, path_segments.collect::<Vec<_>>().join("/"))
+        }
+    };
     if app.is_empty() || stream_key.is_empty() {
         return None;
     }

@@ -422,7 +422,7 @@ async fn output_crud_via_api() {
             "POST",
             "/api/v1/pipelines/p1/outputs",
             &cookie,
-            Some(r#"{"name":"YouTube","url":"rtmp://yt/live","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
+            Some(r#"{"name":"YouTube","url":"rtmp://yt/live/key","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
         ))
         .await
         .unwrap();
@@ -488,7 +488,7 @@ async fn an_output_with_exhausted_retries_can_be_edited() {
     )
     .await
     .unwrap();
-    let body = r#"{"name":"Out","url":"rtmp://new.example/live","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#;
+    let body = r#"{"name":"Out","url":"rtmp://new.example/live/key","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#;
     let edit = || {
         auth_req(
             "PATCH",
@@ -511,7 +511,7 @@ async fn an_output_with_exhausted_retries_can_be_edited() {
     let resp = app.clone().oneshot(edit()).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
-    assert_eq!(json["output"]["url"], "rtmp://new.example/live");
+    assert_eq!(json["output"]["url"], "rtmp://new.example/live/key");
     assert_eq!(json["output"]["desiredState"], "running");
     assert_eq!(json["output"]["retriesExhausted"], true);
 }
