@@ -217,5 +217,12 @@ mod catalog_tests {
             .map(|tool| (tool.name, tool.kind == AgentToolKind::Execution))
             .collect();
         assert_eq!(catalog, tools);
+        for tool in tool_catalog() {
+            assert!(
+                !tool.mutates || tool.requires_feature == "agent-execution",
+                "{} mutates but is not an execution tool",
+                tool.name
+            );
+        }
     }
 }
