@@ -222,10 +222,13 @@ fn mixed_matrix_hevc_rows_do_not_share_capacity_wave() {
 }
 
 #[test]
-fn mixed_signal_waves_run_hevc_cases_alone_and_cover_every_case_once() {
+fn shared_waves_run_hevc_cases_alone_and_cover_every_case_once() {
     let mut hevc_batches = 0;
-    for batch in mixed_signal_batches() {
-        let waves = mixed_signal_waves(&batch.cases);
+    for batch in mixed_signal_batches()
+        .iter()
+        .chain(mixed_fast_breadth_batches())
+    {
+        let waves = plan_shared_waves(&batch.cases);
         let covered: Vec<_> = waves
             .iter()
             .flat_map(|(first, second)| std::iter::once(*first).chain(*second))

@@ -216,15 +216,11 @@ pub(in super::super) async fn mixed_input_matrix_correctness_shared() -> Result<
         let mut stack_stopped = false;
         let wave_started = Instant::now();
 
-        let mut cases_queue: VecDeque<MixedInputCase> = cases.iter().copied().collect();
+        let waves = plan_shared_waves(&cases);
+        let wave_count = waves.len();
         let mut wave_index = 0usize;
-        while let Some(case_a) = cases_queue.pop_front() {
+        for (case_a, case_b) in waves {
             wave_index += 1;
-            let case_b = cases_queue
-                .front()
-                .copied()
-                .filter(|case_b| mixed_matrix_cases_can_share_wave(case_a, *case_b))
-                .and_then(|_| cases_queue.pop_front());
 
             matrix_mark_case_state(
                 &mut case_progress,
@@ -403,7 +399,7 @@ pub(in super::super) async fn mixed_input_matrix_correctness_shared() -> Result<
             if wave_failed {
                 stop_mixed_harness_stack(&mut stack).await;
                 stack_stopped = true;
-                if !cases_queue.is_empty() {
+                if wave_index < wave_count {
                     let mut restarted_stack_env = MixedEnv::from_env_with_default_work_dir(
                         &stack_mode,
                         root.join("_shared").join(group.as_str()),

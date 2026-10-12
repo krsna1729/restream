@@ -26,6 +26,7 @@ items).
 - [Q-045 frontend product](#q-045-frontend-opus-build-the-control-room-on-live-data)
 - [Q-046 agent guidance](#q-046-docs-sonnet-slim-agentsmd-to-a-root-contract)
 - [Q-047 MoQ](#q-047-protocol-opus-moq-interop-spike-parked)
+- [Q-049 silent SRT leaves](#q-049-resilience-opus-find-why-connected-srt-leaves-sent-nothing-under-host-overload)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -299,3 +300,18 @@ items).
   adapter; moxygen and MediaMTX as oracles.
 - Parked until transport convergence (Q-025).
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
+
+### Q-049 [resilience] [opus] Find why connected SRT leaves sent nothing under host overload
+- Evidence: while `mixed.signal` ran an H.265 case beside another case on a
+  6-core host (the wave pairing fixed in Q-048), every SRT 1080p leaf of one
+  pipeline completed the SRT handshake (pcap: the FFmpeg listener accepted
+  the conclusion) and then sent no payload for 30 s. `/api/v1/engine/health`
+  showed `bytesOut` 0, feed lag growing, `backpressureReason`
+  `backpressured` and no caller quality stats. SRT 720p leaves and RTMP
+  1080p leaves on the same stage delivered. It did not reproduce
+  standalone.
+- Question: can a leaf be starved by its shard or Owner under host CPU
+  pressure while its siblings progress? That would break output isolation.
+- Gates: a reproduction (load generator plus one feed) or a proof that the
+  leaf cannot stall while connected; the fix keeps sibling leaves unaffected.
+- Status: open (Filed: 2026-10-12 by claude, found while fixing Q-048).

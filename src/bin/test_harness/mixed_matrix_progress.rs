@@ -23,9 +23,10 @@ pub(crate) fn mixed_matrix_cases_can_share_wave(
         && !matches!(second.codec(), MixedVideoCodec::H265)
 }
 
-/// Split a `mixed.signal` batch into waves of at most two cases that share
-/// the stack, under [`mixed_matrix_cases_can_share_wave`].
-pub(crate) fn mixed_signal_waves(
+/// Split a batch of input cases into waves of at most two cases that share
+/// one stack, under [`mixed_matrix_cases_can_share_wave`]; every shared-stack
+/// runner (`mixed.matrix`, `mixed.fast-breadth`, `mixed.signal`) uses it.
+pub(crate) fn plan_shared_waves(
     cases: &[MixedInputCase],
 ) -> Vec<(MixedInputCase, Option<MixedInputCase>)> {
     let mut cases = cases.iter().copied().peekable();
