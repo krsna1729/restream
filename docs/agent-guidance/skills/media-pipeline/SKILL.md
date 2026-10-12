@@ -1,6 +1,6 @@
 ---
 name: media-pipeline
-description: Use before changing restream src/media/, RTMP/SRT/HLS protocol paths, transcoder stages, ring buffers, mux/demux, egress fabrics, or any per-packet hot path.
+description: Use before changing restream src/media/, RTMP/SRT/HLS protocol paths, transcoder stages, ring buffers, mux/demux, egress fabrics, per-packet hot paths, or thread/runtime placement (Tokio, Compio Owner, OS threads, blocking or FFmpeg/FFI calls) anywhere in src/.
 ---
 
 # Media Pipeline

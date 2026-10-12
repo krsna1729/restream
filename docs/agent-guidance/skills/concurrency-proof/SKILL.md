@@ -10,7 +10,8 @@ Use production code through existing seams; a separate test implementation
 does not prove the production path.
 
 - Add deterministic lifecycle/status tests.
-- Use loom for relevant wake/cancel or registry interleavings; bound the model.
+- Use loom or proptest for relevant wake/cancel or registry interleavings;
+  bound the model.
 - For recovery or teardown changes, update the live harness fault assertion
   and operator-visible status contract together.
 - Extend the proof gate for a new primitive or thread hop (the step tables
@@ -18,9 +19,9 @@ does not prove the production path.
   enforces it.
 - Benchmark hot-path changes; otherwise state that the change is off the hot path.
 
-Follow [AGENTS.md](../../../../AGENTS.md) for host/build safety. Run the focused
-proof gate, then the live contract gate before signing off on lifecycle or
-recovery changes:
+Follow [AGENTS.md](../../../../AGENTS.md) for host/build safety. CI runs the
+fast gate on every PR and the live contract gate on master pushes; locally,
+run only the new step or loom case you added:
 
 ```sh
 cargo xtask concurrency fast
