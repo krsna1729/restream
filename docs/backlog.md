@@ -273,8 +273,11 @@ items).
 ### Q-039 [architecture] [opus] Route every mutation through the reconciler
 - Goal: one write path: persist, mark dirty, reconcile.
 - Files: `src/api/pipeline_inputs.rs:253` (input promotion calls
-  `engine.select_pipeline_input` directly), `src/agent_service.rs:275`
-  (agent apply calls `engine.unregister_egress` directly).
+  `engine.select_pipeline_input` directly),
+  `src/application/services/agent_service.rs:275` (agent apply calls
+  `engine.unregister_egress` directly). Deletes also tear down directly:
+  `src/api/outputs.rs:552` after the row is deleted, and
+  `src/api/pipelines.rs:395` before it is.
 - Gates: tests show a promotion and an agent apply persist first and that
   reconcile converges them; a restart after either keeps the result.
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
@@ -307,7 +310,7 @@ items).
   contract is generated from Rust.
 - Gates: api-contract check on generated types; a client that misses
   events resyncs from a revision.
-- Depends on: Q-040.
+- Depends on: Q-040, Q-038.
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
 
 ### Q-043 [observability] [opus] One evidence classification
@@ -317,7 +320,7 @@ items).
 - First step: record how alerts are built today; this item does not yet
   have file evidence.
 - Depends on: Q-042.
-- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
+- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews).
 
 ### Q-044 [frontend] [opus] Hard-cut the frontend to one build
 - Goal: one Vite build and one React root. Delete
@@ -344,8 +347,7 @@ items).
 
 ### Q-046 [docs] [sonnet] Slim AGENTS.md to a root contract
 - Goal: a small root contract; media, frontend and protocol rules move to
-  skills. Remove stale commands (`scripts/build/resource-limit.sh` and
-  `scripts/check/*` are gone; use `cargo xtask`).
+  skills.
 - Gates: `node scripts/check/docs.mjs`; every command named in AGENTS.md
   runs.
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
