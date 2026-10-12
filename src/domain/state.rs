@@ -64,6 +64,7 @@ pub enum StagePhase {
 
 /// Whether a user has requested an output to run or stop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub enum DesiredOutputState {
     /// The output should be actively streaming.
@@ -198,6 +199,7 @@ impl From<String> for EgressRuntimeStatus {
 /// This is what operators see when they query output status. It is separate
 /// from `StagePhase` which describes the upstream media stage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub enum EgressPhase {
     /// Egress worker has been registered but has not begun protocol work.

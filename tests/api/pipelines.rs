@@ -767,3 +767,95 @@ async fn a_successful_mutation_requests_a_reconcile_pass() {
     assert_eq!(resp.status(), StatusCode::CREATED);
     assert!(due(), "a persisted change requests a pass");
 }
+
+/// Reads the first SSE frame of a streaming response.
+async fn first_sse_frame(resp: axum::http::Response<axum::body::Body>) -> String {
+    use http_body_util::BodyExt;
+    let mut body = resp.into_body();
+    let frame = tokio::time::timeout(std::time::Duration::from_secs(5), body.frame())
+        .await
+        .expect("a frame within 5 s")
+        .expect("the stream is open")
+        .unwrap();
+    String::from_utf8(frame.into_data().unwrap().to_vec()).unwrap()
+}
+
+/// `/api/v1/state` projects rows plus runtime under a revision; the stream
+/// starts a new client from a snapshot and an unknown revision resyncs.
+#[tokio::test]
+async fn runtime_state_reports_outputs_and_the_stream_starts_from_a_snapshot() {
+    let (app, _pool) = test_app().await;
+    let cookie = login(&app).await;
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            "/api/v1/pipelines",
+            &cookie,
+            Some(r#"{"name":"P","streamKey":"key01_6c71124cde80358ca7c13081"}"#),
+        ))
+        .await
+        .unwrap();
+    let pipeline_id = body_json(resp).await["pipeline"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            &format!("/api/v1/pipelines/{pipeline_id}/outputs"),
+            &cookie,
+            Some(
+                r#"{"name":"o","url":"rtmp://127.0.0.1:9/live/k","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#,
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req("GET", "/api/v1/state", &cookie, None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let state = body_json(resp).await;
+    let revision = state["revision"].as_u64().unwrap();
+    assert!(revision >= 1);
+    assert_eq!(state["pipelines"][0]["id"], pipeline_id.as_str());
+    assert_eq!(state["pipelines"][0]["ingest"], serde_json::Value::Null);
+    let output = &state["outputs"][0];
+    assert_eq!(output["desired"], "stopped");
+    assert_eq!(output["convergence"], "converged");
+    assert_eq!(output["actual"], serde_json::Value::Null);
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req("GET", "/api/v1/state/stream", &cookie, None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let frame = first_sse_frame(resp).await;
+    let epoch = state["epoch"].as_str().unwrap();
+    assert!(
+        frame.starts_with(&format!("id: {epoch}.{revision}\nevent: snapshot\n")),
+        "a new client starts from the current snapshot: {frame}"
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            &format!("/api/v1/state/stream?since=other-run.{revision}"),
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    let frame = first_sse_frame(resp).await;
+    assert!(
+        frame.contains("event: snapshot\n"),
+        "a token from another server run resyncs: {frame}"
+    );
+}

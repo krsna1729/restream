@@ -20,6 +20,7 @@ returned by login.
 - [File Ingest](#file-ingest)
 - [Media Files](#media-files)
 - [Custom Encoding](#custom-encoding)
+- [Runtime State](#runtime-state)
 - [Health and Status](#health-and-status)
 - [HLS Pull](#hls-pull)
 - [Operator v1 Endpoints](#operator-v1-endpoints)
@@ -698,6 +699,92 @@ updates configured file-ingest rows that referenced the old filename.
 
 The value is configuration-only today. The native transcoder does not interpret
 the stored FFmpeg argument string.
+
+## Runtime State
+
+One typed, revisioned view of every pipeline and output
+(`application::runtime_state`). The TypeScript contract is generated from
+the Rust types into `web/ts/core/generated/runtime-state.ts`. A unit test
+fails when the file is stale; regenerate it with
+`cargo test --lib runtime_state::tests::write_generated -- --ignored`.
+`web/ts/core/state-stream.ts` is the client.
+
+### `GET /api/v1/state`
+
+Rebuilds the projection and returns it:
+
+```json
+{
+  "epoch": "18c9f0a1b2c3d4e5",
+  "revision": 42,
+  "pipelines": [
+    { "id": "...", "name": "...", "ingest": { "inputId": "...", "protocol": "rtmp", "videoCodec": "h264" } }
+  ],
+  "outputs": [
+    {
+      "id": "...", "pipelineId": "...", "name": "...",
+      "desired": "running",
+      "actual": "sending",
+      "convergence": "converged",
+      "flow": "flowing",
+      "backpressure": null,
+      "retry": null,
+      "evidence": null
+    }
+  ]
+}
+```
+
+- `desired`: the operator's intent (`running`, `stopped`).
+- `epoch`: identifies the server run (see the stream below).
+- `actual`: the phase of the running egress attempt, or `null` when none
+  runs.
+- `convergence`: one of the following.
+  - `converged`: delivering, or stopped as asked.
+  - `starting`: an attempt is starting, or the next reconcile pass starts one.
+  - `waitingForIngest`: no live ingest.
+  - `retrying`: waiting out a backoff; `retry` holds `attempts` and
+    `nextAttemptAtMs`.
+  - `retriesExhausted`: the restart budget is spent.
+  - `stopping`: desired `stopped`, but the egress is still ending.
+- `flow`: `flowing`, `stalled` (no progress past the stall threshold) or
+  `idle`.
+- `evidence`: the latest failure (`error`, `phase`, `atMs`) of the running
+  attempt, or else of the last one.
+
+The revision rises by 1 for each change in the projection. It restarts at 0
+when the process restarts.
+
+### `GET /api/v1/state/stream`
+
+Server-sent events. Each event's `id:` is `<epoch>.<revision>`. The epoch
+identifies the server run, so a resume token from an earlier run never
+matches.
+
+- `event: snapshot`: a whole state, as returned by `GET /api/v1/state`.
+- `event: delta`: what changed since the previous revision (it carries
+  `epoch` too), with
+  `pipelines` and `outputs` (whole entities to insert or replace) and
+  `removedPipelines` and `removedOutputs` (ids).
+
+A new connection starts with a snapshot. To resume, send the last event id
+as `?since=<epoch>.<revision>` or `Last-Event-ID`. The server then replays
+the deltas after that revision, if they are among the last 256. Otherwise,
+and when the epoch belongs to another server run, it sends a snapshot. If a client falls behind the
+live stream, it also receives a fresh snapshot. A client that receives a
+delta that does not follow its revision, or one with another epoch, has
+missed events: it reconnects with `since` set to its last applied token.
+
+The projection is rebuilt only while a stream client is connected: every
+reconcile interval, and soon after an engine lifecycle event or a successful
+mutating request, at most once per interval. An event storm (a destination
+outage) therefore costs at most one projection per interval. With no client
+connected, nothing is rebuilt; `GET /api/v1/state` and a new stream
+connection rebuild on demand. Rebuilds run one at a time.
+
+A delivering output that stops making progress reports `flow: stalled` and
+stays `convergence: converged`: the stall is a flow problem, not a
+mismatch between desired and actual.
 
 ## Health and Status
 

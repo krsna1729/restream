@@ -193,6 +193,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
     ));
 
     let requests = state.reconcile.clone();
+    let runtime_state = state.runtime_state.clone();
     let disconnect_grace =
         std::time::Duration::from_millis(config.tuning.ingest_disconnect_grace_ms);
     tokio::spawn(async move {
@@ -202,6 +203,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
                 &event.kind,
                 disconnect_grace,
             );
+            runtime_state.mark_changed();
             events::persist_runtime_event(event);
         }
     });
@@ -216,6 +218,14 @@ pub async fn run_app(config: Arc<AppConfig>) {
         recording_metadata,
         state.reconcile.clone(),
     );
+    let projector_stop = tokio_util::sync::CancellationToken::new();
+    tokio::spawn(crate::application::runtime_state::hub::run_projector(
+        state.runtime_state.clone(),
+        pool.clone(),
+        engine.clone(),
+        std::time::Duration::from_millis(config.tuning.reconciler_interval_ms),
+        projector_stop.clone(),
+    ));
     let mut runtime = runtime::RuntimeTasks::launch(runtime::RuntimeLaunch {
         config,
         state,
@@ -228,6 +238,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
     let shutdown = shutdown::spawn_signal_watcher();
 
     reconciler.run(&mut runtime, &shutdown).await;
+    projector_stop.cancel();
 
     let (http, rtmp, srt) = runtime.into_handles();
     shutdown::cleanup(&engine, &pool, http, rtmp, srt).await;

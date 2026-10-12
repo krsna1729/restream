@@ -26,6 +26,7 @@ pub mod pipeline_inputs;
 pub mod pipeline_observability;
 pub mod pipelines;
 pub mod router;
+pub mod runtime_state;
 pub mod settings;
 pub mod state;
 pub mod static_assets;
