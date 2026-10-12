@@ -18,8 +18,7 @@ cd "$ROOT_DIR"
 
 node scripts/check/dom-id-drift.mjs
 
-npx tsc -p tsconfig.frontend-node-test.json --outDir "$BUILD_DIR"
-cp test/support/frontend-v2-node-stubs/app/*.js "$BUILD_DIR/app/"
+scripts/dev/frontend/compile-for-node.sh "$BUILD_DIR"
 
 export FRONTEND_MODULES_DIR="$BUILD_DIR"
 export TMPDIR="$TMP_BASE"

@@ -1,4 +1,4 @@
-import { globSync } from "node:fs";
+import { readdirSync } from "node:fs";
 
 import { defineConfig } from "vite";
 
@@ -6,9 +6,9 @@ import { defineConfig } from "vite";
 // `preserveModules` keeps one output file per source module (public/js
 // mirrors web/ts, with its exports), as the dashboard lazy-loads its React
 // views and tests import single modules from the shipped tree.
-const entries = globSync("web/ts/**/*.{ts,tsx}", {
-  exclude: (file) => file.endsWith(".d.ts"),
-});
+const entries = readdirSync("web/ts", { recursive: true })
+  .map((file) => `web/ts/${file}`)
+  .filter((file) => /\.tsx?$/.test(file) && !file.endsWith(".d.ts"));
 export default defineConfig({
   define: {
     "process.env.NODE_ENV": JSON.stringify("production"),
