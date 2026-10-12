@@ -76,13 +76,14 @@ pub enum OutputStartAction {
 
 pub fn decide_output_start_action(
     desired_state: DesiredOutputState,
+    retries_exhausted: bool,
     is_active: bool,
     effective_has_ingest: bool,
     failure: Option<OutputFailureWindow>,
     policy: OutputRetryPolicy,
     jitter_key: &str,
 ) -> OutputStartAction {
-    if desired_state != DesiredOutputState::Running || is_active {
+    if desired_state != DesiredOutputState::Running || retries_exhausted || is_active {
         return OutputStartAction::NotApplicable;
     }
     if !effective_has_ingest {
@@ -309,6 +310,7 @@ mod tests {
         let action = decide_output_start_action(
             DesiredOutputState::Running,
             false,
+            false,
             true,
             Some(OutputFailureWindow {
                 retries: 2,
@@ -436,6 +438,7 @@ mod tests {
         assert_eq!(
             decide_output_start_action(
                 DesiredOutputState::Running,
+                false,
                 true,
                 true,
                 None,
@@ -447,6 +450,7 @@ mod tests {
         assert_eq!(
             decide_output_start_action(
                 DesiredOutputState::Stopped,
+                false,
                 false,
                 true,
                 None,
@@ -461,6 +465,7 @@ mod tests {
     fn start_action_starts_now_without_prior_failure() {
         let action = decide_output_start_action(
             DesiredOutputState::Running,
+            false,
             false,
             true,
             None,
@@ -477,6 +482,7 @@ mod tests {
         // [10_000, 20_000], so this holds regardless of jitter_key.
         let action = decide_output_start_action(
             DesiredOutputState::Running,
+            false,
             false,
             true,
             Some(OutputFailureWindow {
@@ -508,6 +514,7 @@ mod tests {
         let action = decide_output_start_action(
             DesiredOutputState::Running,
             false,
+            false,
             true,
             Some(OutputFailureWindow {
                 retries: 10,
@@ -520,10 +527,28 @@ mod tests {
         assert_eq!(action, OutputStartAction::MarkFailed);
     }
 
+    /// Exhausted retries stop restarts while intent stays `running`: the
+    /// reconciler no longer rewrites desired state to record its own failure.
+    #[test]
+    fn start_action_never_restarts_an_output_whose_retries_are_exhausted() {
+        let action = decide_output_start_action(
+            DesiredOutputState::Running,
+            true,
+            false,
+            true,
+            None,
+            test_retry_policy(),
+            "output-a",
+        );
+
+        assert_eq!(action, OutputStartAction::NotApplicable);
+    }
+
     #[test]
     fn start_action_skips_when_ingest_is_missing() {
         let action = decide_output_start_action(
             DesiredOutputState::Running,
+            false,
             false,
             false,
             None,
@@ -643,6 +668,7 @@ mod tests {
             url: "rtmp://example/live/test".to_string(),
             monitoring_url: None,
             desired_state: DesiredOutputState::Running,
+            retries_exhausted: false,
             config: OutputConfig::source(),
         };
 
@@ -668,6 +694,7 @@ mod tests {
             url: "srt://example:9000".to_string(),
             monitoring_url: None,
             desired_state: DesiredOutputState::Running,
+            retries_exhausted: false,
             config: OutputConfig::source(),
         };
 
@@ -687,6 +714,7 @@ mod tests {
             url: "rtmp://example/live".to_string(),
             monitoring_url: None,
             desired_state: DesiredOutputState::Running,
+            retries_exhausted: false,
             config: OutputConfig::preset("720p"),
         };
         let snapshot = OutputRuntimeSnapshot {

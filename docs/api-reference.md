@@ -272,7 +272,11 @@ create/update. Output responses return the same typed object, and the runtime
 derives any internal stage labels from it server-side.
 
 The one-second reconciler starts and stops native egress tasks from
-`desiredState`.
+`desiredState`, which is only the operator's intent (`running` or
+`stopped`). When an output exhausts its restart budget
+(`RESTREAM_OUTPUT_MAX_RETRIES`), `desiredState` stays `running` and
+`retriesExhausted` becomes `true`: the reconciler stops restarting it, its URL
+and config can be edited, and the next start or stop clears the flag.
 
 Create, update, start, and stop responses include a normalized `output` object
 plus the mutation message so clients can patch local output config state without

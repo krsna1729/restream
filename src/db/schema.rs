@@ -44,6 +44,21 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
     super::migrations::ensure_column_exists(
         pool,
         "outputs",
+        "retries_exhausted",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    .await?;
+    // Exhausted retries were once stored as desired_state 'failed'. The
+    // operator's intent was 'running'; exhaustion is now its own flag.
+    sqlx::query(
+        "UPDATE outputs SET desired_state = 'running', retries_exhausted = 1 \
+         WHERE desired_state = 'failed'",
+    )
+    .execute(pool)
+    .await?;
+    super::migrations::ensure_column_exists(
+        pool,
+        "outputs",
         "config",
         "TEXT NOT NULL DEFAULT '{\"video\":{\"mode\":\"source\"},\"audio\":{\"mode\":\"all\"}}'",
     )

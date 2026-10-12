@@ -168,6 +168,7 @@ async fn processing_graph_routes_srt_egress_through_ts_mux() {
         url: "srt://example.com:9000?streamid=publish:test".to_string(),
         monitoring_url: None,
         desired_state: DesiredOutputState::Running,
+        retries_exhausted: false,
         config: crate::domain::output_spec::OutputConfig::source(),
     };
 
@@ -212,6 +213,7 @@ async fn processing_graph_shows_recirculation_target_input_edge() {
         url: "pipeline://pipeline-recirc-target/input-backup".to_string(),
         monitoring_url: None,
         desired_state: DesiredOutputState::Running,
+        retries_exhausted: false,
         config: crate::domain::output_spec::OutputConfig::source(),
     };
     engine
@@ -288,6 +290,7 @@ async fn processing_graph_marks_failed_egress_inactive() {
         url: "rtmp://example/live/test".to_string(),
         monitoring_url: None,
         desired_state: DesiredOutputState::Running,
+        retries_exhausted: false,
         config: crate::domain::output_spec::OutputConfig::source(),
     };
 
@@ -331,6 +334,7 @@ async fn processing_graph_omits_stale_codec_edge_when_output_no_longer_needs_it(
         url: "rtmp://example/live/test".to_string(),
         monitoring_url: None,
         desired_state: DesiredOutputState::Running,
+        retries_exhausted: false,
         config: crate::domain::output_spec::OutputConfig::source(),
     };
     let _ = crate::application::egress::prepare_output_ring(&engine, &stale_source_output).await;
@@ -342,6 +346,7 @@ async fn processing_graph_omits_stale_codec_edge_when_output_no_longer_needs_it(
         url: "rtmp://example/live/test".to_string(),
         monitoring_url: None,
         desired_state: DesiredOutputState::Running,
+        retries_exhausted: false,
         config: crate::domain::output_spec::OutputConfig::preset("h264").with_audio(
             crate::domain::audio_routing::AudioRouting::SelectTracks { tracks: vec![1] },
         ),

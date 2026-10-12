@@ -20,6 +20,7 @@ struct OutputRow {
     url: String,
     monitoring_url: Option<String>,
     desired_state: String,
+    retries_exhausted: bool,
     config: String,
 }
 
@@ -31,6 +32,9 @@ pub struct OutputRecord {
     pub url: String,
     pub monitoring_url: Option<String>,
     pub desired_state: DesiredOutputState,
+    /// The reconciler gave up restarting this output; cleared by any change
+    /// of desired state.
+    pub retries_exhausted: bool,
     pub config: OutputConfig,
 }
 
@@ -45,6 +49,7 @@ impl TryFrom<OutputRow> for OutputRecord {
             url: row.url,
             monitoring_url: row.monitoring_url,
             desired_state: DesiredOutputState::from(row.desired_state),
+            retries_exhausted: row.retries_exhausted,
             config: deserialize_config(&row.config)?,
         })
     }
@@ -118,7 +123,7 @@ pub async fn get_output(
 ) -> Result<Option<OutputRecord>, sqlx::Error> {
     fetch_output_optional(
         pool,
-        "SELECT id, pipeline_id, name, url, monitoring_url, desired_state, config \
+        "SELECT id, pipeline_id, name, url, monitoring_url, desired_state, retries_exhausted, config \
          FROM outputs WHERE id = ? AND pipeline_id = ?",
         &[id, pipeline_id],
     )
@@ -128,7 +133,7 @@ pub async fn get_output(
 pub async fn list_outputs(pool: &SqlitePool) -> Result<Vec<OutputRecord>, sqlx::Error> {
     fetch_output_all(
         pool,
-        "SELECT id, pipeline_id, name, url, monitoring_url, desired_state, config FROM outputs",
+        "SELECT id, pipeline_id, name, url, monitoring_url, desired_state, retries_exhausted, config FROM outputs",
         &[],
     )
     .await
@@ -140,7 +145,7 @@ pub async fn list_outputs_for_pipeline(
 ) -> Result<Vec<OutputRecord>, sqlx::Error> {
     fetch_output_all(
         pool,
-        "SELECT id, pipeline_id, name, url, monitoring_url, desired_state, config \
+        "SELECT id, pipeline_id, name, url, monitoring_url, desired_state, retries_exhausted, config \
          FROM outputs WHERE pipeline_id = ? ORDER BY rowid ASC",
         &[pipeline_id],
     )
@@ -182,7 +187,9 @@ pub async fn set_output_desired_state(
     id: &str,
     desired_state: DesiredOutputState,
 ) -> Result<OutputRecord, sqlx::Error> {
-    sqlx::query("UPDATE outputs SET desired_state = ? WHERE id = ? AND pipeline_id = ?")
+    sqlx::query(
+        "UPDATE outputs SET desired_state = ?, retries_exhausted = 0 WHERE id = ? AND pipeline_id = ?",
+    )
         .bind(desired_state.as_str())
         .bind(id)
         .bind(pipeline_id)
@@ -192,6 +199,21 @@ pub async fn set_output_desired_state(
     get_output(pool, pipeline_id, id)
         .await?
         .ok_or_else(|| sqlx::Error::RowNotFound)
+}
+
+/// Records that the reconciler stopped restarting an output whose desired
+/// state is still `running`.
+pub async fn mark_output_retries_exhausted(
+    pool: &SqlitePool,
+    pipeline_id: &str,
+    id: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE outputs SET retries_exhausted = 1 WHERE id = ? AND pipeline_id = ?")
+        .bind(id)
+        .bind(pipeline_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn delete_output(

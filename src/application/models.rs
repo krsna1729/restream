@@ -50,6 +50,9 @@ pub struct Output {
     pub url: String,
     pub monitoring_url: Option<String>,
     pub desired_state: DesiredOutputState,
+    /// The reconciler gave up restarting this output (actual state, not
+    /// intent); any change of desired state clears it.
+    pub retries_exhausted: bool,
     pub config: OutputConfig,
 }
 

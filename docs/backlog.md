@@ -22,7 +22,6 @@ items).
 - [Q-035 MEDIA attribution](#q-035-observability-sonnet-attribute-media-pool-time-to-feed-and-stage)
 - [Q-036 enforced runtime truth table](#q-036-docs-sonnet-make-runtime-crossings-an-enforced-truth-table)
 - [Q-037 measurement polling](#q-037-measurement-opus-measure-restream-not-its-status-api)
-- [Q-038 desired vs actual](#q-038-architecture-opus-keep-failure-out-of-desired-state)
 - [Q-039 mutation bypass](#q-039-architecture-opus-route-every-mutation-through-the-reconciler)
 - [Q-040 control core](#q-040-architecture-opus-replace-the-1-s-reconcile-sweep-with-commands-and-a-dirty-set)
 - [Q-041 stage ownership](#q-041-architecture-opus-own-stages-by-the-plan-not-a-sweep)
@@ -260,16 +259,6 @@ items).
   external receiver stays the delivery oracle.
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
 
-### Q-038 [architecture] [opus] Keep failure out of desired state
-- Goal: desired state is only the operator's intent (Running or Stopped).
-  Exhausted retries and failure are actual or convergence state.
-- Files: `src/infrastructure/bootstrap/egress.rs` (`MarkFailed` persists
-  `DesiredOutputState::Failed`), the store, the API views.
-- Gates: a unit test where exhausted retries leave desired = Running and
-  report actual = failed; an operator restart needs no desired-state
-  repair.
-- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
-
 ### Q-039 [architecture] [opus] Route every mutation through the reconciler
 - Goal: one write path: persist, mark dirty, reconcile.
 - Files: `src/api/pipeline_inputs.rs:253` (input promotion calls
@@ -311,7 +300,7 @@ items).
   contract is generated from Rust.
 - Gates: api-contract check on generated types; a client that misses
   events resyncs from a revision.
-- Depends on: Q-040, Q-038.
+- Depends on: Q-040.
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
 
 ### Q-043 [observability] [opus] One evidence classification

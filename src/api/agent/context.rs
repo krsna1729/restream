@@ -200,6 +200,7 @@ fn desired_vs_actual(
                 "outputId": output.id,
                 "name": output.name,
                 "desiredState": output.desired_state,
+                "retriesExhausted": output.retries_exhausted,
                 "actualStatus": actual,
                 "actualPhase": runtime["phase"],
                 "converged": reason == "converged",

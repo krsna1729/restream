@@ -257,11 +257,6 @@ impl AgentService {
                         )
                         .await
                         .map_err(|err| format!("failed to update desired state: {err}"))?,
-                        DesiredOutputState::Failed => {
-                            return Err(
-                                "agent output updates cannot request failed state".to_string()
-                            );
-                        }
                     };
                 }
                 Ok(AgentOutputMutationOutcome::Updated { previous, current })
@@ -301,9 +296,6 @@ impl AgentService {
                         crate::application::outputs::request_stop(&self.db, pipeline_id, &output_id)
                             .await
                             .map_err(|err| format!("failed to set desired state: {err}"))?
-                    }
-                    DesiredOutputState::Failed => {
-                        return Err("agent output actions cannot request failed state".to_string());
                     }
                 };
                 Ok(AgentOutputMutationOutcome::DesiredStateUpdated { previous, current })
