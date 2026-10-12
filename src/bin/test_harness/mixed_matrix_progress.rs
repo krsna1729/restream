@@ -23,6 +23,21 @@ pub(crate) fn mixed_matrix_cases_can_share_wave(
         && !matches!(second.codec(), MixedVideoCodec::H265)
 }
 
+/// Split a batch of input cases into waves of at most two cases that share
+/// one stack, under [`mixed_matrix_cases_can_share_wave`]; every shared-stack
+/// runner (`mixed.matrix`, `mixed.fast-breadth`, `mixed.signal`) uses it.
+pub(crate) fn plan_shared_waves(
+    cases: &[MixedInputCase],
+) -> Vec<(MixedInputCase, Option<MixedInputCase>)> {
+    let mut cases = cases.iter().copied().peekable();
+    let mut waves = Vec::new();
+    while let Some(first) = cases.next() {
+        let second = cases.next_if(|second| mixed_matrix_cases_can_share_wave(first, *second));
+        waves.push((first, second));
+    }
+    waves
+}
+
 const MIXED_RUNTIME_LOG_NOISE_PATTERNS: [&str; 5] = [
     "PPS id out of range",
     "Could not find ref with POC",

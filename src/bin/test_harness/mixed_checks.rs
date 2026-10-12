@@ -283,7 +283,9 @@ pub(crate) async fn verify_mixed_output_cases_inner(
                 }
             }
         }
-        if env.check_selected("signal") && !env.use_direct_signal_sinks() && !mediamtx_publish_probe
+        if env.check_selected("signal")
+            && !env.direct_signal_sink(case.protocol())
+            && !mediamtx_publish_probe
         {
             selected_checks.push("signal");
             let signal_id = mixed_output_check_id(cfg, case.id(), "signal");

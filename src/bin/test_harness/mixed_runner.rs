@@ -64,7 +64,7 @@ pub(super) use mixed_live_scenarios::{
 #[cfg(test)]
 pub(super) use mixed_matrix_runner::{
     matrix_case_progress_rows, mixed_matrix_cases_can_share_wave, mixed_runtime_log_noise_lines,
-    mixed_runtime_log_noise_matches, write_matrix_scenario_progress,
+    mixed_runtime_log_noise_matches, plan_shared_waves, write_matrix_scenario_progress,
 };
 pub(super) use mixed_matrix_runner::{
     mixed_fast_breadth_correctness, mixed_signal_correctness, verify_mixed_runtime_log_hygiene,
@@ -256,13 +256,18 @@ impl MixedEnv {
             .is_some_and(|items| items.iter().any(|item| item == check))
     }
 
-    pub(super) fn use_direct_signal_sinks(&self) -> bool {
-        self.only_checks.as_ref().is_some_and(|items| {
-            !items.is_empty()
-                && items
-                    .iter()
-                    .all(|item| item == "signal" || item == "soak-drift")
-        })
+    /// Whether an output of `protocol` is captured by a direct FFmpeg signal
+    /// sink. Signal-only runs use direct sinks, except for RTMPS: FFmpeg
+    /// cannot listen for RTMPS, so those outputs publish to MediaMTX and get
+    /// the read-back signal check instead.
+    pub(super) fn direct_signal_sink(&self, protocol: MixedOutputProtocol) -> bool {
+        protocol != MixedOutputProtocol::Rtmps
+            && self.only_checks.as_ref().is_some_and(|items| {
+                !items.is_empty()
+                    && items
+                        .iter()
+                        .all(|item| item == "signal" || item == "soak-drift")
+            })
     }
 
     pub(super) fn needs_live_output_progress_gate(&self) -> bool {

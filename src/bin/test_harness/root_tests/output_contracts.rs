@@ -222,6 +222,51 @@ fn mixed_matrix_hevc_rows_do_not_share_capacity_wave() {
 }
 
 #[test]
+fn shared_waves_run_hevc_cases_alone_and_cover_every_case_once() {
+    let mut hevc_batches = 0;
+    for batch in mixed_signal_batches()
+        .iter()
+        .chain(mixed_fast_breadth_batches())
+    {
+        let waves = plan_shared_waves(&batch.cases);
+        let covered: Vec<_> = waves
+            .iter()
+            .flat_map(|(first, second)| std::iter::once(*first).chain(*second))
+            .collect();
+        assert_eq!(
+            covered,
+            batch.cases,
+            "{} waves keep batch order",
+            batch.group.as_str()
+        );
+        for (first, second) in &waves {
+            if let Some(second) = second {
+                assert!(
+                    !matches!(first.codec(), MixedVideoCodec::H265)
+                        && !matches!(second.codec(), MixedVideoCodec::H265),
+                    "{}: {} shares a wave with {}",
+                    batch.group.as_str(),
+                    first.scenario_id(),
+                    second.scenario_id()
+                );
+            }
+        }
+        if batch
+            .cases
+            .iter()
+            .any(|case| matches!(case.codec(), MixedVideoCodec::H265))
+            && batch.cases.len() > 1
+        {
+            hevc_batches += 1;
+        }
+    }
+    assert!(
+        hevc_batches > 0,
+        "the signal batches include an H.265 case with a sibling"
+    );
+}
+
+#[test]
 fn mixed_input_planning_shares_stages_across_duplicate_outputs() {
     for case in mixed_input_cases() {
         let single = planned_mixed_stage_count(*case, 1);

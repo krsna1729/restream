@@ -15,13 +15,14 @@ use mixed_matrix_progress::{
     matrix_mark_case_state, matrix_progress_totals, write_matrix_scenario_progress_for_mode,
 };
 pub(crate) use mixed_matrix_progress::{
-    matrix_case_progress_rows, mixed_matrix_cases_can_share_wave, mixed_matrix_default_check_names,
-    mixed_matrix_fail_fast, verify_mixed_runtime_log_hygiene, write_json_pretty_atomic,
+    matrix_case_progress_rows, mixed_matrix_default_check_names, mixed_matrix_fail_fast,
+    plan_shared_waves, verify_mixed_runtime_log_hygiene, write_json_pretty_atomic,
     write_matrix_scenario_progress,
 };
 #[cfg(test)]
 pub(crate) use mixed_matrix_progress::{
-    mixed_runtime_log_noise_lines, mixed_runtime_log_noise_matches,
+    mixed_matrix_cases_can_share_wave, mixed_runtime_log_noise_lines,
+    mixed_runtime_log_noise_matches,
 };
 
 pub(crate) async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
@@ -70,11 +71,9 @@ pub(crate) async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
         let mut stack = start_mixed_harness_stack(stack_env).await?;
 
         let wave_started = Instant::now();
-        let mut batch_cases = batch.cases.iter().copied();
         let mut wave_index = 0usize;
-        while let Some(case_a) = batch_cases.next() {
+        for (case_a, case_b) in plan_shared_waves(&batch.cases) {
             wave_index += 1;
-            let case_b = batch_cases.next();
 
             let selected_a = mixed_fast_breadth_selected(case_a);
             let mut env_a = MixedEnv::from_env_with_default_work_dir(
@@ -403,11 +402,9 @@ pub(crate) async fn mixed_signal_correctness() -> Result<Value, String> {
         let mut stack = start_mixed_harness_stack(stack_env).await?;
 
         let wave_started = Instant::now();
-        let mut batch_cases = batch.cases.iter().copied();
         let mut wave_index = 0usize;
-        while let Some(case_a) = batch_cases.next() {
+        for (case_a, case_b) in plan_shared_waves(&batch.cases) {
             wave_index += 1;
-            let case_b = batch_cases.next();
 
             let selected_a = mixed_signal_selected(case_a);
             let mut env_a = MixedEnv::from_env_with_default_work_dir(
