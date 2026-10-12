@@ -548,7 +548,7 @@ impl EgressTask {
         let failed = loop {
             self.forward_upload_status(&fabric.upload_status, &mut forwarded)
                 .await;
-            if fabric.terminated.load(std::sync::atomic::Ordering::Relaxed) {
+            if fabric.terminated.load(std::sync::atomic::Ordering::Acquire) {
                 self.forward_upload_status(&fabric.upload_status, &mut forwarded)
                     .await;
                 break true;

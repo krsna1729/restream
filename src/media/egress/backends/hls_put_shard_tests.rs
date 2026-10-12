@@ -257,6 +257,29 @@ fn a_rejection_ends_the_leaf_and_reports_it() {
     assert!(!output.handle.shutdown_and_join().panicked);
 }
 
+/// A rejection after a retried failure ends the retry: the output reports
+/// the rejection, not a retry still in progress.
+#[test]
+fn a_rejection_after_a_retry_reports_no_retry() {
+    let origin = Origin::start(|nth, _| (if nth == 0 { 503 } else { 401 }, false));
+    let output = start_output(origin.port);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !output.terminated.load(Ordering::Acquire) {
+        assert!(Instant::now() < deadline, "the rejection was not reported");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let status = output.upload_status();
+    assert_eq!(status.failures, 2);
+    assert_eq!(status.retry, None, "the rejection left a retry in progress");
+    let (phase, message) = status.last_failure.expect("the rejection is recorded");
+    assert_eq!(phase, "upload_segment");
+    assert!(
+        message.contains("rejected") && message.ends_with("with HTTP 401"),
+        "{message}"
+    );
+    assert!(!output.handle.shutdown_and_join().panicked);
+}
+
 /// A 503 is retried on a fresh connection and the session recovers.
 #[test]
 fn a_server_error_is_retried_on_a_new_connection() {

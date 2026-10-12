@@ -336,6 +336,14 @@ impl EgressProgressSink {
         }
     }
 
+    /// A request failed for good (the ingest rejected it): no retry is in
+    /// progress.
+    pub fn clear_upload_retry(&self) {
+        if let Some(slot) = &self.upload_status {
+            crate::sync::lock(slot).retry = None;
+        }
+    }
+
     /// A request was acknowledged: no retry is in progress.
     pub fn record_upload_acknowledged(&self) {
         if let Some(slot) = &self.upload_status {
@@ -350,7 +358,9 @@ impl EgressProgressSink {
     #[inline]
     pub fn mark_terminated_unexpectedly(&self) {
         if let Some(flag) = &self.terminated_unexpectedly {
-            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+            // Release: a reader that sees the flag also sees what the shard
+            // recorded before it (the upload status).
+            flag.store(true, std::sync::atomic::Ordering::Release);
         }
     }
 }

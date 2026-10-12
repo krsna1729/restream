@@ -547,6 +547,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             if let Some(exchange) = slot.exchange.as_mut() {
                 let Conn::Open(connection) = &mut slot.conn else {
                     slot.exchange = None;
+                    self.fail_exchange(key, now, "connection closed");
                     continue;
                 };
                 let step = exchange.advance(connection, &mut self.scratch);
@@ -801,6 +802,7 @@ fn report(
                 upload_policy::rejected_message(&request.file_name, status),
                 None,
             );
+            slot.progress.clear_upload_retry();
         }
         Some(ResultEffect::EndNotDelivered) => {
             tracing::info!(

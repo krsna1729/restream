@@ -400,8 +400,25 @@ impl EgressReconciler {
             None
         };
 
+        // HTTPS on the fabric needs kernel TLS (no userspace fallback);
+        // without it HTTPS outputs stay on the Reqwest uploader.
         let use_hls_put_fabric = self.engine.config.egress_fabric.hls_put_fabric
-            && matches!(url_scheme, OutputUrlScheme::Http | OutputUrlScheme::Https);
+            && match url_scheme {
+                OutputUrlScheme::Http => true,
+                OutputUrlScheme::Https => {
+                    let available = crate::media::egress::tls::ktls::egress_available();
+                    if !available {
+                        static LOGGED: std::sync::Once = std::sync::Once::new();
+                        LOGGED.call_once(|| {
+                            warn!(
+                                "kernel TLS unavailable; HTTPS HLS outputs use the Reqwest uploader"
+                            );
+                        });
+                    }
+                    available
+                }
+                _ => false,
+            };
         let hls_put_fabric = if use_hls_put_fabric {
             let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let upload_status = Arc::new(std::sync::Mutex::new(

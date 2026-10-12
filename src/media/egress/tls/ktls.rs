@@ -184,6 +184,33 @@ static KTLS_CAPABILITY_CACHE: LazyLock<Mutex<HashMap<(bool, KtlsCipher), bool>>>
 /// call for a combination runs a once-per-process probe against a connected
 /// local TCP pair with dummy key material; later calls reuse the cached
 /// verdict without touching the kernel.
+/// Whether this host can carry TLS egress on kernel TLS at all: some
+/// AES-GCM suite the egress client offers passes the probe. TLS egress on
+/// the fabric has no userspace fallback, so callers pick another transport
+/// when this is false.
+pub(crate) fn egress_available() -> bool {
+    [
+        (
+            ProtocolVersion::TLSv1_3,
+            CipherSuite::TLS13_AES_128_GCM_SHA256,
+        ),
+        (
+            ProtocolVersion::TLSv1_3,
+            CipherSuite::TLS13_AES_256_GCM_SHA384,
+        ),
+        (
+            ProtocolVersion::TLSv1_2,
+            CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+        ),
+        (
+            ProtocolVersion::TLSv1_2,
+            CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+        ),
+    ]
+    .into_iter()
+    .any(|(version, suite)| supports(version, suite))
+}
+
 pub(crate) fn supports(version: ProtocolVersion, suite: CipherSuite) -> bool {
     let Some((tls13, cipher)) = capability_for(version, suite) else {
         return false;
