@@ -593,7 +593,6 @@ impl EgressTask {
             forwarded.failures = status.failures;
             (failure, status.retry, status.healthy)
         };
-        let new_failure = failure.is_some();
         if let Some((phase, message)) = failure {
             self.engine
                 .record_egress_error_if_current(&self.output_id, &self.registration, phase, message)
@@ -606,9 +605,7 @@ impl EgressTask {
                 .mark_egress_recovered_if_current(&self.output_id, &self.registration)
                 .await;
         }
-        // Reconcile clears the retry entry of an active output, so each new
-        // failure asserts it again, as the Tokio uploader does per failure.
-        if retry != forwarded.retry || (new_failure && retry.is_some()) {
+        if retry != forwarded.retry {
             forwarded.retry = retry;
             match retry {
                 Some((attempts, backoff_ms)) => {
@@ -851,12 +848,15 @@ impl EgressTask {
             None,
         )
         .await;
+        // Record the failure before the egress is gone: its stop event wakes
+        // the reconciler, which must see the failure and wait out the backoff
+        // (it reads `last_failed` under this lock).
+        let mut last_failed = self.last_failed.lock().await;
         let was_current = self
             .engine
             .unregister_egress_if_current(&self.output_id, &self.registration)
             .await;
         let retry_backoff = if was_current {
-            let mut last_failed = self.last_failed.lock().await;
             let retries = next_output_retry_count(
                 last_failed
                     .get(&self.output_id)
@@ -871,6 +871,7 @@ impl EgressTask {
         } else {
             None
         };
+        drop(last_failed);
         if let Some((retries, backoff_ms)) = retry_backoff {
             self.engine
                 .update_egress_retry_state(&self.output_id, retries, backoff_ms, backoff_ms)

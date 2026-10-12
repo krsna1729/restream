@@ -172,13 +172,9 @@ pub async fn run_app(config: Arc<AppConfig>) {
         ),
     );
 
+    // Events emitted before the consumer below starts wait in the channel.
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
     engine.set_event_sink(event_tx);
-    tokio::spawn(async move {
-        while let Some(event) = event_rx.recv().await {
-            events::persist_runtime_event(event);
-        }
-    });
 
     let sessions_for_reconciler = sessions.clone();
     let recording_metadata =
@@ -195,6 +191,20 @@ pub async fn run_app(config: Arc<AppConfig>) {
         logging_handles.broadcast_tx.clone(),
         crate::api::state::AppStateRuntimeConfig::from(config.as_ref()),
     ));
+
+    let requests = state.reconcile.clone();
+    let disconnect_grace =
+        std::time::Duration::from_millis(config.tuning.ingest_disconnect_grace_ms);
+    tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            crate::application::topology::request_pass_for_event(
+                &requests,
+                &event.kind,
+                disconnect_grace,
+            );
+            events::persist_runtime_event(event);
+        }
+    });
 
     let reconciler = reconcile::Reconciler::new(
         config.clone(),

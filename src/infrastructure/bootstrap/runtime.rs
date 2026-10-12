@@ -117,17 +117,17 @@ impl RuntimeTasks {
     pub async fn wait_for_reconcile_tick(
         &mut self,
         shutdown: &CancellationToken,
-        interval: Duration,
+        wait: Duration,
         requested: impl std::future::Future<Output = ()>,
     ) -> bool {
         let now = tokio::time::Instant::now();
         self.rtmp.restart_if_due(now);
         self.srt.restart_if_due(now);
-        // Wake for a due restart even when the reconcile interval is longer.
+        // Wake for a due restart even when the requested wait is longer.
         let wake = [self.rtmp.restart_due(), self.srt.restart_due()]
             .into_iter()
             .flatten()
-            .fold(now + interval, std::cmp::min);
+            .fold(now + wait, std::cmp::min);
         tokio::select! {
             _ = shutdown.cancelled() => false,
             result = &mut self.http => {

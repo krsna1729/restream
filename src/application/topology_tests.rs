@@ -175,3 +175,89 @@ async fn a_pass_never_demotes_a_stream_key_session_without_a_request() {
     assert_eq!(forwarded_input(&engine, "pipe").as_deref(), Some("key-p"));
     assert!(!file_ingest.cancel_token.is_cancelled());
 }
+
+#[test]
+fn a_wake_makes_exactly_one_pass_due() {
+    let requests = ReconcileRequests::new();
+    let now = Instant::now();
+    assert!(!requests.take_due(now), "idle: no pass");
+    requests.wake();
+    requests.wake();
+    assert!(requests.take_due(now), "wakes coalesce into one pass");
+    assert!(!requests.take_due(now));
+}
+
+#[test]
+fn a_deadline_makes_a_pass_due_only_once_it_is_reached() {
+    let requests = ReconcileRequests::new();
+    let now = Instant::now();
+    let soon = now + std::time::Duration::from_secs(1);
+    let later = now + std::time::Duration::from_secs(5);
+    requests.wake_at(later);
+    requests.wake_at(soon);
+    assert_eq!(requests.next_deadline(), Some(soon));
+    assert!(!requests.take_due(now));
+    assert!(requests.take_due(soon), "a deadline is due at its instant");
+    assert_eq!(
+        requests.next_deadline(),
+        Some(later),
+        "later deadlines survive"
+    );
+    assert!(!requests.take_due(soon));
+    assert!(requests.take_due(later + std::time::Duration::from_secs(1)));
+    assert_eq!(requests.next_deadline(), None);
+}
+
+#[test]
+fn lifecycle_events_request_the_passes_their_effects_need() {
+    use crate::events::EventKind;
+    let grace = std::time::Duration::from_secs(5);
+    let requests = ReconcileRequests::new();
+    let before = Instant::now();
+    request_pass_for_event(
+        &requests,
+        &EventKind::IngestDisconnected {
+            pipeline_id: "pipe".into(),
+            protocol: "rtmp".into(),
+        },
+        grace,
+    );
+    assert!(requests.take_due(Instant::now()), "outputs react at once");
+    let grace_end = requests
+        .next_deadline()
+        .expect("a pass when the grace ends");
+    assert!(
+        grace_end > before + grace,
+        "after the grace, not at its edge"
+    );
+    assert!(grace_end < Instant::now() + grace + std::time::Duration::from_secs(1));
+
+    let requests = ReconcileRequests::new();
+    request_pass_for_event(
+        &requests,
+        &EventKind::EgressStopped {
+            pipeline_id: "pipe".into(),
+            output_id: "out".into(),
+        },
+        grace,
+    );
+    assert!(
+        requests.take_due(Instant::now()),
+        "an ended egress is retried or swept"
+    );
+
+    let requests = ReconcileRequests::new();
+    request_pass_for_event(
+        &requests,
+        &EventKind::EgressStarted {
+            pipeline_id: "pipe".into(),
+            output_id: "out".into(),
+        },
+        grace,
+    );
+    assert!(
+        !requests.take_due(Instant::now()),
+        "a start changes nothing to converge"
+    );
+    assert_eq!(requests.next_deadline(), None);
+}

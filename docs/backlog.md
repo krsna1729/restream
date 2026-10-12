@@ -21,7 +21,6 @@ items).
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
 - [Q-035 MEDIA attribution](#q-035-observability-sonnet-attribute-media-pool-time-to-feed-and-stage)
 - [Q-036 enforced runtime truth table](#q-036-docs-sonnet-make-runtime-crossings-an-enforced-truth-table)
-- [Q-040 control core](#q-040-architecture-opus-replace-the-1-s-reconcile-sweep-with-commands-and-a-dirty-set)
 - [Q-041 stage ownership](#q-041-architecture-opus-own-stages-by-the-plan-not-a-sweep)
 - [Q-042 runtime truth](#q-042-architecture-opus-one-revisioned-runtime-state-with-delta-events)
 - [Q-043 evidence engine](#q-043-observability-opus-one-evidence-classification)
@@ -244,18 +243,6 @@ items).
 - Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
   review).
 
-### Q-040 [architecture] [opus] Replace the 1 s reconcile sweep with commands and a dirty set
-- Goal: changes drive work, not a timer. Commands mark a pipeline dirty;
-  a deadline queue holds retries; generations reject stale results.
-- Files: `src/infrastructure/bootstrap/` (`reconciler_interval_ms` = 1000
-  walks every output; reconcile clears retry state of active outputs at
-  `egress.rs:53`, so uploaders must re-assert it).
-- Gates: concurrency contract gate; idle reconcile CPU at 1000 outputs
-  measured before/after; the fault.resilience live mode passes.
-- Start from: `application::topology::ReconcileRequests` (wake plus dirty
-  input selections), which mutation handlers already call.
-- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
-
 ### Q-041 [architecture] [opus] Own stages by the plan, not a sweep
 - Goal: shared stages are reference-counted by the pipeline plan and stop
   when the last consumer leaves. Delete the sweep and its grace period.
@@ -263,7 +250,8 @@ items).
   `UNUSED_STAGE_GRACE` = 5 s re-derives use from all outputs).
 - Gates: tests for add/remove/replace of consumers on a shared stage; no
   stage outlives its last consumer; live harness mixed-anchor passes.
-- Depends on: Q-040.
+- Unblocks: per-pipeline output passes. The reconciler's output pass is
+  on demand (Q-040) but still whole, because this sweep needs every output.
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
 
 ### Q-042 [architecture] [opus] One revisioned runtime state with delta events
@@ -273,7 +261,9 @@ items).
   contract is generated from Rust.
 - Gates: api-contract check on generated types; a client that misses
   events resyncs from a revision.
-- Depends on: Q-040.
+- Start from: the reconciler's triggers (`application::topology`
+  `ReconcileRequests`, `request_pass_for_event`) are the change points a
+  revision would advance on.
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
 
 ### Q-043 [observability] [opus] One evidence classification

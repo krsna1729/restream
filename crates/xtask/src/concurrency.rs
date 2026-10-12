@@ -39,6 +39,8 @@ const COMMON_TESTS: &[(&str, &[&str])] = &[
     ("lib-stale-ingest-disconnect", &["test", "stale_ingest_disconnect_cannot_poison_replacement_attempt", "--lib", "--", "--nocapture"]),
     ("lib-stale-egress-unregister", &["test", "stale_egress_unregister_cannot_clobber_replacement_attempt", "--lib", "--", "--nocapture"]),
     ("lib-stale-egress-error", &["test", "stale_egress_error_cannot_poison_replacement_attempt", "--lib", "--", "--nocapture"]),
+    ("lib-reconcile-triggers", &["test", "application::topology::tests", "--lib", "--", "--nocapture"]),
+    ("api-mutation-requests-pass", &["test", "a_successful_mutation_requests_a_reconcile_pass", "--test", "api", "--", "--nocapture"]),
     ("lib-stale-egress-queue", &["test", "stale_egress_queue_removal_cannot_drop_replacement_queue", "--lib", "--", "--nocapture"]),
     ("ring-proptest", &["test", "prop_no_loss_no_gap_no_duplication", "--test", "ring_migration", "--", "--nocapture"]),
     ("ring-multi-reader-proptest", &["test", "prop_multi_reader_migration_preserves_each_reader_order", "--test", "ring_migration", "--", "--nocapture"]),

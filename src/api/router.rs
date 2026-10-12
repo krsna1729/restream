@@ -505,7 +505,31 @@ fn apply_standard_layers(router: Router<Arc<AppState>>) -> Router<Arc<AppState>>
 /// Constructs the externally exposed application router with shared transport
 /// layers and the concrete application state attached.
 pub fn create_router(state: Arc<AppState>) -> Router {
-    apply_standard_layers(create_app_router()).with_state(state)
+    apply_standard_layers(create_app_router())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            wake_reconciler_after_mutation,
+        ))
+        .with_state(state)
+}
+
+/// Every persisted change reaches the reconciler (Q-040): it runs an output
+/// pass only when asked, so a successful mutating request asks, whichever
+/// handler served it.
+async fn wake_reconciler_after_mutation(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mutating = !matches!(
+        *request.method(),
+        axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+    );
+    let response = next.run(request).await;
+    if mutating && response.status().is_success() {
+        state.reconcile.wake();
+    }
+    response
 }
 
 #[cfg(test)]

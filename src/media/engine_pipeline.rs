@@ -229,7 +229,10 @@ impl MediaEngine {
     /// — a reconcile tick can land in that gap and see neither signal.
     const UNUSED_STAGE_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
-    pub async fn sweep_unused_stages(&self) {
+    /// Cancels TS muxer stages with no consumer. Stages younger than the
+    /// grace are kept; returns how long until the youngest of them ages out,
+    /// so the reconciler can sweep again then instead of on a timer.
+    pub async fn sweep_unused_stages(&self) -> Option<std::time::Duration> {
         // Liveness has two independent signals: legacy consumers register a
         // `Reader` on the ring (tracked in `stage.ring.readers`), while
         // fabric consumers read via `EgressFeed::read_from` and never
@@ -245,9 +248,13 @@ impl MediaEngine {
                 .collect()
         };
 
+        let mut next_sweep: Option<std::time::Duration> = None;
         let mut stages = self.stages.ts_muxers.write().await;
         stages.retain(|key, stage| {
-            if stage.created_at.elapsed() < Self::UNUSED_STAGE_GRACE {
+            let age = stage.created_at.elapsed();
+            if age < Self::UNUSED_STAGE_GRACE {
+                let remaining = Self::UNUSED_STAGE_GRACE - age;
+                next_sweep = Some(next_sweep.map_or(remaining, |next| next.min(remaining)));
                 return true;
             }
 
@@ -266,5 +273,6 @@ impl MediaEngine {
                 true
             }
         });
+        next_sweep
     }
 }

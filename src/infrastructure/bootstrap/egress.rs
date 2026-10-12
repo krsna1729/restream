@@ -40,7 +40,11 @@ impl EgressReconciler {
         }
     }
 
-    pub async fn reconcile(&self, outputs: &[Output]) {
+    /// Starts, stops and retries outputs. Returns how long until the earliest
+    /// output waiting out its retry backoff may start, so the reconciler can
+    /// run then.
+    pub async fn reconcile(&self, outputs: &[Output]) -> Option<std::time::Duration> {
+        let mut next_retry: Option<u64> = None;
         for output in outputs {
             let snapshot = load_output_runtime_snapshot(
                 &self.engine,
@@ -48,7 +52,9 @@ impl EgressReconciler {
                 self.tuning.ingest_disconnect_grace_ms,
             )
             .await;
-            if snapshot.is_active || !output.wants_running() {
+            // Restart backoff is the reconciler's; while an output is active,
+            // its retry state is its uploader's, so it is cleared only here.
+            if !output.wants_running() {
                 self.engine.clear_egress_retry_state(&output.id).await;
             }
             let failure = {
@@ -114,9 +120,15 @@ impl EgressReconciler {
                     self.engine
                         .update_egress_retry_state(&output.id, retries, backoff_ms, remaining_ms)
                         .await;
+                    next_retry =
+                        Some(next_retry.map_or(remaining_ms, |next| next.min(remaining_ms)));
                     continue;
                 }
-                OutputStartAction::StartNow => self.start(output).await,
+                OutputStartAction::StartNow => {
+                    // A fresh attempt carries no restart backoff.
+                    self.engine.clear_egress_retry_state(&output.id).await;
+                    self.start(output).await;
+                }
             }
 
             match decide_output_stop_action(
@@ -153,6 +165,7 @@ impl EgressReconciler {
                 }
             }
         }
+        next_retry.map(std::time::Duration::from_millis)
     }
 
     async fn start(&self, output: &Output) {

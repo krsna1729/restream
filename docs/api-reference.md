@@ -281,7 +281,7 @@ Create/update body:
 create/update. Output responses return the same typed object, and the runtime
 derives any internal stage labels from it server-side.
 
-The one-second reconciler starts and stops native egress tasks from
+The reconciler starts and stops native egress tasks from
 `desiredState`, which is only the operator's intent (`running` or
 `stopped`). When an output exhausts its restart budget
 (`RESTREAM_OUTPUT_MAX_RETRIES`), `desiredState` stays `running` and

@@ -67,7 +67,7 @@ in SQLite.
 | SRT receive budget | `512` datagrams for the measurement sink | `RESTREAM_SRT_RECV_BUDGET_DATAGRAMS` (A/B knob for the test-harness SRT sinks only; the production Owner's receive work is bounded by `OwnerServiceBudget`. The sink uses `RecvBudget::new(8, 512)` unless this env is set.) |
 | AVIO queue capacity (async↔OS-thread bridge) | `524288` bytes (512 KiB) | `RESTREAM_AVIO_QUEUE_CAPACITY` (measured peak HWM = 398 KiB at 8 Mb/s RTMP with zero blocked writes; raise only for very high-latency SRT links) |
 | File descriptor limit | `65536` | `RESTREAM_NOFILE_LIMIT` |
-| Output reconciliation interval | 1 second | `RESTREAM_RECONCILE_INTERVAL_MS` |
+| Reconciler housekeeping interval (sessions, fabric sizing, recordings, idle HLS, file-ingest reaping); the output pass runs on demand, with a backstop pass every 10 intervals | 1 second | `RESTREAM_RECONCILE_INTERVAL_MS` |
 | Failed-output max retries | `10` | `RESTREAM_OUTPUT_MAX_RETRIES` |
 | Failed-output restart base backoff | 5 seconds | `RESTREAM_OUTPUT_RETRY_BASE_MS` |
 | Failed-output restart max backoff | 300 seconds | `RESTREAM_OUTPUT_RETRY_MAX_MS` |

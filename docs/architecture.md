@@ -303,8 +303,20 @@ handlers do not tear down or switch runtime state themselves. Each pass
 (`converge_topology`) stops egresses whose output row is gone, tears down the
 ingest sessions (and so file-ingest children), ring, stages and HLS of a
 deleted pipeline; a requested input promotion is applied first in the pass,
-from its persisted row. A request wakes the pass at once instead of at the
-next tick.
+from its persisted row.
+
+The output pass (rows, topology, egress start/stop/retry, stage sweep) runs
+only when something asks for it: a successful mutating HTTP request (one
+middleware covers every handler), an engine lifecycle event (ingest connect or
+disconnect, egress stop or failure, stage stop or failure), or a deadline the
+pass scheduled itself (an output's retry backoff ending, an ingest-disconnect
+grace ending, a young unused stage aging out). A backstop pass runs every 10
+reconcile intervals. Deadlines only wake the pass, which re-reads current
+state, so a stale deadline costs one pass and never acts on old state.
+Housekeeping that reads no outputs (sessions, fabric sizing, recordings, idle
+HLS, file-ingest reaping) stays on the interval. Passes are still whole: the
+transcoder-stage sweep is global, so a pass for one pipeline would need every
+output (Q-041 removes the sweep).
 
 Failure isolation follows these rules:
 
