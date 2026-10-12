@@ -24,6 +24,7 @@ export FRONTEND_MODULES_DIR="$BUILD_DIR"
 export TMPDIR="$TMP_BASE"
 
 TEST_FILES=(
+  test/frontend/control-room-fleet.test.mjs
   test/frontend/frontend-api-contract.test.mjs
   test/frontend/frontend-architecture-layering.test.mjs
   test/frontend/frontend-dashboard-contract.test.mjs

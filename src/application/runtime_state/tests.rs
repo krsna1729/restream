@@ -22,9 +22,13 @@ fn render_contract() -> String {
         crate::application::diagnosis::Cause::decl(&cfg),
         DesiredOutputState::decl(&cfg),
         EgressPhase::decl(&cfg),
+        crate::capacity::CapacitySnapshot::decl(&cfg),
+        crate::capacity::ServiceCenter::decl(&cfg),
+        crate::capacity::FlowDiagnosis::decl(&cfg),
+        crate::capacity::FlowStatus::decl(&cfg),
     ];
     let mut out = String::from(
-        "// Generated from src/application/runtime_state and diagnosis (ts-rs). Do not edit.\n\
+        "// Generated from src/application/runtime_state, diagnosis and capacity (ts-rs). Do not edit.\n\
          // Regenerate: cargo test --lib runtime_state::tests::write_generated -- --ignored\n\n",
     );
     for decl in decls {

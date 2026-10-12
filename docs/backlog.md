@@ -265,10 +265,11 @@ items).
   KB gzip.
 - Remaining: one React root. The vanilla views (`web/ts/features/*`) still
   render into the 42 KB `web/pages/index.html` shell by DOM id, and
-  `dashboard-v2-loader.ts` mounts twelve React islands into it. Replace
-  each view with a React workspace on live data (Q-045), then delete the
-  shell, the loader, the DOM-id drift check (`scripts/check/dom-id-drift.mjs`)
-  and the tests that pin DOM ids.
+  `dashboard-v2-loader.ts` mounts twelve React islands into it. The control
+  room (Q-045) grows beside it as its own page; when it covers the current
+  views it becomes `/`, and the shell, the loader, the vanilla views, the
+  DOM-id drift check (`scripts/check/dom-id-drift.mjs`) and the tests that
+  pin DOM ids are deleted in one change.
 - Gates: `npm run test:frontend`, Playwright; a tokei-measured reduction of
   frontend source plus test glue.
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
@@ -281,9 +282,12 @@ items).
   provenance), Changes (preview, approve, apply, verify).
 - Rule: a workspace ships only on live backend data; the mockup's numbers
   are illustrative.
+- Done so far: `/control-room.html` (one React root, one live store over
+  the state stream, `?w=` workspace route) with Fleet. See
+  [Frontend](frontend.md#control-room).
 - Gates: Playwright per workspace against a running engine.
-- Depends on: Q-042 (state), Q-044 (cut). Q-043 (done) added the
-  output `diagnosis` for the Incidents evidence packet.
+- Depends on: Q-042 (state). Q-043 (done) added the output `diagnosis` for
+  the Incidents evidence packet.
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
 
 ### Q-047 [protocol] [opus] MoQ interop spike (parked)

@@ -1,3 +1,5 @@
+import type { CapacitySnapshot } from "./core/generated/runtime-state.js";
+
 export interface StreamKey {
   key: string;
   label?: string;
@@ -383,6 +385,7 @@ export interface SystemMetrics {
     mountPoint?: string | null;
     root?: string;
   };
+  capacity?: CapacitySnapshot;
   mediaDisk?: {
     usedPercent?: number | null;
     totalBytes?: number | null;

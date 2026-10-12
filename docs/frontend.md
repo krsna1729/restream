@@ -16,6 +16,7 @@ backlog Q-045).
 - [6. Motion & Interaction](#6-motion--interaction)
 - [7. Depth & Surface](#7-depth--surface)
 - [8. Accessibility Constraints & Accepted Debt](#8-accessibility-constraints--accepted-debt)
+- [Control Room](#control-room)
 - [Dashboard Route Contract](#dashboard-route-contract)
 - [Visual and Accessibility Baseline](#visual-and-accessibility-baseline)
 
@@ -145,10 +146,37 @@ surfaces.
 |---|---|---|---|
 | Legacy monitor card radius exceeds 8px | `web/ts/features/control-room.ts` | Existing visual contract outside this feature | Consolidate during a dedicated control-room redesign |
 
+## Control Room
+
+`/control-room.html` is the replacement dashboard (Q-045): one React root
+(`web/ts/control-room/main.tsx`) beside the current shell until it covers
+the current views; then it becomes `/` and the shell, its route contract
+below and its DOM-id tests are deleted (Q-044).
+
+- Data: one store (`web/ts/control-room/store.ts`). It follows the
+  revisioned runtime state stream (`/api/v1/state/stream`) and samples engine
+  telemetry and host metrics every 2 s while a view is subscribed. Views
+  read it through `useLive`; they hold no copy. Rates come from two
+  successive telemetry samples (`rates.ts`); a counter that went down is a
+  new session and has no rate.
+- Location: `?w=<workspace>` (`web/ts/control-room/route.ts`); an absent or
+  unknown workspace opens Fleet. Navigation uses `pushState` and follows
+  `popstate`; other query parameters are kept.
+- Workspaces ship on live data only. Fleet: delivery counts, then degraded
+  outputs grouped by shared cause (an upstream cause covers every output it
+  stalls; destination causes stay per output) and ranked by outputs
+  affected, upstream first on a tie; headroom from `/metrics/system`: the
+  measured host use and egress flow, and, labeled as such, the capacity
+  model's projection onto service centers from calibration priors
+  (observe-only until Q-035/Q-031 measure the coefficients).
+
+Proof: `test/frontend/control-room-fleet.test.mjs`.
+
 ## Dashboard Route Contract
 
-The URL is the canonical owner of dashboard location. A redesign must reuse
-`web/ts/core/pipeline-workspace.ts` rather than introduce a parallel router.
+The URL is the canonical owner of dashboard location. Within the current
+shell, views reuse `web/ts/core/pipeline-workspace.ts` rather than a
+parallel router; the control room page has its own contract (above).
 
 ### Canonical locations
 

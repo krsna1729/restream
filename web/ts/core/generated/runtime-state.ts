@@ -1,4 +1,4 @@
-// Generated from src/application/runtime_state and diagnosis (ts-rs). Do not edit.
+// Generated from src/application/runtime_state, diagnosis and capacity (ts-rs). Do not edit.
 // Regenerate: cargo test --lib runtime_state::tests::write_generated -- --ignored
 
 export type RuntimeState = { 
@@ -69,3 +69,15 @@ export type Cause = { "code": "noPublisher" } | { "code": "stageNotProducing", s
 export type DesiredOutputState = "running" | "stopped";
 
 export type EgressPhase = "starting" | "waitingUpstream" | "connecting" | "sending" | "discarding" | "segmenting" | "uploading" | "retrying" | "failed" | "stopped";
+
+export type CapacitySnapshot = { ingressPps: number, mediaBps: number, egressPps: number, hottestShardUtil: number, nicUtil: number, memoryUtil: number, ffmpegUtil: number, diskUtil: number, activeLeaves: number, uniqueStages: number, hottestCenter: ServiceCenter, projectedUtilization: number, flow: FlowDiagnosis, observeOnly: boolean, };
+
+export type ServiceCenter = "ingress" | "egress" | "cpu" | "nic" | "memory" | "ffmpeg" | "disk";
+
+export type FlowDiagnosis = { center: ServiceCenter, utilization: number, queue: number, backlogSlope: number, 
+/**
+ * Infinite (serialized `null`) when no deadline applies.
+ */
+deadlineSlackMs: number | null, delayMs: number, errors: number, amplification: number, status: FlowStatus, };
+
+export type FlowStatus = "healthy" | "saturated" | "overloaded";

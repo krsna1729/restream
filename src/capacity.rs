@@ -75,6 +75,7 @@ impl Default for CapacityLimits {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub enum ServiceCenter {
     Ingress,
@@ -86,7 +87,11 @@ pub enum ServiceCenter {
     Disk,
 }
 
+/// One projection of the observed workload onto the calibrated service
+/// centers: the `*Util` fields are ratios against `CapacityLimits` priors,
+/// not measurements. `flow` is measured from the egress shards when any run.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct CapacitySnapshot {
     pub ingress_pps: f64,
@@ -204,6 +209,7 @@ pub struct FlowSample {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub enum FlowStatus {
     Healthy,
@@ -212,14 +218,18 @@ pub enum FlowStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct FlowDiagnosis {
     pub center: ServiceCenter,
     pub utilization: f64,
     pub queue: f64,
     pub backlog_slope: f64,
+    /// Infinite (serialized `null`) when no deadline applies.
+    #[cfg_attr(test, ts(type = "number | null"))]
     pub deadline_slack_ms: f64,
     pub delay_ms: f64,
+    #[cfg_attr(test, ts(type = "number"))]
     pub errors: u64,
     pub amplification: f64,
     pub status: FlowStatus,
