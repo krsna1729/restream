@@ -119,12 +119,16 @@ test("the timeline: this pipeline and output, from a minute before it opened, ol
   );
 });
 
-test("the timeline may miss the lead-up: cut at the limit, empty, or starting after the open", () => {
+test("the timeline is complete only when the log reaches back to its start", () => {
   const opened = alert("x", { firstSeen: "2026-10-12T10:00:00Z" });
-  const before = event(1, "2026-10-12T09:59:30Z");
-  const after = event(2, "2026-10-12T10:00:30Z");
-  assert.equal(timelineMayBeIncomplete(opened, [before, after], 2, 200), false);
-  assert.equal(timelineMayBeIncomplete(opened, [before, after], 200, 200), true);
-  assert.equal(timelineMayBeIncomplete(opened, [], 0, 200), true);
-  assert.equal(timelineMayBeIncomplete(opened, [after], 1, 200), true);
+  const atStart = event(1, "2026-10-12T09:59:00Z");
+  const inWindow = event(2, "2026-10-12T09:59:30Z");
+  const after = event(3, "2026-10-12T10:00:30Z");
+  // The oldest fetched event is at the window start: nothing before it matters.
+  assert.equal(timelineMayBeIncomplete(opened, [after, atStart]), false);
+  // A quiet minute before the open still proves coverage if older events exist.
+  assert.equal(timelineMayBeIncomplete(opened, [event(0, "2026-10-12T09:00:00Z"), after]), false);
+  // The log starts inside the window, or holds nothing: the lead-up may be gone.
+  assert.equal(timelineMayBeIncomplete(opened, [inWindow, after]), true);
+  assert.equal(timelineMayBeIncomplete(opened, []), true);
 });

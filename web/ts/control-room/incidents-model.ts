@@ -96,6 +96,13 @@ export function evidencePacket(alert: OperatorAlert): EvidencePacket {
 /** How far before an incident opened its timeline starts. */
 export const TIMELINE_LEAD_MS = 60_000;
 
+/** Where an incident's timeline starts: a minute before it opened, or the
+ * beginning when it has no open time. */
+export function timelineStartMs(alert: OperatorAlert): number {
+  const opened = seenMs(alert.firstSeen);
+  return Number.isFinite(opened) ? opened - TIMELINE_LEAD_MS : Number.NEGATIVE_INFINITY;
+}
+
 /**
  * The lifecycle events of the alert's pipeline (and, for an output alert,
  * that output or the pipeline as a whole) from a minute before it opened,
@@ -105,10 +112,7 @@ export function incidentTimeline(
   alert: OperatorAlert,
   events: readonly LifecycleEvent[],
 ): readonly LifecycleEvent[] {
-  const opened = seenMs(alert.firstSeen);
-  const fromMs = Number.isFinite(opened)
-    ? opened - TIMELINE_LEAD_MS
-    : Number.NEGATIVE_INFINITY;
+  const fromMs = timelineStartMs(alert);
   return events
     .filter(
       (event) =>
@@ -122,21 +126,15 @@ export function incidentTimeline(
 }
 
 /**
- * Whether the timeline may be missing the incident's lead-up: the engine
- * keeps only its most recent events across all pipelines, and a request
- * returns at most `limit`. True when the request was cut at `limit`, or
- * when no kept event is from before the incident opened.
+ * Whether the timeline may be missing the incident's lead-up. The engine
+ * evicts its oldest events first across all pipelines, and `fetched` is the
+ * newest of this pipeline, so the window is complete exactly when some
+ * fetched event is from its start or earlier.
  */
 export function timelineMayBeIncomplete(
   alert: OperatorAlert,
-  timeline: readonly LifecycleEvent[],
-  fetched: number,
-  limit: number,
+  fetched: readonly LifecycleEvent[],
 ): boolean {
-  const first = timeline[0];
-  return (
-    fetched >= limit ||
-    first === undefined ||
-    Date.parse(first.timestamp) > seenMs(alert.firstSeen)
-  );
+  const oldest = Math.min(...fetched.map((event) => Date.parse(event.timestamp)));
+  return !(oldest <= timelineStartMs(alert));
 }

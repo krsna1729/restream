@@ -213,8 +213,10 @@ below and its DOM-id tests are deleted (Q-044).
   `/metrics/system` capacity snapshot (load per service center, labelled
   calibration priors, observe-only), the Flow Doctor (measured from the
   busiest shard, or projected when none runs) and a scenario form whose
-  projection comes from `/capacity/scenario`: the page computes no capacity
-  number.
+  baseline and projection both come from `/capacity/scenario`, priced on the
+  priors from one workload sample: the page computes no capacity number. A
+  timeline says when the engine's event log no longer reaches back to a
+  minute before the incident opened.
 
 Proof: `test/frontend/control-room-fleet.test.mjs`,
 `test/frontend/control-room-operate.test.mjs`,

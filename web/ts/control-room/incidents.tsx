@@ -193,9 +193,7 @@ function Detail(props: {
     [alert, events.value],
   );
   const incomplete =
-    events.value !== null &&
-    timeline !== null &&
-    timelineMayBeIncomplete(alert, timeline, events.value.events.length, EVENT_LIMIT);
+    events.value !== null && timelineMayBeIncomplete(alert, events.value.events);
   return (
     <section className="card bg-base-200" aria-labelledby="incident-detail">
       <div className="card-body gap-3 p-4">
@@ -223,12 +221,10 @@ function Detail(props: {
           <h4 className="font-medium">Timeline</h4>
           <Freshness atMs={events.atMs} />
         </div>
-        {incomplete && timeline && (
+        {incomplete && (
           <p className="text-xs opacity-70">
-            The engine keeps only its most recent events
-            {timeline[0]
-              ? `: anything before ${new Date(timeline[0].timestamp).toLocaleTimeString()} may no longer be kept.`
-              : ", so earlier ones may no longer be kept."}
+            The engine keeps only its most recent events: part of the minute
+            before this opened may no longer be kept.
           </p>
         )}
         {timeline === null ? (

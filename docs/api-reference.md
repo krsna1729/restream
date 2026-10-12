@@ -1118,13 +1118,14 @@ The response also includes a cached `ioUring` capability object from startup;
 
 Authenticated, observe-only projection of a topology change. Query:
 `add_outputs` and `add_stages` (non-negative integers, default `0`). The
-response is `{ addOutputs, addStages, current, projected }`: `current` is the
-same `capacity` object `/metrics/system` returns; `projected` prices the
-current workload with the added outputs and shared stages on the same
-calibration priors. `projected.flowMeasured` is always `false` (nothing
-measures a change that has not happened), and `projected.flow.status`
-(`healthy`, `saturated`, `overloaded`) is the model's judgement of the
-projected hottest center. The model multiplies the current ingest by the
+response is `{ addOutputs, addStages, baseline, projected }`. Both price one
+sample of the current workload on the calibration priors: `baseline` as it
+is, `projected` with the added outputs and shared stages. Neither carries a
+measured flow (`flowMeasured` is `false`), so they compare like with like;
+the measured flow of running shards is in `/metrics/system`'s `capacity`,
+which a scenario does not change. `projected.flow.status` (`healthy`,
+`saturated`, `overloaded`) is the model's judgement of the projected hottest
+center. The model multiplies the current ingest by the
 output count, so it does not take an output's protocol or pipeline. It
 decides and admits nothing.
 
