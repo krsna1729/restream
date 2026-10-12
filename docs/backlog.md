@@ -21,7 +21,7 @@ items).
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
 - [Q-035 MEDIA attribution](#q-035-observability-sonnet-attribute-media-pool-time-to-feed-and-stage)
 - [Q-036 enforced runtime truth table](#q-036-docs-sonnet-make-runtime-crossings-an-enforced-truth-table)
-- [Q-042 runtime truth](#q-042-architecture-opus-one-revisioned-runtime-state-with-delta-events)
+- [Q-042 runtime truth](#q-042-architecture-opus-feed-the-dashboard-from-the-revisioned-runtime-state)
 - [Q-043 evidence engine](#q-043-observability-opus-one-evidence-classification)
 - [Q-044 frontend cut](#q-044-frontend-opus-hard-cut-the-frontend-to-one-build)
 - [Q-045 frontend product](#q-045-frontend-opus-build-the-control-room-on-live-data)
@@ -243,18 +243,21 @@ items).
 - Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
   review).
 
-### Q-042 [architecture] [opus] One revisioned runtime state with delta events
-- Goal: each entity has desired, actual, convergence, flow, queue and
-  evidence state under one revision. A delta SSE stream feeds
-  `/api/state`, `/api/events` and `/api/commands`; the TypeScript
-  contract is generated from Rust.
-- Gates: api-contract check on generated types; a client that misses
-  events resyncs from a revision.
-- Start from: the reconciler's triggers (`application::topology`
-  `ReconcileRequests`, `request_pass_for_event`) are the change points a
-  revision would advance on.
+### Q-042 [architecture] [opus] Feed the dashboard from the revisioned runtime state
+- Done so far: `/api/v1/state` + `/api/v1/state/stream` (revisioned
+  pipelines and outputs with desired, actual, convergence, flow,
+  backpressure, retry and failure evidence; delta SSE with replay or
+  snapshot resync), the generated TypeScript contract
+  (`web/ts/core/generated/runtime-state.ts`, drift test), and the client
+  `web/ts/core/state-stream.ts` with resync tests.
+- Remaining: the dashboard reads entities from the stream instead of
+  polling `/api/v1/dashboard/runtime` and refetching on lifecycle logs.
+  This lands with the frontend cut (Q-044), since the current shell is
+  being replaced. Stage and input entities join the projection when a
+  view needs them.
+- Not planned: a `/api/commands` endpoint. Mutations stay on their REST
+  routes, and their effects reach clients through the stream.
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
-
 ### Q-043 [observability] [opus] One evidence classification
 - Goal: one typed answer to "why is this degraded" (destination/network,
   shard, feed or ingest, with the causes ruled out) shared by alerts, UI,

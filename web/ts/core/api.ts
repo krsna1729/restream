@@ -351,6 +351,15 @@ function buildLogsStreamUrl(options: BuildLogsStreamUrlOptions = {}): string {
   return suffix ? `/api/v1/logs/stream?${suffix}` : "/api/v1/logs/stream";
 }
 
+/** Runtime state stream (Q-042); `since` resumes after that revision. */
+export function buildRuntimeStateStreamUrl(since?: number): string {
+  const path =
+    since !== undefined && Number.isFinite(since)
+      ? `/api/v1/state/stream?since=${since}`
+      : "/api/v1/state/stream";
+  return withBasePath(path);
+}
+
 interface CreatePipelineArgs {
   name: string;
   streamKey?: string;

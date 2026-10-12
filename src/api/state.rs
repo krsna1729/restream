@@ -112,6 +112,8 @@ pub struct AppState {
     pub alert_tracker: alerts::AlertTracker,
     /// Mutation handlers persist, then ask the reconciler to converge here.
     pub reconcile: Arc<crate::application::topology::ReconcileRequests>,
+    /// The revisioned runtime state behind `/api/v1/state` (Q-042).
+    pub runtime_state: Arc<crate::application::runtime_state::hub::StateHub>,
     pub log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
     secure_session_cookies: bool,
     #[cfg(feature = "agent-execution")]
@@ -170,6 +172,7 @@ impl AppState {
             agent_service,
             alert_tracker: alerts::AlertTracker::new(),
             reconcile: Arc::new(crate::application::topology::ReconcileRequests::new()),
+            runtime_state: Arc::new(crate::application::runtime_state::hub::StateHub::new()),
             log_broadcast,
             secure_session_cookies: runtime.secure_session_cookies,
             #[cfg(feature = "agent-execution")]

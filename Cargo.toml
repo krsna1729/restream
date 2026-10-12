@@ -121,6 +121,9 @@ wide = "1.5"
 proptest = "1"
 loom = { version = "0.7", features = ["checkpoint"] }
 rcgen = "0.14.8"
+# Generates the TypeScript contract of typed API payloads (test-only; the
+# drift test in application::runtime_state compares the checked-in file).
+ts-rs = "12"
 
 [[bin]]
 name = "restream-mcp"
