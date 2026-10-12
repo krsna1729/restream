@@ -22,7 +22,7 @@ fn render_contract() -> String {
     ];
     let mut out = String::from(
         "// Generated from src/application/runtime_state (ts-rs). Do not edit.\n\
-         // Regenerate: UPDATE_GENERATED=1 cargo test --lib runtime_state::tests::generated\n\n",
+         // Regenerate: cargo test --lib runtime_state::tests::write_generated -- --ignored\n\n",
     );
     for decl in decls {
         out.push_str("export ");
@@ -34,22 +34,28 @@ fn render_contract() -> String {
     out
 }
 
+fn generated_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(GENERATED)
+}
+
 /// The checked-in TypeScript contract matches the Rust types.
 #[test]
 fn generated_typescript_contract_is_current() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(GENERATED);
-    let rendered = render_contract();
-    if std::env::var_os("UPDATE_GENERATED").is_some() {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, &rendered).unwrap();
-        return;
-    }
-    let checked_in = std::fs::read_to_string(&path).unwrap_or_default();
+    let checked_in = std::fs::read_to_string(generated_path()).unwrap_or_default();
     assert!(
-        checked_in == rendered,
+        checked_in == render_contract(),
         "{GENERATED} is stale; regenerate with \
-         UPDATE_GENERATED=1 cargo test --lib runtime_state::tests::generated"
+         cargo test --lib runtime_state::tests::write_generated -- --ignored"
     );
+}
+
+/// Writes the TypeScript contract (run on demand, see the drift test).
+#[test]
+#[ignore = "writes web/ts/core/generated/runtime-state.ts"]
+fn write_generated_typescript_contract() {
+    let path = generated_path();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, render_contract()).unwrap();
 }
 
 fn output(id: &str, desired: DesiredOutputState) -> Output {

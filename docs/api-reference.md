@@ -706,7 +706,7 @@ One typed, revisioned view of every pipeline and output
 (`application::runtime_state`). The TypeScript contract is generated from
 the Rust types into `web/ts/core/generated/runtime-state.ts`. A unit test
 fails when the file is stale; regenerate it with
-`UPDATE_GENERATED=1 cargo test --lib runtime_state::tests::generated`.
+`cargo test --lib runtime_state::tests::write_generated -- --ignored`.
 `web/ts/core/state-stream.ts` is the client.
 
 ### `GET /api/v1/state`

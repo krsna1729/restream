@@ -1,5 +1,5 @@
 // Generated from src/application/runtime_state (ts-rs). Do not edit.
-// Regenerate: UPDATE_GENERATED=1 cargo test --lib runtime_state::tests::generated
+// Regenerate: cargo test --lib runtime_state::tests::write_generated -- --ignored
 
 export type RuntimeState = { 
 /**
