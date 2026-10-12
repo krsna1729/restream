@@ -21,8 +21,9 @@ function output(id, convergence) {
   };
 }
 
-function delta(revision, outputs, removedOutputs = []) {
+function delta(revision, outputs, removedOutputs = [], epoch = "e1") {
   return {
+    epoch,
     revision,
     pipelines: [],
     outputs,
@@ -57,6 +58,7 @@ async function loadStream() {
 test("deltas apply in revision order; removed entities go", async () => {
   const { applyStateDelta } = await loadStream();
   const base = {
+    epoch: "e1",
     revision: 3,
     pipelines: [],
     outputs: [output("a", "starting"), output("b", "starting")],
@@ -72,6 +74,11 @@ test("deltas apply in revision order; removed entities go", async () => {
   );
   assert.equal(applyStateDelta(next, delta(4, [])), next, "a replayed delta is ignored");
   assert.equal(applyStateDelta(next, delta(6, [])), null, "a gap asks for a resync");
+  assert.equal(
+    applyStateDelta(next, delta(5, [], [], "e2")),
+    null,
+    "a delta from another server run asks for a resync",
+  );
 });
 
 test("a client that misses events resyncs from its last revision", async () => {
@@ -89,6 +96,7 @@ test("a client that misses events resyncs from its last revision", async () => {
 
   assert.match(sources[0].url, /\/api\/v1\/state\/stream$/);
   sources[0].emit("snapshot", {
+    epoch: "e1",
     revision: 7,
     pipelines: [],
     outputs: [output("a", "starting")],
@@ -99,7 +107,7 @@ test("a client that misses events resyncs from its last revision", async () => {
 
   assert.equal(sources[0].closed, true, "the gap closes the stream");
   assert.equal(sources.length, 2);
-  assert.match(sources[1].url, /\/api\/v1\/state\/stream\?since=8$/);
+  assert.match(sources[1].url, /\/api\/v1\/state\/stream\?since=e1\.8$/);
   assert.equal(stream.current().revision, 8, "nothing past the gap is applied");
 
   // The server replays what was missed.
@@ -122,11 +130,11 @@ test("a dropped connection resumes after a delay, from the last revision", async
       return source;
     },
   });
-  sources[0].emit("snapshot", { revision: 2, pipelines: [], outputs: [] });
+  sources[0].emit("snapshot", { epoch: "e1", revision: 2, pipelines: [], outputs: [] });
   sources[0].onerror();
   assert.equal(sources.length, 1, "no immediate reconnect loop");
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(sources.length, 2);
-  assert.match(sources[1].url, /since=2$/);
+  assert.match(sources[1].url, /since=e1\.2$/);
   stream.close();
 });

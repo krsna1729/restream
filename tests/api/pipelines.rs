@@ -837,8 +837,9 @@ async fn runtime_state_reports_outputs_and_the_stream_starts_from_a_snapshot() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let frame = first_sse_frame(resp).await;
+    let epoch = state["epoch"].as_str().unwrap();
     assert!(
-        frame.starts_with(&format!("id: {revision}\nevent: snapshot\n")),
+        frame.starts_with(&format!("id: {epoch}.{revision}\nevent: snapshot\n")),
         "a new client starts from the current snapshot: {frame}"
     );
 
@@ -846,7 +847,7 @@ async fn runtime_state_reports_outputs_and_the_stream_starts_from_a_snapshot() {
         .clone()
         .oneshot(auth_req(
             "GET",
-            &format!("/api/v1/state/stream?since={}", revision + 1000),
+            &format!("/api/v1/state/stream?since=other-run.{revision}"),
             &cookie,
             None,
         ))
@@ -855,6 +856,6 @@ async fn runtime_state_reports_outputs_and_the_stream_starts_from_a_snapshot() {
     let frame = first_sse_frame(resp).await;
     assert!(
         frame.contains("event: snapshot\n"),
-        "a revision the server never had resyncs: {frame}"
+        "a token from another server run resyncs: {frame}"
     );
 }

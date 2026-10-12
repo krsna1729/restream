@@ -1,10 +1,11 @@
 //! `/api/v1/state` and `/api/v1/state/stream` (Q-042).
 //!
 //! The stream sends `snapshot` (a whole `RuntimeState`) or `delta` (a
-//! `StateDelta`) events, each with `id:` = its revision. A client applies
-//! deltas in order to its last snapshot. It reconnects with `?since=` or
-//! `Last-Event-ID`; when that gap is no longer replayable, or the client
-//! falls behind the live stream, it receives a fresh `snapshot` instead.
+//! `StateDelta`) events, each with `id: <epoch>.<revision>`. A client
+//! applies deltas in order to its last snapshot. It reconnects with that id
+//! as `?since=` or `Last-Event-ID`; when the gap is no longer replayable,
+//! the id is from another server run, or the client falls behind the live
+//! stream, it receives a fresh `snapshot` instead.
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -29,12 +30,13 @@ pub async fn v1_state_handler(
 
 #[derive(Deserialize)]
 pub struct StateStreamQuery {
-    since: Option<u64>,
+    since: Option<String>,
 }
 
 fn snapshot_frame(snapshot: &RuntimeState) -> String {
     format!(
-        "id: {}\nevent: snapshot\ndata: {}\n\n",
+        "id: {}.{}\nevent: snapshot\ndata: {}\n\n",
+        snapshot.epoch,
         snapshot.revision,
         serde_json::to_string(snapshot).unwrap_or_default()
     )
@@ -42,7 +44,8 @@ fn snapshot_frame(snapshot: &RuntimeState) -> String {
 
 fn delta_frame(delta: &StateDelta) -> String {
     format!(
-        "id: {}\nevent: delta\ndata: {}\n\n",
+        "id: {}.{}\nevent: delta\ndata: {}\n\n",
+        delta.epoch,
         delta.revision,
         serde_json::to_string(delta).unwrap_or_default()
     )
@@ -59,21 +62,25 @@ pub async fn v1_state_stream_handler(
     let since = headers
         .get("last-event-id")
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse().ok())
+        .map(str::to_string)
         .or(query.since);
 
     let hub = state.runtime_state.clone();
     // Subscribe before reading history, so no delta falls between them.
     let mut live = hub.subscribe();
-    // A connected client keeps the projector refreshing; start it now.
-    hub.mark_changed();
     let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
+    // With no client the projector is idle, so the held state may be old:
+    // bring it current first. Connected now, the projector keeps it so.
+    hub.refresh(&state.db, &state.engine).await;
 
     tokio::spawn(async move {
-        let mut sent_through = match since {
-            Some(revision) => match hub.since(revision).await {
+        let mut sent_through = match since.as_deref() {
+            Some(token) => match hub.since(token).await {
                 Since::Deltas(deltas) => {
-                    let mut through = revision;
+                    let mut through = token
+                        .rsplit_once('.')
+                        .and_then(|(_, revision)| revision.parse().ok())
+                        .unwrap_or(0);
                     for delta in deltas {
                         through = delta.revision;
                         if tx.send(delta_frame(&delta)).await.is_err() {
@@ -118,6 +125,9 @@ pub async fn v1_state_stream_handler(
                         return;
                     }
                 }
+                // Release the receiver (and the projector's cadence) as soon
+                // as the client goes, not at the next send.
+                () = tx.closed() => return,
             }
         }
     });

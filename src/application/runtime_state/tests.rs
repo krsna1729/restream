@@ -137,7 +137,10 @@ async fn deltas_after_a_revision_rebuild_the_current_state() {
     hub.publish(projection_with(&[("b", Convergence::Retrying)]))
         .await;
 
-    let Since::Deltas(deltas) = hub.since(seen.revision).await else {
+    let Since::Deltas(deltas) = hub
+        .since(&format!("{}.{}", seen.epoch, seen.revision))
+        .await
+    else {
         panic!("the gap is in history");
     };
     let mut outputs: BTreeMap<String, OutputState> = seen
@@ -172,18 +175,54 @@ async fn a_client_behind_the_history_or_from_another_run_resyncs() {
         };
         hub.publish(projection_with(&[("a", convergence)])).await;
     }
-    let current = hub.snapshot().await.revision;
-    assert_eq!(hub.since(1).await, Since::Resync, "gap older than history");
+    let snapshot = hub.snapshot().await;
+    let (epoch, current) = (snapshot.epoch, snapshot.revision);
+    let token = |revision: u64| format!("{epoch}.{revision}");
     assert_eq!(
-        hub.since(current + 5).await,
+        hub.since(&token(1)).await,
+        Since::Resync,
+        "gap older than history"
+    );
+    assert_eq!(
+        hub.since(&token(current + 5)).await,
         Since::Resync,
         "unknown revision"
     );
-    assert_eq!(hub.since(current).await, Since::Deltas(Vec::new()));
-    let Since::Deltas(kept) = hub.since(current - DELTA_HISTORY as u64).await else {
+    assert_eq!(hub.since("garbage").await, Since::Resync);
+    assert_eq!(hub.since(&token(current)).await, Since::Deltas(Vec::new()));
+    let Since::Deltas(kept) = hub.since(&token(current - DELTA_HISTORY as u64)).await else {
         panic!("the oldest kept gap is replayable");
     };
     assert_eq!(kept.len(), DELTA_HISTORY);
+}
+
+/// Review of #285: after a restart the new run can pass the client's old
+/// revision before it reconnects. Its deltas must not apply to the old
+/// run's state: the epoch in the token forces a snapshot.
+#[tokio::test]
+async fn a_resume_from_another_server_run_resyncs_even_below_its_revision() {
+    let before = StateHub::with_epoch("run-a".to_string());
+    before
+        .publish(projection_with(&[("a", Convergence::Starting)]))
+        .await;
+    let held = before.snapshot().await;
+    assert_eq!(held.revision, 1);
+
+    let after = StateHub::with_epoch("run-b".to_string());
+    for convergence in [
+        Convergence::Starting,
+        Convergence::Converged,
+        Convergence::Retrying,
+    ] {
+        after.publish(projection_with(&[("a", convergence)])).await;
+    }
+    assert!(after.snapshot().await.revision > held.revision);
+    assert_eq!(
+        after
+            .since(&format!("{}.{}", held.epoch, held.revision))
+            .await,
+        Since::Resync
+    );
 }
 
 #[tokio::test]
@@ -233,10 +272,10 @@ async fn projection_derives_convergence_from_desired_and_runtime() {
     assert_eq!(projection.outputs["stopped"].flow, Flow::Idle);
 }
 
-/// The projector rebuilds when a change is marked even with no stream
-/// client, and does not rebuild an unchanged, unwatched state.
+/// The projector rebuilds only while a stream client is connected: on a
+/// marked change and every interval. With no client, changes cost nothing.
 #[tokio::test]
-async fn the_projector_rebuilds_on_a_change_and_idles_otherwise() {
+async fn the_projector_rebuilds_only_while_a_client_listens() {
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
     crate::db::setup_database_schema(&pool).await.unwrap();
     let engine = std::sync::Arc::new(MediaEngine::new());
@@ -250,7 +289,7 @@ async fn the_projector_rebuilds_on_a_change_and_idles_otherwise() {
         stop.clone(),
     ));
     let revision_after = |hub: std::sync::Arc<StateHub>| async move {
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         hub.snapshot().await.revision
     };
 
@@ -260,20 +299,32 @@ async fn the_projector_rebuilds_on_a_change_and_idles_otherwise() {
     hub.mark_changed();
     assert_eq!(
         revision_after(hub.clone()).await,
-        1,
-        "the change was projected"
+        0,
+        "no client: no rebuild"
     );
 
+    let client = hub.subscribe();
+    hub.mark_changed();
+    assert_eq!(
+        revision_after(hub.clone()).await,
+        1,
+        "a client gets the change"
+    );
     crate::db::create_pipeline(&pool, "pipe-2", "P2", "key-2", None, None)
         .await
         .unwrap();
     assert_eq!(
         revision_after(hub.clone()).await,
-        1,
-        "no client and no marked change: no rebuild"
+        2,
+        "with a client, unreported changes arrive on the interval"
     );
+
+    drop(client);
+    crate::db::create_pipeline(&pool, "pipe-3", "P3", "key-3", None, None)
+        .await
+        .unwrap();
     hub.mark_changed();
-    assert_eq!(revision_after(hub.clone()).await, 2);
+    assert_eq!(revision_after(hub.clone()).await, 2, "the last client left");
     stop.cancel();
     projector.await.unwrap();
 }

@@ -31,6 +31,9 @@ use crate::media::engine::MediaEngine;
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeState {
+    /// Identifies this server run; revisions restart with each run, so a
+    /// resume token is `<epoch>.<revision>`.
+    pub epoch: String,
     #[cfg_attr(test, ts(type = "number"))]
     pub revision: u64,
     pub pipelines: Vec<PipelineState>,
@@ -43,6 +46,7 @@ pub struct RuntimeState {
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct StateDelta {
+    pub epoch: String,
     #[cfg_attr(test, ts(type = "number"))]
     pub revision: u64,
     pub pipelines: Vec<PipelineState>,
@@ -240,8 +244,11 @@ fn project_output(
     has_ingest: bool,
 ) -> OutputState {
     let actual = active.map(|egress| *crate::sync::lock(&egress.phase));
-    let stalled = active
-        .is_some_and(|egress| MediaEngine::egress_effective_status(egress, true) == "stalled");
+    // The same rule as the output status view: without ingest nothing is
+    // expected to move, so an egress cannot be stalled.
+    let stalled = active.is_some_and(|egress| {
+        MediaEngine::egress_effective_status(egress, has_ingest) == "stalled"
+    });
     let progressed =
         active.is_some_and(|egress| egress.last_progress_ms.load(Ordering::Relaxed) > 0);
     let delivering = matches!(
@@ -261,7 +268,8 @@ fn project_output(
         DesiredOutputState::Stopped if active.is_some() => Convergence::Stopping,
         DesiredOutputState::Stopped => Convergence::Converged,
         DesiredOutputState::Running if output.retries_exhausted => Convergence::RetriesExhausted,
-        DesiredOutputState::Running if delivering && !stalled => Convergence::Converged,
+        // A stall is a flow problem (`flow: stalled`), not a convergence one.
+        DesiredOutputState::Running if delivering => Convergence::Converged,
         DesiredOutputState::Running if active.is_some() => Convergence::Starting,
         DesiredOutputState::Running if retry.is_some() => Convergence::Retrying,
         DesiredOutputState::Running if !has_ingest => Convergence::WaitingForIngest,
@@ -269,7 +277,7 @@ fn project_output(
     };
     let flow = if stalled {
         Flow::Stalled
-    } else if delivering && progressed {
+    } else if delivering && progressed && has_ingest {
         Flow::Flowing
     } else {
         Flow::Idle
@@ -302,7 +310,8 @@ fn project_output(
     }
 }
 
-/// The entity-level difference from `old` to `new` (revision left 0).
+/// The entity-level difference from `old` to `new` (epoch and revision left
+/// for the hub to set).
 pub fn diff(old: &Projection, new: &Projection) -> StateDelta {
     fn changed<V: Clone + PartialEq>(
         old: &BTreeMap<String, V>,
@@ -323,6 +332,7 @@ pub fn diff(old: &Projection, new: &Projection) -> StateDelta {
     let (pipelines, removed_pipelines) = changed(&old.pipelines, &new.pipelines);
     let (outputs, removed_outputs) = changed(&old.outputs, &new.outputs);
     StateDelta {
+        epoch: String::new(),
         revision: 0,
         pipelines,
         outputs,

@@ -1,4 +1,5 @@
 import { buildLogsStreamUrl, type BuildLogsStreamUrlOptions } from "./api.js";
+import { withBasePath } from "./base-path.js";
 import type { AppLogRow } from "../types.js";
 
 export type LogStreamFilters = Omit<BuildLogsStreamUrlOptions, "lastEventId">;
@@ -55,11 +56,14 @@ export function createManagedLogStream(): ManagedLogStream {
     unavailableNotified = false;
     const openedGeneration = generation;
     try {
+      // EventSource bypasses apiRequest/fetch, where the base path is added.
       const openedSource = new EventSource(
-        buildLogsStreamUrl({
-          ...(currentSpec.filters || {}),
-          lastEventId,
-        }),
+        withBasePath(
+          buildLogsStreamUrl({
+            ...(currentSpec.filters || {}),
+            lastEventId,
+          }),
+        ),
       );
       source = openedSource;
       openedSource.addEventListener("log", (event: Event) => {

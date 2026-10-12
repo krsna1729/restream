@@ -33,9 +33,12 @@ export function applyStateDelta(
   state: RuntimeState,
   delta: StateDelta,
 ): RuntimeState | null {
+  // Another server run: its revisions do not continue this state's.
+  if (delta.epoch !== state.epoch) return null;
   if (delta.revision <= state.revision) return state;
   if (delta.revision !== state.revision + 1) return null;
   return {
+    epoch: state.epoch,
     revision: delta.revision,
     pipelines: upsertById<PipelineState>(
       state.pipelines,
@@ -87,7 +90,11 @@ export function openRuntimeStateStream(
 
   const connect = () => {
     if (closed) return;
-    const opened = create(buildRuntimeStateStreamUrl(state?.revision));
+    const opened = create(
+      buildRuntimeStateStreamUrl(
+        state ? `${state.epoch}.${state.revision}` : undefined,
+      ),
+    );
     source = opened;
     const reconnect = (delayMs: number) => {
       if (source !== opened) return;

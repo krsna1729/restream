@@ -1,9 +1,14 @@
 // Generated from src/application/runtime_state (ts-rs). Do not edit.
 // Regenerate: UPDATE_GENERATED=1 cargo test --lib runtime_state::tests::generated
 
-export type RuntimeState = { revision: number, pipelines: Array<PipelineState>, outputs: Array<OutputState>, };
+export type RuntimeState = { 
+/**
+ * Identifies this server run; revisions restart with each run, so a
+ * resume token is `<epoch>.<revision>`.
+ */
+epoch: string, revision: number, pipelines: Array<PipelineState>, outputs: Array<OutputState>, };
 
-export type StateDelta = { revision: number, pipelines: Array<PipelineState>, outputs: Array<OutputState>, removedPipelines: Array<string>, removedOutputs: Array<string>, };
+export type StateDelta = { epoch: string, revision: number, pipelines: Array<PipelineState>, outputs: Array<OutputState>, removedPipelines: Array<string>, removedOutputs: Array<string>, };
 
 export type PipelineState = { id: string, name: string, 
 /**

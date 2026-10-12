@@ -22,9 +22,6 @@ use crate::media::engine::MediaEngine;
 /// from a snapshot.
 pub const DELTA_HISTORY: usize = 256;
 
-/// Minimum gap between rebuilds, so an event burst costs one projection.
-const MIN_REBUILD_GAP: Duration = Duration::from_millis(200);
-
 /// Outcome of asking for the deltas after a revision.
 #[derive(Debug, PartialEq)]
 pub enum Since {
@@ -36,6 +33,7 @@ pub enum Since {
 }
 
 struct Current {
+    epoch: String,
     revision: u64,
     projection: Projection,
     history: VecDeque<Arc<StateDelta>>,
@@ -43,6 +41,9 @@ struct Current {
 
 pub struct StateHub {
     current: Mutex<Current>,
+    /// Serializes refreshes, so an older projection never publishes after
+    /// a newer one.
+    refreshing: Mutex<()>,
     deltas: broadcast::Sender<Arc<StateDelta>>,
     changed: Notify,
 }
@@ -55,8 +56,17 @@ impl Default for StateHub {
 
 impl StateHub {
     pub fn new() -> Self {
+        let started = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        Self::with_epoch(format!("{started:x}{:x}", std::process::id()))
+    }
+
+    pub fn with_epoch(epoch: String) -> Self {
         Self {
+            refreshing: Mutex::new(()),
             current: Mutex::new(Current {
+                epoch,
                 revision: 0,
                 projection: Projection::default(),
                 history: VecDeque::with_capacity(DELTA_HISTORY),
@@ -87,6 +97,7 @@ impl StateHub {
         }
         current.revision += 1;
         delta.revision = current.revision;
+        delta.epoch = current.epoch.clone();
         current.projection = projection;
         let delta = Arc::new(delta);
         if current.history.len() == DELTA_HISTORY {
@@ -101,17 +112,24 @@ impl StateHub {
     pub async fn snapshot(&self) -> RuntimeState {
         let current = self.current.lock().await;
         RuntimeState {
+            epoch: current.epoch.clone(),
             revision: current.revision,
             pipelines: current.projection.pipelines.values().cloned().collect(),
             outputs: current.projection.outputs.values().cloned().collect(),
         }
     }
 
-    /// The deltas after `revision`.
-    pub async fn since(&self, revision: u64) -> Since {
+    /// The deltas after a resume token `<epoch>.<revision>`.
+    pub async fn since(&self, token: &str) -> Since {
+        let Some((epoch, revision)) = token
+            .rsplit_once('.')
+            .and_then(|(epoch, revision)| Some((epoch, revision.parse::<u64>().ok()?)))
+        else {
+            return Since::Resync;
+        };
         let current = self.current.lock().await;
-        if revision > current.revision {
-            // From another process lifetime: revisions restart at 0.
+        if epoch != current.epoch || revision > current.revision {
+            // From another server run: its revisions are not this run's.
             return Since::Resync;
         }
         let oldest_kept = current
@@ -133,6 +151,7 @@ impl StateHub {
 
     /// Rebuilds from the rows and the engine and publishes the change.
     pub async fn refresh(&self, pool: &SqlitePool, engine: &MediaEngine) {
+        let _one_at_a_time = self.refreshing.lock().await;
         let pipelines = match crate::db::list_pipelines(pool).await {
             Ok(rows) => rows,
             Err(error) => {
@@ -159,8 +178,13 @@ impl StateHub {
     }
 }
 
-/// Rebuilds the projection on change, and every `interval` while a stream
-/// client is connected.
+/// While a stream client is connected, rebuilds every `interval` and soon
+/// after a change, at most once per `interval` (the reconcile cadence), so
+/// an event storm costs no more than one projection per interval. With no
+/// client nothing is rebuilt: no one reads the deltas, and skipping
+/// projections is safe because each delta is the difference of two whole
+/// projections. `GET /api/v1/state` and a connecting stream refresh on
+/// demand.
 pub async fn run_projector(
     hub: Arc<StateHub>,
     pool: SqlitePool,
@@ -168,6 +192,7 @@ pub async fn run_projector(
     interval: Duration,
     shutdown: CancellationToken,
 ) {
+    let mut next_allowed = tokio::time::Instant::now();
     loop {
         let periodic = async {
             if hub.has_clients() {
@@ -181,7 +206,14 @@ pub async fn run_projector(
             () = hub.changed.notified() => {}
             () = periodic => {}
         }
+        if !hub.has_clients() {
+            continue;
+        }
+        tokio::select! {
+            () = shutdown.cancelled() => return,
+            () = tokio::time::sleep_until(next_allowed) => {}
+        }
         hub.refresh(&pool, &engine).await;
-        tokio::time::sleep(MIN_REBUILD_GAP).await;
+        next_allowed = tokio::time::Instant::now() + interval;
     }
 }
