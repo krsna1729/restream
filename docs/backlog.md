@@ -27,6 +27,7 @@ items).
 - [Q-045 frontend product](#q-045-frontend-opus-build-the-control-room-on-live-data)
 - [Q-046 agent guidance](#q-046-docs-sonnet-slim-agentsmd-to-a-root-contract)
 - [Q-047 MoQ](#q-047-protocol-opus-moq-interop-spike-parked)
+- [Q-048 mixed.signal sinks](#q-048-test-sonnet-make-mixedsignal-pass-on-master)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -299,3 +300,15 @@ items).
   adapter; moxygen and MediaMTX as oracles.
 - Parked until transport convergence (Q-025).
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
+
+### Q-048 [test] [sonnet] Make mixed.signal pass on master
+- Goal: the `mixed.signal` live suite is a usable stage/codec gate again.
+- Evidence: on master 93d934af it fails the same 4 cases as on the Q-041
+  branch. `mixed.live.rtmp.h264.a1.bf0` and `.bf2` select an RTMPS output
+  that `spawn_ffmpeg_signal_sink` rejects
+  (`src/bin/test_harness/mixed_sinks.rs:343`). `mixed.live.srt.h264.a2.bf0`
+  and `mixed.asset.file.h265.a2.bf2` fail because the FFmpeg signal sink
+  exits with status 146 or times out on 1080p outputs.
+- Gates: `mixed.signal` passes on master; RTMPS cases either get a TLS
+  signal sink or are excluded from the signal selection by the catalog.
+- Status: open (Filed: 2026-10-12 by claude, found while gating Q-041).
