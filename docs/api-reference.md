@@ -239,7 +239,8 @@ input reports `forwardingState: "standby"`; a promoted input may briefly report
 Promotion persists the selection and returns the normalized input plus
 `connected`, which is whether the target had a live session at request time.
 The request wakes the reconciler, which applies the switch first in its next
-pass (after any pass already running): when the target is connected, the
+pass (after any pass already running, and at most one reconcile interval
+after the previous pass): when the target is connected, the
 current writer is demoted and drained before the target replays its latest
 complete compressed GOP on its next packet arrival. If no complete GOP is
 cached, it waits for its next video keyframe. Promotion of an idle configured
