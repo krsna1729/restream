@@ -29,6 +29,7 @@ where
     pub(super) fn queue_pending_rtmp_connect(&mut self, spec: OutputSpec, target_url: &str) {
         let Some(parts) = parse_rtmp_url(target_url) else {
             tracing::warn!(output_id = %spec.id, "rtmp fabric leaf rejected: invalid url");
+            spec.progress.mark_terminated_unexpectedly();
             return;
         };
         let output_id = spec.id.clone();

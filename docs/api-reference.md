@@ -326,6 +326,8 @@ URL behavior:
 | `https://` | HLS HTTP PUT upload |
 
 Any other prefix is rejected during validation with a `400 Bad Request`.
+An `rtmp://` or `rtmps://` URL must name an app and a stream key
+(`rtmp://host[:port]/app/stream-key`); one without is rejected with `400`.
 Pipeline recirculation URLs are parsed and checked for cycles and target-input
 ownership before the output can start.
 HTTP/HTTPS HLS upload uses one shared local segmenter per pipeline. Each output

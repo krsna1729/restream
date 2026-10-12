@@ -58,6 +58,8 @@ pub const OUTPUT_URL_SCHEME_ERROR: &str = "Invalid URL scheme. Supported schemes
 pub const MONITORING_URL_SCHEME_ERROR: &str =
     "Invalid monitoring URL scheme. Supported schemes are http://, https://, and srt://";
 pub const OUTPUT_URL_PARSE_ERROR: &str = "Output URL must be a valid absolute URL with a host";
+pub const RTMP_OUTPUT_URL_ERROR: &str =
+    "RTMP output URL must name an app and a stream key: rtmp://host[:port]/app/stream-key";
 pub const MONITORING_URL_PARSE_ERROR: &str =
     "Monitoring URL must be a valid absolute URL with a host";
 pub const CUSTOM_OUTPUT_ENCODING_ERROR: &str =
@@ -341,8 +343,14 @@ fn validate_output_transport(
     let Some(url) = normalize_output_url(&payload.url) else {
         return Err(Box::new(bad_request(OUTPUT_URL_PARSE_ERROR)));
     };
+    let scheme = OutputUrlScheme::from_url(&url);
+    // The leaf connects only to `app/stream-key`; reject what it cannot use
+    // here rather than let the output fail on every attempt.
+    if scheme.is_rtmp_family() && crate::media::rtmp::parse_rtmp_url(&url).is_none() {
+        return Err(Box::new(bad_request(RTMP_OUTPUT_URL_ERROR)));
+    }
     if matches!(output_config.protocol, OutputProtocolConfig::Rtmp { .. })
-        && !OutputUrlScheme::from_url(&url).is_rtmp_family()
+        && !scheme.is_rtmp_family()
     {
         return Err(Box::new(bad_request(OUTPUT_PROTOCOL_CONFIG_ERROR)));
     }
@@ -669,10 +677,20 @@ mod tests {
 
     #[test]
     fn validate_output_payload_normalizes_urls() {
-        let validated = validate_output_payload(&test_output_payload("RTMP://EXAMPLE.COM/live"))
-            .expect("valid outputs should normalize");
+        let validated =
+            validate_output_payload(&test_output_payload("RTMP://EXAMPLE.COM/live/key"))
+                .expect("valid outputs should normalize");
 
-        assert_eq!(validated.url, "rtmp://example.com/live");
+        assert_eq!(validated.url, "rtmp://example.com/live/key");
+    }
+
+    #[test]
+    fn validate_output_payload_rejects_rtmp_url_without_stream_key() {
+        for url in ["rtmp://example.com/live", "rtmps://example.com/live/"] {
+            let response = validate_output_payload(&test_output_payload(url))
+                .expect_err("the leaf cannot connect without a stream key");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{url}");
+        }
     }
 
     #[test]
@@ -683,7 +701,7 @@ mod tests {
                 audio: AudioRouting::Passthrough,
                 ..OutputConfig::default()
             },
-            ..test_output_payload("rtmp://example.com/live")
+            ..test_output_payload("rtmp://example.com/live/key")
         };
 
         let response =
@@ -696,7 +714,7 @@ mod tests {
     fn output_payload_rejects_legacy_encoding_field() {
         let value = serde_json::json!({
             "name": "Primary Output",
-            "url": "rtmp://example.com/live",
+            "url": "rtmp://example.com/live/key",
             "encoding": "720p",
             "config": {
                 "video": {"mode": "source"},
@@ -713,7 +731,7 @@ mod tests {
     fn validate_output_payload_rejects_h265_for_legacy_rtmp() {
         let payload = OutputPayload {
             config: OutputConfig::preset("720p").with_video_codec(OutputVideoCodec::Hevc),
-            ..test_output_payload("rtmp://example.com/live")
+            ..test_output_payload("rtmp://example.com/live/key")
         };
 
         let response =
@@ -728,7 +746,7 @@ mod tests {
             config: OutputConfig::preset("720p")
                 .with_video_codec(OutputVideoCodec::Hevc)
                 .with_rtmp_mode(RtmpOutputMode::Enhanced),
-            ..test_output_payload("rtmp://example.com/live")
+            ..test_output_payload("rtmp://example.com/live/key")
         };
 
         let validated =
