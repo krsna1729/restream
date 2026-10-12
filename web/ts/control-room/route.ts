@@ -10,6 +10,8 @@ export const WORKSPACES = [
   "monitor",
   "incidents",
   "capacity",
+  "media",
+  "system",
 ] as const;
 
 export type Workspace = (typeof WORKSPACES)[number];
@@ -22,6 +24,8 @@ export const WORKSPACE_LABELS: Record<Workspace, string> = {
   monitor: "Monitor",
   incidents: "Incidents",
   capacity: "Capacity",
+  media: "Media",
+  system: "System",
 };
 
 export interface Place {

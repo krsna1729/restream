@@ -942,6 +942,7 @@ Query params:
     "ingressOwner": {
       "faulted": false,
       "managedRx": true,
+      "owners": 1,
       "serviceVisits": 0,
       "rxPackets": 0,
       "rxRingDropped": 0,
@@ -954,7 +955,8 @@ Query params:
   "rtmpListener": {
     "acceptErrors": 0,
     "fdExhaustionErrors": 0,
-    "restarts": 0
+    "restarts": 0,
+    "ingressOwners": 1
   },
   "containedPanics": 0,
   "runtimeLimits": {

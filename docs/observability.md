@@ -59,6 +59,7 @@ recording settings in SQLite.
     "ingressOwner": {
       "faulted": false,
       "managedRx": true,
+      "owners": 1,
       "serviceVisits": 0,
       "rxPackets": 0,
       "txPackets": 0,
@@ -72,7 +73,7 @@ recording settings in SQLite.
 low-cardinality by construction (no peer or StreamID labels). With several
 Owners (`RESTREAM_SRT_INGRESS_OWNERS`) every counter and gauge is the sum over
 the Owners and every high-water mark is the largest one; a stopped Owner
-withdraws its gauges. The sample shows a
+withdraws its gauges, so `owners` counts the Owners running now. The sample shows a
 subset; the full set is service visits/actions/maintenance actions and budget
 exhaustion, TX capacity/in-flight/high-water/exhaustions/packets/completions/
 failures, RX packets/bytes/ring depth/ring drops/buffer exhaustion/truncation, peers, admission

@@ -14,6 +14,7 @@ use super::OwnerLoop;
 /// sum over every Owner, and an exiting Owner withdraws its gauges.
 #[derive(Default)]
 pub(super) struct Published {
+    pub(super) owners: u64,
     pub(super) tx_capacity: u64,
     tx_in_flight: u64,
     tx_exhaustions: u64,
@@ -128,13 +129,82 @@ impl OwnerLoop {
     }
 
     /// Withdraw this Owner's gauges from the listener-wide block when it
-    /// exits; its cumulative counters stay counted.
+    /// exits; its cumulative counters stay counted. Withdrawing twice is a
+    /// no-op: `publish` moves the block only by the change.
     pub(super) fn withdraw_gauges(&mut self) {
         let (stats, published) = (&self.stats.ingress_owner, &mut self.published);
+        publish(&stats.owners, &mut published.owners, 0);
         publish(&stats.tx_capacity, &mut published.tx_capacity, 0);
         publish(&stats.tx_in_flight, &mut published.tx_in_flight, 0);
         publish(&stats.rx_ring_depth, &mut published.rx_ring_depth, 0);
         publish(&stats.peers, &mut published.peers, 0);
         publish(&stats.deferred_sends, &mut published.deferred_sends, 0);
+    }
+}
+
+/// An Owner thread that unwinds never reaches `finish`; dropping its loop
+/// still withdraws its gauges, so `owners` keeps counting live Owners only.
+impl Drop for OwnerLoop {
+    fn drop(&mut self) {
+        self.withdraw_gauges();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    use tokio::sync::mpsc;
+
+    use super::super::super::ingress_admission::ReceiverGroupId;
+    use super::super::super::tokio_ingress::SrtIngestPolicyStore;
+    use super::super::{IngressConfig, OwnerSeat, build, listener_plans};
+    use crate::domain::srt_ingest::SrtGlobalIngestConfig;
+    use crate::media::snapshots::ListenerSocketStats;
+
+    #[test]
+    fn an_owner_loop_dropped_without_finishing_withdraws_its_gauges() {
+        let stats = Arc::new(ListenerSocketStats::default());
+        let config = IngressConfig {
+            bind: SocketAddr::from(([127, 0, 0, 1], 0)),
+            policy_store: Arc::new(SrtIngestPolicyStore::new(
+                SrtGlobalIngestConfig::default(),
+                &[],
+            )),
+            receiver_group: ReceiverGroupId::generate(),
+            stats: stats.clone(),
+            command_capacity: 1,
+            event_capacity: 1,
+            telemetry_capacity: 1,
+            owners: 1,
+            max_peers_per_ip: 1,
+        };
+        let plan = listener_plans(&config)
+            .expect("plan")
+            .pop()
+            .expect("one plan");
+        let (member, inbox) = flume::unbounded();
+        let seat = OwnerSeat {
+            index: 0,
+            plan,
+            epoch: Instant::now(),
+            inbox,
+            members: vec![member],
+        };
+        let (_commands_tx, commands) = flume::bounded(1);
+        let (events, _events_rx) = mpsc::channel(1);
+        let (telemetry, _telemetry_rx) = mpsc::channel(1);
+        let (owner_loop, _) =
+            build(seat, config, commands, events, telemetry).expect("Owner builds");
+        let gauges = || {
+            let snapshot = stats.ingress_owner.snapshot();
+            (snapshot.owners, snapshot.tx_capacity > 0)
+        };
+        assert_eq!(gauges(), (1, true), "a built Owner reports itself");
+        // What an unwinding Owner thread does: the loop drops, `finish` never runs.
+        drop(owner_loop);
+        assert_eq!(gauges(), (0, false), "a dropped Owner withdraws its gauges");
     }
 }

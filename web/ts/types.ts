@@ -348,9 +348,41 @@ export interface HealthData {
     acceptErrors?: number;
     fdExhaustionErrors?: number;
     restarts?: number;
+    /** Ingress owners accepting now; 0 while the listener is stopped. */
+    ingressOwners?: number;
   };
-  srtListener?: Record<string, unknown> | null;
+  srtListener?: {
+    bondingAvailable?: boolean;
+    restarts?: number;
+    /** Summed over every running SRT ingress Owner. */
+    ingressOwner?: SrtIngressOwnerHealth;
+  } | null;
+  egressFabricShards?: Array<{
+    protocol: string;
+    feedId: string;
+    shardIndex: number;
+    state: string;
+  }>;
   containedPanics?: number;
+}
+
+/** The SRT ingress Owners' counters (cumulative) and gauges (now). */
+export interface SrtIngressOwnerHealth {
+  faulted: boolean;
+  owners: number;
+  peers: number;
+  rxRingDepth: number;
+  rxRingDropped: number;
+  rxBufferExhaustions: number;
+  txInFlight: number;
+  txCapacity: number;
+  budgetExhausted: number;
+  eventBridgeFullVisits: number;
+  telemetryDropped: number;
+  overloadDisconnects: number;
+  mediaSlowPasses5ms: number;
+  mediaSlowPasses20ms: number;
+  mediaPassMaxUs: number;
 }
 
 export interface SystemMetrics {
@@ -408,6 +440,11 @@ export interface SystemMetrics {
     ignoredInterfaces?: string[];
     sampleMs?: number | null;
   };
+  /** MEDIA: the worker pool that runs per-packet media services; `workers`
+   * lists the running ones (none until the first service starts). */
+  mediaExecutor?: { configuredWorkers?: number; workers?: unknown[] };
+  ioUring?: { available?: boolean; deploymentTier?: string };
+  rtmps?: { ktlsCapabilities?: Record<string, boolean> };
 }
 
 export interface DashboardRuntimeSnapshot {

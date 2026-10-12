@@ -174,6 +174,7 @@ pub(crate) async fn start_rtmp_server_on_with_shutdown(
     // No owner accepts until every runtime/socket has initialized.
     accepting.cancel();
     info!(owners, "Server listening on {}", addr);
+    let _running = RunningOwners::publish(&engine.runtime.rtmp_listener_stats.owners, owners);
     if let Some(started) = started {
         let _ = started.send(Ok(bound_addr));
     }
@@ -212,6 +213,26 @@ pub(crate) async fn start_rtmp_server_on_with_shutdown(
         info!("RTMP Compio owner stopped during shutdown");
     } else {
         warn!("RTMP Compio owner stopped unexpectedly; no new connections will be accepted");
+    }
+}
+
+/// The running-owner gauge while the listener accepts; dropping it (the
+/// listener returning, or its task aborted) reports 0.
+struct RunningOwners<'a>(&'a std::sync::atomic::AtomicU64);
+
+impl<'a> RunningOwners<'a> {
+    fn publish(gauge: &'a std::sync::atomic::AtomicU64, owners: usize) -> Self {
+        gauge.store(
+            u64::try_from(owners).unwrap_or(u64::MAX),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        Self(gauge)
+    }
+}
+
+impl Drop for RunningOwners<'_> {
+    fn drop(&mut self) {
+        self.0.store(0, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -669,6 +690,14 @@ mod tests {
             }
         };
 
+        let running = || {
+            engine
+                .runtime
+                .rtmp_listener_stats
+                .owners
+                .load(std::sync::atomic::Ordering::Relaxed)
+        };
+        assert_eq!(running(), owners as u64, "every bound owner is reported");
         let mut clients = Vec::new();
         for _ in 0..16 {
             let mut client = TcpStream::connect(address).await.unwrap();
@@ -706,6 +735,11 @@ mod tests {
         .await
         .expect("all owner threads stop")
         .unwrap();
+        assert_eq!(
+            running(),
+            0,
+            "a stopped or aborted listener reports no owners"
+        );
         for mut client in clients {
             let mut remainder = Vec::new();
             let closed =

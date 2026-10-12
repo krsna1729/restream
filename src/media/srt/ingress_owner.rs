@@ -297,6 +297,7 @@ fn build(
     );
     let stats = config.stats;
     let mut published = Published::default();
+    publish(&stats.ingress_owner.owners, &mut published.owners, 1);
     publish(
         &stats.ingress_owner.tx_capacity,
         &mut published.tx_capacity,

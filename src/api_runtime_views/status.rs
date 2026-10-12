@@ -223,6 +223,8 @@ struct RtmpListenerHealthJson {
     accept_errors: u64,
     fd_exhaustion_errors: u64,
     restarts: u64,
+    /// Ingress owners accepting now (0 while the listener is stopped).
+    ingress_owners: u64,
 }
 
 #[derive(Serialize)]
@@ -581,6 +583,11 @@ pub(crate) async fn health_snapshot_view(
                 .runtime
                 .rtmp_listener_stats
                 .restarts
+                .load(Ordering::Relaxed),
+            ingress_owners: engine
+                .runtime
+                .rtmp_listener_stats
+                .owners
                 .load(Ordering::Relaxed),
         },
         srt_listener: SrtListenerHealthJson {
