@@ -23,55 +23,52 @@ pub(super) fn thread_group(comm: &str) -> String {
     comm.to_string()
 }
 
-/// Cumulative user+system clock ticks per thread group. Threads that exit
-/// between readings simply stop contributing.
-pub(super) fn thread_group_ticks(pid: u32) -> BTreeMap<String, u64> {
-    let mut groups = BTreeMap::new();
-    let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
-        return groups;
-    };
-    for task in tasks.flatten() {
-        let Ok(stat) = std::fs::read_to_string(task.path().join("stat")) else {
-            continue;
-        };
-        if let Some((comm, ticks)) = parse_task_stat(&stat) {
-            *groups.entry(thread_group(comm)).or_default() += ticks;
-        }
-    }
-    groups
+/// One reading of a cumulative per-thread counter: thread ID to its group
+/// and value. Deltas are taken per thread, so a thread that exits during the
+/// window drops only its own in-window share instead of its whole history.
+pub(super) type ThreadCounters = BTreeMap<u32, (String, u64)>;
+
+/// Cumulative user+system clock ticks per thread.
+pub(super) fn thread_ticks(pid: u32) -> ThreadCounters {
+    read_tasks(pid, |task| {
+        let stat = std::fs::read_to_string(task.join("stat")).ok()?;
+        let (comm, ticks) = parse_task_stat(&stat)?;
+        Some((thread_group(comm), ticks))
+    })
 }
 
-/// Cumulative run-queue wait in nanoseconds per thread group: the second
-/// field of `/proc/<pid>/task/<tid>/schedstat` (time runnable but not
-/// running). Threads that exit between readings stop contributing.
-pub(super) fn thread_group_runqueue_ns(pid: u32) -> BTreeMap<String, u64> {
-    let mut groups = BTreeMap::new();
+/// Cumulative run-queue wait in nanoseconds per thread: the second field of
+/// `/proc/<pid>/task/<tid>/schedstat` (time runnable but not running).
+pub(super) fn thread_runqueue_ns(pid: u32) -> ThreadCounters {
+    read_tasks(pid, |task| {
+        let comm = std::fs::read_to_string(task.join("comm")).ok()?;
+        let schedstat = std::fs::read_to_string(task.join("schedstat")).ok()?;
+        let wait = schedstat.split_whitespace().nth(1)?.parse().ok()?;
+        Some((thread_group(&comm), wait))
+    })
+}
+
+fn read_tasks(
+    pid: u32,
+    read: impl Fn(&std::path::Path) -> Option<(String, u64)>,
+) -> ThreadCounters {
     let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
-        return groups;
+        return ThreadCounters::new();
     };
-    for task in tasks.flatten() {
-        let (Ok(comm), Ok(schedstat)) = (
-            std::fs::read_to_string(task.path().join("comm")),
-            std::fs::read_to_string(task.path().join("schedstat")),
-        ) else {
-            continue;
-        };
-        if let Some(wait) = schedstat
-            .split_whitespace()
-            .nth(1)
-            .and_then(|field| field.parse::<u64>().ok())
-        {
-            *groups.entry(thread_group(&comm)).or_default() += wait;
-        }
-    }
-    groups
+    tasks
+        .flatten()
+        .filter_map(|task| {
+            let tid = task.file_name().to_str()?.parse().ok()?;
+            Some((tid, read(&task.path())?))
+        })
+        .collect()
 }
 
 /// Run-queue wait per group between two readings `seconds` apart, as % of
 /// one thread's wall time (summed over the group's threads).
 pub(super) fn thread_group_runqueue_pct(
-    start: &BTreeMap<String, u64>,
-    end: &BTreeMap<String, u64>,
+    start: &ThreadCounters,
+    end: &ThreadCounters,
     seconds: f64,
 ) -> BTreeMap<String, f64> {
     per_group_pct(start, end, seconds, 1e9)
@@ -92,8 +89,8 @@ fn parse_task_stat(stat: &str) -> Option<(&str, u64)> {
 
 /// CPU % of one core per group between two readings `seconds` apart.
 pub(super) fn thread_group_cpu_pct(
-    start: &BTreeMap<String, u64>,
-    end: &BTreeMap<String, u64>,
+    start: &ThreadCounters,
+    end: &ThreadCounters,
     seconds: f64,
 ) -> BTreeMap<String, f64> {
     // SAFETY: sysconf has no preconditions.
@@ -101,22 +98,28 @@ pub(super) fn thread_group_cpu_pct(
     per_group_pct(start, end, seconds, clk_tck)
 }
 
-/// Each group's counter delta between two readings `seconds` apart, as % of
-/// one thread's wall time, for a counter running at `units_per_second`.
+/// Each thread's counter delta between two readings `seconds` apart, summed
+/// per group, as % of one thread's wall time, for a counter running at
+/// `units_per_second`. A thread new since `start` counts from zero.
 fn per_group_pct(
-    start: &BTreeMap<String, u64>,
-    end: &BTreeMap<String, u64>,
+    start: &ThreadCounters,
+    end: &ThreadCounters,
     seconds: f64,
     units_per_second: f64,
 ) -> BTreeMap<String, f64> {
     if seconds <= 0.0 || units_per_second <= 0.0 {
         return BTreeMap::new();
     }
-    end.iter()
+    let mut units = BTreeMap::<String, u64>::new();
+    for (tid, (group, value)) in end {
+        let before = start.get(tid).map_or(0, |(_, value)| *value);
+        *units.entry(group.clone()).or_default() += value.saturating_sub(before);
+    }
+    units
+        .into_iter()
         .map(|(group, units)| {
-            let before = start.get(group).copied().unwrap_or(0);
-            let pct = 100.0 * units.saturating_sub(before) as f64 / units_per_second / seconds;
-            (group.clone(), (pct * 10.0).round() / 10.0)
+            let pct = 100.0 * units as f64 / units_per_second / seconds;
+            (group, (pct * 10.0).round() / 10.0)
         })
         .collect()
 }
@@ -141,13 +144,16 @@ mod tests {
         assert_eq!(parse_task_stat(stat), Some(("odd name) 1", 333)));
     }
 
+    fn counters(rows: &[(u32, &str, u64)]) -> ThreadCounters {
+        rows.iter()
+            .map(|(tid, group, value)| (*tid, (group.to_string(), *value)))
+            .collect()
+    }
+
     #[test]
     fn percent_is_per_group_delta() {
-        let start = BTreeMap::from([("egress".to_string(), 100)]);
-        let end = BTreeMap::from([
-            ("egress".to_string(), 100 + 4 * 100),
-            ("srt-in".to_string(), 50),
-        ]);
+        let start = counters(&[(1, "egress", 100)]);
+        let end = counters(&[(1, "egress", 100 + 4 * 100), (2, "srt-in", 50)]);
         let pct = thread_group_cpu_pct(&start, &end, 2.0);
         // SAFETY: sysconf has no preconditions.
         let clk_tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64;
@@ -157,9 +163,22 @@ mod tests {
 
     #[test]
     fn runqueue_wait_is_nanoseconds_per_second_of_window() {
-        let start = BTreeMap::from([("restream-tokio".to_string(), 1_000_000_000)]);
-        let end = BTreeMap::from([("restream-tokio".to_string(), 1_500_000_000)]);
+        let start = counters(&[(7, "restream-tokio", 1_000_000_000)]);
+        let end = counters(&[(7, "restream-tokio", 1_500_000_000)]);
         // 0.5 s of waiting over a 2 s window.
+        let pct = thread_group_runqueue_pct(&start, &end, 2.0);
+        assert_eq!(pct["restream-tokio"], 25.0);
+    }
+
+    /// A blocking-pool thread that exits mid-window must not erase its
+    /// group's in-window time from the threads that stayed.
+    #[test]
+    fn an_exited_thread_does_not_erase_its_siblings_window() {
+        let start = counters(&[
+            (1, "restream-tokio", 1_000_000_000),
+            (2, "restream-tokio", 9_000_000_000),
+        ]);
+        let end = counters(&[(1, "restream-tokio", 1_500_000_000)]);
         let pct = thread_group_runqueue_pct(&start, &end, 2.0);
         assert_eq!(pct["restream-tokio"], 25.0);
     }

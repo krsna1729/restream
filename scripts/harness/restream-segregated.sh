@@ -12,7 +12,11 @@
 # Restream boots on the union of the three sets in both arms, so every
 # CPU-derived size (`HostCapacity`) is the same. Pools grow at run time and a
 # thread takes its name after it starts, so the shim re-reads every thread's
-# name each 0.5 s and re-pins a thread whenever its name changed.
+# name each 0.5 s and re-pins a thread whenever its name changed (a reused
+# thread ID counts as a new thread: the key includes its start time). Child
+# processes (FFmpeg) keep the mask of the thread that spawned them. The
+# packet contract's `restreamCpusAllowed` reads the main thread's mask, which
+# this arm pins to CONTROL, so it shows CONTROL's set, not the union.
 # Shared (`SEG_SHARED=1`, the A arm): every thread stays on the union.
 # Run the harness itself outside these CPUs (for example
 # `taskset -c 8-11 scripts/harness/run.sh ...`), so its peers do not compete.
@@ -40,13 +44,16 @@ if [[ ${SEG_SHARED:-0} != 1 ]]; then
       for task in /proc/"$target"/task/*; do
         tid=${task##*/}
         comm=$(cat "$task/comm" 2>/dev/null) || continue
-        [[ ${pinned[$tid]:-} == "$comm" ]] && continue
+        stat=$(cat "$task/stat" 2>/dev/null) || continue
+        read -ra fields <<<"${stat##*) }"
+        key="${fields[19]}:$comm" # field 22, the thread's start time
+        [[ ${pinned[$tid]:-} == "$key" ]] && continue
         case $comm in
           restream-media*) cpus=$media ;;
           egress-shard-* | srt-in-* | restream-rtmp-c*) cpus=$hot ;;
           *) cpus=$control ;;
         esac
-        taskset -pc "$cpus" "$tid" >/dev/null 2>&1 && pinned[$tid]=$comm
+        taskset -pc "$cpus" "$tid" >/dev/null 2>&1 && pinned[$tid]=$key
       done
       sleep 0.5
     done

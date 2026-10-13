@@ -161,8 +161,8 @@ pub(super) async fn sample_resource_window(
     save_media_executor(env, api, &meta, "start").await;
     let rated_started = Instant::now();
     let srt_drops_start = srt_sink.as_ref().map(|sink| sink.drops());
-    let thread_ticks_start = super::thread_cpu::thread_group_ticks(stack.restream_pid);
-    let runqueue_start = super::thread_cpu::thread_group_runqueue_ns(stack.restream_pid);
+    let thread_ticks_start = super::thread_cpu::thread_ticks(stack.restream_pid);
+    let runqueue_start = super::thread_cpu::thread_runqueue_ns(stack.restream_pid);
     while rated_started.elapsed() < Duration::from_secs(env.sample_secs) {
         tokio::time::sleep(Duration::from_millis(env.sample_interval_ms)).await;
         let now = Instant::now();
@@ -267,8 +267,8 @@ pub(super) async fn sample_resource_window(
             delivery_samples.push(delivery);
         }
     }
-    let thread_ticks_end = super::thread_cpu::thread_group_ticks(stack.restream_pid);
-    let runqueue_end = super::thread_cpu::thread_group_runqueue_ns(stack.restream_pid);
+    let thread_ticks_end = super::thread_cpu::thread_ticks(stack.restream_pid);
+    let runqueue_end = super::thread_cpu::thread_runqueue_ns(stack.restream_pid);
     let rated_secs = rated_started.elapsed().as_secs_f64();
     save_media_executor(env, api, &meta, "end").await;
     save_pipeline_telemetry(env, api, &meta).await;

@@ -196,15 +196,17 @@ Disk             blocking file writer threads
   and the rest on 0, `restream-media` on 1, egress shards and ingress owners
   on 2-3; both arms boot on 0-3, so every CPU-derived size is the same.
   Run-queue wait is `/proc/<pid>/task/*/schedstat` (`threadRunQueuePct`,
-  % of one thread's wall time; `perf sched` needs privileges this host does
-  not grant).
+  % of one thread's wall time summed over the group's threads; `perf sched`
+  needs privileges this host does not grant). Both arms ran the srt-rs #157
+  build (arm B cannot connect SRT egress without it, below). Shard threads
+  were read 20 s after start.
 
-  | Workload | Arm | Process CPU % (runs) | Shard CPU % | Shard run-queue wait % | Delivered |
-  |---|---|---|---|---|---|
-  | SRT × 64 | A | 80.7, 68.9, 68.1 | 69, 58, 58 | 11.9, 8.0, 8.7 | 64/64 × 3 |
-  | SRT × 64 | B | 64.5, 63.1, 57.6 | 56, 55, 50 | 19.6, 18.6, 15.0 | 64/64 × 3 |
-  | RTMP × 100 | A | 12.6, 12.1, 16.5 | 5.7, 6.1, 8.4 | 0.1, 0.3, 0.5 | 100/100 × 3 |
-  | RTMP × 100 | B | 10.9, 10.1, 18.1 | 5.9, 5.3, 10.5 | 1.4, 1.2, 2.9 | 100/100 × 3 |
+  | Workload | Arm | Process CPU % (runs) | Shard CPU % | Shards | Shard run-queue wait % | Delivered |
+  |---|---|---|---|---|---|---|
+  | SRT × 64 | A | 80.7, 68.9, 68.1 | 69, 58, 58 | 2, 2, 2 | 11.9, 8.0, 8.7 | 64/64 × 3 |
+  | SRT × 64 | B | 64.5, 63.1, 57.6 | 56, 55, 50 | 2, 2, 2 | 19.6, 18.6, 15.0 | 64/64 × 3 |
+  | RTMP × 100 | A | 12.6, 12.1, 16.5 | 5.7, 6.1, 8.4 | 2, 4, 4 | 0.1, 0.3, 0.5 | 100/100 × 3 |
+  | RTMP × 100 | B | 10.9, 10.1, 18.1 | 5.9, 5.3, 10.5 | 4, 4, 4 | 1.4, 1.2, 2.9 | 100/100 × 3 |
 
   Segregation saved about 10% of process CPU at SRT × 64 (A's first run,
   80.7%, ran hot; without it A averages 68.5% against B's 61.7%) and halved
@@ -237,12 +239,17 @@ Disk             blocking file writer threads
   The same 48 Mbit/s over 32 connections costs 2.6× the shard CPU when it
   comes from 16 feeds instead of one, with 2.4× the threads and about 4× the
   RSS; the 16 ingest sessions and muxers add about 19% CPU on top (SRT
-  ingress Owner 15%, MEDIA 3.5%). Per feed: about 2.4 threads, 15 MB and 5%
-  shard CPU for 3 Mbit/s of egress. RTMP outputs (same matrix,
-  `rtmpSource`) were cheaper per feed (shard 11–12% at 16 × 2) but still
-  added threads and RSS per feed (47–48 threads, 253–256 MB). Their byte
-  ratio sat at 0.95–0.97 of the ingest rate on every output (Jain ≥ 0.9997),
-  which grades some as under the 0.95 floor; equal rates on every output
-  point to container overhead (MPEG-TS in, FLV out), not loss, though this
-  run did not separate the two. **Decision:** build a host-level shard pool
-  (Q-033).
+  ingress Owner 15%, MEDIA 3.5%). That comparison also changes the feed
+  count, so it is not what a shared pool can recover: a pool still reads
+  and wakes for 16 feeds. From the control, an extra output costs about 0.7%
+  shard CPU, so a lone feed's own shard overhead at 1 × 2 is about 9.4%, and
+  each further feed adds about 5% shard CPU, 2.4 threads (one of them its
+  shard thread) and 15 MB (ingest buffers and the feed ring included). RTMP
+  outputs (same matrix, `rtmpSource`) were cheaper per feed (shard 11–12% at
+  16 × 2) but still added threads and RSS per feed (47–48 threads, 253–256
+  MB). Their median byte ratio was 0.951–0.965 of the ingest rate on every
+  rung (Jain ≥ 0.9997), close enough to the 0.95 floor that some outputs
+  grade under it; equal rates on every output point to container overhead
+  (MPEG-TS in, FLV out), not loss, though this run did not separate the two.
+  **Decision:** build a host-level shard pool (Q-033); its gate is the
+  per-feed shard cost, not the one-feed control.

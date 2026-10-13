@@ -173,18 +173,20 @@ items).
 - Files: `src/media/egress/runtime.rs`, `src/media/engine_*_egress_fabric.rs`,
   `src/media/egress/sizing.rs`, `src/media/egress/backends/sink_shard.rs` and
   the pipeline-recirculation backend.
-- Gates: the many-feed matrix (`runtime-crossings.md` M8: 16 feeds × 2 SRT
-  outputs against 1 feed × 32) brings shard CPU and threads near the
-  one-feed control with every output delivered; per-feed isolation
-  (Q-034 admission, a frozen destination, feed teardown) keeps its harness
-  cases; loom for the shared publish wake (`WakeGate`).
+- Gates: in the many-feed matrix (`runtime-crossings.md` M8), shard threads
+  stop growing with feeds and the shard CPU each extra feed adds (about 5%
+  per feed of 2 × 1.5 Mbit/s SRT today) falls toward the per-output cost
+  (about 0.7%), every output delivered; record the per-feed floor a pool
+  cannot remove (ingest, feed ring, publish wake). Per-feed isolation (Q-034
+  admission, a frozen destination, feed teardown) keeps its harness cases;
+  loom for the shared publish wake (`WakeGate`).
 - Context: measured 2026-10-14 (M8). The same 48 Mbit/s of SRT egress over 32
   connections costs 84–87% shard CPU as 16 feeds × 2 and 30–35% as 1 feed
-  × 32 (2.6×); process threads 51–52 against 21–22, RSS 291 MB against
-  62–73 MB. Every feed holds at least one shard thread per protocol,
-  including sink and pipeline outputs that have no socket poller and could
-  run on MEDIA. Feed publish wake cost scales with subscribed shards
-  (`WakeGate`, W1).
+  × 32; process threads 51–52 against 21–22, RSS 291 MB against 62–73 MB.
+  Part of that is per-feed work a pool keeps (16 ingests, rings, wakes).
+  Every feed holds at least one shard thread per protocol, including sink
+  and pipeline outputs that have no socket poller and could run on MEDIA.
+  Feed publish wake cost scales with subscribed shards (`WakeGate`, W1).
 - Status: open. Decision (2026-10-14, from M8): build the host-level pool;
   per-feed groups have no measured reason to stay.
 
