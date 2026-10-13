@@ -700,9 +700,11 @@ mod tests {
             test_record("op", Some("key".to_string()), "2026-01-01T00:00:00Z"),
         );
 
-        let _ = std::panic::catch_unwind(|| {
-            let _guard = store.state.lock().unwrap();
-            panic!("poison records lock");
+        crate::test_support::with_expected_panic_suppressed(|| {
+            let _ = std::panic::catch_unwind(|| {
+                let _guard = store.state.lock().unwrap();
+                panic!("poison records lock");
+            });
         });
 
         assert!(store.get("op").is_some());
