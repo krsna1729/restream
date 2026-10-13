@@ -77,7 +77,10 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 url = "2"
 percent-encoding = "2"
 shiguredo_mp4 = "2026.5.0"
-# srt-rs main ee78832 (PR #156: per-source limits charge an IPv6 /64 and a
+# srt-rs main b59bcf1 (PR #157: available parallelism is read once per
+# process and explicit worker counts are used as given, so callers prepared
+# on threads pinned apart still share one Owner; PR #156: per-source limits
+# charge an IPv6 /64 and a
 # mapped IPv4 as itself; PR #155: optional window-memory budget reserved at
 # admission; PR #151: per-owner PBKDF2 key-derivation budget; PRs #145-#152:
 # bounded per-visit work for delivery, periodic and peer NAKs, TLPKTDROP,
@@ -98,8 +101,8 @@ shiguredo_mp4 = "2026.5.0"
 # SipHash, acked-bytes stats). SRT egress and ingress both run on
 # `srt_transport::compio::Owner`; ingress attaches each `owner_plans` entry
 # with `Owner::listen_planned`.
-srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "ee7883245e0b06c0c56e8d7740bfcfff96cc4dad" }
-srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "ee7883245e0b06c0c56e8d7740bfcfff96cc4dad", features = ["compio"] }
+srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "b59bcf11a7ad645fac27c42c0780034dc5dc5b8b" }
+srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "b59bcf11a7ad645fac27c42c0780034dc5dc5b8b", features = ["compio"] }
 # Bounded shard command channel with both blocking and Future-based receive, so
 # a backend that owns a thread-affine completion runtime can await commands
 # alongside its own I/O without a second wake source.

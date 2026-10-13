@@ -188,3 +188,61 @@ Disk             blocking file writer threads
   may grow the pool (never past its ceiling); the new shard admits the next
   output, and an empty one retires after the shrink dwell. Harness:
   `srt.admission`.
+- **M7** Core segregation of CONTROL, MEDIA and HOT threads (Q-032).
+  Interleaved A/B (ABBAAB, 2026-10-14, bench build, 6 vCPUs, harness and
+  sink peers on CPUs 4-5, Restream on CPUs 0-3, 4 Mbit/s SRT-published feed,
+  30 s windows, `MSR_PEER=sink`). Shared (A): every thread on 0-3.
+  Segregated (B, `scripts/harness/restream-segregated.sh`): Tokio, SQLite
+  and the rest on 0, `restream-media` on 1, egress shards and ingress owners
+  on 2-3; both arms boot on 0-3, so every CPU-derived size is the same.
+  Run-queue wait is `/proc/<pid>/task/*/schedstat` (`threadRunQueuePct`,
+  % of one thread's wall time; `perf sched` needs privileges this host does
+  not grant).
+
+  | Workload | Arm | Process CPU % (runs) | Shard CPU % | Shard run-queue wait % | Delivered |
+  |---|---|---|---|---|---|
+  | SRT × 64 | A | 80.7, 68.9, 68.1 | 69, 58, 58 | 11.9, 8.0, 8.7 | 64/64 × 3 |
+  | SRT × 64 | B | 64.5, 63.1, 57.6 | 56, 55, 50 | 19.6, 18.6, 15.0 | 64/64 × 3 |
+  | RTMP × 100 | A | 12.6, 12.1, 16.5 | 5.7, 6.1, 8.4 | 0.1, 0.3, 0.5 | 100/100 × 3 |
+  | RTMP × 100 | B | 10.9, 10.1, 18.1 | 5.9, 5.3, 10.5 | 1.4, 1.2, 2.9 | 100/100 × 3 |
+
+  Segregation saved about 10% of process CPU at SRT × 64 (A's first run,
+  80.7%, ran hot; without it A averages 68.5% against B's 61.7%) and halved
+  Tokio's own CPU (1.3–1.7% → 0.6–0.9%; likely its workers no longer look
+  for work across four CPUs). But the hot threads, confined to two CPUs,
+  waited about twice as long to run, and at RTMP × 100 the CPU ranges of the
+  two arms overlap. Delivery was the same in both arms. **Decision:** keep
+  shared affinity. A fixed split takes CPUs from the egress shards exactly
+  when they need them, and the saving does not clear the run-to-run spread
+  at RTMP. The A/B found a real fault instead: srt-rs resolved
+  `WorkerCount::Auto` from the *calling thread's* affinity, so once threads
+  were pinned apart, every SRT egress caller after the first on a shard was
+  refused ("shared callers must use the same resolved transport settings",
+  0/64 delivered in three runs). srt-rs #157 reads the parallelism once per
+  process and uses explicit counts as given.
+- **M8** Many-feed egress topology (Q-033). 2026-10-14, bench build, Restream
+  on CPUs 0-3, harness and sink peers on 4-5, SRT-published 1.5 Mbit/s feeds,
+  20 s windows, 2 runs each. Matrix: `ingest-growth-same` with
+  `RESOURCE_SWEEP_INGEST_OUTPUTS=2` (every feed restreams 2 SRT outputs);
+  control: one feed with the same output counts (`egress-growth-source-srt`).
+
+  | Feeds × outputs | Process CPU % | Shard CPU % | Threads | RSS MB | Delivered |
+  |---|---|---|---|---|---|
+  | 1 × 2 | 21.3, 18.1 | 11.7, 10.0 | 16 | 59 | 2/2 |
+  | 4 × 2 | 44.2, 28.8 | 32.5, 21.8 | 23–24 | 95–100 | 8/8 |
+  | 8 × 2 | 64.7, 51.2 | 51.2, 40.8 | 32–35 | 160 | 16/16 |
+  | 16 × 2 | 107.8, 102.7 | 87.0, 84.0 | 51–52 | 291 | 32/32 |
+  | 1 × 32 (control) | 42.0, 37.8 | 34.7, 29.8 | 21–22 | 62–73 | 32/32 |
+
+  The same 48 Mbit/s over 32 connections costs 2.6× the shard CPU when it
+  comes from 16 feeds instead of one, with 2.4× the threads and about 4× the
+  RSS; the 16 ingest sessions and muxers add about 19% CPU on top (SRT
+  ingress Owner 15%, MEDIA 3.5%). Per feed: about 2.4 threads, 15 MB and 5%
+  shard CPU for 3 Mbit/s of egress. RTMP outputs (same matrix,
+  `rtmpSource`) were cheaper per feed (shard 11–12% at 16 × 2) but still
+  added threads and RSS per feed (47–48 threads, 253–256 MB). Their byte
+  ratio sat at 0.95–0.97 of the ingest rate on every output (Jain ≥ 0.9997),
+  which grades some as under the 0.95 floor; equal rates on every output
+  point to container overhead (MPEG-TS in, FLV out), not loss, though this
+  run did not separate the two. **Decision:** build a host-level shard pool
+  (Q-033).

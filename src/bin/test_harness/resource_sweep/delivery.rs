@@ -74,7 +74,7 @@ impl DeliverySummary {
         if only_hls {
             self.ratio_min = window.ratio_min;
             self.ratio_median = window.ratio_median;
-        } else {
+        } else if window.destinations > 0 {
             self.ratio_min = self.ratio_min.min(window.ratio_min);
         }
         self.hls = Some(window);
@@ -314,5 +314,20 @@ mod tests {
         assert_eq!(summary.delivered, 2);
         assert!(summary.ratio_min >= 1.0);
         assert!((summary.jain - 1.0).abs() < 1e-9);
+    }
+
+    /// A run with an HLS sink but no HLS outputs must not report a zero
+    /// worst ratio for the outputs that were graded.
+    #[test]
+    fn an_empty_hls_window_leaves_the_byte_rated_worst_ratio() {
+        let start = Instant::now();
+        let end = start + Duration::from_secs(4);
+        let mut summary = summarize(&[
+            sample(start, 10, &[("a", 10)]),
+            sample(end, 4_010, &[("a", 4_010)]),
+        ]);
+        summary.add_hls(super::super::hls_sink::HlsWindow::default());
+        assert_eq!(summary.destinations, 1);
+        assert!((summary.ratio_min - 1.0).abs() < 1e-9);
     }
 }

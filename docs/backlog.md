@@ -14,10 +14,8 @@ items).
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
 - [Q-026 frozen-SRT-destination RSS gate](#q-026-resilience-opus-attribute-and-recalibrate-the-frozen-srt-destination-rss-gate)
 - [Q-029 payload-cache delivery watch](#q-029-performance-sonnet-close-the-payload-cache-delivery-watch-item)
-- [Q-030 HLS upload is polled on CONTROL](#q-030-performance-opus-make-hls-upload-publication-driven-and-move-it-off-control)
 - [Q-031 one capacity allocator](#q-031-architecture-opus-derive-every-thread-count-from-one-capacity-allocator)
-- [Q-032 CPU placement](#q-032-performance-opus-measure-core-segregation-of-control-media-and-hot-threads)
-- [Q-033 host-level shard pool](#q-033-architecture-opus-decide-per-feed-shard-groups-versus-a-host-level-shard-pool)
+- [Q-033 host-level shard pool](#q-033-architecture-opus-run-egress-shards-from-one-host-level-pool-instead-of-per-feed-groups)
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
 - [Q-036 enforced runtime truth table](#q-036-docs-sonnet-make-runtime-crossings-an-enforced-truth-table)
 - [Q-047 MoQ](#q-047-protocol-opus-moq-interop-spike-parked)
@@ -135,35 +133,6 @@ items).
   ratio spread was wider with the cache (0.892–0.994 vs 0.970–0.980).
 - Status: open (filed from the media copy audit, removed 2026-10-04).
 
-### Q-030 [performance] [opus] Make HLS upload publication-driven and move it off CONTROL
-- Goal: HLS PUT reacts to segment/playlist publication, as RTMP/SRT egress
-  reacts to feed wakes, and its network I/O leaves the CONTROL runtime.
-- Files: `src/media/hls/upload.rs` (`UPLOAD_INTERVAL` 500 ms poll per output,
-  Reqwest on Tokio CONTROL), `src/media/egress/` (fabric backend candidate).
-- Gates: fake-server unit tests and proptest for request framing and retry
-  state; a fuzz target for the HTTP response parser; a loom model if a thread
-  hop is added; HLS-output benches before and after against Reqwest; a live
-  harness fault case (destination stall and restart).
-- Context: poll cost scales with outputs even when nothing changes, and the
-  PUTs load the scheduler meant for low-rate control work. Two separable
-  wins: publication-driven wake (independent of runtime) and an
-  egress-fabric shard backend (Compio HTTP client). Measure each alone.
-- Status: done (2026-10-13). Both wins landed and were measured apart:
-  #246 made the Reqwest uploader wait on the store's publication watch
-  instead of a 500 ms poll (`UPLOAD_INTERVAL` is gone); the egress-fabric
-  backend (#251, default since #276) uploads from Compio shards woken by
-  each segment publish, off CONTROL, a wake seam model-checked by
-  `tests/egress_feed_wake_loom.rs`. Gates: the response parser has a fuzz
-  target, `http_response` (229k runs in 30 s, no crash; a response is read
-  the same however reads split it), and proptests
-  (`any_split_reads_the_same_response`); request framing has the proptest
-  `any_upload_url_frames_one_request` (any URL path and query frames one
-  PUT a server parses back); retry state has
-  `what_the_server_sees_follows_the_ingest_rules`; the Reqwest-versus-fabric
-  measurements are in `capacity-ramp.md`; destination stall and restart is
-  the hung HLS PUT sink case in `fault_runner/recovery.rs` (timeout, retry,
-  recovery after the sink restarts).
-
 ### Q-031 [architecture] [opus] Derive every thread count from one capacity allocator
 - Goal: thread counts follow measured service demand (λ × D at a target
   utilization, bounded by real CPUs) instead of independent constants that
@@ -197,37 +166,27 @@ items).
   again: `Observe` only shrinks, and a grown shard takes only new outputs.
   That is a placement/admission question and moves to Q-034 and Q-049.
 
-### Q-032 [performance] [opus] Measure core segregation of CONTROL, MEDIA and HOT threads
-- Goal: decide, with evidence, whether CONTROL, MEDIA and Owner/shard threads
-  get disjoint CPU sets.
-- Files: thread spawn sites in `src/media/executor.rs`,
-  `src/media/egress/shard.rs`, `src/media/srt/ingress_owner.rs`,
-  `src/media/rtmp/` ingress owners.
-- Gates: interleaved A/B (shared vs segregated affinity) at RTMP×100 and
-  SRT×64 with delivery checked per output; `perf sched` run-queue latency.
-- Context: the schedulers are logically separate but Linux can stack them on
-  one run queue while another core idles; RTMP-owner experiments
-  (`runtime-crossings.md` M4/M5) suggest placement matters.
-- Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
-  review).
-
-### Q-033 [architecture] [opus] Decide per-feed shard groups versus a host-level shard pool
+### Q-033 [architecture] [opus] Run egress shards from one host-level pool instead of per-feed groups
 - Goal: the unit of egress execution matches the resource it spends (host
-  CPU), or the per-feed shape is kept with a measured reason.
+  CPU): shards are a host pool that serves every feed, not one group per
+  (protocol, feed).
 - Files: `src/media/egress/runtime.rs`, `src/media/engine_*_egress_fabric.rs`,
-  `src/media/egress/backends/sink_shard.rs` and the pipeline-recirculation
-  backend.
-- Gates: many-feed matrix (1/4/8/16 feeds × few outputs) for threads, RSS,
-  context switches and process CPU, delivery checked per output.
-- Context: every fabric now starts at one shard and grows by demand, which
-  removed most of the waste measured in M6 (8 × 1 SRT feeds: 51 → 35 threads
-  with one shard per feed). Still per feed: one OS thread minimum for each
-  (protocol, feed), including sink and pipeline outputs that have no socket
-  poller and could run on MEDIA. Feed publish wake cost scales with
-  subscribed shards (`WakeGate`, W1); an arm-before-park refinement is only
-  worth it if the many-feed matrix shows it.
-- Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
-  review).
+  `src/media/egress/sizing.rs`, `src/media/egress/backends/sink_shard.rs` and
+  the pipeline-recirculation backend.
+- Gates: the many-feed matrix (`runtime-crossings.md` M8: 16 feeds × 2 SRT
+  outputs against 1 feed × 32) brings shard CPU and threads near the
+  one-feed control with every output delivered; per-feed isolation
+  (Q-034 admission, a frozen destination, feed teardown) keeps its harness
+  cases; loom for the shared publish wake (`WakeGate`).
+- Context: measured 2026-10-14 (M8). The same 48 Mbit/s of SRT egress over 32
+  connections costs 84–87% shard CPU as 16 feeds × 2 and 30–35% as 1 feed
+  × 32 (2.6×); process threads 51–52 against 21–22, RSS 291 MB against
+  62–73 MB. Every feed holds at least one shard thread per protocol,
+  including sink and pipeline outputs that have no socket poller and could
+  run on MEDIA. Feed publish wake cost scales with subscribed shards
+  (`WakeGate`, W1).
+- Status: open. Decision (2026-10-14, from M8): build the host-level pool;
+  per-feed groups have no measured reason to stay.
 
 ### Q-034 [resilience] [opus] Define one overload policy for shared service centers
 - Goal: when a shared Owner or shard saturates, viable destinations keep
