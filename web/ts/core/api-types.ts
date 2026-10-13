@@ -11,16 +11,6 @@ import type {
 } from "../types.js";
 import type { CapacitySnapshot, Diagnosis } from "./generated/runtime-state.js";
 
-export interface OverviewSnapshot {
-  generatedAt: string;
-  totalPipelines: number;
-  activePipelines: number;
-  degradedPipelines: number;
-  failedOutputs: number;
-  alertCount: { critical: number; warning: number };
-  srtListener: Record<string, unknown> | null;
-}
-
 export type AlertSeverity = "critical" | "warning";
 export type AlertScope = "engine" | "pipeline" | "stage" | "output";
 
@@ -118,23 +108,6 @@ export interface TelemetryEgress {
   metrics?: TelemetryMetrics;
 }
 
-export interface SourceRingReader {
-  name: string;
-  lagSlots: number;
-  overflowCount: number;
-  packetAgeMs: number | null;
-}
-
-export interface SourceRingTelemetry {
-  fill: number;
-  capacity: number;
-  fillPercent: number;
-  estimatedPktRatePerSec: number;
-  bufferDepthSecs: number;
-  payloadStats: TelemetryMetrics;
-  readers: SourceRingReader[];
-}
-
 export interface EngineTelemetrySnapshot {
   generatedAt: string;
   ingests: TelemetryIngest[];
@@ -142,15 +115,6 @@ export interface EngineTelemetrySnapshot {
   egresses: TelemetryEgress[];
   activeTranscoderBuffers: number;
   memoryAccounting?: Record<string, unknown>;
-}
-
-export interface PipelineTelemetrySnapshot {
-  generatedAt: string;
-  pipelineId: string;
-  ingest: TelemetryIngest | null;
-  sourceRing: SourceRingTelemetry | null;
-  stages: TelemetryStage[];
-  egresses: TelemetryEgress[];
 }
 
 export interface StageTelemetrySnapshot extends TelemetryStage {
@@ -310,18 +274,6 @@ export interface IngestConfig {
   running: boolean;
 }
 
-export interface PipelineFileIngestConfig {
-  configured: boolean;
-  id?: string;
-  filename?: string;
-  streamKey?: string;
-  loop?: boolean;
-  startTime?: string;
-  liveOptimized?: boolean;
-  targetGopSeconds?: number;
-  running: boolean;
-}
-
 export interface MediaFileAnalysis {
   videoCodec?: string | null;
   fps?: number | null;
@@ -343,14 +295,6 @@ export interface AudioCapsPayload {
     }
   >;
   platformLabels?: Record<string, string>;
-}
-
-export interface YoutubeMonitoringStatus {
-  canonical_watch_url: string;
-  live_now: boolean;
-  live_content: boolean;
-  upcoming: boolean;
-  title: string | null;
 }
 
 export interface RateLimitAttempt {

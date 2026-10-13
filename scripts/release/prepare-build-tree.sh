@@ -78,11 +78,7 @@ fi
 frontend_assets_exist() {
     [[ -s public/index.html ]] &&
         [[ -s public/login.html ]] &&
-        [[ -s public/control-room.html ]] &&
         [[ -s public/output.css ]] &&
-        [[ -s public/js/app/dashboard-entry.js ]] &&
-        [[ -s public/js/app/dashboard-v2-entry.js ]] &&
-        [[ -s public/js/app/dashboard-v2-checkpoints-entry.js ]] &&
         [[ -s public/js/control-room/main.js ]] &&
         [[ -s public/js/vendor/react/jsx-runtime.js ]] &&
         [[ -s public/js/lib/hls.min.js ]]
@@ -135,11 +131,7 @@ esac
 for asset in \
     public/index.html \
     public/login.html \
-    public/control-room.html \
     public/output.css \
-    public/js/app/dashboard-entry.js \
-    public/js/app/dashboard-v2-entry.js \
-    public/js/app/dashboard-v2-checkpoints-entry.js \
     public/js/control-room/main.js \
     public/js/vendor/react/jsx-runtime.js \
     public/js/lib/hls.min.js; do

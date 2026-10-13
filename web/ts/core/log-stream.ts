@@ -1,4 +1,5 @@
-import { buildLogsStreamUrl, type BuildLogsStreamUrlOptions } from "./api.js";
+import { buildLogsStreamUrl } from "./api.js";
+import type { BuildLogsStreamUrlOptions } from "./api-types.js";
 import { withBasePath } from "./base-path.js";
 import type { AppLogRow } from "../types.js";
 

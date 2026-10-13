@@ -7,8 +7,7 @@ import test from "node:test";
 // Mirrors the backend's architecture_compliance.rs / domain_layering.rs:
 // prove the module-layering rule holds by scanning raw source, rather than
 // assuming it from convention. core/ is the lowest layer (types, API client,
-// pure state) and must not depend upward on features/ or app/; features/
-// must not depend upward on app/ (the entry-point/composition layer).
+// pure state) and must not depend upward on control-room/, the app.
 const WEB_TS_ROOT = fileURLToPath(new URL("../../web/ts", import.meta.url));
 
 const IMPORT_SPECIFIER_RE =
@@ -64,12 +63,7 @@ async function collectViolations(sourceDir, forbiddenLayers) {
   return violations;
 }
 
-test("core/ does not import upward from features/ or app/", async () => {
-  const violations = await collectViolations("core", ["features", "app"]);
-  assert.deepEqual(violations, []);
-});
-
-test("features/ does not import upward from app/", async () => {
-  const violations = await collectViolations("features", ["app"]);
+test("core/ does not import upward from control-room/", async () => {
+  const violations = await collectViolations("core", ["control-room"]);
   assert.deepEqual(violations, []);
 });

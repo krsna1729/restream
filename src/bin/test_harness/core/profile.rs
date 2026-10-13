@@ -144,7 +144,7 @@ pub(crate) fn ensure_measurement_profile(command: &str, raw: &[String]) -> Resul
 /// descriptor ceiling before the in-process peer starts accepting so a normal
 /// shell default (often 1024) cannot become the scale-test bottleneck.
 pub(crate) fn ensure_msr_nofile_limit(command: &str) -> Result<(), String> {
-    if command != "msr" && command != "msr.dashboard" {
+    if command != "msr" {
         return Ok(());
     }
 

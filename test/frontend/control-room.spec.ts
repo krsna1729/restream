@@ -39,7 +39,7 @@ test("fleet shows a no-publisher cause live and drops it when the output stops",
     expect(start.ok()).toBe(true);
 
     // An unknown workspace opens Fleet.
-    await page.goto("/control-room.html?w=unknown");
+    await page.goto("/?w=unknown");
     await expect(
       page.getByRole("navigation", { name: "Workspaces" }).getByRole("link", {
         name: "Fleet",
@@ -102,7 +102,7 @@ test("operate: find a pipeline, start and stop an output, promote an input", asy
     expect(backup.ok()).toBe(true);
 
     // The inventory finds it by name, in any case.
-    await page.goto("/control-room.html?w=pipelines");
+    await page.goto("/?w=pipelines");
     await page.getByRole("searchbox", { name: "Search pipelines" }).fill(name.toUpperCase());
     const rows = page.getByRole("row").filter({ hasText: pipelineId });
     await expect(rows).toHaveCount(1);
@@ -171,7 +171,7 @@ test("inspect and monitor: one pipeline's anatomy and signals on one clock", asy
     const outputId: string = (await output.json()).output.id;
 
     // The nav keeps the pipeline when the workspace changes.
-    await page.goto(`/control-room.html?w=operate&p=${pipelineId}`);
+    await page.goto(`/?w=operate&p=${pipelineId}`);
     await page
       .getByRole("navigation", { name: "Workspaces" })
       .getByRole("link", { name: "Inspect" })
@@ -247,7 +247,7 @@ test("incidents and capacity: an alert's evidence packet and an engine-made proj
       )).ok(),
     ).toBe(true);
 
-    await page.goto("/control-room.html?w=incidents");
+    await page.goto("/?w=incidents");
     const queue = page.getByRole("region", { name: /^Open/ });
     const incident = queue.getByRole("button").filter({ hasText: `pipeline ${name}` }).first();
     await expect(incident).toBeVisible();
@@ -283,7 +283,7 @@ test("media and system: probe, rename and delete an upload; read the host and it
   const stamp = Date.now();
   const uploaded = `cr-media-${stamp}.mp4`;
   const renamed = `cr-renamed-${stamp}.mp4`;
-  await page.goto("/control-room.html?w=media");
+  await page.goto("/?w=media");
   try {
     // A checked-in file whose keyframes are 5 s apart: wider than the live
     // GOP target, so it can only feed a pipeline through a re-encode.
@@ -346,7 +346,7 @@ test("settings: save a name and a profile, refuse a short passphrase, forget a f
   const before = await (await page.request.get("/api/v1/settings")).json();
   const name = `cr-${Date.now()}`;
 
-  await page.goto("/control-room.html?w=settings");
+  await page.goto("/?w=settings");
   try {
     const general = page.getByRole("region", { name: "General" });
     await general.getByLabel("Server name").fill(name);
@@ -406,7 +406,7 @@ test("changes: the engine refuses an incomplete change, then a destination is ad
   expect(created.ok()).toBe(true);
   const pipelineId: string = (await created.json()).pipeline.id;
 
-  await page.goto("/control-room.html?w=changes");
+  await page.goto("/?w=changes");
   try {
     const define = page.getByRole("region", { name: "Define the change" });
     const stages = page.getByRole("list", { name: "Change progress" }).getByRole("listitem");
@@ -478,7 +478,7 @@ test("changes: an operation survives a reload, and a verification that failed ca
     });
     expect(output.ok()).toBe(true);
 
-    await page.goto("/control-room.html?w=changes");
+    await page.goto("/?w=changes");
     const define = page.getByRole("region", { name: "Define the change" });
     await define.getByLabel("Why (kept in the audit log)").fill("start the backup");
     await define.getByLabel("Pipeline").selectOption({ label: name });
@@ -537,7 +537,7 @@ test("changes: an apply the engine refuses shows the failed operation and its re
     });
     const outputId: string = (await output.json()).output.id;
 
-    await page.goto("/control-room.html?w=changes");
+    await page.goto("/?w=changes");
     const define = page.getByRole("region", { name: "Define the change" });
     await define.getByLabel("Why (kept in the audit log)").fill("retire the old CDN");
     await define.getByLabel("Pipeline").selectOption({ label: name });
@@ -588,7 +588,7 @@ test("manage: create a pipeline, edit its inputs, destinations, source and key, 
   let pipelineId = "";
 
   try {
-    await page.goto("/control-room.html?w=pipelines");
+    await page.goto("/?w=pipelines");
     await page.getByRole("button", { name: "New pipeline" }).click();
     const create = page.getByRole("region", { name: "New pipeline" });
     await create.getByLabel("Name").fill(name);
@@ -773,7 +773,7 @@ test("logs: a pipeline's history, then its rows live; paused, nothing arrives; e
     expect((await page.request.post(`${outputPath}/start`)).ok()).toBe(true);
     await expect.poll(writtenStarts, { timeout: 20_000 }).toBe(1);
 
-    await page.goto(`/control-room.html?w=logs&p=${sourceId}`);
+    await page.goto(`/?w=logs&p=${sourceId}`);
     await expect(page.getByRole("combobox", { name: /^Scope\b/ })).toHaveValue(`p:${sourceId}`);
     const rows = page.getByRole("table", { name: "Log rows" }).locator("tbody tr");
     const live = page.getByRole("region", { name: "Logs" }).getByRole("status");
@@ -827,7 +827,7 @@ test("diagnostics: run the engine's checks on a live pipeline and download the r
   let pipelineId: string | null = null;
   try {
     pipelineId = await liveFilePipeline(page, name);
-    await page.goto(`/control-room.html?w=inspect&p=${pipelineId}`);
+    await page.goto(`/?w=inspect&p=${pipelineId}`);
     await page.getByRole("button", { name: "Run diagnostics" }).click();
     const verdict = page
       .getByRole("region", { name: "Diagnostics" })
@@ -883,7 +883,7 @@ test("previews and stage detail: play the program and an input; a transcode stag
   try {
     const pipelineId = await liveFilePipeline(page, `crpreview${stamp}`);
     pipelineIds.push(pipelineId);
-    await page.goto(`/control-room.html?w=operate&p=${pipelineId}`);
+    await page.goto(`/?w=operate&p=${pipelineId}`);
     await playing("program", 16);
     await playing("Primary", 16);
 
@@ -911,7 +911,7 @@ test("previews and stage detail: play the program and an input; a transcode stag
     expect(created.ok()).toBe(true);
     const outputId: string = (await created.json()).output.id;
     expect((await page.request.post(`/api/v1/pipelines/${pipelineId}/outputs/${outputId}/start`)).ok()).toBe(true);
-    await page.goto(`/control-room.html?w=inspect&p=${pipelineId}`);
+    await page.goto(`/?w=inspect&p=${pipelineId}`);
     await page.getByRole("button", { name: "video:720p:codec:h264", exact: true }).click();
     // The resource map has the stage's counters; its pipe to ffmpeg comes
     // from the stage's own telemetry.

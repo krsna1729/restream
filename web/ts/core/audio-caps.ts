@@ -5,7 +5,8 @@
 // in memory. If the fetch fails, all lookups return unlimited (safe fallback —
 // the backend still enforces caps on create/update).
 
-import { getAudioCapsPayload, type AudioCapsPayload } from "./api.js";
+import { getAudioCapsPayload } from "./api.js";
+import type { AudioCapsPayload } from "./api-types.js";
 
 export type AudioPlatform = "youtube" | "facebook" | "vdocipher" | "generic";
 export type AudioProtocol = "rtmp" | "rtmps" | "hls" | "srt";

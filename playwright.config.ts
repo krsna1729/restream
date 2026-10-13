@@ -1,16 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const testIgnore = [
-    ...(process.env.PLAYWRIGHT_BROWSER_DOM_HARNESS
-        ? []
-        : ['**/frontend-browser-dom.spec.ts']),
-    ...(process.env.MSR_DASHBOARD_PLAYWRIGHT ? [] : ['**/msr-dashboard-soak.spec.ts']),
-];
-
 export default defineConfig({
     testDir: './test',
     testMatch: '**/*.spec.ts',
-    testIgnore,
     fullyParallel: false,
     forbidOnly: !!process.env.CI,
     retries: process.env.CI ? 1 : 0,

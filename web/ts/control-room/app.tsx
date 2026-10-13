@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 
-import { withBasePath } from "../core/base-path.js";
 import { Capacity } from "./capacity.js";
 import { Changes } from "./changes.js";
 import { Fleet } from "./fleet.js";
@@ -77,9 +76,6 @@ export function App() {
             : live.stream}{" "}
           · sample {formatAge(sampledAtMs, now)}
         </span>
-        <a className="link text-sm" href={withBasePath("/")}>
-          Classic dashboard
-        </a>
       </header>
       {/* core/utils.ts toggles the class and writes #error-msg's text; React
           must own neither (constant class, no children). */}

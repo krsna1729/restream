@@ -258,7 +258,6 @@ async fn run() -> Result<(), String> {
             "udp-drain" => udp_drain::udp_drain_mode().await,
             "substrate-pps" => substrate_pps::substrate_pps_mode().await,
             "msr" => msr().await,
-            "msr.dashboard" => msr_dashboard().await,
             "bitrate-sweep" => bitrate_sweep().await,
             "branch-matrix" => branch_matrix().await,
             "srt-crypto-matrix" => srt_crypto_matrix().await,
