@@ -852,6 +852,13 @@ async function createOperation(body: ChangeRequest): Promise<ChangeOperation | n
   return apiRequest<ChangeOperation>("/api/v1/agent/operations", { method: "POST", body });
 }
 
+/** The stored record; a 404 means the engine restarted or evicted it. */
+async function getOperation(operationId: string): Promise<ChangeOperation | null> {
+  return apiRequest<ChangeOperation>(
+    `/api/v1/agent/operations/${encodeURIComponent(operationId)}`,
+  );
+}
+
 /** Approve (the dashboard session approves; `reason` is audited), apply, or
  * verify an operation. */
 async function advanceOperation(
@@ -928,6 +935,7 @@ export {
   getYoutubeMonitoringStatus,
   planChange,
   createOperation,
+  getOperation,
   advanceOperation,
   DEFAULT_ENGINE_SBOM_ENDPOINT,
 };

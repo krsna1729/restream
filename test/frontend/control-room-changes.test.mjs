@@ -49,11 +49,13 @@ test("progress follows the plan, then the operation, and marks where a change fa
   assert.deepEqual(progress(null, op("invalid")), ["done", "failed", "todo", "todo"]);
 });
 
-test("each operation offers one next step, and none once finished", () => {
+test("each operation offers one next step; a failed verification can run again", () => {
   assert.equal(nextStep("awaitingApproval"), "approve");
   assert.equal(nextStep("approved"), "apply");
   assert.equal(nextStep("applied"), "verify");
-  for (const status of ["invalid", "applying", "verified", "verificationFailed", "failed"]) {
+  // Verification is a moment's check: a just-started output may connect later.
+  assert.equal(nextStep("verificationFailed"), "verify");
+  for (const status of ["invalid", "applying", "verified", "failed"]) {
     assert.equal(nextStep(status), null, status);
   }
 });

@@ -109,7 +109,8 @@ export function progress(plan: ChangePlan | null, operation: ChangeOperation | n
 }
 
 /** The one step an operator can take next, or null when the operation is
- * finished (or cannot go on). */
+ * finished (or cannot go on). Verification is a point-in-time check, so a
+ * failed one can run again: a started output needs seconds to connect. */
 export function nextStep(status: OperationStatus): "approve" | "apply" | "verify" | null {
   switch (status) {
     case "awaitingApproval":
@@ -117,6 +118,7 @@ export function nextStep(status: OperationStatus): "approve" | "apply" | "verify
     case "approved":
       return "apply";
     case "applied":
+    case "verificationFailed":
       return "verify";
     default:
       return null;

@@ -454,12 +454,18 @@ export interface ChangeOperation {
   operationId: string;
   status: OperationStatus;
   intentSummary: string;
+  /** The request it was created from; secrets such as URLs are redacted. */
+  request: ChangeRequest;
   approval: { approvedBy: string; claimedBy: string; reason: string | null; approvedAt: string } | null;
   auditLog: { at: string; kind: string; summary: string }[];
-  executionResult: {
-    success: boolean;
-    changeResults: { kind: string; outputId?: string | null; status: string }[];
-  } | null;
+  /** A failed apply stops at the first rejected change; earlier ones stay applied. */
+  executionResult:
+    | {
+        success: true;
+        changeResults: { kind: string; outputId?: string | null; status: string }[];
+      }
+    | { success: false; error: string }
+    | null;
   /** `checks` alone decide `verified`; the rest is reported, not judged. */
   verificationResult: {
     explanation?: string;

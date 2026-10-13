@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { advanceOperation, createOperation, getConfig, planChange } from "../core/api.js";
+import {
+  advanceOperation,
+  createOperation,
+  getConfig,
+  getOperation,
+  planChange,
+} from "../core/api.js";
 import type { ChangeOperation, ChangePlan } from "../core/api-types.js";
 import {
   CHANGE_KINDS,
@@ -21,36 +27,32 @@ const STAGE_BADGE: Record<StageState, string> = {
   todo: "badge-ghost",
 };
 
-const STEP_LABEL = { approve: "Approve", apply: "Apply", verify: "Verify" } as const;
+/** The operation this tab is working on, so leaving the workspace or
+ * reloading does not strand an approved but unapplied change. */
+const OPERATION_KEY = "control-room.change-operation";
 
 /** Change Studio: describe a change, let the engine judge it without touching
  * anything, then approve, apply and verify it as one operation. */
 export function Changes({ live }: { live: LiveSnapshot }) {
-  const pipelines = live.state?.pipelines ?? [];
-  const [intent, setIntent] = useState("");
-  const [pipelineId, setPipelineId] = useState("");
-  const [drafts, setDrafts] = useState<readonly ChangeDraft[]>([NEW_DRAFT]);
-  const [profiles, setProfiles] = useState<readonly string[]>([]);
-  const [plan, setPlan] = useState<{ key: string; plan: ChangePlan } | null>(null);
   const [operation, setOperation] = useState<ChangeOperation | null>(null);
-  const [reason, setReason] = useState("");
+  const [plan, setPlan] = useState<ChangePlan | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    // Profile names for the video choice; read once, like Settings.
-    void getConfig().then((config) => setProfiles(Object.keys(config?.transcodeProfiles ?? {})));
+    const operationId = sessionStorage.getItem(OPERATION_KEY);
+    if (operationId === null) return;
+    // A 404 (engine restarted or evicted it) alerts once; the page starts over.
+    void getOperation(operationId).then((stored) => {
+      if (stored) setOperation(stored);
+      else sessionStorage.removeItem(OPERATION_KEY);
+    });
   }, []);
 
-  const request = useMemo(
-    () => changeRequest(intent, pipelineId, drafts),
-    [intent, pipelineId, drafts],
-  );
-  const requestKey = JSON.stringify(request);
-  // A preview speaks only for the exact change it judged.
-  const currentPlan = plan?.key === requestKey ? plan.plan : null;
-  const outputs = (live.state?.outputs ?? []).filter((output) => output.pipelineId === pipelineId);
-  const stages = progress(currentPlan, operation);
-  const step = operation ? nextStep(operation.status) : null;
+  const track = (next: ChangeOperation | null) => {
+    setOperation(next);
+    if (next) sessionStorage.setItem(OPERATION_KEY, next.operationId);
+    else sessionStorage.removeItem(OPERATION_KEY);
+  };
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
     try {
@@ -59,8 +61,7 @@ export function Changes({ live }: { live: LiveSnapshot }) {
       setBusy(false);
     }
   };
-  const edit = (index: number, next: Partial<ChangeDraft>) =>
-    setDrafts(drafts.map((draft, at) => (at === index ? { ...draft, ...next } : draft)));
+  const stages = progress(plan, operation);
 
   return (
     <div className="space-y-4">
@@ -74,7 +75,67 @@ export function Changes({ live }: { live: LiveSnapshot }) {
           ))}
         </ol>
       </div>
+      {operation === null ? (
+        <DefineChange
+          live={live}
+          busy={busy}
+          run={run}
+          onJudged={setPlan}
+          onCreated={track}
+        />
+      ) : (
+        <Operation
+          operation={operation}
+          busy={busy}
+          run={run}
+          onChange={track}
+          onDone={() => {
+            track(null);
+            setPlan(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
 
+type Run = (action: () => Promise<void>) => Promise<void>;
+
+function DefineChange(props: {
+  live: LiveSnapshot;
+  busy: boolean;
+  run: Run;
+  onJudged: (plan: ChangePlan | null) => void;
+  onCreated: (operation: ChangeOperation) => void;
+}) {
+  const { live, busy, run } = props;
+  const pipelines = live.state?.pipelines ?? [];
+  const [intent, setIntent] = useState("");
+  const [pipelineId, setPipelineId] = useState("");
+  const [drafts, setDrafts] = useState<readonly ChangeDraft[]>([NEW_DRAFT]);
+  const [profiles, setProfiles] = useState<readonly string[]>([]);
+  const [plan, setPlan] = useState<{ key: string; plan: ChangePlan } | null>(null);
+
+  useEffect(() => {
+    // Profile names for the video choice; read once, like Settings.
+    void getConfig().then((config) => setProfiles(Object.keys(config?.transcodeProfiles ?? {})));
+  }, []);
+
+  const request = useMemo(
+    () => changeRequest(intent, pipelineId, drafts),
+    [intent, pipelineId, drafts],
+  );
+  const requestKey = JSON.stringify(request);
+  // A preview speaks only for the exact change it judged.
+  const currentPlan = plan?.key === requestKey ? plan.plan : null;
+  const { onJudged } = props;
+  useEffect(() => onJudged(currentPlan), [onJudged, currentPlan]);
+  const outputs = (live.state?.outputs ?? []).filter((output) => output.pipelineId === pipelineId);
+  const edit = (index: number, next: Partial<ChangeDraft>) =>
+    setDrafts(drafts.map((draft, at) => (at === index ? { ...draft, ...next } : draft)));
+
+  return (
+    <>
       <section className="card bg-base-200" aria-labelledby="changes-define">
         <div className="card-body gap-3 p-4">
           <h3 id="changes-define" className="card-title text-base">
@@ -85,7 +146,6 @@ export function Changes({ live }: { live: LiveSnapshot }) {
             <input
               className="input input-sm input-bordered"
               value={intent}
-              disabled={operation !== null}
               onChange={(event) => setIntent(event.target.value)}
             />
           </label>
@@ -94,7 +154,6 @@ export function Changes({ live }: { live: LiveSnapshot }) {
             <select
               className="select select-sm select-bordered"
               value={pipelineId}
-              disabled={operation !== null}
               onChange={(event) => setPipelineId(event.target.value)}
             >
               <option value="">Choose a pipeline</option>
@@ -114,7 +173,6 @@ export function Changes({ live }: { live: LiveSnapshot }) {
                     <select
                       className="select select-sm select-bordered"
                       value={draft.kind}
-                      disabled={operation !== null}
                       onChange={(event) =>
                         edit(index, { kind: event.target.value as ChangeDraft["kind"] })
                       }
@@ -132,7 +190,6 @@ export function Changes({ live }: { live: LiveSnapshot }) {
                       <select
                         className="select select-sm select-bordered"
                         value={draft.outputId}
-                        disabled={operation !== null}
                         onChange={(event) => edit(index, { outputId: event.target.value })}
                       >
                         <option value="">Choose a destination</option>
@@ -153,7 +210,6 @@ export function Changes({ live }: { live: LiveSnapshot }) {
                         <input
                           className="input input-sm input-bordered"
                           value={draft.name}
-                          disabled={operation !== null}
                           onChange={(event) => edit(index, { name: event.target.value })}
                         />
                       </label>
@@ -164,7 +220,6 @@ export function Changes({ live }: { live: LiveSnapshot }) {
                         <input
                           className="input input-sm input-bordered font-mono"
                           value={draft.url}
-                          disabled={operation !== null}
                           onChange={(event) => edit(index, { url: event.target.value })}
                         />
                       </label>
@@ -177,7 +232,6 @@ export function Changes({ live }: { live: LiveSnapshot }) {
                         <select
                           className="select select-sm select-bordered"
                           value={draft.profile}
-                          disabled={operation !== null}
                           onChange={(event) => edit(index, { profile: event.target.value })}
                         >
                           <option value="">Source (no transcode)</option>
@@ -193,7 +247,6 @@ export function Changes({ live }: { live: LiveSnapshot }) {
                         <select
                           className="select select-sm select-bordered"
                           value={draft.desiredState}
-                          disabled={operation !== null}
                           onChange={(event) =>
                             edit(index, {
                               desiredState: event.target.value as ChangeDraft["desiredState"],
@@ -207,7 +260,7 @@ export function Changes({ live }: { live: LiveSnapshot }) {
                     </>
                   )}
                 </div>
-                {drafts.length > 1 && operation === null && (
+                {drafts.length > 1 && (
                   <button
                     type="button"
                     className="btn btn-ghost btn-xs mt-2"
@@ -223,7 +276,6 @@ export function Changes({ live }: { live: LiveSnapshot }) {
             <button
               type="button"
               className="btn btn-sm btn-ghost"
-              disabled={operation !== null}
               onClick={() => setDrafts([...drafts, NEW_DRAFT])}
             >
               Add a change
@@ -231,7 +283,7 @@ export function Changes({ live }: { live: LiveSnapshot }) {
             <button
               type="button"
               className="btn btn-sm btn-primary"
-              disabled={busy || !pipelineId || operation !== null}
+              disabled={busy || !pipelineId}
               onClick={() =>
                 run(async () => {
                   const judged = await planChange(request);
@@ -247,7 +299,7 @@ export function Changes({ live }: { live: LiveSnapshot }) {
 
       {currentPlan && <Judgement plan={currentPlan} />}
 
-      {currentPlan?.validation.valid && operation === null && (
+      {currentPlan?.validation.valid && (
         <button
           type="button"
           className="btn btn-sm btn-primary"
@@ -256,78 +308,106 @@ export function Changes({ live }: { live: LiveSnapshot }) {
             run(async () => {
               // The operation carries exactly the previewed request.
               const created = await createOperation(request);
-              if (created) setOperation(created);
+              if (created) props.onCreated(created);
             })
           }
         >
           Create operation
         </button>
       )}
+    </>
+  );
+}
 
-      {operation && (
-        <section className="card bg-base-200" aria-labelledby="changes-operation">
-          <div className="card-body gap-3 p-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 id="changes-operation" className="card-title text-base">
-                Operation
-              </h3>
-              <span className="font-mono text-xs">{operation.operationId}</span>
-              <span className="badge" data-status={operation.status}>
-                {operation.status}
-              </span>
-            </div>
-            <p className="text-xs opacity-70">
-              Approval confirms the change from this dashboard session; it is not a
-              second person's sign-off. The engine keeps operations in memory only, so
-              a restart forgets them.
-            </p>
-            {step === "approve" && (
-              <label className="form-control">
-                <span className="label-text">Approval reason (audited)</span>
-                <input
-                  className="input input-sm input-bordered"
-                  value={reason}
-                  onChange={(event) => setReason(event.target.value)}
-                />
-              </label>
-            )}
-            <div className="flex gap-2">
-              {step && (
-                <button
-                  type="button"
-                  className="btn btn-sm btn-primary"
-                  disabled={busy}
-                  onClick={() =>
-                    run(async () => {
-                      const next = await advanceOperation(operation.operationId, step, reason);
-                      if (next) setOperation(next);
-                    })
-                  }
-                >
-                  {STEP_LABEL[step]}
-                </button>
-              )}
-              {step === null && (
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost"
-                  onClick={() => {
-                    setOperation(null);
-                    setPlan(null);
-                    setDrafts([NEW_DRAFT]);
-                    setIntent("");
-                    setReason("");
-                  }}
-                >
-                  Start a new change
-                </button>
-              )}
-            </div>
-            <OperationResult operation={operation} />
-          </div>
-        </section>
-      )}
-    </div>
+function Operation(props: {
+  operation: ChangeOperation;
+  busy: boolean;
+  run: Run;
+  onChange: (operation: ChangeOperation) => void;
+  onDone: () => void;
+}) {
+  const { operation, busy, run } = props;
+  const [reason, setReason] = useState("");
+  const step = nextStep(operation.status);
+  const label =
+    step === "approve"
+      ? "Approve"
+      : step === "apply"
+        ? "Apply"
+        : operation.status === "verificationFailed"
+          ? "Verify again"
+          : "Verify";
+  return (
+    <section className="card bg-base-200" aria-labelledby="changes-operation">
+      <div className="card-body gap-3 p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 id="changes-operation" className="card-title text-base">
+            Operation
+          </h3>
+          <span className="font-mono text-xs">{operation.operationId}</span>
+          <span className="badge" data-status={operation.status}>
+            {operation.status}
+          </span>
+        </div>
+        <p className="text-sm">{operation.intentSummary}</p>
+        <ul className="text-sm" aria-label="Requested changes">
+          {operation.request.proposedChanges.map((change, index) => (
+            <li key={index}>
+              {change.kind} <span className="font-mono">{change.outputId ?? change.name ?? ""}</span>
+              {change.desiredState ? ` (then ${change.desiredState})` : ""}
+            </li>
+          ))}
+        </ul>
+        <p className="text-xs opacity-70">
+          Approval confirms the change from this dashboard session; it is not a
+          second person's sign-off. The engine keeps operations in memory only, so
+          a restart forgets them.
+        </p>
+        {step === "approve" && (
+          <label className="form-control">
+            <span className="label-text">Approval reason (audited)</span>
+            <input
+              className="input input-sm input-bordered"
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+            />
+          </label>
+        )}
+        {operation.status === "verificationFailed" && (
+          <p className="text-sm">
+            Verification checks the engine at one moment; a destination that
+            was just started can need a few seconds to connect.
+          </p>
+        )}
+        <div className="flex gap-2">
+          {step && (
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              disabled={busy}
+              onClick={() =>
+                run(async () => {
+                  // A refused step (a failed apply answers 400 with the
+                  // failed record) still changed the record: read it back.
+                  const next =
+                    (await advanceOperation(operation.operationId, step, reason)) ??
+                    (await getOperation(operation.operationId));
+                  if (next) props.onChange(next);
+                })
+              }
+            >
+              {label}
+            </button>
+          )}
+          {(step === null || step === "verify") && (
+            <button type="button" className="btn btn-sm btn-ghost" onClick={props.onDone}>
+              Start a new change
+            </button>
+          )}
+        </div>
+        <OperationResult operation={operation} />
+      </div>
+    </section>
   );
 }
 
@@ -347,7 +427,7 @@ function Judgement({ plan }: { plan: ChangePlan }) {
         </div>
         {[...validation.errors, ...validation.warnings].map((issue, index) => (
           <p
-            key={`${index}:${issue.code}`}
+            key={index}
             className={`text-sm ${issue.severity === "error" ? "text-error" : "text-warning"}`}
           >
             {issue.message}
@@ -362,8 +442,8 @@ function Judgement({ plan }: { plan: ChangePlan }) {
         )}
         {notes.length > 0 && (
           <ul className="list-disc pl-5 text-xs opacity-70">
-            {notes.map((note) => (
-              <li key={note}>{note}</li>
+            {notes.map((note, index) => (
+              <li key={index}>{note}</li>
             ))}
           </ul>
         )}
@@ -374,12 +454,19 @@ function Judgement({ plan }: { plan: ChangePlan }) {
 
 function OperationResult({ operation }: { operation: ChangeOperation }) {
   const { gates, observations } = verification(operation);
+  const execution = operation.executionResult;
   return (
     <>
-      {operation.executionResult && (
+      {execution?.success === false && (
+        <p className="text-sm text-error" role="alert">
+          Apply failed: {execution.error}. Changes before the failing one may already
+          be applied; check the destinations before trying again.
+        </p>
+      )}
+      {execution?.success && (
         <ul className="text-sm" aria-label="Applied changes">
-          {operation.executionResult.changeResults.map((change, index) => (
-            <li key={`${index}:${change.kind}`}>
+          {execution.changeResults.map((change, index) => (
+            <li key={index}>
               {change.kind} <span className="font-mono">{change.outputId ?? ""}</span>: {change.status}
             </li>
           ))}
@@ -388,8 +475,8 @@ function OperationResult({ operation }: { operation: ChangeOperation }) {
       {gates.length > 0 && (
         <table className="table table-sm" aria-label="Verification">
           <tbody>
-            {gates.map((gate) => (
-              <tr key={gate.label}>
+            {gates.map((gate, index) => (
+              <tr key={index}>
                 <td>{gate.label}</td>
                 <td className={gate.passed ? "text-success" : "text-error"}>
                   {gate.passed ? "passed" : "failed"}
@@ -403,8 +490,8 @@ function OperationResult({ operation }: { operation: ChangeOperation }) {
       {operation.verificationResult?.explanation && (
         <p className="text-sm">{operation.verificationResult.explanation}</p>
       )}
-      {observations.map((line) => (
-        <p key={line} className="text-xs opacity-70">
+      {observations.map((line, index) => (
+        <p key={index} className="text-xs opacity-70">
           {line}
         </p>
       ))}
@@ -414,7 +501,7 @@ function OperationResult({ operation }: { operation: ChangeOperation }) {
         </summary>
         <ol className="mt-1 text-xs">
           {operation.auditLog.map((event, index) => (
-            <li key={`${index}:${event.kind}`}>
+            <li key={index}>
               <span className="font-mono">{event.at}</span> {event.kind}: {event.summary}
             </li>
           ))}

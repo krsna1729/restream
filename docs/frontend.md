@@ -247,7 +247,13 @@ creates an operation from that same request, which the operator approves
 (as this dashboard session, with an audited reason: confirmation, not a
 second person's sign-off), applies and verifies. Only the engine's
 per-change checks decide "verified"; the alert delta and active graph nodes
-are shown as observations. Operations live in engine memory only.
+are shown as observations. Verification checks one moment, so a failed one
+can run again (a just-started destination needs seconds to connect). A
+refused apply answers 400 with the failed record; the page reads the record
+back and shows the reason, and warns that earlier changes may already be
+applied. The tab keeps the operation id in `sessionStorage` and reads the
+operation back after a reload; operations live in engine memory only, so
+after a restart (404 `operationNotFound`) the page starts over.
 
 Proof: `test/frontend/control-room-fleet.test.mjs`,
 `test/frontend/control-room-operate.test.mjs`,
