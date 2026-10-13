@@ -2,8 +2,10 @@
 //! the time went: Tokio workers and blocking pool (`restream-tokio`), the
 //! RTMP ingress owner (`restream-rtmp-c`, the kernel's 15-byte truncation of
 //! `restream-rtmp-compio-owner`), the SRT ingress Owner (`srt-in`), egress
-//! shards (`egress`) and the rest. Read from `/proc/<pid>/task/*/stat` at the
-//! window's start and end only, never per packet.
+//! shards (`egress`) and the rest; and how long each group's runnable threads
+//! waited for a CPU (`/proc/<pid>/task/*/schedstat`, the run-queue delay
+//! `perf sched` would report, without its privileges). Read from `/proc` at
+//! the window's start and end only, never per packet.
 
 use std::collections::BTreeMap;
 
@@ -39,6 +41,42 @@ pub(super) fn thread_group_ticks(pid: u32) -> BTreeMap<String, u64> {
     groups
 }
 
+/// Cumulative run-queue wait in nanoseconds per thread group: the second
+/// field of `/proc/<pid>/task/<tid>/schedstat` (time runnable but not
+/// running). Threads that exit between readings stop contributing.
+pub(super) fn thread_group_runqueue_ns(pid: u32) -> BTreeMap<String, u64> {
+    let mut groups = BTreeMap::new();
+    let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
+        return groups;
+    };
+    for task in tasks.flatten() {
+        let (Ok(comm), Ok(schedstat)) = (
+            std::fs::read_to_string(task.path().join("comm")),
+            std::fs::read_to_string(task.path().join("schedstat")),
+        ) else {
+            continue;
+        };
+        if let Some(wait) = schedstat
+            .split_whitespace()
+            .nth(1)
+            .and_then(|field| field.parse::<u64>().ok())
+        {
+            *groups.entry(thread_group(&comm)).or_default() += wait;
+        }
+    }
+    groups
+}
+
+/// Run-queue wait per group between two readings `seconds` apart, as % of
+/// one thread's wall time (summed over the group's threads).
+pub(super) fn thread_group_runqueue_pct(
+    start: &BTreeMap<String, u64>,
+    end: &BTreeMap<String, u64>,
+    seconds: f64,
+) -> BTreeMap<String, f64> {
+    per_group_pct(start, end, seconds, 1e9)
+}
+
 /// `(comm, utime + stime)` from one `/proc/.../stat` line. The name sits in
 /// parentheses and may contain spaces, so fields are counted after the last
 /// `)`: state is field 3, utime field 14, stime field 15.
@@ -60,13 +98,24 @@ pub(super) fn thread_group_cpu_pct(
 ) -> BTreeMap<String, f64> {
     // SAFETY: sysconf has no preconditions.
     let clk_tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64;
-    if seconds <= 0.0 || clk_tck <= 0.0 {
+    per_group_pct(start, end, seconds, clk_tck)
+}
+
+/// Each group's counter delta between two readings `seconds` apart, as % of
+/// one thread's wall time, for a counter running at `units_per_second`.
+fn per_group_pct(
+    start: &BTreeMap<String, u64>,
+    end: &BTreeMap<String, u64>,
+    seconds: f64,
+    units_per_second: f64,
+) -> BTreeMap<String, f64> {
+    if seconds <= 0.0 || units_per_second <= 0.0 {
         return BTreeMap::new();
     }
     end.iter()
-        .map(|(group, ticks)| {
+        .map(|(group, units)| {
             let before = start.get(group).copied().unwrap_or(0);
-            let pct = 100.0 * ticks.saturating_sub(before) as f64 / clk_tck / seconds;
+            let pct = 100.0 * units.saturating_sub(before) as f64 / units_per_second / seconds;
             (group.clone(), (pct * 10.0).round() / 10.0)
         })
         .collect()
@@ -104,5 +153,14 @@ mod tests {
         let clk_tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64;
         assert!((pct["egress"] - (40_000.0 / clk_tck / 2.0 * 10.0).round() / 10.0).abs() < 1e-9);
         assert!(pct["srt-in"] > 0.0);
+    }
+
+    #[test]
+    fn runqueue_wait_is_nanoseconds_per_second_of_window() {
+        let start = BTreeMap::from([("restream-tokio".to_string(), 1_000_000_000)]);
+        let end = BTreeMap::from([("restream-tokio".to_string(), 1_500_000_000)]);
+        // 0.5 s of waiting over a 2 s window.
+        let pct = thread_group_runqueue_pct(&start, &end, 2.0);
+        assert_eq!(pct["restream-tokio"], 25.0);
     }
 }

@@ -85,6 +85,9 @@ pub(super) struct ResourceAggregate {
     pub(super) delivery: super::delivery::DeliverySummary,
     /// Restream CPU % of one core per thread group over the rated window.
     pub(super) thread_cpu_pct: std::collections::BTreeMap<String, f64>,
+    /// Run-queue wait (runnable, not running) per thread group over the
+    /// rated window, % of one thread's wall time.
+    pub(super) thread_runqueue_pct: std::collections::BTreeMap<String, f64>,
     /// SRT sink drops (kernel socket and Owner RX ring) over the rated window;
     /// `None` when the run has no in-process SRT sink.
     pub(super) srt_sink_drops: Option<crate::harness_srt_sink::SrtSinkDrops>,
@@ -159,6 +162,7 @@ pub(super) async fn sample_resource_window(
     let rated_started = Instant::now();
     let srt_drops_start = srt_sink.as_ref().map(|sink| sink.drops());
     let thread_ticks_start = super::thread_cpu::thread_group_ticks(stack.restream_pid);
+    let runqueue_start = super::thread_cpu::thread_group_runqueue_ns(stack.restream_pid);
     while rated_started.elapsed() < Duration::from_secs(env.sample_secs) {
         tokio::time::sleep(Duration::from_millis(env.sample_interval_ms)).await;
         let now = Instant::now();
@@ -264,6 +268,7 @@ pub(super) async fn sample_resource_window(
         }
     }
     let thread_ticks_end = super::thread_cpu::thread_group_ticks(stack.restream_pid);
+    let runqueue_end = super::thread_cpu::thread_group_runqueue_ns(stack.restream_pid);
     let rated_secs = rated_started.elapsed().as_secs_f64();
     save_media_executor(env, api, &meta, "end").await;
     save_pipeline_telemetry(env, api, &meta).await;
@@ -271,6 +276,8 @@ pub(super) async fn sample_resource_window(
     aggregate.delivery = super::delivery::summarize(&delivery_samples);
     aggregate.thread_cpu_pct =
         super::thread_cpu::thread_group_cpu_pct(&thread_ticks_start, &thread_ticks_end, rated_secs);
+    aggregate.thread_runqueue_pct =
+        super::thread_cpu::thread_group_runqueue_pct(&runqueue_start, &runqueue_end, rated_secs);
     aggregate.srt_sink_drops = srt_sink
         .as_ref()
         .zip(srt_drops_start.as_ref())
@@ -303,6 +310,7 @@ pub(super) fn summarize_resource_samples(
     ResourceAggregate {
         delivery: super::delivery::DeliverySummary::default(),
         thread_cpu_pct: Default::default(),
+        thread_runqueue_pct: Default::default(),
         srt_sink_drops: None,
         scenario: meta.scenario.to_string(),
         label: meta.label,
@@ -599,6 +607,7 @@ pub(super) fn resource_aggregate_json(aggregate: &ResourceAggregate) -> Value {
         "pipelineCountPeak": aggregate.pipeline_count_peak,
     });
     value["threadCpuPct"] = json!(aggregate.thread_cpu_pct);
+    value["threadRunQueuePct"] = json!(aggregate.thread_runqueue_pct);
     value["srtSinkDrops"] = aggregate
         .srt_sink_drops
         .as_ref()
