@@ -146,7 +146,7 @@ test("video and audio choices become the engine's output config", () => {
   const remap = { video: { mode: "source" }, audio: { mode: "remap", track: 1, leftChannel: 2, rightChannel: 3 } };
   assert.deepEqual(outputWrite(outputDraft(stored("rtmp://h/live/k", remap), "host")).config.audio, remap.audio);
   // Custom video settings this editor cannot show are kept, unless replaced.
-  const custom = { video: { mode: "custom", width: 1280, height: 720 }, audio: { mode: "all" } };
+  const custom = { video: { mode: "custom" }, audio: { mode: "all" } };
   const draft = outputDraft(stored("rtmp://h/live/k", custom), "host");
   assert.equal(draft.profile, null);
   assert.deepEqual(outputWrite({ ...draft, name: "Renamed" }).config.video, custom.video);

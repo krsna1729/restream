@@ -681,6 +681,7 @@ test("manage: create a pipeline, edit its inputs, destinations, source and key, 
     const main = (await (await page.request.get("/api/v1/settings")).json()).pipelines.find(
       (pipeline: { name: string }) => pipeline.name === "Main",
     );
+    expect(main, "the demo fixture has a pipeline Main with running destinations").toBeTruthy();
     await page.goto(`/control-room.html?w=operate&p=${main.id}`);
     await page
       .getByRole("region", { name: "Pipeline controls" })
