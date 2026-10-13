@@ -188,7 +188,9 @@ allowlist. An empty list does not grant a wildcard browser origin.
 ### Feature boundaries
 
 Cargo features keep each surface explicit. `agent-execution` (which enables
-`agent-plane`) is in the default build; the MCP features are opt-in:
+`agent-plane`) is in the default build; the MCP features are opt-in. Approval
+is a confirmation by the one dashboard principal, not separation of duties;
+see [API reference](api-reference.md#agent-plane):
 
 | Feature | Adds |
 |---|---|

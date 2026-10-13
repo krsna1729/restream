@@ -1,8 +1,8 @@
-//! Optional agent read/planning plane.
+//! Agent read/planning plane.
 //!
-//! This module is compiled only with the `agent-plane` Cargo feature. It keeps
-//! phase-4 agent support out of the core runtime while still exposing typed,
-//! testable planning primitives when the feature is enabled.
+//! Compiled with the `agent-plane` Cargo feature, which the default build
+//! enables; `--no-default-features` removes it. It exposes typed, testable
+//! planning primitives to the HTTP edge and the MCP sidecar.
 
 mod catalog;
 #[cfg(test)]

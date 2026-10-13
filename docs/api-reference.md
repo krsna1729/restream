@@ -501,6 +501,15 @@ With `agent-execution` (default), the API also exposes
 approval-gated operation routes. These routes are still authenticated, and
 operation responses are redacted before they are returned.
 
+Approval is a confirmation step, not separation of duties: the dashboard has
+one principal, so the same session (or an MCP sidecar given its cookie or
+bearer token) can create, approve and apply an operation. The record keeps
+the authenticated approver (`approval.approvedBy`, always the dashboard
+session) apart from the request's unverified `approvedBy`
+(`approval.claimedBy`). The engine keeps at most 1024 operations in memory
+(finished ones are dropped first, an applying one last; all are lost on
+restart), and creating one accepts a body of at most 256 KiB.
+
 | Method | Route | Purpose |
 |---|---|---|
 | `POST` | `/api/v1/agent/operations` | Create an operation object from an intent, structured changes, and optional idempotency key |

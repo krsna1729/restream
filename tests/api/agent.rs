@@ -457,6 +457,45 @@ async fn agent_execution_routes_return_404_when_compiled_out() {
     assert_eq!(body["compiledIn"], false);
 }
 
+// The store keeps every operation's whole request (up to 1024 of them), so
+// creating one takes a small body: 1024 records x the 4 MiB API default would
+// let one client pin gigabytes.
+#[cfg(feature = "agent-execution")]
+#[tokio::test]
+async fn agent_operation_create_refuses_an_oversized_body() {
+    let (app, _pool) = test_app().await;
+    let cookie = login(&app).await;
+    let oversized = serde_json::json!({
+        "intent": "x".repeat(300 * 1024),
+        "proposedChanges": []
+    })
+    .to_string();
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            "/api/v1/agent/operations",
+            &cookie,
+            Some(&oversized),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    // A plan with the same intent is read but never stored; it keeps the
+    // API-wide limit.
+    let resp = app
+        .oneshot(auth_req(
+            "POST",
+            "/api/v1/agent/plans",
+            &cookie,
+            Some(&oversized),
+        ))
+        .await
+        .unwrap();
+    assert_ne!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
 #[cfg(feature = "agent-execution")]
 #[tokio::test]
 async fn agent_operation_lifecycle_is_approval_gated_redacted_and_verified() {

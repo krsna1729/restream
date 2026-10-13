@@ -1,6 +1,6 @@
-//! Optional agent execution plane.
+//! Agent execution plane.
 //!
-//! This module is compiled only with `agent-execution`, which depends on the
+//! Compiled with `agent-execution` (in the default build), which depends on the
 //! read/planning `agent-plane` feature. It owns operation state, approval
 //! transitions, audit events, idempotency lookups, and redacted public views;
 //! API handlers still perform the actual runtime mutations through core APIs.
@@ -68,7 +68,11 @@ pub enum OperationStatus {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApprovalState {
+    /// The authenticated principal that approved (the dashboard session).
     pub approved_by: String,
+    /// Who the request says approved. Unverified: one session can create,
+    /// approve and apply, so this is a label for the audit log only.
+    pub claimed_by: String,
     pub reason: Option<String>,
     pub approved_at: String,
 }
@@ -229,6 +233,7 @@ impl AgentExecutionStore {
         record.status = OperationStatus::Approved;
         record.approval = Some(ApprovalState {
             approved_by: AUTHENTICATED_DASHBOARD_APPROVER.to_string(),
+            claimed_by: approval.approved_by,
             reason: approval.reason,
             approved_at: approved_at.clone(),
         });
@@ -344,7 +349,7 @@ impl AgentExecutionStore {
 
     fn enforce_record_limit(state: &mut AgentExecutionState) {
         while state.records.len() > MAX_AGENT_EXECUTION_RECORDS {
-            let Some(operation_id) = oldest_operation_id(&state.records) else {
+            let Some(operation_id) = eviction_candidate(&state.records) else {
                 return;
             };
             if let Some(record) = state.records.remove(&operation_id)
@@ -356,12 +361,26 @@ impl AgentExecutionStore {
     }
 }
 
-fn oldest_operation_id(records: &HashMap<String, OperationRecord>) -> Option<String> {
+/// The record to drop when the store is full: a finished operation before a
+/// pending one, and an applying one last (dropping it would answer "not
+/// found" for a mutation that already ran); the oldest within each.
+fn eviction_candidate(records: &HashMap<String, OperationRecord>) -> Option<String> {
+    let liveness = |status: OperationStatus| match status {
+        OperationStatus::Invalid
+        | OperationStatus::Verified
+        | OperationStatus::VerificationFailed
+        | OperationStatus::Failed => 0,
+        OperationStatus::AwaitingApproval
+        | OperationStatus::Approved
+        | OperationStatus::Applied => 1,
+        OperationStatus::Applying => 2,
+    };
     records
         .values()
         .min_by(|left, right| {
-            left.created_at
-                .cmp(&right.created_at)
+            liveness(left.status)
+                .cmp(&liveness(right.status))
+                .then_with(|| left.created_at.cmp(&right.created_at))
                 .then_with(|| left.operation_id.cmp(&right.operation_id))
         })
         .map(|record| record.operation_id.clone())
@@ -613,6 +632,65 @@ mod tests {
     }
 
     #[test]
+    fn record_limit_evicts_finished_operations_before_pending_and_applying_last() {
+        let store = AgentExecutionStore::default();
+        let record = |id: &str, created_at: &str, status: OperationStatus| {
+            let mut record = test_record(id, None, created_at);
+            record.status = status;
+            record
+        };
+        {
+            let mut state = lock_or_recover(&store.state);
+            let records = &mut state.records;
+            records.insert(
+                "applying".to_string(),
+                record(
+                    "applying",
+                    "2026-01-01T00:00:00Z",
+                    OperationStatus::Applying,
+                ),
+            );
+            records.insert(
+                "done".to_string(),
+                record("done", "2026-01-03T00:00:00Z", OperationStatus::Verified),
+            );
+            for index in 0..MAX_AGENT_EXECUTION_RECORDS - 1 {
+                let id = format!("pending-{index:04}");
+                records.insert(
+                    id.clone(),
+                    record(
+                        &id,
+                        "2026-01-02T00:00:00Z",
+                        OperationStatus::AwaitingApproval,
+                    ),
+                );
+            }
+            AgentExecutionStore::enforce_record_limit(&mut state);
+        }
+        // The newest record goes first because it is finished.
+        assert!(store.get("done").is_none());
+        assert!(store.get("applying").is_some());
+
+        {
+            let mut state = lock_or_recover(&store.state);
+            state.records.insert(
+                "newest".to_string(),
+                record(
+                    "newest",
+                    "2026-01-04T00:00:00Z",
+                    OperationStatus::AwaitingApproval,
+                ),
+            );
+            AgentExecutionStore::enforce_record_limit(&mut state);
+        }
+        // With nothing finished, the oldest pending one goes; the older
+        // applying one stays.
+        assert!(store.get("pending-0000").is_none());
+        assert!(store.get("applying").is_some());
+        assert!(store.get("newest").is_some());
+    }
+
+    #[test]
     fn poisoned_record_lock_does_not_panic_reads() {
         let store = AgentExecutionStore::default();
         lock_or_recover(&store.state).records.insert(
@@ -679,10 +757,9 @@ mod tests {
             )
             .expect("approval succeeds");
 
-        assert_eq!(
-            approved.approval.unwrap().approved_by,
-            AUTHENTICATED_DASHBOARD_APPROVER
-        );
+        let approval = approved.approval.unwrap();
+        assert_eq!(approval.approved_by, AUTHENTICATED_DASHBOARD_APPROVER);
+        assert_eq!(approval.claimed_by, "spoofed-approver");
     }
 
     #[test]
