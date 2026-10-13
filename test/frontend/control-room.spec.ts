@@ -838,7 +838,7 @@ test("diagnostics: run the engine's checks on a live pipeline and download the r
 test("previews and stage detail: play the program and an input; a transcode stage shows its pipe", async ({
   page,
 }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   const login = await page.request.post("/api/v1/auth/login", {
     data: { password: "admin" },
   });
@@ -890,6 +890,33 @@ test("previews and stage detail: play the program and an input; a transcode stag
     // The resource map has the stage's counters; its pipe to ffmpeg comes
     // from the stage's own telemetry.
     await expect(page.getByRole("group", { name: "Stage pipe" })).toContainText("idles", { timeout: 20_000 });
+
+    // A playlist that stops growing (a stalled stage upstream) raises no
+    // hls.js error: freeze every playlist at its last body, and the preview
+    // must leave "live", then give up with a Retry.
+    const playlists = new Map<string, string>();
+    let frozen = false;
+    await page.route(/\/hls\/.*\.m3u8(\?.*)?$/, async (route) => {
+      const url = route.request().url();
+      const last = playlists.get(url);
+      if (frozen && last !== undefined) {
+        return route.fulfill({ body: last, contentType: "application/vnd.apple.mpegurl" });
+      }
+      const response = await route.fetch();
+      const body = await response.text();
+      playlists.set(url, body);
+      return route.fulfill({ response, body });
+    });
+    await page.goto(`/control-room.html?w=operate&p=${pipelineId}`);
+    const program = page.getByRole("group", { name: "Preview program" });
+    await program.getByRole("button", { name: "Preview program" }).click();
+    const status = program.getByRole("status");
+    await expect(status).toHaveText("live", { timeout: 30_000 });
+    frozen = true;
+    await expect(status).toHaveText("buffering", { timeout: 30_000 });
+    await expect(status).toHaveText("stalled: no new frames", { timeout: 30_000 });
+    await expect(program.getByRole("button", { name: "Retry preview program" })).toBeVisible();
+    await expect(program.getByLabel("Video program")).toHaveCount(0);
   } finally {
     for (const id of pipelineIds) await page.request.delete(`/api/v1/pipelines/${id}`);
   }
