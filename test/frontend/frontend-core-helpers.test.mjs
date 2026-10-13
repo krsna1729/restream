@@ -216,7 +216,7 @@ test("core utils cover URL, masking, formatting, clipboard, and selection helper
 
 test("editor output-url helpers resolve presets, protocols, and SRT fields", async () => {
   const outputUrl = await loadCompiledFrontendModule(
-    "features/editor/output-url.js",
+    "core/output-url.js",
   );
 
   assert.equal(outputUrl.protocolUsesOutputServerPresets("hls"), true);

@@ -123,6 +123,59 @@ async fn duplicate_stream_keys_are_rejected() {
 }
 
 #[tokio::test]
+async fn pipeline_update_null_clears_the_file_source_and_omission_keeps_it() {
+    let (app, pool) = test_app().await;
+    let cookie = login(&app).await;
+    db::create_pipeline(&pool, "p1", "P1", "file-key", Some("file:clip.ts"), None)
+        .await
+        .unwrap();
+    let patch = |body: &'static str| {
+        app.clone().oneshot(auth_req(
+            "PATCH",
+            "/api/v1/pipelines/p1",
+            &cookie,
+            Some(body),
+        ))
+    };
+
+    // Omitted: the stored source stays.
+    let body = body_json(patch(r#"{"name":"P1"}"#).await.unwrap()).await;
+    assert_eq!(body["pipeline"]["inputSource"], "file:clip.ts");
+
+    // null: back to a live publisher.
+    let resp = patch(r#"{"name":"P1","inputSource":null,"fileIngest":null}"#)
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert!(body["pipeline"]["inputSource"].is_null(), "{body}");
+}
+
+#[tokio::test]
+async fn pipeline_update_with_an_empty_stream_key_rotates_it() {
+    let (app, pool) = test_app().await;
+    let cookie = login(&app).await;
+    db::create_pipeline(&pool, "p1", "P1", "old-key", None, None)
+        .await
+        .unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "PATCH",
+            "/api/v1/pipelines/p1",
+            &cookie,
+            Some(r#"{"name":"P1","streamKey":"  "}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let key = body_json(resp).await["pipeline"]["streamKey"].clone();
+    let key = key.as_str().expect("stream key");
+    assert!(!key.trim().is_empty() && key != "old-key", "{key}");
+}
+
+#[tokio::test]
 async fn pipeline_logs_include_persisted_lifecycle_events_without_stream_keys() {
     let (app, pool) = test_app().await;
     let cookie = login(&app).await;

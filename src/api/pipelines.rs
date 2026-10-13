@@ -32,13 +32,25 @@ use super::state::{
 /// Transport payload for pipeline create and update requests.
 ///
 /// Optional nested `Option` fields preserve the difference between leaving a
-/// field unchanged, clearing it, and replacing it with a new value.
+/// field unchanged (omitted), clearing it (`null`), and replacing it.
 pub struct PipelinePayload {
     pub name: String,
     pub stream_key: Option<String>,
+    #[serde(default, deserialize_with = "present")]
     pub input_source: Option<Option<String>>,
     pub srt_ingest_policy: Option<SrtPipelineIngestConfig>,
+    #[serde(default, deserialize_with = "present")]
     pub file_ingest: Option<Option<PipelineFileIngestPayload>>,
+}
+
+/// A field that is present, `null` included, is `Some`; serde alone reads a
+/// `null` as an omitted field.
+fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 /// Generates a dashboard-managed stream key when callers do not provide one.
@@ -311,9 +323,13 @@ pub async fn pipelines_update_handler(
     let existing_input_source = existing.input_source.clone();
     let existing_srt_ingest_policy = existing.srt_ingest_policy.clone();
 
-    let stream_key = payload
-        .stream_key
-        .unwrap_or_else(|| existing_stream_key.clone());
+    // Omitted keeps the key; empty (as on create) asks for a new one.
+    let stream_key = match payload.stream_key.as_deref() {
+        None => existing_stream_key.clone(),
+        Some(requested) => {
+            requested_stream_key(Some(requested)).unwrap_or_else(generate_stream_key)
+        }
+    };
     let input_source = payload.input_source.unwrap_or(existing_input_source);
     let srt_ingest_policy = match serialize_srt_ingest_policy(payload.srt_ingest_policy.as_ref()) {
         Ok(Some(value)) => Some(value),

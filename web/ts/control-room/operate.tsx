@@ -1,6 +1,8 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  deleteOutput,
+  getConfig,
   getPipelineInputs,
   getProcessingGraph,
   promotePipelineInput,
@@ -9,11 +11,14 @@ import {
 } from "../core/api.js";
 import type { GraphData } from "../core/api-types.js";
 import type { OutputState } from "../core/generated/runtime-state.js";
-import type { PipelineInput, PipelineInputsResponse } from "../types.js";
+import type { ConfigData, PipelineInput, PipelineInputsResponse } from "../types.js";
+import { ConfirmDelete } from "./confirm.js";
 import { describeCause } from "./fleet-model.js";
 import { formatBps } from "./format.js";
+import { AddInput, InputActions, PipelineBar } from "./operate-manage.js";
 import { buildDestinationRows, buildMediaGraph } from "./operate-model.js";
 import type { DestinationRow, GraphColumn } from "./operate-model.js";
+import { OutputForm } from "./output-form.js";
 import { PipelineScope } from "./pipeline-scope.js";
 import { Freshness, usePolled } from "./polled.js";
 import type { LiveSnapshot } from "./store.js";
@@ -39,6 +44,11 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
     getPipelineInputs(pipelineId),
   );
   const graph = usePolled<GraphData>(() => getProcessingGraph(pipelineId));
+  // Stored settings (URLs, output configs, profiles) are not in the state
+  // stream: read once, and again after every edit.
+  const [config, setConfig] = useState<ConfigData | null>(null);
+  const reloadConfig = useCallback(() => void getConfig().then(setConfig), []);
+  useEffect(reloadConfig, [reloadConfig]);
   const columns = useMemo(
     () => (graph.value ? buildMediaGraph(graph.value, outputs) : null),
     [graph.value, outputs],
@@ -47,8 +57,10 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
     () => buildDestinationRows(pipelineId, outputs, graph.value),
     [pipelineId, outputs, graph.value],
   );
+  const stored = config?.pipelines.find((pipeline) => pipeline.id === pipelineId) ?? null;
   return (
     <>
+      {stored && <PipelineBar pipeline={stored} onChanged={reloadConfig} />}
       <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
         <SourceDeck
           pipelineId={pipelineId}
@@ -62,6 +74,8 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
         pipelineId={pipelineId}
         rows={rows}
         egressBps={props.live.rates?.egressBps ?? null}
+        config={config}
+        onConfigChanged={reloadConfig}
       />
     </>
   );
@@ -154,11 +168,27 @@ function SourceDeck(props: {
                       {busy === input.id ? "Promoting…" : `Promote ${input.label}`}
                     </button>
                   )}
+                  {input.role === "backup" && (
+                    <details className="mt-1 text-xs">
+                      <summary className="cursor-pointer opacity-70">Publish URLs</summary>
+                      {[input.ingestUrls?.rtmp, input.ingestUrls?.srt].filter(Boolean).map((url) => (
+                        <p key={url} className="break-all font-mono">
+                          {url}
+                        </p>
+                      ))}
+                    </details>
+                  )}
+                  <InputActions
+                    pipelineId={props.pipelineId}
+                    input={input}
+                    onChanged={props.onChanged}
+                  />
                 </li>
               );
             })}
           </ul>
         )}
+        <AddInput pipelineId={props.pipelineId} onChanged={props.onChanged} />
       </div>
     </section>
   );
@@ -254,16 +284,51 @@ function DestinationMatrix(props: {
   rows: readonly DestinationRow[];
   /** Per output, from two telemetry samples (the header's source too). */
   egressBps: ReadonlyMap<string, number> | null;
+  /** Stored outputs (URL, config) and profiles, for the editor. */
+  config: ConfigData | null;
+  onConfigChanged: () => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
+  /** The output id being edited, "new", or null. */
+  const [editing, setEditing] = useState<string | null>(null);
+  const { config } = props;
+  const editedOutput =
+    editing && editing !== "new"
+      ? (config?.outputs.find((output) => output.id === editing) ?? null)
+      : null;
   return (
-    <section aria-labelledby="operate-destinations">
-      <h3 id="operate-destinations" className="mb-2 font-semibold">
-        Destination matrix{" "}
-        <span className="text-xs font-normal opacity-70">
-          degraded first · {props.rows.length} outputs
-        </span>
-      </h3>
+    <section aria-labelledby="operate-destinations" className="space-y-3">
+      <div className="flex items-center gap-3">
+        <h3 id="operate-destinations" className="font-semibold">
+          Destination matrix{" "}
+          <span className="text-xs font-normal opacity-70">
+            degraded first · {props.rows.length} outputs
+          </span>
+        </h3>
+        <button
+          type="button"
+          className="btn btn-xs btn-primary"
+          disabled={config === null}
+          onClick={() => setEditing("new")}
+        >
+          Add destination
+        </button>
+      </div>
+      {config && (editing === "new" || editedOutput) && (
+        <OutputForm
+          key={editing}
+          pipelineId={props.pipelineId}
+          stored={editedOutput}
+          profiles={Object.keys(config.transcodeProfiles ?? {})}
+          defaultHost={config.ingestHost || "localhost"}
+          onSaved={(output) => {
+            // A new destination continues as an edit of what was stored.
+            setEditing(output.id);
+            props.onConfigChanged();
+          }}
+          onClose={() => setEditing(null)}
+        />
+      )}
       <div className="overflow-x-auto">
         <table className="table table-sm">
           <thead>
@@ -337,6 +402,30 @@ function DestinationMatrix(props: {
                     >
                       {busy === output.id ? "…" : running ? "Stop" : "Start"}
                     </button>
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-ghost ml-1"
+                      aria-label={`Edit ${output.name}`}
+                      disabled={config === null}
+                      onClick={() => setEditing(output.id)}
+                    >
+                      Edit
+                    </button>
+                    <span className="ml-1">
+                      <ConfirmDelete
+                        label={`Delete ${output.name}`}
+                        question="Delete this destination?"
+                        onDelete={async () => {
+                          const deleted =
+                            (await deleteOutput(props.pipelineId, output.id)) !== null;
+                          if (deleted) {
+                            if (editing === output.id) setEditing(null);
+                            props.onConfigChanged();
+                          }
+                          return deleted;
+                        }}
+                      />
+                    </span>
                   </td>
                 </tr>
               );
