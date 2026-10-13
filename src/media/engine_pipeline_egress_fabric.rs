@@ -152,10 +152,9 @@ impl MediaEngine {
         let config = &self.config.egress_fabric;
         let shard_config = config.shard_config();
         let budget = config.work_budget();
-        let effective_cpus = crate::system_sampling::effective_cpu_count();
         let result = runtime.rescale(
             crate::config::EgressShardProfile::OutputCount,
-            effective_cpus,
+            crate::capacity::HostCapacity::get(),
             crate::media::egress::runtime::ResizeReason::Remove,
             shard_config,
             |_shard_id| {

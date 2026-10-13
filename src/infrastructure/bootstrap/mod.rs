@@ -93,7 +93,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
     }
     for warning in config
         .egress_fabric
-        .validate(crate::system_sampling::effective_cpu_count())
+        .validate(crate::capacity::HostCapacity::get().cpus)
     {
         warn!(
             event_class = "lifecycle",

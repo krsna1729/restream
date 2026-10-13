@@ -42,6 +42,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
         .into_iter()
         .map(|status| status.to_json())
         .collect::<Vec<_>>();
+    let host_capacity = host_capacity_json(state, egress_shards.len());
     let io_uring = uring_capabilities();
     let rtmps = RTMPS_TLS_COUNTERS.snapshot();
     let hls_put_tls = HLS_PUT_TLS_COUNTERS.snapshot();
@@ -147,6 +148,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
             },
             "engine": engine,
             "capacity": capacity,
+            "hostCapacity": host_capacity,
             "mediaExecutor": crate::media::executor::snapshot(false),
             "egressShards": egress_shards,
             "ioUring": io_uring,
@@ -176,6 +178,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
             },
             "engine": engine,
             "capacity": capacity,
+            "hostCapacity": host_capacity,
             "mediaExecutor": crate::media::executor::snapshot(true),
             "egressShards": egress_shards,
             "ioUring": io_uring,
@@ -293,6 +296,33 @@ fn is_external_interface(name: &str) -> bool {
     !virtual_prefixes
         .iter()
         .any(|prefix| lower.starts_with(prefix))
+}
+
+/// The CPUs every sizing law reads (`HostCapacity`) and the threads each
+/// execution class holds now. Thread counts are not demand: an idle thread
+/// costs no CPU. MEDIA CPU time is in `mediaExecutor`; the resource sweep
+/// measures every thread group.
+fn host_capacity_json(state: &AppState, egress_shards: usize) -> serde_json::Value {
+    use std::sync::atomic::Ordering::Relaxed;
+    let engine = &state.engine;
+    let control = engine.config.tokio_runtime.worker_threads;
+    let media = crate::media::executor::configured_workers();
+    let rtmp = engine.runtime.rtmp_listener_stats.owners.load(Relaxed) as usize;
+    let srt = engine
+        .runtime
+        .listener_stats
+        .ingress_owner
+        .owners
+        .load(Relaxed) as usize;
+    serde_json::json!({
+        "cpus": crate::capacity::HostCapacity::get().cpus,
+        "controlWorkers": control,
+        "mediaWorkers": media,
+        "rtmpIngressOwners": rtmp,
+        "srtIngressOwners": srt,
+        "egressShards": egress_shards,
+        "sizedThreads": control + media + rtmp + srt + egress_shards,
+    })
 }
 
 pub fn system_status(sys: &System) -> serde_json::Value {

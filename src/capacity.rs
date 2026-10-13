@@ -67,10 +67,55 @@ impl CapacityLimits {
 
 impl Default for CapacityLimits {
     fn default() -> Self {
-        let parallelism = std::thread::available_parallelism()
-            .map(|value| value.get() as u32)
-            .unwrap_or(1);
-        Self::from_parallelism(parallelism)
+        Self::from_parallelism(HostCapacity::get().cpus as u32)
+    }
+}
+
+/// The host's CPUs, read once at boot (`effective_cpu_count`: affinity mask
+/// and root cgroup `cpu.max`), and the default size of every resident
+/// execution class derived from them. Every sizing law takes its CPU count
+/// from here, so no two laws see different hosts and none re-reads `/proc` or
+/// `/sys` after boot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostCapacity {
+    pub cpus: usize,
+}
+
+impl HostCapacity {
+    pub fn get() -> Self {
+        static HOST: std::sync::OnceLock<HostCapacity> = std::sync::OnceLock::new();
+        *HOST.get_or_init(|| Self {
+            cpus: crate::system_sampling::effective_cpu_count(),
+        })
+    }
+
+    /// CONTROL (Tokio) workers: all CPUs up to 2, else `ceil(C/3)` in `[2, 8]`.
+    pub fn tokio_workers(self) -> usize {
+        let cpus = self.cpus.max(1);
+        if cpus <= 2 {
+            cpus
+        } else {
+            cpus.div_ceil(3).clamp(2, 8)
+        }
+    }
+
+    /// MEDIA (`restream-media`) workers: `clamp(C, 1, 4)`.
+    pub fn media_workers(self) -> usize {
+        self.cpus.clamp(1, 4)
+    }
+
+    /// Egress fabric shard threads scale with host cores instead of a flat
+    /// constant. A live legacy-vs-fabric `perf` comparison at a combined
+    /// 1,140 RTMP + 60 SRT workload (the egress migration record (git
+    /// history) Phase 5) measured the previous flat default of 4 costing
+    /// fabric ~12% more avg CPU and ~23% more peak CPU than legacy on a
+    /// 6-CPU host; raising the shard count toward the host's own core count
+    /// closed the avg-CPU gap entirely (fabric ~2% *below* legacy) and shrank
+    /// the peak gap to ~3.5%, across three repeated live captures at each of
+    /// shards=2, 4, and 6 — while preserving fabric's ~12-15% lower RSS
+    /// throughout. This is the ceiling of one shard pool: `clamp(C, 2, 8)`.
+    pub fn egress_shards_per_pool(self) -> u32 {
+        self.cpus.clamp(2, 8) as u32
     }
 }
 

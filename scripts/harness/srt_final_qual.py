@@ -438,7 +438,7 @@ def cmd_burst(args):
                RESOURCE_SWEEP_SCENARIOS="egress-growth-source-srt", RESOURCE_SWEEP_EGRESS_COUNTS=str(args.outputs),
                RESOURCE_SWEEP_SAMPLE_SECS="2", RESOURCE_SWEEP_SETTLE_SECS="20", RESOURCE_SWEEP_BURST="1",
                RESOURCE_SWEEP_PROGRESS_TIMEOUT_BASE_SECS="90", BENCH_BUILD="never", WORK_DIR=str(work))
-    # NOTE: SRT egress floors its shard count at 2 (`default_egress_fabric_shards`
+    # NOTE: SRT egress floors its shard count at 2 (`HostCapacity::egress_shards_per_pool`
     # clamps to 2..=8 and RESTREAM_EGRESS_SHARDS does not apply to the SRT
     # profile), so a pinned run is ONE CPU but TWO shards/Owners.
     if args.connect_concurrency:

@@ -223,7 +223,7 @@ impl EgressFabricRuntime {
     pub(crate) fn rescale<B, E, F, G>(
         &mut self,
         profile: crate::config::EgressShardProfile,
-        effective_cpus: usize,
+        host: crate::capacity::HostCapacity,
         reason: ResizeReason,
         shard_config: EgressShardConfig,
         mut factory_for: G,
@@ -238,8 +238,7 @@ impl EgressFabricRuntime {
         let placement = self.manager.placement_count().get();
         let outputs =
             self.manager.output_count() + usize::from(matches!(reason, ResizeReason::Add));
-        let maximum =
-            crate::config::default_egress_fabric_shards(effective_cpus).min(self.shard_ceiling);
+        let maximum = host.egress_shards_per_pool().min(self.shard_ceiling);
         let target = if self.adaptive && profile.shard_override().is_none() {
             let prior = profile.outputs_per_shard();
             match reason {
@@ -254,7 +253,7 @@ impl EgressFabricRuntime {
                 }
             }
         } else {
-            crate::config::target_egress_fabric_shards(profile, outputs, effective_cpus)
+            crate::config::target_egress_fabric_shards(profile, outputs, host.cpus)
         }
         .max(1) as usize;
 
@@ -634,7 +633,7 @@ mod tests {
         let touched = runtime
             .rescale(
                 crate::config::EgressShardProfile::OutputCount,
-                1,
+                crate::capacity::HostCapacity { cpus: 1 },
                 crate::media::egress::runtime::ResizeReason::Remove,
                 shard_config(),
                 |_| || -> Result<ProbeBackend, String> { unreachable!("must not grow") },
@@ -674,7 +673,7 @@ mod tests {
         let touched = runtime
             .rescale(
                 crate::config::EgressShardProfile::SrtOutputCount,
-                2,
+                crate::capacity::HostCapacity { cpus: 2 },
                 reason,
                 config,
                 |_| {
@@ -744,7 +743,7 @@ mod tests {
         let touched = runtime
             .rescale(
                 crate::config::EgressShardProfile::OutputCount,
-                2,
+                crate::capacity::HostCapacity { cpus: 2 },
                 ResizeReason::Remove,
                 config,
                 |_| {
@@ -809,7 +808,7 @@ mod tests {
             runtime
                 .rescale(
                     crate::config::EgressShardProfile::OutputCount,
-                    2,
+                    crate::capacity::HostCapacity { cpus: 2 },
                     ResizeReason::Remove,
                     config,
                     |_| || -> Result<ProbeBackend, String> { unreachable!("must not grow") },
