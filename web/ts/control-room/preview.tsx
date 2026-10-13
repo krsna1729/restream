@@ -1,9 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 
+import { redirectToLogin } from "../core/auth-redirect.js";
+
 /** Seconds a preview may take to produce its first segment: the engine
  * starts a preview on its first request and answers 404 until then. */
 const FIRST_SEGMENT_RETRIES = 30;
 const RETRY_DELAY_MS = 500;
+/** No new media for this long means the stream stopped (a dead source or a
+ * stopped segmenter raise no hls.js error: the playlist just stops growing).
+ * Longer than the first-segment wait, so a cold start is not a stall. */
+const STALL_MS = 20_000;
+const STALL_CHECK_MS = 1_000;
 
 /** hls.js retries this many 404s (a preview warming up), each after
  * `RETRY_DELAY_MS`; other errors keep hls.js's own rule. */
@@ -40,7 +47,39 @@ function previewConfig(): Partial<HlsConfig> {
   };
 }
 
-type PreviewState = "idle" | "starting" | "playing" | "failed";
+/** Safari plays HLS itself but does not retry a 404, so poll (as hls.js
+ * retries) until the engine has the first segment, then call `done`. */
+function awaitFirstSegment(
+  url: string,
+  alive: () => boolean,
+  done: (outcome: "ready" | "login" | "missing") => void,
+): void {
+  let attempt = 0;
+  const poll = () => {
+    if (!alive()) return;
+    void fetch(url, { credentials: "same-origin" })
+      .catch(() => null)
+      .then((response) => {
+        if (!alive()) return;
+        if (response?.ok) return done("ready");
+        if (response?.status === 401) return done("login");
+        attempt += 1;
+        if (attempt > FIRST_SEGMENT_RETRIES) return done("missing");
+        window.setTimeout(poll, RETRY_DELAY_MS);
+      });
+  };
+  poll();
+}
+
+type PreviewState = "idle" | "starting" | "playing" | "buffering" | "failed" | "stalled";
+const STATUS_TEXT: Record<PreviewState, string> = {
+  idle: "",
+  starting: "starting (the engine makes the first segment)…",
+  playing: "live",
+  buffering: "buffering",
+  failed: "preview unavailable",
+  stalled: "stalled: no new frames",
+};
 
 /** A muted live preview of an HLS URL, loaded only when asked: a preview
  * makes the engine segment the stream while it plays. */
@@ -56,70 +95,108 @@ export function Preview(props: { url: string; label: string }) {
   useEffect(() => {
     const element = video.current;
     if (attempt === 0 || !element) return;
-    const Hls = window.Hls;
-    if (!Hls?.isSupported()) {
-      // Safari plays HLS natively.
-      element.src = props.url;
-      void element.play().catch(() => setState("failed"));
-      return () => element.removeAttribute("src");
-    }
-    const player = new Hls(previewConfig());
-    hls.current = player;
-    let destroyed = false;
-    const destroy = () => {
-      if (destroyed) return;
-      destroyed = true;
-      player.destroy();
-      hls.current = null;
-    };
-    player.on(Hls.Events.MANIFEST_PARSED, () => void element.play().catch(() => undefined));
-    player.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => {
-      setTracks(player.audioTracks.map(({ id, name }) => ({ id, name })));
-      setTrack(player.audioTrack);
-    });
-    player.on(Hls.Events.ERROR, (_event, data) => {
-      if (typeof data === "object" && data !== null && "fatal" in data && data.fatal) {
-        destroy();
-        setState("failed");
+    let ended = false;
+    let player: Hls | null = null;
+    // New media is the buffered range growing. Seconds of playback are not:
+    // hls.js seeks a waiting video forward, so currentTime can move with
+    // nothing new to show.
+    let bufferedEnd = 0;
+    let grewAtMs = Date.now();
+    const watchdog = window.setInterval(() => {
+      const ranges = element.buffered;
+      const edge = ranges.length > 0 ? ranges.end(ranges.length - 1) : 0;
+      if (edge > bufferedEnd) {
+        bufferedEnd = edge;
+        grewAtMs = Date.now();
+      } else if (Date.now() - grewAtMs > STALL_MS) {
+        fail("stalled");
       }
-    });
-    player.loadSource(props.url);
-    player.attachMedia(element);
-    return destroy;
+    }, STALL_CHECK_MS);
+    const end = () => {
+      if (ended) return;
+      ended = true;
+      window.clearInterval(watchdog);
+      player?.destroy();
+      hls.current = null;
+      element.removeAttribute("src");
+      // Without load() Safari keeps fetching the removed source.
+      element.load();
+      setTracks([]);
+      setTrack(null);
+    };
+    const fail = (next: "failed" | "stalled") => {
+      end();
+      setState(next);
+    };
+    const onPlaying = () => setState("playing");
+    const onWaiting = () => setState("buffering");
+    element.addEventListener("playing", onPlaying);
+    element.addEventListener("waiting", onWaiting);
+
+    const Hls = window.Hls;
+    if (Hls?.isSupported()) {
+      player = new Hls(previewConfig());
+      hls.current = player;
+      player.on(Hls.Events.MANIFEST_PARSED, () => void element.play().catch(() => undefined));
+      player.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => {
+        if (!player) return;
+        setTracks(player.audioTracks.map(({ id, name }) => ({ id, name })));
+        setTrack(player.audioTrack);
+      });
+      player.on(Hls.Events.ERROR, (_event, data) => {
+        if (typeof data !== "object" || data === null) return;
+        if ("response" in data && typeof data.response === "object" && data.response !== null
+          && "code" in data.response && data.response.code === 401) {
+          redirectToLogin();
+          return;
+        }
+        if ("fatal" in data && data.fatal) fail("failed");
+      });
+      player.loadSource(props.url);
+      player.attachMedia(element);
+    } else {
+      awaitFirstSegment(props.url, () => !ended, (outcome) => {
+        if (outcome === "login") return redirectToLogin();
+        if (outcome === "missing") return fail("failed");
+        element.src = props.url;
+        void element.play().catch(() => fail("failed"));
+      });
+    }
+    return () => {
+      element.removeEventListener("playing", onPlaying);
+      element.removeEventListener("waiting", onWaiting);
+      end();
+    };
   }, [attempt, props.url]);
 
   const start = () => {
+    setTracks([]);
+    setTrack(null);
     setState("starting");
     setAttempt((current) => current + 1);
   };
   const stop = () => {
     setAttempt(0);
-    setTracks([]);
     setState("idle");
   };
+  const showing = state === "starting" || state === "playing" || state === "buffering";
 
   return (
     <div className="space-y-1" aria-label={`Preview ${props.label}`} role="group">
       <div className="flex flex-wrap items-center gap-2">
-        {state === "idle" || state === "failed" ? (
-          <button type="button" className="btn btn-xs" onClick={start}>
-            {state === "failed" ? `Retry preview ${props.label}` : `Preview ${props.label}`}
-          </button>
-        ) : (
+        {showing ? (
           <button type="button" className="btn btn-xs btn-ghost" onClick={stop}>
             Stop preview
           </button>
+        ) : (
+          <button type="button" className="btn btn-xs" onClick={start}>
+            {state === "idle" ? `Preview ${props.label}` : `Retry preview ${props.label}`}
+          </button>
         )}
         <span role="status" className="text-xs opacity-70">
-          {state === "starting"
-            ? "starting (the engine makes the first segment)…"
-            : state === "playing"
-              ? "live"
-              : state === "failed"
-                ? "preview unavailable"
-                : ""}
+          {STATUS_TEXT[state]}
         </span>
-        {tracks.length > 1 && (
+        {showing && tracks.length > 1 && (
           <select
             className="select select-xs select-bordered"
             aria-label={`Audio track of ${props.label}`}
@@ -138,7 +215,7 @@ export function Preview(props: { url: string; label: string }) {
           </select>
         )}
       </div>
-      {state !== "idle" && state !== "failed" && (
+      {showing && (
         <video
           ref={video}
           className="aspect-video w-full rounded bg-black"
@@ -146,7 +223,6 @@ export function Preview(props: { url: string; label: string }) {
           playsInline
           controls
           aria-label={`Video ${props.label}`}
-          onPlaying={() => setState("playing")}
         />
       )}
     </div>

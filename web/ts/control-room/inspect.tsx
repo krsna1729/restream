@@ -216,16 +216,21 @@ function NodeDetail({ row }: { row: ResourceRow | null }) {
   );
 }
 
-/** The stage's pipe counters (bytes between it and its process), which the
- * resource map leaves out; fetched only for the selected stage. */
+/** The stage's pipe counters (stalls and idles writing to its ffmpeg),
+ * which the resource map leaves out; fetched only for the selected stage. */
 function StagePipe(props: { stageKey: string }) {
-  const stage = usePolled(() => getStageTelemetry(props.stageKey));
-  const rows = scalarEntries(stage.value?.pipeMetrics);
+  // Every answer counts as a load, so a stage the engine no longer has
+  // (null) is told apart from one not read yet.
+  const stage = usePolled(async () => ({ snapshot: await getStageTelemetry(props.stageKey) }));
+  const snapshot = stage.value?.snapshot;
+  const rows = scalarEntries(snapshot?.pipeMetrics);
   return (
     <div aria-label="Stage pipe" role="group" className="text-sm">
       <h4 className="font-medium">Pipe</h4>
       {stage.value === null ? (
         <p className="opacity-70">Loading stage detail…</p>
+      ) : snapshot === null ? (
+        <p className="opacity-70">No telemetry for this stage (it may have stopped).</p>
       ) : rows.length === 0 ? (
         <p className="opacity-70">This stage has no pipe.</p>
       ) : (
