@@ -1,4 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+import { listMediaFiles } from "../core/api.js";
+import type { MediaFile } from "../core/api-types.js";
 
 import {
   buildFleetModel,
@@ -11,7 +14,8 @@ import type {
   PipelineHealth,
 } from "./fleet-model.js";
 import { formatBps } from "./format.js";
-import { PlaceLink } from "./place-link.js";
+import { PipelineForm } from "./pipeline-form.js";
+import { PlaceLink, go } from "./place-link.js";
 import type { LiveSnapshot } from "./store.js";
 
 const HEALTH_FILTERS: ReadonlyArray<[HealthFilter, string]> = [
@@ -26,6 +30,11 @@ const HEALTH_FILTERS: ReadonlyArray<[HealthFilter, string]> = [
 export function Pipelines({ live }: { live: LiveSnapshot }) {
   const [query, setQuery] = useState("");
   const [health, setHealth] = useState<HealthFilter>("all");
+  const [creating, setCreating] = useState(false);
+  const [files, setFiles] = useState<readonly MediaFile[]>([]);
+  useEffect(() => {
+    if (creating) void listMediaFiles().then((media) => setFiles(media?.files ?? []));
+  }, [creating]);
   const rows = useMemo(
     () =>
       live.state ? buildFleetModel(live.state, live.rates).pipelines : null,
@@ -65,7 +74,22 @@ export function Pipelines({ live }: { live: LiveSnapshot }) {
             </button>
           ))}
         </div>
+        <button
+          type="button"
+          className="btn btn-sm btn-primary"
+          aria-expanded={creating}
+          onClick={() => setCreating(!creating)}
+        >
+          New pipeline
+        </button>
       </div>
+      {creating && (
+        <PipelineForm
+          stored={null}
+          files={files}
+          onSaved={(pipeline) => go({ workspace: "operate", pipelineId: pipeline.id })}
+        />
+      )}
       <div className="overflow-x-auto">
         <table className="table table-sm">
           <thead>

@@ -28,6 +28,7 @@ TEST_FILES=(
   test/frontend/control-room-fleet.test.mjs
   test/frontend/control-room-incidents.test.mjs
   test/frontend/control-room-inspect.test.mjs
+  test/frontend/control-room-manage.test.mjs
   test/frontend/control-room-operate.test.mjs
   test/frontend/control-room-settings.test.mjs
   test/frontend/control-room-system.test.mjs

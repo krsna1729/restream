@@ -9,6 +9,7 @@ import {
   uploadMediaFile,
 } from "../core/api.js";
 import type { MediaFile, MediaFileAnalysis } from "../core/api-types.js";
+import { ConfirmDelete } from "./confirm.js";
 import { formatBytes, formatPercent } from "./format.js";
 import {
   formatDuration,
@@ -341,40 +342,23 @@ function Rename(props: { file: MediaFile; onRenamed: (name: string) => void }) {
 /** Delete asks once more before it acts; a file a pipeline ingests cannot be
  * deleted until that ingest is removed. */
 function Delete(props: { file: MediaFile; onDeleted: () => void }) {
-  const [armed, setArmed] = useState(false);
-  const inUse = (props.file.ingestCount ?? 0) > 0;
-  if (inUse) {
+  if ((props.file.ingestCount ?? 0) > 0) {
     return (
       <p className="text-xs opacity-70">
         A pipeline ingests this file: remove that ingest before deleting it.
       </p>
     );
   }
-  return armed ? (
-    <div className="flex items-center gap-2 text-sm">
-      <span>Delete it permanently?</span>
-      <button
-        type="button"
-        className="btn btn-sm btn-error"
-        onClick={async () => {
-          if ((await deleteMediaFile(props.file.name)) !== null) props.onDeleted();
-          else setArmed(false);
-        }}
-      >
-        Delete
-      </button>
-      <button type="button" className="btn btn-sm btn-ghost" onClick={() => setArmed(false)}>
-        Keep
-      </button>
-    </div>
-  ) : (
-    <button
-      type="button"
-      className="btn btn-sm btn-outline btn-error self-start"
-      onClick={() => setArmed(true)}
-    >
-      Delete…
-    </button>
+  return (
+    <ConfirmDelete
+      label={`Delete ${props.file.name}`}
+      question="Delete it permanently?"
+      onDelete={async () => {
+        const deleted = (await deleteMediaFile(props.file.name)) !== null;
+        if (deleted) props.onDeleted();
+        return deleted;
+      }}
+    />
   );
 }
 

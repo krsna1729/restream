@@ -1,4 +1,4 @@
-// Output URL parsing and preset matching — used only by the output editor.
+// Output URL parsing and preset matching for the destination editors.
 
 export interface OutputServerPreset {
   label: string;
@@ -119,6 +119,10 @@ export function matchOutputServerPreset(
   return null;
 }
 
+export function isAbsoluteUrl(rawValue: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(rawValue || "");
+}
+
 export function detectOutputProtocol(url: string): string {
   if (/^https?:\/\//i.test(url)) return "hls";
   if (/^srt:\/\//i.test(url)) return "srt";
@@ -224,4 +228,39 @@ export function buildDefaultCustomOutputUrl(
   if (protocol === "srt")
     return `srt://${hostname}:6000?streamid=publish:${token}`;
   return `rtmp://${hostname}:1935/live/${token}`;
+}
+
+/** The SRT URL the editor's fields describe; empty without a host. */
+export function buildSrtUrl(fields: SrtFields): string {
+  const host = fields.host.trim();
+  if (!host) return "";
+  const query: string[] = [];
+  const streamId = fields.streamId.trim();
+  if (streamId) query.push(`streamid=${streamId}`);
+  const passphrase = fields.passphrase.trim();
+  if (passphrase) {
+    query.push(`passphrase=${encodeURIComponent(passphrase)}`);
+    query.push(
+      `pbkeylen=${fields.pbkeylen === "24" || fields.pbkeylen === "32" ? fields.pbkeylen : "16"}`,
+    );
+  }
+  for (const segment of fields.extraQuery.split("&")) {
+    const part = segment.trim();
+    if (part) query.push(part);
+  }
+  const port = fields.port.trim() || "6000";
+  return `srt://${host}:${port}${query.length ? `?${query.join("&")}` : ""}`;
+}
+
+/** The URL an output editor describes: SRT from its fields; otherwise a full
+ * URL as typed, or the preset server joined with the stream key. */
+export function effectiveOutputUrl(
+  protocol: string,
+  serverUrl: string,
+  rawInput: string,
+  srt: SrtFields,
+): string {
+  if (protocol === "srt") return buildSrtUrl(srt);
+  const input = rawInput.trim();
+  return isAbsoluteUrl(input) ? input : resolvePresetOutputUrl(serverUrl, input);
 }

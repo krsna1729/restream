@@ -34,7 +34,6 @@ import {
   isValidOutput,
   isValidMonitoringUrl,
   setUrlParam,
-  isAbsoluteUrl,
   formatMaskedStreamKey,
   formatChannelCount,
   formatCodecName,
@@ -43,6 +42,7 @@ import {
   confirmInApp,
 } from "../../core/utils.js";
 import {
+  isAbsoluteUrl,
   protocolUsesOutputServerPresets,
   resolvePresetOutputUrl,
   matchOutputServerPreset,
@@ -52,8 +52,8 @@ import {
   parseSrtFields,
   buildDefaultCustomOutputUrl,
   OUTPUT_SERVER_PRESETS,
-} from "./output-url.js";
-import type { MatchedPreset, SrtFields } from "./output-url.js";
+} from "../../core/output-url.js";
+import type { MatchedPreset, SrtFields } from "../../core/output-url.js";
 import {
   detectAudioPlatform,
   detectAudioProtocol,

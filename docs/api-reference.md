@@ -186,15 +186,17 @@ Create/update body:
 
 `name` is required for both create and update because the current update handler
 uses the same payload type. If `streamKey` is omitted on create, an opaque
-random primary-input key is generated.
+random primary-input key is generated. On update, an omitted `streamKey` keeps
+the current key, and an empty or blank one issues a new random key.
 
 `inputSource` is persisted for operator metadata only; it does not pull remote
 media or transform the active native ingest path.
 
-`fileIngest` is optional. When present, pipeline create/update persists or
-replaces the pipeline's file-ingest config in the same mutation response; send
-`"fileIngest": null` to clear the configured file source as part of the same
-pipeline edit instead of issuing a follow-up `/file-ingest` request.
+On update, an omitted `inputSource` or `fileIngest` keeps the stored value and
+`null` clears it. When `fileIngest` is present, pipeline create/update persists
+or replaces the pipeline's file-ingest config in the same mutation response;
+send `"fileIngest": null` to clear the configured file source as part of the
+same pipeline edit instead of issuing a follow-up `/file-ingest` request.
 
 Create and update responses include a normalized `pipeline` object plus the
 mutation message so clients can patch dashboard pipeline state locally without

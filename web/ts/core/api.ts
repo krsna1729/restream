@@ -10,7 +10,6 @@ import type {
   OutputConfig,
   RecordingSettings,
   SrtGlobalIngestConfig,
-  SrtPipelineIngestConfig,
   DashboardRuntimeSnapshot,
   DiagnosticsReport,
   PipelineInputMutationResponse,
@@ -45,6 +44,8 @@ import type {
   ChangeRequest,
   ChangePlan,
   ChangeOperation,
+  PipelineWrite,
+  PipelineProbe,
 } from "./api-types.js";
 
 let activeMutationRequestCount = 0;
@@ -308,6 +309,14 @@ async function getPipelineSummary(
   );
 }
 
+/** What the live publisher sends; null (quietly) when nobody publishes. */
+async function getPipelineProbe(pipelineId: string): Promise<PipelineProbe | null> {
+  return apiRequest<PipelineProbe>(
+    `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/probe`,
+    { silentStatuses: [404] },
+  );
+}
+
 async function getStreamKeys(): Promise<StreamKey[] | null> {
   return apiRequest<StreamKey[]>("/api/v1/stream-keys");
 }
@@ -378,22 +387,8 @@ export function buildRuntimeStateStreamUrl(since?: string): string {
   return withBasePath(path);
 }
 
-interface CreatePipelineArgs {
-  name: string;
-  streamKey?: string;
-  inputSource?: string | null;
-  srtIngestPolicy?: SrtPipelineIngestConfig | null;
-  fileIngest?: {
-    filename: string;
-    loopFlag: boolean;
-    startTime: string;
-    liveOptimized: boolean;
-    targetGopSeconds: number;
-  } | null;
-}
-
 async function createPipeline(
-  args: CreatePipelineArgs,
+  args: PipelineWrite,
 ): Promise<PipelineMutationResponse | null> {
   if (!args.name) {
     showErrorAlert("Invalid pipeline name");
@@ -457,7 +452,7 @@ async function promotePipelineInput(
 
 async function updatePipeline(
   pipeId: string,
-  data: unknown,
+  data: PipelineWrite,
 ): Promise<PipelineMutationResponse | null> {
   if (!pipeId) {
     showErrorAlert("Pipeline id is required");
@@ -887,6 +882,7 @@ export {
   getEngineTelemetry,
   getPipelineTelemetry,
   getPipelineSummary,
+  getPipelineProbe,
   getStageTelemetry,
   getResourceMap,
   getCapacityScenario,

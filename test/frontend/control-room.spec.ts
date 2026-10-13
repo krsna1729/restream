@@ -302,7 +302,7 @@ test("media and system: probe, rename and delete an upload; read the host and it
     await page.getByRole("button", { name: "Rename" }).click();
     await expect(page.getByRole("heading", { name: renamed })).toBeVisible();
 
-    await page.getByRole("button", { name: "Delete…" }).click();
+    await page.getByRole("button", { name: `Delete ${renamed}` }).click();
     await page.getByRole("button", { name: "Delete", exact: true }).click();
     await expect(sources.getByRole("button", { name: new RegExp(renamed) })).toHaveCount(0);
   } finally {
@@ -558,5 +558,125 @@ test("changes: an apply the engine refuses shows the failed operation and its re
     await expect(operation.getByRole("button", { name: "Apply" })).toHaveCount(0);
   } finally {
     await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
+  }
+});
+
+test("manage: create a pipeline, edit its inputs, destinations, source and key, record, then delete it", async ({
+  page,
+}) => {
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  const stamp = Date.now();
+  const name = `cr-manage-${stamp}`;
+  const clip = `cr-manage-${stamp}.mp4`;
+  const upload = await page.request.post("/api/v1/media/upload", {
+    multipart: {
+      file: {
+        name: clip,
+        mimeType: "video/mp4",
+        buffer: await readFile("test/fixtures/media-library/sparse-gop-5s.mp4"),
+      },
+    },
+  });
+  expect(upload.ok()).toBe(true);
+  const stored = async (id: string) =>
+    (await (await page.request.get("/api/v1/settings")).json()).pipelines.find(
+      (pipeline: { id: string }) => pipeline.id === id,
+    );
+  let pipelineId = "";
+
+  try {
+    await page.goto("/control-room.html?w=pipelines");
+    await page.getByRole("button", { name: "New pipeline" }).click();
+    const create = page.getByRole("region", { name: "New pipeline" });
+    await create.getByLabel("Name").fill(name);
+    await create.getByRole("button", { name: "Save" }).click();
+    // Created: the cockpit of the new pipeline opens.
+    await expect(page).toHaveURL(/w=operate/);
+    pipelineId = new URL(page.url()).searchParams.get("p") ?? "";
+    expect((await stored(pipelineId)).name).toBe(name);
+
+    // A backup input: added, disabled, deleted.
+    await page.getByLabel("New input label").fill("cr-backup");
+    await page.getByRole("button", { name: "Add input" }).click();
+    await page.getByRole("button", { name: "Disable cr-backup" }).click();
+    await expect(page.getByRole("button", { name: "Enable cr-backup" })).toBeVisible();
+    await page.getByRole("button", { name: "Delete input cr-backup" }).click();
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(page.getByRole("listitem", { name: "Input cr-backup" })).toHaveCount(0);
+
+    // A destination on a preset server: the engine stores the joined URL and
+    // the preset's RTMP flavour; then it is renamed and deleted.
+    await page.getByRole("button", { name: "Add destination" }).click();
+    const add = page.getByRole("region", { name: "New destination" });
+    await add.getByLabel("Name").fill("cr-yt");
+    await add.getByRole("combobox", { name: /^Server\b/ }).selectOption({ label: "YouTube" });
+    await add.getByLabel("Stream key").fill("abcd-efgh");
+    await add.getByRole("button", { name: "Save" }).click();
+    const matrix = page.getByRole("region", { name: /Destination matrix/ });
+    await expect(matrix.getByRole("cell", { name: "cr-yt", exact: true })).toBeVisible();
+    const settings = await (await page.request.get("/api/v1/settings")).json();
+    const output = settings.outputs.find(
+      (candidate: { pipelineId: string }) => candidate.pipelineId === pipelineId,
+    );
+    expect(output.url).toBe("rtmp://a.rtmp.youtube.com/live2/abcd-efgh");
+    expect(output.config.protocol).toEqual({ type: "rtmp", mode: "enhanced" });
+
+    await page.getByRole("button", { name: "Edit cr-yt" }).click();
+    const edit = page.getByRole("region", { name: "Destination cr-yt" });
+    await edit.getByLabel("Name").fill("cr-yt2");
+    await edit.getByRole("button", { name: "Save" }).click();
+    await expect(matrix.getByRole("cell", { name: "cr-yt2", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Delete cr-yt2" }).click();
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(matrix.getByRole("cell", { name: "cr-yt2", exact: true })).toHaveCount(0);
+
+    // A file source: set, played, stopped, and back to a live publisher.
+    const controls = page.getByRole("region", { name: "Pipeline controls" });
+    await controls.getByRole("button", { name: "Settings" }).click();
+    const pipelineSettings = page.getByRole("region", { name: "Pipeline settings" });
+    await pipelineSettings.getByRole("combobox", { name: /^Source\b/ }).selectOption("file");
+    await pipelineSettings.getByRole("combobox", { name: /^File\b/ }).selectOption(clip);
+    await pipelineSettings.getByRole("button", { name: "Save" }).click();
+    await expect(pipelineSettings.getByRole("status")).toHaveText("saved");
+    await controls.getByRole("button", { name: `Play file ${clip}` }).click();
+    await controls.getByRole("button", { name: `Stop file ${clip}` }).click();
+    await expect(controls.getByRole("button", { name: `Play file ${clip}` })).toBeVisible();
+    await pipelineSettings.getByRole("combobox", { name: /^Source\b/ }).selectOption("live");
+    await pipelineSettings.getByRole("button", { name: "Save" }).click();
+    await expect(controls.getByRole("button", { name: /file/ })).toHaveCount(0);
+    expect((await stored(pipelineId)).inputSource).toBeNull();
+
+    // A new stream key, once.
+    const oldKey = (await stored(pipelineId)).streamKey;
+    await pipelineSettings.getByLabel(/Issue a new stream key/).check();
+    await pipelineSettings.getByRole("button", { name: "Save" }).click();
+    await expect(pipelineSettings.getByLabel(/Issue a new stream key/)).not.toBeChecked();
+    const newKey = (await stored(pipelineId)).streamKey;
+    expect(newKey).not.toBe(oldKey);
+    expect(newKey).toBeTruthy();
+
+    // Recording armed and disarmed, as the engine stores it. `active` is not
+    // asserted: the file publisher stopped above may still be leaving.
+    const recordingEnabled = async () =>
+      (await (await page.request.get(`/api/v1/pipelines/${pipelineId}/summary`)).json()).recording
+        .enabled;
+    await controls.getByRole("button", { name: "Record", exact: true }).click();
+    await expect(controls.getByRole("button", { name: "Stop recording", exact: true })).toBeVisible();
+    expect(await recordingEnabled()).toBe(true);
+    await controls.getByRole("button", { name: "Stop recording", exact: true }).click();
+    await expect(controls.getByRole("button", { name: "Record", exact: true })).toBeVisible();
+    expect(await recordingEnabled()).toBe(false);
+
+    await controls.getByRole("button", { name: `Delete pipeline ${name}` }).click();
+    await controls.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(page).toHaveURL(/w=pipelines/);
+    expect(await stored(pipelineId)).toBeUndefined();
+    pipelineId = "";
+  } finally {
+    if (pipelineId) await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
+    await page.request.delete(`/api/v1/media/${encodeURIComponent(clip)}`);
   }
 });

@@ -334,10 +334,6 @@ function getStatusColor(status: string): string {
   }
 }
 
-function isAbsoluteUrl(rawValue: string): boolean {
-  return /^[a-z][a-z0-9+.-]*:\/\//i.test(rawValue || "");
-}
-
 function formatMaskedStreamKey(streamKey: string | null | undefined): string {
   const normalized = String(streamKey || "");
   const underscoreIdx = normalized.indexOf("_");
@@ -393,7 +389,6 @@ export {
   showCopiedNotification,
   getStatusColor,
   writeSelectedPipelineHint,
-  isAbsoluteUrl,
   formatMaskedStreamKey,
   formatChannelCount,
   formatByteAmount,

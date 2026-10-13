@@ -255,6 +255,25 @@ applied. The tab keeps the operation id in `sessionStorage` and reads the
 operation back after a reload; operations live in engine memory only, so
 after a restart (404 `operationNotFound`) the page starts over.
 
+Managing pipelines (`operate-manage.tsx`, `pipeline-form.tsx`,
+`output-form.tsx`, rules in `manage-model.ts`): Pipelines has New pipeline,
+and the new pipeline's Operate opens once the engine stored it. Operate
+reads `/settings` once and again after each edit, and adds the pipeline
+controls: Record (armed until a source arrives; the summary's `enabled` and
+`active`), play or stop a configured file source, a confirmed delete, and the
+settings form (name, a free stream key on create, "Issue a new stream key" on
+edit, live or file source with its ingest options, and the per-pipeline SRT
+ingest override). An edit re-sends the source only when it changed, because
+re-sending a file source restarts its ingest. The source deck adds backup
+inputs with their publish URLs, and enables, disables or deletes them; the
+primary and the selected input offer neither, as the engine refuses both.
+The destination matrix adds, edits and deletes destinations: a preset server
+plus key or a full URL, SRT as fields, the RTMP flavour from the preset (or
+chosen for a custom server), video passthrough or a profile, and audio
+routing checked against the destination's caps (track and channel limits,
+with notes on what is dropped or downmixed) using the source's tracks from
+`/pipelines/{id}/probe` when someone publishes.
+
 Proof: `test/frontend/control-room-fleet.test.mjs`,
 `test/frontend/control-room-operate.test.mjs`,
 `test/frontend/control-room-inspect.test.mjs`,
@@ -262,6 +281,7 @@ Proof: `test/frontend/control-room-fleet.test.mjs`,
 `test/frontend/control-room-system.test.mjs`,
 `test/frontend/control-room-settings.test.mjs`,
 `test/frontend/control-room-changes.test.mjs`,
+`test/frontend/control-room-manage.test.mjs`,
 `test/frontend/frontend-runtime-state-stream.test.mjs` (stream liveness) and
 `test/frontend/control-room.spec.ts` (against a running engine).
 

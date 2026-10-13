@@ -2,7 +2,12 @@
 // Import types from here when only types are needed.
 // Value imports (apiRequest, getConfig, …) still come from ./api.js.
 
-import type { ConfigPipeline, ConfigOutput, OutputConfig } from "../types.js";
+import type {
+  ConfigPipeline,
+  ConfigOutput,
+  OutputConfig,
+  SrtPipelineIngestConfig,
+} from "../types.js";
 import type { CapacitySnapshot, Diagnosis } from "./generated/runtime-state.js";
 
 export interface OverviewSnapshot {
@@ -220,7 +225,8 @@ export interface PipelineSummarySnapshot {
       bitrateKbps?: number | null;
     }>;
   };
-  recording?: Record<string, unknown>;
+  /** `enabled`: recording is wanted (armed); `active`: a file is being written. */
+  recording?: { enabled: boolean; active: boolean } | null;
   hlsPreview?: Record<string, unknown>;
   graph?: {
     nodes?: number;
@@ -473,4 +479,33 @@ export interface ChangeOperation {
     incidentDelta?: { delta: number };
     graphConvergence?: { activeNodes?: number };
   } | null;
+}
+/** The body of a pipeline create or update. On update an omitted field keeps
+ * its stored value, `null` clears it, and an empty `streamKey` (as on create)
+ * asks for a new key. */
+export interface PipelineWrite {
+  name: string;
+  streamKey?: string;
+  inputSource?: string | null;
+  srtIngestPolicy?: SrtPipelineIngestConfig | null;
+  fileIngest?: {
+    filename: string;
+    loopFlag: boolean;
+    startTime: string;
+    liveOptimized: boolean;
+    targetGopSeconds: number;
+  } | null;
+}
+
+export interface ProbeAudioTrack {
+  trackIndex: number;
+  codec?: string | null;
+  channels?: number | null;
+  channelLayout?: string | null;
+  sampleRate?: number | null;
+}
+
+/** `GET /pipelines/{id}/probe`: what the live publisher sends (404 without one). */
+export interface PipelineProbe {
+  audioTracks: ProbeAudioTrack[];
 }

@@ -1,9 +1,7 @@
+import { formatChannelCount, formatCodecName } from "../../core/utils.js";
 import {
-  isAbsoluteUrl, formatChannelCount, formatCodecName,
-} from "../../core/utils.js";
-import {
-  resolvePresetOutputUrl, detectOutputProtocol, OUTPUT_SERVER_PRESETS,
-} from "./output-url.js";
+  effectiveOutputUrl, detectOutputProtocol, OUTPUT_SERVER_PRESETS,
+} from "../../core/output-url.js";
 import {
   detectAudioPlatform, detectAudioProtocol, getAudioCaps, getAudioPlatformLabel,
 } from "../../core/audio-caps.js";
@@ -14,87 +12,31 @@ import type { AudioTrack } from "../../types.js";
 export function getDefaultOutputHost(): string {
   return state.config?.ingestHost || "localhost";
 }
-export function buildSrtUrlFromFields(): string {
-  const host =
-    (
-      document.getElementById("out-srt-host-input") as HTMLInputElement | null
-    )?.value.trim() || "";
-  const port =
-    (
-      document.getElementById("out-srt-port-input") as HTMLInputElement | null
-    )?.value.trim() || "6000";
-  const streamId =
-    (
-      document.getElementById(
-        "out-srt-streamid-input",
-      ) as HTMLInputElement | null
-    )?.value.trim() || "";
-  const extraQueryRaw =
-    (
-      document.getElementById(
-        "out-srt-extra-query-input",
-      ) as HTMLInputElement | null
-    )?.value.trim() || "";
-  const passphrase =
-    (
-      document.getElementById(
-        "out-srt-passphrase-input",
-      ) as HTMLInputElement | null
-    )?.value.trim() || "";
-  const pbkeylen =
-    (
-      document.getElementById(
-        "out-srt-pbkeylen-input",
-      ) as HTMLSelectElement | null
-    )?.value || "16";
-
-  if (!host) return "";
-
-  const queryParts: string[] = [];
-  if (streamId) {
-    queryParts.push(`streamid=${streamId}`);
-  }
-  if (passphrase) {
-    queryParts.push(`passphrase=${encodeURIComponent(passphrase)}`);
-    queryParts.push(
-      `pbkeylen=${pbkeylen === "24" || pbkeylen === "32" ? pbkeylen : "16"}`,
-    );
-  }
-  if (extraQueryRaw) {
-    for (const segment of extraQueryRaw.split("&")) {
-      const part = segment.trim();
-      if (!part) continue;
-      queryParts.push(part);
-    }
-  }
-
-  const qs = queryParts.join("&");
-  return `srt://${host}:${port}${qs ? `?${qs}` : ""}`;
+function inputValue(id: string, fallback = ""): string {
+  return (
+    (document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null)
+      ?.value.trim() || fallback
+  );
 }
+
+function srtFieldsFromModal() {
+  return {
+    host: inputValue("out-srt-host-input"),
+    port: inputValue("out-srt-port-input", "6000"),
+    streamId: inputValue("out-srt-streamid-input"),
+    passphrase: inputValue("out-srt-passphrase-input"),
+    pbkeylen: inputValue("out-srt-pbkeylen-input", "16"),
+    extraQuery: inputValue("out-srt-extra-query-input"),
+  };
+}
+
 export function getEffectiveOutputUrlFromModal(): string {
-  const protocol =
-    (document.getElementById("out-protocol-input") as HTMLSelectElement | null)
-      ?.value || "rtmp";
-  const serverUrl =
-    (
-      document.getElementById(
-        "out-server-url-input",
-      ) as HTMLSelectElement | null
-    )?.value || "";
-  const rawInput =
-    (
-      document.getElementById("out-rtmp-key-input") as HTMLInputElement | null
-    )?.value.trim() || "";
-
-  if (protocol === "srt") {
-    return buildSrtUrlFromFields();
-  }
-
-  if (isAbsoluteUrl(rawInput)) {
-    return rawInput;
-  }
-
-  return resolvePresetOutputUrl(serverUrl, rawInput);
+  return effectiveOutputUrl(
+    inputValue("out-protocol-input", "rtmp"),
+    inputValue("out-server-url-input"),
+    inputValue("out-rtmp-key-input"),
+    srtFieldsFromModal(),
+  );
 }
 export function setOutputToggleBusy(
   button: HTMLButtonElement | null,
