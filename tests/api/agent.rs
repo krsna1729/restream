@@ -498,6 +498,31 @@ async fn agent_operation_create_refuses_an_oversized_body() {
 
 #[cfg(feature = "agent-execution")]
 #[tokio::test]
+async fn unknown_operation_answers_every_route_with_the_same_json_404() {
+    let (app, cookie) = authenticated_app().await;
+    for (method, path, body) in [
+        ("GET", "/api/v1/agent/operations/op_missing", "{}"),
+        (
+            "POST",
+            "/api/v1/agent/operations/op_missing/approve",
+            r#"{"approvedBy":"test","reason":null}"#,
+        ),
+        ("POST", "/api/v1/agent/operations/op_missing/apply", "{}"),
+        ("POST", "/api/v1/agent/operations/op_missing/verify", "{}"),
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(auth_req(method, path, &cookie, Some(body)))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{path}");
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "operationNotFound", "{path}");
+    }
+}
+
+#[cfg(feature = "agent-execution")]
+#[tokio::test]
 async fn agent_operation_lifecycle_is_approval_gated_redacted_and_verified() {
     let (app, pool) = test_app().await;
     let cookie = login(&app).await;

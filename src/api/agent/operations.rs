@@ -78,7 +78,7 @@ pub async fn agent_operation_get_handler(
     }
     match state.agent_execution.get(&operation_id) {
         Some(record) => Json(crate::agent_execution::public_record(&record)).into_response(),
-        None => (StatusCode::NOT_FOUND, "Operation not found").into_response(),
+        None => operation_store_error(crate::agent_execution::OperationStoreError::NotFound),
     }
 }
 
@@ -144,7 +144,7 @@ pub async fn agent_operation_apply_handler(
             result.execution_result,
         ) {
             Some(record) => Json(crate::agent_execution::public_record(&record)).into_response(),
-            None => (StatusCode::NOT_FOUND, "Operation not found").into_response(),
+            None => operation_store_error(crate::agent_execution::OperationStoreError::NotFound),
         },
         Err(err) => match state.agent_execution.fail_apply(&operation_id, err.clone()) {
             Some(record) => (
@@ -152,7 +152,11 @@ pub async fn agent_operation_apply_handler(
                 Json(crate::agent_execution::public_record(&record)),
             )
                 .into_response(),
-            None => (StatusCode::BAD_REQUEST, err).into_response(),
+            None => (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": err })),
+            )
+                .into_response(),
         },
     }
 }
@@ -495,7 +499,9 @@ fn output_runtime_is_running(runtime: &serde_json::Value) -> bool {
 async fn verify_operation_by_id(state: &AppState, operation_id: &str) -> axum::response::Response {
     let record = match state.agent_execution.get(operation_id) {
         Some(record) => record,
-        None => return (StatusCode::NOT_FOUND, "Operation not found").into_response(),
+        None => {
+            return operation_store_error(crate::agent_execution::OperationStoreError::NotFound);
+        }
     };
     let verification = verify_operation(state, &record).await;
     match state
@@ -503,7 +509,7 @@ async fn verify_operation_by_id(state: &AppState, operation_id: &str) -> axum::r
         .complete_verify(operation_id, verification)
     {
         Some(record) => Json(crate::agent_execution::public_record(&record)).into_response(),
-        None => (StatusCode::NOT_FOUND, "Operation not found").into_response(),
+        None => operation_store_error(crate::agent_execution::OperationStoreError::NotFound),
     }
 }
 

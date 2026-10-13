@@ -520,7 +520,13 @@ restart), and creating one accepts a body of at most 256 KiB.
 | `POST` | `/api/v1/agent/verify` | Verify by body: `{ "operationId": "op_..." }` |
 
 Without `agent-execution`, these operation routes return an authenticated `404`
-with `feature: "agent-execution"` and `compiledIn: false`.
+with `feature: "agent-execution"` and `compiledIn: false`. With it, an unknown
+operation id (operations live in memory, so a restart or the 1024-record limit
+forgets them) answers every operation route with `404`
+`{"code": "operationNotFound", "error": "Operation not found"}`. A refused
+apply answers `400` with the failed operation record: its `executionResult` is
+`{"success": false, "error": "..."}`, and changes before the refused one stay
+applied.
 
 Context responses include:
 

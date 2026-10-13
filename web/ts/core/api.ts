@@ -42,6 +42,9 @@ import type {
   RateLimitAttempt,
   RateLimitState,
   GraphData,
+  ChangeRequest,
+  ChangePlan,
+  ChangeOperation,
 } from "./api-types.js";
 
 let activeMutationRequestCount = 0;
@@ -840,6 +843,38 @@ async function getYoutubeMonitoringStatus(
   );
 }
 
+/** The engine's judgement of a change; nothing is mutated. */
+async function planChange(body: ChangeRequest): Promise<ChangePlan | null> {
+  return apiRequest<ChangePlan>("/api/v1/agent/plans", { method: "POST", body });
+}
+
+async function createOperation(body: ChangeRequest): Promise<ChangeOperation | null> {
+  return apiRequest<ChangeOperation>("/api/v1/agent/operations", { method: "POST", body });
+}
+
+/** The stored record; a 404 means the engine restarted or evicted it. */
+async function getOperation(operationId: string): Promise<ChangeOperation | null> {
+  return apiRequest<ChangeOperation>(
+    `/api/v1/agent/operations/${encodeURIComponent(operationId)}`,
+  );
+}
+
+/** Approve (the dashboard session approves; `reason` is audited), apply, or
+ * verify an operation. */
+async function advanceOperation(
+  operationId: string,
+  step: "approve" | "apply" | "verify",
+  reason?: string,
+): Promise<ChangeOperation | null> {
+  return apiRequest<ChangeOperation>(
+    `/api/v1/agent/operations/${encodeURIComponent(operationId)}/${step}`,
+    {
+      method: "POST",
+      body: step === "approve" ? { approvedBy: "control-room", reason: reason || null } : {},
+    },
+  );
+}
+
 export {
   apiRequest,
   getConfig,
@@ -898,6 +933,10 @@ export {
   resetRateLimitState,
   getProcessingGraph,
   getYoutubeMonitoringStatus,
+  planChange,
+  createOperation,
+  getOperation,
+  advanceOperation,
   DEFAULT_ENGINE_SBOM_ENDPOINT,
 };
 
