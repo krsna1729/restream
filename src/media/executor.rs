@@ -102,6 +102,7 @@ struct ClassMetrics {
 }
 
 struct ServiceMetrics {
+    id: u64,
     service: MediaService,
     timing: PollTiming,
 }
@@ -117,6 +118,7 @@ struct MediaExecutorMetrics {
     classes: [ClassMetrics; 7],
     /// Running services; touched at start, end and snapshot only.
     services: Mutex<Vec<Arc<ServiceMetrics>>>,
+    next_service_id: AtomicU64,
 }
 
 impl MediaExecutorMetrics {
@@ -185,6 +187,7 @@ impl MediaExecutorMetrics {
                 .map(|running| {
                     let (polls, busy_us, max_poll_us) = running.timing.read();
                     ServiceSnapshot {
+                        service_id: running.id,
                         class: running.service.class,
                         pipeline_id: running.service.pipeline_id.clone(),
                         stage: running.service.stage.clone(),
@@ -243,12 +246,14 @@ pub(crate) struct ClassSnapshot {
     pub max_poll_us: u64,
 }
 
-/// Cumulative counters of one running service, from its first poll. A
-/// restarted service (a new file-ingest attempt) starts again from zero, so a
-/// window delta is valid only when `polls` did not go down.
+/// Cumulative counters of one running service, from its first poll.
+/// `service_id` is unique per service start: a restarted service (a new
+/// file-ingest attempt) is a new id that counts from zero, and a run being
+/// replaced can be listed beside its successor with the same labels.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ServiceSnapshot {
+    pub service_id: u64,
     pub class: MediaServiceClass,
     pub pipeline_id: String,
     pub stage: String,
@@ -380,6 +385,7 @@ where
 {
     let class = service.class;
     let service = Arc::new(ServiceMetrics {
+        id: metrics().next_service_id.fetch_add(1, Ordering::Relaxed),
         service,
         timing: PollTiming::default(),
     });
@@ -667,6 +673,10 @@ mod tests {
         let busy_row = service_row(&running, "q035-busy").expect("busy service listed");
         let idle_row = service_row(&running, "q035-idle").expect("idle service listed");
         assert_eq!(busy_row.class, MediaServiceClass::Recording);
+        assert!(
+            idle_row.service_id > busy_row.service_id,
+            "ids follow spawn order, so a restart is a new id"
+        );
         assert_eq!(busy_row.stage, "q035-busy:video");
         assert_eq!(idle_row.stage, "recording");
         assert!(busy_row.busy_us >= 20_000, "{busy_row:?}");
