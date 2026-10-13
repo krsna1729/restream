@@ -232,13 +232,21 @@ classes (running media workers of those configured, RTMP and SRT ingress
 owners, egress fabric shards and FFmpeg children as the engine reports them;
 Tokio workers as configured), the SRT ingress owners' counters with every
 non-zero one that means lost or late work since the engine started, and the
-build, native libraries and SBOM from `/engine`.
+build, native libraries and SBOM from `/engine`. Settings (fleet): reads
+`/settings` once (it also lists every pipeline and output, so it is never
+polled); each card saves only its own part (general names, SRT ingest with
+the 10–79 byte passphrase rule, transcode profiles with the built-ins kept,
+failed-attempt limits, the dashboard password) and says when the engine
+stored it. The failed-attempts list is polled; forgetting one client sends
+its own scope key, and forgetting all sends no scope (the engine rejects any
+other scope with 400). Log out is on the password card.
 
 Proof: `test/frontend/control-room-fleet.test.mjs`,
 `test/frontend/control-room-operate.test.mjs`,
 `test/frontend/control-room-inspect.test.mjs`,
 `test/frontend/control-room-incidents.test.mjs`,
 `test/frontend/control-room-system.test.mjs`,
+`test/frontend/control-room-settings.test.mjs`,
 `test/frontend/frontend-runtime-state-stream.test.mjs` (stream liveness) and
 `test/frontend/control-room.spec.ts` (against a running engine).
 

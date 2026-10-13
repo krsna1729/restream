@@ -329,7 +329,7 @@ async fn password_change_revokes_other_sessions_and_keeps_current_session() {
             "POST",
             "/api/v1/auth/change-password",
             &current_cookie,
-            Some(r#"{"current_password":"admin","new_password":"newpass12345"}"#),
+            Some(r#"{"currentPassword":"admin","newPassword":"newpass12345"}"#),
         ))
         .await
         .unwrap();
@@ -465,7 +465,7 @@ async fn change_password() {
             "POST",
             "/api/v1/auth/change-password",
             &cookie,
-            Some(r#"{"current_password":"admin","new_password":"newpass12345"}"#),
+            Some(r#"{"currentPassword":"admin","newPassword":"newpass12345"}"#),
         ))
         .await
         .unwrap();
@@ -513,7 +513,7 @@ async fn change_password_rejects_short_new_password() {
             "POST",
             "/api/v1/auth/change-password",
             &cookie,
-            Some(r#"{"current_password":"admin","new_password":"short"}"#),
+            Some(r#"{"currentPassword":"admin","newPassword":"short"}"#),
         ))
         .await
         .unwrap();
