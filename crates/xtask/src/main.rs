@@ -76,8 +76,17 @@ commands:
   setup-skills [--symlink]
                         generate local Claude Code skill shims";
 
+/// `cargo xtask` runs through `cargo run`, which sets `CARGO_MANIFEST_DIR`
+/// for the process. Read that first: the compile-time value names the
+/// worktree the binary was built in, and a `target/` moved to another
+/// worktree keeps the binary fresh (Cargo fingerprints workspace members by
+/// relative path), so `env!` alone would act on the old worktree.
 fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .filter(|dir| dir.ends_with("crates/xtask"))
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    manifest_dir
         .ancestors()
         .nth(2)
         .expect("xtask lives at crates/xtask below the repository root")
