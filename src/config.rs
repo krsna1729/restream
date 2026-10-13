@@ -504,6 +504,12 @@ fn env_bool(name: &str) -> Option<bool> {
     })
 }
 
+/// The memory this process may use: the host's RAM, or the cgroup's
+/// (container's) limit when that is lower.
+fn effective_memory_bytes(host: u64, cgroup: Option<u64>) -> u64 {
+    cgroup.map_or(host, |limit| limit.min(host))
+}
+
 fn derive_external_ffmpeg_permits(
     cpus: usize,
     reserve: usize,
@@ -740,16 +746,20 @@ impl AppConfig {
         let srt_egress_gso = env_bool("RESTREAM_SRT_EGRESS_GSO").unwrap_or(true);
         let srt_ingress_owners = env_usize("RESTREAM_SRT_INGRESS_OWNERS", 1).clamp(1, cpus.max(1));
         let srt_max_peers_per_ip = env_usize("RESTREAM_SRT_MAX_PEERS_PER_IP", 64).clamp(1, 4096);
-        // A quarter of host memory, split across the ingress Owners (each
+        // A quarter of the memory this process may use (the container's
+        // limit when there is one), split across the ingress Owners (each
         // checks its own); 0 turns the budget off.
-        let host_memory = sysinfo::System::new_with_specifics(
+        let host = sysinfo::System::new_with_specifics(
             sysinfo::RefreshKind::nothing()
                 .with_memory(sysinfo::MemoryRefreshKind::nothing().with_ram()),
-        )
-        .total_memory();
+        );
+        let memory = effective_memory_bytes(
+            host.total_memory(),
+            host.cgroup_limits().map(|limits| limits.total_memory),
+        );
         let srt_ingress_window_memory_bytes = Some(env_u64(
             "RESTREAM_SRT_INGRESS_WINDOW_MEMORY_BYTES",
-            host_memory / 4 / srt_ingress_owners as u64,
+            memory / 4 / srt_ingress_owners as u64,
         ))
         .filter(|&bytes| bytes > 0);
         let initial_admin_password = env_var("RESTREAM_INITIAL_ADMIN_PASSWORD");

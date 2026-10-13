@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use super::{
     AppConfig, DEFAULT_MEDIA_DIR, EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR, EgressFabricConfig,
     EgressShardProfile, RuntimeTuning, ServerPorts, TokioRuntimeConfig,
-    derive_external_ffmpeg_permits, env_optional_positive_usize, target_egress_fabric_shards,
+    derive_external_ffmpeg_permits, effective_memory_bytes, env_optional_positive_usize,
+    target_egress_fabric_shards,
 };
 use crate::capacity::HostCapacity;
 
@@ -409,26 +410,30 @@ fn srt_egress_connect_concurrency_defaults_and_allows_override() {
 }
 
 #[test]
-fn srt_ingress_window_memory_splits_a_quarter_of_ram_and_zero_disables() {
-    let quarter = sysinfo::System::new_with_specifics(
-        sysinfo::RefreshKind::nothing()
-            .with_memory(sysinfo::MemoryRefreshKind::nothing().with_ram()),
-    )
-    .total_memory()
-        / 4;
-    with_env_overlay(
-        &[("RESTREAM_SRT_INGRESS_OWNERS", "2")],
-        &["RESTREAM_SRT_INGRESS_WINDOW_MEMORY_BYTES"],
-        || {
-            let config = AppConfig::from_env();
-            let owners = config.srt_ingress_owners as u64;
-            assert_eq!(
-                config.srt_ingress_window_memory_bytes,
-                Some(quarter / owners),
-                "each Owner checks its own share"
-            );
-        },
+fn the_memory_limit_is_the_lower_of_host_and_container() {
+    const GIB: u64 = 1 << 30;
+    assert_eq!(effective_memory_bytes(128 * GIB, Some(4 * GIB)), 4 * GIB);
+    assert_eq!(effective_memory_bytes(16 * GIB, None), 16 * GIB);
+    assert_eq!(
+        effective_memory_bytes(16 * GIB, Some(u64::MAX)),
+        16 * GIB,
+        "an unlimited cgroup leaves the host's RAM"
     );
+}
+
+#[test]
+fn srt_ingress_window_memory_is_split_across_owners_and_zero_disables() {
+    let default_for = |owners: &str| {
+        let mut bytes = None;
+        with_env_overlay(
+            &[("RESTREAM_SRT_INGRESS_OWNERS", owners)],
+            &["RESTREAM_SRT_INGRESS_WINDOW_MEMORY_BYTES"],
+            || bytes = AppConfig::from_env().srt_ingress_window_memory_bytes,
+        );
+        bytes.expect("the default budget is on")
+    };
+    let one = default_for("1");
+    assert_eq!(default_for("2"), one / 2, "each Owner checks its own share");
     with_env_vars(
         &[("RESTREAM_SRT_INGRESS_WINDOW_MEMORY_BYTES", "1000000")],
         || {
