@@ -870,6 +870,15 @@ test("previews and stage detail: play the program and an input; a transcode stag
     await playing("program", 16);
     await playing("Primary", 16);
 
+    // Paused by the operator: the preview says so and keeps the video.
+    const input = page.getByRole("group", { name: "Preview Primary" });
+    await input.getByRole("button", { name: "Preview Primary" }).click();
+    await expect(input.getByRole("status")).toHaveText("live", { timeout: 30_000 });
+    await input.getByLabel("Video Primary").evaluate((element: HTMLVideoElement) => element.pause());
+    await expect(input.getByRole("status")).toHaveText("paused");
+    await expect(input.getByLabel("Video Primary")).toHaveCount(1);
+    await input.getByRole("button", { name: "Stop preview" }).click();
+
     const sink = await loopbackSink(page, `crpreviewsink${stamp}`);
     pipelineIds.push(sink.pipelineId);
     const created = await page.request.post(`/api/v1/pipelines/${pipelineId}/outputs`, {

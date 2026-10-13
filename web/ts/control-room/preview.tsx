@@ -71,12 +71,13 @@ function awaitFirstSegment(
   poll();
 }
 
-type PreviewState = "idle" | "starting" | "playing" | "buffering" | "failed" | "stalled";
+type PreviewState = "idle" | "starting" | "playing" | "buffering" | "paused" | "failed" | "stalled";
 const STATUS_TEXT: Record<PreviewState, string> = {
   idle: "",
   starting: "starting (the engine makes the first segment)…",
   playing: "live",
   buffering: "buffering",
+  paused: "paused",
   failed: "preview unavailable",
   stalled: "stalled: no new frames",
 };
@@ -97,25 +98,42 @@ export function Preview(props: { url: string; label: string }) {
     if (attempt === 0 || !element) return;
     let ended = false;
     let player: Hls | null = null;
-    // New media is the buffered range growing. Seconds of playback are not:
+    // New media is the buffered range moving. Seconds of playback are not:
     // hls.js seeks a waiting video forward, so currentTime can move with
-    // nothing new to show.
+    // nothing new to show. A video paused after it played (by the operator,
+    // or a hidden tab) is not stalled: a player may stop loading once its
+    // buffer is full (hls.js in Chromium keeps loading at the live edge).
     let bufferedEnd = 0;
     let grewAtMs = Date.now();
+    let played = false;
     const watchdog = window.setInterval(() => {
       const ranges = element.buffered;
       const edge = ranges.length > 0 ? ranges.end(ranges.length - 1) : 0;
-      if (edge > bufferedEnd) {
+      // Any change counts: a reset timeline starts lower.
+      if (edge !== bufferedEnd || (played && element.paused)) {
         bufferedEnd = edge;
         grewAtMs = Date.now();
       } else if (Date.now() - grewAtMs > STALL_MS) {
         fail("stalled");
       }
     }, STALL_CHECK_MS);
+    const onPlaying = () => {
+      played = true;
+      setState("playing");
+    };
+    const onWaiting = () => setState("buffering");
+    const onPause = () => setState("paused");
+    element.addEventListener("playing", onPlaying);
+    element.addEventListener("waiting", onWaiting);
+    element.addEventListener("pause", onPause);
     const end = () => {
       if (ended) return;
       ended = true;
       window.clearInterval(watchdog);
+      // Before load(): resetting the element may fire `pause`.
+      element.removeEventListener("playing", onPlaying);
+      element.removeEventListener("waiting", onWaiting);
+      element.removeEventListener("pause", onPause);
       player?.destroy();
       hls.current = null;
       element.removeAttribute("src");
@@ -128,10 +146,6 @@ export function Preview(props: { url: string; label: string }) {
       end();
       setState(next);
     };
-    const onPlaying = () => setState("playing");
-    const onWaiting = () => setState("buffering");
-    element.addEventListener("playing", onPlaying);
-    element.addEventListener("waiting", onWaiting);
 
     const Hls = window.Hls;
     if (Hls?.isSupported()) {
@@ -162,11 +176,7 @@ export function Preview(props: { url: string; label: string }) {
         void element.play().catch(() => fail("failed"));
       });
     }
-    return () => {
-      element.removeEventListener("playing", onPlaying);
-      element.removeEventListener("waiting", onWaiting);
-      end();
-    };
+    return end;
   }, [attempt, props.url]);
 
   const start = () => {
@@ -179,7 +189,7 @@ export function Preview(props: { url: string; label: string }) {
     setAttempt(0);
     setState("idle");
   };
-  const showing = state === "starting" || state === "playing" || state === "buffering";
+  const showing = state !== "idle" && state !== "failed" && state !== "stalled";
 
   return (
     <div className="space-y-1" aria-label={`Preview ${props.label}`} role="group">
