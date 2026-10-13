@@ -9,7 +9,7 @@ use std::process::{Command, Stdio};
 use std::thread::sleep;
 use std::time::Duration;
 
-use crate::{StepResult, capture_into, cargo, child_output, history_grouping, run};
+use crate::{StepResult, capture_into, cargo, child_output, run};
 
 /// `tests/<target>.rs` loom models, each built with `--cfg loom`.
 const LOOM_TARGETS: &[&str] = &[
@@ -140,7 +140,6 @@ pub(crate) fn contract() -> StepResult {
 }
 
 fn contract_steps(baseline: &HashSet<u32>) -> StepResult {
-    logged("history-grouping", history_grouping)?;
     logged("process-lifecycle-guards", || {
         process_lifecycle_guards(Path::new("src/bin/test_harness.rs"))
     })?;

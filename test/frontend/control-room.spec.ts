@@ -933,7 +933,7 @@ test("previews and stage detail: play the program and an input; a transcode stag
       playlists.set(url, body);
       return route.fulfill({ response, body });
     });
-    await page.goto(`/control-room.html?w=operate&p=${pipelineId}`);
+    await page.goto(`/?w=operate&p=${pipelineId}`);
     const program = page.getByRole("group", { name: "Preview program" });
     await program.getByRole("button", { name: "Preview program" }).click();
     const status = program.getByRole("status");
