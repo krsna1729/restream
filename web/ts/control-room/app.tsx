@@ -7,6 +7,7 @@ import { Fleet } from "./fleet.js";
 import { formatAge } from "./format.js";
 import { Incidents } from "./incidents.js";
 import { Inspect } from "./inspect.js";
+import { Logs } from "./logs.js";
 import { Media } from "./media.js";
 import { Monitor } from "./monitor.js";
 import { Operate } from "./operate.js";
@@ -102,6 +103,9 @@ export function App() {
           <Monitor live={live} pipelineId={place.pipelineId} />
         )}
         {place.workspace === "incidents" && <Incidents live={live} />}
+        {place.workspace === "logs" && (
+          <Logs key={place.pipelineId ?? ""} live={live} pipelineId={place.pipelineId} />
+        )}
         {place.workspace === "capacity" && <Capacity live={live} />}
         {place.workspace === "media" && <Media live={live} />}
         {place.workspace === "system" && <System live={live} />}

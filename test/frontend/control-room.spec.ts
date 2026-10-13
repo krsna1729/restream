@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 // The control room against a running engine: Fleet follows the runtime state
 // stream, so a change made through the API shows without a reload.
@@ -678,5 +678,154 @@ test("manage: create a pipeline, edit its inputs, destinations, source and key, 
   } finally {
     if (pipelineId) await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
     await page.request.delete(`/api/v1/media/${encodeURIComponent(clip)}`);
+  }
+});
+
+/** The checked-in clip CI copies into the engine's media library (two video
+ * streams, 16 audio tracks). */
+const LIVE_CLIP = "colorbar-timer-2v16a.mp4";
+
+/** A pipeline whose source the engine publishes itself (a looped file ingest
+ * of `LIVE_CLIP`), so a case needs no outside publisher; returns once its
+ * input is on. */
+async function liveFilePipeline(page: Page, name: string): Promise<string> {
+  const created = await page.request.post("/api/v1/pipelines", {
+    data: { name, streamKey: `${name}_${Date.now()}` },
+  });
+  expect(created.ok()).toBe(true);
+  const id: string = (await created.json()).pipeline.id;
+  const source = await page.request.put(`/api/v1/pipelines/${id}/file-ingest`, {
+    data: { filename: LIVE_CLIP, loop: true, liveOptimized: true, targetGopSeconds: 4 },
+  });
+  expect(source.ok(), `the media library holds ${LIVE_CLIP}`).toBe(true);
+  const ingest = await (await page.request.get(`/api/v1/pipelines/${id}/file-ingest`)).json();
+  expect((await page.request.post(`/api/v1/ingests/${ingest.id}/start`)).ok()).toBe(true);
+  await expect
+    .poll(
+      async () =>
+        (await (await page.request.get("/api/v1/engine/health")).json()).pipelines?.[id]?.input?.status,
+      { timeout: 40_000 },
+    )
+    .toBe("on");
+  return id;
+}
+
+test("logs: a pipeline's history, then its rows live; paused, nothing arrives; engine-only rows name no pipeline", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  const stamp = Date.now();
+  const pipelineIds: string[] = [];
+  try {
+    const sourceId = await liveFilePipeline(page, `crlogs${stamp}`);
+    pipelineIds.push(sourceId);
+    // The destination is the engine's own RTMP ingest, under a second
+    // pipeline's key: a sink that accepts on any host.
+    const sink = await page.request.post("/api/v1/pipelines", {
+      data: { name: `crlogssink${stamp}`, streamKey: `crlogssink_${stamp}` },
+    });
+    expect(sink.ok()).toBe(true);
+    const sinkId: string = (await sink.json()).pipeline.id;
+    pipelineIds.push(sinkId);
+    const sinkInputs = await (await page.request.get(`/api/v1/pipelines/${sinkId}/inputs`)).json();
+    const sinkUrl = String(sinkInputs.inputs[0].ingestUrls.rtmp).replace("//localhost:", "//127.0.0.1:");
+    const outputName = `cr-logs-out-${stamp}`;
+    const output = await page.request.post(`/api/v1/pipelines/${sourceId}/outputs`, {
+      data: {
+        name: outputName,
+        url: sinkUrl,
+        config: { video: { mode: "source" }, audio: { mode: "selectTracks", tracks: [0] } },
+      },
+    });
+    expect(output.ok()).toBe(true);
+    const outputId: string = (await output.json()).output.id;
+    const outputPath = `/api/v1/pipelines/${sourceId}/outputs/${outputId}`;
+    const writtenStarts = async () =>
+      (
+        await (await page.request.get(`/api/v1/logs?output_id=${outputId}&limit=1000`)).json()
+      ).logs.filter((row: { message: string }) => row.message === "output job started").length;
+    expect((await page.request.post(`${outputPath}/start`)).ok()).toBe(true);
+    await expect.poll(writtenStarts, { timeout: 20_000 }).toBe(1);
+
+    await page.goto(`/control-room.html?w=logs&p=${sourceId}`);
+    await expect(page.getByRole("combobox", { name: /^Scope\b/ })).toHaveValue(`p:${sourceId}`);
+    const rows = page.getByRole("table", { name: "Log rows" }).locator("tbody tr");
+    const live = page.getByRole("region", { name: "Logs" }).getByRole("status");
+    await expect(live).toHaveText("live");
+    // The history holds the pipeline's lifecycle; a stop written after the
+    // page loaded arrives without a reload, named by its destination.
+    const started = rows.filter({ hasText: "output job started" });
+    await expect(started).toHaveCount(1);
+    const stopped = rows.filter({ hasText: "output job stopped" });
+    await expect(stopped).toHaveCount(0);
+    expect((await page.request.post(`${outputPath}/stop`)).ok()).toBe(true);
+    await expect(stopped).toHaveCount(1);
+    await expect(stopped.first()).toContainText(outputName);
+
+    // Paused: the engine writes the start, the page does not show it, and
+    // keeps the rows it shows.
+    const table = page.getByRole("table", { name: "Log rows" });
+    await table.evaluate((element) => element.setAttribute("data-probe", "kept"));
+    await page.getByRole("button", { name: "Pause live" }).click();
+    await expect(live).toHaveText("paused");
+    await expect(table).toHaveAttribute("data-probe", "kept");
+    expect((await page.request.post(`${outputPath}/start`)).ok()).toBe(true);
+    await expect.poll(writtenStarts, { timeout: 20_000 }).toBe(2);
+    await page.waitForTimeout(1000);
+    await expect(started).toHaveCount(1);
+    // Resumed: the stream sends what was written while paused; the rows on
+    // screen were never read again (the table, and its mark, stayed).
+    await page.getByRole("button", { name: "Resume live" }).click();
+    await expect(live).toHaveText("live");
+    await expect(started).toHaveCount(2);
+    await expect(table).toHaveAttribute("data-probe", "kept");
+
+    await page.getByRole("combobox", { name: /^Scope\b/ }).selectOption("engine");
+    await expect(rows.first()).toBeVisible();
+    const places = await rows.locator("td:nth-child(3)").allTextContents();
+    expect(new Set(places)).toEqual(new Set(["engine"]));
+  } finally {
+    for (const id of pipelineIds) await page.request.delete(`/api/v1/pipelines/${id}`);
+  }
+});
+
+test("diagnostics: run the engine's checks on a live pipeline and download the report", async ({
+  page,
+}) => {
+  test.setTimeout(150_000);
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  const name = `crdiag${Date.now()}`;
+  let pipelineId: string | null = null;
+  try {
+    pipelineId = await liveFilePipeline(page, name);
+    await page.goto(`/control-room.html?w=inspect&p=${pipelineId}`);
+    await page.getByRole("button", { name: "Run diagnostics" }).click();
+    const verdict = page
+      .getByRole("region", { name: "Diagnostics" })
+      .getByRole("status")
+      .filter({ hasText: /checks/ });
+    await expect(verdict).toBeVisible({ timeout: 90_000 });
+    const checks = page.getByRole("list", { name: "Diagnostic checks" }).locator(":scope > li");
+    const shown = await checks.count();
+    expect(shown).toBeGreaterThan(0);
+    await expect(verdict).toContainText(`${shown} checks`);
+
+    const download = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Download report" }).click();
+    const file = await download;
+    expect(file.suggestedFilename()).toMatch(new RegExp(`^diagnostic-${name}-${pipelineId}-[0-9_-]+\\.json$`));
+    const report = JSON.parse(await readFile(await file.path(), "utf8"));
+    expect(report.schema).toBe("restream.diagnostics.v1");
+    expect(report.pipeline).toEqual({ id: pipelineId, name });
+    expect(report.results).toHaveLength(shown);
+  } finally {
+    if (pipelineId) await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
   }
 });
