@@ -184,4 +184,7 @@ Disk             blocking file writer threads
   after any growth it earns (the degradation began at 62%) is refused before
   dispatch; the output reports `capacityRefused` at the shard layer and
   retries on its restart backoff until its retry budget is spent. Admitted
-  outputs are never shed. Harness: `srt.admission`.
+  outputs are never shed. A refused Add still counts toward growth, so it
+  may grow the pool (never past its ceiling); the new shard admits the next
+  output, and an empty one retires after the shrink dwell. Harness:
+  `srt.admission`.

@@ -54,7 +54,9 @@ impl MediaEngine {
 
     /// `source` is the ring the feed's TS muxer reads. The muxer may have
     /// started with this runtime, so its ring has no rate history yet; the
-    /// source's retained window prices the first Adds.
+    /// source's retained window prices the first Adds. That is elementary
+    /// payload, a few percent under the TS bytes sent, until the TS ring has
+    /// 250 ms of its own history.
     pub(crate) async fn retain_srt_fabric_runtime(
         &self,
         feed_id: FeedId,
