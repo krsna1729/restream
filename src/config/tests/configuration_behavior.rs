@@ -423,17 +423,27 @@ fn the_memory_limit_is_the_lower_of_host_and_container() {
 
 #[test]
 fn srt_ingress_window_memory_is_split_across_owners_and_zero_disables() {
+    // (budget, Owners after the clamp to the host's CPUs)
     let default_for = |owners: &str| {
-        let mut bytes = None;
+        let mut result = None;
         with_env_overlay(
             &[("RESTREAM_SRT_INGRESS_OWNERS", owners)],
             &["RESTREAM_SRT_INGRESS_WINDOW_MEMORY_BYTES"],
-            || bytes = AppConfig::from_env().srt_ingress_window_memory_bytes,
+            || {
+                let config = AppConfig::from_env();
+                result = Some((
+                    config
+                        .srt_ingress_window_memory_bytes
+                        .expect("the default budget is on"),
+                    config.srt_ingress_owners as u64,
+                ));
+            },
         );
-        bytes.expect("the default budget is on")
+        result.unwrap()
     };
-    let one = default_for("1");
-    assert_eq!(default_for("2"), one / 2, "each Owner checks its own share");
+    let (one, _) = default_for("1");
+    let (split, owners) = default_for("2");
+    assert_eq!(split, one / owners, "each Owner checks its own share");
     with_env_vars(
         &[("RESTREAM_SRT_INGRESS_WINDOW_MEMORY_BYTES", "1000000")],
         || {
