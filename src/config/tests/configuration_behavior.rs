@@ -409,6 +409,41 @@ fn srt_egress_connect_concurrency_defaults_and_allows_override() {
 }
 
 #[test]
+fn srt_ingress_window_memory_splits_a_quarter_of_ram_and_zero_disables() {
+    let quarter = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::nothing()
+            .with_memory(sysinfo::MemoryRefreshKind::nothing().with_ram()),
+    )
+    .total_memory()
+        / 4;
+    with_env_overlay(
+        &[("RESTREAM_SRT_INGRESS_OWNERS", "2")],
+        &["RESTREAM_SRT_INGRESS_WINDOW_MEMORY_BYTES"],
+        || {
+            let config = AppConfig::from_env();
+            let owners = config.srt_ingress_owners as u64;
+            assert_eq!(
+                config.srt_ingress_window_memory_bytes,
+                Some(quarter / owners),
+                "each Owner checks its own share"
+            );
+        },
+    );
+    with_env_vars(
+        &[("RESTREAM_SRT_INGRESS_WINDOW_MEMORY_BYTES", "1000000")],
+        || {
+            assert_eq!(
+                AppConfig::from_env().srt_ingress_window_memory_bytes,
+                Some(1_000_000)
+            );
+        },
+    );
+    with_env_vars(&[("RESTREAM_SRT_INGRESS_WINDOW_MEMORY_BYTES", "0")], || {
+        assert_eq!(AppConfig::from_env().srt_ingress_window_memory_bytes, None);
+    });
+}
+
+#[test]
 fn initial_admin_password_is_loaded_by_config_module() {
     with_env_vars(&[("RESTREAM_INITIAL_ADMIN_PASSWORD", "dev-secret")], || {
         let config = AppConfig::from_env();

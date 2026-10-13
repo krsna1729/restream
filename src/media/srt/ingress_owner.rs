@@ -194,6 +194,9 @@ pub(super) fn listener_plans(config: &IngressConfig) -> Result<Vec<OwnerListener
             // srt-rs defaults this to `max_peers` (no per-client bound).
             admission.limits.max_peers_per_ip =
                 config.max_peers_per_ip.clamp(1, admission.limits.max_peers);
+            // Each established publisher reserves its worst-case window
+            // memory here; one that does not fit is rejected (OVERLOAD).
+            admission.limits.max_window_memory_bytes = config.window_memory_bytes;
         })
         .configure_transport(|transport| {
             // Same receive buffer as egress Owner sockets (`desired_udp_buf`,

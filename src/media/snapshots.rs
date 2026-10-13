@@ -243,6 +243,8 @@ ingress_owner_stats! {
     policy_rejections,
     policy_deferred,
     credential_failures,
+    key_derivation_drops,
+    window_memory_rejections,
     stale_commands,
     overload_disconnects,
     send_failures,
@@ -288,7 +290,7 @@ impl serde::Serialize for SrtIngressOwnerSnapshot {
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("SrtIngressOwnerSnapshot", 42)?;
+        let mut s = serializer.serialize_struct("SrtIngressOwnerSnapshot", 44)?;
         s.serialize_field("faulted", &self.faulted)?;
         s.serialize_field("managedRx", &self.managed_rx)?;
         s.serialize_field("owners", &self.owners)?;
@@ -314,6 +316,8 @@ impl serde::Serialize for SrtIngressOwnerSnapshot {
         s.serialize_field("policyRejections", &self.policy_rejections)?;
         s.serialize_field("policyDeferred", &self.policy_deferred)?;
         s.serialize_field("credentialFailures", &self.credential_failures)?;
+        s.serialize_field("keyDerivationDrops", &self.key_derivation_drops)?;
+        s.serialize_field("windowMemoryRejections", &self.window_memory_rejections)?;
         s.serialize_field("commandDepthHighWater", &self.command_depth_hwm)?;
         s.serialize_field("eventDepthHighWater", &self.event_depth_hwm)?;
         s.serialize_field("eventBridgeFullVisits", &self.event_bridge_full_visits)?;

@@ -77,7 +77,13 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 url = "2"
 percent-encoding = "2"
 shiguredo_mp4 = "2026.5.0"
-# srt-rs main 1ba0ced (PR #141: a reuseport group admits nothing until all K
+# srt-rs main ee78832 (PR #156: per-source limits charge an IPv6 /64 and a
+# mapped IPv4 as itself; PR #155: optional window-memory budget reserved at
+# admission; PR #151: per-owner PBKDF2 key-derivation budget; PRs #145-#152:
+# bounded per-visit work for delivery, periodic and peer NAKs, TLPKTDROP,
+# cumulative ACK release and group member removal; PRs #142, #143, #149,
+# #153, #154: bench, Kani, footprint, file-split and test-isolation work;
+# PR #141: a reuseport group admits nothing until all K
 # members are bound, one claim per member, one live layout per address, and
 # no growth after start; PR #140: ingest-scaling bench on the production
 # Owner; PR #139: the receiver skips its full TSBPD candidate
@@ -92,8 +98,8 @@ shiguredo_mp4 = "2026.5.0"
 # SipHash, acked-bytes stats). SRT egress and ingress both run on
 # `srt_transport::compio::Owner`; ingress attaches each `owner_plans` entry
 # with `Owner::listen_planned`.
-srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "1ba0cedc6f5b3739be88a3cd6be4be2a89040cff" }
-srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "1ba0cedc6f5b3739be88a3cd6be4be2a89040cff", features = ["compio"] }
+srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "ee7883245e0b06c0c56e8d7740bfcfff96cc4dad" }
+srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "ee7883245e0b06c0c56e8d7740bfcfff96cc4dad", features = ["compio"] }
 # Bounded shard command channel with both blocking and Future-based receive, so
 # a backend that owns a thread-affine completion runtime can await commands
 # alongside its own I/O without a second wake source.

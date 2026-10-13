@@ -141,6 +141,9 @@ pub(crate) struct IngressConfig {
     pub(crate) owners: usize,
     /// Peers one client IP may hold (srt-rs `max_peers_per_ip`).
     pub(crate) max_peers_per_ip: usize,
+    /// One Owner's window-memory budget (srt-rs `max_window_memory_bytes`);
+    /// `None` is no budget.
+    pub(crate) window_memory_bytes: Option<u64>,
 }
 
 /// One Owner thread's place in the listener: its plan, the timestamp origin
