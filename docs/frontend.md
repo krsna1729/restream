@@ -170,7 +170,7 @@ so a reload keeps the workspace in the URL (`?w=`).
   healthy. Headroom from `/metrics/system`: measured host use; egress flow
   only when shards measured it (`flowMeasured`); and, labeled as such, the
   capacity model's projection onto service centers from calibration priors
-  (observe-only until Q-035/Q-031 measure the coefficients). Pipelines: the
+  (observe-only until Q-031 measures the coefficients). Pipelines: the
   inventory (attention first, then size), searchable by name or id and
   filterable by the same health rule as Fleet's count, with outputs by
   protocol. Operate (one pipeline): the source deck from

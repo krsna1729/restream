@@ -7,9 +7,11 @@
 //! bounded bursts. Blocking codecs and disk writes remain on their own threads.
 
 use std::future::Future;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
+
+use crate::sync::lock;
 
 use serde::Serialize;
 use tokio::runtime::{Builder, Runtime};
@@ -44,18 +46,65 @@ impl MediaServiceClass {
     ];
 }
 
-/// Per-class counters. `busy_ns` is wall time spent inside the services'
-/// `poll` calls, not service lifetime: services run for the life of their
-/// pipeline and are parked on rings, timers and pipes almost all of that time.
-/// Wall time includes hypervisor vCPU descheduling inside a poll, which a VM
-/// guest may not report as steal; `max_poll_ns` exposes such stalls (one
-/// 20–120 ms poll among ~µs polls), so read `busy` next to it.
+/// Who a media service works for. Labels its counters; built once per
+/// service start, never per packet.
+pub(crate) struct MediaService {
+    pub class: MediaServiceClass,
+    pub pipeline_id: String,
+    /// Stage key, ingest id, or the work it does for the pipeline.
+    pub stage: String,
+}
+
+impl MediaService {
+    fn other() -> Self {
+        Self {
+            class: MediaServiceClass::Other,
+            pipeline_id: String::new(),
+            stage: String::new(),
+        }
+    }
+}
+
+/// Poll counters. `busy_ns` is wall time spent inside the services' `poll`
+/// calls, not service lifetime: services run for the life of their pipeline
+/// and are parked on rings, timers and pipes almost all of that time. Wall
+/// time includes hypervisor vCPU descheduling inside a poll, which a VM guest
+/// may not report as steal; `max_poll_ns` exposes such stalls (one 20–120 ms
+/// poll among ~µs polls), so read `busy` next to it.
 #[derive(Default)]
-struct ClassMetrics {
-    active: AtomicU64,
+struct PollTiming {
     polls: AtomicU64,
     busy_ns: AtomicU64,
     max_poll_ns: AtomicU64,
+}
+
+impl PollTiming {
+    fn record(&self, elapsed_ns: u64) {
+        self.polls.fetch_add(1, Ordering::Relaxed);
+        self.busy_ns.fetch_add(elapsed_ns, Ordering::Relaxed);
+        self.max_poll_ns.fetch_max(elapsed_ns, Ordering::Relaxed);
+    }
+
+    /// `(polls, busy_us, max_poll_us)`.
+    fn read(&self) -> (u64, u64, u64) {
+        (
+            self.polls.load(Ordering::Relaxed),
+            self.busy_ns.load(Ordering::Relaxed) / 1000,
+            self.max_poll_ns.load(Ordering::Relaxed) / 1000,
+        )
+    }
+}
+
+#[derive(Default)]
+struct ClassMetrics {
+    active: AtomicU64,
+    timing: PollTiming,
+}
+
+struct ServiceMetrics {
+    id: u64,
+    service: MediaService,
+    timing: PollTiming,
 }
 
 #[derive(Default)]
@@ -67,6 +116,9 @@ struct MediaExecutorMetrics {
     queue_latency_us_sum: AtomicU64,
     queue_latency_us_max: AtomicU64,
     classes: [ClassMetrics; 7],
+    /// Running services; touched at start, end and snapshot only.
+    services: Mutex<Vec<Arc<ServiceMetrics>>>,
+    next_service_id: AtomicU64,
 }
 
 impl MediaExecutorMetrics {
@@ -74,14 +126,27 @@ impl MediaExecutorMetrics {
         &self.classes[class as usize]
     }
 
-    fn record_start(&self, class: MediaServiceClass, queue_latency_us: u64) {
+    fn record_start(&self, service: &Arc<ServiceMetrics>, queue_latency_us: u64) {
         self.spawned_total.fetch_add(1, Ordering::Relaxed);
-        self.class(class).active.fetch_add(1, Ordering::Relaxed);
+        self.class(service.service.class)
+            .active
+            .fetch_add(1, Ordering::Relaxed);
         self.queue_latency_samples.fetch_add(1, Ordering::Relaxed);
         self.queue_latency_us_sum
             .fetch_add(queue_latency_us, Ordering::Relaxed);
         self.queue_latency_us_max
             .fetch_max(queue_latency_us, Ordering::Relaxed);
+        lock(&self.services).push(service.clone());
+    }
+
+    fn unregister(&self, service: &Arc<ServiceMetrics>) {
+        let mut services = lock(&self.services);
+        if let Some(index) = services
+            .iter()
+            .position(|running| Arc::ptr_eq(running, service))
+        {
+            services.swap_remove(index);
+        }
     }
 
     fn record_completion(&self, class: MediaServiceClass) {
@@ -98,6 +163,7 @@ impl MediaExecutorMetrics {
         &self,
         configured_workers: usize,
         runtime: Option<&Runtime>,
+        with_services: bool,
     ) -> MediaExecutorSnapshot {
         let samples = self.queue_latency_samples.load(Ordering::Relaxed);
         let sum_us = self.queue_latency_us_sum.load(Ordering::Relaxed);
@@ -105,15 +171,33 @@ impl MediaExecutorMetrics {
             .iter()
             .map(|&class| {
                 let metrics = self.class(class);
+                let (polls, busy_us, max_poll_us) = metrics.timing.read();
                 ClassSnapshot {
                     class,
                     active: metrics.active.load(Ordering::Relaxed),
-                    polls: metrics.polls.load(Ordering::Relaxed),
-                    busy_us: metrics.busy_ns.load(Ordering::Relaxed) / 1000,
-                    max_poll_us: metrics.max_poll_ns.load(Ordering::Relaxed) / 1000,
+                    polls,
+                    busy_us,
+                    max_poll_us,
                 }
             })
             .collect();
+        let services = with_services.then(|| {
+            lock(&self.services)
+                .iter()
+                .map(|running| {
+                    let (polls, busy_us, max_poll_us) = running.timing.read();
+                    ServiceSnapshot {
+                        service_id: running.id,
+                        class: running.service.class,
+                        pipeline_id: running.service.pipeline_id.clone(),
+                        stage: running.service.stage.clone(),
+                        polls,
+                        busy_us,
+                        max_poll_us,
+                    }
+                })
+                .collect()
+        });
         let (workers, global_queue_depth) = runtime.map_or((Vec::new(), 0), |runtime| {
             let metrics = runtime.metrics();
             let workers = (0..metrics.num_workers())
@@ -137,6 +221,7 @@ impl MediaExecutorMetrics {
             global_queue_depth,
             classes,
             workers,
+            services,
         }
     }
 }
@@ -161,6 +246,22 @@ pub(crate) struct ClassSnapshot {
     pub max_poll_us: u64,
 }
 
+/// Cumulative counters of one running service, from its first poll.
+/// `service_id` is unique per service start: a restarted service (a new
+/// file-ingest attempt) is a new id that counts from zero, and a run being
+/// replaced can be listed beside its successor with the same labels.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ServiceSnapshot {
+    pub service_id: u64,
+    pub class: MediaServiceClass,
+    pub pipeline_id: String,
+    pub stage: String,
+    pub polls: u64,
+    pub busy_us: u64,
+    pub max_poll_us: u64,
+}
+
 /// Cumulative per-worker counters from the Tokio runtime.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -171,7 +272,7 @@ pub(crate) struct WorkerSnapshot {
 
 /// Operational snapshot of media executor thread pool and active workloads.
 /// `workers` is empty and `global_queue_depth` zero until the first service
-/// starts the runtime.
+/// starts the runtime. `services` is present only when asked for.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MediaExecutorSnapshot {
@@ -186,12 +287,15 @@ pub(crate) struct MediaExecutorSnapshot {
     pub global_queue_depth: usize,
     pub classes: Vec<ClassSnapshot>,
     pub workers: Vec<WorkerSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub services: Option<Vec<ServiceSnapshot>>,
 }
 
-/// Expose current media executor telemetry.
-pub(crate) fn snapshot() -> MediaExecutorSnapshot {
+/// Expose current media executor telemetry; `services` adds one row per
+/// running service (its pipeline and stage), for attribution.
+pub(crate) fn snapshot(services: bool) -> MediaExecutorSnapshot {
     let runtime = RUNTIME.get().and_then(|runtime| runtime.as_ref().ok());
-    metrics().snapshot(configured_workers(), runtime)
+    metrics().snapshot(configured_workers(), runtime, services)
 }
 
 /// Returns the worker thread count configured for restream-media.
@@ -215,18 +319,18 @@ fn runtime() -> Result<&'static Runtime, String> {
         .map_err(Clone::clone)
 }
 
-/// Drive `future`, adding the wall time of each of its `poll` calls to
-/// `metrics`. Two clock reads per poll; services poll once per wake or yielded
-/// burst, never per packet.
-async fn poll_timed<F: Future>(metrics: &ClassMetrics, future: F) -> F::Output {
+/// Drive `future`, adding the wall time of each of its `poll` calls to its
+/// class and to its own service. Two clock reads per poll; services poll once
+/// per wake or yielded burst, never per packet.
+async fn poll_timed<F: Future>(timings: [&PollTiming; 2], future: F) -> F::Output {
     let mut future = std::pin::pin!(future);
     std::future::poll_fn(|cx| {
         let started = Instant::now();
         let poll = future.as_mut().poll(cx);
         let elapsed = started.elapsed().as_nanos() as u64;
-        metrics.polls.fetch_add(1, Ordering::Relaxed);
-        metrics.busy_ns.fetch_add(elapsed, Ordering::Relaxed);
-        metrics.max_poll_ns.fetch_max(elapsed, Ordering::Relaxed);
+        for timing in timings {
+            timing.record(elapsed);
+        }
         poll
     })
     .await
@@ -235,6 +339,8 @@ async fn poll_timed<F: Future>(metrics: &ClassMetrics, future: F) -> F::Output {
 struct CancelOnDrop {
     cancel: Option<CancellationToken>,
     class: MediaServiceClass,
+    /// Registered at first poll; unregistered when the service ends.
+    service: Option<Arc<ServiceMetrics>>,
     started: bool,
     completed: bool,
 }
@@ -254,8 +360,13 @@ impl Drop for CancelOnDrop {
                 error!("media service panicked; cancelling its lifecycle");
             }
         }
-        if self.started && !self.completed {
-            metrics().record_failure_or_abort(self.class);
+        if self.started {
+            if let Some(service) = &self.service {
+                metrics().unregister(service);
+            }
+            if !self.completed {
+                metrics().record_failure_or_abort(self.class);
+            }
         }
     }
 }
@@ -263,9 +374,8 @@ impl Drop for CancelOnDrop {
 /// Start an owned media service. Tokio contains task panics; the guard also
 /// cancels its lifecycle on panic or abort, even before its first poll.
 /// Successful completion does not cancel: file-input EOF may start a new pass.
-/// Start an owned media service with an explicit service class.
 pub(crate) fn spawn_with_class<F>(
-    class: MediaServiceClass,
+    service: MediaService,
     cancel: CancellationToken,
     future: F,
 ) -> Result<JoinHandle<F::Output>, String>
@@ -273,9 +383,16 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
+    let class = service.class;
+    let service = Arc::new(ServiceMetrics {
+        id: metrics().next_service_id.fetch_add(1, Ordering::Relaxed),
+        service,
+        timing: PollTiming::default(),
+    });
     let mut guard = CancelOnDrop {
         cancel: Some(cancel),
         class,
+        service: Some(service.clone()),
         started: false,
         completed: false,
     };
@@ -283,9 +400,10 @@ where
     let queued_at = Instant::now();
     Ok(runtime.spawn(async move {
         let queue_latency_us = queued_at.elapsed().as_micros() as u64;
-        metrics().record_start(class, queue_latency_us);
+        metrics().record_start(&service, queue_latency_us);
         guard.started = true;
-        let output = poll_timed(metrics().class(class), future).await;
+        let timings = [&metrics().class(class).timing, &service.timing];
+        let output = poll_timed(timings, future).await;
         metrics().record_completion(class);
         guard.disarm();
         output
@@ -302,12 +420,12 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    spawn_with_class(MediaServiceClass::Other, cancel, future)
+    spawn_with_class(MediaService::other(), cancel, future)
 }
 
-/// Await a media service from the control runtime with an explicit service class.
+/// Await a media service from the control runtime.
 pub(crate) async fn run_with_class<F>(
-    class: MediaServiceClass,
+    service: MediaService,
     cancel: CancellationToken,
     future: F,
 ) -> Result<F::Output, String>
@@ -317,11 +435,12 @@ where
 {
     let mut guard = CancelOnDrop {
         cancel: Some(cancel.clone()),
-        class,
+        class: service.class,
+        service: None,
         started: false,
         completed: false,
     };
-    let task = spawn_with_class(class, cancel, future)?;
+    let task = spawn_with_class(service, cancel, future)?;
     match task.await {
         Ok(output) => {
             guard.disarm();
@@ -334,14 +453,14 @@ where
     }
 }
 
-/// Await a media service from the control runtime.
+/// Await a media service from the control runtime with default class `Other`.
 #[allow(dead_code)]
 pub(crate) async fn run<F>(cancel: CancellationToken, future: F) -> Result<F::Output, String>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    run_with_class(MediaServiceClass::Other, cancel, future).await
+    run_with_class(MediaService::other(), cancel, future).await
 }
 
 #[cfg(test)]
@@ -430,28 +549,32 @@ mod tests {
     #[tokio::test]
     async fn media_executor_metrics_tracks_service_classes_and_latency() {
         let cancel = CancellationToken::new();
-        let snap_before = snapshot();
+        let snap_before = snapshot(false);
         let (ready, started) = oneshot::channel();
         let (done, finish) = oneshot::channel();
-        let task = spawn_with_class(MediaServiceClass::Recording, cancel.clone(), async move {
-            ready.send(()).unwrap();
-            finish.await.unwrap();
-        })
+        let task = spawn_with_class(
+            labelled("q035-classes", "recording"),
+            cancel.clone(),
+            async move {
+                ready.send(()).unwrap();
+                finish.await.unwrap();
+            },
+        )
         .unwrap();
 
         started.await.unwrap();
-        let snap_running = snapshot();
+        let snap_running = snapshot(true);
+        // Class counters are shared with tests running in parallel; this
+        // service's own row is not.
         assert!(active(&snap_running, MediaServiceClass::Recording) >= 1);
+        assert!(service_row(&snap_running, "q035-classes").is_some());
         assert!(snap_running.spawned_total > snap_before.spawned_total);
         assert_eq!(snap_running.workers.len(), configured_workers());
 
         done.send(()).unwrap();
         task.await.unwrap();
-        let snap_after = snapshot();
-        assert_eq!(
-            active(&snap_after, MediaServiceClass::Recording),
-            active(&snap_running, MediaServiceClass::Recording) - 1
-        );
+        let snap_after = snapshot(true);
+        assert!(service_row(&snap_after, "q035-classes").is_none());
         assert!(snap_after.completed_total > snap_before.completed_total);
         assert!(snap_after.queue_latency_samples > snap_before.queue_latency_samples);
     }
@@ -467,16 +590,21 @@ mod tests {
 
     #[tokio::test]
     async fn poll_timed_counts_time_in_poll_not_time_parked() {
-        let parked = ClassMetrics::default();
-        poll_timed(&parked, tokio::time::sleep(Duration::from_millis(60))).await;
+        let (parked, parked_service) = (PollTiming::default(), PollTiming::default());
+        poll_timed(
+            [&parked, &parked_service],
+            tokio::time::sleep(Duration::from_millis(60)),
+        )
+        .await;
         assert!(parked.polls.load(Ordering::Relaxed) >= 2);
         assert!(
             parked.busy_ns.load(Ordering::Relaxed) < 30_000_000,
             "a service parked on a timer is not busy"
         );
+        assert_eq!(parked.read(), parked_service.read());
 
-        let blocking = ClassMetrics::default();
-        poll_timed(&blocking, async {
+        let (blocking, blocking_service) = (PollTiming::default(), PollTiming::default());
+        poll_timed([&blocking, &blocking_service], async {
             std::thread::sleep(Duration::from_millis(20));
         })
         .await;
@@ -486,5 +614,87 @@ mod tests {
             blocking.max_poll_ns.load(Ordering::Relaxed),
             blocking.busy_ns.load(Ordering::Relaxed)
         );
+        assert_eq!(blocking.read(), blocking_service.read());
+    }
+
+    fn labelled(pipeline_id: &str, stage: &str) -> MediaService {
+        MediaService {
+            class: MediaServiceClass::Recording,
+            pipeline_id: pipeline_id.to_string(),
+            stage: stage.to_string(),
+        }
+    }
+
+    fn service_row<'a>(
+        snapshot: &'a MediaExecutorSnapshot,
+        pipeline_id: &str,
+    ) -> Option<&'a ServiceSnapshot> {
+        snapshot
+            .services
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .find(|row| row.pipeline_id == pipeline_id)
+    }
+
+    #[tokio::test]
+    async fn busy_time_is_attributed_to_the_service_that_spent_it() {
+        let cancel = CancellationToken::new();
+        let (busy_ready, busy_started) = oneshot::channel();
+        let (busy_done, busy_finish) = oneshot::channel::<()>();
+        let busy = spawn_with_class(
+            labelled("q035-busy", "q035-busy:video"),
+            cancel.clone(),
+            async move {
+                std::thread::sleep(Duration::from_millis(20));
+                // Signal from a later poll: the sleeping poll has returned
+                // and been recorded before the test reads the row.
+                tokio::task::yield_now().await;
+                busy_ready.send(()).unwrap();
+                let _ = busy_finish.await;
+            },
+        )
+        .unwrap();
+        let (idle_ready, idle_started) = oneshot::channel();
+        let idle = spawn_with_class(
+            labelled("q035-idle", "recording"),
+            CancellationToken::new(),
+            async move {
+                idle_ready.send(()).unwrap();
+                std::future::pending::<()>().await;
+            },
+        )
+        .unwrap();
+        busy_started.await.unwrap();
+        idle_started.await.unwrap();
+
+        assert!(
+            snapshot(false).services.is_none(),
+            "summary stays fixed-size"
+        );
+        let running = snapshot(true);
+        let busy_row = service_row(&running, "q035-busy").expect("busy service listed");
+        let idle_row = service_row(&running, "q035-idle").expect("idle service listed");
+        assert_eq!(busy_row.class, MediaServiceClass::Recording);
+        assert!(
+            idle_row.service_id > busy_row.service_id,
+            "ids follow spawn order, so a restart is a new id"
+        );
+        assert_eq!(busy_row.stage, "q035-busy:video");
+        assert_eq!(idle_row.stage, "recording");
+        assert!(busy_row.busy_us >= 20_000, "{busy_row:?}");
+        assert!(
+            idle_row.busy_us < 20_000,
+            "the sibling's busy time is not charged here: {idle_row:?}"
+        );
+
+        // Both ways a service ends remove its row: completion and abort.
+        busy_done.send(()).unwrap();
+        busy.await.unwrap();
+        idle.abort();
+        assert!(idle.await.unwrap_err().is_cancelled());
+        let ended = snapshot(true);
+        assert!(service_row(&ended, "q035-busy").is_none());
+        assert!(service_row(&ended, "q035-idle").is_none());
     }
 }

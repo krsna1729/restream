@@ -26,7 +26,11 @@ pub(crate) fn start_shared_ts_muxer(
     let stage_key_str = stage_key.to_string();
 
     let _ = crate::media::executor::spawn_with_class(
-        crate::media::executor::MediaServiceClass::SharedTsMux,
+        crate::media::executor::MediaService {
+            class: crate::media::executor::MediaServiceClass::SharedTsMux,
+            pipeline_id: pipeline_id_str.clone(),
+            stage: stage_key_str.clone(),
+        },
         cancel.clone(),
         async move {
             // Wait for ingest metadata before starting the MPEG-TS muxer

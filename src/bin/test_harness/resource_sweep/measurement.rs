@@ -757,15 +757,17 @@ async fn save_engine_health(
     }
 }
 
-/// `/metrics/system` `mediaExecutor` (per-class poll busy time, per-worker busy
-/// time, queue depth). Cumulative; `start` and `end` bracket the rated window.
+/// `/metrics/system` `mediaExecutor` (per-class and per-service poll busy
+/// time, per-worker busy time, queue depth). Cumulative; `start` and `end`
+/// bracket the rated window. The full view: only it lists services, and this
+/// runs twice per window, not per sample.
 async fn save_media_executor(
     env: &ResourceSweepEnv,
     api: &RampApi,
     meta: &ResourceScenarioMeta<'_>,
     phase: &str,
 ) {
-    if let Ok(system) = api.get_json("/metrics/system?view=summary").await {
+    if let Ok(system) = api.get_json("/metrics/system").await {
         let stem = format!("{}-p{}-o{}", meta.scenario, meta.pipelines, meta.outputs);
         let _ = std::fs::write(
             env.work_dir

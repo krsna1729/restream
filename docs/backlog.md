@@ -19,7 +19,6 @@ items).
 - [Q-032 CPU placement](#q-032-performance-opus-measure-core-segregation-of-control-media-and-hot-threads)
 - [Q-033 host-level shard pool](#q-033-architecture-opus-decide-per-feed-shard-groups-versus-a-host-level-shard-pool)
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
-- [Q-035 MEDIA attribution](#q-035-observability-sonnet-attribute-media-pool-time-to-feed-and-stage)
 - [Q-036 enforced runtime truth table](#q-036-docs-sonnet-make-runtime-crossings-an-enforced-truth-table)
 - [Q-047 MoQ](#q-047-protocol-opus-moq-interop-spike-parked)
 - [Q-049 silent SRT leaves](#q-049-resilience-opus-find-why-connected-srt-leaves-sent-nothing-under-host-overload)
@@ -215,16 +214,6 @@ items).
   and the status contract.
 - Context: RTMP connections mostly fail and retry one at a time; SRT outputs
   on one shard deteriorate together after saturation.
-- Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
-  review).
-
-### Q-035 [observability] [sonnet] Attribute MEDIA pool time to feed and stage
-- Goal: MEDIA telemetry answers "which feed/stage used the pool", not only
-  "is the pool busy", at per-task (not per-packet) cost.
-- Files: `src/media/executor.rs` (`MediaServiceClass` counters).
-- Gates: unit test for the attribution counters; bench showing no hot-path
-  regression.
-- Context: input to Q-031's service-demand model.
 - Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
   review).
 

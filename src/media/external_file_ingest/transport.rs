@@ -35,7 +35,11 @@ pub(super) async fn pump_stdout(
         }
     };
     crate::media::executor::run_with_class(
-        crate::media::executor::MediaServiceClass::FileIngest,
+        crate::media::executor::MediaService {
+            class: crate::media::executor::MediaServiceClass::FileIngest,
+            pipeline_id: runtime.pipeline_id.clone(),
+            stage: runtime.ingest_id.clone(),
+        },
         runtime.registration.cancel_token.clone(),
         async move {
             // Keep the descriptor's nonblocking flags; from_std registers it with

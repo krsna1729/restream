@@ -28,6 +28,7 @@ pub async fn start_hls_segmenter(
         .planned_stage_key
         .clone()
         .unwrap_or_else(|| StageKey::new(pipeline_id.as_str(), StageKind::hls()));
+    let stage = hls_stage_key.to_string();
     let (lifecycle, metrics) = engine
         .get_or_create_non_ring_stage_runtime(
             hls_stage_key,
@@ -37,7 +38,11 @@ pub async fn start_hls_segmenter(
         )
         .await;
     let result = crate::media::executor::run_with_class(
-        crate::media::executor::MediaServiceClass::HlsSegmenter,
+        crate::media::executor::MediaService {
+            class: crate::media::executor::MediaServiceClass::HlsSegmenter,
+            pipeline_id: pipeline_id.clone(),
+            stage,
+        },
         cancel_token.clone(),
         run_hls_segmenter(
             pipeline_id,
