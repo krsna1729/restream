@@ -83,7 +83,9 @@ commands:
 /// relative path), so `env!` alone would act on the old worktree.
 fn repo_root() -> PathBuf {
     let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR")
-        .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from);
+        .map(PathBuf::from)
+        .filter(|dir| dir.ends_with("crates/xtask"))
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
     manifest_dir
         .ancestors()
         .nth(2)
