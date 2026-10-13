@@ -10,6 +10,32 @@ const SHRINK_DWELL: Duration = Duration::from_secs(300);
 /// Consecutive unhealthy windows that count as trouble, not a blip.
 const BLIP_WINDOWS: u32 = 3;
 const REFERENCE_FEED_BPS: f64 = 4.8e6;
+/// One SRT shard (4 Mbit/s feed, runtime-crossings M6) delivered 64 outputs
+/// at 19–51 % busy, lost outputs at 96 (92/96 delivered, 62 % busy) and
+/// collapsed at 128 (0/128, 89 % busy): a saturated shard starves every
+/// output on it.
+/// An Add that would put the pool's average shard above this is refused.
+pub(crate) const ADMIT_CEILING: f64 = 0.60;
+
+/// A refused Add: with it, the pool would average `busy_pct` (rounded up)
+/// per shard on `shards`, the most it may grow to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Saturated {
+    pub busy_pct: u32,
+    pub shards: u32,
+}
+
+impl std::fmt::Display for Saturated {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "refused: this feed's egress shards would run {}% busy on average across {} shard(s), over the {}% admission ceiling",
+            self.busy_pct,
+            self.shards,
+            (ADMIT_CEILING * 100.0) as u32
+        )
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ServiceSample {
@@ -116,6 +142,28 @@ impl ShardSizer {
         ((outputs as f64 * demand / TARGET).ceil() as u32).clamp(1, maximum.max(1))
     }
 
+    /// Admission before an Add: `outputs` includes it, `shards` is the most
+    /// the pool may have. Admitted outputs are never shed; this only refuses
+    /// new ones, so the outputs already placed keep their share.
+    pub(crate) fn admit(
+        &self,
+        outputs: usize,
+        cold_outputs_per_shard: u32,
+        shards: u32,
+    ) -> Result<(), Saturated> {
+        let shards = shards.max(1);
+        let projected =
+            outputs as f64 * self.demand_per_output(cold_outputs_per_shard) / f64::from(shards);
+        if projected <= ADMIT_CEILING {
+            Ok(())
+        } else {
+            Err(Saturated {
+                busy_pct: (projected * 100.0).ceil() as u32,
+                shards,
+            })
+        }
+    }
+
     /// Periodic decision. Existing outputs never move, so pressure on them
     /// cannot be relieved by a new shard: growth happens only for new outputs
     /// (`recommend`). This can only ask to stop placing on the tail shard,
@@ -188,6 +236,29 @@ mod tests {
             2,
             "doubling feed rate doubles planned CPU demand"
         );
+    }
+
+    #[test]
+    fn admission_refuses_the_add_that_would_cross_the_ceiling() {
+        let mut sizer = ShardSizer::default();
+        // Cold prior: 64 outputs per shard make 0.5, so 76 fit under 0.60.
+        assert_eq!(sizer.admit(76, 64, 1), Ok(()));
+        assert_eq!(
+            sizer.admit(77, 64, 1),
+            Err(Saturated {
+                busy_pct: 61,
+                shards: 1
+            })
+        );
+        assert_eq!(sizer.admit(153, 64, 2), Ok(()));
+        assert!(sizer.admit(154, 64, 2).is_err());
+        // Measured: 16 outputs cost 0.5 core, so 19 fit on one shard.
+        sizer.observe(sample(0.5, 0.5, 16), 16);
+        assert_eq!(sizer.admit(19, 64, 1), Ok(()));
+        assert!(sizer.admit(20, 64, 1).is_err());
+        sizer.forecast_feed(REFERENCE_FEED_BPS * 2.0);
+        assert_eq!(sizer.admit(9, 64, 1), Ok(()), "a faster feed costs more");
+        assert!(sizer.admit(10, 64, 1).is_err());
     }
 
     #[test]

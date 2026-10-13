@@ -77,6 +77,8 @@ mod peer_state;
 mod resource_sweep;
 #[path = "test_harness/sinks.rs"]
 mod sinks;
+#[path = "test_harness/srt_admission.rs"]
+mod srt_admission;
 #[path = "test_harness/srt_raw_sink.rs"]
 mod srt_raw_sink;
 #[path = "test_harness/srt_sink.rs"]
@@ -115,6 +117,7 @@ pub(crate) use mode_specs::*;
 use output_progress::*;
 use resource_sweep::*;
 use sinks::*;
+use srt_admission::*;
 use srt_raw_sink::*;
 use srt_slow_peer::*;
 use srt_urls::*;
@@ -248,6 +251,7 @@ async fn run() -> Result<(), String> {
             "fault.output-stall" => fault_output_stall().await,
             "fault.srt-output-stall" => fault_srt_output_stall().await,
             "srt.slow-peer" => srt_slow_peer().await,
+            "srt.admission" => srt_admission().await,
             "fault.resilience" => fault_resilience().await,
             "file.live-edge" => file_live_edge().await,
             "signal.control" => signal_control().await,

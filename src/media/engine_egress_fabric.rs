@@ -21,8 +21,21 @@ pub(crate) enum SrtFabricEnsureError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SrtFabricDispatchError {
-    MissingFeed { feed_id: FeedId },
+    MissingFeed {
+        feed_id: FeedId,
+    },
+    /// Admission refused the new output; nothing was dispatched.
+    Saturated(crate::media::egress::sizing::Saturated),
     Dispatch(EgressManagerDispatchError<EgressShardGroupError>),
+}
+
+impl SrtFabricDispatchError {
+    pub(crate) fn refused(&self) -> Option<&crate::media::egress::sizing::Saturated> {
+        match self {
+            Self::Saturated(saturated) => Some(saturated),
+            _ => None,
+        }
+    }
 }
 
 impl MediaEngine {
@@ -109,10 +122,17 @@ impl MediaEngine {
         if matches!(command, EgressCommand::Add(_))
             && let Some(inputs) = rescale_inputs.take()
         {
-            {
-                let reason = runtime.reason_for(&command);
-                self.rescale_srt_fabric(feed_id, runtime, inputs, reason);
-            };
+            let reason = runtime.reason_for(&command);
+            if matches!(reason, crate::media::egress::runtime::ResizeReason::Add) {
+                runtime.forecast_feed(&inputs.publication_ring());
+                runtime
+                    .admit_add(
+                        crate::config::EgressShardProfile::SrtOutputCount,
+                        crate::capacity::HostCapacity::get(),
+                    )
+                    .map_err(SrtFabricDispatchError::Saturated)?;
+            }
+            self.rescale_srt_fabric(feed_id, runtime, inputs, reason);
         }
 
         let outcome = runtime

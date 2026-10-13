@@ -13,7 +13,7 @@ use crate::media::egress::shard::{
     EgressShardBackend, EgressShardConfig, EgressShardGroup, EgressShardGroupError,
     EgressShardHeartbeat, EgressShardSnapshot, FeedWakeHandle,
 };
-use crate::media::egress::sizing::{ServiceSample, ShardSizer};
+use crate::media::egress::sizing::{Saturated, ServiceSample, ShardSizer};
 use crate::media::ring_buffer::{PublishSubscribers, PublishWake, RingBuffer};
 
 #[cfg(test)]
@@ -89,6 +89,25 @@ impl EgressFabricRuntime {
             }
             _ => ResizeReason::Remove,
         }
+    }
+
+    /// Admission for a new output (`reason_for` gave `Add`): refused when,
+    /// with it, the pool would average more than `ADMIT_CEILING` busy per
+    /// shard at the most shards it may have. Call after `forecast_feed`.
+    pub(crate) fn admit_add(
+        &self,
+        profile: crate::config::EgressShardProfile,
+        host: crate::capacity::HostCapacity,
+    ) -> Result<(), Saturated> {
+        let outputs = self.manager.output_count() + 1;
+        let ceiling = if self.adaptive && profile.shard_override().is_none() {
+            host.egress_shards_per_pool().min(self.shard_ceiling)
+        } else {
+            crate::config::target_egress_fabric_shards(profile, outputs, host.cpus)
+        };
+        let shards = ceiling.max(self.group.shard_count() as u32);
+        self.sizer
+            .admit(outputs, profile.outputs_per_shard(), shards)
     }
 
     pub(crate) fn observation_due(&self) -> bool {
@@ -704,7 +723,7 @@ mod tests {
         runtime.shutdown();
     }
 
-    fn roomy_runtime(probes: &[Probe]) -> (EgressFabricRuntime, EgressShardConfig) {
+    pub(super) fn roomy_runtime(probes: &[Probe]) -> (EgressFabricRuntime, EgressShardConfig) {
         let config = EgressShardConfig::new(1024, 4, 4, 4, Duration::from_millis(1)).unwrap();
         let count = NonZeroU32::new(probes.len() as u32).unwrap();
         let backends = probes

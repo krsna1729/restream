@@ -13,6 +13,7 @@ use futures_util::FutureExt as _;
 use sqlx::SqlitePool;
 use tracing::{error, warn};
 
+use crate::application::diagnosis::CAPACITY_REFUSED_PHASE;
 use crate::application::models::JobStatus;
 use crate::application::reconcile::next_output_retry_count;
 use crate::config::RuntimeTuning;
@@ -406,12 +407,16 @@ impl EgressTask {
                     .engine
                     .release_srt_fabric_runtime(&fabric.feed_id)
                     .await;
+                let (phase, message) = match error.refused() {
+                    Some(saturated) => (CAPACITY_REFUSED_PHASE, saturated.to_string()),
+                    None => ("srt_fabric_dispatch", format!("{error:?}")),
+                };
                 self.engine
                     .record_egress_error_if_current(
                         &self.output_id,
                         &self.registration,
-                        "srt_fabric_dispatch",
-                        format!("{error:?}"),
+                        phase,
+                        message,
                     )
                     .await;
                 return;
@@ -490,12 +495,16 @@ impl EgressTask {
                     .engine
                     .release_rtmp_fabric_runtime(&fabric.feed_id)
                     .await;
+                let (phase, message) = match error.refused() {
+                    Some(saturated) => (CAPACITY_REFUSED_PHASE, saturated.to_string()),
+                    None => ("rtmp_fabric_dispatch", format!("{error:?}")),
+                };
                 self.engine
                     .record_egress_error_if_current(
                         &self.output_id,
                         &self.registration,
-                        "rtmp_fabric_dispatch",
-                        format!("{error:?}"),
+                        phase,
+                        message,
                     )
                     .await;
                 return;

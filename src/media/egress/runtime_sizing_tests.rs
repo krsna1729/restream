@@ -126,3 +126,28 @@ fn replacement_ring_resets_forecast_counter_even_if_new_counter_is_larger() {
     );
     runtime.shutdown();
 }
+
+#[test]
+fn admission_counts_placed_outputs_against_the_pool_ceiling() {
+    let profile = crate::config::EgressShardProfile::SrtOutputCount;
+    let host = crate::capacity::HostCapacity { cpus: 8 };
+    // An 8× reference feed: one shard holds 9 outputs under the ceiling.
+    for (ceiling, admitted) in [(1, 9), (2, 19)] {
+        let probes = [Probe::default()];
+        let mut runtime = super::tests::roomy_runtime(&probes).0.adaptive(ceiling);
+        runtime.sizer.forecast_feed(4.8e6 * 8.0);
+        for i in 0..admitted {
+            assert_eq!(runtime.admit_add(profile, host), Ok(()), "output {i}");
+            runtime
+                .dispatch(EgressCommand::Add(output_spec(&format!("out-{i}"))))
+                .unwrap();
+        }
+        let refused = runtime.admit_add(profile, host).unwrap_err();
+        assert_eq!(
+            refused.shards, ceiling,
+            "the most shards the pool may grow to"
+        );
+        assert!(refused.busy_pct > 60, "{refused:?}");
+        runtime.shutdown();
+    }
+}

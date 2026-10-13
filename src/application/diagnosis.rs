@@ -43,6 +43,9 @@ pub enum Cause {
     ShardStalled { shard: u32 },
     /// The fabric shard's loop has ended while the output still runs on it.
     ShardStopped { shard: u32 },
+    /// Admission refused the output: the feed's egress shards are at their
+    /// load ceiling. Restarts retry it until load drops.
+    CapacityRefused { error: String },
     /// The restart budget is spent.
     RetriesExhausted,
     /// Failing and close to spending the restart budget.
@@ -110,6 +113,9 @@ pub struct OutputSignals {
 /// Restart attempts at or above this share of the budget are flagged.
 pub const RETRY_BUDGET_WARN_PCT: u64 = 80;
 
+/// The failure phase an egress records when admission refuses it.
+pub const CAPACITY_REFUSED_PHASE: &str = "egress_capacity";
+
 /// The degraded layer and cause, or `None` for a healthy (or stopped)
 /// output.
 pub fn diagnose(signals: &OutputSignals) -> Option<Diagnosis> {
@@ -161,6 +167,19 @@ pub fn diagnose(signals: &OutputSignals) -> Option<Diagnosis> {
             }
             ShardHealth::Healthy => ruled_out.push(Layer::Shard),
         }
+    }
+
+    if signals.failing
+        && let Some((Some(phase), error)) = &signals.last_failure
+        && phase == CAPACITY_REFUSED_PHASE
+    {
+        return found(
+            Layer::Shard,
+            Cause::CapacityRefused {
+                error: error.clone(),
+            },
+            ruled_out,
+        );
     }
 
     let destination = if let Some((attempts, max)) = signals.retry
@@ -286,6 +305,35 @@ mod tests {
             "no shard to rule out for a non-fabric output"
         );
         assert_eq!(legacy.cause, Cause::NoProgress);
+    }
+
+    #[test]
+    fn a_capacity_refusal_is_the_shard_layer_not_the_destination() {
+        let refused = OutputSignals {
+            failing: true,
+            retry: Some((9, 10)),
+            last_failure: Some((
+                Some(CAPACITY_REFUSED_PHASE.into()),
+                "refused: 61% busy".into(),
+            )),
+            ..running()
+        };
+        let diagnosis = diagnose(&refused).unwrap();
+        assert_eq!(diagnosis.layer, Layer::Shard);
+        assert_eq!(
+            diagnosis.cause,
+            Cause::CapacityRefused {
+                error: "refused: 61% busy".into()
+            },
+            "the refusal, not the retry budget it spends, is the cause"
+        );
+        assert_eq!(diagnosis.ruled_out, vec![Layer::Ingest, Layer::Feed]);
+        let recovered = OutputSignals {
+            failing: false,
+            retry: None,
+            ..refused
+        };
+        assert_eq!(diagnose(&recovered), None, "an admitted output is healthy");
     }
 
     #[test]

@@ -200,6 +200,14 @@
           },
           "purpose": "one genuinely slow APPLICATION SRT receiver (delivery paused, protocol alive) among healthy SRT outputs: healthy siblings must keep progressing and feed retention must stay bounded (WI2.5)"
         },
+        "srt.admission": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": true
+          },
+          "purpose": "one SRT shard pool driven past its admission ceiling (Q-034): refused outputs report capacityRefused and send nothing, admitted outputs keep progressing"
+        },
         "fault.resilience": {
           "suiteDefault": true,
           "suiteOrder": 500,

@@ -227,8 +227,19 @@ items).
   and the status contract.
 - Context: RTMP connections mostly fail and retry one at a time; SRT outputs
   on one shard deteriorate together after saturation.
-- Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
-  review).
+- Status: admission done (2026-10-13). Before an SRT or RTMP Add, the pool
+  projects its average shard busy at the most shards it may have
+  (`ShardSizer::admit`, ceiling 60%: one shard degraded at 62%). Over the
+  ceiling, the Add is not dispatched: the output fails with phase
+  `egress_capacity`, the diagnosis is `capacityRefused` at the shard layer,
+  an output alert names it, and the restart backoff retries it. Live gate
+  `srt.admission` (one shard, one 8 Mbit/s feed): at 96 and 120 requested
+  outputs, 76 were admitted and all kept progressing; 20 and 44 were
+  refused and sent nothing. Admitted outputs are never shed; if load rises
+  after admission (feed bitrate), only new Adds are refused. Still open:
+  HLS PUT, sink and pipeline fabrics have no admission; a burst of Adds
+  before the first feed-rate forecast (0.5 s) is priced at the 4.8 Mbit/s
+  reference rate.
 
 ### Q-036 [docs] [sonnet] Make runtime-crossings an enforced truth table
 - Goal: `docs/runtime-crossings.md` is the one statement of which thread

@@ -795,7 +795,10 @@ Rebuilds the projection and returns it:
   checked before it are `ruledOut`. `cause.code` is one of the following.
   - `ingest`: `noPublisher`.
   - `feed`: `stageNotProducing` (`stage`, `phase`).
-  - `shard`: `shardPanicked`, `shardStalled`, `shardStopped` (`shard`).
+  - `shard`: `shardPanicked`, `shardStalled`, `shardStopped` (`shard`);
+    `capacityRefused` (`error`): admission refused the output because the
+    feed's egress shards would pass their load ceiling (failure phase
+    `egress_capacity`); restarts retry it.
   - `destination`: `retriesExhausted`, `retryBudgetNearlySpent`
     (`attempts`, `max`; at 80% of the budget), `rejected` (`phase`,
     `error`), `backpressured` (`stalled`), `noProgress`.
