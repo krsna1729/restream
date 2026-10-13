@@ -392,7 +392,9 @@ function Operation(props: {
                   const next =
                     (await advanceOperation(operation.operationId, step, reason)) ??
                     (await getOperation(operation.operationId));
+                  // Both null: the engine forgot it (restart or eviction).
                   if (next) props.onChange(next);
+                  else props.onDone();
                 })
               }
             >
