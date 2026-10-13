@@ -42,6 +42,7 @@ async fn owner_runs_publisher_media_to_completion_without_losing_payloads() {
         telemetry_capacity: 8,
         owners: 1,
         max_peers_per_ip: 64,
+        window_memory_bytes: None,
     })
     .await
     .expect("ingress owner starts");
@@ -127,6 +128,7 @@ async fn two_owners_share_the_port_and_each_session_command_reaches_its_owner() 
         telemetry_capacity: 8,
         owners: 2,
         max_peers_per_ip: 64,
+        window_memory_bytes: None,
     })
     .await
     .expect("two ingress Owners start");
@@ -273,6 +275,7 @@ async fn start_quality_owner(
         telemetry_capacity,
         owners: 1,
         max_peers_per_ip: 64,
+        window_memory_bytes: None,
     })
     .await
     .expect("ingress owner starts");

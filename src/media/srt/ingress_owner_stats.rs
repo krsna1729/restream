@@ -26,6 +26,8 @@ pub(super) struct Published {
     policy_rejections: u64,
     policy_deferred: u64,
     credential_failures: u64,
+    key_derivation_drops: u64,
+    window_memory_rejections: u64,
     peers: u64,
     pub(super) deferred_sends: u64,
 }
@@ -124,6 +126,16 @@ impl OwnerLoop {
                 &mut published.credential_failures,
                 telemetry.credential_failures,
             );
+            publish(
+                &stats.key_derivation_drops,
+                &mut published.key_derivation_drops,
+                telemetry.key_derivation_drops,
+            );
+            publish(
+                &stats.window_memory_rejections,
+                &mut published.window_memory_rejections,
+                telemetry.window_memory_rejections,
+            );
         }
         publish(&stats.peers, &mut published.peers, self.peers);
     }
@@ -180,6 +192,7 @@ mod tests {
             telemetry_capacity: 1,
             owners: 1,
             max_peers_per_ip: 1,
+            window_memory_bytes: None,
         };
         let plan = listener_plans(&config)
             .expect("plan")

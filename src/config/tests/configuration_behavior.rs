@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use super::{
     AppConfig, DEFAULT_MEDIA_DIR, EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR, EgressFabricConfig,
     EgressShardProfile, RuntimeTuning, ServerPorts, TokioRuntimeConfig,
-    derive_external_ffmpeg_permits, env_optional_positive_usize, target_egress_fabric_shards,
+    derive_external_ffmpeg_permits, effective_memory_bytes, env_optional_positive_usize,
+    target_egress_fabric_shards,
 };
 use crate::capacity::HostCapacity;
 
@@ -405,6 +406,55 @@ fn srt_egress_connect_concurrency_defaults_and_allows_override() {
             1,
             "clamped to at least 1 -- zero would permanently deadlock every SRT connect"
         );
+    });
+}
+
+#[test]
+fn the_memory_limit_is_the_lower_of_host_and_container() {
+    const GIB: u64 = 1 << 30;
+    assert_eq!(effective_memory_bytes(128 * GIB, Some(4 * GIB)), 4 * GIB);
+    assert_eq!(effective_memory_bytes(16 * GIB, None), 16 * GIB);
+    assert_eq!(
+        effective_memory_bytes(16 * GIB, Some(u64::MAX)),
+        16 * GIB,
+        "an unlimited cgroup leaves the host's RAM"
+    );
+}
+
+#[test]
+fn srt_ingress_window_memory_is_split_across_owners_and_zero_disables() {
+    // (budget, Owners after the clamp to the host's CPUs)
+    let default_for = |owners: &str| {
+        let mut result = None;
+        with_env_overlay(
+            &[("RESTREAM_SRT_INGRESS_OWNERS", owners)],
+            &["RESTREAM_SRT_INGRESS_WINDOW_MEMORY_BYTES"],
+            || {
+                let config = AppConfig::from_env();
+                result = Some((
+                    config
+                        .srt_ingress_window_memory_bytes
+                        .expect("the default budget is on"),
+                    config.srt_ingress_owners as u64,
+                ));
+            },
+        );
+        result.unwrap()
+    };
+    let (one, _) = default_for("1");
+    let (split, owners) = default_for("2");
+    assert_eq!(split, one / owners, "each Owner checks its own share");
+    with_env_vars(
+        &[("RESTREAM_SRT_INGRESS_WINDOW_MEMORY_BYTES", "1000000")],
+        || {
+            assert_eq!(
+                AppConfig::from_env().srt_ingress_window_memory_bytes,
+                Some(1_000_000)
+            );
+        },
+    );
+    with_env_vars(&[("RESTREAM_SRT_INGRESS_WINDOW_MEMORY_BYTES", "0")], || {
+        assert_eq!(AppConfig::from_env().srt_ingress_window_memory_bytes, None);
     });
 }
 
