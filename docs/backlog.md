@@ -148,8 +148,17 @@ items).
   PUTs load the scheduler meant for low-rate control work. Two separable
   wins: publication-driven wake (independent of runtime) and an
   egress-fabric shard backend (Compio HTTP client). Measure each alone.
-- Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
-  review).
+- Status: done (2026-10-13). Both wins landed and were measured apart:
+  #246 made the Reqwest uploader wait on the store's publication watch
+  instead of a 500 ms poll (`UPLOAD_INTERVAL` is gone);
+  the egress-fabric backend (#251, default since #276) uploads from Compio
+  shards woken by each segment publish, off CONTROL. The response parser now
+  has a fuzz target, `http_response` (229k runs in 30 s, no crash; the
+  response must not depend on where reads split it). Request framing and
+  retry state have fake-server tests (`http1_tests.rs`,
+  `hls_put_shard_tests.rs`, `upload_tests.rs`); destination stall and
+  restart are covered by the delayed HLS PUT sink and the
+  `mixed.live.srt.h264.a1.bf2` HLS PUT probe.
 
 ### Q-031 [architecture] [opus] Derive every thread count from one capacity allocator
 - Goal: thread counts follow measured service demand (λ × D at a target

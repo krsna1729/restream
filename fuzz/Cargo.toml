@@ -68,3 +68,10 @@ path = "fuzz_targets/ts_demux.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "http_response"
+path = "fuzz_targets/http_response.rs"
+test = false
+doc = false
+bench = false

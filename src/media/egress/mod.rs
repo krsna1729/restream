@@ -31,6 +31,9 @@ pub mod command;
 pub(crate) mod delivery;
 pub(crate) mod factory;
 pub mod feed;
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub mod fuzz_entry;
 pub(crate) mod http1;
 pub mod journal;
 pub mod leaf;
