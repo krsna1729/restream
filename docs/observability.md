@@ -544,6 +544,13 @@ cumulative; compute rates from two snapshots.
   `globalQueueDepth`. These are empty/zero until the first media service starts
   the runtime.
 - `queueLatency*`: spawn-to-first-poll delay of newly started services only.
+- `services[]` (full view only, so the summary stays fixed-size): one row per
+  running service with its `class`, `pipelineId` and `stage` (stage key, file
+  ingest id, or `recording`), and the same `polls`, `busyUs` and `maxPollUs`.
+  This answers which feed and stage used the pool: per-feed demand over a
+  window is `Δ busyUs` of its rows. A row starts at the service's first poll
+  and leaves when it ends; a restarted service (a new file-ingest attempt)
+  starts from zero, so use a delta only when `polls` did not go down.
 
 `busyUs` is wall time. On a VM the hypervisor can deschedule a vCPU inside a
 poll without the guest reporting steal (measured 20–128 ms gaps on the capacity

@@ -32,11 +32,12 @@ Artifacts are written to `.local/artifacts/resource-sweep/`:
   metric the product cannot source yet)
 - `packet-contract-samples.jsonl`: one packet-rate contract record per sample
 - `media-executor-<scenario>-p<pipelines>-o<outputs>-{start,end}.json`: the
-  `/metrics/system` `mediaExecutor` object at the start and end of each rated
-  window (cumulative per-class `polls`/`busyUs`/`maxPollUs`, per-worker
-  `busyUs`/`parks`, queue depth). Subtract `start` from `end` for the window
-  and divide by wall time × `configuredWorkers` for utilization; `maxPollUs`
-  is a lifetime maximum, not a window value
+  full `/metrics/system` `mediaExecutor` object at the start and end of each
+  rated window (cumulative per-class and per-service `polls`/`busyUs`/
+  `maxPollUs`, per-worker `busyUs`/`parks`, queue depth). Subtract `start`
+  from `end` for the window and divide by wall time × `configuredWorkers` for
+  utilization; per-service rows give each feed's and stage's share.
+  `maxPollUs` is a lifetime maximum, not a window value
 - `restream.log`, `mediamtx.log`, and publisher logs
 
 The packet-rate contract records per-second rates for the SRT Owner packet
