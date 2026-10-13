@@ -675,6 +675,18 @@ test("manage: create a pipeline, edit its inputs, destinations, source and key, 
     await expect(page).toHaveURL(/w=pipelines/);
     expect(await stored(pipelineId)).toBeUndefined();
     pipelineId = "";
+
+    // A pipeline whose destinations run does not offer a new key: the live
+    // encoder would lose it at its next reconnect.
+    const main = (await (await page.request.get("/api/v1/settings")).json()).pipelines.find(
+      (pipeline: { name: string }) => pipeline.name === "Main",
+    );
+    await page.goto(`/control-room.html?w=operate&p=${main.id}`);
+    await page
+      .getByRole("region", { name: "Pipeline controls" })
+      .getByRole("button", { name: "Settings" })
+      .click();
+    await expect(page.getByLabel(/Issue a new stream key/)).toBeDisabled();
   } finally {
     if (pipelineId) await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
     await page.request.delete(`/api/v1/media/${encodeURIComponent(clip)}`);

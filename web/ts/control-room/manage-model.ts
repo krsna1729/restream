@@ -137,8 +137,10 @@ export interface OutputDraft {
   /** Only for a custom RTMP server; presets say their own mode. */
   readonly rtmpMode: RtmpOutputMode;
   readonly monitoringUrl: string;
-  /** "" sends the source video; otherwise a transcode profile. */
-  readonly profile: string;
+  /** "" sends the source video, a name a transcode profile, null keeps the
+   * stored custom video settings (this editor cannot change them). */
+  readonly profile: string | null;
+  readonly customVideo: OutputConfig["video"] | null;
   readonly codec: OutputVideoCodec;
   readonly audio: AudioMode;
   /** Source track positions: all selected tracks, or the first for the
@@ -163,7 +165,8 @@ export function outputDraft(output: ConfigOutput | null, defaultHost: string): O
     srt: parseSrtFields(url, defaultHost),
     rtmpMode: config?.protocol?.type === "rtmp" ? config.protocol.mode : "legacy",
     monitoringUrl: output?.monitoringUrl ?? "",
-    profile: video?.mode === "preset" ? video.preset : "",
+    profile: video?.mode === "preset" ? video.preset : video?.mode === "custom" ? null : "",
+    customVideo: video?.mode === "custom" ? video : null,
     codec: video && video.mode !== "custom" ? (video.codec ?? "auto") : "auto",
     audio: audio.mode,
     tracks:
@@ -190,7 +193,7 @@ function audioConfig(draft: OutputDraft): OutputConfig["audio"] {
   const first = draft.tracks[0] ?? 0;
   switch (draft.audio) {
     case "selectTracks":
-      return { mode: "selectTracks", tracks: draft.tracks.length ? [...draft.tracks] : [0] };
+      return { mode: "selectTracks", tracks: [...draft.tracks] };
     case "downmix":
       return { mode: "downmix", track: first };
     case "remap":
@@ -205,15 +208,20 @@ function audioConfig(draft: OutputDraft): OutputConfig["audio"] {
   }
 }
 
+function videoConfig(draft: OutputDraft): OutputConfig["video"] {
+  if (draft.profile === null && draft.customVideo) return draft.customVideo;
+  return draft.profile
+    ? { mode: "preset", preset: draft.profile, codec: draft.codec }
+    : { mode: "source", codec: draft.codec };
+}
+
 export function outputWrite(draft: OutputDraft): OutputMutationArgs {
   return {
     name: draft.name.trim(),
     url: outputUrl(draft),
     monitoringUrl: draft.monitoringUrl.trim(),
     config: {
-      video: draft.profile
-        ? { mode: "preset", preset: draft.profile, codec: draft.codec }
-        : { mode: "source", codec: draft.codec },
+      video: videoConfig(draft),
       audio: audioConfig(draft),
       protocol:
         draft.protocol === "rtmp" ? { type: "rtmp", mode: rtmpMode(draft) } : { type: "auto" },
@@ -225,20 +233,33 @@ function channels(tracks: readonly ProbeAudioTrack[], position: number): number 
   return tracks[position]?.channels || 2;
 }
 
-/** The source tracks a mode sends (all of them for "all"). */
-function routed(draft: OutputDraft, tracks: readonly ProbeAudioTrack[]): number[] {
-  if (draft.audio === "all") return tracks.map((_, position) => position);
+/** The source tracks a mode sends: for "all", as many as the destination
+ * takes, in source order. */
+function routed(draft: OutputDraft, caps: AudioCaps, tracks: readonly ProbeAudioTrack[]): number[] {
+  if (draft.audio === "all") {
+    return tracks.map((_, position) => position).slice(0, caps.maxTracks);
+  }
   if (draft.audio === "selectTracks") return [...draft.tracks];
   return [draft.tracks[0] ?? 0];
 }
 
-/** Why the engine would refuse this destination, or null. `tracks` is what
- * the live publisher sends (empty without one). */
-export function outputProblem(
+/** How many tracks and channels the pickers offer: what the publisher sends,
+ * and never fewer than a stored choice names, so a stored track or channel
+ * shows as itself even while nobody publishes. */
+export function audioChoiceCounts(
   draft: OutputDraft,
-  caps: AudioCaps,
   tracks: readonly ProbeAudioTrack[],
-): string | null {
+): { tracks: number; channels: number } {
+  const first = draft.tracks[0] ?? 0;
+  return {
+    tracks: Math.max(1, tracks.length, ...draft.tracks.map((track) => track + 1)),
+    channels: Math.max(channels(tracks, first), draft.leftChannel + 1, draft.rightChannel + 1),
+  };
+}
+
+/** What must change before saving, or null. The destination's audio limits
+ * are advice (the engine does not enforce them): see `audioNotes`. */
+export function outputProblem(draft: OutputDraft): string | null {
   if (!draft.name.trim()) return "A destination needs a name.";
   if (!outputUrl(draft)) {
     return draft.protocol === "srt" ? "An SRT destination needs a host." : "A destination needs a URL.";
@@ -247,38 +268,46 @@ export function outputProblem(
     const problem = passphraseProblem(draft.srt.passphrase);
     if (problem) return problem;
   }
-  if (draft.audio === "selectTracks" && draft.tracks.length > caps.maxTracks) {
-    return `This destination takes at most ${caps.maxTracks} audio track(s).`;
-  }
-  if (
-    (draft.audio === "selectTracks" || draft.audio === "all") &&
-    routed(draft, tracks).some((position) => channels(tracks, position) > caps.maxChannels)
-  ) {
-    return `This destination takes at most ${caps.maxChannels} audio channels: downmix instead.`;
+  if (draft.audio === "selectTracks" && draft.tracks.length === 0) {
+    return "Choose at least one audio track to send.";
   }
   return null;
 }
 
-/** What the destination will do with the source's audio, worth knowing
- * before saving (none of it stops a save). */
+/** What the destination will do with the source's audio, and what its
+ * limits advise against; none of it stops a save. */
 export function audioNotes(
   draft: OutputDraft,
   caps: AudioCaps,
   tracks: readonly ProbeAudioTrack[],
 ): string[] {
   const notes: string[] = [];
-  const sent = routed(draft, tracks);
+  const sent = routed(draft, caps, tracks);
   if (draft.audio === "all") {
+    if (tracks.length > caps.maxTracks) {
+      notes.push(
+        `Takes ${caps.maxTracks} audio track(s): the other ${tracks.length - caps.maxTracks} are not sent.`,
+      );
+    } else {
+      notes.push(
+        tracks.length > 1
+          ? `Passes all ${tracks.length} source tracks through as they are.`
+          : "Passes the source audio through as it is.",
+      );
+    }
+  }
+  if (draft.audio === "selectTracks" && draft.tracks.length > caps.maxTracks) {
     notes.push(
-      tracks.length > 1
-        ? `Passes all ${tracks.length} source tracks through as they are.`
-        : "Passes the source audio through as it is.",
+      `This destination takes at most ${caps.maxTracks} audio track(s); ${draft.tracks.length} are selected.`,
     );
   }
-  if (caps.maxTracks === 1 && tracks.length > 1 && draft.audio !== "remap") {
-    notes.push(`Takes one audio track: the other ${tracks.length - 1} are not sent.`);
+  const tooWide = sent.some((position) => channels(tracks, position) > caps.maxChannels);
+  if ((draft.audio === "all" || draft.audio === "selectTracks") && tooWide) {
+    notes.push(
+      `A sent track has more than ${caps.maxChannels} channels, which this destination may refuse: downmix it.`,
+    );
   }
-  if (draft.audio === "downmix" && sent.some((position) => channels(tracks, position) > caps.maxChannels)) {
+  if (draft.audio === "downmix" && tooWide) {
     notes.push(`The track is downmixed to stereo (at most ${caps.maxChannels} channels).`);
   }
   if (tracks.length === 0) {

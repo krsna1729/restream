@@ -7,6 +7,7 @@ import {
   createPipelineInput,
   deletePipeline,
   deletePipelineInput,
+  getPipelineFileIngest,
   getPipelineSummary,
   listMediaFiles,
   startIngest,
@@ -15,7 +16,11 @@ import {
   stopRecording,
   updatePipelineInput,
 } from "../core/api.js";
-import type { MediaFile, PipelineSummarySnapshot } from "../core/api-types.js";
+import type {
+  MediaFile,
+  PipelineFileIngestConfig,
+  PipelineSummarySnapshot,
+} from "../core/api-types.js";
 import type { ConfigPipeline, PipelineInput } from "../types.js";
 import { ConfirmDelete } from "./confirm.js";
 import { PipelineForm } from "./pipeline-form.js";
@@ -25,14 +30,14 @@ import { usePolled } from "./polled.js";
 /** Recording and file ingest switches, the settings form and delete. */
 export function PipelineBar(props: {
   pipeline: ConfigPipeline;
+  /** Destinations are running, so the key cannot be rotated. */
+  keyLocked: boolean;
   /** Re-read the stored configuration after a change. */
   onChanged: () => void;
 }) {
   const { pipeline } = props;
   const summary = usePolled<PipelineSummarySnapshot>(() => getPipelineSummary(pipeline.id));
   const recording = summary.value?.recording ?? null;
-  const file = pipeline.fileIngest?.configured ? pipeline.fileIngest : null;
-  const fileId = file?.id;
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   const [files, setFiles] = useState<readonly MediaFile[]>([]);
@@ -69,17 +74,8 @@ export function PipelineBar(props: {
             {recording.active ? "writing a file" : "armed: starts with the source"}
           </span>
         )}
-        {file && fileId && (
-          <button
-            type="button"
-            className="btn btn-sm btn-outline"
-            disabled={busy}
-            onClick={() =>
-              act(() => (file.running ? stopIngest : startIngest)(fileId), props.onChanged)
-            }
-          >
-            {file.running ? `Stop file ${file.filename}` : `Play file ${file.filename}`}
-          </button>
+        {pipeline.fileIngest?.configured && (
+          <FileSwitch key={pipeline.fileIngest.id} pipelineId={pipeline.id} busy={busy} act={act} />
         )}
         <button
           type="button"
@@ -101,8 +97,38 @@ export function PipelineBar(props: {
           />
         </span>
       </div>
-      {editing && <PipelineForm stored={pipeline} files={files} onSaved={props.onChanged} />}
+      {editing && (
+        <PipelineForm
+          stored={pipeline}
+          files={files}
+          keyLocked={props.keyLocked}
+          onSaved={props.onChanged}
+        />
+      )}
     </section>
+  );
+}
+
+/** Play or stop the configured file. Whether it runs is read from the
+ * engine every poll: a file can end, fail or be started elsewhere. */
+function FileSwitch(props: {
+  pipelineId: string;
+  busy: boolean;
+  act: (action: () => Promise<unknown>, after: () => void) => Promise<void>;
+}) {
+  const state = usePolled<PipelineFileIngestConfig>(() => getPipelineFileIngest(props.pipelineId));
+  const file = state.value;
+  const fileId = file?.configured ? file.id : undefined;
+  if (!file || !fileId) return null;
+  return (
+    <button
+      type="button"
+      className="btn btn-sm btn-outline"
+      disabled={props.busy}
+      onClick={() => props.act(() => (file.running ? stopIngest : startIngest)(fileId), state.refresh)}
+    >
+      {file.running ? `Stop file ${file.filename}` : `Play file ${file.filename}`}
+    </button>
   );
 }
 

@@ -152,6 +152,40 @@ async fn pipeline_update_null_clears_the_file_source_and_omission_keeps_it() {
 }
 
 #[tokio::test]
+async fn clearing_the_file_source_releases_only_the_file_session() {
+    let (app, pool, engine) = test_app_with_engine().await;
+    let cookie = login(&app).await;
+    db::create_pipeline(&pool, "p1", "P1", "file-key", Some("file:clip.ts"), None)
+        .await
+        .unwrap();
+    let file = engine
+        .try_register_pipeline_input_attempt("p1", "primary", "file-key", "file", true)
+        .await
+        .expect("file session");
+    let live = engine
+        .try_register_pipeline_input_attempt("p1", "backup", "backup-key", "srt", false)
+        .await
+        .expect("live backup session");
+
+    // A save that clears the file source (the classic editor sends this on
+    // every save of a live pipeline) stops the file, not the encoder.
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "PATCH",
+            "/api/v1/pipelines/p1",
+            &cookie,
+            Some(r#"{"name":"Renamed","fileIngest":null}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(file.cancel_token.is_cancelled());
+    assert!(!live.cancel_token.is_cancelled());
+    assert_eq!(engine.connected_input_count("p1").await, 1);
+}
+
+#[tokio::test]
 async fn pipeline_update_with_an_empty_stream_key_rotates_it() {
     let (app, pool) = test_app().await;
     let cookie = login(&app).await;

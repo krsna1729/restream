@@ -260,19 +260,24 @@ Managing pipelines (`operate-manage.tsx`, `pipeline-form.tsx`,
 and the new pipeline's Operate opens once the engine stored it. Operate
 reads `/settings` once and again after each edit, and adds the pipeline
 controls: Record (armed until a source arrives; the summary's `enabled` and
-`active`), play or stop a configured file source, a confirmed delete, and the
-settings form (name, a free stream key on create, "Issue a new stream key" on
-edit, live or file source with its ingest options, and the per-pipeline SRT
+`active`), play or stop a configured file source (whether it runs is polled
+from `/pipelines/{id}/file-ingest`: a file can end or fail), a confirmed
+delete, and the settings form (name, a free stream key on create, "Issue a
+new stream key" on edit, locked while any destination runs as in the classic
+editor, live or file source with its ingest options, and the per-pipeline SRT
 ingest override). An edit re-sends the source only when it changed, because
 re-sending a file source restarts its ingest. The source deck adds backup
 inputs with their publish URLs, and enables, disables or deletes them; the
 primary and the selected input offer neither, as the engine refuses both.
 The destination matrix adds, edits and deletes destinations: a preset server
 plus key or a full URL, SRT as fields, the RTMP flavour from the preset (or
-chosen for a custom server), video passthrough or a profile, and audio
-routing checked against the destination's caps (track and channel limits,
-with notes on what is dropped or downmixed) using the source's tracks from
-`/pipelines/{id}/probe` when someone publishes.
+chosen for a custom server), video passthrough or a profile (stored custom
+video settings are kept unless replaced), and audio routing with notes from
+the destination's caps: what is dropped or downmixed, and which tracks or
+channels exceed its limits. The caps are advice (the engine does not
+enforce them), so they never stop a save. The source's tracks come from
+`/pipelines/{id}/probe` when someone publishes; the pickers always include a
+stored track or channel.
 
 Logs (`logs.tsx`, rules in `diagnose-model.ts`): the newest 200 persisted
 rows (`/logs`) for everything, engine-wide rows only, one pipeline (with its

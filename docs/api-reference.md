@@ -197,6 +197,9 @@ On update, an omitted `inputSource` or `fileIngest` keeps the stored value and
 or replaces the pipeline's file-ingest config in the same mutation response;
 send `"fileIngest": null` to clear the configured file source as part of the
 same pipeline edit instead of issuing a follow-up `/file-ingest` request.
+Clearing or replacing the file source (and stopping or deleting a file
+ingest) stops only the file publisher: a live RTMP/SRT publisher on another
+input of the pipeline keeps its session.
 
 Create and update responses include a normalized `pipeline` object plus the
 mutation message so clients can patch dashboard pipeline state locally without

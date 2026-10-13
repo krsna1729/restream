@@ -201,10 +201,12 @@ export function parseSrtFields(
   }
   const isSrt = parsed.protocol === "srt:";
   const knownKeys = new Set(["streamid", "passphrase", "pbkeylen"]);
-  const extraEntries: string[] = [];
-  parsed.searchParams.forEach((value, key) => {
-    if (!knownKeys.has(key)) extraEntries.push(`${key}=${value}`);
-  });
+  // Other options stay query text as the URL has them (the field is
+  // `&`-separated, so a decoded `&` in a value could not come back).
+  const extraEntries = parsed.search
+    .slice(1)
+    .split("&")
+    .filter((part) => part && !knownKeys.has(part.split("=")[0]));
   let streamId = parsed.searchParams.get("streamid") || "";
   if (!streamId && !isSrt)
     streamId = `publish:${getDefaultOutputToken(rawUrl)}`;
@@ -234,16 +236,21 @@ export function buildDefaultCustomOutputUrl(
 export function buildSrtUrl(fields: SrtFields): string {
   const host = fields.host.trim();
   if (!host) return "";
-  const query: string[] = [];
+  const values: Array<[string, string]> = [];
   const streamId = fields.streamId.trim();
-  if (streamId) query.push(`streamid=${streamId}`);
+  if (streamId) values.push(["streamid", streamId]);
   const passphrase = fields.passphrase.trim();
   if (passphrase) {
-    query.push(`passphrase=${encodeURIComponent(passphrase)}`);
-    query.push(
-      `pbkeylen=${fields.pbkeylen === "24" || fields.pbkeylen === "32" ? fields.pbkeylen : "16"}`,
-    );
+    values.push(["passphrase", passphrase]);
+    values.push(["pbkeylen", fields.pbkeylen === "24" || fields.pbkeylen === "32" ? fields.pbkeylen : "16"]);
   }
+  // Field values are decoded text (`parseSrtFields`): encode `#`, `&`, `=`,
+  // `%` and spaces, keep `:`, `,` and `/` readable.
+  const query = values.map(
+    ([key, value]) =>
+      `${key}=${encodeURIComponent(value).replace(/%3A/gi, ":").replace(/%2C/gi, ",").replace(/%2F/gi, "/")}`,
+  );
+  // Other options are query text already (see `parseSrtFields`).
   for (const segment of fields.extraQuery.split("&")) {
     const part = segment.trim();
     if (part) query.push(part);

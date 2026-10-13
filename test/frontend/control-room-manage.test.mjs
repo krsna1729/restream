@@ -4,6 +4,7 @@ import test from "node:test";
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
 const {
+  audioChoiceCounts,
   audioNotes,
   outputDraft,
   outputProblem,
@@ -113,6 +114,13 @@ test("a destination's URL survives an edit through presets and SRT fields", () =
     mode: "enhanced",
   });
   assert.deepEqual(outputWrite(outputDraft(stored("srt://h:1"), "host")).config.protocol, { type: "auto" });
+  // An SRT access-control stream id keeps its meaning: its `#` must not
+  // become a URL fragment when the destination is saved again.
+  const access = outputWrite(outputDraft(stored("srt://h:9000?streamid=%23!%3A%3Ar%3Dlive%2Cm%3Dpublish&x=a%26b"), "host"));
+  const written = new URL(access.url);
+  assert.equal(written.hash, "");
+  assert.equal(written.searchParams.get("streamid"), "#!::r=live,m=publish");
+  assert.equal(written.searchParams.get("x"), "a&b");
 });
 
 test("video and audio choices become the engine's output config", () => {
@@ -137,6 +145,12 @@ test("video and audio choices become the engine's output config", () => {
   // A stored remap opens as the same remap.
   const remap = { video: { mode: "source" }, audio: { mode: "remap", track: 1, leftChannel: 2, rightChannel: 3 } };
   assert.deepEqual(outputWrite(outputDraft(stored("rtmp://h/live/k", remap), "host")).config.audio, remap.audio);
+  // Custom video settings this editor cannot show are kept, unless replaced.
+  const custom = { video: { mode: "custom", width: 1280, height: 720 }, audio: { mode: "all" } };
+  const draft = outputDraft(stored("rtmp://h/live/k", custom), "host");
+  assert.equal(draft.profile, null);
+  assert.deepEqual(outputWrite({ ...draft, name: "Renamed" }).config.video, custom.video);
+  assert.deepEqual(outputWrite({ ...draft, profile: "" }).config.video, { mode: "source", codec: "auto" });
 });
 
 const stereoOnly = { maxTracks: 1, maxChannels: 2, codecs: ["aac"] };
@@ -146,24 +160,40 @@ const tracks = [
   { trackIndex: 1, channels: 6 },
 ];
 
-test("a destination the engine would refuse says why, before it is asked", () => {
+test("only what the engine cannot take stops a save; the destination's audio limits do not", () => {
   const ok = { ...outputDraft(null, "host"), name: "N", input: "rtmp://h/live/k" };
-  assert.equal(outputProblem(ok, anything, tracks), null);
-  assert.match(outputProblem({ ...ok, name: "" }, anything, tracks), /name/);
-  assert.match(outputProblem({ ...ok, input: "" }, anything, tracks), /URL/);
-  assert.match(
-    outputProblem({ ...ok, protocol: "srt", srt: { ...ok.srt, host: "h", passphrase: "short" } }, anything, tracks),
-    /10 to 79/,
-  );
-  assert.match(outputProblem({ ...ok, audio: "selectTracks", tracks: [0, 1] }, stereoOnly, tracks), /at most 1 audio track/);
-  // A 5.1 track passed through to a stereo-only destination must be downmixed.
-  assert.match(outputProblem({ ...ok, audio: "all" }, { ...anything, maxChannels: 2 }, tracks), /downmix/);
-  assert.equal(outputProblem({ ...ok, audio: "downmix", tracks: [1] }, stereoOnly, tracks), null);
+  assert.equal(outputProblem(ok), null);
+  assert.match(outputProblem({ ...ok, name: "" }), /name/);
+  assert.match(outputProblem({ ...ok, input: "" }), /URL/);
+  assert.match(outputProblem({ ...ok, protocol: "srt", srt: { ...ok.srt, host: "h", passphrase: "short" } }), /10 to 79/);
+  assert.match(outputProblem({ ...ok, audio: "selectTracks", tracks: [] }), /at least one/);
+  // Too many tracks or channels for the destination: advice, not a refusal.
+  assert.equal(outputProblem({ ...ok, audio: "selectTracks", tracks: [0, 1] }), null);
+});
+
+test("the track and channel pickers always include what is stored", () => {
+  const base = outputDraft(null, "host");
+  assert.deepEqual(audioChoiceCounts(base, tracks), { tracks: 2, channels: 2 });
+  assert.deepEqual(audioChoiceCounts({ ...base, tracks: [1] }, tracks), { tracks: 2, channels: 6 });
+  // Nobody publishes: a stored track 3, channel 5 still show as themselves.
+  assert.deepEqual(audioChoiceCounts({ ...base, tracks: [2], leftChannel: 4, rightChannel: 1 }, []), {
+    tracks: 3,
+    channels: 5,
+  });
+  assert.deepEqual(audioChoiceCounts({ ...base, tracks: [0, 2] }, []), { tracks: 3, channels: 2 });
 });
 
 test("audio notes say what is dropped or downmixed, and when tracks are unknown", () => {
   const ok = { ...outputDraft(null, "host"), name: "N", input: "rtmp://h/live/k" };
   assert.match(audioNotes(ok, stereoOnly, tracks).join(" "), /other 1 are not sent/);
+  // "all" to a one-track destination sends the stereo first track: no warning
+  // about the 5.1 track it never sends.
+  assert.doesNotMatch(audioNotes(ok, stereoOnly, tracks).join(" "), /more than 2 channels/);
+  assert.match(audioNotes(ok, { ...anything, maxChannels: 2 }, tracks).join(" "), /more than 2 channels/);
+  assert.match(
+    audioNotes({ ...ok, audio: "selectTracks", tracks: [0, 1] }, stereoOnly, tracks).join(" "),
+    /at most 1 audio track.*2 are selected/,
+  );
   assert.match(audioNotes({ ...ok, audio: "downmix", tracks: [1] }, stereoOnly, tracks).join(" "), /downmixed/);
   assert.match(audioNotes(ok, anything, []).join(" "), /unknown/);
   assert.doesNotMatch(audioNotes({ ...ok, audio: "remap" }, stereoOnly, tracks).join(" "), /not sent/);

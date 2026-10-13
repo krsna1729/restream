@@ -87,6 +87,7 @@ export function Pipelines({ live }: { live: LiveSnapshot }) {
         <PipelineForm
           stored={null}
           files={files}
+          keyLocked={false}
           onSaved={(pipeline) => go({ workspace: "operate", pipelineId: pipeline.id })}
         />
       )}
