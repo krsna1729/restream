@@ -16,99 +16,14 @@ trap cleanup EXIT
 
 cd "$ROOT_DIR"
 
-node scripts/check/dom-id-drift.mjs
-
 scripts/dev/frontend/compile-for-node.sh "$BUILD_DIR"
 
 export FRONTEND_MODULES_DIR="$BUILD_DIR"
 export TMPDIR="$TMP_BASE"
 
-TEST_FILES=(
-  test/frontend/control-room-changes.test.mjs
-  test/frontend/control-room-diagnose.test.mjs
-  test/frontend/control-room-fleet.test.mjs
-  test/frontend/control-room-incidents.test.mjs
-  test/frontend/control-room-inspect.test.mjs
-  test/frontend/control-room-manage.test.mjs
-  test/frontend/control-room-operate.test.mjs
-  test/frontend/control-room-settings.test.mjs
-  test/frontend/control-room-system.test.mjs
-  test/frontend/frontend-api-contract.test.mjs
-  test/frontend/frontend-architecture-layering.test.mjs
-  test/frontend/frontend-dashboard-contract.test.mjs
-  test/frontend/dashboard-contract/output-mutations.test.mjs
-  test/frontend/dashboard-contract/pipeline-mutations.test.mjs
-  test/frontend/dashboard-contract/runtime-modes.test.mjs
-  test/frontend/dashboard-contract/runtime-polling.test.mjs
-  test/frontend/frontend-core-helpers.test.mjs
-  test/frontend/frontend-diagnostics.test.mjs
-  test/frontend/frontend-incidents.test.mjs
-  test/frontend/frontend-engineer-telemetry.test.mjs
-  test/frontend/frontend-ops-navigation.test.mjs
-  test/frontend/frontend-pipeline-workspace.test.mjs
-  test/frontend/frontend-history-stream.test.mjs
-  test/frontend/frontend-log-stream.test.mjs
-  test/frontend/frontend-runtime-state-stream.test.mjs
-  test/frontend/frontend-log-stream-interleaving.property.test.mjs
-  test/frontend/frontend-history-helpers.test.mjs
-  test/frontend/frontend-overview-activity-stream.test.mjs
-  test/frontend/frontend-publisher-health-contract.test.mjs
-  test/frontend/frontend-status-stream.test.mjs
-  test/frontend/frontend-pipeline-route-body.test.mjs
-  test/frontend/frontend-media-render.test.mjs
-  test/frontend/frontend-status-render.test.mjs
-  test/frontend/frontend-settings-render.test.mjs
-  test/frontend/frontend-settings-srt-ingest.test.mjs
-  test/frontend/frontend-settings-config-sections.test.mjs
-  test/frontend/frontend-settings-security.test.mjs
-  test/frontend/history-nearby-render.test.mjs
-  test/frontend/overview-activity-render.test.mjs
-  test/frontend/overview-view-model.test.mjs
-  test/frontend/pipeline-operate-view-model.test.mjs
-  test/frontend/pipeline-output-overview.property.test.mjs
-  test/frontend/pipeline-inputs-view-model.test.mjs
-  test/frontend/frontend-chaos-scenarios.test.mjs
-  test/frontend/frontend-output-scenarios.test.mjs
-  test/frontend/frontend-pipeline-info-scenarios.test.mjs
-  test/frontend/frontend-dom-render.test.mjs
-)
-
-# Only modules Node's fake-DOM harness genuinely cannot exercise stay here.
-# `npm run test:frontend:coverage:all` (no excludes) is the way to check
-# whether a module belongs on this list: if it already shows non-trivial
-# coverage there, Node is exercising it fine and it should not be excluded.
-NODE_COVERAGE_EXCLUDES=(
-  # Side-effecting bootstrap entry point; runs initDashboardApp() and
-  # startDashboardRuntime() at import time, so it is never imported by a
-  # unit test. Proven at the app/browser-integration layer instead
-  # (test:e2e, the `playwright` CI job).
-  "web/ts/app/dashboard-entry.ts"
-  # Real hls.js/video-element playback logic; near-zero reachable surface
-  # under Node's fake DOM. Covered by test/frontend/hls-player.spec.ts.
-  "web/ts/features/hls-player.ts"
-  # Real preview <video>/<audio> element wiring; near-zero reachable
-  # surface under Node's fake DOM. Covered by
-  # test/frontend/frontend-browser-dom.spec.ts,
-  # test/frontend/hls-player.spec.ts, and
-  # test/frontend/redesign/seed-scale.spec.ts.
-  "web/ts/features/input-preview.ts"
-)
+TEST_FILES=(test/frontend/*.test.mjs)
 
 if [[ "${1:-}" == "--coverage" ]]; then
-  COVERAGE_ARGS=(
-    "--enable-source-maps"
-    "--experimental-test-coverage"
-    "--test"
-    "--test-coverage-exclude=test/**"
-  )
-  for file in "${NODE_COVERAGE_EXCLUDES[@]}"; do
-    COVERAGE_ARGS+=("--test-coverage-exclude=$file")
-  done
-  node --experimental-default-type=module "${COVERAGE_ARGS[@]}" "${TEST_FILES[@]}"
-  exit 0
-fi
-
-if [[ "${1:-}" == "--coverage-all" ]]; then
   node \
     --experimental-default-type=module \
     --enable-source-maps \

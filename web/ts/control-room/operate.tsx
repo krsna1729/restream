@@ -5,6 +5,7 @@ import {
   getConfig,
   getPipelineInputs,
   getProcessingGraph,
+  getYoutubeMonitoringStatus,
   programPreviewUrl,
   promotePipelineInput,
   startOut,
@@ -18,7 +19,12 @@ import { ConfirmDelete } from "./confirm.js";
 import { describeCause } from "./fleet-model.js";
 import { formatBps } from "./format.js";
 import { AddInput, InputActions, PipelineBar } from "./operate-manage.js";
-import { buildDestinationRows, buildMediaGraph } from "./operate-model.js";
+import {
+  buildDestinationRows,
+  buildMediaGraph,
+  isYoutubeUrl,
+  youtubeVerdict,
+} from "./operate-model.js";
 import type { DestinationRow, GraphColumn } from "./operate-model.js";
 import { OutputForm } from "./output-form.js";
 import { PipelineScope } from "./pipeline-scope.js";
@@ -365,9 +371,16 @@ function DestinationMatrix(props: {
           <tbody>
             {props.rows.map(({ output, delivering, feedLagUnits }) => {
               const running = output.desired === "running";
+              const monitoringUrl =
+                config?.outputs.find((stored) => stored.id === output.id)?.monitoringUrl ?? "";
               return (
                 <tr key={output.id}>
-                  <td className="font-medium">{output.name}</td>
+                  <td className="font-medium">
+                    {output.name}
+                    {isYoutubeUrl(monitoringUrl) && (
+                      <YoutubeCheck name={output.name} url={monitoringUrl} />
+                    )}
+                  </td>
                   <td>{output.protocol.toUpperCase()}</td>
                   <td>{output.desired}</td>
                   <td>{output.actual ?? "—"}</td>
@@ -449,5 +462,38 @@ function DestinationMatrix(props: {
         </table>
       </div>
     </section>
+  );
+}
+
+/** On request, asks the engine what YouTube's watch page says about the
+ * stream; never polled. */
+function YoutubeCheck(props: { name: string; url: string }) {
+  const [checking, setChecking] = useState(false);
+  const [verdict, setVerdict] = useState<{ text: string; title: string } | null>(null);
+  return (
+    <span className="ml-2 text-xs font-normal">
+      <button
+        type="button"
+        className="btn btn-xs btn-ghost"
+        disabled={checking}
+        aria-label={`Check ${props.name} on YouTube`}
+        onClick={async () => {
+          setChecking(true);
+          try {
+            const status = await getYoutubeMonitoringStatus(props.url);
+            setVerdict({ text: youtubeVerdict(status), title: status?.title ?? "" });
+          } finally {
+            setChecking(false);
+          }
+        }}
+      >
+        {checking ? "…" : "YouTube"}
+      </button>
+      {verdict && (
+        <span role="status" title={verdict.title}>
+          {verdict.text}
+        </span>
+      )}
+    </span>
   );
 }

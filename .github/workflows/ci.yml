@@ -189,7 +189,7 @@ jobs:
         run: cargo xtask api-contract
 
   frontend:
-    name: Frontend unit and browser DOM
+    name: Frontend unit
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -199,10 +199,6 @@ jobs:
           npm_ci: 'true'
       - name: Run frontend unit tests with coverage report
         run: npm run test:frontend:coverage
-      - name: Install Chromium for DOM tests
-        run: npx playwright install --with-deps chromium
-      - name: Run browser DOM tests
-        run: npm run test:frontend:browser-dom
 
   frontend-e2e:
     name: Frontend app E2E
@@ -537,54 +533,3 @@ jobs:
         ["mixed.live.srt.h264.a1.bf0","mixed.live.srt.h264.a1.bf2","mixed.live.srt.h264.a2.bf0","mixed.live.srt.h264.a2.bf2","mixed.live.srt.h265.a1.bf0","mixed.live.srt.h265.a1.bf2","mixed.live.srt.h265.a2.bf0","mixed.live.srt.h265.a2.bf2","mixed.live.rtmp.h264.a1.bf0","mixed.live.rtmp.h264.a1.bf2","srt-crypto-matrix","fault.resilience","direct-play"]
     secrets:
       gh_token: ${{ github.token }}
-
-  playwright:
-    name: HLS browser playback E2E
-    runs-on: ubuntu-24.04
-    needs: test
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/ci-bootstrap
-        with:
-          node_version: '22'
-          npm_ci: 'true'
-          system_deps_profile: browser
-          native_prefix: 'true'
-          rust_cache: 'true'
-      - name: Install Chromium for HLS E2E
-        run: npx playwright install chromium
-      - name: Build frontend assets for HLS E2E
-        run: npm run build:frontend
-      - name: Build app binary for HLS E2E
-        run: cargo build --release
-      - name: Seed HLS E2E media library
-        run: |
-          mkdir -p .local/e2e/media .local/e2e/logs
-          cp test/fixtures/media-library/colorbar-timer-2v16a.mp4 .local/e2e/media/
-      - name: Start app for HLS E2E
-        env:
-          RESTREAM_DB_PATH: .local/e2e/restream.db
-          RESTREAM_MEDIA_DIR: .local/e2e/media
-          RESTREAM_LOG_DIR: .local/e2e/logs
-          RESTREAM_INITIAL_ADMIN_PASSWORD: admin
-        run: ./target/release/restream &
-      - name: Wait for HLS E2E app
-        run: |
-          for i in $(seq 1 15); do
-            if curl -sf http://localhost:3030/healthz; then
-              echo "App is ready"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "App did not become ready" >&2
-          exit 1
-      - name: Run HLS Playwright tests
-        run: npx playwright test
-      - name: Upload HLS E2E artifacts on failure
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: playwright-results
-          path: .local/test-results/
-          if-no-files-found: ignore

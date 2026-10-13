@@ -1,25 +1,4 @@
 declare global {
-  interface PreviewAudioTrack {
-    id: string;
-    kind: string;
-    label: string;
-    language: string;
-    enabled: boolean;
-    switchable?: boolean;
-  }
-
-  interface PreviewAudioTrackList {
-    readonly length: number;
-    [index: number]: PreviewAudioTrack;
-    onaddtrack: ((ev: Event) => void) | null;
-    onchange: ((ev: Event) => void) | null;
-    onremovetrack: ((ev: Event) => void) | null;
-  }
-
-  interface HTMLVideoElement {
-    audioTracks?: PreviewAudioTrackList;
-  }
-
   interface HlsConfig {
     [key: string]: unknown;
   }
@@ -83,35 +62,6 @@ declare global {
   interface Window {
     Hls?: HlsConstructor;
     __RESTREAM_BASE_PATH__?: string;
-    copyData: (id: string) => void;
-    selectPipeline: (id: string | null) => void;
-    setDashboardMode: (mode: string) => void;
-    pipeFormBtn: (event: Event) => Promise<void>;
-    editOutFormBtn: (event: Event) => Promise<void>;
-    addOutBtn: () => Promise<void>;
-    addPipeBtn: () => Promise<void>;
-    editPipeBtn: () => Promise<void>;
-    deletePipeBtn: () => Promise<void>;
-    onOutEncodingChange: (encoding: string) => void;
-    toggleHistoryPlayPause: () => void;
-    setOutputHistoryMode: (mode: string) => void;
-    setOutputHistoryOrder: (order: string) => void;
-    setOutputHistorySearch: (query: string) => void;
-    onOutputHistorySearchKeydown: (event: KeyboardEvent) => void;
-    navigateOutputHistorySearch: (direction: number) => void;
-    togglePipelineHistoryPlayPause: () => void;
-    saveServerName: () => Promise<void>;
-    saveIngestHost: () => Promise<void>;
-    saveIngestSecurity: () => Promise<void>;
-    saveRecordingSettings: () => Promise<void>;
-    saveSrtIngest: () => Promise<void>;
-    saveTranscodeProfiles: () => Promise<void>;
-    addTranscodeProfile: () => void;
-    saveDashboardPassword: () => Promise<void>;
-    dismissDashboardPasswordPrompt: () => Promise<void>;
-    refreshRateLimitState: () => Promise<void>;
-    resetRateLimitState: (scope?: string, ip?: string) => Promise<void>;
-    logoutUser: () => Promise<void>;
   }
 }
 

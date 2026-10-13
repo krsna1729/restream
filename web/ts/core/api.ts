@@ -2,28 +2,20 @@ import { showLoading, hideLoading, showErrorAlert } from "./utils.js";
 import { withBasePath } from "./base-path.js";
 import { redirectToLogin } from "./auth-redirect.js";
 import type {
-  ConfigOutput,
-  ConfigPipeline,
   ConfigData,
-  HealthData,
   IngestSecurityConfig,
-  OutputConfig,
   RecordingSettings,
   SrtGlobalIngestConfig,
-  DashboardRuntimeSnapshot,
   DiagnosticsReport,
   PipelineInputMutationResponse,
   PipelineInputPromotionResponse,
   PipelineInputsResponse,
   SystemMetrics,
-  StreamKey,
 } from "../types.js";
 import type {
-  OverviewSnapshot,
   AlertsSnapshot,
   LifecycleEventsSnapshot,
   EngineTelemetrySnapshot,
-  PipelineTelemetrySnapshot,
   StageTelemetrySnapshot,
   ResourceMapSnapshot,
   CapacityScenario,
@@ -37,9 +29,8 @@ import type {
   PipelineFileIngestConfig,
   MediaFileAnalysis,
   TranscodeProfiles,
-  YoutubeMonitoringStatus,
-  RateLimitAttempt,
   RateLimitState,
+  YoutubeMonitoringStatus,
   GraphData,
   ChangeRequest,
   ChangePlan,
@@ -78,15 +69,6 @@ function endMutationRequest(): void {
   activeMutationRequestCount -= 1;
   if (activeMutationRequestCount === 0) {
     hideLoading();
-  }
-}
-
-async function parseJsonResponse<T>(response: Response): Promise<T | null> {
-  try {
-    return (await response.json()) as T;
-  } catch (e) {
-    showErrorAlert("Invalid JSON response: " + e);
-    return null;
   }
 }
 
@@ -180,22 +162,6 @@ async function getConfig(
   return apiRequest<ConfigData>(url);
 }
 
-interface GetHealthOptions {
-  view?: "full" | "summary";
-}
-
-async function getHealth(
-  options: GetHealthOptions = {},
-): Promise<HealthData | null> {
-  const query = new URLSearchParams();
-  if (options.view === "summary") query.set("view", "summary");
-  const suffix = query.toString();
-  const url = suffix
-    ? `/api/v1/engine/health?${suffix}`
-    : "/api/v1/engine/health";
-  return apiRequest<HealthData>(url);
-}
-
 interface GetSystemMetricsOptions {
   view?: "full" | "summary";
 }
@@ -208,32 +174,6 @@ async function getSystemMetrics(
   const suffix = query.toString();
   const url = suffix ? `/metrics/system?${suffix}` : "/metrics/system";
   return apiRequest<SystemMetrics>(url);
-}
-
-interface GetDashboardRuntimeOptions {
-  healthView?: "full" | "summary";
-  metricsView?: "full" | "summary";
-  pipelineId?: string | null;
-}
-
-async function getDashboardRuntimeSnapshot(
-  options: GetDashboardRuntimeOptions = {},
-): Promise<DashboardRuntimeSnapshot | null> {
-  const query = new URLSearchParams();
-  if (options.healthView) query.set("health_view", options.healthView);
-  if (options.metricsView) query.set("metrics_view", options.metricsView);
-  if (options.pipelineId) query.set("pipeline_id", options.pipelineId);
-  const suffix = query.toString();
-  const url = suffix
-    ? `/api/v1/dashboard/runtime?${suffix}`
-    : "/api/v1/dashboard/runtime";
-  return apiRequest<DashboardRuntimeSnapshot>(url);
-}
-
-
-
-async function getOverview(): Promise<OverviewSnapshot | null> {
-  return apiRequest<OverviewSnapshot>("/api/v1/overview");
 }
 
 async function getAggregateAlerts(): Promise<AlertsSnapshot | null> {
@@ -257,14 +197,6 @@ async function getLifecycleEvents(
 
 async function getEngineTelemetry(): Promise<EngineTelemetrySnapshot | null> {
   return apiRequest<EngineTelemetrySnapshot>("/api/v1/engine/telemetry");
-}
-
-async function getPipelineTelemetry(
-  pipelineId: string,
-): Promise<PipelineTelemetrySnapshot | null> {
-  return apiRequest<PipelineTelemetrySnapshot>(
-    `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/telemetry`,
-  );
 }
 
 async function getStageTelemetry(
@@ -317,10 +249,6 @@ async function getPipelineProbe(pipelineId: string): Promise<PipelineProbe | nul
     `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/probe`,
     { silentStatuses: [404] },
   );
-}
-
-async function getStreamKeys(): Promise<StreamKey[] | null> {
-  return apiRequest<StreamKey[]>("/api/v1/stream-keys");
 }
 
 async function getEngineStatus<T = unknown>(): Promise<T | null> {
@@ -565,87 +493,6 @@ async function stopOut(
   );
 }
 
-interface GetOutputHistoryOptions {
-  limit?: number;
-  filter?: string | null;
-  since?: string | null;
-  until?: string | null;
-  order?: string | null;
-  prefixes?: string[] | null;
-}
-
-async function getOutputHistory(
-  pipeId: string,
-  outId: string,
-  options: GetOutputHistoryOptions = {},
-): Promise<{ logs: unknown[] } | null> {
-  if (!pipeId || !outId) {
-    showErrorAlert("Pipeline id and output id are required");
-    return null;
-  }
-
-  const {
-    limit = 200,
-    filter = null,
-    since = null,
-    until = null,
-    order = null,
-    prefixes = null,
-  } = options;
-
-  const query = new URLSearchParams();
-  query.set("pipeline_id", pipeId);
-  query.set("output_id", outId);
-
-  if (filter === "lifecycle") {
-    query.set("event_class", "lifecycle");
-  } else {
-    const safeLimit = Number.isFinite(Number(limit)) ? Number(limit) : 200;
-    query.set("limit", String(safeLimit));
-  }
-
-  if (since) query.set("since", String(since));
-  if (until) query.set("until", String(until));
-  if (order) query.set("order", String(order));
-  if (Array.isArray(prefixes) && prefixes.length > 0) {
-    query.set("prefix", prefixes.join(","));
-  }
-
-  const res = await apiRequest<{ logs: Record<string, unknown>[] }>(
-    `/api/v1/logs?${query.toString()}`,
-  );
-  if (!res) return null;
-  return res;
-}
-
-async function getPipelineHistory(
-  pipeId: string,
-  limit = 400,
-): Promise<{ logs: unknown[] } | null> {
-  if (!pipeId) {
-    showErrorAlert("Pipeline id is required");
-    return null;
-  }
-
-  const safeLimit = Number.isFinite(Number(limit)) ? Number(limit) : 200;
-  const query = new URLSearchParams({
-    pipeline_id: pipeId,
-    limit: String(safeLimit),
-  });
-
-  const res = await apiRequest<{ logs: Record<string, unknown>[] }>(
-    `/api/v1/logs?${query.toString()}`,
-  );
-  if (!res) return null;
-  return res;
-}
-
-interface GetRestreamHistoryOptions {
-  limit?: number;
-  order?: string | null;
-  filter?: string | null;
-}
-
 /** Persisted log rows, newest first; `hasMore` when older rows exist. */
 async function getLogs(filters: LogFilters, limit: number): Promise<LogPage | null> {
   const query = new URLSearchParams({ limit: String(limit) });
@@ -655,28 +502,6 @@ async function getLogs(filters: LogFilters, limit: number): Promise<LogPage | nu
   if (filters.outputId) query.set("output_id", filters.outputId);
   if (filters.eventClass) query.set("event_class", filters.eventClass);
   return apiRequest<LogPage>(`/api/v1/logs?${query.toString()}`);
-}
-
-async function getRestreamHistory(
-  options: GetRestreamHistoryOptions = {},
-): Promise<{ logs: unknown[] } | null> {
-  const { limit = 200, order = null, filter = null } = options;
-  const safeLimit = Number.isFinite(Number(limit)) ? Number(limit) : 200;
-  const query = new URLSearchParams({
-    scope: "restream",
-    limit: String(safeLimit),
-  });
-
-  if (order) query.set("order", String(order));
-  if (filter === "lifecycle") {
-    query.set("event_class", "lifecycle");
-  }
-
-  const res = await apiRequest<{ logs: Record<string, unknown>[] }>(
-    `/api/v1/logs?${query.toString()}`,
-  );
-  if (!res) return null;
-  return res;
 }
 
 /** The settings a `PATCH /settings` may change; absent ones stay. */
@@ -848,6 +673,7 @@ async function getProcessingGraph(
   );
 }
 
+/** What YouTube's watch page says about a stream, fetched by the engine. */
 async function getYoutubeMonitoringStatus(
   url: string,
 ): Promise<YoutubeMonitoringStatus | null> {
@@ -891,21 +717,16 @@ async function advanceOperation(
 export {
   apiRequest,
   getConfig,
-  getHealth,
   getSystemMetrics,
-  getDashboardRuntimeSnapshot,
-  getOverview,
   getAggregateAlerts,
   getLifecycleEvents,
   getEngineTelemetry,
-  getPipelineTelemetry,
   getPipelineSummary,
   getPipelineProbe,
   getLogs,
   getStageTelemetry,
   getResourceMap,
   getCapacityScenario,
-  getStreamKeys,
   getEngineStatus,
   getEngineHealth,
   getEngineSbomEndpoint,
@@ -926,9 +747,6 @@ export {
   deleteOutput,
   startOut,
   stopOut,
-  getOutputHistory,
-  getPipelineHistory,
-  getRestreamHistory,
   patchConfig,
   startRecording,
   stopRecording,
@@ -937,9 +755,9 @@ export {
   uploadMediaFile,
   deleteMediaFile,
   renameMediaFile,
+  getPipelineFileIngest,
   startIngest,
   stopIngest,
-  getPipelineFileIngest,
   getMediaFileAnalysis,
   logout,
   changePassword,
@@ -952,45 +770,4 @@ export {
   createOperation,
   getOperation,
   advanceOperation,
-  DEFAULT_ENGINE_SBOM_ENDPOINT,
 };
-
-// Re-export all public types from api-types for backward compatibility.
-// New code should import types from "./api-types.js" directly when only types are needed.
-export type {
-  OverviewSnapshot,
-  AlertSeverity,
-  AlertScope,
-  OperatorAlert,
-  AlertsSnapshot,
-  LifecycleEvent,
-  LifecycleEventsSnapshot,
-  TelemetryMetrics,
-  TelemetryIngest,
-  TelemetryStage,
-  TelemetryEgress,
-  SourceRingReader,
-  SourceRingTelemetry,
-  EngineTelemetrySnapshot,
-  PipelineTelemetrySnapshot,
-  StageTelemetrySnapshot,
-  ResourceMapMemory,
-  ResourceMapNode,
-  ResourceMapSnapshot,
-  CapacityScenario,
-  PipelineSummarySnapshot,
-  BuildLogsStreamUrlOptions,
-  PipelineMutationResponse,
-  OutputMutationResponse,
-  OutputMutationArgs,
-  TranscodeProfile,
-  TranscodeProfiles,
-  MediaFile,
-  IngestConfig,
-  PipelineFileIngestConfig,
-  MediaFileAnalysis,
-  AudioCapsPayload,
-  YoutubeMonitoringStatus,
-  RateLimitAttempt,
-  RateLimitState,
-} from "./api-types.js";

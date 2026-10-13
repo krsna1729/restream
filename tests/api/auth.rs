@@ -157,7 +157,7 @@ async fn login_page_uses_base_path_aware_api_and_redirects() {
         resp.headers()
             .get(header::LOCATION)
             .and_then(|v| v.to_str().ok()),
-        Some("./?mode=settings")
+        Some("./?w=settings")
     );
 }
 

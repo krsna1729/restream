@@ -2,7 +2,7 @@
 // drawn once (each stage with its consumer count) and destinations folded
 // into groups, plus the destination matrix.
 
-import type { GraphData } from "../core/api-types.js";
+import type { GraphData, YoutubeMonitoringStatus } from "../core/api-types.js";
 import type {
   EgressProtocol,
   OutputState,
@@ -161,4 +161,27 @@ export function buildDestinationRows(
       (a, b) =>
         rank(a) - rank(b) || a.output.name.localeCompare(b.output.name),
     );
+}
+
+/** A monitoring URL the engine can check on YouTube (watch, share or live
+ * page). */
+export function isYoutubeUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return /(^|\.)youtube\.com$/.test(host) || host === "youtu.be";
+  } catch {
+    return false;
+  }
+}
+
+/** The verdict shown for a YouTube check; null when the engine could not
+ * read the page. */
+export function youtubeVerdict(status: YoutubeMonitoringStatus | null): string {
+  if (!status) return "YouTube: could not read the page";
+  const state = status.live_now
+    ? "live now"
+    : status.upcoming
+      ? "scheduled, not live yet"
+      : "not live";
+  return `YouTube: ${state}`;
 }

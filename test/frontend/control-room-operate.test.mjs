@@ -3,7 +3,8 @@ import test from "node:test";
 
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
-const { buildMediaGraph, buildDestinationRows } = await loadCompiledFrontendModule(
+const { buildMediaGraph, buildDestinationRows, isYoutubeUrl, youtubeVerdict } =
+  await loadCompiledFrontendModule(
   "control-room/operate-model.js",
 );
 const { buildFleetModel, filterPipelineRows } = await loadCompiledFrontendModule(
@@ -184,4 +185,25 @@ test("the inventory filters by name or id in any case, and by health", () => {
 
   const main = model.pipelines.find((row) => row.id === "pipe_main");
   assert.deepEqual([...main.protocols], [["rtmp", 1], ["srt", 1]]);
+});
+
+test("only YouTube monitoring URLs offer the check, and the verdict prefers live over scheduled", () => {
+  for (const url of [
+    "https://www.youtube.com/watch?v=abc",
+    "https://m.youtube.com/live/abc",
+    "https://youtu.be/abc",
+  ]) {
+    assert.equal(isYoutubeUrl(url), true, url);
+  }
+  for (const url of ["https://notyoutube.com/watch?v=abc", "srt://host:9000", "not a url", ""]) {
+    assert.equal(isYoutubeUrl(url), false, url);
+  }
+  const page = { canonical_watch_url: "u", live_content: true, title: "t" };
+  assert.equal(youtubeVerdict({ ...page, live_now: true, upcoming: true }), "YouTube: live now");
+  assert.equal(
+    youtubeVerdict({ ...page, live_now: false, upcoming: true }),
+    "YouTube: scheduled, not live yet",
+  );
+  assert.equal(youtubeVerdict({ ...page, live_now: false, upcoming: false }), "YouTube: not live");
+  assert.equal(youtubeVerdict(null), "YouTube: could not read the page");
 });

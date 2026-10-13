@@ -32,7 +32,6 @@ fn main() -> ExitCode {
         ["source-audit"] => source_audit::run(),
         ["fixture-discipline"] => scan::fixture_discipline(),
         ["test-hygiene"] => scan::test_hygiene(),
-        ["history-grouping"] => history_grouping(),
         ["api-contract"] => api_contract(),
         ["concurrency", "fast"] => concurrency::fast(),
         ["concurrency", "contract"] => concurrency::contract(),
@@ -63,7 +62,6 @@ commands:
   source-audit          layering, file-size, env-var and guardrail audit
   fixture-discipline    fixture contract test + no inline media generators
   test-hygiene          fmt check + full test run whose passing log stays quiet
-  history-grouping      frontend history/activity render tests
   api-contract          frontend/backend API contract + api-smoke harness run
   concurrency fast      loom models and focused concurrency regressions
   concurrency contract  fast set + live fault/recovery harness modes
@@ -136,21 +134,6 @@ fn cargo(args: &[&str]) -> StepResult {
     run("cargo", args, &[])
 }
 
-fn history_grouping() -> StepResult {
-    let out = env::temp_dir().join("restream-history-grouping-js");
-    compile_frontend_for_node(&out)?;
-    run(
-        "node",
-        &[
-            "--test",
-            "test/frontend/history-nearby-render.test.mjs",
-            "test/frontend/overview-activity-render.test.mjs",
-            "test/frontend/frontend-chaos-scenarios.test.mjs",
-        ],
-        &[("API_CONTRACT_JS_DIR", path_str(&out)?)],
-    )
-}
-
 fn api_contract() -> StepResult {
     let out = env::temp_dir().join("restream-api-contract-js");
     run("npx", &["tsc", "-p", "tsconfig.json", "--noEmit"], &[])?;
@@ -162,7 +145,6 @@ fn api_contract() -> StepResult {
         &[("API_CONTRACT_JS_DIR", path_str(&out)?)],
     )?;
     run("npm", &["run", "build:frontend"], &[])?;
-    history_grouping()?;
     cargo(&["test", "--test", "api", "--", "--nocapture"])?;
     cargo(&["build", "--bin", "restream", "--bin", "test_harness"])?;
     run(

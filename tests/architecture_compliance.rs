@@ -424,13 +424,6 @@ fn dead_srt_udp_queue_telemetry_does_not_return() {
         let source = std::fs::read_to_string(doc).expect("active doc is readable");
         inspect(std::path::Path::new(doc), &source);
     }
-    // The publisher-quality UI describes srt-rs, not a libsrt runtime.
-    let quality_ui = std::fs::read_to_string("web/ts/features/publisher-quality.ts")
-        .expect("publisher quality UI is readable");
-    assert!(
-        !quality_ui.contains("libsrt"),
-        "publisher-quality.ts must not describe a libsrt runtime"
-    );
 }
 
 #[test]
@@ -665,73 +658,6 @@ fn frontend_tooling_and_vendored_assets_are_reproducible() {
             "generated HLS bundle should not point at an absent source map"
         );
     }
-}
-
-#[test]
-fn frontend_features_do_not_import_app_composition_modules() {
-    let features_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/ts/features");
-    let mut offenders = Vec::new();
-    let mut stack = vec![features_dir];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).expect("features dir should exist") {
-            let path = entry.expect("feature entry should be readable").path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if path.extension().and_then(|ext| ext.to_str()) != Some("ts") {
-                continue;
-            }
-            let source = std::fs::read_to_string(&path).expect("feature source should be UTF-8");
-            if source.contains("../app/") {
-                offenders.push(
-                    path.strip_prefix(env!("CARGO_MANIFEST_DIR"))
-                        .unwrap()
-                        .display()
-                        .to_string(),
-                );
-            }
-        }
-    }
-    assert!(
-        offenders.is_empty(),
-        "feature modules should not import app composition modules: {offenders:?}"
-    );
-}
-
-#[test]
-fn frontend_render_modules_do_not_import_runtime_composition_modules() {
-    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let forbidden_edges = [
-        (
-            "web/ts/features/pipeline-view/index.ts",
-            "from \"./dashboard.js\"",
-        ),
-        (
-            "web/ts/features/pipeline-view/index.ts",
-            "from './dashboard.js'",
-        ),
-        (
-            "web/ts/features/pipeline-output-list.ts",
-            "from \"./control-room.js\"",
-        ),
-        (
-            "web/ts/features/pipeline-output-list.ts",
-            "from './control-room.js'",
-        ),
-    ];
-    let mut offenders = Vec::new();
-    for (relative_path, needle) in forbidden_edges {
-        let source = std::fs::read_to_string(manifest_dir.join(relative_path))
-            .expect("frontend render module should be UTF-8");
-        if source.contains(needle) {
-            offenders.push(format!("{relative_path} imports {needle}"));
-        }
-    }
-    assert!(
-        offenders.is_empty(),
-        "render modules should use app-wired dependencies instead of runtime composition imports: {offenders:?}"
-    );
 }
 
 #[test]

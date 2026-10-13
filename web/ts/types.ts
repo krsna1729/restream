@@ -1,11 +1,5 @@
 import type { CapacitySnapshot } from "./core/generated/runtime-state.js";
 
-export interface StreamKey {
-  key: string;
-  label?: string;
-  ingestUrls?: IngestUrls;
-}
-
 export interface VideoTrack {
   codec?: string;
   width?: number;
@@ -206,13 +200,6 @@ export interface Job {
   outputId: string;
   startedAt?: string;
   endedAt?: string;
-}
-
-export interface Encoding {
-  id: string | null;
-  key: string;
-  ffmpegArgs: string | null;
-  isSystem: boolean;
 }
 
 export interface ConfigData {
@@ -445,101 +432,6 @@ export interface SystemMetrics {
   mediaExecutor?: { configuredWorkers?: number; workers?: unknown[] };
   ioUring?: { available?: boolean; deploymentTier?: string };
   rtmps?: { ktlsCapabilities?: Record<string, boolean> };
-}
-
-export interface DashboardRuntimeSnapshot {
-  health?: HealthData | null;
-  metrics?: SystemMetrics | null;
-}
-
-export interface InputView {
-  status: string;
-  time: number | null;
-  probeReady: boolean;
-  probeStatus: string;
-  probePendingMs: number | null;
-  video: VideoTrack | null;
-  videoTrackSelection: VideoTrackSelection | null;
-  audio: AudioTrack | null;
-  audioTracks: AudioTrack[];
-  bytesReceived: number;
-  bytesSent: number;
-  readers: number;
-  bitrateKbps: number | null;
-  lastProgressAgeMs: number | null;
-  publisher: Publisher | null;
-  unexpectedReadersCount: number;
-  lastSessionProtocol: string | null;
-  lastDisconnectAt: string | null;
-  lastDisconnectAgeMs: number | null;
-  lastDisconnectReason: string | null;
-  lastFailurePhase: string | null;
-  recentDisconnectError: boolean;
-  recentDisconnectCount: number;
-  flapping: boolean;
-  disconnectGraceActive: boolean;
-  disconnectGraceRemainingMs: number | null;
-  lastRemoteAddr: string | null;
-  lastSessionBytesReceived: number | null;
-}
-
-export interface OutputView {
-  id: string;
-  pipe: string;
-  name: string;
-  desiredState: string;
-  config: OutputConfig;
-  url: string;
-  monitoringUrl: string | null;
-  status: string;
-  rawStatus: string | null;
-  phase: string | null;
-  failurePhase: string | null;
-  lastError: string | null;
-  lastErrorAt: string | null;
-  lastProgressAt: string | null;
-  lastProgressAgeMs: number | null;
-  recentFailureCount: number;
-  flapping: boolean;
-  retrying: boolean;
-  retryAttempts: number | null;
-  retryBackoffMs: number | null;
-  nextRetryAt: string | null;
-  retryRemainingMs: number | null;
-  time: number | null;
-  job: Job | null;
-  totalSize: number | null;
-  bitrateKbps: number | null;
-}
-
-export interface PipelineStats {
-  inputBitrateKbps: number | null;
-  outputBitrateKbps: number | null;
-  readerCount: number;
-  outputCount: number;
-  readerMismatch: boolean;
-  unexpectedReadersCount: number;
-}
-
-export interface PipelineView {
-  id: string;
-  name: string;
-  key: string | null;
-  inputSource: string | null;
-  srtIngestPolicy?: SrtPipelineIngestConfig | null;
-  ingestUrls: IngestUrls;
-  fileIngest: PipelineFileIngestState | null;
-  input: InputView;
-  outs: OutputView[];
-  stats: PipelineStats;
-  recording: { enabled: boolean; active: boolean };
-  hlsPreview: {
-    active: boolean;
-    persistentConsumers: number;
-    lastAccessAgeMs: number | null;
-    segments: number;
-    playlistBytes: number;
-  };
 }
 
 export interface AppLogRow {

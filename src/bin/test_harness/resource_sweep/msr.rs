@@ -4,8 +4,6 @@ use crate::mediamtx_probe::{
     verify_mediamtx_path_health,
 };
 
-#[path = "msr/dashboard.rs"]
-mod dashboard;
 #[path = "msr/plan.rs"]
 mod plan;
 #[path = "msr/verification.rs"]
@@ -15,12 +13,10 @@ mod verification;
 #[path = "msr/tests.rs"]
 mod tests;
 
-pub(crate) use dashboard::msr_dashboard;
 use plan::*;
 use verification::*;
 
 pub(crate) const MSR_MODE: &str = "msr";
-pub(crate) const MSR_DASHBOARD_MODE: &str = "msr.dashboard";
 
 /// Peer-verification results for one MSR checkpoint. Exactly one of
 /// `path_health`/`post_sample_path_health` (mediamtx peer) or

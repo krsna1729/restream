@@ -49,8 +49,7 @@ document is one `git log -- <path>` away.
   per-entity bound and its test; open findings.
 - [Assurance roadmap](assurance-roadmap.md): which rung (types, tests, Kani,
   TLA+, Lean) should prove which invariant.
-- [Frontend](frontend.md): design system, route contract, visual baseline
-  (operator walkthrough: [operator baseline](../test/frontend/redesign/specs/operator-baseline.md)).
+- [Frontend](frontend.md): design system and the control room.
 
 ## Measure
 

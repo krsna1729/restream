@@ -120,16 +120,6 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
   await api.getConfig();
   await api.getConfig({ view: "dashboard" });
   await api.getConfig({ jobs: "latest" });
-  await api.getDashboardRuntimeSnapshot({
-    healthView: "summary",
-    metricsView: "full",
-  });
-  await api.getDashboardRuntimeSnapshot({
-    healthView: "summary",
-    metricsView: "summary",
-    pipelineId: "pipe-1",
-  });
-  await api.getHealth({ view: "summary" });
   await api.getSystemMetrics({ view: "summary" });
   await api.getPipelineInputs("pipe /1");
   await api.createPipelineInput("pipe /1", "Encoder B");
@@ -150,17 +140,18 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
     },
   });
   await api.updateOutput("pipe-1", "out-1", { name: "Output" });
-  await api.getPipelineHistory("pipe-1", 25);
-  await api.getOutputHistory("pipe-1", "out-1", { filter: "lifecycle" });
-  await api.getRestreamHistory({ limit: 50, order: "desc" });
+  await api.getLogs(
+    { pipelineId: "pipe-1", outputId: "out-1", eventClass: "lifecycle" },
+    25,
+  );
+  await api.getLogs({ scope: "restream", level: "warn" }, 50);
   await api.listMediaFiles();
-  await api.getOverview();
   await api.getAggregateAlerts();
   await api.getLifecycleEvents({ pipelineId: "pipe /1", limit: 40 });
   await api.getEngineTelemetry();
-  await api.getPipelineTelemetry("pipe /1");
   await api.getStageTelemetry("pipe /1:video:720p");
   await api.getResourceMap("pipe /1", { view: "detail", topN: 40 });
+  await api.getYoutubeMonitoringStatus("https://youtu.be/a?si=b&t=1");
   await api.logout();
 
   assert.deepEqual(
@@ -169,15 +160,6 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
       ["GET", "/api/v1/settings"],
       ["GET", "/api/v1/settings?view=dashboard"],
       ["GET", "/api/v1/settings?jobs=latest"],
-      [
-        "GET",
-        "/api/v1/dashboard/runtime?health_view=summary&metrics_view=full",
-      ],
-      [
-        "GET",
-        "/api/v1/dashboard/runtime?health_view=summary&metrics_view=summary&pipeline_id=pipe-1",
-      ],
-      ["GET", "/api/v1/engine/health?view=summary"],
       ["GET", "/metrics/system?view=summary"],
       ["GET", "/api/v1/pipelines/pipe%20%2F1/inputs"],
       ["POST", "/api/v1/pipelines/pipe%20%2F1/inputs"],
@@ -189,28 +171,29 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
       ["DELETE", "/api/v1/pipelines/pipe%20%2F1/inputs/input%20%2F1"],
       ["PATCH", "/api/v1/pipelines/pipe-1"],
       ["PATCH", "/api/v1/pipelines/pipe-1/outputs/out-1"],
-      ["GET", "/api/v1/logs?pipeline_id=pipe-1&limit=25"],
       [
         "GET",
-        "/api/v1/logs?pipeline_id=pipe-1&output_id=out-1&event_class=lifecycle",
+        "/api/v1/logs?limit=25&pipeline_id=pipe-1&output_id=out-1&event_class=lifecycle",
       ],
-      ["GET", "/api/v1/logs?scope=restream&limit=50&order=desc"],
+      ["GET", "/api/v1/logs?limit=50&level=warn&scope=restream"],
       ["GET", "/api/v1/media"],
-      ["GET", "/api/v1/overview"],
       ["GET", "/api/v1/alerts"],
       ["GET", "/api/v1/events?pipeline_id=pipe+%2F1&limit=40"],
       ["GET", "/api/v1/engine/telemetry"],
-      ["GET", "/api/v1/pipelines/pipe%20%2F1/telemetry"],
       ["GET", "/api/v1/stages/pipe%20%2F1%3Avideo%3A720p/telemetry"],
       [
         "GET",
         "/api/v1/engine/resource-map?pipeline_id=pipe+%2F1&view=detail&top_n=40",
       ],
+      [
+        "GET",
+        "/api/v1/monitoring/youtube-status?url=https%3A%2F%2Fyoutu.be%2Fa%3Fsi%3Db%26t%3D1",
+      ],
       ["POST", "/api/v1/auth/logout"],
     ],
   );
-  assert.deepEqual(requests[8].body, { label: "Encoder B" });
-  assert.deepEqual(requests[9].body, {
+  assert.deepEqual(requests[5].body, { label: "Encoder B" });
+  assert.deepEqual(requests[6].body, {
     label: "Encoder C",
     enabled: false,
   });
@@ -319,7 +302,7 @@ test("frontend API helpers preserve response fields and run diagnostics centrall
 
   const api = await loadApiModule();
   const caps = await api.getAudioCapsPayload();
-  const logs = await api.getOutputHistory("pipe-1", "out-1", { limit: 1 });
+  const logs = await api.getLogs({ pipelineId: "pipe-1", outputId: "out-1" }, 1);
   const controller = new AbortController();
   const report = await api.runPipelineDiagnostics("pipe 1", controller.signal);
 
@@ -354,134 +337,4 @@ test("frontend API helpers preserve response fields and run diagnostics centrall
     }),
     "/api/v1/logs/stream?pipeline_id=pipe-1&include_restream=true&event_class=lifecycle",
   );
-});
-
-test("pipeline parsing preserves probe and runtime fault status fields", async () => {
-  const { parsePipelinesInfo } = await loadCompiledModule("core/pipeline.js");
-
-  const pipelines = parsePipelinesInfo(
-    {
-      pipelines: [
-        {
-          id: "pipe-1",
-          name: "Pipeline 1",
-          streamKey: "stream-key",
-          inputSource: null,
-          srtIngestPolicy: null,
-          ingestUrls: { rtmp: null, srt: null },
-        },
-      ],
-      outputs: [
-        {
-          id: "out-1",
-          pipelineId: "pipe-1",
-          name: "Output 1",
-          desiredState: "started",
-          encoding: "source",
-          url: "rtmp://dest/live/key",
-          monitoringUrl: "http://localhost:11888/live/out-1/index.m3u8",
-        },
-      ],
-      jobs: [],
-    },
-    {
-      pipelines: {
-        "pipe-1": {
-          input: {
-            status: "on",
-            probeReady: false,
-            probeStatus: "pending",
-            probePendingMs: 2400,
-            bytesReceived: 1024,
-            bytesSent: 0,
-            readers: 1,
-            bitrateKbps: 3200.4,
-            publisher: { protocol: "srt" },
-            unexpectedReaders: { count: 0 },
-            audioTracks: [],
-            video: null,
-            lastSessionProtocol: null,
-            lastDisconnectAt: null,
-            lastDisconnectAgeMs: null,
-            lastDisconnectReason: null,
-            lastFailurePhase: null,
-            recentDisconnectError: false,
-            lastRemoteAddr: null,
-            lastSessionBytesReceived: null,
-          },
-          outputs: {
-            "out-1": {
-              status: "retrying",
-              rawStatus: "running",
-              phase: "failed",
-              failurePhase: "send",
-              lastError: "connection reset by peer",
-              lastErrorAt: "2026-06-29T00:00:05Z",
-              lastProgressAt: "2026-06-29T00:00:04Z",
-              lastProgressAgeMs: 1200,
-              totalSize: 4096,
-              bitrateKbps: 512.8,
-              recentFailureCount: 2,
-              flapping: true,
-              retrying: true,
-              retryAttempts: 2,
-              retryBackoffMs: 20000,
-              nextRetryAt: "2026-06-29T00:00:25Z",
-              retryRemainingMs: 15000,
-            },
-          },
-        },
-      },
-    },
-  );
-
-  assert.equal(pipelines.length, 1);
-  assert.equal(pipelines[0].input.probeReady, false);
-  assert.equal(pipelines[0].input.probeStatus, "pending");
-  assert.equal(pipelines[0].input.probePendingMs, 2400);
-  assert.equal(pipelines[0].input.lastDisconnectReason, null);
-  assert.equal(pipelines[0].outs[0].status, "retrying");
-  assert.equal(pipelines[0].outs[0].rawStatus, "running");
-  assert.equal(pipelines[0].outs[0].phase, "failed");
-  assert.equal(pipelines[0].outs[0].failurePhase, "send");
-  assert.equal(pipelines[0].outs[0].lastError, "connection reset by peer");
-  assert.equal(pipelines[0].outs[0].lastErrorAt, "2026-06-29T00:00:05Z");
-  assert.equal(pipelines[0].outs[0].lastProgressAt, "2026-06-29T00:00:04Z");
-  assert.equal(pipelines[0].outs[0].lastProgressAgeMs, 1200);
-  assert.equal(pipelines[0].outs[0].recentFailureCount, 2);
-  assert.equal(pipelines[0].outs[0].flapping, true);
-  assert.equal(pipelines[0].outs[0].retrying, true);
-  assert.equal(pipelines[0].outs[0].retryAttempts, 2);
-  assert.equal(pipelines[0].outs[0].retryBackoffMs, 20000);
-  assert.equal(pipelines[0].outs[0].nextRetryAt, "2026-06-29T00:00:25Z");
-  assert.equal(pipelines[0].outs[0].retryRemainingMs, 15000);
-});
-
-test("retrying and flapping outputs are not treated as unexpectedly down", async () => {
-  const {
-    isOutputFlapping,
-    isOutputRetrying,
-    isOutputRunning,
-    isOutputUnexpectedlyDown,
-  } = await loadCompiledModule("core/output-status.js");
-
-  const retryingOutput = {
-    desiredState: "started",
-    status: "retrying",
-    retrying: true,
-  };
-
-  assert.equal(isOutputRetrying(retryingOutput), true);
-  assert.equal(isOutputRunning(retryingOutput), false);
-  assert.equal(isOutputUnexpectedlyDown(retryingOutput), false);
-
-  const flappingOutput = {
-    desiredState: "started",
-    status: "running",
-    flapping: true,
-  };
-
-  assert.equal(isOutputFlapping(flappingOutput), true);
-  assert.equal(isOutputRunning(flappingOutput), true);
-  assert.equal(isOutputUnexpectedlyDown(flappingOutput), false);
 });

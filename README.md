@@ -98,12 +98,11 @@ If you edit frontend assets:
 ```sh
 npm run build:frontend
 npm run test:frontend
-npm run test:frontend:browser-dom
+npx playwright test   # against a running app; or npm run test:e2e
 ```
 
-Use `npm run test:frontend:coverage` for the scoped Node-side TypeScript
-coverage gate and `npm run test:frontend:coverage:all` for the broader
-diagnostic all-files report.
+Use `npm run test:frontend:coverage` for the Node-side TypeScript coverage
+report.
 
 ## Codebase map
 

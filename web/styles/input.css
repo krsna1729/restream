@@ -23,118 +23,8 @@
   }
 }
 
-@layer components {
-  .dashboard-page-shell {
-    @apply mx-auto w-full max-w-7xl space-y-4 px-4 py-4;
-  }
-
-  .dashboard-section {
-    @apply border-base-content/10 bg-base-200/85 min-w-0 rounded-xl border shadow-none;
-  }
-
-  .dashboard-section-header {
-    @apply border-base-content/10 flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3;
-  }
-
-  .dashboard-title {
-    @apply text-base-content text-lg font-semibold leading-tight tracking-wide;
-  }
-
-  .dashboard-section-title {
-    @apply text-base-content text-base font-semibold leading-tight tracking-wide;
-  }
-
-  .dashboard-subtitle {
-    @apply mt-1 text-sm leading-5;
-    color: color-mix(in oklab, var(--color-base-content) 78%, transparent);
-  }
-
-  .dashboard-card {
-    @apply border-base-content/10 bg-base-100/80 min-w-0 rounded-lg border;
-  }
-
-  .dashboard-stat-card {
-    @apply border-base-content/10 bg-base-200 min-h-30 overflow-hidden rounded-xl border p-4 shadow-none;
-  }
-
-  .dashboard-stat-card-compact {
-    @apply bg-base-100/60 rounded-lg p-3;
-  }
-
-  .dashboard-kicker {
-    @apply text-base-content/70 text-[0.68rem] font-semibold tracking-wide uppercase;
-  }
-
-  .dashboard-muted {
-    @apply text-base-content/70 text-sm leading-5;
-  }
-
-  .dashboard-empty {
-    @apply border-base-content/10 bg-base-100/70 rounded-lg border px-3 py-4 text-sm text-base-content/70;
-  }
-
-  .dashboard-nav-strip {
-    @apply border-base-content/10 bg-base-200/85 rounded-xl border p-1;
-  }
-
-  .dashboard-sturdy-control {
-    min-height: 2.25rem !important;
-    min-width: 2.75rem !important;
-  }
-
-  [data-dashboard-v2-owned-route-body] .btn {
-    min-height: 2.25rem;
-  }
-
-  #dashboard-v2-root .btn-accent.btn-outline,
-  #dashboard-v2-operate-panel .btn-accent.btn-outline,
-  [data-dashboard-v2-owned-route-body] .btn-accent.btn-outline {
-    --dashboard-v2-outline-accent: color-mix(
-      in oklab,
-      var(--color-accent) 24%,
-      var(--color-base-content)
-    );
-    --btn-color: var(--dashboard-v2-outline-accent);
-    --btn-fg: var(--color-base-content);
-    --btn-rest-fg: var(--color-base-content);
-    border-color: var(--dashboard-v2-outline-accent);
-    color: var(--color-base-content);
-  }
-
-  #dashboard-v2-root .btn-accent.btn-outline:disabled,
-  #dashboard-v2-operate-panel .btn-accent.btn-outline:disabled,
-  [data-dashboard-v2-owned-route-body] .btn-accent.btn-outline:disabled {
-    --dashboard-v2-disabled-outline: color-mix(
-      in oklab,
-      var(--color-base-content) 70%,
-      var(--color-base-200)
-    );
-    --btn-color: var(--dashboard-v2-disabled-outline);
-    --btn-fg: var(--dashboard-v2-disabled-outline);
-    --btn-rest-fg: var(--dashboard-v2-disabled-outline);
-    border-color: color-mix(
-      in oklab,
-      var(--color-base-content) 38%,
-      transparent
-    );
-    color: var(--dashboard-v2-disabled-outline);
-    opacity: 1;
-  }
-
-  #skip-to-dashboard-main,
-  #workspace-mode-bar [role="tab"],
-  #pipeline-workspace-view-bar [role="tab"] {
-    min-height: 2.25rem !important;
-  }
-
-  .dashboard-table-panel {
-    @apply border-base-content/10 bg-base-200/85 overflow-hidden rounded-xl border shadow-none;
-  }
-}
-
-/* The dim theme's 50/60% secondary text falls below WCAG AA on the dashboard
-   surfaces. Keep the existing semantic utility names while enforcing one
-   readable secondary-text floor across legacy and React presentations. */
+/* The dim theme's 50/60% secondary text falls below WCAG AA. Keep the
+   semantic utility names while enforcing one readable secondary-text floor. */
 @layer utilities {
   .text-base-content\/50,
   .text-base-content\/55,
@@ -148,68 +38,9 @@
       transparent
     );
   }
-
-  [data-dashboard-v2-owned-route-body] .text-base-content\/50,
-  [data-dashboard-v2-owned-route-body] .text-base-content\/55,
-  [data-dashboard-v2-owned-route-body] .text-base-content\/60,
-  [data-dashboard-v2-owned-route-body] .text-base-content\/70 {
-    color: color-mix(
-      in oklab,
-      var(--color-base-content) 82%,
-      transparent
-    );
-  }
-
-}
-
-#dashboard-v2-operate-panel {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-[data-dashboard-v2-operate-detail-shell],
-[data-dashboard-v2-operate-output-shell] {
-  display: none;
-}
-
-[data-dashboard-v2-operate-detail-shell]:has(
-    #dashboard-v2-pipeline-header-root:not([hidden])
-  ),
-[data-dashboard-v2-operate-output-shell]:has(
-    #dashboard-v2-pipeline-output-overview-root:not([hidden])
-  ) {
-  display: block;
-}
-
-.dashboard-scrollbar {
-  scrollbar-width: thin;
-}
-
-@media (min-width: 768px) {
-  #dashboard-v2-operate-panel {
-    grid-template-columns: minmax(15rem, 18rem) minmax(0, 1fr);
-  }
-}
-
-@media (min-width: 1280px) {
-  #dashboard-v2-operate-panel:has(
-      #dashboard-v2-pipeline-input-status-root:not([hidden])
-    ) {
-    grid-template-columns:
-      minmax(14rem, 18rem) minmax(26rem, 1.2fr)
-      minmax(20rem, 0.8fr);
-  }
 }
 
 @media (max-width: 767px) {
-  #dashboard-v2-operate-panel {
-    padding: 1rem;
-  }
-
-  #dashboard-v2-operate-panel > div {
-    max-width: none;
-    min-width: 0;
-  }
-
   .stats {
     display: grid !important;
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
@@ -220,25 +51,4 @@
   .stats .stat {
     min-width: 0;
   }
-}
-
-/* Spinner keyframe used by the HLS preview loading indicator. */
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* Timeline history badge override for stronger contrast in dim theme. */
-.badge-stopped {
-  border-color: color-mix(in oklab, #60a5fa 70%, transparent);
-  background-color: color-mix(in oklab, #60a5fa 30%, transparent);
-  color: #dbeafe;
-}
-
-#restream-process-indicator.restream-process-badge-running {
-  border-color: color-mix(in oklab, #22c55e 72%, #052e16);
-  background-color: #166534;
-  color: #f0fdf4;
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, #bbf7d0 24%, transparent);
 }

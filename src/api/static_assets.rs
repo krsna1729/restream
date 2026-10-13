@@ -161,14 +161,14 @@ pub async fn login_html_redirect_handler() -> impl IntoResponse {
     Redirect::to("login")
 }
 
-/// Redirects the legacy settings HTML path into the SPA mode selector.
+/// Redirects the legacy settings HTML path to the control room's Settings.
 pub async fn settings_html_redirect_handler() -> impl IntoResponse {
-    Redirect::to("./?mode=settings")
+    Redirect::to("./?w=settings")
 }
 
-/// Redirects the legacy status HTML path into the SPA mode selector.
+/// Redirects the legacy status HTML path to the control room's System.
 pub async fn status_html_redirect_handler() -> impl IntoResponse {
-    Redirect::to("./?mode=status")
+    Redirect::to("./?w=system")
 }
 
 /// Serves the embedded dashboard logo asset.

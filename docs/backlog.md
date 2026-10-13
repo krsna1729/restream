@@ -21,10 +21,9 @@ items).
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
 - [Q-035 MEDIA attribution](#q-035-observability-sonnet-attribute-media-pool-time-to-feed-and-stage)
 - [Q-036 enforced runtime truth table](#q-036-docs-sonnet-make-runtime-crossings-an-enforced-truth-table)
-- [Q-042 runtime truth](#q-042-architecture-opus-feed-the-dashboard-from-the-revisioned-runtime-state)
-- [Q-044 frontend cut](#q-044-frontend-opus-hard-cut-the-frontend-to-one-react-root)
 - [Q-047 MoQ](#q-047-protocol-opus-moq-interop-spike-parked)
 - [Q-049 silent SRT leaves](#q-049-resilience-opus-find-why-connected-srt-leaves-sent-nothing-under-host-overload)
+- [Q-050 inputs and stages in runtime state](#q-050-architecture-sonnet-project-inputs-and-stages-into-the-runtime-state)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -240,39 +239,6 @@ items).
 - Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
   review).
 
-### Q-042 [architecture] [opus] Feed the dashboard from the revisioned runtime state
-- Done so far: `/api/v1/state` + `/api/v1/state/stream` (revisioned
-  pipelines and outputs with desired, actual, convergence, flow,
-  backpressure, retry and failure evidence; delta SSE with replay or
-  snapshot resync), the generated TypeScript contract
-  (`web/ts/core/generated/runtime-state.ts`, drift test), and the client
-  `web/ts/core/state-stream.ts` with resync tests.
-- Remaining: the dashboard reads entities from the stream instead of
-  polling `/api/v1/dashboard/runtime` and refetching on lifecycle logs.
-  This lands with the frontend cut (Q-044), since the current shell is
-  being replaced. Stage and input entities join the projection when a
-  view needs them.
-- Not planned: a `/api/commands` endpoint. Mutations stay on their REST
-  routes, and their effects reach clients through the stream.
-- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
-### Q-044 [frontend] [opus] Hard-cut the frontend to one React root
-- Done so far: one Vite build (`vite.config.ts`, every `web/ts` module an
-  entry, `preserveModules`, dependencies under `public/js/vendor/`); `tsc`
-  only type-checks. `tsconfig.v2.json`, `vite.v2.config.ts`, the
-  `build:frontend:v2` script and the untyped bundle-path imports in
-  `dashboard-v2-loader.ts` are gone. Overview page payload 278.5 -> 262.4
-  KB gzip.
-- Remaining: one React root. The vanilla views (`web/ts/features/*`) still
-  render into the 42 KB `web/pages/index.html` shell by DOM id, and
-  `dashboard-v2-loader.ts` mounts twelve React islands into it. The control
-  room (`/control-room.html`) now has every mockup workspace, on live data;
-  after a parity check it becomes `/`, and the shell, the loader, the vanilla views, the
-  DOM-id drift check (`scripts/check/dom-id-drift.mjs`), the tests that
-  pin DOM ids and the shell's router (`web/ts/core/pipeline-workspace.ts`,
-  the `?mode=` contract) are deleted in one change: one router remains.
-- Gates: `npm run test:frontend`, Playwright; a tokei-measured reduction of
-  frontend source plus test glue.
-- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
 ### Q-047 [protocol] [opus] MoQ interop spike (parked)
 - Goal: a pinned-SHA spike on `moq-dev/moq` (IETF MOQT with MSF/LOC)
   with one retention layer (no ring to MoQ-cache copy) behind a Compio
@@ -294,3 +260,16 @@ items).
 - Gates: a reproduction (load generator plus one feed) or a proof that the
   leaf cannot stall while connected; the fix keeps sibling leaves unaffected.
 - Status: open (Filed: 2026-10-12 by claude, found while fixing Q-048).
+
+### Q-050 [architecture] [sonnet] Project inputs and stages into the runtime state
+- Goal: the control room reads pipeline inputs and stages from
+  `/api/v1/state/stream` (Q-042's projection: pipelines and outputs today)
+  instead of polling them; nothing else changes for operators.
+- Evidence: after the FE7 cut, Operate polls `/pipelines/{id}/inputs` and
+  the graph every 2 s; Inspect and Monitor poll the resource map and the
+  graph (`usePolled` in `operate.tsx`, `inspect.tsx`, `monitor.tsx`).
+- Gates: the drift test of the generated TypeScript contract; resync tests
+  for the new entities; a Playwright case that sees an input change without
+  a poll.
+- Status: open (Filed: 2026-10-13 by claude, the follow-up Q-042 named when
+  it closed at the FE7 cut).
