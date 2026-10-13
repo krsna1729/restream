@@ -710,6 +710,19 @@ async function liveFilePipeline(page: Page, name: string): Promise<string> {
   return id;
 }
 
+/** A destination on any host: the engine's own RTMP ingest, under the key of
+ * a pipeline made for it. */
+async function loopbackSink(page: Page, name: string): Promise<{ pipelineId: string; url: string }> {
+  const created = await page.request.post("/api/v1/pipelines", {
+    data: { name, streamKey: `${name}_${Date.now()}` },
+  });
+  expect(created.ok()).toBe(true);
+  const pipelineId: string = (await created.json()).pipeline.id;
+  const inputs = await (await page.request.get(`/api/v1/pipelines/${pipelineId}/inputs`)).json();
+  const url = String(inputs.inputs[0].ingestUrls.rtmp).replace("//localhost:", "//127.0.0.1:");
+  return { pipelineId, url };
+}
+
 test("logs: a pipeline's history, then its rows live; paused, nothing arrives; engine-only rows name no pipeline", async ({
   page,
 }) => {
@@ -723,21 +736,13 @@ test("logs: a pipeline's history, then its rows live; paused, nothing arrives; e
   try {
     const sourceId = await liveFilePipeline(page, `crlogs${stamp}`);
     pipelineIds.push(sourceId);
-    // The destination is the engine's own RTMP ingest, under a second
-    // pipeline's key: a sink that accepts on any host.
-    const sink = await page.request.post("/api/v1/pipelines", {
-      data: { name: `crlogssink${stamp}`, streamKey: `crlogssink_${stamp}` },
-    });
-    expect(sink.ok()).toBe(true);
-    const sinkId: string = (await sink.json()).pipeline.id;
-    pipelineIds.push(sinkId);
-    const sinkInputs = await (await page.request.get(`/api/v1/pipelines/${sinkId}/inputs`)).json();
-    const sinkUrl = String(sinkInputs.inputs[0].ingestUrls.rtmp).replace("//localhost:", "//127.0.0.1:");
+    const sink = await loopbackSink(page, `crlogssink${stamp}`);
+    pipelineIds.push(sink.pipelineId);
     const outputName = `cr-logs-out-${stamp}`;
     const output = await page.request.post(`/api/v1/pipelines/${sourceId}/outputs`, {
       data: {
         name: outputName,
-        url: sinkUrl,
+        url: sink.url,
         config: { video: { mode: "source" }, audio: { mode: "selectTracks", tracks: [0] } },
       },
     });
@@ -838,12 +843,7 @@ test("previews and stage detail: play the program and an input; a transcode stag
     data: { password: "admin" },
   });
   expect(login.ok()).toBe(true);
-  const settings = await (await page.request.get("/api/v1/settings")).json();
-  const main = settings.pipelines.find((pipeline: { name: string }) => pipeline.name === "Main");
-  const sink = settings.outputs.find((candidate: { name: string }) => candidate.name === "sink-a");
-  expect(main, "the bench fixture has a Main pipeline").toBeTruthy();
-  expect(sink, "the bench fixture has a sink-a output").toBeTruthy();
-  const playing = async (label: string) => {
+  const playing = async (label: string, tracks: number) => {
     const preview = page.getByRole("group", { name: `Preview ${label}` });
     await preview.getByRole("button", { name: `Preview ${label}` }).click();
     await expect(preview.getByRole("status")).toHaveText("live", { timeout: 30_000 });
@@ -852,31 +852,45 @@ test("previews and stage detail: play the program and an input; a transcode stag
     await expect
       .poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime))
       .toBeGreaterThan(0.5);
+    // Each audio track is a choice; choosing one loads that rendition.
+    const picker = preview.getByRole("combobox", { name: `Audio track of ${label}` });
+    await expect(picker.locator("option")).toHaveCount(tracks);
+    const rendition = page.waitForRequest(/\/audio\/3\/(index\.m3u8|init\.mp4|[^/]+\.m4s)/);
+    await picker.selectOption({ index: 3 });
+    await rendition;
     await preview.getByRole("button", { name: "Stop preview" }).click();
     await expect(video).toHaveCount(0);
   };
-
-  await page.goto(`/control-room.html?w=operate&p=${main.id}`);
-  await playing("program");
-  await playing("Primary");
-
-  const created = await page.request.post(`/api/v1/pipelines/${main.id}/outputs`, {
-    data: {
-      name: `cr-transcode-${Date.now()}`,
-      url: `${sink.url}transcode`,
-      config: { video: { mode: "preset", preset: "720p" }, audio: { mode: "all" } },
-    },
-  });
-  expect(created.ok()).toBe(true);
-  const outputId: string = (await created.json()).output.id;
+  const stamp = Date.now();
+  const pipelineIds: string[] = [];
   try {
-    expect((await page.request.post(`/api/v1/pipelines/${main.id}/outputs/${outputId}/start`)).ok()).toBe(true);
-    await page.goto(`/control-room.html?w=inspect&p=${main.id}`);
-    await page.getByRole("button", { name: "video:720p:codec:h264" }).click();
+    const pipelineId = await liveFilePipeline(page, `crpreview${stamp}`);
+    pipelineIds.push(pipelineId);
+    await page.goto(`/control-room.html?w=operate&p=${pipelineId}`);
+    await playing("program", 16);
+    await playing("Primary", 16);
+
+    const sink = await loopbackSink(page, `crpreviewsink${stamp}`);
+    pipelineIds.push(sink.pipelineId);
+    const created = await page.request.post(`/api/v1/pipelines/${pipelineId}/outputs`, {
+      data: {
+        name: `cr-transcode-${stamp}`,
+        url: sink.url,
+        config: {
+          video: { mode: "preset", preset: "720p" },
+          audio: { mode: "selectTracks", tracks: [0] },
+        },
+      },
+    });
+    expect(created.ok()).toBe(true);
+    const outputId: string = (await created.json()).output.id;
+    expect((await page.request.post(`/api/v1/pipelines/${pipelineId}/outputs/${outputId}/start`)).ok()).toBe(true);
+    await page.goto(`/control-room.html?w=inspect&p=${pipelineId}`);
+    await page.getByRole("button", { name: "video:720p:codec:h264", exact: true }).click();
     // The resource map has the stage's counters; its pipe to ffmpeg comes
     // from the stage's own telemetry.
     await expect(page.getByRole("group", { name: "Stage pipe" })).toContainText("idles", { timeout: 20_000 });
   } finally {
-    await page.request.delete(`/api/v1/pipelines/${main.id}/outputs/${outputId}`);
+    for (const id of pipelineIds) await page.request.delete(`/api/v1/pipelines/${id}`);
   }
 });
