@@ -829,3 +829,54 @@ test("diagnostics: run the engine's checks on a live pipeline and download the r
     if (pipelineId) await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
   }
 });
+
+test("previews and stage detail: play the program and an input; a transcode stage shows its pipe", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  const settings = await (await page.request.get("/api/v1/settings")).json();
+  const main = settings.pipelines.find((pipeline: { name: string }) => pipeline.name === "Main");
+  const sink = settings.outputs.find((candidate: { name: string }) => candidate.name === "sink-a");
+  expect(main, "the bench fixture has a Main pipeline").toBeTruthy();
+  expect(sink, "the bench fixture has a sink-a output").toBeTruthy();
+  const playing = async (label: string) => {
+    const preview = page.getByRole("group", { name: `Preview ${label}` });
+    await preview.getByRole("button", { name: `Preview ${label}` }).click();
+    await expect(preview.getByRole("status")).toHaveText("live", { timeout: 30_000 });
+    // Live means frames advance, not only that a manifest loaded.
+    const video = preview.getByLabel(`Video ${label}`);
+    await expect
+      .poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime))
+      .toBeGreaterThan(0.5);
+    await preview.getByRole("button", { name: "Stop preview" }).click();
+    await expect(video).toHaveCount(0);
+  };
+
+  await page.goto(`/control-room.html?w=operate&p=${main.id}`);
+  await playing("program");
+  await playing("Primary");
+
+  const created = await page.request.post(`/api/v1/pipelines/${main.id}/outputs`, {
+    data: {
+      name: `cr-transcode-${Date.now()}`,
+      url: `${sink.url}transcode`,
+      config: { video: { mode: "preset", preset: "720p" }, audio: { mode: "all" } },
+    },
+  });
+  expect(created.ok()).toBe(true);
+  const outputId: string = (await created.json()).output.id;
+  try {
+    expect((await page.request.post(`/api/v1/pipelines/${main.id}/outputs/${outputId}/start`)).ok()).toBe(true);
+    await page.goto(`/control-room.html?w=inspect&p=${main.id}`);
+    await page.getByRole("button", { name: "video:720p:codec:h264" }).click();
+    // The resource map has the stage's counters; its pipe to ffmpeg comes
+    // from the stage's own telemetry.
+    await expect(page.getByRole("group", { name: "Stage pipe" })).toContainText("idles", { timeout: 20_000 });
+  } finally {
+    await page.request.delete(`/api/v1/pipelines/${main.id}/outputs/${outputId}`);
+  }
+});
