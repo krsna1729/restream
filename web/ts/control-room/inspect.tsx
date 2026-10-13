@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 
-import { getProcessingGraph, getResourceMap } from "../core/api.js";
+import { getProcessingGraph, getResourceMap, getStageTelemetry } from "../core/api.js";
 import type { GraphData, ResourceMapSnapshot } from "../core/api-types.js";
 import { formatBytes, formatPercent } from "./format.js";
 import {
@@ -210,8 +210,35 @@ function NodeDetail({ row }: { row: ResourceRow | null }) {
             ))}
           </dl>
         )}
+        {row?.node.kind === "stage" && <StagePipe key={row.node.id} stageKey={row.node.id} />}
       </div>
     </section>
+  );
+}
+
+/** The stage's pipe counters (bytes between it and its process), which the
+ * resource map leaves out; fetched only for the selected stage. */
+function StagePipe(props: { stageKey: string }) {
+  const stage = usePolled(() => getStageTelemetry(props.stageKey));
+  const rows = scalarEntries(stage.value?.pipeMetrics);
+  return (
+    <div aria-label="Stage pipe" role="group" className="text-sm">
+      <h4 className="font-medium">Pipe</h4>
+      {stage.value === null ? (
+        <p className="opacity-70">Loading stage detail…</p>
+      ) : rows.length === 0 ? (
+        <p className="opacity-70">This stage has no pipe.</p>
+      ) : (
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+          {rows.map(([key, value]) => (
+            <div key={key} className="contents">
+              <dt className="opacity-70">{key}</dt>
+              <dd className="break-all tabular-nums">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </div>
   );
 }
 

@@ -5,10 +5,12 @@ import {
   getConfig,
   getPipelineInputs,
   getProcessingGraph,
+  programPreviewUrl,
   promotePipelineInput,
   startOut,
   stopOut,
 } from "../core/api.js";
+import { withBasePath } from "../core/base-path.js";
 import type { GraphData } from "../core/api-types.js";
 import type { OutputState } from "../core/generated/runtime-state.js";
 import type { ConfigData, PipelineInput, PipelineInputsResponse } from "../types.js";
@@ -21,6 +23,7 @@ import type { DestinationRow, GraphColumn } from "./operate-model.js";
 import { OutputForm } from "./output-form.js";
 import { PipelineScope } from "./pipeline-scope.js";
 import { Freshness, usePolled } from "./polled.js";
+import { Preview } from "./preview.js";
 import type { LiveSnapshot } from "./store.js";
 
 /** The live pipeline cockpit: sources, the media path and destinations. */
@@ -119,6 +122,7 @@ function SourceDeck(props: {
           </h3>
           <Freshness atMs={props.atMs} />
         </div>
+        <Preview url={programPreviewUrl(props.pipelineId)} label="program" />
         {inputs === null ? (
           <p className="opacity-70">Loading inputs…</p>
         ) : (
@@ -149,6 +153,9 @@ function SourceDeck(props: {
                         ` · ${video.codec} ${video.width ?? "?"}×${video.height ?? "?"}`}
                       {typeof rtt === "number" && ` · RTT ${rtt.toFixed(0)} ms`}
                     </div>
+                  )}
+                  {input.runtime.connected && (
+                    <Preview url={withBasePath(input.previewUrl)} label={input.label} />
                   )}
                   {input.enabled && !input.selected && (
                     <button
