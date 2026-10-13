@@ -91,23 +91,23 @@ impl EgressFabricRuntime {
         }
     }
 
-    /// Admission for a new output (`reason_for` gave `Add`): refused when,
-    /// with it, the pool would average more than `ADMIT_CEILING` busy per
-    /// shard at the most shards it may have. Call after `forecast_feed`.
+    /// Admission for a new output (`reason_for` gave `Add`), after the
+    /// Add's `rescale`: refused when the shard it would be placed on would
+    /// run above `ADMIT_CEILING` with it. Every shard stays under the
+    /// ceiling, whatever the pool's average.
     pub(crate) fn admit_add(
         &self,
         profile: crate::config::EgressShardProfile,
-        host: crate::capacity::HostCapacity,
+        output_id: &crate::media::egress::command::OutputId,
     ) -> Result<(), Saturated> {
-        let outputs = self.manager.output_count() + 1;
-        let ceiling = if self.adaptive && profile.shard_override().is_none() {
-            host.egress_shards_per_pool().min(self.shard_ceiling)
-        } else {
-            crate::config::target_egress_fabric_shards(profile, outputs, host.cpus)
-        };
-        let shards = ceiling.max(self.group.shard_count() as u32);
+        let shard = self.manager.assign_output(output_id);
+        let shard_outputs = self.manager.desired_count_for_shard(shard) + 1;
         self.sizer
-            .admit(outputs, profile.outputs_per_shard(), shards)
+            .admit(shard_outputs, profile.outputs_per_shard())
+            .map_err(|busy_pct| Saturated {
+                busy_pct,
+                shards: self.manager.placement_count().get(),
+            })
     }
 
     pub(crate) fn observation_due(&self) -> bool {
@@ -115,19 +115,28 @@ impl EgressFabricRuntime {
             .is_none_or(|at| at.elapsed() >= Duration::from_secs(5))
     }
 
+    /// Forecast the feed's bitrate from its ring: between looks, from the
+    /// bytes published; at the first look at a ring, from the rate its
+    /// retained window runs at, so a burst of Adds on a new runtime is priced
+    /// at the feed's rate, not the reference rate.
     pub(crate) fn forecast_feed(&mut self, ring: &RingBuffer) {
         let now = Instant::now();
         let identity = std::ptr::from_ref(ring) as usize;
         let published_bytes = ring.published_bytes();
-        if let Some((previous_ring, previous, at)) = self.feed_mark
-            && previous_ring == identity
-        {
-            let elapsed = now.duration_since(at).as_secs_f64();
-            if elapsed < 0.5 && published_bytes >= previous {
-                return;
+        match self.feed_mark {
+            Some((previous_ring, previous, at)) if previous_ring == identity => {
+                let elapsed = now.duration_since(at).as_secs_f64();
+                if elapsed < 0.5 && published_bytes >= previous {
+                    return;
+                }
+                if let Some(bytes) = published_bytes.checked_sub(previous) {
+                    self.sizer.forecast_feed(bytes as f64 * 8.0 / elapsed);
+                }
             }
-            if let Some(bytes) = published_bytes.checked_sub(previous) {
-                self.sizer.forecast_feed(bytes as f64 * 8.0 / elapsed);
+            _ => {
+                if let Some(bps) = ring.retained_payload_bitrate_bps() {
+                    self.sizer.forecast_feed(bps as f64);
+                }
             }
         }
         self.feed_mark = Some((identity, published_bytes, now));

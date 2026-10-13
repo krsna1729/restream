@@ -25,12 +25,12 @@ pub struct EgressManagerConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PlacementPolicy {
     /// `assign_output_to_shard`: a pure function of the output id and the
-    /// shard count. RTMP and SRT, whose harness proofs predict placement.
+    /// shard count.
     #[default]
     Rendezvous,
     /// The placement shard with the fewest live outputs, ties broken by
     /// rendezvous score. For outputs of one feed with like per-output cost
-    /// (HLS PUT): shards that join the pool after the first outputs take
+    /// (SRT, RTMP, HLS PUT): shards that join the pool after the first outputs take
     /// the new ones until the load evens out, where rendezvous would leave
     /// the first shard carrying every output placed before the growth.
     LeastLoaded,
@@ -326,7 +326,7 @@ impl EgressManager {
             .collect())
     }
 
-    fn desired_count_for_shard(&self, shard_id: ShardId) -> usize {
+    pub(crate) fn desired_count_for_shard(&self, shard_id: ShardId) -> usize {
         self.shard_outputs
             .get(shard_id.index() as usize)
             .map_or(0, |count| *count as usize)

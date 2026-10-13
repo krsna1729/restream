@@ -30,6 +30,8 @@ use super::FailureTracker;
 pub(super) struct SrtFabricTask {
     pub(super) feed_id: FeedId,
     pub(super) feed: Arc<TsFeed>,
+    /// The ring the feed's muxer reads (`retain_srt_fabric_runtime`).
+    pub(super) source: Arc<crate::media::ring_buffer::RingBuffer>,
     pub(super) spec: OutputSpec,
     /// Set by the shard when the fabric closes this leaf for a reason the
     /// application did not request (peer closed, protocol failure, or
@@ -369,7 +371,11 @@ impl EgressTask {
     async fn run_srt_fabric(&self, fabric: SrtFabricTask) {
         match self
             .engine
-            .retain_srt_fabric_runtime(fabric.feed_id.clone(), fabric.feed.as_ref())
+            .retain_srt_fabric_runtime(
+                fabric.feed_id.clone(),
+                fabric.feed.as_ref(),
+                fabric.source.as_ref(),
+            )
             .await
         {
             Ok(_) => {}

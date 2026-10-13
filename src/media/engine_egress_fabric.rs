@@ -3,7 +3,7 @@ use crate::media::egress::command::{EgressCommand, FeedId};
 use crate::media::egress::factory::{SrtFabricShardGroupError, spawn_srt_fabric_shard_group};
 use crate::media::egress::journal::TsFeed;
 use crate::media::egress::manager::{
-    EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome,
+    EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome, PlacementPolicy,
 };
 use crate::media::egress::runtime::{
     EgressFabricRuntime, EgressFabricRuntimeError, subscribe_fabric_wakes,
@@ -52,10 +52,14 @@ impl MediaEngine {
             .with_tx_gso(self.config.srt_egress_gso)
     }
 
+    /// `source` is the ring the feed's TS muxer reads. The muxer may have
+    /// started with this runtime, so its ring has no rate history yet; the
+    /// source's retained window prices the first Adds.
     pub(crate) async fn retain_srt_fabric_runtime(
         &self,
         feed_id: FeedId,
         feed: &TsFeed,
+        source: &crate::media::ring_buffer::RingBuffer,
     ) -> Result<bool, SrtFabricEnsureError> {
         let mut registry = self.fabric.srt.lock().await;
         let created = if registry.runtimes.contains_key(&feed_id) {
@@ -70,14 +74,19 @@ impl MediaEngine {
                 self.srt_owner_settings(),
             )
             .map_err(SrtFabricEnsureError::Spawn)?;
+            // Least-loaded placement: one feed's outputs cost the same, so
+            // a shard grown for new outputs takes them, and admission's
+            // per-shard ceiling can only refuse when every shard is full.
             let manager_config = EgressManagerConfig::new(
                 config.srt_shard_count().get(),
                 config.command_channel_capacity,
             )
-            .expect("egress fabric manager config is clamped nonzero");
-            let runtime = EgressFabricRuntime::new(manager_config, group)
+            .expect("egress fabric manager config is clamped nonzero")
+            .with_placement_policy(PlacementPolicy::LeastLoaded);
+            let mut runtime = EgressFabricRuntime::new(manager_config, group)
                 .map_err(SrtFabricEnsureError::Runtime)?
                 .adaptive(config.shards);
+            runtime.forecast_feed(source);
 
             let wakes = subscribe_fabric_wakes(
                 "srt",
@@ -119,20 +128,16 @@ impl MediaEngine {
         // shard the first time, instead of connecting once and immediately
         // getting rehomed onto a different shard.
         let mut rescale_inputs = rescale_inputs;
-        if matches!(command, EgressCommand::Add(_))
+        if let EgressCommand::Add(spec) = &command
             && let Some(inputs) = rescale_inputs.take()
         {
             let reason = runtime.reason_for(&command);
+            self.rescale_srt_fabric(feed_id, runtime, inputs, reason);
             if matches!(reason, crate::media::egress::runtime::ResizeReason::Add) {
-                runtime.forecast_feed(&inputs.publication_ring());
                 runtime
-                    .admit_add(
-                        crate::config::EgressShardProfile::SrtOutputCount,
-                        crate::capacity::HostCapacity::get(),
-                    )
+                    .admit_add(crate::config::EgressShardProfile::SrtOutputCount, &spec.id)
                     .map_err(SrtFabricDispatchError::Saturated)?;
             }
-            self.rescale_srt_fabric(feed_id, runtime, inputs, reason);
         }
 
         let outcome = runtime

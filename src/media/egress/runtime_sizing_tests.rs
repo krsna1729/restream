@@ -128,26 +128,71 @@ fn replacement_ring_resets_forecast_counter_even_if_new_counter_is_larger() {
 }
 
 #[test]
-fn admission_counts_placed_outputs_against_the_pool_ceiling() {
+fn a_burst_of_adds_on_a_new_runtime_is_priced_at_the_feed_rate() {
     let profile = crate::config::EgressShardProfile::SrtOutputCount;
-    let host = crate::capacity::HostCapacity { cpus: 8 };
-    // An 8× reference feed: one shard holds 9 outputs under the ceiling.
-    for (ceiling, admitted) in [(1, 9), (2, 19)] {
-        let probes = [Probe::default()];
-        let mut runtime = super::tests::roomy_runtime(&probes).0.adaptive(ceiling);
-        runtime.sizer.forecast_feed(4.8e6 * 8.0);
-        for i in 0..admitted {
-            assert_eq!(runtime.admit_add(profile, host), Ok(()), "output {i}");
-            runtime
-                .dispatch(EgressCommand::Add(output_spec(&format!("out-{i}"))))
-                .unwrap();
-        }
-        let refused = runtime.admit_add(profile, host).unwrap_err();
-        assert_eq!(
-            refused.shards, ceiling,
-            "the most shards the pool may grow to"
-        );
-        assert!(refused.busy_pct > 60, "{refused:?}");
-        runtime.shutdown();
+    let probes = [Probe::default()];
+    let mut runtime = super::tests::roomy_runtime(&probes).0;
+    let ring = RingBuffer::new(8);
+    // 2 MB over 500 ms of media time: 32 Mbit/s, well over the 4.8 Mbit/s
+    // reference rate, all published before the runtime first looks.
+    for dts in [0, 500] {
+        ring.push(crate::media::packet::MediaPacket {
+            media_type: crate::media::packet::MediaType::Video,
+            format: crate::media::packet::PayloadFormat::Raw,
+            is_keyframe: dts == 0,
+            track_index: 0,
+            pts: dts,
+            dts,
+            payload: bytes::Bytes::from(vec![0; 1_000_000]),
+        });
     }
+    // The runtime's first look at the ring, as on its first Add.
+    runtime.forecast_feed(&ring);
+    let id = output_spec("burst").id;
+    assert!(
+        runtime.admit_add(profile, &id).is_ok(),
+        "the first output is far below any ceiling"
+    );
+    for i in 0..64 {
+        runtime
+            .dispatch(EgressCommand::Add(output_spec(&format!("out-{i}"))))
+            .unwrap();
+    }
+    // 64 outputs at the reference rate fit (0.5 busy); at 32 Mbit/s they do
+    // not.
+    assert!(runtime.admit_add(profile, &id).is_err());
+    runtime.shutdown();
+}
+
+#[test]
+fn admission_holds_every_shard_under_the_ceiling() {
+    let profile = crate::config::EgressShardProfile::SrtOutputCount;
+    let probes = [Probe::default(), Probe::default()];
+    let mut runtime = EgressFabricRuntime::new(
+        EgressManagerConfig::new(2, 1024)
+            .unwrap()
+            .with_placement_policy(crate::media::egress::manager::PlacementPolicy::LeastLoaded),
+        group(2, &probes),
+    )
+    .unwrap();
+    // An 8× reference feed: one shard holds 9 outputs under the ceiling, so
+    // two hold 18; the pool average alone would also admit a 19th.
+    runtime.sizer.forecast_feed(4.8e6 * 8.0);
+    for i in 0..18 {
+        let spec = output_spec(&format!("out-{i}"));
+        assert_eq!(runtime.admit_add(profile, &spec.id), Ok(()), "output {i}");
+        runtime.dispatch(EgressCommand::Add(spec)).unwrap();
+    }
+    for shard in 0..2 {
+        assert_eq!(
+            runtime.manager.desired_count_for_shard(ShardId::new(shard)),
+            9
+        );
+    }
+    let refused = runtime
+        .admit_add(profile, &output_spec("out-18").id)
+        .unwrap_err();
+    assert_eq!(refused.shards, 2);
+    assert!(refused.busy_pct > 60, "{refused:?}");
+    runtime.shutdown();
 }

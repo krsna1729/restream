@@ -34,6 +34,8 @@ pub struct PreparedSrtFabricFeed {
     pub muxer_stage_key: String,
     /// The SRT leaf's lease on the shared muxer.
     pub muxer_lease: StageLease,
+    /// The ring the muxer reads: the feed's rate before the muxer has any.
+    pub source: Arc<RingBuffer>,
 }
 
 /// Prepare the output ring and graph terminal stage for dependency tracking.
@@ -174,6 +176,7 @@ pub async fn prepare_srt_fabric_feed(
         feed: Arc::new(TsFeed::new(&shared_muxer, Arc::new(FeedEpoch::new()))),
         muxer_stage_key,
         muxer_lease,
+        source: prepared.ring.clone(),
     }
 }
 

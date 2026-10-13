@@ -160,9 +160,9 @@ pub(super) fn output_alert(
             Severity::Warning,
             Scope::Output,
             format!("Output '{output_id}' was refused: egress capacity is full"),
-            "Admitting this output would push the feed's egress shards past their load \
-             ceiling and degrade every output on them, so it was refused. It retries on \
-             its restart backoff.",
+            "Admitting this output would push the feed's least-loaded egress shard past \
+             its load ceiling and degrade every output on it, so it was refused. It \
+             retries on its restart backoff until its retry budget is spent.",
             vec![error.clone()],
             "Stop other outputs of this pipeline, or run this destination on a host with \
              more CPUs.",

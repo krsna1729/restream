@@ -496,11 +496,13 @@ the `srt.slow-peer` mode, and the frozen-destination case) and derives the gates
 and rates; `scripts/harness/test_srt_final_qual.py` tests that machinery. The
 `srt.slow-peer` harness mode pauses APPLICATION delivery on one `RawSrtSink`
 receiver (protocol timers and ACK/NAK keep running, unlike a SIGSTOPped peer) and
-requires healthy siblings to keep progressing. The `srt.admission` mode runs
-one egress shard per pool and fans one 8 Mbit/s feed out to
-`ADMISSION_OUTPUTS` (default 96) SRT outputs, past the pool's admission
-ceiling: refused outputs must report `capacityRefused` and send nothing, and
-every admitted output must keep progressing.
+requires healthy siblings to keep progressing; with `SLOW_PEER_EXACT_OWNER=1` it
+also requires one live SRT shard, so every output shares one IPv4 Owner. The
+`srt.admission` mode caps each pool at `ADMISSION_SHARDS` (default 1) egress
+shards and fans one 8 Mbit/s feed out to `ADMISSION_OUTPUTS` (default 96 per
+shard) SRT outputs, past the pool's admission ceiling: refused outputs must
+report `capacityRefused` and send nothing, every admitted output must keep
+progressing, and no `egress-shard-<n>` thread may reach 62% busy.
 
 ## Why two test tiers
 

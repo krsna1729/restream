@@ -49,16 +49,16 @@ pub(super) fn set_affinity_mask(pid: u32, cpus: &BTreeSet<u32>) -> Result<Vec<u3
 
 /// One `/proc/<pid>/task/<tid>/comm` reading, already trimmed.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ThreadComm {
+pub(crate) struct ThreadComm {
     pub(super) tid: u32,
     pub(super) comm: String,
 }
 
 /// An `egress-shard-<n>` thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct EgressShardThread {
-    pub(super) tid: u32,
-    pub(super) index: u32,
+pub(crate) struct EgressShardThread {
+    pub(crate) tid: u32,
+    pub(crate) index: u32,
     /// `comm` is at the kernel's 15-byte limit, so `index` may be a prefix of a
     /// longer shard index (`egress-shard-120` and `egress-shard-12` are
     /// indistinguishable once truncated).
@@ -90,7 +90,7 @@ pub(super) fn parse_egress_shard_comm(comm: &str) -> Option<(u32, bool)> {
 /// (index, tid). Non-egress threads are ignored; a comm that is a *suffix*
 /// match on a longer name (`x-egress-shard-0`) is rejected because the prefix
 /// must start the name.
-pub(super) fn select_egress_shard_threads(threads: &[ThreadComm]) -> Vec<EgressShardThread> {
+pub(crate) fn select_egress_shard_threads(threads: &[ThreadComm]) -> Vec<EgressShardThread> {
     let mut selected: Vec<EgressShardThread> = threads
         .iter()
         .filter_map(|thread| {
@@ -105,7 +105,7 @@ pub(super) fn select_egress_shard_threads(threads: &[ThreadComm]) -> Vec<EgressS
     selected
 }
 
-pub(super) fn read_thread_comms(pid: u32) -> Result<Vec<ThreadComm>, String> {
+pub(crate) fn read_thread_comms(pid: u32) -> Result<Vec<ThreadComm>, String> {
     let task_dir = PathBuf::from(format!("/proc/{pid}/task"));
     let entries = std::fs::read_dir(&task_dir)
         .map_err(|error| format!("read {}: {error}", task_dir.display()))?;
@@ -133,7 +133,7 @@ pub(super) fn read_thread_comms(pid: u32) -> Result<Vec<ThreadComm>, String> {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(super) struct CpuTicks {
+pub(crate) struct CpuTicks {
     pub(super) user: u64,
     pub(super) system: u64,
 }
@@ -168,13 +168,13 @@ pub(super) fn parse_proc_stat_cpu(stat: &str) -> Result<CpuTicks, String> {
     })
 }
 
-pub(super) fn read_proc_stat_cpu(path: &Path) -> Result<CpuTicks, String> {
+pub(crate) fn read_proc_stat_cpu(path: &Path) -> Result<CpuTicks, String> {
     let stat = std::fs::read_to_string(path)
         .map_err(|error| format!("read {}: {error}", path.display()))?;
     parse_proc_stat_cpu(&stat)
 }
 
-pub(super) fn clock_ticks_per_sec() -> u64 {
+pub(crate) fn clock_ticks_per_sec() -> u64 {
     // SAFETY: sysconf(3) takes no pointers.
     let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
     if ticks > 0 { ticks as u64 } else { 100 }
@@ -193,7 +193,7 @@ pub(super) fn micros_per_unit(seconds: f64, units: u64) -> Option<f64> {
 }
 
 /// CPU seconds between two tick readings, rounded to nanoseconds.
-pub(super) fn cpu_secs_between(
+pub(crate) fn cpu_secs_between(
     before: CpuTicks,
     after: CpuTicks,
     ticks_per_sec: u64,

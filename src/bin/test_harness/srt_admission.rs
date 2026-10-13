@@ -1,23 +1,43 @@
 //! `srt.admission`: drive one SRT shard pool past its admission ceiling
 //! (Q-034).
 //!
-//! Restream runs with one egress shard per pool (`RESTREAM_EGRESS_SHARDS=1`)
-//! and a ten-minute restart backoff, so an output refused once stays refused
-//! for the watch. One 8 Mbit/s fixture feed fans out to `ADMISSION_OUTPUTS`
-//! (default 96) SRT outputs, more than one shard admits. Gate: at least one
-//! output is refused; every refused output reports `capacityRefused` at the
-//! shard layer and sends nothing; every other output is live and keeps
-//! progressing through `ADMISSION_WATCH_SECS` (default 20).
+//! Restream runs with `ADMISSION_SHARDS` (default 1) egress shards at most per
+//! pool (`RESTREAM_EGRESS_SHARDS`) and a ten-minute restart backoff, so an
+//! output refused once stays refused for the watch. One 8 Mbit/s fixture feed
+//! fans out to `ADMISSION_OUTPUTS` (default 96 per shard) SRT outputs, added
+//! one at a time so the pool grows across them. Gate: at least one output is
+//! refused; every refused output reports `capacityRefused` at the shard layer
+//! and sends nothing; every other output is live and keeps progressing
+//! through `ADMISSION_WATCH_SECS` (default 20); and no `egress-shard-<n>`
+//! thread runs at or above the 62% busy where one shard began to degrade.
 
 use super::*;
+use crate::egress_duty::cpu::{
+    CpuTicks, clock_ticks_per_sec, cpu_secs_between, read_proc_stat_cpu, read_thread_comms,
+    select_egress_shard_threads,
+};
+use std::collections::BTreeMap;
 
 const RETRY_BACKOFF_MS: &str = "600000";
+/// Busy at which one SRT shard began losing outputs (runtime-crossings M6).
+const DEGRADED_BUSY: f64 = 0.62;
 
 fn env_u(name: &str, default: u64) -> u64 {
     std::env::var(name)
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(default)
+}
+
+/// Shard index -> (tid, CPU ticks) for every egress shard thread.
+fn shard_ticks(pid: u32) -> Result<BTreeMap<u32, (u32, CpuTicks)>, String> {
+    select_egress_shard_threads(&read_thread_comms(pid)?)
+        .into_iter()
+        .map(|thread| {
+            let path = PathBuf::from(format!("/proc/{pid}/task/{}/stat", thread.tid));
+            Ok((thread.index, (thread.tid, read_proc_stat_cpu(&path)?)))
+        })
+        .collect()
 }
 
 /// Output id -> diagnosis cause code, for outputs with a diagnosis.
@@ -38,23 +58,30 @@ async fn cause_codes(api: &RampApi) -> Result<HashMap<String, Value>, String> {
 }
 
 pub(crate) async fn srt_admission() -> Result<Value, String> {
-    let requested = env_u("ADMISSION_OUTPUTS", 96) as usize;
+    let shards = env_u("ADMISSION_SHARDS", 1);
+    let requested = env_u("ADMISSION_OUTPUTS", 96 * shards) as usize;
     let watch = Duration::from_secs(env_u("ADMISSION_WATCH_SECS", 20));
     let work_dir = artifact_path("srt.admission");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
     let ports = TestPorts::from_env();
-    let sink_port = harness_port_defaults()
+    // One sink thread per 32 outputs: the receiver must not be what limits
+    // the outputs at a gigabit and more.
+    let sink_base = harness_port_defaults()
         .ffmpeg_srt_sink_base
         .checked_add(2002)
         .ok_or("sink port overflow")?;
-    let sink = HarnessSrtSinkPool::start(&[sink_port], 8 * 1024 * 1024)?;
+    let sink_ports = (0..requested.div_ceil(32))
+        .map(|i| u16::try_from(i).ok().and_then(|i| sink_base.checked_add(i)))
+        .collect::<Option<Vec<u16>>>()
+        .ok_or("sink port overflow")?;
+    let sink = HarnessSrtSinkPool::start(&sink_ports, 8 * 1024 * 1024)?;
     let mut child = start_restream_child_with_env(
         &default_restream_bin(),
         &ports,
         &work_dir.join("admission.sqlite"),
         &work_dir.join("restream.log"),
         &[
-            ("RESTREAM_EGRESS_SHARDS", "1".to_string()),
+            ("RESTREAM_EGRESS_SHARDS", shards.to_string()),
             (
                 "RESTREAM_OUTPUT_RETRY_BASE_MS",
                 RETRY_BACKOFF_MS.to_string(),
@@ -64,6 +91,7 @@ pub(crate) async fn srt_admission() -> Result<Value, String> {
     )
     .await?;
     let api = login_api(&ports).await?;
+    let restream_pid = child.id().ok_or("restream exited before admission")?;
 
     let stream_key = "admission-input";
     let pid = create_pipeline_with_stream_key(&api, "admission", stream_key).await?;
@@ -86,7 +114,7 @@ pub(crate) async fn srt_admission() -> Result<Value, String> {
             &api,
             &pid,
             &name,
-            &harness_srt_output_url(sink_port, &name, HarnessSrtMode::Publish),
+            &harness_srt_output_url(sink_ports[index / 32], &name, HarnessSrtMode::Publish),
             "source",
         )
         .await?;
@@ -109,14 +137,30 @@ pub(crate) async fn srt_admission() -> Result<Value, String> {
     };
 
     // Watch: admitted outputs advance every 5 s; refused ones stay refused
-    // and send nothing.
+    // and send nothing; no shard thread reaches the degradation busy.
     let mut stalls = Vec::new();
     let mut unrefused = Vec::new();
     let mut refused_sent = Vec::new();
     let mut last: HashMap<String, u64> = HashMap::new();
+    let ticks_per_sec = clock_ticks_per_sec();
+    let mut peak_busy: BTreeMap<u32, f64> = BTreeMap::new();
+    let mut ticks = shard_ticks(restream_pid)?;
+    let mut ticks_at = Instant::now();
     let started = Instant::now();
     while admitted_live.is_ok() && started.elapsed() < watch {
         tokio::time::sleep(Duration::from_secs(5)).await;
+        let now_ticks = shard_ticks(restream_pid)?;
+        let elapsed = ticks_at.elapsed().as_secs_f64();
+        for (index, (tid, after)) in &now_ticks {
+            if let Some((before_tid, before)) = ticks.get(index)
+                && before_tid == tid
+                && let Some(secs) = cpu_secs_between(*before, *after, ticks_per_sec)
+            {
+                let busy = peak_busy.entry(*index).or_default();
+                *busy = busy.max(secs / elapsed);
+            }
+        }
+        (ticks, ticks_at) = (now_ticks, Instant::now());
         let health = api.get_json("/api/v1/engine/health").await?;
         let row = |oid: &str| &health["pipelines"][&pid]["outputs"][oid];
         for oid in &admitted {
@@ -139,6 +183,11 @@ pub(crate) async fn srt_admission() -> Result<Value, String> {
             }
         }
     }
+    let overloaded: Vec<u32> = peak_busy
+        .iter()
+        .filter(|(_, busy)| **busy >= DEGRADED_BUSY)
+        .map(|(index, _)| *index)
+        .collect();
     let refusal_example = refused
         .first()
         .and_then(|oid| diagnoses.get(oid))
@@ -148,9 +197,12 @@ pub(crate) async fn srt_admission() -> Result<Value, String> {
         && admitted_live.is_ok()
         && stalls.is_empty()
         && unrefused.is_empty()
-        && refused_sent.is_empty();
+        && refused_sent.is_empty()
+        && !peak_busy.is_empty()
+        && overloaded.is_empty();
     let result = json!({
         "mode": "srt.admission",
+        "shardCeiling": shards,
         "requested": requested,
         "admitted": admitted.len(),
         "refused": refused.len(),
@@ -159,6 +211,8 @@ pub(crate) async fn srt_admission() -> Result<Value, String> {
         "admittedStalls": stalls,
         "refusedThatRecovered": unrefused,
         "refusedThatSent": refused_sent,
+        "shardPeakBusy": peak_busy,
+        "shardsAtDegradedBusy": overloaded,
         "watchSecs": watch.as_secs(),
         "passed": passed,
     });

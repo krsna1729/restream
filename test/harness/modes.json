@@ -206,7 +206,7 @@
             "portNamespace": true,
             "benchProfile": true
           },
-          "purpose": "one SRT shard pool driven past its admission ceiling (Q-034): refused outputs report capacityRefused and send nothing, admitted outputs keep progressing"
+          "purpose": "one SRT shard pool (ADMISSION_SHARDS at most) driven past its admission ceiling (Q-034): refused outputs report capacityRefused and send nothing, admitted outputs keep progressing, and no egress shard thread reaches 62% busy"
         },
         "fault.resilience": {
           "suiteDefault": true,

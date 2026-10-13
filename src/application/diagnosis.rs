@@ -43,8 +43,8 @@ pub enum Cause {
     ShardStalled { shard: u32 },
     /// The fabric shard's loop has ended while the output still runs on it.
     ShardStopped { shard: u32 },
-    /// Admission refused the output: the feed's egress shards are at their
-    /// load ceiling. Restarts retry it until load drops.
+    /// Admission refused the output: the feed's least-loaded egress shard is
+    /// at its load ceiling. Restarts retry it until the budget is spent.
     CapacityRefused { error: String },
     /// The restart budget is spent.
     RetriesExhausted,

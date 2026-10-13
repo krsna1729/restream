@@ -797,8 +797,9 @@ Rebuilds the projection and returns it:
   - `feed`: `stageNotProducing` (`stage`, `phase`).
   - `shard`: `shardPanicked`, `shardStalled`, `shardStopped` (`shard`);
     `capacityRefused` (`error`): admission refused the output because the
-    feed's egress shards would pass their load ceiling (failure phase
-    `egress_capacity`); restarts retry it.
+    least-loaded shard of the feed's egress pool would pass its load
+    ceiling (failure phase `egress_capacity`); restarts retry it until the
+    retry budget is spent.
   - `destination`: `retriesExhausted`, `retryBudgetNearlySpent`
     (`attempts`, `max`; at 80% of the budget), `rejected` (`phase`,
     `error`), `backpressured` (`stalled`), `noProgress`.
