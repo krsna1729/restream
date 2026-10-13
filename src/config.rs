@@ -4,7 +4,7 @@
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-use crate::capacity::CapacityLimits;
+use crate::capacity::{CapacityLimits, HostCapacity};
 use crate::media::egress::policy::WorkBudgetConfig;
 use crate::media::egress::shard::EgressShardConfig;
 
@@ -65,9 +65,8 @@ pub struct TokioRuntimeConfig {
 
 impl Default for TokioRuntimeConfig {
     fn default() -> Self {
-        let effective_cpus = crate::system_sampling::effective_cpu_count();
         Self {
-            worker_threads: default_tokio_worker_threads(effective_cpus),
+            worker_threads: HostCapacity::get().tokio_workers(),
             max_blocking_threads: 512,
         }
     }
@@ -89,9 +88,8 @@ impl Default for RuntimeTuning {
 
 impl Default for EgressFabricConfig {
     fn default() -> Self {
-        let effective_cpus = crate::system_sampling::effective_cpu_count();
         Self {
-            shards: default_egress_fabric_shards(effective_cpus),
+            shards: HostCapacity::get().egress_shards_per_pool(),
             command_channel_capacity: 1024,
             command_batch_budget: 32,
             readiness_batch_budget: 64,
@@ -446,29 +444,6 @@ pub(crate) fn env_optional_positive_usize(name: &str) -> Option<usize> {
         .filter(|&value| value >= 1)
 }
 
-fn default_tokio_worker_threads(effective_cpus: usize) -> usize {
-    let effective_cpus = effective_cpus.max(1);
-    if effective_cpus <= 2 {
-        effective_cpus
-    } else {
-        effective_cpus.div_ceil(3).clamp(2, 8)
-    }
-}
-
-/// Egress fabric shard threads scale with host cores instead of a flat
-/// constant. A live legacy-vs-fabric `perf` comparison at a combined
-/// 1,140 RTMP + 60 SRT workload (the egress migration record (git history) Phase 5)
-/// measured the previous flat default of 4 costing fabric ~12% more avg
-/// CPU and ~23% more peak CPU than legacy on a 6-CPU host; raising the
-/// shard count toward the host's own core count (matching
-/// `effective_cpus` rather than the fixed constant) closed the avg-CPU
-/// gap entirely (fabric ~2% *below* legacy) and shrank the peak gap to
-/// ~3.5%, across three repeated live captures at each of shards=2, 4,
-/// and 6 — while preserving fabric's ~12-15% lower RSS throughout.
-pub(crate) fn default_egress_fabric_shards(effective_cpus: usize) -> u32 {
-    effective_cpus.clamp(2, 8) as u32
-}
-
 /// Startup priors only. Both transports use the same runtime service-demand
 /// controller; SRT's prior reserves more CPU per output than RTMP.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -501,7 +476,10 @@ pub(crate) fn target_egress_fabric_shards(
     output_count: usize,
     effective_cpus: usize,
 ) -> u32 {
-    let cpu_max = default_egress_fabric_shards(effective_cpus);
+    let cpu_max = HostCapacity {
+        cpus: effective_cpus,
+    }
+    .egress_shards_per_pool();
     if let Some(requested) = profile.shard_override() {
         return requested;
     }
@@ -620,9 +598,7 @@ impl Default for AppConfig {
         };
         let tuning = RuntimeTuning::default();
         let tokio_runtime = TokioRuntimeConfig::default();
-        let cpus = std::thread::available_parallelism()
-            .map(std::num::NonZeroUsize::get)
-            .unwrap_or(1);
+        let cpus = HostCapacity::get().cpus;
         let derived_permits =
             derive_external_ffmpeg_permits(cpus, 2.min(cpus.saturating_sub(1)), 2, usize::MAX);
 
@@ -685,9 +661,7 @@ impl AppConfig {
             env_var("RESTREAM_HTTP_BIND_ADDR").unwrap_or_else(|| "127.0.0.1".to_string());
         let tuning = RuntimeTuning::from_env();
         let egress_fabric = EgressFabricConfig::from_env();
-        let cpus = std::thread::available_parallelism()
-            .map(std::num::NonZeroUsize::get)
-            .unwrap_or(1);
+        let cpus = HostCapacity::get().cpus;
         let capacity_limits = capacity_limits_from_env(cpus);
         let tokio_runtime = TokioRuntimeConfig::from_env();
         let db_path =

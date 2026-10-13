@@ -176,10 +176,15 @@ failures, surface status, and cancel their stage rather than terminating the
 server. External FFmpeg children also have admission controls; the canonical
 limits and environment parsing are in `src/config.rs`.
 
-The Tokio runtime is built in `src/main.rs`. Its resolved sizing uses the
-effective CPU limit and may be overridden by the documented runtime variables.
-The media executor is a separate, lazily initialized Tokio runtime, with
-`effective_cpu_count().clamp(1, 4)` worker threads named `restream-media`.
+The Tokio runtime is built in `src/main.rs`. Every sizing law reads the host's
+CPUs from one place, `HostCapacity` (`src/capacity.rs`): the affinity mask and
+root cgroup `cpu.max` quota, read once at boot. It gives the CONTROL (Tokio)
+default, `ceil(C/3)` in `[2, 8]` (all CPUs up to 2); the MEDIA default,
+`clamp(C, 1, 4)`; and the ceiling of one egress shard pool, `clamp(C, 2, 8)`.
+The documented runtime variables override them. `/metrics/system`
+`hostCapacity` reports the CPU count and the threads each class holds now.
+The media executor is a separate, lazily initialized Tokio runtime whose
+worker threads are named `restream-media`.
 Tasks keep their ring cursors and reusable buffers on this execution class;
 they check cancellation and yield between bounded bursts. It does not add a
 per-feed thread or a per-packet handoff through the control runtime.

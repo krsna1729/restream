@@ -262,7 +262,8 @@ fn parse_cpu_max_quota(value: &str) -> Option<usize> {
     Some(quota.div_ceil(period).max(1))
 }
 
-/// Samples the limits used during runtime construction.
+/// The CPUs runtime sizing uses, read once at boot by
+/// [`HostCapacity::get`](crate::capacity::HostCapacity::get); call that.
 ///
 /// The root `cpu.max` lookup intentionally preserves the historical startup
 /// behavior. The operational snapshot above resolves the process's nested

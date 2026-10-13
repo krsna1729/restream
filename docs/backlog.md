@@ -168,8 +168,20 @@ items).
   per-class busy/poll telemetry but no feedback loop; no auto-resize before
   mixed-load data. Ingress RX mode (managed multishot vs `RawReadiness`) is a
   host fact with its own coefficients: model it, do not unify it.
-- Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
-  review).
+- Status: step 1 done (2026-10-13): one `HostCapacity` (`src/capacity.rs`),
+  read once at boot, holds the CPU count and the CONTROL, MEDIA and
+  per-pool egress defaults (values unchanged); every sizing law and the
+  capacity priors read it (before, three call sites read
+  `available_parallelism` without the cgroup quota, and each fabric re-read
+  `/proc` and `/sys` on every rescale); `/metrics/system` `hostCapacity`
+  reports CPUs and threads per class. Measured (C = 6, 4 mixed scenarios up
+  to 100 outputs): CONTROL + MEDIA use less than 0.02 core and egress shards
+  carry over 90 % of engine CPU, so resizing resident classes does not move
+  delivery.
+  The first shortfall (SRT, transcoded feed, 50 outputs, host at 1.7 of 6
+  cores) sits in one SRT pool that grew to 4 shards at Add time and never
+  again: `Observe` only shrinks, and a grown shard takes only new outputs.
+  That is a placement/admission question and moves to Q-034 and Q-049.
 
 ### Q-032 [performance] [opus] Measure core segregation of CONTROL, MEDIA and HOT threads
 - Goal: decide, with evidence, whether CONTROL, MEDIA and Owner/shard threads

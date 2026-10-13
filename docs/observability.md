@@ -528,6 +528,17 @@ faults as issues. Buffer exhaustion is informational, not a packet-loss alarm.
 The active ingest selects the RTMP, SRT, or file check set. Returns `404`
 without an active ingest.
 
+### Host capacity (`hostCapacity`)
+
+Both summary and full `GET /metrics/system` responses include `hostCapacity`:
+`cpus`, the CPU count every sizing law uses (affinity mask and root cgroup
+`cpu.max`, read once at boot), and the threads each execution class holds now:
+`controlWorkers` (Tokio), `mediaWorkers`, `rtmpIngressOwners`,
+`srtIngressOwners`, `egressShards` (running, all pools), and their sum
+`threads`. `threads` above `cpus` is not overload: an idle thread costs no
+CPU. MEDIA CPU time per class is in `mediaExecutor`; the resource sweep
+measures every thread group (`threadCpuPct`).
+
 ### Media executor (`mediaExecutor`)
 
 Both summary and full `GET /metrics/system` responses include `mediaExecutor`,

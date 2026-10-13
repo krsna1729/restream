@@ -301,7 +301,7 @@ pub(crate) fn snapshot(services: bool) -> MediaExecutorSnapshot {
 /// Returns the worker thread count configured for restream-media.
 pub(crate) fn configured_workers() -> usize {
     crate::config::media_executor_workers_env()
-        .unwrap_or_else(|| crate::system_sampling::effective_cpu_count().clamp(1, 4))
+        .unwrap_or_else(|| crate::capacity::HostCapacity::get().media_workers())
 }
 
 fn runtime() -> Result<&'static Runtime, String> {

@@ -214,11 +214,10 @@ impl MediaEngine {
         let budget = config.work_budget();
         let chunk_size = self.config.rtmp_egress_chunk_size;
         let poller_max_events = config.tcp_poller_max_events;
-        let effective_cpus = crate::system_sampling::effective_cpu_count();
         runtime.forecast_feed(&feed.publication_ring());
         let result = runtime.rescale(
             crate::config::EgressShardProfile::OutputCount,
-            effective_cpus,
+            crate::capacity::HostCapacity::get(),
             reason,
             shard_config,
             |_shard_id| {

@@ -473,7 +473,7 @@ pub enum EgressManagerDispatchError<E> {
 /// hashing `(output_id, shard_index)` together and pick the max. Changing the
 /// count changes the winner for about `1/shard_count` of NEW outputs, while
 /// existing outputs keep their recorded shard. `shard_count` is always small
-/// (see `default_egress_fabric_shards`, capped at 8), so this stays a cheap
+/// (see `HostCapacity::egress_shards_per_pool`, capped at 8), so this stays a cheap
 /// `O(shard_count)` scan.
 pub fn assign_output_to_shard(output_id: &OutputId, shard_count: NonZeroU32) -> ShardId {
     let bytes = output_id.as_str().as_bytes();

@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use super::{
     AppConfig, DEFAULT_MEDIA_DIR, EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR, EgressFabricConfig,
     EgressShardProfile, RuntimeTuning, ServerPorts, TokioRuntimeConfig,
-    default_egress_fabric_shards, default_tokio_worker_threads, derive_external_ffmpeg_permits,
-    env_optional_positive_usize, target_egress_fabric_shards,
+    derive_external_ffmpeg_permits, env_optional_positive_usize, target_egress_fabric_shards,
 };
+use crate::capacity::HostCapacity;
 
 thread_local! {
     /// Per-test environment overrides read by `config::env_var`: `Some(value)`
@@ -252,10 +252,7 @@ fn egress_fabric_config_defaults_disabled_and_builds_runtime_values() {
         || {
             let fabric = EgressFabricConfig::from_env();
             assert_eq!(fabric, EgressFabricConfig::default());
-            assert_eq!(
-                fabric.shards,
-                default_egress_fabric_shards(crate::system_sampling::effective_cpu_count())
-            );
+            assert_eq!(fabric.shards, HostCapacity::get().egress_shards_per_pool());
             assert_eq!(fabric.shard_config().command_channel_capacity().get(), 1024);
             let budget = fabric.work_budget();
             assert_eq!(budget.max_units, 32);
@@ -328,17 +325,19 @@ fn egress_fabric_config_validate_flags_cross_field_issues() {
 
 #[test]
 fn tokio_runtime_config_tracks_cpu_limits_and_overrides() {
-    assert_eq!(default_tokio_worker_threads(1), 1);
-    assert_eq!(default_tokio_worker_threads(2), 2);
-    assert_eq!(default_tokio_worker_threads(6), 2);
-    assert_eq!(default_tokio_worker_threads(12), 4);
-    assert_eq!(default_tokio_worker_threads(64), 8);
-
-    assert_eq!(default_egress_fabric_shards(1), 2);
-    assert_eq!(default_egress_fabric_shards(2), 2);
-    assert_eq!(default_egress_fabric_shards(6), 6);
-    assert_eq!(default_egress_fabric_shards(12), 8);
-    assert_eq!(default_egress_fabric_shards(64), 8);
+    // (CPUs, CONTROL workers, MEDIA workers, egress shards per pool).
+    for (cpus, tokio, media, shards) in [
+        (1, 1, 1, 2),
+        (2, 2, 2, 2),
+        (6, 2, 4, 6),
+        (12, 4, 4, 8),
+        (64, 8, 4, 8),
+    ] {
+        let host = HostCapacity { cpus };
+        assert_eq!(host.tokio_workers(), tokio, "{cpus} CPUs");
+        assert_eq!(host.media_workers(), media, "{cpus} CPUs");
+        assert_eq!(host.egress_shards_per_pool(), shards, "{cpus} CPUs");
+    }
 
     with_env_vars(
         &[
@@ -485,11 +484,11 @@ fn target_egress_fabric_shards_matches_known_cases() {
     // A handful of outputs on an 8-core host stays well under the CPU
     // ceiling -- this is the exact gap task #11 didn't close: fewer
     // outputs than one shard's OUTPUTS_PER_SHARD budget should not pay
-    // for `default_egress_fabric_shards(8) == 8` dedicated shard threads.
+    // for `egress_shards_per_pool() == 8` dedicated shard threads.
     assert_eq!(target_egress_fabric_shards(OutputCount, 38, 8), 1);
 
     // Right at and just past the CPU ceiling's output budget
-    // (default_egress_fabric_shards(8) == 8, OUTPUTS_PER_SHARD == 128).
+    // (egress_shards_per_pool() == 8, OUTPUTS_PER_SHARD == 128).
     assert_eq!(target_egress_fabric_shards(OutputCount, 8 * 128, 8), 8);
     assert_eq!(target_egress_fabric_shards(OutputCount, 8 * 128 + 1, 8), 8);
 
@@ -497,7 +496,7 @@ fn target_egress_fabric_shards_matches_known_cases() {
     assert_eq!(target_egress_fabric_shards(OutputCount, 1_000_000, 8), 8);
 
     // A constrained 1-CPU host still gets the same
-    // default_egress_fabric_shards(1) == 2 ceiling once outputs justify it.
+    // egress_shards_per_pool() == 2 ceiling once outputs justify it.
     assert_eq!(target_egress_fabric_shards(OutputCount, 0, 1), 1);
     assert_eq!(target_egress_fabric_shards(OutputCount, 1_000_000, 1), 2);
 
@@ -513,7 +512,7 @@ fn target_egress_fabric_shards_matches_known_cases() {
 proptest::proptest! {
     /// The output-count-aware target never leaves the CPU-derived range:
     /// always at least one shard, never more than
-    /// `default_egress_fabric_shards(cpus)` would allow.
+    /// `HostCapacity::egress_shards_per_pool` would allow.
     #[test]
     fn target_egress_fabric_shards_stays_within_cpu_bounds(
         outputs in 0usize..100_000,
@@ -521,7 +520,7 @@ proptest::proptest! {
     ) {
         for profile in [EgressShardProfile::OutputCount, EgressShardProfile::SrtOutputCount] {
             let target = target_egress_fabric_shards(profile, outputs, cpus);
-            let ceiling = default_egress_fabric_shards(cpus);
+            let ceiling = HostCapacity { cpus }.egress_shards_per_pool();
             proptest::prop_assert!(target >= 1);
             proptest::prop_assert!(target <= ceiling);
         }
