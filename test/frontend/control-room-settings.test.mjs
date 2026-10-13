@@ -71,24 +71,30 @@ test("profiles list the built-ins first, then the rest by name", () => {
 
 test("profiles are saved only when every name is set, unique, and the built-ins stay", () => {
   const builtIns = ["h264", "720p", "1080p"].map((name) => ({ name, profile: NEW_PROFILE }));
-  const ok = profilesToSave([...builtIns, { name: " mine ", profile: NEW_PROFILE }], []);
+  const ok = profilesToSave([...builtIns, { name: " mine ", profile: NEW_PROFILE }], [], {});
   assert.deepEqual(Object.keys(ok.profiles).sort(), ["1080p", "720p", "h264", "mine"]);
-  assert.match(profilesToSave([...builtIns, { name: "  ", profile: NEW_PROFILE }], []).problem, /name/);
+  assert.match(profilesToSave([...builtIns, { name: "  ", profile: NEW_PROFILE }], [], {}).problem, /name/);
   assert.match(
     profilesToSave(
       [...builtIns, { name: "x", profile: NEW_PROFILE }, { name: "x ", profile: NEW_PROFILE }],
       [],
+      {},
     ).problem,
     /Two profiles/,
   );
-  assert.match(profilesToSave(builtIns.slice(1), []).problem, /"h264" must stay/);
+  assert.match(profilesToSave(builtIns.slice(1), [], {}).problem, /"h264" must stay/);
 });
 
-test("a profile an output names cannot be removed; the output would silently re-encode", () => {
+test("a stored profile an output names cannot be removed; one already missing does not block", () => {
   const builtIns = ["h264", "720p", "1080p"].map((name) => ({ name, profile: NEW_PROFILE }));
+  const stored = { h264: NEW_PROFILE, "720p": NEW_PROFILE, "1080p": NEW_PROFILE, mine: NEW_PROFILE };
   const output = (video) => ({ id: "o1", pipelineId: "p1", name: "CDN", url: "", config: { video, audio: { mode: "all" } } });
   const usesMine = output({ mode: "preset", preset: "mine" });
-  assert.match(profilesToSave(builtIns, [usesMine]).problem, /Output "CDN" uses profile "mine"/);
-  assert.ok("profiles" in profilesToSave([...builtIns, { name: "mine", profile: NEW_PROFILE }], [usesMine]));
-  assert.ok("profiles" in profilesToSave(builtIns, [output({ mode: "source" })]));
+  assert.match(profilesToSave(builtIns, [usesMine], stored).problem, /Output "CDN" uses profile "mine"/);
+  assert.ok("profiles" in profilesToSave([...builtIns, { name: "mine", profile: NEW_PROFILE }], [usesMine], stored));
+  assert.ok("profiles" in profilesToSave(builtIns, [output({ mode: "source" })], stored));
+  // The output already names a profile the engine does not have (it falls
+  // back today); an unrelated edit still saves.
+  const usesGone = output({ mode: "preset", preset: "gone" });
+  assert.ok("profiles" in profilesToSave(builtIns, [usesGone], stored));
 });

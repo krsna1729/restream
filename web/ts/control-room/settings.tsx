@@ -191,7 +191,7 @@ function Profiles(props: {
   save: Saver;
 }) {
   const [rows, setRows] = useState<readonly ProfileRow[]>(() => profileRows(props.current));
-  const result = profilesToSave(rows, props.outputs);
+  const result = profilesToSave(rows, props.outputs, props.current);
   const edit = (index: number, next: Partial<ProfileRow>) =>
     setRows(rows.map((row, at) => (at === index ? { ...row, ...next } : row)));
   return (

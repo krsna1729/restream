@@ -105,11 +105,13 @@ export function nextProfileName(rows: readonly ProfileRow[]): string {
 
 /** The profiles to save, or why they cannot be: every name is non-empty and
  * unique (a duplicate would silently replace the other), every built-in is
- * kept, and no profile an output names is removed (that output would fall
- * back to the baseline encode without saying so). */
+ * kept, and no stored profile an output names is removed here (that output
+ * would fall back to the baseline encode without saying so). An output that
+ * already names a missing profile does not block unrelated edits. */
 export function profilesToSave(
   rows: readonly ProfileRow[],
   outputs: readonly ConfigOutput[],
+  stored: TranscodeProfiles,
 ): { readonly profiles: TranscodeProfiles } | { readonly problem: string } {
   const profiles: TranscodeProfiles = {};
   for (const row of rows) {
@@ -122,7 +124,7 @@ export function profilesToSave(
   if (missing) return { problem: `The built-in profile "${missing}" must stay.` };
   for (const output of outputs) {
     const video = output.config.video;
-    if (video.mode === "preset" && !(video.preset in profiles)) {
+    if (video.mode === "preset" && video.preset in stored && !(video.preset in profiles)) {
       return { problem: `Output "${output.name}" uses profile "${video.preset}"; change it first.` };
     }
   }
