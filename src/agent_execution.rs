@@ -363,7 +363,9 @@ impl AgentExecutionStore {
 
 /// The record to drop when the store is full: a finished operation before a
 /// pending one, and an applying one last (dropping it would answer "not
-/// found" for a mutation that already ran); the oldest within each.
+/// found" for a mutation that already ran); the oldest within each. A new
+/// `Invalid` operation may go the moment it is created when every other
+/// record is pending; that is harmless, since it can never be approved.
 fn eviction_candidate(records: &HashMap<String, OperationRecord>) -> Option<String> {
     let liveness = |status: OperationStatus| match status {
         OperationStatus::Invalid
