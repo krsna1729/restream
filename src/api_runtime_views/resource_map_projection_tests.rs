@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use super::{
     DEFAULT_TOP_N, MAX_TOP_N, ResourceMapOptions, ResourceMapView, append_hotspots, egress_node,
     execution_for_stage, group_key, group_label, merge_thread_counts, node_score, number_field,
-    placed_shard_nodes, queue_hotspots, source_ring_node, stage_backend_pid, stage_node, top_nodes,
+    placed_shard_nodes, source_ring_node, stage_backend_pid, stage_node, top_nodes,
 };
 use crate::system_sampling::ChildProcessResourceSnapshot;
 
@@ -180,22 +180,6 @@ fn append_hotspots_deduplicates_and_ignores_non_string_entries() {
 }
 
 #[test]
-fn queue_hotspots_high_watermark_is_inclusive_at_75_percent() {
-    assert_eq!(queue_hotspots(75, 100, 0), vec!["queue_high"]);
-    assert_eq!(queue_hotspots(74, 100, 0), Vec::<&str>::new());
-    assert_eq!(
-        queue_hotspots(u64::MAX, 0, 0),
-        Vec::<&str>::new(),
-        "zero capacity must not report a hotspot even for a huge queue length"
-    );
-    assert_eq!(queue_hotspots(0, 100, 1), vec!["backpressure"]);
-    assert_eq!(
-        queue_hotspots(u64::MAX, u64::MAX, u64::MAX),
-        vec!["queue_high", "backpressure"]
-    );
-}
-
-#[test]
 fn execution_for_stage_maps_every_known_backend_and_defaults_to_shared() {
     let backend = |name: &str| json!({"lifecycle": {"backend": name}});
     assert_eq!(
@@ -261,21 +245,20 @@ fn egress_node_uses_tokio_task_for_non_fabric_output_types_regardless_of_protoco
     // types the fabric does not cover (HLS PUT upload), which share the
     // tokio pool like any other non-fabric async task — there is no
     // per-output OS thread left to attribute for any protocol.
-    let srt = egress_node(&json!({"outputId": "o1", "protocol": "srt"}), &[]);
+    let srt = egress_node(&json!({"outputId": "o1", "protocol": "srt"}));
     assert_eq!(srt["execution"], "tokio_task");
     assert_eq!(srt["threads"]["appOwned"], 0);
 
-    let rtmp = egress_node(&json!({"outputId": "o2", "protocol": "rtmp"}), &[]);
+    let rtmp = egress_node(&json!({"outputId": "o2", "protocol": "rtmp"}));
     assert_eq!(rtmp["execution"], "tokio_task");
     assert_eq!(rtmp["threads"]["appOwned"], 0);
 }
 
 #[test]
 fn egress_node_uses_shard_thread_for_fabric_owned_outputs_regardless_of_protocol() {
-    let fabric_srt = egress_node(
-        &json!({"outputId": "o3", "protocol": "srt", "fabric": true, "shardId": 2}),
-        &[],
-    );
+    let fabric_srt = egress_node(&json!(
+        {"outputId": "o3", "protocol": "srt", "fabric": true, "shardId": 2}
+    ));
     assert_eq!(fabric_srt["execution"], "shard_thread");
     // A fabric-owned output shares a fixed shard thread — it must not also
     // be counted as an app-owned OS thread, or the resource map
@@ -284,23 +267,11 @@ fn egress_node_uses_shard_thread_for_fabric_owned_outputs_regardless_of_protocol
     assert_eq!(fabric_srt["fabric"], true);
     assert_eq!(fabric_srt["shardId"], 2);
 
-    let fabric_rtmp = egress_node(
-        &json!({"outputId": "o4", "protocol": "rtmp", "fabric": true, "shardId": 0}),
-        &[],
-    );
+    let fabric_rtmp = egress_node(&json!(
+        {"outputId": "o4", "protocol": "rtmp", "fabric": true, "shardId": 0}
+    ));
     assert_eq!(fabric_rtmp["execution"], "shard_thread");
     assert_eq!(fabric_rtmp["threads"]["appOwned"], 0);
-}
-
-#[test]
-fn egress_node_with_no_matching_queue_reports_zeroed_stats_and_no_hotspots() {
-    let node = egress_node(
-        &json!({"outputId": "missing-queue", "protocol": "rtmp"}),
-        &[],
-    );
-    assert_eq!(node["memory"]["attributedBytes"], 0);
-    assert_eq!(node["hotspots"], json!([]));
-    assert_eq!(node["queue"], Value::Null);
 }
 
 #[test]

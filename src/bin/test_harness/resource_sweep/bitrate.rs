@@ -553,7 +553,6 @@ async fn sample_bitrate_window(
                 .as_array()
                 .into_iter()
                 .flatten()
-                .chain(avio["egressQueues"].as_array().into_iter().flatten())
                 .map(|queue| queue["highWaterBytes"].as_u64().unwrap_or(0))
                 .sum::<u64>()
                 / 1024,

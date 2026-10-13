@@ -260,17 +260,6 @@ fn stage_backend_pid(stage: &Value) -> Option<u32> {
         .and_then(|pid| u32::try_from(pid).ok())
 }
 
-fn queue_hotspots(len: u64, capacity: u64, blocked_writes: u64) -> Vec<&'static str> {
-    let mut hotspots = Vec::new();
-    if capacity > 0 && len.saturating_mul(100) >= capacity.saturating_mul(75) {
-        hotspots.push("queue_high");
-    }
-    if blocked_writes > 0 {
-        hotspots.push("backpressure");
-    }
-    hotspots
-}
-
 fn stage_node(
     stage: &Value,
     child_resources: &HashMap<u32, ChildProcessResourceSnapshot>,
@@ -340,7 +329,9 @@ fn stage_node(
     node
 }
 
-fn egress_node(egress: &Value, avio_queues: &[Value]) -> Value {
+/// An output holds no queue of its own (fabric leaves read the feed's ring
+/// in place), so it reports no attributed memory and no queue hotspots.
+fn egress_node(egress: &Value) -> Value {
     let output_id = egress
         .get("outputId")
         .and_then(Value::as_str)
@@ -349,15 +340,6 @@ fn egress_node(egress: &Value, avio_queues: &[Value]) -> Value {
         .get("protocol")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
-    let queue = avio_queues.iter().find(|queue| {
-        queue
-            .get("outputId")
-            .and_then(Value::as_str)
-            .is_some_and(|id| id == output_id)
-    });
-    let len = queue.map(|q| number_field(q, "lenBytes")).unwrap_or(0);
-    let capacity = queue.map(|q| number_field(q, "capacityBytes")).unwrap_or(0);
-    let blocked = queue.map(|q| number_field(q, "blockedWrites")).unwrap_or(0);
     // A fabric-owned output runs on a shared shard thread it does not own
     // exclusively — attributing a whole app-owned OS thread to it here
     // would double-count the same fixed shard pool once per output. RTMP,
@@ -383,7 +365,7 @@ fn egress_node(egress: &Value, avio_queues: &[Value]) -> Value {
         "execution": execution,
         "fabric": is_fabric,
         "shardId": egress.get("shardId").cloned().unwrap_or(Value::Null),
-        "memory": memory(len, "derived", "avio_egress_queue_len"),
+        "memory": Value::Null,
         "threads": {
             "appOwned": 0,
             "childProcess": 0,
@@ -391,8 +373,7 @@ fn egress_node(egress: &Value, avio_queues: &[Value]) -> Value {
         "status": egress.get("status").cloned().unwrap_or(Value::Null),
         "phase": egress.get("phase").cloned().unwrap_or(Value::Null),
         "metrics": egress.get("metrics").cloned().unwrap_or_else(|| json!({})),
-        "queue": queue.cloned().unwrap_or(Value::Null),
-        "hotspots": queue_hotspots(len, capacity, blocked),
+        "hotspots": [],
     })
 }
 
@@ -484,13 +465,6 @@ pub(crate) async fn resource_map(
         .get("memoryAccounting")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let avio_egress_queues: Vec<Value> = memory_accounting
-        .get("avioQueues")
-        .and_then(|queues| queues.get("egressQueues"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-
     let stages = engine_telemetry
         .get("stages")
         .and_then(Value::as_array)
@@ -604,11 +578,7 @@ pub(crate) async fn resource_map(
             .iter()
             .map(|stage| stage_node(stage, &child_resources)),
     );
-    nodes.extend(
-        egresses
-            .iter()
-            .map(|egress| egress_node(egress, &avio_egress_queues)),
-    );
+    nodes.extend(egresses.iter().map(egress_node));
 
     let srt_sender_limit = 512u64;
     let srt_sender_threads =
