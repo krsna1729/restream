@@ -368,7 +368,7 @@ fn oldest_operation_id(records: &HashMap<String, OperationRecord>) -> Option<Str
 }
 
 fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    crate::sync::lock(&mutex)
+    crate::sync::lock(mutex)
 }
 
 pub fn public_record(record: &OperationRecord) -> Value {
