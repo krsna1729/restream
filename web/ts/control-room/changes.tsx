@@ -392,20 +392,19 @@ function Operation(props: {
                   const next =
                     (await advanceOperation(operation.operationId, step, reason)) ??
                     (await getOperation(operation.operationId));
-                  // Both null: the engine forgot it (restart or eviction).
+                  // Both null (alerted): a network failure and a forgotten
+                  // operation look alike, so the card stays and the
+                  // operator chooses to start over.
                   if (next) props.onChange(next);
-                  else props.onDone();
                 })
               }
             >
               {label}
             </button>
           )}
-          {(step === null || step === "verify") && (
-            <button type="button" className="btn btn-sm btn-ghost" onClick={props.onDone}>
-              Start a new change
-            </button>
-          )}
+          <button type="button" className="btn btn-sm btn-ghost" onClick={props.onDone}>
+            Start a new change
+          </button>
         </div>
         <OperationResult operation={operation} />
       </div>
