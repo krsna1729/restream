@@ -287,6 +287,19 @@ checks on the pipeline's live input (`POST /pipelines/{id}/diagnostics/run`)
 on request, each with its result, issues, help and output, and the run
 downloads as the classic dashboard's `restream.diagnostics.v1` report.
 
+Previews (`preview.tsx`): the source deck plays the program
+(`/hls/{pipeline}/master.m3u8`) and each connected input (its `previewUrl`)
+muted through hls.js, only when asked, because a preview makes the engine
+segment that stream. The engine answers 404 until the first segment exists,
+so the player retries 404s for up to 15 s (Safari's own player does not
+retry, so the page polls the playlist first). A stream whose buffered media
+has not grown for 20 s is stalled: a stopped source raises no player error,
+its playlist only stops growing. The preview then stops and offers Retry; a
+wait for data reads "buffering", never "live". A 401 goes to the login page.
+More than one audio track adds a track picker. Inspect's detail for a
+selected stage adds its pipe counters (`/stages/{key}/telemetry`), which the
+resource map leaves out, and says so when the engine no longer has the stage.
+
 Proof: `test/frontend/control-room-fleet.test.mjs`,
 `test/frontend/control-room-operate.test.mjs`,
 `test/frontend/control-room-inspect.test.mjs`,

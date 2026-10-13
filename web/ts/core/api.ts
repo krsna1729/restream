@@ -389,6 +389,11 @@ export function buildRuntimeStateStreamUrl(since?: string): string {
   return withBasePath(path);
 }
 
+/** The HLS preview of what a pipeline sends (its program). */
+export function programPreviewUrl(pipelineId: string): string {
+  return withBasePath(`/hls/${encodeURIComponent(pipelineId)}/master.m3u8`);
+}
+
 async function createPipeline(
   args: PipelineWrite,
 ): Promise<PipelineMutationResponse | null> {
