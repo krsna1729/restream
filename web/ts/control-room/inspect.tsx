@@ -10,6 +10,7 @@ import {
   shardsFrom,
 } from "./inspect-model.js";
 import type { ResourceRow, RingView, ShardView } from "./inspect-model.js";
+import { Diagnostics } from "./diagnostics.js";
 import { PipelineScope } from "./pipeline-scope.js";
 import { Freshness, usePolled } from "./polled.js";
 import type { LiveSnapshot } from "./store.js";
@@ -29,7 +30,19 @@ export function Inspect(props: { live: LiveSnapshot; pipelineId: string | null }
       pipelineId={props.pipelineId}
       verb="inspect"
     >
-      {(pipelineId) => <Anatomy pipelineId={pipelineId} />}
+      {(pipelineId) => (
+        <>
+          <Anatomy pipelineId={pipelineId} />
+          <Diagnostics
+            pipeline={{
+              id: pipelineId,
+              name:
+                props.live.state?.pipelines.find((pipeline) => pipeline.id === pipelineId)?.name ??
+                pipelineId,
+            }}
+          />
+        </>
+      )}
     </PipelineScope>
   );
 }

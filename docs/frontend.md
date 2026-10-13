@@ -274,6 +274,17 @@ routing checked against the destination's caps (track and channel limits,
 with notes on what is dropped or downmixed) using the source's tracks from
 `/pipelines/{id}/probe` when someone publishes.
 
+Logs (`logs.tsx`, rules in `diagnose-model.ts`): the newest 200 persisted
+rows (`/logs`) for everything, engine-wide rows only, one pipeline (with its
+destinations' rows) or one destination, from a lowest level, optionally
+lifecycle events only; then every matching row live from `/logs/stream`,
+which resumes after the newest row read, so no row is lost or shown twice.
+History and stream use one filter set. The page keeps 500 rows, newest
+first; Pause live closes the stream. Inspect adds Diagnostics: the engine's
+checks on the pipeline's live input (`POST /pipelines/{id}/diagnostics/run`)
+on request, each with its result, issues, help and output, and the run
+downloads as the classic dashboard's `restream.diagnostics.v1` report.
+
 Proof: `test/frontend/control-room-fleet.test.mjs`,
 `test/frontend/control-room-operate.test.mjs`,
 `test/frontend/control-room-inspect.test.mjs`,
@@ -282,6 +293,7 @@ Proof: `test/frontend/control-room-fleet.test.mjs`,
 `test/frontend/control-room-settings.test.mjs`,
 `test/frontend/control-room-changes.test.mjs`,
 `test/frontend/control-room-manage.test.mjs`,
+`test/frontend/control-room-diagnose.test.mjs`,
 `test/frontend/frontend-runtime-state-stream.test.mjs` (stream liveness) and
 `test/frontend/control-room.spec.ts` (against a running engine).
 

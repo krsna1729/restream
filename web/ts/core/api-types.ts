@@ -7,6 +7,7 @@ import type {
   ConfigOutput,
   OutputConfig,
   SrtPipelineIngestConfig,
+  AppLogRow,
 } from "../types.js";
 import type { CapacitySnapshot, Diagnosis } from "./generated/runtime-state.js";
 
@@ -508,4 +509,19 @@ export interface ProbeAudioTrack {
 /** `GET /pipelines/{id}/probe`: what the live publisher sends (404 without one). */
 export interface PipelineProbe {
   audioTracks: ProbeAudioTrack[];
+}
+
+/** Filters shared by `GET /logs` and `GET /logs/stream`. `level` is the
+ * lowest level shown; `scope` "restream" means engine-wide rows only. */
+export interface LogFilters {
+  level?: "error" | "warn" | "info" | "debug";
+  scope?: "restream" | "pipeline" | "output";
+  pipelineId?: string;
+  outputId?: string;
+  eventClass?: "lifecycle";
+}
+
+export interface LogPage {
+  logs: AppLogRow[];
+  hasMore: boolean;
 }

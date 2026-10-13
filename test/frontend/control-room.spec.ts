@@ -680,3 +680,91 @@ test("manage: create a pipeline, edit its inputs, destinations, source and key, 
     await page.request.delete(`/api/v1/media/${encodeURIComponent(clip)}`);
   }
 });
+
+test("logs: a pipeline's history, then its rows live; paused, nothing arrives; engine-only rows name no pipeline", async ({
+  page,
+}) => {
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  const settings = await (await page.request.get("/api/v1/settings")).json();
+  const main = settings.pipelines.find((pipeline: { name: string }) => pipeline.name === "Main");
+  const output = settings.outputs.find((candidate: { name: string }) => candidate.name === "sink-a");
+  const outputPath = `/api/v1/pipelines/${main.id}/outputs/${output.id}`;
+  const writtenStarts = async () =>
+    (
+      await (await page.request.get(`/api/v1/logs?output_id=${output.id}&limit=1000`)).json()
+    ).logs.filter((row: { message: string }) => row.message === "output job started").length;
+
+  try {
+    await page.goto(`/control-room.html?w=logs&p=${main.id}`);
+    await expect(page.getByRole("combobox", { name: /^Scope\b/ })).toHaveValue(`p:${main.id}`);
+    const rows = page.getByRole("table", { name: "Log rows" }).locator("tbody tr");
+    const live = page.getByRole("region", { name: "Logs" }).getByRole("status");
+    await expect(live).toHaveText("live");
+    // The history holds the pipeline's lifecycle; a stop written after the
+    // page loaded arrives without a reload, named by its destination.
+    await expect(rows.filter({ hasText: "output started" }).first()).toBeVisible();
+    const stopped = rows.filter({ hasText: "output job stopped" });
+    const stoppedBefore = await stopped.count();
+    expect((await page.request.post(`${outputPath}/stop`)).ok()).toBe(true);
+    await expect(stopped).toHaveCount(stoppedBefore + 1);
+    await expect(stopped.first()).toContainText("sink-a");
+
+    // Paused: the engine writes the start, the page does not show it.
+    await page.getByRole("button", { name: "Pause live" }).click();
+    await expect(live).toHaveText("paused");
+    const started = rows.filter({ hasText: "output job started" });
+    const startedShown = await started.count();
+    const startsWritten = await writtenStarts();
+    expect((await page.request.post(`${outputPath}/start`)).ok()).toBe(true);
+    await expect.poll(writtenStarts).toBe(startsWritten + 1);
+    await page.waitForTimeout(1000);
+    await expect(started).toHaveCount(startedShown);
+    // Resumed: the history read again includes it.
+    await page.getByRole("button", { name: "Resume live" }).click();
+    await expect(live).toHaveText("live");
+    await expect(started).toHaveCount(startedShown + 1);
+
+    await page.getByRole("combobox", { name: /^Scope\b/ }).selectOption("engine");
+    await expect(rows.first()).toBeVisible();
+    const places = await rows.locator("td:nth-child(3)").allTextContents();
+    expect(new Set(places)).toEqual(new Set(["engine"]));
+  } finally {
+    await page.request.post(`${outputPath}/start`);
+  }
+});
+
+test("diagnostics: run the engine's checks on a live pipeline and download the report", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  const settings = await (await page.request.get("/api/v1/settings")).json();
+  const main = settings.pipelines.find((pipeline: { name: string }) => pipeline.name === "Main");
+
+  await page.goto(`/control-room.html?w=inspect&p=${main.id}`);
+  await page.getByRole("button", { name: "Run diagnostics" }).click();
+  const verdict = page
+    .getByRole("region", { name: "Diagnostics" })
+    .getByRole("status")
+    .filter({ hasText: /checks/ });
+  await expect(verdict).toBeVisible({ timeout: 90_000 });
+  const checks = page.getByRole("list", { name: "Diagnostic checks" }).locator(":scope > li");
+  const shown = await checks.count();
+  expect(shown).toBeGreaterThan(0);
+  await expect(verdict).toContainText(`${shown} checks`);
+
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download report" }).click();
+  const file = await download;
+  expect(file.suggestedFilename()).toMatch(new RegExp(`^diagnostic-Main-${main.id}-[0-9_-]+\\.json$`));
+  const report = JSON.parse(await readFile(await file.path(), "utf8"));
+  expect(report.schema).toBe("restream.diagnostics.v1");
+  expect(report.pipeline).toEqual({ id: main.id, name: "Main" });
+  expect(report.results).toHaveLength(shown);
+});

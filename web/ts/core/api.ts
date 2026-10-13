@@ -46,6 +46,8 @@ import type {
   ChangeOperation,
   PipelineWrite,
   PipelineProbe,
+  LogFilters,
+  LogPage,
 } from "./api-types.js";
 
 let activeMutationRequestCount = 0;
@@ -639,6 +641,17 @@ interface GetRestreamHistoryOptions {
   filter?: string | null;
 }
 
+/** Persisted log rows, newest first; `hasMore` when older rows exist. */
+async function getLogs(filters: LogFilters, limit: number): Promise<LogPage | null> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  if (filters.level) query.set("level", filters.level);
+  if (filters.scope) query.set("scope", filters.scope);
+  if (filters.pipelineId) query.set("pipeline_id", filters.pipelineId);
+  if (filters.outputId) query.set("output_id", filters.outputId);
+  if (filters.eventClass) query.set("event_class", filters.eventClass);
+  return apiRequest<LogPage>(`/api/v1/logs?${query.toString()}`);
+}
+
 async function getRestreamHistory(
   options: GetRestreamHistoryOptions = {},
 ): Promise<{ logs: unknown[] } | null> {
@@ -883,6 +896,7 @@ export {
   getPipelineTelemetry,
   getPipelineSummary,
   getPipelineProbe,
+  getLogs,
   getStageTelemetry,
   getResourceMap,
   getCapacityScenario,
