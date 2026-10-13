@@ -227,8 +227,29 @@ items).
   and the status contract.
 - Context: RTMP connections mostly fail and retry one at a time; SRT outputs
   on one shard deteriorate together after saturation.
-- Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
-  review).
+- Status: admission done (2026-10-13). SRT and RTMP pools place new outputs
+  on their least-loaded shard; before an Add, after the pool grows for it,
+  the shard it would land on projects its busy with it (`ShardSizer::admit`,
+  ceiling 60%: one shard degraded at 62%). Over the ceiling, the Add is not
+  dispatched: the output fails with phase `egress_capacity`, the diagnosis
+  is `capacityRefused` at the shard layer, an output alert names it, and the
+  restart backoff retries it until the output's retry budget is spent
+  (`retriesExhausted` then). The price uses the feed's rate: a runtime's
+  first look at a ring takes the rate of its retained window (DTS), and a
+  new SRT runtime looks at the ring its TS muxer reads, because the muxer
+  may start with the runtime and every Add of a burst lands within the
+  first 0.5 s (observed: 80 Adds in 170 ms were priced at the 4.8 Mbit/s
+  reference rate before this). Live gate `srt.admission` (one 8 Mbit/s
+  feed, one sink thread per 32 outputs): on one shard, 39 of 96 admitted,
+  peak busy 42%; on two shards, 80 of 192, peak busy 46% and 47%; no
+  stalls, and refused outputs sent nothing. Priced at the reference rate,
+  76 per shard were admitted at 61–65% peak busy. With one sink thread for
+  all 192 outputs the receiver, not the shards, was the limit: shard 0
+  reached 70% and 27 outputs stalled. Admitted outputs are never shed; if
+  load rises after admission (feed bitrate), only new Adds are refused.
+  Still open: HLS PUT, sink and pipeline fabrics have no admission; the
+  cold prior prices this host at 1.4–1.9× its measured per-output cost
+  until a healthy window measures it (Q-025).
 
 ### Q-036 [docs] [sonnet] Make runtime-crossings an enforced truth table
 - Goal: `docs/runtime-crossings.md` is the one statement of which thread

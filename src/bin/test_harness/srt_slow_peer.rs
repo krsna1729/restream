@@ -7,21 +7,18 @@
 //! on a live connection -- not a frozen (SIGSTOPped) peer, which
 //! `fault.srt-output-stall` covers separately. Healthy siblings go to the
 //! harness's fast SRT sink. SRT starts with one shard and grows from measured
-//! service demand. With `SLOW_PEER_EXACT_OWNER=1` the healthy siblings are
-//! chosen with the production
-//! `assign_output_to_shard` and the LIVE shard count, so every one of them
-//! (and the slow output) provably lives on the same shard, hence the same IPv4
-//! Owner and caller socket. (`shardId` in the output health row is not used: it
-//! is not a reliable leaf -> shard attribution.)
+//! service demand. With `SLOW_PEER_EXACT_OWNER=1` the run requires one live SRT
+//! shard before and after the pause, so every output (and the slow one)
+//! provably lives on that shard, hence the same IPv4 Owner and caller socket.
+//! (Placement is least-loaded, so on more shards an output's shard cannot be
+//! computed from its id; `shardId` in the output health row is not a reliable
+//! leaf -> shard attribution either.)
 //!
 //! Environment: `SLOW_PEER_HEALTHY` (default 10), `SLOW_PEER_WATCH_SECS` (30),
-//! `SLOW_PEER_EXACT_OWNER` (1: choose healthy siblings that the production
-//! rendezvous function assigns to the slow output's exact shard),
+//! `SLOW_PEER_EXACT_OWNER` (1: require the one-shard topology above),
 //! `SLOW_PEER_LABEL` (artifact name), `SLOW_PEER_PAUSE` (1; 0 = control run).
 
 use super::*;
-use restream::media::egress::command::OutputId;
-use restream::media::egress::manager::assign_output_to_shard;
 
 fn env_u(name: &str, default: u64) -> u64 {
     std::env::var(name)
@@ -81,55 +78,14 @@ async fn target_owner(api: &RampApi, target: u32) -> Value {
         .unwrap_or(Value::Null)
 }
 
-fn shard_of(output_id: &str, live_shards: u32) -> Result<u32, String> {
-    let count = std::num::NonZeroU32::new(live_shards).ok_or("no live SRT shards")?;
-    Ok(assign_output_to_shard(&OutputId::new(output_id), count).index())
-}
-
-/// Create candidate healthy outputs until `want` of them are assigned, by the
-/// production rendezvous function and the LIVE shard count, to the slow
-/// output's shard; candidates that hash elsewhere are deleted unstarted and
-/// never join the fault population. Bounded: fails rather than accept fewer.
-async fn select_same_shard_siblings(
-    api: &RampApi,
-    pipeline_id: &str,
-    slow_id: &str,
-    healthy_port: u16,
-    want: usize,
-    shards: u32,
-) -> Result<(u32, Vec<String>, usize, Value), String> {
-    const CANDIDATE_CAP: usize = 128;
-    let target = shard_of(slow_id, shards)?;
-    let mut kept = Vec::new();
-    let mut computed = serde_json::Map::new();
-    let mut created = 0usize;
-    while kept.len() < want {
-        if created >= CANDIDATE_CAP {
-            return Err(format!(
-                "only {} of {want} same-shard siblings after {CANDIDATE_CAP} candidates",
-                kept.len()
-            ));
-        }
-        created += 1;
-        let name = format!("healthy-{created:03}");
-        let oid = create_output(
-            api,
-            pipeline_id,
-            &name,
-            &harness_srt_output_url(healthy_port, &name, HarnessSrtMode::Publish),
-            "source",
-        )
-        .await?;
-        if shard_of(&oid, shards)? == target {
-            start_output(api, pipeline_id, &oid).await?;
-            computed.insert(oid.clone(), json!(target));
-            kept.push(oid);
-        } else {
-            api.delete_json(&format!("/api/v1/pipelines/{pipeline_id}/outputs/{oid}"))
-                .await?;
-        }
+/// The exact-owner topology: every output on the one live SRT shard.
+async fn require_one_srt_shard(api: &RampApi, when: &str) -> Result<(), String> {
+    match live_srt_shard_count(api).await? {
+        1 => Ok(()),
+        shards => Err(format!(
+            "exact owner needs one live SRT shard {when}, found {shards}"
+        )),
     }
-    Ok((target, kept, created, Value::Object(computed)))
 }
 
 pub(crate) async fn srt_slow_peer() -> Result<Value, String> {
@@ -167,70 +123,31 @@ pub(crate) async fn srt_slow_peer() -> Result<Value, String> {
 
     let exact_owner = env_u("SLOW_PEER_EXACT_OWNER", 0) == 1;
     let mut healthy_ids = Vec::new();
-    let slow_id;
-    let mut exact_topology = Value::Null;
-    if exact_owner {
-        // Slow output first, so the live shard count and its computed shard are
-        // known before any sibling is chosen.
-        slow_id = create_output(
+    for index in 0..healthy_count {
+        let oid = create_output(
             &api,
             &pid,
-            "slow",
-            &harness_srt_output_url(slow_port, "slow", HarnessSrtMode::Publish),
-            "source",
-        )
-        .await?;
-        start_output(&api, &pid, &slow_id).await?;
-        wait_for_outputs_progress(
-            &api,
-            &pid,
-            std::slice::from_ref(&slow_id),
-            Duration::from_secs(60),
-        )
-        .await?;
-        let shards = live_srt_shard_count(&api).await?;
-        let (target, kept, created, computed) =
-            select_same_shard_siblings(&api, &pid, &slow_id, healthy_port, healthy_count, shards)
-                .await?;
-        healthy_ids = kept;
-        exact_topology = json!({
-            "liveSrtShardCount": shards,
-            "targetShard": target,
-            "slowOutputId": slow_id,
-            "slowOutputComputedShard": shard_of(&slow_id, shards)?,
-            "healthyOutputIds": healthy_ids,
-            "healthyComputedShards": computed,
-            "candidatesCreated": created,
-            "addressFamily": "V4",
-            "inference": "same feed + same SRT shard + same address family = same Compio runtime, same IPv4 Owner, same shared caller socket",
-        });
-    } else {
-        for index in 0..healthy_count {
-            let oid = create_output(
-                &api,
-                &pid,
+            &format!("healthy-{index:02}"),
+            &harness_srt_output_url(
+                healthy_port,
                 &format!("healthy-{index:02}"),
-                &harness_srt_output_url(
-                    healthy_port,
-                    &format!("healthy-{index:02}"),
-                    HarnessSrtMode::Publish,
-                ),
-                "source",
-            )
-            .await?;
-            start_output(&api, &pid, &oid).await?;
-            healthy_ids.push(oid);
-        }
-        slow_id = create_output(
-            &api,
-            &pid,
-            "slow",
-            &harness_srt_output_url(slow_port, "slow", HarnessSrtMode::Publish),
+                HarnessSrtMode::Publish,
+            ),
             "source",
         )
         .await?;
-        start_output(&api, &pid, &slow_id).await?;
+        start_output(&api, &pid, &oid).await?;
+        healthy_ids.push(oid);
     }
+    let slow_id = create_output(
+        &api,
+        &pid,
+        "slow",
+        &harness_srt_output_url(slow_port, "slow", HarnessSrtMode::Publish),
+        "source",
+    )
+    .await?;
+    start_output(&api, &pid, &slow_id).await?;
     let mut all_ids = healthy_ids.clone();
     all_ids.push(slow_id.clone());
     wait_for_outputs_progress(&api, &pid, &all_ids, Duration::from_secs(60)).await?;
@@ -245,22 +162,19 @@ pub(crate) async fn srt_slow_peer() -> Result<Value, String> {
     }
     tokio::time::sleep(Duration::from_secs(3)).await;
 
-    // Assert the topology is unchanged immediately before fault injection.
-    let target_shard = exact_topology["targetShard"].as_u64().map(|v| v as u32);
+    // Assert the topology immediately before fault injection.
+    let mut exact_topology = Value::Null;
     let mut owner_at_start = Value::Null;
     if exact_owner {
-        let shards_now = live_srt_shard_count(&api).await?;
-        if u64::from(shards_now) != exact_topology["liveSrtShardCount"].as_u64().unwrap_or(0) {
-            return Err(format!(
-                "live SRT shard count changed to {shards_now} before the pause"
-            ));
-        }
-        for oid in healthy_ids.iter().chain(std::iter::once(&slow_id)) {
-            if Some(shard_of(oid, shards_now)?) != target_shard {
-                return Err(format!("{oid} no longer computes to the target shard"));
-            }
-        }
-        owner_at_start = target_owner(&api, target_shard.unwrap_or(0)).await;
+        require_one_srt_shard(&api, "before the pause").await?;
+        exact_topology = json!({
+            "liveSrtShardCount": 1,
+            "slowOutputId": slow_id,
+            "healthyOutputIds": healthy_ids,
+            "addressFamily": "V4",
+            "inference": "same feed + one SRT shard + same address family = same Compio runtime, same IPv4 Owner, same shared caller socket",
+        });
+        owner_at_start = target_owner(&api, 0).await;
     }
 
     // ---- pause application delivery on exactly one receiver
@@ -347,10 +261,8 @@ pub(crate) async fn srt_slow_peer() -> Result<Value, String> {
     let mut owner_at_end = Value::Null;
     let mut owner_productive = true;
     if exact_owner {
-        let shards_end = live_srt_shard_count(&api).await?;
-        owner_at_end = target_owner(&api, target_shard.unwrap_or(0)).await;
-        owner_productive = shards_end as u64
-            == exact_topology["liveSrtShardCount"].as_u64().unwrap_or(0)
+        owner_at_end = target_owner(&api, 0).await;
+        owner_productive = require_one_srt_shard(&api, "after the pause").await.is_ok()
             && owner_at_end["faulted"] == false
             && owner_at_end["txCompletedOk"].as_u64().unwrap_or(0)
                 > owner_at_start["txCompletedOk"].as_u64().unwrap_or(0)

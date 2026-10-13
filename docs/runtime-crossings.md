@@ -179,4 +179,12 @@ Disk             blocking file writer threads
   shard added only for new outputs, the tail retired after the dwell, and every
   surviving destination kept its original SRT connection with no failure,
   retry or unexpected close. Cross-host qualification of the coefficient
-  (Q-025) remains open.
+  (Q-025) remains open. Admission (Q-034): SRT and RTMP place each new output
+  on the least-loaded shard; an Add that would put that shard above 60% busy
+  after any growth it earns (the degradation began at 62%) is refused before
+  dispatch; the output reports `capacityRefused` at the shard layer and
+  retries on its restart backoff until its retry budget is spent. Admitted
+  outputs are never shed. A refused Add still counts toward growth, so it
+  may grow the pool (never past its ceiling); the new shard admits the next
+  output, and an empty one retires after the shrink dwell. Harness:
+  `srt.admission`.

@@ -136,10 +136,10 @@ async fn srt_fabric_registry_retains_native_runtime_once_per_feed() {
     let feed = TsFeed::new(&ts_ring, Arc::new(FeedEpoch::new()));
 
     let first = engine
-        .retain_srt_fabric_runtime(feed_id.clone(), &feed)
+        .retain_srt_fabric_runtime(feed_id.clone(), &feed, &ts_ring.ring)
         .await;
     let second = engine
-        .retain_srt_fabric_runtime(feed_id.clone(), &feed)
+        .retain_srt_fabric_runtime(feed_id.clone(), &feed, &ts_ring.ring)
         .await;
 
     assert_eq!(first, Ok(true));
@@ -169,7 +169,7 @@ async fn srt_fabric_registry_shutdown_helper_removes_and_joins_retained_runtime(
 
     assert_eq!(
         engine
-            .retain_srt_fabric_runtime(feed_id.clone(), &feed)
+            .retain_srt_fabric_runtime(feed_id.clone(), &feed, &ts_ring.ring)
             .await,
         Ok(true)
     );

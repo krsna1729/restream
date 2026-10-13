@@ -315,6 +315,7 @@ impl EgressReconciler {
                 spec,
                 feed_id: feed.feed_id,
                 feed: feed.feed,
+                source: feed.source,
                 terminated,
             })
         } else {

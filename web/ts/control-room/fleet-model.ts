@@ -225,6 +225,8 @@ export function describeCause(cause: Cause): string {
       return `egress shard ${cause.shard} stalled`;
     case "shardStopped":
       return `egress shard ${cause.shard} stopped`;
+    case "capacityRefused":
+      return `egress capacity full: ${cause.error}`;
     case "retriesExhausted":
       return "retries exhausted";
     case "retryBudgetNearlySpent":

@@ -9,7 +9,7 @@ use crate::media::egress::command::{EgressCommand, FeedId, OutputId};
 use crate::media::egress::factory::{RtmpFabricShardGroupError, spawn_rtmp_fabric_shard_group};
 use crate::media::egress::journal::RingFeed;
 use crate::media::egress::manager::{
-    EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome,
+    EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome, PlacementPolicy,
 };
 use crate::media::egress::runtime::{
     EgressFabricRuntime, EgressFabricRuntimeError, subscribe_fabric_wakes,
@@ -28,8 +28,21 @@ pub(crate) enum RtmpFabricEnsureError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RtmpFabricDispatchError {
-    MissingFeed { feed_id: FeedId },
+    MissingFeed {
+        feed_id: FeedId,
+    },
+    /// Admission refused the new output; nothing was dispatched.
+    Saturated(crate::media::egress::sizing::Saturated),
     Dispatch(EgressManagerDispatchError<EgressShardGroupError>),
+}
+
+impl RtmpFabricDispatchError {
+    pub(crate) fn refused(&self) -> Option<&crate::media::egress::sizing::Saturated> {
+        match self {
+            Self::Saturated(saturated) => Some(saturated),
+            _ => None,
+        }
+    }
 }
 
 impl MediaEngine {
@@ -59,8 +72,10 @@ impl MediaEngine {
                 |_| feed.clone_reader(),
             )
             .map_err(RtmpFabricEnsureError::Spawn)?;
+            // Least-loaded placement: see the SRT fabric.
             let manager_config = EgressManagerConfig::new(1, config.command_channel_capacity)
-                .expect("egress fabric manager config is clamped nonzero");
+                .expect("egress fabric manager config is clamped nonzero")
+                .with_placement_policy(PlacementPolicy::LeastLoaded);
             let runtime = EgressFabricRuntime::new(manager_config, group)
                 .map_err(RtmpFabricEnsureError::Runtime)?
                 .adaptive(config.shards);
@@ -135,29 +150,41 @@ impl MediaEngine {
             });
         };
 
-        // `assign_output_to_shard` places an `Add` under whatever shard
-        // count is live right now. If rescale below is about to resize the
-        // pool anyway, dispatching first would place the output, then
-        // immediately rehome it -- for a connection-oriented protocol like
-        // RTMP that means tearing down and reconnecting a socket that was
-        // just established (surfaced by the live concurrency harness as a
-        // spurious extra reconnect right after a fresh output starts).
-        // Size the pool for an `Add` *before* dispatching it so it lands on
-        // its final shard the first time. Remove defers shrinking until the
-        // periodic controller has observed sustained headroom.
+        // Placement uses the shard count live right now. If rescale below is
+        // about to resize the pool anyway, dispatching first would place the
+        // output, then immediately rehome it -- for a connection-oriented
+        // protocol like RTMP that means tearing down and reconnecting a
+        // socket that was just established (surfaced by the live concurrency
+        // harness as a spurious extra reconnect right after a fresh output
+        // starts). Size the pool for an `Add` *before* dispatching it so it
+        // lands on its final shard the first time, then admit it there.
+        // Remove defers shrinking until the periodic controller has observed
+        // sustained headroom.
         let mut rescale_inputs = rescale_inputs;
-        if matches!(command, EgressCommand::Add(_))
+        // An Add that is not dispatched leaves its publish startup to nobody.
+        let mut startup = None;
+        if let EgressCommand::Add(spec) = &command
             && let Some(inputs) = rescale_inputs.take()
         {
+            let reason = runtime.reason_for(&command);
+            let source = inputs.0.clone();
+            self.rescale_rtmp_fabric(feed_id, runtime, inputs, reason);
+            if matches!(reason, crate::media::egress::runtime::ResizeReason::Add)
+                && let Err(saturated) =
+                    runtime.admit_add(crate::config::EgressShardProfile::OutputCount, &spec.id)
             {
-                let reason = runtime.reason_for(&command);
-                self.rescale_rtmp_fabric(feed_id, runtime, inputs, reason);
-            };
+                source.remove(&spec.id);
+                return Err(RtmpFabricDispatchError::Saturated(saturated));
+            }
+            startup = Some((source, spec.id.clone()));
         }
 
-        let outcome = runtime
-            .dispatch(command)
-            .map_err(RtmpFabricDispatchError::Dispatch)?;
+        let outcome = runtime.dispatch(command).map_err(|error| {
+            if let Some((source, output_id)) = &startup {
+                source.remove(output_id);
+            }
+            RtmpFabricDispatchError::Dispatch(error)
+        })?;
 
         if let Some(inputs) = rescale_inputs.take() {
             self.rescale_rtmp_fabric(

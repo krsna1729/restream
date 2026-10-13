@@ -69,7 +69,7 @@ ruledOut: Array<Layer>, };
 
 export type Layer = "ingest" | "feed" | "shard" | "destination";
 
-export type Cause = { "code": "noPublisher" } | { "code": "stageNotProducing", stage: string, phase: string, } | { "code": "shardPanicked", shard: number, } | { "code": "shardStalled", shard: number, } | { "code": "shardStopped", shard: number, } | { "code": "retriesExhausted" } | { "code": "retryBudgetNearlySpent", attempts: number, max: number, } | { "code": "rejected", phase: string | null, error: string, } | { "code": "backpressured", stalled: boolean, } | { "code": "noProgress" };
+export type Cause = { "code": "noPublisher" } | { "code": "stageNotProducing", stage: string, phase: string, } | { "code": "shardPanicked", shard: number, } | { "code": "shardStalled", shard: number, } | { "code": "shardStopped", shard: number, } | { "code": "capacityRefused", error: string, } | { "code": "retriesExhausted" } | { "code": "retryBudgetNearlySpent", attempts: number, max: number, } | { "code": "rejected", phase: string | null, error: string, } | { "code": "backpressured", stalled: boolean, } | { "code": "noProgress" };
 
 export type DesiredOutputState = "running" | "stopped";
 

@@ -629,34 +629,16 @@ impl RingBuffer {
         stats
     }
 
-    /// Estimate the aggregate encoded payload bitrate from packets currently
-    /// retained in the ring.
-    ///
-    /// This is sampled only during stage startup. It deliberately uses media
-    /// DTS rather than wall-clock arrival time: a publisher can deliver in
-    /// bursts, while FFmpeg's probe must cover a bounded amount of media time.
-    /// Use both the retained-window average and a short media-time peak. Early
-    /// live ingest can be VBR-heavy around the first keyframe, and FFmpeg needs
-    /// enough bytes to see the audio/video headers in that burst even when the
-    /// whole retained window averages lower. The startup policy applies the
-    /// final cap, so this estimator should err toward stable startup.
-    pub fn observed_payload_bitrate_bps(&self) -> Option<u64> {
-        const MIN_OBSERVATION_MS: i64 = 250;
-        const PEAK_WINDOW_MS: i64 = 250;
-
+    /// Packets retained in the ring as (DTS, payload bytes), one entry per
+    /// DTS, in DTS order.
+    fn payload_by_dts(&self) -> Vec<(i64, u64)> {
         let mut samples = Vec::with_capacity(self.capacity);
-
         for slot in &self.slots {
             let Some(packet) = slot.data.load_full() else {
                 continue;
             };
             samples.push((packet.dts, packet.payload.len() as u64));
         }
-
-        if samples.len() < 2 {
-            return None;
-        }
-
         samples.sort_unstable_by_key(|(dts, _)| *dts);
 
         let mut grouped: Vec<(i64, u64)> = Vec::with_capacity(samples.len());
@@ -669,22 +651,32 @@ impl RingBuffer {
             }
             grouped.push((dts, bytes));
         }
+        grouped
+    }
 
-        let min_dts = grouped.first()?.0;
-        let max_dts = grouped.last()?.0;
-        let payload_bytes = grouped
-            .iter()
-            .fold(0u64, |acc, (_, bytes)| acc.saturating_add(*bytes));
-        let span_ms = max_dts.checked_sub(min_dts)?;
-        if payload_bytes == 0 || span_ms < MIN_OBSERVATION_MS {
-            return None;
-        }
+    /// Average payload bitrate over the retained window's media time (DTS),
+    /// at least 250 ms of it: what the feed runs at now, however long the
+    /// ring has existed.
+    pub fn retained_payload_bitrate_bps(&self) -> Option<u64> {
+        average_payload_bps(&self.payload_by_dts())
+    }
 
-        let average_bps = payload_bytes
-            .saturating_mul(8)
-            .saturating_mul(1_000)
-            .div_ceil(span_ms as u64);
+    /// Estimate the aggregate encoded payload bitrate from packets currently
+    /// retained in the ring.
+    ///
+    /// This is sampled only during stage startup. It deliberately uses media
+    /// DTS rather than wall-clock arrival time: a publisher can deliver in
+    /// bursts, while FFmpeg's probe must cover a bounded amount of media time.
+    /// Use both the retained-window average and a short media-time peak. Early
+    /// live ingest can be VBR-heavy around the first keyframe, and FFmpeg needs
+    /// enough bytes to see the audio/video headers in that burst even when the
+    /// whole retained window averages lower. The startup policy applies the
+    /// final cap, so this estimator should err toward stable startup.
+    pub fn observed_payload_bitrate_bps(&self) -> Option<u64> {
+        const PEAK_WINDOW_MS: i64 = 250;
 
+        let grouped = self.payload_by_dts();
+        let average_bps = average_payload_bps(&grouped)?;
         let mut peak_bps = 0u64;
         let mut window_bytes = 0u64;
         let mut end = 0usize;
@@ -806,6 +798,28 @@ impl DtsEnforcer {
         }
         (pts, dts)
     }
+}
+
+/// Payload bitrate over `grouped`'s DTS span (milliseconds), at least 250 ms.
+fn average_payload_bps(grouped: &[(i64, u64)]) -> Option<u64> {
+    const MIN_OBSERVATION_MS: i64 = 250;
+
+    if grouped.len() < 2 {
+        return None;
+    }
+    let span_ms = grouped.last()?.0.checked_sub(grouped.first()?.0)?;
+    let payload_bytes = grouped
+        .iter()
+        .fold(0u64, |acc, (_, bytes)| acc.saturating_add(*bytes));
+    if payload_bytes == 0 || span_ms < MIN_OBSERVATION_MS {
+        return None;
+    }
+    Some(
+        payload_bytes
+            .saturating_mul(8)
+            .saturating_mul(1_000)
+            .div_ceil(span_ms as u64),
+    )
 }
 
 #[cfg(test)]

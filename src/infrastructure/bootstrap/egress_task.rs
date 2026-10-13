@@ -13,6 +13,7 @@ use futures_util::FutureExt as _;
 use sqlx::SqlitePool;
 use tracing::{error, warn};
 
+use crate::application::diagnosis::CAPACITY_REFUSED_PHASE;
 use crate::application::models::JobStatus;
 use crate::application::reconcile::next_output_retry_count;
 use crate::config::RuntimeTuning;
@@ -29,6 +30,8 @@ use super::FailureTracker;
 pub(super) struct SrtFabricTask {
     pub(super) feed_id: FeedId,
     pub(super) feed: Arc<TsFeed>,
+    /// The ring the feed's muxer reads (`retain_srt_fabric_runtime`).
+    pub(super) source: Arc<crate::media::ring_buffer::RingBuffer>,
     pub(super) spec: OutputSpec,
     /// Set by the shard when the fabric closes this leaf for a reason the
     /// application did not request (peer closed, protocol failure, or
@@ -368,7 +371,11 @@ impl EgressTask {
     async fn run_srt_fabric(&self, fabric: SrtFabricTask) {
         match self
             .engine
-            .retain_srt_fabric_runtime(fabric.feed_id.clone(), fabric.feed.as_ref())
+            .retain_srt_fabric_runtime(
+                fabric.feed_id.clone(),
+                fabric.feed.as_ref(),
+                fabric.source.as_ref(),
+            )
             .await
         {
             Ok(_) => {}
@@ -406,12 +413,16 @@ impl EgressTask {
                     .engine
                     .release_srt_fabric_runtime(&fabric.feed_id)
                     .await;
+                let (phase, message) = match error.refused() {
+                    Some(saturated) => (CAPACITY_REFUSED_PHASE, saturated.to_string()),
+                    None => ("srt_fabric_dispatch", format!("{error:?}")),
+                };
                 self.engine
                     .record_egress_error_if_current(
                         &self.output_id,
                         &self.registration,
-                        "srt_fabric_dispatch",
-                        format!("{error:?}"),
+                        phase,
+                        message,
                     )
                     .await;
                 return;
@@ -490,12 +501,16 @@ impl EgressTask {
                     .engine
                     .release_rtmp_fabric_runtime(&fabric.feed_id)
                     .await;
+                let (phase, message) = match error.refused() {
+                    Some(saturated) => (CAPACITY_REFUSED_PHASE, saturated.to_string()),
+                    None => ("rtmp_fabric_dispatch", format!("{error:?}")),
+                };
                 self.engine
                     .record_egress_error_if_current(
                         &self.output_id,
                         &self.registration,
-                        "rtmp_fabric_dispatch",
-                        format!("{error:?}"),
+                        phase,
+                        message,
                     )
                     .await;
                 return;
