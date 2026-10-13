@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { getConfig, patchConfig } from "../core/api.js";
 import type { TranscodeProfile } from "../core/api-types.js";
-import type { ConfigData, SrtGlobalIngestConfig } from "../types.js";
+import type { ConfigData, ConfigOutput, SrtGlobalIngestConfig } from "../types.js";
 import { SettingsForm } from "./settings-form.js";
 import type { Saver } from "./settings-form.js";
 import { Security } from "./security.js";
@@ -39,7 +39,11 @@ export function Settings() {
       <div className="grid gap-4 lg:grid-cols-2">
         <General config={config} save={save} />
         <SrtIngest current={config.srtIngest} save={save} />
-        <Profiles current={config.transcodeProfiles ?? {}} save={save} />
+        <Profiles
+          current={config.transcodeProfiles ?? {}}
+          outputs={config.outputs}
+          save={save}
+        />
         <Security config={config} save={save} />
       </div>
     </div>
@@ -108,7 +112,7 @@ function SrtIngest(props: { current: SrtGlobalIngestConfig | undefined; save: Sa
         props.save({
           srtIngest: {
             mode,
-            passphrase: encrypted ? passphrase : null,
+            passphrase: encrypted ? passphrase.trim() : null,
             pbkeylen,
             latencyMs,
           },
@@ -181,9 +185,13 @@ const PROFILE_NUMBERS: ReadonlyArray<[keyof TranscodeProfile, string, number, nu
   ["height", "Height (0 source)", 0],
 ];
 
-function Profiles(props: { current: Record<string, TranscodeProfile>; save: Saver }) {
+function Profiles(props: {
+  current: Record<string, TranscodeProfile>;
+  outputs: readonly ConfigOutput[];
+  save: Saver;
+}) {
   const [rows, setRows] = useState<readonly ProfileRow[]>(() => profileRows(props.current));
-  const result = profilesToSave(rows);
+  const result = profilesToSave(rows, props.outputs);
   const edit = (index: number, next: Partial<ProfileRow>) =>
     setRows(rows.map((row, at) => (at === index ? { ...row, ...next } : row)));
   return (

@@ -2,6 +2,7 @@
 // change anything, and the words it uses for what the engine reports.
 
 import type { RateLimitAttempt, TranscodeProfile, TranscodeProfiles } from "../core/api-types.js";
+import type { ConfigOutput } from "../types.js";
 
 /** The engine's x264 presets and tunes (`TranscodeProfile::validate`). */
 export const X264_PRESETS = [
@@ -55,16 +56,25 @@ export function resetOne(attempt: RateLimitAttempt): { scope: string; ip: string
   return { scope: attempt.scope, ip: attempt.ip };
 }
 
-/** Why a new password cannot be sent yet, or null when it can. */
-export function passwordProblem(next: string, confirm: string): string | null {
-  if (!next) return "Enter a new password.";
+/** The engine's dashboard password floor (`MIN_DASHBOARD_PASSWORD_LEN`), in bytes. */
+const MIN_PASSWORD_BYTES = 12;
+
+const byteLength = (text: string) => new TextEncoder().encode(text).length;
+
+/** Why a password change cannot be sent yet, or null when it can. */
+export function passwordProblem(current: string, next: string, confirm: string): string | null {
+  if (!current) return "Enter the current password.";
+  if (byteLength(next) < MIN_PASSWORD_BYTES) {
+    return `The new password must be at least ${MIN_PASSWORD_BYTES} bytes.`;
+  }
   if (next !== confirm) return "The two new passwords differ.";
   return null;
 }
 
-/** The SRT passphrase rule (10 to 79 bytes) for encrypted ingest. */
+/** The SRT passphrase rule for encrypted ingest: 10 to 79 bytes once
+ * trimmed, as the engine checks it. */
 export function passphraseProblem(passphrase: string): string | null {
-  const bytes = new TextEncoder().encode(passphrase).length;
+  const bytes = byteLength(passphrase.trim());
   return bytes >= 10 && bytes <= 79 ? null : "The passphrase must be 10 to 79 bytes.";
 }
 
@@ -94,10 +104,12 @@ export function nextProfileName(rows: readonly ProfileRow[]): string {
 }
 
 /** The profiles to save, or why they cannot be: every name is non-empty and
- * unique (a duplicate would silently replace the other), and every built-in
- * is kept. */
+ * unique (a duplicate would silently replace the other), every built-in is
+ * kept, and no profile an output names is removed (that output would fall
+ * back to the baseline encode without saying so). */
 export function profilesToSave(
   rows: readonly ProfileRow[],
+  outputs: readonly ConfigOutput[],
 ): { readonly profiles: TranscodeProfiles } | { readonly problem: string } {
   const profiles: TranscodeProfiles = {};
   for (const row of rows) {
@@ -108,6 +120,12 @@ export function profilesToSave(
   }
   const missing = BUILT_IN_PROFILES.find((name) => !(name in profiles));
   if (missing) return { problem: `The built-in profile "${missing}" must stay.` };
+  for (const output of outputs) {
+    const video = output.config.video;
+    if (video.mode === "preset" && !(video.preset in profiles)) {
+      return { problem: `Output "${output.name}" uses profile "${video.preset}"; change it first.` };
+    }
+  }
   return { profiles };
 }
 

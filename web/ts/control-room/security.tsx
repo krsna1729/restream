@@ -34,7 +34,7 @@ function Password({ recommended }: { recommended: boolean }) {
     <SettingsForm
       id="settings-password"
       title="Dashboard password"
-      problem={passwordProblem(next, confirm)}
+      problem={passwordProblem(current, next, confirm)}
       onSave={async () => {
         if ((await changePassword(current, next)) === null) return false;
         setCurrent("");

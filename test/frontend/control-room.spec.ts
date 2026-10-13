@@ -368,6 +368,15 @@ test("settings: save a name and a profile, refuse a short passphrase, forget a f
     await expect(srt.getByRole("button", { name: "Save" })).toBeDisabled();
     await expect(srt).toContainText("10 to 79 bytes");
 
+    // The page's password fields reach the engine: a wrong current password
+    // is judged as wrong (not as an empty new one), and nothing changes.
+    const password = page.getByRole("region", { name: "Dashboard password" });
+    await password.getByLabel("Current password").fill("not-the-password");
+    await password.getByLabel("New password", { exact: true }).fill("a-long-new-password");
+    await password.getByLabel("New password again").fill("a-long-new-password");
+    await password.getByRole("button", { name: "Save" }).click();
+    await expect(page.locator("#error-alert")).toContainText("Current password is incorrect");
+
     // The engine accepts the reset the page sends (its own scope key).
     const attempts = page.getByRole("table", { name: "Failed attempts" });
     const forget = attempts.getByRole("button", { name: /Forget .* for Dashboard login/ });

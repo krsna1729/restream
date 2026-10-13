@@ -25,6 +25,7 @@ pub struct LoginPayload {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChangePasswordPayload {
     pub current_password: Option<String>,
     pub new_password: Option<String>,
@@ -255,10 +256,10 @@ pub async fn change_password_handler(
 
     let current_password = payload.current_password.unwrap_or_default();
     let new_password = payload.new_password.unwrap_or_default();
-    if let Some(r) = check_field_len("current_password", &current_password, MAX_PASSWORD_LEN) {
+    if let Some(r) = check_field_len("currentPassword", &current_password, MAX_PASSWORD_LEN) {
         return r;
     }
-    if let Some(r) = check_field_len("new_password", &new_password, MAX_PASSWORD_LEN) {
+    if let Some(r) = check_field_len("newPassword", &new_password, MAX_PASSWORD_LEN) {
         return r;
     }
 

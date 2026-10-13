@@ -48,7 +48,7 @@ message.
 |---|---|---|
 | `POST` | `/api/auth/login` | Create a persisted session from `{ "password": "..." }` |
 | `POST` | `/api/auth/logout` | Delete the current session |
-| `POST` | `/api/auth/change-password` | Change the password; existing sessions remain valid |
+| `POST` | `/api/auth/change-password` | Change the password from `{ "currentPassword", "newPassword" }` (at least 12 bytes); every other session is revoked, the current one stays |
 
 Static pages/assets are served without an auth gate; protected API handlers
 enforce the cookie themselves. `/healthz` and `/audio-caps` are public.

@@ -30,17 +30,22 @@ test("attempts read in operator words; a ban counts down in whole seconds", () =
   assert.equal(banLabel({ banned: true, banRemainingMs: null }), "banned");
 });
 
-test("a new password must be given twice, the same", () => {
-  assert.match(passwordProblem("", ""), /Enter/);
-  assert.match(passwordProblem("secret-1", "secret-2"), /differ/);
-  assert.equal(passwordProblem("secret-1", "secret-1"), null);
+test("a password change needs the current one and a new one of 12 bytes, given twice", () => {
+  assert.match(passwordProblem("", "long-enough-1", "long-enough-1"), /current/);
+  assert.match(passwordProblem("admin", "x".repeat(11), "x".repeat(11)), /12 bytes/);
+  assert.equal(passwordProblem("admin", "x".repeat(12), "x".repeat(12)), null);
+  // Four three-byte characters are 12 bytes: long enough.
+  assert.equal(passwordProblem("admin", "€€€€", "€€€€"), null);
+  assert.match(passwordProblem("admin", "long-enough-1", "long-enough-2"), /differ/);
 });
 
-test("an SRT passphrase is 10 to 79 bytes, counted as bytes", () => {
+test("an SRT passphrase is 10 to 79 bytes once trimmed, counted as bytes", () => {
   assert.notEqual(passphraseProblem("123456789"), null);
   assert.equal(passphraseProblem("1234567890"), null);
   assert.equal(passphraseProblem("x".repeat(79)), null);
   assert.notEqual(passphraseProblem("x".repeat(80)), null);
+  // The engine trims first: 12 characters with spaces are 8 bytes, too short.
+  assert.notEqual(passphraseProblem("  short123  "), null);
   // Five three-byte characters are 15 bytes: long enough.
   assert.equal(passphraseProblem("€€€€€"), null);
 });
@@ -66,13 +71,24 @@ test("profiles list the built-ins first, then the rest by name", () => {
 
 test("profiles are saved only when every name is set, unique, and the built-ins stay", () => {
   const builtIns = ["h264", "720p", "1080p"].map((name) => ({ name, profile: NEW_PROFILE }));
-  const ok = profilesToSave([...builtIns, { name: " mine ", profile: NEW_PROFILE }]);
+  const ok = profilesToSave([...builtIns, { name: " mine ", profile: NEW_PROFILE }], []);
   assert.deepEqual(Object.keys(ok.profiles).sort(), ["1080p", "720p", "h264", "mine"]);
-  assert.match(profilesToSave([...builtIns, { name: "  ", profile: NEW_PROFILE }]).problem, /name/);
+  assert.match(profilesToSave([...builtIns, { name: "  ", profile: NEW_PROFILE }], []).problem, /name/);
   assert.match(
-    profilesToSave([...builtIns, { name: "x", profile: NEW_PROFILE }, { name: "x ", profile: NEW_PROFILE }])
-      .problem,
+    profilesToSave(
+      [...builtIns, { name: "x", profile: NEW_PROFILE }, { name: "x ", profile: NEW_PROFILE }],
+      [],
+    ).problem,
     /Two profiles/,
   );
-  assert.match(profilesToSave(builtIns.slice(1)).problem, /"h264" must stay/);
+  assert.match(profilesToSave(builtIns.slice(1), []).problem, /"h264" must stay/);
+});
+
+test("a profile an output names cannot be removed; the output would silently re-encode", () => {
+  const builtIns = ["h264", "720p", "1080p"].map((name) => ({ name, profile: NEW_PROFILE }));
+  const output = (video) => ({ id: "o1", pipelineId: "p1", name: "CDN", url: "", config: { video, audio: { mode: "all" } } });
+  const usesMine = output({ mode: "preset", preset: "mine" });
+  assert.match(profilesToSave(builtIns, [usesMine]).problem, /Output "CDN" uses profile "mine"/);
+  assert.ok("profiles" in profilesToSave([...builtIns, { name: "mine", profile: NEW_PROFILE }], [usesMine]));
+  assert.ok("profiles" in profilesToSave(builtIns, [output({ mode: "source" })]));
 });
