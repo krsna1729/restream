@@ -280,7 +280,9 @@ destinations' rows) or one destination, from a lowest level, optionally
 lifecycle events only; then every matching row live from `/logs/stream`,
 which resumes after the newest row read, so no row is lost or shown twice.
 History and stream use one filter set. The page keeps 500 rows, newest
-first; Pause live closes the stream. Inspect adds Diagnostics: the engine's
+first; Pause live closes the stream and keeps the rows shown, and Resume
+reopens it after the newest row shown, so it delivers what the pause missed.
+A failed history read says so and offers Read again. Inspect adds Diagnostics: the engine's
 checks on the pipeline's live input (`POST /pipelines/{id}/diagnostics/run`)
 on request, each with its result, issues, help and output, and the run
 downloads as the classic dashboard's `restream.diagnostics.v1` report.

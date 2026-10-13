@@ -691,6 +691,8 @@ test("logs: a pipeline's history, then its rows live; paused, nothing arrives; e
   const settings = await (await page.request.get("/api/v1/settings")).json();
   const main = settings.pipelines.find((pipeline: { name: string }) => pipeline.name === "Main");
   const output = settings.outputs.find((candidate: { name: string }) => candidate.name === "sink-a");
+  expect(main, "the bench fixture has a Main pipeline").toBeTruthy();
+  expect(output, "the bench fixture has a sink-a output").toBeTruthy();
   const outputPath = `/api/v1/pipelines/${main.id}/outputs/${output.id}`;
   const writtenStarts = async () =>
     (
@@ -712,9 +714,13 @@ test("logs: a pipeline's history, then its rows live; paused, nothing arrives; e
     await expect(stopped).toHaveCount(stoppedBefore + 1);
     await expect(stopped.first()).toContainText("sink-a");
 
-    // Paused: the engine writes the start, the page does not show it.
+    // Paused: the engine writes the start, the page does not show it, and
+    // keeps the rows it shows.
+    const table = page.getByRole("table", { name: "Log rows" });
+    await table.evaluate((element) => element.setAttribute("data-probe", "kept"));
     await page.getByRole("button", { name: "Pause live" }).click();
     await expect(live).toHaveText("paused");
+    await expect(table).toHaveAttribute("data-probe", "kept");
     const started = rows.filter({ hasText: "output job started" });
     const startedShown = await started.count();
     const startsWritten = await writtenStarts();
@@ -722,10 +728,12 @@ test("logs: a pipeline's history, then its rows live; paused, nothing arrives; e
     await expect.poll(writtenStarts).toBe(startsWritten + 1);
     await page.waitForTimeout(1000);
     await expect(started).toHaveCount(startedShown);
-    // Resumed: the history read again includes it.
+    // Resumed: the stream sends what was written while paused; the rows on
+    // screen were never read again (the table, and its mark, stayed).
     await page.getByRole("button", { name: "Resume live" }).click();
     await expect(live).toHaveText("live");
     await expect(started).toHaveCount(startedShown + 1);
+    await expect(table).toHaveAttribute("data-probe", "kept");
 
     await page.getByRole("combobox", { name: /^Scope\b/ }).selectOption("engine");
     await expect(rows.first()).toBeVisible();
@@ -746,6 +754,7 @@ test("diagnostics: run the engine's checks on a live pipeline and download the r
   expect(login.ok()).toBe(true);
   const settings = await (await page.request.get("/api/v1/settings")).json();
   const main = settings.pipelines.find((pipeline: { name: string }) => pipeline.name === "Main");
+  expect(main, "the bench fixture has a Main pipeline").toBeTruthy();
 
   await page.goto(`/control-room.html?w=inspect&p=${main.id}`);
   await page.getByRole("button", { name: "Run diagnostics" }).click();

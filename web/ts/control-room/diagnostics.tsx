@@ -86,8 +86,8 @@ export function Diagnostics(props: { pipeline: { id: string; name: string } }) {
                 <p className="text-xs opacity-70">{check.description}</p>
                 {check.issues.length > 0 && (
                   <ul className="list-disc pl-5 text-warning">
-                    {check.issues.map((issue) => (
-                      <li key={issue}>{issue}</li>
+                    {check.issues.map((issue, index) => (
+                      <li key={index}>{issue}</li>
                     ))}
                   </ul>
                 )}

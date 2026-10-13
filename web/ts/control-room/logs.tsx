@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { getLogs } from "../core/api.js";
 import { createManagedLogStream } from "../core/log-stream.js";
@@ -34,35 +34,51 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null }) {
   const [rows, setRows] = useState<AppLogRow[] | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [streamDown, setStreamDown] = useState(false);
+  /** Which filter set the history was read for, and how that read ended. */
+  const [history, setHistory] = useState<{ key: string; status: "loaded" | "failed" } | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const shown = useRef(rows);
+  shown.current = rows;
   const filters = useMemo(() => logFilters(scope, level, lifecycleOnly), [scope, level, lifecycleOnly]);
   const filterKey = JSON.stringify(filters);
 
+  // The history is read once per filter set; Pause and Resume only close and
+  // reopen the stream, so the rows on screen stay where they are.
   useEffect(() => {
     let alive = true;
-    const stream = createManagedLogStream();
     setRows(null);
-    setStreamDown(false);
+    setHistory(null);
     void getLogs(filters, HISTORY_ROWS).then((page) => {
       if (!alive) return;
-      const history = page?.logs ?? [];
-      setRows(history);
-      setHasMore(page?.hasMore ?? false);
-      if (!following) return;
-      // Resume after the newest row shown: the engine sends what was written
-      // since the read, then live rows, so none is lost or doubled.
-      const newest = Math.max(0, ...history.map((row) => row.id ?? 0));
-      stream.sync({
-        filters,
-        resumeAfterId: newest || null,
-        onLog: (row) => setRows((shown) => withLiveRow(shown ?? [], row)),
-        onUnavailable: () => setStreamDown(true),
-      });
+      if (page === null) {
+        setHistory({ key: filterKey, status: "failed" });
+        return;
+      }
+      setRows(page.logs);
+      setHasMore(page.hasMore);
+      setHistory({ key: filterKey, status: "loaded" });
     });
     return () => {
       alive = false;
-      stream.close();
     };
-  }, [filterKey, following]);
+  }, [filterKey, attempt]);
+
+  useEffect(() => {
+    if (!following || history?.key !== filterKey || history.status !== "loaded") return;
+    setStreamDown(false);
+    const stream = createManagedLogStream();
+    // Resume after the newest row shown: the engine sends what was written
+    // since (what a pause missed, too), then live rows, so none is lost or
+    // doubled. With nothing shown the stream starts live.
+    const newest = Math.max(0, ...(shown.current ?? []).map((row) => row.id ?? 0));
+    stream.sync({
+      filters,
+      resumeAfterId: newest || null,
+      onLog: (row) => setRows((current) => withLiveRow(current ?? [], row)),
+      onUnavailable: () => setStreamDown(true),
+    });
+    return () => stream.close();
+  }, [filterKey, following, history]);
 
   const names = useMemo(() => {
     const map = new Map<string, string>();
@@ -161,7 +177,14 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null }) {
           {!following ? "paused" : streamDown ? "live stream unavailable" : "live"}
         </span>
       </div>
-      {rows === null ? (
+      {history?.key === filterKey && history.status === "failed" ? (
+        <p className="text-error">
+          The engine did not return the log.{" "}
+          <button type="button" className="btn btn-xs" onClick={() => setAttempt((count) => count + 1)}>
+            Read again
+          </button>
+        </p>
+      ) : rows === null ? (
         <p className="opacity-70">Loading log…</p>
       ) : rows.length === 0 ? (
         <p className="opacity-70">No rows match.</p>
