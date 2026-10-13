@@ -733,7 +733,7 @@ fn impact_preview(request: &PlanRequest) -> ImpactPreview {
         "No concrete pipeline impact was identified.".to_string()
     } else {
         format!(
-            "Would affect {} pipeline(s) and {} existing output(s); execution remains disabled in phase 4.",
+            "Would affect {} pipeline(s) and {} existing output(s).",
             affected_pipelines.len(),
             affected_outputs.len()
         )
