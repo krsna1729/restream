@@ -151,6 +151,7 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
   await api.getEngineTelemetry();
   await api.getStageTelemetry("pipe /1:video:720p");
   await api.getResourceMap("pipe /1", { view: "detail", topN: 40 });
+  await api.getYoutubeMonitoringStatus("https://youtu.be/a?si=b&t=1");
   await api.logout();
 
   assert.deepEqual(
@@ -183,6 +184,10 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
       [
         "GET",
         "/api/v1/engine/resource-map?pipeline_id=pipe+%2F1&view=detail&top_n=40",
+      ],
+      [
+        "GET",
+        "/api/v1/monitoring/youtube-status?url=https%3A%2F%2Fyoutu.be%2Fa%3Fsi%3Db%26t%3D1",
       ],
       ["POST", "/api/v1/auth/logout"],
     ],

@@ -23,6 +23,7 @@ items).
 - [Q-036 enforced runtime truth table](#q-036-docs-sonnet-make-runtime-crossings-an-enforced-truth-table)
 - [Q-047 MoQ](#q-047-protocol-opus-moq-interop-spike-parked)
 - [Q-049 silent SRT leaves](#q-049-resilience-opus-find-why-connected-srt-leaves-sent-nothing-under-host-overload)
+- [Q-050 inputs and stages in runtime state](#q-050-architecture-sonnet-project-inputs-and-stages-into-the-runtime-state)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -259,3 +260,16 @@ items).
 - Gates: a reproduction (load generator plus one feed) or a proof that the
   leaf cannot stall while connected; the fix keeps sibling leaves unaffected.
 - Status: open (Filed: 2026-10-12 by claude, found while fixing Q-048).
+
+### Q-050 [architecture] [sonnet] Project inputs and stages into the runtime state
+- Goal: the control room reads pipeline inputs and stages from
+  `/api/v1/state/stream` (Q-042's projection: pipelines and outputs today)
+  instead of polling them; nothing else changes for operators.
+- Evidence: after the FE7 cut, Operate polls `/pipelines/{id}/inputs` and
+  the graph every 2 s; Inspect and Monitor poll the resource map and the
+  graph (`usePolled` in `operate.tsx`, `inspect.tsx`, `monitor.tsx`).
+- Gates: the drift test of the generated TypeScript contract; resync tests
+  for the new entities; a Playwright case that sees an input change without
+  a poll.
+- Status: open (Filed: 2026-10-13 by claude, the follow-up Q-042 named when
+  it closed at the FE7 cut).

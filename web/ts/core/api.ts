@@ -29,6 +29,7 @@ import type {
   MediaFileAnalysis,
   TranscodeProfiles,
   RateLimitState,
+  YoutubeMonitoringStatus,
   GraphData,
   ChangeRequest,
   ChangePlan,
@@ -663,6 +664,15 @@ async function getProcessingGraph(
   );
 }
 
+/** What YouTube's watch page says about a stream, fetched by the engine. */
+async function getYoutubeMonitoringStatus(
+  url: string,
+): Promise<YoutubeMonitoringStatus | null> {
+  return apiRequest<YoutubeMonitoringStatus>(
+    `/api/v1/monitoring/youtube-status?url=${encodeURIComponent(url)}`,
+  );
+}
+
 /** The engine's judgement of a change; nothing is mutated. */
 async function planChange(body: ChangeRequest): Promise<ChangePlan | null> {
   return apiRequest<ChangePlan>("/api/v1/agent/plans", { method: "POST", body });
@@ -745,6 +755,7 @@ export {
   getRateLimitState,
   resetRateLimitState,
   getProcessingGraph,
+  getYoutubeMonitoringStatus,
   planChange,
   createOperation,
   getOperation,

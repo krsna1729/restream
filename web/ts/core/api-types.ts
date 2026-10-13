@@ -309,6 +309,15 @@ export interface RateLimitState {
   attempts: RateLimitAttempt[];
 }
 
+/** `GET /api/v1/monitoring/youtube-status`: the watch page's live flags. */
+export interface YoutubeMonitoringStatus {
+  canonical_watch_url: string;
+  live_now: boolean;
+  live_content: boolean;
+  upcoming: boolean;
+  title: string | null;
+}
+
 /** One node of `GET /api/v1/pipelines/{id}/graph` (runtime topology). */
 export interface GraphNode {
   id: string;
