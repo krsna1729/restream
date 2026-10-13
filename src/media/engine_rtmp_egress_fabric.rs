@@ -159,18 +159,20 @@ impl MediaEngine {
         // its final shard the first time. Remove defers shrinking until the
         // periodic controller has observed sustained headroom.
         let mut rescale_inputs = rescale_inputs;
-        if matches!(command, EgressCommand::Add(_))
+        if let EgressCommand::Add(spec) = &command
             && let Some(inputs) = rescale_inputs.take()
         {
             let reason = runtime.reason_for(&command);
             if matches!(reason, crate::media::egress::runtime::ResizeReason::Add) {
                 runtime.forecast_feed(&inputs.1.0.publication_ring());
-                runtime
-                    .admit_add(
-                        crate::config::EgressShardProfile::OutputCount,
-                        crate::capacity::HostCapacity::get(),
-                    )
-                    .map_err(RtmpFabricDispatchError::Saturated)?;
+                if let Err(saturated) = runtime.admit_add(
+                    crate::config::EgressShardProfile::OutputCount,
+                    crate::capacity::HostCapacity::get(),
+                ) {
+                    // Nothing was dispatched, so nothing will take it.
+                    inputs.0.remove(&spec.id);
+                    return Err(RtmpFabricDispatchError::Saturated(saturated));
+                }
             }
             self.rescale_rtmp_fabric(feed_id, runtime, inputs, reason);
         }
