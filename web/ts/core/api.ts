@@ -26,6 +26,7 @@ import type {
   OutputMutationArgs,
   MediaFile,
   IngestConfig,
+  PipelineFileIngestConfig,
   MediaFileAnalysis,
   TranscodeProfiles,
   RateLimitState,
@@ -609,6 +610,14 @@ async function stopIngest(id: string): Promise<IngestConfig | null> {
   );
 }
 
+async function getPipelineFileIngest(
+  pipeId: string,
+): Promise<PipelineFileIngestConfig | null> {
+  return apiRequest<PipelineFileIngestConfig>(
+    `/api/v1/pipelines/${encodeURIComponent(pipeId)}/file-ingest`,
+  );
+}
+
 async function getMediaFileAnalysis(
   filename: string,
 ): Promise<MediaFileAnalysis | null> {
@@ -746,6 +755,7 @@ export {
   uploadMediaFile,
   deleteMediaFile,
   renameMediaFile,
+  getPipelineFileIngest,
   startIngest,
   stopIngest,
   getMediaFileAnalysis,

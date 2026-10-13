@@ -274,6 +274,18 @@ export interface IngestConfig {
   running: boolean;
 }
 
+export interface PipelineFileIngestConfig {
+  configured: boolean;
+  id?: string;
+  filename?: string;
+  streamKey?: string;
+  loop?: boolean;
+  startTime?: string;
+  liveOptimized?: boolean;
+  targetGopSeconds?: number;
+  running: boolean;
+}
+
 export interface MediaFileAnalysis {
   videoCodec?: string | null;
   fps?: number | null;
