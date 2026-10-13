@@ -402,7 +402,12 @@ function Operation(props: {
               {label}
             </button>
           )}
-          <button type="button" className="btn btn-sm btn-ghost" onClick={props.onDone}>
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            disabled={busy}
+            onClick={props.onDone}
+          >
             Start a new change
           </button>
         </div>
