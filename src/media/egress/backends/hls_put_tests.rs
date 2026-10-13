@@ -195,3 +195,59 @@ fn a_reset_or_a_close_mid_response_fails_the_exchange() {
     };
     assert!(matches!(step, ExchangeStep::Failed(error) if error.contains("closed")));
 }
+
+mod framing {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Whatever path and query the operator's URL carries, an upload's
+        /// head is exactly one HTTP/1.1 PUT that a server parses back to
+        /// the same target, host and length.
+        #[test]
+        fn any_upload_url_frames_one_request(
+            path in "[ -~\u{80}-\u{7ff}]{0,40}",
+            query in proptest::option::of("[ -~\u{80}-\u{7ff}]{0,40}"),
+            file_name in "[a-z0-9._-]{1,20}",
+            playlist in any::<bool>(),
+            length in 0usize..100_000,
+        ) {
+            let url = match &query {
+                Some(query) => format!("http://origin:8080/{path}?{query}"),
+                None => format!("http://origin:8080/{path}"),
+            };
+            let Some(target) = HlsPutTarget::parse(&url) else {
+                return Ok(());
+            };
+            let request = UploadRequest {
+                target: if playlist {
+                    UploadTarget::Playlist { last_sequence: None, end: false }
+                } else {
+                    UploadTarget::Segment { sequence: 0 }
+                },
+                file_name,
+                content_type: "video/mp2t",
+                body: Bytes::from(vec![0; length]),
+                fresh_connection: false,
+            };
+            let exchange = Exchange::new(&target, &request, deadline());
+            let mut headers = [httparse::EMPTY_HEADER; 8];
+            let mut parsed = httparse::Request::new(&mut headers);
+            let status = parsed.parse(&exchange.head);
+            prop_assert_eq!(status, Ok(httparse::Status::Complete(exchange.head.len())));
+            prop_assert_eq!(parsed.method, Some("PUT"));
+            let expected_target = target.request_target(&request);
+            prop_assert_eq!(parsed.path, Some(expected_target.as_str()));
+            let header = |name: &str| {
+                parsed
+                    .headers
+                    .iter()
+                    .find(|header| header.name.eq_ignore_ascii_case(name))
+                    .map(|header| header.value)
+            };
+            prop_assert_eq!(header("host"), Some(&b"origin:8080"[..]));
+            let expected_length = length.to_string();
+            prop_assert_eq!(header("content-length"), Some(expected_length.as_bytes()));
+        }
+    }
+}

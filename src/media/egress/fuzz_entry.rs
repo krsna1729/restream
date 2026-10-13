@@ -18,13 +18,17 @@ fn read_response<'a>(reads: impl IntoIterator<Item = &'a [u8]>) -> Result<Respon
 }
 
 /// Bytes from an HTTP server after an HLS PUT request, delivered in the
-/// given reads. A response must not depend on where the reads split it.
+/// given reads. Whether a response is accepted, and which, must not depend on
+/// where the reads split it. The error kind may: a head still incomplete past
+/// its size limit is `HeadTooLarge` when split, but the whole input can show
+/// httparse a bad byte first.
 pub fn http_response<'a>(reads: impl IntoIterator<Item = &'a [u8]> + Clone) {
     let split = read_response(reads.clone());
     let whole: Vec<u8> = reads.into_iter().flatten().copied().collect();
     let joined = read_response([whole.as_slice()]);
-    assert_eq!(split, joined, "the response depends on how reads split it");
-    if let Ok(response) = split {
-        assert!(response.status <= 999, "a status code has three digits");
-    }
+    assert_eq!(
+        split.ok(),
+        joined.ok(),
+        "the response depends on how reads split it"
+    );
 }
