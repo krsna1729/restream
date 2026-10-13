@@ -171,9 +171,10 @@ items).
 - Status: step 1 done (2026-10-13): one `HostCapacity` (`src/capacity.rs`),
   read once at boot, holds the CPU count and the CONTROL, MEDIA and
   per-pool egress defaults (values unchanged); every sizing law and the
-  capacity priors read it (before, three call sites read
-  `available_parallelism` without the cgroup quota, and each fabric re-read
-  `/proc` and `/sys` on every rescale); `/metrics/system` `hostCapacity`
+  capacity priors read it (before, three priors read `available_parallelism`,
+  the process's own cgroup, rather than the root `cpu.max` + affinity count
+  of the thread laws, and each fabric re-read `/proc` and `/sys` on every
+  rescale); `/metrics/system` `hostCapacity`
   reports CPUs and threads per class. Measured (C = 6, 4 mixed scenarios up
   to 100 outputs): CONTROL + MEDIA use less than 0.02 core and egress shards
   carry over 90 % of engine CPU, so resizing resident classes does not move

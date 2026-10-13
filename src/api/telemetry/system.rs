@@ -321,7 +321,7 @@ fn host_capacity_json(state: &AppState, egress_shards: usize) -> serde_json::Val
         "rtmpIngressOwners": rtmp,
         "srtIngressOwners": srt,
         "egressShards": egress_shards,
-        "threads": control + media + rtmp + srt + egress_shards,
+        "sizedThreads": control + media + rtmp + srt + egress_shards,
     })
 }
 

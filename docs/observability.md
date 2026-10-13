@@ -535,9 +535,11 @@ Both summary and full `GET /metrics/system` responses include `hostCapacity`:
 `cpu.max`, read once at boot), and the threads each execution class holds now:
 `controlWorkers` (Tokio), `mediaWorkers`, `rtmpIngressOwners`,
 `srtIngressOwners`, `egressShards` (running, all pools), and their sum
-`threads`. `threads` above `cpus` is not overload: an idle thread costs no
-CPU. MEDIA CPU time per class is in `mediaExecutor`; the resource sweep
-measures every thread group (`threadCpuPct`).
+`sizedThreads`. That sum covers only these sized classes, not the process:
+the blocking pool, resolver, recording and FFmpeg pipe threads are outside
+it. `sizedThreads` above `cpus` is not overload: an idle thread costs no CPU.
+MEDIA CPU time per class is in `mediaExecutor`; the resource sweep measures
+every thread group (`threadCpuPct`).
 
 ### Media executor (`mediaExecutor`)
 
