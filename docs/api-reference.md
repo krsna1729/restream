@@ -15,7 +15,7 @@ returned by login.
 - [Process Logs](#process-logs)
 - [Output Status](#output-status)
 - [Probe, Graph, and Diagnostics](#probe-graph-and-diagnostics)
-- [Optional Agent Plane](#optional-agent-plane)
+- [Agent Plane](#agent-plane)
 - [Recording](#recording)
 - [File Ingest](#file-ingest)
 - [Media Files](#media-files)
@@ -472,15 +472,16 @@ RTMP and SRT inputs run the transport-oriented checks documented in
 source-file presence and analysis, file-ingest runtime state, and preview /
 recording readiness.
 
-## Optional Agent Plane
+## Agent Plane
 
-The phase-4 agent read/planning plane is behind the `agent-plane` Cargo feature.
-Normal core builds compile it out and return `404` from `/api/v1/agent/*`
-routes with `compiledIn: false`.
+The agent read/planning plane (`agent-plane`) and its approval-gated execution
+(`agent-execution`) are Cargo features in the default build; they back the
+control room's Change Studio and the MCP sidecar. A build with
+`--no-default-features` compiles them out and returns `404` from
+`/api/v1/agent/*` routes with `compiledIn: false`.
 
-When compiled with `--features agent-plane`, the routes are authenticated,
-read-only, and do not mutate pipeline, output, or runtime state. Execution is
-reserved for the separate `agent-execution` phase-6 feature.
+The read/planning routes are authenticated, read-only, and do not mutate
+pipeline, output, or runtime state.
 
 The agent capability route catalog intentionally lists only agent-plane routes.
 Core operator APIs may expose raw operator data such as target URLs; agents
@@ -496,9 +497,18 @@ state.
 | `POST` | `/api/v1/agent/plans/validate` | Return only validation results for a draft plan |
 | `POST` | `/api/v1/agent/graph-diff-preview` | Return graph/impact preview for a draft plan |
 
-When compiled with `--features agent-execution`, the API also exposes
+With `agent-execution` (default), the API also exposes
 approval-gated operation routes. These routes are still authenticated, and
 operation responses are redacted before they are returned.
+
+Approval is a confirmation step, not separation of duties: the dashboard has
+one principal, so the same session (or an MCP sidecar given its cookie or
+bearer token) can create, approve and apply an operation. The record keeps
+the authenticated approver (`approval.approvedBy`, always the dashboard
+session) apart from the request's unverified `approvedBy`
+(`approval.claimedBy`). The engine keeps at most 1024 operations in memory
+(finished ones are dropped first, an applying one last; all are lost on
+restart), and creating one accepts a body of at most 256 KiB.
 
 | Method | Route | Purpose |
 |---|---|---|

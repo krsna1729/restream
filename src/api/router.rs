@@ -81,6 +81,9 @@ use super::telemetry::{
 };
 
 const DEFAULT_API_BODY_LIMIT_BYTES: usize = 4 * 1024 * 1024;
+/// Operation create stores the whole request (up to 1024 operations are
+/// kept), so it takes a far smaller body than the API-wide limit.
+const AGENT_OPERATION_BODY_LIMIT_BYTES: usize = 256 * 1024;
 
 // These path lists document which transport surfaces are intentionally public
 // versus session-gated. They are also reused by tests and external tooling that
@@ -403,7 +406,8 @@ fn create_app_router() -> Router<Arc<AppState>> {
         )
         .route(
             "/api/v1/agent/operations",
-            post(agent_operation_create_handler),
+            post(agent_operation_create_handler)
+                .layer(DefaultBodyLimit::max(AGENT_OPERATION_BODY_LIMIT_BYTES)),
         )
         .route(
             "/api/v1/agent/operations/{operation_id}",

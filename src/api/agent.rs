@@ -1,4 +1,5 @@
-//! Authenticated HTTP edge for optional agent planning and execution features.
+//! Authenticated HTTP edge for agent planning and execution (default
+//! features); without them the routes answer 404 with `compiledIn: false`.
 
 #[cfg(feature = "agent-plane")]
 mod context;

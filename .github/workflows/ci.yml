@@ -77,6 +77,10 @@ jobs:
           # Agent tool list (discovery, MCP catalog, dispatch) and agent output mutations.
           cargo test --lib --no-default-features \
             --features mcp-embedded,agent-execution -- agent_mcp agent_service
+          # The agent plane is a default feature; the opt-out build still
+          # answers its routes with 404 compiledIn:false. Lint and test it.
+          cargo clippy --lib --test api --no-default-features -- -D warnings
+          cargo test --no-default-features --test api -- agent::
 
   architecture-guardrails:
     name: Source architecture audit

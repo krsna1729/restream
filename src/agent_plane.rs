@@ -1,8 +1,8 @@
-//! Optional agent read/planning plane.
+//! Agent read/planning plane.
 //!
-//! This module is compiled only with the `agent-plane` Cargo feature. It keeps
-//! phase-4 agent support out of the core runtime while still exposing typed,
-//! testable planning primitives when the feature is enabled.
+//! Compiled with the `agent-plane` Cargo feature, which the default build
+//! enables; `--no-default-features` removes it. It exposes typed, testable
+//! planning primitives to the HTTP edge and the MCP sidecar.
 
 mod catalog;
 #[cfg(test)]
@@ -733,7 +733,7 @@ fn impact_preview(request: &PlanRequest) -> ImpactPreview {
         "No concrete pipeline impact was identified.".to_string()
     } else {
         format!(
-            "Would affect {} pipeline(s) and {} existing output(s); execution remains disabled in phase 4.",
+            "Would affect {} pipeline(s) and {} existing output(s).",
             affected_pipelines.len(),
             affected_outputs.len()
         )

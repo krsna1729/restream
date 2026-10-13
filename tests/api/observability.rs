@@ -360,7 +360,6 @@ async fn stage_telemetry_returns_404_for_unknown_stage() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
-#[cfg(not(feature = "agent-plane"))]
 #[tokio::test]
 async fn pipeline_alerts_requires_auth_and_returns_array() {
     let (app, cookie) = authenticated_app().await;

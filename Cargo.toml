@@ -22,7 +22,10 @@ undocumented_unsafe_blocks = "deny"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = []
+# The agent plane and its approval-gated execution back the control room's
+# Change Studio, so every build carries them; `--no-default-features` removes
+# them (the lower MCP layers are proven to compile without them).
+default = ["agent-execution"]
 agent-plane = []
 agent-execution = ["agent-plane"]
 mcp-core = []
