@@ -391,3 +391,65 @@ test("settings: save a name and a profile, refuse a short passphrase, forget a f
     });
   }
 });
+
+test("changes: the engine refuses an incomplete change, then a destination is added through approve, apply and verify", async ({
+  page,
+}) => {
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  const name = `cr-changes-${Date.now()}`;
+  const created = await page.request.post("/api/v1/pipelines", {
+    data: { name, streamKey: `crchanges_${Date.now()}` },
+  });
+  expect(created.ok()).toBe(true);
+  const pipelineId: string = (await created.json()).pipeline.id;
+
+  await page.goto("/control-room.html?w=changes");
+  try {
+    const define = page.getByRole("region", { name: "Define the change" });
+    const stages = page.getByRole("list", { name: "Change progress" }).getByRole("listitem");
+    await define.getByLabel("Why (kept in the audit log)").fill("add a DR destination");
+    await define.getByLabel("Pipeline").selectOption({ label: name });
+
+    // An add without a name or URL: the engine says why, nothing is created.
+    await define.getByRole("button", { name: "Preview" }).click();
+    const judgement = page.getByRole("region", { name: "Engine judgement" });
+    await expect(judgement).toContainText("addOutput requires a non-empty name.");
+    await expect(stages.nth(1)).toHaveAttribute("data-state", "failed");
+    await expect(page.getByRole("button", { name: "Create operation" })).toHaveCount(0);
+
+    await define.getByLabel("Name").fill("cr-dr");
+    await define.getByLabel("URL").fill("rtmp://127.0.0.1:9/live/crdr");
+    // The earlier judgement no longer speaks for the edited change.
+    await expect(judgement).toHaveCount(0);
+    await define.getByRole("button", { name: "Preview" }).click();
+    await expect(judgement.getByText("valid", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Create operation" }).click();
+
+    const operation = page.getByRole("region", { name: "Operation" });
+    const status = operation.locator("[data-status]");
+    await expect(status).toHaveText("awaitingApproval");
+    await operation.getByLabel("Approval reason (audited)").fill("drill");
+    await operation.getByRole("button", { name: "Approve" }).click();
+    await expect(status).toHaveText("approved");
+    await operation.getByRole("button", { name: "Apply" }).click();
+    await expect(status).toHaveText("applied");
+    await operation.getByRole("button", { name: "Verify" }).click();
+    await expect(status).toHaveText("verified");
+    await expect(operation.getByRole("table", { name: "Verification" })).toContainText("passed");
+    await expect(stages.nth(3)).toHaveAttribute("data-state", "done");
+
+    // The engine stored the destination on this pipeline.
+    const settings = await (await page.request.get("/api/v1/settings")).json();
+    expect(
+      settings.outputs.some(
+        (output: { name: string; pipelineId: string }) =>
+          output.name === "cr-dr" && output.pipelineId === pipelineId,
+      ),
+    ).toBe(true);
+  } finally {
+    await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
+  }
+});

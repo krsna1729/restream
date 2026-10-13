@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { withBasePath } from "../core/base-path.js";
 import { Capacity } from "./capacity.js";
+import { Changes } from "./changes.js";
 import { Fleet } from "./fleet.js";
 import { formatAge } from "./format.js";
 import { Incidents } from "./incidents.js";
@@ -104,6 +105,7 @@ export function App() {
         {place.workspace === "capacity" && <Capacity live={live} />}
         {place.workspace === "media" && <Media live={live} />}
         {place.workspace === "system" && <System live={live} />}
+        {place.workspace === "changes" && <Changes live={live} />}
         {place.workspace === "settings" && <Settings />}
       </main>
     </div>

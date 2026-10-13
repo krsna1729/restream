@@ -23,7 +23,6 @@ items).
 - [Q-036 enforced runtime truth table](#q-036-docs-sonnet-make-runtime-crossings-an-enforced-truth-table)
 - [Q-042 runtime truth](#q-042-architecture-opus-feed-the-dashboard-from-the-revisioned-runtime-state)
 - [Q-044 frontend cut](#q-044-frontend-opus-hard-cut-the-frontend-to-one-react-root)
-- [Q-045 frontend product](#q-045-frontend-opus-build-the-control-room-on-live-data)
 - [Q-047 MoQ](#q-047-protocol-opus-moq-interop-spike-parked)
 - [Q-049 silent SRT leaves](#q-049-resilience-opus-find-why-connected-srt-leaves-sent-nothing-under-host-overload)
 
@@ -266,40 +265,14 @@ items).
 - Remaining: one React root. The vanilla views (`web/ts/features/*`) still
   render into the 42 KB `web/pages/index.html` shell by DOM id, and
   `dashboard-v2-loader.ts` mounts twelve React islands into it. The control
-  room (Q-045) grows beside it as its own page; when it covers the current
-  views it becomes `/`, and the shell, the loader, the vanilla views, the
+  room (`/control-room.html`) now has every mockup workspace, on live data;
+  after a parity check it becomes `/`, and the shell, the loader, the vanilla views, the
   DOM-id drift check (`scripts/check/dom-id-drift.mjs`), the tests that
   pin DOM ids and the shell's router (`web/ts/core/pipeline-workspace.ts`,
   the `?mode=` contract) are deleted in one change: one router remains.
 - Gates: `npm run test:frontend`, Playwright; a tokei-measured reduction of
   frontend source plus test glue.
 - Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
-### Q-045 [frontend] [opus] Build the control room on live data
-- Goal: the workspaces of the
-  [control-room mockup](design/control-room-mockup.html): Fleet, Pipelines,
-  Operate (source deck, live media graph, destination matrix), Inspect
-  (resource map, ring, shard), Monitor, Incidents (evidence packet),
-  Capacity (Flow Doctor, scenario), Media, System (readiness, owners,
-  provenance), Changes (preview, approve, apply, verify).
-- Rule: a workspace ships only on live backend data; the mockup's numbers
-  are illustrative.
-- Done so far: `/control-room.html` (one React root, one live store over
-  the state stream, `?w=`/`&p=` route) with Fleet, Pipelines (inventory),
-  Operate (source deck with promote, media graph, destination matrix with
-  start/stop), Inspect (resource map, ring, shards, attribution), Monitor
-  (correlated signals, in-page history), Incidents (ranked open alerts,
-  timeline, evidence packet), Capacity (service centers, Flow Doctor,
-  scenario projection by the engine), Media (library, probe and ingest
-  readiness, upload/rename/delete, storage), System (host checks,
-  execution classes as reported, SRT ingress owners, provenance, SBOM) and
-  Settings (names, SRT ingest, transcode profiles, failed-attempt limits and
-  list, password, log out). Left: Changes. See
-  [Frontend](frontend.md#control-room).
-- Gates: Playwright per workspace against a running engine.
-- Depends on: Q-042 (state). Q-043 (done) added the output `diagnosis` for
-  the Incidents evidence packet.
-- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
-
 ### Q-047 [protocol] [opus] MoQ interop spike (parked)
 - Goal: a pinned-SHA spike on `moq-dev/moq` (IETF MOQT with MSF/LOC)
   with one retention layer (no ring to MoQ-cache copy) behind a Compio

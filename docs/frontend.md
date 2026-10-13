@@ -3,8 +3,7 @@
 The dashboard's design system, route contract and visual baseline. Source
 lives in `web/ts/` and `web/styles/input.css`; `public/js/` is generated.
 The target operator experience is the
-[control-room mockup](design/control-room-mockup.html) (illustrative data;
-backlog Q-045).
+[control-room mockup](design/control-room-mockup.html) (illustrative data).
 
 ## Contents
 
@@ -148,7 +147,7 @@ surfaces.
 
 ## Control Room
 
-`/control-room.html` is the replacement dashboard (Q-045): one React root
+`/control-room.html` is the replacement dashboard: one React root
 (`web/ts/control-room/main.tsx`) beside the current shell until it covers
 the current views; then it becomes `/` and the shell, its route contract
 below and its DOM-id tests are deleted (Q-044).
@@ -239,7 +238,16 @@ the 10–79 byte passphrase rule, transcode profiles with the built-ins kept,
 failed-attempt limits, the dashboard password) and says when the engine
 stored it. The failed-attempts list is polled; forgetting one client sends
 its own scope key, and forgetting all sends no scope (the engine rejects any
-other scope with 400). Log out is on the password card.
+other scope with 400). Log out is on the password card. Changes (fleet,
+the [agent plane](api-reference.md#agent-plane)): one pipeline, one or more
+destination changes (add, change, start, stop, remove) and a reason. Preview
+asks the engine to judge them (`/agent/plans`, which mutates nothing) and is
+shown only while the form still matches what was judged; a valid preview
+creates an operation from that same request, which the operator approves
+(as this dashboard session, with an audited reason: confirmation, not a
+second person's sign-off), applies and verifies. Only the engine's
+per-change checks decide "verified"; the alert delta and active graph nodes
+are shown as observations. Operations live in engine memory only.
 
 Proof: `test/frontend/control-room-fleet.test.mjs`,
 `test/frontend/control-room-operate.test.mjs`,
@@ -247,6 +255,7 @@ Proof: `test/frontend/control-room-fleet.test.mjs`,
 `test/frontend/control-room-incidents.test.mjs`,
 `test/frontend/control-room-system.test.mjs`,
 `test/frontend/control-room-settings.test.mjs`,
+`test/frontend/control-room-changes.test.mjs`,
 `test/frontend/frontend-runtime-state-stream.test.mjs` (stream liveness) and
 `test/frontend/control-room.spec.ts` (against a running engine).
 

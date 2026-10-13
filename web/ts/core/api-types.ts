@@ -392,3 +392,79 @@ export interface GraphData {
   nodes: GraphNode[];
   edges: GraphEdge[];
 }
+
+/** One output change the engine's planner understands (`ProposedChange`). */
+export interface ProposedChange {
+  kind: "addOutput" | "updateOutput" | "removeOutput" | "startOutput" | "stopOutput";
+  outputId?: string;
+  name?: string;
+  url?: string;
+  config?: OutputConfig;
+  desiredState?: "running" | "stopped";
+}
+
+export interface ChangeRequest {
+  intent: string;
+  pipelineId: string;
+  proposedChanges: ProposedChange[];
+}
+
+export interface PlanIssue {
+  severity: string;
+  code: string;
+  message: string;
+  field?: string;
+}
+
+/** `POST /agent/plans`: the engine's judgement of a change, made without
+ * mutating anything. */
+export interface ChangePlan {
+  planId: string;
+  executionEnabled: boolean;
+  validation: { valid: boolean; errors: PlanIssue[]; warnings: PlanIssue[] };
+  graphPreview: { notes: string[] };
+  impact: {
+    affectedPipelines: string[];
+    affectedOutputs: string[];
+    sharedStageCandidates: string[];
+    operatorSummary: string;
+    engineeringNotes: string[];
+  };
+}
+
+export type OperationStatus =
+  | "invalid"
+  | "awaitingApproval"
+  | "approved"
+  | "applying"
+  | "applied"
+  | "verified"
+  | "verificationFailed"
+  | "failed";
+
+export interface OperationCheck {
+  kind: string;
+  outputId?: string | null;
+  passed: boolean;
+  reason?: string | null;
+}
+
+/** An approval-gated operation (`public_record`): redacted, in memory only. */
+export interface ChangeOperation {
+  operationId: string;
+  status: OperationStatus;
+  intentSummary: string;
+  approval: { approvedBy: string; claimedBy: string; reason: string | null; approvedAt: string } | null;
+  auditLog: { at: string; kind: string; summary: string }[];
+  executionResult: {
+    success: boolean;
+    changeResults: { kind: string; outputId?: string | null; status: string }[];
+  } | null;
+  /** `checks` alone decide `verified`; the rest is reported, not judged. */
+  verificationResult: {
+    explanation?: string;
+    checks?: OperationCheck[];
+    incidentDelta?: { delta: number };
+    graphConvergence?: { activeNodes?: number };
+  } | null;
+}
