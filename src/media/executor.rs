@@ -563,18 +563,18 @@ mod tests {
         .unwrap();
 
         started.await.unwrap();
-        let snap_running = snapshot(false);
+        let snap_running = snapshot(true);
+        // Class counters are shared with tests running in parallel; this
+        // service's own row is not.
         assert!(active(&snap_running, MediaServiceClass::Recording) >= 1);
+        assert!(service_row(&snap_running, "q035-classes").is_some());
         assert!(snap_running.spawned_total > snap_before.spawned_total);
         assert_eq!(snap_running.workers.len(), configured_workers());
 
         done.send(()).unwrap();
         task.await.unwrap();
-        let snap_after = snapshot(false);
-        assert_eq!(
-            active(&snap_after, MediaServiceClass::Recording),
-            active(&snap_running, MediaServiceClass::Recording) - 1
-        );
+        let snap_after = snapshot(true);
+        assert!(service_row(&snap_after, "q035-classes").is_none());
         assert!(snap_after.completed_total > snap_before.completed_total);
         assert!(snap_after.queue_latency_samples > snap_before.queue_latency_samples);
     }
@@ -647,6 +647,9 @@ mod tests {
             cancel.clone(),
             async move {
                 std::thread::sleep(Duration::from_millis(20));
+                // Signal from a later poll: the sleeping poll has returned
+                // and been recorded before the test reads the row.
+                tokio::task::yield_now().await;
                 busy_ready.send(()).unwrap();
                 let _ = busy_finish.await;
             },
