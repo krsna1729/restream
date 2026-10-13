@@ -199,6 +199,9 @@ pub async fn load_pipeline_file_ingest_state(
     Ok(PipelineFileIngestState { ingest, running })
 }
 
+/// Stops the file sources publishing with `stream_key` and releases their
+/// sessions now (a restart right after must not find them held); live
+/// publishers of the same pipeline keep their sessions.
 pub async fn clear_stream_key_file_ingests(
     pipeline_lookup: &dyn PipelineStore,
     ingest_lookup: &dyn IngestLookup,
@@ -210,7 +213,7 @@ pub async fn clear_stream_key_file_ingests(
         .await
         .map_err(ClearFileIngestsError::PipelineStore)?
     {
-        engine.unregister_ingest(&pipeline.id).await;
+        engine.unregister_file_ingest(&pipeline.id).await;
     }
 
     let ingests = ingest_lookup

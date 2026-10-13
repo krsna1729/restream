@@ -12,6 +12,7 @@ import type { ProbeAudioTrack } from "../core/api-types.js";
 import { OUTPUT_SERVER_PRESETS } from "../core/output-url.js";
 import type { ConfigOutput } from "../types.js";
 import {
+  audioChoiceCounts,
   audioNotes,
   outputDraft,
   outputProblem,
@@ -55,17 +56,15 @@ export function OutputForm(props: {
   const platform = detectAudioPlatform(url);
   const caps = getAudioCaps(platform, detectAudioProtocol(url, draft.protocol));
   const presets = OUTPUT_SERVER_PRESETS[draft.protocol] ?? [];
-  // Without a publisher the engine defaults to the first track.
-  const trackCount = Math.max(1, tracks.length);
   const firstTrack = draft.tracks[0] ?? 0;
-  const firstChannels = tracks[firstTrack]?.channels || 2;
+  const choices = audioChoiceCounts(draft, tracks);
   const id = stored ? `output-edit-${stored.id}` : "output-new";
 
   return (
     <SettingsForm
       id={id}
       title={stored ? `Destination ${stored.name}` : "New destination"}
-      problem={outputProblem(draft, caps, tracks)}
+      problem={outputProblem(draft)}
       onSave={async () => {
         const body = outputWrite(draft);
         const saved = stored
@@ -91,7 +90,8 @@ export function OutputForm(props: {
             className="select select-sm select-bordered"
             value={draft.protocol}
             onChange={(event) =>
-              set({ protocol: event.target.value as OutputProtocol, server: "" })
+              // A URL of one protocol never fits another: start the new one empty.
+              set({ protocol: event.target.value as OutputProtocol, server: "", input: "" })
             }
           >
             <option value="rtmp">RTMP / RTMPS</option>
@@ -215,12 +215,16 @@ export function OutputForm(props: {
           <span className="label-text">Video</span>
           <select
             className="select select-sm select-bordered"
-            value={draft.profile}
-            onChange={(event) => set({ profile: event.target.value })}
+            value={draft.profile === null ? "c:" : draft.profile ? `p:${draft.profile}` : "s:"}
+            onChange={(event) => {
+              const value = event.target.value;
+              set({ profile: value === "c:" ? null : value.startsWith("p:") ? value.slice(2) : "" });
+            }}
           >
-            <option value="">Source (no transcode)</option>
+            {draft.customVideo && <option value="c:">Custom settings (kept as stored)</option>}
+            <option value="s:">Source (no transcode)</option>
             {props.profiles.map((name) => (
-              <option key={name} value={name}>
+              <option key={name} value={`p:${name}`}>
                 Profile {name}
               </option>
             ))}
@@ -231,6 +235,7 @@ export function OutputForm(props: {
           <select
             className="select select-sm select-bordered"
             value={draft.codec}
+            disabled={draft.profile === null}
             onChange={(event) => set({ codec: event.target.value as OutputDraft["codec"] })}
           >
             <option value="auto">auto</option>
@@ -269,7 +274,7 @@ export function OutputForm(props: {
         </select>
         {draft.audio === "selectTracks" && (
           <div className="flex flex-wrap gap-3" role="group" aria-label="Tracks to send">
-            {Array.from({ length: trackCount }, (_, position) => (
+            {Array.from({ length: choices.tracks }, (_, position) => (
               <label key={position} className="label cursor-pointer gap-2">
                 <input
                   type="checkbox"
@@ -296,7 +301,7 @@ export function OutputForm(props: {
               value={firstTrack}
               onChange={(event) => set({ tracks: [Number(event.target.value)] })}
             >
-              {Array.from({ length: trackCount }, (_, position) => (
+              {Array.from({ length: choices.tracks }, (_, position) => (
                 <option key={position} value={position}>
                   {trackLabel(tracks, position)}
                 </option>
@@ -314,7 +319,7 @@ export function OutputForm(props: {
                     set(side === "leftChannel" ? { leftChannel: channel } : { rightChannel: channel });
                   }}
                 >
-                  {Array.from({ length: firstChannels }, (_, channel) => (
+                  {Array.from({ length: choices.channels }, (_, channel) => (
                     <option key={channel} value={channel}>
                       {side === "leftChannel" ? "Left" : "Right"} ← channel {channel + 1}
                     </option>

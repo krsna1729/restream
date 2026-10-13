@@ -670,6 +670,23 @@ test("manage: create a pipeline, edit its inputs, destinations, source and key, 
     await expect(controls.getByRole("button", { name: "Record", exact: true })).toBeVisible();
     expect(await recordingEnabled()).toBe(false);
 
+    // A pipeline whose destinations run does not offer a new key: the live
+    // encoder would lose it at its next reconnect.
+    const running = await page.request.post(`/api/v1/pipelines/${pipelineId}/outputs`, {
+      data: {
+        name: "cr-keylock",
+        url: "rtmp://127.0.0.1:9/live/crkeylock",
+        config: { video: { mode: "source" }, audio: { mode: "all" } },
+      },
+    });
+    expect(running.ok()).toBe(true);
+    const runningId: string = (await running.json()).output.id;
+    const outputPath = `/api/v1/pipelines/${pipelineId}/outputs/${runningId}`;
+    expect((await page.request.post(`${outputPath}/start`)).ok()).toBe(true);
+    await expect(pipelineSettings.getByLabel(/Issue a new stream key/)).toBeDisabled();
+    expect((await page.request.post(`${outputPath}/stop`)).ok()).toBe(true);
+    await expect(pipelineSettings.getByLabel(/Issue a new stream key/)).toBeEnabled();
+
     await controls.getByRole("button", { name: `Delete pipeline ${name}` }).click();
     await controls.getByRole("button", { name: "Delete", exact: true }).click();
     await expect(page).toHaveURL(/w=pipelines/);

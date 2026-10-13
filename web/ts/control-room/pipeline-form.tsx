@@ -13,6 +13,9 @@ export function PipelineForm(props: {
   stored: ConfigPipeline | null;
   /** Media files a file source can ingest. */
   files: readonly MediaFile[];
+  /** Destinations are running: a new key would cut the encoder at its next
+   * reconnect, so it is not offered (as in the classic editor). */
+  keyLocked: boolean;
   onSaved: (pipeline: ConfigPipeline) => void;
 }) {
   const { stored } = props;
@@ -25,7 +28,7 @@ export function PipelineForm(props: {
       title={stored ? "Pipeline settings" : "New pipeline"}
       problem={pipelineProblem(draft)}
       onSave={async () => {
-        const body = pipelineWrite(draft, stored);
+        const body = pipelineWrite({ ...draft, rotateKey: draft.rotateKey && !props.keyLocked }, stored);
         const saved = stored ? await updatePipeline(stored.id, body) : await createPipeline(body);
         if (saved === null) return false;
         // The form now shows what the engine stored (a rotated key is not
@@ -52,11 +55,15 @@ export function PipelineForm(props: {
             <input
               type="checkbox"
               className="checkbox checkbox-sm"
-              checked={draft.rotateKey}
+              checked={draft.rotateKey && !props.keyLocked}
+              disabled={props.keyLocked}
               onChange={(event) => set({ rotateKey: event.target.checked })}
             />
             <span className="label-text">Issue a new stream key (publishers must switch to it)</span>
           </label>
+          {props.keyLocked && (
+            <p className="text-xs opacity-70">Stop the destinations first: the encoder would lose the key at its next reconnect.</p>
+          )}
         </div>
       ) : (
         <label className="form-control">

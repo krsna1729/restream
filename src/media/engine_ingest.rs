@@ -396,13 +396,32 @@ impl MediaEngine {
         true
     }
 
+    /// Releases every ingest session of the pipeline and forgets its input
+    /// selection.
     pub async fn unregister_ingest(&self, pipeline_id: &str) {
+        self.release_ingest_sessions(pipeline_id, |_| true, true)
+            .await;
+    }
+
+    /// Releases the pipeline's file-source sessions only: a live publisher on
+    /// another input keeps its session, and the selection stays.
+    pub async fn unregister_file_ingest(&self, pipeline_id: &str) {
+        self.release_ingest_sessions(pipeline_id, |ingest| ingest.protocol == "file", false)
+            .await;
+    }
+
+    async fn release_ingest_sessions(
+        &self,
+        pipeline_id: &str,
+        release: impl Fn(&ActiveIngest) -> bool,
+        forget_selection: bool,
+    ) {
         let _selection = self.ingests.selection_lock.lock().await;
         let removed_sessions = {
             let mut sessions = self.ingests.sessions.write().await;
             let input_ids = sessions
                 .values()
-                .filter(|ingest| ingest.pipeline_id == pipeline_id)
+                .filter(|ingest| ingest.pipeline_id == pipeline_id && release(ingest))
                 .map(|ingest| ingest.input_id.clone())
                 .collect::<Vec<_>>();
             input_ids
@@ -419,13 +438,24 @@ impl MediaEngine {
             }
         }
 
-        let removed_selected = self.ingests.active.write().await.remove(pipeline_id);
-        self.ingests
-            .selected_inputs
-            .write()
-            .await
-            .remove(pipeline_id);
-
+        let removed_selected = {
+            let mut active = self.ingests.active.write().await;
+            if active
+                .get(pipeline_id)
+                .is_some_and(|ingest| release(ingest))
+            {
+                active.remove(pipeline_id)
+            } else {
+                None
+            }
+        };
+        if forget_selection {
+            self.ingests
+                .selected_inputs
+                .write()
+                .await
+                .remove(pipeline_id);
+        }
         let protocol = removed_selected
             .as_ref()
             .map(|ingest| ingest.protocol.clone())

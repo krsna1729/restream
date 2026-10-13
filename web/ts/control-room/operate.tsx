@@ -63,7 +63,15 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
   const stored = config?.pipelines.find((pipeline) => pipeline.id === pipelineId) ?? null;
   return (
     <>
-      {stored && <PipelineBar pipeline={stored} onChanged={reloadConfig} />}
+      {stored && (
+        <PipelineBar
+          pipeline={stored}
+          keyLocked={outputs.some(
+            (output) => output.pipelineId === pipelineId && output.desired === "running",
+          )}
+          onChanged={reloadConfig}
+        />
+      )}
       <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
         <SourceDeck
           pipelineId={pipelineId}
