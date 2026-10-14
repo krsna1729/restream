@@ -311,6 +311,26 @@ test("media and system: probe, rename and delete an upload; read the host and it
     }
   }
 
+  // The owner counters are wall-clock measurements: a descheduled Owner
+  // thread on a busy host records a slow pass with no peers. Pin them to one
+  // known finding, so the card is checked against what it was given.
+  await page.route("**/api/v1/engine/health", async (route) => {
+    const response = await route.fetch();
+    const health = await response.json();
+    const owner = health.srtListener?.ingressOwner;
+    if (owner) {
+      Object.assign(owner, {
+        faulted: false,
+        rxRingDropped: 0,
+        rxBufferExhaustions: 0,
+        eventBridgeFullVisits: 0,
+        telemetryDropped: 0,
+        overloadDisconnects: 0,
+        mediaSlowPasses20ms: 2,
+      });
+    }
+    return route.fulfill({ response, json: health });
+  });
   await page
     .getByRole("navigation", { name: "Workspaces" })
     .getByRole("link", { name: "System" })
@@ -323,8 +343,9 @@ test("media and system: probe, rename and delete an upload; read the host and it
   const topology = page.getByRole("region", { name: /Execution topology/ });
   await expect(topology.getByText("RTMP ingress").locator("..")).toContainText("1");
   await expect(topology.getByText("SRT ingress").locator("..")).toContainText("1");
-  await expect(page.getByRole("region", { name: /SRT ingress owners/ })).toContainText(
-    "No dropped or late work since the engine started",
+  const owners = page.getByRole("region", { name: /SRT ingress owners/ });
+  await expect(owners.getByRole("list", { name: "Owner findings" })).toHaveText(
+    "2 media passes took over 20 ms.",
   );
   await expect(page.getByRole("region", { name: "Build and provenance" })).toContainText(
     "Commit",
