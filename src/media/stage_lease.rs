@@ -84,6 +84,14 @@ impl StageLease {
     pub(crate) fn ended(&self) -> tokio_util::sync::WaitForCancellationFuture<'_> {
         self.0.cancel.cancelled()
     }
+
+    /// Completes once any of `stages` ends on its own; never, for none.
+    pub(crate) async fn any_ended(stages: &[StageLease]) {
+        if stages.is_empty() {
+            return std::future::pending().await;
+        }
+        futures_util::future::select_all(stages.iter().map(|stage| Box::pin(stage.ended()))).await;
+    }
 }
 
 impl Drop for LeaseCell {

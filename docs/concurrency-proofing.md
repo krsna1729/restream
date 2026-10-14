@@ -65,8 +65,10 @@ Use the narrowest proof that can actually catch the bug:
      that unsupported backpressure shape.
      `recovery` also covers hung HLS PUT destinations timing out, surfacing
      retry/error state, recovering after the sink restarts, rapid same-pipeline
-     SRT publisher replacement races, and repeated RTMP and SRT downstream sink
-     flaps surfacing as recovered-but-unstable output health.
+     SRT publisher replacement races, repeated RTMP and SRT downstream sink
+     flaps surfacing as recovered-but-unstable output health, and a transcoder
+     stage whose FFmpeg is killed mid-stream: its RTMP output ends the attempt,
+     retries, and delivers again from a new stage process.
 
 5. Benchmarks
    - Use only for hot-path or end-to-end performance-sensitive changes.
