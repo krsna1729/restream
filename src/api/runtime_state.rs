@@ -24,7 +24,10 @@ pub async fn v1_state_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    state.runtime_state.refresh(&state.db, &state.engine).await;
+    state
+        .runtime_state
+        .refresh_on_demand(&state.db, &state.engine)
+        .await;
     Json(state.runtime_state.snapshot().await).into_response()
 }
 
@@ -75,7 +78,7 @@ pub async fn v1_state_stream_handler(
         // With no client the projector is idle, so the held state may be
         // old: bring it current first (still after subscribing). Connected
         // now, the projector keeps it so.
-        hub.refresh(&pool, &engine).await;
+        hub.refresh_on_demand(&pool, &engine).await;
         let mut sent_through = match since.as_deref() {
             Some(token) => match hub.since(token).await {
                 Since::Deltas(deltas) => {
