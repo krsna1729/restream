@@ -256,6 +256,19 @@ items).
   pressure while its siblings progress? That would break output isolation.
 - Gates: a reproduction (load generator plus one feed) or a proof that the
   leaf cannot stall while connected; the fix keeps sibling leaves unaffected.
+- Not reproduced (2026-10-13, master `f040cbdc` plus #320, 6 cores):
+  `mixed.live.srt.h265.a2.bf2` with five CPU-bound spinners passed, and the
+  whole `mixed.signal` mode with four spinners passed (6 cases).
+- Bound today: `classify_stall` (`egress/policy.rs`) turns a leaf with
+  pending bytes and no progress for `max_backpressure_duration` (30 s by
+  default) from `backpressured` into `stalled`, and the SRT stall sweep
+  (`srt_drain.rs`) closes it so the output retries. That fits the 30 s the
+  evidence saw. One exception has no bound: while the shard reports
+  `saturated`, a stalled leaf is kept as `shard_saturated`, so a leaf that
+  can never send stays open for as long as the overload lasts.
+  "No caller quality stats" means `owners.stats(&leaf.caller)` returned
+  nothing. A likely next probe is the Owner's view of that caller: is it
+  still connecting, or missing from its peer table?
 - Status: open (Filed: 2026-10-12 by claude, found while fixing Q-048).
 
 ### Q-050 [architecture] [sonnet] Project inputs and stages into the runtime state
