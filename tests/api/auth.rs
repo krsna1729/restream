@@ -47,7 +47,7 @@ async fn static_assets_use_cache_validators() {
         resp.headers()
             .get(header::CACHE_CONTROL)
             .and_then(|value| value.to_str().ok()),
-        Some("public, max-age=3600")
+        Some("no-cache")
     );
     let etag = resp.headers().get(header::ETAG).cloned().unwrap();
     assert!(!body_bytes(resp).await.is_empty());
