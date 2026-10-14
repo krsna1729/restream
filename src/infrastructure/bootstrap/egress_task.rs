@@ -103,8 +103,9 @@ pub(super) struct EgressTask {
     pub(super) pool: SqlitePool,
     pub(super) last_failed: FailureTracker,
     /// Leases on the shared stages this output reads through: they stop
-    /// when the last egress (or other consumer) using them ends.
-    pub(super) _stages: Vec<crate::media::stage_lease::StageLease>,
+    /// when the last egress (or other consumer) using them ends. A pipeline
+    /// HLS segmenter this output starts holds clones while it reads the ring.
+    pub(super) stages: Vec<crate::media::stage_lease::StageLease>,
     pub(super) tuning: RuntimeTuning,
     pub(super) correlation_id: String,
     pub(super) job_id: String,
@@ -186,27 +187,15 @@ impl EgressTask {
                             );
                             return;
                         };
-                        let engine = self.engine.clone();
-                        let pipeline_id = self.pipeline_id.clone();
-                        let ring = self.ring.clone();
-                        let segmenter_store = store.clone();
-                        let stage_key = self.terminal_stage_key.clone();
-                        tokio::spawn(async move {
-                            crate::media::hls::start_hls_segmenter(
-                                pipeline_id.clone(),
-                                segmenter_store,
-                                ring,
-                                None,
-                                engine.clone(),
-                                hls_cancel,
-                                crate::media::hls::HlsSegmenterStart {
-                                    video_meta_override: None,
-                                    planned_stage_key: Some(stage_key),
-                                },
-                            )
-                            .await;
-                            engine.shutdown_hls_segmenter(&pipeline_id).await;
-                        });
+                        spawn_pipeline_hls_segmenter(
+                            self.engine.clone(),
+                            self.pipeline_id.clone(),
+                            store.clone(),
+                            self.ring.clone(),
+                            hls_cancel,
+                            self.terminal_stage_key.clone(),
+                            self.stages.clone(),
+                        );
                     }
                     hls_lease = self
                         .engine
@@ -939,3 +928,39 @@ impl EgressTask {
         );
     }
 }
+
+/// Spawns the pipeline's one HLS segmenter on `ring`. The segmenter is
+/// shared by every HLS output of the pipeline and outlives the output that
+/// started it, so it holds that output's stage leases itself: the stages
+/// feeding `ring` stop only after the segmenter ends.
+pub(super) fn spawn_pipeline_hls_segmenter(
+    engine: Arc<MediaEngine>,
+    pipeline_id: String,
+    store: Arc<crate::media::hls::HlsStore>,
+    ring: Arc<crate::media::ring_buffer::RingBuffer>,
+    cancel: tokio_util::sync::CancellationToken,
+    stage_key: crate::domain::stage::StageKey,
+    stages: Vec<crate::media::stage_lease::StageLease>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        crate::media::hls::start_hls_segmenter(
+            pipeline_id.clone(),
+            store,
+            ring,
+            None,
+            engine.clone(),
+            cancel,
+            crate::media::hls::HlsSegmenterStart {
+                video_meta_override: None,
+                planned_stage_key: Some(stage_key),
+            },
+        )
+        .await;
+        engine.shutdown_hls_segmenter(&pipeline_id).await;
+        drop(stages);
+    })
+}
+
+#[cfg(test)]
+#[path = "egress_task_tests.rs"]
+mod tests;
