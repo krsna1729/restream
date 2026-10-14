@@ -1478,7 +1478,11 @@ The summary contains measured process and child-process fields such as CPU,
 RSS, thread count, file descriptor count, child FFmpeg count, and active SRT
 sender thread permits, plus egress-fabric shard counters
 (`fabricShardThreadCount`, `fabricShardStalledCount`,
-`fabricShardPanickedCount`) over the shards the response lists. Nodes include
+`fabricShardPanickedCount`) over the shards the response lists. The process
+fields and `retainedPayloadBytes`, `avioQueueLenBytes`,
+`avioQueueCapacityBytes` and `activeTranscoderBuffers` are runtime-wide at
+either scope; the node list, the shard counters and the ingest, stage and
+egress counts follow the scope. Nodes include
 execution ownership (`tokio_task`, `os_thread`, `shard_thread`,
 `child_process`, `shared`, or `process`) plus memory attribution with a
 confidence marker. An egress output node's `execution` is always
