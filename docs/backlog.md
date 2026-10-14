@@ -256,6 +256,35 @@ items).
   pressure while its siblings progress? That would break output isolation.
 - Gates: a reproduction (load generator plus one feed) or a proof that the
   leaf cannot stall while connected; the fix keeps sibling leaves unaffected.
+- Not reproduced (2026-10-13, master `f040cbdc` plus #320, 6 cores):
+  `mixed.live.srt.h265.a2.bf2` with five CPU-bound spinners passed, and the
+  whole `mixed.signal` mode with four spinners passed (6 cases).
+- The stall bound does not explain the evidence; it contradicts it.
+  `classify_stall` (`egress/policy.rs`) marks a leaf with pending bytes as
+  `stalled` when its feed lag exceeds `max_lag_units` (300 for SRT) or when
+  it has made no progress for `max_backpressure_duration`. SRT leaves take
+  their limits from `LeafLimits::from_policy`, so that duration is
+  `LeafPolicy::no_progress_timeout`, 15 s (the 30 s `LeafLimits` default
+  does not apply to them). The SRT stall sweep (`srt_drain.rs`) closes a
+  stalled leaf and the output retries. A leaf that reported `backpressured`
+  for 30 s with growing lag was therefore either recording progress without
+  payload, or never reaching `stalled`. Progress without payload can come
+  from:
+  - `record_send` with units and no bytes (`leaf.rs`);
+  - the backlog-shrink rule in `SrtLeaf::observe_stall`.
+
+  A lag of 0 is reported while the cursor is unprimed. The leaf also
+  escapes the bound in these cases:
+  - With zero pending bytes the leaf is `idle`. When there are no caller
+    stats the backlog counts as 0.
+  - While the shard reports `saturated`, a stalled leaf is kept as
+    `shard_saturated` for as long as the overload lasts.
+
+  "No caller quality stats" means `owners.stats(&leaf.caller)` returned
+  nothing, or `sample_quality` had no first sample yet. The next probes:
+  - the Owner's view of that caller: still connecting, or missing from its
+    peer table?
+  - which of the progress paths above fired.
 - Status: open (Filed: 2026-10-12 by claude, found while fixing Q-048).
 
 ### Q-050 [architecture] [sonnet] Project inputs and stages into the runtime state
