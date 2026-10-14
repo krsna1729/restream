@@ -465,6 +465,17 @@ egresses, HLS, and recording nodes where present. Every `egress` node carries
 `outputId`, whether or not its egress runs; its `details` are present only
 while one runs.
 
+The source ring node's `details.readers` lists the readers registered on the
+ring (HLS segmenters, recordings, RTMP playback clients, and stage inputs such
+as transcoders and the SRT TS muxer) with their lag and overflow counts.
+Outputs that run on egress-fabric shards (network, sink and pipeline
+outputs) read the ring in place without registering, so a pipeline whose
+only consumers are such outputs shows `readers: []`; HLS and HLS PUT outputs
+appear through their segmenter. Their edges in the graph show what they
+read; their progress is per output (`flow` in `GET /api/v1/state`, `egresses`
+in pipeline telemetry). The same holds for `sourceRing.readers` in pipeline
+telemetry, so a ring-overflow sum over it does not cover fabric outputs.
+
 ### `POST /api/v1/pipelines/:pipelineId/diagnostics/run`
 
 Returns one JSON report with `protocol`, `totalDurationMs`, and ordered `checks`.
