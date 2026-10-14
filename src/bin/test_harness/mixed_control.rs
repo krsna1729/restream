@@ -10,13 +10,18 @@ use super::{MixedInputCase, MixedVideoCodec};
 pub(crate) fn mixed_output_checks_need_live_progress_gate(only_checks: Option<&[String]>) -> bool {
     let check_selected =
         |check: &str| only_checks.is_none_or(|items| items.iter().any(|item| item == check));
-    let direct_signal_sinks = only_checks.is_some_and(|items| {
+    check_selected("ffprobe") || (check_selected("signal") && !signal_checks_only(only_checks))
+}
+
+/// The run selects only signal checks (`signal`, `soak-drift`), so outputs
+/// can send to direct signal sinks instead of read-back receivers.
+pub(crate) fn signal_checks_only(only_checks: Option<&[String]>) -> bool {
+    only_checks.is_some_and(|items| {
         !items.is_empty()
             && items
                 .iter()
                 .all(|item| item == "signal" || item == "soak-drift")
-    });
-    check_selected("ffprobe") || (check_selected("signal") && !direct_signal_sinks)
+    })
 }
 
 /// Excludes helper outputs (for example, HLS preview) from progress gates.

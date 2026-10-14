@@ -52,7 +52,7 @@ pub(super) use mixed_checks::{
 };
 pub(super) use mixed_control::{
     MixedResume, mixed_output_checks_need_live_progress_gate,
-    mixed_output_progress_timeout_for_case, mixed_progress_output_ids,
+    mixed_output_progress_timeout_for_case, mixed_progress_output_ids, signal_checks_only,
 };
 pub(super) use mixed_executor::{ScenarioExecutionContext, scenario_executor_for_plan};
 pub(super) use mixed_lifecycle::{
@@ -261,13 +261,7 @@ impl MixedEnv {
     /// cannot listen for RTMPS, so those outputs publish to MediaMTX and get
     /// the read-back signal check instead.
     pub(super) fn direct_signal_sink(&self, protocol: MixedOutputProtocol) -> bool {
-        protocol != MixedOutputProtocol::Rtmps
-            && self.only_checks.as_ref().is_some_and(|items| {
-                !items.is_empty()
-                    && items
-                        .iter()
-                        .all(|item| item == "signal" || item == "soak-drift")
-            })
+        protocol != MixedOutputProtocol::Rtmps && signal_checks_only(self.only_checks.as_deref())
     }
 
     pub(super) fn needs_live_output_progress_gate(&self) -> bool {
