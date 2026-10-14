@@ -375,6 +375,23 @@ async fn the_projector_rebuilds_only_while_a_client_listens() {
     projector.await.unwrap();
 }
 
+/// The reuse decision at its edges: inside the window with no new mark,
+/// at the window's end, after a mark, and before any rebuild.
+#[test]
+fn the_last_refresh_covers_only_an_unmarked_read_inside_the_window() {
+    let built = tokio::time::Instant::now();
+    let last = hub::LastRefresh {
+        at: Some(built),
+        changes: 7,
+    };
+    let just_inside = built + hub::ON_DEMAND_REUSE - std::time::Duration::from_millis(1);
+    assert!(last.covers(built, 7));
+    assert!(last.covers(just_inside, 7));
+    assert!(!last.covers(built + hub::ON_DEMAND_REUSE, 7));
+    assert!(!last.covers(built, 8));
+    assert!(!hub::LastRefresh::default().covers(built, 0));
+}
+
 /// A client polling `GET /api/v1/state` in a loop costs one rebuild per
 /// reuse window, but never reads past a marked change.
 #[tokio::test]

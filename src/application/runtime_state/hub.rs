@@ -1,14 +1,15 @@
 //! Holds the current projection under a revision and publishes deltas.
 //!
 //! Change points mark the hub changed ([`StateHub::mark_changed`]): every
-//! engine lifecycle event and every successful mutating request. The
-//! projector ([`run_projector`]) rebuilds on a change and, while a stream
-//! client is connected, once per interval for state no event reports (flow,
-//! stalls, retry countdowns). With no client connected nothing runs between
-//! changes; `GET /api/v1/state` and a connecting stream refresh on demand,
-//! reusing a projection younger than [`ON_DEMAND_REUSE`] when no change was
-//! marked since, so a client polling in a loop costs at most one rebuild per
-//! window.
+//! engine lifecycle event, every successful mutating request, and the
+//! egress reconciler's retries-exhausted write. The projector
+//! ([`run_projector`]) rebuilds on a change and, while a stream client is
+//! connected, once per interval for state no event reports (flow, stalls,
+//! retry countdowns). With no client connected nothing runs between changes;
+//! `GET /api/v1/state` and a connecting stream refresh on demand, reusing a
+//! projection whose rebuild completed less than [`ON_DEMAND_REUSE`] ago
+//! when no change was marked since, so a client polling in a loop costs at
+//! most one rebuild per window.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -61,10 +62,22 @@ pub struct StateHub {
     changes: AtomicU64,
 }
 
+/// When the last rebuild completed, and the marked-change count it read
+/// before reading the rows.
 #[derive(Default)]
-struct LastRefresh {
-    at: Option<Instant>,
-    changes: u64,
+pub(super) struct LastRefresh {
+    pub(super) at: Option<Instant>,
+    pub(super) changes: u64,
+}
+
+impl LastRefresh {
+    /// The last projection still answers a request at `now`: completed less
+    /// than [`ON_DEMAND_REUSE`] ago, with no change marked since.
+    pub(super) fn covers(&self, now: Instant, changes: u64) -> bool {
+        self.at
+            .is_some_and(|at| now.saturating_duration_since(at) < ON_DEMAND_REUSE)
+            && self.changes == changes
+    }
 }
 
 impl Default for StateHub {
@@ -177,13 +190,12 @@ impl StateHub {
     }
 
     /// [`Self::refresh`] for a request: reuses the current projection when
-    /// it is younger than [`ON_DEMAND_REUSE`] and no change was marked since.
-    /// Requests queued behind a rebuild find it fresh and return at once.
+    /// the last rebuild completed less than [`ON_DEMAND_REUSE`] ago and no
+    /// change was marked since. Requests queued behind a rebuild find it
+    /// fresh and return at once.
     pub async fn refresh_on_demand(&self, pool: &SqlitePool, engine: &MediaEngine) {
         let mut last = self.refreshing.lock().await;
-        let fresh = last.at.is_some_and(|at| at.elapsed() < ON_DEMAND_REUSE)
-            && last.changes == self.changes.load(Ordering::Acquire);
-        if !fresh {
+        if !last.covers(Instant::now(), self.changes.load(Ordering::Acquire)) {
             self.rebuild(&mut last, pool, engine).await;
         }
     }

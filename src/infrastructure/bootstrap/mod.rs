@@ -217,6 +217,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
         sessions_for_reconciler,
         recording_metadata,
         state.reconcile.clone(),
+        state.runtime_state.clone(),
     );
     let projector_stop = tokio_util::sync::CancellationToken::new();
     tokio::spawn(crate::application::runtime_state::hub::run_projector(

@@ -740,9 +740,10 @@ fails when the file is stale; regenerate it with
 
 ### `GET /api/v1/state`
 
-Returns the projection, rebuilt first unless it is younger than 500 ms and
-no engine lifecycle event or mutating request has happened since (a client
-polling in a loop costs at most one rebuild per 500 ms):
+Returns the projection, rebuilt first unless the last rebuild completed less
+than 500 ms ago and no engine lifecycle event, mutating request or reconciler
+write (retries exhausted) has happened since (a client polling in a loop
+costs at most one rebuild per 500 ms):
 
 ```json
 {
