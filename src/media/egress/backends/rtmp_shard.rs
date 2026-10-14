@@ -660,7 +660,7 @@ where
                     self.queue_pending_rtmp_connect(spec, &url);
                 }
             }
-            EgressCommand::Remove(output_id) => {
+            EgressCommand::Remove(output_id) | EgressCommand::Abandon(output_id) => {
                 self.begin_graceful_close(&output_id, CloseReason::Removed);
             }
             EgressCommand::FeedWake => self.enqueue_feed_waiting_leaves(),

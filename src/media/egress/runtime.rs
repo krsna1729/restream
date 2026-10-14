@@ -518,6 +518,7 @@ mod tests {
                 EgressCommand::Add(spec) => format!("add:{}", spec.id),
                 EgressCommand::Update(spec) => format!("update:{}", spec.id),
                 EgressCommand::Remove(output_id) => format!("remove:{output_id}"),
+                EgressCommand::Abandon(output_id) => format!("abandon:{output_id}"),
                 EgressCommand::FeedWake => "feed-wake".to_string(),
                 EgressCommand::DrainShard(shard_id) => format!("drain:{shard_id}"),
                 EgressCommand::Shutdown => "shutdown".to_string(),

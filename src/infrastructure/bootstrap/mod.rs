@@ -28,6 +28,7 @@
 mod auth;
 mod egress;
 mod events;
+mod hls_segmenter;
 mod layout;
 mod listener_supervisor;
 #[forbid(unsafe_code)]

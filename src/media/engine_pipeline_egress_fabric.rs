@@ -102,7 +102,7 @@ impl MediaEngine {
         command: EgressCommand,
     ) -> Result<ManagerCommandOutcome, PipelineFabricDispatchError> {
         let mut registry = self.fabric.pipeline.lock().await;
-        if let EgressCommand::Remove(output_id) = &command
+        if let EgressCommand::Remove(output_id) | EgressCommand::Abandon(output_id) = &command
             && let Some(source) = registry.target_sources.get(feed_id)
         {
             source.remove(output_id);

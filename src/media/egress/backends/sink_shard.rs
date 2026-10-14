@@ -189,7 +189,7 @@ impl EgressShardBackend for SinkShardBackend {
                     self.add_leaf(spec);
                 }
             }
-            EgressCommand::Remove(output_id) => {
+            EgressCommand::Remove(output_id) | EgressCommand::Abandon(output_id) => {
                 self.remove_leaf_by_output(&output_id);
             }
             EgressCommand::FeedWake => self.enqueue_all_leaves(),

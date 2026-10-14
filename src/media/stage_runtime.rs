@@ -268,6 +268,9 @@ impl StageRuntimeManager {
                 include_audio,
             ) else {
                 tracing::warn!(stage = %key, "no ffmpeg plan for stage");
+                // The stage ends here, like a failed metadata wait above:
+                // its consumers see it end and retry.
+                cancel.cancel();
                 return;
             };
 

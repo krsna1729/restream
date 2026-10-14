@@ -719,7 +719,7 @@ impl EgressShardBackend for SrtShardBackend {
                     self.queue_pending_srt_connect(spec, &url);
                 }
             }
-            EgressCommand::Remove(output_id) => {
+            EgressCommand::Remove(output_id) | EgressCommand::Abandon(output_id) => {
                 self.begin_graceful_close(
                     &output_id,
                     crate::media::egress::backend::CloseReason::Removed,

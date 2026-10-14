@@ -157,11 +157,16 @@ ends with it, so the next HLS attempt starts one on its new stage. The
 registry keeps only a `Weak`, so a consumer reuses a stage only while
 another holds it. The last lease to drop cancels the stage at once and
 removes its entry, unless a newer stage has taken the key. A stage that ends
-on its own is cancelled and never reused, so the next consumer starts a new
-one. There is no stage sweep and no grace
-period. An output waiting out its retry backoff holds no lease, so a
-transcoder used only by that output restarts with its next attempt (unless a
-pipeline HLS segmenter still holds it).
+on its own (its FFmpeg exits or finds no plan) is cancelled and never reused,
+so the next consumer starts a new one; an egress attempt reading it ends with
+error `stage_ended` and retries, and the retry starts the new stage. That is
+no intentional stop: an HLS PUT fabric output abandons its session
+(`EgressCommand::Abandon`) without the `EXT-X-ENDLIST` end playlist, so the
+destination keeps the stream open for the retry. A pipeline delete stops its
+outputs before it cancels their stages, so they stop, not fail. There is
+no stage sweep and no grace period. An output waiting out its retry backoff
+holds no lease, so a transcoder used only by that output restarts with its
+next attempt (unless a pipeline HLS segmenter still holds it).
 
 ### Passthrough rule
 

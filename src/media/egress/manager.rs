@@ -135,7 +135,12 @@ impl EgressManager {
         match command {
             EgressCommand::Add(spec) => self.dispatch_spec(spec, false, sink),
             EgressCommand::Update(spec) => self.dispatch_spec(spec, true, sink),
-            EgressCommand::Remove(output_id) => self.dispatch_remove(output_id, sink),
+            EgressCommand::Remove(output_id) => {
+                self.dispatch_remove(output_id, EgressCommand::Remove, sink)
+            }
+            EgressCommand::Abandon(output_id) => {
+                self.dispatch_remove(output_id, EgressCommand::Abandon, sink)
+            }
             // Feed wakes are delivered per shard by the feed watcher, not
             // routed through manager assignment.
             EgressCommand::FeedWake => Ok(ManagerCommandOutcome::Ignored),
@@ -234,6 +239,7 @@ impl EgressManager {
     fn dispatch_remove<S: CommandSink>(
         &mut self,
         output_id: OutputId,
+        command: fn(OutputId) -> EgressCommand,
         sink: &S,
     ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<S::Error>> {
         let Some(current) = self.desired.get(&output_id) else {
@@ -242,7 +248,7 @@ impl EgressManager {
         let shard_id = current.shard_id;
         self.check_command_slots(shard_id, 1, sink)
             .map_err(EgressManagerDispatchError::Command)?;
-        sink.send(shard_id, EgressCommand::Remove(output_id.clone()))
+        sink.send(shard_id, command(output_id.clone()))
             .map_err(|source| EgressManagerDispatchError::Dispatch { shard_id, source })?;
         self.desired.remove(&output_id);
         if let Some(count) = self.shard_outputs.get_mut(shard_id.index() as usize) {

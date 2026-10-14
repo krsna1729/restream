@@ -187,7 +187,7 @@ impl EgressTask {
                             );
                             return;
                         };
-                        spawn_pipeline_hls_segmenter(
+                        crate::infrastructure::bootstrap::hls_segmenter::spawn_pipeline_hls_segmenter(
                             self.engine.clone(),
                             self.pipeline_id.clone(),
                             store.clone(),
@@ -224,7 +224,10 @@ impl EgressTask {
                                 EgressPhase::Segmenting,
                             )
                             .await;
-                        self.registration.cancel_token.cancelled().await;
+                        tokio::select! {
+                            _ = self.registration.cancel_token.cancelled() => {}
+                            () = self.own_stage_ended() => {}
+                        }
                     }
                 }
                 OutputUrlScheme::Pipeline => {
@@ -333,28 +336,47 @@ impl EgressTask {
         .await;
     }
 
-    /// Waits for either explicit cancellation (normal stop/reconfigure) or
-    /// the fabric marking this output's leaf as unexpectedly terminated
-    /// (peer closed, protocol failure, or stall recovery — see
-    /// `EgressProgressSink::terminated_unexpectedly`). Returns `true` only
-    /// for the unexpected-termination case, so the caller can surface it as
-    /// an error before falling through to the shared retry/backoff
-    /// bookkeeping in `EgressTask::run`. Polls rather than a wake-based
-    /// signal: this only runs once per output for as long as it's healthy,
-    /// nowhere near the packet-level hot path.
+    /// Waits for explicit cancellation (normal stop/reconfigure), the fabric
+    /// marking this output's leaf as unexpectedly terminated (peer closed,
+    /// protocol failure, or stall recovery — see
+    /// `EgressProgressSink::terminated_unexpectedly`), or a stage this output
+    /// reads ending on its own. Returns `true` only for the leaf case, so
+    /// the caller can surface it as an error before falling through to the
+    /// shared retry/backoff bookkeeping in `EgressTask::run`; a stage end
+    /// records its own error and also retries. Polls the leaf flag rather
+    /// than a wake-based signal: this only runs once per output for as long
+    /// as it's healthy, nowhere near the packet-level hot path.
     async fn wait_for_stop_or_leaf_failure(
         &self,
         terminated: &std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> bool {
+        let stage_ended = self.own_stage_ended();
+        tokio::pin!(stage_ended);
         loop {
             if terminated.load(std::sync::atomic::Ordering::Relaxed) {
                 return true;
             }
             tokio::select! {
                 _ = self.registration.cancel_token.cancelled() => return false,
+                () = &mut stage_ended => return false,
                 _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
             }
         }
+    }
+
+    /// Completes once a stage this output reads ends on its own, after
+    /// recording that as the attempt's error. Such a stage is never fed or
+    /// reused again, so the attempt ends and its retry starts a new one.
+    async fn own_stage_ended(&self) {
+        crate::media::stage_lease::StageLease::any_ended(&self.stages).await;
+        self.engine
+            .record_egress_error_if_current(
+                &self.output_id,
+                &self.registration,
+                "stage_ended",
+                "a stage this output reads ended; the next attempt starts it again",
+            )
+            .await;
     }
 
     async fn run_srt_fabric(&self, fabric: SrtFabricTask) {
@@ -578,16 +600,19 @@ impl EgressTask {
             }
         }
         let mut forwarded = ForwardedUploadStatus::default();
-        let failed = loop {
+        let own_stage = self.own_stage_ended();
+        tokio::pin!(own_stage);
+        let (failed, stage_ended) = loop {
             self.forward_upload_status(&fabric.upload_status, &mut forwarded)
                 .await;
             if fabric.terminated.load(std::sync::atomic::Ordering::Acquire) {
                 self.forward_upload_status(&fabric.upload_status, &mut forwarded)
                     .await;
-                break true;
+                break (true, false);
             }
             tokio::select! {
-                _ = self.registration.cancel_token.cancelled() => break false,
+                _ = self.registration.cancel_token.cancelled() => break (false, false),
+                () = &mut own_stage => break (false, true),
                 _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
             }
         };
@@ -602,10 +627,17 @@ impl EgressTask {
                 )
                 .await;
         }
-        // The leaf sends its end playlist after the remove.
+        // The leaf sends its end playlist after a remove. A stage that ended
+        // under the output is no intentional stop: abandon the session, so
+        // the destination keeps the stream open for the retry.
+        let command = if stage_ended {
+            EgressCommand::Abandon(fabric.spec.id)
+        } else {
+            EgressCommand::Remove(fabric.spec.id)
+        };
         let _ = self
             .engine
-            .dispatch_hls_put_fabric_command(&feed_id, EgressCommand::Remove(fabric.spec.id))
+            .dispatch_hls_put_fabric_command(&feed_id, command)
             .await;
         let _ = self.engine.release_hls_put_fabric_runtime(&feed_id).await;
     }
@@ -928,55 +960,3 @@ impl EgressTask {
         );
     }
 }
-
-/// Spawns the pipeline's one HLS segmenter on `ring`. The segmenter is
-/// shared by every HLS output of the pipeline and outlives the output that
-/// started it, so it holds that output's stage leases itself: the stages
-/// feeding `ring` stop only after the segmenter ends. A stage that ends on
-/// its own leaves `ring` unfed for good, so the segmenter ends with it and
-/// the next HLS attempt starts a new one on its new stage.
-pub(super) fn spawn_pipeline_hls_segmenter(
-    engine: Arc<MediaEngine>,
-    pipeline_id: String,
-    store: Arc<crate::media::hls::HlsStore>,
-    ring: Arc<crate::media::ring_buffer::RingBuffer>,
-    cancel: tokio_util::sync::CancellationToken,
-    stage_key: crate::domain::stage::StageKey,
-    stages: Vec<crate::media::stage_lease::StageLease>,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let segmenter = crate::media::hls::start_hls_segmenter(
-            pipeline_id.clone(),
-            store,
-            ring,
-            None,
-            engine.clone(),
-            cancel.clone(),
-            crate::media::hls::HlsSegmenterStart {
-                video_meta_override: None,
-                planned_stage_key: Some(stage_key),
-            },
-        );
-        tokio::pin!(segmenter);
-        let stage_ended = async {
-            if stages.is_empty() {
-                std::future::pending::<()>().await;
-            }
-            futures_util::future::select_all(stages.iter().map(|stage| Box::pin(stage.ended())))
-                .await;
-        };
-        tokio::select! {
-            () = &mut segmenter => {}
-            () = stage_ended => {
-                cancel.cancel();
-                segmenter.await;
-            }
-        }
-        engine.shutdown_hls_segmenter(&pipeline_id).await;
-        drop(stages);
-    })
-}
-
-#[cfg(test)]
-#[path = "egress_task_tests.rs"]
-mod tests;
