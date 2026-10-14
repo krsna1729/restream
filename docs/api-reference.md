@@ -468,10 +468,10 @@ while one runs.
 The source ring node's `details.readers` lists the readers registered on the
 ring (HLS segmenters, recordings, RTMP playback clients, and stage inputs such
 as transcoders and the SRT TS muxer) with their lag and overflow counts.
-Outputs that run on egress-fabric shards (network, sink and pipeline outputs,
-and the HLS PUT upload) read the ring in place without registering, so a
-pipeline whose only consumers are such outputs shows `readers: []`; an HLS
-output appears through its segmenter. Their edges in the graph show what they
+Outputs that run on egress-fabric shards (network, sink and pipeline
+outputs) read the ring in place without registering, so a pipeline whose
+only consumers are such outputs shows `readers: []`; HLS and HLS PUT outputs
+appear through their segmenter. Their edges in the graph show what they
 read; their progress is per output (`flow` in `GET /api/v1/state`, `egresses`
 in pipeline telemetry). The same holds for `sourceRing.readers` in pipeline
 telemetry, so a ring-overflow sum over it does not cover fabric outputs.
