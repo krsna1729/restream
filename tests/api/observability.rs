@@ -529,6 +529,23 @@ async fn engine_resource_map_requires_auth_and_returns_structured_data() {
             .is_some_and(|nodes| nodes.len() <= 1)
     );
     assert!(detail_body["memoryAccounting"].is_object());
+
+    // The accounting payload is runtime-wide: a pipeline-scoped detail map
+    // must not report other pipelines' rings and queues as its own.
+    let pipeline_detail = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            "/api/v1/engine/resource-map?view=detail&pipeline_id=pipe-1",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(pipeline_detail.status(), StatusCode::OK);
+    let pipeline_body = body_json(pipeline_detail).await;
+    assert_eq!(pipeline_body["scope"]["kind"].as_str(), Some("pipeline"));
+    assert!(pipeline_body["memoryAccounting"].is_null());
 }
 
 #[tokio::test]

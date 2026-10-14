@@ -164,7 +164,7 @@ export interface ResourceMapSnapshot {
     maxTopN?: number;
   };
   summary: Record<string, number | string | boolean | null>;
-  memoryAccounting?: Record<string, unknown>;
+  memoryAccounting?: Record<string, unknown> | null;
   nodes: ResourceMapNode[];
   edges?: Array<Record<string, unknown>>;
   attribution?: Record<string, string[]>;

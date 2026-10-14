@@ -1474,14 +1474,19 @@ Query parameters:
 - `view=grouped|summary|detail`: defaults to `grouped`. `summary` returns only
   summary counters and no nodes. `grouped` collapses high-cardinality resources
   such as outputs by kind/protocol/execution. `detail` returns top individual
-  nodes and includes detailed memory-accounting payloads.
+  nodes and, at runtime scope only, the runtime-wide memory-accounting payload
+  (`memoryAccounting`); a pipeline-scoped map returns `memoryAccounting: null`.
 - `top_n=<n>`: caps returned nodes, default `25`, maximum `200`.
 
 The summary contains measured process and child-process fields such as CPU,
 RSS, thread count, file descriptor count, child FFmpeg count, and active SRT
 sender thread permits, plus egress-fabric shard counters
 (`fabricShardThreadCount`, `fabricShardStalledCount`,
-`fabricShardPanickedCount`) over the shards the response lists. Nodes include
+`fabricShardPanickedCount`) over the shards the response lists. The process
+fields and `retainedPayloadBytes`, `avioQueueLenBytes`,
+`avioQueueCapacityBytes` and `activeTranscoderBuffers` are runtime-wide at
+either scope; the node list, the shard counters and the ingest, stage and
+egress counts follow the scope. Nodes include
 execution ownership (`tokio_task`, `os_thread`, `shard_thread`,
 `child_process`, `shared`, or `process`) plus memory attribution with a
 confidence marker. An egress output node's `execution` is always
