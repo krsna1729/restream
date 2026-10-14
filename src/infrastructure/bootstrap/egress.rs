@@ -498,7 +498,7 @@ impl EgressReconciler {
             url: output.url.clone(),
             ring: prepared.ring,
             terminal_stage_key: prepared.terminal_stage_key,
-            _stages: stages,
+            stages,
             registration,
             engine: self.engine.clone(),
             pool: self.pool.clone(),

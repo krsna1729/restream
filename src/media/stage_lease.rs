@@ -78,6 +78,12 @@ impl StageLease {
     pub(crate) fn upgrade(weak: &Weak<LeaseCell>) -> Option<Self> {
         weak.upgrade().map(Self)
     }
+
+    /// Completes once the leased stage is cancelled. While this lease lives
+    /// that means the stage ended on its own (it is never reused).
+    pub(crate) fn ended(&self) -> tokio_util::sync::WaitForCancellationFuture<'_> {
+        self.0.cancel.cancelled()
+    }
 }
 
 impl Drop for LeaseCell {
