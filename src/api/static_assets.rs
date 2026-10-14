@@ -134,8 +134,15 @@ fn header_value(value: &str) -> HeaderValue {
     HeaderValue::from_str(value).expect("generated static asset header is valid")
 }
 
+/// HTML, scripts and styles revalidate on every load (the content-hash ETag
+/// makes that a 304): module and stylesheet names carry no content hash, so
+/// a cached copy could outlive an upgrade and mix two builds' modules in one
+/// page. Other assets (images) keep an hour.
 fn cache_control(path: &str) -> HeaderValue {
-    if path.ends_with(".html") {
+    if [".html", ".js", ".css"]
+        .iter()
+        .any(|extension| path.ends_with(extension))
+    {
         HeaderValue::from_static("no-cache")
     } else {
         HeaderValue::from_static("public, max-age=3600")
@@ -239,13 +246,16 @@ mod tests {
     }
 
     #[test]
-    fn html_assets_disable_long_term_cache() {
+    fn unhashed_code_revalidates_and_images_cache_for_an_hour() {
+        for path in ["index.html", "js/control-room/app.js", "output.css"] {
+            assert_eq!(
+                cache_control(path),
+                HeaderValue::from_static("no-cache"),
+                "{path}"
+            );
+        }
         assert_eq!(
-            cache_control("index.html"),
-            HeaderValue::from_static("no-cache")
-        );
-        assert_eq!(
-            cache_control("output.css"),
+            cache_control("logo.png"),
             HeaderValue::from_static("public, max-age=3600")
         );
     }
