@@ -241,6 +241,35 @@ fn a_session_uploads_on_one_connection_and_ends_with_endlist() {
     assert!(!output.handle.shutdown_and_join().panicked);
 }
 
+/// An output abandoned because its stage ended sends no end playlist, so
+/// the destination keeps the stream open for the retry; the shard drops it
+/// and uploads nothing more for it, even through a shutdown.
+#[test]
+fn an_abandoned_output_ends_without_an_end_playlist() {
+    let origin = Origin::start(|_, _| (200, false));
+    let output = start_output(origin.port);
+
+    origin.wait_for("segment and playlist", |seen| seen.len() >= 2);
+    output
+        .handle
+        .try_send(EgressCommand::Abandon(OutputId::new("out-hls")))
+        .unwrap();
+    output
+        .store
+        .push_segment(1.5, Bytes::from_static(b"segment-one"));
+    output.handle.try_send(EgressCommand::FeedWake).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!output.handle.shutdown_and_join().panicked);
+
+    let seen = origin.seen();
+    assert_eq!(seen.len(), 2, "nothing after the abandon");
+    assert!(
+        seen.iter()
+            .all(|request| !request.body.ends_with(b"#EXT-X-ENDLIST\n"))
+    );
+    assert!(!output.terminated.load(Ordering::Relaxed));
+}
+
 /// A 401 (YouTube: the cid expired) ends the leaf without a retry and
 /// reports it, so the egress task records the failure.
 #[test]

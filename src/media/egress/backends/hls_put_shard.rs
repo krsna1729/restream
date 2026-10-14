@@ -860,6 +860,14 @@ impl<P: RtmpReadinessPoller + 'static> EgressShardBackend for HlsPutShardBackend
                     self.enqueue(key);
                 }
             }
+            // The stage ended under a running output: drop the session
+            // without the end playlist, so the destination keeps the stream
+            // open for the next attempt.
+            EgressCommand::Abandon(output_id) => {
+                if let Some(key) = self.by_output.get(&output_id).copied() {
+                    self.close_slot(key);
+                }
+            }
             EgressCommand::FeedWake => {
                 if let Some(snapshot) = self.store.snapshot() {
                     for (key, slot) in self.slots.iter_mut() {

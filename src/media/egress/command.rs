@@ -137,6 +137,11 @@ pub enum EgressCommand {
     Update(OutputSpec),
     /// Close and remove the leaf with this output ID.
     Remove(OutputId),
+    /// Remove the leaf without the end marker of an intentional stop (no
+    /// HLS `EXT-X-ENDLIST`): the stage it read ended on its own, and the
+    /// next attempt adds the output again. Backends with no end marker
+    /// treat it as `Remove`.
+    Abandon(OutputId),
     /// Coalesced notification that the shard's feed may have new data; the
     /// shard clears its wake gate and drains within normal budgets.
     FeedWake,
@@ -151,7 +156,7 @@ impl EgressCommand {
     pub fn output_id(&self) -> Option<&OutputId> {
         match self {
             EgressCommand::Add(s) | EgressCommand::Update(s) => Some(&s.id),
-            EgressCommand::Remove(id) => Some(id),
+            EgressCommand::Remove(id) | EgressCommand::Abandon(id) => Some(id),
             EgressCommand::FeedWake | EgressCommand::DrainShard(_) | EgressCommand::Shutdown => {
                 None
             }

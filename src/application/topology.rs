@@ -158,12 +158,11 @@ pub async fn converge_topology(pool: &SqlitePool, engine: &MediaEngine, outputs:
             return;
         }
     };
-    for pipeline_id in runtime_pipelines.difference(&pipelines) {
-        engine.teardown_pipeline_runtime(pipeline_id).await;
-    }
-
     // Only the reconciler registers egresses, always from its own output rows,
     // so a registration absent from these rows is for a deleted output.
+    // Consumers stop before their producers: an egress whose stage the
+    // teardown below cancels is then already stopped, not failed with
+    // `stage_ended` and counted for a retry.
     let wanted = outputs
         .iter()
         .filter(|output| pipelines.contains(&output.pipeline_id))
@@ -174,6 +173,10 @@ pub async fn converge_topology(pool: &SqlitePool, engine: &MediaEngine, outputs:
             engine.unregister_egress(&output_id).await;
             engine.clear_egress_retry_state(&output_id).await;
         }
+    }
+
+    for pipeline_id in runtime_pipelines.difference(&pipelines) {
+        engine.teardown_pipeline_runtime(pipeline_id).await;
     }
 }
 

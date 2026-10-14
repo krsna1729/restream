@@ -600,19 +600,19 @@ impl EgressTask {
             }
         }
         let mut forwarded = ForwardedUploadStatus::default();
-        let stage_ended = self.own_stage_ended();
-        tokio::pin!(stage_ended);
-        let failed = loop {
+        let own_stage = self.own_stage_ended();
+        tokio::pin!(own_stage);
+        let (failed, stage_ended) = loop {
             self.forward_upload_status(&fabric.upload_status, &mut forwarded)
                 .await;
             if fabric.terminated.load(std::sync::atomic::Ordering::Acquire) {
                 self.forward_upload_status(&fabric.upload_status, &mut forwarded)
                     .await;
-                break true;
+                break (true, false);
             }
             tokio::select! {
-                _ = self.registration.cancel_token.cancelled() => break false,
-                () = &mut stage_ended => break false,
+                _ = self.registration.cancel_token.cancelled() => break (false, false),
+                () = &mut own_stage => break (false, true),
                 _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
             }
         };
@@ -627,10 +627,17 @@ impl EgressTask {
                 )
                 .await;
         }
-        // The leaf sends its end playlist after the remove.
+        // The leaf sends its end playlist after a remove. A stage that ended
+        // under the output is no intentional stop: abandon the session, so
+        // the destination keeps the stream open for the retry.
+        let command = if stage_ended {
+            EgressCommand::Abandon(fabric.spec.id)
+        } else {
+            EgressCommand::Remove(fabric.spec.id)
+        };
         let _ = self
             .engine
-            .dispatch_hls_put_fabric_command(&feed_id, EgressCommand::Remove(fabric.spec.id))
+            .dispatch_hls_put_fabric_command(&feed_id, command)
             .await;
         let _ = self.engine.release_hls_put_fabric_runtime(&feed_id).await;
     }

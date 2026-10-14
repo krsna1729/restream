@@ -222,6 +222,7 @@ fn resolve_request_from_command(command: &EgressCommand) -> Option<SrtResolveReq
             resolve_request_from_output_spec(spec)
         }
         EgressCommand::Remove(_)
+        | EgressCommand::Abandon(_)
         | EgressCommand::FeedWake
         | EgressCommand::DrainShard(_)
         | EgressCommand::Shutdown => None,
