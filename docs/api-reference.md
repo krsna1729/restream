@@ -1490,13 +1490,16 @@ the same underlying data): global scope lists every live fabric shard;
 pipeline scope lists the shards this pipeline's running outputs are placed
 on, matched on feed and shard index (every feed numbers its shards from 0,
 and a shard thread serves only its feed). A shard node holds no attributed
-memory, so with more nodes than `top_n` it is among the first cut; read
-`limits.truncatedNodeCount`. The memory
-attribution confidence marker is one of:
+memory (`confidence: unmeasured`), so with more nodes than `top_n` it is among
+the first cut; read `limits.truncatedNodeCount`. An output node reports
+`memory: null` and no hotspots: it holds no queue of its own and reads its
+feed's ring in place; a group of outputs reports `memory: null` too. The
+memory attribution confidence marker is one of:
 
 - `measured`: process RSS, child FFmpeg RSS, process thread/fd counts
-- `derived`: ring payload stats, AVIO queue lengths, stage/egress counters
+- `derived`: ring payload stats, AVIO input queue lengths, stage counters
 - `estimated`: overheads that are intentionally not assigned to exact nodes
+- `unmeasured`: egress shards, which hold memory this view does not measure
 
 Responses include `limits.totalNodeCount`, `limits.returnedNodeCount`, and
 `limits.truncatedNodeCount` so large fleets can show that the view is grouped or

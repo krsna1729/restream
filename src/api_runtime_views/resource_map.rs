@@ -170,21 +170,27 @@ fn grouped_nodes(nodes: &[Value], top_n: usize) -> Vec<Value> {
                 .iter()
                 .map(|node| node_memory_bytes(node))
                 .sum::<u64>();
-            let measured_count = members
+            // Members with `memory: null` hold none (an output reads its
+            // feed's ring in place); they neither count nor dilute.
+            let confidences = members
                 .iter()
-                .filter(|node| {
-                    node.get("memory")
-                        .and_then(|memory| memory.get("confidence"))
-                        .and_then(Value::as_str)
-                        == Some("measured")
-                })
+                .filter_map(|node| node.get("memory").filter(|memory| !memory.is_null()))
+                .map(|memory| memory.get("confidence").and_then(Value::as_str))
+                .collect::<Vec<_>>();
+            let measured_count = confidences
+                .iter()
+                .filter(|confidence| **confidence == Some("measured"))
                 .count();
-            let confidence = if measured_count == members.len() {
-                "measured"
+            let group_memory = if confidences.is_empty() {
+                Value::Null
+            } else if confidences.iter().all(|c| *c == Some("unmeasured")) {
+                memory(memory_bytes, "unmeasured", "grouped_resource_nodes")
+            } else if measured_count == confidences.len() {
+                memory(memory_bytes, "measured", "grouped_resource_nodes")
             } else if measured_count == 0 {
-                "derived"
+                memory(memory_bytes, "derived", "grouped_resource_nodes")
             } else {
-                "estimated"
+                memory(memory_bytes, "estimated", "grouped_resource_nodes")
             };
             let execution = members
                 .first()
@@ -204,7 +210,7 @@ fn grouped_nodes(nodes: &[Value], top_n: usize) -> Vec<Value> {
                 "label": group_label(&key, count),
                 "execution": execution,
                 "cpuPercent": cpu_percent,
-                "memory": memory(memory_bytes, confidence, "grouped_resource_nodes"),
+                "memory": group_memory,
                 "threads": Value::Object(threads),
                 "nodeCount": count,
                 "hotspots": hotspots,

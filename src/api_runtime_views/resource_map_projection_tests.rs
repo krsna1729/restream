@@ -4,8 +4,8 @@ use serde_json::{Value, json};
 
 use super::{
     DEFAULT_TOP_N, MAX_TOP_N, ResourceMapOptions, ResourceMapView, append_hotspots, egress_node,
-    execution_for_stage, group_key, group_label, merge_thread_counts, node_score, number_field,
-    placed_shard_nodes, source_ring_node, stage_backend_pid, stage_node, top_nodes,
+    execution_for_stage, group_key, group_label, grouped_nodes, merge_thread_counts, node_score,
+    number_field, placed_shard_nodes, source_ring_node, stage_backend_pid, stage_node, top_nodes,
 };
 use crate::system_sampling::ChildProcessResourceSnapshot;
 
@@ -272,6 +272,28 @@ fn egress_node_uses_shard_thread_for_fabric_owned_outputs_regardless_of_protocol
     ));
     assert_eq!(fabric_rtmp["execution"], "shard_thread");
     assert_eq!(fabric_rtmp["threads"]["appOwned"], 0);
+}
+
+/// A group of outputs holds no memory, so the grouped view reports none,
+/// not a derived zero; a group of unmeasured shards stays unmeasured.
+#[test]
+fn grouped_outputs_report_no_memory_and_unmeasured_shards_stay_unmeasured() {
+    let outputs = [
+        egress_node(&json!({"outputId": "o1", "protocol": "srt", "fabric": true})),
+        egress_node(&json!({"outputId": "o2", "protocol": "srt", "fabric": true})),
+    ];
+    let grouped = grouped_nodes(&outputs, 10);
+    assert_eq!(grouped.len(), 1);
+    assert_eq!(grouped[0]["memory"], Value::Null);
+
+    let unmeasured =
+        json!({"attributedBytes": 0, "confidence": "unmeasured", "source": "fabric_shard"});
+    let shards = [
+        json!({"kind": "egress_shard", "memory": unmeasured}),
+        json!({"kind": "egress_shard", "memory": unmeasured}),
+    ];
+    let grouped = grouped_nodes(&shards, 10);
+    assert_eq!(grouped[0]["memory"]["confidence"], "unmeasured");
 }
 
 #[test]
