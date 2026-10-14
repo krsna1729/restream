@@ -656,6 +656,12 @@ async fn run_resource_ingest_growth(
 
     let mut publishers = Vec::new();
     let mut pipeline_ids = Vec::new();
+    let mut feed_outputs: Vec<(String, Vec<String>)> = Vec::new();
+    let outputs_per_feed = if mixed {
+        0
+    } else {
+        env.ingest_outputs_per_feed
+    };
     let max_ingests = *env.ingest_counts.iter().max().unwrap_or(&1);
     let same_growth = *sweep_configs()
         .iter()
@@ -678,8 +684,36 @@ async fn run_resource_ingest_growth(
         let publisher = spawn_resource_publisher(env, config, &stream_key)?;
         wait_for_api_input_live(&active.api, &pipeline_id, Duration::from_secs(45)).await?;
         publishers.push(publisher);
+        let kind = env.ingest_output_kind;
+        let mut output_ids = Vec::with_capacity(outputs_per_feed);
+        for output in 1..=outputs_per_feed {
+            let name = format!("{stream_key}-{}-{output}", kind.label());
+            let (url, encoding) = resource_output_url(env, config, kind, &name);
+            let output_id = create_output_with_rtmp_mode(
+                &active.api,
+                &pipeline_id,
+                &name,
+                &url,
+                &encoding,
+                kind.rtmp_mode(),
+            )
+            .await?;
+            start_output(&active.api, &pipeline_id, &output_id).await?;
+            output_ids.push(output_id);
+        }
+        feed_outputs.push((pipeline_id.clone(), output_ids));
         pipeline_ids.push(pipeline_id);
         if env.ingest_counts.contains(&index) {
+            let total_outputs = feed_outputs.iter().map(|(_, ids)| ids.len()).sum::<usize>();
+            for (pipeline_id, output_ids) in &feed_outputs {
+                wait_for_outputs_progress(
+                    &active.api,
+                    pipeline_id,
+                    output_ids,
+                    resource_output_progress_timeout(total_outputs),
+                )
+                .await?;
+            }
             let ingest_types = if mixed {
                 sweep_configs()
                     .iter()
@@ -702,9 +736,13 @@ async fn run_resource_ingest_growth(
                         },
                         label: format!("{index}-pipelines"),
                         pipelines: index,
-                        outputs: 0,
+                        outputs: total_outputs,
                         ingest_types,
-                        egress_mix: "none".to_string(),
+                        egress_mix: if total_outputs == 0 {
+                            "none".to_string()
+                        } else {
+                            env.ingest_output_kind.label().to_string()
+                        },
                         transcode: "none",
                     },
                 )

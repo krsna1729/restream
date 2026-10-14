@@ -54,7 +54,11 @@ rung (`healthy`, `contaminated` when the host or peer dropped datagrams, or
 The sweep combines:
 
 - OS-level process memory from `/proc/<pid>/status` and `/proc/<pid>/smaps_rollup`
-- CPU deltas from `/proc/<pid>/stat`
+- CPU deltas from `/proc/<pid>/stat`, and per thread group
+  (`threadCpuPct`) from `/proc/<pid>/task/*/stat`
+- run-queue wait per thread group (`threadRunQueuePct`: time runnable but
+  not running, % of one thread's wall time, from `/proc/<pid>/task/*/schedstat`;
+  the delay `perf sched` reports, without its privileges)
 - internal counters, payload accounting and Restream's own delivery view from
   `GET /api/v1/measure` (fixed shape, so sampling cost does not grow with
   output count)
@@ -81,6 +85,11 @@ Useful env vars:
 - `RESOURCE_SWEEP_BITRATE=8M` (publisher fixture bitrate label; default `1.5M`)
 - `RESOURCE_SWEEP_EGRESS_COUNTS=1,3,6`
 - `RESOURCE_SWEEP_INGEST_COUNTS=1,2,4`
+- `RESOURCE_SWEEP_INGEST_OUTPUTS=2` gives every `ingest-growth-same` feed
+  that many outputs of kind `RESOURCE_SWEEP_INGEST_OUTPUT_KIND` (a catalog
+  name, default `srtSource`), started as each feed goes live; every window
+  waits for all of them to make progress. Default 0: publishers only. This
+  is the many-feed matrix (feeds × few outputs)
 - `MSR_PEER=sink` swaps MediaMTX for in-process `srt-rs`/RTMP sink listeners,
   which is what the packet-rate ladder uses so the peer side is not the
   bottleneck

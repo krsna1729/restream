@@ -45,6 +45,8 @@ fn test_env() -> ResourceSweepEnv {
         peer_mode: ResourceSweepPeer::Mediamtx,
         srt_peer_hosts: Vec::new(),
         ingest_growth_config: "h264-srt".to_string(),
+        ingest_outputs_per_feed: 0,
+        ingest_output_kind: super::catalog::SweepOutputKind::SrtSource,
         sample_secs: 1,
         sample_interval_ms: 1000,
         settle_secs: 1,

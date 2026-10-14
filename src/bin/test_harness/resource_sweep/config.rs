@@ -112,6 +112,12 @@ pub(super) struct ResourceSweepEnv {
     /// config every publisher of `ingest-growth-same` uses, e.g. `h264-rtmp`
     /// to grow RTMP publishers.
     pub(super) ingest_growth_config: String,
+    /// `RESOURCE_SWEEP_INGEST_OUTPUTS` (default 0): outputs each
+    /// `ingest-growth-same` feed restreams, of kind
+    /// `RESOURCE_SWEEP_INGEST_OUTPUT_KIND` (default `srtSource`), so the
+    /// many-feed matrix (feeds × few outputs) runs on one scenario.
+    pub(super) ingest_outputs_per_feed: usize,
+    pub(super) ingest_output_kind: super::catalog::SweepOutputKind,
     pub(super) sample_secs: u64,
     pub(super) sample_interval_ms: u64,
     pub(super) settle_secs: u64,
@@ -165,6 +171,12 @@ impl ResourceSweepEnv {
             srt_peer_hosts: parse_string_list("RESOURCE_SWEEP_SRT_PEER_HOSTS"),
             ingest_growth_config: std::env::var("RESOURCE_SWEEP_INGEST_GROWTH_CONFIG")
                 .unwrap_or_else(|_| "h264-srt".to_string()),
+            ingest_outputs_per_feed: env_usize("RESOURCE_SWEEP_INGEST_OUTPUTS", 0),
+            ingest_output_kind: match std::env::var("RESOURCE_SWEEP_INGEST_OUTPUT_KIND") {
+                Ok(kind) => serde_json::from_value(serde_json::Value::String(kind.clone()))
+                    .map_err(|_| format!("unknown RESOURCE_SWEEP_INGEST_OUTPUT_KIND {kind}"))?,
+                Err(_) => super::catalog::SweepOutputKind::SrtSource,
+            },
             sample_secs: env_secs("RESOURCE_SWEEP_SAMPLE_SECS", 6),
             sample_interval_ms: env_secs("RESOURCE_SWEEP_SAMPLE_INTERVAL_MS", 1000),
             settle_secs: env_secs("RESOURCE_SWEEP_SETTLE_SECS", 4),
