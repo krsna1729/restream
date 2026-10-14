@@ -129,7 +129,7 @@ impl MediaEngine {
         command: EgressCommand,
     ) -> Result<ManagerCommandOutcome, RtmpFabricDispatchError> {
         let mut registry = self.fabric.rtmp.lock().await;
-        if let EgressCommand::Remove(output_id) = &command
+        if let EgressCommand::Remove(output_id) | EgressCommand::Abandon(output_id) = &command
             && let Some(source) = registry.startup_sources.get(feed_id)
         {
             source.remove(output_id);
