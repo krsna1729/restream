@@ -605,11 +605,14 @@ pub(crate) async fn resource_map(
         ResourceMapView::Grouped => grouped_nodes(&nodes, options.top_n),
         ResourceMapView::Detail => top_nodes(nodes, options.top_n),
     };
-    let memory_accounting_response = if options.view == ResourceMapView::Detail {
-        memory_accounting
-    } else {
-        Value::Null
-    };
+    // The accounting payload covers the whole runtime: a pipeline-scoped
+    // map leaves it out rather than report other pipelines' rings and queues.
+    let memory_accounting_response =
+        if options.view == ResourceMapView::Detail && pipeline_id.is_none() {
+            memory_accounting
+        } else {
+            Value::Null
+        };
     let returned_node_count = returned_nodes.len();
     let view = match options.view {
         ResourceMapView::Summary => "summary",

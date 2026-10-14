@@ -1470,7 +1470,8 @@ Query parameters:
 - `view=grouped|summary|detail`: defaults to `grouped`. `summary` returns only
   summary counters and no nodes. `grouped` collapses high-cardinality resources
   such as outputs by kind/protocol/execution. `detail` returns top individual
-  nodes and includes detailed memory-accounting payloads.
+  nodes and, at runtime scope only, the runtime-wide memory-accounting payload
+  (`memoryAccounting`); a pipeline-scoped map returns `memoryAccounting: null`.
 - `top_n=<n>`: caps returned nodes, default `25`, maximum `200`.
 
 The summary contains measured process and child-process fields such as CPU,
