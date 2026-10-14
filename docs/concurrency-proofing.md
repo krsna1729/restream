@@ -264,6 +264,7 @@ surface already covers it.
 - `src/media/egress/shard/tests/feed_wake.rs`
   - `publication_after_a_wake_head_check_rearms_the_shared_shard_gate`
   - `a_full_command_queue_cannot_strand_a_feeds_final_publication`
+  - `full_fallback_preserves_an_already_queued_publication_wake`
     (controlled races drive the production shard loop against real feed heads)
 - `src/media/srt_stream_id.rs`
   - `media::srt_stream_id::tests` (stream-key normalization and mode parsing)

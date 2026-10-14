@@ -27,19 +27,21 @@
 //!
 //! ## Wake coalescing
 //!
-//! One `AtomicBool` wake-pending flag per `(FeedId, shard)` pair.  Protocol:
-//! 1. Publisher calls `WakeGate::notify` (AcqRel swap) after every push; when
-//!    it returns `true` the flag transitioned from clear to set and the
-//!    publisher **must** deliver one wake through the shard's wake mechanism
-//!    (command channel or native poller interrupt).  A `false` return means a
-//!    wake is already outstanding and delivery is coalesced away.
-//! 2. Shard calls `WakeGate::take` (AcqRel) when it wakes or before sleeping.
-//! 3. Shard **re-reads** the feed head after clearing the flag.
+//! One pending-wake flag and one Full-retry flag per shard. Protocol:
+//! 1. Publisher calls `WakeGate::notify` (AcqRel swap) after every push; a
+//!    clear-to-set transition obligates one bounded delivery attempt.
+//!    A `false` return coalesces into the already queued wake. If delivery is
+//!    Full, clear pending and arm the separate retry bit. Closed clears
+//!    pending but requires no service from the stopped shard.
+//! 2. On a queued wake, the shard clears pending **before** re-reading heads.
+//! 3. On fallback service, the shard clears the retry bit **before** re-reading
+//!    heads, without clearing pending: an already queued wake still owns it.
 //!
-//! Lost-wakeup safety rests on the delivery primitive, not on flag/head load
-//! ordering: every clear-to-set transition delivers exactly one wake, so a
-//! shard that sleeps with unconsumed data always has a delivery in flight.
-//! `tests/egress_feed_wake_loom.rs` model-checks this seam.
+//! An outstanding hint is either a queued wake or the Full-retry bit, not
+//! necessarily a delivery in flight. If Full produces no queued wake, the
+//! active shard's bounded idle deadline still guarantees another service turn;
+//! no later publication is required. `tests/egress_feed_wake_loom.rs` models
+//! both queued delivery and bounded retry service.
 //!
 //! ## Retention
 //!
@@ -174,8 +176,8 @@ fn retention_snapshot(ring: &RingBuffer) -> FeedRetentionSnapshot {
 /// ### Protocol
 /// 1. Publisher calls [`notify`](WakeGate::notify) after every push (`AcqRel`
 ///    swap).  A `true` return is a clear-to-set transition: the publisher must
-///    deliver exactly one wake through the shard's wake mechanism.  `false`
-///    means a wake is already outstanding — delivery is coalesced away.
+///    make one bounded delivery attempt. `false` means a queued wake already
+///    owns pending — delivery is coalesced away.
 /// 2. Shard calls [`take`](WakeGate::take) when consuming the queued wake,
 ///    **before** the backend checks any head (`AcqRel`).
 /// 3. Shard re-reads heads after the clear; a later publication arms a new wake.
@@ -201,11 +203,11 @@ impl WakeGate {
         }
     }
 
-    /// Mark that new data is available.  Returns `true` when the flag
-    /// transitioned from clear to set — the caller must then deliver one wake
-    /// to the consumer.  Returns `false` when a wake is already outstanding.
+    /// Mark that new data is available. A clear-to-set transition returns
+    /// `true`, obligating one bounded delivery attempt (or a Full retry hint).
+    /// Returns `false` when a queued wake already owns pending.
     #[inline]
-    #[must_use = "a true return obligates the caller to deliver a wake"]
+    #[must_use = "a true return obligates a delivery attempt or Full retry hint"]
     pub fn notify(&self) -> bool {
         !self.pending.swap(true, Ordering::AcqRel)
     }

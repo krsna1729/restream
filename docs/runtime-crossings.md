@@ -322,6 +322,10 @@ Disk             blocking file writer threads
   worker. Removing the queued wake's clear-before-check guard or disabling
   the Full hint made the corresponding production-loop regression fail;
   moving the retry model's head read before its swap-clear also failed.
+  The composed Full-plus-queued-wake regression also drives the production
+  loop: a new publication coalesces while the fallback is paused and the
+  queued wake later observes the final head. Adding a pending clear to the
+  fallback made that publication return `Full` instead of coalescing.
   Final per-feed smoke, from a canonical bench rebuild with
   `BENCH_BUILD=never`: `fault.srt-output-stall` passed. Frozen-destination RSS
   grew 22,216 KiB (56,896→79,112 KiB), with retry and destination diagnosis

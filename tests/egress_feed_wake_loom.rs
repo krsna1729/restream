@@ -4,18 +4,17 @@
 //! `media::egress::journal::WakeGate` plus the shard wake delivery mechanism:
 //!
 //! - publisher: advance the feed head, then `notify()` — an `AcqRel` swap
-//!   whose `true` return (clear-to-set transition) obligates delivering
-//!   exactly one wake through the shard's wake primitive;
-//! - shard: on wake, `take()` (`AcqRel` swap-clear), then re-read the head and
-//!   drain; sleep again only on the wake primitive itself.
+//!   whose clear-to-set transition obligates one bounded delivery attempt;
+//! - queued wake: clear pending before reading the head and draining;
+//! - Full: clear pending and arm a separate retry bit with an `AcqRel` swap;
+//! - fallback: swap-clear retry before reading heads, leaving a queued wake's
+//!   pending gate untouched. The bounded idle deadline services a quiet feed.
 //!
-//! Lost-wakeup safety rests on the delivery pairing, not on flag/head load
-//! ordering: every clear-to-set transition delivers one wake, so a shard
-//! sleeping with unconsumed data always has a delivery in flight.  The models
-//! below encode "sleep" as a real Condvar wait; loom's deadlock detection is
-//! the lost-wakeup detector — if any interleaving could strand the shard with
-//! unconsumed data and no wake, the model fails to terminate and loom reports
-//! it.
+//! Lost-wakeup safety requires delivery pairing **and** clear-before-observe
+//! ordering. The queued-wake models encode sleep as a Condvar wait, where
+//! loom's deadlock detector catches stranded data. The Full-retry model uses
+//! bounded service turns, including one after publishing ends, to model the
+//! idle deadline without relying on another publication.
 //!
 //! The model mirrors `WakeGate`'s orderings rather than importing it (std
 //! atomics vs loom atomics), matching the repository's loom convention — keep
