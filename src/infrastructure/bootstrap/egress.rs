@@ -11,6 +11,7 @@ use crate::application::reconcile::{
     OutputFailureWindow, OutputStartAction, OutputStopAction, decide_output_start_action,
     decide_output_stop_action, load_output_runtime_snapshot,
 };
+use crate::application::runtime_state::hub::StateHub;
 use crate::config::RuntimeTuning;
 use crate::domain::output_spec::OutputUrlScheme;
 use crate::media::engine::MediaEngine;
@@ -28,15 +29,24 @@ pub(super) struct EgressReconciler {
     pool: SqlitePool,
     tuning: RuntimeTuning,
     last_failed: FailureTracker,
+    /// Marked when this reconciler writes a row the projection reads
+    /// (retries exhausted), as API writes and engine events are.
+    runtime_state: Arc<StateHub>,
 }
 
 impl EgressReconciler {
-    pub fn new(engine: Arc<MediaEngine>, pool: SqlitePool, tuning: RuntimeTuning) -> Self {
+    pub fn new(
+        engine: Arc<MediaEngine>,
+        pool: SqlitePool,
+        tuning: RuntimeTuning,
+        runtime_state: Arc<StateHub>,
+    ) -> Self {
         Self {
             engine,
             pool,
             tuning,
             last_failed: Arc::new(Mutex::new(HashMap::new())),
+            runtime_state,
         }
     }
 
@@ -93,6 +103,7 @@ impl EgressReconciler {
                         Ok(_) => {
                             self.last_failed.lock().await.remove(&output.id);
                             self.engine.clear_egress_retry_state(&output.id).await;
+                            self.runtime_state.mark_changed();
                             warn!(
                                 correlation_id = %crate::logging::next_correlation_id("out"),
                                 output_id = %output.id,

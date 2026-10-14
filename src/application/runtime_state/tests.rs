@@ -374,3 +374,68 @@ async fn the_projector_rebuilds_only_while_a_client_listens() {
     stop.cancel();
     projector.await.unwrap();
 }
+
+/// The reuse decision at its edges: inside the window with no new mark,
+/// at the window's end, after a mark, and before any rebuild.
+#[test]
+fn the_last_refresh_covers_only_an_unmarked_read_inside_the_window() {
+    let built = tokio::time::Instant::now();
+    let last = hub::LastRefresh {
+        at: Some(built),
+        changes: 7,
+    };
+    let just_inside = built + hub::ON_DEMAND_REUSE - std::time::Duration::from_millis(1);
+    assert!(last.covers(built, 7));
+    assert!(last.covers(just_inside, 7));
+    assert!(!last.covers(built + hub::ON_DEMAND_REUSE, 7));
+    assert!(!last.covers(built, 8));
+    assert!(!hub::LastRefresh::default().covers(built, 0));
+}
+
+/// A client polling `GET /api/v1/state` in a loop costs one rebuild per
+/// reuse window, but never reads past a marked change.
+#[tokio::test]
+async fn on_demand_refresh_reuses_a_fresh_projection_until_a_change() {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    crate::db::setup_database_schema(&pool).await.unwrap();
+    let engine = MediaEngine::new();
+    let hub = StateHub::new();
+    let pipelines = async |hub: &StateHub| hub.snapshot().await.pipelines.len();
+
+    crate::db::create_pipeline(&pool, "pipe", "P", "key", None, None)
+        .await
+        .unwrap();
+    // Taken before the rebuild, so the hub's projection is no older than
+    // this when the second read below decides.
+    let rebuilt_at = tokio::time::Instant::now();
+    hub.refresh_on_demand(&pool, &engine).await;
+    assert_eq!(pipelines(&hub).await, 1);
+
+    crate::db::create_pipeline(&pool, "pipe-2", "P2", "key-2", None, None)
+        .await
+        .unwrap();
+    hub.refresh_on_demand(&pool, &engine).await;
+    // A host slower than the window rebuilds here, which is also correct.
+    if rebuilt_at.elapsed() < hub::ON_DEMAND_REUSE {
+        assert_eq!(
+            pipelines(&hub).await,
+            1,
+            "unmarked, inside the window: reused"
+        );
+    }
+
+    hub.mark_changed();
+    hub.refresh_on_demand(&pool, &engine).await;
+    assert_eq!(
+        pipelines(&hub).await,
+        2,
+        "a marked change is never served stale"
+    );
+
+    crate::db::create_pipeline(&pool, "pipe-3", "P3", "key-3", None, None)
+        .await
+        .unwrap();
+    tokio::time::sleep(hub::ON_DEMAND_REUSE).await;
+    hub.refresh_on_demand(&pool, &engine).await;
+    assert_eq!(pipelines(&hub).await, 3, "past the window: rebuilt");
+}

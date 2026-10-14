@@ -1,18 +1,24 @@
 //! Holds the current projection under a revision and publishes deltas.
 //!
 //! Change points mark the hub changed ([`StateHub::mark_changed`]): every
-//! engine lifecycle event and every successful mutating request. The
-//! projector ([`run_projector`]) rebuilds on a change and, while a stream
-//! client is connected, once per interval for state no event reports (flow,
-//! stalls, retry countdowns). With no client connected nothing runs between
-//! changes; `GET /api/v1/state` refreshes on demand.
+//! engine lifecycle event, every successful mutating request, and the
+//! egress reconciler's retries-exhausted write. The projector
+//! ([`run_projector`]) rebuilds on a change and, while a stream client is
+//! connected, once per interval for state no event reports (flow, stalls,
+//! retry countdowns). With no client connected nothing runs between changes;
+//! `GET /api/v1/state` and a connecting stream refresh on demand, reusing a
+//! projection whose rebuild completed less than [`ON_DEMAND_REUSE`] ago
+//! when no change was marked since, so a client polling in a loop costs at
+//! most one rebuild per window.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use sqlx::SqlitePool;
 use tokio::sync::{Mutex, Notify, broadcast};
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use super::{Projection, RuntimeState, StateDelta, diff, project};
@@ -21,6 +27,12 @@ use crate::media::engine::MediaEngine;
 /// Deltas kept for clients that reconnect with `since`; older gaps resync
 /// from a snapshot.
 pub const DELTA_HISTORY: usize = 256;
+
+/// How long an on-demand read reuses the last projection when no change was
+/// marked since: the staleness bound for state no event reports (flow,
+/// stalls, retry countdowns), and the bound on rebuilds a polling client
+/// can cause.
+pub const ON_DEMAND_REUSE: Duration = Duration::from_millis(500);
 
 /// Outcome of asking for the deltas after a revision.
 #[derive(Debug, PartialEq)]
@@ -42,10 +54,30 @@ struct Current {
 pub struct StateHub {
     current: Mutex<Current>,
     /// Serializes refreshes, so an older projection never publishes after
-    /// a newer one.
-    refreshing: Mutex<()>,
+    /// a newer one, and records the last one for on-demand reuse.
+    refreshing: Mutex<LastRefresh>,
     deltas: broadcast::Sender<Arc<StateDelta>>,
     changed: Notify,
+    /// Marked changes so far; a refresh records the count it read.
+    changes: AtomicU64,
+}
+
+/// When the last rebuild completed, and the marked-change count it read
+/// before reading the rows.
+#[derive(Default)]
+pub(super) struct LastRefresh {
+    pub(super) at: Option<Instant>,
+    pub(super) changes: u64,
+}
+
+impl LastRefresh {
+    /// The last projection still answers a request at `now`: completed less
+    /// than [`ON_DEMAND_REUSE`] ago, with no change marked since.
+    pub(super) fn covers(&self, now: Instant, changes: u64) -> bool {
+        self.at
+            .is_some_and(|at| now.saturating_duration_since(at) < ON_DEMAND_REUSE)
+            && self.changes == changes
+    }
 }
 
 impl Default for StateHub {
@@ -64,7 +96,7 @@ impl StateHub {
 
     pub fn with_epoch(epoch: String) -> Self {
         Self {
-            refreshing: Mutex::new(()),
+            refreshing: Mutex::new(LastRefresh::default()),
             current: Mutex::new(Current {
                 epoch,
                 revision: 0,
@@ -73,11 +105,13 @@ impl StateHub {
             }),
             deltas: broadcast::channel(DELTA_HISTORY).0,
             changed: Notify::new(),
+            changes: AtomicU64::new(0),
         }
     }
 
     /// Something the projection reads may have changed.
     pub fn mark_changed(&self) {
+        self.changes.fetch_add(1, Ordering::AcqRel);
         self.changed.notify_one();
     }
 
@@ -151,7 +185,25 @@ impl StateHub {
 
     /// Rebuilds from the rows and the engine and publishes the change.
     pub async fn refresh(&self, pool: &SqlitePool, engine: &MediaEngine) {
-        let _one_at_a_time = self.refreshing.lock().await;
+        let mut last = self.refreshing.lock().await;
+        self.rebuild(&mut last, pool, engine).await;
+    }
+
+    /// [`Self::refresh`] for a request: reuses the current projection when
+    /// the last rebuild completed less than [`ON_DEMAND_REUSE`] ago and no
+    /// change was marked since. Requests queued behind a rebuild find it
+    /// fresh and return at once.
+    pub async fn refresh_on_demand(&self, pool: &SqlitePool, engine: &MediaEngine) {
+        let mut last = self.refreshing.lock().await;
+        if !last.covers(Instant::now(), self.changes.load(Ordering::Acquire)) {
+            self.rebuild(&mut last, pool, engine).await;
+        }
+    }
+
+    async fn rebuild(&self, last: &mut LastRefresh, pool: &SqlitePool, engine: &MediaEngine) {
+        // Read before the rows: a change marked during the rebuild is newer
+        // than this projection and must not be taken as covered by it.
+        let changes = self.changes.load(Ordering::Acquire);
         let pipelines = match crate::db::list_pipelines(pool).await {
             Ok(rows) => rows,
             Err(error) => {
@@ -171,6 +223,10 @@ impl StateHub {
         };
         self.publish(project(engine, &pipelines, &outputs).await)
             .await;
+        *last = LastRefresh {
+            at: Some(Instant::now()),
+            changes,
+        };
     }
 
     fn has_clients(&self) -> bool {

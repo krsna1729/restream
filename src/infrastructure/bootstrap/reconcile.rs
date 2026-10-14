@@ -47,8 +47,10 @@ impl Reconciler {
         sessions: Arc<RwLock<HashSet<String>>>,
         recording_metadata: RecordingMetadataReporter,
         requests: Arc<ReconcileRequests>,
+        runtime_state: Arc<crate::application::runtime_state::hub::StateHub>,
     ) -> Self {
-        let egress = EgressReconciler::new(engine.clone(), pool.clone(), config.tuning);
+        let egress =
+            EgressReconciler::new(engine.clone(), pool.clone(), config.tuning, runtime_state);
         Self {
             config,
             pool,

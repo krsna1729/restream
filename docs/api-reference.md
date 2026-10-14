@@ -740,7 +740,10 @@ fails when the file is stale; regenerate it with
 
 ### `GET /api/v1/state`
 
-Rebuilds the projection and returns it:
+Returns the projection, rebuilt first unless the last rebuild completed less
+than 500 ms ago and no engine lifecycle event, mutating request or reconciler
+write (retries exhausted) has happened since (a client polling in a loop
+costs at most one rebuild per 500 ms):
 
 ```json
 {
@@ -838,7 +841,8 @@ reconcile interval, and soon after an engine lifecycle event or a successful
 mutating request, at most once per interval. An event storm (a destination
 outage) therefore costs at most one projection per interval. With no client
 connected, nothing is rebuilt; `GET /api/v1/state` and a new stream
-connection rebuild on demand. Rebuilds run one at a time.
+connection rebuild on demand, reusing a projection younger than 500 ms when
+nothing was marked changed since. Rebuilds run one at a time.
 
 A delivering output that stops making progress reports `flow: stalled` and
 stays `convergence: converged`: the stall is a flow problem, not a

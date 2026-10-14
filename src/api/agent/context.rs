@@ -46,7 +46,10 @@ pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
     }
     // Output convergence and diagnosis come from the runtime state, the
     // one classification the dashboard and alerts also read.
-    state.runtime_state.refresh(&state.db, &state.engine).await;
+    state
+        .runtime_state
+        .refresh_on_demand(&state.db, &state.engine)
+        .await;
     let runtime = state.runtime_state.snapshot().await;
     let desired_vs_actual = desired_vs_actual(
         &pipelines,
