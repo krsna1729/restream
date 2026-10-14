@@ -152,12 +152,11 @@ session. A pipeline HLS segmenter, which every HLS output of the pipeline
 shares and which outlives the output that started it, holds that output's
 leases until the segmenter ends. The registry keeps only a `Weak`, so a
 consumer reuses a stage only while another holds it. The last lease to drop
-cancels the stage at once and
-removes its entry, unless a newer stage has taken the key. A stage that ends
-on its own is cancelled and never reused, so the next consumer starts a new
-one. There is no sweep and no grace period. An output waiting out its retry
-backoff holds no lease, so a transcoder used only by that output restarts
-with its next attempt.
+cancels the stage at once and removes its entry, unless a newer stage has
+taken the key. A stage that ends on its own is cancelled and never reused,
+so the next consumer starts a new one. There is no sweep and no grace
+period. An output waiting out its retry backoff holds no lease, so a
+transcoder used only by that output restarts with its next attempt.
 
 ### Passthrough rule
 
