@@ -172,4 +172,85 @@ mod loom_tests {
             );
         });
     }
+
+    /// Several publishers may share a cloneable shard wake handle. Model
+    /// two independent feed heads to ensure coalescing cannot strand either
+    /// one. The production loop clears the gate before the backend reads
+    /// heads, as the deterministic two-head shard regression also checks.
+    #[test]
+    fn loom_two_heads_sharing_one_gate_strand_no_publication() {
+        loom::model(|| {
+            let gate = FeedWakeModel::new();
+            let heads = Arc::new([AtomicUsize::new(0), AtomicUsize::new(0)]);
+            let publishers: Vec<_> = (0..2)
+                .map(|feed| {
+                    let (gate, heads) = (gate.clone(), heads.clone());
+                    thread::spawn(move || {
+                        heads[feed].store(1, Ordering::Release);
+                        if !gate.pending.swap(true, Ordering::AcqRel) {
+                            let mut delivered = gate.delivered.lock().unwrap();
+                            *delivered += 1;
+                            gate.wake.notify_all();
+                        }
+                    })
+                })
+                .collect();
+
+            let mut cursors = [0usize; 2];
+            let mut wakes_seen = 0usize;
+            loop {
+                let _had_wake = gate.pending.swap(false, Ordering::AcqRel);
+                for (feed, cursor) in cursors.iter_mut().enumerate() {
+                    let head = heads[feed].load(Ordering::Acquire);
+                    if head > *cursor {
+                        *cursor = head;
+                    }
+                }
+                if cursors == [1, 1] {
+                    break;
+                }
+                let mut delivered = gate.delivered.lock().unwrap();
+                while *delivered == wakes_seen {
+                    delivered = gate.wake.wait(delivered).unwrap();
+                }
+                wakes_seen = *delivered;
+            }
+            for publisher in publishers {
+                publisher.join().unwrap();
+            }
+        });
+    }
+
+    /// A full command queue preserves one retry bit for the active shard's
+    /// next turn. Clear that bit before reading the head so a publish racing
+    /// the read remains pending. Two bounded turns plus the final turn after
+    /// the publisher finishes model eventual service, including the idle
+    /// deadline when no further command or publication arrives.
+    #[test]
+    fn loom_full_queue_retry_cannot_lose_the_final_head() {
+        loom::model(|| {
+            let head = Arc::new(AtomicUsize::new(0));
+            let retry = Arc::new(AtomicBool::new(false));
+            let (published, full_retry) = (head.clone(), retry.clone());
+            let publisher = thread::spawn(move || {
+                for sequence in 1..=2 {
+                    published.store(sequence, Ordering::Release);
+                    full_retry.swap(true, Ordering::AcqRel);
+                    thread::yield_now();
+                }
+            });
+            let mut consumed = 0;
+            for _ in 0..2 {
+                if retry.swap(false, Ordering::AcqRel) {
+                    consumed = consumed.max(head.load(Ordering::Acquire));
+                }
+                thread::yield_now();
+            }
+            publisher.join().unwrap();
+            if retry.swap(false, Ordering::AcqRel) {
+                consumed = consumed.max(head.load(Ordering::Acquire));
+            }
+            assert_eq!(consumed, 2, "the final full-queue hint must survive");
+        });
+    }
 }

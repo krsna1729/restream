@@ -1,3 +1,4 @@
+mod feed_wake;
 mod group;
 mod group_supervision;
 mod heartbeat;

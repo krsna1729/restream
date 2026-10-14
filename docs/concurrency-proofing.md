@@ -35,6 +35,9 @@ Use the narrowest proof that can actually catch the bug:
      races where scheduling order matters more than payload content.
    - Current loom targets:
      - `avio_loom`
+     - `egress_feed_wake_loom` (queued coalescing, independent heads and the
+       full-channel retry bit; both arming and taking the retry bit use
+       `AcqRel` swaps, and the consumer clears it before observing the head)
      - `ring_migration_loom`
      - `input_selection_loom`
      - `ts_chunk_ring_loom`
@@ -258,6 +261,10 @@ surface already covers it.
   - `fabric_feed_wakes_follow_ring_growth_rescale_and_stop_on_drop` (wakes
     are delivered from the publishing thread, follow a replacement ring,
     reach a shard added by rescale, and stop when the subscription drops)
+- `src/media/egress/shard/tests/feed_wake.rs`
+  - `publication_after_a_wake_head_check_rearms_the_shared_shard_gate`
+  - `a_full_command_queue_cannot_strand_a_feeds_final_publication`
+    (controlled races drive the production shard loop against real feed heads)
 - `src/media/srt_stream_id.rs`
   - `media::srt_stream_id::tests` (stream-key normalization and mode parsing)
 - `src/media/ts_chunk_ring.rs`

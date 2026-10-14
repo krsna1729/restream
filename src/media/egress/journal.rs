@@ -176,22 +176,28 @@ fn retention_snapshot(ring: &RingBuffer) -> FeedRetentionSnapshot {
 ///    swap).  A `true` return is a clear-to-set transition: the publisher must
 ///    deliver exactly one wake through the shard's wake mechanism.  `false`
 ///    means a wake is already outstanding — delivery is coalesced away.
-/// 2. Shard calls [`take`](WakeGate::take) when woken or before sleeping
-///    (`AcqRel`) — returns `true` if a notification was pending.
-/// 3. Shard **must** re-read the feed head after `take` so data published
-///    since the delivered wake is drained in the same visit.
+/// 2. Shard calls [`take`](WakeGate::take) when consuming the queued wake,
+///    **before** the backend checks any head (`AcqRel`).
+/// 3. Shard re-reads heads after the clear; a later publication arms a new wake.
 ///
-/// Lost-wakeup safety comes from pairing every clear-to-set transition with
-/// one delivered wake; `tests/egress_feed_wake_loom.rs` model-checks the seam.
+/// If the command channel is full, a separate retry bit preserves the hint
+/// for the active loop. Clearing that bit never clears a queued wake's gate.
+/// The bounded idle wait covers a full-channel retry arriving after the loop
+/// has already drained its commands. `tests/egress_feed_wake_loom.rs` and the
+/// production-loop regressions model/check these clear-before-observe seams.
 #[derive(Debug, Default)]
 pub struct WakeGate {
     pending: AtomicBool,
+    /// A full command channel already keeps the shard active. Preserve one
+    /// out-of-channel wake so the final publish does not require a retry.
+    full_retry: AtomicBool,
 }
 
 impl WakeGate {
     pub fn new() -> Self {
         Self {
             pending: AtomicBool::new(false),
+            full_retry: AtomicBool::new(false),
         }
     }
 
@@ -210,6 +216,15 @@ impl WakeGate {
     #[inline]
     pub fn take(&self) -> bool {
         self.pending.swap(false, Ordering::AcqRel)
+    }
+
+    pub(crate) fn record_full_delivery(&self) {
+        self.take();
+        self.full_retry.swap(true, Ordering::AcqRel);
+    }
+
+    pub(crate) fn take_full_delivery(&self) -> bool {
+        self.full_retry.swap(false, Ordering::AcqRel)
     }
 
     /// Non-destructive peek (for metrics only — never use for scheduling).

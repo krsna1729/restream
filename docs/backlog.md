@@ -179,7 +179,8 @@ items).
   (about 0.7%), every output delivered; record the per-feed floor a pool
   cannot remove (ingest, feed ring, publish wake). Per-feed isolation (Q-034
   admission, a frozen destination, feed teardown) keeps its harness cases;
-  loom for the shared publish wake (`WakeGate`).
+  structural Owner and shard failures must keep the required failure domains,
+  not merely leave memory finite; loom for the shared publish wake (`WakeGate`).
 - Context: measured 2026-10-14 (M8). The same 48 Mbit/s of SRT egress over 32
   connections costs 84–87% shard CPU as 16 feeds × 2 and 30–35% as 1 feed
   × 32; process threads 51–52 against 21–22, RSS 291 MB against 62–73 MB.
@@ -187,8 +188,14 @@ items).
   Every feed holds at least one shard thread per protocol, including sink
   and pipeline outputs that have no socket poller and could run on MEDIA.
   Feed publish wake cost scales with subscribed shards (`WakeGate`, W1).
-- Status: open. Decision (2026-10-14, from M8): build the host-level pool;
-  per-feed groups have no measured reason to stay.
+- Status: experiment complete, cutover rejected (2026-10-14, M9); implementation
+  remains open. At 16 × 2, pooling reduced shard CPU from 89.9/96.4% to
+  37.2/29.5%, with 32/32 delivered. Frozen-destination and feed-teardown
+  isolation passed, but an injected production Owner-fault handler failed
+  both feeds in a shared pool where the per-feed control spared the sibling.
+  Keep production per-feed groups until a design preserves the required
+  failure domains or that contract is explicitly changed. The rejected
+  prototype is preserved on its local experiment branch (`d8c39b52`).
 
 ### Q-034 [resilience] [opus] Define one overload policy for shared service centers
 - Goal: when a shared Owner or shard saturates, viable destinations keep
