@@ -141,7 +141,6 @@ export interface ResourceMapNode {
   status?: string | null;
   phase?: string | null;
   metrics?: TelemetryMetrics;
-  queue?: TelemetryMetrics | null;
   hotspots?: string[];
   /** `egress_shard` nodes: `healthy`, `stalled`, `panicked` or `stopped`. */
   state?: string;
