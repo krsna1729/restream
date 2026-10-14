@@ -934,9 +934,10 @@ High-priority bounded commands include add, update, remove, drain, and shutdown.
 A control-plane sender must not block indefinitely; overload is surfaced as an
 operator-visible error and reconciliation retries the desired state.
 
-Media notifications are coalesced hints. Each feed and shard pair has a
-`wake_pending` flag. Publication schedules at most one outstanding wake until
-the shard observes the newest sequence and clears the flag.
+Media notifications are coalesced hints. Each shard's `WakeGate` permits
+at most one queued publication wake. The shard clears the gate **before**
+the backend checks feed heads; a publication after that check re-arms a
+new wake rather than coalescing into a check that already happened.
 
 ```rust
 if !subscription.wake_pending.swap(true, Ordering::AcqRel) {
@@ -944,8 +945,13 @@ if !subscription.wake_pending.swap(true, Ordering::AcqRel) {
 }
 ```
 
-The feed remains authoritative if a notification is lost or coalesced. The
-shard compares head sequences whenever it wakes.
+The feed remains authoritative when notifications coalesce. If the command
+channel is full, one atomic fallback bit per shard preserves the hint for
+the active loop, so a final publication needs no later publish to retry it.
+The fallback bit is cleared before the backend checks heads. A full channel
+already keeps the shard active; if its queue drains before the bit is set,
+the configured bounded idle wait brings it back to the loop. A closed shard
+is not woken. Neither the queued nor fallback path allocates per publish.
 
 Control commands must not share a queue whose capacity can be consumed by one
 notification per media packet.

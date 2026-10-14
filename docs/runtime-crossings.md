@@ -55,7 +55,7 @@ Disk             blocking file writer threads
 
 | # | Crossing | Mechanism | Rate | Verdict |
 |---|---|---|---|---|
-| W1 | Feed wake: ring publish → egress shards | the producing thread calls the ring's publication subscribers after each publish, seal and end of stream; each fabric subscribes one waker per feed that sets every shard's `WakeGate` and `try_send`s `FeedWake` only on its clear-to-set transition (`subscribe_fabric_wakes`). A replacement ring shares the subscriber set, and dropping the subscription unsubscribes | per publish: two `ArcSwap` loads plus one gate swap per shard; ≤ 1 queued wake per shard | **Fixed (WI11 step 4).** No Tokio task between publish and shard: the per-feed watcher task, its `Notify` round trip and its per-publish handle `Vec` clone are gone. The ring still knows nothing about egress (it calls an opaque `PublishWake`). Release A/B vs 7bccb734 (one ingest, 2 reps): RTMP×100 Restream CPU 44–49% → 37–38%, shards 23–28% → 18.5–19%, Tokio 11–12% → 9%. |
+| W1 | Feed wake: ring publish → egress shards | the producing thread calls the ring's publication subscribers after each publish, seal and end of stream; each fabric subscribes one waker per feed that sets every shard's `WakeGate` and `try_send`s `FeedWake` only on its clear-to-set transition (`subscribe_fabric_wakes`). The shard clears the gate before the backend checks heads; a full command channel preserves one atomic fallback hint for the active loop. A replacement ring shares the subscriber set, and dropping the subscription unsubscribes | per publish: two `ArcSwap` loads plus one gate swap per shard; ≤ 1 queued publication wake plus 1 fallback bit per shard | **Fixed (WI11 step 4; ordering/full-channel regressions from M9).** No Tokio task between publish and shard: the per-feed watcher task, its `Notify` round trip and its per-publish handle `Vec` clone are gone. The ring still knows nothing about egress (it calls an opaque `PublishWake`). Release A/B vs 7bccb734 (one ingest, 2 reps): RTMP×100 Restream CPU 44–49% → 37–38%, shards 23–28% → 18.5–19%, Tokio 11–12% → 9%. |
 | W2 | Egress commands: Tokio → shard | bounded flume (`RESTREAM_EGRESS_COMMAND_CAPACITY`, 1024) | control rate (add/remove/update) | **Justified.** |
 | W3 | Egress progress/quality: shard → Tokio/API | atomics for counters, `Mutex<PublisherQuality>` written once per second per leaf by the stall sweep | ≤ 1 Hz per leaf | **Justified.** |
 | W4 | SRT egress Owner events → shard → Tokio | bounded event queues drained per ready batch | connection lifecycle rate | **Justified.** |
@@ -253,3 +253,82 @@ Disk             blocking file writer threads
   (MPEG-TS in, FLV out), not loss, though this run did not separate the two.
   **Decision:** build a host-level shard pool (Q-033); its gate is the
   per-feed shard cost, not the one-feed control.
+
+- **M9** Host SRT pool experiment (Q-033), 2026-10-14. **Rejected for
+  cutover: structural Owner failures no longer stay within one feed.**
+  Baseline `064a29b4`; dirty prototype preserved on the local experiment
+  branch at `d8c39b52` (not merged). Same M8 bench-profile workload, checked-in
+  H.264 1.5 Mbit/s fixture, `MSR_PEER=sink`, Restream on CPUs 0–3 and harness/
+  receivers on 4–5, 20-second samples, two serial runs per arm; no Cargo build
+  during samples. Many-feed counts 1/4/8/16 with two outputs per feed; control
+  one feed with 2/32 outputs. Every run's log contained zero `Compiling` lines.
+
+  | Feeds × outputs/feed | Arm | Process CPU % | Shard CPU % | Threads | RSS MiB | Delivered |
+  |---|---|---|---|---|---|---|
+  | 1 × 2 | base | 15.3, 19.0 | 8.5, 10.7 | 16, 17 | 59, 57 | 2/2, 2/2 |
+  | 1 × 2 | pool | 19.1, 12.6 | 10.1, 6.9 | 17, 17 | 54, 58 | 2/2, 2/2 |
+  | 4 × 2 | base | 42.6, 55.1 | 31.7, 42.1 | 23, 23 | 95, 92 | 8/8, 8/8 |
+  | 4 × 2 | pool | 27.5, 16.7 | 17.3, 8.6 | 19, 17 | 82, 80 | 8/8, 8/8 |
+  | 8 × 2 | base | 69.2, 91.1 | 55.2, 70.6 | 35, 36 | 156, 161 | 16/16, 16/16 |
+  | 8 × 2 | pool | 47.7, 30.6 | 31.4, 18.4 | 25, 21 | 127, 123 | 16/16, 16/16 |
+  | 16 × 2 | base | 110.4, 120.8 | 89.9, 96.4 | 52, 52 | 288, 291 | 32/32, 32/32 |
+  | 16 × 2 | pool | 55.6, 53.5 | 37.2, 29.5 | 28, 24 | 216, 210 | 32/32, 32/32 |
+  | 1 × 32 (control) | base | 55.3, 52.4 | 44.5, 43.9 | 26, 26 | 63, 79 | 32/32, 32/32 |
+  | 1 × 32 (control) | pool | 30.6, 53.9 | 25.5, 46.2 | 20, 24 | 62, 66 | 32/32, 32/32 |
+
+  Delivery is the harness's external receiver byte-rate gate (0.95 floor),
+  not a claim of packet-perfect delivery. Minimum destination ratio was
+  0.9566 in the pool arm; minimum Jain fairness was 0.9996. The many-feed
+  CPU/thread reduction is clear; the one-feed control is noisy. RSS still
+  grows with the retained ingest/feed state that pooling cannot remove.
+  The existing `egress_visit/yielding_engine` control benchmark measured
+  26.936 ns before and 31.497 ns in the prototype (overlapping confidence
+  intervals); its code is unchanged, and this synthetic visit does not
+  measure the pool scheduler or establish a pool hot-path regression.
+  After dropping pooling, the retained per-feed wake fix control measured
+  28.353 ns (interval 26.671–30.529 ns); Criterion detected no change. This
+  remains a visit control, not a benchmark of either wake-loss fix.
+
+  Proof results:
+  - Scoped pool lifecycle, mixed-rate admission, cross-feed payload/wake and
+    randomized placement/retirement tests passed; the shared wake models passed.
+  - A live three-feed, one-shard case froze one real MediaMTX destination for
+    20 seconds, then deleted that feed and watched another 10 seconds. All
+    four sibling receiver sessions kept their identities and advanced bytes
+    every five seconds, with no sibling retry, Owner fault or queue overflow.
+    RSS was 60,828→76,892 KiB during the freeze and peaked at 77,028 KiB after
+    teardown. This is a bounded watch, not an unbounded-time memory proof.
+  - The decisive counterexample used real SRT connections/delivery, then
+    injected the production `SrtShardBackend::fail_family(V4)` handler (not an
+    induced kernel failure). In the original per-feed backend control, only
+    the first output failed and the other continued delivering. In the
+    two-feed pool, both outputs' unexpected-termination flags were set. The
+    prototype acceptance probe
+    `host_pool_experiment_preserves_per_feed_owner_fault_isolation` failed.
+    Each pool shard shares an Owner across feeds; a structural Owner fault
+    therefore has a wider blast radius. [INFERENCE] A shard-thread failure
+    also spans the feeds assigned to it by ownership; no thread-failure run
+    was used to establish that extra risk.
+
+  **Decision:** keep per-feed production groups. Reduced CPU does not satisfy
+  the requested no-loss-of-isolation gate. A later pool design must preserve
+  the required failure domains or get an explicit change to that contract.
+  No RTMP/sink/pipeline pooling is inferred from this SRT experiment. Two
+  independent bugs found at the wake seam are fixed without changing topology:
+  clear the gate before the backend's head check, and keep one atomic fallback
+  hint when the command channel is full so the final publish is not stranded.
+  The fallback uses the existing gate's `AcqRel` swap convention and does not
+  clear an already queued wake's gate. It adds one bit, not another channel or
+  worker. Removing the queued wake's clear-before-check guard or disabling
+  the Full hint made the corresponding production-loop regression fail;
+  moving the retry model's head read before its swap-clear also failed.
+  The composed Full-plus-queued-wake regression also drives the production
+  loop: a new publication coalesces while the fallback is paused and the
+  queued wake later observes the final head. Adding a pending clear to the
+  fallback made that publication return `Full` instead of coalescing.
+  Final per-feed smoke, from a canonical bench rebuild with
+  `BENCH_BUILD=never`: `fault.srt-output-stall` passed. Frozen-destination RSS
+  grew 22,216 KiB (56,896→79,112 KiB), with retry and destination diagnosis
+  observed. The srt-rs receiver delivered 7,730 data events, remained connected
+  under backpressure, and both healthy siblings advanced. These are the
+  harness's bounded observation gates, not an unbounded-time memory proof.

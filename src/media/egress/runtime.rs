@@ -376,10 +376,9 @@ impl EgressFabricRuntime {
     }
 }
 
-/// Delivers one coalesced wake per shard from the publishing thread. Each
-/// `FeedWakeHandle::deliver` is an atomic swap on the shard's gate, plus one
-/// bounded `try_send` on its clear-to-set transition, so at most one wake per
-/// shard is in flight however fast the feed publishes.
+/// Delivers coalesced wakes from the publishing thread. Each handle uses
+/// one gate and at most one bounded `try_send` per publication. Per shard,
+/// at most one publication wake is queued plus one separate Full-retry hint.
 struct FabricWakers {
     handles: Arc<ArcSwap<Vec<FeedWakeHandle>>>,
 }
@@ -388,8 +387,8 @@ impl PublishWake for FabricWakers {
     #[inline]
     fn wake(&self) {
         for handle in self.handles.load().iter() {
-            // Full or closed: the gate stays clear, so the next publication
-            // retries; the shard's idle poll covers a quiet feed meanwhile.
+            // Full arms a retry hint serviced even without another publish,
+            // through the shard's bounded idle deadline. Closed needs no service.
             let _ = handle.deliver();
         }
     }

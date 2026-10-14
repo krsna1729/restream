@@ -84,6 +84,7 @@ const COMMON_TESTS: &[(&str, &[&str])] = &[
     ("lib-media-executor", &["test", "media::executor::tests", "--lib"]),
     ("lib-egress-sizing", &["test", "media::egress::sizing", "--lib"]),
     ("lib-egress-resize", &["test", "media::egress::runtime", "--lib"]),
+    ("lib-egress-feed-wake-races", &["test", "shard::tests::feed_wake", "--lib"]),
     ("lib-media-control-isolation", &["test", "while_control_thread_is_blocked", "--lib"]),
     ("lib-media-file-ingest", &["test", "media::external_file_ingest::tests", "--lib"]),
     ("recording-media-owner-abort", &["test", "aborting_control_owner_closes_media_feeder_and_writer", "--lib"]),

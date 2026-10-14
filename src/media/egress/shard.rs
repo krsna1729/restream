@@ -279,10 +279,10 @@ impl FeedWakeHandle {
             return match self.sender.try_send(EgressCommand::FeedWake) {
                 Ok(()) => Ok(()),
                 Err(TrySendError::Full(_)) => {
-                    // No wake was delivered. Leave the gate clear so the
-                    // caller can retry, rather than permanently suppressing
-                    // every later publication for this shard.
-                    self.gate.take();
+                    // The full channel keeps the shard active. Record one
+                    // bounded fallback wake for its next loop, rather than
+                    // requiring another publish to retry the final hint.
+                    self.gate.record_full_delivery();
                     Err(EgressShardSendError::Full)
                 }
                 Err(TrySendError::Disconnected(_)) => {
@@ -584,9 +584,13 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
                     running = false;
                 }
             }
-            // Clear the wake gate before draining so a publish landing after
-            // this point re-arms exactly one wake delivery (loom-proven seam).
-            self.wake_gate.take();
+            if self.wake_gate.take_full_delivery() {
+                // Preserve a queued wake's gate: it still owns its delivery.
+                // As on the queued path, the callback requeues feed readers
+                // and the runtime schedules one bounded ready chain.
+                self.backend.on_command(EgressCommand::FeedWake);
+                self.apply_effect(EgressShardCommandEffect::ScheduleReady { count: 1 });
+            }
             let media_tick_effect = self.backend.on_media_tick();
             self.apply_effect(media_tick_effect);
             self.record_iteration(loop_started_at, processed, timers_processed);
@@ -665,9 +669,12 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
             // feed is fully drained (RTMP, unlike SRT's always-write
             // registration) needs the wake itself to re-enqueue those
             // leaves, since a bare `poll_leaves()` re-poll cannot discover
-            // readiness a leaf never registered for. SRT's backend treats
-            // `FeedWake` as a no-op today, so this is free for it.
+            // readiness a leaf never registered for.
             EgressCommand::FeedWake => {
+                // Clear BEFORE the backend reads any feed head. A publish
+                // after that check must deliver a new wake, not coalesce
+                // into a head check that has already happened.
+                self.wake_gate.take();
                 self.backend.on_command(EgressCommand::FeedWake);
                 EgressShardCommandEffect::ScheduleReady { count: 1 }
             }
