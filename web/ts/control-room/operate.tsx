@@ -22,7 +22,9 @@ import { AddInput, InputActions, PipelineBar } from "./operate-manage.js";
 import {
   buildDestinationRows,
   buildMediaGraph,
+  DESTINATION_ROW_LIMIT,
   isYoutubeUrl,
+  windowDestinationRows,
   youtubeVerdict,
 } from "./operate-model.js";
 import type { DestinationRow, GraphColumn } from "./operate-model.js";
@@ -88,6 +90,7 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
         <MediaGraph columns={columns} atMs={graph.atMs} />
       </div>
       <DestinationMatrix
+        key={pipelineId}
         pipelineId={pipelineId}
         rows={rows}
         egressBps={props.live.rates?.egressBps ?? null}
@@ -312,6 +315,8 @@ function DestinationMatrix(props: {
   const [busy, setBusy] = useState<string | null>(null);
   /** The output id being edited, "new", or null. */
   const [editing, setEditing] = useState<string | null>(null);
+  /** The cap is lifted only when the operator asks for the whole fleet. */
+  const [showAll, setShowAll] = useState(false);
   const { config } = props;
   /** Stored monitoring URLs by output id: one pass per config, not one
    * `find` per matrix row. */
@@ -324,6 +329,14 @@ function DestinationMatrix(props: {
         ]),
       ),
     [config],
+  );
+  const { visible, hidden, hiddenDegraded } = useMemo(
+    () =>
+      windowDestinationRows(
+        props.rows,
+        showAll ? Number.POSITIVE_INFINITY : DESTINATION_ROW_LIMIT,
+      ),
+    [props.rows, showAll],
   );
   const editedOutput =
     editing && editing !== "new"
@@ -381,7 +394,7 @@ function DestinationMatrix(props: {
             </tr>
           </thead>
           <tbody>
-            {props.rows.map(({ output, delivering, feedLagUnits }) => {
+            {visible.map(({ output, delivering, feedLagUnits }) => {
               const running = output.desired === "running";
               const monitoringUrl = monitoringUrls.get(output.id) ?? "";
               return (
@@ -469,6 +482,21 @@ function DestinationMatrix(props: {
                 </tr>
               );
             })}
+            {hidden > 0 && (
+              <tr>
+                <td colSpan={10} className="text-xs opacity-70">
+                  {hidden} more not shown
+                  {hiddenDegraded > 0 && ` (${hiddenDegraded} need attention)`}{" "}
+                  <button
+                    type="button"
+                    className="link link-primary"
+                    onClick={() => setShowAll(true)}
+                  >
+                    Show all {props.rows.length}
+                  </button>
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

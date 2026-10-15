@@ -968,3 +968,56 @@ test("previews and stage detail: play the program and an input; a transcode stag
     for (const id of pipelineIds) await page.request.delete(`/api/v1/pipelines/${id}`);
   }
 });
+
+test("matrix: a large fleet renders a bounded window and can show the rest", async ({
+  page,
+}) => {
+  // 500 outputs over the API, then two full renders.
+  test.setTimeout(90_000);
+
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+
+  const name = `cr-matrix-${Date.now()}`;
+  const created = await page.request.post("/api/v1/pipelines", {
+    data: { name, streamKey: `crmatrix_${Date.now()}` },
+  });
+  expect(created.ok()).toBe(true);
+  const pipelineId: string = (await created.json()).pipeline.id;
+
+  try {
+    // A fleet large enough that rendering every row would put thousands of
+    // cells in the DOM. Nothing is started: this is the render, not media.
+    const total = 500;
+    for (let start = 0; start < total; start += 50) {
+      const responses = await Promise.all(
+        Array.from({ length: Math.min(50, total - start) }, (_, index) =>
+          page.request.post(`/api/v1/pipelines/${pipelineId}/outputs`, {
+            data: {
+              name: `cr-m-${start + index}`,
+              url: `rtmp://127.0.0.1:9/live/cr-m-${start + index}`,
+              config: { video: { mode: "source" }, audio: { mode: "all" } },
+            },
+          }),
+        ),
+      );
+      for (const response of responses) expect(response.ok()).toBe(true);
+    }
+
+    await page.goto(`/?w=operate&p=${pipelineId}`);
+    const matrix = page.getByRole("region", { name: /Destination matrix/ });
+    // The window is capped at DESTINATION_ROW_LIMIT (200 in
+    // operate-model.ts): the header row, 200 destination rows, and the "more
+    // not shown" row.
+    await expect(matrix.getByRole("row")).toHaveCount(202);
+    await expect(matrix).toContainText(`${total - 200} more not shown`);
+
+    // The rest are deferred, not dropped: one click shows every row.
+    await matrix.getByRole("button", { name: `Show all ${total}` }).click();
+    await expect(matrix.getByRole("row")).toHaveCount(total + 1);
+  } finally {
+    await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
+  }
+});
