@@ -11,8 +11,8 @@ use crate::media::ring_buffer::{Reader, RingBuffer};
 use crate::media::stage_lifecycle::StageLifecycle;
 use crate::media::stage_metrics::StageMetrics;
 
-/// Shared input pump that provides identical byte-feeding semantics to both
-/// external-process and in-process FFmpeg backends.
+/// Shared input pump for FFmpeg-backed stages: one reader contract for the
+/// external transcoder's child process and the stage runtime.
 ///
 /// Owns:
 /// - `Reader::new_with_keyframe_preroll`
@@ -103,9 +103,10 @@ impl StageInputPump {
         self.reader.current_ring().codec_hint_str().to_string()
     }
 
-    /// Turn this pump into the input of an in-process FFmpeg stage: the
-    /// stage's AVIO reads pull the ring and encode TS on the FFmpeg thread
-    /// (see [`crate::media::avio::QueueRefill`]), so no Tokio task feeds it.
+    /// Turn this pump into a pull-based refill: the consumer pulls the ring
+    /// and encodes TS on its own thread (see
+    /// [`crate::media::avio::QueueRefill`]), so no Tokio task feeds it. The
+    /// external transcoder's stdin writer is the production caller.
     pub fn into_queue_refill(self, cancel: CancellationToken) -> StageInputRefill {
         StageInputRefill {
             pump: self,
@@ -175,7 +176,7 @@ impl StageInputPump {
     }
 }
 
-/// A [`StageInputPump`] driven by its FFmpeg stage's AVIO reads.
+/// A [`StageInputPump`] driven by the AVIO pull contract.
 pub struct StageInputRefill {
     pump: StageInputPump,
     cancel: CancellationToken,
