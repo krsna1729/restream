@@ -237,15 +237,21 @@ fn output_and_read_urls_target_the_same_instance_the_output_publishes_to() {
         name: "msr-rank01-rtmp-0001".to_string(),
     };
 
-    // ordinal 5 % 4 == instance 1 -> mtx_rtmp + 1 == 1937.
+    // ordinal 5 % 4 == instance 1: every MSR port derivation must come from the
+    // peer-instance mapping (mtx_rtmp + PEER_PORT_STRIDE == 1940).
+    let (rtmp_port, _, srt_port, api_port) = peer_instance_ports(&env, 1);
+    assert_eq!(rtmp_port, 1940);
+    assert_eq!(srt_port, 8895);
+    assert_eq!(api_port, 10001);
     assert_eq!(
         msr_output_url(&env, &output),
-        "rtmp://127.0.0.1:1937/live/msr-rank01-rtmp-0001"
+        format!("rtmp://127.0.0.1:{rtmp_port}/live/msr-rank01-rtmp-0001")
     );
     assert_eq!(
         msr_read_url(&env, &output),
-        "rtmp://127.0.0.1:1937/live/msr-rank01-rtmp-0001"
+        format!("rtmp://127.0.0.1:{rtmp_port}/live/msr-rank01-rtmp-0001")
     );
+    assert_eq!(msr_api_port(&env, 1), api_port);
 }
 
 #[test]

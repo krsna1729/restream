@@ -27,6 +27,19 @@ pub(crate) struct HarnessPortDefaults {
     pub(crate) ffmpeg_signal_sink_base: u16,
 }
 
+/// Offset per peer instance, in ports.
+///
+/// Instance `i` listens on `base + i * PEER_PORT_STRIDE` for each of
+/// `mtx_rtmp`/`mtx_rtmps`/`mtx_srt`/`mtx_api` (see `peer_instance_ports`), so
+/// two TCP bases whose difference is a multiple of the stride below
+/// `PEER_PORT_STRIDE * peer_count` collide. The default layout is the case to
+/// clear: `mtx_rtmp` and `mtx_rtmps` are adjacent (1936/1937), and an offset of
+/// one per instance made instance 1's RTMP port the value of instance 0's RTMPS
+/// port, so the second listener failed to bind. Every MTX base therefore
+/// reserves its whole band here, and `ResourceSweepEnv` rejects a peer count
+/// whose band would overflow a port number.
+pub(crate) const PEER_PORT_STRIDE: u16 = 4;
+
 static HARNESS_PORT_DEFAULTS: OnceLock<HarnessPortDefaults> = OnceLock::new();
 
 impl TestPorts {
@@ -43,15 +56,19 @@ impl TestPorts {
 pub(crate) fn harness_port_defaults() -> HarnessPortDefaults {
     *HARNESS_PORT_DEFAULTS.get_or_init(|| {
         let mut reserved = HashSet::new();
+        // Every MTX base owns a band of `stride * peer_count` ports: reserving
+        // only the base let a peer band run into another synthesized range (the
+        // HLS PUT or FFmpeg sink bands) once PEER_COUNT > 1.
+        let peer_band = PEER_PORT_STRIDE.saturating_mul(peer_count_from_env());
         HarnessPortDefaults {
             restream_http: env_or_allocated_port("RESTREAM_HTTP", 3030, &mut reserved),
             restream_rtmp: env_or_allocated_port("RESTREAM_RTMP", 1935, &mut reserved),
             restream_srt: env_or_allocated_port("RESTREAM_SRT", 10080, &mut reserved),
-            mtx_rtmp: env_or_allocated_port("MTX_RTMP", 1936, &mut reserved),
-            mtx_rtmps: env_or_allocated_port("MTX_RTMPS", 1937, &mut reserved),
-            mtx_srt: env_or_allocated_port("MTX_SRT", 8891, &mut reserved),
+            mtx_rtmp: env_or_allocated_port_range("MTX_RTMP", 1936, peer_band, &mut reserved),
+            mtx_rtmps: env_or_allocated_port_range("MTX_RTMPS", 1937, peer_band, &mut reserved),
+            mtx_srt: env_or_allocated_port_range("MTX_SRT", 8891, peer_band, &mut reserved),
             mtx_hls: env_or_allocated_port("MTX_HLS", 8890, &mut reserved),
-            mtx_api: env_or_allocated_port("MTX_API", 9997, &mut reserved),
+            mtx_api: env_or_allocated_port_range("MTX_API", 9997, peer_band, &mut reserved),
             sink: env_or_allocated_port_range("SINK_PORT", SINK_PORT, 256, &mut reserved),
             hls_put: env_or_allocated_port_range("HLS_PUT_PORT", 8990, 16, &mut reserved),
             ffmpeg_srt_sink_base: env_or_allocated_port_range(
@@ -68,6 +85,19 @@ pub(crate) fn harness_port_defaults() -> HarnessPortDefaults {
             ),
         }
     })
+}
+
+/// `PEER_COUNT` as read by the allocator, before `ResourceSweepEnv` exists:
+/// the MTX bands must be reserved before any peer starts. A missing, zero or
+/// non-numeric value falls back to one instance, matching `ResourceSweepEnv`
+/// (`env_usize("PEER_COUNT", 1)`); a count too large for a port band is rejected
+/// by `validate_peer_instance_ports` when the env is built.
+fn peer_count_from_env() -> u16 {
+    std::env::var("PEER_COUNT")
+        .ok()
+        .and_then(|value| value.trim().parse::<u16>().ok())
+        .filter(|count| *count > 0)
+        .unwrap_or(1)
 }
 
 pub(crate) fn env_or_allocated_port(name: &str, default: u16, reserved: &mut HashSet<u16>) -> u16 {

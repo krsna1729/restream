@@ -18,8 +18,8 @@ pub(crate) use history::{
 };
 #[allow(unused_imports)]
 pub(crate) use ports::{
-    HarnessPortDefaults, TestPorts, env_or_allocated_port, env_or_allocated_port_range,
-    harness_port_defaults,
+    HarnessPortDefaults, PEER_PORT_STRIDE, TestPorts, env_or_allocated_port,
+    env_or_allocated_port_range, harness_port_defaults,
 };
 #[allow(unused_imports)]
 pub(crate) use process::{

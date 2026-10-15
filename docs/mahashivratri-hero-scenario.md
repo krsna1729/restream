@@ -392,7 +392,7 @@ Names are provisional until the mode is implemented:
 | `MSR_PROGRESS_TIMEOUT_PER_OUTPUT_SECS` | `2` | Additional progress allowance per output |
 | `MSR_PROGRESS_TIMEOUT_CAP_SECS` | `900` | Maximum progress wait |
 | `MSR_NO_CLEANUP` | unset | Leave the final stack for inspection |
-| `PEER_COUNT` | `1` | Number of peer instances (`MTX_RTMP`/`MTX_SRT`/`MTX_API` + instance offset each); outputs distribute round-robin by ordinal (`ordinal % PEER_COUNT`). |
+| `PEER_COUNT` | `1` | Number of peer instances (`MTX_RTMP`/`MTX_RTMPS`/`MTX_SRT`/`MTX_API` + `index * 4` each, so the adjacent default bands 1936/1937 cannot collide); each output lands on the instance `ordinal % PEER_COUNT` (`msr_peer_instance`). |
 | `PEER_SKIP_START` | unset | Meaningful only for `MSR_PEER=mediamtx`: peer instances are pre-started externally, and the harness verifies all `PEER_COUNT` instances are live instead of spawning them. No effect on `MSR_PEER=sink` — an in-process listener has no external-process equivalent to skip-start; it is always bound fresh by the harness. |
 | `MSR_PEER` | `mediamtx` | `mediamtx` (default) or `sink` — see "Peer modes" below |
 | `HARNESS_SRT_SINK_UDP_BUFFER` | `8388608` (8MB) | `MSR_PEER=sink` only: requested `SO_RCVBUF`/`SO_SNDBUF` per SRT socket; `0` preserves host defaults. Linux may clamp this to `net.core.rmem_max`/`wmem_max`. |
