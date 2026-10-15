@@ -64,4 +64,8 @@ fn a_faulted_family_is_disposed_once_and_stays_closed() {
         row.present && row.faulted,
         "the disposed family keeps reporting its fault: {row:?}"
     );
+    assert!(
+        !harness.backend.owners.has_owner(),
+        "a quiescent disposal leaves nothing for the shard to drive"
+    );
 }

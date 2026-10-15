@@ -39,7 +39,7 @@ use crate::media::egress::shard::EgressShardIdleWake;
 use crate::media::srt::{AddressFamily, SrtConnectKind, SrtConnectRequest, SrtSendResult};
 
 mod dispose;
-use self::dispose::DisposedFamily;
+use self::dispose::{Disposing, FamilyClosure};
 
 /// Default concurrent datagram sends per family Owner (its TX pool and lane
 /// count, "K"); `RESTREAM_SRT_EGRESS_TX_CAPACITY` overrides it. The retired
@@ -278,9 +278,12 @@ struct ClosingCaller {
 /// the tasks they own) drop before the runtime that runs them.
 pub(crate) struct SrtOwners {
     owners: [Option<FamilyOwner>; AddressFamily::COUNT],
-    /// Families whose faulted Owner was disposed. A disposed family is closed
-    /// for admission for the life of the shard.
-    disposed: [Option<DisposedFamily>; AddressFamily::COUNT],
+    /// Families closed by a fault: the recorded fault keeps admission refused
+    /// and the last metrics row visible after the Owner is gone.
+    closed: [Option<FamilyClosure>; AddressFamily::COUNT],
+    /// Closed families whose Owner has not yet reached quiescence. They are
+    /// driven and retried on service visits, never serviced as live Owners.
+    disposing: [Option<Disposing>; AddressFamily::COUNT],
     closing: std::collections::VecDeque<ClosingCaller>,
     pool_scratch: Vec<PoolEvent>,
     caller_scratch: Vec<CallerEvent>,
@@ -328,7 +331,8 @@ impl SrtOwners {
         );
         Ok(Self {
             owners: [None, None],
-            disposed: [None, None],
+            closed: [None, None],
+            disposing: [None, None],
             closing: std::collections::VecDeque::new(),
             pool_scratch: Vec::with_capacity(EVENT_DRAIN),
             caller_scratch: Vec::with_capacity(EVENT_DRAIN),
@@ -359,7 +363,7 @@ impl SrtOwners {
     }
 
     pub(crate) fn has_owner(&self) -> bool {
-        self.owners.iter().any(Option::is_some)
+        self.owners.iter().any(Option::is_some) || self.disposing.iter().any(Option::is_some)
     }
 
     #[cfg(test)]
@@ -402,10 +406,10 @@ impl SrtOwners {
     pub(crate) fn connect(&mut self, request: SrtConnectRequest) -> Result<PoolOutcome, String> {
         self.assert_home_thread();
         let index = request.family.index();
-        if let Some(disposed) = self.disposed[index].as_ref() {
+        if let Some(closed) = self.closed[index].as_ref() {
             return Err(format!(
                 "SRT {:?} Owner is faulted ({}); no new callers are admitted",
-                request.family, disposed.fault
+                request.family, closed.fault
             ));
         }
         if self.owners[index].is_none() {
@@ -651,6 +655,7 @@ impl SrtOwners {
             }
         });
         self.reap_closing();
+        self.drive_disposals();
         summary
     }
 
@@ -779,6 +784,13 @@ impl SrtOwners {
         for family_owner in self.owners.iter_mut().flatten() {
             wait_us = wait_us.min(family_owner.owner.time_until_next_deadline(now, default_us));
         }
+        // A pending disposal retry is a wake of its own: the park must end when
+        // the attempt is due, not only on Owner protocol deadlines.
+        let wall = Instant::now();
+        for disposing in self.disposing.iter().flatten() {
+            let wait = disposing.next_attempt().saturating_duration_since(wall);
+            wait_us = wait_us.min(u64::try_from(wait.as_micros()).unwrap_or(u64::MAX));
+        }
         Duration::from_micros(wait_us).min(max_wait)
     }
 
@@ -793,6 +805,10 @@ impl SrtOwners {
     ) -> EgressShardIdleWake {
         self.assert_home_thread();
         let wait = self.park_bound(max_wait);
+        // A pending disposal must get a ready visit when its retry comes due:
+        // the park already ends there (see `park_bound`), and that end is a
+        // reason to service, not idleness.
+        let disposal_pending = self.disposing.iter().any(Option::is_some);
         let [v4, v6] = &mut self.owners;
         self.runtime.block_on(async {
             let command = pin!(async {
@@ -805,7 +821,11 @@ impl SrtOwners {
             let activity_v6 = pin!(owner_activity(v6.as_mut(), wait));
             let timeout = pin!(async {
                 compio::time::sleep(wait).await;
-                EgressShardIdleWake::Timeout
+                if disposal_pending {
+                    EgressShardIdleWake::BackendActivity
+                } else {
+                    EgressShardIdleWake::Timeout
+                }
             });
             // Commands are polled first so they win ties.
             first_ready(
@@ -832,6 +852,10 @@ impl SrtOwners {
             }
         }
         let mut all = true;
+        // Families whose teardown is still in flight get one bounded attempt
+        // under the shard's own reserve; the runtime is destroyed with the
+        // shard, which releases anything that attempt could not.
+        self.shutdown_disposals(timeout, &mut all);
         let owners = &mut self.owners;
         let incomplete = &mut self.shutdown_incomplete;
         self.runtime.block_on(async {
@@ -900,11 +924,11 @@ impl SrtOwners {
         for (index, slot) in self.owners.iter().enumerate() {
             metrics.srt_owners[index] = match slot.as_ref() {
                 Some(family_owner) => family_owner.metrics(),
-                // A disposed family keeps its last row, so the fault and the
+                // A closed family keeps its last row, so the fault and the
                 // final counters stay visible after the Owner is gone.
-                None => self.disposed[index]
+                None => self.closed[index]
                     .as_ref()
-                    .map_or_else(OwnerFamilyMetrics::default, |disposed| disposed.metrics),
+                    .map_or_else(OwnerFamilyMetrics::default, |closed| closed.metrics),
             };
         }
     }

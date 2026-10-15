@@ -6,13 +6,77 @@
 use super::{AddressFamily, FamilyOwner, OWNER_SHUTDOWN_RESERVE, SrtOwners};
 use crate::media::egress::metrics::OwnerFamilyMetrics;
 use srt_transport::compio::OwnerRxMode;
+use std::time::{Duration, Instant};
 
-/// A family Owner that faulted and was disposed: the fault text keeps
-/// admission refused after the Owner itself is gone, and the last metrics row
-/// keeps the fault and the final counters visible on the shard's metrics.
-pub(super) struct DisposedFamily {
+/// Bound for a retried teardown attempt. Short on purpose: the attempt still
+/// drives the runtime, but it never holds the shard's sibling family for long.
+const DISPOSAL_RETRY_BOUND: Duration = Duration::from_millis(25);
+/// Spacing between retried attempts, doubling per attempt up to the ceiling so
+/// a teardown that cannot reach quiescence keeps its runtime driven without
+/// keeping the shard busy.
+const DISPOSAL_RETRY_INTERVAL: Duration = Duration::from_millis(10);
+const DISPOSAL_RETRY_INTERVAL_MAX: Duration = Duration::from_millis(250);
+
+/// What a closed family records: the fault text that keeps admission refused,
+/// and the last metrics row so the fault and its final counters stay visible
+/// after the Owner is gone.
+pub(super) struct FamilyClosure {
     pub(super) fault: String,
     pub(super) metrics: OwnerFamilyMetrics,
+}
+
+/// When the next teardown attempt is due. Spacing doubles per miss from
+/// [`DISPOSAL_RETRY_INTERVAL`] up to [`DISPOSAL_RETRY_INTERVAL_MAX`]: a
+/// teardown that cannot reach quiescence keeps its runtime driven without
+/// keeping the shard busy.
+#[derive(Debug)]
+struct DisposalSchedule {
+    attempts: u32,
+    next_attempt: Instant,
+}
+
+impl DisposalSchedule {
+    fn after_first_miss() -> Self {
+        Self {
+            attempts: 0,
+            next_attempt: Instant::now() + DISPOSAL_RETRY_INTERVAL,
+        }
+    }
+
+    fn due(&self, now: Instant) -> bool {
+        self.next_attempt <= now
+    }
+
+    fn next_attempt(&self) -> Instant {
+        self.next_attempt
+    }
+
+    /// Count one miss and schedule the next attempt.
+    fn bump(&mut self, now: Instant) {
+        self.attempts = self.attempts.saturating_add(1);
+        let spacing = DISPOSAL_RETRY_INTERVAL
+            .saturating_mul(1u32 << self.attempts.min(5))
+            .min(DISPOSAL_RETRY_INTERVAL_MAX);
+        self.next_attempt = now + spacing;
+    }
+}
+
+/// A closed family whose Owner teardown did not reach quiescence on its first
+/// attempt. It is never serviced as a live Owner, never reports runnable work
+/// and never admits a caller: it is kept only so the shard keeps driving its
+/// runtime and retrying [`srt_transport::compio::Owner::shutdown_and_drain`]
+/// until the cleanup that teardown started is discharged. Dropping the Owner
+/// earlier would leave cancelled tasks and kernel-owned sends to be released
+/// whenever the runtime is finally destroyed.
+pub(super) struct Disposing {
+    owner: FamilyOwner,
+    schedule: DisposalSchedule,
+}
+
+impl Disposing {
+    pub(super) fn next_attempt(&self) -> Instant {
+        self.schedule.next_attempt()
+    }
 }
 
 impl FamilyOwner {
@@ -77,10 +141,11 @@ impl SrtOwners {
     /// A faulted Owner never runs protocol maintenance again, so anything
     /// retired into it (the normal terminal paths, and `fail_family`'s
     /// leaves) would hold its windows and keep reporting runnable work for
-    /// the life of the shard. Tear it down under the reserve the shard keeps
-    /// for Owner teardown, then drop it: the drop is what releases the
-    /// retained protocol storage. The family stays closed for admission and
-    /// keeps its last metrics row.
+    /// the life of the shard. The family is closed here, and its Owner is torn
+    /// down: a quiescent teardown drops the Owner (releasing the retained
+    /// protocol storage), and a teardown that misses its bound keeps the Owner
+    /// in [`Disposing`] so later service visits drive it to quiescence instead
+    /// of dropping cleanup the runtime still owns.
     pub(crate) fn dispose_faulted(&mut self, family: AddressFamily) {
         self.assert_home_thread();
         let index = family.index();
@@ -94,20 +159,129 @@ impl SrtOwners {
             .unwrap_or_else(|| "unknown fault".to_string());
         let mut metrics = family_owner.metrics();
         metrics.faulted = true;
-        let quiescent = self.runtime.block_on(
+        tracing::warn!(
+            ?family,
+            fault = %fault,
+            "srt egress faulted Owner closed; tearing the family down"
+        );
+        self.closed[index] = Some(FamilyClosure { fault, metrics });
+        // Closing entries named this family: its Owner is gone, so no SHUTDOWN
+        // can flush behind them and nothing else reaps them.
+        self.closing.retain(|entry| entry.family != family);
+        if self.runtime.block_on(
             family_owner
                 .owner
                 .shutdown_and_drain(OWNER_SHUTDOWN_RESERVE),
+        ) {
+            // The drop releases the retained protocol storage.
+            drop(family_owner);
+        } else {
+            self.disposing[index] = Some(Disposing {
+                owner: family_owner,
+                schedule: DisposalSchedule::after_first_miss(),
+            });
+        }
+    }
+
+    /// Retry every pending family disposal whose retry is due: one bounded
+    /// attempt per Owner per call. The attempt drives the runtime, so cancelled
+    /// tasks and kernel-owned sends keep progressing instead of waiting for the
+    /// shard to be destroyed. The shard's park bound wakes exactly when the
+    /// next attempt is due.
+    pub(super) fn drive_disposals(&mut self) {
+        self.assert_home_thread();
+        let now = Instant::now();
+        for index in 0..AddressFamily::COUNT {
+            if self.disposing[index]
+                .as_ref()
+                .is_none_or(|disposing| !disposing.schedule.due(now))
+            {
+                continue;
+            }
+            let Some(mut disposing) = self.disposing[index].take() else {
+                continue;
+            };
+            let quiescent = self.runtime.block_on(
+                disposing
+                    .owner
+                    .owner
+                    .shutdown_and_drain(DISPOSAL_RETRY_BOUND),
+            );
+            if quiescent {
+                drop(disposing.owner);
+            } else {
+                disposing.schedule.bump(Instant::now());
+                self.disposing[index] = Some(disposing);
+            }
+        }
+    }
+
+    /// Tear down a still-disposing Owner during shard shutdown. Nothing is
+    /// retried after this: the shard's runtime is destroyed with the shard,
+    /// which is what finally releases anything the teardown could not.
+    pub(super) fn shutdown_disposals(&mut self, timeout: Duration, all: &mut bool) {
+        self.assert_home_thread();
+        for index in 0..AddressFamily::COUNT {
+            let Some(disposing) = self.disposing[index].take() else {
+                continue;
+            };
+            let fault = self.closed[index]
+                .as_ref()
+                .map(|closed| closed.fault.clone())
+                .unwrap_or_else(|| "unknown fault".to_string());
+            let mut owner = disposing.owner;
+            let quiescent = self
+                .runtime
+                .block_on(owner.owner.shutdown_and_drain(timeout));
+            if !quiescent {
+                *all = false;
+                self.shutdown_incomplete = self.shutdown_incomplete.saturating_add(1);
+                tracing::warn!(
+                    family = index,
+                    fault = %fault,
+                    in_flight = owner.owner.tx_in_flight(),
+                    "srt egress faulted family Owner did not reach quiescence before shard teardown"
+                );
+            }
+            drop(owner);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DISPOSAL_RETRY_INTERVAL, DisposalSchedule};
+    use std::time::{Duration, Instant};
+
+    /// A teardown that cannot reach quiescence must not retry at a fixed or
+    /// unbounded rate: the spacing doubles per miss and stops at the ceiling,
+    /// so the shard's sibling family is never held for long while the runtime
+    /// still keeps being driven.
+    #[test]
+    fn disposal_retries_back_off_to_a_bounded_interval() {
+        let before = Instant::now();
+        let mut schedule = DisposalSchedule::after_first_miss();
+        let first = schedule.next_attempt();
+        assert!(
+            first >= before + DISPOSAL_RETRY_INTERVAL
+                && first <= Instant::now() + DISPOSAL_RETRY_INTERVAL,
+            "the first retry waits one interval"
         );
-        if !quiescent {
-            self.shutdown_incomplete = self.shutdown_incomplete.saturating_add(1);
-            tracing::warn!(
-                ?family,
-                fault = %fault,
-                in_flight = family_owner.owner.tx_in_flight(),
-                "srt egress faulted Owner did not reach quiescence within its bound; disposed anyway"
+        assert!(schedule.due(first), "a retry is due at its own deadline");
+        assert!(
+            !schedule.due(first.checked_sub(Duration::from_nanos(1)).unwrap_or(before)),
+            "and not before it"
+        );
+
+        let now = Instant::now();
+        for expected_ms in [20u64, 40, 80, 160, 250, 250, 250] {
+            schedule.bump(now);
+            let spacing = schedule.next_attempt().saturating_duration_since(now);
+            assert_eq!(
+                spacing,
+                Duration::from_millis(expected_ms),
+                "spacing doubles to the ceiling and stops there"
             );
         }
-        self.disposed[index] = Some(DisposedFamily { fault, metrics });
     }
 }

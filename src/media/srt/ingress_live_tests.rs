@@ -396,9 +396,9 @@ async fn fragmented_publisher_panic_retires_tail_without_stalling_an_existing_si
     .await;
     let remote = server.remote;
     let finished = Arc::new(AtomicBool::new(false));
-    let delivered_after_retirement = Arc::new(AtomicU64::new(0));
+    let sent_after_retirement = Arc::new(AtomicU64::new(0));
     let stop = Arc::clone(&finished);
-    let post_retirement = Arc::clone(&delivered_after_retirement);
+    let sent = Arc::clone(&sent_after_retirement);
     let healthy = tokio::spawn(blocking(move || {
         let chunks = ts_chunks(512);
         let mut next = 0;
@@ -412,10 +412,10 @@ async fn fragmented_publisher_panic_retires_tail_without_stalling_an_existing_si
                     }
                     next += 1;
                     if stop.load(Ordering::Acquire) {
-                        post_retirement.fetch_add(1, Ordering::Relaxed);
+                        sent.fetch_add(1, Ordering::Relaxed);
                     }
                 }
-                post_retirement.load(Ordering::Relaxed) >= 512
+                sent.load(Ordering::Relaxed) >= 512
             },
         )
     }));
@@ -468,10 +468,11 @@ async fn fragmented_publisher_panic_retires_tail_without_stalling_an_existing_si
     );
     assert_eq!(doomed.sent_bytes, 4096 * CHUNK);
     assert!(healthy.connected && !healthy.disconnected, "{healthy:?}");
-    let delivered = delivered_after_retirement.load(Ordering::Relaxed);
+    let sent_after = sent_after_retirement.load(Ordering::Relaxed);
     assert!(
-        delivered >= 512,
-        "the healthy publisher delivers its post-retirement quota: {delivered}"
+        sent_after >= 512,
+        "the healthy publisher keeps sending past the retirement boundary \
+         (delivery itself is the ring-progress wait above): {sent_after}"
     );
     assert_eq!(
         stats.owners, 1,
