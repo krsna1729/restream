@@ -23,6 +23,7 @@ items).
 - [Q-050 inputs and stages in runtime state](#q-050-architecture-sonnet-project-inputs-and-stages-into-the-runtime-state)
 - [Q-051 bounded ingress transfer pump](#q-051-architecture-sonnet-bound-the-ingress-transfer-pump-per-owner-visit)
 - [Q-052 dead stage input-queue telemetry](#q-052-architecture-sonnet-delete-or-fill-the-dead-stage-input-queue-telemetry)
+- [Q-053 external FFmpeg process topology](#q-053-architecture-sonnet-external-ffmpeg-process-topology-per-rendition)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -348,3 +349,38 @@ items).
   report the stdin writer's real depth; `scripts/check/api-drift.mjs` and
   `cargo xtask api-contract` if a view field is removed.
 - Status: open (Filed: 2026-10-15 by claude, from the #325 review).
+
+### Q-053 [architecture] [sonnet] External FFmpeg process topology per rendition
+- Goal: one recorded decision for how many external FFmpeg children a pipeline
+  runs, so nobody builds a merged multi-output child without an isolation gate.
+- Files (for a measurement): `src/bin/test_harness/resource_sweep/` scenarios
+  and `docs/resource-sweep.md`. Seams a multi-output arm would change:
+  `src/planner/output_path.rs`, `src/planner/graph_plan.rs`,
+  `src/media/stage_runtime.rs`, `src/media/ffmpeg/stage_plan.rs`,
+  `src/media/external_transcoder.rs`,
+  `src/media/external_transcoder/ffmpeg_process.rs`.
+- Evidence (mapped 2026-10-15): one external FFmpeg child runs per live unique
+  typed stage (`StageKey = (pipeline, StageKind)`) and every destination shares
+  it - 0 children for passthrough, 1 for a 720p rendition, 2 for 720p+1080p,
+  independent of destination count (`stage_runtime.rs:62-100`,
+  `engine_pipeline.rs:90-125`, `external_transcoder.rs:5-8,24-31`). The
+  arguments builder ends in `-f mpegts pipe:1` with `-map 0:v:0 -map 0:a?`
+  (`ffmpeg_process.rs:226-235,324-326`): no `tee`, no multi-rendition output,
+  one stdout reader into one stage ring. The "opt-in families" were the
+  per-stage-family backend policy deleted by #279; the harness "families" are
+  renditions (`h264`, `720p`, `1080p`).
+- The alternative and its cost: a multi-output child could only merge several
+  renditions of one pipeline into one process, which puts them in one codec
+  failure domain - against `high-performance-data-path.md:123-127` ("isolates
+  codec failure") and `:100-102` (destination isolation), the argument that
+  rejected Q-033. Any such arm needs an explicit failure-isolation gate and an
+  owner decision.
+- Gates (measurement only): committed numbers come from release binaries
+  (`cargo xtask build-release` -> `target/qual-release/`, with the
+  `HARNESS_BIN`/`RESTREAM_BIN` overrides; `capacity-ramp`
+  `CAPACITY_BUILD_PROFILE=release`), never `build-bench`. The open measurement
+  is the fixed per-rendition child cost (historical about 166 MB per 720p
+  child, `resource-sweep.md:230-231`) and child CPU at 720p/1080p/mixed.
+- Status: open (Filed: 2026-10-15 by claude. The former board item "FFmpeg
+  A/B: external per-stage vs external multi-output" cannot be run as written:
+  the second arm does not exist).
