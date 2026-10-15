@@ -117,7 +117,7 @@ With all 30 languages represented:
 - 30 shared `audio:atrack:N:from:source` router stages;
 - 1,140 independent RTMP egress tasks and TCP connections;
 - shared SRT MPEG-TS mux stages keyed by distinct final encoding;
-- 60 independent SRT feeder tasks, sender threads, sockets, and AVIO queues.
+- 60 SRT outputs on shared per-feed egress shard pools (the shard's Owner owns the SRT socket), not one sender task per output.
 
 The Zipf distribution changes the number of last-hop senders per language. It
 does not create additional audio routers for a hot language: the 300 rank-one
