@@ -1,9 +1,8 @@
 //! Typed stage plan for FFmpeg-backed stages.
 //!
-//! This is the narrow waist between the planner and the execution backends.
-//! Both external (child-process) and internal (in-process libav) backends must
-//! consume the same plan so they do not independently parse stringified stage
-//! keys or preset names.
+//! This is the narrow waist between the stage runtime, which builds it, and
+//! the external (child-process) transcoder, which consumes it so it does not
+//! parse stringified stage keys or preset names itself.
 
 use crate::domain::stage::StageKey;
 use crate::media::metadata::{AudioMeta, VideoMeta};
@@ -94,7 +93,7 @@ impl Default for TimelinePolicy {
     }
 }
 
-/// Backend-neutral plan for a single FFmpeg stage.
+/// Typed plan for a single FFmpeg stage.
 #[derive(Clone, Debug)]
 pub struct FfmpegStagePlan {
     pub stage_key: StageKey,

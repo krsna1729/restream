@@ -192,7 +192,7 @@ fn stage_plan_carries_the_stage_operation() {
     assert_eq!(plan.output_codec, VideoCodecKind::H264);
     assert!(
         plan.startup.wait_for_first_keyframe,
-        "shared FFmpeg plan should carry startup policy for both backends"
+        "the FFmpeg plan carries startup policy"
     );
 }
 

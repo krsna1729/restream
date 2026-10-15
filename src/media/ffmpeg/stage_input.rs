@@ -11,8 +11,9 @@ use crate::media::ring_buffer::{Reader, RingBuffer};
 use crate::media::stage_lifecycle::StageLifecycle;
 use crate::media::stage_metrics::StageMetrics;
 
-/// Shared input pump that provides identical byte-feeding semantics to both
-/// external-process and in-process FFmpeg backends.
+/// Input pump for FFmpeg-backed stages: the stage runtime builds it, and the
+/// external transcoder's stdin writer thread drains it through
+/// [`Self::into_queue_refill`].
 ///
 /// Owns:
 /// - `Reader::new_with_keyframe_preroll`
@@ -103,9 +104,10 @@ impl StageInputPump {
         self.reader.current_ring().codec_hint_str().to_string()
     }
 
-    /// Turn this pump into the input of an in-process FFmpeg stage: the
-    /// stage's AVIO reads pull the ring and encode TS on the FFmpeg thread
-    /// (see [`crate::media::avio::QueueRefill`]), so no Tokio task feeds it.
+    /// Turn this pump into a pull-based refill: the consumer pulls the ring
+    /// and encodes TS on its own thread (see [`StageInputRefill::refill`]), so
+    /// no Tokio task feeds it. The external transcoder's stdin writer is the
+    /// production caller.
     pub fn into_queue_refill(self, cancel: CancellationToken) -> StageInputRefill {
         StageInputRefill {
             pump: self,
@@ -115,7 +117,7 @@ impl StageInputPump {
     }
 
     /// Pull one burst from the ring and append its TS to `ts_batch`. Never
-    /// waits: it runs on the FFmpeg (or stdin writer) thread.
+    /// waits: it runs on the stdin writer thread.
     fn encode_burst(&mut self, packets: &mut Vec<Arc<MediaPacket>>, ts_batch: &mut Vec<u8>) {
         packets.clear();
         if self
@@ -175,15 +177,18 @@ impl StageInputPump {
     }
 }
 
-/// A [`StageInputPump`] driven by its FFmpeg stage's AVIO reads.
+/// A [`StageInputPump`] pulled by the external transcoder's stdin writer.
 pub struct StageInputRefill {
     pump: StageInputPump,
     cancel: CancellationToken,
     packets: Vec<Arc<MediaPacket>>,
 }
 
-impl crate::media::avio::QueueRefill for StageInputRefill {
-    fn refill(&mut self, out: &mut Vec<u8>) -> bool {
+impl StageInputRefill {
+    /// Block until more input is available and append it to `out` (which is
+    /// empty on entry). Return `false` at end of input or on cancellation;
+    /// the writer then stops.
+    pub fn refill(&mut self, out: &mut Vec<u8>) -> bool {
         loop {
             let data = block_on(async {
                 tokio::select! {
@@ -246,7 +251,6 @@ mod tests {
     /// Drain a refill-driven pump the way its reading thread would, until
     /// it reports end of input. Returns (TS bytes, non-empty batches).
     fn drain(pump: StageInputPump) -> (usize, usize) {
-        use crate::media::avio::QueueRefill;
         let mut refill = pump.into_queue_refill(CancellationToken::new());
         let (mut bytes, mut batches) = (0, 0);
         let mut out = Vec::new();
@@ -406,37 +410,33 @@ mod tests {
         )
     }
 
-    /// The FFmpeg-thread input path: AVIO reads through the queue pull the
-    /// ring and encode TS on the reading thread, with no Tokio runtime, and
-    /// the queue closes at end of stream.
+    /// The stdin-writer input path: refill pulls the ring and encodes TS on
+    /// the reading thread, with no Tokio runtime, and reports end of input.
     #[test]
-    fn queue_refill_pulls_the_ring_on_the_reading_thread_until_eos() {
-        use crate::media::avio::MemoryQueue;
-
+    fn refill_pulls_the_ring_on_the_reading_thread_until_eos() {
         let ring = Arc::new(RingBuffer::new(8));
         let metrics = Arc::new(StageMetrics::new());
-        let queue = Arc::new(MemoryQueue::new());
-        queue.set_refill(Box::new(
-            video_pump(&ring, &metrics).into_queue_refill(CancellationToken::new()),
-        ));
+        let mut refill = video_pump(&ring, &metrics).into_queue_refill(CancellationToken::new());
 
         ring.push(video_keyframe(0));
-        let reader = {
-            let queue = queue.clone();
-            std::thread::spawn(move || {
-                let mut total = Vec::new();
-                let mut buf = [0u8; 4096];
-                loop {
-                    let n = queue.read(&mut buf);
-                    if n == 0 {
-                        return total;
-                    }
-                    total.extend_from_slice(&buf[..n]);
+        let reader = std::thread::spawn(move || {
+            let mut total = Vec::new();
+            let mut buf = Vec::new();
+            loop {
+                buf.clear();
+                if !refill.refill(&mut buf) {
+                    return total;
                 }
-            })
-        };
+                total.extend_from_slice(&buf);
+            }
+        });
         // The reader parks waiting for the ring, then wakes on publication.
         std::thread::sleep(std::time::Duration::from_millis(20));
+        // Parked, not finished: the burst is still missing packet 33.
+        assert!(
+            !reader.is_finished(),
+            "refill returned before end of stream"
+        );
         ring.push(video_keyframe(33));
         ring.mark_end_of_stream();
 
@@ -445,28 +445,27 @@ mod tests {
         assert_eq!(ts.len() % 188, 0);
         assert!(ts.chunks(188).all(|packet| packet[0] == 0x47));
         assert_eq!(metrics.packets_in.load(Ordering::Relaxed), 2);
-        assert!(queue.is_closed());
     }
 
     #[test]
-    fn queue_refill_stops_on_cancel_while_waiting() {
-        use crate::media::avio::MemoryQueue;
-
+    fn refill_stops_on_cancel_while_waiting() {
         let ring = Arc::new(RingBuffer::new(8));
         let metrics = Arc::new(StageMetrics::new());
         let cancel = CancellationToken::new();
-        let queue = Arc::new(MemoryQueue::new());
-        queue.set_refill(Box::new(
-            video_pump(&ring, &metrics).into_queue_refill(cancel.clone()),
-        ));
-        let reader = {
-            let queue = queue.clone();
-            std::thread::spawn(move || queue.read(&mut [0u8; 64]))
-        };
+        let mut refill = video_pump(&ring, &metrics).into_queue_refill(cancel.clone());
+        let reader = std::thread::spawn(move || {
+            let mut out = Vec::new();
+            refill.refill(&mut out)
+        });
+        // The ring holds no data and has no parked-waiter signal, so the
+        // sleep only gives the thread time to enter refill. The assertion
+        // guards that refill does not return while the ring is empty: it
+        // proves refill had not returned when the cancel arrives, not that
+        // the cancel landed after the wait began.
         std::thread::sleep(std::time::Duration::from_millis(20));
+        assert!(!reader.is_finished(), "refill returned before cancellation");
         cancel.cancel();
 
-        assert_eq!(reader.join().unwrap(), 0);
-        assert!(queue.is_closed());
+        assert!(!reader.join().unwrap());
     }
 }
