@@ -131,8 +131,6 @@
         "sourceRingKb",
         "transcoderRingKb",
         "tsmuxRingKb",
-        "avioLenKb",
-        "avioHwmKb",
         "overflowCount"
       ]
     },
@@ -154,8 +152,6 @@
         "sourceRingKb",
         "transcoderRingKb",
         "tsmuxRingKb",
-        "avioLenKb",
-        "avioHwmKb",
         "unattributedKb"
       ]
     },

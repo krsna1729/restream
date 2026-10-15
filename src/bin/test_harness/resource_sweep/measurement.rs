@@ -30,8 +30,6 @@ pub(super) struct ResourceSample {
     pub(super) source_ring_kb: u64,
     pub(super) transcoder_ring_kb: u64,
     pub(super) tsmux_ring_kb: u64,
-    pub(super) avio_len_kb: u64,
-    pub(super) avio_hwm_kb: u64,
     pub(super) active_transcoder_buffers: u64,
     pub(super) ingests: usize,
     pub(super) egresses: usize,
@@ -70,8 +68,6 @@ pub(super) struct ResourceAggregate {
     pub(super) source_ring_peak_kb: u64,
     pub(super) transcoder_ring_peak_kb: u64,
     pub(super) tsmux_ring_peak_kb: u64,
-    pub(super) avio_len_peak_kb: u64,
-    pub(super) avio_hwm_peak_kb: u64,
     pub(super) anonymous_peak_kb: u64,
     pub(super) private_dirty_peak_kb: u64,
     pub(super) shared_clean_peak_kb: u64,
@@ -214,8 +210,6 @@ pub(super) async fn sample_resource_window(
         let source_ring_kb = kb("sourceRingPayloadBytes");
         let transcoder_ring_kb = kb("transcoderRingPayloadBytes");
         let tsmux_ring_kb = kb("tsMuxerRingPayloadBytes");
-        let avio_len_kb = kb("stageInputQueueLenBytes");
-        let avio_hwm_kb = kb("stageInputQueueHighWaterBytes");
         let count = |field: &str| measure[field].as_u64().unwrap_or(0) as usize;
         let sample = ResourceSample {
             scenario: meta.scenario.to_string(),
@@ -246,14 +240,12 @@ pub(super) async fn sample_resource_window(
             source_ring_kb,
             transcoder_ring_kb,
             tsmux_ring_kb,
-            avio_len_kb,
-            avio_hwm_kb,
             active_transcoder_buffers: measure["activeTranscoderBuffers"].as_u64().unwrap_or(0),
             ingests: count("ingests"),
             egresses: count("egresses"),
             stages: count("stages"),
             pipeline_count: count("pipelines"),
-            unattributed_kb: rss_kb.saturating_sub(retained_kb + avio_len_kb),
+            unattributed_kb: rss_kb.saturating_sub(retained_kb),
         };
         append_line(
             &env.samples_jsonl,
@@ -362,8 +354,6 @@ pub(super) fn summarize_resource_samples(
             .max()
             .unwrap_or(0),
         tsmux_ring_peak_kb: samples.iter().map(|s| s.tsmux_ring_kb).max().unwrap_or(0),
-        avio_len_peak_kb: samples.iter().map(|s| s.avio_len_kb).max().unwrap_or(0),
-        avio_hwm_peak_kb: samples.iter().map(|s| s.avio_hwm_kb).max().unwrap_or(0),
         anonymous_peak_kb: samples.iter().map(|s| s.anonymous_kb).max().unwrap_or(0),
         private_dirty_peak_kb: samples
             .iter()
@@ -553,8 +543,6 @@ fn resource_sample_json(sample: &ResourceSample) -> Value {
         "sourceRingKb": sample.source_ring_kb,
         "transcoderRingKb": sample.transcoder_ring_kb,
         "tsmuxRingKb": sample.tsmux_ring_kb,
-        "avioLenKb": sample.avio_len_kb,
-        "avioHwmKb": sample.avio_hwm_kb,
         "activeTranscoderBuffers": sample.active_transcoder_buffers,
         "ingests": sample.ingests,
         "egresses": sample.egresses,
@@ -593,8 +581,6 @@ pub(super) fn resource_aggregate_json(aggregate: &ResourceAggregate) -> Value {
         "sourceRingPeakKb": aggregate.source_ring_peak_kb,
         "transcoderRingPeakKb": aggregate.transcoder_ring_peak_kb,
         "tsmuxRingPeakKb": aggregate.tsmux_ring_peak_kb,
-        "avioLenPeakKb": aggregate.avio_len_peak_kb,
-        "avioHwmPeakKb": aggregate.avio_hwm_peak_kb,
         "anonymousPeakKb": aggregate.anonymous_peak_kb,
         "privateDirtyPeakKb": aggregate.private_dirty_peak_kb,
         "sharedCleanPeakKb": aggregate.shared_clean_peak_kb,
@@ -639,11 +625,11 @@ pub(super) fn write_resource_sweep_csv(
     rows: &[ResourceAggregate],
 ) -> Result<(), String> {
     let mut text = String::from(
-        "scenario,label,lifecycle,pipelines,outputs,ingest_types,egress_mix,transcode,sample_count,restream_cpu_avg_pct,restream_cpu_peak_pct,ffmpeg_cpu_avg_pct,ffmpeg_cpu_peak_pct,total_cpu_avg_pct,total_cpu_peak_pct,voluntary_ctxt_switches_avg_per_sec,voluntary_ctxt_switches_peak_per_sec,nonvoluntary_ctxt_switches_avg_per_sec,nonvoluntary_ctxt_switches_peak_per_sec,thread_count_peak,rss_avg_kb,rss_peak_kb,ffmpeg_rss_peak_kb,retained_peak_kb,source_ring_peak_kb,transcoder_ring_peak_kb,tsmux_ring_peak_kb,avio_len_peak_kb,avio_hwm_peak_kb,anonymous_peak_kb,private_dirty_peak_kb,shared_clean_peak_kb,pss_peak_kb,unattributed_peak_kb,active_transcoder_buffers_peak,ingests_peak,egresses_peak,stages_peak,pipeline_count_peak,delivery_destinations,delivery_delivered,delivery_offered_bps,delivery_ratio_min,delivery_ratio_median,delivery_interval_ratio_min,delivery_jain,restream_delivery_rated,restream_delivery_delivered,restream_delivery_ratio_min,restream_delivery_jain_min\n",
+        "scenario,label,lifecycle,pipelines,outputs,ingest_types,egress_mix,transcode,sample_count,restream_cpu_avg_pct,restream_cpu_peak_pct,ffmpeg_cpu_avg_pct,ffmpeg_cpu_peak_pct,total_cpu_avg_pct,total_cpu_peak_pct,voluntary_ctxt_switches_avg_per_sec,voluntary_ctxt_switches_peak_per_sec,nonvoluntary_ctxt_switches_avg_per_sec,nonvoluntary_ctxt_switches_peak_per_sec,thread_count_peak,rss_avg_kb,rss_peak_kb,ffmpeg_rss_peak_kb,retained_peak_kb,source_ring_peak_kb,transcoder_ring_peak_kb,tsmux_ring_peak_kb,anonymous_peak_kb,private_dirty_peak_kb,shared_clean_peak_kb,pss_peak_kb,unattributed_peak_kb,active_transcoder_buffers_peak,ingests_peak,egresses_peak,stages_peak,pipeline_count_peak,delivery_destinations,delivery_delivered,delivery_offered_bps,delivery_ratio_min,delivery_ratio_median,delivery_interval_ratio_min,delivery_jain,restream_delivery_rated,restream_delivery_delivered,restream_delivery_ratio_min,restream_delivery_jain_min\n",
     );
     for row in rows {
         text.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{},{:.2},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.0},{:.4},{:.4},{:.4},{:.5},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{},{:.2},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.0},{:.4},{:.4},{:.4},{:.5},{},{},{},{}\n",
             csv_escape(&row.scenario),
             csv_escape(&row.label),
             csv_escape(&row.lifecycle),
@@ -671,8 +657,6 @@ pub(super) fn write_resource_sweep_csv(
             row.source_ring_peak_kb,
             row.transcoder_ring_peak_kb,
             row.tsmux_ring_peak_kb,
-            row.avio_len_peak_kb,
-            row.avio_hwm_peak_kb,
             row.anonymous_peak_kb,
             row.private_dirty_peak_kb,
             row.shared_clean_peak_kb,

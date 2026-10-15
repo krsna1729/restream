@@ -81,45 +81,18 @@ pub(super) fn ts_muxer_ring_telemetry_json(
     })
 }
 
-pub(super) fn avio_input_queue_json(
-    key: &StageKey,
-    len_bytes: usize,
-    capacity_bytes: usize,
-    high_water_bytes: usize,
-    blocked_writes: u64,
-    blocked_write_us: u64,
-) -> serde_json::Value {
-    serde_json::json!({
-        "stageKey": key.to_string(),
-        "pipelineId": key.pipeline.as_str(),
-        "lenBytes": len_bytes,
-        "capacityBytes": capacity_bytes,
-        "highWaterBytes": high_water_bytes,
-        "blockedWrites": blocked_writes,
-        "blockedWriteUs": blocked_write_us,
-    })
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn memory_accounting_json(
     retained_payload_bytes: u64,
     source_rings: Vec<serde_json::Value>,
     transcoder_rings: Vec<serde_json::Value>,
     ts_muxer_rings: Vec<serde_json::Value>,
-    avio_total_len_bytes: usize,
-    avio_total_capacity_bytes: usize,
-    avio_input_queues: Vec<serde_json::Value>,
 ) -> serde_json::Value {
     serde_json::json!({
         "retainedPayloadBytes": retained_payload_bytes,
         "sourceRings": source_rings,
         "transcoderRings": transcoder_rings,
         "tsMuxerRings": ts_muxer_rings,
-        "avioQueues": {
-            "totalLenBytes": avio_total_len_bytes,
-            "totalCapacityBytes": avio_total_capacity_bytes,
-            "inputQueues": avio_input_queues,
-        },
     })
 }
 
@@ -249,19 +222,12 @@ mod tests {
                 vec![serde_json::json!({"pipelineId": "pipeline-a"})],
                 vec![serde_json::json!({"stageKey": "pipeline-a:video:720p"})],
                 vec![serde_json::json!({"stageKey": "pipeline-a_ts"})],
-                128,
-                1024,
-                vec![serde_json::json!({"stageKey": "pipeline-a:source"})],
             ),
         );
 
         assert_eq!(value["generatedAt"], "2026-06-30T12:00:00Z");
         assert_eq!(value["activeTranscoderBuffers"], 2);
         assert_eq!(value["memoryAccounting"]["retainedPayloadBytes"], 4096);
-        assert_eq!(
-            value["memoryAccounting"]["avioQueues"]["totalCapacityBytes"],
-            1024
-        );
         assert_eq!(
             value["memoryAccounting"]["tsMuxerRings"][0]["stageKey"],
             "pipeline-a_ts"

@@ -158,7 +158,6 @@ pub(crate) fn processing_graph_stage_node(
     lifecycle: Option<&crate::runtime::stage::StageRuntimeSnapshot>,
     active: bool,
     metrics: Option<serde_json::Value>,
-    queue_metrics: Option<serde_json::Value>,
     pipe_metrics: Option<serde_json::Value>,
     payload_stats: serde_json::Value,
 ) -> serde_json::Value {
@@ -170,7 +169,6 @@ pub(crate) fn processing_graph_stage_node(
         "active": active,
         "details": lifecycle.map(super::stage_projection::stage_runtime_snapshot_json),
         "metrics": metrics,
-        "queueMetrics": queue_metrics,
         "pipeMetrics": pipe_metrics,
         "payloadStats": payload_stats,
     })

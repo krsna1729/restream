@@ -208,7 +208,9 @@ Peak memory and average CPU for the default isolated sweep:
 | Mixed 720p transcode egress, 20 outputs | 120.3 | 166.5 | 286.8 | 51.65 |
 | HEVC bridge, 10 RTMP outputs | 158.7 | 0.0 | 158.7 | 71.82 |
 
-Peak internal buffers for the most relevant scaling rows:
+Peak internal buffers for the most relevant scaling rows (the AVIO HWM column
+measured the stage input queue, which the external-only FFmpeg cutover removed;
+current harness output no longer reports it):
 
 | Scenario | Source Ring MB | Transcoder Ring MB | TsMux Ring MB | AVIO HWM MB |
 |---|---:|---:|---:|---:|

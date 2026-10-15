@@ -201,7 +201,7 @@ Phase 3, and Phase 4 (degradation slices) remain open.
 | MSR-04 | Adaptive ring replacement disrupts mass startup | Startup timeline, cancellations, retries, time-to-progress |
 | MSR-05 | Correlated sink failure creates a retry/log/DB storm | Fault slice with bounded recovery and reconciler timing |
 | MSR-06 | Slow outputs overflow and repeatedly restart | One and many slow-sink fault slices; overflow and retry counters |
-| MSR-07 | SRT per-output threads and buffers consume excessive resources | Thread count, AVIO HWM, RSS/PSS, kernel socket memory |
+| MSR-07 | SRT per-output threads and buffers consume excessive resources | Thread count, RSS/PSS, kernel socket memory |
 | MSR-08 | 5.1 AAC is not accepted by an RTMP destination | Interop probe of passthrough 5.1 and optional downmix route |
 | MSR-09 | The shared 4K HEVC compatibility stage misses real time | Stage CPU, output progress, decode probe, dropped/overflow counters |
 | MSR-10 | Teardown leaks tasks, stages, sockets, jobs, or memory | Post-stop convergence and resource return-to-baseline assertions |
@@ -299,7 +299,6 @@ per-output backend cost from physical-link saturation. At each step record:
 - restream RSS/PSS, CPU, file descriptors, task count, and OS-thread count;
 - child FFmpeg count/RSS/CPU;
 - source, selected-audio, and TS-mux ring fill/HWM/overflow counters;
-- AVIO queue length, HWM, and blocked writes;
 - egress bytes/s and messages/s by protocol;
 - retry, failure, and log-event rates;
 - SQLite/reconciler tick duration if exposed by current telemetry.

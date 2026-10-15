@@ -117,7 +117,6 @@ impl StageRuntimeManager {
                 cancel: cancel.clone(),
                 lifecycle: lifecycle.clone(),
                 metrics: metrics.clone(),
-                input_queue: None,
                 pipe_metrics: None,
                 lease: lease.downgrade(),
                 lease_id: lease.id(),

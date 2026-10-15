@@ -17,7 +17,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::domain::stage::StageKey;
 use crate::events::EventLog;
-use crate::media::avio::MemoryQueue;
 use crate::media::egress::FeedId;
 use crate::media::egress::runtime::{EgressFabricRuntime, FeedWakeSubscription};
 use crate::media::engine::{
@@ -310,7 +309,6 @@ pub struct StageRuntime {
     pub cancel: CancellationToken,
     pub lifecycle: Arc<StageLifecycle>,
     pub metrics: Arc<StageMetrics>,
-    pub input_queue: Option<Arc<MemoryQueue>>,
     pub pipe_metrics: Option<Arc<PipeMetrics>>,
     /// Consumers' leases (`Weak::new()` for stages no consumer leases).
     pub lease: std::sync::Weak<crate::media::stage_lease::LeaseCell>,

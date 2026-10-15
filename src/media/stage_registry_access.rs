@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use crate::domain::stage::{StageKey, StageKind};
-use crate::media::avio::MemoryQueue;
 use crate::media::engine::{ActiveEgress, MediaEngine, hls_preview_registry_key};
 use crate::media::engine_hls::input_id_from_hls_preview_resource_id;
 use crate::media::engine_registries::StageRuntime;
@@ -21,18 +20,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 impl MediaEngine {
-    pub async fn register_input_queue(&self, key: StageKey, queue: Arc<MemoryQueue>) {
-        if let Some(runtime) = self.stages.runtimes.write().await.get_mut(&key) {
-            runtime.input_queue = Some(queue.clone());
-        }
-    }
-
-    pub async fn remove_input_queue(&self, key: &StageKey) {
-        if let Some(runtime) = self.stages.runtimes.write().await.get_mut(key) {
-            runtime.input_queue = None;
-        }
-    }
-
     pub async fn register_pipe_metrics(&self, key: StageKey, metrics: Arc<PipeMetrics>) {
         if let Some(runtime) = self.stages.runtimes.write().await.get_mut(&key) {
             runtime.pipe_metrics = Some(metrics.clone());
@@ -68,7 +55,6 @@ impl MediaEngine {
                 cancel,
                 lifecycle: lifecycle.clone(),
                 metrics: metrics.clone(),
-                input_queue: None,
                 pipe_metrics: None,
                 lease: std::sync::Weak::new(),
                 lease_id: 0,
