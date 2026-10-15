@@ -147,27 +147,10 @@ impl SrtOwners {
     /// in [`Disposing`] so later service visits drive it to quiescence instead
     /// of dropping cleanup the runtime still owns.
     pub(crate) fn dispose_faulted(&mut self, family: AddressFamily) {
-        self.assert_home_thread();
         let index = family.index();
-        let Some(mut family_owner) = self.owners[index].take() else {
+        let Some(mut family_owner) = self.close_family(family) else {
             return;
         };
-        let fault = family_owner
-            .owner
-            .fault()
-            .map(|fault| format!("{fault:?}"))
-            .unwrap_or_else(|| "unknown fault".to_string());
-        let mut metrics = family_owner.metrics();
-        metrics.faulted = true;
-        tracing::warn!(
-            ?family,
-            fault = %fault,
-            "srt egress faulted Owner closed; tearing the family down"
-        );
-        self.closed[index] = Some(FamilyClosure { fault, metrics });
-        // Closing entries named this family: its Owner is gone, so no SHUTDOWN
-        // can flush behind them and nothing else reaps them.
-        self.closing.retain(|entry| entry.family != family);
         if self.runtime.block_on(
             family_owner
                 .owner
@@ -181,6 +164,52 @@ impl SrtOwners {
                 schedule: DisposalSchedule::after_first_miss(),
             });
         }
+    }
+
+    /// Take one family out of service: record its fault text and last metrics
+    /// row, purge the closing entries no Owner can flush behind any more, and
+    /// hand the Owner back for disposal. Called on the fault path; a missing
+    /// Owner means the family was already closed.
+    fn close_family(&mut self, family: AddressFamily) -> Option<FamilyOwner> {
+        self.assert_home_thread();
+        let index = family.index();
+        let family_owner = self.owners[index].take()?;
+        let fault = family_owner
+            .owner
+            .fault()
+            .map(|fault| format!("{fault:?}"))
+            .unwrap_or_else(|| "unknown fault".to_string());
+        let mut metrics = family_owner.metrics();
+        metrics.faulted = true;
+        tracing::warn!(
+            ?family,
+            fault = %fault,
+            "srt egress faulted Owner closed; tearing the family down"
+        );
+        self.closed[index] = Some(FamilyClosure { fault, metrics });
+        self.closing.retain(|entry| entry.family != family);
+        Some(family_owner)
+    }
+
+    /// Test-only: park a live Owner in the pending-disposal state without a
+    /// teardown attempt. A real miss needs a hung RX stop or kernel-owned sends
+    /// that a harness cannot produce; everything after this point (park bound,
+    /// wake, retry, release) is the production path.
+    #[cfg(test)]
+    pub(crate) fn force_disposal_pending(&mut self, family: AddressFamily) {
+        let index = family.index();
+        if let Some(family_owner) = self.close_family(family) {
+            self.disposing[index] = Some(Disposing {
+                owner: family_owner,
+                schedule: DisposalSchedule::after_first_miss(),
+            });
+        }
+    }
+
+    /// Whether a closed family's Owner is still being torn down.
+    #[cfg(test)]
+    pub(crate) fn disposal_pending(&self, family: AddressFamily) -> bool {
+        self.disposing[family.index()].is_some()
     }
 
     /// Retry every pending family disposal whose retry is due: one bounded
