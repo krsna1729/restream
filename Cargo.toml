@@ -101,8 +101,10 @@ shiguredo_mp4 = "2026.5.0"
 # SipHash, acked-bytes stats). SRT egress and ingress both run on
 # `srt_transport::compio::Owner`; ingress attaches each `owner_plans` entry
 # with `Owner::listen_planned`.
-srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "b59bcf11a7ad645fac27c42c0780034dc5dc5b8b" }
-srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "b59bcf11a7ad645fac27c42c0780034dc5dc5b8b", features = ["compio"] }
+# PR #159: segmented receive payloads and explicit Owner-local retirement.
+# Ingress consumes original chunks; both native Owners drive reclamation.
+srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "4827487d23f830faa39f29d43cd36fde2d710ca3" }
+srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "4827487d23f830faa39f29d43cd36fde2d710ca3", features = ["compio"] }
 # Bounded shard command channel with both blocking and Future-based receive, so
 # a backend that owns a thread-affine completion runtime can await commands
 # alongside its own I/O without a second wake source.

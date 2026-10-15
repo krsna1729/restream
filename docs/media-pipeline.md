@@ -580,10 +580,22 @@ independent.
   publisher demux/publication and diagnostic reader playback stay on the Owner.
   Backpressure on the lifecycle bridge retains unaccepted events; it does not
   introduce a per-packet media handoff through Tokio.
-- **Retirement.** A terminal `Disconnected` is forwarded and the peer is removed
+- **Fragmented messages stay chunked.** `ReceivedPayload` keeps message metadata
+  and original packet order without flattening. One fixed-capacity 64-slot
+  Owner-local work list holds events, chunk cursors and their cancellation
+  retirements. A pass consumes at most 64 chunks, with a 16-chunk slice per
+  cursor, and separately reclaims at most 64 original packet slots. The same
+  work slot follows a message into retirement; no second garbage queue is added.
+  Lifecycle-bridge backpressure pauses media/event delivery but not reclamation.
+  A peer's terminal event cannot overtake its preceding message cursor.
+- **Retirement.** A terminal `Disconnected` is forwarded and the peer is unrouted
   from the Owner; a locally disconnected peer is retired after its terminal event
-  or a 500 ms grace. Stale commands for a retired `LogicalPeerId` are harmless and
-  counted (`staleCommands`).
+  or a 500 ms grace. Pending application cursors are cancelled in place.
+  Protocol storage remains on that Owner for action-budgeted reclamation, and
+  its admission/window-payload credits stay charged until reclamation completes.
+  Stale commands for a retired `LogicalPeerId` remain harmless and counted
+  (`staleCommands`). Reclamation counts do not impose a hard allocator/kernel
+  CPU-time limit, and the payload-window budget is not a total RSS bound.
 - **Owner fault** stops admission, reports `Fault` to Tokio and ends the thread;
   there is no rebuild on another runtime. Shutdown flushes SHUTDOWN datagrams and
   runs `Owner::shutdown_and_drain`; the verdict is logged, never assumed.

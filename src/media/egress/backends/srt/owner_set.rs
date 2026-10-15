@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use futures_util::future::{Either, pending, select};
-use srt_proto::Timestamp;
+use srt_proto::{PayloadRetirement, Timestamp};
 use srt_transport::advanced::caller::{
     CallerEvent, CallerGroupFault, LogicalCallerId, LogicalCallerState, LogicalCallerStats,
     PoolEvent, PoolOutcome, PoolRequestId,
@@ -262,6 +262,7 @@ struct FamilyOwner {
     /// The selected receive mode was logged once, when the Owner attached.
     attach_logged: bool,
     counters: FamilyCounters,
+    retired_payloads: std::collections::VecDeque<PayloadRetirement>,
 }
 
 struct ClosingCaller {
@@ -377,6 +378,7 @@ impl SrtOwners {
             .map_err(|error| error.to_string())?;
         Ok(FamilyOwner {
             owner,
+            retired_payloads: std::collections::VecDeque::with_capacity(EVENT_DRAIN),
             fault_reported: false,
             attach_logged: false,
             counters: FamilyCounters::default(),
@@ -501,7 +503,7 @@ impl SrtOwners {
             .and_then(|logical| logical.state())
             == Some(LogicalCallerState::Connected);
         if !established {
-            drop(family_owner.owner.remove_caller(caller.id));
+            family_owner.owner.retire_caller(caller.id);
             return;
         }
         if let Some(mut logical) = family_owner.owner.logical_caller_mut(&caller.id) {
@@ -518,7 +520,7 @@ impl SrtOwners {
     /// that never connected, a stale queued admission).
     pub(crate) fn remove_now(&mut self, caller: &SrtCaller) {
         if let Some(family_owner) = self.owners[caller.family.index()].as_mut() {
-            drop(family_owner.owner.remove_caller(caller.id));
+            family_owner.owner.retire_caller(caller.id);
         }
     }
 
@@ -549,7 +551,7 @@ impl SrtOwners {
                 }
             };
             if done {
-                drop(family_owner.owner.remove_caller(entry.id));
+                family_owner.owner.retire_caller(entry.id);
             } else {
                 self.closing.push_back(entry);
             }
@@ -680,8 +682,20 @@ impl SrtOwners {
                     PoolEvent::Queued { .. } | PoolEvent::Cancelled { .. } => {}
                 }
             }
-            owner.poll_caller_events(&mut self.caller_scratch);
-            more |= self.caller_scratch.len() >= cap;
+            let mut reclaimed = 0;
+            while reclaimed < cap {
+                let Some(retired) = family_owner.retired_payloads.front_mut() else {
+                    break;
+                };
+                reclaimed += retired.reclaim(cap - reclaimed);
+                if retired.is_complete() {
+                    family_owner.retired_payloads.pop_front();
+                }
+            }
+            let available = cap.saturating_sub(family_owner.retired_payloads.len());
+            owner.poll_caller_events_bounded(available, &mut self.caller_scratch);
+            more |= !family_owner.retired_payloads.is_empty()
+                || (available != 0 && self.caller_scratch.len() >= available);
             for event in self.caller_scratch.drain(..) {
                 match event.event {
                     srt_proto::ConnectionEvent::Connected => out.push(SrtOwnerEvent::Connected {
@@ -693,6 +707,13 @@ impl SrtOwners {
                             family,
                             caller: event.id,
                         });
+                    }
+                    srt_proto::ConnectionEvent::DataReceived { payload, .. } => {
+                        let retired = payload.retire();
+                        if !retired.is_complete() {
+                            family_owner.retired_payloads.push_back(retired);
+                            more = true;
+                        }
                     }
                     _ => {}
                 }
@@ -791,7 +812,7 @@ impl SrtOwners {
         self.log_final_counters();
         while let Some(entry) = self.closing.pop_front() {
             if let Some(family_owner) = self.owners[entry.family.index()].as_mut() {
-                drop(family_owner.owner.remove_caller(entry.id));
+                family_owner.owner.retire_caller(entry.id);
             }
         }
         let mut all = true;

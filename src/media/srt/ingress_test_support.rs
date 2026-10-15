@@ -356,6 +356,10 @@ pub(super) fn bonded(remote: SocketAddr, stream_id: &str, mode: GroupType) -> At
     )
 }
 
+fn timestamp(epoch: Instant) -> Timestamp {
+    Timestamp::from_micros(epoch.elapsed().as_micros() as u64)
+}
+
 /// Run a caller until `step` returns `true` or `deadline` passes. Blocking:
 /// call from `spawn_blocking`.
 pub(super) fn run_caller(
@@ -372,7 +376,6 @@ pub(super) fn run_caller(
         let mut report = CallerReport::default();
         let mut owner = Owner::new_with_ceiling(CALLER_TX, SRT_OWNER_WIRE_CEILING);
         let epoch = Instant::now();
-        let timestamp = |epoch: Instant| Timestamp::from_micros(epoch.elapsed().as_micros() as u64);
         let outcome = match &attach {
             Attach::Direct(config) => owner.connect(config, timestamp(epoch)),
             Attach::Bonded(config) => owner.connect_bonded(config, timestamp(epoch)),
@@ -398,7 +401,10 @@ pub(super) fn run_caller(
                         report.disconnected_at.get_or_insert_with(Instant::now);
                     }
                     srt_proto::ConnectionEvent::DataReceived { payload, .. } => {
-                        report.received.extend_from_slice(&payload);
+                        report.received.reserve(payload.len());
+                        for chunk in payload.chunks() {
+                            report.received.extend_from_slice(chunk);
+                        }
                     }
                     _ => {}
                 }
@@ -469,4 +475,94 @@ pub(super) async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send 
     tokio::task::spawn_blocking(work)
         .await
         .expect("caller thread")
+}
+
+/// The public protocol message API can send a fragmented message; the logical
+/// native caller's packet API deliberately does not flatten or split packets.
+/// Drive that protocol over a real UDP socket into the production ingress Owner.
+pub(super) fn run_fragmented_publisher(
+    remote: SocketAddr,
+    stream_id: &str,
+    payload: &[u8],
+    deadline: Duration,
+) -> CallerReport {
+    use srt_proto::{
+        ConnectionEvent, ConnectionOptions, ConnectionOutput, ConnectionState, SrtConnection,
+    };
+    use srt_transport::advanced::driver::ManualTimerStore;
+
+    let socket = std::net::UdpSocket::bind("127.0.0.1:0").expect("publisher socket");
+    socket
+        .set_read_timeout(Some(Duration::from_millis(1)))
+        .expect("receive timeout");
+    let mut caller = SrtConnection::new_caller(ConnectionOptions {
+        stream_id: Some(stream_id.to_owned()),
+        // All fragments share one source timestamp. Allow their socket transfer
+        // to finish before Live-mode late-drop can retire the message.
+        tsbpd_delay: 2000,
+        ..Default::default()
+    });
+    let mut timers = ManualTimerStore::new();
+    let epoch = Instant::now();
+    caller
+        .connect(Timestamp::default())
+        .expect("start publisher");
+    let mut report = CallerReport::default();
+    let mut buffer = [0u8; 1500];
+    while epoch.elapsed() < deadline && !report.disconnected {
+        let now = timestamp(epoch);
+        timers.fire_expired(now, &mut caller);
+        if caller.state() == ConnectionState::Connected && report.sent_bytes == 0 {
+            caller
+                .send_message(payload, now)
+                .expect("whole fragmented message fits the negotiated window");
+            report.sent_bytes = payload.len();
+        }
+        for _ in 0..64 {
+            let Some(output) = caller.poll_output().expect("protocol output") else {
+                break;
+            };
+            if let ConnectionOutput::SendPacket(packet) = &output {
+                assert_eq!(
+                    socket.send_to(packet, remote).expect("send datagram"),
+                    packet.len()
+                );
+            }
+            timers.apply_output(&output, now);
+        }
+        for _ in 0..64 {
+            match socket.recv_from(&mut buffer) {
+                Ok((len, peer)) => {
+                    assert_eq!(peer, remote);
+                    caller
+                        .feed_recv_buf(&buffer[..len], timestamp(epoch))
+                        .expect("listener datagram");
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    break;
+                }
+                Err(error) => panic!("receive listener datagram: {error}"),
+            }
+        }
+        while let Some(event) = caller.poll_event() {
+            match event {
+                ConnectionEvent::Connected => report.connected = true,
+                ConnectionEvent::Disconnected { .. } => report.disconnected = true,
+                _ => {}
+            }
+        }
+    }
+    if !report.disconnected {
+        eprintln!(
+            "fragmented publisher state={:?}, sender={:?}",
+            caller.state(),
+            caller.sender_stats()
+        );
+    }
+    report
 }

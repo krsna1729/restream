@@ -381,3 +381,86 @@ async fn a_panicking_publisher_is_disconnected_and_the_owner_keeps_serving() {
     assert!(!stats.faulted, "{stats:?}");
     server.stop().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fragmented_publisher_panic_retires_tail_without_stalling_an_existing_sibling() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    let server = TestServer::start(
+        &["fragmented-doomed", "fragmented-healthy"],
+        vec![plain("fragmented-doomed"), plain("fragmented-healthy")],
+    )
+    .await;
+    let remote = server.remote;
+    let finished = Arc::new(AtomicBool::new(false));
+    let stop = Arc::clone(&finished);
+    let healthy = tokio::spawn(blocking(move || {
+        let chunks = ts_chunks(512);
+        let mut next = 0;
+        let mut after_retirement = 0;
+        run_caller(
+            direct(remote, "#!::r=fragmented-healthy,m=publish", None),
+            Duration::from_secs(20),
+            move |ctx| {
+                for _ in 0..8 {
+                    if !ctx.connected() || !ctx.send(&chunks[next % chunks.len()]) {
+                        break;
+                    }
+                    next += 1;
+                    if stop.load(Ordering::Acquire) {
+                        after_retirement += 1;
+                    }
+                }
+                after_retirement >= 512
+            },
+        )
+    }));
+    server
+        .wait_until(
+            "healthy publisher reaches its ring",
+            Duration::from_secs(10),
+            || async { server.ring_progress("pipeline-fragmented-healthy").await > 0 },
+        )
+        .await;
+    let before = server.ring_progress("pipeline-fragmented-healthy").await;
+    let mut message = Vec::with_capacity(4096 * CHUNK);
+    let mut poison = vec![0u8; CHUNK];
+    poison[..super::ingress_media::INJECTED_PANIC_PAYLOAD.len()]
+        .copy_from_slice(super::ingress_media::INJECTED_PANIC_PAYLOAD);
+    message.extend_from_slice(&poison);
+    for chunk in ts_chunks(512).iter().cycle().take(4095) {
+        message.extend_from_slice(chunk);
+    }
+    let doomed = blocking(move || {
+        run_fragmented_publisher(
+            remote,
+            "#!::r=fragmented-doomed,m=publish",
+            &message,
+            Duration::from_secs(15),
+        )
+    })
+    .await;
+    finished.store(true, Ordering::Release);
+    let healthy = healthy.await.expect("healthy publisher task");
+    let stats = server
+        .engine
+        .listener_stats_handle()
+        .ingress_owner
+        .snapshot();
+    assert!(
+        doomed.connected && doomed.disconnected,
+        "{doomed:?}; Owner: {stats:?}"
+    );
+    assert_eq!(doomed.sent_bytes, 4096 * CHUNK);
+    assert!(healthy.connected && !healthy.disconnected, "{healthy:?}");
+    assert!(server.ring_progress("pipeline-fragmented-healthy").await > before);
+    assert_eq!(
+        stats.owners, 1,
+        "the fault and sibling must share one ingress Owner"
+    );
+    assert!(!stats.faulted, "{stats:?}");
+    server.stop().await;
+}

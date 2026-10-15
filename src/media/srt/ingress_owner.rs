@@ -64,11 +64,14 @@ pub(crate) use super::ingress_bridge::{
 use super::ingress_media::IngressMedia;
 use crate::media::snapshots::SrtIngressOwnerStats;
 
+#[path = "ingress_owner_payload.rs"]
+mod payload;
 #[path = "ingress_owner_send.rs"]
 mod send;
 #[path = "ingress_owner_stats.rs"]
 mod stats;
 use super::ingress_quality::{Observation, QualitySample, sample_from_stats};
+use payload::{PAYLOAD_WORK_CAPACITY, PayloadWork};
 use send::DeferredSends;
 use stats::{Published, publish};
 
@@ -145,6 +148,8 @@ struct OwnerLoop {
     /// so it is bounded by one Owner drain and accepted media is never lost.
     pending_events: VecDeque<SrtIngressEvent>,
     scratch: Vec<AdmissionEvent>,
+    payload_work: VecDeque<PayloadWork>,
+    active_payloads: std::collections::HashSet<LogicalPeerId>,
     /// Every publisher's and reader's media state (run to completion here).
     media: IngressMedia,
     /// Representative address of each admitted peer, for lifecycle events.
@@ -325,6 +330,8 @@ fn build(
             epoch,
             pending_events: VecDeque::with_capacity(64),
             scratch: Vec::with_capacity(64),
+            payload_work: VecDeque::with_capacity(PAYLOAD_WORK_CAPACITY),
+            active_payloads: std::collections::HashSet::with_capacity(PAYLOAD_WORK_CAPACITY),
             media: IngressMedia::default(),
             addrs: HashMap::new(),
             reader_scratch: Vec::with_capacity(READER_SENDS_PER_VISIT),
@@ -428,7 +435,8 @@ impl OwnerLoop {
                 || !self.inbox.is_empty()
                 || (!self.pending_events.is_empty() && self.events_has_room())
                 // A sampling round in progress finishes promptly.
-                || !self.sample_queue.is_empty();
+                || !self.sample_queue.is_empty()
+                || self.payload_work_runnable();
             if !busy {
                 self.park(now);
             }
@@ -635,7 +643,8 @@ impl OwnerLoop {
     /// (or never present) makes this a no-op that cannot touch a later peer,
     /// because `LogicalPeerId`s are never reused.
     fn retire(&mut self, peer: LogicalPeerId) {
-        if self.owner.remove_listener_peer(peer).is_some() {
+        self.cancel_payload_work(peer);
+        if self.owner.retire_listener_peer(peer) {
             self.peers = self.peers.saturating_sub(1);
         }
         self.deferred.forget(&peer);
@@ -645,86 +654,6 @@ impl OwnerLoop {
         // Flushes a publisher's last media into the ring and drops any reader
         // or held state.
         self.media.detach(peer);
-    }
-
-    /// Run received media to completion and translate lifecycle events for
-    /// Tokio. Stops draining only if Tokio has fallen [`PENDING_EVENTS_MAX`]
-    /// lifecycle events behind, so protocol flow control absorbs that
-    /// backpressure; media itself never waits on Tokio.
-    fn drain_owner_events(&mut self) {
-        if self.pending_events.len() >= PENDING_EVENTS_MAX {
-            self.stats
-                .ingress_owner
-                .event_bridge_full_visits
-                .fetch_add(1, Ordering::Relaxed);
-            return;
-        }
-        let started = Instant::now();
-        self.owner.poll_listener_events(&mut self.scratch);
-        let mut scratch = std::mem::take(&mut self.scratch);
-        for event in scratch.drain(..) {
-            let AdmissionEvent {
-                representative_peer: peer,
-                logical_peer,
-                event,
-            } = event;
-            match event {
-                ConnectionEvent::Connected => {
-                    let stream_id = self
-                        .owner
-                        .listener_peer_mut(logical_peer)
-                        .and_then(|entry| entry.stream_id().map(str::to_owned))
-                        .unwrap_or_default();
-                    self.peers += 1;
-                    self.live.insert(logical_peer);
-                    self.addrs.insert(logical_peer, peer);
-                    self.pending_events.push_back(SrtIngressEvent::Connected {
-                        peer,
-                        logical_peer: self.session(logical_peer),
-                        stream_id,
-                    });
-                }
-                ConnectionEvent::DataReceived { payload, .. } => {
-                    if let Some(Some(probe)) = self
-                        .contain_peer_media(logical_peer, |ingress, stats| {
-                            ingress.on_payload(logical_peer, payload, stats)
-                        })
-                    {
-                        self.pending_events.push_back(SrtIngressEvent::Probe {
-                            logical_peer: self.session(logical_peer),
-                            probe,
-                        });
-                    }
-                }
-                ConnectionEvent::Disconnected { reason } => {
-                    self.pending_events
-                        .push_back(SrtIngressEvent::Disconnected {
-                            peer,
-                            logical_peer: self.session(logical_peer),
-                            reason: reason.to_string(),
-                        });
-                    // Forward, then retire: the terminal peer never stays
-                    // resident, and the id cannot be reused.
-                    self.retire(logical_peer);
-                }
-                ConnectionEvent::StateChanged(_)
-                | ConnectionEvent::Error(_)
-                | ConnectionEvent::KeyRefreshNeeded { .. } => {}
-            }
-        }
-        self.scratch = scratch;
-        let elapsed_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
-        let stats = &self.stats.ingress_owner;
-        stats.media_work_us.fetch_add(elapsed_us, Ordering::Relaxed);
-        stats
-            .media_pass_max_us
-            .fetch_max(elapsed_us, Ordering::Relaxed);
-        if elapsed_us > 5_000 {
-            stats.media_slow_passes_5ms.fetch_add(1, Ordering::Relaxed);
-            if elapsed_us > 20_000 {
-                stats.media_slow_passes_20ms.fetch_add(1, Ordering::Relaxed);
-            }
-        }
     }
 
     fn events_has_room(&self) -> bool {
