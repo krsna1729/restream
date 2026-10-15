@@ -119,7 +119,9 @@ pub(super) fn encrypted(key: &str, passphrase: &str, pbkeylen: i32) -> SrtIngest
     )
 }
 
-/// A free UDP port (bound and released; nothing else in the test binds it).
+/// A port that was free when probed. The probe socket is released, so a
+/// parallel test can take the port before the caller binds; `TestServer::start`
+/// retries on a fresh port for exactly that reason.
 pub(super) fn free_port() -> u16 {
     std::net::UdpSocket::bind("127.0.0.1:0")
         .expect("bind")
@@ -137,34 +139,54 @@ pub(super) struct TestServer {
 
 impl TestServer {
     pub(super) async fn start(auth_keys: &[&str], entries: Vec<SrtIngestPolicyEntry>) -> Self {
-        let engine = Arc::new(MediaEngine::new());
-        let store = Arc::new(SrtIngestPolicyStore::new(
-            SrtGlobalIngestConfig::default(),
-            &entries,
-        ));
-        let server = Arc::new(SrtServer::new(
-            TestAuth::new(auth_keys),
-            engine.clone(),
-            Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG)),
-            store,
-        ));
-        let port = free_port();
-        let task = tokio::spawn(server.clone().run(port));
-        let ready = engine.listener_stats_handle();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !ready.bonding_available.load(Ordering::Relaxed) {
-            assert!(
-                Instant::now() < deadline,
-                "the SRT listener did not become ready"
-            );
-            tokio::time::sleep(Duration::from_millis(10)).await;
+        // `free_port` releases its probe socket before the server binds, so a
+        // parallel test can take the port in between. A listener that exits
+        // early is retried on a fresh port; `SrtServer::run` logs its own start
+        // error, so the panic below only reports that the attempts ran out.
+        let mut last_error = None;
+        for _ in 0..3 {
+            let engine = Arc::new(MediaEngine::new());
+            let store = Arc::new(SrtIngestPolicyStore::new(
+                SrtGlobalIngestConfig::default(),
+                &entries,
+            ));
+            let server = Arc::new(SrtServer::new(
+                TestAuth::new(auth_keys),
+                engine.clone(),
+                Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG)),
+                store,
+            ));
+            let port = free_port();
+            let task = tokio::spawn(server.clone().run(port));
+            let ready = engine.listener_stats_handle();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !ready.bonding_available.load(Ordering::Relaxed) {
+                if task.is_finished() {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "the SRT listener did not become ready"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            if ready.bonding_available.load(Ordering::Relaxed) {
+                return Self {
+                    server,
+                    engine,
+                    remote: SocketAddr::from(([127, 0, 0, 1], port)),
+                    task,
+                };
+            }
+            last_error = Some(match task.await {
+                Ok(()) => "the listener stopped before it was ready".to_string(),
+                Err(error) => error.to_string(),
+            });
         }
-        Self {
-            server,
-            engine,
-            remote: SocketAddr::from(([127, 0, 0, 1], port)),
-            task,
-        }
+        panic!(
+            "the SRT listener did not become ready on three ports; see the logged start error ({})",
+            last_error.unwrap_or_default()
+        );
     }
 
     pub(super) async fn stop(self) {

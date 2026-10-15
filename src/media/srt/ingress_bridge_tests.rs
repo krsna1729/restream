@@ -31,9 +31,8 @@ async fn owner_runs_publisher_media_to_completion_without_losing_payloads() {
         &entries,
     ));
     let stats = Arc::new(crate::media::snapshots::ListenerSocketStats::default());
-    let port = free_port();
     let mut handle = SrtIngressHandle::start(IngressConfig {
-        bind: SocketAddr::from(([127, 0, 0, 1], port)),
+        bind: SocketAddr::from(([127, 0, 0, 1], 0)),
         policy_store: store,
         receiver_group: ReceiverGroupId::generate(),
         stats: stats.clone(),
@@ -119,6 +118,12 @@ async fn two_owners_share_the_port_and_each_session_command_reaches_its_owner() 
     ));
     let stats = Arc::new(crate::media::snapshots::ListenerSocketStats::default());
     let mut handle = SrtIngressHandle::start(IngressConfig {
+        // A multi-Owner listener rejects port 0 ("a multi-Owner listener needs
+        // an explicit port so every Owner binds a known one"), so this test
+        // keeps `free_port`. The probe socket is released before the bind, so a
+        // parallel test can take the port: that fails the bind against a plain
+        // socket, or lets another `SO_REUSEPORT` group join and split
+        // datagrams.
         bind: SocketAddr::from(([127, 0, 0, 1], free_port())),
         policy_store: store,
         receiver_group: ReceiverGroupId::generate(),
@@ -266,7 +271,7 @@ async fn start_quality_owner(
     ));
     let stats = Arc::new(crate::media::snapshots::ListenerSocketStats::default());
     let handle = SrtIngressHandle::start(IngressConfig {
-        bind: SocketAddr::from(([127, 0, 0, 1], free_port())),
+        bind: SocketAddr::from(([127, 0, 0, 1], 0)),
         policy_store: store,
         receiver_group: ReceiverGroupId::generate(),
         stats: stats.clone(),
