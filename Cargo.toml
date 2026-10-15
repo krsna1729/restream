@@ -77,7 +77,15 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 url = "2"
 percent-encoding = "2"
 shiguredo_mp4 = "2026.5.0"
-# srt-rs main b59bcf1 (PR #157: available parallelism is read once per
+# srt-rs main 9b20d51 (PR #171: the poll-path duplicate keeps close-on-exec, so
+# a Compio SRT Owner socket no longer leaks into every child process the engine
+# spawns later; PR #164: discarded listener datagrams are charged to the visit
+# budget; PR #162: a received DATA payload above the constant 1484-byte ceiling
+# is dropped and counted rather than acted on, and the connection stays up;
+# PRs #165-#170: the peer-group, CONCLUSION-admission, Backup retirement and
+# re-eligibility, ACK-authority and payload-separation test suites; PR #160: the
+# teardown-tail probe example; PR #161: the loss-bitmap word budget is declared
+# and debug-asserted; PR #157: available parallelism is read once per
 # process and explicit worker counts are used as given, so callers prepared
 # on threads pinned apart still share one Owner; PR #156: per-source limits
 # charge an IPv6 /64 and a
@@ -103,8 +111,8 @@ shiguredo_mp4 = "2026.5.0"
 # with `Owner::listen_planned`.
 # PR #159: segmented receive payloads and explicit Owner-local retirement.
 # Ingress consumes original chunks; both native Owners drive reclamation.
-srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "4827487d23f830faa39f29d43cd36fde2d710ca3" }
-srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "4827487d23f830faa39f29d43cd36fde2d710ca3", features = ["compio"] }
+srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "9b20d515805aa2d920ffa2d84fd8061310779910" }
+srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "9b20d515805aa2d920ffa2d84fd8061310779910", features = ["compio"] }
 # Bounded shard command channel with both blocking and Future-based receive, so
 # a backend that owns a thread-affine completion runtime can await commands
 # alongside its own I/O without a second wake source.
