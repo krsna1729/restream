@@ -13,11 +13,11 @@ use tracing::debug;
 
 pub const DEFAULT_AVIO_QUEUE_CAPACITY: usize = 512 * 1024;
 
-// 512 KB absorbs bursts between the async TS reader and the blocking SRT/RTMP
-// sender thread. Scale-test evidence: max per-queue HWM = 398 KB at 8 Mb/s
-// across all config×bitrate combinations, 0 blocked_writes throughout.
-// Operators running very high latency links (> 1 s) can raise this with
-// RESTREAM_AVIO_QUEUE_CAPACITY (bytes).
+// 512 KB is the pre-cutover default: it absorbed bursts between the async TS
+// reader and the blocking SRT/RTMP sender threads that used this queue then
+// (scale-test evidence: max per-queue HWM = 398 KB at 8 Mb/s across all
+// config×bitrate combinations, 0 blocked_writes throughout). Recording is the
+// only user left; operators can raise it with RESTREAM_AVIO_QUEUE_CAPACITY.
 
 fn default_avio_queue_capacity() -> usize {
     DEFAULT_AVIO_QUEUE_CAPACITY

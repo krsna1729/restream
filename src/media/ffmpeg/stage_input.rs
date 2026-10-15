@@ -458,8 +458,10 @@ mod tests {
             refill.refill(&mut out)
         });
         // The ring holds no data and has no parked-waiter signal, so the
-        // sleep only gives the thread time to enter refill; the assertion
-        // below is what proves it is still waiting when the cancel arrives.
+        // sleep only gives the thread time to enter refill. The assertion
+        // guards that refill does not return while the ring is empty: it
+        // proves refill had not returned when the cancel arrives, not that
+        // the cancel landed after the wait began.
         std::thread::sleep(std::time::Duration::from_millis(20));
         assert!(!reader.is_finished(), "refill returned before cancellation");
         cancel.cancel();

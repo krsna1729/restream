@@ -22,6 +22,7 @@ items).
 - [Q-049 silent SRT leaves](#q-049-resilience-opus-find-why-connected-srt-leaves-sent-nothing-under-host-overload)
 - [Q-050 inputs and stages in runtime state](#q-050-architecture-sonnet-project-inputs-and-stages-into-the-runtime-state)
 - [Q-051 bounded ingress transfer pump](#q-051-architecture-sonnet-bound-the-ingress-transfer-pump-per-owner-visit)
+- [Q-052 dead stage input-queue telemetry](#q-052-architecture-sonnet-delete-or-fill-the-dead-stage-input-queue-telemetry)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -325,3 +326,25 @@ items).
   per-visit cap, and the counted bound is on outstanding transfers rather than
   on a replenished drain. Pre-existing, not introduced by #324.
 - Status: open (Filed: 2026-10-15 by claude, from the #324 review).
+
+### Q-052 [architecture] [sonnet] Delete or fill the dead stage input-queue telemetry
+- Goal: status, graph and measure stop reporting a stage input queue that no
+  longer exists.
+- Files: `src/media/stage_registry_access.rs` (`register_input_queue`,
+  `remove_input_queue`), `src/media/engine_registries.rs:313` (the
+  `input_queue: Option<Arc<MemoryQueue>>` field),
+  `src/media/stage_runtime.rs:120`, `src/api_runtime_views/measure.rs`
+  (`stage_input_queue_len_bytes`, `stage_input_queue_high_water_bytes`, the
+  aggregate at `:90`), `src/api_runtime_views/graph.rs:161`,
+  `src/api_runtime_views/telemetry.rs:134`.
+- Evidence: raised in the restream#325 review, which deleted the `MemoryQueue`
+  refill path this field described. `register_input_queue` has no production
+  caller - its only callers are `registry_tests.rs`, `measure_tests.rs:62` and
+  `telemetry.rs:449` - and both runtime constructors set `input_queue: None`
+  (`stage_runtime.rs:120`, `stage_registry_access.rs:71`), so `graph.rs:161`,
+  `measure.rs:90` and `telemetry.rs:134` read a field that is always empty in
+  production.
+- Gates: the graph/measure/telemetry unit tests assert the field is gone, or
+  report the stdin writer's real depth; `scripts/check/api-drift.mjs` and
+  `cargo xtask api-contract` if a view field is removed.
+- Status: open (Filed: 2026-10-15 by claude, from the #325 review).
