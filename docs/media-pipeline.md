@@ -550,22 +550,24 @@ bond fails the output explicitly.
 
 ## SRT ingress owner
 
-The SRT listener is one owner thread (`srt-in-<port>`), with one production
-Compio runtime (forced io_uring, no fallback) and one
-`srt_transport::compio::Owner` attached with `Owner::listen_with_resolver`.
-The runtime's managed-RX capability is observed but deliberately not installed
-on ingress: the pinned srt-rs integration treats a surfaced transient
-provided-buffer-exhaustion error (`ENOBUFS`) as an owner RX-stream fault.
-Without the substrate, `ManagedPreferred` selects raw readiness inside the
-working io_uring runtime. The pinned upstream listener drains bounded
-`recvmmsg` batches, with `recvfrom` for the residual byte-budget tail.
-This is not a per-datagram Tokio bridge or a transport-runtime fallback.
+The SRT listener is one owner thread per seat (`srt-in-<port>`): one thread by
+default, or K members of one `SO_REUSEPORT` group
+(`RESTREAM_SRT_INGRESS_OWNERS`), each with one production Compio runtime
+(forced io_uring, no fallback) and one `srt_transport::compio::Owner` attached
+with `Owner::listen_planned` for its own `owner_plans` entry and the ingress
+resolver. Every such Owner installs the managed-RX substrate observed from its
+own runtime (`Owner::set_rx_substrate`) and runs `ManagedPreferred`: multishot
+provided-buffer receive where the host supports it, raw readiness otherwise.
+Transient provided-buffer pressure (`ENOBUFS`/`ResourceBusy`) is counted
+(`rxBufferExhaustions`), never promoted to an RX-stream fault. The pinned
+upstream listener drains bounded `recvmmsg` batches, with `recvfrom` for the
+residual byte-budget tail. This is not a per-datagram Tokio bridge or a
+transport-runtime fallback.
 
-The Owner owns the socket, `PeerTable`, handshake admission, timers, ACK/NAK,
+The Owner owns its socket, `PeerTable`, handshake admission, timers, ACK/NAK,
 listener TX and every peer's send/disconnect/retire. There is no second protocol
-table on Tokio. Ingress does not provision the previously described managed
-provided-buffer ring; egress's separately qualified managed-RX policy is
-independent.
+table on Tokio. Egress's separately qualified managed-RX policy is independent
+of any one ingress Owner's.
 
 - **Admission** is synchronous on the owner thread: the resolver reads the
   `SrtIngestPolicyStore` (mode validation, `UNAUTHORIZED`/`BAD_MODE`/
@@ -580,10 +582,25 @@ independent.
   publisher demux/publication and diagnostic reader playback stay on the Owner.
   Backpressure on the lifecycle bridge retains unaccepted events; it does not
   introduce a per-packet media handoff through Tokio.
-- **Retirement.** A terminal `Disconnected` is forwarded and the peer is removed
+- **Fragmented messages stay chunked.** `ReceivedPayload` keeps message metadata
+  and original packet order without flattening. One fixed-capacity 64-slot
+  Owner-local work list holds events, chunk cursors and their cancellation
+  retirements. A pass consumes at most 64 chunks, with a 16-chunk slice per
+  cursor, and separately reclaims at most 64 original packet slots. The same
+  work slot follows a message into retirement; no second garbage queue is added.
+  Lifecycle-bridge backpressure pauses media/event delivery but not reclamation.
+  Events apply in queue order: the first event a visit cannot apply (full
+  bridge, live cursor, spent media budget) holds every later event of that
+  visit, so a terminal event can never overtake an accepted payload still
+  queued ahead of it.
+- **Retirement.** A terminal `Disconnected` is forwarded and the peer is unrouted
   from the Owner; a locally disconnected peer is retired after its terminal event
-  or a 500 ms grace. Stale commands for a retired `LogicalPeerId` are harmless and
-  counted (`staleCommands`).
+  or a 500 ms grace. Pending application cursors are cancelled in place.
+  Protocol storage remains on that Owner for action-budgeted reclamation, and
+  its admission/window-payload credits stay charged until reclamation completes.
+  Stale commands for a retired `LogicalPeerId` remain harmless and counted
+  (`staleCommands`). Reclamation counts do not impose a hard allocator/kernel
+  CPU-time limit, and the payload-window budget is not a total RSS bound.
 - **Owner fault** stops admission, reports `Fault` to Tokio and ends the thread;
   there is no rebuild on another runtime. Shutdown flushes SHUTDOWN datagrams and
   runs `Owner::shutdown_and_drain`; the verdict is logged, never assumed.

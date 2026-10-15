@@ -550,6 +550,10 @@ impl SrtShardBackend {
                     AddressFamily::V6
                 };
                 self.fail_family(family);
+                // A faulted Owner never runs protocol maintenance again, so
+                // retiring callers into it would retain their windows and
+                // report runnable work forever. Dispose the family once.
+                self.owners.dispose_faulted(family);
             }
         }
         // Activity may have opened send windows: re-examine a bounded,

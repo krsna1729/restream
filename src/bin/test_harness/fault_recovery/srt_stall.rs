@@ -484,22 +484,26 @@ async fn srt_egress_srt_rs_receiver_delivery() -> Result<Value, String> {
     )
     .await?;
 
-    // Healthy siblings publish into restream's own SRT ingest, the same
-    // shape the dead-sink isolation case uses, so no second sink process is
-    // needed to judge neighbor health.
+    // Independent receivers provide the sibling oracle before and after the
+    // target's logical retirement; sender counters alone cannot prove delivery.
     let mut sibling_output_ids = Vec::with_capacity(SRT_RS_RECEIVER_SIBLING_OUTPUTS);
+    let mut sibling_sinks = Vec::with_capacity(SRT_RS_RECEIVER_SIBLING_OUTPUTS);
     for index in 0..SRT_RS_RECEIVER_SIBLING_OUTPUTS {
         let sink_name = format!("srt-rs-receiver-healthy-sink-{index:02}");
-        create_pipeline(&api, &sink_name).await?;
+        let sibling_port = sink_port
+            .checked_add(index as u16 + 1)
+            .ok_or("sibling srt-rs receiver port range overflowed")?;
+        let sibling_sink = RawSrtSink::start(sibling_port)?;
         let oid = create_output(
             &api,
             &pid,
             &format!("srt-rs-receiver-healthy-{index:02}"),
-            &harness_srt_output_url(ports.srt, &sink_name, HarnessSrtMode::Publish),
+            &harness_srt_output_url(sibling_sink.port(), &sink_name, HarnessSrtMode::Publish),
             "source",
         )
         .await?;
         sibling_output_ids.push(oid);
+        sibling_sinks.push(sibling_sink);
     }
 
     let mut pub_child = spawn_publisher(
@@ -586,13 +590,48 @@ async fn srt_egress_srt_rs_receiver_delivery() -> Result<Value, String> {
 
     let sibling_progress =
         wait_for_outputs_live_and_progressing(&api, &pid, &sibling_output_ids, timeout).await;
+    stop_mixed_outputs(&api, &pid, std::slice::from_ref(&bad_oid)).await;
+    let retirement_deadline = Instant::now() + timeout;
+    let mut retired_output_stopped = false;
+    let mut sibling_receivers_progressed = false;
+    while Instant::now() < retirement_deadline {
+        if let Ok((status, _)) = api.get_output_status(&pid, &bad_oid).await
+            && status.status == "stopped"
+        {
+            retired_output_stopped = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    // Start fresh receiver counters only after the target is observably stopped.
+    let sibling_events_before: Vec<_> = sibling_sinks
+        .iter()
+        .map(|sink| sink.observe().data_events)
+        .collect();
+    let mut sibling_events_after = sibling_events_before.clone();
+    while retired_output_stopped && Instant::now() < retirement_deadline {
+        for (after, sink) in sibling_events_after.iter_mut().zip(&sibling_sinks) {
+            *after = sink.observe().data_events;
+        }
+        sibling_receivers_progressed = sibling_events_after
+            .iter()
+            .zip(&sibling_events_before)
+            .all(|(after, before)| after > before);
+        if sibling_receivers_progressed {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     let sink_final = sink.observe();
     let final_output = observe_final_output(&api, &pid, &bad_oid).await;
-
-    let passed = sink_final.accepted >= 1 && sink_final.data_events > 0 && sibling_progress.is_ok();
+    let passed = sink_final.accepted >= 1
+        && sink_final.data_events > 0
+        && sibling_progress.is_ok()
+        && retired_output_stopped
+        && sibling_receivers_progressed;
 
     println!(
-        "[fault] SRT egress srt-rs receiver delivery: {} (sinkAccepted={} dataEvents={} sawBackpressured={} connectedWhileBackpressured={} sawStalled={} enteredRetryCycle={} reasons={:?} bytesBeforeReceiverDelivery={} siblings={} siblingProgress={} contentionBurners={} loadavgBefore={} loadavgDuring={} loadavgAfter={} dropsFirst={:?} dropsLast={:?} elapsed={:.1}s)",
+        "[fault] SRT egress srt-rs receiver delivery: {} (sinkAccepted={} dataEvents={} sawBackpressured={} connectedWhileBackpressured={} sawStalled={} enteredRetryCycle={} reasons={:?} bytesBeforeReceiverDelivery={} siblings={} siblingProgress={} contentionBurners={} loadavgBefore={} loadavgDuring={} loadavgAfter={} dropsFirst={:?} dropsLast={:?} retiredOutputStopped={} siblingReceiversProgressed={} elapsed={:.1}s)",
         if passed { "PASS" } else { "FAIL" },
         sink_final.accepted,
         sink_final.data_events,
@@ -610,14 +649,18 @@ async fn srt_egress_srt_rs_receiver_delivery() -> Result<Value, String> {
         loadavg_after.map_or_else(|| "n/a".to_string(), |v| format!("{v:.2}")),
         observation.drops_first,
         observation.drops_last,
+        retired_output_stopped,
+        sibling_receivers_progressed,
         watch_elapsed.as_secs_f64(),
     );
 
-    stop_mixed_outputs(&api, &pid, std::slice::from_ref(&bad_oid)).await;
     stop_mixed_outputs(&api, &pid, &sibling_output_ids).await;
     stop_child(&mut pub_child).await;
     stop_child(&mut child).await;
     sink.stop();
+    for sibling in sibling_sinks {
+        sibling.stop();
+    }
 
     Ok(json!({
         "test": "srt-egress-srt-rs-receiver-delivery",
@@ -641,6 +684,10 @@ async fn srt_egress_srt_rs_receiver_delivery() -> Result<Value, String> {
         "srtRsSink": sink_final.to_json(),
         "siblingProgress": sibling_progress.as_ref().ok().cloned(),
         "siblingProgressError": sibling_progress.err(),
+        "retiredOutputStopped": retired_output_stopped,
+        "siblingReceiverDataBeforeRetirement": sibling_events_before,
+        "siblingReceiverDataAfterRetirement": sibling_events_after,
+        "siblingReceiversProgressedAfterRetirement": sibling_receivers_progressed,
         "status": final_output.status.clone().unwrap_or(Value::Null),
         "healthOutput": final_output.health.clone(),
     }))

@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use futures_util::future::{Either, pending, select};
-use srt_proto::Timestamp;
+use srt_proto::{PayloadRetirement, Timestamp};
 use srt_transport::advanced::caller::{
     CallerEvent, CallerGroupFault, LogicalCallerId, LogicalCallerState, LogicalCallerStats,
     PoolEvent, PoolOutcome, PoolRequestId,
@@ -28,8 +28,8 @@ use srt_transport::advanced::caller::{
 use srt_transport::advanced::driver::OutputDrainBudget;
 use srt_transport::advanced::sink::TxAttribution;
 use srt_transport::compio::{
-    CompioProductionProfile, ManagedRxSubstrate, Owner, OwnerFault, OwnerRxMode,
-    OwnerServiceBudget, ProductionRuntimeConfig, RxModePolicy, TxFailureClass, TxFailureEvent,
+    CompioProductionProfile, ManagedRxSubstrate, Owner, OwnerFault, OwnerServiceBudget,
+    ProductionRuntimeConfig, RxModePolicy, TxFailureClass, TxFailureEvent,
     observe_production_runtime, production_runtime_builder,
 };
 
@@ -37,6 +37,9 @@ use crate::media::egress::command::EgressCommand;
 use crate::media::egress::metrics::{OwnerFamilyMetrics, ShardMetrics};
 use crate::media::egress::shard::EgressShardIdleWake;
 use crate::media::srt::{AddressFamily, SrtConnectKind, SrtConnectRequest, SrtSendResult};
+
+mod dispose;
+use self::dispose::{Disposing, FamilyClosure};
 
 /// Default concurrent datagram sends per family Owner (its TX pool and lane
 /// count, "K"); `RESTREAM_SRT_EGRESS_TX_CAPACITY` overrides it. The retired
@@ -262,6 +265,7 @@ struct FamilyOwner {
     /// The selected receive mode was logged once, when the Owner attached.
     attach_logged: bool,
     counters: FamilyCounters,
+    retired_payloads: std::collections::VecDeque<PayloadRetirement>,
 }
 
 struct ClosingCaller {
@@ -274,6 +278,12 @@ struct ClosingCaller {
 /// the tasks they own) drop before the runtime that runs them.
 pub(crate) struct SrtOwners {
     owners: [Option<FamilyOwner>; AddressFamily::COUNT],
+    /// Families closed by a fault: the recorded fault keeps admission refused
+    /// and the last metrics row visible after the Owner is gone.
+    closed: [Option<FamilyClosure>; AddressFamily::COUNT],
+    /// Closed families whose Owner has not yet reached quiescence. They are
+    /// driven and retried on service visits, never serviced as live Owners.
+    disposing: [Option<Disposing>; AddressFamily::COUNT],
     closing: std::collections::VecDeque<ClosingCaller>,
     pool_scratch: Vec<PoolEvent>,
     caller_scratch: Vec<CallerEvent>,
@@ -321,6 +331,8 @@ impl SrtOwners {
         );
         Ok(Self {
             owners: [None, None],
+            closed: [None, None],
+            disposing: [None, None],
             closing: std::collections::VecDeque::new(),
             pool_scratch: Vec::with_capacity(EVENT_DRAIN),
             caller_scratch: Vec::with_capacity(EVENT_DRAIN),
@@ -351,7 +363,7 @@ impl SrtOwners {
     }
 
     pub(crate) fn has_owner(&self) -> bool {
-        self.owners.iter().any(Option::is_some)
+        self.owners.iter().any(Option::is_some) || self.disposing.iter().any(Option::is_some)
     }
 
     #[cfg(test)]
@@ -360,7 +372,10 @@ impl SrtOwners {
     }
 
     #[cfg(test)]
-    pub(crate) fn rx_mode(&self, family: AddressFamily) -> Option<OwnerRxMode> {
+    pub(crate) fn rx_mode(
+        &self,
+        family: AddressFamily,
+    ) -> Option<srt_transport::compio::OwnerRxMode> {
         self.owners[family.index()].as_ref()?.owner.rx_mode()
     }
 
@@ -377,6 +392,7 @@ impl SrtOwners {
             .map_err(|error| error.to_string())?;
         Ok(FamilyOwner {
             owner,
+            retired_payloads: std::collections::VecDeque::with_capacity(EVENT_DRAIN),
             fault_reported: false,
             attach_logged: false,
             counters: FamilyCounters::default(),
@@ -390,6 +406,12 @@ impl SrtOwners {
     pub(crate) fn connect(&mut self, request: SrtConnectRequest) -> Result<PoolOutcome, String> {
         self.assert_home_thread();
         let index = request.family.index();
+        if let Some(closed) = self.closed[index].as_ref() {
+            return Err(format!(
+                "SRT {:?} Owner is faulted ({}); no new callers are admitted",
+                request.family, closed.fault
+            ));
+        }
         if self.owners[index].is_none() {
             self.owners[index] = Some(self.new_family_owner()?);
         }
@@ -501,7 +523,7 @@ impl SrtOwners {
             .and_then(|logical| logical.state())
             == Some(LogicalCallerState::Connected);
         if !established {
-            drop(family_owner.owner.remove_caller(caller.id));
+            family_owner.owner.retire_caller(caller.id);
             return;
         }
         if let Some(mut logical) = family_owner.owner.logical_caller_mut(&caller.id) {
@@ -518,7 +540,7 @@ impl SrtOwners {
     /// that never connected, a stale queued admission).
     pub(crate) fn remove_now(&mut self, caller: &SrtCaller) {
         if let Some(family_owner) = self.owners[caller.family.index()].as_mut() {
-            drop(family_owner.owner.remove_caller(caller.id));
+            family_owner.owner.retire_caller(caller.id);
         }
     }
 
@@ -549,7 +571,7 @@ impl SrtOwners {
                 }
             };
             if done {
-                drop(family_owner.owner.remove_caller(entry.id));
+                family_owner.owner.retire_caller(entry.id);
             } else {
                 self.closing.push_back(entry);
             }
@@ -633,6 +655,7 @@ impl SrtOwners {
             }
         });
         self.reap_closing();
+        self.drive_disposals();
         summary
     }
 
@@ -680,8 +703,20 @@ impl SrtOwners {
                     PoolEvent::Queued { .. } | PoolEvent::Cancelled { .. } => {}
                 }
             }
-            owner.poll_caller_events(&mut self.caller_scratch);
-            more |= self.caller_scratch.len() >= cap;
+            let mut reclaimed = 0;
+            while reclaimed < cap {
+                let Some(retired) = family_owner.retired_payloads.front_mut() else {
+                    break;
+                };
+                reclaimed += retired.reclaim(cap - reclaimed);
+                if retired.is_complete() {
+                    family_owner.retired_payloads.pop_front();
+                }
+            }
+            let available = cap.saturating_sub(family_owner.retired_payloads.len());
+            owner.poll_caller_events_bounded(available, &mut self.caller_scratch);
+            more |= !family_owner.retired_payloads.is_empty()
+                || (available != 0 && self.caller_scratch.len() >= available);
             for event in self.caller_scratch.drain(..) {
                 match event.event {
                     srt_proto::ConnectionEvent::Connected => out.push(SrtOwnerEvent::Connected {
@@ -693,6 +728,13 @@ impl SrtOwners {
                             family,
                             caller: event.id,
                         });
+                    }
+                    srt_proto::ConnectionEvent::DataReceived { payload, .. } => {
+                        let retired = payload.retire();
+                        if !retired.is_complete() {
+                            family_owner.retired_payloads.push_back(retired);
+                            more = true;
+                        }
                     }
                     _ => {}
                 }
@@ -742,6 +784,13 @@ impl SrtOwners {
         for family_owner in self.owners.iter_mut().flatten() {
             wait_us = wait_us.min(family_owner.owner.time_until_next_deadline(now, default_us));
         }
+        // A pending disposal retry is a wake of its own: the park must end when
+        // the attempt is due, not only on Owner protocol deadlines.
+        let wall = Instant::now();
+        for disposing in self.disposing.iter().flatten() {
+            let wait = disposing.next_attempt().saturating_duration_since(wall);
+            wait_us = wait_us.min(u64::try_from(wait.as_micros()).unwrap_or(u64::MAX));
+        }
         Duration::from_micros(wait_us).min(max_wait)
     }
 
@@ -756,6 +805,10 @@ impl SrtOwners {
     ) -> EgressShardIdleWake {
         self.assert_home_thread();
         let wait = self.park_bound(max_wait);
+        // A pending disposal must get a ready visit when its retry comes due:
+        // the park already ends there (see `park_bound`), and that end is a
+        // reason to service, not idleness.
+        let disposal_pending = self.disposing.iter().any(Option::is_some);
         let [v4, v6] = &mut self.owners;
         self.runtime.block_on(async {
             let command = pin!(async {
@@ -768,7 +821,11 @@ impl SrtOwners {
             let activity_v6 = pin!(owner_activity(v6.as_mut(), wait));
             let timeout = pin!(async {
                 compio::time::sleep(wait).await;
-                EgressShardIdleWake::Timeout
+                if disposal_pending {
+                    EgressShardIdleWake::BackendActivity
+                } else {
+                    EgressShardIdleWake::Timeout
+                }
             });
             // Commands are polled first so they win ties.
             first_ready(
@@ -791,10 +848,14 @@ impl SrtOwners {
         self.log_final_counters();
         while let Some(entry) = self.closing.pop_front() {
             if let Some(family_owner) = self.owners[entry.family.index()].as_mut() {
-                drop(family_owner.owner.remove_caller(entry.id));
+                family_owner.owner.retire_caller(entry.id);
             }
         }
         let mut all = true;
+        // Families whose teardown is still in flight get one bounded attempt
+        // under the shard's own reserve; the runtime is destroyed with the
+        // shard, which releases anything that attempt could not.
+        self.shutdown_disposals(timeout, &mut all);
         let owners = &mut self.owners;
         let incomplete = &mut self.shutdown_incomplete;
         self.runtime.block_on(async {
@@ -861,56 +922,13 @@ impl SrtOwners {
         metrics.srt_managed_rx_available = self.substrate.is_available();
         metrics.srt_owner_shutdown_incomplete = self.shutdown_incomplete;
         for (index, slot) in self.owners.iter().enumerate() {
-            let Some(family_owner) = slot.as_ref() else {
-                metrics.srt_owners[index] = OwnerFamilyMetrics::default();
-                continue;
-            };
-            let owner = &family_owner.owner;
-            let counters = &family_owner.counters;
-            let tx = owner.tx_pool_snapshot();
-            let pool = owner.caller_pool_stats().unwrap_or_default();
-            let rx = owner.rx_stats().caller;
-            metrics.srt_owners[index] = OwnerFamilyMetrics {
-                present: true,
-                faulted: owner.fault().is_some(),
-                managed_rx: owner.rx_mode() == Some(OwnerRxMode::ManagedMultishot),
-                tx_capacity: tx.capacity as u32,
-                tx_free: tx.free as u32,
-                tx_high_water: tx.high_water as u32,
-                tx_exhaustions: tx.exhaustions,
-                tx_in_flight: owner.tx_in_flight() as u32,
-                tx_failures_dropped: owner.tx_failures_dropped(),
-                rx_packets: counters.rx_packets,
-                rx_bytes: counters.rx_bytes,
-                tx_packets: counters.tx_packets,
-                tx_bytes: counters.tx_bytes,
-                tx_class: counters.tx_class,
-                tx_batching: owner.tx_batching(),
-                tx_completed_ok: counters.completed_ok,
-                tx_short_sends: counters.short_sends,
-                tx_failed_sends: counters.failed_sends,
-                tx_peer_local_failures: counters.peer_local_failures,
-                tx_transient_failures: counters.transient_failures,
-                protocol_output_failures: counters.protocol_output_failures,
-                caller_in_flight_hwm: counters.caller_in_flight_hwm,
-                caller_queued_hwm: counters.caller_queued_hwm,
-                caller_queue_longest_us: counters.caller_queue_longest_us,
-                service_visits: counters.service_visits,
-                service_duration_sum_us: counters.service_duration_sum_us,
-                service_duration_max_us: counters.service_duration_max_us,
-                service_budget_exhausted: counters.budget_exhausted_visits,
-                service_actions: counters.service_actions,
-                maintenance_actions: counters.maintenance_actions,
-                peer_group_collisions: counters.peer_group_collisions,
-                caller_in_flight: pool.in_flight as u32,
-                caller_queued: pool.queued as u32,
-                caller_expired: pool.expired,
-                caller_failed: pool.failed,
-                caller_cancelled: pool.cancelled,
-                rx_ring_depth: rx.map_or(0, |stats| stats.depth as u32),
-                rx_ring_dropped: rx.map_or(0, |stats| stats.dropped),
-                rx_buffer_exhaustions: rx.map_or(0, |stats| stats.buffer_exhaustions),
-                rx_truncated: rx.map_or(0, |stats| stats.truncated),
+            metrics.srt_owners[index] = match slot.as_ref() {
+                Some(family_owner) => family_owner.metrics(),
+                // A closed family keeps its last row, so the fault and the
+                // final counters stay visible after the Owner is gone.
+                None => self.closed[index]
+                    .as_ref()
+                    .map_or_else(OwnerFamilyMetrics::default, |closed| closed.metrics),
             };
         }
     }

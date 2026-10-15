@@ -236,12 +236,17 @@ surface already covers it.
   - `external_1080p_stage_remuxes_marker_fixture_with_monotone_dts`
 - `src/media/hls/`
   - `hls_segment_boundaries_preserve_non_decreasing_dts_per_stream`
-- `src/media/srt/ingress_owner.rs`, `ingress_bridge.rs`, `ingress_admission.rs`,
-  `ingress_quality.rs`, `ingress_live_tests.rs`, `ingress_bridge_tests.rs`
+- `src/media/srt/ingress_owner.rs`, `ingress_owner_payload.rs`, `ingress_bridge.rs`,
+  `ingress_admission.rs`, `ingress_quality.rs`, `ingress_live_tests.rs`,
+  `ingress_bridge_tests.rs`
   (the SRT ingress owner thread: one Compio runtime, one listener `Owner`,
   bounded `LogicalPeerId` command/event bridges)
   - `read_play_sends_through_the_owner_and_target_deletion_disconnects`
   - `asynchronous_rejection_disconnects_the_owner_peer`
+  - `fragmented_publisher_panic_retires_tail_without_stalling_an_existing_sibling`
+    (a 5.14 MiB fragmented message over real UDP, a pre-existing healthy publisher,
+    one shared ingress Owner, and cancellation of the unconsumed tail; 2 s SRT
+    playout allows the message's fragments to arrive before Live late-drop)
   - `event_bridge_saturation_never_loses_accepted_media`
   - `command_bridge_saturation_never_loses_reader_fragments`
   - `owner_samples_receive_quality_and_forgets_retired_peers`
@@ -249,6 +254,11 @@ surface already covers it.
   - `one_ingress_thread_serves_many_peers_and_tokio_has_no_peer_table`
   - `owner_and_runtime_are_not_send`
   - `media::srt::ingress_admission::tests`
+  The existing `lib-srt-ingress-owner` namespace step in
+  `crates/xtask/src/concurrency.rs` includes the new lifecycle regression; no
+  duplicate test step is needed. `fault.srt-output-stall` also requires the
+  retired output to become observably stopped, then takes fresh counters from
+  two independent sibling SRT receivers and requires both to advance.
 - `src/media/rtmp/listener.rs`
   - `compio_rtmp_listener_shutdown_joins_acceptor_and_session_workers`
     (cancellation drops accepted bridges and joins every registered listener

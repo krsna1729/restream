@@ -2,6 +2,7 @@ mod allocation;
 mod architecture;
 mod bonded;
 mod connect_lifecycle;
+mod fault_disposal;
 mod idle_shutdown;
 mod lifecycle_close;
 mod peer_group;
