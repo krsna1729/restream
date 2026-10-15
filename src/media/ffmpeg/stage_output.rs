@@ -8,10 +8,11 @@ use crate::media::stage_metrics::StageMetrics;
 
 use super::timeline::{NormalizedTs, StageTimeline};
 
-/// Shared output normalizer for FFmpeg-backed stages.
+/// Output normalizer for FFmpeg-backed stages.
 ///
-/// Nothing writes directly to a `RingBuffer`: the external transcoder and the
-/// stage runtime emit packets through `StageOutputNormalizer`, which handles:
+/// No FFmpeg stage writes directly to its output ring: the stage runtime
+/// builds this normalizer and the external transcoder's stdout reader emits
+/// every demuxed packet through it, which handles:
 ///
 /// - Timestamp normalization to a shared stage-local epoch.
 /// - DTS monotonicity enforcement per output stream.

@@ -543,7 +543,7 @@ pub(crate) async fn wait_for_stage_metadata(
     }
 }
 
-/// Build a backend-neutral FFmpeg plan from a stage key and source ring.
+/// Build the FFmpeg stage plan from a stage key and source ring.
 /// Returns `None` for stages that are not FFmpeg-backed (e.g. pure audio-router).
 pub fn build_ffmpeg_stage_plan(
     key: &StageKey,

@@ -1,7 +1,7 @@
 //! Typed stage plan for FFmpeg-backed stages.
 //!
-//! This is the narrow waist between the planner and the execution backend:
-//! the external (child-process) transcoder consumes the plan so it does not
+//! This is the narrow waist between the stage runtime, which builds it, and
+//! the external (child-process) transcoder, which consumes it so it does not
 //! parse stringified stage keys or preset names itself.
 
 use crate::domain::stage::StageKey;
@@ -93,7 +93,7 @@ impl Default for TimelinePolicy {
     }
 }
 
-/// Backend-neutral plan for a single FFmpeg stage.
+/// Typed plan for a single FFmpeg stage.
 #[derive(Clone, Debug)]
 pub struct FfmpegStagePlan {
     pub stage_key: StageKey,
