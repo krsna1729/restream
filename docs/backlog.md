@@ -362,7 +362,7 @@ items).
 - Evidence (mapped 2026-10-15): one external FFmpeg child runs per live unique
   FFmpeg-backed `StageKey`, and every destination shares it
   (`stage_runtime.rs:62-100`, `engine_pipeline.rs:90-125`,
-  `external_transcoder.rs:5-8,24-31`). The FFmpeg-backed kinds are more than
+  `external_transcoder.rs:5-10,26-33`). The FFmpeg-backed kinds are more than
   video presets: a video preset per codec variant (`video_preset` and
   `video_preset_with_codec` are distinct stages, `encoding_stage_plan.rs:40-47`),
   a HEVC-to-H.264 codec edge (`output_path.rs:131,170-176`), a non-lightweight

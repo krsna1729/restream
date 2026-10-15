@@ -4,7 +4,7 @@
 //!
 //! The external transcoder is a **shared stage** in the media graph, not a
 //! per-output process. One FFmpeg subprocess is spawned per live FFmpeg-backed
-//! `StageKey` (`planner::stage_backend::select_backend`): a video preset per
+//! `StageKey` (`planner::select_backend`): a video preset per
 //! codec variant, the HEVC-to-H.264 codec edge, non-lightweight audio routes
 //! and the HEVC preview bridge. All egress outputs that request the same stage
 //! on the same pipeline read from the shared output ring buffer.
@@ -25,7 +25,8 @@
 //!
 //! # Passthrough
 //!
-//! `source` encodings never enter the transcoder stage. Legacy `custom`
+//! `source` encodings never enter a video-preset stage; on HEVC ingest, an
+//! H.264-only destination still goes through the codec edge. Legacy `custom`
 //! output rows also fall through as passthrough, but output create/update now
 //! rejects new custom output encodings until custom FFmpeg args are applied.
 //!
