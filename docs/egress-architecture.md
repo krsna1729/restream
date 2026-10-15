@@ -624,8 +624,12 @@ shard OS thread
   and lifecycle timers.
 - **Faults.** A peer-local or transient TX failure is attributed to one caller
   (and leg) and never faults anything else. A structural Owner fault retires the
-  leaves on that family and stops admission there; the sibling family keeps
-  running.
+  leaves on that family, then tears that family Owner down
+  (`shutdown_and_drain` under the shard's reserve) and drops it: a faulted
+  Owner never runs the maintenance that reclaims retirements, so its retained
+  caller windows must not outlive the fault. Admission stays closed on that
+  family for the life of the shard, its last metrics row stays visible, and the
+  sibling family keeps running.
 - **Shutdown.** Leaves flush inside the shard drain window minus a small
   reserve; each instantiated Owner is then torn down with
   `shutdown_and_drain`, proving no send in flight, a whole TX pool, joined lanes

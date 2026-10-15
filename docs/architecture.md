@@ -125,12 +125,14 @@ diagnostic direct-RTMP-play request/reply scheduler; neither is migrated here.
   if io_uring is unavailable.
 - SRT egress runs on fixed Compio shard threads with at most one `srt-rs`
   Compio `Owner` per address family and a shared caller UDP socket per Owner.
-  SRT ingress runs on one dedicated Compio/io_uring owner thread and one
-  `Owner::listen_with_resolver`; Tokio addresses sessions only by
-  `LogicalPeerId` through bounded commands and events. Ingress observes the
-  managed-RX capability but does not install that substrate: pinned srt-rs
-  treats transient managed-ring `ENOBUFS` as a terminal RX-stream failure, so
-  ingress remains on raw readiness until that failure is retryable. Egress
+  SRT ingress runs on one dedicated Compio/io_uring owner thread per seat (K
+  members of one `SO_REUSEPORT` group when `RESTREAM_SRT_INGRESS_OWNERS` asks
+  for more), each attaching one `Owner::listen_planned` plan with the ingress
+  resolver; Tokio addresses sessions only by `LogicalPeerId` through bounded
+  commands and events. Every ingress Owner installs the managed-RX substrate
+  observed from its own runtime and runs `ManagedPreferred`: provided-buffer
+  multishot where the host supports it, raw readiness otherwise. Transient
+  provided-buffer `ENOBUFS` pressure is counted, not an RX-stream fault. Egress
   retains its independently qualified managed RX path.
   Ingest media (TS demux, input gate, timestamps, standby GOP, and ring publication)
   runs to completion inline on the Owner thread without a per-packet Tokio hop.

@@ -20,6 +20,26 @@ pub(super) enum PayloadWork {
     Retired(PayloadRetirement),
 }
 
+/// One visit's event-order discipline. Events apply in queue order, so the
+/// first event a visit cannot apply blocks every later event of that visit:
+/// a terminal event can never overtake a payload the visit already accepted
+/// but has not yet consumed, even when the media budget is spent before that
+/// payload's own event is reached. Cursors and retirements are independent of
+/// the latch and keep running.
+#[derive(Debug, Default)]
+struct EventOrder {
+    blocked: bool,
+}
+
+impl EventOrder {
+    /// Whether this event may be applied now. `needs_defer` is the event's own
+    /// reason to wait (full bridge, live cursor, exhausted media budget).
+    fn step(&mut self, needs_defer: bool) -> bool {
+        self.blocked |= needs_defer;
+        !self.blocked
+    }
+}
+
 impl OwnerLoop {
     /// Protocol service continues every turn. Large application messages are
     /// consumed in packet chunks here, without flattening or a Tokio handoff.
@@ -41,6 +61,7 @@ impl OwnerLoop {
         let visits = self.payload_work.len();
         let mut media_left = MEDIA_CHUNKS_PER_VISIT;
         let mut reclaim_left = RECLAIM_ACTIONS_PER_VISIT;
+        let mut order = EventOrder::default();
         for _ in 0..visits {
             let Some(work) = self.payload_work.pop_front() else {
                 break;
@@ -61,15 +82,15 @@ impl OwnerLoop {
                     }
                 }
                 PayloadWork::Event(event) => {
-                    if self.pending_events.len() >= PENDING_EVENTS_MAX
+                    let needs_defer = self.pending_events.len() >= PENDING_EVENTS_MAX
                         || (!self.active_payloads.is_empty()
                             && self.active_payloads.contains(&event.logical_peer))
                         || (media_left == 0
-                            && matches!(event.event, ConnectionEvent::DataReceived { .. }))
-                    {
-                        self.payload_work.push_back(PayloadWork::Event(event));
-                    } else {
+                            && matches!(event.event, ConnectionEvent::DataReceived { .. }));
+                    if order.step(needs_defer) {
                         self.apply_received_event(event, &mut media_left);
+                    } else {
+                        self.payload_work.push_back(PayloadWork::Event(event));
                     }
                 }
             }
@@ -228,5 +249,30 @@ impl OwnerLoop {
             *work = PayloadWork::Retired(retired);
         }
         self.active_payloads.remove(&peer);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EventOrder;
+
+    /// A payload the visit cannot afford is requeued, and its peer's terminal
+    /// event follows it in the same visit. Applying that event immediately
+    /// retires the accepted payload and drops accepted media.
+    #[test]
+    fn a_deferred_event_defers_every_later_event_of_its_visit() {
+        let mut order = EventOrder::default();
+        assert!(!order.step(true), "the unaffordable payload waits");
+        assert!(
+            !order.step(false),
+            "a terminal event must not overtake the payload queued ahead of it"
+        );
+    }
+
+    #[test]
+    fn an_unblocked_visit_applies_every_event() {
+        let mut order = EventOrder::default();
+        assert!(order.step(false), "nothing queued requires a wait");
+        assert!(order.step(false), "the latch never engages on its own");
     }
 }

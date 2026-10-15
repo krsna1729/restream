@@ -21,6 +21,7 @@ items).
 - [Q-047 MoQ](#q-047-protocol-opus-moq-interop-spike-parked)
 - [Q-049 silent SRT leaves](#q-049-resilience-opus-find-why-connected-srt-leaves-sent-nothing-under-host-overload)
 - [Q-050 inputs and stages in runtime state](#q-050-architecture-sonnet-project-inputs-and-stages-into-the-runtime-state)
+- [Q-051 bounded ingress transfer pump](#q-051-architecture-sonnet-bound-the-ingress-transfer-pump-per-owner-visit)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -306,3 +307,21 @@ items).
   a poll.
 - Status: open (Filed: 2026-10-13 by claude, the follow-up Q-042 named when
   it closed at the FE7 cut).
+
+### Q-051 [architecture] [sonnet] Bound the ingress transfer pump per Owner visit
+- Goal: one Owner turn cannot be postponed by peer-controlled work.
+  `accept_transfers` drains its inbox until empty; srt-rs bounds what one
+  sender queues (its handshake queue per sender, one transfer per live
+  relocated session), but a continuously refilled inbox is not bounded, so
+  protocol service, media and payload reclamation wait behind an unbounded
+  number of accepted transfers.
+- Files: `src/media/srt/ingress_owner.rs` (`accept_transfers`), the transfer
+  senders in `src/media/srt/ingress_bridge.rs`.
+- Gates: a visit-budget case that a refilled inbox cannot extend one Owner turn
+  past its action allowance, plus a case that the cap adds no latency while the
+  inbox is short (the existing `!inbox.is_empty()` busy predicate already
+  schedules the continuation).
+- Evidence: raised in the restream#324 review (finding 4): the pass has no
+  per-visit cap, and the counted bound is on outstanding transfers rather than
+  on a replenished drain. Pre-existing, not introduced by #324.
+- Status: open (Filed: 2026-10-15 by claude, from the #324 review).
