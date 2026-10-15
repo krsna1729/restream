@@ -126,6 +126,14 @@ dedicated threads.
 The process boundary has a process-start cost and pipe traffic, but isolates
 codec failure and avoids blocking the async scheduler.
 
+One child runs per live unique FFmpeg-backed stage, and every destination shares
+it: the child count follows a pipeline's renditions and codec edges, not its
+destination count (measured cost and per-child CPU: `resource-sweep.md`,
+"Per-rendition FFmpeg child cost"). Merging several renditions into one child
+would put every merged destination in one codec failure domain, which "Sharing
+and isolation" forbids; it needs an explicit failure-isolation gate and an owner
+decision.
+
 ## Measurement workflow
 
 The benchmark targets declared in `Cargo.toml` and implemented under `benches/`
