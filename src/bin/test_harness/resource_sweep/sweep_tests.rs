@@ -66,7 +66,25 @@ fn peer_instance_ports_offset_from_instance_zero() {
     let env = test_env();
     // Instance 0 always matches the pre-existing single-mediamtx ports.
     assert_eq!(peer_instance_ports(&env, 0), (1936, 1937, 8891, 9997));
-    assert_eq!(peer_instance_ports(&env, 3), (1939, 1940, 8894, 10000));
+    assert_eq!(peer_instance_ports(&env, 3), (1948, 1949, 8903, 10009));
+}
+
+#[test]
+fn peer_instance_ports_never_collide_across_instances() {
+    let env = test_env();
+    // `mtx_rtmp` and `mtx_rtmps` are adjacent (1936/1937 by default), so a
+    // one-per-instance offset gives instance 1's RTMP port the value of
+    // instance 0's RTMPS port and the second listener fails to bind.
+    let mut seen = std::collections::BTreeMap::new();
+    for index in 0..env.peer_count {
+        let (rtmp, rtmps, srt, api) = peer_instance_ports(&env, index);
+        for (role, port) in [("rtmp", rtmp), ("rtmps", rtmps), ("srt", srt), ("api", api)] {
+            let current = (index, role);
+            if let Some(previous) = seen.insert(port, current) {
+                panic!("port {port} is used by {previous:?} and {current:?}");
+            }
+        }
+    }
 }
 
 #[test]

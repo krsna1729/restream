@@ -5,12 +5,21 @@ use std::path::{Path, PathBuf};
 
 use super::{ResourceSweepEnv, SweepConfig, SweepOutputKind};
 
+/// Offset per peer instance, in ports.
+///
+/// The stride must keep the four bands apart: `mtx_rtmp` and `mtx_rtmps` are
+/// adjacent by default (1936/1937), so an offset of one per instance makes
+/// instance 1's RTMP port the value of instance 0's RTMPS port and the second
+/// listener fails to bind (`peer_instance_ports_never_collide_across_instances`
+/// pins the default layout).
+const PEER_PORT_STRIDE: u16 = 4;
+
 /// Ports for peer instance `index` (0-based): each of `mtx_rtmp`/`mtx_rtmps`/
-/// `mtx_srt`/`mtx_api` offset by `index`. Instance 0 always matches the
-/// pre-existing single-mediamtx ports, so `peer_count == 1` is byte-identical
-/// to prior behavior.
+/// `mtx_srt`/`mtx_api` offset by `index * PEER_PORT_STRIDE`. Instance 0 always
+/// matches the pre-existing single-mediamtx ports, so `peer_count == 1` is
+/// byte-identical to prior behavior.
 pub(super) fn peer_instance_ports(env: &ResourceSweepEnv, index: usize) -> (u16, u16, u16, u16) {
-    let offset = index as u16;
+    let offset = (index as u16).saturating_mul(PEER_PORT_STRIDE);
     (
         env.mtx_rtmp.wrapping_add(offset),
         env.mtx_rtmps.wrapping_add(offset),
