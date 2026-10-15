@@ -129,13 +129,13 @@ fn format_msr_report(
          with {enhanced_rtmp_outputs} Enhanced RTMP / {srt_outputs} SRT, \
          1080p30 H.264 passthrough, {proof_phrase}).\n\n"
     );
-    report.push_str("| Outputs | Egress mix | MediaMTX ready | MediaMTX bytes delta | CPU avg % | CPU peak % | RSS peak | AVIO HWM peak | Samples |\n");
-    report.push_str("|---:|---|---:|---:|---:|---:|---:|---:|---:|\n");
+    report.push_str("| Outputs | Egress mix | MediaMTX ready | MediaMTX bytes delta | CPU avg % | CPU peak % | RSS peak | Samples |\n");
+    report.push_str("|---:|---|---:|---:|---:|---:|---:|---:|\n");
     for aggregate in aggregates {
         let resource = &aggregate.resource;
         let (ready, expected, bytes_delta) = checkpoint_ready_summary(aggregate);
         report.push_str(&format!(
-            "| {} | {} | {}/{} | {} | {:.1} | {:.1} | {} | {} | {} |\n",
+            "| {} | {} | {}/{} | {} | {:.1} | {:.1} | {} | {} |\n",
             resource.outputs,
             resource.egress_mix,
             ready,
@@ -144,7 +144,6 @@ fn format_msr_report(
             resource.total_cpu_avg_pct,
             resource.total_cpu_peak_pct,
             human_kib(resource.rss_peak_kb),
-            human_kib(resource.avio_hwm_peak_kb),
             resource.sample_count,
         ));
     }

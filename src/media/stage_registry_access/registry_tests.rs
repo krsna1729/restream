@@ -3,59 +3,12 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use crate::domain::stage::{StageKey, StageKind};
-use crate::media::avio::MemoryQueue;
 use crate::media::engine::MediaEngine;
 use crate::media::pipe_metrics::PipeMetrics;
 use crate::media::stage_lifecycle::{StageBackendKind, StagePhase};
 
 fn test_key() -> StageKey {
     StageKey::new("pipe-a", StageKind::source())
-}
-
-#[tokio::test]
-async fn register_input_queue_is_noop_when_runtime_missing() {
-    let engine = MediaEngine::new();
-    let key = test_key();
-    engine
-        .register_input_queue(key.clone(), Arc::new(MemoryQueue::new()))
-        .await;
-    assert!(engine.stages.runtimes.read().await.get(&key).is_none());
-}
-
-#[tokio::test]
-async fn register_and_remove_input_queue_round_trips_on_existing_runtime() {
-    let engine = MediaEngine::new();
-    let key = test_key();
-    engine
-        .get_or_create_non_ring_stage_runtime(
-            key.clone(),
-            StagePhase::Registered,
-            StageBackendKind::ExternalFfmpeg,
-            CancellationToken::new(),
-        )
-        .await;
-
-    engine
-        .register_input_queue(key.clone(), Arc::new(MemoryQueue::new()))
-        .await;
-    assert!(
-        engine.stages.runtimes.read().await[&key]
-            .input_queue
-            .is_some()
-    );
-
-    engine.remove_input_queue(&key).await;
-    assert!(
-        engine.stages.runtimes.read().await[&key]
-            .input_queue
-            .is_none()
-    );
-}
-
-#[tokio::test]
-async fn remove_input_queue_is_noop_when_runtime_missing() {
-    let engine = MediaEngine::new();
-    engine.remove_input_queue(&test_key()).await;
 }
 
 #[tokio::test]

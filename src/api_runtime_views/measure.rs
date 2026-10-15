@@ -25,8 +25,6 @@ pub(crate) struct MeasureSnapshot {
     pub source_ring_payload_bytes: u64,
     pub transcoder_ring_payload_bytes: u64,
     pub ts_muxer_ring_payload_bytes: u64,
-    pub stage_input_queue_len_bytes: u64,
-    pub stage_input_queue_high_water_bytes: u64,
     pub delivery: DeliveryTotals,
 }
 
@@ -63,13 +61,7 @@ pub(crate) async fn measure_snapshot(engine: &MediaEngine, pipelines: usize) -> 
         .values()
         .map(|ring| ring.payload_stats().payload_bytes as u64)
         .sum::<u64>();
-    let (
-        stages,
-        active_transcoder_buffers,
-        transcoder_ring_payload_bytes,
-        queue_len,
-        queue_high_water,
-    ) = {
+    let (stages, active_transcoder_buffers, transcoder_ring_payload_bytes) = {
         // One read of `runtimes` for every stage field, so they agree within
         // a sample. `metrics` nests inside it; no writer takes them reversed.
         let runtimes = engine.stages.runtimes.read().await;
@@ -85,14 +77,7 @@ pub(crate) async fn measure_snapshot(engine: &MediaEngine, pipelines: usize) -> 
             .filter_map(|runtime| runtime.ring.as_ref())
             .map(|ring| ring.payload_stats().payload_bytes as u64)
             .sum::<u64>();
-        let (len, high_water) = runtimes
-            .values()
-            .filter_map(|runtime| runtime.input_queue.as_ref())
-            .map(|queue| queue.stats())
-            .fold((0_u64, 0_u64), |(len, high), stats| {
-                (len + stats.len as u64, high + stats.high_water_bytes as u64)
-            });
-        (stages, runtimes.len(), ring_bytes, len, high_water)
+        (stages, runtimes.len(), ring_bytes)
     };
     let ts_muxer_ring_payload_bytes = engine
         .stages
@@ -136,8 +121,6 @@ pub(crate) async fn measure_snapshot(engine: &MediaEngine, pipelines: usize) -> 
         source_ring_payload_bytes,
         transcoder_ring_payload_bytes,
         ts_muxer_ring_payload_bytes,
-        stage_input_queue_len_bytes: queue_len,
-        stage_input_queue_high_water_bytes: queue_high_water,
         delivery,
     }
 }

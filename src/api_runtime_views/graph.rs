@@ -158,7 +158,6 @@ pub(crate) async fn processing_graph(
             let kind = &key.kind;
             let stage_key_str = kind.to_string();
             let stage_id = kind.graph_node_id(pipeline_id);
-            let queue_stats = runtime.input_queue.as_ref().map(|queue| queue.stats());
             let pipe_stats = runtime
                 .pipe_metrics
                 .as_ref()
@@ -171,7 +170,6 @@ pub(crate) async fn processing_graph(
                 lifecycle_snapshots.get(key),
                 !runtime.cancel.is_cancelled(),
                 Some(serde_json::to_value(runtime.metrics.snapshot()).unwrap_or_default()),
-                queue_stats.map(|stats| serde_json::json!(stats)),
                 pipe_stats,
                 api_view_models::ring_payload_stats_json(ring),
             );

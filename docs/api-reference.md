@@ -1494,9 +1494,8 @@ RSS, thread count, file descriptor count, child FFmpeg count, and active SRT
 sender thread permits, plus egress-fabric shard counters
 (`fabricShardThreadCount`, `fabricShardStalledCount`,
 `fabricShardPanickedCount`) over the shards the response lists. The process
-fields and `retainedPayloadBytes`, `avioQueueLenBytes`,
-`avioQueueCapacityBytes` and `activeTranscoderBuffers` are runtime-wide at
-either scope; the node list, the shard counters and the ingest, stage and
+fields and `retainedPayloadBytes` and `activeTranscoderBuffers` are runtime-wide
+at either scope; the node list, the shard counters and the ingest, stage and
 egress counts follow the scope. Nodes include
 execution ownership (`tokio_task`, `os_thread`, `shard_thread`,
 `child_process`, `shared`, or `process`) plus memory attribution with a
@@ -1565,7 +1564,6 @@ a delivery sample.
   "activeTranscoderBuffers": 0, "ingestBytesReceived": 123456789,
   "retainedPayloadBytes": 4194304, "sourceRingPayloadBytes": 4194304,
   "transcoderRingPayloadBytes": 0, "tsMuxerRingPayloadBytes": 0,
-  "stageInputQueueLenBytes": 0, "stageInputQueueHighWaterBytes": 0,
   "delivery": { "destinations": 500, "rated": 500, "delivered": 500,
                 "ratioMin": 0.97, "jainMin": 0.9999 }
 }

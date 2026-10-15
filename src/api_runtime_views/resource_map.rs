@@ -594,10 +594,6 @@ pub(crate) async fn resource_map(
         .filter(|thread| !thread.is_finished())
         .count() as u64;
     let retained_payload_bytes = number_field(&memory_accounting, "retainedPayloadBytes");
-    let avio_queues = memory_accounting
-        .get("avioQueues")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
 
     let total_node_count = nodes.len();
     let returned_nodes = match options.view {
@@ -650,8 +646,6 @@ pub(crate) async fn resource_map(
             "srtSenderThreadLimit": srt_sender_limit,
             "fdCount": process.fd_count,
             "retainedPayloadBytes": retained_payload_bytes,
-            "avioQueueLenBytes": number_field(&avio_queues, "totalLenBytes"),
-            "avioQueueCapacityBytes": number_field(&avio_queues, "totalCapacityBytes"),
             "activeTranscoderBuffers": number_field(&engine_telemetry, "activeTranscoderBuffers"),
             "ingestCount": ingests.len(),
             "stageCount": stages.len(),

@@ -131,8 +131,6 @@ struct BitrateSweepSample {
     source_ring_kb: u64,
     transcoder_ring_kb: u64,
     tsmux_ring_kb: u64,
-    avio_len_kb: u64,
-    avio_hwm_kb: u64,
     overflow_count: u64,
 }
 
@@ -166,8 +164,6 @@ struct BitrateSweepCase {
     source_ring_peak_kb: u64,
     transcoder_ring_peak_kb: u64,
     tsmux_ring_peak_kb: u64,
-    avio_len_peak_kb: u64,
-    avio_hwm_peak_kb: u64,
     overflow_count_final: u64,
     correctness_ok: bool,
     correctness_failures: Vec<String>,
@@ -496,7 +492,6 @@ async fn sample_bitrate_window(
             .get_json(&format!("/api/v1/pipelines/{pipeline_id}/telemetry"))
             .await?;
         let accounting = &telemetry["memoryAccounting"];
-        let avio = &accounting["avioQueues"];
         let overflow_count = pipeline_telemetry["sourceRing"]["readers"]
             .as_array()
             .map(|readers| {
@@ -546,14 +541,6 @@ async fn sample_bitrate_window(
                 .unwrap_or(&Vec::new())
                 .iter()
                 .map(|ring| ring["payloadStats"]["payloadBytes"].as_u64().unwrap_or(0))
-                .sum::<u64>()
-                / 1024,
-            avio_len_kb: avio["totalLenBytes"].as_u64().unwrap_or(0) / 1024,
-            avio_hwm_kb: avio["inputQueues"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|queue| queue["highWaterBytes"].as_u64().unwrap_or(0))
                 .sum::<u64>()
                 / 1024,
             overflow_count,
@@ -723,16 +710,6 @@ fn summarize_bitrate_case(
             .map(|sample| sample.tsmux_ring_kb)
             .max()
             .unwrap_or(0),
-        avio_len_peak_kb: samples
-            .iter()
-            .map(|sample| sample.avio_len_kb)
-            .max()
-            .unwrap_or(0),
-        avio_hwm_peak_kb: samples
-            .iter()
-            .map(|sample| sample.avio_hwm_kb)
-            .max()
-            .unwrap_or(0),
         overflow_count_final: samples
             .last()
             .map(|sample| sample.overflow_count)
@@ -759,8 +736,6 @@ fn bitrate_sweep_sample_json(sample: &BitrateSweepSample) -> Value {
         "sourceRingKb": sample.source_ring_kb,
         "transcoderRingKb": sample.transcoder_ring_kb,
         "tsmuxRingKb": sample.tsmux_ring_kb,
-        "avioLenKb": sample.avio_len_kb,
-        "avioHwmKb": sample.avio_hwm_kb,
         "overflowCount": sample.overflow_count,
     })
 }
@@ -795,8 +770,6 @@ fn bitrate_sweep_case_json(case: &BitrateSweepCase) -> Value {
         "sourceRingPeakKb": case.source_ring_peak_kb,
         "transcoderRingPeakKb": case.transcoder_ring_peak_kb,
         "tsmuxRingPeakKb": case.tsmux_ring_peak_kb,
-        "avioLenPeakKb": case.avio_len_peak_kb,
-        "avioHwmPeakKb": case.avio_hwm_peak_kb,
         "overflowCountFinal": case.overflow_count_final,
         "correctnessOk": case.correctness_ok,
         "correctnessFailures": case.correctness_failures,
@@ -805,11 +778,11 @@ fn bitrate_sweep_case_json(case: &BitrateSweepCase) -> Value {
 
 fn write_bitrate_sweep_csv(path: &Path, rows: &[BitrateSweepCase]) -> Result<(), String> {
     let mut text = String::from(
-        "config,ingest_proto,video_codec,multi_audio,bitrate_label,bitrate_mbps,output_groups,outputs_total,restream_rss_base_kb,restream_rss_final_kb,restream_rss_delta_kb,restream_rss_peak_kb,ffmpeg_count_peak,ffmpeg_rss_peak_kb,total_rss_peak_kb,restream_cpu_avg_pct,restream_cpu_peak_pct,ffmpeg_cpu_avg_pct,ffmpeg_cpu_peak_pct,total_cpu_avg_pct,total_cpu_peak_pct,retained_payload_min_kb,retained_payload_max_kb,retained_payload_final_kb,retained_growth_kb_per_min,source_ring_peak_kb,transcoder_ring_peak_kb,tsmux_ring_peak_kb,avio_len_peak_kb,avio_hwm_peak_kb,overflow_count_final,correctness_ok\n",
+        "config,ingest_proto,video_codec,multi_audio,bitrate_label,bitrate_mbps,output_groups,outputs_total,restream_rss_base_kb,restream_rss_final_kb,restream_rss_delta_kb,restream_rss_peak_kb,ffmpeg_count_peak,ffmpeg_rss_peak_kb,total_rss_peak_kb,restream_cpu_avg_pct,restream_cpu_peak_pct,ffmpeg_cpu_avg_pct,ffmpeg_cpu_peak_pct,total_cpu_avg_pct,total_cpu_peak_pct,retained_payload_min_kb,retained_payload_max_kb,retained_payload_final_kb,retained_growth_kb_per_min,source_ring_peak_kb,transcoder_ring_peak_kb,tsmux_ring_peak_kb,overflow_count_final,correctness_ok\n",
     );
     for row in rows {
         text.push_str(&format!(
-            "{},{},{},{},{},{:.2},{},{},{},{},{},{},{},{},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{},{},{},{:.2},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{:.2},{},{},{},{},{},{},{},{},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{},{},{},{:.2},{},{},{},{},{}\n",
             csv_escape(&row.config),
             csv_escape(&row.ingest_proto),
             csv_escape(&row.video_codec),
@@ -838,8 +811,6 @@ fn write_bitrate_sweep_csv(path: &Path, rows: &[BitrateSweepCase]) -> Result<(),
             row.source_ring_peak_kb,
             row.transcoder_ring_peak_kb,
             row.tsmux_ring_peak_kb,
-            row.avio_len_peak_kb,
-            row.avio_hwm_peak_kb,
             row.overflow_count_final,
             row.correctness_ok,
         ));

@@ -410,7 +410,6 @@ fn stage_phase_table_is_consistent_for_status_graph_and_alerts() {
             true,
             None,
             None,
-            None,
             json!({}),
         );
 

@@ -129,32 +129,6 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
         .filter_map(|entry| entry["payloadStats"]["payloadBytes"].as_u64())
         .sum::<u64>();
 
-    let avio_input_queues: Vec<serde_json::Value> = runtimes
-        .iter()
-        .filter_map(|(key, runtime)| runtime.input_queue.as_ref().map(|queue| (key, queue)))
-        .map(|(key, queue)| {
-            let stats = queue.stats();
-            api_view_models::avio_input_queue_json(
-                key,
-                stats.len,
-                stats.capacity,
-                stats.high_water_bytes,
-                stats.blocked_writes,
-                stats.blocked_write_us,
-            )
-        })
-        .collect();
-    let avio_total_len_bytes: usize = avio_input_queues
-        .iter()
-        .filter_map(|entry| entry["lenBytes"].as_u64())
-        .map(|value| value as usize)
-        .sum();
-    let avio_total_capacity_bytes: usize = avio_input_queues
-        .iter()
-        .filter_map(|entry| entry["capacityBytes"].as_u64())
-        .map(|value| value as usize)
-        .sum();
-
     api_view_models::engine_telemetry_json(
         generated_at,
         ingest_arr,
@@ -166,9 +140,6 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
             source_rings,
             transcoder_rings,
             ts_muxer_rings,
-            avio_total_len_bytes,
-            avio_total_capacity_bytes,
-            avio_input_queues,
         ),
     )
 }
@@ -407,7 +378,6 @@ mod tests {
         assert!(rows.iter().all(|row| row.jain == Some(1.0)));
     }
     use crate::domain::stage::{StageKey, StageKind};
-    use crate::media::avio::MemoryQueue;
     use crate::media::pipe_metrics::PipeMetrics;
     use crate::media::ring_buffer::RingBuffer;
     use crate::media::stage_lifecycle::StagePhase;
@@ -434,31 +404,6 @@ mod tests {
 
         assert_eq!(telemetry["pipeMetrics"]["stalls"], 1);
         assert_eq!(telemetry["pipeMetrics"]["stallUs"], 1_500);
-    }
-
-    #[tokio::test]
-    async fn engine_telemetry_reads_input_queues_from_stage_runtime() {
-        let engine = Arc::new(MediaEngine::new());
-        let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
-        let manager = StageRuntimeManager::new(engine.clone());
-        let _stage = manager
-            .ensure_stage(key.clone(), Arc::new(RingBuffer::new(4)), None)
-            .await;
-        let input_queue = Arc::new(MemoryQueue::new_with_capacity(128));
-        input_queue.write_sync(b"queued bytes");
-        engine.register_input_queue(key.clone(), input_queue).await;
-
-        let telemetry = engine_telemetry(&engine).await;
-        let queues = telemetry["memoryAccounting"]["avioQueues"]["inputQueues"]
-            .as_array()
-            .expect("input queues should be serialized");
-
-        let queue = queues
-            .iter()
-            .find(|queue| queue["stageKey"] == key.to_string())
-            .expect("runtime input queue should be present");
-        assert_eq!(queue["lenBytes"], b"queued bytes".len() as u64);
-        assert_eq!(queue["capacityBytes"], 128);
     }
 
     #[tokio::test]

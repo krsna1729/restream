@@ -421,8 +421,6 @@ fn report_test_aggregate() -> MsrCheckpointAggregate {
             source_ring_peak_kb: 0,
             transcoder_ring_peak_kb: 0,
             tsmux_ring_peak_kb: 0,
-            avio_len_peak_kb: 0,
-            avio_hwm_peak_kb: 92,
             anonymous_peak_kb: 0,
             private_dirty_peak_kb: 0,
             shared_clean_peak_kb: 0,

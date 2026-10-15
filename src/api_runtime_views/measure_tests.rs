@@ -1,6 +1,5 @@
 use super::*;
 use crate::domain::stage::{StageKey, StageKind};
-use crate::media::avio::MemoryQueue;
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
 use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_runtime::StageRuntimeManager;
@@ -57,9 +56,6 @@ async fn the_snapshot_equals_the_sums_of_the_payloads_it_replaces() {
         .ensure_stage(stage.clone(), Arc::new(RingBuffer::new(4)), None)
         .await;
     handle.ring.push(packet(700));
-    let queue = Arc::new(MemoryQueue::new_with_capacity(128));
-    queue.write_sync(b"queued bytes");
-    engine.register_input_queue(stage, queue).await;
 
     // A stage known only by its metrics (no runtime) still counts as a stage.
     let _ = engine
@@ -131,21 +127,6 @@ async fn the_snapshot_equals_the_sums_of_the_payloads_it_replaces() {
         snapshot.ts_muxer_ring_payload_bytes,
         ring_bytes("tsMuxerRings")
     );
-    assert_eq!(
-        snapshot.stage_input_queue_len_bytes,
-        accounting["avioQueues"]["totalLenBytes"].as_u64().unwrap()
-    );
-    assert_eq!(
-        snapshot.stage_input_queue_len_bytes,
-        b"queued bytes".len() as u64
-    );
-    let high_water = accounting["avioQueues"]["inputQueues"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|queue| queue["highWaterBytes"].as_u64().unwrap())
-        .sum::<u64>();
-    assert_eq!(snapshot.stage_input_queue_high_water_bytes, high_water);
 
     // Delivery: the per-pipeline feed rows, folded as the harness folded them.
     let mut rated = 0;
