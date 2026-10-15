@@ -82,6 +82,7 @@ footer{padding:22px;color:#627d8e;text-align:center;font-size:9px}
 </style>
 </head>
 <body>
+<div style="padding:7px 14px;background:#102331;border-bottom:1px solid #203846;color:#8aa2b2;font-size:11px">Illustrative target experience: the stage input-queue fields depicted in Operate and Inspect ("Input queue", "Blocked writes", "AVIO queue memory") were deleted in #327 and are not reported — they had been dead since the external-only FFmpeg cutover.</div>
 <div class="app">
 <aside class="sidebar">
   <div class="brand"><div class="logo"></div><div><h1>Restream</h1><small>operator control room</small></div></div>
@@ -301,6 +302,7 @@ footer{padding:22px;color:#627d8e;text-align:center;font-size:9px}
               <div class="metric panel" style="box-shadow:none"><div class="label">Average work</div><div class="value">51 µs</div><div class="foot">per input packet</div></div>
             </div>
             <div class="kv" style="margin-top:12px"><span>Lifecycle phase</span><span>running</span><span>Backend</span><span>external FFmpeg</span><span>Backend PID</span><span>44123</span><span>Input queue</span><span>12 / 4096 KiB</span><span>Blocked writes</span><span>0</span><span>Payload retained</span><span>9.2 MiB</span></div>
+            <div class="meta" style="margin-top:6px">Input queue and Blocked writes are not reported by the product (deleted in #327; see the note at the top of this file).</div>
             <div class="evidence good" style="margin-top:12px"><strong>Not a bottleneck</strong><p>Packets in/out are advancing, no queue growth is visible, and child-process CPU remains below its service limit.</p></div>
           </div>
         </div>
@@ -308,7 +310,7 @@ footer{padding:22px;color:#627d8e;text-align:center;font-size:9px}
       <div class="grid g3" style="margin-top:10px">
         <div class="panel"><div class="panel-h"><h3>Source ring</h3><span class="chip good">healthy</span></div><div class="panel-b"><div class="kv"><span>Fill</span><span>37 / 4096</span><span>Estimated depth</span><span>1.46 s</span><span>Readers</span><span>346</span><span>Max reader lag</span><span>42 ms</span><span>Reader overflows</span><span>0</span><span>Retained payload</span><span>18.3 MiB</span></div></div></div>
         <div class="panel"><div class="panel-h"><h3>Egress shard 2</h3><span class="chip good">healthy</span></div><div class="panel-b"><div class="kv"><span>Protocol</span><span>SRT</span><span>Outputs</span><span>39</span><span>Progress age</span><span>2.1 ms</span><span>Command depth</span><span>2 / 1024</span><span>Media ticks</span><span>1.92M</span><span>State</span><span>healthy</span></div></div></div>
-        <div class="panel"><div class="panel-h"><h3>Attribution confidence</h3></div><div class="panel-b"><div class="evidence good"><strong>Measured</strong><p>Process RSS, child-process RSS/CPU, process thread count, FD count.</p></div><div class="evidence" style="margin-top:8px;border-left-color:var(--cyan)"><strong>Derived</strong><p>Ring payload memory, AVIO queue memory, stage processing counters.</p></div><div class="evidence" style="margin-top:8px;border-left-color:#61798a"><strong>Unmeasured</strong><p>Per-shard CPU and shared Tokio-task CPU are not directly attributable yet.</p></div></div></div>
+        <div class="panel"><div class="panel-h"><h3>Attribution confidence</h3></div><div class="panel-b"><div class="evidence good"><strong>Measured</strong><p>Process RSS, child-process RSS/CPU, process thread count, FD count.</p></div><div class="evidence" style="margin-top:8px;border-left-color:var(--cyan)"><strong>Derived</strong><p>Ring payload memory, stage processing counters. (AVIO queue memory is no longer reported — see the note at the top of this file.)</p></div><div class="evidence" style="margin-top:8px;border-left-color:#61798a"><strong>Unmeasured</strong><p>Per-shard CPU and shared Tokio-task CPU are not directly attributable yet.</p></div></div></div>
       </div>
     </section>
 

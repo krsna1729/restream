@@ -330,56 +330,39 @@ items).
 ### Q-053 [architecture] [sonnet] External FFmpeg process topology per rendition
 - Goal: one recorded decision for how many external FFmpeg children a pipeline
   runs, so nobody builds a merged multi-output child without an isolation gate.
-- Files (for a measurement): `src/bin/test_harness/resource_sweep/` scenarios
-  and `docs/resource-sweep.md`. Seams a multi-output arm would change:
-  `src/planner/output_path.rs`, `src/planner/graph_plan.rs`,
-  `src/media/stage_runtime.rs`, `src/media/ffmpeg/stage_plan.rs`,
-  `src/media/external_transcoder.rs`,
-  `src/media/external_transcoder/ffmpeg_process.rs`.
-- Evidence (mapped 2026-10-15): one external FFmpeg child runs per live unique
-  FFmpeg-backed `StageKey`, and every destination shares it
-  (`stage_runtime.rs:62-100`, `engine_pipeline.rs:90-125`,
-  `external_transcoder.rs:5-10,26-34`). The FFmpeg-backed kinds are more than
-  video presets: a video preset per codec variant (`video_preset` and
-  `video_preset_with_codec` are distinct stages, `encoding_stage_plan.rs:40-47`),
-  a HEVC-to-H.264 codec edge (`output_path.rs:131,170-176`), a non-lightweight
-  audio route chained after the video stage (`encoding_stage_plan.rs:51-54`,
-  `output_path.rs:126-138`), and the HEVC preview bridge
-  (`graph_plan.rs:71-80`). For H.264 ingest with no audio routing: 0 children
-  for passthrough, 1 per rendition. "720p auto" and "720p h264" are two
-  children; "720p + remap" is two children in series; a `source` passthrough
-  output on HEVC ingest costs 1, not 0.
-- The arguments builder has three map forms, all into the single output
-  (`ffmpeg_process.rs:324-326`): video only, `-map 0:v:0` (`:224-225`); complex
-  audio, `-filter_complex ... -map 0:v:0? -map [aout]` (`:227-230`); and
-  `-map 0:v:0 -map 0:a?` (`:232-233`). There is no `tee` and no
-  multi-rendition output anywhere in the file; one stdout reader feeds one
-  stage ring (`:82-99`). The "opt-in families" were the per-stage-family
-  backend policy deleted by #279; the harness "families" are renditions
-  (`h264`, `720p`, `1080p`).
-- The alternative and its cost: a multi-output child could only merge several
-  renditions of one pipeline into one process. A crash or stall in that child
-  would take down every destination of every merged rendition -
-  `high-performance-data-path.md:100-102` requires that a stalled or failed
-  destination can lose its own buffered data or restart without stopping the
-  publisher or another destination, and M9 (`runtime-crossings.md:256-257`)
-  rejected Q-033 on exactly this ground: one shared execution unit let a
-  structural fault fail both feeds. (`:123-127`, "isolates codec failure",
-  speaks only for the parent/child boundary; a merged child still keeps codec
-  failure out of the server.) Any such arm needs an explicit failure-isolation
-  gate and an owner decision.
-- Gates (measurement only): committed numbers come from release binaries
-  (`cargo xtask build-release` -> `target/qual-release/`; `capacity-ramp`
-  `CAPACITY_BUILD_PROFILE=release`), never `build-bench`. Run the harness with
-  `HARNESS_BIN=target/qual-release/test_harness`, `RESTREAM_BIN` likewise and
-  `BENCH_BUILD=never` - otherwise `scripts/harness/run.sh:29-45,78-93` triggers
-  a `cargo xtask build-bench` whenever its bench binary is older than the
-  sources, which is a Cargo build immediately before measuring, and then still
-  runs the release binary. Require `target/qual-release/COMMIT` (`bins.rs:81`)
-  to match HEAD. The open measurement covers the fixed per-rendition child cost
-  (historical about 166 MB per 720p child, `resource-sweep.md:230-231`), child
-  CPU at 720p/1080p/mixed, and the chained cases: preset plus audio route, and
-  the HEVC codec edge.
-- Status: open (Filed: 2026-10-15 by claude. The former board item "FFmpeg
-  A/B: external per-stage vs external multi-output" cannot be run as written:
-  the second arm does not exist).
+- Decided and recorded: one child per live unique FFmpeg-backed `StageKey`,
+  shared by every destination, so the child count follows a pipeline's
+  FFmpeg-backed stages rather than its destinations
+  (`high-performance-data-path.md`, "Native and child-process boundaries"). A
+  merged multi-output child would put every merged destination in one codec
+  failure domain, which "Sharing and isolation" forbids, so it needs an explicit
+  failure-isolation gate and an owner decision.
+- Measured (2026-10-15, release binaries at `1f4e0a34`, 1/5/10 egress counts):
+  `docs/resource-sweep.md`, "Per-rendition FFmpeg child cost". One child carried
+  1 to 20 outputs, two carried 4 to 60, and total child RSS stayed flat (186.6 to
+  186.7 MB across 2/10/20 outputs; 422.3 to 422.9 MB across 4/20/40).
+- Resolved: `egress-growth-hevc-bridge` runs `configIndex: 2` (HEVC SRT ingest)
+  with `outputKinds: ["rtmpSource"]`, and `SweepOutputKind::RtmpSource` is
+  `RtmpOutputMode::Enhanced` (`resource_sweep/catalog.rs:102`). Enhanced RTMP
+  carries HEVC, so the output resolves to HEVC, `needs_h264_codec_edge` is false
+  (`output_path.rs:170-176`), and 0 children is what the code predicts. The
+  earlier claim that "a `source` passthrough output on HEVC ingest costs 1, not
+  0" holds only when the destination resolves to H.264.
+- Open: two cases no scenario exercises. Both are one JSON line, because the
+  catalog kinds already exist:
+  - the non-lightweight audio route: `RtmpSourceDownmix`/`SrtSourceDownmix`
+    (`source+downmix:0`, `resource_sweep/catalog.rs:89`) exist and no scenario
+    uses them. The route chains after `Source`, so this is one child, not two in
+    series; two in series would need a preset plus a route, which no catalog
+    kind produces.
+  - the HEVC-to-H.264 codec edge (`output_path.rs:131,170-176`): needs HEVC
+    ingest (`configIndex: 2`) with an H.264-only kind - `rtmpsSource` or
+    `hlsPut`, the `Legacy` modes (`catalog.rs:103-105`).
+- Gates (measurement only): release binaries (`cargo xtask build-release` ->
+  `target/qual-release/`, provenance `COMMIT` matching HEAD), `HARNESS_BIN` and
+  `RESTREAM_BIN` pointing at them with `BENCH_BUILD=never` so
+  `scripts/harness/run.sh` cannot trigger a `cargo xtask build-bench`
+  immediately before measuring, and `--no-netns` on this host (no `unshare`).
+- Status: open (Filed: 2026-10-15 by claude; the cost measurement closed
+  2026-10-15. The former board item "FFmpeg A/B: external per-stage vs external
+  multi-output" cannot be run as written: the second arm does not exist).
