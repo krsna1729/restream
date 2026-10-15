@@ -88,9 +88,10 @@ pub(crate) fn harness_port_defaults() -> HarnessPortDefaults {
 }
 
 /// `PEER_COUNT` as read by the allocator, before `ResourceSweepEnv` exists:
-/// the MTX bands must be reserved before any peer starts. A missing or invalid
-/// value falls back to one instance; the sweep config reports it as an error
-/// when it parses the same variable.
+/// the MTX bands must be reserved before any peer starts. A missing, zero or
+/// non-numeric value falls back to one instance, matching `ResourceSweepEnv`
+/// (`env_usize("PEER_COUNT", 1)`); a count too large for a port band is rejected
+/// by `validate_peer_instance_ports` when the env is built.
 fn peer_count_from_env() -> u16 {
     std::env::var("PEER_COUNT")
         .ok()

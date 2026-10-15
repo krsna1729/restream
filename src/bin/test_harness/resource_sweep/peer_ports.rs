@@ -28,24 +28,38 @@ pub(super) fn peer_instance_ports(env: &ResourceSweepEnv, index: usize) -> (u16,
 /// binding the wrong listener; the collision test calls it too, so the test
 /// exercises the same code production runs.
 ///
-/// `mtx_hls` is deliberately absent: it has no per-instance ports, so it cannot
-/// collide with a strided band.
+/// The ports come from `peer_instance_ports` - the mapping the listeners bind -
+/// so a stride change cannot pass this check while the listeners move with it.
+/// `mtx_hls` is deliberately absent (it has no per-instance ports), and `mtx_srt`
+/// is included even though only the TCP roles can collide on one port: the check
+/// is stricter than the kernel requires and costs nothing.
 pub(super) fn validate_peer_instance_ports(env: &ResourceSweepEnv) -> Result<(), String> {
+    // Overflow precheck for the highest instance, before the mapping's
+    // saturating arithmetic could hide an unrepresentable band.
+    let last = env.peer_count.saturating_sub(1);
+    let max_offset = u16::try_from(last)
+        .ok()
+        .and_then(|last| last.checked_mul(PEER_PORT_STRIDE))
+        .ok_or_else(|| format!("peer instance {last} overflows the port band"))?;
+    for (role, base) in [
+        ("mtx_rtmp", env.mtx_rtmp),
+        ("mtx_rtmps", env.mtx_rtmps),
+        ("mtx_srt", env.mtx_srt),
+        ("mtx_api", env.mtx_api),
+    ] {
+        base.checked_add(max_offset)
+            .ok_or_else(|| format!("peer instance {last} {role} overflows a port number"))?;
+    }
+
     let mut seen: Vec<(u16, usize, &'static str)> = Vec::new();
     for index in 0..env.peer_count {
-        let offset = u16::try_from(index)
-            .ok()
-            .and_then(|index| index.checked_mul(PEER_PORT_STRIDE))
-            .ok_or_else(|| format!("peer instance {index} overflows the port band"))?;
-        for (role, base) in [
-            ("mtx_rtmp", env.mtx_rtmp),
-            ("mtx_rtmps", env.mtx_rtmps),
-            ("mtx_srt", env.mtx_srt),
-            ("mtx_api", env.mtx_api),
+        let (rtmp, rtmps, srt, api) = peer_instance_ports(env, index);
+        for (role, port) in [
+            ("mtx_rtmp", rtmp),
+            ("mtx_rtmps", rtmps),
+            ("mtx_srt", srt),
+            ("mtx_api", api),
         ] {
-            let port = base
-                .checked_add(offset)
-                .ok_or_else(|| format!("peer instance {index} {role} overflows a port number"))?;
             if let Some((_, previous_index, previous_role)) =
                 seen.iter().find(|(candidate, _, _)| *candidate == port)
             {
