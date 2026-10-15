@@ -3,9 +3,11 @@
 //! # Architecture
 //!
 //! The external transcoder is a **shared stage** in the media graph, not a
-//! per-output process. One FFmpeg subprocess is spawned per (pipeline, preset)
-//! pair. All egress outputs that request the same encoding on the same pipeline
-//! read from the shared output ring buffer.
+//! per-output process. One FFmpeg subprocess is spawned per live FFmpeg-backed
+//! `StageKey` (`planner::stage_backend::select_backend`): a video preset per
+//! codec variant, the HEVC-to-H.264 codec edge, non-lightweight audio routes
+//! and the HEVC preview bridge. All egress outputs that request the same stage
+//! on the same pipeline read from the shared output ring buffer.
 //!
 //! ```text
 //! source_ring
