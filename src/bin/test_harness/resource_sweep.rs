@@ -63,7 +63,7 @@ mod peer_ports;
 mod thread_cpu;
 use peer_ports::{instance_suffixed_path, peer_instance_ports, resource_output_url};
 #[cfg(test)]
-use peer_ports::{peer_instance_for, srt_url_on_host};
+use peer_ports::{peer_instance_for, srt_url_on_host, validate_peer_instance_ports};
 #[path = "resource_sweep/packet_contract.rs"]
 mod packet_contract;
 #[path = "resource_sweep/packet_contract_peers.rs"]

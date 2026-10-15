@@ -95,12 +95,13 @@ pub(super) struct ResourceSweepEnv {
     pub(super) mtx_rtmps: u16,
     pub(super) mtx_srt: u16,
     pub(super) mtx_api: u16,
-    /// Number of peer (mediamtx or sink) instances, one port range per
-    /// instance starting at `mtx_rtmp`/`mtx_rtmps`/`mtx_srt`/`mtx_api` and
-    /// striding by `PEER_PORT_STRIDE` per instance. Each egress output lands
-    /// on the instance its name hashes to (`peer_instance_for`), so the
-    /// assignment is stable across runs. `PEER_COUNT` (default 1) keeps every
-    /// other resource-sweep scenario on a single instance.
+    /// Number of peer (mediamtx or sink) instances, one port band per instance
+    /// starting at `mtx_rtmp`/`mtx_rtmps`/`mtx_srt`/`mtx_api` and striding by
+    /// `PEER_PORT_STRIDE`. The generic sweep assigns each egress output to the
+    /// instance its name hashes to (`peer_instance_for`); MSR assigns by
+    /// ordinal (`msr_peer_instance`). `PEER_COUNT` (default 1) keeps every
+    /// other resource-sweep scenario on a single instance. The bands are
+    /// validated when the env is built (`validate_peer_instance_ports`).
     pub(super) peer_count: usize,
     /// `MSR_PEER` (default `mediamtx`): which process type backs the peer
     /// instances above.
@@ -150,7 +151,7 @@ impl ResourceSweepEnv {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(default_dir));
         let ports = harness_port_defaults();
-        Ok(Self {
+        let env = Self {
             summary_json: work_dir.join("resource-sweep-results.json"),
             summary_csv: work_dir.join("resource-sweep-results.csv"),
             samples_jsonl: work_dir.join("resource-sweep-samples.jsonl"),
@@ -199,7 +200,9 @@ impl ResourceSweepEnv {
                 _ => None,
             },
             work_dir,
-        })
+        };
+        super::peer_ports::validate_peer_instance_ports(&env)?;
+        Ok(env)
     }
 
     /// The remote sink peers' state endpoints, when SRT outputs are

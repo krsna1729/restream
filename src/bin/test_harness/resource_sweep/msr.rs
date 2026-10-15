@@ -205,7 +205,7 @@ async fn verify_msr_grouped_path_health(
     let groups = msr_group_expected_paths_by_instance(outputs, env.peer_count);
     let mut accumulated: Option<MediaMtxPathHealth> = None;
     for (instance, paths) in groups {
-        let api_port = env.mtx_api + instance as u16;
+        let api_port = msr_api_port(env, instance);
         let health = verify_mediamtx_path_health(api_port, &paths, sample_secs, timeout).await?;
         accumulated = Some(match accumulated {
             None => health,

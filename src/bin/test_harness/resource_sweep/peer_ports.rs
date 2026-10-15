@@ -3,21 +3,15 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::core::PEER_PORT_STRIDE;
+
 use super::{ResourceSweepEnv, SweepConfig, SweepOutputKind};
 
-/// Offset per peer instance, in ports.
-///
-/// The stride must keep the four bands apart: `mtx_rtmp` and `mtx_rtmps` are
-/// adjacent by default (1936/1937), so an offset of one per instance makes
-/// instance 1's RTMP port the value of instance 0's RTMPS port and the second
-/// listener fails to bind (`peer_instance_ports_never_collide_across_instances`
-/// pins the default layout).
-const PEER_PORT_STRIDE: u16 = 4;
-
 /// Ports for peer instance `index` (0-based): each of `mtx_rtmp`/`mtx_rtmps`/
-/// `mtx_srt`/`mtx_api` offset by `index * PEER_PORT_STRIDE`. Instance 0 always
-/// matches the pre-existing single-mediamtx ports, so `peer_count == 1` is
-/// byte-identical to prior behavior.
+/// `mtx_srt`/`mtx_api` offset by `index * PEER_PORT_STRIDE` (see that constant
+/// for the collision invariant). Instance 0 always matches the pre-existing
+/// single-mediamtx ports, so `peer_count == 1` is byte-identical to prior
+/// behavior.
 pub(super) fn peer_instance_ports(env: &ResourceSweepEnv, index: usize) -> (u16, u16, u16, u16) {
     let offset = (index as u16).saturating_mul(PEER_PORT_STRIDE);
     (
@@ -26,6 +20,44 @@ pub(super) fn peer_instance_ports(env: &ResourceSweepEnv, index: usize) -> (u16,
         env.mtx_srt.wrapping_add(offset),
         env.mtx_api.wrapping_add(offset),
     )
+}
+
+/// Every port every peer instance binds, checked for overflow and for two roles
+/// landing on one port. `ResourceSweepEnv` runs this when it is built, so an
+/// explicit `MTX_*` override whose bands overlap fails at startup instead of
+/// binding the wrong listener; the collision test calls it too, so the test
+/// exercises the same code production runs.
+///
+/// `mtx_hls` is deliberately absent: it has no per-instance ports, so it cannot
+/// collide with a strided band.
+pub(super) fn validate_peer_instance_ports(env: &ResourceSweepEnv) -> Result<(), String> {
+    let mut seen: Vec<(u16, usize, &'static str)> = Vec::new();
+    for index in 0..env.peer_count {
+        let offset = u16::try_from(index)
+            .ok()
+            .and_then(|index| index.checked_mul(PEER_PORT_STRIDE))
+            .ok_or_else(|| format!("peer instance {index} overflows the port band"))?;
+        for (role, base) in [
+            ("mtx_rtmp", env.mtx_rtmp),
+            ("mtx_rtmps", env.mtx_rtmps),
+            ("mtx_srt", env.mtx_srt),
+            ("mtx_api", env.mtx_api),
+        ] {
+            let port = base
+                .checked_add(offset)
+                .ok_or_else(|| format!("peer instance {index} {role} overflows a port number"))?;
+            if let Some((_, previous_index, previous_role)) =
+                seen.iter().find(|(candidate, _, _)| *candidate == port)
+            {
+                return Err(format!(
+                    "peer instance {index} {role} and instance {previous_index} {previous_role} \
+                     both use port {port}"
+                ));
+            }
+            seen.push((port, index, role));
+        }
+    }
+    Ok(())
 }
 
 /// Suffix `path` with `-{index}` (before the extension) for `index > 0`,

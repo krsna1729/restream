@@ -1,6 +1,7 @@
 //! Resource-sweep unit tests (scenario needs, ports, URL retargeting).
 
 use super::*;
+use crate::core::PEER_PORT_STRIDE;
 
 /// The multi-host rung path: only the loopback authority is replaced.
 #[test]
@@ -74,17 +75,18 @@ fn peer_instance_ports_never_collide_across_instances() {
     let env = test_env();
     // `mtx_rtmp` and `mtx_rtmps` are adjacent (1936/1937 by default), so a
     // one-per-instance offset gives instance 1's RTMP port the value of
-    // instance 0's RTMPS port and the second listener fails to bind.
-    let mut seen = std::collections::BTreeMap::new();
-    for index in 0..env.peer_count {
-        let (rtmp, rtmps, srt, api) = peer_instance_ports(&env, index);
-        for (role, port) in [("rtmp", rtmp), ("rtmps", rtmps), ("srt", srt), ("api", api)] {
-            let current = (index, role);
-            if let Some(previous) = seen.insert(port, current) {
-                panic!("port {port} is used by {previous:?} and {current:?}");
-            }
-        }
-    }
+    // instance 0's RTMPS port and the second listener fails to bind. This is
+    // the validator `ResourceSweepEnv` runs when it is built.
+    validate_peer_instance_ports(&env).expect("the default peer bands must not collide");
+}
+
+#[test]
+fn peer_instance_ports_reject_a_band_whose_difference_is_a_stride_multiple() {
+    let mut env = test_env();
+    env.mtx_rtmps = env.mtx_rtmp + PEER_PORT_STRIDE;
+    let error =
+        validate_peer_instance_ports(&env).expect_err("an overlapping band must be rejected");
+    assert!(error.contains("both use port"), "unexpected error: {error}");
 }
 
 #[test]
