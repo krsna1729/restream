@@ -313,6 +313,18 @@ function DestinationMatrix(props: {
   /** The output id being edited, "new", or null. */
   const [editing, setEditing] = useState<string | null>(null);
   const { config } = props;
+  /** Stored monitoring URLs by output id: one pass per config, not one
+   * `find` per matrix row. */
+  const monitoringUrls = useMemo(
+    () =>
+      new Map(
+        (config?.outputs ?? []).map((stored) => [
+          stored.id,
+          stored.monitoringUrl ?? "",
+        ]),
+      ),
+    [config],
+  );
   const editedOutput =
     editing && editing !== "new"
       ? (config?.outputs.find((output) => output.id === editing) ?? null)
@@ -371,8 +383,7 @@ function DestinationMatrix(props: {
           <tbody>
             {props.rows.map(({ output, delivering, feedLagUnits }) => {
               const running = output.desired === "running";
-              const monitoringUrl =
-                config?.outputs.find((stored) => stored.id === output.id)?.monitoringUrl ?? "";
+              const monitoringUrl = monitoringUrls.get(output.id) ?? "";
               return (
                 <tr key={output.id}>
                   <td className="font-medium">
