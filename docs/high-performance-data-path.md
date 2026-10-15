@@ -129,8 +129,8 @@ codec failure and avoids blocking the async scheduler.
 One child runs per live unique FFmpeg-backed stage, and every destination shares
 it: the child count follows a pipeline's FFmpeg-backed stages — renditions per
 codec variant, codec edges, heavy audio routes, the HEVC preview bridge — not
-its destination count (measured cost and per-child CPU:
-[resource-sweep.md](resource-sweep.md#per-rendition-ffmpeg-child-cost)).
+its destination count (measured child cost and CPU:
+[resource-sweep.md](resource-sweep.md#per-rendition-ffmpeg-child-cost-2026-10-15)).
 Merging several renditions into one child would put every merged destination in
 one codec failure domain, which "Sharing and isolation" forbids; it needs an
 explicit failure-isolation gate and an owner decision.

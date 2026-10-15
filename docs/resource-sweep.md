@@ -239,33 +239,40 @@ What these numbers say:
 Release binaries at `1f4e0a34` (`cargo xtask build-release`, `target/qual-release/`
 provenance matches HEAD), `scripts/harness/run.sh resource-sweep -- --no-netns`
 (this host has no `unshare`), `MSR_PEER=sink`, `RESOURCE_SWEEP_EGRESS_COUNTS=1,5,10`,
-20 s samples, 6 s settle. The child count is the sampler's FFmpeg child PID set
+20 s samples, 6 s settle. Each point is one 20 s window, so a single point can
+move by 10-20%. The child count is the sampler's FFmpeg child PID set
 (`ffmpegCount` in `resource-sweep-samples.jsonl`), not the stage count, which
-also covers TsMuxer and audio-router stages.
+also covers TsMuxer and audio-router stages. Per-count CPU figures are averages;
+the peaks are in the same columns of the sweep CSV.
 
-| Scenario | Outputs | FFmpeg children | Child RSS MB | Child CPU % (avg/peak) | Restream RSS MB | Threads | Delivered |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Empty baseline | 0 | 0 | 0.0 | 0.0 / 0.0 | 43.9 | 10 | — |
-| Ingest only (RTMP, SRT, HEVC) | 0 | 0 | 0.0 | 0.0 / 0.0 | 44.9–51.0 | 10–11 | — |
-| 720p rendition, one family | 1 / 5 / 10 | 1 | 168.2 / 168.3 / 186.3 | 81.5 / 77.3 / 108.5 | 61.4 / 64.3 / 65.1 | 16 / 15 / 15 | 1 / 5 / 10 |
-| 720p rendition, mixed egress | 2 / 10 / 20 | 1 | 186.6 / 186.7 / 186.7 | 89.6 / 68.9 / 69.5 | 85.1 / 97.3 / 99.6 | 22 / 23 / 23 | 2 / 10 / 20 |
-| 720p + 1080p renditions | 4 / 20 / 40 | 2 | 422.3 / 422.7 / 422.9 | 162.9 / 139.6 / 152.8 | 182.1 / 197.9 / 214.7 | 29 / 29 / 36 | 4 / 20 / 40 |
-| Source + 720p + 1080p | 6 / 30 / 60 | 2 | 417.0 / 417.4 / 417.5 | 122.2 / 129.6 / 114.1 | 196.2 / 212.1 / 242.4 | 33 / 32 / 36 | 6 / 30 / 60 |
-| HEVC bridge | 1 / 5 / 10 | 0 | 0.0 | 0.0 / 0.0 | 58.3 / 59.8 / 60.5 | 12 / 11 / 12 | 1 / 5 / 10 |
+| Scenario | Outputs | FFmpeg children | Children RSS MB | Child CPU avg % | Child CPU peak % | Restream RSS MB | Threads | Delivered |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Empty baseline | 0 | 0 | 0.0 | 0.0 | 0.0 | 43.9 | 10 | — |
+| Ingest only (RTMP, SRT, HEVC) | 0 | 0 | 0.0 | 0.0 | 0.0 | 44.9–51.0 | 10–11 | — |
+| 720p rendition, one family | 1 / 5 / 10 | 1 | 168.2 / 168.3 / 186.3 | 81.5 / 77.3 / 108.5 | 111.8 / 109.4 / 209.2 | 61.4 / 64.3 / 65.1 | 16 / 15 / 15 | 1 / 5 / 10 |
+| 720p rendition, mixed egress | 2 / 10 / 20 | 1 | 186.6 / 186.7 / 186.7 | 89.6 / 68.9 / 69.5 | 133.1 / 95.9 / 115.6 | 85.1 / 97.3 / 99.6 | 22 / 23 / 23 | 2 / 10 / 20 |
+| 720p + 1080p renditions | 4 / 20 / 40 | 2 | 422.3 / 422.7 / 422.9 | 162.9 / 139.6 / 152.8 | 221.2 / 183.6 / 213.4 | 182.1 / 197.9 / 214.7 | 29 / 29 / 36 | 4 / 20 / 40 |
+| Source + 720p + 1080p | 6 / 30 / 60 | 2 | 417.0 / 417.4 / 417.5 | 122.2 / 129.6 / 114.1 | 172.6 / 220.5 / 144.4 | 196.2 / 212.1 / 242.4 | 33 / 32 / 36 | 6 / 30 / 60 |
+| HEVC ingest, Enhanced RTMP source passthrough | 1 / 5 / 10 | 0 | 0.0 | 0.0 | 0.0 | 58.3 / 59.8 / 60.5 | 12 / 11 / 12 | 1 / 5 / 10 |
 
 What these numbers say:
 
 - The child count is a property of the pipeline's FFmpeg-backed stages, not of
-  its destinations: one child carried 1 to 10 outputs, two carried 4 to 60, and
-  the `egress-growth-hevc-bridge` scenario ran 10 outputs with none.
-- Per-child RSS is flat as destinations grow: 186.6 to 186.7 MB across 2, 10 and
-  20 outputs, 422.3 to 422.9 MB across 4, 20 and 40, 417.0 to 417.5 MB across 6,
-  30 and 60. The 1080p child costs about 235 MB against the 720p child's 186 MB.
+  its destinations: one child carried 1 to 20 outputs, two carried 4 to 60, and
+  the Enhanced RTMP passthrough row carried 10 with none.
+- Total child RSS is flat as destinations grow wherever the child count is
+  fixed: 186.6 to 186.7 MB across 2, 10 and 20 outputs, 422.3 to 422.9 MB across
+  4, 20 and 40, 417.0 to 417.5 MB across 6, 30 and 60. The one-family row is the
+  exception: 168.2, 168.3, then 186.3 MB at 10 outputs - an 18 MB step, which is
+  warm-up or sampling variance [INFERENCE], not destination count.
+- The 1080p child costs about 235 MB against the 720p child's 186 MB (235 MB
+  derived from 422.5 minus a 720p child, ±20 MB across rows).
 - The parent, not the children, grows with destinations: 85.1 to 99.6 MB at 2 to
   20 outputs and 182.1 to 214.7 MB at 4 to 40.
 - Every row delivered every destination.
-- The 20-output mixed row agrees with the 2026-06-28 snapshot: 286.3 MB combined
-  here against 286.8 MB there.
+- The 20-output mixed row's combined 286.3 MB matches the 2026-06-28 snapshot's
+  286.8 MB, but the split moved about 20 MB each way: the parent fell from 120.3
+  to 99.6 MB while the 720p child rose from 166.5 to 186.7 MB.
 
 ## Profiling Workflow
 

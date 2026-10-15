@@ -339,19 +339,25 @@ items).
   failure-isolation gate and an owner decision.
 - Measured (2026-10-15, release binaries at `1f4e0a34`, 1/5/10 egress counts):
   `docs/resource-sweep.md`, "Per-rendition FFmpeg child cost". One child carried
-  1 to 10 outputs, two carried 4 to 60, and per-child RSS stayed flat (186.6 to
+  1 to 20 outputs, two carried 4 to 60, and total child RSS stayed flat (186.6 to
   186.7 MB across 2/10/20 outputs; 422.3 to 422.9 MB across 4/20/40).
-- Open: the chained cases the goal still names. No sweep scenario exercises
-  them - `outputKinds` in `src/bin/test_harness/resource_egress_scenarios.json`
-  has neither an audio route nor a codec edge:
-  - a preset plus a non-lightweight audio route chained after it
-    (`encoding_stage_plan.rs:51-54`, `output_path.rs:126-138`), expected to be
-    two children in series;
-  - the HEVC-to-H.264 codec edge (`output_path.rs:131,170-176`).
-- Open discrepancy: `egress-growth-hevc-bridge` ran 1/5/10 outputs with **0**
-  FFmpeg children, against this entry's earlier claim that a `source`
-  passthrough output on HEVC ingest costs 1, not 0. Resolve which is wrong
-  before quoting either.
+- Resolved: `egress-growth-hevc-bridge` runs `configIndex: 2` (HEVC SRT ingest)
+  with `outputKinds: ["rtmpSource"]`, and `SweepOutputKind::RtmpSource` is
+  `RtmpOutputMode::Enhanced` (`resource_sweep/catalog.rs:102`). Enhanced RTMP
+  carries HEVC, so the output resolves to HEVC, `needs_h264_codec_edge` is false
+  (`output_path.rs:170-176`), and 0 children is what the code predicts. The
+  earlier claim that "a `source` passthrough output on HEVC ingest costs 1, not
+  0" holds only when the destination resolves to H.264.
+- Open: two cases no scenario exercises. Both are one JSON line, because the
+  catalog kinds already exist:
+  - the non-lightweight audio route: `RtmpSourceDownmix`/`SrtSourceDownmix`
+    (`source+downmix:0`, `resource_sweep/catalog.rs:89`) exist and no scenario
+    uses them. The route chains after `Source`, so this is one child, not two in
+    series; two in series would need a preset plus a route, which no catalog
+    kind produces.
+  - the HEVC-to-H.264 codec edge (`output_path.rs:131,170-176`): needs HEVC
+    ingest (`configIndex: 2`) with an H.264-only kind - `rtmpsSource` or
+    `hlsPut`, the `Legacy` modes (`catalog.rs:103-105`).
 - Gates (measurement only): release binaries (`cargo xtask build-release` ->
   `target/qual-release/`, provenance `COMMIT` matching HEAD), `HARNESS_BIN` and
   `RESTREAM_BIN` pointing at them with `BENCH_BUILD=never` so
