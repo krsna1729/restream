@@ -130,6 +130,14 @@ export function buildMediaGraph(
     }));
 }
 
+/** Why a row sorts where it does: a diagnosed destination first, then one
+ * that is wanted but not delivering, then everything else. */
+export function destinationRank(row: DestinationRow): number {
+  if (row.output.diagnosis) return 0;
+  if (row.output.desired === "running" && !row.delivering) return 1;
+  return 2;
+}
+
 /** The pipeline's outputs, degraded first, then the wanted ones not yet
  * delivering, then by name. */
 export function buildDestinationRows(
@@ -142,11 +150,6 @@ export function buildDestinationRows(
   for (const node of graph?.nodes ?? []) {
     if (node.outputId && node.details) details.set(node.outputId, node.details);
   }
-  const rank = (row: DestinationRow): number => {
-    if (row.output.diagnosis) return 0;
-    if (row.output.desired === "running" && !row.delivering) return 1;
-    return 2;
-  };
   return outputs
     .filter((output) => output.pipelineId === pipelineId)
     .map((output) => {
@@ -159,8 +162,34 @@ export function buildDestinationRows(
     })
     .sort(
       (a, b) =>
-        rank(a) - rank(b) || a.output.name.localeCompare(b.output.name),
+        destinationRank(a) - destinationRank(b) ||
+        a.output.name.localeCompare(b.output.name),
     );
+}
+
+/** How many destination rows the matrix renders before the operator asks for
+ * the rest. Rows are degraded-first, so the cap hides the least urgent tail
+ * while 200 or fewer rows are urgent; the footer names the degraded rows it
+ * does hide. */
+export const DESTINATION_ROW_LIMIT = 200;
+
+/** The rows a bounded matrix renders, how many the cap hides, and how many of
+ * the hidden rows are degraded. */
+export function windowDestinationRows(
+  rows: readonly DestinationRow[],
+  limit: number,
+): {
+  readonly visible: readonly DestinationRow[];
+  readonly hidden: number;
+  readonly hiddenDegraded: number;
+} {
+  const shown = Math.max(0, Math.min(limit, rows.length));
+  const hidden = rows.slice(shown);
+  return {
+    visible: rows.slice(0, shown),
+    hidden: hidden.length,
+    hiddenDegraded: hidden.filter((row) => destinationRank(row) < 2).length,
+  };
 }
 
 /** A monitoring URL the engine can check on YouTube (watch, share or live

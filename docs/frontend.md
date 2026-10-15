@@ -179,7 +179,9 @@ so a reload keeps the workspace in the URL (`?w=`).
   once with its consumer count and destinations folded per upstream stage
   and protocol (egress nodes join outputs on their `outputId`); the
   destination matrix from the state stream (feed lag from the running egress,
-  rate from the telemetry rates) with Start/Stop. Inputs and graph are polled
+  rate from the telemetry rates) with Start/Stop, degraded first and capped
+  at 200 rendered rows, with the hidden count (and how many of them need
+  attention) and a "show all" button for the rest. Inputs and graph are polled
   every 2 s only while Operate shows that pipeline (`polled.tsx`); each panel
   shows the age of its last successful update and turns amber once that is
   older than 2.5 poll intervals. Inspect (one pipeline): the resource map

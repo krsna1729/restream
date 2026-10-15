@@ -3,8 +3,13 @@ import test from "node:test";
 
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
-const { buildMediaGraph, buildDestinationRows, isYoutubeUrl, youtubeVerdict } =
-  await loadCompiledFrontendModule(
+const {
+  buildMediaGraph,
+  buildDestinationRows,
+  isYoutubeUrl,
+  windowDestinationRows,
+  youtubeVerdict,
+} = await loadCompiledFrontendModule(
   "control-room/operate-model.js",
 );
 const { buildFleetModel, filterPipelineRows } = await loadCompiledFrontendModule(
@@ -151,6 +156,63 @@ test("destinations: degraded first, then wanted but not delivering, then by name
   const alpha = rows.find((row) => row.output.id === "alpha");
   assert.equal(alpha.feedLagUnits, null);
   assert.equal(alpha.delivering, false);
+});
+
+test("the destination window keeps the leading rows and reports the rest", () => {
+  const rows = ["a", "b", "c", "d", "e"].map((id) => ({
+    output: output(id),
+    delivering: false,
+    feedLagUnits: null,
+  }));
+
+  const capped = windowDestinationRows(rows, 3);
+  assert.deepEqual(
+    capped.visible.map((row) => row.output.id),
+    ["a", "b", "c"],
+  );
+  assert.equal(capped.hidden, 2);
+  assert.equal(capped.hiddenDegraded, 2);
+
+  // The button's argument: everything, nothing hidden.
+  const whole = windowDestinationRows(rows, Number.POSITIVE_INFINITY);
+  assert.equal(whole.visible.length, 5);
+  assert.equal(whole.hidden, 0);
+  assert.equal(whole.hiddenDegraded, 0);
+
+  const exact = windowDestinationRows(rows, 5);
+  assert.equal(exact.visible.length, 5);
+  assert.equal(exact.hidden, 0);
+
+  const none = windowDestinationRows(rows, 0);
+  assert.equal(none.visible.length, 0);
+  assert.equal(none.hidden, 5);
+  assert.equal(none.hiddenDegraded, 5);
+});
+
+test("the hidden count separates the rows that need attention", () => {
+  const rows = [
+    { output: output("a"), delivering: true, feedLagUnits: null },
+    { output: output("b"), delivering: true, feedLagUnits: null },
+    {
+      output: output("c", { diagnosis: "no-publisher" }),
+      delivering: false,
+      feedLagUnits: null,
+    },
+    {
+      output: output("d", { desired: "running" }),
+      delivering: false,
+      feedLagUnits: null,
+    },
+  ];
+  // A healthy row (b, rank 2) sits in the hidden part, so the count cannot be
+  // the hidden length.
+  const { visible, hidden, hiddenDegraded } = windowDestinationRows(rows, 1);
+  assert.deepEqual(
+    visible.map((row) => row.output.id),
+    ["a"],
+  );
+  assert.equal(hidden, 3);
+  assert.equal(hiddenDegraded, 2);
 });
 
 test("the inventory filters by name or id in any case, and by health", () => {
