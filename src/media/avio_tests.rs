@@ -17,12 +17,6 @@ async fn write_batch_preserves_chunk_order() {
     assert_eq!(&output, b"abcdef");
 }
 
-#[test]
-fn explicit_capacity_is_reported_in_stats() {
-    let queue = MemoryQueue::new_with_capacity(12345);
-    assert_eq!(queue.stats().capacity, 12345);
-}
-
 #[tokio::test]
 async fn empty_write_batch_does_not_add_data() {
     let queue = MemoryQueue::new();
@@ -217,38 +211,6 @@ fn len_and_is_empty_reflect_buffered_bytes() {
 }
 
 #[test]
-fn stats_report_depth_capacity_high_water_and_closed_state() {
-    let queue = MemoryQueue::new_with_capacity(8);
-    assert_eq!(
-        queue.stats(),
-        MemoryQueueStats {
-            len: 0,
-            capacity: 8,
-            high_water_bytes: 0,
-            blocked_writes: 0,
-            blocked_write_us: 0,
-            closed: false,
-        }
-    );
-
-    queue.write_sync(b"hello");
-    let stats = queue.stats();
-    assert_eq!(stats.len, 5);
-    assert_eq!(stats.capacity, 8);
-    assert_eq!(stats.high_water_bytes, 5);
-    assert!(!stats.closed);
-
-    let mut buf = [0u8; 3];
-    queue.read_nonblocking(&mut buf);
-    let stats = queue.stats();
-    assert_eq!(stats.len, 2);
-    assert_eq!(stats.high_water_bytes, 5);
-
-    queue.close();
-    assert!(queue.stats().closed);
-}
-
-#[test]
 fn is_closed_reflects_state() {
     let queue = MemoryQueue::new();
     assert!(!queue.is_closed());
@@ -272,29 +234,6 @@ async fn write_respects_capacity() {
     let mut buf = [0u8; 5];
     queue.read_nonblocking(&mut buf);
     handle.await.unwrap();
-}
-
-#[tokio::test]
-async fn blocked_write_updates_backpressure_stats() {
-    let queue = Arc::new(MemoryQueue::new_with_capacity(5));
-    queue.write(b"hello").await;
-    let q = queue.clone();
-    let handle = tokio::spawn(async move {
-        q.write(b"blocked").await;
-    });
-
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    assert!(!handle.is_finished());
-    assert_eq!(queue.stats().blocked_writes, 1);
-
-    let mut buf = [0u8; 5];
-    queue.read_nonblocking(&mut buf);
-    handle.await.unwrap();
-
-    let stats = queue.stats();
-    assert_eq!(stats.blocked_writes, 1);
-    assert!(stats.blocked_write_us > 0);
-    assert!(stats.high_water_bytes >= 7);
 }
 
 #[tokio::test]

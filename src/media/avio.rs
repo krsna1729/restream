@@ -6,7 +6,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -30,23 +30,11 @@ pub struct MemoryQueue {
     capacity: usize,
     high_water_bytes: AtomicUsize,
     blocked_writes: AtomicU64,
-    blocked_write_us: AtomicU64,
 }
 
 struct MemoryQueueInner {
     buf: VecDeque<u8>,
     closed: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemoryQueueStats {
-    pub len: usize,
-    pub capacity: usize,
-    pub high_water_bytes: usize,
-    pub blocked_writes: u64,
-    pub blocked_write_us: u64,
-    pub closed: bool,
 }
 
 impl Default for MemoryQueue {
@@ -72,12 +60,11 @@ impl MemoryQueue {
             capacity,
             high_water_bytes: AtomicUsize::new(0),
             blocked_writes: AtomicU64::new(0),
-            blocked_write_us: AtomicU64::new(0),
         }
     }
 
     pub async fn write(&self, data: &[u8]) {
-        let mut blocked_since = None;
+        let mut counted_block = false;
         loop {
             // Arm the `Notified` future *before* checking capacity: it snapshots
             // the notify generation on creation, so a `notify_waiters()` racing
@@ -92,17 +79,12 @@ impl MemoryQueue {
                     break;
                 }
             }
-            if blocked_since.is_none() {
-                blocked_since = Some(Instant::now());
+            if !counted_block {
+                counted_block = true;
                 self.blocked_writes.fetch_add(1, Ordering::Relaxed);
             }
             notified.await;
         }
-        if let Some(start) = blocked_since {
-            self.blocked_write_us
-                .fetch_add(start.elapsed().as_micros() as u64, Ordering::Relaxed);
-        }
-
         let mut inner = crate::sync::lock(&self.inner);
         if inner.closed {
             return;
@@ -113,7 +95,7 @@ impl MemoryQueue {
     }
 
     pub async fn write_cancellable(&self, data: &[u8], cancel: &CancellationToken) -> bool {
-        let mut blocked_since = None;
+        let mut counted_block = false;
         loop {
             // See `write()` for why this future must be armed before the
             // capacity check — it closes a lost-wakeup race against a
@@ -125,26 +107,17 @@ impl MemoryQueue {
                     break;
                 }
             }
-            if blocked_since.is_none() {
-                blocked_since = Some(Instant::now());
+            if !counted_block {
+                counted_block = true;
                 self.blocked_writes.fetch_add(1, Ordering::Relaxed);
             }
             tokio::select! {
                 _ = notified => {}
                 _ = cancel.cancelled() => {
-                    if let Some(start) = blocked_since {
-                        self.blocked_write_us
-                            .fetch_add(start.elapsed().as_micros() as u64, Ordering::Relaxed);
-                    }
                     return false;
                 }
             }
         }
-        if let Some(start) = blocked_since {
-            self.blocked_write_us
-                .fetch_add(start.elapsed().as_micros() as u64, Ordering::Relaxed);
-        }
-
         let mut inner = crate::sync::lock(&self.inner);
         if inner.closed || cancel.is_cancelled() {
             return false;
@@ -165,7 +138,7 @@ impl MemoryQueue {
             return 0;
         }
 
-        let mut blocked_since = None;
+        let mut counted_block = false;
         loop {
             // See `write()` for why this future must be armed before the
             // capacity check — it closes a lost-wakeup race against a
@@ -177,17 +150,12 @@ impl MemoryQueue {
                     break;
                 }
             }
-            if blocked_since.is_none() {
-                blocked_since = Some(Instant::now());
+            if !counted_block {
+                counted_block = true;
                 self.blocked_writes.fetch_add(1, Ordering::Relaxed);
             }
             notified.await;
         }
-        if let Some(start) = blocked_since {
-            self.blocked_write_us
-                .fetch_add(start.elapsed().as_micros() as u64, Ordering::Relaxed);
-        }
-
         let mut inner = crate::sync::lock(&self.inner);
         if inner.closed {
             return 0;
@@ -243,18 +211,6 @@ impl MemoryQueue {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
-    }
-
-    pub fn stats(&self) -> MemoryQueueStats {
-        let inner = crate::sync::lock(&self.inner);
-        MemoryQueueStats {
-            len: inner.buf.len(),
-            capacity: self.capacity,
-            high_water_bytes: self.high_water_bytes.load(Ordering::Relaxed),
-            blocked_writes: self.blocked_writes.load(Ordering::Relaxed),
-            blocked_write_us: self.blocked_write_us.load(Ordering::Relaxed),
-            closed: inner.closed,
-        }
     }
 
     fn record_depth(&self, len: usize) {

@@ -61,7 +61,7 @@
         "audio-route",
         "bitrate-resource"
       ],
-      "purpose": "bitrate-driven CPU/RSS/ring/AVIO resource behavior"
+      "purpose": "bitrate-driven CPU/RSS/ring resource behavior"
     },
     "resource.branch": {
       "checks": [

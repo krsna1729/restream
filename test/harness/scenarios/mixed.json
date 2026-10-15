@@ -1504,7 +1504,7 @@
           "default": 1
         },
         "legacyConfig": "h264-rtmp",
-        "rationale": "measures bitrate-driven CPU/RSS/ring/AVIO growth for RTMP H.264 ingest",
+        "rationale": "measures bitrate-driven CPU/RSS/ring growth for RTMP H.264 ingest",
         "checkBundle": "resource.bitrate",
         "checks": [
           "ffprobe",
@@ -1529,7 +1529,7 @@
           "default": 1
         },
         "legacyConfig": "h264-srt",
-        "rationale": "measures bitrate-driven CPU/RSS/ring/AVIO growth for SRT H.264 ingest",
+        "rationale": "measures bitrate-driven CPU/RSS/ring growth for SRT H.264 ingest",
         "checkBundle": "resource.bitrate",
         "checks": [
           "ffprobe",

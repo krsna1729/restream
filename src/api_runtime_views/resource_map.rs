@@ -659,7 +659,7 @@ pub(crate) async fn resource_map(
         "edges": [],
         "attribution": {
             "measured": ["process_rss", "child_process_rss", "process_thread_count", "fd_count"],
-            "derived": ["ring_payload_stats", "avio_queue_len", "stage_metrics"],
+            "derived": ["ring_payload_stats", "stage_metrics"],
             "estimated": ["tokio_task_overhead"]
         }
     })

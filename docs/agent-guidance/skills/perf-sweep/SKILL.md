@@ -35,7 +35,7 @@ a current control run.
   with the recorded threshold (default ±5% for throughput ledger rows).
   Confirm a suspected regression with comparable runs before attributing it.
 - **Resource check:** run `scripts/harness/run.sh resource-sweep`; compare
-  delivered work, RSS, ring payload, and AVIO high-water marks.
+  delivered work, RSS, and ring payload.
 - **Optimization:** measure before editing, change one variable, then repeat
   the measurement and relevant correctness gates. If there is no demonstrated
   benefit, discard only the experimental hunks and record the negative result.

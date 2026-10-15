@@ -1516,7 +1516,7 @@ feed's ring in place; a group of outputs reports `memory: null` too. The
 memory attribution confidence marker is one of:
 
 - `measured`: process RSS, child FFmpeg RSS, process thread/fd counts
-- `derived`: ring payload stats, AVIO input queue lengths, stage counters
+- `derived`: ring payload stats, stage counters
 - `estimated`: overheads that are intentionally not assigned to exact nodes
 - `unmeasured`: egress shards, which hold memory this view does not measure
 
