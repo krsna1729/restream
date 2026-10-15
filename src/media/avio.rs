@@ -1,8 +1,7 @@
 //! `MemoryQueue`: the bounded byte queue between a media producer and a
-//! blocking consumer (an external `ffmpeg` process's stdin writer, the
-//! recording writer). Data flows through a `VecDeque<u8>` protected by
-//! `Mutex` + `Condvar`, with bulk `as_slices()` + `drain()` reads instead of
-//! per-byte `pop_front()`.
+//! blocking consumer (the recording writer). Data flows through a
+//! `VecDeque<u8>` protected by `Mutex` + `Condvar`, with bulk `as_slices()` +
+//! `drain()` reads instead of per-byte `pop_front()`.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -22,17 +21,6 @@ pub const DEFAULT_AVIO_QUEUE_CAPACITY: usize = 512 * 1024;
 
 fn default_avio_queue_capacity() -> usize {
     DEFAULT_AVIO_QUEUE_CAPACITY
-}
-
-/// Produces a stage's TS input on the reading thread, on demand (WI11): the
-/// external `ffmpeg` stdin-writer thread pulls from it while feeding the
-/// child's stdin, so a stage's input is read from its source ring on that
-/// thread with no producer task or thread in between.
-pub trait QueueRefill: Send {
-    /// Block until more input is available and append it to `out` (which is
-    /// empty on entry). Return `false` at end of input or on cancellation;
-    /// the writer then stops.
-    fn refill(&mut self, out: &mut Vec<u8>) -> bool;
 }
 
 pub struct MemoryQueue {

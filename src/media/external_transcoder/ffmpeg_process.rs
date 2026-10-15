@@ -35,7 +35,6 @@ pub(super) fn spawn_external_stdin_writer(
     timing_clock: crate::media::timing::Clock,
     done: tokio::sync::oneshot::Sender<Result<(), String>>,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
-    use crate::media::avio::QueueRefill;
     use std::io::Write;
 
     let fd = stdin.into_owned_fd()?;

@@ -34,7 +34,7 @@ async fn empty_write_batch_does_not_add_data() {
 // --- Regression: issue #2 (Round 3) — MemoryQueue::read must not panic
 // if the Mutex is poisoned by a panicking writer thread.
 // Before the fix, `cvar.wait(inner).unwrap()` would propagate the poison
-// and panic in the AVIO read callback, corrupting the FFmpeg output.
+// and panic a reader thread.
 // After the fix the lock is recovered and reading resumes normally.
 #[tokio::test]
 async fn read_recovers_from_poisoned_mutex() {
