@@ -239,11 +239,12 @@ What these numbers say:
 Release binaries at `1f4e0a34` (`cargo xtask build-release`, `target/qual-release/`
 provenance matches HEAD), `scripts/harness/run.sh resource-sweep -- --no-netns`
 (this host has no `unshare`), `MSR_PEER=sink`, `RESOURCE_SWEEP_EGRESS_COUNTS=1,5,10`,
-20 s samples, 6 s settle. Each point is one 20 s window, so a single point can
-move by 10-20%. The child count is the sampler's FFmpeg child PID set
+20 s samples, 6 s settle. Every figure is one 20 s window per egress count, and a
+single point can move that much: the one-family row steps from 168.2 to 186.3 MB
+between 5 and 10 outputs. The child count is the sampler's FFmpeg child PID set
 (`ffmpegCount` in `resource-sweep-samples.jsonl`), not the stage count, which
-also covers TsMuxer and audio-router stages. Per-count CPU figures are averages;
-the peaks are in the same columns of the sweep CSV.
+also covers TsMuxer and audio-router stages. Average and peak CPU are per egress
+count, each over one 20 s window.
 
 | Scenario | Outputs | FFmpeg children | Children RSS MB | Child CPU avg % | Child CPU peak % | Restream RSS MB | Threads | Delivered |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
