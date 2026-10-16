@@ -25,6 +25,8 @@ items).
 - [Q-053 external FFmpeg process topology](#q-053-architecture-sonnet-external-ffmpeg-process-topology-per-rendition)
 - [Q-063 control-room nested-path boot](#q-063-frontend-sonnet-control-room-boots-on-nested-unknown-paths)
 - [Q-064 incident signals before the page opened](#q-064-observability-sonnet-incident-correlation-before-the-page-opened)
+- [Q-065 capacity cost of HLS, sink and pipeline outputs](#q-065-performance-sonnet-price-hls-sink-and-pipeline-outputs-from-a-measured-cost)
+- [Q-066 SRT ingress test port race](#q-066-testing-sonnet-srt-multi-owner-test-port-can-join-a-foreign-reuseport-group)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -394,3 +396,28 @@ items).
 - Gates: Rust tests for the history's bound and `since`; Playwright for an
   incident older than the page.
 - Status: open (Filed: 2026-10-15 by claude, the rest of Q-061).
+
+### Q-065 [performance] [sonnet] Price HLS, sink and pipeline outputs from a measured cost
+- Goal: the capacity model prices each output kind by what it costs.
+- Sources: `OutputProtocol::of_egress` (`src/capacity.rs`) prices every
+  output that is not SRT or RTMPS as RTMP egress. Sink and pipeline outputs
+  send nothing over the network, so they are overcharged on egress and NIC.
+  HLS PUT uploads segments, not a per-packet stream. Needs a measured cost
+  per kind (a capacity-ramp run or bench), not an assumed weight.
+- Gates: the measurement in the commit message; a Rust test per kind.
+- Status: open (Filed: 2026-10-16 by claude, from the #345 review).
+
+### Q-066 [testing] [sonnet] SRT multi-Owner test port can join a foreign reuseport group
+- Goal: `two_owners_share_the_port_and_each_session_command_reaches_its_owner`
+  cannot share its port with another process.
+- Sources: a multi-Owner listener needs an explicit port (srt-rs
+  `owner_layout.rs`; production ingest uses a configured, well-known
+  one), so the test probes a free port and releases it before binding. A
+  bind error now retries on a fresh port. A foreign `SO_REUSEPORT` socket of
+  the same uid (another `cargo test` on this host) that takes the port in
+  the gap would instead join the group and take a share of the datagrams;
+  the test's byte counts fail on that, so it is loud, not silent. Removing
+  it needs a per-test network namespace for this unit test, or srt-rs
+  binding Owner 0 first and the rest to its port.
+- Gates: none until it flakes.
+- Status: open (Filed: 2026-10-16 by claude).
