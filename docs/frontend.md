@@ -164,7 +164,8 @@ to `/`.
   them to TanStack Router, which owns history and link clicks); an absent or
   unknown workspace opens Fleet, and the pipeline is kept across workspaces.
   Links (`PlaceLink`) are real `href`s, and a plain click navigates in place.
-  Other query parameters are kept, after `w` and `p`.
+  Other query parameters are kept, after `w` and `p`; a repeated parameter
+  keeps its first value.
 - Errors: the page renders the `#error-alert`/`#error-msg` and
   `#saving-badge` elements that `core/api.ts` reports into, so a failed
   mutation is shown, not only logged.

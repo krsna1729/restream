@@ -231,6 +231,13 @@ test("a place without a pipeline drops `p`; other parameters stay, after them", 
 
 test("a query string stays plain strings through the round trip", () => {
   // A numeric-looking id is a string, not JSON: `p=123` names pipeline 123.
+  // (A JSON-parsing parseSearch would make this a number and drop it.)
+  assert.deepEqual(placeFromSearch(parseSearch("?w=operate&p=123")), {
+    workspace: "operate",
+    pipelineId: "123",
+  });
+  // The first value of a repeated parameter wins, as `get` did before.
+  assert.deepEqual(parseSearch("?w=operate&w=media"), { w: "operate" });
   assert.equal(
     stringifySearch(
       placeSearch(parseSearch("?debug=1&p=123&w=operate"), {

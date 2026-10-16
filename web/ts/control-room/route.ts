@@ -89,7 +89,12 @@ export function placeSearch(
  * `p=1` as a number and drop the pipeline.)
  */
 export function parseSearch(search: string): Record<string, unknown> {
-  return Object.fromEntries(new URLSearchParams(search));
+  const parsed: Record<string, unknown> = {};
+  for (const [key, value] of new URLSearchParams(search)) {
+    // The first value of a repeated parameter wins, as `get` did before.
+    if (!(key in parsed)) parsed[key] = value;
+  }
+  return parsed;
 }
 
 /** The query string naming `search`; absent values are left out. */
