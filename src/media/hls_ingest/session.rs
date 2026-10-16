@@ -4,7 +4,8 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::Instant;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -32,6 +33,8 @@ pub(super) struct SessionContext {
     pub(super) pipeline_id: String,
     pub(super) registration: IngestRegistration,
     pub(super) ring: Arc<RingBuffer>,
+    /// Where the session publishes its pacing lead for the body deadline.
+    pub(super) lead_ms: Arc<AtomicU64>,
     pub(super) limits: SessionLimits,
 }
 
@@ -68,6 +71,7 @@ pub(super) async fn run(
                 &mut objects,
                 &mut outbox,
                 outbox_limit,
+                &context.lead_ms,
             )
             .await
         }
@@ -76,7 +80,8 @@ pub(super) async fn run(
     // End the attempt before the queue closes: a handler whose send then
     // fails must find the attempt cancelled, so its one restart registers
     // a new attempt instead of being refused as a second publisher. Objects
-    // already queued are answered, never lost: the encoder retries them.
+    // already queued are answered `Retry`; an encoder that does not read
+    // replies (FFmpeg) loses them.
     cancel.cancel();
     objects.close();
     while let Ok(object) = objects.try_recv() {
@@ -85,17 +90,20 @@ pub(super) async fn run(
     (end, session.counters())
 }
 
-/// Released segments not yet fully published, and where the first one is.
+/// Released segments not yet fully published, and where the first one is;
+/// sized in bytes and in listed (`EXTINF`) media time.
 #[derive(Default)]
 struct Outbox {
     releases: VecDeque<Release>,
     offset: usize,
     bytes: usize,
+    media: Duration,
 }
 
 impl Outbox {
     fn push(&mut self, release: Release) {
         self.bytes += release.payload.bytes.len();
+        self.media = self.media.saturating_add(release.duration);
         self.releases.push_back(release);
     }
 
@@ -111,6 +119,7 @@ async fn drive(
     objects: &mut mpsc::Receiver<HlsObject>,
     outbox: &mut Outbox,
     outbox_limit: usize,
+    lead_ms: &AtomicU64,
 ) -> SessionEnd {
     let mut publisher = TsPublisher::new(TsTimestamps::default());
     let mut pacer = Pacer::default();
@@ -129,9 +138,11 @@ async fn drive(
             (Some(deadline), Some(idle)) => Some(deadline.min(idle)),
             (deadline, idle) => deadline.or(idle),
         };
-        // An encoder faster than real time waits for its replies once a
-        // hold's worth of media is queued for publication.
-        let accepting = outbox.bytes <= outbox_limit;
+        // An encoder faster than real time waits for its replies (and,
+        // through its upload slots, its next uploads) once two target
+        // durations of media, or a hold's worth of bytes, wait to publish.
+        let lead = session.pacing_lead();
+        let accepting = outbox.media < lead.saturating_mul(2) && outbox.bytes <= outbox_limit;
         tokio::select! {
             biased;
             _ = cancel.cancelled() => return SessionEnd::Cancelled,
@@ -142,6 +153,8 @@ async fn drive(
                 last_activity = Instant::now();
                 let outcome = apply(session, object.kind, object.path, object.payload, last_activity);
                 let _ = object.reply.send(outcome);
+                let lead = u64::try_from(session.pacing_lead().as_millis()).unwrap_or(u64::MAX);
+                lead_ms.store(lead, Ordering::Relaxed);
             }
             _ = sleep_until(publish_at) => {
                 publish_next_chunk(&mut publisher, &mut pacer, target, outbox).await;
@@ -201,6 +214,7 @@ async fn publish_next_chunk(
     } else {
         outbox.offset = 0;
         outbox.bytes -= bytes.len();
+        outbox.media = outbox.media.saturating_sub(release.duration);
         // Dropping the release returns its bytes to the global budget.
         outbox.releases.pop_front();
     }

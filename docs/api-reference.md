@@ -1388,11 +1388,11 @@ The stream key is checked first, before any body byte is read, under the
 | `400` | The object path is invalid, or the playlist does not parse |
 | `403` | Wrong key, disabled input, or banned client |
 | `405` | Any other method (`Allow: PUT, POST, DELETE`) |
-| `408` | The request body sent nothing for 10 s |
+| `408` | The request body sent nothing for 10 s, or took longer than max(4 × target duration, 40 s) |
 | `409` | Another publisher (RTMP, SRT, file) holds the input |
 | `413` | Over the limit: playlist 1 MiB, segment 64 MiB |
 | `415` | Neither `.m3u8` nor `.ts` (fMP4 is not ingested yet) |
-| `503` | The 512 MiB HLS ingest buffer is full, or the session ended with the object queued (all `Retry-After: 1`); or the key lookup or session is unavailable |
+| `503` | The 512 MiB HLS ingest buffer is full (FFmpeg never reads this: the segment is lost), the key's upload slots stayed busy for 10 s, or the session ended with the object queued (all `Retry-After: 1`); or the key lookup or session is unavailable |
 
 Ordering, sessions and per-key bounds are described in
 [HLS push ingest](media-pipeline.md#hls-push-ingest).

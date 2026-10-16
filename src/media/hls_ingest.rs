@@ -39,11 +39,17 @@ pub struct HlsIngestLimits {
     /// Two maximum-size segments.
     pub hold_bytes: usize,
     /// All HLS ingest bytes in flight, queued, held or publishing, across
-    /// every stream key: >100 keys of typical 2 MB segments, or 2 keys at
-    /// their worst case, and far below the host memory media work needs.
+    /// every stream key: >100 keys of typical 2 MB segments, and far below
+    /// the host memory media work needs. Exhausted, an upload gets `503`,
+    /// which FFmpeg never reads: that segment is lost.
     pub total_buffer_bytes: usize,
-    /// Idle timeout floor, the hold age before any playlist, and the time
-    /// each request body frame has to arrive (`408` after it).
+    /// One stream key's share of `total_buffer_bytes` (a quarter), so a few
+    /// keys cannot starve the rest. Reading waits for it: the encoder's
+    /// blocked write is backpressure it respects, where a `503` is a loss.
+    pub key_buffer_bytes: usize,
+    /// Idle timeout floor, the hold age before any playlist, the time each
+    /// request body frame and an upload slot may take (`408`/`503` after
+    /// it), and a quarter of the whole-body deadline before any playlist.
     pub idle_floor: Duration,
 }
 
@@ -56,6 +62,7 @@ impl Default for HlsIngestLimits {
             hold_segments: 8,
             hold_bytes: 128 * 1024 * 1024,
             total_buffer_bytes: 512 * 1024 * 1024,
+            key_buffer_bytes: 128 * 1024 * 1024,
             idle_floor: ordering::IDLE_FLOOR,
         }
     }
@@ -110,18 +117,22 @@ pub enum BodyError {
     BufferFull,
 }
 
-/// One object's body, read frame by frame against its size bound and the
-/// global budget; never waits for budget, so partial readers cannot
-/// deadlock each other.
+/// One object's body, read frame by frame against its size bound, its
+/// key's share and the global budget. Each frame waits for the key's share
+/// (FIFO, so one key's uploads queue behind each other; the caller bounds
+/// the wait with the whole-body deadline) and never for the global budget,
+/// so readers of different keys cannot deadlock each other.
 pub struct ObjectBody {
     budget: Arc<Semaphore>,
+    key_budget: Arc<Semaphore>,
     max_bytes: usize,
     bytes: BytesMut,
     permit: Option<OwnedSemaphorePermit>,
+    key_permit: Option<OwnedSemaphorePermit>,
 }
 
 impl ObjectBody {
-    pub fn push(&mut self, frame: &[u8]) -> Result<(), BodyError> {
+    pub async fn push(&mut self, frame: &[u8]) -> Result<(), BodyError> {
         if frame.is_empty() {
             return Ok(());
         }
@@ -129,20 +140,31 @@ impl ObjectBody {
             return Err(BodyError::TooLarge);
         }
         let permits = u32::try_from(frame.len()).map_err(|_| BodyError::TooLarge)?;
+        let key_permit = self
+            .key_budget
+            .clone()
+            .acquire_many_owned(permits)
+            .await
+            .map_err(|_| BodyError::BufferFull)?;
         let permit = self
             .budget
             .clone()
             .try_acquire_many_owned(permits)
             .map_err(|_| BodyError::BufferFull)?;
-        match &mut self.permit {
-            Some(held) => held.merge(permit),
-            None => self.permit = Some(permit),
-        }
+        merge(&mut self.key_permit, key_permit);
+        merge(&mut self.permit, permit);
         self.bytes.extend_from_slice(frame);
         Ok(())
     }
 
     fn into_payload(self) -> ordering::Payload {
-        ordering::Payload::new(Bytes::from(self.bytes), self.permit)
+        ordering::Payload::new(Bytes::from(self.bytes), self.permit, self.key_permit)
+    }
+}
+
+fn merge(held: &mut Option<OwnedSemaphorePermit>, permit: OwnedSemaphorePermit) {
+    match held {
+        Some(held) => held.merge(permit),
+        None => *held = Some(permit),
     }
 }

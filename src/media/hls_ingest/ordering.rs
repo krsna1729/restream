@@ -26,13 +26,19 @@ const MAX_OTHER_VARIANTS: usize = 16;
 pub(super) struct Payload {
     pub(super) bytes: Bytes,
     _budget: Option<OwnedSemaphorePermit>,
+    _key_budget: Option<OwnedSemaphorePermit>,
 }
 
 impl Payload {
-    pub(super) fn new(bytes: Bytes, budget: Option<OwnedSemaphorePermit>) -> Self {
+    pub(super) fn new(
+        bytes: Bytes,
+        budget: Option<OwnedSemaphorePermit>,
+        key_budget: Option<OwnedSemaphorePermit>,
+    ) -> Self {
         Self {
             bytes,
             _budget: budget,
+            _key_budget: key_budget,
         }
     }
 
@@ -72,6 +78,8 @@ pub(super) struct Release {
     /// The bytes start an unrelated TS stream (EXT-X-DISCONTINUITY, a new
     /// epoch, or a variant switch).
     pub(super) discontinuity: bool,
+    /// The playlist's `EXTINF` for this segment.
+    pub(super) duration: Duration,
     pub(super) payload: Payload,
 }
 
@@ -101,6 +109,7 @@ impl Lock {
 struct Listed {
     path: String,
     discontinuity: bool,
+    duration: Duration,
     listed_at: Instant,
     payload: Option<Payload>,
 }
@@ -304,6 +313,12 @@ impl Session {
     /// `index0.ts` is discarded as a duplicate of released sequence 0; the
     /// next segment (`index1.ts`, sequence 1) continues normally. One
     /// segment is lost, never order.
+    ///
+    /// A stale playlist that arrives after a newer one (reordered uploads)
+    /// moves the window back and so starts a spurious epoch: it costs one
+    /// discontinuity and up to a target duration's stall while the next
+    /// listing realigns, and never duplicates media (released sequences are
+    /// gone from the listing).
     fn starts_new_epoch(&self, media: &MediaPlaylist, last: u64) -> bool {
         let Some(window) = &self.window else {
             return false;
@@ -373,6 +388,7 @@ impl Session {
                 Listed {
                     path: segment.path,
                     discontinuity: segment.discontinuity,
+                    duration: segment.duration,
                     listed_at: now,
                     payload,
                 },
@@ -411,6 +427,7 @@ impl Session {
                         sequence,
                         epoch: self.epoch,
                         discontinuity: listed.discontinuity || self.discontinuity_pending,
+                        duration: listed.duration,
                         payload,
                     });
                     self.discontinuity_pending = false;

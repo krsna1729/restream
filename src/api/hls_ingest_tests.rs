@@ -1,5 +1,6 @@
 //! The HLS push ingest route on a real HTTP server: the request contract,
-//! then FFmpeg pushing a checked-in TS fixture over PUT and over POST.
+//! a persistent connection, then FFmpeg pushing a checked-in TS fixture over
+//! PUT and over POST.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,6 +16,7 @@ use crate::media::packet::MediaType;
 
 struct Server {
     engine: Arc<MediaEngine>,
+    address: std::net::SocketAddr,
     base: String,
     _ingest: Arc<HlsIngest>,
 }
@@ -27,6 +29,7 @@ async fn serve(limits: HlsIngestLimits) -> Server {
     tokio::spawn(crate::api::http_server::serve(listener, app));
     Server {
         engine,
+        address,
         base: format!("http://{address}/ingest/hls"),
         _ingest: ingest,
     }
@@ -258,11 +261,13 @@ async fn a_stalled_body_times_out_with_408_and_returns_its_budget() {
 /// FFmpeg runs with its default of one connection per object. With
 /// `-http_persistent 1` it sends requests ahead of the replies and, on
 /// exit, closes without reading them: the next reply that reaches the closed
-/// socket draws an RST, and the server's kernel discards the requests still
-/// unread in its receive queue (captured: the final `index3.ts` and ENDLIST
-/// playlist lost). No server can recover those bytes, so an encoder that
-/// pipelines and exits without reading the replies can lose its final
-/// objects; this test keeps that encoder limit out of the server's bar.
+/// socket draws an RST, hyper drops the connection on the failed reply
+/// write, and the requests still queued behind it are never parsed
+/// (captured: the final `index3.ts` and ENDLIST playlist lost). This server
+/// cannot recover them, so an encoder that pipelines and exits without
+/// reading the replies can lose its final objects; this test keeps that
+/// encoder limit out of the server's bar, and the persistent path is
+/// covered by `a_persistent_connection_carries_a_whole_stream`.
 async fn ffmpeg_push_reaches_the_ring(method: &str) {
     let server = serve(HlsIngestLimits::default()).await;
     let ring = server.engine.get_or_create_pipeline(PIPELINE_ID).await;
@@ -294,6 +299,15 @@ async fn ffmpeg_push_reaches_the_ring(method: &str) {
         .unwrap();
     assert!(status.success(), "ffmpeg {method} push failed: {status}");
     wait_until_unregistered(&server.engine).await;
+    assert_whole_fixture_published(&server, &ring, start).await;
+}
+
+/// The session ended on its ENDLIST and the ring holds the whole fixture.
+async fn assert_whole_fixture_published(
+    server: &Server,
+    ring: &crate::media::ring_buffer::RingBuffer,
+    start: usize,
+) {
     let phase = server
         .engine
         .recent_ingest_outcome(PIPELINE_ID)
@@ -341,4 +355,103 @@ async fn ffmpeg_hls_put_with_a_connection_per_object_reaches_the_ring() {
 #[tokio::test]
 async fn ffmpeg_hls_post_with_a_connection_per_object_reaches_the_ring() {
     ffmpeg_push_reaches_the_ring("POST").await;
+}
+
+/// One keep-alive connection that reads every reply, as a persistent
+/// encoder does mid-stream: playlist, two segments, final playlist.
+#[tokio::test]
+async fn a_persistent_connection_carries_a_whole_stream() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn request(stream: &mut tokio::net::TcpStream, path: &str, body: &[u8]) -> u16 {
+        let head = format!(
+            "PUT /ingest/hls/{STREAM_KEY}/{path} HTTP/1.1\r\nHost: ingest\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        stream.write_all(head.as_bytes()).await.unwrap();
+        stream.write_all(body).await.unwrap();
+        let mut reply = Vec::new();
+        let header_end = loop {
+            let mut byte = [0u8; 1];
+            stream.read_exact(&mut byte).await.unwrap();
+            reply.push(byte[0]);
+            if reply.ends_with(b"\r\n\r\n") {
+                break reply.len();
+            }
+        };
+        let head = String::from_utf8_lossy(&reply[..header_end]).to_ascii_lowercase();
+        let length: usize = head
+            .lines()
+            .find_map(|line| line.strip_prefix("content-length:"))
+            .map_or(0, |value| value.trim().parse().unwrap());
+        let mut body = vec![0u8; length];
+        stream.read_exact(&mut body).await.unwrap();
+        head[9..12].parse().unwrap()
+    }
+
+    let server = serve(HlsIngestLimits::default()).await;
+    let ring = server.engine.get_or_create_pipeline(PIPELINE_ID).await;
+    let start = ring.get_write_idx();
+    let fixture =
+        std::fs::read(crate::test_fixtures::canonical_h264_ts_fixture().unwrap()).unwrap();
+    let half = fixture.len() / 188 / 2 * 188;
+    let listing =
+        "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nindex0.ts\n#EXTINF:4,\nindex1.ts\n";
+    let ended = format!("{listing}#EXT-X-ENDLIST\n");
+
+    let mut stream = tokio::net::TcpStream::connect(server.address)
+        .await
+        .unwrap();
+    assert_eq!(
+        request(&mut stream, "index.m3u8", listing.as_bytes()).await,
+        200
+    );
+    assert_eq!(
+        request(&mut stream, "index0.ts", &fixture[..half]).await,
+        200
+    );
+    assert_eq!(
+        request(&mut stream, "index1.ts", &fixture[half..]).await,
+        200
+    );
+    assert_eq!(
+        request(&mut stream, "index.m3u8", ended.as_bytes()).await,
+        200
+    );
+
+    wait_until_unregistered(&server.engine).await;
+    assert_whole_fixture_published(&server, &ring, start).await;
+}
+
+/// A body that keeps every frame inside the idle floor but crawls still
+/// ends at the whole-body deadline (four idle floors before a playlist).
+#[tokio::test]
+async fn a_trickling_body_hits_the_whole_body_deadline() {
+    let server = serve(HlsIngestLimits {
+        idle_floor: Duration::from_millis(300),
+        ..HlsIngestLimits::default()
+    })
+    .await;
+    let trickle = futures_util::stream::unfold((), |()| async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        Some((Ok::<_, std::io::Error>(Bytes::from_static(&[0x47])), ()))
+    });
+    let started = std::time::Instant::now();
+    let response = tokio::time::timeout(
+        Duration::from_secs(5),
+        put(
+            &server,
+            STREAM_KEY,
+            "index0.ts",
+            reqwest::Body::wrap_stream(trickle),
+        ),
+    )
+    .await
+    .expect("a trickling body is answered");
+    assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+    assert!(
+        started.elapsed() >= Duration::from_millis(1_100),
+        "answered after {:?}, before the 1.2 s body deadline",
+        started.elapsed()
+    );
 }

@@ -4,6 +4,8 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tracing::{error, info, warn};
@@ -22,6 +24,8 @@ use crate::secret_display::redact_secret;
 /// Objects queued for one session; encoders upload sequentially, and the
 /// per-key upload slots bound what can wait here anyway.
 const OBJECT_QUEUE: usize = 2;
+/// Initial body capacity; larger bodies grow with the bytes counted.
+const INITIAL_BODY_CAPACITY: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthorizeError {
@@ -48,6 +52,11 @@ struct SessionHandle {
 /// first objects from both registering an attempt.
 struct KeyState {
     uploads: Arc<Semaphore>,
+    /// The key's share of the global buffer budget.
+    budget: Arc<Semaphore>,
+    /// The session's pacing lead in ms (target duration, or the idle floor
+    /// before a playlist); sizes the whole-body deadline.
+    lead_ms: Arc<AtomicU64>,
     start: tokio::sync::Mutex<()>,
 }
 
@@ -120,6 +129,8 @@ impl HlsIngest {
             .or_insert_with(|| {
                 Arc::new(KeyState {
                     uploads: Arc::new(Semaphore::new(self.limits.uploads_per_key)),
+                    budget: Arc::new(Semaphore::new(self.limits.key_buffer_bytes)),
+                    lead_ms: Arc::new(AtomicU64::new(0)),
                     start: tokio::sync::Mutex::new(()),
                 })
             })
@@ -133,11 +144,22 @@ impl HlsIngest {
         uploads.acquire_owned().await.ok()
     }
 
-    /// An empty body for `kind`, sized from the declared length when known.
+    /// How long one request body may take in total: four target durations
+    /// (four idle floors before the first playlist, and never less). A
+    /// 64 MiB segment on a 10 Mbit/s uplink fits; a trickle does not.
+    pub fn body_deadline(&self, input_id: &str) -> Duration {
+        let lead = Duration::from_millis(self.key_state(input_id).lead_ms.load(Ordering::Relaxed));
+        lead.max(self.limits.idle_floor).saturating_mul(4)
+    }
+
+    /// An empty body for `kind` charged to `input_id`'s share. The declared
+    /// length is checked against the bound but preallocates at most 1 MiB,
+    /// so memory tracks the bytes counted against the budgets.
     pub fn object_body(
         &self,
         kind: ObjectKind,
         content_length: Option<u64>,
+        input_id: &str,
     ) -> Result<ObjectBody, BodyError> {
         let max_bytes = kind.max_bytes(&self.limits);
         let declared = content_length.map_or(Ok(0), |length| {
@@ -148,9 +170,11 @@ impl HlsIngest {
         })?;
         Ok(ObjectBody {
             budget: self.budget.clone(),
+            key_budget: self.key_state(input_id).budget.clone(),
             max_bytes,
-            bytes: bytes::BytesMut::with_capacity(declared),
+            bytes: bytes::BytesMut::with_capacity(declared.min(INITIAL_BODY_CAPACITY)),
             permit: None,
+            key_permit: None,
         })
     }
 
@@ -243,6 +267,7 @@ impl HlsIngest {
             pipeline_id: pipeline.id.clone(),
             registration,
             ring,
+            lead_ms: key.lead_ms.clone(),
             limits: SessionLimits {
                 hold_segments: self.limits.hold_segments,
                 hold_bytes: self.limits.hold_bytes,
@@ -265,10 +290,13 @@ impl HlsIngest {
         drop(sessions);
         let mut keys = crate::sync::lock(&self.keys);
         // Keep the key's state while anything still uses it: an upload slot
-        // in flight or a start in progress.
+        // in flight, bytes charged to its share, or a start in progress.
         if idle
             && keys.get(input_id).is_some_and(|key| {
-                Arc::strong_count(key) == 1 && Arc::strong_count(&key.uploads) == 1
+                Arc::strong_count(key) == 1
+                    && Arc::strong_count(&key.uploads) == 1
+                    && Arc::strong_count(&key.budget) == 1
+                    && Arc::strong_count(&key.lead_ms) == 1
             })
         {
             keys.remove(input_id);
@@ -351,8 +379,10 @@ mod tests {
                 objects: stale,
             },
         );
-        let mut body = ingest.object_body(ObjectKind::Segment, None).unwrap();
-        body.push(b"segment").unwrap();
+        let mut body = ingest
+            .object_body(ObjectKind::Segment, None, INPUT_ID)
+            .unwrap();
+        body.push(b"segment").await.unwrap();
 
         let outcome = ingest
             .dispatch(
@@ -378,11 +408,21 @@ mod tests {
         path: &str,
         bytes: &[u8],
     ) -> ObjectOutcome {
-        let mut body = ingest.object_body(kind, None).unwrap();
-        body.push(bytes).unwrap();
+        send_to(ingest, &authenticated(), kind, path, bytes).await
+    }
+
+    async fn send_to(
+        ingest: &Arc<HlsIngest>,
+        pipeline: &AuthenticatedPipeline,
+        kind: ObjectKind,
+        path: &str,
+        bytes: &[u8],
+    ) -> ObjectOutcome {
+        let mut body = ingest.object_body(kind, None, &pipeline.input_id).unwrap();
+        body.push(bytes).await.unwrap();
         ingest
             .dispatch(
-                &authenticated(),
+                pipeline,
                 STREAM_KEY,
                 "127.0.0.1:9",
                 kind,
@@ -391,6 +431,152 @@ mod tests {
             )
             .await
             .unwrap()
+    }
+
+    fn fixture() -> Vec<u8> {
+        std::fs::read(crate::test_fixtures::canonical_h264_ts_fixture().unwrap()).unwrap()
+    }
+
+    /// A key at its buffer share is throttled, not refused: its next body
+    /// waits until the segment being published returns its bytes, and a
+    /// second key publishes meanwhile.
+    #[tokio::test]
+    async fn a_key_at_its_share_is_throttled_while_another_key_publishes() {
+        let (engine, ingest) = test_ingest(HlsIngestLimits {
+            key_buffer_bytes: 8_000_000,
+            ..HlsIngestLimits::default()
+        });
+        let segment = fixture();
+        let playlist = "#EXTM3U\n#EXT-X-TARGETDURATION:8\n#EXTINF:8.0,\nindex0.ts\n";
+        assert_eq!(
+            send(&ingest, ObjectKind::Segment, "index0.ts", &segment).await,
+            ObjectOutcome::Held
+        );
+        assert_eq!(
+            send(
+                &ingest,
+                ObjectKind::Playlist,
+                "index.m3u8",
+                playlist.as_bytes()
+            )
+            .await,
+            ObjectOutcome::Stored
+        );
+
+        // index0 (6.7 MB) publishes over 8 s and holds most of the 8 MB share.
+        let started = std::time::Instant::now();
+        let mut next = ingest
+            .object_body(ObjectKind::Segment, None, INPUT_ID)
+            .unwrap();
+        let throttled = tokio::spawn(async move {
+            let pushed = next.push(&fixture()).await;
+            (pushed.is_ok(), started.elapsed())
+        });
+
+        let other = AuthenticatedPipeline {
+            id: "pipe-hls-b".to_string(),
+            input_id: "input-hls-b".to_string(),
+            selected: true,
+        };
+        let other_ring = engine.get_or_create_pipeline(&other.id).await;
+        let other_playlist = "#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1.0,\nindex0.ts\n";
+        let other_segment = &segment[..188 * 2_000];
+        assert_eq!(
+            send_to(
+                &ingest,
+                &other,
+                ObjectKind::Segment,
+                "index0.ts",
+                other_segment
+            )
+            .await,
+            ObjectOutcome::Held
+        );
+        assert_eq!(
+            send_to(
+                &ingest,
+                &other,
+                ObjectKind::Playlist,
+                "index.m3u8",
+                other_playlist.as_bytes()
+            )
+            .await,
+            ObjectOutcome::Stored
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while other_ring.get_write_idx() == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the other key publishes");
+        assert!(
+            !throttled.is_finished(),
+            "the capped key's body waits for its share"
+        );
+
+        let (pushed, waited) = throttled.await.unwrap();
+        assert!(pushed, "the capped key's body is read, never refused");
+        assert!(
+            waited >= std::time::Duration::from_secs(5),
+            "the body waited only {waited:?} for the share"
+        );
+        engine.cancel_pipeline_input(INPUT_ID).await;
+        engine.cancel_pipeline_input(&other.input_id).await;
+    }
+
+    /// Released media waits to be published only up to two target
+    /// durations: past that the session stops taking objects, so a
+    /// faster-than-real-time encoder's next reply waits, though the bytes
+    /// (6.7 MB) are far below the byte ceiling.
+    #[tokio::test]
+    async fn the_outbox_holds_two_target_durations_of_media() {
+        let (engine, ingest) = test_ingest(HlsIngestLimits::default());
+        let fixture = fixture();
+        let slice = fixture.len() / 188 / 6 * 188;
+        let mut playlist = String::from("#EXTM3U\n#EXT-X-TARGETDURATION:1\n");
+        for index in 0..6 {
+            let end = if index == 5 {
+                fixture.len()
+            } else {
+                (index + 1) * slice
+            };
+            let path = format!("index{index}.ts");
+            let bytes = &fixture[index * slice..end];
+            assert_eq!(
+                send(&ingest, ObjectKind::Segment, &path, bytes).await,
+                ObjectOutcome::Held
+            );
+            playlist.push_str(&format!("#EXTINF:1.0,\n{path}\n"));
+        }
+        // All six (6 s listed) are released at once.
+        assert_eq!(
+            send(
+                &ingest,
+                ObjectKind::Playlist,
+                "index.m3u8",
+                playlist.as_bytes()
+            )
+            .await,
+            ObjectOutcome::Stored
+        );
+
+        let asked = std::time::Instant::now();
+        let outcome = send(
+            &ingest,
+            ObjectKind::Playlist,
+            "index.m3u8",
+            playlist.as_bytes(),
+        )
+        .await;
+        let waited = asked.elapsed();
+        assert_eq!(outcome, ObjectOutcome::Stored);
+        // Taken once under 2 s remain: five slices of 1.33 s real media.
+        assert!(
+            waited >= std::time::Duration::from_secs(4),
+            "the next object was taken after {waited:?}"
+        );
+        engine.cancel_pipeline_input(INPUT_ID).await;
     }
 
     /// A whole segment released at once reaches the ring at media pace, not

@@ -629,10 +629,10 @@ ffmpeg -re -i input.mp4 -c:v libx264 -g 60 -c:a aac \
 These all work: `-method POST`; FFmpeg's default of one connection per
 object, closed without reading the response; persistent connections
 (`-http_persistent 1`), with one limit: FFmpeg then sends requests ahead of
-the replies and closes without reading them when it exits, so the reset that
-follows can discard its final segment and `EXT-X-ENDLIST` playlist before
-they are read (the session then ends on the idle timeout); keep the default
-for streams whose end matters; chunked or `Content-Length` bodies; and
+the replies and, on exit, closes without reading them, so the connection is
+reset and its final segment and `EXT-X-ENDLIST` playlist can be lost (the
+session then ends on the idle timeout); keep the default for streams whose
+end matters; chunked or `Content-Length` bodies; and
 `delete_segments`, whose `DELETE` gets `200` and changes nothing. Segment URIs
 must be relative to their playlist. fMP4 segments are not ingested yet
 (`415`).
@@ -666,17 +666,23 @@ must be relative to their playlist. fMP4 segments are not ingested yet
   - Each object is bounded: 1 MiB per playlist and 64 MiB per segment
     (`413` over the bound).
   - Each key is bounded: 2 uploads in flight, and 8 held segments or 128 MiB
-    held, with the oldest evicted first. A third upload waits for a slot
-    before its body is read; a `503` would be lost on FFmpeg, which closes
-    without reading the reply, and its object with it.
-  - All HLS sessions share a 512 MiB budget for bytes being read, queued, held
-    or published. When it is exhausted, an upload gets `503` with
-    `Retry-After: 1`.
-  - A request body that sends nothing for 10 s gets `408`, and its bytes
-    are released.
-  - An encoder faster than real time is slowed: once a hold's worth of
-    released media (128 MiB) waits to be published, the session stops taking
-    objects, so its uploads are answered only as publication catches up.
+    held, with the oldest evicted first. A third upload waits up to 10 s for
+    a slot before its body is read (`503` after that).
+  - Each key may use 128 MiB, a quarter of the shared budget, for bytes being
+    read, queued, held or published. A body that would exceed it is read
+    more slowly instead of refused: FFmpeg's blocked write is backpressure it
+    respects, where a refusal it never reads would lose the segment.
+  - All HLS sessions share a 512 MiB budget. When it is exhausted, an upload
+    gets `503` with `Retry-After: 1`. FFmpeg never reads replies, so for it
+    that segment is lost; the per-key share keeps a few keys from reaching
+    this for all.
+  - A request body that sends nothing for 10 s, or takes longer in total than
+    max(4 × target duration, 40 s), gets `408`, and its bytes are released.
+    A 64 MiB segment on a 10 Mbit/s uplink fits; a trickle does not.
+  - An encoder faster than real time is slowed, not refused: once two target
+    durations (by `EXTINF`; 10 s before a playlist) of released media, or
+    128 MiB, wait to be published, the session stops taking objects, so its
+    uploads are answered only as publication catches up.
 - **Pacing.** Released segments reach the ring at media pace, like every
   other TS source, not as one burst per segment. Media time is anchored at
   the first data after a session start or a discontinuity; later data waits

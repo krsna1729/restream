@@ -68,28 +68,36 @@ pub async fn hls_ingest_handler(
         .get(header::CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok());
-    let mut object = match ingest.object_body(kind, content_length) {
+    let mut object = match ingest.object_body(kind, content_length, &pipeline.input_id) {
         Ok(object) => object,
         Err(error) => return body_error(error),
     };
-    let Some(slot) = ingest.upload_slot(&pipeline.input_id).await else {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    let idle_floor = ingest.limits().idle_floor;
+    let Ok(Some(slot)) =
+        tokio::time::timeout(idle_floor, ingest.upload_slot(&pipeline.input_id)).await
+    else {
+        return retry_later("upload slots for this stream key stayed busy");
     };
-    // A stalled upload must not hold its slot and budget: each frame has
-    // the idle floor to arrive, and its bytes are released on expiry.
-    let frame_deadline = ingest.limits().idle_floor;
+    // A stalled or trickling upload must not hold its slot and budget: each
+    // frame has the idle floor to arrive, the whole body (including waits
+    // for the key's buffer share) its deadline, and everything read is
+    // released on expiry.
+    let body_deadline = tokio::time::Instant::now() + ingest.body_deadline(&pipeline.input_id);
     let mut frames = body.into_data_stream();
     loop {
-        let frame = match tokio::time::timeout(frame_deadline, frames.next()).await {
+        let frame_deadline = body_deadline.min(tokio::time::Instant::now() + idle_floor);
+        let frame = match tokio::time::timeout_at(frame_deadline, frames.next()).await {
             Ok(Some(frame)) => frame,
             Ok(None) => break,
-            Err(_) => return (StatusCode::REQUEST_TIMEOUT, "request body stalled").into_response(),
+            Err(_) => return body_too_slow(),
         };
         let Ok(frame) = frame else {
             return (StatusCode::BAD_REQUEST, "request body failed").into_response();
         };
-        if let Err(error) = object.push(&frame) {
-            return body_error(error);
+        match tokio::time::timeout_at(body_deadline, object.push(&frame)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return body_error(error),
+            Err(_) => return body_too_slow(),
         }
     }
 
@@ -125,6 +133,14 @@ fn body_error(error: BodyError) -> Response {
         BodyError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE.into_response(),
         BodyError::BufferFull => retry_later("ingest buffer full"),
     }
+}
+
+fn body_too_slow() -> Response {
+    (
+        StatusCode::REQUEST_TIMEOUT,
+        "request body stalled or too slow",
+    )
+        .into_response()
 }
 
 fn retry_later(reason: &'static str) -> Response {
