@@ -49,7 +49,21 @@ pub struct OperationRecord {
     pub audit_log: Vec<Value>,
     pub execution_result: Option<Value>,
     pub verification_result: Option<Value>,
-    pub pre_apply_alert_count: Option<usize>,
+    /// What verification compares against, taken as the apply starts;
+    /// `None` until then.
+    pub baseline: Option<ApplyBaseline>,
+}
+
+/// The engine just before an apply.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ApplyBaseline {
+    /// Every open alert, for the reported delta.
+    pub alerts_total: usize,
+    /// Critical alerts on the changed pipelines, by id, so a new one is not
+    /// hidden by an old one clearing.
+    pub critical_ids: Vec<String>,
+    /// The hottest service center on the calibration priors.
+    pub projected_utilization: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -106,7 +120,6 @@ impl AgentExecutionStore {
         &self,
         request: OperationCreateRequest,
         plan: PlanResponse,
-        pre_alert_count: usize,
     ) -> Result<StoreCreateResult, OperationStoreError> {
         let plan_request = request.plan_request();
         let plan_hash = plan_hash(&plan_request);
@@ -185,7 +198,7 @@ impl AgentExecutionStore {
             audit_log,
             execution_result: None,
             verification_result: None,
-            pre_apply_alert_count: Some(pre_alert_count),
+            baseline: None,
             request,
         };
 
@@ -247,7 +260,13 @@ impl AgentExecutionStore {
         Ok(record.clone())
     }
 
-    pub fn start_apply(&self, operation_id: &str) -> Result<OperationRecord, OperationStoreError> {
+    /// Start applying an approved operation, recording the engine as it
+    /// stands now: the baseline its verification compares against.
+    pub fn start_apply(
+        &self,
+        operation_id: &str,
+        baseline: ApplyBaseline,
+    ) -> Result<OperationRecord, OperationStoreError> {
         let mut state = lock_or_recover(&self.state);
         let record = state
             .records
@@ -266,6 +285,7 @@ impl AgentExecutionStore {
 
         let ts = now();
         record.status = OperationStatus::Applying;
+        record.baseline = Some(baseline);
         record.updated_at = ts.clone();
         record.audit_log.push(audit_event(
             "applyStarted",
@@ -417,7 +437,9 @@ pub fn public_record(record: &OperationRecord) -> Value {
         "auditLog": record.audit_log,
         "executionResult": record.execution_result,
         "verificationResult": record.verification_result,
-        "preApplyAlertCount": record.pre_apply_alert_count,
+        "preApplyAlertCount": record.baseline.as_ref().map(|baseline| baseline.alerts_total),
+        "preApplyCriticalAlertIds": record.baseline.as_ref().map(|baseline| &baseline.critical_ids),
+        "preApplyProjectedUtilization": record.baseline.as_ref().map(|baseline| baseline.projected_utilization),
     }))
 }
 
@@ -539,6 +561,7 @@ mod tests {
                 removed_nodes: Vec::new(),
                 changed_edges: Vec::new(),
                 notes: Vec::new(),
+                topology: None,
             },
             impact: ImpactPreview {
                 affected_pipelines: vec!["pipe".to_string()],
@@ -582,7 +605,7 @@ mod tests {
             audit_log: Vec::new(),
             execution_result: None,
             verification_result: None,
-            pre_apply_alert_count: Some(0),
+            baseline: None,
         }
     }
 
@@ -715,19 +738,19 @@ mod tests {
         let store = AgentExecutionStore::default();
         let request = test_request(Some("same-key".to_string()));
         let first = store
-            .create(request.clone(), test_plan(), 0)
+            .create(request.clone(), test_plan())
             .expect("first create succeeds");
         assert!(!first.reused);
 
         let replay = store
-            .create(request, test_plan(), 0)
+            .create(request, test_plan())
             .expect("matching replay succeeds");
         assert!(replay.reused);
 
         let mut changed = test_request(Some("same-key".to_string()));
         changed.intent = "remove output".to_string();
         let err = store
-            .create(changed, test_plan(), 0)
+            .create(changed, test_plan())
             .expect_err("different request with same key should conflict");
 
         assert_eq!(err, OperationStoreError::IdempotencyConflict);
@@ -741,9 +764,7 @@ mod tests {
         request.agent_id = Some("spoofed-agent".to_string());
         request.tool_identity = Some("spoofed-tool".to_string());
 
-        let created = store
-            .create(request, test_plan(), 0)
-            .expect("create succeeds");
+        let created = store.create(request, test_plan()).expect("create succeeds");
         let operation_id = created.operation["operationId"].as_str().unwrap();
         let record = store.get(operation_id).expect("record stored");
 
@@ -779,7 +800,7 @@ mod tests {
                     let request = test_request(Some("race-key".to_string()));
                     barrier.wait();
                     store
-                        .create(request, test_plan(), 0)
+                        .create(request, test_plan())
                         .expect("create should not error for identical requests")
                 })
             })

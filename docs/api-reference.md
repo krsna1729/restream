@@ -532,7 +532,7 @@ restart), and creating one accepts a body of at most 256 KiB.
 | `GET` | `/api/v1/agent/operations/:operation_id` | Read operation status, audit log, progress, execution result, and verification result |
 | `POST` | `/api/v1/agent/operations/:operation_id/approve` | Record explicit approval before mutation is allowed |
 | `POST` | `/api/v1/agent/operations/:operation_id/apply` | Apply approved output add/update/remove/start/stop changes through the core DB/runtime primitives |
-| `POST` | `/api/v1/agent/operations/:operation_id/verify` | Verify post-change health, graph convergence, and alert delta |
+| `POST` | `/api/v1/agent/operations/:operation_id/verify` | Judge the applied change against four fixed gates; report graph convergence and the alert delta |
 | `POST` | `/api/v1/agent/verify` | Verify by body: `{ "operationId": "op_..." }` |
 
 Without `agent-execution`, these operation routes return an authenticated `404`
@@ -543,6 +543,28 @@ forgets them) answers every operation route with `404`
 apply answers `400` with the failed operation record: its `executionResult` is
 `{"success": false, "error": "..."}`, and changes before the refused one stay
 applied.
+
+A plan's `graphPreview.topology` is the request pipeline's topology before
+and after the change: outputs that want running (desired `running`, retries
+not exhausted) grouped by the stage each one reads and its protocol
+(`before`/`after` rows of `{stage, protocol, outputs}`), with the stages the
+change starts (`addedStages`) and those no output reads afterwards
+(`retiredStages`). It is planned with the same planner as the reconciler,
+for the live ingest's video codec (`ingestCodec`, `null` without a live
+ingest: no codec bridge is planned). Changes for another pipeline are outside
+it; a request without `pipelineId` has `topology: null`.
+
+Verification (`verificationResult`) is decided by four fixed `gates`, each
+`{gate, passed, detail}`; the operation is `verified` only when all pass:
+
+| Gate | Passes when |
+|---|---|
+| `desiredState` | every requested change reached its state (the per-change `checks`) |
+| `outputsRunning` | every output the change set running is running (outputs it did not touch are not judged; a change that starts nothing passes) |
+| `newCriticalAlerts` | no critical alert on the changed pipelines is open that was not open as the apply started (`preApplyCriticalAlertIds`; by id, so one clearing does not hide a new one; other pipelines and engine-wide alerts are not judged) |
+| `capacityState` | the change did not take the hottest service center on the calibration priors from below the safe utilization (0.8) to at or above it (`preApplyProjectedUtilization` against now; a host already past it passes, so a change that sheds load can verify) |
+
+`graphConvergence` and `incidentDelta` (all alerts) are reported, not judged.
 
 Context responses include:
 

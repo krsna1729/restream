@@ -276,14 +276,23 @@ pub(super) async fn build_agent_plan(
     let catalog = state.agent_service.load_pipeline_output_catalog().await;
     let pipelines = catalog.pipelines;
     let outputs = catalog.outputs;
-    let current_graph = if let Some(pid) = request.pipeline_id.as_deref()
+    let (current_graph, ingest_codec) = if let Some(pid) = request.pipeline_id.as_deref()
         && pipelines.iter().any(|pipeline| pipeline.id == pid)
     {
-        Some(crate::api_runtime_views::processing_graph(&state.engine, pid, &outputs).await)
+        (
+            Some(crate::api_runtime_views::processing_graph(&state.engine, pid, &outputs).await),
+            state.engine.ingest_video_codec(pid).await,
+        )
     } else {
-        None
+        (None, None)
     };
-    crate::agent_plane::plan_response(request, &pipelines, &outputs, current_graph.as_ref())
+    crate::agent_plane::plan_response(
+        request,
+        &pipelines,
+        &outputs,
+        current_graph.as_ref(),
+        ingest_codec.as_deref(),
+    )
 }
 
 #[cfg(test)]
@@ -312,6 +321,7 @@ mod tests {
                 removed_nodes: Vec::new(),
                 changed_edges: Vec::new(),
                 notes: vec!["note".to_string()],
+                topology: None,
             },
             impact: crate::agent_plane::ImpactPreview {
                 affected_pipelines: vec!["pipe-1".to_string()],

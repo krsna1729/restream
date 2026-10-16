@@ -3,8 +3,17 @@ import test from "node:test";
 
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
-const { NEW_DRAFT, changeRequest, nextStep, progress, verification } =
-  await loadCompiledFrontendModule("control-room/changes-model.js");
+const {
+  NEW_DRAFT,
+  changeRequest,
+  convergenceTimeline,
+  liveConvergence,
+  nextStep,
+  progress,
+  scenarioLoad,
+  topologyLines,
+  verification,
+} = await loadCompiledFrontendModule("control-room/changes-model.js");
 
 test("a change becomes the planner's request; a change to a destination sends only what was filled in", () => {
   const add = { ...NEW_DRAFT, name: " DR ", url: " srt://dr:9000 ", profile: "720p" };
@@ -60,26 +69,142 @@ test("each operation offers one next step; a failed verification can run again",
   }
 });
 
-test("only the per-change checks are gates; alerts and graph nodes are observations", () => {
+test("the engine's fixed gates decide; per-change checks and alerts are not gates", () => {
   const result = verification(
-    op("verified", {
-      checks: [
-        { kind: "addOutput", outputId: "o9", passed: true, reason: "stopped" },
-        { kind: "stopOutput", outputId: null, passed: false, reason: "stillRunning" },
+    op("verificationFailed", {
+      gates: [
+        { gate: "desiredState", passed: true, detail: "1 of 1" },
+        { gate: "outputsRunning", passed: false, detail: "0 of 1" },
       ],
+      checks: [{ kind: "addOutput", outputId: "o9", passed: true, reason: "stopped" }],
       incidentDelta: { delta: 2 },
       graphConvergence: { activeNodes: 5 },
     }),
   );
-  assert.deepEqual(result.gates, [
-    { label: "addOutput o9", passed: true, detail: "stopped" },
-    { label: "stopOutput", passed: false, detail: "stillRunning" },
-  ]);
+  assert.deepEqual(
+    result.gates.map((gate) => [gate.passed, gate.detail]),
+    [
+      [true, "1 of 1"],
+      [false, "0 of 1"],
+    ],
+  );
+  assert.deepEqual(result.checks, [{ label: "addOutput o9", passed: true, detail: "stopped" }]);
   assert.deepEqual(result.observations, [
     "Open alerts: 2 more than before the change.",
     "Active graph nodes after the change: 5.",
   ]);
   assert.match(verification(op("verified", { incidentDelta: { delta: -1 } })).observations[0], /1 fewer/);
-  assert.match(verification(op("verified", { incidentDelta: { delta: 0 } })).observations[0], /as many as/);
-  assert.deepEqual(verification(op("applied")), { gates: [], observations: [] });
+  assert.deepEqual(verification(op("applied")), { gates: [], checks: [], observations: [] });
+});
+
+const diff = (before, after, addedStages = [], retiredStages = []) => ({
+  pipelineId: "p",
+  ingestCodec: "h264",
+  before,
+  after,
+  addedStages,
+  retiredStages,
+});
+
+test("the topology diff lines up before and after, and marks the stages the change starts", () => {
+  const lines = topologyLines(
+    diff(
+      [
+        { stage: "source", protocol: "srt", outputs: 3 },
+        { stage: "video:720p", protocol: "rtmp", outputs: 1 },
+      ],
+      [
+        { stage: "video:720p", protocol: "rtmp", outputs: 4 },
+        { stage: "video:1080p", protocol: "hls", outputs: 1 },
+      ],
+      ["video:1080p"],
+    ),
+  );
+  assert.deepEqual(
+    lines.map((line) => [line.stage, line.protocol, line.before, line.after, line.newStage]),
+    [
+      ["video:720p", "rtmp", 1, 4, false],
+      ["video:1080p", "hls", 0, 1, true],
+      // Gone after: still listed, so the removal shows.
+      ["source", "srt", 3, 0, false],
+    ],
+  );
+});
+
+test("the scenario prices only what the change adds; removals are reported, not credited", () => {
+  const rows = (n) => [{ stage: "source", protocol: "srt", outputs: n }];
+  assert.deepEqual(scenarioLoad(diff(rows(2), rows(5), ["a"])), {
+    addOutputs: 3,
+    addStages: 1,
+    removedOutputs: 0,
+  });
+  assert.deepEqual(scenarioLoad(diff(rows(5), rows(2))), {
+    addOutputs: 0,
+    addStages: 0,
+    removedOutputs: 3,
+  });
+  // One added on a new stage, one removed elsewhere: both counted, not netted.
+  assert.deepEqual(
+    scenarioLoad(
+      diff(
+        [{ stage: "source", protocol: "srt", outputs: 2 }],
+        [
+          { stage: "source", protocol: "srt", outputs: 1 },
+          { stage: "video:720p", protocol: "rtmp", outputs: 1 },
+        ],
+        ["video:720p"],
+      ),
+    ),
+    { addOutputs: 1, addStages: 1, removedOutputs: 1 },
+  );
+});
+
+const T0 = Date.parse("2026-10-16T10:00:00Z");
+const at = (ms) => new Date(T0 + ms).toISOString();
+
+test("the convergence timeline merges audit events and output changes in time order", () => {
+  const operation = {
+    auditLog: [
+      { at: at(0), kind: "created", summary: "op made" },
+      { at: at(5000), kind: "applyCompleted", summary: "applied" },
+      { at: "garbled", kind: "approved", summary: "dropped" },
+    ],
+    stateTransitions: [
+      { at: at(4000), kind: "addOutput", pipelineId: "p", outputId: "o1", from: null, to: { desiredState: "running" } },
+      {
+        at: at(4500),
+        kind: "stopOutput",
+        pipelineId: "p",
+        outputId: "o2",
+        from: { desiredState: "running" },
+        to: { desiredState: "stopped" },
+      },
+      { at: at(4800), kind: "removeOutput", pipelineId: "p", outputId: "o3", from: { desiredState: "stopped" }, to: null },
+    ],
+  };
+  assert.deepEqual(
+    convergenceTimeline(operation).map((step) => [step.offsetMs, step.label]),
+    [
+      [0, "created: op made"],
+      [4000, "o1 created, desired running"],
+      [4500, "o2 desired running → stopped"],
+      [4800, "o3 removed"],
+      [5000, "applyCompleted: applied"],
+    ],
+  );
+
+  const live = liveConvergence(operation, [
+    { id: "o1", name: "cdn-a", convergence: "starting" },
+    { id: "o2", name: "cdn-b", convergence: "converged" },
+    { id: "o9", name: "untouched", convergence: "retrying" },
+  ]);
+  // o3 was removed; o9 was not part of the change.
+  assert.deepEqual(live, {
+    converged: 1,
+    total: 2,
+    states: [
+      ["cdn-a", "starting"],
+      ["cdn-b", "converged"],
+    ],
+  });
 });

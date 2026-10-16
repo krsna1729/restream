@@ -12,6 +12,7 @@ import type {
 import type {
   CapacitySnapshot,
   Diagnosis,
+  EgressProtocol,
   ServiceCenter,
 } from "./generated/runtime-state.js";
 
@@ -424,13 +425,31 @@ export interface PlanIssue {
   field?: string;
 }
 
+/** Wanted-running outputs that read one stage over one protocol. */
+export interface TopologyRow {
+  stage: string;
+  protocol: EgressProtocol;
+  outputs: number;
+}
+
+/** The plan pipeline's wanted-running outputs before and after a change,
+ * planned for the live ingest's codec (`null`: no live ingest). */
+export interface TopologyDiff {
+  pipelineId: string;
+  ingestCodec: string | null;
+  before: TopologyRow[];
+  after: TopologyRow[];
+  addedStages: string[];
+  retiredStages: string[];
+}
+
 /** `POST /agent/plans`: the engine's judgement of a change, made without
  * mutating anything. */
 export interface ChangePlan {
   planId: string;
   executionEnabled: boolean;
   validation: { valid: boolean; errors: PlanIssue[]; warnings: PlanIssue[] };
-  graphPreview: { notes: string[] };
+  graphPreview: { notes: string[]; topology: TopologyDiff | null };
   impact: {
     affectedPipelines: string[];
     affectedOutputs: string[];
@@ -450,6 +469,24 @@ export type OperationStatus =
   | "verificationFailed"
   | "failed";
 
+/** A fixed verification gate; all four must pass for `verified`. */
+export interface VerifyGate {
+  gate: "desiredState" | "outputsRunning" | "newCriticalAlerts" | "capacityState";
+  passed: boolean;
+  detail: string;
+}
+
+/** One change the apply made, as the engine recorded it. */
+export interface StateTransition {
+  at: string;
+  kind: ProposedChange["kind"];
+  pipelineId: string;
+  outputId?: string | null;
+  /** The output record before and after; `null` when there was none. */
+  from?: { desiredState?: string } | null;
+  to?: { desiredState?: string } | null;
+}
+
 export interface OperationCheck {
   kind: string;
   outputId?: string | null;
@@ -466,6 +503,7 @@ export interface ChangeOperation {
   request: ChangeRequest;
   approval: { approvedBy: string; claimedBy: string; reason: string | null; approvedAt: string } | null;
   auditLog: { at: string; kind: string; summary: string }[];
+  stateTransitions: StateTransition[];
   /** A failed apply stops at the first rejected change; earlier ones stay applied. */
   executionResult:
     | {
@@ -474,9 +512,10 @@ export interface ChangeOperation {
       }
     | { success: false; error: string }
     | null;
-  /** `checks` alone decide `verified`; the rest is reported, not judged. */
+  /** `gates` decide `verified`; the alert delta and graph are reported. */
   verificationResult: {
     explanation?: string;
+    gates?: VerifyGate[];
     checks?: OperationCheck[];
     incidentDelta?: { delta: number };
     graphConvergence?: { activeNodes?: number };

@@ -7,6 +7,8 @@
 mod catalog;
 #[cfg(test)]
 mod tests;
+mod topology;
+mod verify_gates;
 
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -22,6 +24,11 @@ const OUTPUT_URL_SCHEME_ERROR: &str = "Supported schemes are rtmp://, rtmps://, 
 
 pub use catalog::{
     AgentCapabilities, capabilities, redaction_policy, route_catalog, schema_catalog,
+};
+pub use topology::{TopologyDiff, TopologyRow};
+pub use verify_gates::{
+    VerifyGate, capacity_state, critical_ids_on, desired_state, new_critical_alerts,
+    outputs_running,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -50,6 +57,9 @@ pub struct GraphPreview {
     pub removed_nodes: Vec<Value>,
     pub changed_edges: Vec<Value>,
     pub notes: Vec<String>,
+    /// The request pipeline's wanted-running outputs by stage and protocol,
+    /// before and after the change.
+    pub topology: Option<TopologyDiff>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -365,9 +375,11 @@ pub fn plan_response(
     pipelines: &[Pipeline],
     outputs: &[Output],
     current_graph: Option<&Value>,
+    ingest_codec: Option<&str>,
 ) -> PlanResponse {
     let validation = validate_plan(&request, pipelines, outputs);
-    let graph_preview = graph_preview(&request, current_graph);
+    let mut graph_preview = graph_preview(&request, current_graph);
+    graph_preview.topology = topology::topology_diff(&request, outputs, ingest_codec);
     let impact = impact_preview(&request);
     let plan_id = plan_id(&request);
 
@@ -401,7 +413,7 @@ pub fn plan_response(
             }));
             steps.push(serde_json::json!({
                 "id": "verify-agent-operation",
-                "title": "Verify health, graph convergence, and alert delta after application",
+                "title": "Verify desired state, delivery floor, critical alerts and capacity after application",
                 "phase": "verify",
                 "status": "available"
             }));
@@ -669,6 +681,7 @@ fn graph_preview(request: &PlanRequest, current_graph: Option<&Value>) -> GraphP
         removed_nodes: Vec::new(),
         changed_edges: Vec::new(),
         notes,
+        topology: None,
     }
 }
 
