@@ -139,14 +139,17 @@ function instant(value: string | null | undefined): number | null {
 }
 
 /**
- * A recording's life, from the persisted session behind the file (start,
- * stop, failure) and its browser-MP4 remux; `null` for a file no recording
- * session wrote. Steps come in the order they happen.
+ * A recording's life, from the persisted session behind the file and its
+ * conversion state; `null` for a file no recording session wrote. What the
+ * recorder writes: the session start; at stop, only the `converting`
+ * conversion state (its time is the stop); after the MP4 remux, the session
+ * `ready` with `endedAt` = when the MP4 was written. A failed remux marks
+ * both the session and the conversion failed while the `.ts` stays, so it
+ * is one remux failure, not a failed recording.
  */
 export function recordingTimeline(file: MediaFile): readonly TimelineEvent[] | null {
   const started = instant(file.recordingStartedAt);
   if (!file.recordingId || started === null) return null;
-  const ended = instant(file.recordingEndedAt);
   const events: TimelineEvent[] = [
     {
       atMs: started,
@@ -154,43 +157,25 @@ export function recordingTimeline(file: MediaFile): readonly TimelineEvent[] | n
       tone: "ok",
     },
   ];
-  switch (file.recordingStatus) {
-    case "recording":
-      events.push({ atMs: null, label: "Still recording", tone: "info" });
-      break;
-    case "finalizing":
-      events.push({ atMs: ended, label: "Stopped; finalizing the file", tone: "info" });
-      break;
-    case "ready":
-      events.push({ atMs: ended, label: "Recording stopped and finalized", tone: "ok" });
-      break;
-    case "failed":
-      events.push({
-        atMs: ended,
-        label: `Recording failed: ${file.recordingError ?? "no reason was recorded"}`,
-        tone: "error",
-      });
-      break;
-    default:
-      break;
-  }
-  const remuxedAt = instant(file.conversionUpdatedAt);
-  switch (file.conversionStatus) {
-    case "converting":
-      events.push({ atMs: remuxedAt, label: "Remuxing to browser MP4", tone: "info" });
-      break;
-    case "ready":
-      events.push({ atMs: remuxedAt, label: "Remuxed to browser MP4", tone: "ok" });
-      break;
-    case "failed":
-      events.push({
-        atMs: remuxedAt,
-        label: `Remux failed: ${file.conversionError ?? "no reason was recorded"}`,
-        tone: "error",
-      });
-      break;
-    default:
-      break;
+  const converted = instant(file.conversionUpdatedAt);
+  if (file.conversionStatus === "converting") {
+    events.push({ atMs: converted, label: "Stopped; writing the browser MP4", tone: "info" });
+  } else if (file.conversionStatus === "failed") {
+    events.push({
+      atMs: converted,
+      label: `MP4 remux failed: ${file.conversionError ?? "no reason was recorded"}; the .ts is kept`,
+      tone: "error",
+    });
+  } else if (file.recordingStatus === "recording") {
+    events.push({ atMs: null, label: "Still recording", tone: "info" });
+  } else if (file.recordingStatus === "ready") {
+    events.push({ atMs: instant(file.recordingEndedAt), label: "Stopped; MP4 written", tone: "ok" });
+  } else if (file.recordingStatus === "failed") {
+    events.push({
+      atMs: instant(file.recordingEndedAt),
+      label: `Recording failed: ${file.recordingError ?? "no reason was recorded"}`,
+      tone: "error",
+    });
   }
   return events;
 }

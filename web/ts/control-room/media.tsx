@@ -48,7 +48,10 @@ export function Media({ live }: { live: LiveSnapshot }) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const files = library.value?.files ?? null;
-  const chosen = files?.find((file) => mediaKey(file) === selected) ?? null;
+  // A rename selects the new name: the session join is by stored path, so a
+  // renamed recording loses its session (and its timeline).
+  const chosen =
+    files?.find((file) => mediaKey(file) === selected || file.name === selected) ?? null;
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
@@ -81,8 +84,7 @@ export function Media({ live }: { live: LiveSnapshot }) {
                 file={chosen}
                 files={files}
                 onChanged={(name) => {
-                  // A recording keeps its key across a rename.
-                  setSelected(name === null ? null : chosen.recordingId ? mediaKey(chosen) : name);
+                  setSelected(name);
                   library.refresh();
                 }}
               />
@@ -273,7 +275,9 @@ function Asset(props: {
             Download original
           </a>
         </div>
-        <UseAsSource file={file} files={props.files} analysis={analysis} />
+        {/* A remux can replace the .ts while the form is open: a new name
+            starts a new form, so it never saves a deleted file. */}
+        <UseAsSource key={file.name} file={file} files={props.files} analysis={analysis} />
         <Rename file={file} onRenamed={props.onChanged} />
         <Delete file={file} onDeleted={() => props.onChanged(null)} />
       </div>

@@ -271,10 +271,14 @@ engine measures no spacing, so none, or one in a file longer than the
 target, needs Live Optimized); upload, rename and a confirmed
 delete (refused while a pipeline ingests the file); and the media disk from
 `/metrics/system`. A file a recording session wrote shows its timeline from
-the persisted session the media list already joins (`recordings` table:
-start, stop and finalize, or the failure, then the browser-MP4 remux; a
-step under way has no time), and stays selected when its `.ts` becomes the
-finalized `.mp4` (rows are selected by session id). "Use as source" opens
+the persisted session the media list already joins (`recordings` table)
+and the remux conversion state: the start; at stop only the `converting`
+state is written, so its time is the stop; the session's `endedAt` is when
+the browser MP4 was written, not the stop; a failed remux is one failure
+with the `.ts` kept; a step with no recorded time shows none. A row is
+selected by session id, so it stays selected when its `.ts` becomes the
+`.mp4`; a rename breaks the session join (by stored path), so a renamed
+recording keeps its file but loses its timeline. "Use as source" opens
 the new-pipeline form with the file as a looping file source, Live
 Optimized when the probe says the GOP needs it, and goes to the new
 pipeline's Operate view. System (fleet, `/engine/health` every 10 s): the host

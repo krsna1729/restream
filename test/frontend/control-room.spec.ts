@@ -519,7 +519,7 @@ test("media: a recording's timeline, then the recording as a new pipeline's sour
     );
     // The library poll picks up the finalized session, with no reload, and
     // keeps it selected though its .ts became the .mp4.
-    await expect(timeline).toContainText("Recording stopped and finalized", { timeout: 30_000 });
+    await expect(timeline).toContainText("Stopped; MP4 written", { timeout: 30_000 });
     await expect(timeline).not.toContainText("Still recording");
     recorded = (await sessionFile()) ?? recorded;
 
