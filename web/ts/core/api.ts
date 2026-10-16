@@ -236,13 +236,18 @@ async function getCapacityScenario(change: {
   addStages: number;
   /** Whose ingest the outputs carry; the highest-bitrate live one when absent. */
   pipelineId?: string;
+  /** The caller handles a pipeline with no live ingest (422) itself. */
+  quietWhenNotLive?: boolean;
 }): Promise<CapacityScenario | null> {
   const query = new URLSearchParams({ add_stages: String(change.addStages) });
   for (const [protocol, count] of Object.entries(change.addOutputs)) {
     if (count) query.set(`add_${protocol}`, String(count));
   }
   if (change.pipelineId) query.set("pipeline_id", change.pipelineId);
-  return apiRequest<CapacityScenario>(`/api/v1/capacity/scenario?${query}`);
+  return apiRequest<CapacityScenario>(
+    `/api/v1/capacity/scenario?${query}`,
+    change.quietWhenNotLive ? { silentStatuses: [422] } : {},
+  );
 }
 
 async function getPipelineSummary(

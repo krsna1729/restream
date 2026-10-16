@@ -20,7 +20,7 @@ export function Impact({ topology, pipelineId }: { topology: TopologyDiff; pipel
     if (!adds) return;
     let current = true;
     const change = { addOutputs: { rtmp, srt }, addStages: load.addStages };
-    void getCapacityScenario(live ? { ...change, pipelineId } : change)
+    void getCapacityScenario(live ? { ...change, pipelineId, quietWhenNotLive: true } : change)
       // The ingest may have ended since the plan: price it unnamed then.
       .then((result) => result ?? (live ? getCapacityScenario(change) : null))
       .then((result) => {
