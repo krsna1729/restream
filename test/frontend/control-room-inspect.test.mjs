@@ -5,11 +5,17 @@ import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
 const { buildResourceRows, nodeCards, ringFromGraph, shardsFrom } =
   await loadCompiledFrontendModule("control-room/inspect-model.js");
-const { takeSample } = await loadCompiledFrontendModule("control-room/monitor-model.js");
+const { incidentOnsets, takeSample } = await loadCompiledFrontendModule(
+  "control-room/monitor-model.js",
+);
 const { appendSample, sparkline } = await loadCompiledFrontendModule(
   "control-room/sample-window.js",
 );
 const ingest = (sample) => sample.ingestBps;
+const DIAGNOSED = {
+  flow: "stalled",
+  diagnosis: { layer: "destination", cause: { code: "noProgress" }, ruledOut: [] },
+};
 
 function resource(id, overrides = {}) {
   return { id, kind: "egress", label: id, ...overrides };
@@ -124,8 +130,9 @@ test("a sample covers one pipeline: its outputs, rates, lag, ring and shards", (
     outputs: [
       output("a", "p", { shard: 0 }),
       output("b", "p", { convergence: "starting", flow: "idle" }),
-      output("off", "p", { desired: "stopped", flow: "idle" }),
-      output("other", "q"),
+      // Neither a stopped output nor another pipeline's counts as degraded.
+      output("off", "p", { desired: "stopped", flow: "idle", ...DIAGNOSED }),
+      output("other", "q", DIAGNOSED),
     ],
     rates: {
       ingestBps: new Map([["p", 8_000_000], ["q", 1]]),
@@ -154,7 +161,21 @@ test("a sample covers one pipeline: its outputs, rates, lag, ring and shards", (
     maxFeedLag: 4,
     ringFillPercent: 25,
     maxShardProgressMs: 40,
+    degradedOutputs: 0,
   });
+
+  // A diagnosed wanted output of this pipeline is degraded.
+  assert.equal(
+    takeSample({
+      atMs: 1_200,
+      pipelineId: "p",
+      outputs: [output("a", "p", DIAGNOSED), output("b", "p")],
+      rates: null,
+      graph: null,
+      resources: null,
+    }).degradedOutputs,
+    1,
+  );
 
   // A truncated map may have dropped the slowest shard: a gap.
   const truncated = takeSample({
@@ -180,6 +201,37 @@ test("a sample covers one pipeline: its outputs, rates, lag, ring and shards", (
     [empty.ingestBps, empty.egressBps, empty.deliveringPercent, empty.maxFeedLag],
     [null, null, null, null],
   );
+
+  // The state stream is down: delivery and degradation are gaps.
+  const down = takeSample({
+    atMs: 2_500,
+    pipelineId: "p",
+    outputs: null,
+    rates: null,
+    graph: null,
+    resources: null,
+  });
+  assert.deepEqual([down.deliveringPercent, down.degradedOutputs], [null, null]);
+});
+
+test("the incident cursor marks each rise from 0 the page saw, across gaps", () => {
+  const at = (atMs, degradedOutputs) => ({ atMs, degradedOutputs });
+  assert.deepEqual(
+    incidentOnsets([
+      // Already degraded when the page opened: no onset in view.
+      at(0, 2),
+      at(1, 0),
+      at(2, 1), // onset
+      at(3, 2), // still the same incident
+      at(4, null), // a gap neither ends nor starts one
+      at(5, 1),
+      at(6, 0),
+      at(7, null),
+      at(8, 3), // onset: the last known value was 0
+    ]),
+    [2, 8],
+  );
+  assert.deepEqual(incidentOnsets([at(0, null), at(1, 1)]), []);
 });
 
 test("history keeps the window by time, however late the timer fires", () => {
