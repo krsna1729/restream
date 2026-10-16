@@ -29,3 +29,16 @@ for response in \
   { printf "\\x$(printf '%02x' "$len")"; printf "$response"; } > "$out/seed-$i"
   i=$((i + 1))
 done
+
+# hls_playlist: a path selector byte, then a media or master playlist.
+out=corpus/hls_playlist
+mkdir -p "$out"
+i=0
+for playlist in \
+  '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:7\n#EXTINF:2.000,\nindex7.ts\n#EXT-X-DISCONTINUITY\n#EXTINF:1.5,\n../v1/index8.ts\n#EXT-X-ENDLIST\n' \
+  '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,CODECS="avc1.64001f,mp4a.40.2"\nlow/index.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=2500000\nhigh/index.m3u8\n'; do
+  for selector in 00 01; do
+    { printf "\\x$selector"; printf "$playlist"; } > "$out/seed-$i-$selector"
+  done
+  i=$((i + 1))
+done

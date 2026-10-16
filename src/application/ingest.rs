@@ -90,6 +90,16 @@ impl PipelineAccessAuthenticator for PipelineStoreIngestAuthenticator {
                 )
                 .await
                 .map_err(pipeline_access_error)?,
+                PipelineAccessMode::HlsPublish => authenticate_stream_key_for_scope(
+                    self.pipeline_lookup.as_ref(),
+                    &self.security,
+                    stream_key,
+                    client_ip,
+                    RateLimitScope::HlsPublish,
+                    true,
+                )
+                .await
+                .map_err(pipeline_access_error)?,
             };
 
             let input = self

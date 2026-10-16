@@ -50,6 +50,11 @@ tokio = { version = "1.39", features = [
     "rt-multi-thread", "signal", "sync", "time", "test-util",
 ] }
 axum = { version = "0.8", features = ["macros", "multipart"] }
+# The dashboard listener serves axum on hyper directly to allow half-closed
+# HTTP/1.1 requests (HLS push encoders close right after the body).
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "service"] }
+tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.7", features = ["fs", "cors", "set-header", "compression-gzip"] }
 sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio", "macros"] }
 libsqlite3-sys = { version = "0.37.0", features = ["bundled"] }
@@ -136,7 +141,6 @@ sha2 = "0.11"
 criterion = "0.8"
 rtrb = "0.3"
 crossbeam-queue = "0.3"
-tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 pulp = { version = "0.22", features = ["x86-v4"] }
 wide = "1.5"

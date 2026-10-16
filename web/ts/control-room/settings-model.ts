@@ -38,6 +38,7 @@ const SCOPE_LABELS: Record<string, string> = {
   "rtmp-publish": "RTMP publish",
   "srt-publish": "SRT publish",
   "srt-read": "SRT read",
+  "hls-publish": "HLS publish",
 };
 
 export function scopeLabel(scope: string): string {

@@ -13,6 +13,8 @@ mod registry;
 mod ring_fanout;
 #[path = "high_performance_data_path/support.rs"]
 mod support;
+#[path = "high_performance_data_path/ts_publisher.rs"]
+mod ts_publisher;
 
 fn benches(c: &mut Criterion) {
     support::print_layout_baseline();
@@ -20,6 +22,7 @@ fn benches(c: &mut Criterion) {
     ring_fanout::register(c);
     queue_segments::register(c);
     mpegts::register(c);
+    ts_publisher::register(c);
     burst::register(c);
     registry::register_keyframe(c);
 }

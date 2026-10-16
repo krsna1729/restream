@@ -16,6 +16,7 @@ pub enum RateLimitScope {
     RtmpPublish,
     SrtPublish,
     SrtRead,
+    HlsPublish,
 }
 
 impl RateLimitScope {
@@ -25,6 +26,7 @@ impl RateLimitScope {
             Self::RtmpPublish => "rtmp-publish",
             Self::SrtPublish => "srt-publish",
             Self::SrtRead => "srt-read",
+            Self::HlsPublish => "hls-publish",
         }
     }
 
@@ -34,6 +36,7 @@ impl RateLimitScope {
             "rtmp-publish" => Some(Self::RtmpPublish),
             "srt-publish" => Some(Self::SrtPublish),
             "srt-read" => Some(Self::SrtRead),
+            "hls-publish" => Some(Self::HlsPublish),
             _ => None,
         }
     }
@@ -281,6 +284,7 @@ mod tests {
             RateLimitScope::RtmpPublish,
             RateLimitScope::SrtPublish,
             RateLimitScope::SrtRead,
+            RateLimitScope::HlsPublish,
         ] {
             assert_eq!(
                 RateLimitScope::from_key(scope.key()).map(|s| s.key()),

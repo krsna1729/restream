@@ -37,6 +37,7 @@ pub mod hls;
 pub use hls::fmp4 as hls_fmp4;
 pub use hls::preview as hls_preview_runtime;
 pub use hls::upload as hls_upload;
+pub mod hls_ingest;
 pub mod ingest_auth;
 pub mod input_gate;
 pub mod metadata;
@@ -65,6 +66,7 @@ pub mod ffmpeg;
 pub mod tcp_stats;
 pub mod timing;
 pub mod ts_chunk_ring;
+pub mod ts_publisher;
 pub mod uring_capabilities;
 
 use ring_buffer::MEDIA_PULL_BURST_PACKETS;

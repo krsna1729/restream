@@ -434,6 +434,36 @@ async fn pipeline_access_authenticator_records_srt_publish_failures() {
 }
 
 #[tokio::test]
+async fn pipeline_access_authenticator_checks_hls_publish_keys_under_their_own_scope() {
+    let lookup = Arc::new(FakePipelineStore::success("live"));
+    let security = Arc::new(IngestSecurityService::new(test_security_config()));
+    let auth = PipelineStoreIngestAuthenticator::new(lookup.clone(), lookup, security.clone());
+    let ip = "10.0.0.6";
+
+    let rejected = auth
+        .authenticate(PipelineAccessMode::HlsPublish, "missing", ip)
+        .await;
+    assert!(matches!(
+        rejected,
+        Err(PipelineAccessError::InvalidStreamKey)
+    ));
+    let snapshots = security.snapshots();
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].scope, "hls-publish");
+    assert_eq!(snapshots[0].failure_count, 1);
+
+    let accepted = auth
+        .authenticate(PipelineAccessMode::HlsPublish, "live", ip)
+        .await
+        .unwrap();
+    assert_eq!(accepted.id, "pipeline-1");
+    assert!(
+        security.snapshots().is_empty(),
+        "an accepted key clears the client's failures"
+    );
+}
+
+#[tokio::test]
 async fn resolve_file_ingest_context_returns_none_for_missing_ingest() {
     let ingest_lookup = FakeIngestLookup {
         by_id: HashMap::new(),

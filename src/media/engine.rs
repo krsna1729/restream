@@ -326,6 +326,7 @@ impl MediaEngine {
             Some("rtmp") => "FLV media packets",
             Some("srt") => "Demuxed MPEG-TS media packets",
             Some("file") => "Demuxed file media packets",
+            Some("hls") => "Demuxed HLS segment media packets",
             _ => "Media packets",
         }
     }

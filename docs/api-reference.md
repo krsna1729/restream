@@ -23,6 +23,7 @@ returned by login.
 - [Runtime State](#runtime-state)
 - [Health and Status](#health-and-status)
 - [HLS Pull](#hls-pull)
+- [HLS Push Ingest](#hls-push-ingest)
 - [Operator v1 Endpoints](#operator-v1-endpoints)
 - [Engineer v1 Endpoints](#engineer-v1-endpoints)
 
@@ -52,7 +53,8 @@ message.
 
 Static pages/assets are served without an auth gate; protected API handlers
 enforce the cookie themselves. `/healthz` and `/audio-caps` are public.
-HLS pull routes require the dashboard session cookie.
+HLS pull routes require the dashboard session cookie. HLS push ingest routes
+are authorized by the stream key in their path instead.
 
 All responses include `X-Content-Type-Options: nosniff` and
 `X-Frame-Options: SAMEORIGIN` security headers. These are applied globally by
@@ -1367,6 +1369,32 @@ to inspect a warm standby without forwarding it into pipeline outputs.
 All HLS routes respond with `Access-Control-Allow-Origin: *` and allow `GET`,
 `OPTIONS`, `Content-Type`, and `Range` so browser-based players on other
 origins can pull segments and playlists without CORS preflight errors.
+
+## HLS Push Ingest
+
+| Method | Route | Purpose |
+|---|---|---|
+| `PUT`, `POST` | `/ingest/hls/:streamKey/*path` | Upload a `.m3u8` playlist or an MPEG-TS `.ts` segment |
+| `DELETE` | `/ingest/hls/:streamKey/*path` | Accepted and ignored (FFmpeg `delete_segments`) |
+
+The stream key is checked first, before any body byte is read, under the
+`hls-publish` rate-limit scope. These routes take no session cookie, and the
+4 MiB API body limit does not apply to them; their own limits do.
+
+| Status | Meaning |
+|---|---|
+| `200` | The playlist was applied, the segment completed a listed sequence, or the object was a duplicate or belonged to another variant |
+| `202` | The segment is held until a playlist lists it |
+| `400` | The object path is invalid, or the playlist does not parse |
+| `403` | Wrong key, disabled input, or banned client |
+| `405` | Any other method (`Allow: PUT, POST, DELETE`) |
+| `409` | Another publisher (RTMP, SRT, file) holds the input |
+| `413` | Over the limit: playlist 1 MiB, segment 64 MiB |
+| `415` | Neither `.m3u8` nor `.ts` (fMP4 is not ingested yet) |
+| `503` | The 512 MiB HLS ingest buffer is full (`Retry-After: 1`), or the key lookup or session is unavailable |
+
+Ordering, sessions and per-key bounds are described in
+[HLS push ingest](media-pipeline.md#hls-push-ingest).
 
 ## Operator v1 Endpoints
 

@@ -75,3 +75,10 @@ path = "fuzz_targets/http_response.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "hls_playlist"
+path = "fuzz_targets/hls_playlist.rs"
+test = false
+doc = false
+bench = false
