@@ -1475,9 +1475,9 @@ is not RFC 3339 is `400` (after authentication). `resolvedCompleteFrom`
 says after when the kept history is complete (the engine's start, or the
 latest evicted entry's close): a `since` at or before it may be missing
 some. Each condition keeps one entry, at its latest closing, so a flapping
-alert does not evict the others. A pipeline summary read stamps alerts but
-resolves none: it lacks the stage, reader and fabric inputs, so an alert it
-does not derive may still be open. Engine-level alerts include RTMP listener
+alert does not evict the others. A pipeline summary read only stamps
+alerts already open: it lacks the stage, reader and fabric inputs, so it can
+neither tell that an alert ended nor be trusted to open one. Engine-level alerts include RTMP listener
 file-descriptor exhaustion, and a runtime nofile limit below the configured
 target.
 

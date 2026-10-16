@@ -95,10 +95,18 @@ impl AlertTracker {
     }
 
     /// Stamp alerts from a snapshot that does not carry every alert input
-    /// (the pipeline summary): it cannot tell that an alert ended, so it
-    /// resolves nothing.
+    /// (the pipeline summary). It can neither tell that an alert ended nor
+    /// be trusted to open one (its thinner signals may diagnose another
+    /// cause), so it only stamps alerts already open and changes nothing.
     pub fn stamp_only(&self, alerts: &mut [Alert]) {
-        self.track_at(alerts, Utc::now(), |_| false);
+        let stamp = Utc::now().to_rfc3339();
+        let state = crate::sync::lock(&self.state);
+        for alert in alerts.iter_mut() {
+            if let Some(history) = state.open.get(&alert.id) {
+                alert.first_seen = Some(history.first_seen.clone());
+                alert.last_seen = Some(stamp.clone());
+            }
+        }
     }
 
     fn track_at(
@@ -263,6 +271,18 @@ mod tests {
         assert_eq!(ids(&window.alerts), ["flap", "steady"]);
         assert_eq!(window.alerts[0].resolved_at, at(RESOLVED_CAP as i64 + 44));
         assert_eq!(window.complete_from, at(-60), "nothing was evicted");
+    }
+
+    #[test]
+    fn a_stamp_only_snapshot_opens_nothing() {
+        let tracker = AlertTracker::started_at(at(-60));
+        // Only the summary derives it: the full view never reported it.
+        let mut summary_only = [alert("summary-cause", "p1")];
+        tracker.stamp_only(&mut summary_only);
+        assert_eq!(summary_only[0].first_seen, None);
+        tracker.track_at(&mut [], at(1), |_| true);
+        assert!(tracker.resolved_since(at(-60)).alerts.is_empty());
+        assert_eq!(tracker.active_count(), 0);
     }
 
     #[test]
