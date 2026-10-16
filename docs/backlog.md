@@ -555,55 +555,74 @@ items).
 - Status: open (Filed: 2026-10-16 by claude).
 
 ### Q-074 [performance] [opus] HLS ingest poll latency grows faster than the session count
-- Goal: one HLS ingest session's poll stays bounded, so the shared MEDIA
-  executor cannot be held by it as sessions multiply.
+- Goal: one HLS ingest session's poll stays bounded in **CPU time**, so the
+  shared MEDIA executor cannot be held by it as sessions multiply.
 - Sources: the `hls-push-duty` harness mode with release binaries
   (`target/qual-release`, master 1891c876), 2 RTMP base publishers plus M
   HLS push sessions, 60 s, 6-vCPU host, one run per arm:
   - M=0: `hlsIngest` idle; executor queue latency 0 samples.
   - M=4: busy 619 ms, 6420 polls, `maxPollUs` 5259; queue latency max 225 µs.
-  - M=8: busy 1689 ms (2.7x for 2x sessions), 13006 polls, `maxPollUs`
-    30892; queue latency max 841 µs.
-  The RTMP egress counters stayed at zero in every arm (resync, feed lag,
-  stalls, overflows, budget, ring drops, TX failures) and base delivery was
-  flat (59.0 / 59.0 / 58.9 video per second), so nothing was visibly starved
-  at this load — but a 31 ms single poll on a shared executor is the shape
-  the placement rule exists to prevent, and it is the number that scales.
-- A poll publishes at most one `PUBLISH_CHUNK_BYTES` (64 KiB) chunk, and the
-  publisher bench measures that path at 2.13 GiB/s (~30 µs), so the time is
-  not the demux. Candidate: whatever the session's `select!` turn does
-  besides one chunk — the due-release burst, `take_probe`'s engine hop, the
-  ring push's backpressure, or the outbox drain. Instrument the turn to find
-  it, then bound it (a unit or time budget per poll, or a yield between
-  units).
-- Gates: the same three arms with `maxPollUs` flat between M=4 and M=8, on
-  release binaries, numbers in the commit message; a unit test for whatever
-  bound is added.
+  - M=8: busy 1689 ms, 13006 polls, `maxPollUs` 30892; queue latency max
+    841 µs.
+- **The first hypothesis is OS preemption, not ingest code.** `maxPollUs` and
+  `busyUs` are wall time (`Instant::now()` before the poll, `elapsed()`
+  after, `src/media/executor.rs`), so a worker descheduled mid-poll counts as
+  poll time. The M=8 arm ran 10 FFmpeg publishers, the sinks, the harness and
+  restream on 6 vCPUs. The shape fits: every `hlsIngest` service in the M=8
+  report carries a multi-ms tail (8536, 8062, 26253 µs), which is uniform
+  across sessions rather than one session's hot path, and the per-poll average
+  only moved 96 µs to 130 µs.
+- Sources read so far do not support a 30 ms CPU path in the session turn: one
+  poll publishes at most one 64 KiB chunk and ends in `yield_now`; `apply`
+  does no O(segment) work; `take_probe`'s engine hop runs once per session and
+  awaits; the release burst, ring push and outbox drain are per-chunk
+  bookkeeping. The demux of a chunk is about 30 µs at the benched rate.
+- Steps: separate CPU time from wall time per poll (thread CPU clock in the
+  poll wrapper, or scheduler data for the worker threads); record host load
+  per arm; repeat each arm several times; re-run M=8 with the publishers
+  pinned away from restream's CPUs (`scripts/harness/restream-pinned.sh`).
+  Only if the CPU time stays high with the host idle is there a code cause.
+- Gates: per-poll CPU time (or p99 over repeated runs) flat between M=4 and
+  M=8 on an otherwise idle host, with the numbers and the host load in the
+  commit message. A wall-clock maximum on a shared host is not a gate any code
+  change can meet.
 - Status: open (Filed: 2026-10-16 by claude, from the HLS ingest isolation
   measurement).
 
-### Q-075 [protocol] [opus] Multi-frame AAC reaches RTMP outputs as one FLV audio message
-- Goal: one RTMP audio message carries exactly one AAC frame, whatever the
-  ingest path produced.
+### Q-075 [protocol] [opus] One raw AAC frame per message and per sample
+- Goal: every raw-AAC consumer receives exactly one AAC access unit per unit,
+  whatever the ingest path produced.
 - Sources: a TS-ingest `MediaPacket` is one PES, and a PES can carry several
-  ADTS frames (`adts_frame_count` exists for exactly that, used by the TS
-  muxer and the fMP4 packager). The RTMP egress does not split:
-  `encode_unit` makes one wire packet per `MediaPacket`
-  (`egress/backends/rtmp.rs`), and `audio_for_rtmp_into` calls
-  `strip_adts`, which removes only the first 7- or 9-byte header
-  (`codec/aac.rs`), leaving the later frames' ADTS headers inside the
-  payload.
-- Evidence: in the isolation measurement, the same fixture delivered 2890
+  ADTS frames (`adts_frame_count` exists for that). Three consumers assume
+  one frame per unit and none splits:
+  - **RTMP egress:** `RtmpMediaEncoder::encode_audio`
+    (`rtmp/egress_engine.rs:142`) emits one action per packet and
+    `encode_unit` writes one wire message per action
+    (`egress/backends/rtmp.rs:257`); the payload goes through
+    `audio_for_rtmp_into` and `strip_adts`, which removes only the first
+    7- or 9-byte header (`codec/aac.rs:248`).
+  - **fMP4 packager:** `AudioRenditionState::push_packet`
+    (`hls/fmp4/rendition.rs:228`) strips the whole packet, so one MP4 sample
+    holds N raw frames with N−1 ADTS headers inside it — an AAC sample must be
+    one access unit. `audio_default_duration` already counts N×1024 for that
+    sample (`hls/fmp4/codec.rs:189`).
+- Evidence: in the isolation measurement the same fixture delivered 2890
   audio messages per RTMP pipeline (one frame per message, 46.9/s) but 364
-  per HLS pipeline over the same window — about 7.7 ADTS frames per packet.
-  Video counts matched, so this is audio packaging, not loss. It is not
-  HLS-specific: any TS source (SRT, file, HLS) shares the path.
-- Change: split a multi-frame ADTS payload into per-frame messages in the
-  RTMP egress (or normalize at the TS demuxer, which would also give the
-  fMP4 packager one frame per packet). One decision, applied once.
-- Gates: a unit test that a payload with N ADTS frames becomes N FLV audio
-  messages each starting `0xAF 0x01` with one raw frame; the SRT-to-RTMP and
-  HLS-to-RTMP harness modes still deliver audio; a check that an RTMP
-  receiver's frame count matches the source's.
+  per HLS pipeline over the same window — 2890/364 = 7.9 raw, 7.85 normalised
+  by the video counts (the HLS sessions start about 1 s later). Video counts
+  matched, so this is packaging, not loss. Any TS source (SRT, file, HLS)
+  shares the path, and an fMP4 output fed by a TS source carries the same
+  corruption.
+- Change: **normalise at the TS demuxer** — one `MediaPacket` per ADTS frame,
+  DTS stepped by 1024/sample_rate, so every consumer is fixed once. Splitting
+  in each consumer instead means two split sites and leaves the ring's units
+  inconsistent with what the fMP4 sample model needs. Price the extra ring
+  units for audio with the relevant bench.
+- Gates: a unit test that a 3-frame ADTS payload becomes three packets with
+  timestamps stepped by 1024/sample_rate (monotonic after rounding); the RTMP
+  leaf test that it writes one `0xAF 0x01` message per frame; an fMP4 gate
+  that the sample count equals the frame count with no ADTS sync word inside a
+  sample; the harness's audio/video ratio floor, which a mutation reverting
+  the split must fail; the SRT-to-RTMP and HLS-to-RTMP paths still deliver.
 - Status: open (Filed: 2026-10-16 by claude, from the HLS ingest isolation
-  measurement).
+  measurement). Fix before HLS pull ingest, which reuses the same path.
