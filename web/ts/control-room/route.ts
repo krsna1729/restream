@@ -81,3 +81,24 @@ export function placeSearch(
     ...rest,
   };
 }
+
+/**
+ * A query string as plain strings: `?w=operate&p=1` names the same place the
+ * hand-rolled parser read, and a parameter another part of the page set
+ * survives as it was. (TanStack Router's default JSON round-trip would read
+ * `p=1` as a number and drop the pipeline.)
+ */
+export function parseSearch(search: string): Record<string, unknown> {
+  return Object.fromEntries(new URLSearchParams(search));
+}
+
+/** The query string naming `search`; absent values are left out. */
+export function stringifySearch(search: Record<string, unknown>): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(search)) {
+    if (value === undefined || value === null) continue;
+    params.set(key, String(value));
+  }
+  const query = params.toString();
+  return query === "" ? "" : `?${query}`;
+}

@@ -9,9 +9,8 @@ const { buildFleetModel, pipelineHealth } = await loadCompiledFrontendModule(
 const { telemetryRates } = await loadCompiledFrontendModule(
   "control-room/rates.js",
 );
-const { placeFromSearch, placeSearch } = await loadCompiledFrontendModule(
-  "control-room/route.js",
-);
+const { parseSearch, placeFromSearch, placeSearch, stringifySearch } =
+  await loadCompiledFrontendModule("control-room/route.js");
 
 const INGEST = { inputId: "in", protocol: "srt", videoCodec: "h264" };
 
@@ -228,4 +227,29 @@ test("a place without a pipeline drops `p`; other parameters stay, after them", 
     ),
     ["w", "p", "debug"],
   );
+});
+
+test("a query string stays plain strings through the round trip", () => {
+  // A numeric-looking id is a string, not JSON: `p=123` names pipeline 123.
+  assert.equal(
+    stringifySearch(
+      placeSearch(parseSearch("?debug=1&p=123&w=operate"), {
+        workspace: "operate",
+        pipelineId: "123",
+      }),
+    ),
+    "?w=operate&p=123&debug=1",
+  );
+  const spaced = placeSearch({}, { workspace: "operate", pipelineId: "a b" });
+  assert.deepEqual(placeFromSearch(parseSearch(stringifySearch(spaced))), {
+    workspace: "operate",
+    pipelineId: "a b",
+  });
+  assert.equal(
+    stringifySearch(
+      placeSearch({ p: "", debug: "1" }, { workspace: "fleet", pipelineId: null }),
+    ),
+    "?w=fleet&debug=1",
+  );
+  assert.equal(stringifySearch({}), "");
 });

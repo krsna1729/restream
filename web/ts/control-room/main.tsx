@@ -7,10 +7,13 @@ import { RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
-import { router } from "./router.js";
+import { App } from "./app.js";
+import { createControlRoomRouter } from "./router.js";
 
 const container = document.getElementById("root");
 if (!container) throw new Error("control room: #root is missing");
+
+const router = createControlRoomRouter(App);
 
 // Polled panels read through TanStack Query: one cache shared by every
 // workspace, the last value kept while a load fails, no retry of its own (the

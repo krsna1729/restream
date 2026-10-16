@@ -188,7 +188,7 @@ function Detail(props: {
 }) {
   const { alert } = props;
   const events = usePolled<LifecycleEventsSnapshot>(
-    ["lifecycle-events", alert.pipelineId ?? null],
+    ["lifecycle-events", alert.pipelineId ?? null, EVENT_LIMIT],
     () =>
       getLifecycleEvents({
         pipelineId: alert.pipelineId ?? null,

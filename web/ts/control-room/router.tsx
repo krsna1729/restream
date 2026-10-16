@@ -1,7 +1,8 @@
 // The control room's router: one route whose search is the place (route.ts),
 // so reload, back/forward and shared links land on the same view. TanStack
 // Router owns history and link clicks; `usePlace`, `PlaceLink` and `useGo`
-// keep the app's own vocabulary for it.
+// keep the app's own vocabulary for it. `createControlRoomRouter` takes the
+// root component, so this module does not import the app that imports it.
 
 import {
   Link,
@@ -14,28 +15,34 @@ import {
 import type { ReactNode } from "react";
 
 import { getBasePath } from "../core/base-path.js";
-import { App } from "./app.js";
-import { placeFromSearch, placeSearch } from "./route.js";
+import {
+  parseSearch,
+  placeFromSearch,
+  placeSearch,
+  stringifySearch,
+} from "./route.js";
 import type { Place, PlaceSearch } from "./route.js";
 
-const rootRoute = createRootRoute({ component: App });
-
-/** The one route: the place in the search. */
-const placeRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/",
-  validateSearch: (search: Record<string, unknown>): PlaceSearch =>
-    placeSearch(search, placeFromSearch(search)),
-});
-
-export const router = createRouter({
-  routeTree: rootRoute.addChildren([placeRoute]),
-  basepath: getBasePath() || "/",
-});
+/** The control room's router over `root`, which renders the app. */
+export function createControlRoomRouter(root: () => ReactNode) {
+  const rootRoute = createRootRoute({ component: root });
+  const placeRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/",
+    validateSearch: (search: Record<string, unknown>): PlaceSearch =>
+      placeSearch(search, placeFromSearch(search)),
+  });
+  return createRouter({
+    routeTree: rootRoute.addChildren([placeRoute]),
+    basepath: getBasePath() || "/",
+    parseSearch,
+    stringifySearch,
+  });
+}
 
 declare module "@tanstack/react-router" {
   interface Register {
-    router: typeof router;
+    router: ReturnType<typeof createControlRoomRouter>;
   }
 }
 
