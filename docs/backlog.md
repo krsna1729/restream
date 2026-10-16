@@ -593,8 +593,9 @@ items).
 - Goal: every raw-AAC consumer receives exactly one AAC access unit per unit,
   whatever the ingest path produced.
 - Sources: a TS-ingest `MediaPacket` is one PES, and a PES can carry several
-  ADTS frames (`adts_frame_count` exists for that). Three consumers assume
-  one frame per unit and none splits:
+  ADTS frames (`adts_frame_count` exists for that). Two consumers assume
+  one frame per unit and neither splits (the TS muxer
+  counts frames per payload and is unaffected):
   - **RTMP egress:** `RtmpMediaEncoder::encode_audio`
     (`rtmp/egress_engine.rs:142`) emits one action per packet and
     `encode_unit` writes one wire message per action
@@ -606,11 +607,12 @@ items).
     holds N raw frames with N−1 ADTS headers inside it — an AAC sample must be
     one access unit. `audio_default_duration` already counts N×1024 for that
     sample (`hls/fmp4/codec.rs:189`).
-- Evidence: in the isolation measurement the same fixture delivered 2890
-  audio messages per RTMP pipeline (one frame per message, 46.9/s) but 364
-  per HLS pipeline over the same window — 2890/364 = 7.9 raw, 7.85 normalised
-  by the video counts (the HLS sessions start about 1 s later). Video counts
-  matched, so this is packaging, not loss. Any TS source (SRT, file, HLS)
+- Evidence: in the M=4 isolation run the fixture delivered 2890 audio
+  messages per RTMP pipeline (one frame per message, 46.9/s) against 364 per
+  HLS pipeline — 2890/364 = 7.9. The M=8 run gave 2995 against 369,
+  which is 7.85 after normalising by the video counts (1838 against 1906),
+  since the HLS sessions start about 1 s later. Video counts matched, so this
+  is packaging, not loss. Any TS source (SRT, file, HLS)
   shares the path, and an fMP4 output fed by a TS source carries the same
   corruption.
 - Change: **normalise at the TS demuxer** — one `MediaPacket` per ADTS frame,
@@ -622,7 +624,8 @@ items).
   timestamps stepped by 1024/sample_rate (monotonic after rounding); the RTMP
   leaf test that it writes one `0xAF 0x01` message per frame; an fMP4 gate
   that the sample count equals the frame count with no ADTS sync word inside a
-  sample; the harness's audio/video ratio floor, which a mutation reverting
-  the split must fail; the SRT-to-RTMP and HLS-to-RTMP paths still deliver.
+  sample; add an audio/video ratio floor to hls-push-duty (it has none today:
+  delivered_ok requires only audioCount > 0), which a mutation reverting the
+  split must fail; the SRT-to-RTMP and HLS-to-RTMP paths still deliver.
 - Status: open (Filed: 2026-10-16 by claude, from the HLS ingest isolation
   measurement). Fix before HLS pull ingest, which reuses the same path.
