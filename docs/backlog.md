@@ -24,7 +24,6 @@ items).
 - [Q-051 bounded ingress transfer pump](#q-051-architecture-sonnet-bound-the-ingress-transfer-pump-per-owner-visit)
 - [Q-053 external FFmpeg process topology](#q-053-architecture-sonnet-external-ffmpeg-process-topology-per-rendition)
 - [Q-054 control-room Pipelines gaps](#q-054-frontend-sonnet-control-room-pipelines-protocol-mix-shared-stage-efficiency-filter-cards)
-- [Q-055 control-room Operate gaps](#q-055-frontend-sonnet-control-room-operate-srt-group-inspector-execution-owner-graph-tabs)
 - [Q-056 control-room Inspect gaps](#q-056-frontend-sonnet-control-room-inspect-node-metric-cards-bottleneck-judgement-global-map)
 - [Q-057 control-room Fleet gaps](#q-057-frontend-sonnet-control-room-fleet-shared-work-open-incidents-fleet-table-headroom-history)
 - [Q-058 control-room Monitor gaps](#q-058-frontend-sonnet-control-room-monitor-input-transport-shared-path-outlier-incident-cursor-pausecompare)
@@ -392,19 +391,6 @@ items).
   state stream. So the runtime state gains all four: the output's stage, the
   standby-input count, the recording flag and the bonded flag.
 - Gates: node tests for the derivations; one Playwright case per structure.
-- Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
-
-### Q-055 [frontend] [sonnet] Control room Operate: SRT-group inspector, execution owner, graph tabs
-- Goal: Operate gets the SRT-group inspector, the execution-owner and evidence
-  subsection, and the graph Destinations/Timeline/Preview tabs.
-- Sources (all exist; the tabs are UI only): the live output `quality`
-  (`EgressRuntimeView.quality`, `api_runtime_views/common.rs:104`) and
-  `diagnosis` from the runtime state; `egressFabricShards` on
-  `/api/v1/engine/health` (`api_runtime_views/status.rs`);
-  `/api/v1/events?pipeline_id` for Timeline; `/hls/{id}/master.m3u8` for
-  Preview. Per-group "hottest shard" is engine-wide only
-  (`hottestShardUtil`); show it as engine-wide, not per group.
-- Gates: node tests for any new model function; Playwright for each tab.
 - Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
 
 ### Q-056 [frontend] [sonnet] Control room Inspect: node metric cards, bottleneck judgement, global map
