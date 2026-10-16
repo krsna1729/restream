@@ -10,7 +10,9 @@ use futures_util::StreamExt as _;
 use reqwest::StatusCode;
 
 use crate::media::engine::MediaEngine;
-use crate::media::hls_ingest::test_support::{INPUT_ID, PIPELINE_ID, STREAM_KEY, test_ingest};
+use crate::media::hls_ingest::test_support::{
+    INPUT_ID, PIPELINE_ID, STREAM_KEY, fmp4_video_objects, test_ingest,
+};
 use crate::media::hls_ingest::{HlsIngest, HlsIngestLimits};
 
 struct Server {
@@ -174,6 +176,21 @@ async fn fmp4_objects_are_checked_on_arrival_and_cannot_join_a_ts_stream() {
     assert_eq!(ts.status(), StatusCode::ACCEPTED);
     let mixed = put(&server, STREAM_KEY, "index1.m4s", mp4_box(b"free", 8)).await;
     assert_eq!(mixed.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    server.engine.cancel_pipeline_input(INPUT_ID).await;
+}
+
+/// fMP4 media needs the playlist's `EXT-X-MAP`: under a playlist that names
+/// none it is refused on arrival, not held until it ages out.
+#[tokio::test]
+async fn fmp4_media_under_a_playlist_without_a_map_is_refused() {
+    let server = serve(HlsIngestLimits::default()).await;
+    let (_, segments) = fmp4_video_objects(1, 2);
+    let playlist = "#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:0.1,\nindex0.m4s\n";
+    let applied = put(&server, STREAM_KEY, "index.m3u8", playlist).await;
+    assert_eq!(applied.status(), StatusCode::OK);
+
+    let refused = put(&server, STREAM_KEY, "index0.m4s", segments[0].clone()).await;
+    assert_eq!(refused.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
     server.engine.cancel_pipeline_input(INPUT_ID).await;
 }
 

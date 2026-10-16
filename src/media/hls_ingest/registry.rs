@@ -11,7 +11,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tracing::{error, info, warn};
 
 use super::ordering::SessionLimits;
-use super::session::{self, HlsObject, SessionContext, SessionEnd};
+use super::session::{self, HlsObject, InitCache, SessionContext, SessionEnd};
 use super::{
     BodyError, HlsIngestLimits, KeyCharge, ObjectBody, ObjectKind, ObjectOutcome, SegmentShare,
 };
@@ -75,6 +75,9 @@ pub struct HlsIngest {
     /// Keyed by input id; held for lookups only, never across an await.
     sessions: std::sync::Mutex<HashMap<String, SessionHandle>>,
     keys: std::sync::Mutex<HashMap<String, Arc<KeyState>>>,
+    /// The init each stream key applied last: an encoder uploads its
+    /// `EXT-X-MAP` init once per run, so it outlives the session.
+    inits: Arc<std::sync::Mutex<InitCache>>,
 }
 
 impl HlsIngest {
@@ -92,6 +95,7 @@ impl HlsIngest {
             budget: Arc::new(Semaphore::new(limits.total_buffer_bytes)),
             sessions: std::sync::Mutex::new(HashMap::new()),
             keys: std::sync::Mutex::new(HashMap::new()),
+            inits: Arc::new(std::sync::Mutex::new(InitCache::default())),
         })
     }
 
@@ -299,6 +303,7 @@ impl HlsIngest {
                 idle_floor: self.limits.idle_floor,
             },
             max_init_bytes: self.limits.max_init_bytes,
+            inits: self.inits.clone(),
         };
         tokio::spawn(Arc::clone(self).supervise(context, receiver));
         Ok((attempt_id, objects))
@@ -390,7 +395,8 @@ impl HlsIngest {
 mod tests {
     use super::*;
     use crate::media::hls_ingest::test_support::{
-        INPUT_ID, PIPELINE_ID, STREAM_KEY, authenticated, test_ingest,
+        INPUT_ID, PIPELINE_ID, STREAM_KEY, authenticated, emptied_mdat, fmp4_playlist,
+        fmp4_video_objects, test_ingest,
     };
 
     /// A session that ended between lookup and send gets exactly one
@@ -467,6 +473,155 @@ mod tests {
 
     fn fixture() -> Vec<u8> {
         std::fs::read(crate::test_fixtures::canonical_h264_ts_fixture().unwrap()).unwrap()
+    }
+
+    /// Wait until the pipeline's current ring satisfies `predicate`, or fail
+    /// the test after `secs`. The engine can swap the ring after a probe, so
+    /// the buffer is re-read every pass.
+    async fn wait_for_ring(
+        engine: &MediaEngine,
+        secs: u64,
+        what: &str,
+        mut predicate: impl FnMut(&crate::media::ring_buffer::RingBuffer) -> bool,
+    ) {
+        tokio::time::timeout(std::time::Duration::from_secs(secs), async {
+            loop {
+                let ring = engine.get_or_create_pipeline(PIPELINE_ID).await;
+                if predicate(&ring) {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {what}"));
+    }
+
+    /// How many packets the pipeline's current ring holds.
+    async fn published(engine: &MediaEngine) -> usize {
+        engine
+            .get_or_create_pipeline(PIPELINE_ID)
+            .await
+            .get_write_idx()
+    }
+
+    async fn wait_until_unregistered(engine: &MediaEngine) {
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while engine.input_has_session(PIPELINE_ID, INPUT_ID).await {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("HLS session unregistered");
+    }
+
+    /// The init an encoder uploads once keeps a later session publishing:
+    /// after an idle end, a new session resumes with the next segment and
+    /// the playlist, and the media still reaches the ring.
+    #[tokio::test]
+    async fn media_keeps_flowing_after_an_idle_end_without_reuploading_the_init() {
+        let (engine, ingest) = test_ingest(HlsIngestLimits {
+            idle_floor: std::time::Duration::from_millis(150),
+            ..HlsIngestLimits::default()
+        });
+        let (init, segments) = fmp4_video_objects(2, 4);
+
+        assert_eq!(
+            send(&ingest, ObjectKind::Fmp4, "init.mp4", &init).await,
+            ObjectOutcome::Held
+        );
+        assert_eq!(
+            send(&ingest, ObjectKind::Fmp4, "index0.m4s", &segments[0]).await,
+            ObjectOutcome::Held
+        );
+        assert_eq!(
+            send(
+                &ingest,
+                ObjectKind::Playlist,
+                "index.m3u8",
+                fmp4_playlist(0, &["index0.m4s"], false).as_bytes()
+            )
+            .await,
+            ObjectOutcome::Stored
+        );
+        wait_for_ring(&engine, 10, "the first segment in the ring", |ring| {
+            ring.get_write_idx() > 0
+        })
+        .await;
+        wait_until_unregistered(&engine).await;
+
+        // The encoder's next upload: no init this time (FFmpeg uploads it
+        // once per run), and the stream continues.
+        let before = published(&engine).await;
+        assert_eq!(
+            send(&ingest, ObjectKind::Fmp4, "index1.m4s", &segments[1]).await,
+            ObjectOutcome::Held
+        );
+        assert_eq!(
+            send(
+                &ingest,
+                ObjectKind::Playlist,
+                "index.m3u8",
+                fmp4_playlist(1, &["index1.m4s"], true).as_bytes()
+            )
+            .await,
+            ObjectOutcome::Stored
+        );
+        wait_for_ring(&engine, 10, "the resumed segment in the ring", |ring| {
+            ring.get_write_idx() > before
+        })
+        .await;
+        wait_until_unregistered(&engine).await;
+        let phase = engine
+            .recent_ingest_outcome(PIPELINE_ID)
+            .await
+            .and_then(|outcome| outcome.failure_phase);
+        assert_eq!(phase.as_deref(), Some("eof"));
+    }
+
+    /// A segment whose bytes cannot be demuxed is dropped: the session stays
+    /// up and the segment after it publishes.
+    #[tokio::test]
+    async fn a_segment_that_fails_demux_is_skipped_and_the_next_one_publishes() {
+        let (engine, ingest) = test_ingest(HlsIngestLimits {
+            idle_floor: std::time::Duration::from_millis(300),
+            ..HlsIngestLimits::default()
+        });
+        let (init, segments) = fmp4_video_objects(2, 4);
+
+        assert_eq!(
+            send(&ingest, ObjectKind::Fmp4, "init.mp4", &init).await,
+            ObjectOutcome::Held
+        );
+        let broken = emptied_mdat(&segments[0]);
+        assert_eq!(
+            send(&ingest, ObjectKind::Fmp4, "index0.m4s", &broken).await,
+            ObjectOutcome::Held
+        );
+        assert_eq!(
+            send(&ingest, ObjectKind::Fmp4, "index1.m4s", &segments[1]).await,
+            ObjectOutcome::Held
+        );
+        assert_eq!(
+            send(
+                &ingest,
+                ObjectKind::Playlist,
+                "index.m3u8",
+                fmp4_playlist(0, &["index0.m4s", "index1.m4s"], true).as_bytes()
+            )
+            .await,
+            ObjectOutcome::Stored
+        );
+        wait_for_ring(&engine, 10, "the segment after the broken one", |ring| {
+            ring.get_write_idx() > 0
+        })
+        .await;
+        wait_until_unregistered(&engine).await;
+        let phase = engine
+            .recent_ingest_outcome(PIPELINE_ID)
+            .await
+            .and_then(|outcome| outcome.failure_phase);
+        assert_eq!(phase.as_deref(), Some("eof"), "the session kept going");
     }
 
     /// A key at its buffer share is throttled, not refused: its next body

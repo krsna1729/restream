@@ -30,6 +30,12 @@ fn sized(len: usize) -> Payload {
 }
 
 fn media(dir: &str, first: u64, len: u64, ended: bool) -> Playlist {
+    media_with_map(dir, first, len, ended, None)
+}
+
+/// The same listing, every entry under `map` (the `EXT-X-MAP` in force).
+fn media_with_map(dir: &str, first: u64, len: u64, ended: bool, map: Option<&str>) -> Playlist {
+    let map = map.map(str::to_string);
     Playlist::Media(MediaPlaylist {
         target_duration: TARGET,
         media_sequence: first,
@@ -39,10 +45,11 @@ fn media(dir: &str, first: u64, len: u64, ended: bool) -> Playlist {
                 path: format!("{dir}index{sequence}.ts"),
                 duration: TARGET,
                 discontinuity: false,
+                map_uri: map.clone(),
             })
             .collect(),
         ended,
-        map_uri: None,
+        map_uri: map,
     })
 }
 
@@ -314,10 +321,14 @@ fn a_resent_identical_playlist_is_not_a_new_epoch() {
     assert_eq!(seg(&mut session, "index1.ts", t0), SegmentOutcome::Attached);
 }
 
+/// The listing with an `EXT-X-MAP` before every entry, as FFmpeg writes it.
 fn with_map(playlist: Playlist, map: &str) -> Playlist {
     match playlist {
         Playlist::Media(mut media) => {
             media.map_uri = Some(map.to_string());
+            for segment in &mut media.segments {
+                segment.map_uri = Some(map.to_string());
+            }
             Playlist::Media(media)
         }
         master => master,
@@ -337,7 +348,7 @@ fn released_with_init(
             (
                 release.sequence,
                 text(&release.payload),
-                release.init.as_ref().map(text),
+                release.init.as_ref().map(|init| text(&init.payload)),
                 release.discontinuity,
             )
         })
@@ -414,6 +425,78 @@ fn a_segment_waits_for_its_init_then_is_released_with_it() {
     assert!(released_with_init(&mut orphan, t0 + TARGET).is_empty());
     assert_eq!(orphan.counters().skipped, 1);
     assert!(orphan.next_deadline().is_none());
+}
+
+/// The init the stream key applied before this session is delivered again,
+/// without another upload: FFmpeg uploads its init once per run, and a
+/// session that starts after an idle timeout still needs it.
+#[test]
+fn a_seeded_init_is_delivered_without_an_upload() {
+    let t0 = Instant::now();
+    let mut session = Session::new(limits());
+    session.seed_init("init.mp4", Bytes::from_static(b"init.mp4"));
+    assert_eq!(seg(&mut session, "index0.ts", t0), SegmentOutcome::Held);
+    session.on_playlist(
+        "index.m3u8",
+        with_map(media("", 0, 1, false), "init.mp4"),
+        t0,
+    );
+    assert_eq!(
+        released_with_init(&mut session, t0),
+        vec![(0, "index0.ts".into(), Some("init.mp4".into()), false)],
+        "the seeded init reaches the new session's demuxer"
+    );
+
+    // A playlist that names a different init does not get the seed.
+    let mut other = Session::new(limits());
+    other.seed_init("init.mp4", Bytes::from_static(b"init.mp4"));
+    seg(&mut other, "index0.ts", t0);
+    other.on_playlist(
+        "index.m3u8",
+        with_map(media("", 0, 1, false), "other.mp4"),
+        t0,
+    );
+    assert!(released_with_init(&mut other, t0).is_empty());
+    assert_eq!(other.counters().skipped, 0, "it waits, it is not skipped");
+}
+
+/// A playlist whose `EXT-X-MAP` changes mid-listing: each segment needs the
+/// init that was in force for it, so the one listed before the change is
+/// released without waiting for the new one.
+#[test]
+fn a_segment_needs_only_the_map_it_was_listed_under() {
+    let t0 = Instant::now();
+    let mut session = Session::new(limits());
+    seg(&mut session, "index0.ts", t0);
+    seg(&mut session, "index1.ts", t0);
+
+    let mut listing = match with_map(media("", 1, 1, false), "init2.mp4") {
+        Playlist::Media(media) => media,
+        master => panic!("media expected, got {master:?}"),
+    };
+    listing.media_sequence = 0;
+    listing.segments.insert(
+        0,
+        SegmentEntry {
+            sequence: 0,
+            path: "index0.ts".into(),
+            duration: TARGET,
+            discontinuity: false,
+            map_uri: None,
+        },
+    );
+    session.on_playlist("index.m3u8", Playlist::Media(listing), t0);
+    assert_eq!(
+        released_with_init(&mut session, t0),
+        vec![(0, "index0.ts".into(), None, false)],
+        "no map yet for index0.ts: it does not wait"
+    );
+
+    assert_eq!(seg(&mut session, "init2.mp4", t0), SegmentOutcome::Init);
+    assert_eq!(
+        released_with_init(&mut session, t0),
+        vec![(1, "index1.ts".into(), Some("init2.mp4".into()), false)]
+    );
 }
 
 /// An encoder restart with a new `EXT-X-MAP` (new URI, or new bytes at the

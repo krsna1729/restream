@@ -674,11 +674,20 @@ keeps the container it started with.
     the playlist that names it. Such an object is held (`202`), like any
     object the playlist has not listed yet; when the playlist's `EXT-X-MAP`
     names it, the session applies it as an init object, never as a media
-    segment and never published to the ring.
+    segment and never published to the ring. Each listed segment records
+    the `EXT-X-MAP` that was in force for it, so a listing that changes its
+    map uses each segment's own init.
   - When the `EXT-X-MAP` URI changes, or the bytes of the same URI change,
     the demuxer is rebuilt and the next segment is a discontinuity: its
     demuxed timestamp continues right after the last forwarded one, like an
     `EXT-X-DISCONTINUITY`.
+  - The init a stream key applied last is kept in the ingest itself, not in
+    the session, because FFmpeg uploads its init once per run: a session
+    that starts after an idle timeout, a retry or a failure applies the same
+    init again from that cache when the playlist names the same
+    `EXT-X-MAP` URI, so a resumed encoder keeps publishing. A playlist that
+    names a different URI gets nothing from it. The cache holds the inits of
+    the last 64 stream keys.
 - **Discontinuities.** A new epoch starts on an encoder restart inside the
   idle window (the media sequence or the segment names go back) and on
   `EXT-X-DISCONTINUITY`. The next segment is demuxed from scratch, and its
@@ -691,15 +700,24 @@ keeps the container it started with.
 - **fMP4 demuxing.** The session walks each media segment's top-level boxes
   itself (`styp`, `sidx`, `free`, `emsg` and `prft` are skipped, and an
   unknown box is logged once per session) and demuxes each `moof` + `mdat`
-  pair, at most 64 fragments per segment. A `moof` with no `mdat`, a box size
-  below its header, a truncated object, or a `tfhd` that sets an explicit
-  `base_data_offset` (whose offsets would measure from the whole segment, not
-  from the fragment handed to the demuxer) is refused with `400`. A malformed
-  fMP4 media segment or a decode failure during publication ends that input's
-  HLS session with a recorded error reason (the object that caused it was
-  already answered); the engine survives, and the encoder's next object starts
-  a fresh session. An fMP4 init object that is answered on its own upload
-  carries the refusal (`415`, `400` or `413`) directly.
+  pair, at most 64 fragments per segment. Every fragment must carry its own
+  `tfdt`: without it the demuxer would place the fragment at decode time 0
+  and glue a restarted timeline onto the previous one. A `moof` with no
+  `mdat`, a `traf` with no `tfdt`, a box size below its header, a truncated
+  object, or a `tfhd` that sets an explicit `base_data_offset` (whose offsets
+  would measure from the whole segment, not from the fragment handed to the
+  demuxer) is refused with `400`. An fMP4 media object under a playlist that
+  names no `EXT-X-MAP` is refused with `415`: it can never be demuxed. An
+  fMP4 init object that is answered on its own upload carries the refusal
+  (`415`, `400` or `413`) directly.
+- **A segment that cannot be demuxed.** A rejection while publishing an
+  already-answered segment — a truncated access unit, a sample that runs past
+  its fragment, a decode failure — drops that segment: the session counts it,
+  logs the reason once, marks a discontinuity so the next segment re-anchors
+  its timestamps, and keeps publishing. Only a session that no longer has a
+  demuxer at all (its publisher failed to open) ends failed; the engine
+  survives either way, and the encoder's next object starts a fresh session
+  if the session does end.
 - **Bounds.**
   - Each object is bounded: 1 MiB per playlist, and 64 MiB per segment and
     per fMP4 object (an fMP4 object is bounded before its role is known). An

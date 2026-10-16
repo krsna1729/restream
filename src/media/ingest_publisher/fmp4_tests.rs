@@ -467,3 +467,45 @@ fn a_media_segment_needs_an_init_and_a_valid_walk() {
     let mut out = Vec::new();
     assert_eq!(demux.drain_into(&mut out), 1);
 }
+
+/// A sample whose NAL length runs past it is a truncated access unit: it is
+/// refused, never published in part.
+#[test]
+fn a_truncated_access_unit_is_refused() {
+    let entry = avc1(LengthSize::FourBytes);
+    let mut muxer = Fmp4SegmentMuxer::new().unwrap();
+    // The second sample claims a 16-byte NAL but carries four bytes.
+    let mut truncated = 16u32.to_be_bytes().to_vec();
+    truncated.extend_from_slice(&[0x41, 0x9A, 0x02, 0x33]);
+    let media = segment(
+        &mut muxer,
+        &[
+            video(&entry, 3000, true, 0, length_prefixed(&[IDR], 4)),
+            video(&entry, 3000, false, 0, truncated),
+        ],
+    );
+    let init = muxer.init_segment_bytes().unwrap();
+
+    let mut demux = Fmp4Demux::default();
+    demux.apply_init(&init, MAX_INIT).unwrap();
+    demux.begin_object(&Bytes::from(media)).unwrap();
+    let error = demux.end_object().unwrap_err();
+    assert!(
+        matches!(error, MediaRejection::Malformed(_)),
+        "a truncated access unit is malformed, got {error:?}"
+    );
+
+    // A zero-length NAL is the same kind of damage.
+    let mut zero = 0u32.to_be_bytes().to_vec();
+    zero.extend_from_slice(&[0x41, 0x9A, 0x02, 0x33]);
+    let mut muxer = Fmp4SegmentMuxer::new().unwrap();
+    let media = segment(&mut muxer, &[video(&entry, 3000, true, 0, zero)]);
+    let init = muxer.init_segment_bytes().unwrap();
+    let mut demux = Fmp4Demux::default();
+    demux.apply_init(&init, MAX_INIT).unwrap();
+    demux.begin_object(&Bytes::from(media)).unwrap();
+    assert!(matches!(
+        demux.end_object(),
+        Err(MediaRejection::Malformed(_))
+    ));
+}

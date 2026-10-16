@@ -27,8 +27,7 @@ use shiguredo_mp4::demux::Fmp4SegmentDemuxer;
 
 use super::{MediaRejection, SegmentDemux};
 use crate::media::codec::{
-    avcc_to_annexb_into, build_adts_header_for, build_avcc_sequence_header, level_name,
-    parse_h264_sps, profile_name,
+    build_adts_header_for, build_avcc_sequence_header, level_name, parse_h264_sps, profile_name,
 };
 use crate::media::metadata::{AudioMeta, VideoMeta};
 use crate::media::mpegts::DemuxProbe;
@@ -242,6 +241,7 @@ impl SegmentDemux for Fmp4Demux {
                 "[hls] fMP4 segment carries an unknown top-level box; skipped (logged once per session)"
             );
         }
+        self.fragment_packets.clear();
         self.object = Some(Object {
             bytes: object.clone(),
             next_fragment: 0,
@@ -280,6 +280,7 @@ impl SegmentDemux for Fmp4Demux {
     fn flush(&mut self) {
         self.output
             .extend(self.pending.drain(..).map(|pending| pending.packet));
+        self.fragment_packets.clear();
         self.object = None;
     }
 
@@ -287,6 +288,7 @@ impl SegmentDemux for Fmp4Demux {
     /// init arrives through [`SegmentDemux::apply_init`].
     fn discontinuity(&mut self) {
         self.pending.clear();
+        self.fragment_packets.clear();
         self.object = None;
     }
 
@@ -534,16 +536,24 @@ fn convert_sample(
             nalu_length_size,
             parameter_sets,
         } => {
+            let nalu_units = avcc_nalus(data, *nalu_length_size).ok_or_else(|| {
+                malformed("H.264 sample ends inside a NALU length field or is empty")
+            })?;
             let inject = keyframe && !avcc_carries_sps(data, *nalu_length_size);
-            let mut payload = Vec::with_capacity(data.len().saturating_add(if inject {
-                parameter_sets.len()
-            } else {
-                0
-            }));
+            let mut payload = Vec::with_capacity(
+                nalu_units
+                    .iter()
+                    .map(|nalu| nalu.len().saturating_add(START_CODE.len()))
+                    .sum::<usize>()
+                    .saturating_add(if inject { parameter_sets.len() } else { 0 }),
+            );
             if inject {
                 payload.extend_from_slice(parameter_sets);
             }
-            avcc_to_annexb_into(data, *nalu_length_size, &mut payload);
+            for nalu in nalu_units {
+                payload.extend_from_slice(&START_CODE);
+                payload.extend_from_slice(nalu);
+            }
             payload
         }
         Codec::Aac(adts) => {
@@ -574,6 +584,30 @@ fn convert_sample(
         dts,
         payload: Bytes::from(payload),
     })
+}
+
+/// The NAL units of a length-prefixed H.264 sample, `None` if a length
+/// field runs past the sample or is zero: a truncated access unit must be
+/// refused, not published in part.
+fn avcc_nalus(data: &[u8], nalu_length_size: usize) -> Option<Vec<&[u8]>> {
+    if nalu_length_size == 0 {
+        return None;
+    }
+    let mut nalus = Vec::new();
+    let mut rest = data;
+    while !rest.is_empty() {
+        let (length, after) = rest.split_at_checked(nalu_length_size)?;
+        let length = length
+            .iter()
+            .fold(0usize, |len, &byte| (len << 8) | usize::from(byte));
+        if length == 0 {
+            return None;
+        }
+        let (nalu, after) = after.split_at_checked(length)?;
+        nalus.push(nalu);
+        rest = after;
+    }
+    Some(nalus)
 }
 
 /// Whether a length-prefixed H.264 sample carries an SPS (NAL type 7).

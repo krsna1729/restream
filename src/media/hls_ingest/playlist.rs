@@ -26,9 +26,9 @@ pub struct MediaPlaylist {
     pub media_sequence: u64,
     pub segments: Vec<SegmentEntry>,
     pub ended: bool,
-    /// The current `EXT-X-MAP` init URI, resolved against the playlist
-    /// directory like a segment URI; the last `EXT-X-MAP` wins, because
-    /// that is the map the segments that follow it use.
+    /// The playlist's last `EXT-X-MAP` init URI, resolved against the
+    /// playlist directory like a segment URI: the map its newest segments
+    /// use. Each [`SegmentEntry`] records the map in force for itself.
     pub map_uri: Option<String>,
 }
 
@@ -40,6 +40,9 @@ pub struct SegmentEntry {
     pub duration: Duration,
     /// An `EXT-X-DISCONTINUITY` precedes this segment.
     pub discontinuity: bool,
+    /// The `EXT-X-MAP` in force for this segment (the last one before it),
+    /// resolved like its URI; `None` for a playlist that names no init.
+    pub map_uri: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,7 +131,7 @@ pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistErro
     let mut pending_duration = None;
     let mut pending_discontinuity = false;
     let mut pending_bandwidth = None;
-    let mut segment_uris: Vec<(String, Duration, bool)> = Vec::new();
+    let mut segment_uris: Vec<(String, Duration, bool, Option<String>)> = Vec::new();
     let mut variants = Vec::new();
 
     for (line_number, line) in lines {
@@ -177,7 +180,12 @@ pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistErro
                 let duration = pending_duration
                     .take()
                     .ok_or(PlaylistError::SegmentWithoutDuration { line: line_number })?;
-                segment_uris.push((path, duration, std::mem::take(&mut pending_discontinuity)));
+                segment_uris.push((
+                    path,
+                    duration,
+                    std::mem::take(&mut pending_discontinuity),
+                    map_uri.clone(),
+                ));
             }
         }
     }
@@ -194,7 +202,7 @@ pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistErro
 
     let target_duration = target_duration.ok_or(PlaylistError::MissingTargetDuration)?;
     let mut segments = Vec::with_capacity(segment_uris.len());
-    for (offset, (path, duration, discontinuity)) in segment_uris.into_iter().enumerate() {
+    for (offset, (path, duration, discontinuity, map_uri)) in segment_uris.into_iter().enumerate() {
         let sequence = u64::try_from(offset)
             .ok()
             .and_then(|offset| media_sequence.checked_add(offset))
@@ -204,6 +212,7 @@ pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistErro
             path,
             duration,
             discontinuity,
+            map_uri,
         });
     }
     Ok(Playlist::Media(MediaPlaylist {
@@ -300,12 +309,14 @@ mod tests {
                     path: "live/index7.ts".into(),
                     duration: Duration::from_secs_f64(2.002),
                     discontinuity: false,
+                    map_uri: None,
                 },
                 SegmentEntry {
                     sequence: 8,
                     path: "other/index8.ts".into(),
                     duration: Duration::from_secs_f64(1.5),
                     discontinuity: true,
+                    map_uri: None,
                 },
             ]
         );
@@ -359,6 +370,17 @@ mod tests {
              #EXTINF:2,\nindex7.ts\n#EXT-X-MAP:URI=\"b/init2.mp4\"\n#EXTINF:2,\nindex8.ts\n",
         );
         assert_eq!(playlist.map_uri.as_deref(), Some("live/b/init2.mp4"));
+        // A mid-listing change is recorded per segment: index7.ts belongs to
+        // the map that was in force when it was listed.
+        let maps: Vec<Option<&str>> = playlist
+            .segments
+            .iter()
+            .map(|segment| segment.map_uri.as_deref())
+            .collect();
+        assert_eq!(
+            maps,
+            vec![Some("live/a/init.mp4"), Some("live/b/init2.mp4")]
+        );
     }
 
     #[test]

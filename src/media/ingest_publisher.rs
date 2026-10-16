@@ -279,6 +279,9 @@ impl SegmentPublisher {
         max_bytes: usize,
     ) -> Result<(), MediaRejection> {
         self.demux.apply_init(bytes, max_bytes)?;
+        // A new init may change resolution, profile or the audio track: its
+        // probe replaces the recorded metadata, so the one-shot gate opens.
+        self.probe_sent = false;
         self.take_probe(target).await;
         Ok(())
     }

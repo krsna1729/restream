@@ -7,11 +7,12 @@
 //! here, before their reply: an init against its bound and the codec scope,
 //! a media segment against the box walk.
 
-use std::collections::VecDeque;
-use std::sync::Arc;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use bytes::Bytes;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -47,6 +48,48 @@ pub(super) struct SessionContext {
     pub(super) limits: SessionLimits,
     /// Bound on an fMP4 init segment.
     pub(super) max_init_bytes: usize,
+    /// The init each stream key applied last: FFmpeg uploads its init once
+    /// per run, so a session that starts after an idle timeout, a retry or
+    /// a failure still needs it.
+    pub(super) inits: Arc<Mutex<InitCache>>,
+}
+
+/// The last init a stream key applied, and the `EXT-X-MAP` it belongs to.
+#[derive(Clone)]
+pub(super) struct AppliedInit {
+    pub(super) uri: String,
+    pub(super) bytes: Bytes,
+}
+
+/// How many stream keys' inits one ingest keeps: an init is a few KiB, and
+/// only the keys that push fMP4 hold one.
+const CACHED_INITS: usize = 64;
+
+/// The init each stream key applied last, kept across sessions: FFmpeg
+/// uploads its `EXT-X-MAP` init once per run, so a session that starts
+/// after an idle timeout, a retry or a failure must apply the same init
+/// again. Oldest key first out.
+#[derive(Default)]
+pub(super) struct InitCache {
+    by_key: HashMap<String, AppliedInit>,
+    order: VecDeque<String>,
+}
+
+impl InitCache {
+    pub(super) fn get(&self, key: &str) -> Option<AppliedInit> {
+        self.by_key.get(key).cloned()
+    }
+
+    pub(super) fn put(&mut self, key: &str, init: AppliedInit) {
+        if self.by_key.insert(key.to_string(), init).is_none() {
+            self.order.push_back(key.to_string());
+            while self.order.len() > CACHED_INITS {
+                if let Some(oldest) = self.order.pop_front() {
+                    self.by_key.remove(&oldest);
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -66,6 +109,10 @@ pub(super) async fn run(
     let outbox_limit = context.limits.hold_bytes;
     let max_init_bytes = context.max_init_bytes;
     let mut session = Session::new(context.limits);
+    let key = context.registration.input_id.clone();
+    if let Some(applied) = crate::sync::lock(&context.inits).get(&key) {
+        session.seed_init(&applied.uri, applied.bytes);
+    }
     let end = match PublishTarget::open(
         context.engine,
         context.pipeline_id,
@@ -79,6 +126,9 @@ pub(super) async fn run(
                 outbox: Outbox::default(),
                 outbox_limit,
                 max_init_bytes,
+                inits: context.inits.clone(),
+                key: key.clone(),
+                failed_logged: false,
                 container: None,
                 publisher: None,
                 pacer: Pacer::default(),
@@ -135,6 +185,12 @@ struct Publishing {
     outbox: Outbox,
     outbox_limit: usize,
     max_init_bytes: usize,
+    /// The stream key's init slot: an applied init outlives the session.
+    inits: Arc<Mutex<InitCache>>,
+    /// The stream key this session publishes for.
+    key: String,
+    /// One log line per session for dropped segments.
+    failed_logged: bool,
     /// Fixed by the first accepted media object.
     container: Option<Container>,
     /// Built with the container.
@@ -193,8 +249,12 @@ async fn drive(
                 lead_ms.store(lead, Ordering::Relaxed);
             }
             _ = sleep_until(publish_at) => {
-                if let Err(error) = publish_next_chunk(state, target).await {
-                    return SessionEnd::Failed(error);
+                // A segment whose bytes cannot be demuxed is dropped, not
+                // fatal: the encoder keeps pushing and the next segment
+                // publishes. Its object was answered when it arrived.
+                if let Err(failure) = publish_next_chunk(state, target).await {
+                    session.note_failed_segment();
+                    state.drop_failed_release(failure.sequence, &failure.rejection, target);
                 }
                 last_activity = Instant::now();
             }
@@ -235,22 +295,36 @@ async fn sleep_until(at: Option<Instant>) {
     }
 }
 
+/// A segment dropped because its bytes could not be demuxed.
+struct ReleaseFailure {
+    sequence: u64,
+    rejection: MediaRejection,
+}
+
 /// Publish at most one chunk of the outbox's first release. A release that
 /// starts applies its discontinuity and its init first; one that ends
-/// closes its object. An error ends the session: the object was answered
-/// when it arrived.
-async fn publish_next_chunk(state: &mut Publishing, target: &PublishTarget) -> Result<(), String> {
+/// closes its object. A rejection names the release it failed on: the
+/// caller drops that segment and keeps the session.
+async fn publish_next_chunk(
+    state: &mut Publishing,
+    target: &PublishTarget,
+) -> Result<(), ReleaseFailure> {
     let Publishing {
         outbox,
         publisher,
         pacer,
         max_init_bytes,
+        inits,
+        key,
         ..
     } = state;
     let (Some(release), Some(publisher)) = (outbox.releases.front(), publisher.as_mut()) else {
         return Ok(());
     };
-    let failed = |error: MediaRejection| format!("segment {}: {error}", release.sequence);
+    let failed = |rejection| ReleaseFailure {
+        sequence: release.sequence,
+        rejection,
+    };
     let bytes = &release.payload.bytes;
     if outbox.offset == 0 {
         if release.discontinuity {
@@ -259,9 +333,17 @@ async fn publish_next_chunk(state: &mut Publishing, target: &PublishTarget) -> R
         }
         if let Some(init) = &release.init {
             publisher
-                .apply_init(target, &init.bytes, *max_init_bytes)
+                .apply_init(target, &init.payload.bytes, *max_init_bytes)
                 .await
-                .map_err(|error| format!("init segment: {error}"))?;
+                .map_err(failed)?;
+            // The init outlives this session: an encoder uploads it once.
+            crate::sync::lock(inits).put(
+                key,
+                AppliedInit {
+                    uri: init.uri.clone(),
+                    bytes: init.payload.bytes.clone(),
+                },
+            );
         }
         publisher.begin_object(bytes).map_err(failed)?;
     }
@@ -281,6 +363,36 @@ async fn publish_next_chunk(state: &mut Publishing, target: &PublishTarget) -> R
     // Dropping the release returns its bytes to the global budget.
     outbox.releases.pop_front();
     Ok(())
+}
+
+impl Publishing {
+    /// Drop the release whose bytes could not be demuxed: log the reason
+    /// once per session, mark a discontinuity so the next segment re-anchors
+    /// its timestamps, and return the bytes to the budget.
+    fn drop_failed_release(
+        &mut self,
+        sequence: u64,
+        rejection: &MediaRejection,
+        target: &PublishTarget,
+    ) {
+        if !self.failed_logged {
+            self.failed_logged = true;
+            tracing::warn!(
+                sequence,
+                reason = %rejection,
+                "hls ingest dropped a segment that could not be demuxed"
+            );
+        }
+        if let Some(publisher) = self.publisher.as_mut() {
+            publisher.discontinuity(target);
+        }
+        self.pacer.reset();
+        self.outbox.offset = 0;
+        if let Some(release) = self.outbox.releases.pop_front() {
+            self.outbox.bytes -= release.payload.bytes.len();
+            self.outbox.media = self.outbox.media.saturating_sub(release.duration);
+        }
+    }
 }
 
 fn apply(
@@ -313,15 +425,16 @@ fn apply(
             container_name(container)
         ));
     }
-    if container == Container::Fmp4
-        && let Err(rejection) = check_fmp4(
+    if container == Container::Fmp4 {
+        let is_map_object = session.knows_map(&path);
+        if let Err(rejection) = check_fmp4(
             &payload.bytes,
-            &path,
-            session.map_uri(),
+            is_map_object,
+            session.map_required(),
             state.max_init_bytes,
-        )
-    {
-        return rejection.into();
+        ) {
+            return rejection.into();
+        }
     }
     if state.container.is_none() {
         state.container = Some(container);
@@ -346,19 +459,25 @@ fn container_name(container: Container) -> &'static str {
 
 /// An fMP4 object before it is held: an init (a top-level `moov`) is
 /// checked against its bound and the codec scope, anything else must walk
-/// as a media segment. The current `EXT-X-MAP` object must be an init.
+/// as a media segment. The `EXT-X-MAP` object must be an init, and a
+/// playlist that names no map can carry no fMP4 media at all.
 fn check_fmp4(
     bytes: &[u8],
-    path: &str,
-    map_uri: Option<&str>,
+    is_map_object: bool,
+    map_required: bool,
     max_init_bytes: usize,
 ) -> Result<(), MediaRejection> {
     if boxes::is_init_segment(bytes) {
         return Fmp4Demux::check_init(bytes, max_init_bytes);
     }
-    if map_uri == Some(path) {
+    if is_map_object {
         return Err(MediaRejection::Malformed(
             "the EXT-X-MAP object is not an fMP4 init segment".to_string(),
+        ));
+    }
+    if map_required {
+        return Err(MediaRejection::Unsupported(
+            "fMP4 segments need an EXT-X-MAP init segment; this playlist names none".to_string(),
         ));
     }
     boxes::media_fragments(bytes, &mut Vec::new())

@@ -6,7 +6,9 @@
 //! `prft`, `emsg` and boxes not yet invented, so everything that is not a
 //! fragment is skipped. Each fragment is handed to the demuxer on its own,
 //! which is why an explicit `tfhd` `base_data_offset` is refused: it counts
-//! from the start of the whole segment, not of the fragment.
+//! from the start of the whole segment, not of the fragment. Every `traf`
+//! must carry a `tfdt` for the same reason: without it a fragment has no
+//! place on the stream's timeline.
 #![deny(
     clippy::indexing_slicing,
     clippy::arithmetic_side_effects,
@@ -60,6 +62,8 @@ pub enum WalkError {
     TooManyFragments,
     /// A `tfhd` sets `base_data_offset`, measured from the whole segment.
     ExplicitBaseDataOffset,
+    /// A `traf` has no `tfdt`, so the fragment carries no timeline.
+    TrafWithoutTfdt,
     NoMoov,
 }
 
@@ -96,6 +100,11 @@ impl fmt::Display for WalkError {
                 f,
                 "tfhd sets an explicit base_data_offset, which counts from the whole segment; \
                  only moof-relative offsets are supported"
+            ),
+            Self::TrafWithoutTfdt => write!(
+                f,
+                "traf has no tfdt: a fragment without a decode time cannot be placed on the \
+                 stream's timeline"
             ),
             Self::NoMoov => write!(f, "init segment has no moov"),
         }
@@ -242,19 +251,31 @@ fn check_moof(moof: &[u8]) -> Result<(), WalkError> {
         if &child.kind != b"traf" {
             return Ok(());
         }
-        for_each_child(body, |child, body| {
-            if &child.kind != b"tfhd" {
-                return Ok(());
+        // Every fragment must carry its own decode time: the demuxer reads
+        // `tfdt` and would otherwise place it at zero, silently gluing a
+        // restarted segment's timeline onto the previous one.
+        let mut has_tfdt = false;
+        for_each_child(body, |child, body| match &child.kind {
+            b"tfdt" => {
+                has_tfdt = true;
+                Ok(())
             }
-            let &[_version, f0, f1, f2] = body
-                .first_chunk::<4>()
-                .ok_or(WalkError::Truncated { offset: child.body })?;
-            let flags = u32::from_be_bytes([0, f0, f1, f2]);
-            if flags & TFHD_BASE_DATA_OFFSET_PRESENT != 0 {
-                return Err(WalkError::ExplicitBaseDataOffset);
+            b"tfhd" => {
+                let &[_version, f0, f1, f2] = body
+                    .first_chunk::<4>()
+                    .ok_or(WalkError::Truncated { offset: child.body })?;
+                let flags = u32::from_be_bytes([0, f0, f1, f2]);
+                if flags & TFHD_BASE_DATA_OFFSET_PRESENT != 0 {
+                    return Err(WalkError::ExplicitBaseDataOffset);
+                }
+                Ok(())
             }
-            Ok(())
-        })
+            _ => Ok(()),
+        })?;
+        if !has_tfdt {
+            return Err(WalkError::TrafWithoutTfdt);
+        }
+        Ok(())
     })
 }
 

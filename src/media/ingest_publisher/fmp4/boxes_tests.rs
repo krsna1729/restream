@@ -29,16 +29,29 @@ fn large(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
     out
 }
 
-/// A `moof` holding one `traf` whose `tfhd` has `flags`.
-fn moof(flags: u32) -> Vec<u8> {
+/// A `moof` holding one `traf`, with a `tfhd` of `flags` and (`with_tfdt`)
+/// a `tfdt` at decode time 0.
+fn moof_with(flags: u32, with_tfdt: bool) -> Vec<u8> {
     let mut tfhd = vec![0u8];
     tfhd.extend_from_slice(&flags.to_be_bytes()[1..]);
     tfhd.extend_from_slice(&1u32.to_be_bytes());
     if flags & 1 != 0 {
         tfhd.extend_from_slice(&0u64.to_be_bytes());
     }
-    let traf = bx(b"traf", &bx(b"tfhd", &tfhd));
+    let mut children = vec![bx(b"tfhd", &tfhd)];
+    if with_tfdt {
+        let mut tfdt = vec![0u8];
+        tfdt.extend_from_slice(&0u32.to_be_bytes());
+        children.push(bx(b"tfdt", &tfdt));
+    }
+    let traf = bx(b"traf", &children.concat());
     bx(b"moof", &[bx(b"mfhd", &[0; 8]), traf].concat())
+}
+
+/// A `moof` whose `traf` carries a `tfdt`: every fragment the walker
+/// accepts has one.
+fn moof(flags: u32) -> Vec<u8> {
+    moof_with(flags, true)
 }
 
 fn walk(bytes: &[u8]) -> Result<(Vec<Range<usize>>, WalkReport), WalkError> {
@@ -192,6 +205,17 @@ fn malformed_layouts_are_refused() {
 /// Offsets counted from the whole segment would point every sample at the
 /// wrong bytes once the walker hands the demuxer one fragment; the
 /// moof-relative forms (`default_base_is_moof`, or no flag) are accepted.
+/// `tfdt` is required: without it the demuxer would place every fragment at
+/// decode time 0 and glue a restarted timeline onto the previous one.
+#[test]
+fn a_traf_without_a_tfdt_is_refused() {
+    let fragment = [moof_with(0x02_0000, false), bx(b"mdat", &[0; 4])].concat();
+    assert_eq!(walk(&fragment), Err(WalkError::TrafWithoutTfdt));
+
+    let fragment = [moof_with(0x02_0000, true), bx(b"mdat", &[0; 4])].concat();
+    assert!(walk(&fragment).is_ok());
+}
+
 #[test]
 fn an_explicit_base_data_offset_is_refused() {
     let explicit = [bx(b"styp", &[0; 8]), moof(0x00_0001), bx(b"mdat", &[0; 8])].concat();
