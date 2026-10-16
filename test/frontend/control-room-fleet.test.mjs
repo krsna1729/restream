@@ -238,6 +238,9 @@ test("a query string stays plain strings through the round trip", () => {
   });
   // The first value of a repeated parameter wins, as `get` did before.
   assert.deepEqual(parseSearch("?w=operate&w=media"), { w: "operate" });
+  // A name the object prototype also has stays an own parameter.
+  assert.deepEqual(parseSearch("?toString=1"), { toString: "1" });
+  assert.deepEqual(Object.keys(parseSearch("?__proto__=x")), ["__proto__"]);
   assert.equal(
     stringifySearch(
       placeSearch(parseSearch("?debug=1&p=123&w=operate"), {

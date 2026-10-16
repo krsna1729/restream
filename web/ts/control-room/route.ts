@@ -91,8 +91,16 @@ export function placeSearch(
 export function parseSearch(search: string): Record<string, unknown> {
   const parsed: Record<string, unknown> = {};
   for (const [key, value] of new URLSearchParams(search)) {
-    // The first value of a repeated parameter wins, as `get` did before.
-    if (!(key in parsed)) parsed[key] = value;
+    // The first value of a repeated parameter wins, as `get` did before; a
+    // name the object prototype also has stays an own parameter.
+    if (!Object.prototype.hasOwnProperty.call(parsed, key)) {
+      Object.defineProperty(parsed, key, {
+        value,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
   }
   return parsed;
 }
