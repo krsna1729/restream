@@ -1471,9 +1471,13 @@ pipeline's alerts are read, so `resolvedAt` is no finer than the reads. The
 engine keeps the last 256 resolved alerts, in memory (a restart forgets
 them). History is opt-in: `resolved` is present only with query param
 `since` (RFC 3339), and holds those resolved at or after it; a value that
-is not RFC 3339 is `400`. `resolvedCompleteFrom` says from when the kept
-history is complete (the engine's start, or the latest evicted entry's
-close): a `since` before it may be missing some. Engine-level alerts include RTMP listener
+is not RFC 3339 is `400` (after authentication). `resolvedCompleteFrom`
+says after when the kept history is complete (the engine's start, or the
+latest evicted entry's close): a `since` at or before it may be missing
+some. Each condition keeps one entry, at its latest closing, so a flapping
+alert does not evict the others. A pipeline summary read stamps alerts but
+resolves none: it lacks the stage, reader and fabric inputs, so an alert it
+does not derive may still be open. Engine-level alerts include RTMP listener
 file-descriptor exhaustion, and a runtime nofile limit below the configured
 target.
 

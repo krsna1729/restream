@@ -252,10 +252,10 @@ pub async fn v1_pipeline_summary_handler(
         })
         .unwrap_or(0);
 
+    // The summary lacks stage, reader and fabric inputs: an alert it does
+    // not derive may still be open, so it stamps and resolves nothing.
     let mut alert_list = alerts::derive_alerts(&snapshot);
-    state
-        .alert_tracker
-        .track_pipeline(&pipeline_id, &mut alert_list);
+    state.alert_tracker.stamp_only(&mut alert_list);
 
     let input_status = pip["input"]["status"].as_str().unwrap_or("off");
     let bitrate_kbps = pip["input"]["bitrateKbps"].as_f64();

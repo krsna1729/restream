@@ -619,8 +619,6 @@ fn saturated_srt_receive_buffer_yields_input_causal_alert() {
             .map(|line| line.confidence)
     };
     assert_eq!(confidence_of("100%"), Some(Confidence::Measured));
-    // Why the kernel queue can look empty is the engine's inference.
-    assert_eq!(confidence_of("kernel UDP queue"), Some(Confidence::Derived));
 }
 
 #[test]

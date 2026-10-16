@@ -433,6 +433,19 @@ async fn aggregate_alerts_requires_auth_and_returns_array() {
     assert!(body["generatedAt"].is_string());
     assert!(body["resolved"].is_null(), "history is opt-in: {body}");
 
+    // Without a session a malformed query still reads as unauthenticated.
+    let unauth_bad = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/alerts?since=1h")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauth_bad.status(), StatusCode::UNAUTHORIZED);
+
     // `since` is RFC 3339; anything else is the caller's error, not "all".
     let bad = app
         .clone()

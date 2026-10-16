@@ -66,11 +66,17 @@ pub struct AlertsQuery {
 pub async fn aggregate_alerts_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Query(query): Query<AlertsQuery>,
+    query: Result<Query<AlertsQuery>, axum::extract::rejection::QueryRejection>,
 ) -> impl IntoResponse {
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
+    // Validated after authentication: a caller without a session learns
+    // nothing about the query, only that it needs one.
+    let Query(query) = match query {
+        Ok(query) => query,
+        Err(rejection) => return rejection.into_response(),
+    };
 
     // Alerts are derived from the same health snapshot shape the dashboard uses
     // so transport-only alert logic does not need to understand engine internals.

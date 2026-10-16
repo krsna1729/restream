@@ -222,7 +222,8 @@ pub(super) fn output_alert(
             Scope::Output,
             format!("Output '{output_id}' cannot drain its send path"),
             "Data waits on the send path and has not drained within the deadline.",
-            vec![Evidence::measured("backpressureReason = stalled")],
+            // The stall classifier's verdict from lag and age thresholds.
+            vec![Evidence::derived("backpressureReason = stalled")],
             "Check the destination's receive rate and the network path to it.",
             generated_at,
         ),
@@ -388,6 +389,26 @@ mod tests {
                 .evidence
                 .iter()
                 .any(|e| e == &Evidence::derived("ruled out: ingest, feed, shard"))
+        );
+    }
+
+    #[test]
+    fn a_stalled_send_path_is_the_classifiers_verdict_not_a_reading() {
+        let mut held = snapshot("healthy");
+        held["pipelines"]["pipe1"]["outputs"]["out1"] = json!({
+            "status": "running",
+            "phase": "sending",
+            "fabricFeed": "srt:pipe1:mux",
+            "shardId": 1,
+            "backpressureReason": "stalled"
+        });
+        let alerts = derive_alerts(&held);
+        assert_eq!(alerts.len(), 1, "{alerts:#?}");
+        assert_eq!(alerts[0].id, "pipeline:pipe1:output:out1:send_path_stalled");
+        assert!(
+            alerts[0]
+                .evidence
+                .contains(&Evidence::derived("backpressureReason = stalled"))
         );
     }
 }

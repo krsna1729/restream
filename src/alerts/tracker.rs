@@ -10,7 +10,8 @@ use serde::Serialize;
 
 use super::Alert;
 
-/// Resolved alerts kept, newest first out; older ones are dropped.
+/// Distinct resolved conditions kept (each at its latest closing); the
+/// oldest closing is dropped first.
 pub const RESOLVED_CAP: usize = 256;
 
 #[derive(Debug, Clone)]
@@ -34,9 +35,9 @@ pub struct ResolvedAlert {
 struct TrackerState {
     open: HashMap<String, AlertHistory>,
     resolved: VecDeque<ResolvedAlert>,
-    /// From when `resolved` is complete: the tracker's start (a restart
-    /// forgets), moved to the latest evicted entry's `resolved_at` once the
-    /// ring is full.
+    /// After when `resolved` is complete (an exclusive bound): the tracker's
+    /// start (a restart forgets), moved to the latest evicted entry's
+    /// `resolved_at` once the ring is full.
     complete_from: DateTime<Utc>,
 }
 
@@ -93,6 +94,13 @@ impl AlertTracker {
         });
     }
 
+    /// Stamp alerts from a snapshot that does not carry every alert input
+    /// (the pipeline summary): it cannot tell that an alert ended, so it
+    /// resolves nothing.
+    pub fn stamp_only(&self, alerts: &mut [Alert]) {
+        self.track_at(alerts, Utc::now(), |_| false);
+    }
+
     fn track_at(
         &self,
         alerts: &mut [Alert],
@@ -115,6 +123,9 @@ impl AlertTracker {
             .collect();
         for id in gone {
             if let Some(history) = open.remove(&id) {
+                // One entry per condition: its latest closing. A flapping
+                // alert must not evict other alerts' history.
+                resolved.retain(|entry| entry.alert.id != id);
                 if resolved.len() == RESOLVED_CAP
                     && let Some(evicted) = resolved.pop_front()
                 {
@@ -237,6 +248,35 @@ mod tests {
             "nothing evicted: complete from the start"
         );
         assert_eq!(tracker.active_count(), 1);
+    }
+
+    #[test]
+    fn a_flapping_alert_keeps_one_entry_and_evicts_nothing_else() {
+        let tracker = AlertTracker::started_at(at(-60));
+        tracker.track_at(&mut [alert("steady", "p2")], at(0), |_| true);
+        tracker.track_at(&mut [], at(0), |_| true);
+        for minute in 1..=(RESOLVED_CAP as i64 + 44) {
+            tracker.track_at(&mut [alert("flap", "p1")], at(minute), |_| true);
+            tracker.track_at(&mut [], at(minute), |_| true);
+        }
+        let window = tracker.resolved_since(at(-60));
+        assert_eq!(ids(&window.alerts), ["flap", "steady"]);
+        assert_eq!(window.alerts[0].resolved_at, at(RESOLVED_CAP as i64 + 44));
+        assert_eq!(window.complete_from, at(-60), "nothing was evicted");
+    }
+
+    #[test]
+    fn a_stamp_only_snapshot_resolves_nothing_and_keeps_first_seen() {
+        let tracker = AlertTracker::started_at(at(-60));
+        let mut full = [alert("stage", "p1")];
+        tracker.track_at(&mut full, at(0), |_| true);
+        let first_seen = full[0].first_seen.clone();
+        // The summary does not derive the stage alert: absent, not ended.
+        tracker.stamp_only(&mut []);
+        let mut again = [alert("stage", "p1")];
+        tracker.track_at(&mut again, at(1), |_| true);
+        assert!(tracker.resolved_since(at(-60)).alerts.is_empty());
+        assert_eq!(again[0].first_seen, first_seen);
     }
 
     #[test]

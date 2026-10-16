@@ -67,8 +67,8 @@ test("resolved: an alert open again leaves, and a repeat id shows its latest clo
 
 test("a resolved window reaching past the kept history may be missing some", () => {
   const from = "2026-10-12T10:00:00Z";
-  assert.equal(resolvedMayBeIncomplete(Date.parse(from) - 1, from), true);
-  assert.equal(resolvedMayBeIncomplete(Date.parse(from), from), false);
+  assert.equal(resolvedMayBeIncomplete(Date.parse(from), from), true, "exclusive bound");
+  assert.equal(resolvedMayBeIncomplete(Date.parse(from) + 1, from), false);
   assert.equal(resolvedMayBeIncomplete(0, undefined), false);
 });
 

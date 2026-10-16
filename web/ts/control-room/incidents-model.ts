@@ -66,16 +66,17 @@ export function rankIncidents(
 }
 
 /**
- * Whether a resolved window may be missing some: it reaches back past the
- * time from which the engine's kept history is complete (its start, or the
- * close of the latest alert it dropped).
+ * Whether a resolved window may be missing some: it reaches back to or past
+ * the time after which the engine's kept history is complete (its start, or
+ * the close of the latest alert it dropped; an alert closed at that instant
+ * may be gone).
  */
 export function resolvedMayBeIncomplete(
   windowStartMs: number,
   completeFrom: string | undefined,
 ): boolean {
   const from = completeFrom === undefined ? Number.NaN : Date.parse(completeFrom);
-  return Number.isFinite(from) && windowStartMs < from;
+  return Number.isFinite(from) && windowStartMs <= from;
 }
 
 /**

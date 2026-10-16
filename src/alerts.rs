@@ -288,14 +288,12 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                         severity,
                         Scope::Pipeline,
                         title,
-                        "The SRT application receive buffer is full or nearly full. The publisher can still be connected while Restream is not draining ingest data, so downstream outputs will stall.",
+                        "The SRT application receive buffer is full or nearly full. The publisher can still be connected while Restream is not draining ingest data, so downstream outputs will stall. The kernel UDP queue may still look empty: the packets have already entered the srt-rs Owner.",
                         vec![
                             Evidence::measured(format!(
                                 "srtRecvBufPackets = {} / {} ({:.0}%)",
                                 recv_packets, capacity_packets, pct
                             )),
-                            // An explanation of the reading, not a reading.
-                            Evidence::derived("kernel UDP queue may still be empty because packets have already entered the srt-rs Owner"),
                         ],
                         "Treat this as an input/ingest issue first: restart the affected publisher or Restream, then inspect SRT ingest readiness if it recurs.",
                         &generated_at,
