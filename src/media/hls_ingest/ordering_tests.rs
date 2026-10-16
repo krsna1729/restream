@@ -317,7 +317,6 @@ fn a_resent_identical_playlist_is_not_a_new_epoch() {
 enum Op {
     Segment { index: u64, len: usize },
     Playlist { first: u64, len: u64, ended: bool },
-    Restart,
     Advance(u64),
 }
 
@@ -326,14 +325,13 @@ fn op() -> impl Strategy<Value = Op> {
         4 => (0u64..12, 1usize..400).prop_map(|(index, len)| Op::Segment { index, len }),
         3 => (0u64..12, 0u64..6, proptest::bool::weighted(0.1))
             .prop_map(|(first, len, ended)| Op::Playlist { first, len, ended }),
-        1 => Just(Op::Restart),
         2 => (0u64..5_000).prop_map(Op::Advance),
     ]
 }
 
-/// Payload bytes name the encoder epoch and segment index they belong to.
-fn tagged(epoch: u64, index: u64, len: usize, budget: &Arc<Semaphore>) -> Payload {
-    let mut bytes = format!("{epoch}:{index}:").into_bytes();
+/// Payload bytes name the segment index they belong to.
+fn tagged(index: u64, len: usize, budget: &Arc<Semaphore>) -> Payload {
+    let mut bytes = format!("{index}:").into_bytes();
     bytes.resize(len.max(bytes.len()), b'.');
     let permits = u32::try_from(bytes.len()).unwrap();
     let permit = budget.clone().try_acquire_many_owned(permits).unwrap();
@@ -342,12 +340,12 @@ fn tagged(epoch: u64, index: u64, len: usize, budget: &Arc<Semaphore>) -> Payloa
 
 fn index_of(payload: &Payload) -> u64 {
     let text = std::str::from_utf8(&payload.bytes).unwrap();
-    text.split(':').nth(1).unwrap().parse().unwrap()
+    text.split(':').next().unwrap().parse().unwrap()
 }
 
 proptest! {
     /// Arbitrary interleavings of uploads (early, late, duplicate), sliding
-    /// playlists, encoder restarts and time. Model: what leaves is a subset
+    /// playlists (one that moves back is an encoder restart) and time. Model: what leaves is a subset
     /// of the listed sequences, ascending within an epoch, each (epoch,
     /// sequence) at most once, always the bytes of the name listed at that
     /// sequence; the hold stays inside its bounds; every byte of budget
@@ -359,7 +357,6 @@ proptest! {
         let t0 = Instant::now();
         let mut now = t0;
         let mut session = Session::new(limits());
-        let mut encoder_epoch = 0u64;
         let mut listed = BTreeSet::new();
         let mut seen = BTreeSet::new();
         let mut last_by_epoch: Option<(u64, u64)> = None;
@@ -367,14 +364,13 @@ proptest! {
         for op in ops {
             match op {
                 Op::Segment { index, len } => {
-                    let payload = tagged(encoder_epoch, index, len, &budget);
+                    let payload = tagged(index, len, &budget);
                     session.on_segment(format!("index{index}.ts"), payload, now);
                 }
                 Op::Playlist { first, len, ended } => {
                     listed.extend(first..first + len);
                     session.on_playlist("index.m3u8", media("", first, len, ended), now);
                 }
-                Op::Restart => encoder_epoch += 1,
                 Op::Advance(ms) => now += Duration::from_millis(ms),
             }
             session.poll(now, &mut out);

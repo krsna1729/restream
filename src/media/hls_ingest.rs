@@ -10,6 +10,7 @@
 pub mod playlist;
 
 mod ordering;
+mod pacing;
 mod registry;
 mod session;
 #[cfg(test)]
@@ -41,7 +42,8 @@ pub struct HlsIngestLimits {
     /// every stream key: >100 keys of typical 2 MB segments, or 2 keys at
     /// their worst case, and far below the host memory media work needs.
     pub total_buffer_bytes: usize,
-    /// Idle timeout floor (and the hold age before any playlist).
+    /// Idle timeout floor, the hold age before any playlist, and the time
+    /// each request body frame has to arrive (`408` after it).
     pub idle_floor: Duration,
 }
 
@@ -97,6 +99,8 @@ pub enum ObjectOutcome {
     Dropped,
     /// The playlist does not parse; the session continues.
     Malformed(String),
+    /// The session ended with the object still queued; upload it again.
+    Retry,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

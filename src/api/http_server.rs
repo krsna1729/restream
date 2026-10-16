@@ -5,6 +5,12 @@
 //! right after the request body and never read the response. hyper's default
 //! treats that EOF as an abort and drops the request before its body is read,
 //! so `axum::serve` would lose every such upload.
+//!
+//! The cost: with half-close a client EOF is not a disconnect, so a client
+//! that leaves a streaming response (SSE) is noticed only when a write to
+//! it fails, at the second write after its reset (20-40 s for the state
+//! stream's 20 s heartbeat), not when it goes. Q-072 moves HLS ingest to a
+//! listener of its own so only uploads pay this.
 
 use std::net::SocketAddr;
 use std::time::Duration;

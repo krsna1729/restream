@@ -178,6 +178,12 @@ impl Session {
             .map_or(floor, |target| target.saturating_mul(3).max(floor))
     }
 
+    /// How far published media may run from the wall clock: one target
+    /// duration, or the idle floor before any playlist names one.
+    pub(super) fn pacing_lead(&self) -> Duration {
+        self.target.unwrap_or(self.limits.idle_floor)
+    }
+
     /// `EXT-X-ENDLIST` was seen and every listed segment has left.
     pub(super) fn finished(&self) -> bool {
         self.ended && self.listed.is_empty()
@@ -194,7 +200,7 @@ impl Session {
             && listed.path == path
         {
             if listed.payload.is_some() {
-                self.counters.duplicates += 1;
+                self.counters.duplicates = self.counters.duplicates.saturating_add(1);
                 return SegmentOutcome::Duplicate;
             }
             listed.payload = Some(payload);
@@ -222,7 +228,7 @@ impl Session {
             || self.held_bytes > self.limits.hold_bytes
         {
             self.pop_oldest_held();
-            self.counters.evicted += 1;
+            self.counters.evicted = self.counters.evicted.saturating_add(1);
         }
         SegmentOutcome::Held
     }
@@ -291,6 +297,13 @@ impl Session {
         }
     }
 
+    /// A restart is recognised only when the new listing contradicts the
+    /// last one. One case is not: the old window was exactly
+    /// `[0: index0.ts]` and the restarted encoder lists the same single
+    /// entry. That playlist is identical, so no epoch starts and the new
+    /// `index0.ts` is discarded as a duplicate of released sequence 0; the
+    /// next segment (`index1.ts`, sequence 1) continues normally. One
+    /// segment is lost, never order.
     fn starts_new_epoch(&self, media: &MediaPlaylist, last: u64) -> bool {
         let Some(window) = &self.window else {
             return false;
@@ -322,8 +335,8 @@ impl Session {
             self.listed.clear();
             self.latest_listing.clear();
             self.next_seq = Some(first);
-            self.epoch += 1;
-            self.counters.epochs += 1;
+            self.epoch = self.epoch.saturating_add(1);
+            self.counters.epochs = self.counters.epochs.saturating_add(1);
             self.discontinuity_pending = true;
             self.ended = false;
         }
@@ -340,7 +353,7 @@ impl Session {
                 // Same epoch, already released or skipped: a held copy is a
                 // duplicate upload.
                 if self.remove_held(&segment.path) {
-                    self.counters.duplicates += 1;
+                    self.counters.duplicates = self.counters.duplicates.saturating_add(1);
                 }
                 continue;
             }
@@ -382,7 +395,7 @@ impl Session {
         {
             if sequence > next {
                 // The window slid past sequences that were never listed here.
-                self.counters.skipped += sequence - next;
+                self.counters.skipped = self.counters.skipped.saturating_add(sequence - next);
                 self.next_seq = Some(sequence);
                 continue;
             }
@@ -402,7 +415,7 @@ impl Session {
                     });
                     self.discontinuity_pending = false;
                 }
-                None => self.counters.skipped += 1,
+                None => self.counters.skipped = self.counters.skipped.saturating_add(1),
             }
             self.next_seq = sequence.checked_add(1);
         }
@@ -413,7 +426,7 @@ impl Session {
             .is_some_and(|held| now.saturating_duration_since(held.at) >= hold_age)
         {
             self.pop_oldest_held();
-            self.counters.evicted += 1;
+            self.counters.evicted = self.counters.evicted.saturating_add(1);
         }
     }
 

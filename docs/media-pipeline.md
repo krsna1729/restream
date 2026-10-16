@@ -666,6 +666,17 @@ must be relative to their playlist. fMP4 segments are not ingested yet
   - All HLS sessions share a 512 MiB budget for bytes being read, queued, held
     or published. When it is exhausted, an upload gets `503` with
     `Retry-After: 1`.
+  - A request body that sends nothing for 10 s gets `408`, and its bytes
+    are released.
+  - An encoder faster than real time is slowed: once a hold's worth of
+    released media (128 MiB) waits to be published, its next object is
+    answered only as publication catches up.
+- **Pacing.** Released segments reach the ring at media pace, like every
+  other TS source, not as one burst per segment. Media time is anchored at
+  the first data after a session start or a discontinuity; later data waits
+  until its offset from the anchor has passed on the wall clock. Media that
+  fell behind is published at once, at most one target duration of it (10 s
+  before the first playlist); further behind, or a timestamp jump, re-anchors.
 - **Placement.**
   - The axum handler only checks the key and reads the bounded body.
   - It hands each object over a bounded channel to the key's session task on

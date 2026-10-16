@@ -75,8 +75,16 @@ pub async fn hls_ingest_handler(
     let Some(slot) = ingest.upload_slot(&pipeline.input_id).await else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
+    // A stalled upload must not hold its slot and budget: each frame has
+    // the idle floor to arrive, and its bytes are released on expiry.
+    let frame_deadline = ingest.limits().idle_floor;
     let mut frames = body.into_data_stream();
-    while let Some(frame) = frames.next().await {
+    loop {
+        let frame = match tokio::time::timeout(frame_deadline, frames.next()).await {
+            Ok(Some(frame)) => frame,
+            Ok(None) => break,
+            Err(_) => return (StatusCode::REQUEST_TIMEOUT, "request body stalled").into_response(),
+        };
         let Ok(frame) = frame else {
             return (StatusCode::BAD_REQUEST, "request body failed").into_response();
         };
@@ -105,6 +113,7 @@ pub async fn hls_ingest_handler(
             "input already has an active publisher",
         )
             .into_response(),
+        Ok(Ok(ObjectOutcome::Retry)) => retry_later("ingest session ended"),
         Ok(Err(DispatchError::Unavailable)) | Err(_) => {
             StatusCode::SERVICE_UNAVAILABLE.into_response()
         }
@@ -114,13 +123,17 @@ pub async fn hls_ingest_handler(
 fn body_error(error: BodyError) -> Response {
     match error {
         BodyError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE.into_response(),
-        BodyError::BufferFull => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            [(header::RETRY_AFTER, HeaderValue::from_static("1"))],
-            "ingest buffer full",
-        )
-            .into_response(),
+        BodyError::BufferFull => retry_later("ingest buffer full"),
     }
+}
+
+fn retry_later(reason: &'static str) -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        [(header::RETRY_AFTER, HeaderValue::from_static("1"))],
+        reason,
+    )
+        .into_response()
 }
 
 #[cfg(test)]

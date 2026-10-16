@@ -44,16 +44,22 @@ struct SessionHandle {
     objects: mpsc::Sender<HlsObject>,
 }
 
+/// Per stream key (input id): its upload slots and the lock that keeps two
+/// first objects from both registering an attempt.
+struct KeyState {
+    uploads: Arc<Semaphore>,
+    start: tokio::sync::Mutex<()>,
+}
+
 pub struct HlsIngest {
     engine: Arc<MediaEngine>,
     access: Arc<dyn PipelineAccessAuthenticator>,
     security: Arc<IngestSecurityService>,
     limits: HlsIngestLimits,
     budget: Arc<Semaphore>,
-    /// Keyed by input id. Async so that two first objects for one key cannot
-    /// both register an attempt; held across the start path only.
-    sessions: tokio::sync::Mutex<HashMap<String, SessionHandle>>,
-    upload_slots: std::sync::Mutex<HashMap<String, Arc<Semaphore>>>,
+    /// Keyed by input id; held for lookups only, never across an await.
+    sessions: std::sync::Mutex<HashMap<String, SessionHandle>>,
+    keys: std::sync::Mutex<HashMap<String, Arc<KeyState>>>,
 }
 
 impl HlsIngest {
@@ -69,8 +75,8 @@ impl HlsIngest {
             security,
             limits,
             budget: Arc::new(Semaphore::new(limits.total_buffer_bytes)),
-            sessions: tokio::sync::Mutex::new(HashMap::new()),
-            upload_slots: std::sync::Mutex::new(HashMap::new()),
+            sessions: std::sync::Mutex::new(HashMap::new()),
+            keys: std::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -108,17 +114,23 @@ impl HlsIngest {
         }
     }
 
+    fn key_state(&self, input_id: &str) -> Arc<KeyState> {
+        crate::sync::lock(&self.keys)
+            .entry(input_id.to_string())
+            .or_insert_with(|| {
+                Arc::new(KeyState {
+                    uploads: Arc::new(Semaphore::new(self.limits.uploads_per_key)),
+                    start: tokio::sync::Mutex::new(()),
+                })
+            })
+            .clone()
+    }
+
     /// One of the key's upload slots, held from body read to reply. `None`
     /// only if the slot semaphore was closed, which this module never does.
     pub async fn upload_slot(&self, input_id: &str) -> Option<OwnedSemaphorePermit> {
-        let slots = {
-            let mut slots = crate::sync::lock(&self.upload_slots);
-            slots
-                .entry(input_id.to_string())
-                .or_insert_with(|| Arc::new(Semaphore::new(self.limits.uploads_per_key)))
-                .clone()
-        };
-        slots.acquire_owned().await.ok()
+        let uploads = self.key_state(input_id).uploads.clone();
+        uploads.acquire_owned().await.ok()
     }
 
     /// An empty body for `kind`, sized from the declared length when known.
@@ -167,11 +179,17 @@ impl HlsIngest {
                 Ok(()) => return outcome.await.map_err(|_| DispatchError::Unavailable),
                 Err(mpsc::error::SendError(returned)) => {
                     object = returned;
-                    self.forget(&pipeline.input_id, attempt_id).await;
+                    self.forget(&pipeline.input_id, attempt_id);
                 }
             }
         }
         Err(DispatchError::Unavailable)
+    }
+
+    fn current_session(&self, input_id: &str) -> Option<(u64, mpsc::Sender<HlsObject>)> {
+        crate::sync::lock(&self.sessions)
+            .get(input_id)
+            .map(|handle| (handle.attempt_id, handle.objects.clone()))
     }
 
     async fn session_for(
@@ -180,9 +198,14 @@ impl HlsIngest {
         stream_key: &str,
         client_addr: &str,
     ) -> Result<(u64, mpsc::Sender<HlsObject>), DispatchError> {
-        let mut sessions = self.sessions.lock().await;
-        if let Some(handle) = sessions.get(&pipeline.input_id) {
-            return Ok((handle.attempt_id, handle.objects.clone()));
+        if let Some(session) = self.current_session(&pipeline.input_id) {
+            return Ok(session);
+        }
+        // Only objects of this key wait here; other keys start in parallel.
+        let key = self.key_state(&pipeline.input_id);
+        let _starting = key.start.lock().await;
+        if let Some(session) = self.current_session(&pipeline.input_id) {
+            return Ok(session);
         }
         let engine = &self.engine;
         let registration = engine
@@ -207,7 +230,7 @@ impl HlsIngest {
             .await;
         let (objects, receiver) = mpsc::channel(OBJECT_QUEUE);
         let attempt_id = registration.attempt_id;
-        sessions.insert(
+        crate::sync::lock(&self.sessions).insert(
             pipeline.input_id.clone(),
             SessionHandle {
                 attempt_id,
@@ -230,21 +253,25 @@ impl HlsIngest {
         Ok((attempt_id, objects))
     }
 
-    async fn forget(&self, input_id: &str, attempt_id: u64) {
-        let mut sessions = self.sessions.lock().await;
+    fn forget(&self, input_id: &str, attempt_id: u64) {
+        let mut sessions = crate::sync::lock(&self.sessions);
         if sessions
             .get(input_id)
             .is_some_and(|handle| handle.attempt_id == attempt_id)
         {
             sessions.remove(input_id);
         }
+        let idle = !sessions.contains_key(input_id);
         drop(sessions);
-        let mut slots = crate::sync::lock(&self.upload_slots);
-        if slots
-            .get(input_id)
-            .is_some_and(|slot| Arc::strong_count(slot) == 1)
+        let mut keys = crate::sync::lock(&self.keys);
+        // Keep the key's state while anything still uses it: an upload slot
+        // in flight or a start in progress.
+        if idle
+            && keys.get(input_id).is_some_and(|key| {
+                Arc::strong_count(key) == 1 && Arc::strong_count(&key.uploads) == 1
+            })
         {
-            slots.remove(input_id);
+            keys.remove(input_id);
         }
     }
 
@@ -299,8 +326,7 @@ impl HlsIngest {
         self.engine
             .unregister_ingest_if_current(&pipeline_id, &registration)
             .await;
-        self.forget(&registration.input_id, registration.attempt_id)
-            .await;
+        self.forget(&registration.input_id, registration.attempt_id);
     }
 }
 
@@ -318,7 +344,7 @@ mod tests {
         let (engine, ingest) = test_ingest(HlsIngestLimits::default());
         let (stale, receiver) = mpsc::channel(OBJECT_QUEUE);
         drop(receiver);
-        ingest.sessions.lock().await.insert(
+        crate::sync::lock(&ingest.sessions).insert(
             INPUT_ID.to_string(),
             SessionHandle {
                 attempt_id: u64::MAX,
@@ -340,9 +366,114 @@ mod tests {
             .await;
 
         assert_eq!(outcome, Ok(ObjectOutcome::Held));
-        let attempt = ingest.sessions.lock().await[INPUT_ID].attempt_id;
+        let attempt = crate::sync::lock(&ingest.sessions)[INPUT_ID].attempt_id;
         assert_ne!(attempt, u64::MAX, "the stale handle was replaced");
         assert!(engine.input_has_session(PIPELINE_ID, INPUT_ID).await);
         engine.cancel_pipeline_input(INPUT_ID).await;
+    }
+
+    async fn send(
+        ingest: &Arc<HlsIngest>,
+        kind: ObjectKind,
+        path: &str,
+        bytes: &[u8],
+    ) -> ObjectOutcome {
+        let mut body = ingest.object_body(kind, None).unwrap();
+        body.push(bytes).unwrap();
+        ingest
+            .dispatch(
+                &authenticated(),
+                STREAM_KEY,
+                "127.0.0.1:9",
+                kind,
+                path.to_string(),
+                body,
+            )
+            .await
+            .unwrap()
+    }
+
+    /// A whole segment released at once reaches the ring at media pace, not
+    /// in one burst: the wall time from its first to its last published
+    /// packet covers most of its media duration.
+    #[tokio::test]
+    async fn a_released_segment_reaches_the_ring_at_media_pace() {
+        let (engine, ingest) = test_ingest(HlsIngestLimits::default());
+        let ring = engine.get_or_create_pipeline(PIPELINE_ID).await;
+        let start = ring.get_write_idx();
+        let fixture = crate::test_fixtures::canonical_h264_ts_fixture().unwrap();
+        let segment = std::fs::read(fixture).unwrap();
+        let playlist =
+            "#EXTM3U\n#EXT-X-TARGETDURATION:8\n#EXTINF:8.0,\nindex0.ts\n#EXT-X-ENDLIST\n";
+
+        assert_eq!(
+            send(&ingest, ObjectKind::Segment, "index0.ts", &segment).await,
+            ObjectOutcome::Held
+        );
+        assert_eq!(
+            send(
+                &ingest,
+                ObjectKind::Playlist,
+                "index.m3u8",
+                playlist.as_bytes()
+            )
+            .await,
+            ObjectOutcome::Stored
+        );
+
+        // The receive path never waits on pacing: the next upload is
+        // answered while the first segment is still being published.
+        let asked = std::time::Instant::now();
+        assert_eq!(
+            send(
+                &ingest,
+                ObjectKind::Segment,
+                "index1.ts",
+                &segment[..18_800]
+            )
+            .await,
+            ObjectOutcome::Held
+        );
+        let replied = std::time::Instant::now();
+
+        let mut first = None;
+        let mut last = None;
+        let mut seen = start;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while engine.input_has_session(PIPELINE_ID, INPUT_ID).await {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the session never ended"
+            );
+            let written = ring.get_write_idx();
+            if written > seen {
+                let now = std::time::Instant::now();
+                first.get_or_insert(now);
+                last = Some(now);
+                seen = written;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        let dts: Vec<i64> = (start..ring.get_write_idx())
+            .filter_map(|index| ring.read_at(index))
+            .map(|packet| packet.dts)
+            .collect();
+        let media_ms = dts.iter().max().unwrap() - dts.iter().min().unwrap();
+        let wall_ms = (last.unwrap() - first.unwrap()).as_millis();
+        assert!(media_ms > 7_000, "the segment holds {media_ms} ms of media");
+        assert!(
+            replied - asked < std::time::Duration::from_millis(500) && last.unwrap() > replied,
+            "the second upload was answered after {:?}, publication ended {:?} after it",
+            replied - asked,
+            last.unwrap().saturating_duration_since(replied)
+        );
+        assert!(
+            wall_ms * 10 >= u128::try_from(media_ms).unwrap() * 8,
+            "{media_ms} ms of media reached the ring in {wall_ms} ms"
+        );
+        assert!(
+            wall_ms <= u128::try_from(media_ms).unwrap() + 2_000,
+            "pacing must not lag: {media_ms} ms of media took {wall_ms} ms"
+        );
     }
 }

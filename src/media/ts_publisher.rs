@@ -85,6 +85,8 @@ pub struct TsPublisher {
     packets: Vec<MediaPacket>,
     probe_sent: bool,
     timestamps: TsTimestamps,
+    /// Highest continuity-adjusted DTS demuxed so far (milliseconds).
+    media_time_ms: Option<i64>,
 }
 
 impl TsPublisher {
@@ -94,11 +96,19 @@ impl TsPublisher {
             packets: Vec::with_capacity(MEDIA_PRODUCER_BATCH_PACKETS),
             probe_sent: false,
             timestamps,
+            media_time_ms: None,
         }
     }
 
     pub fn into_timestamps(self) -> TsTimestamps {
         self.timestamps
+    }
+
+    /// The media time this publisher has reached: the highest DTS it has
+    /// demuxed, after continuity. Callers pace against it; the publisher
+    /// itself never waits on the clock.
+    pub fn media_time_ms(&self) -> Option<i64> {
+        self.media_time_ms
     }
 
     /// Demux one chunk, forward the packets it completes, count it, yield.
@@ -143,6 +153,11 @@ impl TsPublisher {
         let registration = &target.registration;
         for packet in &mut self.packets {
             self.timestamps.continuous.apply(packet);
+        }
+        // One comparison per batch: DTS increases per stream, and the last
+        // packet of a demuxed batch is within one frame of its maximum.
+        if let Some(last) = self.packets.last() {
+            self.media_time_ms = self.media_time_ms.max(Some(last.dts));
         }
         if let Some(preview_ring) = registration.preview_ring.load_full() {
             preview_ring.push_batch(self.packets.iter().cloned());
