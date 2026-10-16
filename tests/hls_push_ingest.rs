@@ -206,7 +206,8 @@ async fn request(stream: &mut tokio::net::TcpStream, path: &str, body: &[u8]) ->
 }
 
 /// One keep-alive connection that reads every reply, as a persistent
-/// encoder does mid-stream: playlist, two segments, final playlist.
+/// encoder does mid-stream, in FFmpeg's order: each segment first (held,
+/// `202`), then the playlist that lists and releases it (`200`).
 #[tokio::test]
 async fn a_persistent_connection_carries_a_whole_stream() {
     let server = serve().await;
@@ -214,24 +215,23 @@ async fn a_persistent_connection_carries_a_whole_stream() {
     let start = ring.get_write_idx();
     let fixture = std::fs::read(fixture_path()).unwrap();
     let half = fixture.len() / 188 / 2 * 188;
-    let listing =
-        "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nindex0.ts\n#EXTINF:4,\nindex1.ts\n";
-    let ended = format!("{listing}#EXT-X-ENDLIST\n");
+    let first = "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nindex0.ts\n";
+    let ended = format!("{first}#EXTINF:4,\nindex1.ts\n#EXT-X-ENDLIST\n");
 
     let mut stream = tokio::net::TcpStream::connect(server.address)
         .await
         .unwrap();
     assert_eq!(
-        request(&mut stream, "index.m3u8", listing.as_bytes()).await,
-        200
+        request(&mut stream, "index0.ts", &fixture[..half]).await,
+        202
     );
     assert_eq!(
-        request(&mut stream, "index0.ts", &fixture[..half]).await,
+        request(&mut stream, "index.m3u8", first.as_bytes()).await,
         200
     );
     assert_eq!(
         request(&mut stream, "index1.ts", &fixture[half..]).await,
-        200
+        202
     );
     assert_eq!(
         request(&mut stream, "index.m3u8", ended.as_bytes()).await,

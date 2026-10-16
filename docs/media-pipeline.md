@@ -680,12 +680,17 @@ must be relative to their playlist. fMP4 segments are not ingested yet
     only the shared budget and never wait for a share.
   - All HLS sessions share a 512 MiB budget, never waited for. When it is
     exhausted, an upload gets `503` with `Retry-After: 1`, and its claim is
-    released. FFmpeg never reads replies, so for it that segment is lost; the
-    per-key share keeps a few keys from reaching this for all.
+    released. FFmpeg never reads replies, so for it that segment is lost.
+    The per-key share bounds this but does not prevent it: four keys at
+    their 128 MiB share fill the budget, and then other keys' segments get
+    `503`. Four 4K publishers with 10 s segments reach that legitimately
+    (two target durations of outbox is about 2 × 61 MiB each).
   - A request body that sends nothing for 10 s, or takes longer in total than
     max(4 × target duration, 40 s) including any wait for its share, gets
-    `408`, and its bytes are released. A 64 MiB segment on a 10 Mbit/s uplink
-    fits; a trickle does not.
+    `408`, and its bytes are released. A segment fits when the uplink carries
+    at least a quarter of the stream bitrate, which a real-time encoder's
+    uplink always does, since it must carry the full bitrate; a trickle does
+    not.
   - An encoder faster than real time is slowed, not refused: once two target
     durations (by `EXTINF`; 10 s before a playlist) of released media, or
     128 MiB, wait to be published, the session stops taking objects, so its

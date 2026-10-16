@@ -154,7 +154,8 @@ impl HlsIngest {
 
     /// How long one request body may take in total: four target durations
     /// (four idle floors before the first playlist, and never less). A
-    /// 64 MiB segment on a 10 Mbit/s uplink fits; a trickle does not.
+    /// segment fits when the uplink carries a quarter of the stream bitrate,
+    /// which a real-time encoder's uplink always does; a trickle does not.
     pub fn body_deadline(&self, input_id: &str) -> Duration {
         let lead = Duration::from_millis(self.key_state(input_id).lead_ms.load(Ordering::Relaxed));
         lead.max(self.limits.idle_floor).saturating_mul(4)

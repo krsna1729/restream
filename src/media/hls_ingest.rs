@@ -45,9 +45,12 @@ pub struct HlsIngestLimits {
     /// the host memory media work needs. Exhausted, an upload gets `503`,
     /// which FFmpeg never reads: that segment is lost.
     pub total_buffer_bytes: usize,
-    /// One stream key's share for segments (a quarter of the total), so a
-    /// few keys cannot starve the rest. A segment waits for it: the
-    /// encoder's blocked write is backpressure it respects.
+    /// One stream key's share for segments (a quarter of the total). It
+    /// bounds starvation without preventing it: four keys at their share
+    /// fill the total, and other keys' segments then get `503` (four 4K
+    /// publishers with 10 s segments reach that legitimately). A segment
+    /// waits for its share: the encoder's blocked write is backpressure it
+    /// respects.
     pub key_buffer_bytes: usize,
     /// Idle timeout floor, the hold age before any playlist, the time each
     /// request body frame and an upload slot may take (`408` after it), and
