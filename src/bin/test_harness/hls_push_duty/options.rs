@@ -1,0 +1,170 @@
+//! Parsed command-line options for the `hls-push-duty` mode.
+//!
+//! The mode is the executor-isolation harness for HLS push ingest: a baseline
+//! arm of RTMP publishers and a treatment arm of extra HLS push publishers
+//! whose only difference is the HLS addition. Every knob has a default, so a
+//! bare `hls-push-duty` is a short, standalone smoke run.
+
+use std::time::Duration;
+
+/// Which HLS container the HLS-arm publishers push.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HlsSegmentType {
+    Ts,
+    Fmp4,
+}
+
+impl HlsSegmentType {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ts => "ts",
+            Self::Fmp4 => "fmp4",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "ts" => Ok(Self::Ts),
+            "fmp4" => Ok(Self::Fmp4),
+            other => Err(format!("--segment-type must be ts or fmp4 (got {other:?})")),
+        }
+    }
+
+    /// The `-f hls` arguments that select this segment container.
+    ///
+    /// fMP4 needs `aac_adtstoasc` when the source is ADTS AAC in MPEG-TS,
+    /// because the mp4 muxer rejects a raw ADTS bitstream (see the HLS push
+    /// ingest section of `docs/media-pipeline.md`).
+    pub(crate) const fn ffmpeg_args(self) -> &'static [&'static str] {
+        match self {
+            Self::Ts => &[],
+            Self::Fmp4 => &["-hls_segment_type", "fmp4", "-bsf:a", "aac_adtstoasc"],
+        }
+    }
+}
+
+/// Upper bounds keep a mistyped argument from spawning hundreds of FFmpeg
+/// processes on a shared host.
+const MAX_PUBLISHERS: usize = 64;
+const MAX_SEGMENT_SECS: u64 = 30;
+const MAX_DURATION_SECS: u64 = 3_600;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HlsPushOptions {
+    /// RTMP publishers that make up the baseline arm.
+    pub(crate) base_publishers: usize,
+    /// Extra HLS push publishers: 0 is the baseline, >0 the treatment arm.
+    pub(crate) hls_publishers: usize,
+    pub(crate) segment_type: HlsSegmentType,
+    /// Rated window, in seconds, measured after every input has published.
+    pub(crate) duration_secs: u64,
+    /// `-hls_time`: the HLS arm's target segment duration.
+    pub(crate) segment_secs: u64,
+}
+
+impl Default for HlsPushOptions {
+    fn default() -> Self {
+        Self {
+            base_publishers: 2,
+            hls_publishers: 0,
+            segment_type: HlsSegmentType::Ts,
+            duration_secs: 12,
+            segment_secs: 2,
+        }
+    }
+}
+
+pub(crate) const USAGE: &str = "hls-push-duty [--base-publishers N] [--hls-publishers N] \
+[--segment-type ts|fmp4] [--duration-secs N] [--segment-secs N]";
+
+impl HlsPushOptions {
+    pub(crate) fn from_args(args: &[String]) -> Result<Self, String> {
+        let mut options = Self::default();
+        let mut index = 0;
+        while index < args.len() {
+            let (name, inline) = match args[index].split_once('=') {
+                Some((name, value)) => (name, Some(value.to_string())),
+                None => (args[index].as_str(), None),
+            };
+            let value = |index: &mut usize| -> Result<String, String> {
+                if let Some(inline) = inline.clone() {
+                    return Ok(inline);
+                }
+                *index += 1;
+                args.get(*index)
+                    .cloned()
+                    .ok_or_else(|| format!("{name} requires a value"))
+            };
+            match name {
+                "--base-publishers" => {
+                    options.base_publishers = parse_usize(&value(&mut index)?, name)?
+                }
+                "--hls-publishers" => {
+                    options.hls_publishers = parse_usize(&value(&mut index)?, name)?
+                }
+                "--segment-type" => {
+                    options.segment_type = HlsSegmentType::parse(&value(&mut index)?)?
+                }
+                "--duration-secs" => options.duration_secs = parse_u64(&value(&mut index)?, name)?,
+                "--segment-secs" => options.segment_secs = parse_u64(&value(&mut index)?, name)?,
+                other => {
+                    return Err(format!(
+                        "unknown hls-push-duty option {other:?}; usage: {USAGE}"
+                    ));
+                }
+            }
+            index += 1;
+        }
+        options.validate()?;
+        Ok(options)
+    }
+
+    pub(crate) fn total_publishers(&self) -> usize {
+        self.base_publishers + self.hls_publishers
+    }
+
+    pub(crate) fn window(&self) -> Duration {
+        Duration::from_secs(self.duration_secs)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.total_publishers() == 0 {
+            return Err(
+                "hls-push-duty needs at least one publisher (--base-publishers or \
+                 --hls-publishers)"
+                    .to_string(),
+            );
+        }
+        if self.total_publishers() > MAX_PUBLISHERS {
+            return Err(format!(
+                "hls-push-duty supports at most {MAX_PUBLISHERS} publishers (got {})",
+                self.total_publishers()
+            ));
+        }
+        if self.segment_secs == 0 || self.segment_secs > MAX_SEGMENT_SECS {
+            return Err(format!(
+                "--segment-secs must be in 1..={MAX_SEGMENT_SECS} (got {})",
+                self.segment_secs
+            ));
+        }
+        if self.duration_secs == 0 || self.duration_secs > MAX_DURATION_SECS {
+            return Err(format!(
+                "--duration-secs must be in 1..={MAX_DURATION_SECS} (got {})",
+                self.duration_secs
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn parse_usize(value: &str, name: &str) -> Result<usize, String> {
+    value
+        .parse()
+        .map_err(|_| format!("{name} needs a non-negative integer (got {value:?})"))
+}
+
+fn parse_u64(value: &str, name: &str) -> Result<u64, String> {
+    value
+        .parse()
+        .map_err(|_| format!("{name} needs a positive integer (got {value:?})"))
+}

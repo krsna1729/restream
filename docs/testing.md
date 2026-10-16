@@ -393,6 +393,9 @@ Choose the narrowest catalog mode that crosses the changed boundary:
 - teardown or recovery — the matching fault workflow;
 - HLS, recording, or file ingest — a scenario whose resolved plan includes the
   relevant sink and checks;
+- HLS push ingest or executor isolation — `hls-push-duty`, whose baseline arm
+  (`--hls-publishers 0`) and treatment arm (`--hls-publishers N`) differ only
+  by the HLS addition;
 - broad regression confidence — a catalog suite after the scoped mode passes;
 - performance or capacity — a measurement workflow, run serially with
   bench-profile binaries.
@@ -400,6 +403,48 @@ Choose the narrowest catalog mode that crosses the changed boundary:
 Use the catalog's current inspection commands to resolve a mode and review its
 services, scenarios, checks, timeouts, and artifacts before spending time on a
 live run.
+
+### HLS push ingest isolation (`hls-push-duty`)
+
+`hls-push-duty` is the harness gate for HLS push ingest and the treatment arm
+of an executor-isolation measurement: does adding HLS ingest sessions degrade
+the existing RTMP/SRT ingest-and-egress guarantees? It starts one bench-profile
+Restream, then builds two arms that differ only by the HLS addition:
+
+- **Baseline arm** (`--base-publishers N`, default 2): `N` RTMP publishers,
+  each an ingest input and one RTMP sink output.
+- **Treatment arm** (`--hls-publishers N`, default 0): the same base load plus
+  `N` pipelines whose input is an HLS push session, driven by one FFmpeg
+  process each (`-re -f hls -method PUT`), to the same RTMP sink output kind.
+
+Every pipeline's output goes to its own in-process RTMP sink, so delivery is
+asserted per pipeline (video, audio, a keyframe, monotonic DTS) and the egress
+side of the fabric carries real work. `--hls-publishers 0` is the baseline and
+`--hls-publishers 4` the treatment, with the same base load in both.
+
+```sh
+scripts/harness/run.sh hls-push-duty
+scripts/harness/run.sh hls-push-duty -- --hls-publishers 4 --segment-type fmp4
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--base-publishers N` | `2` | RTMP baseline publishers with one sink output each |
+| `--hls-publishers N` | `0` | Extra HLS push pipelines with one sink output each |
+| `--segment-type ts\|fmp4` | `ts` | Container the HLS arm pushes |
+| `--duration-secs N` | `12` | Rated window after every input has published |
+| `--segment-secs N` | `2` | `-hls_time` for the HLS arm |
+
+The result JSON (`.local/artifacts/hls-push-duty/report.json`) carries
+`pipelines[].publishedPackets` (per-pipeline video/audio/keyframe counts from
+its sink), `pipelines[].input` (bytes received and GOP keyframe count),
+`pipelines[].egress` (resync count, `stalled`, queue overflows and RX/TX drop
+counters), the raw `mediaExecutor` snapshot (`queueLatencyMaxUs` and the
+per-class `active`/`polls`/`busyUs`/`maxPollUs` rows), the raw
+`egressShards` list, `wallClockSecs`, and `environment.cpuCount` so runs are
+comparable. The media executor exposes one global queue-latency max; per-class
+rows carry its poll/busy counters. FFmpeg is resolved through
+`src/ffmpeg_binary.rs` and the source through `src/test_fixtures.rs`.
 
 ### Transport live-CI tiers
 

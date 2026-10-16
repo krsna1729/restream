@@ -256,6 +256,14 @@
             "benchProfile": true
           },
           "purpose": "substrate UDP submission benchmark (compio vs native io_uring): one pinned sender CPU, 1000 destinations over the veth lane, preconstructed payload, queue-depth window; reports pps, pps/core and payload Gbit/s with the drain peer's counters deciding attribution"
+        },
+        "hls-push-duty": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": true
+          },
+          "purpose": "executor-isolation harness for HLS push ingest: a baseline arm of `--base-publishers` RTMP publishers plus a treatment arm of `--hls-publishers` HLS push (TS or fMP4) publishers, each pipeline an ingest input and one RTMP sink output over a rated window; reports per-pipeline published/delivered packet counts, the media executor queue-latency max, per-output egress resync/stall/drop counters, wall-clock duration and host CPU count"
         }
       }
     }

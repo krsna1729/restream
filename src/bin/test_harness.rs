@@ -52,6 +52,8 @@ mod fault_recovery;
 mod fault_runner;
 #[path = "test_harness/harness_srt_sink.rs"]
 mod harness_srt_sink;
+#[path = "test_harness/hls_push_duty.rs"]
+mod hls_push_duty;
 #[path = "test_harness/hls_put.rs"]
 mod hls_put;
 #[path = "test_harness/live_modes.rs"]
@@ -107,6 +109,7 @@ use fault_manifest::*;
 use fault_recovery::*;
 use fault_runner::*;
 use harness_srt_sink::*;
+use hls_push_duty::*;
 use hls_put::*;
 use live_modes::*;
 use media_probes::*;
@@ -259,6 +262,7 @@ async fn run() -> Result<(), String> {
             "resource-sweep" => resource_sweep().await,
             "srt-sink" => srt_sink::srt_sink_mode().await,
             "egress-duty" => egress_duty().await,
+            "hls-push-duty" => hls_push_duty(&raw[1..]).await,
             "udp-drain" => udp_drain::udp_drain_mode().await,
             "substrate-pps" => substrate_pps::substrate_pps_mode().await,
             "msr" => msr().await,
