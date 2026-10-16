@@ -27,12 +27,13 @@ items).
 - [Q-064 incident signals before the page opened](#q-064-observability-sonnet-incident-correlation-before-the-page-opened)
 - [Q-065 capacity cost of HLS, sink and pipeline outputs](#q-065-performance-sonnet-price-hls-sink-and-pipeline-outputs-from-a-measured-cost)
 - [Q-066 SRT ingress test port race](#q-066-testing-sonnet-srt-multi-owner-test-port-can-join-a-foreign-reuseport-group)
-- [Q-067 HLS push ingest: fMP4 and remaining gates](#q-067-protocol-opus-hls-push-ingest-fmp4-segments-and-remaining-gates)
+- [Q-067 HLS push ingest: remaining gates](#q-067-protocol-opus-hls-push-ingest-remaining-gates)
 - [Q-068 HLS pull ingest](#q-068-protocol-opus-hls-pull-ingest)
 - [Q-069 frame-level media units](#q-069-architecture-opus-frame-level-media-units-for-moq-and-fmp4-ingest)
 - [Q-070 MoQ ingest](#q-070-protocol-opus-moq-ingest)
 - [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
 - [Q-072 dedicated HLS ingest listener](#q-072-architecture-sonnet-dedicated-hls-ingest-listener-with-half-close)
+- [Q-073 HEVC fMP4 HLS push ingest](#q-073-protocol-opus-hevc-fmp4-hls-push-ingest)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -437,21 +438,18 @@ items).
 - Gates: none until it flakes.
 - Status: open (Filed: 2026-10-16 by claude).
 
-### Q-067 [protocol] [opus] HLS push ingest: fMP4 segments and remaining gates
-- Goal: what HLS push ingest (`src/media/hls_ingest/`, TS segments over
-  PUT and POST) still lacks for encoders that push fMP4 or need more than
-  the stream key.
+### Q-067 [protocol] [opus] HLS push ingest: remaining gates
+- Goal: what HLS push ingest (`src/media/hls_ingest/`, TS and H.264/AAC
+  fMP4 segments over PUT and POST) still lacks for encoders that need more
+  than the stream key, and the gates it has not yet passed.
 - Contract:
-  - fMP4 segments (`EXT-X-MAP` init, `.m4s`/`.mp4`, answered `415` today)
-    go to `shiguredo_mp4::demux::Fmp4SegmentDemuxer` behind the same
-    ordering session, on the MEDIA executor.
   - Optional basic auth over the stream key.
   - Generated `ingestUrls.hls`: `AppState` does not know the HTTP port yet.
-- Gates: a fuzz target for `Fmp4SegmentDemuxer` over arbitrary bytes; a
-  test that a panic inside one session ends only that session and
+- Gates: a test that a panic inside one session ends only that session and
   releases its input; one harness mode with FFmpeg pushing TS and fMP4
   over PUT and POST.
-- Status: open (Filed: 2026-10-16 by claude, user request; TS push done).
+- Status: open (Filed: 2026-10-16 by claude, user request; TS and
+  H.264/AAC fMP4 push done).
 
 ### Q-068 [protocol] [opus] HLS pull ingest
 - Goal: a pipeline input pulls a remote live HLS URL.
@@ -541,4 +539,17 @@ items).
   hyper's default.
 - Gates: the FFmpeg POST push test still passes; a test that a dropped
   SSE client releases its receiver within one heartbeat.
+- Status: open (Filed: 2026-10-16 by claude).
+
+### Q-073 [protocol] [opus] HEVC fMP4 HLS push ingest
+- Goal: HLS push ingest accepts fMP4 segments with HEVC video, as it does
+  H.264.
+- Sources: `src/media/ingest_publisher/fmp4.rs` rejects an HEVC init
+  (`hvc1`/`hev1`) with `415` "HEVC fMP4 ingest is not implemented".
+  Supporting it needs an `hvcC` parser: the VPS/SPS/PPS arrays and the
+  NALU length size from the `hvcC` record, with the parameter sets
+  injected at keyframes as the H.264 path does from `avcC`.
+  `codec/enhanced_rtmp_hevc.rs` only builds an `hvcC` and never parses one.
+- Gates: an `ffmpeg -hls_segment_type fmp4` end-to-end test with an HEVC
+  input in `tests/hls_push_ingest.rs`; a unit test for the `hvcC` parser.
 - Status: open (Filed: 2026-10-16 by claude).

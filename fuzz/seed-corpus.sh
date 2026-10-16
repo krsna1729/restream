@@ -42,3 +42,21 @@ for playlist in \
   done
   i=$((i + 1))
 done
+
+# fmp4_ingest: the init segment's length (2 bytes, big-endian), the init,
+# then one media segment, as FFmpeg's fMP4 HLS muxer writes them
+# (`styp sidx moof mdat`): the canonical H.264 fixture re-encoded tiny, with
+# B-frames (composition offsets), so seeds stay a few KiB.
+out=corpus/fmp4_ingest
+mkdir -p "$out"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+ffmpeg -hide_banner -loglevel error -nostdin -i ../test/fixtures/transport/correctness-h264.ts \
+  -t 1 -vf scale=64:36 -c:v libx264 -preset ultrafast -bf 2 -g 6 -c:a aac -b:a 24k \
+  -f hls -hls_segment_type fmp4 -hls_time 0.2 -hls_list_size 0 "$work/index.m3u8"
+init_len=$(wc -c < "$work/init.mp4")
+for segment in "$work"/index*.m4s; do
+  name=$(basename "$segment" .m4s)
+  { printf "\\x$(printf '%02x' $((init_len >> 8)))\\x$(printf '%02x' $((init_len & 255)))"
+    cat "$work/init.mp4" "$segment"; } > "$out/seed-$name"
+done

@@ -3,7 +3,9 @@ use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::process::ChildStdout;
 
-use crate::media::ts_publisher::{PUBLISH_CHUNK_BYTES, TsPublishTarget, TsPublisher, TsTimestamps};
+use crate::media::ingest_publisher::{
+    Container, IngestTimestamps, PUBLISH_CHUNK_BYTES, PublishTarget, SegmentPublisher,
+};
 
 use super::ExternalFileIngestRuntime;
 
@@ -12,8 +14,8 @@ use super::ExternalFileIngestRuntime;
 pub(super) async fn pump_stdout(
     runtime: Arc<ExternalFileIngestRuntime>,
     stdout: ChildStdout,
-    timestamps: TsTimestamps,
-) -> Result<(TsTimestamps, Result<(), String>), String> {
+    timestamps: IngestTimestamps,
+) -> Result<(IngestTimestamps, Result<(), String>), String> {
     let stdout = match stdout.into_owned_fd() {
         Ok(stdout) => stdout,
         Err(error) => {
@@ -31,7 +33,7 @@ pub(super) async fn pump_stdout(
         },
         runtime.registration.cancel_token.clone(),
         async move {
-            let mut publisher = TsPublisher::new(timestamps);
+            let mut publisher = SegmentPublisher::new(Container::Ts.demux(), timestamps);
             // Keep the descriptor's nonblocking flags; from_std registers it with
             // the currently entered MEDIA runtime, not its original CONTROL reactor.
             let result = match ChildStdout::from_std(std::process::ChildStdout::from(stdout)) {
@@ -47,9 +49,9 @@ pub(super) async fn pump_stdout(
 async fn pump_stdout_inner(
     runtime: &ExternalFileIngestRuntime,
     mut stdout: ChildStdout,
-    publisher: &mut TsPublisher,
+    publisher: &mut SegmentPublisher,
 ) -> Result<(), String> {
-    let target = TsPublishTarget::open(
+    let target = PublishTarget::open(
         runtime.engine.clone(),
         runtime.pipeline_id.clone(),
         runtime.registration.clone(),
@@ -70,7 +72,10 @@ async fn pump_stdout_inner(
             break;
         }
         // Cancellation is observed at every bounded (at most 64 KiB) read.
-        publisher.publish(&target, &buf[..read]).await;
+        publisher
+            .publish(&target, &buf[..read])
+            .await
+            .map_err(|error| format!("Failed to demux ffmpeg stdout: {error}"))?;
     }
 
     Ok(())

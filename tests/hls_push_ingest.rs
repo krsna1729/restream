@@ -1,7 +1,8 @@
 //! HLS push ingest end to end on a real HTTP server: FFmpeg pushes the
-//! checked-in TS fixture over PUT and over POST, and a raw client carries a
-//! whole stream over one persistent connection. Each run must publish the
-//! whole fixture, in order, and end its session on `EXT-X-ENDLIST`.
+//! checked-in TS fixture over PUT and over POST, as MPEG-TS and as fMP4
+//! segments, and a raw client carries a whole stream over one persistent
+//! connection. Each run must publish the whole fixture, in order, and end
+//! its session on `EXT-X-ENDLIST`.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -78,7 +79,13 @@ fn fixture_path() -> std::path::PathBuf {
 
 /// The session ended on its ENDLIST and the ring holds the whole fixture:
 /// 8 s of 30 fps video with a keyframe every 2 s, all of it in order.
-async fn assert_whole_fixture_published(server: &Server, ring: &RingBuffer, start: usize) {
+/// `annexb`: an fMP4 push, whose audio and H.264 conversion are checked too.
+async fn assert_whole_fixture_published(
+    server: &Server,
+    ring: &RingBuffer,
+    start: usize,
+    annexb: bool,
+) {
     // Long enough for an 8 s fixture published at media pace.
     tokio::time::timeout(Duration::from_secs(30), async {
         while server.engine.input_has_session(PIPELINE_ID, INPUT_ID).await {
@@ -123,6 +130,33 @@ async fn assert_whole_fixture_published(server: &Server, ring: &RingBuffer, star
         video_dts.windows(2).all(|pair| pair[1] > pair[0]),
         "video DTS leaves the ring in order"
     );
+    if annexb {
+        let audio = packets
+            .iter()
+            .filter(|packet| packet.media_type == MediaType::Audio)
+            .count();
+        assert!(audio > 0, "the fMP4 push carried no audio");
+        // The first keyframe is Annex B and carries the parameter sets the
+        // TS path carries in band: FFmpeg's sample keeps the SPS/PPS it
+        // muxed into `avcC` (after the access unit delimiter), or the
+        // conversion injects them when a keyframe lacks them.
+        let first_keyframe = packets
+            .iter()
+            .find(|packet| packet.media_type == MediaType::Video && packet.is_keyframe)
+            .expect("a keyframe reached the ring");
+        let head = &first_keyframe.payload[..first_keyframe.payload.len().min(64)];
+        let has = |nalu: u8| head.windows(5).any(|window| window == [0, 0, 0, 1, nalu]);
+        assert!(
+            head.starts_with(&[0, 0, 0, 1]),
+            "the first keyframe is not Annex B: {:02x?}",
+            head
+        );
+        assert!(
+            has(0x67) && has(0x68),
+            "the first keyframe carries no SPS/PPS: {:02x?}",
+            head
+        );
+    }
 }
 
 /// FFmpeg runs with its default of one connection per object. With
@@ -135,7 +169,10 @@ async fn assert_whole_fixture_published(server: &Server, ring: &RingBuffer, star
 /// reading the replies can lose its final objects; this test keeps that
 /// encoder limit out of the server's bar, and the persistent path is
 /// covered by `a_persistent_connection_carries_a_whole_stream`.
-async fn ffmpeg_push_reaches_the_ring(method: &str) {
+///
+/// `segment_args` selects the segment container; the binary is the one
+/// production resolves.
+async fn ffmpeg_push_reaches_the_ring(method: &str, segment_args: &[&str], annexb: bool) {
     let server = serve().await;
     let ring = server.engine.get_or_create_pipeline(PIPELINE_ID).await;
     let start = ring.get_write_idx();
@@ -143,7 +180,7 @@ async fn ffmpeg_push_reaches_the_ring(method: &str) {
         "http://{}/ingest/hls/{STREAM_KEY}/index.m3u8",
         server.address
     );
-    let status = tokio::process::Command::new("/usr/bin/ffmpeg")
+    let status = tokio::process::Command::new(restream::ffmpeg_binary::ffmpeg_bin_path())
         .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-i"])
         .arg(fixture_path())
         .args([
@@ -156,6 +193,7 @@ async fn ffmpeg_push_reaches_the_ring(method: &str) {
             "-hls_list_size",
             "3",
         ])
+        .args(segment_args)
         .args(["-hls_flags", "delete_segments", "-method", method])
         .args(["-http_persistent", "0"])
         .arg(url)
@@ -168,17 +206,29 @@ async fn ffmpeg_push_reaches_the_ring(method: &str) {
         .expect("ffmpeg finished")
         .expect("ffmpeg ran");
     assert!(status.success(), "ffmpeg exited with {status}");
-    assert_whole_fixture_published(&server, &ring, start).await;
+    assert_whole_fixture_published(&server, &ring, start, annexb).await;
 }
 
 #[tokio::test]
 async fn ffmpeg_hls_put_with_a_connection_per_object_reaches_the_ring() {
-    ffmpeg_push_reaches_the_ring("PUT").await;
+    ffmpeg_push_reaches_the_ring("PUT", &[], false).await;
 }
 
 #[tokio::test]
 async fn ffmpeg_hls_post_with_a_connection_per_object_reaches_the_ring() {
-    ffmpeg_push_reaches_the_ring("POST").await;
+    ffmpeg_push_reaches_the_ring("POST", &[], false).await;
+}
+
+/// FFmpeg's fMP4 HLS: `init.mp4` (named by `EXT-X-MAP`) ahead of
+/// `styp sidx moof mdat` segments, AAC as raw access units in the MP4.
+#[tokio::test]
+async fn ffmpeg_hls_fmp4_segments_reach_the_ring() {
+    ffmpeg_push_reaches_the_ring(
+        "PUT",
+        &["-hls_segment_type", "fmp4", "-bsf:a", "aac_adtstoasc"],
+        true,
+    )
+    .await;
 }
 
 /// Send one PUT on `stream` and read its whole reply; returns the status.
@@ -238,5 +288,5 @@ async fn a_persistent_connection_carries_a_whole_stream() {
         200
     );
 
-    assert_whole_fixture_published(&server, &ring, start).await;
+    assert_whole_fixture_published(&server, &ring, start, false).await;
 }

@@ -8,6 +8,7 @@ publish = false
 cargo-fuzz = true
 
 [dependencies]
+bytes = "1"
 libfuzzer-sys = "0.4"
 restream = { path = ".." }
 
@@ -79,6 +80,13 @@ bench = false
 [[bin]]
 name = "hls_playlist"
 path = "fuzz_targets/hls_playlist.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fmp4_ingest"
+path = "fuzz_targets/fmp4_ingest.rs"
 test = false
 doc = false
 bench = false

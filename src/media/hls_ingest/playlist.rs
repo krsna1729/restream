@@ -2,10 +2,11 @@
 //! error out. Malformed input is an error, never a panic.
 //!
 //! It reads what ordering needs: `#EXTM3U`, `EXT-X-TARGETDURATION`,
-//! `EXT-X-MEDIA-SEQUENCE`, `EXTINF`, `EXT-X-DISCONTINUITY`, `EXT-X-ENDLIST`
-//! and master playlists (`EXT-X-STREAM-INF` with `BANDWIDTH`). Every other
-//! tag is ignored. URIs resolve against the playlist's own path; only
-//! relative URIs that stay inside the stream key's namespace are accepted.
+//! `EXT-X-MEDIA-SEQUENCE`, `EXTINF`, `EXT-X-DISCONTINUITY`, `EXT-X-MAP`,
+//! `EXT-X-ENDLIST` and master playlists (`EXT-X-STREAM-INF` with
+//! `BANDWIDTH`). Every other tag is ignored. URIs resolve against the
+//! playlist's own path; only relative URIs that stay inside the stream key's
+//! namespace are accepted.
 
 use std::fmt;
 use std::time::Duration;
@@ -25,6 +26,10 @@ pub struct MediaPlaylist {
     pub media_sequence: u64,
     pub segments: Vec<SegmentEntry>,
     pub ended: bool,
+    /// The playlist's last `EXT-X-MAP` init URI, resolved against the
+    /// playlist directory like a segment URI: the map its newest segments
+    /// use. Each [`SegmentEntry`] records the map in force for itself.
+    pub map_uri: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +40,9 @@ pub struct SegmentEntry {
     pub duration: Duration,
     /// An `EXT-X-DISCONTINUITY` precedes this segment.
     pub discontinuity: bool,
+    /// The `EXT-X-MAP` in force for this segment (the last one before it),
+    /// resolved like its URI; `None` for a playlist that names no init.
+    pub map_uri: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,10 +127,11 @@ pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistErro
     let mut target_duration = None;
     let mut media_sequence = 0u64;
     let mut ended = false;
+    let mut map_uri = None;
     let mut pending_duration = None;
     let mut pending_discontinuity = false;
     let mut pending_bandwidth = None;
-    let mut segment_uris: Vec<(String, Duration, bool)> = Vec::new();
+    let mut segment_uris: Vec<(String, Duration, bool, Option<String>)> = Vec::new();
     let mut variants = Vec::new();
 
     for (line_number, line) in lines {
@@ -149,6 +158,12 @@ pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistErro
             pending_discontinuity = true;
         } else if line == "#EXT-X-ENDLIST" {
             ended = true;
+        } else if let Some(value) = line.strip_prefix("#EXT-X-MAP:") {
+            let uri = attribute(value, "URI").ok_or_else(|| invalid("EXT-X-MAP"))?;
+            map_uri = Some(
+                resolve_uri(playlist_path, uri)
+                    .ok_or(PlaylistError::InvalidUri { line: line_number })?,
+            );
         } else if let Some(attributes) = line.strip_prefix("#EXT-X-STREAM-INF:") {
             let bandwidth = attribute(attributes, "BANDWIDTH")
                 .and_then(|value| value.parse().ok())
@@ -165,7 +180,12 @@ pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistErro
                 let duration = pending_duration
                     .take()
                     .ok_or(PlaylistError::SegmentWithoutDuration { line: line_number })?;
-                segment_uris.push((path, duration, std::mem::take(&mut pending_discontinuity)));
+                segment_uris.push((
+                    path,
+                    duration,
+                    std::mem::take(&mut pending_discontinuity),
+                    map_uri.clone(),
+                ));
             }
         }
     }
@@ -182,7 +202,7 @@ pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistErro
 
     let target_duration = target_duration.ok_or(PlaylistError::MissingTargetDuration)?;
     let mut segments = Vec::with_capacity(segment_uris.len());
-    for (offset, (path, duration, discontinuity)) in segment_uris.into_iter().enumerate() {
+    for (offset, (path, duration, discontinuity, map_uri)) in segment_uris.into_iter().enumerate() {
         let sequence = u64::try_from(offset)
             .ok()
             .and_then(|offset| media_sequence.checked_add(offset))
@@ -192,6 +212,7 @@ pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistErro
             path,
             duration,
             discontinuity,
+            map_uri,
         });
     }
     Ok(Playlist::Media(MediaPlaylist {
@@ -199,6 +220,7 @@ pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistErro
         media_sequence,
         segments,
         ended,
+        map_uri,
     }))
 }
 
@@ -287,12 +309,14 @@ mod tests {
                     path: "live/index7.ts".into(),
                     duration: Duration::from_secs_f64(2.002),
                     discontinuity: false,
+                    map_uri: None,
                 },
                 SegmentEntry {
                     sequence: 8,
                     path: "other/index8.ts".into(),
                     duration: Duration::from_secs_f64(1.5),
                     discontinuity: true,
+                    map_uri: None,
                 },
             ]
         );
@@ -325,6 +349,61 @@ mod tests {
         );
         assert_eq!(playlist.segments.len(), 1);
         assert!(!playlist.ended);
+    }
+
+    #[test]
+    fn map_tag_resolves_the_init_uri_against_the_playlist_directory() {
+        let playlist = media(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MAP:URI=\"init.mp4\"\n\
+             #EXTINF:2,\nindex7.ts\n",
+        );
+        assert_eq!(playlist.map_uri.as_deref(), Some("live/init.mp4"));
+
+        let playlist = media("#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nindex7.ts\n");
+        assert_eq!(playlist.map_uri, None);
+    }
+
+    #[test]
+    fn later_map_tag_overwrites_an_earlier_one() {
+        let playlist = media(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MAP:URI=\"a/init.mp4\"\n\
+             #EXTINF:2,\nindex7.ts\n#EXT-X-MAP:URI=\"b/init2.mp4\"\n#EXTINF:2,\nindex8.ts\n",
+        );
+        assert_eq!(playlist.map_uri.as_deref(), Some("live/b/init2.mp4"));
+        // A mid-listing change is recorded per segment: index7.ts belongs to
+        // the map that was in force when it was listed.
+        let maps: Vec<Option<&str>> = playlist
+            .segments
+            .iter()
+            .map(|segment| segment.map_uri.as_deref())
+            .collect();
+        assert_eq!(
+            maps,
+            vec![Some("live/a/init.mp4"), Some("live/b/init2.mp4")]
+        );
+    }
+
+    #[test]
+    fn malformed_map_tags_are_errors() {
+        assert_eq!(
+            parse(
+                b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MAP:BYTERANGE=\"100@200\"\n\
+                  #EXTINF:2,\nindex7.ts\n",
+                "live/index.m3u8"
+            ),
+            Err(PlaylistError::InvalidTag {
+                line: 3,
+                tag: "EXT-X-MAP",
+            })
+        );
+        assert_eq!(
+            parse(
+                b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MAP:URI=\"../../init.mp4\"\n\
+                  #EXTINF:2,\nindex7.ts\n",
+                "live/index.m3u8"
+            ),
+            Err(PlaylistError::InvalidUri { line: 3 })
+        );
     }
 
     #[test]
@@ -415,6 +494,7 @@ mod tests {
                     Just("#EXT-X-DISCONTINUITY".to_string()),
                     Just("#EXT-X-ENDLIST".to_string()),
                     "#EXT-X-STREAM-INF:[A-Z=0-9,\"]{0,24}",
+                    "#EXT-X-MAP:[A-Z=0-9,\"]{0,24}",
                     "[./a-z0-9?#]{0,12}",
                 ],
                 0..40,

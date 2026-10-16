@@ -11,7 +11,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tracing::{error, info, warn};
 
 use super::ordering::SessionLimits;
-use super::session::{self, HlsObject, SessionContext, SessionEnd};
+use super::session::{self, HlsObject, InitCache, SessionContext, SessionEnd};
 use super::{
     BodyError, HlsIngestLimits, KeyCharge, ObjectBody, ObjectKind, ObjectOutcome, SegmentShare,
 };
@@ -75,6 +75,9 @@ pub struct HlsIngest {
     /// Keyed by input id; held for lookups only, never across an await.
     sessions: std::sync::Mutex<HashMap<String, SessionHandle>>,
     keys: std::sync::Mutex<HashMap<String, Arc<KeyState>>>,
+    /// The init each stream key applied last: an encoder uploads its
+    /// `EXT-X-MAP` init once per run, so it outlives the session.
+    inits: Arc<std::sync::Mutex<InitCache>>,
 }
 
 impl HlsIngest {
@@ -92,6 +95,9 @@ impl HlsIngest {
             budget: Arc::new(Semaphore::new(limits.total_buffer_bytes)),
             sessions: std::sync::Mutex::new(HashMap::new()),
             keys: std::sync::Mutex::new(HashMap::new()),
+            inits: Arc::new(std::sync::Mutex::new(InitCache::new(
+                limits.init_cache_bytes,
+            ))),
         })
     }
 
@@ -179,7 +185,7 @@ impl HlsIngest {
                 .ok_or(BodyError::TooLarge)
         })?;
         let key = self.key_state(input_id);
-        let segment = (kind == ObjectKind::Segment).then(|| SegmentShare {
+        let segment = (kind != ObjectKind::Playlist).then(|| SegmentShare {
             share: key.share.clone(),
             lock: key.share_lock.clone(),
             growing: None,
@@ -298,6 +304,8 @@ impl HlsIngest {
                 hold_bytes: self.limits.hold_bytes,
                 idle_floor: self.limits.idle_floor,
             },
+            max_init_bytes: self.limits.max_init_bytes,
+            inits: self.inits.clone(),
         };
         tokio::spawn(Arc::clone(self).supervise(context, receiver));
         Ok((attempt_id, objects))
@@ -385,362 +393,7 @@ impl HlsIngest {
     }
 }
 
+/// Tests live in `registry_tests.rs` (this file is at the line cap).
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::media::hls_ingest::test_support::{
-        INPUT_ID, PIPELINE_ID, STREAM_KEY, authenticated, test_ingest,
-    };
-
-    /// A session that ended between lookup and send gets exactly one
-    /// restart, with the object already read.
-    #[tokio::test]
-    async fn an_object_for_a_session_that_just_ended_restarts_it_once() {
-        let (engine, ingest) = test_ingest(HlsIngestLimits::default());
-        let (stale, receiver) = mpsc::channel(OBJECT_QUEUE);
-        drop(receiver);
-        crate::sync::lock(&ingest.sessions).insert(
-            INPUT_ID.to_string(),
-            SessionHandle {
-                attempt_id: u64::MAX,
-                objects: stale,
-            },
-        );
-        let mut body = ingest
-            .object_body(ObjectKind::Segment, None, INPUT_ID)
-            .await
-            .unwrap();
-        body.push(b"segment").await.unwrap();
-
-        let outcome = ingest
-            .dispatch(
-                &authenticated(),
-                STREAM_KEY,
-                "127.0.0.1:9",
-                ObjectKind::Segment,
-                "index0.ts".to_string(),
-                body,
-            )
-            .await;
-
-        assert_eq!(outcome, Ok(ObjectOutcome::Held));
-        let attempt = crate::sync::lock(&ingest.sessions)[INPUT_ID].attempt_id;
-        assert_ne!(attempt, u64::MAX, "the stale handle was replaced");
-        assert!(engine.input_has_session(PIPELINE_ID, INPUT_ID).await);
-        engine.cancel_pipeline_input(INPUT_ID).await;
-    }
-
-    async fn send(
-        ingest: &Arc<HlsIngest>,
-        kind: ObjectKind,
-        path: &str,
-        bytes: &[u8],
-    ) -> ObjectOutcome {
-        send_to(ingest, &authenticated(), kind, path, bytes).await
-    }
-
-    async fn send_to(
-        ingest: &Arc<HlsIngest>,
-        pipeline: &AuthenticatedPipeline,
-        kind: ObjectKind,
-        path: &str,
-        bytes: &[u8],
-    ) -> ObjectOutcome {
-        let mut body = ingest
-            .object_body(kind, None, &pipeline.input_id)
-            .await
-            .unwrap();
-        body.push(bytes).await.unwrap();
-        ingest
-            .dispatch(
-                pipeline,
-                STREAM_KEY,
-                "127.0.0.1:9",
-                kind,
-                path.to_string(),
-                body,
-            )
-            .await
-            .unwrap()
-    }
-
-    fn fixture() -> Vec<u8> {
-        std::fs::read(crate::test_fixtures::canonical_h264_ts_fixture().unwrap()).unwrap()
-    }
-
-    /// A key at its buffer share is throttled, not refused: its next body
-    /// waits until the segment being published returns its bytes, and a
-    /// second key publishes meanwhile. The wait is exercised on the body
-    /// here; over a real socket it becomes the encoder's write blocking on
-    /// a full TCP window, which no test covers yet.
-    #[tokio::test]
-    async fn a_key_at_its_share_is_throttled_while_another_key_publishes() {
-        let (engine, ingest) = test_ingest(HlsIngestLimits {
-            key_buffer_bytes: 8_000_000,
-            ..HlsIngestLimits::default()
-        });
-        let segment = fixture();
-        let playlist = "#EXTM3U\n#EXT-X-TARGETDURATION:8\n#EXTINF:8.0,\nindex0.ts\n";
-        assert_eq!(
-            send(&ingest, ObjectKind::Segment, "index0.ts", &segment).await,
-            ObjectOutcome::Held
-        );
-        assert_eq!(
-            send(
-                &ingest,
-                ObjectKind::Playlist,
-                "index.m3u8",
-                playlist.as_bytes()
-            )
-            .await,
-            ObjectOutcome::Stored
-        );
-
-        // index0 (6.7 MB) publishes over 8 s and holds most of the 8 MB share.
-        let started = std::time::Instant::now();
-        let mut next = ingest
-            .object_body(ObjectKind::Segment, None, INPUT_ID)
-            .await
-            .unwrap();
-        let throttled = tokio::spawn(async move {
-            let pushed = next.push(&fixture()).await;
-            (pushed.is_ok(), started.elapsed())
-        });
-
-        let other = AuthenticatedPipeline {
-            id: "pipe-hls-b".to_string(),
-            input_id: "input-hls-b".to_string(),
-            selected: true,
-        };
-        let other_ring = engine.get_or_create_pipeline(&other.id).await;
-        let other_playlist = "#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1.0,\nindex0.ts\n";
-        let other_segment = &segment[..188 * 2_000];
-        assert_eq!(
-            send_to(
-                &ingest,
-                &other,
-                ObjectKind::Segment,
-                "index0.ts",
-                other_segment
-            )
-            .await,
-            ObjectOutcome::Held
-        );
-        assert_eq!(
-            send_to(
-                &ingest,
-                &other,
-                ObjectKind::Playlist,
-                "index.m3u8",
-                other_playlist.as_bytes()
-            )
-            .await,
-            ObjectOutcome::Stored
-        );
-        tokio::time::timeout(std::time::Duration::from_secs(3), async {
-            while other_ring.get_write_idx() == 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("the other key publishes");
-        assert!(
-            !throttled.is_finished(),
-            "the capped key's body waits for its share"
-        );
-
-        let (pushed, waited) = throttled.await.unwrap();
-        assert!(pushed, "the capped key's body is read, never refused");
-        assert!(
-            waited >= std::time::Duration::from_secs(5),
-            "the body waited only {waited:?} for the share"
-        );
-        engine.cancel_pipeline_input(INPUT_ID).await;
-        engine.cancel_pipeline_input(&other.input_id).await;
-    }
-
-    /// Share claims of one key are serialized: a chunked body holds the
-    /// key's claim lock until it is complete, so a second chunked body
-    /// waits without a fragment and the first can still grow. Without the
-    /// lock the second would hold 4 MiB and the first could not claim its
-    /// next step.
-    #[tokio::test]
-    async fn two_chunked_bodies_of_one_key_never_both_hold_a_share_fragment() {
-        const MIB: usize = 1024 * 1024;
-        let (_engine, ingest) = test_ingest(HlsIngestLimits {
-            key_buffer_bytes: 10 * MIB,
-            ..HlsIngestLimits::default()
-        });
-        let mut first = ingest
-            .object_body(ObjectKind::Segment, None, INPUT_ID)
-            .await
-            .unwrap();
-        first.push(&[0x47; 1024]).await.unwrap();
-
-        let mut second = ingest
-            .object_body(ObjectKind::Segment, None, INPUT_ID)
-            .await
-            .unwrap();
-        let waiting = tokio::spawn(async move {
-            let pushed = second.push(&[0x47; 1024]).await.is_ok();
-            (pushed, second)
-        });
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        assert!(
-            !waiting.is_finished(),
-            "the second body waits for the first"
-        );
-
-        tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            first.push(&vec![0x47; 5 * MIB]),
-        )
-        .await
-        .expect("the first body grows past its first claim")
-        .unwrap();
-        drop(first);
-        let (pushed, _second) = tokio::time::timeout(std::time::Duration::from_secs(1), waiting)
-            .await
-            .expect("the second body proceeds once the first is gone")
-            .unwrap();
-        assert!(pushed);
-    }
-
-    /// Released media waits to be published only up to two target
-    /// durations: past that the session stops taking objects, so a
-    /// faster-than-real-time encoder's next reply waits, though the bytes
-    /// (6.7 MB) are far below the byte ceiling.
-    #[tokio::test]
-    async fn the_outbox_holds_two_target_durations_of_media() {
-        let (engine, ingest) = test_ingest(HlsIngestLimits::default());
-        let fixture = fixture();
-        let slice = fixture.len() / 188 / 6 * 188;
-        let mut playlist = String::from("#EXTM3U\n#EXT-X-TARGETDURATION:1\n");
-        for index in 0..6 {
-            let end = if index == 5 {
-                fixture.len()
-            } else {
-                (index + 1) * slice
-            };
-            let path = format!("index{index}.ts");
-            let bytes = &fixture[index * slice..end];
-            assert_eq!(
-                send(&ingest, ObjectKind::Segment, &path, bytes).await,
-                ObjectOutcome::Held
-            );
-            playlist.push_str(&format!("#EXTINF:1.0,\n{path}\n"));
-        }
-        // All six (6 s listed) are released at once.
-        assert_eq!(
-            send(
-                &ingest,
-                ObjectKind::Playlist,
-                "index.m3u8",
-                playlist.as_bytes()
-            )
-            .await,
-            ObjectOutcome::Stored
-        );
-
-        let asked = std::time::Instant::now();
-        let outcome = send(
-            &ingest,
-            ObjectKind::Playlist,
-            "index.m3u8",
-            playlist.as_bytes(),
-        )
-        .await;
-        let waited = asked.elapsed();
-        assert_eq!(outcome, ObjectOutcome::Stored);
-        // Taken once under 2 s remain: five slices of 1.33 s real media.
-        assert!(
-            waited >= std::time::Duration::from_secs(4),
-            "the next object was taken after {waited:?}"
-        );
-        engine.cancel_pipeline_input(INPUT_ID).await;
-    }
-
-    /// A whole segment released at once reaches the ring at media pace, not
-    /// in one burst: the wall time from its first to its last published
-    /// packet covers most of its media duration.
-    #[tokio::test]
-    async fn a_released_segment_reaches_the_ring_at_media_pace() {
-        let (engine, ingest) = test_ingest(HlsIngestLimits::default());
-        let ring = engine.get_or_create_pipeline(PIPELINE_ID).await;
-        let start = ring.get_write_idx();
-        let fixture = crate::test_fixtures::canonical_h264_ts_fixture().unwrap();
-        let segment = std::fs::read(fixture).unwrap();
-        let playlist =
-            "#EXTM3U\n#EXT-X-TARGETDURATION:8\n#EXTINF:8.0,\nindex0.ts\n#EXT-X-ENDLIST\n";
-
-        assert_eq!(
-            send(&ingest, ObjectKind::Segment, "index0.ts", &segment).await,
-            ObjectOutcome::Held
-        );
-        assert_eq!(
-            send(
-                &ingest,
-                ObjectKind::Playlist,
-                "index.m3u8",
-                playlist.as_bytes()
-            )
-            .await,
-            ObjectOutcome::Stored
-        );
-
-        // The receive path never waits on pacing: the next upload is
-        // answered while the first segment is still being published.
-        let asked = std::time::Instant::now();
-        assert_eq!(
-            send(
-                &ingest,
-                ObjectKind::Segment,
-                "index1.ts",
-                &segment[..18_800]
-            )
-            .await,
-            ObjectOutcome::Held
-        );
-        let replied = std::time::Instant::now();
-
-        let mut first = None;
-        let mut last = None;
-        let mut seen = start;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while engine.input_has_session(PIPELINE_ID, INPUT_ID).await {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the session never ended"
-            );
-            let written = ring.get_write_idx();
-            if written > seen {
-                let now = std::time::Instant::now();
-                first.get_or_insert(now);
-                last = Some(now);
-                seen = written;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
-        let dts: Vec<i64> = (start..ring.get_write_idx())
-            .filter_map(|index| ring.read_at(index))
-            .map(|packet| packet.dts)
-            .collect();
-        let media_ms = dts.iter().max().unwrap() - dts.iter().min().unwrap();
-        let wall_ms = (last.unwrap() - first.unwrap()).as_millis();
-        assert!(media_ms > 7_000, "the segment holds {media_ms} ms of media");
-        assert!(
-            replied - asked < std::time::Duration::from_millis(500) && last.unwrap() > replied,
-            "the second upload was answered after {:?}, publication ended {:?} after it",
-            replied - asked,
-            last.unwrap().saturating_duration_since(replied)
-        );
-        assert!(
-            wall_ms * 10 >= u128::try_from(media_ms).unwrap() * 8,
-            "{media_ms} ms of media reached the ring in {wall_ms} ms"
-        );
-        assert!(
-            wall_ms <= u128::try_from(media_ms).unwrap() + 2_000,
-            "pacing must not lag: {media_ms} ms of media took {wall_ms} ms"
-        );
-    }
-}
+#[path = "registry_tests.rs"]
+mod tests;

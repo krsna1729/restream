@@ -612,9 +612,9 @@ of any one ingress Owner's.
 
 ## HLS push ingest
 
-Encoders can push an MPEG-TS HLS stream over HTTP, as they do to YouTube HLS
-ingest or Akamai MSL. They `PUT` or `POST` each playlist and segment to the
-dashboard HTTP port, under the input's stream key:
+Encoders can push an MPEG-TS or fMP4 HLS stream over HTTP, as they do to
+YouTube HLS ingest or Akamai MSL. They `PUT` or `POST` each playlist and
+segment to the dashboard HTTP port, under the input's stream key:
 
 ```text
 http://<host>:<httpPort>/ingest/hls/<streamKey>/<playlist>.m3u8
@@ -626,6 +626,12 @@ ffmpeg -re -i input.mp4 -c:v libx264 -g 60 -c:a aac \
   http://HOST:3030/ingest/hls/KEY/index.m3u8
 ```
 
+```sh
+ffmpeg -re -i input.mp4 -c:v libx264 -g 60 -c:a aac \
+  -f hls -hls_segment_type fmp4 -method PUT -hls_time 2 \
+  http://HOST:3030/ingest/hls/KEY/index.m3u8
+```
+
 These all work: `-method POST`; FFmpeg's default of one connection per
 object, closed without reading the response; persistent connections
 (`-http_persistent 1`), with one limit: FFmpeg then sends requests ahead of
@@ -634,8 +640,13 @@ reset and its final segment and `EXT-X-ENDLIST` playlist can be lost (the
 session then ends on the idle timeout); keep the default for streams whose
 end matters; chunked or `Content-Length` bodies; and
 `delete_segments`, whose `DELETE` gets `200` and changes nothing. Segment URIs
-must be relative to their playlist. fMP4 segments are not ingested yet
-(`415`).
+must be relative to their playlist. To copy existing ADTS AAC into fMP4, add
+`-bsf:a aac_adtstoasc`. An ingest accepts a `.m3u8` playlist, an MPEG-TS `.ts`
+segment, and an fMP4 object with extension `.mp4` or `.m4s` (the init segment
+is usually `init.mp4` and media segments `*.m4s`, though some encoders name
+media segments `*.mp4`). One input publishes exactly one container: a stream
+that mixes MPEG-TS and fMP4 objects gets `415` on the mismatching object and
+keeps the container it started with.
 
 - **Key check.** The stream key is the credential. It is resolved the same
   way as an RTMP or SRT publish key, against the client IP, under its own
@@ -658,13 +669,79 @@ must be relative to their playlist. fMP4 segments are not ingested yet
   - With a master playlist, the highest-`BANDWIDTH` variant is followed;
     otherwise the first media playlist is. Objects of the other variants get
     `200` and are dropped.
+  - **fMP4 segments.** The init segment is named by the playlist's
+    `EXT-X-MAP` URI, not by its extension, and encoders upload it *before*
+    the playlist that names it. Such an object is held (`202`), like any
+    object the playlist has not listed yet; when the playlist's `EXT-X-MAP`
+    names it, the session applies it as an init object, never as a media
+    segment and never published to the ring. Each listed segment records
+    the `EXT-X-MAP` that was in force for it, so a listing that changes its
+    map uses each segment's own init.
+  - When the `EXT-X-MAP` URI changes, or the bytes of the same URI change,
+    the demuxer is rebuilt and the next segment is a discontinuity: its
+    demuxed timestamp continues right after the last forwarded one, like an
+    `EXT-X-DISCONTINUITY`.
+  - The init a stream key applied last is kept in the ingest itself, not in
+    the session, because FFmpeg uploads its init once per run: a session
+    that starts after an idle timeout, a retry or a failure applies the same
+    init again from that cache when the playlist names the same
+    `EXT-X-MAP` URI, so a resumed encoder keeps publishing. A playlist that
+    names a different URI gets nothing from it. The cache holds the inits of
+    at most 64 stream keys and at most 8 MiB (a normal init is about 1 KiB),
+    evicting the oldest first, so it stays inside the ingest's accounting: a
+    single init larger than the whole bound is kept alone. The entry goes
+    when `EXT-X-ENDLIST` ends the run, or when an init upload for that key
+    is refused (which also voids the map's init, and the seed a later session
+    would take from it).
+  - **Known limit.** The two rules above cover an init the ingest *refused*.
+    An init *lost* on the way (an unread `503` or `408`, a reset) under the
+    same `EXT-X-MAP` URI is not visible to the ingest, and a run whose audio
+    settings changed then gets ADTS headers built from the stale
+    AudioSpecificConfig. Video is not affected in practice: FFmpeg carries
+    SPS/PPS in band, and a stale `avcC` is only injected into a keyframe that
+    lacks one.
 - **Discontinuities.** A new epoch starts on an encoder restart inside the
   idle window (the media sequence or the segment names go back) and on
   `EXT-X-DISCONTINUITY`. The next segment is demuxed from scratch, and its
   timestamps continue right after the last ones forwarded.
+- **Codecs.** fMP4 ingest is H.264 video and AAC audio only. An HEVC
+  (`hev1`/`hvc1`) init segment is refused with `415` and the reason "HEVC
+  fMP4 ingest is not implemented". An accepted init's `avcC` SPS/PPS become
+  the ring's video parameter sets, so downstream stages see an fMP4 input
+  exactly as they see a TS one.
+- **fMP4 demuxing.** The session walks each media segment's top-level boxes
+  itself (`styp`, `sidx`, `free`, `emsg` and `prft` are skipped, and an
+  unknown box is logged once per session) and demuxes each `moof` + `mdat`
+  pair, at most 64 fragments per segment. Every fragment must carry its own
+  `tfdt`: without it the demuxer would place the fragment at decode time 0
+  and glue a restarted timeline onto the previous one. A `moof` with no
+  `mdat`, a `traf` with no `tfdt`, a box size below its header, a truncated
+  object, or a `tfhd` that sets an explicit `base_data_offset` (whose offsets
+  would measure from the whole segment, not from the fragment handed to the
+  demuxer) is refused with `400`. An fMP4 media object under a playlist that
+  names no `EXT-X-MAP` is refused with `415`: it can never be demuxed. An
+  fMP4 init object that is answered on its own upload carries the refusal
+  (`415`, `400` or `413`) directly, and voids that map's init plus the key's
+  cached init: encoders never read a refusal, and a stale init would
+  silently demux the new run's segments with it (an HEVC stream as H.264,
+  another codec's frames as AAC). Its segments then wait for an init that
+  cannot come and are skipped.
+- **A segment that cannot be demuxed.** A rejection while publishing an
+  already-answered segment — a truncated access unit, a sample that runs past
+  its fragment, a decode failure — drops that segment whole: the session
+  counts it, logs the reason once, discards what the segment had demuxed but
+  not yet published, re-anchors the timeline for
+  the next segment, and keeps publishing. Packets from an earlier fragment of
+  that segment that were already released stay in the ring; only what was
+  demuxed and still pending is dropped. Only a session that no longer has a
+  demuxer at all (its publisher failed to open) ends failed; the engine
+  survives either way, and the encoder's next object starts a fresh session
+  if the session does end.
 - **Bounds.**
-  - Each object is bounded: 1 MiB per playlist and 64 MiB per segment
-    (`413` over the bound).
+  - Each object is bounded: 1 MiB per playlist, and 64 MiB per segment and
+    per fMP4 object (an fMP4 object is bounded before its role is known). An
+    fMP4 init object is additionally bounded at 4 MiB. Over any bound is
+    `413`.
   - Each key is bounded: 2 uploads in flight, and 8 held segments or 128 MiB
     held, with the oldest evicted first. A third upload waits up to 10 s for
     a slot before its body is read (`408` after that).
@@ -706,8 +783,8 @@ must be relative to their playlist. fMP4 segments are not ingested yet
   - It hands each object over a bounded channel to the key's session task on
     the MEDIA executor (`hlsIngest` class).
   - The session task parses playlists, orders segments and publishes them
-    through the TS publisher it shares with file ingest
-    (`media::ts_publisher`).
+    through the ingest publisher it shares with file ingest
+    (`media::ingest_publisher`; MPEG-TS and fMP4 are its two demuxes).
   - A panic in a session ends only that session and releases its input.
 
 ## Protocol correctness requirements

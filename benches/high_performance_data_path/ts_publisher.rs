@@ -2,8 +2,8 @@ use std::hint::black_box;
 
 use criterion::{Criterion, Throughput};
 use restream::media::engine::MediaEngine;
-use restream::media::ts_publisher::{
-    PUBLISH_CHUNK_BYTES, TsPublishTarget, TsPublisher, TsTimestamps,
+use restream::media::ingest_publisher::{
+    Container, IngestTimestamps, PUBLISH_CHUNK_BYTES, PublishTarget, SegmentPublisher,
 };
 
 /// The shared TS-to-ring publisher (file ingest, HLS push ingest) on the
@@ -27,7 +27,7 @@ fn bench_ts_publisher(c: &mut Criterion) {
             .await
             .unwrap_or_else(|| panic!("bench input registers"));
         let ring = engine.get_or_create_pipeline("bench").await;
-        TsPublishTarget::open(engine.clone(), "bench".to_string(), registration, ring)
+        PublishTarget::open(engine.clone(), "bench".to_string(), registration, ring)
             .await
             .unwrap_or_else(|e| panic!("{e}"))
     });
@@ -38,9 +38,13 @@ fn bench_ts_publisher(c: &mut Criterion) {
     group.bench_function("publish_64k_chunks", |b| {
         b.iter(|| {
             runtime.block_on(async {
-                let mut publisher = TsPublisher::new(TsTimestamps::default());
+                let mut publisher =
+                    SegmentPublisher::new(Container::Ts.demux(), IngestTimestamps::default());
                 for chunk in fixture.chunks(PUBLISH_CHUNK_BYTES) {
-                    publisher.publish(&target, black_box(chunk)).await;
+                    publisher
+                        .publish(&target, black_box(chunk))
+                        .await
+                        .unwrap_or_else(|e| panic!("{e}"));
                 }
                 publisher.flush(&target);
             });

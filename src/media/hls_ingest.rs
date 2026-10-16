@@ -1,11 +1,11 @@
-//! HLS push ingest: encoders PUT or POST an MPEG-TS HLS stream (playlists
-//! and segments) under `/ingest/hls/{stream_key}/...`, as they do to YouTube
-//! HLS ingest or Akamai MSL.
+//! HLS push ingest: encoders PUT or POST an HLS stream (playlists and
+//! MPEG-TS or fMP4 segments) under `/ingest/hls/{stream_key}/...`, as they
+//! do to YouTube HLS ingest or Akamai MSL.
 //!
 //! The HTTP handler only authorizes the key and reads the bounded body; it
 //! hands each object to the stream key's session task on the MEDIA executor,
 //! which parses playlists, orders segments (`ordering`) and publishes them
-//! through the shared TS publisher.
+//! through the shared ingest publisher.
 
 pub mod playlist;
 
@@ -33,6 +33,13 @@ pub struct HlsIngestLimits {
     pub max_playlist_bytes: usize,
     /// 64 MiB: a 10 s segment at 51 Mbps, YouTube's top 4K HLS bitrate.
     pub max_segment_bytes: usize,
+    /// 4 MiB: an fMP4 init segment (`ftyp` + `moov`) is a few KiB; its own
+    /// bound keeps it off the segment budget.
+    pub max_init_bytes: usize,
+    /// 8 MiB: every stream key's last applied init, remembered across
+    /// sessions. A normal init is about 1 KiB, so this is thousands of them;
+    /// the keys are bounded too, and the oldest is evicted first.
+    pub init_cache_bytes: usize,
     /// Uploads one stream key may have in flight (read, queued, awaiting
     /// reply); encoders upload sequentially, so 2 only absorbs overlap.
     pub uploads_per_key: usize,
@@ -63,6 +70,8 @@ impl Default for HlsIngestLimits {
         Self {
             max_playlist_bytes: 1024 * 1024,
             max_segment_bytes: 64 * 1024 * 1024,
+            max_init_bytes: 4 * 1024 * 1024,
+            init_cache_bytes: 8 * 1024 * 1024,
             uploads_per_key: 2,
             hold_segments: 8,
             hold_bytes: 128 * 1024 * 1024,
@@ -76,26 +85,36 @@ impl Default for HlsIngestLimits {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObjectKind {
     Playlist,
-    Segment,
+    /// An MPEG-TS segment.
+    TsSegment,
+    /// An fMP4 object: an init segment or a media segment. Which one is
+    /// known from the playlist's `EXT-X-MAP` and the object's boxes, not
+    /// from its extension.
+    Fmp4,
 }
 
 impl ObjectKind {
-    /// The object an upload path names; fMP4 segments are not ingested yet.
+    /// The object an upload path names: `.m3u8`, `.ts`, or `.mp4`/`.m4s`
+    /// (encoders name inits `.mp4` and media segments either way).
     pub fn of(path: &str) -> Option<Self> {
         let extension = path.rsplit_once('.')?.1;
         if extension.eq_ignore_ascii_case("m3u8") {
             Some(Self::Playlist)
         } else if extension.eq_ignore_ascii_case("ts") {
-            Some(Self::Segment)
+            Some(Self::TsSegment)
+        } else if extension.eq_ignore_ascii_case("mp4") || extension.eq_ignore_ascii_case("m4s") {
+            Some(Self::Fmp4)
         } else {
             None
         }
     }
 
+    /// An fMP4 object's role is unknown until its body is read, so it gets
+    /// the segment bound; an init is held to `max_init_bytes` afterwards.
     pub fn max_bytes(self, limits: &HlsIngestLimits) -> usize {
         match self {
             Self::Playlist => limits.max_playlist_bytes,
-            Self::Segment => limits.max_segment_bytes,
+            Self::TsSegment | Self::Fmp4 => limits.max_segment_bytes,
         }
     }
 }
@@ -109,8 +128,13 @@ pub enum ObjectOutcome {
     Held,
     /// A duplicate, or an object of a variant this session does not follow.
     Dropped,
-    /// The playlist does not parse; the session continues.
+    /// The playlist or fMP4 object does not parse; the session continues.
     Malformed(String),
+    /// The object's codec or container is not ingested (a mixed TS/fMP4
+    /// stream, an HEVC fMP4 init).
+    Unsupported(String),
+    /// An fMP4 init over its bound.
+    TooLarge(String),
     /// The session ended with the object still queued; upload it again.
     Retry,
 }

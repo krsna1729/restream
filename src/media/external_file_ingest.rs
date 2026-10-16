@@ -14,7 +14,7 @@ use tracing::{error, warn};
 use crate::media::engine::{IngestRegistration, MediaEngine};
 use crate::media::ring_buffer::RingBuffer;
 
-use crate::media::ts_publisher::TsTimestamps;
+use crate::media::ingest_publisher::IngestTimestamps;
 use process::SpawnedExternalFileIngest;
 
 pub(crate) struct ExternalFileIngestSource {
@@ -158,7 +158,7 @@ async fn run_external_file_ingest(
     mut cleanup: CoordinatorCleanup,
 ) {
     let cancel = runtime.registration.cancel_token.clone();
-    let mut timestamps = TsTimestamps::default();
+    let mut timestamps = IngestTimestamps::default();
 
     loop {
         cleanup.child_pid = spawned.child.id();
@@ -405,7 +405,7 @@ mod tests {
             .publication_subscribers()
             .subscribe(Arc::new(PublicationSignal(published)));
         let ts = timestamped_audio_ts();
-        let mut timestamps = TsTimestamps::default();
+        let mut timestamps = IngestTimestamps::default();
         for expected in [[100, 249], [250, 399]] {
             let (stdout, mut writer) = stdout_pair();
             let mut pump =
@@ -452,7 +452,7 @@ mod tests {
         let mut pump = std::pin::pin!(transport::pump_stdout(
             runtime.clone(),
             stdout,
-            TsTimestamps::default(),
+            IngestTimestamps::default(),
         ));
         assert!(futures_util::poll!(pump.as_mut()).is_pending());
         runtime.registration.cancel_token.cancel();
