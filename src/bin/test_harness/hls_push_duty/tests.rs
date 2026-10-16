@@ -221,17 +221,28 @@ fn published_and_delivered_checks_require_media() {
         "bytes": 4096,
         "dtsMonotone": true
     });
-    assert!(delivered_ok(&delivered));
+    assert!(delivered_ok(&delivered, true));
+    assert!(delivered_ok(&delivered, false));
     let mut non_monotone = delivered.clone();
     non_monotone["dtsMonotone"] = json!(false);
-    assert!(!delivered_ok(&non_monotone));
+    assert!(!delivered_ok(&non_monotone, true));
     let mut no_keyframe = delivered.clone();
     no_keyframe["keyframeCount"] = json!(0);
-    assert!(!delivered_ok(&no_keyframe));
+    assert!(!delivered_ok(&no_keyframe, true));
     let mut no_video = delivered.clone();
     no_video["videoCount"] = json!(0);
-    assert!(!delivered_ok(&no_video));
+    assert!(!delivered_ok(&no_video, true));
     let mut no_bytes = delivered.clone();
     no_bytes["bytes"] = json!(0);
-    assert!(!delivered_ok(&no_bytes));
+    assert!(!delivered_ok(&no_bytes, true));
+
+    // A source that published audio tracks must deliver audio: this is the
+    // HLS push failure (video delivered, `audioCount: 0`) the mode catches.
+    let mut no_audio = delivered.clone();
+    no_audio["audioCount"] = json!(0);
+    assert!(!delivered_ok(&no_audio, true));
+    assert!(
+        delivered_ok(&no_audio, false),
+        "a video-only source has no audio to deliver"
+    );
 }

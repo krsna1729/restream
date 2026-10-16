@@ -124,6 +124,25 @@ async fn wait_until_unregistered(engine: &MediaEngine) {
     .expect("HLS session unregistered");
 }
 
+/// How many packets one pipeline's current ring holds.
+async fn ring_write_idx(engine: &MediaEngine, pipeline_id: &str) -> usize {
+    engine
+        .get_or_create_pipeline(pipeline_id)
+        .await
+        .get_write_idx()
+}
+
+/// Wait until `input_id`'s session on `pipeline_id` is gone.
+async fn wait_until_session_gone(engine: &MediaEngine, pipeline_id: &str, input_id: &str) {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while engine.input_has_session(pipeline_id, input_id).await {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("HLS session unregistered");
+}
+
 /// The init an encoder uploads once keeps a later session publishing:
 /// after an idle end, a new session resumes with the next segment and
 /// the playlist, and the media still reaches the ring.
@@ -268,7 +287,7 @@ async fn a_refused_init_leaves_no_seed_for_the_next_session() {
         ..HlsIngestLimits::default()
     });
     let (init, segments) = fmp4_video_objects(2, 4);
-    // A first run publishes and so fills the key's init cache.
+    // A first run publishes and so fills the key's init slot.
     assert_eq!(
         send(&ingest, ObjectKind::Fmp4, "init.mp4", &init).await,
         ObjectOutcome::Held
@@ -298,8 +317,8 @@ async fn a_refused_init_leaves_no_seed_for_the_next_session() {
     );
     wait_until_unregistered(&engine).await;
 
-    // The next session seeds from the key's cache: the refusal must have
-    // emptied it, so these objects cannot publish.
+    // The next session seeds from the key's init slot: the refusal must
+    // have emptied it, so these objects cannot publish.
     let before = published(&engine).await;
     assert_eq!(
         send(&ingest, ObjectKind::Fmp4, "index1.m4s", &segments[1]).await,
@@ -324,7 +343,7 @@ async fn a_refused_init_leaves_no_seed_for_the_next_session() {
     wait_until_unregistered(&engine).await;
 }
 
-/// `EXT-X-ENDLIST` ends the run for good, so the key's cached init goes
+/// `EXT-X-ENDLIST` ends the run for good, so the key's init goes
 /// with it: the next session must upload its own.
 #[tokio::test]
 async fn an_ended_run_leaves_no_init_seed_for_the_next_session() {
@@ -377,6 +396,110 @@ async fn an_ended_run_leaves_no_init_seed_for_the_next_session() {
         "an ended run must leave no seed for the next session"
     );
     wait_until_unregistered(&engine).await;
+}
+
+/// The init a key applied is the key's own state, not a bounded shared
+/// cache. 65 keys each publish their first segment, then the first key's
+/// session ends and the encoder resumes without re-uploading its init: the
+/// segment still publishes. A 64-entry FIFO cache evicted the first key's
+/// init when the 65th key applied one, and its segments then waited for an
+/// init that never came and were skipped forever — a publisher's silent
+/// death, which is what the init is kept across sessions for.
+#[tokio::test]
+async fn more_keys_than_a_shared_cache_would_hold_do_not_evict_the_first_init() {
+    const KEYS: u64 = 65;
+    let (engine, ingest) = test_ingest(HlsIngestLimits {
+        idle_floor: std::time::Duration::from_millis(150),
+        ..HlsIngestLimits::default()
+    });
+    let (init, segments) = fmp4_video_objects(2, 4);
+    let key = |index: u64| AuthenticatedPipeline {
+        id: format!("pipe-{index}"),
+        input_id: format!("input-{index}"),
+        selected: true,
+    };
+
+    for index in 0..KEYS {
+        let pipeline = key(index);
+        assert_eq!(
+            send_to(&ingest, &pipeline, ObjectKind::Fmp4, "init.mp4", &init).await,
+            ObjectOutcome::Held
+        );
+        assert_eq!(
+            send_to(
+                &ingest,
+                &pipeline,
+                ObjectKind::Fmp4,
+                "index0.m4s",
+                &segments[0]
+            )
+            .await,
+            ObjectOutcome::Held
+        );
+        assert_eq!(
+            send_to(
+                &ingest,
+                &pipeline,
+                ObjectKind::Playlist,
+                "index.m3u8",
+                fmp4_playlist(0, &["index0.m4s"], false).as_bytes(),
+            )
+            .await,
+            ObjectOutcome::Stored
+        );
+    }
+    // Every key applied its init (each published its first segment).
+    for index in 0..KEYS {
+        let pipeline_id = key(index).id;
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            while ring_write_idx(&engine, &pipeline_id).await == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("key {index} never published its first segment"));
+    }
+
+    // The first key's session ends (an idle timeout in production, a
+    // cancelled attempt here) and the encoder resumes with the next
+    // segment — and no init of its own, as FFmpeg uploads it once per run.
+    engine.cancel_pipeline_input(&key(0).input_id).await;
+    wait_until_session_gone(&engine, &key(0).id, &key(0).input_id).await;
+    let before = ring_write_idx(&engine, &key(0).id).await;
+    let pipeline = key(0);
+    assert_eq!(
+        send_to(
+            &ingest,
+            &pipeline,
+            ObjectKind::Fmp4,
+            "index1.m4s",
+            &segments[1]
+        )
+        .await,
+        ObjectOutcome::Held
+    );
+    assert_eq!(
+        send_to(
+            &ingest,
+            &pipeline,
+            ObjectKind::Playlist,
+            "index.m3u8",
+            fmp4_playlist(1, &["index1.m4s"], true).as_bytes(),
+        )
+        .await,
+        ObjectOutcome::Stored
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while ring_write_idx(&engine, &pipeline.id).await <= before {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the first key's init must survive the other keys' uploads");
+
+    for index in 0..KEYS {
+        engine.cancel_pipeline_input(&key(index).input_id).await;
+    }
 }
 
 /// A segment whose bytes cannot be demuxed is dropped: the session stays

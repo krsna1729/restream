@@ -253,6 +253,35 @@ impl MediaEngine {
         }
     }
 
+    /// Whether the pipeline's active ingest has the probe an output needs
+    /// before it plans its tracks, or `None` when no ingest is active (the
+    /// caller decides from the disconnect grace).
+    ///
+    /// A direct egress resolves its track plan once, when it starts: the
+    /// RTMP leaf builds the audio track, the AAC sequence header and the
+    /// stream metadata from it, and drops raw AAC packets it cannot
+    /// announce. HLS push ingest registers its input on the first uploaded
+    /// object — the playlist, which carries no media — so an output started
+    /// on that `IngestConnected` plans video-only tracks and then loses the
+    /// whole stream's audio. Wait for the probe instead.
+    ///
+    /// A source that publishes media without ever reporting one (no
+    /// sequence header an ingest parses) is treated as track-less after the
+    /// same grace the stage runtime waits, so its output starts video-only
+    /// rather than never.
+    pub async fn ingest_tracks_ready(&self, pipeline_id: &str) -> Option<bool> {
+        let ingests = self.ingests.active.read().await;
+        let ingest = ingests.get(pipeline_id)?;
+        if ingest.metadata().video.is_some() || !crate::sync::lock(&ingest.audio_tracks).is_empty()
+        {
+            return Some(true);
+        }
+        Some(
+            ingest.bytes_received.load(Ordering::Relaxed) > 0
+                && ingest.start_time.elapsed() >= crate::media::stage_runtime::AUDIO_ABSENCE_GRACE,
+        )
+    }
+
     pub async fn update_ingest_session_quality(
         &self,
         registration: &IngestRegistration,

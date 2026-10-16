@@ -300,8 +300,8 @@ impl SegmentPublisher {
         self.forward(target);
     }
 
-    /// The current object could not be demuxed. The segment is dropped
-    /// whole: what it had demuxed but not yet published is discarded, and the
+    /// The current object could not be demuxed. The segment is dropped:
+    /// what it had demuxed but not yet published is discarded, and the
     /// timeline is re-anchored for the next segment, like a discontinuity.
     pub fn discard_failed_object(&mut self) {
         self.demux.discard_object();

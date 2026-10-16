@@ -62,6 +62,9 @@ pub struct OutputFailureWindow {
 pub enum OutputStartAction {
     NotApplicable,
     SkipNoIngest,
+    /// The source has an active ingest but it has not reported the probe the
+    /// output plans its tracks from yet.
+    SkipProbePending,
     StartNow,
     MarkFailed,
     WaitRetry {
@@ -71,11 +74,17 @@ pub enum OutputStartAction {
     },
 }
 
+/// `effective_has_ingest` and `ingest_tracks_ready` are separate inputs on
+/// purpose: the first also stops a running output, the second only gates a
+/// start, so folding them into one field would make a new ingest's pending
+/// probe look like a lost ingest.
+#[allow(clippy::too_many_arguments)]
 pub fn decide_output_start_action(
     desired_state: DesiredOutputState,
     retries_exhausted: bool,
     is_active: bool,
     effective_has_ingest: bool,
+    ingest_tracks_ready: bool,
     failure: Option<OutputFailureWindow>,
     policy: OutputRetryPolicy,
     jitter_key: &str,
@@ -85,6 +94,15 @@ pub fn decide_output_start_action(
     }
     if !effective_has_ingest {
         return OutputStartAction::SkipNoIngest;
+    }
+    // An output resolves its track plan once, when it starts (the RTMP leaf
+    // takes the audio track, the AAC sequence header and the stream metadata
+    // from it). Starting before the source's probe is recorded plans a
+    // video-only output that can never carry the audio arriving later, and
+    // HLS push ingest registers its input on the first uploaded object —
+    // the playlist, which carries no media — before publishing any.
+    if !ingest_tracks_ready {
+        return OutputStartAction::SkipProbePending;
     }
     if let Some(failure) = failure {
         if failure.retries >= policy.max_retries {
@@ -156,6 +174,9 @@ pub fn next_output_retry_count(previous_retries: Option<u32>, had_progress: bool
 pub struct OutputRuntimeSnapshot {
     pub is_active: bool,
     pub effective_has_ingest: bool,
+    /// The active ingest has the probe an output plans its tracks from, or
+    /// no ingest is active at all (see [`MediaEngine::ingest_tracks_ready`]).
+    pub ingest_tracks_ready: bool,
     pub ingest_video_codec: Option<String>,
 }
 
@@ -169,10 +190,17 @@ pub async fn load_output_runtime_snapshot(
     let within_disconnect_grace = engine
         .has_recent_ingest_disconnect(&output.pipeline_id, ingest_disconnect_grace_ms)
         .await;
+    // Only an active ingest gates the start: a pipeline in its disconnect
+    // grace (or with no ingest at all) keeps today's behavior.
+    let ingest_tracks_ready = engine
+        .ingest_tracks_ready(&output.pipeline_id)
+        .await
+        .unwrap_or(true);
 
     OutputRuntimeSnapshot {
         is_active,
         effective_has_ingest: has_ingest || within_disconnect_grace,
+        ingest_tracks_ready,
         ingest_video_codec: engine.ingest_video_codec(&output.pipeline_id).await,
     }
 }
@@ -255,6 +283,7 @@ mod tests {
             DesiredOutputState::Running,
             false,
             false,
+            true,
             true,
             Some(OutputFailureWindow {
                 retries: 2,
@@ -385,6 +414,7 @@ mod tests {
                 false,
                 true,
                 true,
+                true,
                 None,
                 test_retry_policy(),
                 "output-a",
@@ -396,6 +426,7 @@ mod tests {
                 DesiredOutputState::Stopped,
                 false,
                 false,
+                true,
                 true,
                 None,
                 test_retry_policy(),
@@ -411,6 +442,7 @@ mod tests {
             DesiredOutputState::Running,
             false,
             false,
+            true,
             true,
             None,
             test_retry_policy(),
@@ -428,6 +460,7 @@ mod tests {
             DesiredOutputState::Running,
             false,
             false,
+            true,
             true,
             Some(OutputFailureWindow {
                 retries: 2,
@@ -460,6 +493,7 @@ mod tests {
             false,
             false,
             true,
+            true,
             Some(OutputFailureWindow {
                 retries: 10,
                 elapsed_ms: 999_999,
@@ -480,6 +514,7 @@ mod tests {
             true,
             false,
             true,
+            true,
             None,
             test_retry_policy(),
             "output-a",
@@ -495,12 +530,50 @@ mod tests {
             false,
             false,
             false,
+            true,
             None,
             test_retry_policy(),
             "output-a",
         );
 
         assert_eq!(action, OutputStartAction::SkipNoIngest);
+    }
+
+    /// An ingest that is registered but has published no probe yet (HLS push
+    /// ingest registers on the playlist, before any media) must not start its
+    /// output: the output resolves its audio track, AAC sequence header and
+    /// stream metadata once, at start, so starting now would plan video-only
+    /// tracks and lose every audio packet of the stream. This is the
+    /// hls-push-duty TS failure (video delivered, `audioCount: 0`).
+    #[test]
+    fn start_action_skips_until_the_source_probe_is_recorded() {
+        let action = decide_output_start_action(
+            DesiredOutputState::Running,
+            false,
+            false,
+            true,
+            false,
+            None,
+            test_retry_policy(),
+            "output-a",
+        );
+
+        assert_eq!(action, OutputStartAction::SkipProbePending);
+
+        // Once the probe lands, the same call starts.
+        assert_eq!(
+            decide_output_start_action(
+                DesiredOutputState::Running,
+                false,
+                false,
+                true,
+                true,
+                None,
+                test_retry_policy(),
+                "output-a",
+            ),
+            OutputStartAction::StartNow
+        );
     }
 
     #[test]
@@ -588,6 +661,58 @@ mod tests {
         assert!(!snapshot.is_active);
         assert!(snapshot.effective_has_ingest);
         assert_eq!(snapshot.ingest_video_codec.as_deref(), Some("hevc"));
+    }
+
+    /// HLS push ingest registers its input on the first uploaded object, the
+    /// playlist, before any media: an output must not start in that window.
+    /// A pipeline with no active ingest (an output waiting in its disconnect
+    /// grace) is not gated.
+    #[tokio::test]
+    async fn output_runtime_snapshot_gates_the_start_on_the_source_probe() {
+        let engine = MediaEngine::new();
+        let unprobed = crate::application::models::Output {
+            id: "out-1".to_string(),
+            pipeline_id: "pipe".to_string(),
+            name: "Output".to_string(),
+            url: "rtmp://example/live/test".to_string(),
+            monitoring_url: None,
+            desired_state: DesiredOutputState::Running,
+            retries_exhausted: false,
+            config: OutputConfig::source(),
+        };
+
+        let snapshot = load_output_runtime_snapshot(&engine, &unprobed, 0).await;
+        assert!(snapshot.ingest_tracks_ready, "no ingest: not gated");
+
+        engine
+            .try_register_ingest("pipe", "stream-key", "hls")
+            .await
+            .unwrap();
+        let snapshot = load_output_runtime_snapshot(&engine, &unprobed, 0).await;
+        assert!(snapshot.effective_has_ingest);
+        assert!(!snapshot.ingest_tracks_ready, "the probe has not landed");
+
+        engine
+            .update_ingest_meta(
+                "pipe",
+                Some(VideoMeta {
+                    codec: "h264".to_string(),
+                    ..Default::default()
+                }),
+                None,
+                None,
+            )
+            .await;
+        let snapshot = load_output_runtime_snapshot(&engine, &unprobed, 0).await;
+        assert!(snapshot.ingest_tracks_ready, "the probe landed");
+
+        engine.unregister_ingest("pipe").await;
+        let snapshot = load_output_runtime_snapshot(&engine, &unprobed, 1_000).await;
+        assert!(snapshot.effective_has_ingest);
+        assert!(
+            snapshot.ingest_tracks_ready,
+            "the disconnect grace is not gated"
+        );
     }
 
     #[tokio::test]

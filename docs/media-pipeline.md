@@ -684,15 +684,14 @@ keeps the container it started with.
   - The init a stream key applied last is kept in the ingest itself, not in
     the session, because FFmpeg uploads its init once per run: a session
     that starts after an idle timeout, a retry or a failure applies the same
-    init again from that cache when the playlist names the same
+    init again from that slot when the playlist names the same
     `EXT-X-MAP` URI, so a resumed encoder keeps publishing. A playlist that
-    names a different URI gets nothing from it. The cache holds the inits of
-    at most 64 stream keys and at most 8 MiB (a normal init is about 1 KiB),
-    evicting the oldest first, so it stays inside the ingest's accounting: a
-    single init larger than the whole bound is kept alone. The entry goes
-    when `EXT-X-ENDLIST` ends the run, or when an init upload for that key
-    is refused (which also voids the map's init, and the seed a later session
-    would take from it).
+    names a different URI gets nothing from it. The slot lives in the stream
+    key's own state, so it is bounded by the configured inputs, holds at
+    most one init (the 4 MiB init bound), and goes when that state does. Its
+    entry is cleared when `EXT-X-ENDLIST` ends the run, or when an init
+    upload for that key is refused (which also voids the map's init, and the
+    seed a later session would take from it).
   - **Known limit.** The two rules above cover an init the ingest *refused*.
     An init *lost* on the way (an unread `503` or `408`, a reset) under the
     same `EXT-X-MAP` URI is not visible to the ingest, and a run whose audio
@@ -728,7 +727,7 @@ keeps the container it started with.
   cannot come and are skipped.
 - **A segment that cannot be demuxed.** A rejection while publishing an
   already-answered segment — a truncated access unit, a sample that runs past
-  its fragment, a decode failure — drops that segment whole: the session
+  its fragment, a decode failure — drops that segment: the session
   counts it, logs the reason once, discards what the segment had demuxed but
   not yet published, re-anchors the timeline for
   the next segment, and keeps publishing. Packets from an earlier fragment of

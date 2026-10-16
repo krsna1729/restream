@@ -267,9 +267,15 @@ impl Session {
                     shard_lookup.get(&(protocol, index))
                 });
             let sink_summary = task.metrics.summary();
+            let input = input_published_summary(&probe);
+            let input_has_audio = input
+                .get("audioTracks")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                > 0;
             let keyframe_count = gop_keyframe_count(&probe);
             let published = published_ok(&probe, keyframe_count);
-            let delivered = delivered_ok(&sink_summary);
+            let delivered = delivered_ok(&sink_summary, input_has_audio);
             if !published {
                 failures.push(format!("{}: ingest published no media", task.name));
             }
@@ -284,7 +290,7 @@ impl Session {
                 "segmentType": (task.kind == "hls").then(|| options.segment_type.as_str()),
                 "outputId": task.output_id,
                 "sinkPort": task.sink_port,
-                "input": input_published_summary(&probe),
+                "input": input,
                 "publishedPackets": {
                     "video": sink_summary.get("videoCount").cloned().unwrap_or(Value::Null),
                     "audio": sink_summary.get("audioCount").cloned().unwrap_or(Value::Null),
@@ -466,11 +472,15 @@ pub(crate) fn published_ok(probe: &Value, keyframe_count: Option<u64>) -> bool {
     bytes > 0 && video_present && keyframe_count.is_some_and(|count| count >= 1)
 }
 
-pub(crate) fn delivered_ok(sink_summary: &Value) -> bool {
+pub(crate) fn delivered_ok(sink_summary: &Value, input_has_audio: bool) -> bool {
     let count = |name: &str| sink_summary.get(name).and_then(Value::as_u64).unwrap_or(0);
     count("videoCount") > 0
         && count("keyframeCount") > 0
         && count("bytes") > 0
+        // A source that published audio tracks and delivered none of them is
+        // the HLS-push failure this mode catches (the output planned its
+        // tracks before the ingest's probe was recorded).
+        && (!input_has_audio || count("audioCount") > 0)
         && sink_summary.get("dtsMonotone").and_then(Value::as_bool) == Some(true)
 }
 

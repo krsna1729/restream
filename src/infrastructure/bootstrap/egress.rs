@@ -83,6 +83,7 @@ impl EgressReconciler {
                 output.retries_exhausted,
                 snapshot.is_active,
                 snapshot.effective_has_ingest,
+                snapshot.ingest_tracks_ready,
                 failure,
                 self.tuning.output_retry_policy(),
                 &output.id,
@@ -90,6 +91,17 @@ impl EgressReconciler {
                 OutputStartAction::NotApplicable => {}
                 OutputStartAction::SkipNoIngest => {
                     self.engine.clear_egress_retry_state(&output.id).await;
+                    continue;
+                }
+                OutputStartAction::SkipProbePending => {
+                    // Nothing wakes the reconciler when a probe lands — it is
+                    // media-plane state, not a topology change — so re-check
+                    // on the next interval the pass gap allows instead of
+                    // waiting for the backstop. The window is one probe's
+                    // worth of media (milliseconds for a publisher that
+                    // probes at connect, the first segment for HLS push).
+                    let interval_ms = self.tuning.reconciler_interval_ms;
+                    next_retry = Some(next_retry.map_or(interval_ms, |next| next.min(interval_ms)));
                     continue;
                 }
                 OutputStartAction::MarkFailed => {
