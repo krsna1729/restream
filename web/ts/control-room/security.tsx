@@ -129,7 +129,7 @@ function IngestSecurity(props: { current: IngestSecurityConfig; save: Saver }) {
 }
 
 function Attempts() {
-  const state = usePolled(getRateLimitState);
+  const state = usePolled(["rate-limit-state"], getRateLimitState);
   const attempts = state.value?.attempts ?? null;
   return (
     <section className="card bg-base-200" aria-labelledby="settings-attempts">

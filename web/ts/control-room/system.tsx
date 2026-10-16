@@ -39,7 +39,11 @@ const HEALTH_INTERVAL_MS = 10_000;
  * Counts are the engine's report; a class it reports only as configured
  * says so. */
 export function System({ live }: { live: LiveSnapshot }) {
-  const health = usePolled(() => getEngineHealth<HealthData>(), HEALTH_INTERVAL_MS);
+  const health = usePolled(
+    ["engine-health"],
+    () => getEngineHealth<HealthData>(),
+    HEALTH_INTERVAL_MS,
+  );
   const [status, setStatus] = useState<EngineStatus | null>(null);
   useEffect(() => {
     void getEngineStatus<EngineStatus>().then(setStatus);

@@ -9,7 +9,7 @@ const { buildFleetModel, pipelineHealth } = await loadCompiledFrontendModule(
 const { telemetryRates } = await loadCompiledFrontendModule(
   "control-room/rates.js",
 );
-const { parsePlace, placeSearch } = await loadCompiledFrontendModule(
+const { placeFromSearch, placeSearch } = await loadCompiledFrontendModule(
   "control-room/route.js",
 );
 
@@ -197,22 +197,35 @@ test("rates come from two samples of one session", () => {
 });
 
 test("an unknown or absent workspace opens Fleet; the pipeline is kept", () => {
-  assert.equal(parsePlace("").workspace, "fleet");
-  assert.deepEqual(parsePlace("?w=nope&p=p1"), {
+  assert.equal(placeFromSearch({}).workspace, "fleet");
+  assert.deepEqual(placeFromSearch({ w: "nope", p: "p1" }), {
     workspace: "fleet",
     pipelineId: "p1",
   });
-  assert.deepEqual(parsePlace("?w=operate&p="), {
+  assert.deepEqual(placeFromSearch({ w: "operate", p: "" }), {
     workspace: "operate",
     pipelineId: null,
   });
 });
 
-test("a place without a pipeline drops `p`; other parameters stay", () => {
-  assert.equal(
-    placeSearch("?w=operate&p=p1&debug=1", { workspace: "fleet", pipelineId: null }),
-    "?w=fleet&debug=1",
+test("a place without a pipeline drops `p`; other parameters stay, after them", () => {
+  assert.deepEqual(
+    placeSearch(
+      { w: "operate", p: "p1", debug: "1" },
+      { workspace: "fleet", pipelineId: null },
+    ),
+    { w: "fleet", debug: "1" },
   );
-  const search = placeSearch("", { workspace: "operate", pipelineId: "a b" });
-  assert.deepEqual(parsePlace(search), { workspace: "operate", pipelineId: "a b" });
+  const search = placeSearch({}, { workspace: "operate", pipelineId: "a b" });
+  assert.deepEqual(placeFromSearch(search), {
+    workspace: "operate",
+    pipelineId: "a b",
+  });
+  // The router writes `w` then `p`, so a shared link reads as the e2e asserts.
+  assert.deepEqual(
+    Object.keys(
+      placeSearch({ debug: "1" }, { workspace: "operate", pipelineId: "p1" }),
+    ),
+    ["w", "p", "debug"],
+  );
 });

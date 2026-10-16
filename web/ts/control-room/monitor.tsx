@@ -63,9 +63,13 @@ function fresh<T>(polled: Polled<T>, nowMs: number): T | null {
 }
 
 function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
-  const graph = usePolled<GraphData>(() => getProcessingGraph(props.pipelineId));
-  const resources = usePolled<ResourceMapSnapshot>(() =>
-    getResourceMap(props.pipelineId, { view: "detail", topN: MAP_TOP_N }),
+  const graph = usePolled<GraphData>(
+    ["processing-graph", props.pipelineId],
+    () => getProcessingGraph(props.pipelineId),
+  );
+  const resources = usePolled<ResourceMapSnapshot>(
+    ["resource-map", props.pipelineId, MAP_TOP_N],
+    () => getResourceMap(props.pipelineId, { view: "detail", topN: MAP_TOP_N }),
   );
   // The sampler reads the newest sources without restarting its clock.
   const latest = useRef({ live: props.live, graph, resources });

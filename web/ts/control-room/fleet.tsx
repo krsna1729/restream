@@ -5,7 +5,7 @@ import type { SystemMetrics } from "../types.js";
 import { buildFleetModel, describeCause } from "./fleet-model.js";
 import type { AttentionItem, FleetModel } from "./fleet-model.js";
 import { formatBps, formatPercent } from "./format.js";
-import { PlaceLink } from "./place-link.js";
+import { PlaceLink } from "./router.js";
 import type { LiveSnapshot } from "./store.js";
 
 export function Fleet({ live }: { live: LiveSnapshot }) {

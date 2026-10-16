@@ -38,7 +38,7 @@ const READINESS_LABEL = {
 /** The media directory: recordings and source files, what each one is, and
  * whether it can feed a live pipeline as it is. */
 export function Media({ live }: { live: LiveSnapshot }) {
-  const library = usePolled(listMediaFiles);
+  const library = usePolled(["media-files"], listMediaFiles);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const files = library.value?.files ?? null;

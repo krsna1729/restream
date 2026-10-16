@@ -22,6 +22,9 @@ dashboard route contract.
 
 - Route every dashboard API call through `web/ts/core/api.ts`; route
   literals elsewhere fail `node scripts/check/api-drift.mjs`.
+- Routing and per-view polling use TanStack Router and Query
+  (`web/ts/control-room/router.tsx`, `polled.tsx`); the pushed runtime state
+  stays in `store.ts`.
 - When a route or payload changes, update the API contract tests
   (`cargo xtask api-contract`).
 - The runtime-state TypeScript contract is generated from Rust:

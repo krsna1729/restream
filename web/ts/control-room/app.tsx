@@ -1,5 +1,3 @@
-import { useEffect, useState } from "react";
-
 import { Capacity } from "./capacity.js";
 import { Changes } from "./changes.js";
 import { Fleet } from "./fleet.js";
@@ -10,24 +8,12 @@ import { Logs } from "./logs.js";
 import { Media } from "./media.js";
 import { Monitor } from "./monitor.js";
 import { Operate } from "./operate.js";
-import { PlaceLink } from "./place-link.js";
 import { Pipelines } from "./pipelines.js";
-import { WORKSPACES, WORKSPACE_LABELS, parsePlace } from "./route.js";
+import { WORKSPACES, WORKSPACE_LABELS } from "./route.js";
+import { PlaceLink, usePlace } from "./router.js";
 import { Settings } from "./settings.js";
 import { System } from "./system.js";
-import type { Place } from "./route.js";
 import { SAMPLE_STALE_AFTER_MS, useLive, useNow } from "./store.js";
-
-/** The place in the URL; links move it with `go`, which fires `popstate`. */
-function usePlace(): Place {
-  const [place, setPlace] = useState(() => parsePlace(window.location.search));
-  useEffect(() => {
-    const onPop = () => setPlace(parsePlace(window.location.search));
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
-  }, []);
-  return place;
-}
 
 export function App() {
   const live = useLive();

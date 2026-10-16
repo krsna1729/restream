@@ -15,8 +15,8 @@ import {
   updateResolved,
 } from "./incidents-model.js";
 import type { ResolvedIncident } from "./incidents-model.js";
-import { PlaceLink } from "./place-link.js";
 import { Freshness, usePolled } from "./polled.js";
+import { PlaceLink } from "./router.js";
 import { useNow } from "./store.js";
 import type { LiveSnapshot } from "./store.js";
 
@@ -25,7 +25,9 @@ const EVENT_LIMIT = 200;
 
 /** Open incidents, what failed and what did not, and what to do. */
 export function Incidents({ live }: { live: LiveSnapshot }) {
-  const alerts = usePolled<AlertsSnapshot>(() => getAggregateAlerts());
+  const alerts = usePolled<AlertsSnapshot>(["aggregate-alerts"], () =>
+    getAggregateAlerts(),
+  );
   const open = useMemo(
     () => rankIncidents(alerts.value?.alerts ?? []),
     [alerts.value],
@@ -185,8 +187,13 @@ function Detail(props: {
   names: Map<string, string>;
 }) {
   const { alert } = props;
-  const events = usePolled<LifecycleEventsSnapshot>(() =>
-    getLifecycleEvents({ pipelineId: alert.pipelineId ?? null, limit: EVENT_LIMIT }),
+  const events = usePolled<LifecycleEventsSnapshot>(
+    ["lifecycle-events", alert.pipelineId ?? null],
+    () =>
+      getLifecycleEvents({
+        pipelineId: alert.pipelineId ?? null,
+        limit: EVENT_LIMIT,
+      }),
   );
   const timeline = useMemo(
     () => (events.value ? incidentTimeline(alert, events.value.events) : null),

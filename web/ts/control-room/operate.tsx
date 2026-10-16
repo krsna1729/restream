@@ -51,10 +51,13 @@ export function Operate(props: { live: LiveSnapshot; pipelineId: string | null }
 function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
   const { pipelineId } = props;
   const outputs = props.live.state?.outputs ?? [];
-  const inputs = usePolled<PipelineInputsResponse>(() =>
-    getPipelineInputs(pipelineId),
+  const inputs = usePolled<PipelineInputsResponse>(
+    ["pipeline-inputs", pipelineId],
+    () => getPipelineInputs(pipelineId),
   );
-  const graph = usePolled<GraphData>(() => getProcessingGraph(pipelineId));
+  const graph = usePolled<GraphData>(["processing-graph", pipelineId], () =>
+    getProcessingGraph(pipelineId),
+  );
   // Stored settings (URLs, output configs, profiles) are not in the state
   // stream: read once, and again after every edit.
   const [config, setConfig] = useState<ConfigData | null>(null);

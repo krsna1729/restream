@@ -1,6 +1,7 @@
 // The control room's location lives in the URL query (`?w=<workspace>` and,
 // for pipeline workspaces, `&p=<pipeline id>`), so reload, back/forward and
-// shared links land on the same view.
+// shared links land on the same view. These are the pure rules; router.tsx
+// wires them to TanStack Router, which owns history and link clicks.
 
 export const WORKSPACES = [
   "fleet",
@@ -40,25 +41,43 @@ export interface Place {
   readonly pipelineId: string | null;
 }
 
-function isWorkspace(value: string | null): value is Workspace {
-  return value !== null && (WORKSPACES as readonly string[]).includes(value);
+/**
+ * The router's search: the place, plus every other parameter the URL
+ * carried, so a link keeps them.
+ */
+export type PlaceSearch = {
+  readonly w: Workspace;
+  readonly p?: string;
+} & Record<string, unknown>;
+
+function isWorkspace(value: unknown): value is Workspace {
+  return (
+    typeof value === "string" && (WORKSPACES as readonly string[]).includes(value)
+  );
 }
 
-/** The place a query string names; an absent or unknown workspace is Fleet. */
-export function parsePlace(search: string): Place {
-  const params = new URLSearchParams(search);
-  const workspace = params.get("w");
+/** The place a parsed query names; an absent or unknown workspace is Fleet. */
+export function placeFromSearch(search: Record<string, unknown>): Place {
+  const pipelineId = search.p;
   return {
-    workspace: isWorkspace(workspace) ? workspace : "fleet",
-    pipelineId: params.get("p") || null,
+    workspace: isWorkspace(search.w) ? search.w : "fleet",
+    pipelineId:
+      typeof pipelineId === "string" && pipelineId !== "" ? pipelineId : null,
   };
 }
 
-/** `search` naming `place`; other parameters are kept. */
-export function placeSearch(search: string, place: Place): string {
-  const params = new URLSearchParams(search);
-  params.set("w", place.workspace);
-  if (place.pipelineId) params.set("p", place.pipelineId);
-  else params.delete("p");
-  return `?${params.toString()}`;
+/** The search a place names; `p` is absent without a pipeline. */
+export function placeSearch(
+  search: Record<string, unknown>,
+  place: Place,
+): PlaceSearch {
+  const rest: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(search)) {
+    if (key !== "w" && key !== "p") rest[key] = value;
+  }
+  return {
+    w: place.workspace,
+    ...(place.pipelineId === null ? {} : { p: place.pipelineId }),
+    ...rest,
+  };
 }

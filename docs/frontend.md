@@ -142,10 +142,13 @@ None open.
 ## Control Room
 
 `/` is the dashboard: one React root (`web/ts/control-room/main.tsx`) in
-`web/pages/index.html`. The engine serves the same page for unknown paths,
-so a reload keeps the workspace in the URL (`?w=`).
+`web/pages/index.html`, mounting a TanStack Router (`router.tsx`). The engine
+serves the same page for unknown paths, so a reload keeps the workspace in
+the URL (`?w=`).
 
-- Data: one store (`web/ts/control-room/store.ts`). It follows the
+- Data: one store (`web/ts/control-room/store.ts`) for what is pushed or
+  sampled for the whole page, plus TanStack Query for the per-view polls
+  (`polled.tsx`). The store follows the
   revisioned runtime state stream (`/api/v1/state/stream`) and samples engine
   telemetry and host metrics every 2 s while a view is subscribed. Views
   read it through `useLive`; they hold no copy. Rates come from two
@@ -155,10 +158,11 @@ so a reload keeps the workspace in the URL (`?w=`).
   `reconnecting`; a steady system sends no deltas, so the time since the
   last change says nothing) and the age of the oldest sampled source.
 - Location: `?w=<workspace>` and, for a pipeline view, `&p=<pipeline id>`
-  (`web/ts/control-room/route.ts`); an absent or unknown workspace opens
-  Fleet, and the pipeline is kept across workspaces. Links (`place-link.tsx`)
-  are real `href`s; a plain click uses `pushState` and the app follows
-  `popstate`. Other query parameters are kept.
+  (`web/ts/control-room/route.ts` holds the pure rules; `router.tsx` wires
+  them to TanStack Router, which owns history and link clicks); an absent or
+  unknown workspace opens Fleet, and the pipeline is kept across workspaces.
+  Links (`PlaceLink`) are real `href`s, and a plain click navigates in place.
+  Other query parameters are kept, after `w` and `p`.
 - Errors: the page renders the `#error-alert`/`#error-msg` and
   `#saving-badge` elements that `core/api.ts` reports into, so a failed
   mutation is shown, not only logged.
@@ -182,9 +186,10 @@ so a reload keeps the workspace in the URL (`?w=`).
   rate from the telemetry rates) with Start/Stop, degraded first and capped
   at 200 rendered rows, with the hidden count (and how many of them need
   attention) and a "show all" button for the rest. Inputs and graph are polled
-  every 2 s only while Operate shows that pipeline (`polled.tsx`); each panel
-  shows the age of its last successful update and turns amber once that is
-  older than 2.5 poll intervals. Inspect (one pipeline): the resource map
+  every 2 s only while Operate shows that pipeline (`polled.tsx`: one
+  TanStack Query per subject, shared by panels that name the same one); each
+  panel shows the age of its last successful update and turns amber once that
+  is older than 2.5 poll intervals. Inspect (one pipeline): the resource map
   (`/engine/resource-map?pipeline_id=…&view=detail&top_n=200`), nodes under
   pressure first, then by memory held, each with its confidence (measured,
   derived, estimated, unmeasured), a detail panel and the count of nodes the
