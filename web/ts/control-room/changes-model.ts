@@ -216,7 +216,7 @@ export function topologyLines(diff: TopologyDiff): TopologyLine[] {
 /** What the change adds for the capacity scenario, which prices additions
  * only: removals are reported, not credited. Counted per stage and protocol,
  * so an add and a removal elsewhere do not cancel out. The scenario prices
- * SRT in datagrams and every other output as a stream (RTMP). */
+ * SRT by its shard sizing prior and every other output as RTMP. */
 export function scenarioLoad(diff: TopologyDiff): {
   readonly addOutputs: number;
   readonly addByProtocol: { readonly rtmp: number; readonly srt: number };

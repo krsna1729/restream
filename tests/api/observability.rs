@@ -649,7 +649,7 @@ async fn capacity_scenario_projects_the_change_without_claiming_a_measurement() 
 
     // The calibration says what it was priced on, limit by limit.
     let calibration = &same["calibration"];
-    assert_eq!(calibration["modelVersion"], 2);
+    assert_eq!(calibration["modelVersion"], 3);
     assert_eq!(calibration["safeUtilization"], 0.8);
     assert!(calibration["priorCpus"].as_u64() > Some(0));
     for limit in [

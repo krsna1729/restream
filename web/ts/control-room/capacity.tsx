@@ -106,7 +106,7 @@ function FlowDoctor({ capacity }: { capacity: CapacitySnapshot }) {
 const PROTOCOLS: ReadonlyArray<[OutputProtocol, string]> = [
   ["rtmp", "RTMP"],
   ["rtmps", "RTMPS (TLS cost not priced)"],
-  ["srt", "SRT (1316-byte datagrams)"],
+  ["srt", "SRT (2× RTMP: shard prior at 4.8 Mbit/s)"],
 ];
 
 // Each new rendition is one more FFmpeg stage its outputs share.

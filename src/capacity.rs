@@ -10,14 +10,11 @@ use serde::Serialize;
 
 use crate::media::engine::MediaEngine;
 
-/// The projection's formula. 2: each output carries its own pipeline's
-/// ingest, sent as its protocol packetizes it (1: every output carried the
-/// sum of all ingests, protocol-blind).
-pub const CAPACITY_MODEL_VERSION: u32 = 2;
-
-/// The largest SRT message payload the engine sends: seven 188-byte MPEG-TS
-/// packets.
-const SRT_DATAGRAM_BYTES: f64 = 1316.0;
+/// The projection's formula. 3: an SRT output costs what the egress shard
+/// sizing priors say, relative to RTMP (2: SRT priced as 1316-byte
+/// datagrams against a ceiling never calibrated in them; 1: every output
+/// carried the sum of all ingests, protocol-blind).
+pub const CAPACITY_MODEL_VERSION: u32 = 3;
 
 /// One pipeline's ingest, as sampled.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
@@ -27,15 +24,15 @@ pub struct IngestRate {
     pub pps: f64,
 }
 
-/// How an output sends its pipeline's media, for packet pricing.
+/// How an output sends its pipeline's media, for egress pricing.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum OutputProtocol {
-    /// RTMP and every other stream output: one write per media packet.
+    /// RTMP and every other output: one write per media packet.
     #[default]
     Rtmp,
-    /// RTMP over TLS: packetized as RTMP. The TLS cost is not priced.
+    /// RTMP over TLS: priced as RTMP. The TLS cost is not priced.
     Rtmps,
-    /// MPEG-TS in datagrams of at most 1316 bytes.
+    /// Priced by the SRT shard sizing prior.
     Srt,
 }
 
@@ -48,13 +45,21 @@ impl OutputProtocol {
         }
     }
 
-    /// Packets per second one output sends of `ingest`. SRT cuts the
-    /// stream into datagrams, so it sends at least the bitrate over the
-    /// datagram size; a stream output writes each media packet once.
-    pub fn packets_per_sec(self, ingest: IngestRate) -> f64 {
+    /// One output's egress work for `ingest`, in RTMP packets per second
+    /// (the unit of the `egress_pps` ceiling). An SRT output costs as many
+    /// RTMP outputs as the shard sizing priors fit RTMP outputs per SRT
+    /// output on one shard (128 / 64 = 2: the SRT figure measured at
+    /// 4.8 Mbit/s on the reference host, RTMP's the default sizing), so the
+    /// two models agree. It scales with packet rate, not bitrate: an SRT
+    /// output well above 4.8 Mbit/s may cost more than priced.
+    pub fn egress_work_pps(self, ingest: IngestRate) -> f64 {
+        use crate::config::EgressShardProfile;
         match self {
             Self::Rtmp | Self::Rtmps => ingest.pps,
-            Self::Srt => ingest.pps.max(ingest.bps / 8.0 / SRT_DATAGRAM_BYTES),
+            Self::Srt => {
+                ingest.pps * f64::from(EgressShardProfile::OutputCount.outputs_per_shard())
+                    / f64::from(EgressShardProfile::SrtOutputCount.outputs_per_shard())
+            }
         }
     }
 }
@@ -96,7 +101,7 @@ impl Workload {
         Self {
             outputs: self.outputs.saturating_add(count),
             fanout_bps: self.fanout_bps + count_f * ingest.bps,
-            fanout_pps: self.fanout_pps + count_f * protocol.packets_per_sec(ingest),
+            fanout_pps: self.fanout_pps + count_f * protocol.egress_work_pps(ingest),
             ..self
         }
     }
@@ -705,19 +710,12 @@ mod tests {
     }
 
     #[test]
-    fn srt_sends_the_bitrate_in_1316_byte_datagrams() {
-        // 6 Mb/s in 100 media packets a second: SRT cuts it into
-        // 6e6 / 8 / 1316 = 570 datagrams; RTMP writes the 100 packets.
+    fn an_srt_output_costs_what_the_shard_sizing_priors_say() {
         let ingest = rate(6_000_000.0, 100.0);
-        assert_eq!(OutputProtocol::Rtmp.packets_per_sec(ingest), 100.0);
-        assert_eq!(OutputProtocol::Rtmps.packets_per_sec(ingest), 100.0);
-        let srt = OutputProtocol::Srt.packets_per_sec(ingest);
-        assert!((srt - 6_000_000.0 / 8.0 / 1316.0).abs() < 1e-9, "{srt}");
-        // A packet rate above the datagram rate stands: never fewer packets.
-        assert_eq!(
-            OutputProtocol::Srt.packets_per_sec(rate(8_000.0, 50.0)),
-            50.0
-        );
+        assert_eq!(OutputProtocol::Rtmp.egress_work_pps(ingest), 100.0);
+        assert_eq!(OutputProtocol::Rtmps.egress_work_pps(ingest), 100.0);
+        // One shard fits 128 RTMP or 64 SRT outputs: one SRT is two RTMP.
+        assert_eq!(OutputProtocol::Srt.egress_work_pps(ingest), 200.0);
     }
 
     #[test]

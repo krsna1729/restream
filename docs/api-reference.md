@@ -1206,11 +1206,14 @@ which a scenario does not change. `projected.flow.status` (`healthy`,
 `saturated`, `overloaded`) is the model's judgement of the projected hottest
 center. It decides and admits nothing.
 
-The model (`calibration.modelVersion` 2) prices each output with its own
-pipeline's ingest, not the sum of all ingests: egress packets and NIC bytes
+The model (`calibration.modelVersion` 3) prices each output with its own
+pipeline's ingest, not the sum of all ingests: egress work and NIC bytes
 are the sum over outputs of their pipeline's rate. An RTMP or RTMPS output
-writes each media packet once (RTMPS's TLS cost is not priced); an SRT
-output sends at least its bitrate in 1316-byte datagrams. The added outputs
+costs its pipeline's media packet rate (RTMPS's TLS cost is not priced). An
+SRT output costs twice that: the egress shard sizing priors fit 128 RTMP or
+64 SRT outputs on one shard (the SRT figure measured at 4.8 Mbit/s), and the
+capacity model takes its SRT weight from the same priors. HLS, sink and
+pipeline outputs are priced as RTMP. The added outputs
 carry `pipeline_id`'s ingest, which must be live (else `422`: its rate is
 unknown), or else the highest-bitrate live ingest; `ratedBy` and `ingest`
 (`{ bps, pps }`) say which. With no live ingest, `ratedBy` is `null` and
