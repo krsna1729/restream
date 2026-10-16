@@ -514,6 +514,7 @@ items).
 - Gates: interop with moxygen and MediaMTX as publishers (one harness
   mode); a fuzz target for the object parser.
 - Status: open (Filed: 2026-10-16 by claude, user request; after Q-047).
+
 ### Q-071 [architecture] [sonnet] HLS-to-HLS passthrough
 - Goal: an HLS output relays the selected HLS input's segments instead of
   demuxing and repackaging them.
@@ -542,4 +543,5 @@ items).
 - Gates: one harness mode pushing HLS and relaying it, checked against a
   normal-path run (bytes and timing); a test that an ineligible pipeline
   (a stage, or a non-HLS output) falls back with the reason recorded.
-- Status: open (Filed: 2026-10-16 by claude, user question on passthrough).
+- Status: open (Filed: 2026-10-16 by claude, user question on passthrough;
+  after Q-067/Q-068).
