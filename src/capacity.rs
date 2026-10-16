@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::media::engine::MediaEngine;
 
@@ -28,8 +28,7 @@ pub struct IngestRate {
 }
 
 /// How an output sends its pipeline's media, for packet pricing.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum OutputProtocol {
     /// RTMP and every other stream output: one write per media packet.
     #[default]
@@ -395,14 +394,22 @@ fn ratio(numerator: f64, denominator: f64) -> f64 {
     }
 }
 
-/// A topology change to price: `outputs` more outputs sent over
-/// `protocol`, carrying `pipeline_id`'s ingest (the busiest live one when
-/// `None`), and `stages` more shared stages.
+/// Added outputs by how they send.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputsByProtocol {
+    pub rtmp: u32,
+    pub rtmps: u32,
+    pub srt: u32,
+}
+
+/// A topology change to price: more outputs by protocol, carrying
+/// `pipeline_id`'s ingest (the highest-bitrate live one when `None`), and
+/// `stages` more shared stages.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ScenarioChange {
-    pub outputs: u32,
+    pub outputs: OutputsByProtocol,
     pub stages: u32,
-    pub protocol: OutputProtocol,
     pub pipeline_id: Option<String>,
 }
 
@@ -566,9 +573,13 @@ impl MediaEngine {
         let (rated_by, ingest) = scenario_rate(&rates, change.pipeline_id.as_deref())?;
         let workload = self.capacity_workload(&rates).await;
         let model = self.capacity_model();
+        let added = change.outputs;
         let changed = Workload {
             stage_count: workload.stage_count.saturating_add(change.stages),
-            ..workload.with_outputs(change.outputs, ingest, change.protocol)
+            ..workload
+                .with_outputs(added.rtmp, ingest, OutputProtocol::Rtmp)
+                .with_outputs(added.rtmps, ingest, OutputProtocol::Rtmps)
+                .with_outputs(added.srt, ingest, OutputProtocol::Srt)
         };
         Ok(Scenario {
             baseline: model.project(workload),
@@ -580,7 +591,7 @@ impl MediaEngine {
 }
 
 /// The ingest the scenario's outputs carry: the named pipeline's, which must
-/// be live, or else the busiest live one (the dearest an output can be).
+/// be live, or else the highest-bitrate live one.
 fn scenario_rate(
     rates: &HashMap<String, IngestRate>,
     pipeline_id: Option<&str>,
@@ -710,7 +721,7 @@ mod tests {
     }
 
     #[test]
-    fn a_scenario_rates_the_named_pipeline_or_the_busiest() {
+    fn a_scenario_rates_the_named_pipeline_or_the_highest_bitrate() {
         let rates = HashMap::from([
             ("a".to_string(), rate(1_000_000.0, 100.0)),
             ("b".to_string(), rate(5_000_000.0, 400.0)),
@@ -722,7 +733,7 @@ mod tests {
         assert_eq!(
             scenario_rate(&rates, None),
             Ok((Some("b".to_string()), rates["b"])),
-            "unnamed: the dearest live ingest"
+            "unnamed: the highest-bitrate live ingest"
         );
         assert_eq!(
             scenario_rate(&rates, Some("gone")),

@@ -134,9 +134,8 @@ function Scenario({ live }: { live: LiveSnapshot }) {
   const [result, setResult] = useState<CapacityScenario | null>(null);
   const project = () =>
     void getCapacityScenario({
-      addOutputs,
+      addOutputs: { [protocol]: addOutputs },
       addStages,
-      protocol,
       pipelineId: pipelineId || undefined,
     }).then((scenario) => {
       if (scenario) setResult(scenario);
@@ -180,7 +179,7 @@ function Scenario({ live }: { live: LiveSnapshot }) {
               value={pipelineId}
               onChange={(event) => setPipelineId(event.target.value)}
             >
-              <option value="">The busiest live pipeline</option>
+              <option value="">The highest-bitrate live pipeline</option>
               {pipelines.map((pipeline) => (
                 <option key={pipeline.id} value={pipeline.id}>
                   {pipeline.name}
@@ -248,7 +247,7 @@ function Scenario({ live }: { live: LiveSnapshot }) {
             </p>
             <Meters title="Now, on the priors" rows={serviceCenterRows(result.baseline)} />
             <Meters
-              title={`With ${result.addOutputs} more ${result.protocol.toUpperCase()} outputs and ${result.addStages} more stages`}
+              title={`With ${addedOutputs(result.addOutputs)} and ${result.addStages} more stages`}
               rows={serviceCenterRows(result.projected)}
             />
             <Calibration calibration={result.calibration} />
@@ -257,6 +256,13 @@ function Scenario({ live }: { live: LiveSnapshot }) {
       </div>
     </section>
   );
+}
+
+function addedOutputs(added: CapacityScenario["addOutputs"]): string {
+  const parts = PROTOCOLS.filter(([protocol]) => added[protocol] > 0).map(
+    ([protocol]) => `${added[protocol]} more ${protocol.toUpperCase()}`,
+  );
+  return parts.length === 0 ? "no more outputs" : `${parts.join(", ")} outputs`;
 }
 
 /** What every projection is priced on, and where each number came from. */

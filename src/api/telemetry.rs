@@ -376,13 +376,15 @@ pub async fn v1_engine_resource_map_handler(
 #[derive(Deserialize)]
 pub struct CapacityScenarioQuery {
     #[serde(default)]
-    pub add_outputs: u32,
+    pub add_rtmp: u32,
+    #[serde(default)]
+    pub add_rtmps: u32,
+    #[serde(default)]
+    pub add_srt: u32,
     #[serde(default)]
     pub add_stages: u32,
-    /// How the added outputs send: `rtmp` (default), `rtmps` or `srt`.
-    #[serde(default)]
-    pub protocol: crate::capacity::OutputProtocol,
-    /// Whose ingest the added outputs carry; the busiest live one if absent.
+    /// Whose ingest the added outputs carry; the highest-bitrate live one if
+    /// absent.
     pub pipeline_id: Option<String>,
 }
 
@@ -392,15 +394,26 @@ pub struct CapacityScenarioQuery {
 pub async fn v1_capacity_scenario_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    axum::extract::Query(query): axum::extract::Query<CapacityScenarioQuery>,
+    query: Result<
+        axum::extract::Query<CapacityScenarioQuery>,
+        axum::extract::rejection::QueryRejection,
+    >,
 ) -> impl IntoResponse {
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
+    // Validated after authentication, like `/alerts`.
+    let axum::extract::Query(query) = match query {
+        Ok(query) => query,
+        Err(rejection) => return rejection.into_response(),
+    };
     let change = crate::capacity::ScenarioChange {
-        outputs: query.add_outputs,
+        outputs: crate::capacity::OutputsByProtocol {
+            rtmp: query.add_rtmp,
+            rtmps: query.add_rtmps,
+            srt: query.add_srt,
+        },
         stages: query.add_stages,
-        protocol: query.protocol,
         pipeline_id: query.pipeline_id,
     };
     let scenario = match state.engine.capacity_scenario(&change).await {
@@ -420,7 +433,6 @@ pub async fn v1_capacity_scenario_handler(
     Json(serde_json::json!({
         "addOutputs": change.outputs,
         "addStages": change.stages,
-        "protocol": change.protocol,
         "ratedBy": scenario.rated_by,
         "ingest": scenario.ingest,
         "calibration": state.engine.capacity_calibration(),

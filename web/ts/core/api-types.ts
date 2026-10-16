@@ -79,9 +79,7 @@ export interface LifecycleEventsSnapshot {
   events: LifecycleEvent[];
 }
 
-/** A capacity scenario: one workload sample priced on the priors as it is
- * (`baseline`) and with the change (`projected`). Both are priors only;
- * neither carries a measured flow. Observe-only. */
+/** How an added output sends, for packet pricing. */
 export type OutputProtocol = "rtmp" | "rtmps" | "srt";
 
 export type LimitSource = "prior" | "configured";
@@ -105,10 +103,12 @@ export interface CapacityCalibration {
   safeUtilization: number;
 }
 
+/** A capacity scenario: one workload sample priced on the priors as it is
+ * (`baseline`) and with the change (`projected`). Both are priors only;
+ * neither carries a measured flow. Observe-only. */
 export interface CapacityScenario {
-  addOutputs: number;
+  addOutputs: Record<OutputProtocol, number>;
   addStages: number;
-  protocol: OutputProtocol;
   /** The pipeline whose ingest the added outputs carry; `null`: none live. */
   ratedBy: string | null;
   ingest: { bps: number; pps: number };

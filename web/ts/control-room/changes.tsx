@@ -300,7 +300,9 @@ function DefineChange(props: {
       </section>
 
       {currentPlan && <Judgement plan={currentPlan} />}
-      {currentPlan?.graphPreview.topology && <Impact topology={currentPlan.graphPreview.topology} />}
+      {currentPlan?.graphPreview.topology && (
+        <Impact topology={currentPlan.graphPreview.topology} pipelineId={pipelineId} />
+      )}
 
       {currentPlan?.validation.valid && (
         <button

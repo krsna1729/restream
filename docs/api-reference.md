@@ -1193,10 +1193,11 @@ The response also includes a cached `ioUring` capability object from startup;
 ### `GET /api/v1/capacity/scenario`
 
 Authenticated, observe-only projection of a topology change. Query:
-`add_outputs` and `add_stages` (non-negative integers, default `0`),
-`protocol` (`rtmp`, the default, `rtmps` or `srt`) and `pipeline_id`
-(optional). The response is `{ addOutputs, addStages, protocol, ratedBy,
-ingest, calibration, baseline, projected }`. Both sides price one sample of
+`add_rtmp`, `add_rtmps`, `add_srt` (the added outputs by how they send)
+and `add_stages` (non-negative integers, default `0`), and `pipeline_id`
+(optional). A malformed query is `400`, after authentication. The response
+is `{ addOutputs: { rtmp, rtmps, srt }, addStages, ratedBy, ingest,
+calibration, baseline, projected }`. Both sides price one sample of
 the current workload on the calibration priors: `baseline` as it is,
 `projected` with the added outputs and shared stages. Neither carries a
 measured flow (`flowMeasured` is `false`), so they compare like with like;
@@ -1211,7 +1212,7 @@ are the sum over outputs of their pipeline's rate. An RTMP or RTMPS output
 writes each media packet once (RTMPS's TLS cost is not priced); an SRT
 output sends at least its bitrate in 1316-byte datagrams. The added outputs
 carry `pipeline_id`'s ingest, which must be live (else `422`: its rate is
-unknown), or else the busiest live ingest; `ratedBy` and `ingest`
+unknown), or else the highest-bitrate live ingest; `ratedBy` and `ingest`
 (`{ bps, pps }`) say which. With no live ingest, `ratedBy` is `null` and
 they carry nothing. A new rendition is one more shared stage (`add_stages`).
 

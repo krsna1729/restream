@@ -265,8 +265,9 @@ to `/`.
   baseline and projection both come from `/capacity/scenario`, priced on the
   priors from one workload sample: the page computes no capacity number. The
   scenario picks the added outputs' pipeline (whose ingest they carry; the
-  busiest live one by default), protocol and encoding (new renditions are
-  shared stages), and the calibration table shows each limit and whether it
+  highest-bitrate live one by default), protocol and encoding (new renditions
+  are shared stages); Changes prices its added outputs by protocol, on its
+  own pipeline's ingest when that is live, and the calibration table shows each limit and whether it
   is configured or a prior; "draft it in Changes" leads to a planned change's
   topology diff. A
   timeline says when the engine's event log no longer reaches back to a

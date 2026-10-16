@@ -8,22 +8,29 @@ import { convergenceTimeline, liveConvergence, scenarioLoad, topologyLines } fro
 import type { LiveSnapshot } from "./store.js";
 
 /** The change's topology and what it costs, before anything is applied. */
-export function Impact({ topology }: { topology: TopologyDiff }) {
+export function Impact({ topology, pipelineId }: { topology: TopologyDiff; pipelineId: string }) {
   const load = scenarioLoad(topology);
   const [scenario, setScenario] = useState<CapacityScenario | null>(null);
   const adds = load.addOutputs > 0 || load.addStages > 0;
+  // A codec means the plan's pipeline is live: price its own ingest.
+  const live = topology.ingestCodec !== null;
+  const { rtmp, srt } = load.addByProtocol;
   useEffect(() => {
     setScenario(null);
     if (!adds) return;
     let current = true;
-    void getCapacityScenario({ addOutputs: load.addOutputs, addStages: load.addStages }).then((result) => {
-      if (current) setScenario(result);
-    });
+    const change = { addOutputs: { rtmp, srt }, addStages: load.addStages };
+    void getCapacityScenario(live ? { ...change, pipelineId } : change)
+      // The ingest may have ended since the plan: price it unnamed then.
+      .then((result) => result ?? (live ? getCapacityScenario(change) : null))
+      .then((result) => {
+        if (current) setScenario(result);
+      });
     return () => {
       current = false;
     };
     // Re-price only when one of the numbers changes, not on every render.
-  }, [adds, load.addOutputs, load.addStages]);
+  }, [adds, rtmp, srt, load.addStages, live, pipelineId]);
   const lines = topologyLines(topology);
   return (
     <section className="card bg-base-200" aria-labelledby="changes-impact">
