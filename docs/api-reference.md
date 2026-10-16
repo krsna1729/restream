@@ -1397,7 +1397,8 @@ The stream key is checked first, before any body byte is read, under the
 fMP4 ingest is H.264 video and AAC audio only, and it names its init segment
 through the playlist's `EXT-X-MAP` URI rather than by file extension. That
 init is remembered per stream key, so an encoder that uploads it once keeps
-publishing after its session ends; a segment that fails to demux is dropped
+publishing after its session ends; a refused init upload voids that memory
+(encoders never read a refusal); a segment that fails to demux is dropped
 and the session continues.
 
 Ordering, sessions and per-key bounds are described in

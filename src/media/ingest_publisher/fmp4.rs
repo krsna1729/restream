@@ -284,6 +284,16 @@ impl SegmentDemux for Fmp4Demux {
         self.object = None;
     }
 
+    /// An object that could not be demuxed is dropped whole: its fragment's
+    /// packets were never paced against the session's chunks, so none of
+    /// them may be published.
+    fn discard_object(&mut self) {
+        self.pending.clear();
+        self.fragment_packets.clear();
+        self.output.clear();
+        self.object = None;
+    }
+
     /// Fragments are anchored by their own `tfdt`, so the init stays; a new
     /// init arrives through [`SegmentDemux::apply_init`].
     fn discontinuity(&mut self) {

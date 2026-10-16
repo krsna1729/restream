@@ -687,7 +687,11 @@ keeps the container it started with.
     init again from that cache when the playlist names the same
     `EXT-X-MAP` URI, so a resumed encoder keeps publishing. A playlist that
     names a different URI gets nothing from it. The cache holds the inits of
-    the last 64 stream keys.
+    at most 64 stream keys and at most 8 MiB (a normal init is about 1 KiB),
+    evicting the oldest first, so it stays inside the ingest's accounting: a
+    single init larger than the whole bound is kept alone. The entry goes
+    when `EXT-X-ENDLIST` ends the run, or when an init upload for that key
+    is refused.
 - **Discontinuities.** A new epoch starts on an encoder restart inside the
   idle window (the media sequence or the segment names go back) and on
   `EXT-X-DISCONTINUITY`. The next segment is demuxed from scratch, and its
@@ -709,12 +713,18 @@ keeps the container it started with.
   demuxer) is refused with `400`. An fMP4 media object under a playlist that
   names no `EXT-X-MAP` is refused with `415`: it can never be demuxed. An
   fMP4 init object that is answered on its own upload carries the refusal
-  (`415`, `400` or `413`) directly.
+  (`415`, `400` or `413`) directly, and voids that map's init plus the key's
+  cached init: encoders never read a refusal, and a stale init would
+  silently demux the new run's segments with it (an HEVC stream as H.264,
+  another codec's frames as AAC). Its segments then wait for an init that
+  cannot come and are skipped.
 - **A segment that cannot be demuxed.** A rejection while publishing an
   already-answered segment — a truncated access unit, a sample that runs past
   its fragment, a decode failure — drops that segment: the session counts it,
-  logs the reason once, marks a discontinuity so the next segment re-anchors
-  its timestamps, and keeps publishing. Only a session that no longer has a
+  logs the reason once, discards everything that segment produced (packets
+  from its earlier fragments were never paced against the session's chunks,
+  so they are not published either), re-anchors the timeline for the next
+  segment, and keeps publishing. Only a session that no longer has a
   demuxer at all (its publisher failed to open) ends failed; the engine
   survives either way, and the encoder's next object starts a fresh session
   if the session does end.

@@ -247,6 +247,17 @@ impl Session {
         self.ensure_map(uri);
     }
 
+    /// Forget the init a map holds. A *refused* init upload must leave
+    /// nothing behind: otherwise the map keeps the previous run's init and
+    /// the encoder's next segments are demuxed with it (an encoder never
+    /// reads the refusal).
+    pub(super) fn void_map(&mut self, uri: &str) {
+        if let Some(map) = self.maps.iter_mut().find(|map| map.uri == uri) {
+            map.pending = None;
+            map.delivered = None;
+        }
+    }
+
     /// A segment was dropped: its bytes could not be demuxed.
     pub(super) fn note_failed_segment(&mut self) {
         self.counters.failed = self.counters.failed.saturating_add(1);
@@ -397,9 +408,12 @@ impl Session {
         self.next_seq = None;
         self.ended = false;
         self.discontinuity_pending = true;
-        // The new variant's playlist names its own `EXT-X-MAP`.
+        // The new variant's playlist names its own `EXT-X-MAP`, and its
+        // first fMP4 segment arrives before that playlist: the old variant's
+        // map says nothing about it.
         self.maps.clear();
         self.current_map = None;
+        self.playlist_seen = false;
     }
 
     fn on_other_variant(&mut self, playlist_path: &str, media: &MediaPlaylist) {

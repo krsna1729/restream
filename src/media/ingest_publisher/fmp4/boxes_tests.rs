@@ -202,9 +202,6 @@ fn malformed_layouts_are_refused() {
     assert_eq!(walk(&[]), Err(WalkError::NoFragments));
 }
 
-/// Offsets counted from the whole segment would point every sample at the
-/// wrong bytes once the walker hands the demuxer one fragment; the
-/// moof-relative forms (`default_base_is_moof`, or no flag) are accepted.
 /// `tfdt` is required: without it the demuxer would place every fragment at
 /// decode time 0 and glue a restarted timeline onto the previous one.
 #[test]
@@ -216,6 +213,9 @@ fn a_traf_without_a_tfdt_is_refused() {
     assert!(walk(&fragment).is_ok());
 }
 
+/// Offsets counted from the whole segment would point every sample at the
+/// wrong bytes once the walker hands the demuxer one fragment; the
+/// moof-relative forms (`default_base_is_moof`, or no flag) are accepted.
 #[test]
 fn an_explicit_base_data_offset_is_refused() {
     let explicit = [bx(b"styp", &[0; 8]), moof(0x00_0001), bx(b"mdat", &[0; 8])].concat();

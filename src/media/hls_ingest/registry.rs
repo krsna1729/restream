@@ -95,7 +95,9 @@ impl HlsIngest {
             budget: Arc::new(Semaphore::new(limits.total_buffer_bytes)),
             sessions: std::sync::Mutex::new(HashMap::new()),
             keys: std::sync::Mutex::new(HashMap::new()),
-            inits: Arc::new(std::sync::Mutex::new(InitCache::default())),
+            inits: Arc::new(std::sync::Mutex::new(InitCache::new(
+                limits.init_cache_bytes,
+            ))),
         })
     }
 
@@ -395,8 +397,8 @@ impl HlsIngest {
 mod tests {
     use super::*;
     use crate::media::hls_ingest::test_support::{
-        INPUT_ID, PIPELINE_ID, STREAM_KEY, authenticated, emptied_mdat, fmp4_playlist,
-        fmp4_video_objects, test_ingest,
+        INPUT_ID, PIPELINE_ID, STREAM_KEY, authenticated, emptied_mdat, fmp4_hevc_init,
+        fmp4_playlist, fmp4_video_objects, test_ingest,
     };
 
     /// A session that ended between lookup and send gets exactly one
@@ -577,6 +579,76 @@ mod tests {
             .await
             .and_then(|outcome| outcome.failure_phase);
         assert_eq!(phase.as_deref(), Some("eof"));
+    }
+
+    /// A refused init must void the map: FFmpeg uploads `init.mp4` on every
+    /// run and never reads the refusal, so leaving the previous run's init
+    /// in place would demux the new run's segments with it.
+    #[tokio::test]
+    async fn a_refused_init_voids_the_map_and_its_segments_do_not_publish() {
+        let (engine, ingest) = test_ingest(HlsIngestLimits {
+            idle_floor: std::time::Duration::from_millis(300),
+            ..HlsIngestLimits::default()
+        });
+        let (init, segments) = fmp4_video_objects(2, 4);
+
+        // The first run is H.264 and publishes.
+        assert_eq!(
+            send(&ingest, ObjectKind::Fmp4, "init.mp4", &init).await,
+            ObjectOutcome::Held
+        );
+        assert_eq!(
+            send(&ingest, ObjectKind::Fmp4, "index0.m4s", &segments[0]).await,
+            ObjectOutcome::Held
+        );
+        assert_eq!(
+            send(
+                &ingest,
+                ObjectKind::Playlist,
+                "index.m3u8",
+                fmp4_playlist(0, &["index0.m4s"], false).as_bytes()
+            )
+            .await,
+            ObjectOutcome::Stored
+        );
+        wait_for_ring(&engine, 10, "the first run in the ring", |ring| {
+            ring.get_write_idx() > 0
+        })
+        .await;
+
+        // The operator switches the key to HEVC: the same `init.mp4` path
+        // now carries `hvc1`, which is refused.
+        assert_eq!(
+            send(&ingest, ObjectKind::Fmp4, "init.mp4", &fmp4_hevc_init()).await,
+            ObjectOutcome::Unsupported("HEVC fMP4 ingest is not implemented".to_string())
+        );
+
+        // The next run's media must not be demuxed with the old init: it
+        // waits for an init that cannot come, and nowhere is it published.
+        let before = published(&engine).await;
+        assert_eq!(
+            send(&ingest, ObjectKind::Fmp4, "index1.m4s", &segments[1]).await,
+            ObjectOutcome::Held
+        );
+        assert_eq!(
+            send(
+                &ingest,
+                ObjectKind::Playlist,
+                "index.m3u8",
+                fmp4_playlist(1, &["index1.m4s"], true).as_bytes()
+            )
+            .await,
+            ObjectOutcome::Stored
+        );
+        // Two target durations: long enough that a stale init would have
+        // published the segment already.
+        tokio::time::sleep(std::time::Duration::from_millis(2_200)).await;
+        assert_eq!(
+            published(&engine).await,
+            before,
+            "a refused init must not leave the previous run's init in place"
+        );
+        engine.cancel_pipeline_input(INPUT_ID).await;
     }
 
     /// A segment whose bytes cannot be demuxed is dropped: the session stays

@@ -499,6 +499,57 @@ fn a_segment_needs_only_the_map_it_was_listed_under() {
     );
 }
 
+/// A variant switch forgets the map of the variant it leaves: the new
+/// variant's first fMP4 segment is normally uploaded before its playlist,
+/// and the old variant's map must not refuse it as "no EXT-X-MAP".
+#[test]
+fn a_variant_switch_forgets_the_old_map_until_the_new_playlist_arrives() {
+    let t0 = Instant::now();
+    let mut session = Session::new(limits());
+    let master = |bandwidth| {
+        Playlist::Master(MasterPlaylist {
+            variants: vec![Variant {
+                bandwidth,
+                path: format!("v{bandwidth}/index.m3u8"),
+            }],
+        })
+    };
+    // The first variant's playlist names an init.
+    session.on_playlist("master.m3u8", master(800_000), t0);
+    session.on_playlist(
+        "v800000/index.m3u8",
+        with_map(media("v800000/", 0, 1, false), "init.mp4"),
+        t0,
+    );
+    assert_eq!(session.map_uri(), Some("init.mp4"));
+    assert!(!session.map_required());
+
+    // A higher-bandwidth variant appears: its segment arrives before its
+    // playlist, so no map is known for it yet.
+    session.on_playlist("master.m3u8", master(2_500_000), t0);
+    assert_eq!(session.map_uri(), None);
+    assert!(
+        !session.map_required(),
+        "the new variant's map is not known yet, so nothing is refused"
+    );
+    assert_eq!(
+        seg(&mut session, "v2500000/index0.m4s", t0),
+        SegmentOutcome::Held
+    );
+
+    // Its own playlist then names the map, as a fresh upload would.
+    assert_eq!(
+        session.on_playlist(
+            "v2500000/index.m3u8",
+            with_map(media("v2500000/", 0, 1, false), "init.mp4"),
+            t0
+        ),
+        PlaylistOutcome::Accepted
+    );
+    assert!(!session.map_required());
+    assert_eq!(session.map_uri(), Some("init.mp4"));
+}
+
 /// An encoder restart with a new `EXT-X-MAP` (new URI, or new bytes at the
 /// same URI) delivers the new init with the next segment and flags the
 /// discontinuity that resets the demuxer's timeline.

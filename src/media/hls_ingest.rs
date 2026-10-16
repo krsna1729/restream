@@ -36,6 +36,10 @@ pub struct HlsIngestLimits {
     /// 4 MiB: an fMP4 init segment (`ftyp` + `moov`) is a few KiB; its own
     /// bound keeps it off the segment budget.
     pub max_init_bytes: usize,
+    /// 8 MiB: every stream key's last applied init, remembered across
+    /// sessions. A normal init is about 1 KiB, so this is thousands of them;
+    /// the keys are bounded too, and the oldest is evicted first.
+    pub init_cache_bytes: usize,
     /// Uploads one stream key may have in flight (read, queued, awaiting
     /// reply); encoders upload sequentially, so 2 only absorbs overlap.
     pub uploads_per_key: usize,
@@ -67,6 +71,7 @@ impl Default for HlsIngestLimits {
             max_playlist_bytes: 1024 * 1024,
             max_segment_bytes: 64 * 1024 * 1024,
             max_init_bytes: 4 * 1024 * 1024,
+            init_cache_bytes: 8 * 1024 * 1024,
             uploads_per_key: 2,
             hold_segments: 8,
             hold_bytes: 128 * 1024 * 1024,

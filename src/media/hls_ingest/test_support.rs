@@ -58,11 +58,11 @@ pub(crate) fn authenticated() -> AuthenticatedPipeline {
     }
 }
 
-/// The first keyframe of the canonical H.264 fixture, as Annex B: it carries
-/// the parameter sets an `avc1` sample entry is built from.
-fn fixture_keyframe() -> Vec<u8> {
-    let (_, _, packets) = crate::test_fixtures::primary_av_packets_for_codec("h264")
-        .expect("the canonical H.264 fixture demuxes");
+/// The first keyframe of a canonical fixture, as Annex B: it carries the
+/// parameter sets a sample entry is built from.
+fn fixture_keyframe(codec: &str) -> Vec<u8> {
+    let (_, _, packets) = crate::test_fixtures::primary_av_packets_for_codec(codec)
+        .unwrap_or_else(|error| panic!("the canonical {codec} fixture demuxes: {error}"));
     packets
         .into_iter()
         .find(|packet| {
@@ -132,7 +132,7 @@ pub(crate) fn fmp4_video_objects(segments: usize, frames: usize) -> (Vec<u8>, Ve
         length_size: LengthSize::FourBytes,
     };
     let entry = SampleEntry::Avc1(
-        build_avc1_box_from_annexb(&fixture_keyframe(), &config)
+        build_avc1_box_from_annexb(&fixture_keyframe("h264"), &config)
             .expect("the fixture's SPS/PPS parse"),
     );
     let mut muxer = shiguredo_mp4::mux::Fmp4SegmentMuxer::new().expect("the muxer builds");
@@ -175,4 +175,25 @@ pub(crate) fn emptied_mdat(segment: &[u8]) -> Vec<u8> {
         offset += size;
     }
     segment.to_vec()
+}
+
+/// An HEVC fMP4 init segment (`hvc1`): this ingest refuses it.
+pub(crate) fn fmp4_hevc_init() -> Vec<u8> {
+    use shiguredo_mp4::bitstream::h265::{
+        H265ConstantFrameRate, H265SampleEntryConfig, LengthSize, build_hvc1_box_from_annexb,
+    };
+    use shiguredo_mp4::boxes::SampleEntry;
+
+    let config = H265SampleEntryConfig {
+        length_size: LengthSize::FourBytes,
+        avg_frame_rate: H265SampleEntryConfig::AVG_FRAME_RATE_UNSPECIFIED,
+        constant_frame_rate: H265ConstantFrameRate::Unknown,
+    };
+    let entry = SampleEntry::Hvc1(
+        build_hvc1_box_from_annexb(&fixture_keyframe("h265"), &config)
+            .expect("the fixture's VPS/SPS/PPS parse"),
+    );
+    let mut muxer = shiguredo_mp4::mux::Fmp4SegmentMuxer::new().expect("the muxer builds");
+    let _ = fmp4_segment(&mut muxer, &entry, 1);
+    muxer.init_segment_bytes().expect("the init builds")
 }
