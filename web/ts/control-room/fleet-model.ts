@@ -15,8 +15,16 @@ import type { TelemetryRates } from "./rates.js";
 export interface FleetPipelineRow {
   readonly id: string;
   readonly name: string;
-  /** `null` when no ingest is connected. */
-  readonly source: { protocol: string; videoCodec: string | null } | null;
+  /** `null` when no ingest is connected; `bonded` for an SRT group. */
+  readonly source: {
+    protocol: string;
+    videoCodec: string | null;
+    bonded: boolean;
+  } | null;
+  /** Connected inputs held in warm standby. */
+  readonly standbyInputs: number;
+  /** A recording file is being written. */
+  readonly recording: boolean;
   readonly ingestBps: number | null;
   readonly egressBps: number | null;
   /** Outputs the operator wants running. */
@@ -127,7 +135,10 @@ export function buildFleetModel(
       source: pipeline.ingest && {
         protocol: pipeline.ingest.protocol,
         videoCodec: pipeline.ingest.videoCodec,
+        bonded: pipeline.ingest.bonded,
       },
+      standbyInputs: pipeline.standbyInputs,
+      recording: pipeline.recording,
       ingestBps: rates?.ingestBps.get(pipeline.id) ?? null,
       egressBps,
       wanted,
@@ -244,12 +255,27 @@ export function describeCause(cause: Cause): string {
 
 export type HealthFilter = PipelineHealth["tone"] | "all";
 
-/** Rows whose name or id holds `query` (any case) and whose health is
- * `health`. */
+/** The operational cards: pipelines that need attention, have a warm
+ * standby, ingest over bonded SRT, or record. */
+export type OperationalFilter = "attention" | "standby" | "bonded" | "recording";
+
+export const OPERATIONAL: Record<
+  OperationalFilter,
+  (row: FleetPipelineRow) => boolean
+> = {
+  attention: (row) => row.attention > 0,
+  standby: (row) => row.standbyInputs > 0,
+  bonded: (row) => row.source?.bonded === true,
+  recording: (row) => row.recording,
+};
+
+/** Rows whose name or id holds `query` (any case), whose health is
+ * `health`, and that match the operational card, when one is chosen. */
 export function filterPipelineRows(
   rows: readonly FleetPipelineRow[],
   query: string,
   health: HealthFilter,
+  operational: OperationalFilter | null = null,
 ): readonly FleetPipelineRow[] {
   const needle = query.trim().toLowerCase();
   return rows.filter(
@@ -257,6 +283,7 @@ export function filterPipelineRows(
       (needle === "" ||
         row.name.toLowerCase().includes(needle) ||
         row.id.toLowerCase().includes(needle)) &&
-      (health === "all" || pipelineHealth(row).tone === health),
+      (health === "all" || pipelineHealth(row).tone === health) &&
+      (operational === null || OPERATIONAL[operational](row)),
   );
 }

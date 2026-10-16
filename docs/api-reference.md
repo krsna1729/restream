@@ -761,13 +761,19 @@ costs at most one rebuild per 500 ms):
   "epoch": "18c9f0a1b2c3d4e5",
   "revision": 42,
   "pipelines": [
-    { "id": "...", "name": "...", "ingest": { "inputId": "...", "protocol": "rtmp", "videoCodec": "h264" } }
+    {
+      "id": "...", "name": "...",
+      "ingest": { "inputId": "...", "protocol": "srt", "videoCodec": "h264", "bonded": false },
+      "standbyInputs": 1,
+      "recording": false
+    }
   ],
   "outputs": [
     {
       "id": "...", "pipelineId": "...", "name": "...",
       "protocol": "rtmp",
       "shard": 0,
+      "stage": "pipe:video:720p",
       "desired": "running",
       "actual": "sending",
       "convergence": "converged",
@@ -781,10 +787,16 @@ costs at most one rebuild per 500 ms):
 }
 ```
 
+- `ingest.bonded`: the selected ingest is an SRT group (bonded) connection.
+- `standbyInputs`: connected inputs held in warm standby (connected, not
+  selected).
+- `recording`: a recording file is being written.
 - `protocol`: from the URL scheme: `rtmp` (also `rtmps`), `srt`, `hls`,
   `sink`, `pipeline` or `unknown`.
 - `shard`: the egress shard carrying the running attempt; `null` off the
   fabric or when none runs.
+- `stage`: the last stage the running attempt reads (`<pipeline>:<kind>`);
+  outputs with the same `stage` share its work. `null` when none runs.
 - `desired`: the operator's intent (`running`, `stopped`).
 - `epoch`: identifies the server run (see the stream below).
 - `actual`: the phase of the running egress attempt, or `null` when none

@@ -1120,3 +1120,66 @@ test("operate views: inspect an egress group, list the groups, read the pipeline
     for (const id of pipelineIds) await page.request.delete(`/api/v1/pipelines/${id}`);
   }
 });
+
+test("pipelines: protocol mix, the stage two outputs share, and the recording card", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  const stamp = Date.now();
+  const name = `crpipes${stamp}`;
+  const pipelineIds: string[] = [];
+  try {
+    const pipelineId = await liveFilePipeline(page, name);
+    pipelineIds.push(pipelineId);
+    const sink = await loopbackSink(page, `crpipessink${stamp}`);
+    pipelineIds.push(sink.pipelineId);
+    for (const output of ["cr-share-a", "cr-share-b"]) {
+      const created = await page.request.post(`/api/v1/pipelines/${pipelineId}/outputs`, {
+        data: {
+          name: output,
+          url: sink.url,
+          config: { video: { mode: "source" }, audio: { mode: "selectTracks", tracks: [0] } },
+        },
+      });
+      expect(created.ok()).toBe(true);
+      const outputId: string = (await created.json()).output.id;
+      expect(
+        (await page.request.post(`/api/v1/pipelines/${pipelineId}/outputs/${outputId}/start`)).ok(),
+      ).toBe(true);
+    }
+
+    await page.goto("/?w=pipelines");
+    // Both destinations are RTMP, counted fleet-wide.
+    await expect(
+      page.getByRole("region", { name: "Protocol mix" }).getByRole("listitem").filter({ hasText: "RTMP" }),
+    ).toContainText("2");
+    // Same pipeline, same video and audio: one stage serves both.
+    const sharing = page.getByRole("region", { name: "Shared-stage efficiency" });
+    await expect(sharing).toContainText("2 outputs", { timeout: 30_000 });
+    await expect(sharing).toContainText(name);
+    await expect(sharing).toContainText("2 of 2 running outputs");
+
+    // The recording card selects only the pipeline that records.
+    const cards = page.getByRole("region", { name: "Operational filters" });
+    const recording = cards.getByRole("button", { name: /Recording active/ });
+    await expect(recording).toContainText("0 pipelines");
+    expect((await page.request.post(`/api/v1/pipelines/${pipelineId}/recording/start`)).ok()).toBe(
+      true,
+    );
+    await expect(recording).toContainText("1 pipeline", { timeout: 30_000 });
+    await recording.click();
+    await expect(recording).toHaveAttribute("aria-pressed", "true");
+    const rows = page.getByRole("table").getByRole("row");
+    await expect(rows.filter({ hasText: pipelineId })).toHaveCount(1);
+    await expect(rows.filter({ hasText: sink.pipelineId })).toHaveCount(0);
+    // A second click clears the card.
+    await recording.click();
+    await expect(rows.filter({ hasText: sink.pipelineId })).toHaveCount(1);
+  } finally {
+    for (const id of pipelineIds) await page.request.delete(`/api/v1/pipelines/${id}`);
+  }
+});

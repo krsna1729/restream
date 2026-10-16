@@ -180,7 +180,11 @@ to `/`.
   (observe-only until Q-031 measures the coefficients). Pipelines: the
   inventory (attention first, then size), searchable by name or id and
   filterable by the same health rule as Fleet's count, with outputs by
-  protocol. Operate (one pipeline): the source deck from
+  protocol; above it, all from the runtime state (`pipelines-model.ts`), the
+  fleet-wide protocol mix, the shared stages (running outputs grouped by the
+  `stage` they read, largest group first), and the operational cards (needs
+  attention, warm standby, bonded SRT, recording) that narrow the table.
+  Operate (one pipeline): the source deck from
   `/pipelines/{id}/inputs` with Promote and each input's preview; the media
   path (`operate-graph.tsx`) in four views: Graph (from
   `/pipelines/{id}/graph`, laid out by longest path, each shared stage drawn

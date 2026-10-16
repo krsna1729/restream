@@ -90,6 +90,7 @@ fn projection_with(outputs: &[(&str, Convergence)]) -> Projection {
                 name: id.to_string(),
                 protocol: crate::domain::output_spec::EgressProtocol::Rtmp,
                 shard: None,
+                stage: None,
                 desired: DesiredOutputState::Running,
                 actual: None,
                 convergence: *convergence,
@@ -316,6 +317,85 @@ async fn projection_derives_convergence_from_desired_and_runtime() {
         "a stopped output whose egress still runs is converging"
     );
     assert_eq!(projection.outputs["stopped"].flow, Flow::Idle);
+}
+
+/// The fleet-wide Pipelines view reads warm standby, recording, bonding and
+/// shared stages from the projection instead of polling every pipeline.
+#[tokio::test]
+async fn projection_reports_standby_recording_bonding_and_the_output_stage() {
+    let engine = MediaEngine::new();
+    let pipelines = [crate::db::PipelineRecord {
+        id: "pipe".to_string(),
+        name: "pipe".to_string(),
+        stream_key: "k".to_string(),
+        input_source: None,
+        srt_ingest_policy: None,
+    }];
+    let outputs = [
+        output("shared", DesiredOutputState::Running),
+        output("idle", DesiredOutputState::Running),
+    ];
+    let projection = project(&engine, &pipelines, &outputs).await;
+    let pipe = &projection.pipelines["pipe"];
+    assert_eq!((pipe.standby_inputs, pipe.recording), (0, false));
+    assert_eq!(pipe.ingest, None);
+
+    engine
+        .try_register_pipeline_input_attempt("pipe", "main", "k-main", "srt", true)
+        .await
+        .expect("main input registers");
+    engine
+        .try_register_pipeline_input_attempt("pipe", "backup", "k-backup", "srt", false)
+        .await
+        .expect("backup input registers");
+    engine
+        .update_publisher_quality(
+            "pipe",
+            crate::media::snapshots::PublisherQuality {
+                srt_bonded: Some(true),
+                ..Default::default()
+            },
+        )
+        .await;
+    engine.recordings.cancel_tokens.write().await.insert(
+        "pipe".to_string(),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    let stage = crate::domain::stage::StageKey::new(
+        "pipe",
+        crate::domain::stage::StageKind::video_preset("720p"),
+    );
+    engine
+        .register_egress_attempt_with_meta(
+            "shared",
+            "pipe",
+            "rtmp://127.0.0.1:9/live/k",
+            Some("shared"),
+            Some("720p"),
+            Some(stage),
+        )
+        .await;
+
+    let projection = project(&engine, &pipelines, &outputs).await;
+    let pipe = &projection.pipelines["pipe"];
+    assert_eq!(
+        pipe.standby_inputs, 1,
+        "the selected input is not a standby"
+    );
+    assert!(pipe.recording);
+    let ingest = pipe.ingest.as_ref().expect("the selected input ingests");
+    assert_eq!(ingest.input_id, "main");
+    assert!(ingest.bonded);
+    assert_eq!(
+        projection.outputs["shared"].stage.as_deref(),
+        Some("pipe:video:720p")
+    );
+    assert_eq!(projection.outputs["idle"].stage, None);
+
+    // A cancelled recording token is a recording that has ended.
+    engine.recordings.cancel_tokens.read().await["pipe"].cancel();
+    let projection = project(&engine, &pipelines, &outputs).await;
+    assert!(!projection.pipelines["pipe"].recording);
 }
 
 /// The projector rebuilds only while a stream client is connected: on a
