@@ -49,16 +49,21 @@ pub struct OperationRecord {
     pub audit_log: Vec<Value>,
     pub execution_result: Option<Value>,
     pub verification_result: Option<Value>,
-    /// Open alerts just before the apply; `None` until it starts.
-    pub pre_apply_alerts: Option<AlertBaseline>,
+    /// What verification compares against, taken as the apply starts;
+    /// `None` until then.
+    pub baseline: Option<ApplyBaseline>,
 }
 
-/// Open alerts at one moment: how many, and which are critical (by id, so
-/// a new critical alert is not hidden by an old one clearing).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AlertBaseline {
-    pub total: usize,
+/// The engine just before an apply.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ApplyBaseline {
+    /// Every open alert, for the reported delta.
+    pub alerts_total: usize,
+    /// Critical alerts on the changed pipelines, by id, so a new one is not
+    /// hidden by an old one clearing.
     pub critical_ids: Vec<String>,
+    /// The hottest service center on the calibration priors.
+    pub projected_utilization: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -193,7 +198,7 @@ impl AgentExecutionStore {
             audit_log,
             execution_result: None,
             verification_result: None,
-            pre_apply_alerts: None,
+            baseline: None,
             request,
         };
 
@@ -255,12 +260,12 @@ impl AgentExecutionStore {
         Ok(record.clone())
     }
 
-    /// Start applying an approved operation, recording the open alerts as
-    /// they stand now: the baseline its verification compares against.
+    /// Start applying an approved operation, recording the engine as it
+    /// stands now: the baseline its verification compares against.
     pub fn start_apply(
         &self,
         operation_id: &str,
-        alerts: AlertBaseline,
+        baseline: ApplyBaseline,
     ) -> Result<OperationRecord, OperationStoreError> {
         let mut state = lock_or_recover(&self.state);
         let record = state
@@ -280,7 +285,7 @@ impl AgentExecutionStore {
 
         let ts = now();
         record.status = OperationStatus::Applying;
-        record.pre_apply_alerts = Some(alerts);
+        record.baseline = Some(baseline);
         record.updated_at = ts.clone();
         record.audit_log.push(audit_event(
             "applyStarted",
@@ -432,8 +437,9 @@ pub fn public_record(record: &OperationRecord) -> Value {
         "auditLog": record.audit_log,
         "executionResult": record.execution_result,
         "verificationResult": record.verification_result,
-        "preApplyAlertCount": record.pre_apply_alerts.as_ref().map(|alerts| alerts.total),
-        "preApplyCriticalAlertIds": record.pre_apply_alerts.as_ref().map(|alerts| &alerts.critical_ids),
+        "preApplyAlertCount": record.baseline.as_ref().map(|baseline| baseline.alerts_total),
+        "preApplyCriticalAlertIds": record.baseline.as_ref().map(|baseline| &baseline.critical_ids),
+        "preApplyProjectedUtilization": record.baseline.as_ref().map(|baseline| baseline.projected_utilization),
     }))
 }
 
@@ -599,7 +605,7 @@ mod tests {
             audit_log: Vec::new(),
             execution_result: None,
             verification_result: None,
-            pre_apply_alerts: None,
+            baseline: None,
         }
     }
 

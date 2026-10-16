@@ -732,7 +732,7 @@ async fn agent_operation_lifecycle_is_approval_gated_redacted_and_verified() {
             .collect::<Vec<_>>(),
         [
             "desiredState",
-            "deliveryFloor",
+            "outputsRunning",
             "newCriticalAlerts",
             "capacityState"
         ]
@@ -790,101 +790,144 @@ async fn agent_call(
 }
 
 #[cfg(feature = "agent-execution")]
+async fn create_output(app: &axum::Router, cookie: &str, pid: &str, name: &str) -> String {
+    let (status, output) = agent_call(
+        app,
+        cookie,
+        "POST",
+        &format!("/api/v1/pipelines/{pid}/outputs"),
+        Some(serde_json::json!({
+            "name": name,
+            "url": format!("rtmp://127.0.0.1:9/live/{name}"),
+            "config": {"video": {"mode": "source"}, "audio": {"mode": "all"}}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{output}");
+    output["output"]["id"].as_str().unwrap().to_string()
+}
+
+/// Creates, approves, applies and verifies one operation; the verified record.
+#[cfg(feature = "agent-execution")]
+async fn run_operation(
+    app: &axum::Router,
+    cookie: &str,
+    pid: &str,
+    change: serde_json::Value,
+) -> serde_json::Value {
+    let (status, created) = agent_call(
+        app,
+        cookie,
+        "POST",
+        "/api/v1/agent/operations",
+        Some(serde_json::json!({
+            "intent": "gate test",
+            "pipelineId": pid,
+            "proposedChanges": [change]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    // The baseline is taken at apply, not at create.
+    assert!(created["preApplyCriticalAlertIds"].is_null(), "{created}");
+    let op = created["operationId"].as_str().unwrap().to_string();
+    for step in ["approve", "apply"] {
+        let (status, body) = agent_call(
+            app,
+            cookie,
+            "POST",
+            &format!("/api/v1/agent/operations/{op}/{step}"),
+            (step == "approve").then(|| serde_json::json!({ "approvedBy": "t", "reason": "test" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{step}: {body}");
+    }
+    agent_call(
+        app,
+        cookie,
+        "POST",
+        &format!("/api/v1/agent/operations/{op}/verify"),
+        None,
+    )
+    .await
+    .1
+}
+
+#[cfg(feature = "agent-execution")]
+fn gate(verified: &serde_json::Value, name: &str) -> serde_json::Value {
+    verified["verificationResult"]["gates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|gate| gate["gate"] == name)
+        .unwrap_or_else(|| panic!("no {name} gate: {verified}"))
+        .clone()
+}
+
+#[cfg(feature = "agent-execution")]
 #[tokio::test]
-async fn verify_fails_the_delivery_floor_when_a_wanted_output_on_the_pipeline_does_not_deliver() {
+async fn verify_judges_only_the_outputs_the_change_set_running() {
     let (app, cookie) = authenticated_app().await;
     let (_, pipeline) = agent_call(
         &app,
         &cookie,
         "POST",
         "/api/v1/pipelines",
-        Some(serde_json::json!({ "name": "agent-floor", "streamKey": "agent-floor-key" })),
+        Some(serde_json::json!({ "name": "agent-gates", "streamKey": "agent-gates-key" })),
     )
     .await;
     let pid = pipeline["pipeline"]["id"].as_str().unwrap().to_string();
-    // A destination the pipeline wants running; with no publisher it cannot
-    // deliver.
-    let (_, output) = agent_call(
-        &app,
-        &cookie,
-        "POST",
-        &format!("/api/v1/pipelines/{pid}/outputs"),
-        Some(serde_json::json!({
-            "name": "wanted",
-            "url": "rtmp://127.0.0.1:9/live/wanted",
-            "config": {"video": {"mode": "source"}, "audio": {"mode": "all"}}
-        })),
-    )
-    .await;
-    let wanted = output["output"]["id"].as_str().unwrap().to_string();
+    // Already wanted running and down (no publisher): not the change's doing.
+    let down = create_output(&app, &cookie, &pid, "down").await;
     let (status, _) = agent_call(
         &app,
         &cookie,
         "POST",
-        &format!("/api/v1/pipelines/{pid}/outputs/{wanted}/start"),
+        &format!("/api/v1/pipelines/{pid}/outputs/{down}/start"),
         None,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    // The change itself (a stopped destination) reaches its state.
-    let (status, created) = agent_call(
+    // A stopped backup leaves every gate passing.
+    let verified = run_operation(
         &app,
         &cookie,
-        "POST",
-        "/api/v1/agent/operations",
-        Some(serde_json::json!({
-            "intent": "add a stopped backup",
-            "pipelineId": pid,
-            "proposedChanges": [{
-                "kind": "addOutput",
-                "name": "backup",
-                "url": "rtmp://127.0.0.1:9/live/backup",
-                "config": {"video": {"mode": "source"}, "audio": {"mode": "all"}},
-                "desiredState": "stopped"
-            }]
-        })),
+        &pid,
+        serde_json::json!({
+            "kind": "addOutput",
+            "name": "backup",
+            "url": "rtmp://127.0.0.1:9/live/backup",
+            "config": {"video": {"mode": "source"}, "audio": {"mode": "all"}},
+            "desiredState": "stopped"
+        }),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED);
-    // The alert baseline is taken at apply, not at create.
-    assert!(created["preApplyCriticalAlertIds"].is_null(), "{created}");
-    let op = created["operationId"].as_str().unwrap().to_string();
-    for step in ["approve", "apply"] {
-        let (status, _) = agent_call(
-            &app,
-            &cookie,
-            "POST",
-            &format!("/api/v1/agent/operations/{op}/{step}"),
-            (step == "approve").then(|| serde_json::json!({ "approvedBy": "t", "reason": "test" })),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{step}");
-    }
-    let (_, verified) = agent_call(
+    assert_eq!(verified["status"], "verified", "{verified}");
+    assert_eq!(
+        gate(&verified, "outputsRunning")["detail"],
+        "0 of 0 outputs the change set running are running"
+    );
+    assert!(
+        verified["preApplyCriticalAlertIds"].is_array(),
+        "{verified}"
+    );
+
+    // Starting an output that cannot come up fails it.
+    let spare = create_output(&app, &cookie, &pid, "spare").await;
+    let verified = run_operation(
         &app,
         &cookie,
-        "POST",
-        &format!("/api/v1/agent/operations/{op}/verify"),
-        None,
+        &pid,
+        serde_json::json!({ "kind": "startOutput", "outputId": spare }),
     )
     .await;
     assert_eq!(verified["status"], "verificationFailed", "{verified}");
-    let gate = |name: &str| {
-        verified["verificationResult"]["gates"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|gate| gate["gate"] == name)
-            .unwrap_or_else(|| panic!("no {name} gate: {verified}"))
-            .clone()
-    };
-    assert_eq!(gate("desiredState")["passed"], true);
-    assert_eq!(gate("deliveryFloor")["passed"], false);
+    assert_eq!(gate(&verified, "outputsRunning")["passed"], false);
     assert_eq!(
-        gate("deliveryFloor")["detail"],
-        "0 of 1 wanted outputs deliver (floor 0.95)"
+        gate(&verified, "outputsRunning")["detail"],
+        "0 of 1 outputs the change set running are running"
     );
-    assert_eq!(gate("newCriticalAlerts")["passed"], true);
-    assert_eq!(gate("capacityState")["passed"], true);
+    assert_eq!(gate(&verified, "newCriticalAlerts")["passed"], true);
+    assert_eq!(gate(&verified, "capacityState")["passed"], true);
 }

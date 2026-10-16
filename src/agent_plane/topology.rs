@@ -92,17 +92,21 @@ pub(super) fn topology_diff(
 }
 
 fn apply<'a>(wanted: &mut Vec<Wanted<'a>>, stored: &[&'a Output], change: &'a ProposedChange) {
-    let target = change.output_id.as_deref();
+    // Trimmed as the apply trims them (`prepare_add_output`, `prepare_update_output`).
+    let target = change.output_id.as_deref().map(str::trim);
+    let desired = change.desired_state.as_deref().map(str::trim);
+    let url = change.url.as_deref().map(str::trim);
     let position = |wanted: &[Wanted]| {
         target.and_then(|id| wanted.iter().position(|output| output.id == Some(id)))
     };
     match change.kind.as_str() {
         "addOutput" => {
-            if change.desired_state.as_deref() == Some("running")
-                && let (Some(config), Some(url)) = (&change.config, &change.url)
+            if desired == Some("running")
+                && let (Some(config), Some(url)) = (&change.config, url)
             {
                 wanted.push(Wanted {
-                    id: None,
+                    // An explicit id lets a later change in the request find it.
+                    id: target,
                     config,
                     url,
                 });
@@ -111,7 +115,7 @@ fn apply<'a>(wanted: &mut Vec<Wanted<'a>>, stored: &[&'a Output], change: &'a Pr
         "updateOutput" => {
             // An update that sets a stopped output running starts it.
             if position(wanted).is_none()
-                && change.desired_state.as_deref() == Some("running")
+                && desired == Some("running")
                 && let Some(output) = stored
                     .iter()
                     .find(|output| Some(output.id.as_str()) == target)
@@ -126,10 +130,10 @@ fn apply<'a>(wanted: &mut Vec<Wanted<'a>>, stored: &[&'a Output], change: &'a Pr
             if let Some(config) = &change.config {
                 wanted[at].config = config;
             }
-            if let Some(url) = &change.url {
+            if let Some(url) = url {
                 wanted[at].url = url;
             }
-            if change.desired_state.as_deref() == Some("stopped") {
+            if desired == Some("stopped") {
                 wanted.remove(at);
             }
         }
@@ -360,6 +364,18 @@ mod tests {
         assert!(diff.before.is_empty());
         assert_eq!(diff.after.len(), 1);
         assert_eq!(diff.after[0].protocol, EgressProtocol::Rtmp);
+    }
+
+    #[test]
+    fn an_explicit_add_id_is_found_by_a_later_change_and_values_are_trimmed() {
+        let mut first = add(OutputConfig::source(), " srt://h:1 ", " running ");
+        first.output_id = Some("new".to_string());
+        let stop = change("stopOutput", Some("new"));
+        let added = topology_diff(&request(vec![first.clone()]), &[], None).unwrap();
+        assert_eq!(total(&added.after), 1, "a trimmed running add counts");
+        assert_eq!(added.after[0].protocol, EgressProtocol::Srt);
+        let stopped = topology_diff(&request(vec![first, stop]), &[], None).unwrap();
+        assert!(stopped.after.is_empty(), "{stopped:?}");
     }
 
     #[test]

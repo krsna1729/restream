@@ -137,7 +137,7 @@ export interface Gate {
 
 const GATE_LABEL: Record<VerifyGate["gate"], string> = {
   desiredState: "Desired state converged",
-  deliveryFloor: "Delivery floor",
+  outputsRunning: "Outputs it started are running",
   newCriticalAlerts: "No new critical alerts",
   capacityState: "Capacity state healthy",
 };
@@ -214,19 +214,20 @@ export function topologyLines(diff: TopologyDiff): TopologyLine[] {
 }
 
 /** What the change adds for the capacity scenario, which prices additions
- * only: removals are reported, not credited. */
+ * only: removals are reported, not credited. Counted per stage and protocol,
+ * so an add and a removal elsewhere do not cancel out. */
 export function scenarioLoad(diff: TopologyDiff): {
   readonly addOutputs: number;
   readonly addStages: number;
   readonly removedOutputs: number;
 } {
-  const total = (rows: TopologyDiff["before"]) => rows.reduce((sum, row) => sum + row.outputs, 0);
-  const change = total(diff.after) - total(diff.before);
-  return {
-    addOutputs: Math.max(0, change),
-    addStages: diff.addedStages.length,
-    removedOutputs: Math.max(0, -change),
-  };
+  let addOutputs = 0;
+  let removedOutputs = 0;
+  for (const line of topologyLines(diff)) {
+    addOutputs += Math.max(0, line.after - line.before);
+    removedOutputs += Math.max(0, line.before - line.after);
+  }
+  return { addOutputs, addStages: diff.addedStages.length, removedOutputs };
 }
 
 export interface TimelineStep {

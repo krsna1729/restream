@@ -1,13 +1,11 @@
 //! The fixed gates an applied change must pass to be verified. The caller
 //! measures; these judge, so each rule has one place and one test.
 
+use std::collections::HashSet;
+
 use serde::Serialize;
 
-use crate::capacity::{CapacitySnapshot, FlowStatus};
-/// The engine's one delivery floor, the share of wanted-running outputs on
-/// the changed pipelines that must deliver: the same floor feed delivery
-/// and Monitor judge by.
-use crate::media::egress::delivery::DELIVERY_FLOOR;
+use crate::alerts::{Alert, Severity};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,19 +24,32 @@ pub fn desired_state(passed: usize, checks: usize) -> VerifyGate {
     }
 }
 
-/// Of the outputs the changed pipelines want running, at least
-/// [`DELIVERY_FLOOR`] deliver. None wanted passes: nothing is short.
-pub fn delivery_floor(wanted: usize, delivering: usize) -> VerifyGate {
-    let share = if wanted == 0 {
-        1.0
-    } else {
-        delivering as f64 / wanted as f64
-    };
+/// Every output the change set running is running. A share of running
+/// outputs is not the engine's per-leaf delivery ratio, so it borrows no
+/// floor: one output that did not come up fails the gate (verification can
+/// run again once it connects).
+pub fn outputs_running(wanted: usize, running: usize) -> VerifyGate {
     VerifyGate {
-        gate: "deliveryFloor",
-        passed: share >= DELIVERY_FLOOR,
-        detail: format!("{delivering} of {wanted} wanted outputs deliver (floor {DELIVERY_FLOOR})"),
+        gate: "outputsRunning",
+        passed: running >= wanted,
+        detail: format!("{running} of {wanted} outputs the change set running are running"),
     }
+}
+
+/// The ids of the critical alerts on the changed pipelines: a fault on
+/// another pipeline, or engine-wide, is not this change's result.
+pub fn critical_ids_on(alerts: &[Alert], changed: &HashSet<String>) -> Vec<String> {
+    alerts
+        .iter()
+        .filter(|alert| {
+            alert.severity == Severity::Critical
+                && alert
+                    .pipeline_id
+                    .as_ref()
+                    .is_some_and(|pipeline| changed.contains(pipeline))
+        })
+        .map(|alert| alert.id.clone())
+        .collect()
 }
 
 /// No critical alert open now that was not open just before the apply. By
@@ -64,19 +75,20 @@ pub fn new_critical_alerts(before: &[String], after: &[String]) -> VerifyGate {
     }
 }
 
-/// The host has headroom: the measured flow is healthy and the hottest
-/// service center, on the priors, stays under the safe threshold.
-pub fn capacity_state(snapshot: &CapacitySnapshot, safe_utilization: f64) -> VerifyGate {
-    let utilization = f64::from(snapshot.projected_utilization);
-    let passed = snapshot.flow.status == FlowStatus::Healthy && utilization < safe_utilization;
+/// The change did not push the host past its safe utilization: the hottest
+/// service center on the calibration priors, before the apply and now. A
+/// host already past it before the change passes, so a change that sheds
+/// load can verify; the measured flow of the outputs the change set running
+/// is the delivery floor's to judge.
+pub fn capacity_state(before: f32, after: f32, safe_utilization: f64) -> VerifyGate {
+    let (before, after) = (f64::from(before), f64::from(after));
     VerifyGate {
         gate: "capacityState",
-        passed,
+        passed: after < safe_utilization || before >= safe_utilization,
         detail: format!(
-            "{:?} flow; hottest center {:?} at {:.0}% (safe below {:.0}%)",
-            snapshot.flow.status,
-            snapshot.hottest_center,
-            utilization * 100.0,
+            "hottest center {:.0}% before, {:.0}% now (safe below {:.0}%)",
+            before * 100.0,
+            after * 100.0,
             safe_utilization * 100.0
         ),
     }
@@ -85,16 +97,13 @@ pub fn capacity_state(snapshot: &CapacitySnapshot, safe_utilization: f64) -> Ver
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capacity::{CapacityLimits, CapacityModel, Workload};
 
     #[test]
-    fn delivery_floor_fails_one_short_of_the_floor() {
-        // 19 of 20 is 0.95: on the floor.
-        assert!(delivery_floor(20, 19).passed);
-        // 18 of 20 is 0.90: under it.
-        assert!(!delivery_floor(20, 18).passed);
-        // A pipeline that wants nothing running is not short.
-        assert!(delivery_floor(0, 0).passed);
+    fn one_output_that_did_not_come_up_fails() {
+        assert!(outputs_running(3, 3).passed);
+        assert!(!outputs_running(3, 2).passed);
+        // A change that set nothing running (a stop, a removal) is not short.
+        assert!(outputs_running(0, 0).passed);
     }
 
     #[test]
@@ -109,6 +118,37 @@ mod tests {
         assert!(new_critical_alerts(&[], &[]).passed);
     }
 
+    fn alert(id: &str, severity: Severity, pipeline: Option<&str>) -> Alert {
+        Alert {
+            id: id.to_string(),
+            severity,
+            scope: crate::alerts::Scope::Pipeline,
+            pipeline_id: pipeline.map(str::to_string),
+            stage_id: None,
+            output_id: None,
+            title: String::new(),
+            cause: String::new(),
+            evidence: Vec::new(),
+            recommended_action: String::new(),
+            generated_at: String::new(),
+            first_seen: None,
+            last_seen: None,
+            diagnosis: None,
+        }
+    }
+
+    #[test]
+    fn only_critical_alerts_on_the_changed_pipelines_count() {
+        let changed = HashSet::from(["a".to_string()]);
+        let alerts = [
+            alert("a:crit", Severity::Critical, Some("a")),
+            alert("a:warn", Severity::Warning, Some("a")),
+            alert("b:crit", Severity::Critical, Some("b")),
+            alert("engine:crit", Severity::Critical, None),
+        ];
+        assert_eq!(critical_ids_on(&alerts, &changed), ["a:crit"]);
+    }
+
     #[test]
     fn desired_state_needs_every_change() {
         assert!(desired_state(2, 2).passed);
@@ -116,20 +156,11 @@ mod tests {
     }
 
     #[test]
-    fn capacity_fails_on_a_hot_projection_or_an_unhealthy_flow() {
-        let model = CapacityModel {
-            limits: CapacityLimits::from_parallelism(4),
-            safe_utilization: 0.8,
-        };
-        let idle = model.project(Workload::default());
-        assert!(capacity_state(&idle, 0.8).passed);
-
-        let mut hot = idle;
-        hot.projected_utilization = 0.85;
-        assert!(!capacity_state(&hot, 0.8).passed);
-
-        let mut stalled = idle;
-        stalled.flow.status = FlowStatus::Saturated;
-        assert!(!capacity_state(&stalled, 0.8).passed);
+    fn capacity_fails_only_when_the_change_crosses_the_safe_threshold() {
+        assert!(capacity_state(0.5, 0.7, 0.8).passed);
+        assert!(!capacity_state(0.7, 0.85, 0.8).passed);
+        // Already past it: shedding load (or not) cannot be blamed on the change.
+        assert!(capacity_state(0.9, 0.85, 0.8).passed);
+        assert!(capacity_state(0.9, 0.95, 0.8).passed);
     }
 }

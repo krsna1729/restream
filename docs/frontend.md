@@ -307,8 +307,9 @@ protocol, before and after, marking a stage the change starts and an add
 that reuses a stage) and, when the change adds outputs or stages, the
 capacity scenario (`/capacity/scenario`) for those additions, before and
 after on the calibration priors (removals are counted, not credited). The
-engine's four fixed gates decide "verified" (desired state, the engine's
-delivery floor 0.95, no new critical alert since the apply, capacity healthy); the per-change checks are
+engine's four fixed gates decide "verified" (desired state, the outputs it
+started are running, no new critical alert on the changed pipelines since the
+apply, and the change did not push the host past its safe utilization); the per-change checks are
 listed under them, and the alert delta and active graph nodes are shown as
 observations. The operation card's convergence timeline merges the audit
 events and each output change the apply made, in time order from creation,

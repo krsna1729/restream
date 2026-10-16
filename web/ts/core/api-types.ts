@@ -471,7 +471,7 @@ export type OperationStatus =
 
 /** A fixed verification gate; all four must pass for `verified`. */
 export interface VerifyGate {
-  gate: "desiredState" | "deliveryFloor" | "newCriticalAlerts" | "capacityState";
+  gate: "desiredState" | "outputsRunning" | "newCriticalAlerts" | "capacityState";
   passed: boolean;
   detail: string;
 }

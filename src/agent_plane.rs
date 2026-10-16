@@ -27,7 +27,8 @@ pub use catalog::{
 };
 pub use topology::{TopologyDiff, TopologyRow};
 pub use verify_gates::{
-    VerifyGate, capacity_state, delivery_floor, desired_state, new_critical_alerts,
+    VerifyGate, capacity_state, critical_ids_on, desired_state, new_critical_alerts,
+    outputs_running,
 };
 
 #[derive(Debug, Clone, Serialize)]

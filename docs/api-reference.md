@@ -560,9 +560,9 @@ Verification (`verificationResult`) is decided by four fixed `gates`, each
 | Gate | Passes when |
 |---|---|
 | `desiredState` | every requested change reached its state (the per-change `checks`) |
-| `deliveryFloor` | at least the engine's delivery floor (0.95, the one feed delivery uses) of the outputs the changed pipelines want running deliver (none wanted passes) |
-| `newCriticalAlerts` | no critical alert is open that was not open just before the apply (`preApplyCriticalAlertIds`, taken when the apply starts; by id, so one clearing does not hide a new one) |
-| `capacityState` | the measured flow is healthy and the hottest service center, on the calibration priors, is under the safe utilization (0.8) |
+| `outputsRunning` | every output the change set running is running (outputs it did not touch are not judged; a change that starts nothing passes) |
+| `newCriticalAlerts` | no critical alert on the changed pipelines is open that was not open as the apply started (`preApplyCriticalAlertIds`; by id, so one clearing does not hide a new one; other pipelines and engine-wide alerts are not judged) |
+| `capacityState` | the change did not take the hottest service center on the calibration priors from below the safe utilization (0.8) to at or above it (`preApplyProjectedUtilization` against now; a host already past it passes, so a change that sheds load can verify) |
 
 `graphConvergence` and `incidentDelta` (all alerts) are reported, not judged.
 

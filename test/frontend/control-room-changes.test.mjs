@@ -74,7 +74,7 @@ test("the engine's fixed gates decide; per-change checks and alerts are not gate
     op("verificationFailed", {
       gates: [
         { gate: "desiredState", passed: true, detail: "1 of 1" },
-        { gate: "deliveryFloor", passed: false, detail: "0 of 1" },
+        { gate: "outputsRunning", passed: false, detail: "0 of 1" },
       ],
       checks: [{ kind: "addOutput", outputId: "o9", passed: true, reason: "stopped" }],
       incidentDelta: { delta: 2 },
@@ -143,6 +143,20 @@ test("the scenario prices only what the change adds; removals are reported, not 
     addStages: 0,
     removedOutputs: 3,
   });
+  // One added on a new stage, one removed elsewhere: both counted, not netted.
+  assert.deepEqual(
+    scenarioLoad(
+      diff(
+        [{ stage: "source", protocol: "srt", outputs: 2 }],
+        [
+          { stage: "source", protocol: "srt", outputs: 1 },
+          { stage: "video:720p", protocol: "rtmp", outputs: 1 },
+        ],
+        ["video:720p"],
+      ),
+    ),
+    { addOutputs: 1, addStages: 1, removedOutputs: 1 },
+  );
 });
 
 const T0 = Date.parse("2026-10-16T10:00:00Z");

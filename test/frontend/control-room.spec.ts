@@ -730,7 +730,7 @@ test("changes: an operation survives a reload, and a verification that failed ca
     await expect(operation.getByRole("table", { name: "Per-change checks" })).toContainText("pendingInput");
     // The fixed gates say why: nothing on the pipeline delivers yet.
     await expect(
-      operation.getByRole("table", { name: "Verification gates" }).getByRole("row", { name: /Delivery floor/ }),
+      operation.getByRole("table", { name: "Verification gates" }).getByRole("row", { name: /Outputs it started are running/ }),
     ).toContainText("failed");
     await expect(operation.getByLabel("Live convergence")).toContainText("0 of 1 changed outputs converged");
     await expect(operation.getByRole("button", { name: "Verify again" })).toBeVisible();

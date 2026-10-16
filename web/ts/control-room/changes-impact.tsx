@@ -132,7 +132,14 @@ export function Convergence(props: { operation: ChangeOperation; live: LiveSnaps
       <ol className="text-xs" aria-label="Convergence timeline">
         {steps.map((step, index) => (
           <li key={index} className="grid grid-cols-[5rem_1fr] gap-2">
-            <span className="tabular-nums opacity-70">{offset(step.offsetMs)}</span>
+            {/* The offset reads the sequence; the wall-clock time stays on hover
+                and on the first step, so a later reader sees when it ran. */}
+            <span
+              className="tabular-nums opacity-70"
+              title={new Date(step.atMs).toISOString()}
+            >
+              {index === 0 ? new Date(step.atMs).toISOString().slice(11, 19) : offset(step.offsetMs)}
+            </span>
             <span>{step.label}</span>
           </li>
         ))}

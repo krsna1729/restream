@@ -131,8 +131,13 @@ pub async fn agent_operation_apply_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    let alerts = current_agent_alerts(&state).await;
-    let record = match state.agent_execution.start_apply(&operation_id, alerts) {
+    let changed = state
+        .agent_execution
+        .get(&operation_id)
+        .map(|record| changed_pipelines(&record.request))
+        .unwrap_or_default();
+    let baseline = apply_baseline(&state, &changed).await;
+    let record = match state.agent_execution.start_apply(&operation_id, baseline) {
         Ok(record) => record,
         Err(err) => return operation_store_error(err),
     };
@@ -629,27 +634,22 @@ async fn verify_operation(
         .flatten()
         .filter(|node| node["active"].as_bool().unwrap_or(false))
         .count();
-    let pre = record.pre_apply_alerts.clone().unwrap_or_default();
-    let post = alert_baseline(&alerts);
-    let alert_delta = post.total as isize - pre.total as isize;
+    let changed = changed_pipelines(&record.request);
+    let before = record.baseline.clone().unwrap_or_default();
+    let after_critical = crate::agent_plane::critical_ids_on(&alerts, &changed);
+    let alert_delta = alerts.len() as isize - before.alerts_total as isize;
 
-    // Delivery on the pipelines the operation changed, after the change.
-    let changed_pipelines: std::collections::HashSet<&str> = record
-        .request
-        .proposed_changes
+    // Delivery of the outputs this operation set running; outputs it did
+    // not touch, already down or not, are not its result.
+    let touched: std::collections::HashSet<&str> = record
+        .state_transitions
         .iter()
-        .filter_map(|change| {
-            change
-                .pipeline_id
-                .as_deref()
-                .or(record.request.pipeline_id.as_deref())
-        })
+        .filter(|transition| !transition["to"].is_null())
+        .filter_map(|transition| transition["outputId"].as_str())
         .collect();
     let wanted: Vec<&crate::application::models::Output> = outputs
         .iter()
-        .filter(|output| {
-            changed_pipelines.contains(output.pipeline_id.as_str()) && output.wants_running()
-        })
+        .filter(|output| touched.contains(output.id.as_str()) && output.wants_running())
         .collect();
     let delivering = wanted
         .iter()
@@ -665,10 +665,11 @@ async fn verify_operation(
         .count();
     let gates = [
         crate::agent_plane::desired_state(passed_checks, checks.len()),
-        crate::agent_plane::delivery_floor(wanted.len(), delivering),
-        crate::agent_plane::new_critical_alerts(&pre.critical_ids, &post.critical_ids),
+        crate::agent_plane::outputs_running(wanted.len(), delivering),
+        crate::agent_plane::new_critical_alerts(&before.critical_ids, &after_critical),
         crate::agent_plane::capacity_state(
-            &state.engine.capacity_snapshot().await,
+            before.projected_utilization,
+            state.engine.capacity_priors().await.projected_utilization,
             crate::capacity::CapacityModel::default().safe_utilization,
         ),
     ];
@@ -688,14 +689,14 @@ async fn verify_operation(
             "activeNodes": active_graph_nodes,
         },
         "incidentDelta": {
-            "preApplyAlertCount": pre.total,
-            "postApplyAlertCount": post.total,
+            "preApplyAlertCount": before.alerts_total,
+            "postApplyAlertCount": alerts.len(),
             "delta": alert_delta,
         },
         "checks": checks,
         "gates": gates,
         "explanation": if success {
-            "Every gate passed: the changes reached their state, delivery holds the floor, no new critical alert, and the host has headroom."
+            "Every gate passed: the changes reached their state, the outputs it set running run, no new critical alert on the changed pipelines, and the change did not push the host past its safe utilization."
         } else {
             "One or more gates failed; each gate says why."
         },
@@ -729,7 +730,30 @@ fn change_output_id(
 }
 
 #[cfg(feature = "agent-execution")]
-async fn current_agent_alerts(state: &AppState) -> crate::agent_execution::AlertBaseline {
+fn changed_pipelines(
+    request: &crate::agent_core::OperationCreateRequest,
+) -> std::collections::HashSet<String> {
+    request
+        .proposed_changes
+        .iter()
+        .filter_map(|change| {
+            change
+                .pipeline_id
+                .as_deref()
+                .or(request.pipeline_id.as_deref())
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+/// The engine as an apply starts: every open alert (for the reported
+/// delta), the critical ones on the changed pipelines, and the priors'
+/// hottest center.
+#[cfg(feature = "agent-execution")]
+async fn apply_baseline(
+    state: &AppState,
+    changed: &std::collections::HashSet<String>,
+) -> crate::agent_execution::ApplyBaseline {
     let catalog = state.agent_service.load_pipeline_output_catalog().await;
     let pipeline_ids = catalog
         .pipelines
@@ -737,18 +761,11 @@ async fn current_agent_alerts(state: &AppState) -> crate::agent_execution::Alert
         .map(|pipeline| pipeline.id.clone())
         .collect::<Vec<_>>();
     let (_, health) = agent_health_snapshot(state, &pipeline_ids).await;
-    alert_baseline(&alerts::derive_alerts(&health))
-}
-
-#[cfg(feature = "agent-execution")]
-fn alert_baseline(alerts: &[alerts::Alert]) -> crate::agent_execution::AlertBaseline {
-    crate::agent_execution::AlertBaseline {
-        total: alerts.len(),
-        critical_ids: alerts
-            .iter()
-            .filter(|alert| alert.severity == alerts::Severity::Critical)
-            .map(|alert| alert.id.clone())
-            .collect(),
+    let alerts = alerts::derive_alerts(&health);
+    crate::agent_execution::ApplyBaseline {
+        alerts_total: alerts.len(),
+        critical_ids: crate::agent_plane::critical_ids_on(&alerts, changed),
+        projected_utilization: state.engine.capacity_priors().await.projected_utilization,
     }
 }
 
