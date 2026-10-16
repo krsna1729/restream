@@ -23,6 +23,16 @@ items).
 - [Q-050 inputs and stages in runtime state](#q-050-architecture-sonnet-project-inputs-and-stages-into-the-runtime-state)
 - [Q-051 bounded ingress transfer pump](#q-051-architecture-sonnet-bound-the-ingress-transfer-pump-per-owner-visit)
 - [Q-053 external FFmpeg process topology](#q-053-architecture-sonnet-external-ffmpeg-process-topology-per-rendition)
+- [Q-054 control-room Pipelines gaps](#q-054-frontend-sonnet-control-room-pipelines-protocol-mix-shared-stage-efficiency-filter-cards)
+- [Q-055 control-room Operate gaps](#q-055-frontend-sonnet-control-room-operate-srt-group-inspector-execution-owner-graph-tabs)
+- [Q-056 control-room Inspect gaps](#q-056-frontend-sonnet-control-room-inspect-node-metric-cards-bottleneck-judgement-global-map)
+- [Q-057 control-room Fleet gaps](#q-057-frontend-sonnet-control-room-fleet-shared-work-open-incidents-fleet-table-headroom-history)
+- [Q-058 control-room Monitor gaps](#q-058-frontend-sonnet-control-room-monitor-input-transport-shared-path-outlier-incident-cursor-pausecompare)
+- [Q-059 control-room Media gaps](#q-059-frontend-sonnet-control-room-media-recording-timeline-use-as-source)
+- [Q-060 control-room Changes gaps](#q-060-frontend-sonnet-control-room-changes-numeric-impact-topology-diff-convergence-timeline-gates)
+- [Q-061 control-room Incidents gaps](#q-061-frontend-opus-control-room-incidents-correlation-chart-evidence-confidence-time-range-export)
+- [Q-062 control-room Capacity gaps](#q-062-frontend-opus-control-room-capacity-calibration-provenance-scenario-controls-topology-diff)
+- [Q-063 control-room nested-path boot](#q-063-frontend-sonnet-control-room-boots-on-nested-unknown-paths)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -366,3 +376,159 @@ items).
 - Status: open (Filed: 2026-10-15 by claude; the cost measurement closed
   2026-10-15. The former board item "FFmpeg A/B: external per-stage vs external
   multi-output" cannot be run as written: the second arm does not exist).
+
+### Q-054 [frontend] [sonnet] Control room Pipelines: protocol mix, shared-stage efficiency, filter cards
+- Goal: the Pipelines workspace shows the three mockup structures
+  (`docs/design/control-room-mockup.html`) that have no shipped counterpart.
+  Q-054 to Q-062 are the 2026-10-15 mockup-gap audit; the user asked for all
+  of them, one PR per workspace, in Q-number order.
+- Sources: the protocol mix and the needs-attention card derive from the
+  runtime state (`OutputState.protocol`, `diagnosis`). Shared stages
+  (`delivery[]` on `/api/v1/pipelines/{id}/telemetry`) and warm standby
+  (`forwardingState` on `/api/v1/pipelines/{pipeline_id}/inputs`) exist only
+  per pipeline. Bonding (`publisher.quality.srtBonded`) and recording
+  (`recording.active`) arrive fleet-wide in one `/api/v1/engine/health`, but
+  that is the expensive view (`api/health.rs`) and the page already has the
+  state stream. So the runtime state gains all four: the output's stage, the
+  standby-input count, the recording flag and the bonded flag.
+- Gates: node tests for the derivations; one Playwright case per structure.
+- Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
+
+### Q-055 [frontend] [sonnet] Control room Operate: SRT-group inspector, execution owner, graph tabs
+- Goal: Operate gets the SRT-group inspector, the execution-owner and evidence
+  subsection, and the graph Destinations/Timeline/Preview tabs.
+- Sources (all exist; the tabs are UI only): the live output `quality`
+  (`EgressRuntimeView.quality`, `api_runtime_views/common.rs:104`) and
+  `diagnosis` from the runtime state; `egressFabricShards` on
+  `/api/v1/engine/health` (`api_runtime_views/status.rs`);
+  `/api/v1/events?pipeline_id` for Timeline; `/hls/{id}/master.m3u8` for
+  Preview. Per-group "hottest shard" is engine-wide only
+  (`hottestShardUtil`); show it as engine-wide, not per group.
+- Gates: node tests for any new model function; Playwright for each tab.
+- Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
+
+### Q-056 [frontend] [sonnet] Control room Inspect: node metric cards, bottleneck judgement, global map
+- Goal: Inspect shows metric cards for the selected node, a bottleneck
+  judgement, and an action that opens the runtime-wide resource map.
+- Sources: node `cpuPercent`, `memory`, `threads`, `metrics`, `hotspots`
+  (`api_runtime_views/resource_map.rs:313-407`); `GET
+  /api/v1/engine/resource-map` without `pipeline_id` for the global map.
+- Missing: a node-level bottleneck verdict. Only `hotspots[]` and the
+  engine-wide `FlowDiagnosis.status` exist. Add the verdict to the resource
+  map node from the capacity model, or show no judgement; the page must not
+  invent one.
+- Gates: a Rust unit test for the verdict rule; the API drift check; Playwright.
+- Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
+
+### Q-057 [frontend] [sonnet] Control room Fleet: shared work, open incidents, fleet table, headroom history
+- Goal: Fleet shows shared-work and open-incident metrics, a fleet table, and
+  a headroom history.
+- Sources: `uniqueStages`/`activeLeaves` in the capacity snapshot
+  (`capacity.rs:150-151`, `/metrics/system`); `/api/v1/overview.alertCount`
+  `{critical, warning}` (there is no incident entity; the metric is their
+  sum);
+  `/api/v1/pipelines` with `/api/v1/engine/health` for the table. Per-row
+  limiting center and cost have no per-pipeline field: the limiting center is
+  engine-wide (`hottestCenter`). Leave those columns out or add the fields.
+- History: the engine keeps no metric history, only the current sample
+  (`capacity.rs`); the runtime-state delta ring (`runtime_state/hub.rs`) is
+  stream resume, not samples. Decided: one bounded page-level ring beside
+  `web/ts/control-room/store.ts`, fed by the store's 2 s sample, holding only
+  fleet-wide signals: headroom (`/metrics/system` capacity), delivery
+  (engine telemetry), and degraded-output counts by layer from the runtime
+  state's diagnoses (the store has no alert poll; diagnoses feed the alerts).
+  The ring lives while a view is subscribed, so it starts empty at page load
+  and covers only this session. Fleet headroom
+  history (here), the Monitor incident cursor (Q-058) and the Incidents
+  correlation chart (Q-061) read it; no backend history store. Monitor keeps
+  its own per-pipeline series (`monitor.tsx` `Trends` samples the pipeline's
+  graph and resource-map queries, which the store does not carry), so per-
+  pipeline samples do not go into the shared ring.
+- Gates: node tests for the ring bound and eviction; Playwright for the table.
+- Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
+
+### Q-058 [frontend] [sonnet] Control room Monitor: input transport, shared path, outlier, incident cursor, Pause/Compare
+- Goal: Monitor shows input transport quality, the shared media path, the
+  destination outlier, an incident cursor across its series, and Pause/Compare.
+- Sources: `publisher.quality` on `/api/v1/engine/health`; `sourceRing`,
+  `stages` and reader `overflowCount` on `/api/v1/pipelines/{id}/telemetry`;
+  per-output `quality.deliveryRatio` and telemetry `delivery[].{ratioMin,jain}`.
+  The mockup's "blocked AVIO writes" is out of scope: the stage input queue
+  was deleted in #327, and the remaining `MemoryQueue` counter
+  (`media/avio.rs`) serves recording only.
+- Incident cursor: marks diagnosis onsets from the shared fleet ring (Q-057) on
+  Monitor's own per-pipeline series. Pause freezes the page window; Compare
+  overlays two windows the page already holds. No new route.
+- Gates: node tests for the outlier pick and window freeze; Playwright.
+- Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
+
+### Q-059 [frontend] [sonnet] Control room Media: recording timeline, use as source
+- Goal: Media shows a recording timeline and a "use as source" action.
+- Sources: use as source exists (`POST /api/v1/ingests` or `PUT
+  /api/v1/pipelines/{id}/file-ingest`). The timeline is missing: event kinds
+  (`events.rs`) cover ingest, stage and egress only, and the library carries
+  only the current `conversionStatus`/`conversionUpdatedAt`. Needs recording
+  start/stop/finalize events on `/api/v1/events`.
+- Gates: a Rust test that the recording lifecycle emits each event once;
+  the API drift check; Playwright.
+- Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
+
+### Q-060 [frontend] [sonnet] Control room Changes: numeric impact, topology diff, convergence timeline, gates
+- Goal: Change Studio shows numeric impact, a topology diff, a convergence
+  timeline, and fixed verification gates.
+- Sources: topology diff from `POST /api/v1/agent/graph-diff-preview`
+  (`GraphPreview`); convergence timeline from `GET
+  /api/v1/agent/operations/{id}` (`stateTransitions`, `progressSnapshots`;
+  in memory, at most 1024 operations, lost on restart). Missing: per-change
+  numeric impact (`ImpactPreview`, `agent_plane.rs:57`, lists affected
+  pipelines, outputs and shared-stage candidates with a summary, but no
+  numbers; derive them from the capacity scenario for the change's added
+  outputs and stages) and the delivery-floor and capacity-state gates in
+  `POST .../verify`, which today returns per-change checks, post-change
+  health, freshness recovery, graph convergence and incident delta.
+- Gates: Rust tests for each new verify gate (failing case included); API
+  drift check; Playwright.
+- Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
+
+### Q-061 [frontend] [opus] Control room Incidents: correlation chart, evidence confidence, time range, export
+- Goal: Incidents shows a correlation chart, per-signal evidence confidence,
+  a time range, and an export.
+- Sources: all four are missing. The correlation chart reads the shared fleet
+  ring (Q-057), which covers only the current page session; a time range
+  before it needs the `since` added below.
+  Alerts carry `evidence: string[]` only; confidence needs a
+  measured/derived marker per signal from the evidence engine. Neither
+  `/api/v1/alerts` nor `/api/v1/events` takes `since`. There is no export
+  route (the SBOM is the only attachment).
+- Gates: Rust tests for `since` bounds and the confidence rule; API drift
+  check; Playwright for range and export.
+- Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
+
+### Q-062 [frontend] [opus] Control room Capacity: calibration provenance, scenario controls, topology diff
+- Goal: Capacity shows calibration provenance, pipeline/protocol/encoding
+  scenario controls, and a topology-diff entry.
+- Sources: the topology diff exists (`graph-diff-preview`). Provenance is
+  missing: the scenario carries only `observeOnly`/`flowMeasured`, and
+  the calibrated `CapacityLimits` (`capacity.rs:40-50`, six per-center
+  ceilings) appear in no response, and provenance (model version, prior
+  source) does not exist and must be added.
+  Scenario controls are missing: `/api/v1/capacity/scenario` takes only
+  `add_outputs`/`add_stages`, and the model takes no protocol or pipeline
+  (`docs/api-reference.md`). Adding them changes the capacity model, not
+  only the API.
+- Gates: Rust tests that each control changes the predicted demand as the
+  model states; API drift check; Playwright.
+- Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
+
+### Q-063 [frontend] [sonnet] Control room boots on nested unknown paths
+- Goal: any served path boots the control room.
+- Evidence: a nested unknown path (`/a/b`) serves `index.html`, whose
+  relative asset URLs (`js/control-room/main.js`, `base-path.js`,
+  `output.css`) then resolve under `/a/`, so the page stays blank. `/`,
+  `/index.html` and single-segment paths work (#333 test "a stale deep path
+  still opens the workspace in the query"). The app never links to such a
+  path; pre-existing.
+- Fix: asset URLs from `window.__RESTREAM_BASE_PATH__`, or a redirect to the
+  base path.
+- Gates: a Playwright case on `/a/b?w=inspect`.
+- Status: open (Filed: 2026-10-15 by claude, found while testing #333).
