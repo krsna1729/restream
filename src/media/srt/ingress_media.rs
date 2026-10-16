@@ -265,16 +265,15 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
         }
         let media = &mut slot.media;
         let len = payload.len() as u64;
+        let now_ms = MediaEngine::now_epoch_ms();
         crate::media::engine::note_media_bytes(
             &media.bytes_received,
             &media.first_media_ms,
             len,
-            MediaEngine::now_epoch_ms(),
+            now_ms,
         );
         media.ingest_metrics.record_in(len);
-        media
-            .last_progress_ms
-            .store(MediaEngine::now_epoch_ms(), Ordering::Relaxed);
+        media.last_progress_ms.store(now_ms, Ordering::Relaxed);
         if media.probe_sent {
             return None;
         }

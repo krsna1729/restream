@@ -21,15 +21,14 @@ impl MediaEngine {
     pub async fn update_ingest_bytes(&self, pipeline_id: &str, bytes: u64) {
         let ingests = self.ingests.active.read().await;
         if let Some(ingest) = ingests.get(pipeline_id) {
+            let now_ms = Self::now_epoch_ms();
             crate::media::engine::note_media_bytes(
                 &ingest.bytes_received,
                 &ingest.first_media_ms,
                 bytes,
-                Self::now_epoch_ms(),
+                now_ms,
             );
-            ingest
-                .last_progress_ms
-                .store(Self::now_epoch_ms(), Ordering::Relaxed);
+            ingest.last_progress_ms.store(now_ms, Ordering::Relaxed);
         }
     }
 

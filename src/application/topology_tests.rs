@@ -249,6 +249,20 @@ fn lifecycle_events_request_the_passes_their_effects_need() {
     let requests = ReconcileRequests::new();
     request_pass_for_event(
         &requests,
+        &EventKind::IngestProbed {
+            pipeline_id: "pipe".into(),
+            protocol: "hls".into(),
+        },
+        grace,
+    );
+    assert!(
+        requests.take_due(Instant::now()),
+        "an output held for the probe starts on the next pass"
+    );
+
+    let requests = ReconcileRequests::new();
+    request_pass_for_event(
+        &requests,
         &EventKind::EgressStarted {
             pipeline_id: "pipe".into(),
             output_id: "out".into(),

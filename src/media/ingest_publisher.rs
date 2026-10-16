@@ -260,16 +260,15 @@ impl SegmentPublisher {
         self.take_probe(target).await;
 
         let read = chunk.len() as u64;
+        let now_ms = MediaEngine::now_epoch_ms();
         crate::media::engine::note_media_bytes(
             &target.bytes_received,
             &target.first_media_ms,
             read,
-            MediaEngine::now_epoch_ms(),
+            now_ms,
         );
         target.metrics.record_in(read);
-        target
-            .last_progress_ms
-            .store(MediaEngine::now_epoch_ms(), Ordering::Relaxed);
+        target.last_progress_ms.store(now_ms, Ordering::Relaxed);
         tokio::task::yield_now().await;
         Ok(())
     }

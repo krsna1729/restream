@@ -806,7 +806,8 @@ output while its pipeline's active ingest has no probe yet
 (`MediaEngine::ingest_tracks_ready`, `OutputStartAction::SkipProbePending`).
 This matters most for HLS push, which registers its input on the playlist, one
 segment before any media. Every probe recorder writes the audio tracks, track
-selection and sequence header before the video/audio metadata that opens the
+selection and sequence header (and SRT resizes the source ring, so an output
+attaches to the sized ring) before the video/audio metadata that opens the
 gate, then emits `ingest.probed`, which wakes the reconciler, so the output
 starts on the next pass. A source whose media never yields a probe starts
 track-less 10 s after its first media byte (longer than a long GOP), counted

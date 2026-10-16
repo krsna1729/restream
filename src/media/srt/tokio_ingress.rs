@@ -429,9 +429,11 @@ impl SrtServer {
     /// the pipeline ring when this input is selected. Returns the replacement
     /// ring for the Owner.
     ///
-    /// The video/audio metadata is written after the audio tracks and the
-    /// track selection: it opens an output's start gate
-    /// (`MediaEngine::ingest_tracks_ready`).
+    /// The video/audio metadata is written last, after the audio tracks, the
+    /// track selection and the ring resize: it opens an output's start gate
+    /// (`MediaEngine::ingest_tracks_ready`), so an output attaches to the
+    /// resized ring rather than migrating to it mid-read, and the codec hint
+    /// lands on the ring the pipeline keeps.
     pub(super) async fn apply_probe(
         &self,
         publisher: &PublisherSession,
@@ -457,15 +459,6 @@ impl SrtServer {
                 )
                 .await;
         }
-        self.engine
-            .update_ingest_session_meta(
-                &publisher.pipeline_id,
-                &publisher.registration,
-                probe.video,
-                first_audio,
-                None,
-            )
-            .await;
         let ring = if self
             .engine
             .is_ingest_session_selected(&publisher.pipeline_id, &publisher.registration)
@@ -477,6 +470,15 @@ impl SrtServer {
         } else {
             None
         };
+        self.engine
+            .update_ingest_session_meta(
+                &publisher.pipeline_id,
+                &publisher.registration,
+                probe.video,
+                first_audio,
+                None,
+            )
+            .await;
         self.engine
             .note_ingest_session_probed(&publisher.registration)
             .await;

@@ -81,9 +81,10 @@ impl ActiveIngest {
 /// clock the output start gate counts its probe grace from.
 ///
 /// Called on the media path (per 64 KiB chunk for HLS push and file ingest,
-/// per packet for RTMP and SRT), so it reuses the bump that is already there:
-/// one comparison of the value `fetch_add` returns, and one
-/// `compare_exchange` in the whole session.
+/// per packet for RTMP and SRT). It reuses the bump that is already there
+/// and the clock read the caller already makes for `last_progress_ms` (pass
+/// that same `now_ms`): one comparison of the value `fetch_add` returns per
+/// call, and one `compare_exchange` in the whole session.
 pub(crate) fn note_media_bytes(
     bytes_received: &AtomicU64,
     first_media_ms: &AtomicU64,
