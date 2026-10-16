@@ -159,7 +159,7 @@ test("the scenario prices only what the change adds; removals are reported, not 
     ),
     { addOutputs: 1, addByProtocol: { rtmp: 1, srt: 0 }, addStages: 1, removedOutputs: 1 },
   );
-  // SRT is priced in datagrams; every other output as a stream.
+  // SRT is priced by its shard sizing prior; every other output as RTMP.
   assert.deepEqual(
     scenarioLoad(
       diff(
