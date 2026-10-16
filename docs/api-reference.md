@@ -789,7 +789,7 @@ costs at most one rebuild per 500 ms):
 
 - `ingest.bonded`: the selected ingest is an SRT group (bonded) connection.
 - `standbyInputs`: connected inputs held in warm standby (connected, not
-  selected).
+  selected). A configured file source running beside the live input counts.
 - `recording`: a recording file is being written.
 - `protocol`: from the URL scheme: `rtmp` (also `rtmps`), `srt`, `hls`,
   `sink`, `pipeline` or `unknown`.

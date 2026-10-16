@@ -188,8 +188,11 @@ pub async fn project(
     pipelines: &[crate::db::PipelineRecord],
     outputs: &[Output],
 ) -> Projection {
-    let active_ingests = engine.ingests.active.read().await.clone();
-    let ingests: HashMap<String, IngestState> = active_ingests
+    let ingests: HashMap<String, IngestState> = engine
+        .ingests
+        .active
+        .read()
+        .await
         .iter()
         .map(|(pipeline_id, ingest)| {
             let metadata = ingest.metadata();
@@ -204,13 +207,13 @@ pub async fn project(
             )
         })
         .collect();
-    // Every connected input session that is not its pipeline's selected one
-    // is a warm standby.
+    // Every connected input session (a configured file source too) that is
+    // not its pipeline's selected one is a warm standby.
     let mut standby: HashMap<String, u32> = HashMap::new();
     for session in engine.ingests.sessions.read().await.values() {
-        let selected = active_ingests
+        let selected = ingests
             .get(&session.pipeline_id)
-            .is_some_and(|active| active.input_id == session.input_id);
+            .is_some_and(|ingest| ingest.input_id == session.input_id);
         if !selected {
             *standby.entry(session.pipeline_id.clone()).or_default() += 1;
         }

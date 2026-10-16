@@ -357,10 +357,10 @@ async fn projection_reports_standby_recording_bonding_and_the_output_stage() {
             },
         )
         .await;
-    engine.recordings.cancel_tokens.write().await.insert(
-        "pipe".to_string(),
-        tokio_util::sync::CancellationToken::new(),
-    );
+    let recording = engine
+        .register_recording("pipe")
+        .await
+        .expect("no recording runs yet");
     let stage = crate::domain::stage::StageKey::new(
         "pipe",
         crate::domain::stage::StageKind::video_preset("720p"),
@@ -393,7 +393,7 @@ async fn projection_reports_standby_recording_bonding_and_the_output_stage() {
     assert_eq!(projection.outputs["idle"].stage, None);
 
     // A cancelled recording token is a recording that has ended.
-    engine.recordings.cancel_tokens.read().await["pipe"].cancel();
+    recording.cancel();
     let projection = project(&engine, &pipelines, &outputs).await;
     assert!(!projection.pipelines["pipe"].recording);
 }
