@@ -14,11 +14,17 @@ import { formatBytes, formatPercent } from "./format.js";
 import {
   formatDuration,
   ingestReadiness,
+  mediaKey,
+  recordingTimeline,
   searchMedia,
+  sourceDraft,
   splitLibrary,
   storedForms,
 } from "./media-model.js";
+import type { TimelineEvent } from "./media-model.js";
+import { PipelineForm } from "./pipeline-form.js";
 import { Freshness, usePolled } from "./polled.js";
+import { PlaceLink, useGo } from "./router.js";
 import type { LiveSnapshot } from "./store.js";
 
 const READINESS_BADGE = {
@@ -42,7 +48,7 @@ export function Media({ live }: { live: LiveSnapshot }) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const files = library.value?.files ?? null;
-  const chosen = files?.find((file) => file.name === selected) ?? null;
+  const chosen = files?.find((file) => mediaKey(file) === selected) ?? null;
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
@@ -71,10 +77,12 @@ export function Media({ live }: { live: LiveSnapshot }) {
           <div className="space-y-4">
             {chosen ? (
               <Asset
-                key={chosen.name}
+                key={mediaKey(chosen)}
                 file={chosen}
+                files={files}
                 onChanged={(name) => {
-                  setSelected(name);
+                  // A recording keeps its key across a rename.
+                  setSelected(name === null ? null : chosen.recordingId ? mediaKey(chosen) : name);
                   library.refresh();
                 }}
               />
@@ -167,14 +175,14 @@ function FileList(props: {
       ) : (
         <ul className="space-y-1" aria-label={props.title}>
           {props.files.map((file) => (
-            <li key={file.name}>
+            <li key={mediaKey(file)}>
               <button
                 type="button"
                 className={`flex w-full flex-wrap items-center gap-2 rounded px-2 py-1 text-left text-sm hover:bg-base-100 ${
-                  file.name === props.selected ? "bg-base-100 font-semibold" : ""
+                  mediaKey(file) === props.selected ? "bg-base-100 font-semibold" : ""
                 }`}
-                aria-pressed={file.name === props.selected}
-                onClick={() => props.onSelect(file.name)}
+                aria-pressed={mediaKey(file) === props.selected}
+                onClick={() => props.onSelect(mediaKey(file))}
               >
                 <span className="min-w-0 flex-1 truncate">{file.name}</span>
                 <ConversionBadge file={file} />
@@ -207,10 +215,15 @@ function ConversionBadge({ file }: { file: MediaFile }) {
   return null;
 }
 
-function Asset(props: { file: MediaFile; onChanged: (name: string | null) => void }) {
+function Asset(props: {
+  file: MediaFile;
+  files: readonly MediaFile[];
+  onChanged: (name: string | null) => void;
+}) {
   const { file } = props;
   const forms = storedForms(file);
   const ingests = file.ingestCount ?? 0;
+  const analysis = useAnalysis(file.name);
   return (
     <section className="card bg-base-200" aria-labelledby="media-asset">
       <div className="card-body gap-3 p-4">
@@ -238,7 +251,8 @@ function Asset(props: { file: MediaFile; onChanged: (name: string | null) => voi
         {file.conversionStatus === "failed" && file.conversionError && (
           <p className="text-sm text-error">{file.conversionError}</p>
         )}
-        <Analysis filename={file.name} />
+        <RecordingTimeline file={file} />
+        <Analysis analysis={analysis} />
         <div className="flex flex-wrap gap-2">
           {file.playName && (
             <a
@@ -259,6 +273,7 @@ function Asset(props: { file: MediaFile; onChanged: (name: string | null) => voi
             Download original
           </a>
         </div>
+        <UseAsSource file={file} files={props.files} analysis={analysis} />
         <Rename file={file} onRenamed={props.onChanged} />
         <Delete file={file} onDeleted={() => props.onChanged(null)} />
       </div>
@@ -267,7 +282,7 @@ function Asset(props: { file: MediaFile; onChanged: (name: string | null) => voi
 }
 
 /** The file's streams and keyframe spacing, probed once when it is selected. */
-function Analysis({ filename }: { filename: string }) {
+function useAnalysis(filename: string): MediaFileAnalysis | null | "failed" {
   const [analysis, setAnalysis] = useState<MediaFileAnalysis | null | "failed">(null);
   useEffect(() => {
     let alive = true;
@@ -278,6 +293,10 @@ function Analysis({ filename }: { filename: string }) {
       alive = false;
     };
   }, [filename]);
+  return analysis;
+}
+
+function Analysis({ analysis }: { analysis: MediaFileAnalysis | null | "failed" }) {
   if (analysis === null) return <p className="text-sm opacity-70">Probing the file…</p>;
   if (analysis === "failed") {
     return <p className="text-sm opacity-70">The engine could not probe this file.</p>;
@@ -309,6 +328,82 @@ function Analysis({ filename }: { filename: string }) {
       </dl>
       <p className="mt-2">{readiness.detail}</p>
     </div>
+  );
+}
+
+const TIMELINE_DOT: Record<TimelineEvent["tone"], string> = {
+  ok: "bg-success",
+  info: "bg-info",
+  error: "bg-error",
+};
+
+/** What happened to a recording, from its persisted session and remux. */
+function RecordingTimeline({ file }: { file: MediaFile }) {
+  const events = recordingTimeline(file);
+  if (events === null) return null;
+  return (
+    <div className="rounded bg-base-100 p-3 text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <b>Recording timeline</b>
+        {file.pipelineId && (
+          <PlaceLink
+            className="link text-xs"
+            place={{ workspace: "operate", pipelineId: file.pipelineId }}
+          >
+            Open its pipeline
+          </PlaceLink>
+        )}
+      </div>
+      <ol className="mt-2 space-y-1" aria-label="Recording timeline">
+        {events.map((event) => (
+          <li key={event.label} className="grid grid-cols-[0.5rem_6rem_1fr] items-center gap-2">
+            <span className={`h-2 w-2 rounded-full ${TIMELINE_DOT[event.tone]}`} />
+            <span className="tabular-nums opacity-70">
+              {event.atMs === null ? "--" : new Date(event.atMs).toLocaleTimeString()}
+            </span>
+            <span className={event.tone === "error" ? "text-error" : undefined}>
+              {event.label}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+/** A new pipeline that plays this file, opened in Operate once it exists.
+ * Offered once the probe is in: whether it needs Live Optimized is set when
+ * the form opens. */
+function UseAsSource(props: {
+  file: MediaFile;
+  files: readonly MediaFile[];
+  analysis: MediaFileAnalysis | null | "failed";
+}) {
+  const [open, setOpen] = useState(false);
+  const go = useGo();
+  if (props.analysis === null) return null;
+  const draft = sourceDraft(
+    props.file,
+    props.analysis === "failed" ? null : ingestReadiness(props.analysis),
+  );
+  if (draft === null) {
+    return <p className="text-sm opacity-70">A file with no video cannot feed a pipeline.</p>;
+  }
+  if (!open) {
+    return (
+      <button type="button" className="btn btn-sm btn-primary" onClick={() => setOpen(true)}>
+        Use as source
+      </button>
+    );
+  }
+  return (
+    <PipelineForm
+      stored={null}
+      files={props.files}
+      keyLocked={false}
+      initial={draft}
+      onSaved={(pipeline) => go({ workspace: "operate", pipelineId: pipeline.id })}
+    />
   );
 }
 

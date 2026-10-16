@@ -270,7 +270,14 @@ judgement against its live GOP target; with fewer than two keyframes the
 engine measures no spacing, so none, or one in a file longer than the
 target, needs Live Optimized); upload, rename and a confirmed
 delete (refused while a pipeline ingests the file); and the media disk from
-`/metrics/system`. System (fleet, `/engine/health` every 10 s): the host
+`/metrics/system`. A file a recording session wrote shows its timeline from
+the persisted session the media list already joins (`recordings` table:
+start, stop and finalize, or the failure, then the browser-MP4 remux; a
+step under way has no time), and stays selected when its `.ts` becomes the
+finalized `.mp4` (rows are selected by session id). "Use as source" opens
+the new-pipeline form with the file as a looping file source, Live
+Optimized when the probe says the GOP needs it, and goes to the new
+pipeline's Operate view. System (fleet, `/engine/health` every 10 s): the host
 checks (a warning first), kernel io_uring and TLS capability, the execution
 classes (running media workers of those configured, RTMP and SRT ingress
 owners, egress fabric shards and FFmpeg children as the engine reports them;
@@ -353,6 +360,7 @@ resource map leaves out, and says so when the engine no longer has the stage.
 Proof: `test/frontend/control-room-fleet.test.mjs`,
 `test/frontend/control-room-fleet-history.test.mjs`,
 `test/frontend/control-room-monitor.test.mjs`,
+`test/frontend/control-room-media.test.mjs`,
 `test/frontend/control-room-operate.test.mjs`,
 `test/frontend/control-room-inspect.test.mjs`,
 `test/frontend/control-room-incidents.test.mjs`,

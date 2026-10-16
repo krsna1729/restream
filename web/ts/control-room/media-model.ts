@@ -3,6 +3,7 @@
 // file can feed a live pipeline as it is.
 
 import type { MediaFile, MediaFileAnalysis } from "../core/api-types.js";
+import type { PipelineDraft } from "./manage-model.js";
 
 export type MediaKind = "recording" | "source";
 
@@ -12,6 +13,12 @@ export function mediaKind(file: MediaFile): MediaKind {
   if (file.kind) return file.kind;
   if ((file.ingestCount ?? 0) > 0) return "source";
   return file.name.toLowerCase().includes("recording") ? "recording" : "source";
+}
+
+/** What a library row is selected by: a recording's session id, which stays
+ * the same when its `.ts` becomes the finalized `.mp4`; else its name. */
+export function mediaKey(file: MediaFile): string {
+  return file.recordingId ? `recording:${file.recordingId}` : file.name;
 }
 
 /** The files whose name (or source or converted name) holds `query`,
@@ -116,4 +123,94 @@ export function formatDuration(seconds: number | null | undefined): string {
   const m = Math.floor((total % 3600) / 60);
   const s = String(total % 60).padStart(2, "0");
   return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
+}
+
+export interface TimelineEvent {
+  /** `null`: the step has no recorded time (it is under way, or the engine
+   * did not keep one). */
+  readonly atMs: number | null;
+  readonly label: string;
+  readonly tone: "ok" | "info" | "error";
+}
+
+function instant(value: string | null | undefined): number | null {
+  const ms = value ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * A recording's life, from the persisted session behind the file (start,
+ * stop, failure) and its browser-MP4 remux; `null` for a file no recording
+ * session wrote. Steps come in the order they happen.
+ */
+export function recordingTimeline(file: MediaFile): readonly TimelineEvent[] | null {
+  const started = instant(file.recordingStartedAt);
+  if (!file.recordingId || started === null) return null;
+  const ended = instant(file.recordingEndedAt);
+  const events: TimelineEvent[] = [
+    {
+      atMs: started,
+      label: `Recording started${file.recordingCodecSummary ? ` · ${file.recordingCodecSummary}` : ""}`,
+      tone: "ok",
+    },
+  ];
+  switch (file.recordingStatus) {
+    case "recording":
+      events.push({ atMs: null, label: "Still recording", tone: "info" });
+      break;
+    case "finalizing":
+      events.push({ atMs: ended, label: "Stopped; finalizing the file", tone: "info" });
+      break;
+    case "ready":
+      events.push({ atMs: ended, label: "Recording stopped and finalized", tone: "ok" });
+      break;
+    case "failed":
+      events.push({
+        atMs: ended,
+        label: `Recording failed: ${file.recordingError ?? "no reason was recorded"}`,
+        tone: "error",
+      });
+      break;
+    default:
+      break;
+  }
+  const remuxedAt = instant(file.conversionUpdatedAt);
+  switch (file.conversionStatus) {
+    case "converting":
+      events.push({ atMs: remuxedAt, label: "Remuxing to browser MP4", tone: "info" });
+      break;
+    case "ready":
+      events.push({ atMs: remuxedAt, label: "Remuxed to browser MP4", tone: "ok" });
+      break;
+    case "failed":
+      events.push({
+        atMs: remuxedAt,
+        label: `Remux failed: ${file.conversionError ?? "no reason was recorded"}`,
+        tone: "error",
+      });
+      break;
+    default:
+      break;
+  }
+  return events;
+}
+
+/**
+ * A new pipeline that plays `file`: named after it, looping, and through
+ * Live Optimized when the file's keyframes are too sparse to join live.
+ * `null` when the file cannot feed a pipeline (it has no video).
+ */
+export function sourceDraft(
+  file: MediaFile,
+  readiness: Readiness | null,
+): Partial<PipelineDraft> | null {
+  if (readiness?.kind === "noVideo") return null;
+  const stem = file.name.replace(/\.[^.]+$/, "");
+  return {
+    name: stem || file.name,
+    source: "file",
+    filename: file.name,
+    loop: true,
+    liveOptimized: readiness?.kind === "needsReencode",
+  };
 }
