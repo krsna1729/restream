@@ -284,9 +284,9 @@ impl SegmentDemux for Fmp4Demux {
         self.object = None;
     }
 
-    /// An object that could not be demuxed is dropped whole: whatever its
-    /// fragments had already demuxed goes with it, so a segment is either
-    /// published or not.
+    /// An object that could not be demuxed is dropped: what it had demuxed
+    /// but not yet released is discarded. Packets from an earlier fragment
+    /// that were already released stay in the ring.
     fn discard_object(&mut self) {
         self.pending.clear();
         self.fragment_packets.clear();

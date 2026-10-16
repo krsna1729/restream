@@ -729,9 +729,11 @@ keeps the container it started with.
 - **A segment that cannot be demuxed.** A rejection while publishing an
   already-answered segment — a truncated access unit, a sample that runs past
   its fragment, a decode failure — drops that segment whole: the session
-  counts it, logs the reason once, discards whatever the segment had already
-  demuxed (a segment is either published or not), re-anchors the timeline for
-  the next segment, and keeps publishing. Only a session that no longer has a
+  counts it, logs the reason once, discards what the segment had demuxed but
+  not yet published, re-anchors the timeline for
+  the next segment, and keeps publishing. Packets from an earlier fragment of
+  that segment that were already released stay in the ring; only what was
+  demuxed and still pending is dropped. Only a session that no longer has a
   demuxer at all (its publisher failed to open) ends failed; the engine
   survives either way, and the encoder's next object starts a fresh session
   if the session does end.

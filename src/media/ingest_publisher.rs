@@ -105,9 +105,9 @@ pub trait SegmentDemux: Send {
     /// End of the stream: forward whatever the demux still holds.
     fn flush(&mut self);
 
-    /// Drop everything the current object produced, so a segment is either
-    /// published or not. What the container keeps across objects (an fMP4
-    /// init, a TS stream's continuity) stays.
+    /// Drop what the current object demuxed but has not released, so a
+    /// failed segment does not publish the rest of itself. What the container
+    /// keeps across objects (an fMP4 init, a TS stream's continuity) stays.
     fn discard_object(&mut self) {}
 
     /// The next bytes start an unrelated stream.
@@ -301,8 +301,8 @@ impl SegmentPublisher {
     }
 
     /// The current object could not be demuxed. The segment is dropped
-    /// whole, whatever it had already demuxed included, and the timeline is
-    /// re-anchored for the next segment, like a discontinuity.
+    /// whole: what it had demuxed but not yet published is discarded, and the
+    /// timeline is re-anchored for the next segment, like a discontinuity.
     pub fn discard_failed_object(&mut self) {
         self.demux.discard_object();
         self.packets.clear();
