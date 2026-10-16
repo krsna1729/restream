@@ -23,7 +23,6 @@ items).
 - [Q-050 inputs and stages in runtime state](#q-050-architecture-sonnet-project-inputs-and-stages-into-the-runtime-state)
 - [Q-051 bounded ingress transfer pump](#q-051-architecture-sonnet-bound-the-ingress-transfer-pump-per-owner-visit)
 - [Q-053 external FFmpeg process topology](#q-053-architecture-sonnet-external-ffmpeg-process-topology-per-rendition)
-- [Q-054 control-room Pipelines gaps](#q-054-frontend-sonnet-control-room-pipelines-protocol-mix-shared-stage-efficiency-filter-cards)
 - [Q-056 control-room Inspect gaps](#q-056-frontend-sonnet-control-room-inspect-node-metric-cards-bottleneck-judgement-global-map)
 - [Q-057 control-room Fleet gaps](#q-057-frontend-sonnet-control-room-fleet-shared-work-open-incidents-fleet-table-headroom-history)
 - [Q-058 control-room Monitor gaps](#q-058-frontend-sonnet-control-room-monitor-input-transport-shared-path-outlier-incident-cursor-pausecompare)
@@ -375,23 +374,6 @@ items).
 - Status: open (Filed: 2026-10-15 by claude; the cost measurement closed
   2026-10-15. The former board item "FFmpeg A/B: external per-stage vs external
   multi-output" cannot be run as written: the second arm does not exist).
-
-### Q-054 [frontend] [sonnet] Control room Pipelines: protocol mix, shared-stage efficiency, filter cards
-- Goal: the Pipelines workspace shows the three mockup structures
-  (`docs/design/control-room-mockup.html`) that have no shipped counterpart.
-  Q-054 to Q-062 are the 2026-10-15 mockup-gap audit; the user asked for all
-  of them, one PR per workspace, in Q-number order.
-- Sources: the protocol mix and the needs-attention card derive from the
-  runtime state (`OutputState.protocol`, `diagnosis`). Shared stages
-  (`delivery[]` on `/api/v1/pipelines/{id}/telemetry`) and warm standby
-  (`forwardingState` on `/api/v1/pipelines/{pipeline_id}/inputs`) exist only
-  per pipeline. Bonding (`publisher.quality.srtBonded`) and recording
-  (`recording.active`) arrive fleet-wide in one `/api/v1/engine/health`, but
-  that is the expensive view (`api/health.rs`) and the page already has the
-  state stream. So the runtime state gains all four: the output's stage, the
-  standby-input count, the recording flag and the bonded flag.
-- Gates: node tests for the derivations; one Playwright case per structure.
-- Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
 
 ### Q-056 [frontend] [sonnet] Control room Inspect: node metric cards, bottleneck judgement, global map
 - Goal: Inspect shows metric cards for the selected node, a bottleneck

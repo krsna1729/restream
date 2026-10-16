@@ -14,9 +14,21 @@ export type PipelineState = { id: string, name: string,
 /**
  * The selected live ingest, if one is connected.
  */
-ingest: IngestState | null, };
+ingest: IngestState | null, 
+/**
+ * Connected inputs held in warm standby (connected, not selected).
+ */
+standbyInputs: number, 
+/**
+ * A recording file is being written.
+ */
+recording: boolean, };
 
-export type IngestState = { inputId: string, protocol: string, videoCodec: string | null, };
+export type IngestState = { inputId: string, protocol: string, videoCodec: string | null, 
+/**
+ * The ingest is an SRT group (bonded) connection.
+ */
+bonded: boolean, };
 
 export type OutputState = { id: string, pipelineId: string, name: string, protocol: EgressProtocol, 
 /**
@@ -24,6 +36,11 @@ export type OutputState = { id: string, pipelineId: string, name: string, protoc
  * or when none runs.
  */
 shard: number | null, 
+/**
+ * The last stage the running attempt reads (`<pipeline>:<kind>`), so
+ * outputs with the same stage share its work; `null` when none runs.
+ */
+stage: string | null, 
 /**
  * The operator's intent.
  */

@@ -6,15 +6,19 @@ import type { MediaFile } from "../core/api-types.js";
 import {
   buildFleetModel,
   filterPipelineRows,
+  OPERATIONAL,
   pipelineHealth,
 } from "./fleet-model.js";
 import type {
   FleetPipelineRow,
   HealthFilter,
+  OperationalFilter,
   PipelineHealth,
 } from "./fleet-model.js";
 import { formatBps } from "./format.js";
 import { PipelineForm } from "./pipeline-form.js";
+import { protocolMix, sharedStages } from "./pipelines-model.js";
+import type { ProtocolShare, SharedStages } from "./pipelines-model.js";
 import { PlaceLink, useGo } from "./router.js";
 import type { LiveSnapshot } from "./store.js";
 
@@ -26,10 +30,18 @@ const HEALTH_FILTERS: ReadonlyArray<[HealthFilter, string]> = [
   ["idle", "Idle"],
 ];
 
+const OPERATIONAL_CARDS: ReadonlyArray<[OperationalFilter, string]> = [
+  ["attention", "Needs attention"],
+  ["standby", "Has warm standby"],
+  ["bonded", "Uses bonded SRT"],
+  ["recording", "Recording active"],
+];
+
 /** The pipeline inventory: every pipeline in one dense, filterable table. */
 export function Pipelines({ live }: { live: LiveSnapshot }) {
   const [query, setQuery] = useState("");
   const [health, setHealth] = useState<HealthFilter>("all");
+  const [operational, setOperational] = useState<OperationalFilter | null>(null);
   const [creating, setCreating] = useState(false);
   const [files, setFiles] = useState<readonly MediaFile[]>([]);
   useEffect(() => {
@@ -40,11 +52,15 @@ export function Pipelines({ live }: { live: LiveSnapshot }) {
       live.state ? buildFleetModel(live.state, live.rates).pipelines : null,
     [live.state, live.rates],
   );
+  const sharing = useMemo(
+    () => live.state && sharedStages(live.state.pipelines, live.state.outputs),
+    [live.state],
+  );
   const go = useGo();
-  if (rows === null) {
+  if (rows === null || sharing === null) {
     return <p className="opacity-70">Waiting for runtime state…</p>;
   }
-  const shown = filterPipelineRows(rows, query, health);
+  const shown = filterPipelineRows(rows, query, health, operational);
   return (
     <section aria-labelledby="pipelines-title" className="space-y-3">
       <div className="flex flex-wrap items-end gap-3">
@@ -92,6 +108,38 @@ export function Pipelines({ live }: { live: LiveSnapshot }) {
           onSaved={(pipeline) => go({ workspace: "operate", pipelineId: pipeline.id })}
         />
       )}
+      <div className="grid gap-3 md:grid-cols-3">
+        <ProtocolMix mix={protocolMix(rows)} />
+        <StageSharing sharing={sharing} />
+        <section aria-labelledby="operational-title" className="card card-compact bg-base-200">
+          <div className="card-body">
+            <h3 id="operational-title" className="card-title text-sm">
+              Operational filters
+            </h3>
+            <div className="grid grid-cols-2 gap-2">
+              {OPERATIONAL_CARDS.map(([value, label]) => {
+                const count = rows.filter(OPERATIONAL[value]).length;
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={operational === value}
+                    className={`btn btn-sm h-auto flex-col items-start py-2 ${
+                      operational === value ? "btn-active" : ""
+                    } ${value === "attention" && count > 0 ? "btn-warning btn-outline" : ""}`}
+                    onClick={() => setOperational(operational === value ? null : value)}
+                  >
+                    <span>{label}</span>
+                    <span className="text-xs font-normal opacity-70">
+                      {count} {count === 1 ? "pipeline" : "pipelines"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+      </div>
       <div className="overflow-x-auto">
         <table className="table table-sm">
           <thead>
@@ -141,6 +189,74 @@ export function Pipelines({ live }: { live: LiveSnapshot }) {
             ))}
           </tbody>
         </table>
+      </div>
+    </section>
+  );
+}
+
+function ProtocolMix({ mix }: { mix: readonly ProtocolShare[] }) {
+  const total = mix.reduce((sum, share) => sum + share.outputs, 0);
+  return (
+    <section aria-labelledby="protocol-mix-title" className="card card-compact bg-base-200">
+      <div className="card-body">
+        <h3 id="protocol-mix-title" className="card-title text-sm">
+          Protocol mix
+        </h3>
+        {total === 0 ? (
+          <p className="text-sm opacity-70">No outputs.</p>
+        ) : (
+          <ul className="space-y-1">
+            {mix.map((share) => (
+              <li key={share.protocol} className="grid grid-cols-[6rem_1fr_3rem] items-center gap-2 text-sm">
+                <span>{share.protocol.toUpperCase()}</span>
+                <progress
+                  className="progress"
+                  value={share.outputs}
+                  max={total}
+                  aria-label={`${share.protocol.toUpperCase()} share`}
+                />
+                <strong className="text-right tabular-nums">{share.outputs}</strong>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function StageSharing({ sharing }: { sharing: SharedStages }) {
+  const largest = sharing.groups[0];
+  return (
+    <section aria-labelledby="stage-sharing-title" className="card card-compact bg-base-200">
+      <div className="card-body">
+        <h3 id="stage-sharing-title" className="card-title text-sm">
+          Shared-stage efficiency
+        </h3>
+        {largest ? (
+          <>
+            <div>
+              <div className="text-xs opacity-70">Largest sharing group</div>
+              <div className="text-lg font-semibold tabular-nums">
+                {largest.outputs} outputs
+              </div>
+              <div className="text-xs opacity-70">
+                one {largest.kind} stage · {largest.pipelineName}
+              </div>
+            </div>
+            <p className="text-sm">
+              {sharing.sharedOutputs} of {sharing.stagedOutputs} running outputs
+              read a stage another output also reads ({sharing.groups.length}{" "}
+              shared {sharing.groups.length === 1 ? "stage" : "stages"}).
+            </p>
+          </>
+        ) : (
+          <p className="text-sm opacity-70">
+            {sharing.stagedOutputs === 0
+              ? "No running output reads a stage."
+              : `${sharing.stagedOutputs} running outputs, each on its own stage.`}
+          </p>
+        )}
       </div>
     </section>
   );

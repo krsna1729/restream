@@ -75,6 +75,10 @@ pub struct PipelineState {
     pub name: String,
     /// The selected live ingest, if one is connected.
     pub ingest: Option<IngestState>,
+    /// Connected inputs held in warm standby (connected, not selected).
+    pub standby_inputs: u32,
+    /// A recording file is being written.
+    pub recording: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -84,6 +88,8 @@ pub struct IngestState {
     pub input_id: String,
     pub protocol: String,
     pub video_codec: Option<String>,
+    /// The ingest is an SRT group (bonded) connection.
+    pub bonded: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -97,6 +103,9 @@ pub struct OutputState {
     /// The egress shard carrying the running attempt; `null` off the fabric
     /// or when none runs.
     pub shard: Option<u32>,
+    /// The last stage the running attempt reads (`<pipeline>:<kind>`), so
+    /// outputs with the same stage share its work; `null` when none runs.
+    pub stage: Option<String>,
     /// The operator's intent.
     pub desired: DesiredOutputState,
     /// The running egress attempt's phase; `null` when none runs.
@@ -186,15 +195,37 @@ pub async fn project(
         .await
         .iter()
         .map(|(pipeline_id, ingest)| {
+            let metadata = ingest.metadata();
             (
                 pipeline_id.clone(),
                 IngestState {
                     input_id: ingest.input_id.clone(),
                     protocol: ingest.protocol.clone(),
-                    video_codec: ingest.metadata().video.map(|video| video.codec),
+                    video_codec: metadata.video.map(|video| video.codec),
+                    bonded: metadata.quality.srt_bonded == Some(true),
                 },
             )
         })
+        .collect();
+    // Every connected input session (a configured file source too) that is
+    // not its pipeline's selected one is a warm standby.
+    let mut standby: HashMap<String, u32> = HashMap::new();
+    for session in engine.ingests.sessions.read().await.values() {
+        let selected = ingests
+            .get(&session.pipeline_id)
+            .is_some_and(|ingest| ingest.input_id == session.input_id);
+        if !selected {
+            *standby.entry(session.pipeline_id.clone()).or_default() += 1;
+        }
+    }
+    let recording: std::collections::HashSet<String> = engine
+        .recordings
+        .cancel_tokens
+        .read()
+        .await
+        .iter()
+        .filter(|(_, token)| !token.is_cancelled())
+        .map(|(pipeline_id, _)| pipeline_id.clone())
         .collect();
     let retries = engine.egresses.retry.read().await.clone();
     // Read one map at a time: no new lock nesting between egress maps.
@@ -281,6 +312,8 @@ pub async fn project(
                 id: pipeline.id.clone(),
                 name: pipeline.name.clone(),
                 ingest: ingests.get(&pipeline.id).cloned(),
+                standby_inputs: standby.get(&pipeline.id).copied().unwrap_or(0),
+                recording: recording.contains(&pipeline.id),
             },
         );
     }
@@ -399,6 +432,9 @@ fn project_output(
         shard: active
             .and_then(|egress| egress.fabric.as_ref())
             .map(|slot| slot.shard),
+        stage: active
+            .and_then(|egress| egress.terminal_stage_key.as_ref())
+            .map(ToString::to_string),
         actual,
         convergence,
         flow,
