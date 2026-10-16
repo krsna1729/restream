@@ -1532,6 +1532,18 @@ memory attribution confidence marker is one of:
 - `estimated`: overheads that are intentionally not assigned to exact nodes
 - `unmeasured`: egress shards, which hold memory this view does not measure
 
+A node that consumes a modelled service center carries `judgement`: a
+child-process stage or group (`ffmpeg`), an output or shard (`egress`), the
+source ring (`memory`). `verdict` is `limiting` when the capacity snapshot's
+flow diagnosis names the node's center saturated or overloaded, or when the
+node is a shard that is not `healthy`; `pressured` when the center's
+utilization is at or above the model's safe utilization (0.8); otherwise
+`clear`. It also carries `center`, `utilization` (against the calibrated
+limit; `null` where the model prices the center only through the flow),
+`measured` (`true` when the verdict rests on the measured shard flow or the
+shard's own state, `false` when it rests on the calibration priors) and a
+plain-language `reason`. Other nodes have no `judgement`.
+
 Responses include `limits.totalNodeCount`, `limits.returnedNodeCount`, and
 `limits.truncatedNodeCount` so large fleets can show that the view is grouped or
 capped. Agent context uses summary mode by default; investigation responses use

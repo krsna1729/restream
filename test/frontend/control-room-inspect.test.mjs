@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
-const { buildResourceRows, ringFromGraph, shardsFrom } =
+const { buildResourceRows, nodeCards, ringFromGraph, shardsFrom } =
   await loadCompiledFrontendModule("control-room/inspect-model.js");
 const { appendSample, sparkline, takeSample } = await loadCompiledFrontendModule(
   "control-room/monitor-model.js",
@@ -209,4 +209,48 @@ test("a sparkline spans the window, peaks at the top and breaks at a gap", () =>
     sparkline([{ atMs: 0, ingestBps: 0 }, { atMs: 10, ingestBps: 0 }], "ingestBps", 0, 10, 100, 40),
     ["0.0,40.0 100.0,40.0"],
   );
+});
+
+test("node cards count the stage's graph consumers and omit numbers the node lacks", () => {
+  const graph = {
+    nodes: [
+      { id: "ring", type: "ring_buffer", label: "ring", active: true },
+      { id: "tx", type: "stage", label: "tx", active: true, stageKey: "stage-1" },
+      { id: "e1", type: "egress", label: "e1", active: true },
+      { id: "e2", type: "egress", label: "e2", active: true },
+    ],
+    edges: [
+      { from: "ring", to: "tx" },
+      { from: "ring", to: "e1" },
+      { from: "tx", to: "e2" },
+      { from: "tx", to: "e1" },
+    ],
+  };
+  const stage = resource("stage-1", {
+    kind: "stage",
+    cpuPercent: 12.345,
+    backendPid: 4242,
+    metrics: { packetsPerSec: 1234.4, avgUsPerPacket: 3.21 },
+  });
+  assert.deepEqual(nodeCards(stage, graph), [
+    { label: "Consumers", value: "2", foot: "graph nodes reading it" },
+    { label: "CPU", value: "12.3%", foot: "measured child PID 4242" },
+    { label: "Packet rate", value: "1,234/s", foot: "input packets, since it started" },
+    { label: "Average work", value: "3.2 µs", foot: "per input packet" },
+  ]);
+
+  // The source ring's consumers are the ring buffer's edges.
+  const ring = resource("source", { kind: "source_ring" });
+  assert.deepEqual(nodeCards(ring, graph), [
+    { label: "Consumers", value: "2", foot: "graph nodes reading it" },
+  ]);
+
+  // No graph (the global map), no CPU sample, no work recorded: no cards,
+  // not zeros.
+  const idle = resource("stage-1", {
+    kind: "stage",
+    cpuPercent: null,
+    metrics: { packetsPerSec: Number.NaN, avgUsPerPacket: 0 },
+  });
+  assert.deepEqual(nodeCards(idle, null), []);
 });

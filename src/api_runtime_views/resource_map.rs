@@ -585,6 +585,12 @@ pub(crate) async fn resource_map(
             .map(|stage| stage_node(stage, &child_resources)),
     );
     nodes.extend(egresses.iter().map(egress_node));
+    let capacity = engine.capacity_snapshot().await;
+    for node in &mut nodes {
+        if let Some(judgement) = super::node_judgement::judge_node(node, &capacity) {
+            node["judgement"] = json!(judgement);
+        }
+    }
 
     let srt_sender_limit = 512u64;
     let srt_sender_threads =
