@@ -306,6 +306,24 @@ pub fn diagnose(sample: FlowSample) -> FlowDiagnosis {
     }
 }
 
+/// One egress shard's measured flow: its command queue against its bound,
+/// with a non-healthy shard counted as a growing backlog and progress older
+/// than 1 s as a missed deadline. The engine's measured flow is the deepest
+/// shard's (`MediaEngine::capacity_snapshot`).
+pub fn shard_flow(depth: f64, capacity: f64, progress_age_ms: f64, stalled: bool) -> FlowDiagnosis {
+    diagnose(FlowSample {
+        center: ServiceCenter::Egress,
+        arrival_rate: depth,
+        service_rate: capacity.max(1.0),
+        queue: depth,
+        backlog_slope: if stalled { 1.0 } else { 0.0 },
+        delay_ms: progress_age_ms,
+        deadline_slack_ms: 1_000.0 - progress_age_ms,
+        errors: u64::from(stalled),
+        amplification: 1.0,
+    })
+}
+
 fn ratio(numerator: f64, denominator: f64) -> f64 {
     if denominator > 0.0 {
         (numerator / denominator).max(0.0)
@@ -359,23 +377,29 @@ impl MediaEngine {
         workload
     }
 
+    /// The current workload projected onto the calibrated priors alone, with
+    /// no measured flow.
+    pub async fn capacity_priors(&self) -> CapacitySnapshot {
+        CapacityModel {
+            limits: self.config.capacity_limits,
+            ..CapacityModel::default()
+        }
+        .project(self.capacity_workload().await)
+    }
+
     /// Observe the current runtime topology and counters without making an
     /// admission decision. The snapshot is intentionally a control-plane
     /// operation; no native shard hot path reads these locks.
     pub async fn capacity_snapshot(&self) -> CapacitySnapshot {
-        let mut snapshot = CapacityModel {
-            limits: self.config.capacity_limits,
-            ..CapacityModel::default()
-        }
-        .project(self.capacity_workload().await);
-        if let Some((queue, capacity, progress_age_ms, stalled)) = self
+        let mut snapshot = self.capacity_priors().await;
+        if let Some((depth, capacity, progress_age_ms, stalled)) = self
             .egress_fabric_shard_statuses(std::time::Duration::from_secs(5))
             .await
             .iter()
             .map(|status| {
                 (
                     f64::from(status.command_depth),
-                    f64::from(status.command_capacity.max(1)),
+                    f64::from(status.command_capacity),
                     status.progress_age_ms.unwrap_or_default() as f64,
                     !matches!(
                         status.state,
@@ -385,17 +409,7 @@ impl MediaEngine {
             })
             .max_by(|left, right| left.0.total_cmp(&right.0))
         {
-            let flow = diagnose(FlowSample {
-                center: ServiceCenter::Egress,
-                arrival_rate: queue,
-                service_rate: capacity,
-                queue,
-                backlog_slope: if stalled { 1.0 } else { 0.0 },
-                delay_ms: progress_age_ms,
-                deadline_slack_ms: 1_000.0 - progress_age_ms,
-                errors: u64::from(stalled),
-                amplification: 1.0,
-            });
+            let flow = shard_flow(depth, capacity, progress_age_ms, stalled);
             snapshot.projected_utilization =
                 snapshot.projected_utilization.max(flow.utilization as f32);
             snapshot.flow = flow;

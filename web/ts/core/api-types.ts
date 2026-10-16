@@ -169,9 +169,10 @@ export interface ResourceMapNode {
 export interface NodeJudgement {
   verdict: "limiting" | "pressured" | "clear";
   center: ServiceCenter;
-  /** The center's utilization against its limit, when the model prices it. */
-  utilization: number | null;
-  /** The measured shard flow, not the calibration priors. */
+  /** The shard's command queue against its bound, or the shared pool's
+   * utilization against its calibrated limit. */
+  utilization: number;
+  /** A shard's own measurement, not the calibration priors. */
   measured: boolean;
   reason: string;
 }

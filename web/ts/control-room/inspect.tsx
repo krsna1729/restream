@@ -264,7 +264,7 @@ function Judgement({ judgement }: { judgement: NodeJudgement }) {
           {judgement.reason}.{" "}
           <span className="opacity-70">
             {judgement.measured
-              ? "From the measured shard flow."
+              ? "From a measurement."
               : "From the capacity model's calibration priors (observe-only)."}
           </span>
         </p>

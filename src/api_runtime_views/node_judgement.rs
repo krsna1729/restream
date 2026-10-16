@@ -1,23 +1,30 @@
-//! Whether one resource-map node limits the pipeline, judged from the
-//! capacity model: the service center the node consumes, that center's
-//! utilization against its calibrated limit, and the engine's flow
-//! diagnosis. A node that consumes no modelled center gets no judgement.
+//! Whether one resource-map node limits the pipeline.
+//!
+//! - An egress shard is judged on its own command queue, progress age and
+//!   state, through the flow diagnosis the engine applies to its deepest
+//!   shard ([`shard_flow`]).
+//! - A fabric output takes the judgement of the shard it is placed on: a
+//!   sibling shard's stall does not touch it.
+//! - An FFmpeg child (stage or group) and the source ring draw on a pooled
+//!   center (`ffmpeg`, `memory`) that every member shares, so they take the
+//!   pool's utilization against its calibrated limit (priors, not a
+//!   measurement).
+//!
+//! Any other node gets no judgement.
 
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::capacity::{CapacityModel, CapacitySnapshot, FlowStatus, ServiceCenter};
+use crate::capacity::{CapacityModel, CapacitySnapshot, FlowStatus, ServiceCenter, shard_flow};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum Verdict {
-    /// The node's center is the one the flow diagnosis names as saturated or
-    /// overloaded, or the node itself (a shard) is not healthy.
+    /// The node's own flow is saturated or overloaded, or its pool is full.
     Limiting,
-    /// The node's center is at or above the safe utilization, but the flow
-    /// diagnosis does not name it.
+    /// Its pool is at or above the safe utilization.
     Pressured,
-    /// Below the safe utilization and not named by the flow diagnosis.
+    /// Neither.
     Clear,
 }
 
@@ -26,118 +33,152 @@ pub(crate) enum Verdict {
 pub(crate) struct NodeJudgement {
     pub verdict: Verdict,
     pub center: ServiceCenter,
-    /// The center's utilization against its limit; `None` when the model
-    /// prices it only through the flow diagnosis.
-    pub utilization: Option<f64>,
-    /// `true` when the verdict rests on the measured shard flow; otherwise
-    /// it rests on the calibration priors (observe-only).
+    /// The shard's command queue against its bound, or the pool's
+    /// utilization against its calibrated limit.
+    pub utilization: f64,
+    /// `true` for a shard's (or its output's) own measurement; `false` for
+    /// the calibration priors.
     pub measured: bool,
     pub reason: String,
-}
-
-fn center_of(node: &Value) -> Option<ServiceCenter> {
-    let kind = node.get("kind").and_then(Value::as_str)?;
-    let execution = node.get("execution").and_then(Value::as_str);
-    match kind {
-        "stage" if execution == Some("child_process") => Some(ServiceCenter::Ffmpeg),
-        "child_process_group" => Some(ServiceCenter::Ffmpeg),
-        "egress" | "egress_shard" => Some(ServiceCenter::Egress),
-        "source_ring" => Some(ServiceCenter::Memory),
-        _ => None,
-    }
-}
-
-fn utilization_of(center: ServiceCenter, capacity: &CapacitySnapshot) -> Option<f64> {
-    let util = match center {
-        ServiceCenter::Egress => capacity.hottest_shard_util,
-        ServiceCenter::Ffmpeg => capacity.ffmpeg_util,
-        ServiceCenter::Memory => capacity.memory_util,
-        ServiceCenter::Nic => capacity.nic_util,
-        ServiceCenter::Disk => capacity.disk_util,
-        ServiceCenter::Ingress | ServiceCenter::Cpu => return None,
-    };
-    Some(f64::from(util))
-}
-
-fn center_name(center: ServiceCenter) -> &'static str {
-    match center {
-        ServiceCenter::Ingress => "ingress",
-        ServiceCenter::Egress => "egress",
-        ServiceCenter::Cpu => "cpu",
-        ServiceCenter::Nic => "nic",
-        ServiceCenter::Memory => "memory",
-        ServiceCenter::Ffmpeg => "ffmpeg",
-        ServiceCenter::Disk => "disk",
-    }
 }
 
 fn percent(ratio: f64) -> String {
     format!("{:.0}%", ratio * 100.0)
 }
 
-pub(crate) fn judge_node(node: &Value, capacity: &CapacitySnapshot) -> Option<NodeJudgement> {
-    let center = center_of(node)?;
-    let utilization = utilization_of(center, capacity);
-    let name = center_name(center);
-    let judgement = |verdict, measured, reason| NodeJudgement {
-        verdict,
-        center,
-        utilization,
-        measured,
-        reason,
-    };
-    if node.get("kind").and_then(Value::as_str) == Some("egress_shard")
-        && let Some(state) = node.get("state").and_then(Value::as_str)
-        && state != "healthy"
-    {
-        return Some(judgement(
-            Verdict::Limiting,
-            true,
-            format!("this shard is {state}"),
-        ));
-    }
-    let flow = &capacity.flow;
-    if flow.center == center && flow.status != FlowStatus::Healthy {
+/// One egress shard, from its own command queue, progress age and state.
+pub(crate) fn judge_shard(
+    command_depth: u32,
+    command_capacity: u32,
+    progress_age_ms: Option<u64>,
+    state: &str,
+) -> NodeJudgement {
+    let flow = shard_flow(
+        f64::from(command_depth),
+        f64::from(command_capacity),
+        progress_age_ms.unwrap_or_default() as f64,
+        state != "healthy",
+    );
+    let (verdict, reason) = if state != "healthy" {
+        (Verdict::Limiting, format!("the shard is {state}"))
+    } else if flow.status != FlowStatus::Healthy {
         let status = if flow.status == FlowStatus::Overloaded {
             "overloaded"
         } else {
             "saturated"
         };
-        return Some(judgement(
+        (
             Verdict::Limiting,
-            capacity.flow_measured,
             format!(
-                "the flow diagnosis names {name} {status} at {}",
+                "the shard is {status}: command queue at {} of its bound, progress {} ms ago",
+                percent(flow.utilization),
+                progress_age_ms.unwrap_or_default()
+            ),
+        )
+    } else {
+        (
+            Verdict::Clear,
+            format!(
+                "the shard's command queue is at {} of its bound",
                 percent(flow.utilization)
             ),
-        ));
+        )
+    };
+    NodeJudgement {
+        verdict,
+        center: ServiceCenter::Egress,
+        utilization: flow.utilization,
+        measured: true,
+        reason,
     }
+}
+
+/// A fabric output, from the shard it is placed on.
+pub(crate) fn judge_output(shard: &NodeJudgement, shard_index: u64) -> NodeJudgement {
+    NodeJudgement {
+        reason: format!("on shard {shard_index}: {}", shard.reason),
+        ..shard.clone()
+    }
+}
+
+/// An FFmpeg child or the source ring, from its pool's prior utilization.
+pub(crate) fn judge_pooled(node: &Value, priors: &CapacitySnapshot) -> Option<NodeJudgement> {
+    let kind = node.get("kind").and_then(Value::as_str)?;
+    let execution = node.get("execution").and_then(Value::as_str);
+    let (center, name, utilization) = match kind {
+        "stage" if execution == Some("child_process") => {
+            (ServiceCenter::Ffmpeg, "FFmpeg", priors.ffmpeg_util)
+        }
+        "child_process_group" => (ServiceCenter::Ffmpeg, "FFmpeg", priors.ffmpeg_util),
+        "source_ring" => (ServiceCenter::Memory, "memory", priors.memory_util),
+        _ => return None,
+    };
+    let utilization = f64::from(utilization);
     let safe = CapacityModel::default().safe_utilization;
-    Some(match utilization {
-        Some(util) if util >= safe => judgement(
-            Verdict::Pressured,
-            false,
-            format!(
-                "{name} at {} of its limit, at or above the safe {}",
-                percent(util),
-                percent(safe)
-            ),
-        ),
-        Some(util) => judgement(
-            Verdict::Clear,
-            false,
-            format!(
-                "{name} at {} of its limit, below the safe {}; the flow diagnosis does not name it",
-                percent(util),
-                percent(safe)
-            ),
-        ),
-        None => judgement(
-            Verdict::Clear,
-            capacity.flow_measured,
-            format!("the flow diagnosis does not name {name}"),
+    let verdict = if utilization >= 1.0 {
+        Verdict::Limiting
+    } else if utilization >= safe {
+        Verdict::Pressured
+    } else {
+        Verdict::Clear
+    };
+    Some(NodeJudgement {
+        verdict,
+        center,
+        utilization,
+        measured: false,
+        reason: format!(
+            "the {name} pool every pipeline shares is at {} of its limit (safe below {})",
+            percent(utilization),
+            percent(safe)
         ),
     })
+}
+
+/// Judge every node of a map in place: shards first, so each fabric output
+/// can take its shard's judgement (`fabricFeed`/`shardId` against
+/// `feedId`/`shardIndex`); then the pooled centers.
+pub(crate) fn judge_nodes(nodes: &mut [Value], priors: &CapacitySnapshot) {
+    let slot = |node: &Value, feed: &str, shard: &str| {
+        Some((
+            node.get(feed)?.as_str()?.to_owned(),
+            node.get(shard)?.as_u64()?,
+        ))
+    };
+    let mut shards = std::collections::HashMap::new();
+    for node in nodes.iter_mut() {
+        if node.get("kind").and_then(Value::as_str) != Some("egress_shard") {
+            continue;
+        }
+        let metric = |key: &str| {
+            node.get("metrics")
+                .and_then(|metrics| metrics.get(key))
+                .and_then(Value::as_u64)
+        };
+        let judgement = judge_shard(
+            u32::try_from(metric("commandDepth").unwrap_or_default()).unwrap_or(u32::MAX),
+            u32::try_from(metric("commandCapacity").unwrap_or_default()).unwrap_or(u32::MAX),
+            metric("progressAgeMs"),
+            node.get("state")
+                .and_then(Value::as_str)
+                .unwrap_or("healthy"),
+        );
+        if let Some(key) = slot(node, "feedId", "shardIndex") {
+            shards.insert(key, judgement.clone());
+        }
+        node["judgement"] = serde_json::json!(judgement);
+    }
+    for node in nodes.iter_mut() {
+        let judgement = match node.get("kind").and_then(Value::as_str) {
+            Some("egress_shard") => continue,
+            Some("egress") => slot(node, "fabricFeed", "shardId")
+                .and_then(|key| shards.get(&key).map(|shard| judge_output(shard, key.1))),
+            _ => judge_pooled(node, priors),
+        };
+        if let Some(judgement) = judgement {
+            node["judgement"] = serde_json::json!(judgement);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -147,7 +188,7 @@ mod tests {
     use super::*;
     use crate::capacity::{CapacityLimits, Workload};
 
-    fn snapshot(stages: u32) -> CapacitySnapshot {
+    fn priors(stages: u32) -> CapacitySnapshot {
         // Four FFmpeg stages fit the limit: 1 stage is 25%, 4 are 100%.
         CapacityModel {
             limits: CapacityLimits {
@@ -166,71 +207,112 @@ mod tests {
         json!({ "kind": "stage", "execution": "child_process" })
     }
 
+    fn verdict(node: &Value, priors: &CapacitySnapshot) -> Option<Verdict> {
+        judge_pooled(node, priors).map(|judgement| judgement.verdict)
+    }
+
     #[test]
-    fn a_node_that_consumes_no_modelled_center_gets_no_judgement() {
-        let snapshot = snapshot(1);
-        assert_eq!(judge_node(&json!({ "kind": "ingest" }), &snapshot), None);
+    fn only_pooled_centers_get_a_pooled_judgement() {
+        let priors = priors(4);
+        assert_eq!(verdict(&json!({ "kind": "ingest" }), &priors), None);
+        // An output or a shard is judged on its shard, never on a pool.
+        assert_eq!(verdict(&json!({ "kind": "egress" }), &priors), None);
+        assert_eq!(verdict(&json!({ "kind": "egress_shard" }), &priors), None);
         // A stage that runs in-process is not an FFmpeg child.
         assert_eq!(
-            judge_node(
+            verdict(
                 &json!({ "kind": "stage", "execution": "tokio_task" }),
-                &snapshot
+                &priors
             ),
             None
         );
     }
 
     #[test]
-    fn a_child_stage_below_the_safe_utilization_is_clear() {
-        let judgement = judge_node(&transcoder(), &snapshot(1)).expect("an FFmpeg stage");
-        assert_eq!(judgement.verdict, Verdict::Clear);
-        assert_eq!(judgement.center, ServiceCenter::Ffmpeg);
-        assert_eq!(judgement.utilization, Some(0.25));
-        assert!(!judgement.measured, "priors, not a measurement");
+    fn an_ffmpeg_child_follows_its_pool_clear_pressured_then_limiting() {
+        let quarter = judge_pooled(&transcoder(), &priors(1)).expect("an FFmpeg child");
+        assert_eq!(quarter.verdict, Verdict::Clear);
+        assert_eq!(quarter.center, ServiceCenter::Ffmpeg);
+        assert_eq!(quarter.utilization, 0.25);
+        assert!(!quarter.measured, "priors, not a measurement");
+
+        let mut pool = priors(1);
+        pool.ffmpeg_util = 0.79;
+        assert_eq!(verdict(&transcoder(), &pool), Some(Verdict::Clear));
+        pool.ffmpeg_util = 0.8;
+        assert_eq!(verdict(&transcoder(), &pool), Some(Verdict::Pressured));
+        // Full: every child of the pool is bound by it.
+        assert_eq!(verdict(&transcoder(), &priors(4)), Some(Verdict::Limiting));
     }
 
     #[test]
-    fn the_center_the_flow_diagnosis_names_is_limiting_and_one_above_safe_is_pressured() {
-        // 4 of 4 stages: FFmpeg is the hottest center and saturated.
-        let full = snapshot(4);
-        assert_eq!(full.flow.center, ServiceCenter::Ffmpeg);
-        assert_ne!(full.flow.status, FlowStatus::Healthy);
-        assert_eq!(
-            judge_node(&transcoder(), &full).map(|j| j.verdict),
-            Some(Verdict::Limiting)
-        );
-        // The flow names FFmpeg, not egress: an idle egress is not limiting.
-        assert_eq!(
-            judge_node(&json!({ "kind": "egress" }), &full).map(|j| j.verdict),
-            Some(Verdict::Clear)
-        );
+    fn a_shard_is_judged_on_its_own_flow_so_a_stalled_sibling_does_not_limit_it() {
+        let stalled = judge_shard(3, 1024, Some(4_000), "stalled");
+        assert_eq!(stalled.verdict, Verdict::Limiting);
+        assert!(stalled.measured);
+        assert_eq!(stalled.reason, "the shard is stalled");
 
-        // At the safe utilization but not named by the flow: pressured.
-        let mut pressured = snapshot(1);
-        pressured.ffmpeg_util = 0.8;
+        let healthy = judge_shard(1, 1024, Some(5), "healthy");
+        assert_eq!(healthy.verdict, Verdict::Clear);
+        assert!(healthy.measured);
+
+        // Healthy state, but a full queue: its own flow limits it.
+        let full = judge_shard(1024, 1024, Some(5), "healthy");
+        assert_eq!(full.verdict, Verdict::Limiting);
+        assert_eq!(full.utilization, 1.0);
+        // Healthy state and a short queue, but no progress for 2 s: the
+        // deadline is missed.
         assert_eq!(
-            judge_node(&transcoder(), &pressured).map(|j| j.verdict),
-            Some(Verdict::Pressured)
+            judge_shard(1, 1024, Some(2_000), "healthy").verdict,
+            Verdict::Limiting
         );
     }
 
     #[test]
-    fn an_unhealthy_shard_is_limiting_whatever_the_model_says() {
-        let judgement = judge_node(
-            &json!({ "kind": "egress_shard", "state": "stalled" }),
-            &snapshot(0),
-        )
-        .expect("a shard");
-        assert_eq!(judgement.verdict, Verdict::Limiting);
-        assert!(judgement.measured);
-        assert_eq!(judgement.reason, "this shard is stalled");
+    fn an_output_carries_its_own_shards_judgement() {
+        let healthy = judge_shard(1, 1024, Some(5), "healthy");
+        let output = judge_output(&healthy, 2);
+        assert_eq!(output.verdict, Verdict::Clear);
+        assert!(output.reason.starts_with("on shard 2: "));
+    }
+
+    #[test]
+    fn in_one_map_a_stalled_shard_limits_only_its_own_outputs() {
+        let shard = |index: u64, state: &str, age: u64| {
+            json!({
+                "kind": "egress_shard", "feedId": "srt:p:source", "shardIndex": index,
+                "state": state,
+                "metrics": { "commandDepth": 1, "commandCapacity": 1024, "progressAgeMs": age },
+            })
+        };
+        let output = |shard: u64| json!({ "kind": "egress", "fabricFeed": "srt:p:source", "shardId": shard });
+        let mut nodes = vec![
+            output(0),
+            output(1),
+            shard(0, "stalled", 12_000),
+            shard(1, "healthy", 5),
+            // Not on the fabric: no shard, no judgement.
+            json!({ "kind": "egress" }),
+            transcoder(),
+        ];
+        judge_nodes(&mut nodes, &priors(1));
+        let verdict_of = |node: &Value| node["judgement"]["verdict"].as_str().map(str::to_owned);
+        let verdicts: Vec<_> = nodes.iter().map(verdict_of).collect();
         assert_eq!(
-            judge_node(
-                &json!({ "kind": "egress_shard", "state": "healthy" }),
-                &snapshot(0)
-            )
-            .map(|j| j.verdict),
-            Some(Verdict::Clear)
+            verdicts,
+            [
+                Some("limiting"),
+                Some("clear"),
+                Some("limiting"),
+                Some("clear"),
+                None,
+                Some("clear")
+            ]
+            .map(|v| v.map(str::to_owned))
+        );
+        assert_eq!(
+            nodes[0]["judgement"]["reason"],
+            "on shard 0: the shard is stalled"
         );
     }
 }

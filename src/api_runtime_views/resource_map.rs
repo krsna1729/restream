@@ -370,6 +370,7 @@ fn egress_node(egress: &Value) -> Value {
         "pipelineId": egress.get("pipelineId").cloned().unwrap_or(Value::Null),
         "execution": execution,
         "fabric": is_fabric,
+        "fabricFeed": egress.get("fabricFeed").cloned().unwrap_or(Value::Null),
         "shardId": egress.get("shardId").cloned().unwrap_or(Value::Null),
         "memory": Value::Null,
         "threads": {
@@ -585,12 +586,7 @@ pub(crate) async fn resource_map(
             .map(|stage| stage_node(stage, &child_resources)),
     );
     nodes.extend(egresses.iter().map(egress_node));
-    let capacity = engine.capacity_snapshot().await;
-    for node in &mut nodes {
-        if let Some(judgement) = super::node_judgement::judge_node(node, &capacity) {
-            node["judgement"] = json!(judgement);
-        }
-    }
+    super::node_judgement::judge_nodes(&mut nodes, &engine.capacity_priors().await);
 
     let srt_sender_limit = 512u64;
     let srt_sender_threads =
