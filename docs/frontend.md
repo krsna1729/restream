@@ -209,7 +209,13 @@ to `/`.
   (`/engine/resource-map?pipeline_id=…&view=detail&top_n=200`), nodes under
   pressure first, then by memory held, each with its confidence (measured,
   derived, estimated, unmeasured), a detail panel and the count of nodes the
-  server left out; the source ring (fill and retained payload) from the
+  server left out. The detail panel shows the node's metric cards (graph
+  consumers on the pipeline map, measured CPU with the FFmpeg child PID,
+  input packet rate and work per packet since the node started; a number the
+  node lacks is left out, not shown as zero) and the engine's bottleneck
+  judgement. "Global resource map" switches to the runtime scope (no
+  `pipeline_id`); there the graph is not the map's, so no consumer card. Then
+  the source ring (fill and retained payload) from the
   graph; the egress shards this pipeline's outputs run on (the server scopes
   them by feed and shard); and the map's attribution legend. Monitor (one
   pipeline): ingest and egress rate, the share of wanted outputs delivering,

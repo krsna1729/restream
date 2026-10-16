@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react";
 
 import { getProcessingGraph, getResourceMap, getStageTelemetry } from "../core/api.js";
-import type { GraphData, ResourceMapSnapshot } from "../core/api-types.js";
+import type { GraphData, NodeJudgement, ResourceMapSnapshot } from "../core/api-types.js";
 import { formatBytes, formatPercent } from "./format.js";
 import {
   buildResourceRows,
   MAP_TOP_N,
+  nodeCards,
   ringFromGraph,
   shardsFrom,
 } from "./inspect-model.js";
@@ -48,9 +49,11 @@ export function Inspect(props: { live: LiveSnapshot; pipelineId: string | null }
 }
 
 function Anatomy({ pipelineId }: { pipelineId: string }) {
-  const map = usePolled<ResourceMapSnapshot>(
-    ["resource-map", pipelineId, MAP_TOP_N],
-    () => getResourceMap(pipelineId, { view: "detail", topN: MAP_TOP_N }),
+  // The pipeline's map, or every pipeline's (the runtime scope).
+  const [global, setGlobal] = useState(false);
+  const scope = global ? null : pipelineId;
+  const map = usePolled<ResourceMapSnapshot>(["resource-map", scope, MAP_TOP_N], () =>
+    getResourceMap(scope, { view: "detail", topN: MAP_TOP_N }),
   );
   const graph = usePolled<GraphData>(["processing-graph", pipelineId], () =>
     getProcessingGraph(pipelineId),
@@ -70,7 +73,7 @@ function Anatomy({ pipelineId }: { pipelineId: string }) {
           <div className="card-body gap-3 p-4">
             <div className="flex items-center justify-between gap-2">
               <h3 id="inspect-map" className="card-title text-base">
-                Resource map
+                {global ? "Global resource map" : "Resource map"}
                 <span className="text-xs font-normal opacity-70">
                   under pressure first, then by memory held
                 </span>
@@ -82,6 +85,17 @@ function Anatomy({ pipelineId }: { pipelineId: string }) {
                   </span>
                 )}
                 <Freshness atMs={map.atMs} />
+                <button
+                  type="button"
+                  className="btn btn-xs"
+                  aria-pressed={global}
+                  onClick={() => {
+                    setGlobal(!global);
+                    setSelectedId(null);
+                  }}
+                >
+                  {global ? "This pipeline only" : "Global resource map"}
+                </button>
               </span>
             </div>
             {rows === null ? (
@@ -95,7 +109,8 @@ function Anatomy({ pipelineId }: { pipelineId: string }) {
             )}
           </div>
         </section>
-        <NodeDetail row={selected} />
+        {/* The graph is this pipeline's: it names consumers only here. */}
+        <NodeDetail row={selected} graph={global ? null : graph.value} />
       </div>
       <div className="grid gap-4 lg:grid-cols-3">
         <RingPanel
@@ -186,13 +201,26 @@ function scalarEntries(
     ]);
 }
 
-function NodeDetail({ row }: { row: ResourceRow | null }) {
+function NodeDetail({ row, graph }: { row: ResourceRow | null; graph: GraphData | null }) {
+  const cards = row ? nodeCards(row.node, graph) : [];
   return (
     <section className="card bg-base-200" aria-labelledby="inspect-node">
       <div className="card-body gap-3 p-4">
         <h3 id="inspect-node" className="card-title text-base">
           {row ? `Selected · ${row.node.label}` : "Selected node"}
         </h3>
+        {cards.length > 0 && (
+          <dl className="grid grid-cols-2 gap-2" aria-label="Node metrics">
+            {cards.map((card) => (
+              <div key={card.label} className="rounded bg-base-100 p-2">
+                <dt className="text-xs opacity-70">{card.label}</dt>
+                <dd className="text-lg font-semibold tabular-nums">{card.value}</dd>
+                <dd className="text-xs opacity-60">{card.foot}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        {row?.node.judgement && <Judgement judgement={row.node.judgement} />}
         {row === null ? (
           <p className="opacity-70">No node.</p>
         ) : (
@@ -216,6 +244,32 @@ function NodeDetail({ row }: { row: ResourceRow | null }) {
         {row?.node.kind === "stage" && <StagePipe key={row.node.id} stageKey={row.node.id} />}
       </div>
     </section>
+  );
+}
+
+const VERDICT: Record<NodeJudgement["verdict"], { title: string; tone: string }> = {
+  limiting: { title: "Limiting", tone: "alert-error" },
+  pressured: { title: "Under pressure", tone: "alert-warning" },
+  clear: { title: "Not a bottleneck", tone: "alert-success" },
+};
+
+/** The engine's judgement of the node against its service center. */
+function Judgement({ judgement }: { judgement: NodeJudgement }) {
+  const verdict = VERDICT[judgement.verdict];
+  return (
+    <div role="note" aria-label="Bottleneck judgement" className={`alert ${verdict.tone} alert-soft text-sm`}>
+      <div>
+        <b>{verdict.title}</b>
+        <p>
+          {judgement.reason}.{" "}
+          <span className="opacity-70">
+            {judgement.measured
+              ? "From a measurement."
+              : "From the capacity model's calibration priors (observe-only)."}
+          </span>
+        </p>
+      </div>
+    </div>
   );
 }
 

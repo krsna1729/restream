@@ -9,6 +9,7 @@ mod common;
 mod graph;
 mod graph_projection;
 mod measure;
+mod node_judgement;
 mod resource_map;
 mod stage_projection;
 mod status;

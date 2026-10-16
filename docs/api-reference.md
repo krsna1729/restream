@@ -1532,6 +1532,27 @@ memory attribution confidence marker is one of:
 - `estimated`: overheads that are intentionally not assigned to exact nodes
 - `unmeasured`: egress shards, which hold memory this view does not measure
 
+Some nodes carry `judgement`: whether the node limits the pipeline.
+
+- An `egress_shard` node is judged on its own command queue, progress age
+  and state, through the flow diagnosis the engine applies to its deepest
+  shard: `limiting` when it is not `healthy`, when its queue is at 80% of its
+  bound or more, or when it has not progressed for 1 s; otherwise `clear`.
+  A shard has no `pressured` tier: its 80% queue mark is already the
+  diagnosis's saturation point.
+- A fabric `egress` node takes the judgement of the shard it is placed on
+  (`fabricFeed`, `shardId`), so a stalled sibling shard does not touch it.
+  An output off the fabric has none.
+- A child-process stage or group (`ffmpeg`) and the source ring (`memory`)
+  draw on a pool every pipeline shares, and take its utilization against
+  the calibrated limit: `limiting` at 100% or more, `pressured` at the
+  model's safe utilization (80%) or more, otherwise `clear`.
+
+Each judgement carries `verdict`, `center`, `utilization` (the shard's queue
+against its bound, or the pool's utilization), `measured` (`true` for a
+shard's own measurement, `false` for the calibration priors) and a
+plain-language `reason`. Other nodes have no `judgement`.
+
 Responses include `limits.totalNodeCount`, `limits.returnedNodeCount`, and
 `limits.truncatedNodeCount` so large fleets can show that the view is grouped or
 capped. Agent context uses summary mode by default; investigation responses use

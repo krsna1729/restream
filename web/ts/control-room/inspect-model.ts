@@ -104,3 +104,60 @@ export function shardsFrom(snapshot: ResourceMapSnapshot): readonly ShardView[] 
         a.index - b.index,
     );
 }
+
+export interface NodeCard {
+  readonly label: string;
+  readonly value: string;
+  readonly foot: string;
+}
+
+/**
+ * The selected node's headline numbers. Consumers come from the graph (the
+ * graph node of the same stage, or the source ring); CPU only where the
+ * engine measures it; packet rate and work per packet from the node's
+ * counters, averaged since it started. A number the node does not have is
+ * left out rather than shown as zero.
+ */
+export function nodeCards(
+  node: ResourceMapNode,
+  graph: GraphData | null,
+): readonly NodeCard[] {
+  const cards: NodeCard[] = [];
+  const graphNode = graph?.nodes.find((candidate) =>
+    node.kind === "source_ring"
+      ? candidate.type === "ring_buffer"
+      : candidate.stageKey === node.id,
+  );
+  if (graph && graphNode) {
+    const consumers = graph.edges.filter((edge) => edge.from === graphNode.id).length;
+    cards.push({ label: "Consumers", value: String(consumers), foot: "graph nodes reading it" });
+  }
+  const cpu = finiteOrNull(node.cpuPercent);
+  if (cpu !== null) {
+    cards.push({
+      label: "CPU",
+      value: `${cpu.toFixed(1)}%`,
+      foot:
+        node.backendPid !== undefined
+          ? `measured child PID ${node.backendPid}`
+          : "measured",
+    });
+  }
+  const rate = finiteOrNull(node.metrics?.packetsPerSec);
+  if (rate !== null) {
+    cards.push({
+      label: "Packet rate",
+      value: `${Math.round(rate).toLocaleString("en-US")}/s`,
+      foot: "input packets, since it started",
+    });
+  }
+  const work = finiteOrNull(node.metrics?.avgUsPerPacket);
+  if (work !== null && work > 0) {
+    cards.push({
+      label: "Average work",
+      value: `${work.toFixed(work < 10 ? 1 : 0)} µs`,
+      foot: "per input packet",
+    });
+  }
+  return cards;
+}

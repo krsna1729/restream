@@ -9,7 +9,11 @@ import type {
   SrtPipelineIngestConfig,
   AppLogRow,
 } from "../types.js";
-import type { CapacitySnapshot, Diagnosis } from "./generated/runtime-state.js";
+import type {
+  CapacitySnapshot,
+  Diagnosis,
+  ServiceCenter,
+} from "./generated/runtime-state.js";
 
 export type AlertSeverity = "critical" | "warning";
 export type AlertScope = "engine" | "pipeline" | "stage" | "output";
@@ -155,6 +159,22 @@ export interface ResourceMapNode {
   protocol?: string;
   shardIndex?: number;
   feedId?: string;
+  /** A stage's FFmpeg child, when it has one. */
+  backendPid?: number;
+  /** Whether the node limits the pipeline, from the capacity model; absent
+   * for a node that consumes no modelled service center. */
+  judgement?: NodeJudgement;
+}
+
+export interface NodeJudgement {
+  verdict: "limiting" | "pressured" | "clear";
+  center: ServiceCenter;
+  /** The shard's command queue against its bound, or the shared pool's
+   * utilization against its calibrated limit. */
+  utilization: number;
+  /** A shard's own measurement, not the calibration priors. */
+  measured: boolean;
+  reason: string;
 }
 
 export interface ResourceMapSnapshot {

@@ -23,7 +23,6 @@ items).
 - [Q-050 inputs and stages in runtime state](#q-050-architecture-sonnet-project-inputs-and-stages-into-the-runtime-state)
 - [Q-051 bounded ingress transfer pump](#q-051-architecture-sonnet-bound-the-ingress-transfer-pump-per-owner-visit)
 - [Q-053 external FFmpeg process topology](#q-053-architecture-sonnet-external-ffmpeg-process-topology-per-rendition)
-- [Q-056 control-room Inspect gaps](#q-056-frontend-sonnet-control-room-inspect-node-metric-cards-bottleneck-judgement-global-map)
 - [Q-057 control-room Fleet gaps](#q-057-frontend-sonnet-control-room-fleet-shared-work-open-incidents-fleet-table-headroom-history)
 - [Q-058 control-room Monitor gaps](#q-058-frontend-sonnet-control-room-monitor-input-transport-shared-path-outlier-incident-cursor-pausecompare)
 - [Q-059 control-room Media gaps](#q-059-frontend-sonnet-control-room-media-recording-timeline-use-as-source)
@@ -375,19 +374,6 @@ items).
   2026-10-15. The former board item "FFmpeg A/B: external per-stage vs external
   multi-output" cannot be run as written: the second arm does not exist).
 
-### Q-056 [frontend] [sonnet] Control room Inspect: node metric cards, bottleneck judgement, global map
-- Goal: Inspect shows metric cards for the selected node, a bottleneck
-  judgement, and an action that opens the runtime-wide resource map.
-- Sources: node `cpuPercent`, `memory`, `threads`, `metrics`, `hotspots`
-  (`api_runtime_views/resource_map.rs:313-407`); `GET
-  /api/v1/engine/resource-map` without `pipeline_id` for the global map.
-- Missing: a node-level bottleneck verdict. Only `hotspots[]` and the
-  engine-wide `FlowDiagnosis.status` exist. Add the verdict to the resource
-  map node from the capacity model, or show no judgement; the page must not
-  invent one.
-- Gates: a Rust unit test for the verdict rule; the API drift check; Playwright.
-- Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
-
 ### Q-057 [frontend] [sonnet] Control room Fleet: shared work, open incidents, fleet table, headroom history
 - Goal: Fleet shows shared-work and open-incident metrics, a fleet table, and
   a headroom history.
@@ -474,7 +460,9 @@ items).
 
 ### Q-062 [frontend] [opus] Control room Capacity: calibration provenance, scenario controls, topology diff
 - Goal: Capacity shows calibration provenance, pipeline/protocol/encoding
-  scenario controls, and a topology-diff entry.
+  scenario controls, and a topology-diff entry. Q-054 to Q-062 are the
+  2026-10-15 mockup-gap audit; the user asked for all of them, one PR per
+  workspace, in Q-number order, so this item closes last.
 - Sources: the topology diff exists (`graph-diff-preview`). Provenance is
   missing: the scenario carries only `observeOnly`/`flowMeasured`, and
   the calibrated `CapacityLimits` (`capacity.rs:40-50`, six per-center

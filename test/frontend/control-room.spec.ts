@@ -1183,3 +1183,79 @@ test("pipelines: protocol mix, the stage two outputs share, and the recording ca
     for (const id of pipelineIds) await page.request.delete(`/api/v1/pipelines/${id}`);
   }
 });
+
+test("inspect: a node's metric cards and bottleneck judgement, then the global map", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  const stamp = Date.now();
+  const pipelineIds: string[] = [];
+  try {
+    const sourceId = await liveFilePipeline(page, `crnode${stamp}`);
+    pipelineIds.push(sourceId);
+    const sink = await loopbackSink(page, `crnodesink${stamp}`);
+    pipelineIds.push(sink.pipelineId);
+    const output = await page.request.post(`/api/v1/pipelines/${sourceId}/outputs`, {
+      data: {
+        name: `cr-node-out-${stamp}`,
+        url: sink.url,
+        config: { video: { mode: "source" }, audio: { mode: "selectTracks", tracks: [0] } },
+      },
+    });
+    expect(output.ok()).toBe(true);
+    const outputId: string = (await output.json()).output.id;
+    expect(
+      (await page.request.post(`/api/v1/pipelines/${sourceId}/outputs/${outputId}/start`)).ok(),
+    ).toBe(true);
+
+    await page.goto(`/?w=inspect&p=${sourceId}`);
+    const map = page.getByRole("region", { name: /^Resource map/ });
+    await map
+      .getByRole("row")
+      .filter({ hasText: "source ring" })
+      .getByRole("button", { name: "Source ring" })
+      .click();
+    const ring = page.getByRole("region", { name: "Selected · Source ring" });
+    // The output reads the ring: the graph names at least one consumer.
+    await expect(ring.getByLabel("Node metrics")).toContainText(/Consumers\s*[1-9]/);
+    // The ring draws on the shared memory pool, judged from the priors.
+    const ringJudgement = ring.getByRole("note", { name: "Bottleneck judgement" });
+    await expect(ringJudgement).toContainText("Not a bottleneck");
+    await expect(ringJudgement).toContainText(/memory pool every pipeline shares is at \d+%/);
+    await expect(ringJudgement).toContainText("calibration priors");
+
+    // The output is judged on the shard it is placed on, measured.
+    await map.getByRole("button", { name: "rtmp output" }).click();
+    const out = page.getByRole("region", { name: "Selected · rtmp output" });
+    const outJudgement = out.getByRole("note", { name: "Bottleneck judgement" });
+    await expect(outJudgement).toContainText(/on shard \d+: the shard's command queue is at \d+%/, {
+      timeout: 30_000,
+    });
+    await expect(outJudgement).toContainText("From a measurement.");
+
+    // The global map asks for every pipeline: no pipeline_id.
+    const global = page.waitForRequest(
+      (request) =>
+        request.url().includes("/api/v1/engine/resource-map") &&
+        !request.url().includes("pipeline_id="),
+    );
+    await map.getByRole("button", { name: "Global resource map" }).click();
+    await global;
+    const runtime = page.getByRole("region", { name: /^Global resource map/ });
+    await expect(runtime.getByRole("button", { name: "This pipeline only" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(runtime.getByRole("row").filter({ hasText: "restream" })).toContainText(
+      "measured",
+    );
+  } finally {
+    for (const id of pipelineIds) {
+      await page.request.delete(`/api/v1/pipelines/${id}`);
+    }
+  }
+});
