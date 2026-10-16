@@ -1,49 +1,51 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 
-import type { OperatorAlert } from "../core/api-types.js";
+import type { LifecycleEventsSnapshot, OperatorAlert, ResolvedAlert } from "../core/api-types.js";
+import type { FleetSample } from "./fleet-history.js";
 import { formatAge } from "./format.js";
 import {
+  RESOLVED_WINDOWS,
+  evidenceExport,
   evidencePacket,
+  incidentMarks,
   incidentTimeline,
   rankIncidents,
+  resolvedMayBeIncomplete,
   timelineMayBeIncomplete,
-  updateResolved,
+  visibleResolved,
 } from "./incidents-model.js";
-import type { ResolvedIncident } from "./incidents-model.js";
 import { Freshness, useLifecycleEvents, useOpenAlerts } from "./polled.js";
+import type { Polled } from "./polled.js";
 import { PlaceLink } from "./router.js";
+import { Sparkline } from "./sparkline.js";
 import { useNow } from "./store.js";
 import type { LiveSnapshot } from "./store.js";
 
-const RESOLVED_CAP = 20;
-
 /** Open incidents, what failed and what did not, and what to do. */
 export function Incidents({ live }: { live: LiveSnapshot }) {
-  const alerts = useOpenAlerts();
+  const [windowIndex, setWindowIndex] = useState(1);
+  const resolvedWindow = RESOLVED_WINDOWS[windowIndex] ?? RESOLVED_WINDOWS[0];
+  const alerts = useOpenAlerts(resolvedWindow.ms);
   const open = useMemo(
     () => rankIncidents(alerts.value?.alerts ?? []),
     [alerts.value],
   );
-  const [resolved, setResolved] = useState<readonly ResolvedIncident[]>([]);
-  const previous = useRef<readonly OperatorAlert[] | null>(null);
-  useEffect(() => {
-    if (!alerts.value) return;
-    const current = alerts.value.alerts;
-    if (previous.current) {
-      const before = previous.current;
-      setResolved((list) =>
-        updateResolved(list, before, current, Date.now(), RESOLVED_CAP),
-      );
-    }
-    previous.current = current;
-  }, [alerts.value]);
+  const resolved = useMemo(
+    () => visibleResolved(alerts.value?.resolved ?? [], open),
+    [alerts.value, open],
+  );
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedResolved = open.some((alert) => alert.id === selectedId)
+    ? undefined
+    : resolved.find((entry) => entry.alert.id === selectedId);
   const selected =
     open.find((alert) => alert.id === selectedId) ??
-    resolved.find((entry) => entry.alert.id === selectedId)?.alert ??
+    selectedResolved?.alert ??
     open[0] ??
     null;
+  const resolvedAt = selected === selectedResolved?.alert ? selectedResolved.resolvedAt : null;
+  const events = useLifecycleEvents(selected?.pipelineId ?? null);
   const names = useMemo(() => {
     const map = new Map<string, string>();
     for (const pipeline of live.state?.pipelines ?? []) map.set(pipeline.id, pipeline.name);
@@ -57,12 +59,39 @@ export function Incidents({ live }: { live: LiveSnapshot }) {
         <h2 className="text-xl font-semibold">Incidents</h2>
         <span className="badge badge-warning">{open.length} open</span>
         <span className="badge badge-ghost">
-          {resolved.length} resolved since this page opened
+          {resolved.length} resolved in the last {resolvedWindow.label}
         </span>
+        <label className="flex items-center gap-1 text-sm">
+          Resolved window
+          <select
+            className="select select-bordered select-xs"
+            value={windowIndex}
+            onChange={(event) => setWindowIndex(Number(event.target.value))}
+          >
+            {RESOLVED_WINDOWS.map((option, index) => (
+              <option key={option.label} value={index}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <span className="ml-auto">
           <Freshness atMs={alerts.atMs} />
         </span>
       </div>
+      {alerts.value?.resolvedCompleteFrom !== undefined &&
+        alerts.atMs !== null &&
+        resolvedMayBeIncomplete(
+          alerts.atMs - resolvedWindow.ms,
+          alerts.value.resolvedCompleteFrom,
+        ) && (
+          <p className="text-xs opacity-70">
+            The engine's resolved history is complete only from{" "}
+            {new Date(alerts.value.resolvedCompleteFrom).toLocaleString()} (it
+            restarted then, or dropped older ones): earlier closings in this
+            window may be missing.
+          </p>
+        )}
       {alerts.value === null ? (
         <p className="opacity-70">Loading alerts…</p>
       ) : (
@@ -79,10 +108,18 @@ export function Incidents({ live }: { live: LiveSnapshot }) {
               <Detail
                 key={selected.id}
                 alert={selected}
-                isOpen={open.includes(selected)}
+                resolvedAt={resolvedAt}
+                events={events}
+                history={live.history}
                 names={names}
               />
-              <Evidence alert={selected} names={names} />
+              <Evidence
+                alert={selected}
+                resolvedAt={resolvedAt}
+                events={events.value}
+                history={live.history}
+                names={names}
+              />
             </>
           ) : (
             <p className="opacity-70 lg:col-span-2">
@@ -109,7 +146,7 @@ function affected(alert: OperatorAlert, names: Map<string, string>): string {
 
 function Queue(props: {
   open: readonly OperatorAlert[];
-  resolved: readonly ResolvedIncident[];
+  resolved: readonly ResolvedAlert[];
   selectedId: string | null;
   names: Map<string, string>;
   onSelect: (id: string) => void;
@@ -162,8 +199,8 @@ function Queue(props: {
           <>
             <h3 className="card-title mt-2 text-base">Resolved</h3>
             <ul className="space-y-1 opacity-80">
-              {props.resolved.map(({ alert, resolvedAtMs }) =>
-                item(alert, `resolved ${formatAge(resolvedAtMs, now)} ago`),
+              {props.resolved.map(({ alert, resolvedAt }) =>
+                item(alert, `resolved ${formatAge(Date.parse(resolvedAt), now)} ago`),
               )}
             </ul>
           </>
@@ -175,11 +212,13 @@ function Queue(props: {
 
 function Detail(props: {
   alert: OperatorAlert;
-  isOpen: boolean;
+  resolvedAt: string | null;
+  events: Polled<LifecycleEventsSnapshot>;
+  history: readonly FleetSample[];
   names: Map<string, string>;
 }) {
-  const { alert } = props;
-  const events = useLifecycleEvents(alert.pipelineId ?? null);
+  const { alert, events } = props;
+  const isOpen = props.resolvedAt === null;
   const timeline = useMemo(
     () => (events.value ? incidentTimeline(alert, events.value.events) : null),
     [alert, events.value],
@@ -193,8 +232,8 @@ function Detail(props: {
           <h3 id="incident-detail" className="card-title text-base">
             {alert.title}
           </h3>
-          <span className={`badge ${props.isOpen ? "badge-warning" : "badge-success"}`}>
-            {props.isOpen ? "open" : "resolved"}
+          <span className={`badge ${isOpen ? "badge-warning" : "badge-success"}`}>
+            {isOpen ? "open" : "resolved"}
           </span>
           {alert.pipelineId && (
             <PlaceLink
@@ -206,9 +245,13 @@ function Detail(props: {
           )}
         </div>
         <div className="rounded bg-base-100 p-3 text-sm">
-          <b>{props.isOpen ? "Current judgement" : "Last judgement"}</b>
+          <b>{isOpen ? "Current judgement" : "Last judgement"}</b>
           <p>{alert.cause}</p>
         </div>
+        <Correlation
+          history={props.history}
+          marks={incidentMarks(alert, props.resolvedAt)}
+        />
         <div className="flex items-center justify-between">
           <h4 className="font-medium">Timeline</h4>
           <Freshness atMs={events.atMs} />
@@ -248,14 +291,82 @@ function Detail(props: {
   );
 }
 
-function Evidence(props: { alert: OperatorAlert; names: Map<string, string> }) {
+/** The fleet's signals around the incident, cursors at its open and close. */
+function Correlation(props: { history: readonly FleetSample[]; marks: readonly number[] }) {
+  return (
+    <div aria-label="Correlation">
+      <h4 className="font-medium">Correlation</h4>
+      <p className="text-xs opacity-70">
+        This page's last 15 minutes of fleet samples; the cursor marks when the
+        incident opened and, once it did, closed.
+      </p>
+      {props.history.length === 0 ? (
+        <p className="opacity-70">Collecting the first sample…</p>
+      ) : (
+        <dl className="grid grid-cols-[7rem_1fr] items-center gap-x-2 text-sm">
+          <dt>Delivering</dt>
+          <dd>
+            <Sparkline
+              history={props.history}
+              pick={(sample) => sample.deliveringPercent}
+              label="Delivering over time"
+              top={100}
+              marks={props.marks}
+            />
+          </dd>
+          <dt>Headroom</dt>
+          <dd>
+            <Sparkline
+              history={props.history}
+              pick={(sample) => sample.headroomPercent}
+              label="Headroom over time"
+              top={100}
+              marks={props.marks}
+            />
+          </dd>
+        </dl>
+      )}
+    </div>
+  );
+}
+
+function Evidence(props: {
+  alert: OperatorAlert;
+  resolvedAt: string | null;
+  events: LifecycleEventsSnapshot | null;
+  history: readonly FleetSample[];
+  names: Map<string, string>;
+}) {
   const packet = evidencePacket(props.alert);
+  const download = () => {
+    const record = evidenceExport({
+      alert: props.alert,
+      resolvedAt: props.resolvedAt,
+      events: props.events?.events ?? null,
+      history: props.history,
+      nowMs: Date.now(),
+    });
+    const url = URL.createObjectURL(
+      new Blob([JSON.stringify(record, null, 2)], { type: "application/json" }),
+    );
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `incident-${props.alert.id.replace(/[^A-Za-z0-9._-]+/g, "_")}.json`;
+    link.click();
+    // Some browsers read the URL after `click` returns.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
   return (
     <section className="card bg-base-200" aria-labelledby="incident-evidence">
       <div className="card-body gap-3 p-4 text-sm">
-        <h3 id="incident-evidence" className="card-title text-base">
-          Evidence packet
-        </h3>
+        <div className="flex items-center justify-between gap-2">
+          <h3 id="incident-evidence" className="card-title text-base">
+            Evidence packet
+          </h3>
+          <button type="button" className="btn btn-xs" onClick={download}>
+            Export evidence
+          </button>
+        </div>
         <div>
           <h4 className="text-xs uppercase opacity-70">Affected</h4>
           <p>{affected(props.alert, props.names)}</p>
@@ -278,10 +389,22 @@ function Evidence(props: { alert: OperatorAlert; names: Map<string, string> }) {
         </div>
         <div>
           <h4 className="text-xs uppercase opacity-70">Evidence</h4>
-          <ul className="list-inside list-disc break-words">
+          <ul className="space-y-1 break-words">
             {packet.evidence.map((line, index) => (
               // Two alerts may repeat a line: the position keeps keys unique.
-              <li key={`${index}:${line}`}>{line}</li>
+              <li key={`${index}:${line.signal}`} className="flex items-start gap-2">
+                <span
+                  className={`badge badge-xs shrink-0 ${line.confidence === "measured" ? "badge-info" : "badge-ghost"}`}
+                  title={
+                    line.confidence === "measured"
+                      ? "A reading the engine took."
+                      : "A conclusion the engine's rules drew from readings."
+                  }
+                >
+                  {line.confidence}
+                </span>
+                <span>{line.signal}</span>
+              </li>
             ))}
           </ul>
         </div>

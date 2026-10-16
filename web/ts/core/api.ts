@@ -176,8 +176,14 @@ async function getSystemMetrics(
   return apiRequest<SystemMetrics>(url);
 }
 
-async function getAggregateAlerts(): Promise<AlertsSnapshot | null> {
-  return apiRequest<AlertsSnapshot>("/api/v1/alerts");
+async function getAggregateAlerts(
+  options: { since?: Date } = {},
+): Promise<AlertsSnapshot | null> {
+  return apiRequest<AlertsSnapshot>(
+    options.since
+      ? `/api/v1/alerts?since=${encodeURIComponent(options.since.toISOString())}`
+      : "/api/v1/alerts",
+  );
 }
 
 async function getLifecycleEvents(

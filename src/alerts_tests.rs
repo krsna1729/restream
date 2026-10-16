@@ -214,7 +214,7 @@ fn failed_output_phase_yields_warning() {
         alerts[0]
             .evidence
             .iter()
-            .any(|e| e.contains("connection refused"))
+            .any(|e| e.signal.contains("connection refused"))
     );
 }
 
@@ -495,7 +495,7 @@ fn low_nofile_limit_yields_engine_warning() {
         alerts[0]
             .evidence
             .iter()
-            .any(|evidence| evidence == "soft = 1024")
+            .any(|evidence| evidence == &Evidence::measured("soft = 1024"))
     );
 }
 
@@ -519,7 +519,7 @@ fn rtmp_fd_exhaustion_yields_critical_engine_alert() {
         alerts[0]
             .evidence
             .iter()
-            .any(|evidence| evidence == "fdExhaustionErrors = 3")
+            .any(|evidence| evidence == &Evidence::measured("fdExhaustionErrors = 3"))
     );
 }
 
@@ -611,7 +611,14 @@ fn saturated_srt_receive_buffer_yields_input_causal_alert() {
     assert_eq!(alert.scope, Scope::Pipeline);
     assert!(alert.title.contains("SRT publisher ingest"));
     assert!(alert.cause.contains("not draining ingest data"));
-    assert!(alert.evidence.iter().any(|line| line.contains("100%")));
+    let confidence_of = |text: &str| {
+        alert
+            .evidence
+            .iter()
+            .find(|line| line.signal.contains(text))
+            .map(|line| line.confidence)
+    };
+    assert_eq!(confidence_of("100%"), Some(Confidence::Measured));
 }
 
 #[test]
@@ -739,7 +746,7 @@ fn stage_receiving_input_without_output_yields_warning_alert() {
         alerts[0]
             .evidence
             .iter()
-            .any(|evidence| evidence == "packetsIn = 4")
+            .any(|evidence| evidence == &Evidence::measured("packetsIn = 4"))
     );
 }
 
@@ -825,7 +832,12 @@ fn stalled_fabric_shard_yields_warning_alert() {
     assert_eq!(alerts[0].severity, Severity::Warning);
     assert_eq!(alerts[0].scope, Scope::Engine);
     assert_eq!(alerts[0].id, "engine:egress_fabric:srt:feed-2:3:stalled");
-    assert!(alerts[0].evidence.iter().any(|e| e.contains("30000")));
+    assert!(
+        alerts[0]
+            .evidence
+            .iter()
+            .any(|e| e.signal.contains("30000"))
+    );
 }
 
 #[test]
@@ -864,7 +876,12 @@ fn fabric_shard_command_channel_near_capacity_yields_warning_alert() {
         alerts[0].id,
         "engine:egress_fabric:sink:feed-4:2:command_overload"
     );
-    assert!(alerts[0].evidence.iter().any(|e| e.contains("90.0%")));
+    assert!(
+        alerts[0]
+            .evidence
+            .iter()
+            .any(|e| e.signal.contains("90.0%"))
+    );
 }
 
 #[test]
@@ -916,7 +933,7 @@ fn retry_attempts_near_ceiling_yields_retry_admission_alert() {
         alerts[0].id,
         "pipeline:pipe1:output:out1:retry_admission_saturation"
     );
-    assert!(alerts[0].evidence.iter().any(|e| e.contains("8")));
+    assert!(alerts[0].evidence.iter().any(|e| e.signal.contains("8")));
 }
 
 #[test]
@@ -956,5 +973,5 @@ fn derive_alerts_triggers_warning_on_repeated_egress_resync() {
         alerts[0].id,
         "engine:egress_fabric:rtmp:feed-1:0:repeated_resync"
     );
-    assert!(alerts[0].evidence.iter().any(|e| e.contains("5")));
+    assert!(alerts[0].evidence.iter().any(|e| e.signal.contains("5")));
 }

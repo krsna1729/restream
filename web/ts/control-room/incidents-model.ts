@@ -1,28 +1,33 @@
 // The Incidents workspace's model. An incident is an open alert: a period
 // (first seen .. last seen) with an affected entity, a diagnosis and an
-// operator action. The engine keeps no incident history, so alerts that
-// close while the page is open are kept here as resolved.
+// operator action. The engine keeps a bounded history of the ones that
+// resolved; the alerts read returns those closed since a given time.
 
 import type {
+  AlertEvidence,
   AlertScope,
   LifecycleEvent,
   OperatorAlert,
+  ResolvedAlert,
 } from "../core/api-types.js";
 import type { Layer } from "../core/generated/runtime-state.js";
+import type { FleetSample } from "./fleet-history.js";
 import { describeCause } from "./fleet-model.js";
 
-export interface ResolvedIncident {
-  readonly alert: OperatorAlert;
-  /** Wall-clock ms of the first poll that no longer listed it. */
-  readonly resolvedAtMs: number;
-}
+/** How far back the resolved list reaches. */
+export const RESOLVED_WINDOWS = [
+  { label: "15m", ms: 15 * 60_000 },
+  { label: "1h", ms: 60 * 60_000 },
+  { label: "6h", ms: 6 * 60 * 60_000 },
+  { label: "24h", ms: 24 * 60 * 60_000 },
+] as const;
 
 export interface EvidencePacket {
   /** The degraded layer and why; `null` when the alert has no diagnosis. */
   readonly failed: string | null;
   /** Layers checked and healthy upstream of the failure. */
   readonly notFailed: readonly string[];
-  readonly evidence: readonly string[];
+  readonly evidence: readonly AlertEvidence[];
   readonly action: string;
 }
 
@@ -61,24 +66,33 @@ export function rankIncidents(
 }
 
 /**
- * `resolved` with the alerts of `previous` that `current` no longer lists,
- * newest first, keeping `cap`. An alert that reopens leaves the list.
- * Unchanged (the same array) when nothing closed or reopened.
+ * Whether a resolved window may be missing some: it reaches back to or past
+ * the time after which the engine's kept history is complete (its start, or
+ * the close of the latest alert it dropped; an alert closed at that instant
+ * may be gone).
  */
-export function updateResolved(
-  resolved: readonly ResolvedIncident[],
-  previous: readonly OperatorAlert[],
-  current: readonly OperatorAlert[],
-  atMs: number,
-  cap: number,
-): readonly ResolvedIncident[] {
-  const open = new Set(current.map((alert) => alert.id));
-  const closed = previous
-    .filter((alert) => !open.has(alert.id))
-    .map((alert) => ({ alert, resolvedAtMs: atMs }));
-  const kept = resolved.filter((entry) => !open.has(entry.alert.id));
-  if (closed.length === 0 && kept.length === resolved.length) return resolved;
-  return [...closed, ...kept].slice(0, cap);
+export function resolvedMayBeIncomplete(
+  windowStartMs: number,
+  completeFrom: string | undefined,
+): boolean {
+  const from = completeFrom === undefined ? Number.NaN : Date.parse(completeFrom);
+  return Number.isFinite(from) && windowStartMs <= from;
+}
+
+/**
+ * The engine's resolved alerts (newest first) less the ones open again,
+ * once per id: the latest closing, so a selection by id is unambiguous.
+ */
+export function visibleResolved(
+  resolved: readonly ResolvedAlert[],
+  open: readonly OperatorAlert[],
+): readonly ResolvedAlert[] {
+  const seen = new Set(open.map((alert) => alert.id));
+  return resolved.filter((entry) => {
+    if (seen.has(entry.alert.id)) return false;
+    seen.add(entry.alert.id);
+    return true;
+  });
 }
 
 export function evidencePacket(alert: OperatorAlert): EvidencePacket {
@@ -137,4 +151,44 @@ export function timelineMayBeIncomplete(
 ): boolean {
   const oldest = Math.min(...fetched.map((event) => Date.parse(event.timestamp)));
   return !(oldest <= timelineStartMs(alert));
+}
+
+/** The chart's cursors: when the incident opened and, once it has, closed. */
+export function incidentMarks(alert: OperatorAlert, resolvedAt: string | null): number[] {
+  return [alert.firstSeen, resolvedAt ?? undefined]
+    .map((at) => seenMs(at))
+    .filter(Number.isFinite);
+}
+
+/**
+ * One incident as a self-contained record an operator can attach to a
+ * ticket: the alert as last judged, its evidence packet, the timeline the
+ * page shows, and the page's fleet samples from the timeline's start to the
+ * close (or now). `events` is `null` when the timeline was not loaded.
+ */
+export function evidenceExport(input: {
+  alert: OperatorAlert;
+  resolvedAt: string | null;
+  events: readonly LifecycleEvent[] | null;
+  history: readonly FleetSample[];
+  nowMs: number;
+}) {
+  const { alert, resolvedAt, events } = input;
+  const fromMs = timelineStartMs(alert);
+  const toMs = resolvedAt === null ? input.nowMs : seenMs(resolvedAt);
+  return {
+    exportedAt: new Date(input.nowMs).toISOString(),
+    status: resolvedAt === null ? "open" : "resolved",
+    resolvedAt,
+    alert,
+    packet: evidencePacket(alert),
+    timeline:
+      events === null
+        ? null
+        : {
+            events: incidentTimeline(alert, events),
+            mayBeIncomplete: timelineMayBeIncomplete(alert, events),
+          },
+    signals: input.history.filter((sample) => sample.atMs >= fromMs && sample.atMs <= toMs),
+  };
 }

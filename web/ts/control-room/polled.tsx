@@ -66,9 +66,16 @@ export function useEngineHealth(): Polled<HealthData> {
   return usePolled(["engine-health"], () => getEngineHealth<HealthData>(), HEALTH_INTERVAL_MS);
 }
 
-/** Every open alert, shared by Fleet's count and the Incidents list. */
-export function useOpenAlerts(): Polled<AlertsSnapshot> {
-  return usePolled(["aggregate-alerts"], () => getAggregateAlerts());
+/** Every open alert, shared by Fleet's count and the Incidents list, and
+ * the ones resolved in the last `resolvedWindowMs` (all kept without it). */
+export function useOpenAlerts(resolvedWindowMs?: number): Polled<AlertsSnapshot> {
+  return usePolled(["aggregate-alerts", resolvedWindowMs ?? null], () =>
+    getAggregateAlerts(
+      resolvedWindowMs === undefined
+        ? {}
+        : { since: new Date(Date.now() - resolvedWindowMs) },
+    ),
+  );
 }
 
 /** The latest lifecycle events of one pipeline (`null`: of every one). */

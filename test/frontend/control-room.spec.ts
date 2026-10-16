@@ -380,6 +380,39 @@ test("incidents and capacity: an alert's evidence packet and an engine-made proj
     const packet = page.getByRole("region", { name: "Evidence packet" });
     await expect(packet).toContainText(`pipeline ${name}`);
     await expect(packet.getByText("Operator action")).toBeVisible();
+    await expect(packet.getByText("measured").first()).toBeVisible();
+    await expect(page.getByLabel("Correlation")).toBeVisible();
+
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      packet.getByRole("button", { name: "Export evidence" }).click(),
+    ]);
+    const exported = JSON.parse(await readFile(await download.path(), "utf8"));
+    expect(exported.status).toBe("open");
+    expect(exported.alert.pipelineId).toBe(pipelineId);
+    expect(exported.packet.evidence[0].confidence).toMatch(/^(measured|derived)$/);
+
+    // Deleting the pipeline ends its incident: the engine lists it as
+    // resolved in the chosen window (by id: the name went with it), and the
+    // detail reads it as closed.
+    expect((await page.request.delete(`/api/v1/pipelines/${pipelineId}`)).ok()).toBe(true);
+    await page.getByLabel("Resolved window").selectOption("15m");
+    const resolved = queue
+      .getByRole("button")
+      .filter({ hasText: /resolved .* ago/ })
+      .filter({ hasText: `pipeline ${pipelineId}` })
+      .first();
+    await expect(resolved).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("resolved in the last 15m")).toBeVisible();
+    await resolved.click();
+    await expect(page.getByRole("region", { name: "Evidence packet" })).toContainText(
+      `pipeline ${pipelineId}`,
+    );
+    await expect(
+      page
+        .locator('section[aria-labelledby="incident-detail"]')
+        .getByText("resolved", { exact: true }),
+    ).toBeVisible();
 
     await page
       .getByRole("navigation", { name: "Workspaces" })

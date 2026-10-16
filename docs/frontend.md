@@ -251,9 +251,14 @@ to `/`.
   alert (`/alerts`), critical first, then the widest scope, then the oldest;
   the selected one's lifecycle events (`/events`) from a minute before it
   opened; and its evidence packet: what failed (the diagnosis layer and
-  cause), what did not (the layers ruled out), the evidence lines and the
-  recommended action. Alerts that close while the page is open stay listed
-  as resolved (the engine keeps no incident history). Capacity (fleet): the
+  cause), what did not (the layers ruled out), each evidence line marked
+  `measured` or `derived` by the engine, and the recommended action. The
+  resolved list is the engine's (`/alerts?since=`, a 15m/1h/6h/24h window),
+  with a note when the window reaches past the engine's kept history.
+  A correlation chart draws the page's 15-minute delivering and headroom
+  samples with cursors at the incident's open and close, and "Export
+  evidence" downloads the alert, packet, timeline and those samples as one
+  JSON file, built in the browser. Capacity (fleet): the
   `/metrics/system` capacity snapshot (load per service center, labelled
   calibration priors, observe-only), the Flow Doctor (measured from the
   busiest shard, or projected when none runs) and a scenario form whose

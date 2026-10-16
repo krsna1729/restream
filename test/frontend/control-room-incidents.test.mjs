@@ -4,11 +4,14 @@ import test from "node:test";
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
 const {
+  evidenceExport,
   evidencePacket,
+  incidentMarks,
   incidentTimeline,
   rankIncidents,
+  resolvedMayBeIncomplete,
   timelineMayBeIncomplete,
-  updateResolved,
+  visibleResolved,
 } =
   await loadCompiledFrontendModule("control-room/incidents-model.js");
 
@@ -43,31 +46,83 @@ test("incidents rank critical first, then the widest scope, then the oldest", ()
   );
 });
 
-test("a closed alert becomes resolved, newest first and capped; reopening removes it", () => {
-  let resolved = updateResolved([], [alert("a"), alert("b")], [alert("b")], 1_000, 2);
+test("resolved: an alert open again leaves, and a repeat id shows its latest closing", () => {
+  const resolved = [
+    { alert: alert("a"), resolvedAt: "2026-10-12T10:05:00Z" },
+    { alert: alert("b"), resolvedAt: "2026-10-12T10:04:00Z" },
+    { alert: alert("a"), resolvedAt: "2026-10-12T10:02:00Z" },
+  ];
   assert.deepEqual(
-    resolved.map((r) => [r.alert.id, r.resolvedAtMs]),
-    [["a", 1_000]],
+    visibleResolved(resolved, []).map((r) => [r.alert.id, r.resolvedAt]),
+    [
+      ["a", "2026-10-12T10:05:00Z"],
+      ["b", "2026-10-12T10:04:00Z"],
+    ],
   );
-  resolved = updateResolved(resolved, [alert("b"), alert("c")], [], 2_000, 2);
   assert.deepEqual(
-    resolved.map((r) => r.alert.id),
-    ["b", "c"],
+    visibleResolved(resolved, [alert("a")]).map((r) => r.alert.id),
+    ["b"],
   );
-  // `b` opens again: it is no longer resolved.
-  resolved = updateResolved(resolved, [], [alert("b")], 3_000, 2);
+});
+
+test("a resolved window reaching past the kept history may be missing some", () => {
+  const from = "2026-10-12T10:00:00Z";
+  assert.equal(resolvedMayBeIncomplete(Date.parse(from), from), true, "exclusive bound");
+  assert.equal(resolvedMayBeIncomplete(Date.parse(from) + 1, from), false);
+  assert.equal(resolvedMayBeIncomplete(0, undefined), false);
+});
+
+test("the chart marks the open and, once resolved, the close", () => {
+  const opened = alert("a", { firstSeen: "2026-10-12T10:00:00Z" });
+  assert.deepEqual(incidentMarks(opened, null), [Date.parse("2026-10-12T10:00:00Z")]);
+  assert.deepEqual(incidentMarks(opened, "2026-10-12T10:03:00Z"), [
+    Date.parse("2026-10-12T10:00:00Z"),
+    Date.parse("2026-10-12T10:03:00Z"),
+  ]);
+  assert.deepEqual(incidentMarks(alert("b", { firstSeen: undefined }), null), []);
+});
+
+test("the export keeps the samples from the timeline's start to the close", () => {
+  const at = (iso) => Date.parse(iso);
+  const sample = (iso) => ({ atMs: at(iso), headroomPercent: 50, deliveringPercent: 100, degraded: null });
+  const history = [
+    sample("2026-10-12T09:58:59Z"), // before the minute of lead-up
+    sample("2026-10-12T09:59:00Z"),
+    sample("2026-10-12T10:02:00Z"),
+    sample("2026-10-12T10:03:01Z"), // after it closed
+  ];
+  const record = evidenceExport({
+    alert: alert("a", { firstSeen: "2026-10-12T10:00:00Z" }),
+    resolvedAt: "2026-10-12T10:03:00Z",
+    events: [event(1, "2026-10-12T09:58:00Z"), event(2, "2026-10-12T10:01:00Z")],
+    history,
+    nowMs: at("2026-10-12T10:10:00Z"),
+  });
+  assert.equal(record.status, "resolved");
+  assert.equal(record.exportedAt, "2026-10-12T10:10:00.000Z");
   assert.deepEqual(
-    resolved.map((r) => r.alert.id),
-    ["c"],
+    record.signals.map((s) => s.atMs),
+    [at("2026-10-12T09:59:00Z"), at("2026-10-12T10:02:00Z")],
   );
-  // Nothing closed or reopened: the same list, so the queue need not redraw.
-  assert.equal(updateResolved(resolved, [alert("b")], [alert("b")], 4_000, 2), resolved);
+  assert.deepEqual(record.timeline, { events: [event(2, "2026-10-12T10:01:00Z")], mayBeIncomplete: false });
+
+  // Open: the window runs to now; no timeline loaded is said, not faked.
+  const open = evidenceExport({
+    alert: alert("a", { firstSeen: "2026-10-12T10:00:00Z" }),
+    resolvedAt: null,
+    events: null,
+    history,
+    nowMs: at("2026-10-12T10:10:00Z"),
+  });
+  assert.equal(open.status, "open");
+  assert.equal(open.timeline, null);
+  assert.equal(open.signals.length, 3);
 });
 
 test("the evidence packet says what failed, what was ruled out and what to do", () => {
   const packet = evidencePacket(
     alert("dead", {
-      evidence: ["phase rtmp_fabric_leaf"],
+      evidence: [{ signal: "phase rtmp_fabric_leaf", confidence: "measured" }],
       recommendedAction: "Check the destination.",
       diagnosis: {
         layer: "destination",
@@ -80,7 +135,7 @@ test("the evidence packet says what failed, what was ruled out and what to do", 
   assert.equal(packet.notFailed.length, 2);
   assert.match(packet.notFailed[0], /^ingest/);
   assert.match(packet.notFailed[1], /^feed/);
-  assert.deepEqual(packet.evidence, ["phase rtmp_fabric_leaf"]);
+  assert.deepEqual(packet.evidence, [{ signal: "phase rtmp_fabric_leaf", confidence: "measured" }]);
   assert.equal(packet.action, "Check the destination.");
 
   const undiagnosed = evidencePacket(alert("no-publisher", { scope: "pipeline" }));

@@ -4,11 +4,13 @@
 //! returns a sorted `Vec<Alert>` (Critical before Warning). No I/O, no locks.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
 
 use serde::Serialize;
 
 mod output;
+mod tracker;
+
+pub use tracker::{AlertTracker, ResolvedAlert, ResolvedWindow};
 
 // ─── Severity ────────────────────────────────────────────────────────────────
 
@@ -41,6 +43,44 @@ pub enum Scope {
     Output,
 }
 
+// ─── Evidence ────────────────────────────────────────────────────────────────
+
+/// How the engine knows an evidence signal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Confidence {
+    /// Read from one runtime counter, gauge or reported state (or a ratio
+    /// of two read at the same instant).
+    Measured,
+    /// Concluded by the evidence rules from other signals: layers ruled
+    /// out, outputs counted across a shard.
+    Derived,
+}
+
+/// One evidence signal and how the engine knows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Evidence {
+    pub signal: String,
+    pub confidence: Confidence,
+}
+
+impl Evidence {
+    pub fn measured(signal: impl Into<String>) -> Self {
+        Self {
+            signal: signal.into(),
+            confidence: Confidence::Measured,
+        }
+    }
+
+    pub fn derived(signal: impl Into<String>) -> Self {
+        Self {
+            signal: signal.into(),
+            confidence: Confidence::Derived,
+        }
+    }
+}
+
 // ─── Alert ───────────────────────────────────────────────────────────────────
 
 /// A single derived health alert. The `id` field is a stable key for dedup
@@ -59,7 +99,7 @@ pub struct Alert {
     pub output_id: Option<String>,
     pub title: String,
     pub cause: String,
-    pub evidence: Vec<String>,
+    pub evidence: Vec<Evidence>,
     pub recommended_action: String,
     /// Copied from `snapshot.generatedAt`.
     pub generated_at: String,
@@ -79,7 +119,8 @@ impl Alert {
     /// Build an alert with no pipeline/stage/output scoping and no dedup
     /// history. Callers that need `pipeline_id`/`stage_id`/`output_id` set
     /// override them with struct-update syntax: `Alert { pipeline_id:
-    /// Some(...), ..Alert::new(...) }`.
+    /// Some(...), ..Alert::new(...) }`. Each evidence line says how the
+    /// engine knows it.
     #[allow(clippy::too_many_arguments)]
     fn new(
         id: String,
@@ -87,7 +128,7 @@ impl Alert {
         scope: Scope,
         title: impl Into<String>,
         cause: impl Into<String>,
-        evidence: Vec<String>,
+        evidence: Vec<Evidence>,
         recommended_action: impl Into<String>,
         generated_at: &str,
     ) -> Self {
@@ -154,12 +195,12 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
             .unwrap_or(0);
         let soft = nofile.get("soft").and_then(|value| value.as_u64());
         let hard = nofile.get("hard").and_then(|value| value.as_u64());
-        let mut evidence = vec![format!("configured = {}", configured)];
+        let mut evidence = vec![Evidence::measured(format!("configured = {}", configured))];
         if let Some(soft) = soft {
-            evidence.push(format!("soft = {}", soft));
+            evidence.push(Evidence::measured(format!("soft = {}", soft)));
         }
         if let Some(hard) = hard {
-            evidence.push(format!("hard = {}", hard));
+            evidence.push(Evidence::measured(format!("hard = {}", hard)));
         }
         alerts.push(Alert::new(
             "engine:runtime:nofile_limit_too_low".into(),
@@ -190,8 +231,8 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
             "RTMP listener exhausted file descriptors",
             "The RTMP listener hit the process or host open-file limit while accepting connections.",
             vec![
-                format!("fdExhaustionErrors = {}", fd_exhaustion),
-                format!("acceptErrors = {}", accept_errors),
+                Evidence::measured(format!("fdExhaustionErrors = {}", fd_exhaustion)),
+                Evidence::measured(format!("acceptErrors = {}", accept_errors)),
             ],
             "Raise the process/host nofile limit, reduce concurrent connections, and restart affected publishers.",
             &generated_at,
@@ -215,7 +256,7 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                         Scope::Pipeline,
                         "No active publisher",
                         "The pipeline is configured but not receiving a stream.",
-                        vec!["input.status = off".into()],
+                        vec![Evidence::measured("input.status = off")],
                         "Start the publisher or check the stream key and connection.",
                         &generated_at,
                     )
@@ -247,13 +288,12 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                         severity,
                         Scope::Pipeline,
                         title,
-                        "The SRT application receive buffer is full or nearly full. The publisher can still be connected while Restream is not draining ingest data, so downstream outputs will stall.",
+                        "The SRT application receive buffer is full or nearly full. The publisher can still be connected while Restream is not draining ingest data, so downstream outputs will stall. The kernel UDP queue may still look empty: the packets have already entered the srt-rs Owner.",
                         vec![
-                            format!(
+                            Evidence::measured(format!(
                                 "srtRecvBufPackets = {} / {} ({:.0}%)",
                                 recv_packets, capacity_packets, pct
-                            ),
-                            "kernel UDP queue may still be empty because packets have already entered the srt-rs Owner".into(),
+                            )),
                         ],
                         "Treat this as an input/ingest issue first: restart the affected publisher or Restream, then inspect SRT ingest readiness if it recurs.",
                         &generated_at,
@@ -280,10 +320,12 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                                 Scope::Stage,
                                 format!("Stage '{}' is lagging behind the ring buffer", name),
                                 "The consumer is reading slower than the producer is writing.",
-                                vec![format!(
+                                vec![
+                                    Evidence::measured(format!(
                                     "lagSlots = {} (threshold {})",
                                     lag, LAG_SLOTS_WARN
-                                )],
+                                )),
+                                ],
                                 "Check downstream network/encoder throughput or reduce output bitrate.",
                                 &generated_at,
                             )
@@ -308,7 +350,7 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                                 ),
                                 "The ring buffer was full when this reader tried to consume packets; \
                                     some packets were skipped.",
-                                vec![format!("overflowCount = {}", overflows)],
+                                vec![Evidence::measured(format!("overflowCount = {}", overflows))],
                                 "Reduce output count or increase processing throughput.",
                                 &generated_at,
                             )
@@ -353,8 +395,8 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                             format!("Stage '{}' has failed", stage_kind),
                             format!("The processing stage failed with error: {}.", last_error),
                             vec![
-                                "phase = failed".into(),
-                                format!("lastError = {}", last_error),
+                                Evidence::measured("phase = failed"),
+                                Evidence::measured(format!("lastError = {}", last_error)),
                             ],
                             "Check the transcoder logs, resource limits, and media source compatibility.",
                             &generated_at,
@@ -393,11 +435,11 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                             format!("Stage '{}' is receiving input but has no output", stage_kind),
                             "The stage backend has accepted input but has not produced any packets.",
                             vec![
-                                format!("phase = {}", phase_name),
-                                format!("packetsIn = {}", packets_in),
-                                format!("packetsOut = {}", packets_out),
-                                format!("bytesIn = {}", bytes_in),
-                                format!("bytesOut = {}", bytes_out),
+                                Evidence::measured(format!("phase = {}", phase_name)),
+                                Evidence::measured(format!("packetsIn = {}", packets_in)),
+                                Evidence::measured(format!("packetsOut = {}", packets_out)),
+                                Evidence::measured(format!("bytesIn = {}", bytes_in)),
+                                Evidence::measured(format!("bytesOut = {}", bytes_out)),
                             ],
                             "Check backend stderr, codec compatibility, and downstream stage readiness.",
                             &generated_at,
@@ -420,7 +462,7 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                             Scope::Stage,
                             format!("Preview stage '{}' is waiting for a keyframe", stage_kind),
                             "HLS/preview output cannot start until the source produces a video keyframe.",
-                            vec![format!("phase = {}", phase_name)],
+                            vec![Evidence::measured(format!("phase = {}", phase_name))],
                             "Shorten the source GOP/keyframe interval or wait for the next keyframe.",
                             &generated_at,
                         )
@@ -443,11 +485,11 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                             format!("Transcoding capacity exhausted for stage '{}'", stage_kind),
                             "The stage is waiting for transcoding capacity/permits to become available.",
                             vec![
-                                format!("phase = {}", phase_name),
-                                format!(
+                                Evidence::measured(format!("phase = {}", phase_name)),
+                                Evidence::measured(format!(
                                     "capacityWaitMs = {} ms (threshold {})",
                                     capacity_wait_ms, CAPACITY_WAIT_WARN_MS
-                                ),
+                                )),
                             ],
                             "Increase RESTREAM_EXTERNAL_FFMPEG_PERMITS, reduce pipeline count, or lower encoding presets.",
                             &generated_at,
@@ -477,31 +519,36 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
             .get(&(feed_id.to_string(), shard_index))
             .copied()
             .unwrap_or(0);
-        let affected_evidence = (affected > 0).then(|| format!("affectedOutputs = {affected}"));
+        // Counted across the shard's outputs by the evidence rules.
+        let affected_evidence =
+            (affected > 0).then(|| Evidence::derived(format!("affectedOutputs = {affected}")));
 
         match state {
             "panicked" => {
-                alerts.push(Alert::new(
+                let mut alert = Alert::new(
                     format!("engine:egress_fabric:{protocol}:{feed_id}:{shard_index}:panicked"),
                     Severity::Critical,
                     Scope::Engine,
                     format!("Egress fabric shard panicked ({shard_label})"),
                     "The shard's OS thread panicked and every output assigned to it lost its connection until the supervisor replaces the shard.",
-                    std::iter::once(format!("state = panicked ({shard_label})"))
-                        .chain(affected_evidence)
-                        .collect(),
+                    vec![Evidence::measured(format!(
+                        "state = panicked ({shard_label})"
+                    ))],
                     "Check logs for the panic message and stack trace at the time this shard stopped; outputs on this shard will reconnect once the supervisor replaces it.",
                     &generated_at,
-                ));
+                );
+                alert.evidence.extend(affected_evidence);
+                alerts.push(alert);
             }
             "stalled" => {
                 let progress_age_ms = shard.get("progressAgeMs").and_then(|v| v.as_u64());
-                let mut evidence = vec![format!("state = stalled ({shard_label})")];
+                let mut evidence = vec![Evidence::measured(format!(
+                    "state = stalled ({shard_label})"
+                ))];
                 if let Some(age) = progress_age_ms {
-                    evidence.push(format!("progressAgeMs = {age}"));
+                    evidence.push(Evidence::measured(format!("progressAgeMs = {age}")));
                 }
-                evidence.extend(affected_evidence);
-                alerts.push(Alert::new(
+                let mut alert = Alert::new(
                     format!("engine:egress_fabric:{protocol}:{feed_id}:{shard_index}:stalled"),
                     Severity::Warning,
                     Scope::Engine,
@@ -510,7 +557,9 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                     evidence,
                     "Check whether this shard's assigned outputs have healthy destinations; a genuinely idle shard with no assigned outputs is expected to age past the threshold and is not itself a problem.",
                     &generated_at,
-                ));
+                );
+                alert.evidence.extend(affected_evidence);
+                alerts.push(alert);
             }
             // A stopped shard is expected once its outputs are gone; with
             // outputs still assigned it is their cause.
@@ -522,8 +571,8 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                     format!("Egress fabric shard stopped with outputs assigned ({shard_label})"),
                     "The shard's loop has ended while outputs still run on it; they cannot deliver.",
                     vec![
-                        format!("state = stopped ({shard_label})"),
-                        format!("affectedOutputs = {affected}"),
+                        Evidence::measured(format!("state = stopped ({shard_label})")),
+                        Evidence::derived(format!("affectedOutputs = {affected}")),
                     ],
                     "Check the logs for why the shard stopped; restart the affected outputs.",
                     &generated_at,
@@ -549,9 +598,11 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                     Scope::Engine,
                     format!("Egress fabric shard command channel near capacity ({shard_label})"),
                     "The shard's command channel (add/remove/update dispatch) is close to full; further commands risk being rejected until the shard catches up.",
-                    vec![format!(
+                    vec![
+                        Evidence::measured(format!(
                         "commandDepth = {command_depth} / commandCapacity = {command_capacity} ({occupancy_pct:.1}%)"
-                    )],
+                    )),
+                    ],
                     "Reduce the rate of output add/remove/update churn against this shard, or raise RESTREAM_EGRESS_COMMAND_CAPACITY.",
                     &generated_at,
                 ));
@@ -569,9 +620,11 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                 Scope::Engine,
                 format!("Repeated egress resynchronizations detected ({shard_label})"),
                 "The egress shard is experiencing repeated feed overruns and resynchronizing leaf cursors.",
-                vec![format!(
+                vec![
+                    Evidence::measured(format!(
                     "resyncCount = {resync_count} (threshold {REPEATED_RESYNC_WARN_THRESHOLD})"
-                )],
+                )),
+                ],
                 "Check pipeline ring buffer capacity and downstream network bandwidth.",
                 &generated_at,
             ));
@@ -634,84 +687,6 @@ fn sorted(mut alerts: Vec<Alert>) -> Vec<Alert> {
             .then(a.id.cmp(&b.id))
     });
     alerts
-}
-
-// ─── Alert Tracker ──────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-struct AlertHistory {
-    first_seen: String,
-    last_seen: String,
-    pipeline_id: Option<String>,
-}
-
-/// Tracks `first_seen`/`last_seen` timestamps for recurring alert conditions.
-///
-/// Call one of the `track_*` methods after each `derive_alerts` invocation. It
-/// stamps each alert with its history and prunes entries only for the snapshot
-/// scope that was actually observed.
-pub struct AlertTracker {
-    history: Mutex<HashMap<String, AlertHistory>>,
-}
-
-impl Default for AlertTracker {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl AlertTracker {
-    pub fn new() -> Self {
-        Self {
-            history: Mutex::new(HashMap::new()),
-        }
-    }
-
-    /// Stamp alerts from a complete snapshot and prune every resolved entry.
-    pub fn track(&self, alerts: &mut [Alert]) {
-        self.track_with_prune(alerts, |_| true);
-    }
-
-    /// Stamp alerts from a single-pipeline snapshot and prune only resolved
-    /// entries for that same pipeline. Alerts for other pipelines remain intact
-    /// because this snapshot did not observe them.
-    pub fn track_pipeline(&self, pipeline_id: &str, alerts: &mut [Alert]) {
-        self.track_with_prune(alerts, |history| {
-            history.pipeline_id.as_deref() == Some(pipeline_id)
-        });
-    }
-
-    fn track_with_prune(
-        &self,
-        alerts: &mut [Alert],
-        mut should_prune_if_absent: impl FnMut(&AlertHistory) -> bool,
-    ) {
-        let now = chrono::Utc::now().to_rfc3339();
-        let mut history = crate::sync::lock(&self.history);
-        let mut active_ids: HashMap<&str, ()> = HashMap::with_capacity(alerts.len());
-
-        for alert in alerts.iter_mut() {
-            active_ids.insert(&alert.id, ());
-            let entry = history
-                .entry(alert.id.clone())
-                .or_insert_with(|| AlertHistory {
-                    first_seen: now.clone(),
-                    last_seen: now.clone(),
-                    pipeline_id: alert.pipeline_id.clone(),
-                });
-            entry.last_seen = now.clone();
-            alert.first_seen = Some(entry.first_seen.clone());
-            alert.last_seen = Some(entry.last_seen.clone());
-        }
-
-        history.retain(|id, entry| {
-            active_ids.contains_key(id.as_str()) || !should_prune_if_absent(entry)
-        });
-    }
-
-    pub fn active_count(&self) -> usize {
-        crate::sync::lock(&self.history).len()
-    }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
