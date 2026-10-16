@@ -302,6 +302,36 @@ test("inspect and monitor: one pipeline's anatomy and signals on one clock", asy
     // Wanted but without a publisher: none of it delivers.
     await expect(delivering).toHaveText("0%");
     await expect(signals).toContainText(/[2-9] samples|\d\d+ samples/);
+
+    // The output went from not wanted (0 degraded) to wanted and diagnosed
+    // while the page watched: one incident onset, marked on the signals.
+    await expect(signals.getByLabel("Degraded outputs now")).toHaveText("1");
+    await expect(signals.getByLabel("Incident onsets")).toContainText("degraded at");
+    await expect(signals.locator('[data-series="incident"]').first()).toBeAttached();
+
+    await expect(page.getByRole("region", { name: "Input transport" })).toContainText(
+      "No selected input is connected.",
+    );
+    await expect(page.getByRole("region", { name: "Shared media path" })).toContainText(
+      /Source ring\s*not running/,
+    );
+    await expect(page.getByRole("region", { name: /Destination outlier/ })).toContainText(
+      "Every rated output delivers at least 95%",
+    );
+
+    // Pause freezes the window; Compare overlays the live one on it.
+    const compare = signals.getByRole("button", { name: "Compare" });
+    await expect(compare).toBeDisabled();
+    await signals.getByRole("button", { name: "Pause" }).click();
+    await expect(signals).toContainText("paused at");
+    const pausedCount = await signals.getByText(/\d+ samples/).textContent();
+    await page.waitForTimeout(2_500);
+    await expect(signals.getByText(/\d+ samples/)).toHaveText(pausedCount ?? "");
+    await compare.click();
+    await expect(compare).toHaveAttribute("aria-pressed", "true");
+    await expect(signals.locator('[data-series="compare"]').first()).toBeAttached();
+    await signals.getByRole("button", { name: "Resume" }).click();
+    await expect(signals.locator('[data-series="compare"]')).toHaveCount(0);
   } finally {
     await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
   }

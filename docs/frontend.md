@@ -233,7 +233,20 @@ to `/`.
   sampled every 2 s on one clock and kept in the page for the last 15
   minutes (the engine keeps no history). A stale or missing source, a state
   stream that is not live, or a truncated map is a gap in its line, never a
-  zero or a frozen value. Operate, Inspect and Monitor share one pipeline
+  zero or a frozen value. The degraded-output count is a signal too: each
+  rise from 0 the page saw is an incident onset, marked as a cursor on every
+  line and listed by time (a pipeline already degraded at page load has no
+  onset in view). Pause shows the window as it was while sampling goes on;
+  Compare, while paused, overlays the live window dashed on the same scale.
+  Below (`monitor-path.ts`): the selected input's transport (what its
+  protocol reports, from `/pipelines/{id}/inputs`; an unreported metric is
+  left out, not 0), the shared media path from the processing graph (source
+  ring fill, worst reader lag, each stage with its packet rate and the
+  wanted outputs reading it, reader overflows), and the destination outlier:
+  the wanted output with the lowest delivery ratio under the engine's 0.95
+  floor, against the median of its peers on the same stage and protocol. The
+  mockup's blocked AVIO writes are not shown: that queue was deleted in #327.
+  Operate, Inspect and Monitor share one pipeline
   header and picker (`pipeline-scope.tsx`). Incidents (fleet): every open
   alert (`/alerts`), critical first, then the widest scope, then the oldest;
   the selected one's lifecycle events (`/events`) from a minute before it
@@ -339,6 +352,7 @@ resource map leaves out, and says so when the engine no longer has the stage.
 
 Proof: `test/frontend/control-room-fleet.test.mjs`,
 `test/frontend/control-room-fleet-history.test.mjs`,
+`test/frontend/control-room-monitor.test.mjs`,
 `test/frontend/control-room-operate.test.mjs`,
 `test/frontend/control-room-inspect.test.mjs`,
 `test/frontend/control-room-incidents.test.mjs`,

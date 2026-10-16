@@ -4,8 +4,9 @@ import { getProcessingGraph, getResourceMap } from "../core/api.js";
 import type { GraphData, ResourceMapSnapshot } from "../core/api-types.js";
 import { formatBps, formatPercent } from "./format.js";
 import { MAP_TOP_N } from "./inspect-model.js";
-import { SIGNALS, takeSample } from "./monitor-model.js";
+import { incidentOnsets, SIGNALS, takeSample } from "./monitor-model.js";
 import type { MonitorSample, Signal } from "./monitor-model.js";
+import { MonitorPanels } from "./monitor-panels.js";
 import { PipelineScope } from "./pipeline-scope.js";
 import { Freshness, usePolled } from "./polled.js";
 import type { Polled } from "./polled.js";
@@ -21,6 +22,7 @@ const SIGNAL_LABELS: Record<Signal, string> = {
   maxFeedLag: "Worst feed lag",
   ringFillPercent: "Source ring fill",
   maxShardProgressMs: "Slowest shard progress",
+  degradedOutputs: "Degraded outputs",
 };
 
 function formatSignal(signal: Signal, value: number | null): string {
@@ -36,6 +38,8 @@ function formatSignal(signal: Signal, value: number | null): string {
       return `${value} units`;
     case "maxShardProgressMs":
       return `${value} ms`;
+    case "degradedOutputs":
+      return String(value);
   }
 }
 
@@ -75,6 +79,9 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
     latest.current = { live: props.live, graph, resources };
   });
   const [history, setHistory] = useState<readonly MonitorSample[]>([]);
+  // Paused: the page shows the window as it was; sampling goes on.
+  const [frozen, setFrozen] = useState<readonly MonitorSample[] | null>(null);
+  const [comparing, setComparing] = useState(false);
   useEffect(() => {
     const timer = window.setInterval(() => {
       const { live, graph, resources } = latest.current;
@@ -85,7 +92,7 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
         atMs: now,
         pipelineId: props.pipelineId,
         // While the state stream is down, its last snapshot is not now.
-        outputs: live.stream === "live" ? (live.state?.outputs ?? []) : [],
+        outputs: live.stream === "live" ? (live.state?.outputs ?? []) : null,
         rates: ratesFresh ? live.rates : null,
         graph: fresh(graph, now),
         resources: fresh(resources, now),
@@ -95,24 +102,58 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
     return () => window.clearInterval(timer);
   }, [props.pipelineId]);
 
-  const first = history[0];
-  const last = history[history.length - 1];
+  const shown = frozen ?? history;
+  const compare = frozen && comparing ? history : undefined;
+  const onsets = incidentOnsets(shown);
+  const first = shown[0];
+  const last = shown[shown.length - 1];
   return (
+    <div className="space-y-4">
     <section className="card bg-base-200" aria-labelledby="monitor-signals">
       <div className="card-body gap-3 p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 id="monitor-signals" className="card-title text-base">
             Correlated signals
             <span className="text-xs font-normal opacity-70">
-              one clock · since this page opened, up to 15 min · {history.length}{" "}
-              samples
+              one clock · since this page opened, up to 15 min · {shown.length} samples
+              {frozen && last && ` · paused at ${new Date(last.atMs).toLocaleTimeString()}`}
+              {compare && " · dashed: now"}
             </span>
           </h3>
-          <span className="flex gap-1">
+          <span className="flex items-center gap-1">
+            <button
+              type="button"
+              className="btn btn-xs"
+              aria-pressed={frozen !== null}
+              onClick={() => {
+                setFrozen(frozen ? null : history);
+                setComparing(false);
+              }}
+            >
+              {frozen ? "Resume" : "Pause"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-xs"
+              aria-pressed={comparing}
+              disabled={frozen === null}
+              title="Overlay the live window on the paused one"
+              onClick={() => setComparing(!comparing)}
+            >
+              Compare
+            </button>
             <Freshness atMs={graph.atMs} />
             <Freshness atMs={resources.atMs} />
           </span>
         </div>
+        {onsets.length > 0 && (
+          <p className="text-sm" aria-label="Incident onsets">
+            <span className="badge badge-warning badge-sm mr-2">incident</span>
+            {onsets.length === 1 ? "An output degraded at " : "Outputs degraded at "}
+            {onsets.map((at) => new Date(at).toLocaleTimeString()).join(", ")}; the cursor
+            marks it on every signal.
+          </p>
+        )}
         {first === undefined || last === undefined ? (
           <p className="opacity-70">Collecting the first sample…</p>
         ) : (
@@ -125,9 +166,11 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
                 <dt className="text-sm">{SIGNAL_LABELS[signal]}</dt>
                 <dd>
                   <Sparkline
-                    history={history}
+                    history={shown}
                     pick={(sample) => sample[signal]}
                     label={`${SIGNAL_LABELS[signal]} over time`}
+                    marks={onsets}
+                    compare={compare}
                   />
                 </dd>
                 <dd
@@ -142,5 +185,7 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
         )}
       </div>
     </section>
+      <MonitorPanels live={props.live} pipelineId={props.pipelineId} graph={graph} />
+    </div>
   );
 }

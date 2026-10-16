@@ -23,7 +23,6 @@ items).
 - [Q-050 inputs and stages in runtime state](#q-050-architecture-sonnet-project-inputs-and-stages-into-the-runtime-state)
 - [Q-051 bounded ingress transfer pump](#q-051-architecture-sonnet-bound-the-ingress-transfer-pump-per-owner-visit)
 - [Q-053 external FFmpeg process topology](#q-053-architecture-sonnet-external-ffmpeg-process-topology-per-rendition)
-- [Q-058 control-room Monitor gaps](#q-058-frontend-sonnet-control-room-monitor-input-transport-shared-path-outlier-incident-cursor-pausecompare)
 - [Q-059 control-room Media gaps](#q-059-frontend-sonnet-control-room-media-recording-timeline-use-as-source)
 - [Q-060 control-room Changes gaps](#q-060-frontend-sonnet-control-room-changes-numeric-impact-topology-diff-convergence-timeline-gates)
 - [Q-061 control-room Incidents gaps](#q-061-frontend-opus-control-room-incidents-correlation-chart-evidence-confidence-time-range-export)
@@ -372,23 +371,6 @@ items).
 - Status: open (Filed: 2026-10-15 by claude; the cost measurement closed
   2026-10-15. The former board item "FFmpeg A/B: external per-stage vs external
   multi-output" cannot be run as written: the second arm does not exist).
-
-### Q-058 [frontend] [sonnet] Control room Monitor: input transport, shared path, outlier, incident cursor, Pause/Compare
-- Goal: Monitor shows input transport quality, the shared media path, the
-  destination outlier, an incident cursor across its series, and Pause/Compare.
-- Sources: `publisher.quality` on `/api/v1/engine/health`; `sourceRing`,
-  `stages` and reader `overflowCount` on `/api/v1/pipelines/{id}/telemetry`;
-  per-output `quality.deliveryRatio` and telemetry `delivery[].{ratioMin,jain}`.
-  The mockup's "blocked AVIO writes" is out of scope: the stage input queue
-  was deleted in #327, and the remaining `MemoryQueue` counter
-  (`media/avio.rs`) serves recording only.
-- Incident cursor: marks this pipeline's diagnosis onsets, taken in
-  Monitor's own per-pipeline sample (`takeSample`), on its series. The
-  store's fleet history has no pipeline identity, so it cannot mark them
-  without marking other pipelines' faults. Pause freezes the page window; Compare
-  overlays two windows the page already holds. No new route.
-- Gates: node tests for the outlier pick and window freeze; Playwright.
-- Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
 
 ### Q-059 [frontend] [sonnet] Control room Media: recording timeline, use as source
 - Goal: Media shows a recording timeline and a "use as source" action.
