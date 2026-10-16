@@ -22,11 +22,11 @@ fn limits() -> SessionLimits {
 }
 
 fn payload(tag: &str) -> Payload {
-    Payload::new(Bytes::copy_from_slice(tag.as_bytes()), None, None)
+    Payload::new(Bytes::copy_from_slice(tag.as_bytes()), None, None, None)
 }
 
 fn sized(len: usize) -> Payload {
-    Payload::new(Bytes::from(vec![0u8; len]), None, None)
+    Payload::new(Bytes::from(vec![0u8; len]), None, None, None)
 }
 
 fn media(dir: &str, first: u64, len: u64, ended: bool) -> Playlist {
@@ -335,7 +335,7 @@ fn tagged(index: u64, len: usize, budget: &Arc<Semaphore>) -> Payload {
     bytes.resize(len.max(bytes.len()), b'.');
     let permits = u32::try_from(bytes.len()).unwrap();
     let permit = budget.clone().try_acquire_many_owned(permits).unwrap();
-    Payload::new(Bytes::from(bytes), Some(permit), None)
+    Payload::new(Bytes::from(bytes), Some(permit), None, None)
 }
 
 fn index_of(payload: &Payload) -> u64 {

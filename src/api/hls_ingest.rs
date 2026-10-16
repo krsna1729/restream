@@ -68,21 +68,31 @@ pub async fn hls_ingest_handler(
         .get(header::CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok());
-    let mut object = match ingest.object_body(kind, content_length, &pipeline.input_id) {
-        Ok(object) => object,
-        Err(error) => return body_error(error),
-    };
     let idle_floor = ingest.limits().idle_floor;
     let Ok(Some(slot)) =
         tokio::time::timeout(idle_floor, ingest.upload_slot(&pipeline.input_id)).await
     else {
-        return retry_later("upload slots for this stream key stayed busy");
+        return (
+            StatusCode::REQUEST_TIMEOUT,
+            "upload slots for this stream key stayed busy",
+        )
+            .into_response();
     };
     // A stalled or trickling upload must not hold its slot and budget: each
     // frame has the idle floor to arrive, the whole body (including waits
-    // for the key's buffer share) its deadline, and everything read is
+    // for the key's buffer share) its deadline, and everything claimed is
     // released on expiry.
     let body_deadline = tokio::time::Instant::now() + ingest.body_deadline(&pipeline.input_id);
+    let object = tokio::time::timeout_at(
+        body_deadline,
+        ingest.object_body(kind, content_length, &pipeline.input_id),
+    )
+    .await;
+    let mut object = match object {
+        Ok(Ok(object)) => object,
+        Ok(Err(error)) => return body_error(error),
+        Err(_) => return body_too_slow(),
+    };
     let mut frames = body.into_data_stream();
     loop {
         let frame_deadline = body_deadline.min(tokio::time::Instant::now() + idle_floor);

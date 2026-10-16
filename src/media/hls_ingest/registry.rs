@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
@@ -12,7 +12,9 @@ use tracing::{error, info, warn};
 
 use super::ordering::SessionLimits;
 use super::session::{self, HlsObject, SessionContext, SessionEnd};
-use super::{BodyError, HlsIngestLimits, ObjectBody, ObjectKind, ObjectOutcome};
+use super::{
+    BodyError, HlsIngestLimits, KeyCharge, ObjectBody, ObjectKind, ObjectOutcome, SegmentShare,
+};
 use crate::media::engine::{IngestRegistration, MediaEngine};
 use crate::media::executor::{MediaService, MediaServiceClass};
 use crate::media::ingest_auth::{
@@ -52,8 +54,12 @@ struct SessionHandle {
 /// first objects from both registering an attempt.
 struct KeyState {
     uploads: Arc<Semaphore>,
-    /// The key's share of the global buffer budget.
-    budget: Arc<Semaphore>,
+    /// The key's share of the global budget, claimed by segments.
+    share: Arc<Semaphore>,
+    /// Serializes share claims; a chunked body holds it until complete.
+    share_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Bytes the key has outstanding, for the fair-share log.
+    outstanding: Arc<AtomicUsize>,
     /// The session's pacing lead in ms (target duration, or the idle floor
     /// before a playlist); sizes the whole-body deadline.
     lead_ms: Arc<AtomicU64>,
@@ -129,7 +135,9 @@ impl HlsIngest {
             .or_insert_with(|| {
                 Arc::new(KeyState {
                     uploads: Arc::new(Semaphore::new(self.limits.uploads_per_key)),
-                    budget: Arc::new(Semaphore::new(self.limits.key_buffer_bytes)),
+                    share: Arc::new(Semaphore::new(self.limits.key_buffer_bytes)),
+                    share_lock: Arc::new(tokio::sync::Mutex::new(())),
+                    outstanding: Arc::new(AtomicUsize::new(0)),
                     lead_ms: Arc::new(AtomicU64::new(0)),
                     start: tokio::sync::Mutex::new(()),
                 })
@@ -152,10 +160,11 @@ impl HlsIngest {
         lead.max(self.limits.idle_floor).saturating_mul(4)
     }
 
-    /// An empty body for `kind` charged to `input_id`'s share. The declared
-    /// length is checked against the bound but preallocates at most 1 MiB,
-    /// so memory tracks the bytes counted against the budgets.
-    pub fn object_body(
+    /// An empty body for `kind`, counted against `input_id`. A segment's
+    /// declared length is claimed from the key's share and the global budget
+    /// at once (waiting for the share); it preallocates at most 1 MiB, so
+    /// memory tracks the bytes claimed.
+    pub async fn object_body(
         &self,
         kind: ObjectKind,
         content_length: Option<u64>,
@@ -168,14 +177,29 @@ impl HlsIngest {
                 .filter(|length| *length <= max_bytes)
                 .ok_or(BodyError::TooLarge)
         })?;
-        Ok(ObjectBody {
+        let key = self.key_state(input_id);
+        let segment = (kind == ObjectKind::Segment).then(|| SegmentShare {
+            share: key.share.clone(),
+            lock: key.share_lock.clone(),
+            growing: None,
+        });
+        let mut body = ObjectBody {
             budget: self.budget.clone(),
-            key_budget: self.key_state(input_id).budget.clone(),
+            segment,
             max_bytes,
             bytes: bytes::BytesMut::with_capacity(declared.min(INITIAL_BODY_CAPACITY)),
+            claimed: 0,
             permit: None,
-            key_permit: None,
-        })
+            share_permit: None,
+            input_id: input_id.to_string(),
+            fair_share: self.limits.total_buffer_bytes / 4,
+            charge: KeyCharge {
+                outstanding: key.outstanding.clone(),
+                bytes: 0,
+            },
+        };
+        body.claim_declared(declared).await?;
+        Ok(body)
     }
 
     /// Hand one fully read object to the key's session, starting it if
@@ -290,12 +314,14 @@ impl HlsIngest {
         drop(sessions);
         let mut keys = crate::sync::lock(&self.keys);
         // Keep the key's state while anything still uses it: an upload slot
-        // in flight, bytes charged to its share, or a start in progress.
+        // in flight, bytes counted against it, or a start in progress.
         if idle
             && keys.get(input_id).is_some_and(|key| {
                 Arc::strong_count(key) == 1
                     && Arc::strong_count(&key.uploads) == 1
-                    && Arc::strong_count(&key.budget) == 1
+                    && Arc::strong_count(&key.share) == 1
+                    && Arc::strong_count(&key.share_lock) == 1
+                    && Arc::strong_count(&key.outstanding) == 1
                     && Arc::strong_count(&key.lead_ms) == 1
             })
         {
@@ -381,6 +407,7 @@ mod tests {
         );
         let mut body = ingest
             .object_body(ObjectKind::Segment, None, INPUT_ID)
+            .await
             .unwrap();
         body.push(b"segment").await.unwrap();
 
@@ -418,7 +445,10 @@ mod tests {
         path: &str,
         bytes: &[u8],
     ) -> ObjectOutcome {
-        let mut body = ingest.object_body(kind, None, &pipeline.input_id).unwrap();
+        let mut body = ingest
+            .object_body(kind, None, &pipeline.input_id)
+            .await
+            .unwrap();
         body.push(bytes).await.unwrap();
         ingest
             .dispatch(
@@ -439,7 +469,9 @@ mod tests {
 
     /// A key at its buffer share is throttled, not refused: its next body
     /// waits until the segment being published returns its bytes, and a
-    /// second key publishes meanwhile.
+    /// second key publishes meanwhile. The wait is exercised on the body
+    /// here; over a real socket it becomes the encoder's write blocking on
+    /// a full TCP window, which no test covers yet.
     #[tokio::test]
     async fn a_key_at_its_share_is_throttled_while_another_key_publishes() {
         let (engine, ingest) = test_ingest(HlsIngestLimits {
@@ -467,6 +499,7 @@ mod tests {
         let started = std::time::Instant::now();
         let mut next = ingest
             .object_body(ObjectKind::Segment, None, INPUT_ID)
+            .await
             .unwrap();
         let throttled = tokio::spawn(async move {
             let pushed = next.push(&fixture()).await;
@@ -523,6 +556,53 @@ mod tests {
         );
         engine.cancel_pipeline_input(INPUT_ID).await;
         engine.cancel_pipeline_input(&other.input_id).await;
+    }
+
+    /// Share claims of one key are serialized: a chunked body holds the
+    /// key's claim lock until it is complete, so a second chunked body
+    /// waits without a fragment and the first can still grow. Without the
+    /// lock the second would hold 4 MiB and the first could not claim its
+    /// next step.
+    #[tokio::test]
+    async fn two_chunked_bodies_of_one_key_never_both_hold_a_share_fragment() {
+        const MIB: usize = 1024 * 1024;
+        let (_engine, ingest) = test_ingest(HlsIngestLimits {
+            key_buffer_bytes: 10 * MIB,
+            ..HlsIngestLimits::default()
+        });
+        let mut first = ingest
+            .object_body(ObjectKind::Segment, None, INPUT_ID)
+            .await
+            .unwrap();
+        first.push(&[0x47; 1024]).await.unwrap();
+
+        let mut second = ingest
+            .object_body(ObjectKind::Segment, None, INPUT_ID)
+            .await
+            .unwrap();
+        let waiting = tokio::spawn(async move {
+            let pushed = second.push(&[0x47; 1024]).await.is_ok();
+            (pushed, second)
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            !waiting.is_finished(),
+            "the second body waits for the first"
+        );
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            first.push(&vec![0x47; 5 * MIB]),
+        )
+        .await
+        .expect("the first body grows past its first claim")
+        .unwrap();
+        drop(first);
+        let (pushed, _second) = tokio::time::timeout(std::time::Duration::from_secs(1), waiting)
+            .await
+            .expect("the second body proceeds once the first is gone")
+            .unwrap();
+        assert!(pushed);
     }
 
     /// Released media waits to be published only up to two target

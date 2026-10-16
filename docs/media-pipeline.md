@@ -667,18 +667,25 @@ must be relative to their playlist. fMP4 segments are not ingested yet
     (`413` over the bound).
   - Each key is bounded: 2 uploads in flight, and 8 held segments or 128 MiB
     held, with the oldest evicted first. A third upload waits up to 10 s for
-    a slot before its body is read (`503` after that).
-  - Each key may use 128 MiB, a quarter of the shared budget, for bytes being
-    read, queued, held or published. A body that would exceed it is read
-    more slowly instead of refused: FFmpeg's blocked write is backpressure it
-    respects, where a refusal it never reads would lose the segment.
-  - All HLS sessions share a 512 MiB budget. When it is exhausted, an upload
-    gets `503` with `Retry-After: 1`. FFmpeg never reads replies, so for it
-    that segment is lost; the per-key share keeps a few keys from reaching
-    this for all.
+    a slot before its body is read (`408` after that).
+  - Each key's segments may use 128 MiB, a quarter of the shared budget, for
+    bytes being read, queued, held or published. A segment claims its share
+    before it is read: all of its `Content-Length` at once, or, when chunked,
+    in 4 MiB steps while it alone holds the key's claim lock, so two bodies
+    of one key never each hold part of the share and wait for the rest. A
+    segment that has to wait is read later, not refused: FFmpeg's blocked
+    write is backpressure it respects. This throttle is tested on the body,
+    not yet over a real socket (FFmpeg's write blocking on a full TCP window).
+  - Playlists are small and are what releases held segments, so they take
+    only the shared budget and never wait for a share.
+  - All HLS sessions share a 512 MiB budget, never waited for. When it is
+    exhausted, an upload gets `503` with `Retry-After: 1`, and its claim is
+    released. FFmpeg never reads replies, so for it that segment is lost; the
+    per-key share keeps a few keys from reaching this for all.
   - A request body that sends nothing for 10 s, or takes longer in total than
-    max(4 × target duration, 40 s), gets `408`, and its bytes are released.
-    A 64 MiB segment on a 10 Mbit/s uplink fits; a trickle does not.
+    max(4 × target duration, 40 s) including any wait for its share, gets
+    `408`, and its bytes are released. A 64 MiB segment on a 10 Mbit/s uplink
+    fits; a trickle does not.
   - An encoder faster than real time is slowed, not refused: once two target
     durations (by `EXTINF`; 10 s before a playlist) of released media, or
     128 MiB, wait to be published, the session stops taking objects, so its

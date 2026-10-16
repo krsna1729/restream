@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use tokio::sync::OwnedSemaphorePermit;
 
+use super::KeyCharge;
 use super::playlist::{MasterPlaylist, MediaPlaylist, Playlist};
 
 /// Production idle floor: also the hold age and idle timeout before any
@@ -26,19 +27,22 @@ const MAX_OTHER_VARIANTS: usize = 16;
 pub(super) struct Payload {
     pub(super) bytes: Bytes,
     _budget: Option<OwnedSemaphorePermit>,
-    _key_budget: Option<OwnedSemaphorePermit>,
+    _share: Option<OwnedSemaphorePermit>,
+    _charge: Option<KeyCharge>,
 }
 
 impl Payload {
     pub(super) fn new(
         bytes: Bytes,
         budget: Option<OwnedSemaphorePermit>,
-        key_budget: Option<OwnedSemaphorePermit>,
+        share: Option<OwnedSemaphorePermit>,
+        charge: Option<KeyCharge>,
     ) -> Self {
         Self {
             bytes,
             _budget: budget,
-            _key_budget: key_budget,
+            _share: share,
+            _charge: charge,
         }
     }
 

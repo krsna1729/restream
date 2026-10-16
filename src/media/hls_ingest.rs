@@ -17,10 +17,12 @@ mod session;
 pub(crate) mod test_support;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
+use tracing::warn;
 
 pub use registry::{AuthorizeError, DispatchError, HlsIngest};
 
@@ -43,13 +45,13 @@ pub struct HlsIngestLimits {
     /// the host memory media work needs. Exhausted, an upload gets `503`,
     /// which FFmpeg never reads: that segment is lost.
     pub total_buffer_bytes: usize,
-    /// One stream key's share of `total_buffer_bytes` (a quarter), so a few
-    /// keys cannot starve the rest. Reading waits for it: the encoder's
-    /// blocked write is backpressure it respects, where a `503` is a loss.
+    /// One stream key's share for segments (a quarter of the total), so a
+    /// few keys cannot starve the rest. A segment waits for it: the
+    /// encoder's blocked write is backpressure it respects.
     pub key_buffer_bytes: usize,
     /// Idle timeout floor, the hold age before any playlist, the time each
-    /// request body frame and an upload slot may take (`408`/`503` after
-    /// it), and a quarter of the whole-body deadline before any playlist.
+    /// request body frame and an upload slot may take (`408` after it), and
+    /// a quarter of the whole-body deadline before any playlist.
     pub idle_floor: Duration,
 }
 
@@ -117,48 +119,139 @@ pub enum BodyError {
     BufferFull,
 }
 
-/// One object's body, read frame by frame against its size bound, its
-/// key's share and the global budget. Each frame waits for the key's share
-/// (FIFO, so one key's uploads queue behind each other; the caller bounds
-/// the wait with the whole-body deadline) and never for the global budget,
-/// so readers of different keys cannot deadlock each other.
+/// Bytes a stream key has outstanding (read, queued, held or publishing);
+/// counted for observability, never enforced.
+pub(crate) struct KeyCharge {
+    outstanding: Arc<AtomicUsize>,
+    bytes: usize,
+}
+
+impl Drop for KeyCharge {
+    fn drop(&mut self) {
+        self.outstanding.fetch_sub(self.bytes, Ordering::Relaxed);
+    }
+}
+
+/// Claim step for a segment body sent without `Content-Length`.
+const SHARE_STEP: usize = 4 * 1024 * 1024;
+
+/// A segment's claim on its key's buffer share. Claims are made under the
+/// key's lock, and a chunked body keeps the lock until it is complete, so
+/// two bodies of one key never each hold a fragment and wait for more.
+pub(crate) struct SegmentShare {
+    pub(crate) share: Arc<Semaphore>,
+    pub(crate) lock: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) growing: Option<OwnedMutexGuard<()>>,
+}
+
+/// One object's body, read frame by frame against its size bound. A
+/// segment claims its key's share before its bytes are read (awaited, so
+/// the encoder's write blocks instead of failing; the caller bounds the
+/// wait with the whole-body deadline). Every frame then takes the global
+/// budget, never awaited (`BufferFull` drops the body and its claim). A
+/// playlist, which is small and is what releases held segments, takes only
+/// the global budget.
 pub struct ObjectBody {
     budget: Arc<Semaphore>,
-    key_budget: Arc<Semaphore>,
+    /// `Some` for segments.
+    segment: Option<SegmentShare>,
     max_bytes: usize,
     bytes: BytesMut,
+    claimed: usize,
     permit: Option<OwnedSemaphorePermit>,
-    key_permit: Option<OwnedSemaphorePermit>,
+    share_permit: Option<OwnedSemaphorePermit>,
+    input_id: String,
+    fair_share: usize,
+    charge: KeyCharge,
 }
 
 impl ObjectBody {
+    /// Claim a segment's declared length from its key's share up front, in
+    /// one acquire under the key's claim lock.
+    pub(crate) async fn claim_declared(&mut self, declared: usize) -> Result<(), BodyError> {
+        let Some(segment) = &self.segment else {
+            return Ok(());
+        };
+        if declared == 0 {
+            return Ok(());
+        }
+        let _claiming = segment.lock.clone().lock_owned().await;
+        self.claim_share(declared).await
+    }
+
     pub async fn push(&mut self, frame: &[u8]) -> Result<(), BodyError> {
         if frame.is_empty() {
             return Ok(());
         }
-        if self.bytes.len().saturating_add(frame.len()) > self.max_bytes {
+        let length = self.bytes.len().saturating_add(frame.len());
+        if length > self.max_bytes {
             return Err(BodyError::TooLarge);
         }
+        if let Some(segment) = &mut self.segment
+            && length > self.claimed
+        {
+            if segment.growing.is_none() {
+                segment.growing = Some(segment.lock.clone().lock_owned().await);
+            }
+            let step = (length - self.claimed)
+                .max(SHARE_STEP)
+                .min(self.max_bytes - self.claimed);
+            self.claim_share(step).await?;
+        }
         let permits = u32::try_from(frame.len()).map_err(|_| BodyError::TooLarge)?;
-        let key_permit = self
-            .key_budget
-            .clone()
-            .acquire_many_owned(permits)
-            .await
-            .map_err(|_| BodyError::BufferFull)?;
         let permit = self
             .budget
             .clone()
             .try_acquire_many_owned(permits)
             .map_err(|_| BodyError::BufferFull)?;
-        merge(&mut self.key_permit, key_permit);
         merge(&mut self.permit, permit);
         self.bytes.extend_from_slice(frame);
+        self.charge.bytes += frame.len();
+        let before = self
+            .charge
+            .outstanding
+            .fetch_add(frame.len(), Ordering::Relaxed);
+        if before <= self.fair_share && before + frame.len() > self.fair_share {
+            warn!(
+                input = %self.input_id,
+                outstanding = before + frame.len(),
+                fair_share = self.fair_share,
+                "hls ingest key holds more than its fair share of the buffer"
+            );
+        }
         Ok(())
     }
 
-    fn into_payload(self) -> ordering::Payload {
-        ordering::Payload::new(Bytes::from(self.bytes), self.permit, self.key_permit)
+    async fn claim_share(&mut self, bytes: usize) -> Result<(), BodyError> {
+        let Some(segment) = &self.segment else {
+            return Ok(());
+        };
+        let permits = u32::try_from(bytes).map_err(|_| BodyError::TooLarge)?;
+        let permit = segment
+            .share
+            .clone()
+            .acquire_many_owned(permits)
+            .await
+            .map_err(|_| BodyError::BufferFull)?;
+        merge(&mut self.share_permit, permit);
+        self.claimed += bytes;
+        Ok(())
+    }
+
+    fn into_payload(mut self) -> ordering::Payload {
+        // Return what a claim took beyond the body's real length.
+        let excess = self.claimed.saturating_sub(self.bytes.len());
+        if excess > 0
+            && let Some(permit) = &mut self.share_permit
+        {
+            drop(permit.split(excess));
+        }
+        ordering::Payload::new(
+            Bytes::from(self.bytes),
+            self.permit,
+            self.share_permit,
+            Some(self.charge),
+        )
     }
 }
 
