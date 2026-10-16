@@ -117,26 +117,34 @@ async fn two_owners_share_the_port_and_each_session_command_reaches_its_owner() 
         &entries,
     ));
     let stats = Arc::new(crate::media::snapshots::ListenerSocketStats::default());
-    let mut handle = SrtIngressHandle::start(IngressConfig {
-        // A multi-Owner listener rejects port 0 ("a multi-Owner listener needs
-        // an explicit port so every Owner binds a known one"), so this test
-        // keeps `free_port`. The probe socket is released before the bind, so a
-        // parallel test can take the port: that fails the bind against a plain
-        // socket, or lets another `SO_REUSEPORT` group join and split
-        // datagrams.
-        bind: SocketAddr::from(([127, 0, 0, 1], free_port())),
-        policy_store: store,
-        receiver_group: ReceiverGroupId::generate(),
-        stats: stats.clone(),
-        command_capacity: 64,
-        event_capacity: 256,
-        telemetry_capacity: 8,
-        owners: 2,
-        max_peers_per_ip: 64,
-        window_memory_bytes: None,
-    })
-    .await
-    .expect("two ingress Owners start");
+    // A multi-Owner listener needs an explicit port (production ingest
+    // listens on a configured, well-known one), so this test probes a free
+    // port and binds it. The probe is released first, so a parallel test can
+    // take the port in between: the bind then fails, and the test retries on
+    // a fresh port. A foreign `SO_REUSEPORT` socket that joins instead would
+    // take a share of the datagrams; the byte counts below fail on that.
+    let mut attempts = 0;
+    let mut handle = loop {
+        attempts += 1;
+        let started = SrtIngressHandle::start(IngressConfig {
+            bind: SocketAddr::from(([127, 0, 0, 1], free_port())),
+            policy_store: store.clone(),
+            receiver_group: ReceiverGroupId::generate(),
+            stats: stats.clone(),
+            command_capacity: 64,
+            event_capacity: 256,
+            telemetry_capacity: 8,
+            owners: 2,
+            max_peers_per_ip: 64,
+            window_memory_bytes: None,
+        })
+        .await;
+        match started {
+            Ok(handle) => break handle,
+            Err(error) if attempts < 5 => eprintln!("ingress start retried: {error:?}"),
+            Err(error) => panic!("two ingress Owners start: {error:?}"),
+        }
+    };
     let remote = handle.local_addr();
     let chunks = ts_chunks(CHUNKS);
     let per_publisher = chunks.iter().map(Bytes::len).sum::<usize>() as u64;
