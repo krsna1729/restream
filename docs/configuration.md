@@ -251,6 +251,13 @@ rtmp://<ingestHost>:1935/live/<streamKey>
 srt://<ingestHost>:10080?streamid=publish:<streamKey>
 ```
 
+HLS push ingest (MPEG-TS) uses the dashboard HTTP port; it is not among the
+generated `ingestUrls`. See [HLS push ingest](media-pipeline.md#hls-push-ingest):
+
+```text
+http://<ingestHost>:<httpPort>/ingest/hls/<streamKey>/<playlist>.m3u8
+```
+
 Pipelines may supply an explicit stream key, or omit it and let the API generate
 a high-entropy key. `GET /api/v1/stream-keys` returns only keys already assigned
 to configured pipelines; it does not enumerate unused credentials.

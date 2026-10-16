@@ -99,6 +99,9 @@ pub const PUBLIC_ROUTE_PATHS: &[&str] = &[
     "/api/{*path}",
     "/healthz",
     "/metrics/system",
+    // The stream key in the path is the credential (resolved like RTMP and
+    // SRT publish keys), not a dashboard session.
+    "/ingest/hls/{stream_key}/{*path}",
 ];
 
 // Authenticated routes include both dashboard JSON APIs and media/HLS entry
@@ -507,8 +510,11 @@ fn create_app_router() -> Router<Arc<AppState>> {
 /// headers) shared by dashboard APIs, static assets, and media endpoints.
 /// Compression is not part of this baseline; see `create_compressed_static_router`.
 fn apply_standard_layers(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
+    apply_security_headers(router.layer(DefaultBodyLimit::max(DEFAULT_API_BODY_LIMIT_BYTES)))
+}
+
+fn apply_security_headers<S: Clone + Send + Sync + 'static>(router: Router<S>) -> Router<S> {
     router
-        .layer(DefaultBodyLimit::max(DEFAULT_API_BODY_LIMIT_BYTES))
         .layer(SetResponseHeaderLayer::if_not_present(
             header::HeaderName::from_static("x-content-type-options"),
             HeaderValue::from_static("nosniff"),
@@ -528,6 +534,17 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             wake_reconciler_after_mutation,
         ))
         .with_state(state)
+}
+
+/// The HLS push ingest surface. Kept out of `create_router`'s body limit and
+/// reconciler wake: it enforces its own body bounds, and a segment upload is
+/// not a mutation the reconciler must converge.
+pub fn create_hls_ingest_router(ingest: Arc<crate::media::hls_ingest::HlsIngest>) -> Router {
+    apply_security_headers(Router::new().route(
+        "/ingest/hls/{stream_key}/{*path}",
+        any(super::hls_ingest::hls_ingest_handler),
+    ))
+    .with_state(ingest)
 }
 
 /// Every persisted change reaches the reconciler (Q-040): it runs an output

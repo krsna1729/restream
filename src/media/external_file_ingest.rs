@@ -3,7 +3,6 @@
 //! The application layer chooses when an ingest starts. This module owns the
 //! spawned process, MPEG-TS transport, retry loop, and runtime cleanup.
 
-mod continuity;
 mod process;
 mod transport;
 
@@ -15,8 +14,8 @@ use tracing::{error, warn};
 use crate::media::engine::{IngestRegistration, MediaEngine};
 use crate::media::ring_buffer::RingBuffer;
 
+use crate::media::ts_publisher::TsTimestamps;
 use process::SpawnedExternalFileIngest;
-use transport::FileIngestTimestamps;
 
 pub(crate) struct ExternalFileIngestSource {
     pub file_path: PathBuf,
@@ -159,7 +158,7 @@ async fn run_external_file_ingest(
     mut cleanup: CoordinatorCleanup,
 ) {
     let cancel = runtime.registration.cancel_token.clone();
-    let mut timestamps = FileIngestTimestamps::default();
+    let mut timestamps = TsTimestamps::default();
 
     loop {
         cleanup.child_pid = spawned.child.id();
@@ -406,7 +405,7 @@ mod tests {
             .publication_subscribers()
             .subscribe(Arc::new(PublicationSignal(published)));
         let ts = timestamped_audio_ts();
-        let mut timestamps = FileIngestTimestamps::default();
+        let mut timestamps = TsTimestamps::default();
         for expected in [[100, 249], [250, 399]] {
             let (stdout, mut writer) = stdout_pair();
             let mut pump =
@@ -453,7 +452,7 @@ mod tests {
         let mut pump = std::pin::pin!(transport::pump_stdout(
             runtime.clone(),
             stdout,
-            FileIngestTimestamps::default(),
+            TsTimestamps::default(),
         ));
         assert!(futures_util::poll!(pump.as_mut()).is_pending());
         runtime.registration.cancel_token.cancel();

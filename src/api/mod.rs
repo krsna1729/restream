@@ -18,6 +18,8 @@ pub mod error;
 pub mod file_ingest;
 pub mod health;
 pub mod hls;
+pub mod hls_ingest;
+pub mod http_server;
 pub mod ingests;
 pub mod logs;
 pub mod media_library;
@@ -45,6 +47,6 @@ pub struct AppServices {
     pub agent_service: AgentService,
 }
 
-pub use router::create_router;
+pub use router::{create_hls_ingest_router, create_router};
 pub use state::{AppState, PortConfig};
 pub use static_assets::EmbeddedAssets;

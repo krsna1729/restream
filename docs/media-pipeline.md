@@ -24,6 +24,7 @@ For the performance optimization plan and benchmark results, see
 - [Thread and memory ownership, ingest to egress](#thread-and-memory-ownership-ingest-to-egress)
 - [SRT bonding](#srt-bonding)
 - [SRT ingress owner](#srt-ingress-owner)
+- [HLS push ingest](#hls-push-ingest)
 - [Protocol correctness requirements](#protocol-correctness-requirements)
 
 ## Current shape
@@ -608,6 +609,106 @@ of any one ingress Owner's.
   actions, TX capacity/in-flight/high-water/exhaustions, RX packets/bytes/ring
   depth/drops/truncation, peers, admission telemetry, bridge depth high-water,
   stale commands, overload disconnects). No peer or StreamID labels.
+
+## HLS push ingest
+
+Encoders can push an MPEG-TS HLS stream over HTTP, as they do to YouTube HLS
+ingest or Akamai MSL. They `PUT` or `POST` each playlist and segment to the
+dashboard HTTP port, under the input's stream key:
+
+```text
+http://<host>:<httpPort>/ingest/hls/<streamKey>/<playlist>.m3u8
+```
+
+```sh
+ffmpeg -re -i input.mp4 -c:v libx264 -g 60 -c:a aac \
+  -f hls -method PUT -hls_time 2 \
+  http://HOST:3030/ingest/hls/KEY/index.m3u8
+```
+
+These all work: `-method POST`; FFmpeg's default of one connection per
+object, closed without reading the response; persistent connections
+(`-http_persistent 1`), with one limit: FFmpeg then sends requests ahead of
+the replies and, on exit, closes without reading them, so the connection is
+reset and its final segment and `EXT-X-ENDLIST` playlist can be lost (the
+session then ends on the idle timeout); keep the default for streams whose
+end matters; chunked or `Content-Length` bodies; and
+`delete_segments`, whose `DELETE` gets `200` and changes nothing. Segment URIs
+must be relative to their playlist. fMP4 segments are not ingested yet
+(`415`).
+
+- **Key check.** The stream key is the credential. It is resolved the same
+  way as an RTMP or SRT publish key, against the client IP, under its own
+  `hls-publish` rate-limit scope, before any body byte is read. A wrong key,
+  a disabled input or a banned IP gets `403`. The route sits outside the
+  dashboard session check.
+- **Session.** The first accepted object for a key registers an `hls` input
+  attempt. If another publisher (RTMP, SRT or file) already holds the input,
+  the object gets `409`. A session ends in any of these cases:
+  - `EXT-X-ENDLIST`, once the last listed segment has been published;
+  - no object for max(3 × target duration, 10 s);
+  - the pipeline or input is removed or disabled.
+- **Ordering.**
+  - Encoders upload a segment before the playlist that lists it, so a segment
+    that no playlist lists yet is held and answered `202` at once.
+  - Segments are published in `EXT-X-MEDIA-SEQUENCE` order, each sequence
+    once.
+  - A gap that has waited one target duration, while later segments are
+    ready, is skipped and counted.
+  - With a master playlist, the highest-`BANDWIDTH` variant is followed;
+    otherwise the first media playlist is. Objects of the other variants get
+    `200` and are dropped.
+- **Discontinuities.** A new epoch starts on an encoder restart inside the
+  idle window (the media sequence or the segment names go back) and on
+  `EXT-X-DISCONTINUITY`. The next segment is demuxed from scratch, and its
+  timestamps continue right after the last ones forwarded.
+- **Bounds.**
+  - Each object is bounded: 1 MiB per playlist and 64 MiB per segment
+    (`413` over the bound).
+  - Each key is bounded: 2 uploads in flight, and 8 held segments or 128 MiB
+    held, with the oldest evicted first. A third upload waits up to 10 s for
+    a slot before its body is read (`408` after that).
+  - Each key's segments may use 128 MiB, a quarter of the shared budget, for
+    bytes being read, queued, held or published. A segment claims its share
+    before it is read: all of its `Content-Length` at once, or, when chunked,
+    in 4 MiB steps while it alone holds the key's claim lock, so two bodies
+    of one key never each hold part of the share and wait for the rest. A
+    segment that has to wait is read later, not refused: FFmpeg's blocked
+    write is backpressure it respects. This throttle is tested on the body,
+    not yet over a real socket (FFmpeg's write blocking on a full TCP window).
+  - Playlists are small and are what releases held segments, so they take
+    only the shared budget and never wait for a share.
+  - All HLS sessions share a 512 MiB budget, never waited for. When it is
+    exhausted, an upload gets `503` with `Retry-After: 1`, and its claim is
+    released. FFmpeg never reads replies, so for it that segment is lost.
+    The per-key share bounds this but does not prevent it: four keys at
+    their 128 MiB share fill the budget, and then other keys' segments get
+    `503`. Four 4K publishers with 10 s segments reach that legitimately
+    (two target durations of outbox is about 2 × 61 MiB each).
+  - A request body that sends nothing for 10 s, or takes longer in total than
+    max(4 × target duration, 40 s) including any wait for its share, gets
+    `408`, and its bytes are released. A segment fits when the uplink carries
+    at least a quarter of the stream bitrate, which a real-time encoder's
+    uplink always does, since it must carry the full bitrate; a trickle does
+    not.
+  - An encoder faster than real time is slowed, not refused: once two target
+    durations (by `EXTINF`; 10 s before a playlist) of released media, or
+    128 MiB, wait to be published, the session stops taking objects, so its
+    uploads are answered only as publication catches up.
+- **Pacing.** Released segments reach the ring at media pace, like every
+  other TS source, not as one burst per segment. Media time is anchored at
+  the first data after a session start or a discontinuity; later data waits
+  until its offset from the anchor has passed on the wall clock. Media that
+  fell behind is published at once, at most one target duration of it (10 s
+  before the first playlist); further behind, or a timestamp jump, re-anchors.
+- **Placement.**
+  - The axum handler only checks the key and reads the bounded body.
+  - It hands each object over a bounded channel to the key's session task on
+    the MEDIA executor (`hlsIngest` class).
+  - The session task parses playlists, orders segments and publishes them
+    through the TS publisher it shares with file ingest
+    (`media::ts_publisher`).
+  - A panic in a session ends only that session and releases its input.
 
 ## Protocol correctness requirements
 

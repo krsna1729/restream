@@ -13,6 +13,7 @@ pub enum PipelineAccessMode {
     RtmpPlay,
     SrtPublish,
     SrtRead,
+    HlsPublish,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

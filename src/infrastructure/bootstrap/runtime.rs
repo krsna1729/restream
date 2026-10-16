@@ -41,7 +41,14 @@ impl RuntimeTasks {
         } = launch;
 
         let http_addr = format!("{}:{}", config.http_bind_addr, config.ports.http);
-        let app = crate::api::create_router(state);
+        let hls_ingest = crate::media::hls_ingest::HlsIngest::new(
+            engine.clone(),
+            pipeline_access.clone(),
+            security.clone(),
+            crate::media::hls_ingest::HlsIngestLimits::default(),
+        );
+        let app = crate::api::create_router(state)
+            .merge(crate::api::create_hls_ingest_router(hls_ingest));
         let listener = tokio::net::TcpListener::bind(&http_addr)
             .await
             .unwrap_or_else(|error| {
@@ -56,16 +63,7 @@ impl RuntimeTasks {
             addr = %http_addr,
             "dashboard API server listening",
         );
-        let http = tokio::spawn(async move {
-            if let Err(error) = axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-            )
-            .await
-            {
-                error!(err = ?error, "axum server error");
-            }
-        });
+        let http = tokio::spawn(crate::api::http_server::serve(listener, app));
 
         let rtmp_port = config.ports.rtmp;
         let rtmp_restarts = Arc::clone(&engine.runtime.rtmp_listener_stats.restarts);

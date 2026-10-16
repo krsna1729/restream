@@ -29,19 +29,21 @@ pub(crate) enum MediaServiceClass {
     Recording,
     AudioRouter,
     FileIngest,
+    HlsIngest,
     #[allow(dead_code)]
     Other,
 }
 
 impl MediaServiceClass {
     /// Declaration order; `class as usize` indexes `MediaExecutorMetrics::classes`.
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::SharedTsMux,
         Self::HlsSegmenter,
         Self::HlsFmp4,
         Self::Recording,
         Self::AudioRouter,
         Self::FileIngest,
+        Self::HlsIngest,
         Self::Other,
     ];
 }
@@ -115,7 +117,7 @@ struct MediaExecutorMetrics {
     queue_latency_samples: AtomicU64,
     queue_latency_us_sum: AtomicU64,
     queue_latency_us_max: AtomicU64,
-    classes: [ClassMetrics; 7],
+    classes: [ClassMetrics; 8],
     /// Running services; touched at start, end and snapshot only.
     services: Mutex<Vec<Arc<ServiceMetrics>>>,
     next_service_id: AtomicU64,

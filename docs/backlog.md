@@ -27,11 +27,12 @@ items).
 - [Q-064 incident signals before the page opened](#q-064-observability-sonnet-incident-correlation-before-the-page-opened)
 - [Q-065 capacity cost of HLS, sink and pipeline outputs](#q-065-performance-sonnet-price-hls-sink-and-pipeline-outputs-from-a-measured-cost)
 - [Q-066 SRT ingress test port race](#q-066-testing-sonnet-srt-multi-owner-test-port-can-join-a-foreign-reuseport-group)
-- [Q-067 HLS push ingest](#q-067-protocol-opus-hls-push-ingest-over-http-put-and-post)
+- [Q-067 HLS push ingest: fMP4 and remaining gates](#q-067-protocol-opus-hls-push-ingest-fmp4-segments-and-remaining-gates)
 - [Q-068 HLS pull ingest](#q-068-protocol-opus-hls-pull-ingest)
 - [Q-069 frame-level media units](#q-069-architecture-opus-frame-level-media-units-for-moq-and-fmp4-ingest)
 - [Q-070 MoQ ingest](#q-070-protocol-opus-moq-ingest)
 - [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
+- [Q-072 dedicated HLS ingest listener](#q-072-architecture-sonnet-dedicated-hls-ingest-listener-with-half-close)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -436,41 +437,21 @@ items).
 - Gates: none until it flakes.
 - Status: open (Filed: 2026-10-16 by claude).
 
-### Q-067 [protocol] [opus] HLS push ingest over HTTP PUT and POST
-- Goal: an encoder pushes HLS to Restream as it pushes to YouTube or
-  Akamai MSL. FFmpeg (`-f hls -method PUT|POST`), hardware and software
-  encoders all work without special settings.
+### Q-067 [protocol] [opus] HLS push ingest: fMP4 segments and remaining gates
+- Goal: what HLS push ingest (`src/media/hls_ingest/`, TS segments over
+  PUT and POST) still lacks for encoders that push fMP4 or need more than
+  the stream key.
 - Contract:
-  - Route `/ingest/hls/{stream_key}/{*path}`. The stream key selects the
-    pipeline input, like RTMP and SRT (`src/media/ingest_auth.rs`).
-    The catch-all path takes FFmpeg `var_stream_map` subdirectories.
-    Primary and backup are two keys.
-  - PUT and POST; chunked and content-length bodies; persistent and
-    per-request connections. DELETE answers 200 and does nothing.
-    Optional basic auth over the key.
-  - Media playlists drive order (`EXT-X-MEDIA-SEQUENCE`), with
-    deduplication. A segment that arrives before any playlist lists it is
-    the normal case (FFmpeg uploads each segment before the playlist that
-    lists it). It answers 202 at once and the session holds it, bounded in
-    bytes and age, until a playlist lists it. The handler never waits for
-    the playlist. `EXT-X-DISCONTINUITY` and `EXT-X-ENDLIST` are
-    handled. A master playlist picks one variant by a policy (default:
-    highest `BANDWIDTH`).
-  - TS segments go to the existing `TsDemuxer`. fMP4 segments
-    (`EXT-X-MAP` init) go to `shiguredo_mp4::demux::Fmp4SegmentDemuxer`.
-    Both are native.
-  - The axum handler only reads the body and checks the key. Demux and
-    ring publication run off Tokio workers, on a session thread that
-    follows the media-pipeline skill. Bodies, held segments and sessions
-    are bounded.
-  - It registers as an input attempt (`try_register_pipeline_input_attempt`,
-    protocol `"hls"`) and ends after `EXT-X-ENDLIST` or an idle timeout.
-- Gates: unit tests for playlist ordering, dedup and early segments; a
-  fuzz target for the m3u8 parser, and for each segment demuxer over
-  arbitrary bytes (`TsDemuxer`, `Fmp4SegmentDemuxer`); a panic in a
-  session ends only that session; one harness mode with FFmpeg pushing TS
-  and fMP4 over PUT and POST.
-- Status: open (Filed: 2026-10-16 by claude, user request).
+  - fMP4 segments (`EXT-X-MAP` init, `.m4s`/`.mp4`, answered `415` today)
+    go to `shiguredo_mp4::demux::Fmp4SegmentDemuxer` behind the same
+    ordering session, on the MEDIA executor.
+  - Optional basic auth over the stream key.
+  - Generated `ingestUrls.hls`: `AppState` does not know the HTTP port yet.
+- Gates: a fuzz target for `Fmp4SegmentDemuxer` over arbitrary bytes; a
+  test that a panic inside one session ends only that session and
+  releases its input; one harness mode with FFmpeg pushing TS and fMP4
+  over PUT and POST.
+- Status: open (Filed: 2026-10-16 by claude, user request; TS push done).
 
 ### Q-068 [protocol] [opus] HLS pull ingest
 - Goal: a pipeline input pulls a remote live HLS URL.
@@ -545,3 +526,19 @@ items).
   (a stage, or a non-HLS output) falls back with the reason recorded.
 - Status: open (Filed: 2026-10-16 by claude, user question on passthrough;
   after Q-067/Q-068).
+
+### Q-072 [architecture] [sonnet] Dedicated HLS ingest listener with half-close
+- Goal: only HLS push uploads get HTTP/1.1 half-close; dashboard SSE
+  streams notice a departed client at once again.
+- Sources: `src/api/http_server.rs` serves every dashboard route with
+  `half_close(true)` because FFmpeg (default `-http_persistent 0`) closes
+  its side after the body and hyper otherwise drops the upload. With it,
+  a client that leaves an SSE stream (`/api/v1/state/stream`, logs) is
+  noticed only when a write fails, at the second write after the reset
+  (20 to 40 s with the 20 s heartbeat), not at `tx.closed()`.
+- Change: serve `/ingest/hls/` on its own listener (or a per-route
+  connection policy) that sets half-close, and return the dashboard to
+  hyper's default.
+- Gates: the FFmpeg POST push test still passes; a test that a dropped
+  SSE client releases its receiver within one heartbeat.
+- Status: open (Filed: 2026-10-16 by claude).

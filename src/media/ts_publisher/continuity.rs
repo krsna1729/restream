@@ -1,5 +1,6 @@
-//! Timestamp continuity across file-ingest passes: each replayed pass is
-//! shifted so every stream's timestamps keep increasing.
+//! Timestamp continuity across TS source passes: each replayed file pass,
+//! and each stream after an HLS discontinuity, is shifted so every stream's
+//! timestamps keep increasing.
 
 use crate::media::packet::MediaPacket;
 use std::collections::HashMap;
@@ -8,6 +9,9 @@ use std::collections::HashMap;
 pub(super) struct ContinuousTimestampState {
     offset_ms: i64,
     last_timestamp_ms_by_stream: HashMap<u64, i64>,
+    /// The next packet starts an unrelated timeline: re-anchor it right after
+    /// the latest timestamp forwarded on any stream, whichever way it jumped.
+    rebase_pending: bool,
 }
 
 impl ContinuousTimestampState {
@@ -23,9 +27,20 @@ impl ContinuousTimestampState {
         }
     }
 
+    /// Backward jumps re-anchor on their own; a forward jump (an encoder
+    /// restart, an HLS `EXT-X-DISCONTINUITY`) re-anchors only when marked.
+    pub(super) fn mark_discontinuity(&mut self) {
+        self.rebase_pending = true;
+    }
+
     pub(super) fn apply(&mut self, packet: &mut MediaPacket) {
         let stream_key = Self::stream_key(packet);
         let raw_timestamp_ms = Self::continuity_timestamp_ms(packet);
+        if std::mem::take(&mut self.rebase_pending)
+            && let Some(latest_ms) = self.last_timestamp_ms_by_stream.values().copied().max()
+        {
+            self.offset_ms = latest_ms.saturating_add(1).saturating_sub(raw_timestamp_ms);
+        }
         if let Some(last_timestamp_ms) = self.last_timestamp_ms_by_stream.get(&stream_key).copied()
         {
             let adjusted_timestamp_ms = raw_timestamp_ms.saturating_add(self.offset_ms);
@@ -116,6 +131,23 @@ mod tests {
         assert_eq!(reordered_p.dts, 33);
         assert_eq!(reordered_b.pts, 66);
         assert_eq!(reordered_b.dts, 66);
+    }
+
+    #[test]
+    fn marked_discontinuity_reanchors_a_forward_jump_after_the_latest_stream() {
+        let mut timestamps = ContinuousTimestampState::default();
+        let mut video = test_packet(MediaType::Video, 0, 1_000, 1_000);
+        let mut audio = test_packet(MediaType::Audio, 0, 1_010, 1_010);
+        timestamps.apply(&mut video);
+        timestamps.apply(&mut audio);
+
+        timestamps.mark_discontinuity();
+        let mut jumped_video = test_packet(MediaType::Video, 0, 9_000_000, 9_000_000);
+        let mut jumped_audio = test_packet(MediaType::Audio, 0, 9_000_005, 9_000_005);
+        timestamps.apply(&mut jumped_video);
+        timestamps.apply(&mut jumped_audio);
+        assert_eq!(jumped_video.dts, 1_011);
+        assert_eq!(jumped_audio.dts, 1_016);
     }
 
     fn test_packet(media_type: MediaType, track_index: u32, pts: i64, dts: i64) -> MediaPacket {
