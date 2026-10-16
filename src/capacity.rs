@@ -4,19 +4,72 @@
 //! The model consumes observed work (bytes/packets, stages, and fanout) and
 //! reports the hottest calibrated service center. It starts observe-only.
 
-use serde::Serialize;
+use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
 
 use crate::media::engine::MediaEngine;
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+/// The projection's formula. 2: each output carries its own pipeline's
+/// ingest, sent as its protocol packetizes it (1: every output carried the
+/// sum of all ingests, protocol-blind).
+pub const CAPACITY_MODEL_VERSION: u32 = 2;
+
+/// The largest SRT message payload the engine sends: seven 188-byte MPEG-TS
+/// packets.
+const SRT_DATAGRAM_BYTES: f64 = 1316.0;
+
+/// One pipeline's ingest, as sampled.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct IngestRate {
+    pub bps: f64,
+    pub pps: f64,
+}
+
+/// How an output sends its pipeline's media, for packet pricing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputProtocol {
+    /// RTMP and every other stream output: one write per media packet.
+    #[default]
+    Rtmp,
+    /// RTMP over TLS: packetized as RTMP. The TLS cost is not priced.
+    Rtmps,
+    /// MPEG-TS in datagrams of at most 1316 bytes.
+    Srt,
+}
+
+impl OutputProtocol {
+    fn of_egress(protocol: &str) -> Self {
+        match protocol {
+            "srt" => Self::Srt,
+            "rtmps" => Self::Rtmps,
+            _ => Self::Rtmp,
+        }
+    }
+
+    /// Packets per second one output sends of `ingest`. SRT cuts the
+    /// stream into datagrams, so it sends at least the bitrate over the
+    /// datagram size; a stream output writes each media packet once.
+    pub fn packets_per_sec(self, ingest: IngestRate) -> f64 {
+        match self {
+            Self::Rtmp | Self::Rtmps => ingest.pps,
+            Self::Srt => ingest.pps.max(ingest.bps / 8.0 / SRT_DATAGRAM_BYTES),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Workload {
     pub outputs: u32,
+    /// Every ingest summed: what the ingress center receives.
     pub media_bps: u64,
     pub media_pps: u64,
-    pub rtmp_outputs: u32,
-    pub rtmps_outputs: u32,
-    pub srt_outputs: u32,
+    /// Every output's pipeline ingest summed: what the egress center and
+    /// the NIC send before retransmission.
+    pub fanout_bps: f64,
+    pub fanout_pps: f64,
     pub loss_rate: f64,
     pub stage_count: u32,
     pub shard_count: u32,
@@ -28,12 +81,24 @@ impl Default for Workload {
             outputs: 0,
             media_bps: 0,
             media_pps: 0,
-            rtmp_outputs: 0,
-            rtmps_outputs: 0,
-            srt_outputs: 0,
+            fanout_bps: 0.0,
+            fanout_pps: 0.0,
             loss_rate: 0.0,
             stage_count: 0,
             shard_count: 1,
+        }
+    }
+}
+
+impl Workload {
+    /// `count` more outputs of `ingest`, sent over `protocol`.
+    pub fn with_outputs(self, count: u32, ingest: IngestRate, protocol: OutputProtocol) -> Self {
+        let count_f = f64::from(count);
+        Self {
+            outputs: self.outputs.saturating_add(count),
+            fanout_bps: self.fanout_bps + count_f * ingest.bps,
+            fanout_pps: self.fanout_pps + count_f * protocol.packets_per_sec(ingest),
+            ..self
         }
     }
 }
@@ -176,15 +241,11 @@ impl Default for CapacityModel {
 impl CapacityModel {
     pub fn project(&self, workload: Workload) -> CapacitySnapshot {
         let ingress = ratio(workload.media_pps as f64, self.limits.ingress_pps);
-        let egress_pps = (workload.media_pps as f64)
-            * f64::from(workload.outputs)
-            * (1.0 + workload.loss_rate.max(0.0));
+        let egress_pps = workload.fanout_pps * (1.0 + workload.loss_rate.max(0.0));
         let shard_count = f64::from(workload.shard_count.max(1));
         let hottest_shard = ratio(egress_pps / shard_count, self.limits.egress_pps);
         let egress = ratio(egress_pps, self.limits.egress_pps * shard_count);
-        let nic_bps = (workload.media_bps as f64)
-            * f64::from(workload.outputs)
-            * (1.0 + workload.loss_rate.max(0.0));
+        let nic_bps = workload.fanout_bps * (1.0 + workload.loss_rate.max(0.0));
         let nic = ratio(nic_bps, self.limits.nic_bps);
         let memory = ratio(
             f64::from(workload.outputs) * 262_144.0,
@@ -334,38 +395,95 @@ fn ratio(numerator: f64, denominator: f64) -> f64 {
     }
 }
 
-impl MediaEngine {
-    /// The observed workload: ingest rates, outputs by protocol, stages and
-    /// the egress shard count.
-    async fn capacity_workload(&self) -> Workload {
-        let ingests = self.ingests.active.read().await;
-        let mut media_bps = 0_u64;
-        let mut media_pps = 0_u64;
-        for ingest in ingests.values() {
-            if let Some(rate) = MediaEngine::sample_ingest_bitrate_kbps(ingest) {
-                media_bps = media_bps.saturating_add((rate * 1_000.0).max(0.0) as u64);
-            }
-            media_pps = media_pps.saturating_add(ingest.metrics.snapshot().packets_per_sec as u64);
-        }
-        drop(ingests);
+/// A topology change to price: `outputs` more outputs sent over
+/// `protocol`, carrying `pipeline_id`'s ingest (the busiest live one when
+/// `None`), and `stages` more shared stages.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ScenarioChange {
+    pub outputs: u32,
+    pub stages: u32,
+    pub protocol: OutputProtocol,
+    pub pipeline_id: Option<String>,
+}
 
-        let egresses = self.egresses.active.read().await;
+/// One scenario priced: `baseline` and `projected` share one workload
+/// sample; `rated_by` is the pipeline whose ingest the added outputs carry
+/// (`None`: no ingest is live, so they carry nothing) at `ingest`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Scenario {
+    pub baseline: CapacitySnapshot,
+    pub projected: CapacitySnapshot,
+    pub rated_by: Option<String>,
+    pub ingest: IngestRate,
+}
+
+/// The scenario named a pipeline with no live ingest: its rate is unknown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoLiveIngest(pub String);
+
+/// Where each limit comes from.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LimitSource {
+    /// `CapacityLimits::from_parallelism`: a conservative prior from the CPU
+    /// count, not a measurement of this host.
+    #[default]
+    Prior,
+    /// Set by the operator (`RESTREAM_CAPACITY_*`), presumably measured.
+    Configured,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LimitSources {
+    pub ingress_pps: LimitSource,
+    pub egress_pps: LimitSource,
+    pub nic_bps: LimitSource,
+    pub memory_bytes: LimitSource,
+    pub ffmpeg_stages: LimitSource,
+    pub disk_bps: LimitSource,
+}
+
+/// What a projection was priced on: the formula, each limit and where it
+/// came from, the CPU count the priors scale with, and the safe threshold.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Calibration {
+    pub model_version: u32,
+    pub limits: CapacityLimits,
+    pub sources: LimitSources,
+    pub prior_cpus: u32,
+    pub safe_utilization: f64,
+}
+
+impl MediaEngine {
+    /// Each live pipeline's ingest rate, by pipeline id.
+    async fn ingest_rates(&self) -> HashMap<String, IngestRate> {
+        let ingests = self.ingests.active.read().await;
+        ingests
+            .iter()
+            .map(|(pipeline_id, ingest)| {
+                let bps = MediaEngine::sample_ingest_bitrate_kbps(ingest)
+                    .map_or(0.0, |rate| (rate * 1_000.0).max(0.0));
+                let pps = ingest.metrics.snapshot().packets_per_sec as f64;
+                (pipeline_id.clone(), IngestRate { bps, pps })
+            })
+            .collect()
+    }
+
+    /// The observed workload: ingest rates, each output's fan-out of its
+    /// own pipeline, stages and the egress shard count.
+    async fn capacity_workload(&self, rates: &HashMap<String, IngestRate>) -> Workload {
         let mut workload = Workload {
-            outputs: egresses.len().min(u32::MAX as usize) as u32,
-            media_bps,
-            media_pps,
+            media_bps: rates.values().map(|rate| rate.bps as u64).sum(),
+            media_pps: rates.values().map(|rate| rate.pps as u64).sum(),
             ..Workload::default()
         };
-        for egress in egresses.values() {
-            match egress.protocol.as_str() {
-                "rtmp" => workload.rtmp_outputs = workload.rtmp_outputs.saturating_add(1),
-                "rtmps" => workload.rtmps_outputs = workload.rtmps_outputs.saturating_add(1),
-                "srt" => workload.srt_outputs = workload.srt_outputs.saturating_add(1),
-                _ => {}
-            }
+        for egress in self.egresses.active.read().await.values() {
+            let ingest = rates.get(&egress.pipeline_id).copied().unwrap_or_default();
+            workload =
+                workload.with_outputs(1, ingest, OutputProtocol::of_egress(&egress.protocol));
         }
-        drop(egresses);
-
         workload.stage_count = self
             .stages
             .runtimes
@@ -377,14 +495,31 @@ impl MediaEngine {
         workload
     }
 
-    /// The current workload projected onto the calibrated priors alone, with
-    /// no measured flow.
-    pub async fn capacity_priors(&self) -> CapacitySnapshot {
+    fn capacity_model(&self) -> CapacityModel {
         CapacityModel {
             limits: self.config.capacity_limits,
             ..CapacityModel::default()
         }
-        .project(self.capacity_workload().await)
+    }
+
+    /// The calibration every projection is priced on.
+    pub fn capacity_calibration(&self) -> Calibration {
+        let model = self.capacity_model();
+        Calibration {
+            model_version: CAPACITY_MODEL_VERSION,
+            limits: model.limits,
+            sources: self.config.capacity_sources,
+            prior_cpus: self.config.capacity_prior_cpus,
+            safe_utilization: model.safe_utilization,
+        }
+    }
+
+    /// The current workload projected onto the calibrated priors alone, with
+    /// no measured flow.
+    pub async fn capacity_priors(&self) -> CapacitySnapshot {
+        let rates = self.ingest_rates().await;
+        self.capacity_model()
+            .project(self.capacity_workload(&rates).await)
     }
 
     /// Observe the current runtime topology and counters without making an
@@ -419,27 +554,53 @@ impl MediaEngine {
     }
 
     /// One sample of the current workload projected onto the calibrated
-    /// priors twice: as it is (`baseline`) and with `outputs` more outputs
-    /// and `stages` more shared stages (`projected`). Both are priors only,
-    /// so they compare like with like; the measured flow of running shards
-    /// is [`Self::capacity_snapshot`]'s, and nothing measures a change that
-    /// has not happened.
+    /// priors twice: as it is (`baseline`) and with the change
+    /// (`projected`). Both are priors only, so they compare like with like;
+    /// the measured flow of running shards is [`Self::capacity_snapshot`]'s,
+    /// and nothing measures a change that has not happened.
     pub async fn capacity_scenario(
         &self,
-        outputs: u32,
-        stages: u32,
-    ) -> (CapacitySnapshot, CapacitySnapshot) {
-        let workload = self.capacity_workload().await;
-        let model = CapacityModel {
-            limits: self.config.capacity_limits,
-            ..CapacityModel::default()
-        };
+        change: &ScenarioChange,
+    ) -> Result<Scenario, NoLiveIngest> {
+        let rates = self.ingest_rates().await;
+        let (rated_by, ingest) = scenario_rate(&rates, change.pipeline_id.as_deref())?;
+        let workload = self.capacity_workload(&rates).await;
+        let model = self.capacity_model();
         let changed = Workload {
-            outputs: workload.outputs.saturating_add(outputs),
-            stage_count: workload.stage_count.saturating_add(stages),
-            ..workload
+            stage_count: workload.stage_count.saturating_add(change.stages),
+            ..workload.with_outputs(change.outputs, ingest, change.protocol)
         };
-        (model.project(workload), model.project(changed))
+        Ok(Scenario {
+            baseline: model.project(workload),
+            projected: model.project(changed),
+            rated_by,
+            ingest,
+        })
+    }
+}
+
+/// The ingest the scenario's outputs carry: the named pipeline's, which must
+/// be live, or else the busiest live one (the dearest an output can be).
+fn scenario_rate(
+    rates: &HashMap<String, IngestRate>,
+    pipeline_id: Option<&str>,
+) -> Result<(Option<String>, IngestRate), NoLiveIngest> {
+    match pipeline_id {
+        Some(id) => rates
+            .get(id)
+            .map(|rate| (Some(id.to_string()), *rate))
+            .ok_or_else(|| NoLiveIngest(id.to_string())),
+        None => Ok(rates
+            .iter()
+            .max_by(|left, right| {
+                left.1
+                    .bps
+                    .total_cmp(&right.1.bps)
+                    .then_with(|| right.0.cmp(left.0))
+            })
+            .map_or((None, IngestRate::default()), |(id, rate)| {
+                (Some(id.clone()), *rate)
+            })),
     }
 }
 
@@ -454,13 +615,22 @@ mod tests {
             limits: CapacityLimits::from_parallelism(4),
             safe_utilization: 0.8,
         }
-        .project(Workload {
-            outputs: 100,
-            media_bps: 10_000_000,
-            media_pps: 100,
-            shard_count: 4,
-            ..Workload::default()
-        });
+        .project(
+            Workload {
+                media_bps: 10_000_000,
+                media_pps: 100,
+                shard_count: 4,
+                ..Workload::default()
+            }
+            .with_outputs(
+                100,
+                IngestRate {
+                    bps: 10_000_000.0,
+                    pps: 100.0,
+                },
+                OutputProtocol::Rtmp,
+            ),
+        );
         assert_eq!(snapshot.active_leaves, 100);
         assert_eq!(snapshot.egress_pps, 10_000.0);
         assert!(snapshot.nic_util > 0.0);
@@ -499,6 +669,72 @@ mod tests {
         assert_eq!(diagnosis.status, FlowStatus::Healthy);
     }
 
+    fn rate(bps: f64, pps: f64) -> IngestRate {
+        IngestRate { bps, pps }
+    }
+
+    #[test]
+    fn an_output_carries_its_own_pipelines_ingest_not_the_sum() {
+        // Two pipelines, 6 and 1 Mb/s; one output on the small one.
+        let rates = HashMap::from([
+            ("big".to_string(), rate(6_000_000.0, 600.0)),
+            ("small".to_string(), rate(1_000_000.0, 100.0)),
+        ]);
+        let workload = Workload {
+            media_bps: 7_000_000,
+            media_pps: 700,
+            ..Workload::default()
+        }
+        .with_outputs(1, rates["small"], OutputProtocol::Rtmp);
+        let snapshot = CapacityModel::default().project(workload);
+        assert_eq!(
+            snapshot.egress_pps, 100.0,
+            "not 700: the sum of both ingests"
+        );
+    }
+
+    #[test]
+    fn srt_sends_the_bitrate_in_1316_byte_datagrams() {
+        // 6 Mb/s in 100 media packets a second: SRT cuts it into
+        // 6e6 / 8 / 1316 = 570 datagrams; RTMP writes the 100 packets.
+        let ingest = rate(6_000_000.0, 100.0);
+        assert_eq!(OutputProtocol::Rtmp.packets_per_sec(ingest), 100.0);
+        assert_eq!(OutputProtocol::Rtmps.packets_per_sec(ingest), 100.0);
+        let srt = OutputProtocol::Srt.packets_per_sec(ingest);
+        assert!((srt - 6_000_000.0 / 8.0 / 1316.0).abs() < 1e-9, "{srt}");
+        // A packet rate above the datagram rate stands: never fewer packets.
+        assert_eq!(
+            OutputProtocol::Srt.packets_per_sec(rate(8_000.0, 50.0)),
+            50.0
+        );
+    }
+
+    #[test]
+    fn a_scenario_rates_the_named_pipeline_or_the_busiest() {
+        let rates = HashMap::from([
+            ("a".to_string(), rate(1_000_000.0, 100.0)),
+            ("b".to_string(), rate(5_000_000.0, 400.0)),
+        ]);
+        assert_eq!(
+            scenario_rate(&rates, Some("a")),
+            Ok((Some("a".to_string()), rates["a"]))
+        );
+        assert_eq!(
+            scenario_rate(&rates, None),
+            Ok((Some("b".to_string()), rates["b"])),
+            "unnamed: the dearest live ingest"
+        );
+        assert_eq!(
+            scenario_rate(&rates, Some("gone")),
+            Err(NoLiveIngest("gone".to_string()))
+        );
+        assert_eq!(
+            scenario_rate(&HashMap::new(), None),
+            Ok((None, IngestRate::default())),
+            "nothing live: the outputs carry nothing"
+        );
+    }
+
     proptest! {
         #[test]
         fn projection_preserves_nonnegative_work(
@@ -507,13 +743,16 @@ mod tests {
             media_pps in 0u64..1_000_000,
             stages in 0u32..128,
         ) {
-            let snapshot = CapacityModel::default().project(Workload {
-                outputs,
-                media_bps,
-                media_pps,
-                stage_count: stages,
-                ..Workload::default()
-            });
+            let ingest = IngestRate { bps: media_bps as f64, pps: media_pps as f64 };
+            let snapshot = CapacityModel::default().project(
+                Workload {
+                    media_bps,
+                    media_pps,
+                    stage_count: stages,
+                    ..Workload::default()
+                }
+                .with_outputs(outputs, ingest, OutputProtocol::Srt),
+            );
             prop_assert!(snapshot.ingress_pps >= 0.0);
             prop_assert!(snapshot.media_bps >= 0.0);
             prop_assert!(snapshot.egress_pps >= 0.0);

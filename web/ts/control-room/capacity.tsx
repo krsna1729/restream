@@ -1,10 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { getCapacityScenario } from "../core/api.js";
-import type { CapacityScenario } from "../core/api-types.js";
+import type {
+  CapacityCalibration,
+  CapacityLimits,
+  CapacityScenario,
+  OutputProtocol,
+} from "../core/api-types.js";
 import type { CapacitySnapshot, FlowDiagnosis } from "../core/generated/runtime-state.js";
 import { Meters, serviceCenterRows } from "./fleet.js";
 import { formatBps, formatPercent } from "./format.js";
+import { PlaceLink } from "./router.js";
 import type { LiveSnapshot } from "./store.js";
 
 const FLOW_BADGE: Record<FlowDiagnosis["status"], string> = {
@@ -54,7 +60,7 @@ export function Capacity({ live }: { live: LiveSnapshot }) {
             <FlowDoctor capacity={capacity} />
           </div>
         </section>
-        <Scenario />
+        <Scenario live={live} />
       </div>
     </div>
   );
@@ -97,10 +103,49 @@ function FlowDoctor({ capacity }: { capacity: CapacitySnapshot }) {
   );
 }
 
-function Scenario() {
+const PROTOCOLS: ReadonlyArray<[OutputProtocol, string]> = [
+  ["rtmp", "RTMP"],
+  ["rtmps", "RTMPS (TLS cost not priced)"],
+  ["srt", "SRT (1316-byte datagrams)"],
+];
+
+// Each new rendition is one more FFmpeg stage its outputs share.
+const ENCODINGS: ReadonlyArray<[number, string]> = [
+  [0, "Source passthrough"],
+  [1, "1 new rendition"],
+  [2, "2 new renditions"],
+  [3, "3 new renditions"],
+];
+
+const LIMIT_LABELS: ReadonlyArray<[keyof CapacityLimits, string, (value: number) => string]> = [
+  ["ingressPps", "Ingress", (value) => `${Math.round(value)} pps`],
+  ["egressPps", "Egress per shard", (value) => `${Math.round(value)} pps`],
+  ["nicBps", "NIC", formatBps],
+  ["memoryBytes", "Memory", (value) => `${Math.round(value / 1_000_000)} MB`],
+  ["ffmpegStages", "FFmpeg stages", (value) => String(value)],
+  ["diskBps", "Disk", formatBps],
+];
+
+function Scenario({ live }: { live: LiveSnapshot }) {
   const [addOutputs, setAddOutputs] = useState(100);
   const [addStages, setAddStages] = useState(0);
+  const [protocol, setProtocol] = useState<OutputProtocol>("rtmp");
+  const [pipelineId, setPipelineId] = useState("");
   const [result, setResult] = useState<CapacityScenario | null>(null);
+  const project = () =>
+    void getCapacityScenario({
+      addOutputs,
+      addStages,
+      protocol,
+      pipelineId: pipelineId || undefined,
+    }).then((scenario) => {
+      if (scenario) setResult(scenario);
+    });
+  // The default scenario once, on arrival: the calibration shows without a
+  // click. Later changes project on submit only.
+  useEffect(project, []);
+  const pipelines = live.state?.pipelines ?? [];
+  const name = (id: string) => pipelines.find((pipeline) => pipeline.id === id)?.name ?? id;
   return (
     <section className="card bg-base-200" aria-labelledby="capacity-scenario">
       <div className="card-body gap-3 p-4">
@@ -108,12 +153,13 @@ function Scenario() {
           Scenario
           <span className="text-xs font-normal opacity-70">{PRIORS}</span>
         </h3>
-        {/* A failed request shows in the app's error alert. */}
+        {/* A failed request (a pipeline with no live ingest) shows in the
+            app's error alert. */}
         <form
           className="flex flex-wrap items-end gap-3"
           onSubmit={(event) => {
             event.preventDefault();
-            void getCapacityScenario({ addOutputs, addStages }).then(setResult);
+            project();
           }}
         >
           <label className="form-control">
@@ -128,15 +174,47 @@ function Scenario() {
             />
           </label>
           <label className="form-control">
-            <span className="label-text text-xs">More shared stages</span>
-            <input
-              type="number"
-              min={0}
-              max={1000}
-              className="input input-sm input-bordered w-28"
+            <span className="label-text text-xs">Carrying the ingest of</span>
+            <select
+              className="select select-sm select-bordered"
+              value={pipelineId}
+              onChange={(event) => setPipelineId(event.target.value)}
+            >
+              <option value="">The busiest live pipeline</option>
+              {pipelines.map((pipeline) => (
+                <option key={pipeline.id} value={pipeline.id}>
+                  {pipeline.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="form-control">
+            <span className="label-text text-xs">Protocol</span>
+            <select
+              className="select select-sm select-bordered"
+              value={protocol}
+              onChange={(event) => setProtocol(event.target.value as OutputProtocol)}
+            >
+              {PROTOCOLS.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="form-control">
+            <span className="label-text text-xs">Encoding</span>
+            <select
+              className="select select-sm select-bordered"
               value={addStages}
-              onChange={(event) => setAddStages(Math.max(0, Number(event.target.value) || 0))}
-            />
+              onChange={(event) => setAddStages(Number(event.target.value))}
+            >
+              {ENCODINGS.map(([stages, label]) => (
+                <option key={stages} value={stages}>
+                  {label}
+                </option>
+              ))}
+            </select>
           </label>
           <button type="submit" className="btn btn-sm btn-primary">
             Project
@@ -144,9 +222,14 @@ function Scenario() {
         </form>
         <p className="text-xs opacity-70">
           Both sides are priced on the priors, so they compare like with like;
-          the measured flow is the Flow Doctor's. The model prices outputs and
-          stages, not their protocol or pipeline: it multiplies the current
-          ingest by the output count.
+          the measured flow is the Flow Doctor's. Each added output carries its
+          pipeline's ingest, in the packets its protocol sends; a rendition is
+          one FFmpeg stage its outputs share. To price a planned change with its
+          topology diff,{" "}
+          <PlaceLink place={{ workspace: "changes", pipelineId: pipelineId || null }} className="link">
+            draft it in Changes
+          </PlaceLink>
+          .
         </p>
         {result && (
           <div className="space-y-3" aria-label="Scenario result">
@@ -158,14 +241,64 @@ function Scenario() {
                 {result.projected.flow.status}
               </span>
             </p>
+            <p className="text-xs opacity-70">
+              {result.ratedBy === null
+                ? "No ingest is live: the added outputs carry nothing yet."
+                : `Each added output carries ${name(result.ratedBy)}: ${formatBps(result.ingest.bps)}, ${Math.round(result.ingest.pps)} pps.`}
+            </p>
             <Meters title="Now, on the priors" rows={serviceCenterRows(result.baseline)} />
             <Meters
-              title={`With ${result.addOutputs} more outputs and ${result.addStages} more stages`}
+              title={`With ${result.addOutputs} more ${result.protocol.toUpperCase()} outputs and ${result.addStages} more stages`}
               rows={serviceCenterRows(result.projected)}
             />
+            <Calibration calibration={result.calibration} />
           </div>
         )}
       </div>
+    </section>
+  );
+}
+
+/** What every projection is priced on, and where each number came from. */
+function Calibration({ calibration }: { calibration: CapacityCalibration }) {
+  return (
+    <section className="rounded bg-base-100 p-3" aria-labelledby="capacity-calibration">
+      <h4 id="capacity-calibration" className="font-medium">
+        Calibration
+        <span className="ml-2 text-xs font-normal opacity-70">
+          model v{calibration.modelVersion} · safe below{" "}
+          {formatPercent(calibration.safeUtilization * 100)}
+        </span>
+      </h4>
+      <table className="table table-xs mt-1" aria-label="Capacity limits">
+        <thead>
+          <tr>
+            <th>Center</th>
+            <th>Limit</th>
+            <th>Source</th>
+          </tr>
+        </thead>
+        <tbody>
+          {LIMIT_LABELS.map(([key, label, format]) => (
+            <tr key={key}>
+              <td>{label}</td>
+              <td className="tabular-nums">{format(calibration.limits[key])}</td>
+              <td>
+                {calibration.sources[key] === "configured" ? (
+                  <span className="badge badge-sm badge-info">configured</span>
+                ) : (
+                  <span
+                    className="badge badge-sm badge-ghost"
+                    title={`A conservative prior scaled to ${calibration.priorCpus} CPUs, not a measurement of this host`}
+                  >
+                    prior · {calibration.priorCpus} CPUs
+                  </span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </section>
   );
 }

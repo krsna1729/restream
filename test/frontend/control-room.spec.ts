@@ -420,11 +420,24 @@ test("incidents and capacity: an alert's evidence packet and an engine-made proj
       .click();
     await expect(page.getByRole("heading", { name: /Flow Doctor/ })).toBeVisible();
     const scenario = page.getByRole("region", { name: /Scenario/ });
+    // The default scenario runs on arrival, so the calibration shows at once.
+    const limits = scenario.getByRole("table", { name: "Capacity limits" });
+    await expect(limits.getByRole("row", { name: /FFmpeg stages/ })).toContainText(
+      /prior · \d+ CPUs|configured/,
+    );
     await scenario.getByLabel("More outputs").fill("5000");
+    await scenario.getByLabel("Protocol").selectOption("srt");
+    await scenario.getByLabel("Encoding").selectOption("1");
     await scenario.getByRole("button", { name: "Project" }).click();
     const result = scenario.getByLabel("Scenario result");
-    await expect(result).toContainText("With 5000 more outputs and 0 more stages");
+    await expect(result).toContainText("With 5000 more SRT outputs and 1 more stages");
     await expect(result).toContainText("Projected hottest center");
+    // The result says whose ingest the added outputs carry, or that none is live.
+    await expect(result).toContainText(/No ingest is live|Each added output carries/);
+    await expect(scenario.getByRole("link", { name: "draft it in Changes" })).toHaveAttribute(
+      "href",
+      /w=changes/,
+    );
   } finally {
     await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
   }

@@ -379,6 +379,11 @@ pub struct CapacityScenarioQuery {
     pub add_outputs: u32,
     #[serde(default)]
     pub add_stages: u32,
+    /// How the added outputs send: `rtmp` (default), `rtmps` or `srt`.
+    #[serde(default)]
+    pub protocol: crate::capacity::OutputProtocol,
+    /// Whose ingest the added outputs carry; the busiest live one if absent.
+    pub pipeline_id: Option<String>,
 }
 
 /// Projects one sample of the current workload, as it is and with a topology
@@ -392,15 +397,35 @@ pub async fn v1_capacity_scenario_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    let (baseline, projected) = state
-        .engine
-        .capacity_scenario(query.add_outputs, query.add_stages)
-        .await;
+    let change = crate::capacity::ScenarioChange {
+        outputs: query.add_outputs,
+        stages: query.add_stages,
+        protocol: query.protocol,
+        pipeline_id: query.pipeline_id,
+    };
+    let scenario = match state.engine.capacity_scenario(&change).await {
+        Ok(scenario) => scenario,
+        Err(crate::capacity::NoLiveIngest(pipeline_id)) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": format!(
+                        "pipeline {pipeline_id} has no live ingest: its rate is unknown, so its outputs cannot be priced"
+                    ),
+                })),
+            )
+                .into_response();
+        }
+    };
     Json(serde_json::json!({
-        "addOutputs": query.add_outputs,
-        "addStages": query.add_stages,
-        "baseline": baseline,
-        "projected": projected,
+        "addOutputs": change.outputs,
+        "addStages": change.stages,
+        "protocol": change.protocol,
+        "ratedBy": scenario.rated_by,
+        "ingest": scenario.ingest,
+        "calibration": state.engine.capacity_calibration(),
+        "baseline": scenario.baseline,
+        "projected": scenario.projected,
     }))
     .into_response()
 }

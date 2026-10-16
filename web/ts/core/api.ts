@@ -19,6 +19,7 @@ import type {
   StageTelemetrySnapshot,
   ResourceMapSnapshot,
   CapacityScenario,
+  OutputProtocol,
   PipelineSummarySnapshot,
   BuildLogsStreamUrlOptions,
   PipelineMutationResponse,
@@ -233,11 +234,16 @@ async function getResourceMap(
 async function getCapacityScenario(change: {
   addOutputs: number;
   addStages: number;
+  protocol?: OutputProtocol;
+  /** Whose ingest the outputs carry; the busiest live one when absent. */
+  pipelineId?: string;
 }): Promise<CapacityScenario | null> {
   const query = new URLSearchParams({
     add_outputs: String(change.addOutputs),
     add_stages: String(change.addStages),
   });
+  if (change.protocol) query.set("protocol", change.protocol);
+  if (change.pipelineId) query.set("pipeline_id", change.pipelineId);
   return apiRequest<CapacityScenario>(`/api/v1/capacity/scenario?${query}`);
 }
 

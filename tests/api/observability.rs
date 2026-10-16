@@ -640,4 +640,43 @@ async fn capacity_scenario_projects_the_change_without_claiming_a_measurement() 
         .unwrap();
     let same = body_json(same).await;
     assert_eq!(same["projected"], same["baseline"]);
+    // Nothing is live: the added outputs are rated by no pipeline.
+    assert!(same["ratedBy"].is_null(), "{same}");
+    assert_eq!(same["protocol"], "rtmp");
+
+    // The calibration says what it was priced on, limit by limit.
+    let calibration = &same["calibration"];
+    assert_eq!(calibration["modelVersion"], 2);
+    assert_eq!(calibration["safeUtilization"], 0.8);
+    assert!(calibration["priorCpus"].as_u64() > Some(0));
+    for limit in [
+        "ingressPps",
+        "egressPps",
+        "nicBps",
+        "memoryBytes",
+        "ffmpegStages",
+        "diskBps",
+    ] {
+        assert!(calibration["limits"][limit].as_f64() > Some(0.0), "{limit}");
+        assert!(
+            matches!(
+                calibration["sources"][limit].as_str(),
+                Some("prior" | "configured")
+            ),
+            "{limit}"
+        );
+    }
+
+    // A named pipeline must be live: its ingest rate is what is priced.
+    let unknown = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            "/api/v1/capacity/scenario?add_outputs=1&pipeline_id=nowhere&protocol=srt",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
