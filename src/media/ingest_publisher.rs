@@ -12,6 +12,9 @@
 
 mod continuity;
 pub mod fmp4;
+#[cfg(test)]
+#[path = "ingest_publisher/tests.rs"]
+mod tests;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
