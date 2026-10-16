@@ -376,9 +376,16 @@ pub async fn v1_engine_resource_map_handler(
 #[derive(Deserialize)]
 pub struct CapacityScenarioQuery {
     #[serde(default)]
-    pub add_outputs: u32,
+    pub add_rtmp: u32,
+    #[serde(default)]
+    pub add_rtmps: u32,
+    #[serde(default)]
+    pub add_srt: u32,
     #[serde(default)]
     pub add_stages: u32,
+    /// Whose ingest the added outputs carry; the highest-bitrate live one if
+    /// absent.
+    pub pipeline_id: Option<String>,
 }
 
 /// Projects one sample of the current workload, as it is and with a topology
@@ -387,20 +394,50 @@ pub struct CapacityScenarioQuery {
 pub async fn v1_capacity_scenario_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    axum::extract::Query(query): axum::extract::Query<CapacityScenarioQuery>,
+    query: Result<
+        axum::extract::Query<CapacityScenarioQuery>,
+        axum::extract::rejection::QueryRejection,
+    >,
 ) -> impl IntoResponse {
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    let (baseline, projected) = state
-        .engine
-        .capacity_scenario(query.add_outputs, query.add_stages)
-        .await;
+    // Validated after authentication, like `/alerts`.
+    let axum::extract::Query(query) = match query {
+        Ok(query) => query,
+        Err(rejection) => return rejection.into_response(),
+    };
+    let change = crate::capacity::ScenarioChange {
+        outputs: crate::capacity::OutputsByProtocol {
+            rtmp: query.add_rtmp,
+            rtmps: query.add_rtmps,
+            srt: query.add_srt,
+        },
+        stages: query.add_stages,
+        pipeline_id: query.pipeline_id,
+    };
+    let scenario = match state.engine.capacity_scenario(&change).await {
+        Ok(scenario) => scenario,
+        Err(crate::capacity::NoLiveIngest(pipeline_id)) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": format!(
+                        "pipeline {pipeline_id} has no live ingest: its rate is unknown, so its outputs cannot be priced"
+                    ),
+                })),
+            )
+                .into_response();
+        }
+    };
     Json(serde_json::json!({
-        "addOutputs": query.add_outputs,
-        "addStages": query.add_stages,
-        "baseline": baseline,
-        "projected": projected,
+        "addOutputs": change.outputs,
+        "addStages": change.stages,
+        "ratedBy": scenario.rated_by,
+        "ingest": scenario.ingest,
+        "calibration": state.engine.capacity_calibration(),
+        "baseline": scenario.baseline,
+        "projected": scenario.projected,
     }))
     .into_response()
 }

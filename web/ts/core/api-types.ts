@@ -79,12 +79,40 @@ export interface LifecycleEventsSnapshot {
   events: LifecycleEvent[];
 }
 
+/** How an added output sends, for packet pricing. */
+export type OutputProtocol = "rtmp" | "rtmps" | "srt";
+
+export type LimitSource = "prior" | "configured";
+
+export interface CapacityLimits {
+  ingressPps: number;
+  egressPps: number;
+  nicBps: number;
+  memoryBytes: number;
+  ffmpegStages: number;
+  diskBps: number;
+}
+
+/** What a projection was priced on, and where each limit came from. */
+export interface CapacityCalibration {
+  modelVersion: number;
+  limits: CapacityLimits;
+  sources: Record<keyof CapacityLimits, LimitSource>;
+  /** The CPU count the priors scale with. */
+  priorCpus: number;
+  safeUtilization: number;
+}
+
 /** A capacity scenario: one workload sample priced on the priors as it is
  * (`baseline`) and with the change (`projected`). Both are priors only;
  * neither carries a measured flow. Observe-only. */
 export interface CapacityScenario {
-  addOutputs: number;
+  addOutputs: Record<OutputProtocol, number>;
   addStages: number;
+  /** The pipeline whose ingest the added outputs carry; `null`: none live. */
+  ratedBy: string | null;
+  ingest: { bps: number; pps: number };
+  calibration: CapacityCalibration;
   baseline: CapacitySnapshot;
   projected: CapacitySnapshot;
 }

@@ -4,7 +4,7 @@
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-use crate::capacity::{CapacityLimits, HostCapacity};
+use crate::capacity::{CapacityLimits, HostCapacity, LimitSource, LimitSources};
 use crate::media::egress::policy::WorkBudgetConfig;
 use crate::media::egress::shard::EgressShardConfig;
 
@@ -288,6 +288,10 @@ pub struct AppConfig {
     /// Host-specific service-center capacities. These remain observe-only;
     /// admission is not enforced until calibration is validated externally.
     pub capacity_limits: CapacityLimits,
+    /// Which `capacity_limits` the operator set, the rest being priors.
+    pub capacity_sources: LimitSources,
+    /// The CPU count the priors scale with.
+    pub capacity_prior_cpus: u32,
     pub tokio_runtime: TokioRuntimeConfig,
     pub db_path: String,
     pub media_dir: String,
@@ -407,23 +411,48 @@ fn env_usize(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
-fn env_positive_f64(name: &str, default: f64) -> f64 {
-    env_var(name)
+/// A positive limit from `name`, and whether the operator set it; else the
+/// prior. An unparseable or non-positive value is the prior, as if unset.
+fn capacity_limit(name: &str, prior: f64) -> (f64, LimitSource) {
+    match env_var(name)
         .and_then(|value| value.parse().ok())
         .filter(|value: &f64| value.is_finite() && value.is_sign_positive())
-        .unwrap_or(default)
+    {
+        Some(value) => (value, LimitSource::Configured),
+        None => (prior, LimitSource::Prior),
+    }
 }
 
-fn capacity_limits_from_env(parallelism: usize) -> CapacityLimits {
-    let defaults = CapacityLimits::from_parallelism(parallelism.min(u32::MAX as usize) as u32);
-    CapacityLimits {
-        ingress_pps: env_positive_f64("RESTREAM_CAPACITY_INGRESS_PPS", defaults.ingress_pps),
-        egress_pps: env_positive_f64("RESTREAM_CAPACITY_EGRESS_PPS", defaults.egress_pps),
-        nic_bps: env_positive_f64("RESTREAM_CAPACITY_NIC_BPS", defaults.nic_bps),
-        memory_bytes: env_positive_f64("RESTREAM_CAPACITY_MEMORY_BYTES", defaults.memory_bytes),
-        ffmpeg_stages: env_positive_f64("RESTREAM_CAPACITY_FFMPEG_STAGES", defaults.ffmpeg_stages),
-        disk_bps: env_positive_f64("RESTREAM_CAPACITY_DISK_BPS", defaults.disk_bps),
-    }
+fn capacity_limits_from_env(parallelism: usize) -> (CapacityLimits, LimitSources) {
+    let priors = CapacityLimits::from_parallelism(parallelism.min(u32::MAX as usize) as u32);
+    let (ingress_pps, ingress_source) =
+        capacity_limit("RESTREAM_CAPACITY_INGRESS_PPS", priors.ingress_pps);
+    let (egress_pps, egress_source) =
+        capacity_limit("RESTREAM_CAPACITY_EGRESS_PPS", priors.egress_pps);
+    let (nic_bps, nic_source) = capacity_limit("RESTREAM_CAPACITY_NIC_BPS", priors.nic_bps);
+    let (memory_bytes, memory_source) =
+        capacity_limit("RESTREAM_CAPACITY_MEMORY_BYTES", priors.memory_bytes);
+    let (ffmpeg_stages, ffmpeg_source) =
+        capacity_limit("RESTREAM_CAPACITY_FFMPEG_STAGES", priors.ffmpeg_stages);
+    let (disk_bps, disk_source) = capacity_limit("RESTREAM_CAPACITY_DISK_BPS", priors.disk_bps);
+    (
+        CapacityLimits {
+            ingress_pps,
+            egress_pps,
+            nic_bps,
+            memory_bytes,
+            ffmpeg_stages,
+            disk_bps,
+        },
+        LimitSources {
+            ingress_pps: ingress_source,
+            egress_pps: egress_source,
+            nic_bps: nic_source,
+            memory_bytes: memory_source,
+            ffmpeg_stages: ffmpeg_source,
+            disk_bps: disk_source,
+        },
+    )
 }
 
 /// Positive `usize` override for thin A/B knobs. Unset, unparseable, or `0`
@@ -619,6 +648,8 @@ impl Default for AppConfig {
             tuning,
             egress_fabric: EgressFabricConfig::default(),
             capacity_limits: CapacityLimits::from_parallelism(cpus as u32),
+            capacity_sources: LimitSources::default(),
+            capacity_prior_cpus: cpus as u32,
             tokio_runtime,
             db_path: ".restream/data/restream.db".to_string(),
             media_dir: DEFAULT_MEDIA_DIR.to_string(),
@@ -674,7 +705,7 @@ impl AppConfig {
         let tuning = RuntimeTuning::from_env();
         let egress_fabric = EgressFabricConfig::from_env();
         let cpus = HostCapacity::get().cpus;
-        let capacity_limits = capacity_limits_from_env(cpus);
+        let (capacity_limits, capacity_sources) = capacity_limits_from_env(cpus);
         let tokio_runtime = TokioRuntimeConfig::from_env();
         let db_path =
             env_var("RESTREAM_DB_PATH").unwrap_or_else(|| ".restream/data/restream.db".to_string());
@@ -792,6 +823,8 @@ impl AppConfig {
             tuning,
             egress_fabric,
             capacity_limits,
+            capacity_sources,
+            capacity_prior_cpus: cpus.min(u32::MAX as usize) as u32,
             tokio_runtime,
             db_path,
             media_dir,

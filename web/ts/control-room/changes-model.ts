@@ -215,19 +215,29 @@ export function topologyLines(diff: TopologyDiff): TopologyLine[] {
 
 /** What the change adds for the capacity scenario, which prices additions
  * only: removals are reported, not credited. Counted per stage and protocol,
- * so an add and a removal elsewhere do not cancel out. */
+ * so an add and a removal elsewhere do not cancel out. The scenario prices
+ * SRT in datagrams and every other output as a stream (RTMP). */
 export function scenarioLoad(diff: TopologyDiff): {
   readonly addOutputs: number;
+  readonly addByProtocol: { readonly rtmp: number; readonly srt: number };
   readonly addStages: number;
   readonly removedOutputs: number;
 } {
-  let addOutputs = 0;
+  let rtmp = 0;
+  let srt = 0;
   let removedOutputs = 0;
   for (const line of topologyLines(diff)) {
-    addOutputs += Math.max(0, line.after - line.before);
+    const added = Math.max(0, line.after - line.before);
+    if (line.protocol === "srt") srt += added;
+    else rtmp += added;
     removedOutputs += Math.max(0, line.before - line.after);
   }
-  return { addOutputs, addStages: diff.addedStages.length, removedOutputs };
+  return {
+    addOutputs: rtmp + srt,
+    addByProtocol: { rtmp, srt },
+    addStages: diff.addedStages.length,
+    removedOutputs,
+  };
 }
 
 export interface TimelineStep {

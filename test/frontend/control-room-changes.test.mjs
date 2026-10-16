@@ -135,11 +135,13 @@ test("the scenario prices only what the change adds; removals are reported, not 
   const rows = (n) => [{ stage: "source", protocol: "srt", outputs: n }];
   assert.deepEqual(scenarioLoad(diff(rows(2), rows(5), ["a"])), {
     addOutputs: 3,
+    addByProtocol: { rtmp: 0, srt: 3 },
     addStages: 1,
     removedOutputs: 0,
   });
   assert.deepEqual(scenarioLoad(diff(rows(5), rows(2))), {
     addOutputs: 0,
+    addByProtocol: { rtmp: 0, srt: 0 },
     addStages: 0,
     removedOutputs: 3,
   });
@@ -155,7 +157,21 @@ test("the scenario prices only what the change adds; removals are reported, not 
         ["video:720p"],
       ),
     ),
-    { addOutputs: 1, addStages: 1, removedOutputs: 1 },
+    { addOutputs: 1, addByProtocol: { rtmp: 1, srt: 0 }, addStages: 1, removedOutputs: 1 },
+  );
+  // SRT is priced in datagrams; every other output as a stream.
+  assert.deepEqual(
+    scenarioLoad(
+      diff(
+        [],
+        [
+          { stage: "source", protocol: "srt", outputs: 2 },
+          { stage: "source", protocol: "hls", outputs: 1 },
+          { stage: "source", protocol: "rtmp", outputs: 1 },
+        ],
+      ),
+    ).addByProtocol,
+    { rtmp: 2, srt: 2 },
   );
 });
 

@@ -23,7 +23,6 @@ items).
 - [Q-050 inputs and stages in runtime state](#q-050-architecture-sonnet-project-inputs-and-stages-into-the-runtime-state)
 - [Q-051 bounded ingress transfer pump](#q-051-architecture-sonnet-bound-the-ingress-transfer-pump-per-owner-visit)
 - [Q-053 external FFmpeg process topology](#q-053-architecture-sonnet-external-ffmpeg-process-topology-per-rendition)
-- [Q-062 control-room Capacity gaps](#q-062-frontend-opus-control-room-capacity-calibration-provenance-scenario-controls-topology-diff)
 - [Q-063 control-room nested-path boot](#q-063-frontend-sonnet-control-room-boots-on-nested-unknown-paths)
 - [Q-064 incident signals before the page opened](#q-064-observability-sonnet-incident-correlation-before-the-page-opened)
 
@@ -369,24 +368,6 @@ items).
 - Status: open (Filed: 2026-10-15 by claude; the cost measurement closed
   2026-10-15. The former board item "FFmpeg A/B: external per-stage vs external
   multi-output" cannot be run as written: the second arm does not exist).
-
-### Q-062 [frontend] [opus] Control room Capacity: calibration provenance, scenario controls, topology diff
-- Goal: Capacity shows calibration provenance, pipeline/protocol/encoding
-  scenario controls, and a topology-diff entry. Q-054 to Q-062 are the
-  2026-10-15 mockup-gap audit; the user asked for all of them, one PR per
-  workspace, in Q-number order, so this item closes last.
-- Sources: the topology diff exists (`graph-diff-preview`). Provenance is
-  missing: the scenario carries only `observeOnly`/`flowMeasured`, and
-  the calibrated `CapacityLimits` (`capacity.rs:40-50`, six per-center
-  ceilings) appear in no response, and provenance (model version, prior
-  source) does not exist and must be added.
-  Scenario controls are missing: `/api/v1/capacity/scenario` takes only
-  `add_outputs`/`add_stages`, and the model takes no protocol or pipeline
-  (`docs/api-reference.md`). Adding them changes the capacity model, not
-  only the API.
-- Gates: Rust tests that each control changes the predicted demand as the
-  model states; API drift check; Playwright.
-- Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
 
 ### Q-063 [frontend] [sonnet] Control room boots on nested unknown paths
 - Goal: any served path boots the control room.

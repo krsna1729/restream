@@ -7,7 +7,7 @@ use super::{
     derive_external_ffmpeg_permits, effective_memory_bytes, env_optional_positive_usize,
     target_egress_fabric_shards,
 };
-use crate::capacity::HostCapacity;
+use crate::capacity::{HostCapacity, LimitSource};
 
 thread_local! {
     /// Per-test environment overrides read by `config::env_var`: `Some(value)`
@@ -67,7 +67,8 @@ fn capacity_limits_accept_host_calibration_overrides() {
             ("RESTREAM_CAPACITY_NIC_BPS", "9000000000"),
             ("RESTREAM_CAPACITY_MEMORY_BYTES", "123456789"),
             ("RESTREAM_CAPACITY_FFMPEG_STAGES", "3.5"),
-            ("RESTREAM_CAPACITY_DISK_BPS", "456789"),
+            // Not positive: the prior stands, and is reported as the prior.
+            ("RESTREAM_CAPACITY_DISK_BPS", "-1"),
         ],
         || {
             let config = AppConfig::from_env();
@@ -76,7 +77,11 @@ fn capacity_limits_accept_host_calibration_overrides() {
             assert_eq!(config.capacity_limits.nic_bps, 9_000_000_000.0);
             assert_eq!(config.capacity_limits.memory_bytes, 123_456_789.0);
             assert_eq!(config.capacity_limits.ffmpeg_stages, 3.5);
-            assert_eq!(config.capacity_limits.disk_bps, 456_789.0);
+            assert_eq!(config.capacity_limits.disk_bps, 500_000_000.0);
+            let sources = config.capacity_sources;
+            assert_eq!(sources.ingress_pps, LimitSource::Configured);
+            assert_eq!(sources.ffmpeg_stages, LimitSource::Configured);
+            assert_eq!(sources.disk_bps, LimitSource::Prior);
         },
     );
 }
