@@ -48,8 +48,10 @@ impl OutputProtocol {
     /// One output's egress work for `ingest`, in RTMP packets per second
     /// (the unit of the `egress_pps` ceiling). An SRT output costs as many
     /// RTMP outputs as the shard sizing priors fit RTMP outputs per SRT
-    /// output on one shard (128 / 64 = 2, the SRT figure measured at
-    /// 4.8 Mbit/s on the reference host), so the two models agree.
+    /// output on one shard (128 / 64 = 2: the SRT figure measured at
+    /// 4.8 Mbit/s on the reference host, RTMP's the default sizing), so the
+    /// two models agree. It scales with packet rate, not bitrate: an SRT
+    /// output well above 4.8 Mbit/s may cost more than priced.
     pub fn egress_work_pps(self, ingest: IngestRate) -> f64 {
         use crate::config::EgressShardProfile;
         match self {
