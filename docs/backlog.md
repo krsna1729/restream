@@ -23,7 +23,6 @@ items).
 - [Q-050 inputs and stages in runtime state](#q-050-architecture-sonnet-project-inputs-and-stages-into-the-runtime-state)
 - [Q-051 bounded ingress transfer pump](#q-051-architecture-sonnet-bound-the-ingress-transfer-pump-per-owner-visit)
 - [Q-053 external FFmpeg process topology](#q-053-architecture-sonnet-external-ffmpeg-process-topology-per-rendition)
-- [Q-059 control-room Media gaps](#q-059-frontend-sonnet-control-room-media-recording-timeline-use-as-source)
 - [Q-060 control-room Changes gaps](#q-060-frontend-sonnet-control-room-changes-numeric-impact-topology-diff-convergence-timeline-gates)
 - [Q-061 control-room Incidents gaps](#q-061-frontend-opus-control-room-incidents-correlation-chart-evidence-confidence-time-range-export)
 - [Q-062 control-room Capacity gaps](#q-062-frontend-opus-control-room-capacity-calibration-provenance-scenario-controls-topology-diff)
@@ -371,17 +370,6 @@ items).
 - Status: open (Filed: 2026-10-15 by claude; the cost measurement closed
   2026-10-15. The former board item "FFmpeg A/B: external per-stage vs external
   multi-output" cannot be run as written: the second arm does not exist).
-
-### Q-059 [frontend] [sonnet] Control room Media: recording timeline, use as source
-- Goal: Media shows a recording timeline and a "use as source" action.
-- Sources: use as source exists (`POST /api/v1/ingests` or `PUT
-  /api/v1/pipelines/{id}/file-ingest`). The timeline is missing: event kinds
-  (`events.rs`) cover ingest, stage and egress only, and the library carries
-  only the current `conversionStatus`/`conversionUpdatedAt`. Needs recording
-  start/stop/finalize events on `/api/v1/events`.
-- Gates: a Rust test that the recording lifecycle emits each event once;
-  the API drift check; Playwright.
-- Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
 
 ### Q-060 [frontend] [sonnet] Control room Changes: numeric impact, topology diff, convergence timeline, gates
 - Goal: Change Studio shows numeric impact, a topology diff, a convergence

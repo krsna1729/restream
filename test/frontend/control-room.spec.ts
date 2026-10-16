@@ -477,6 +477,70 @@ test("media and system: probe, rename and delete an upload; read the host and it
   );
 });
 
+test("media: a recording's timeline, then the recording as a new pipeline's source", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  const stamp = Date.now();
+  const pipelineIds: string[] = [];
+  let recorded: string | null = null;
+  try {
+    const pipelineId = await liveFilePipeline(page, `crrec${stamp}`);
+    pipelineIds.push(pipelineId);
+    expect((await page.request.post(`/api/v1/pipelines/${pipelineId}/recording/start`)).ok()).toBe(
+      true,
+    );
+    // The recorder drops files under 5 s: let this one run past that.
+    const sessionFile = async () => {
+      const library = await (await page.request.get("/api/v1/media")).json();
+      return (library.files as Array<{ name: string; pipelineId?: string | null }>).find(
+        (file) => file.pipelineId === pipelineId,
+      )?.name;
+    };
+    await expect.poll(sessionFile, { timeout: 30_000 }).toBeTruthy();
+    recorded = (await sessionFile()) ?? null;
+
+    await page.goto("/?w=media");
+    await page
+      .getByRole("list", { name: "Recordings" })
+      .getByRole("button", { name: new RegExp(recorded ?? "") })
+      .click();
+    const timeline = page.getByRole("list", { name: "Recording timeline" });
+    await expect(timeline).toContainText("Recording started");
+    await expect(timeline).toContainText("Still recording");
+
+    await page.waitForTimeout(6_000);
+    expect((await page.request.post(`/api/v1/pipelines/${pipelineId}/recording/stop`)).ok()).toBe(
+      true,
+    );
+    // The library poll picks up the finalized session, with no reload, and
+    // keeps it selected though its .ts became the .mp4.
+    await expect(timeline).toContainText("Stopped; MP4 written", { timeout: 30_000 });
+    await expect(timeline).not.toContainText("Still recording");
+    recorded = (await sessionFile()) ?? recorded;
+
+    // The recording feeds a new pipeline: named after it, looping, chosen.
+    await page.getByRole("button", { name: "Use as source" }).click();
+    const form = page.getByRole("region", { name: "New pipeline" });
+    await expect(form.getByLabel("Name")).toHaveValue((recorded ?? "").replace(/\.[^.]+$/, ""));
+    await expect(form.getByRole("combobox", { name: /^File/ })).toHaveValue(recorded ?? "");
+    await expect(form.getByLabel("Loop")).toBeChecked();
+    await form.getByRole("button", { name: "Save" }).click();
+    await expect(page).toHaveURL(/[?&]w=operate&p=[^&]+$/);
+    const created = new URL(page.url()).searchParams.get("p") ?? "";
+    pipelineIds.push(created);
+    const ingest = await (await page.request.get(`/api/v1/pipelines/${created}/file-ingest`)).json();
+    expect(ingest).toMatchObject({ configured: true, filename: recorded, loop: true });
+  } finally {
+    for (const id of pipelineIds.reverse()) await page.request.delete(`/api/v1/pipelines/${id}`);
+    if (recorded) await page.request.delete(`/api/v1/media/${encodeURIComponent(recorded)}`);
+  }
+});
+
 test("settings: save a name and a profile, refuse a short passphrase, forget a failed client", async ({
   page,
 }) => {

@@ -3,6 +3,7 @@
 // file can feed a live pipeline as it is.
 
 import type { MediaFile, MediaFileAnalysis } from "../core/api-types.js";
+import type { PipelineDraft } from "./manage-model.js";
 
 export type MediaKind = "recording" | "source";
 
@@ -12,6 +13,12 @@ export function mediaKind(file: MediaFile): MediaKind {
   if (file.kind) return file.kind;
   if ((file.ingestCount ?? 0) > 0) return "source";
   return file.name.toLowerCase().includes("recording") ? "recording" : "source";
+}
+
+/** What a library row is selected by: a recording's session id, which stays
+ * the same when its `.ts` becomes the finalized `.mp4`; else its name. */
+export function mediaKey(file: MediaFile): string {
+  return file.recordingId ? `recording:${file.recordingId}` : file.name;
 }
 
 /** The files whose name (or source or converted name) holds `query`,
@@ -116,4 +123,79 @@ export function formatDuration(seconds: number | null | undefined): string {
   const m = Math.floor((total % 3600) / 60);
   const s = String(total % 60).padStart(2, "0");
   return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
+}
+
+export interface TimelineEvent {
+  /** `null`: the step has no recorded time (it is under way, or the engine
+   * did not keep one). */
+  readonly atMs: number | null;
+  readonly label: string;
+  readonly tone: "ok" | "info" | "error";
+}
+
+function instant(value: string | null | undefined): number | null {
+  const ms = value ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * A recording's life, from the persisted session behind the file and its
+ * conversion state; `null` for a file no recording session wrote. What the
+ * recorder writes: the session start; at stop, only the `converting`
+ * conversion state (its time is the stop); after the MP4 remux, the session
+ * `ready` with `endedAt` = when the MP4 was written. A failed remux marks
+ * both the session and the conversion failed while the `.ts` stays, so it
+ * is one remux failure, not a failed recording.
+ */
+export function recordingTimeline(file: MediaFile): readonly TimelineEvent[] | null {
+  const started = instant(file.recordingStartedAt);
+  if (!file.recordingId || started === null) return null;
+  const events: TimelineEvent[] = [
+    {
+      atMs: started,
+      label: `Recording started${file.recordingCodecSummary ? ` · ${file.recordingCodecSummary}` : ""}`,
+      tone: "ok",
+    },
+  ];
+  const converted = instant(file.conversionUpdatedAt);
+  if (file.conversionStatus === "converting") {
+    events.push({ atMs: converted, label: "Stopped; writing the browser MP4", tone: "info" });
+  } else if (file.conversionStatus === "failed") {
+    events.push({
+      atMs: converted,
+      label: `MP4 remux failed: ${file.conversionError ?? "no reason was recorded"}; the .ts is kept`,
+      tone: "error",
+    });
+  } else if (file.recordingStatus === "recording") {
+    events.push({ atMs: null, label: "Still recording", tone: "info" });
+  } else if (file.recordingStatus === "ready") {
+    events.push({ atMs: instant(file.recordingEndedAt), label: "Stopped; MP4 written", tone: "ok" });
+  } else if (file.recordingStatus === "failed") {
+    events.push({
+      atMs: instant(file.recordingEndedAt),
+      label: `Recording failed: ${file.recordingError ?? "no reason was recorded"}`,
+      tone: "error",
+    });
+  }
+  return events;
+}
+
+/**
+ * A new pipeline that plays `file`: named after it, looping, and through
+ * Live Optimized when the file's keyframes are too sparse to join live.
+ * `null` when the file cannot feed a pipeline (it has no video).
+ */
+export function sourceDraft(
+  file: MediaFile,
+  readiness: Readiness | null,
+): Partial<PipelineDraft> | null {
+  if (readiness?.kind === "noVideo") return null;
+  const stem = file.name.replace(/\.[^.]+$/, "");
+  return {
+    name: stem || file.name,
+    source: "file",
+    filename: file.name,
+    loop: true,
+    liveOptimized: readiness?.kind === "needsReencode",
+  };
 }

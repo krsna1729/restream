@@ -17,9 +17,14 @@ export function PipelineForm(props: {
    * reconnect, so it is not offered (as in the classic editor). */
   keyLocked: boolean;
   onSaved: (pipeline: ConfigPipeline) => void;
+  /** Fields a new pipeline starts with (Media's "use as source"). */
+  initial?: Partial<PipelineDraft>;
 }) {
   const { stored } = props;
-  const [draft, setDraft] = useState<PipelineDraft>(() => pipelineDraft(stored));
+  const [draft, setDraft] = useState<PipelineDraft>(() => ({
+    ...pipelineDraft(stored),
+    ...props.initial,
+  }));
   const set = (next: Partial<PipelineDraft>) => setDraft({ ...draft, ...next });
   const encrypted = draft.srtMode === "encrypted";
   return (

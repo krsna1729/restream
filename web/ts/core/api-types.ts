@@ -288,6 +288,15 @@ export interface MediaFile {
   conversionStatus?: "converting" | "ready" | "failed" | null;
   conversionError?: string | null;
   conversionUpdatedAt?: string | null;
+  /** The persisted recording session behind the file, when there is one
+   * (`recordings` table, `MediaLibraryFile` in media_library_service.rs). */
+  recordingId?: string | null;
+  pipelineId?: string | null;
+  recordingStatus?: "recording" | "finalizing" | "ready" | "failed" | null;
+  recordingStartedAt?: string | null;
+  recordingEndedAt?: string | null;
+  recordingCodecSummary?: string | null;
+  recordingError?: string | null;
 }
 
 export interface IngestConfig {
