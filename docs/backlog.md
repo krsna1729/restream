@@ -448,13 +448,16 @@ items).
     per-request connections. DELETE answers 200 and does nothing.
     Optional basic auth over the key.
   - Media playlists drive order (`EXT-X-MEDIA-SEQUENCE`), with
-    deduplication. A segment that arrives before its playlist answers 202
-    and waits, bounded. `EXT-X-DISCONTINUITY` and `EXT-X-ENDLIST` are
+    deduplication. A segment that arrives before any playlist lists it is
+    the normal case (FFmpeg uploads each segment before the playlist that
+    lists it). It answers 202 at once and the session holds it, bounded in
+    bytes and age, until a playlist lists it. The handler never waits for
+    the playlist. `EXT-X-DISCONTINUITY` and `EXT-X-ENDLIST` are
     handled. A master playlist picks one variant by a policy (default:
     highest `BANDWIDTH`).
   - TS segments go to the existing `TsDemuxer`. fMP4 segments
-    (`EXT-X-MAP` init) go to `shiguredo_mp4::Fmp4SegmentDemuxer`. Both
-    are native.
+    (`EXT-X-MAP` init) go to `shiguredo_mp4::demux::Fmp4SegmentDemuxer`.
+    Both are native.
   - The axum handler only reads the body and checks the key. Demux and
     ring publication run off Tokio workers, on a session thread that
     follows the media-pipeline skill. Bodies, held segments and sessions
@@ -462,7 +465,9 @@ items).
   - It registers as an input attempt (`try_register_pipeline_input_attempt`,
     protocol `"hls"`) and ends after `EXT-X-ENDLIST` or an idle timeout.
 - Gates: unit tests for playlist ordering, dedup and early segments; a
-  fuzz target for the m3u8 parser; one harness mode with FFmpeg pushing TS
+  fuzz target for the m3u8 parser, and for each segment demuxer over
+  arbitrary bytes (`TsDemuxer`, `Fmp4SegmentDemuxer`); a panic in a
+  session ends only that session; one harness mode with FFmpeg pushing TS
   and fMP4 over PUT and POST.
 - Status: open (Filed: 2026-10-16 by claude, user request).
 
@@ -470,7 +475,9 @@ items).
 - Goal: a pipeline input pulls a remote live HLS URL.
 - Contract: the input stores the source URL and a variant rule (default
   highest `BANDWIDTH`). The puller fetches the playlist again every
-  target duration, fetches new segments in order with `reqwest`, and
+  target duration (half of it after a reload that brought nothing new, RFC
+  8216 section 6.3.4), fetches new segments in order with `reqwest`, with
+  bounded playlist and segment sizes, and
   feeds the same session assembler as Q-067 (ordering, demux, ring),
   with bounded retry and backoff. API and frontend input forms gain the
   source kind.
@@ -481,14 +488,18 @@ items).
 ### Q-069 [architecture] [opus] Frame-level media units for MoQ and fMP4 ingest
 - Goal: the ring can feed per-frame consumers (MoQ objects, LL-HLS parts).
 - Sources: `MediaPacket` (`src/media/packet.rs`) has no codec
-  configuration, configuration generation, duration or group id. A TS
-  packet is one PES, which can hold several AAC frames. Timestamps are
+  configuration, configuration generation, duration or group id. A
+  TS-ingest `MediaPacket` is one PES, which can hold several AAC frames. Timestamps are
   milliseconds: per-frame jitter is at most 0.5 ms, and the fMP4 path
-  derives durations from DTS deltas (`src/media/hls/fmp4/rendition.rs`),
+  derives durations from DTS deltas (`build_mux_samples` in
+  `src/media/hls/fmp4/codec.rs`),
   so the total does not drift.
 - Change: split audio PES into frames at ingest; a per-track
   configuration with a generation number that readers can follow; a GOP
-  sequence number from the keyframe gate.
+  sequence number from the keyframe gate. `MediaPacket` is pinned at 56
+  bytes by a layout test, so the configuration generation and group id go
+  in a side table keyed by ring sequence unless the ring bench shows that
+  a larger packet costs nothing.
 - Gates: proptest of the frame split against a simple model; the existing
   fMP4 and TS output tests unchanged; bench of the ring hot path before
   and after.
