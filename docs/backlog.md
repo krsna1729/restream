@@ -31,6 +31,7 @@ items).
 - [Q-068 HLS pull ingest](#q-068-protocol-opus-hls-pull-ingest)
 - [Q-069 frame-level media units](#q-069-architecture-opus-frame-level-media-units-for-moq-and-fmp4-ingest)
 - [Q-070 MoQ ingest](#q-070-protocol-opus-moq-ingest)
+- [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -513,3 +514,32 @@ items).
 - Gates: interop with moxygen and MediaMTX as publishers (one harness
   mode); a fuzz target for the object parser.
 - Status: open (Filed: 2026-10-16 by claude, user request; after Q-047).
+### Q-071 [architecture] [sonnet] HLS-to-HLS passthrough
+- Goal: an HLS output relays the selected HLS input's segments instead of
+  demuxing and repackaging them.
+- Why it is possible: the HLS PUT shard already works at segment level
+  (`HlsStore`, `egress/backends/hls_put_shard.rs`), so a passthrough
+  skips the ring, the demuxer and the segmenter, and feeds the store the
+  shard already reads.
+- Conditions: HLS PUT output only; no stage between input and output;
+  matching container (TS to TS, fMP4 to fMP4), codecs and segment
+  boundaries (our output cuts at keyframes, 1 s minimum,
+  `hls/mod.rs:52`). The input must be self-initializing. Validated at
+  apply time, with a fallback to the normal path and a stated reason.
+- Costs:
+  - The output stops reading the ring, so capacity accounting, preview and
+    pipeline health need a stated answer for passthrough outputs.
+  - `HlsStore` gains a second source of truth, or gains a per-output
+    store.
+  - Failover between primary and backup inputs runs through the ring's
+    input gate and promotion timestamp mapper (`src/media/input_gate.rs`).
+    A relay loses failover unless it rebuilds it at segment level:
+    switch inputs on a segment boundary, add `EXT-X-DISCONTINUITY`, and
+    keep the output's media sequence monotonic. This must not ship
+    silently broken.
+- Trigger: telemetry showing meaningful CPU in HLS demux plus segmenting
+  for HLS-to-HLS pipelines. Until then the ring path stands.
+- Gates: one harness mode pushing HLS and relaying it, checked against a
+  normal-path run (bytes and timing); a test that an ineligible pipeline
+  (a stage, or a non-HLS output) falls back with the reason recorded.
+- Status: open (Filed: 2026-10-16 by claude, user question on passthrough).
