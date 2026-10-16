@@ -4,7 +4,7 @@
 
 use axum::{
     Json,
-    extract::State,
+    extract::{Query, State},
     http::HeaderMap,
     response::{IntoResponse, Response},
 };
@@ -38,12 +38,27 @@ fn snapshot_generated_at(snapshot: &serde_json::Value) -> String {
 
 // Transport shaping for the alert payload stays local to this module so the
 // tracker and derivation code do not need to know the HTTP response schema.
-fn alerts_response(snapshot: &serde_json::Value, alerts: Vec<crate::alerts::Alert>) -> Response {
-    Json(serde_json::json!({
+fn alerts_response(
+    snapshot: &serde_json::Value,
+    alerts: Vec<crate::alerts::Alert>,
+    resolved: Option<crate::alerts::ResolvedWindow>,
+) -> Response {
+    let mut body = serde_json::json!({
         "generatedAt": snapshot_generated_at(snapshot),
         "alerts": alerts,
-    }))
-    .into_response()
+    });
+    // History is opt-in: a reader of the open set does not pay for it.
+    if let Some(resolved) = resolved {
+        body["resolved"] = serde_json::json!(resolved.alerts);
+        body["resolvedCompleteFrom"] = serde_json::json!(resolved.complete_from);
+    }
+    Json(body).into_response()
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct AlertsQuery {
+    /// RFC 3339: only resolved alerts that closed at or after it.
+    since: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Returns the authenticated dashboard alert feed derived from the current
@@ -51,6 +66,7 @@ fn alerts_response(snapshot: &serde_json::Value, alerts: Vec<crate::alerts::Aler
 pub async fn aggregate_alerts_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
+    Query(query): Query<AlertsQuery>,
 ) -> impl IntoResponse {
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
@@ -61,7 +77,10 @@ pub async fn aggregate_alerts_handler(
     let snapshot = dashboard_alert_snapshot(&state).await;
     let mut alert_list = alerts::derive_alerts(&snapshot);
     state.alert_tracker.track(&mut alert_list);
-    alerts_response(&snapshot, alert_list)
+    let resolved = query
+        .since
+        .map(|since| state.alert_tracker.resolved_since(since));
+    alerts_response(&snapshot, alert_list, resolved)
 }
 
 #[cfg(test)]
@@ -80,7 +99,7 @@ mod tests {
 
     #[test]
     fn alerts_response_uses_ok_status() {
-        let response = alerts_response(&serde_json::json!({}), Vec::new());
+        let response = alerts_response(&serde_json::json!({}), Vec::new(), None);
 
         assert_eq!(response.status(), StatusCode::OK);
     }

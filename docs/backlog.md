@@ -23,9 +23,9 @@ items).
 - [Q-050 inputs and stages in runtime state](#q-050-architecture-sonnet-project-inputs-and-stages-into-the-runtime-state)
 - [Q-051 bounded ingress transfer pump](#q-051-architecture-sonnet-bound-the-ingress-transfer-pump-per-owner-visit)
 - [Q-053 external FFmpeg process topology](#q-053-architecture-sonnet-external-ffmpeg-process-topology-per-rendition)
-- [Q-061 control-room Incidents gaps](#q-061-frontend-opus-control-room-incidents-correlation-chart-evidence-confidence-time-range-export)
 - [Q-062 control-room Capacity gaps](#q-062-frontend-opus-control-room-capacity-calibration-provenance-scenario-controls-topology-diff)
 - [Q-063 control-room nested-path boot](#q-063-frontend-sonnet-control-room-boots-on-nested-unknown-paths)
+- [Q-064 incident signals before the page opened](#q-064-observability-sonnet-incident-correlation-before-the-page-opened)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -370,21 +370,6 @@ items).
   2026-10-15. The former board item "FFmpeg A/B: external per-stage vs external
   multi-output" cannot be run as written: the second arm does not exist).
 
-### Q-061 [frontend] [opus] Control room Incidents: correlation chart, evidence confidence, time range, export
-- Goal: Incidents shows a correlation chart, per-signal evidence confidence,
-  a time range, and an export.
-- Sources: all four are missing. The correlation chart reads the store's
-  fleet history (`LiveSnapshot.history`), which covers only the current page
-  session; a time range
-  before it needs the `since` added below.
-  Alerts carry `evidence: string[]` only; confidence needs a
-  measured/derived marker per signal from the evidence engine. Neither
-  `/api/v1/alerts` nor `/api/v1/events` takes `since`. There is no export
-  route (the SBOM is the only attachment).
-- Gates: Rust tests for `since` bounds and the confidence rule; API drift
-  check; Playwright for range and export.
-- Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
-
 ### Q-062 [frontend] [opus] Control room Capacity: calibration provenance, scenario controls, topology diff
 - Goal: Capacity shows calibration provenance, pipeline/protocol/encoding
   scenario controls, and a topology-diff entry. Q-054 to Q-062 are the
@@ -415,3 +400,16 @@ items).
   base path.
 - Gates: a Playwright case on `/a/b?w=inspect`.
 - Status: open (Filed: 2026-10-15 by claude, found while testing #333).
+
+### Q-064 [observability] [sonnet] Incident correlation before the page opened
+- Goal: the Incidents correlation chart covers the incident's whole span,
+  not only the page's last 15 minutes.
+- Sources: the chart reads the store's fleet samples
+  (`LiveSnapshot.history`, `WINDOW_MS` 15 minutes, from when the page
+  opened). The engine keeps no fleet signal history, so an incident older
+  than the page, or a 1h/6h/24h resolved window, has no chart before it.
+  Needs a bounded server-side history of the fleet signals (delivering,
+  headroom, degraded by layer) with `since`, and the chart reading it.
+- Gates: Rust tests for the history's bound and `since`; Playwright for an
+  incident older than the page.
+- Status: open (Filed: 2026-10-15 by claude, the rest of Q-061).

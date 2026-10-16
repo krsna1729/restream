@@ -28,7 +28,7 @@ export interface OperatorAlert {
   outputId?: string;
   title: string;
   cause: string;
-  evidence: string[];
+  evidence: AlertEvidence[];
   recommendedAction: string;
   generatedAt: string;
   firstSeen?: string;
@@ -37,9 +37,27 @@ export interface OperatorAlert {
   diagnosis?: Diagnosis;
 }
 
+/** One evidence line and how the engine knows it: `measured` is a reading
+ * taken by the engine, `derived` a conclusion its rules drew from readings. */
+export interface AlertEvidence {
+  signal: string;
+  confidence: "measured" | "derived";
+}
+
+/** An alert no longer observed: it ended between `alert.lastSeen` and
+ * `resolvedAt`. */
+export interface ResolvedAlert {
+  alert: OperatorAlert;
+  resolvedAt: string;
+}
+
 export interface AlertsSnapshot {
   generatedAt: string;
   alerts: OperatorAlert[];
+  /** Only when asked with `since`: those resolved since, newest first. */
+  resolved?: ResolvedAlert[];
+  /** From when the engine's resolved history is complete. */
+  resolvedCompleteFrom?: string;
 }
 
 export interface LifecycleEvent {

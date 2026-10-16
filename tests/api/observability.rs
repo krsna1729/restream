@@ -431,6 +431,29 @@ async fn aggregate_alerts_requires_auth_and_returns_array() {
     let body = body_json(resp).await;
     assert!(body["alerts"].is_array());
     assert!(body["generatedAt"].is_string());
+    assert!(body["resolved"].is_null(), "history is opt-in: {body}");
+
+    // `since` is RFC 3339; anything else is the caller's error, not "all".
+    let bad = app
+        .clone()
+        .oneshot(auth_req("GET", "/api/v1/alerts?since=1h", &cookie, None))
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+    let good = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            "/api/v1/alerts?since=2026-10-12T10%3A00%3A00Z",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(good.status(), StatusCode::OK);
+    let good = body_json(good).await;
+    assert!(good["resolved"].is_array(), "{good}");
+    assert!(good["resolvedCompleteFrom"].is_string(), "{good}");
 }
 
 // ── coverage gap: metrics/system ────────────────────────────────────────

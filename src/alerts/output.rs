@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use super::{Alert, Scope, Severity, blocked_output_action, stage_phase_name};
+use super::{Alert, Evidence, Scope, Severity, blocked_output_action, stage_phase_name};
 use crate::application::diagnosis::{
     Cause, Diagnosis, Layer, OutputSignals, ShardHealth, diagnose,
 };
@@ -147,9 +147,11 @@ pub(super) fn output_alert(
                 format!("Output '{output_id}' is blocked by upstream stage"),
                 format!("The output is waiting on stage '{stage}' in phase '{phase}'."),
                 vec![
-                    format!("blockedBy.stage = {stage}"),
-                    format!("blockedBy.phase = {phase}"),
-                    format!("blockedBy.backend = {backend}"),
+                    // Which stage blocks it is the diagnosis's attribution;
+                    // that stage's phase and backend are readings.
+                    Evidence::derived(format!("blockedBy.stage = {stage}")),
+                    Evidence::measured(format!("blockedBy.phase = {phase}")),
+                    Evidence::measured(format!("blockedBy.backend = {backend}")),
                 ],
                 blocked_output_action(phase),
                 generated_at,
@@ -163,7 +165,7 @@ pub(super) fn output_alert(
             "Admitting this output would push the feed's least-loaded egress shard past \
              its load ceiling and degrade every output on it, so it was refused. It \
              retries on its restart backoff until its retry budget is spent.",
-            vec![error.clone()],
+            vec![Evidence::measured(error.clone())],
             "Stop other outputs of this pipeline, or run this destination on a host with \
              more CPUs.",
             generated_at,
@@ -180,9 +182,9 @@ pub(super) fn output_alert(
                 format!("Output '{output_id}' is close to exhausting its retry budget"),
                 "The output has failed and retried repeatedly; once it reaches the configured \
                  retry ceiling it stops retrying and requires manual intervention to restart.",
-                vec![format!(
+                vec![Evidence::measured(format!(
                     "retryAttempts = {attempts} / outputMaxRetries = {max}, retryBackoffMs = {backoff_ms}"
-                )],
+                ))],
                 "Investigate why the destination keeps rejecting connections before the retry \
                  budget is exhausted, or raise RESTREAM_OUTPUT_MAX_RETRIES.",
                 generated_at,
@@ -197,8 +199,8 @@ pub(super) fn output_alert(
                 format!("Output '{output_id}' reported an egress failure"),
                 format!("Output failed during the '{phase}' phase."),
                 vec![
-                    "output.phase = failed".to_string(),
-                    format!("lastError = {error}"),
+                    Evidence::measured("output.phase = failed"),
+                    Evidence::measured(format!("lastError = {error}")),
                 ],
                 "Check destination reachability, credentials, and protocol settings.",
                 generated_at,
@@ -210,7 +212,7 @@ pub(super) fn output_alert(
             Scope::Output,
             format!("Output '{output_id}' is not running"),
             format!("Output status is '{status}' while the pipeline has an active publisher."),
-            vec![format!("output.status = {status}")],
+            vec![Evidence::measured(format!("output.status = {status}"))],
             "Check the destination URL, credentials, and network reachability.",
             generated_at,
         ),
@@ -220,7 +222,7 @@ pub(super) fn output_alert(
             Scope::Output,
             format!("Output '{output_id}' cannot drain its send path"),
             "Data waits on the send path and has not drained within the deadline.",
-            vec!["backpressureReason = stalled".to_string()],
+            vec![Evidence::measured("backpressureReason = stalled")],
             "Check the destination's receive rate and the network path to it.",
             generated_at,
         ),
@@ -235,9 +237,9 @@ pub(super) fn output_alert(
                 Scope::Output,
                 format!("Output '{output_id}' has stopped making progress"),
                 "The output is still registered but has not completed a send recently.",
-                vec![format!(
+                vec![Evidence::measured(format!(
                     "lastProgressAgeMs = {age_ms} (threshold {EGRESS_PROGRESS_STALE_MS})"
-                )],
+                ))],
                 "Check downstream network health or restart the output if it remains stale.",
                 generated_at,
             )
@@ -250,7 +252,8 @@ pub(super) fn output_alert(
         ..alert
     };
     if !diagnosis.ruled_out.is_empty() {
-        alert.evidence.push(format!(
+        // Concluded by the diagnosis rules from the upstream layers' signals.
+        alert.evidence.push(Evidence::derived(format!(
             "ruled out: {}",
             diagnosis
                 .ruled_out
@@ -258,7 +261,7 @@ pub(super) fn output_alert(
                 .map(|layer| layer_name(*layer))
                 .collect::<Vec<_>>()
                 .join(", ")
-        ));
+        )));
     }
     alert.diagnosis = Some(diagnosis);
     Some(alert)
@@ -310,7 +313,7 @@ pub(super) fn push_output_alerts<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::super::derive_alerts;
+    use super::super::{Evidence, derive_alerts};
     use crate::application::diagnosis::{Cause, Layer};
     use serde_json::json;
 
@@ -350,7 +353,7 @@ mod tests {
             alerts[0]
                 .evidence
                 .iter()
-                .any(|e| e == "affectedOutputs = 1")
+                .any(|e| e == &Evidence::derived("affectedOutputs = 1"))
         );
     }
 
@@ -384,7 +387,7 @@ mod tests {
             alerts[0]
                 .evidence
                 .iter()
-                .any(|e| e == "ruled out: ingest, feed, shard")
+                .any(|e| e == &Evidence::derived("ruled out: ingest, feed, shard"))
         );
     }
 }

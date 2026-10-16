@@ -1457,8 +1457,23 @@ Engine-wide operator summary: pipeline counts, alert rollup, and listener state.
 Aggregate alerts across all pipelines. Each alert carries `id`, `severity`,
 `scope`, `evidence`, `recommendedAction`, `firstSeen`, and `lastSeen` fields.
 Sorted Critical-first. `firstSeen` is stamped on first observation;
-`lastSeen` updates on every subsequent observation. Resolved alerts are
-pruned automatically. Engine-level alerts include RTMP listener
+`lastSeen` updates on every subsequent observation. Each `evidence` entry is
+`{ "signal", "confidence" }`: `measured` is a reading the engine took
+(a counter, a phase, a ratio of two readings at one instant), `derived` a
+conclusion its rules drew from readings (the outputs a shard affects, the
+layers a diagnosis ruled out).
+
+An alert no longer observed leaves `alerts` and enters `resolved`
+(newest first) as `{ "alert", "resolvedAt" }`: the alert as last observed,
+and the first read that no longer listed it, so the condition ended between
+`alert.lastSeen` and `resolvedAt`. Alerts are observed when this route or a
+pipeline's alerts are read, so `resolvedAt` is no finer than the reads. The
+engine keeps the last 256 resolved alerts, in memory (a restart forgets
+them). History is opt-in: `resolved` is present only with query param
+`since` (RFC 3339), and holds those resolved at or after it; a value that
+is not RFC 3339 is `400`. `resolvedCompleteFrom` says from when the kept
+history is complete (the engine's start, or the latest evicted entry's
+close): a `since` before it may be missing some. Engine-level alerts include RTMP listener
 file-descriptor exhaustion, and a runtime nofile limit below the configured
 target.
 
@@ -1473,7 +1488,9 @@ as `affectedOutputs`.
 ```json
 {
   "generatedAt": "...",
-  "alerts": [ { "id": "...", "severity": "Warning", ... } ]
+  "alerts": [ { "id": "...", "severity": "Warning", "evidence": [ { "signal": "lagSlots = 900", "confidence": "measured" } ], ... } ],
+  "resolved": [ { "alert": { "id": "...", ... }, "resolvedAt": "..." } ],
+  "resolvedCompleteFrom": "..."
 }
 ```
 
