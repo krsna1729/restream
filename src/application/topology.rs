@@ -95,8 +95,9 @@ impl ReconcileRequests {
 
 /// Engine lifecycle events that change what the output pass decides: an
 /// ingest arriving or leaving (outputs start or stop; a departure also once
-/// its grace ends) and an egress ending (retry it). Stages need no pass: their
-/// consumers' leases stop them (Q-041).
+/// its grace ends), an ingest's probe landing (outputs held for it start) and
+/// an egress ending (retry it). Stages need no pass: their consumers' leases
+/// stop them (Q-041).
 /// `EgressFailed` is not one: it reports each error of a still-active egress
 /// (every upload retry), and the egress ending emits `EgressStopped`.
 pub fn request_pass_for_event(
@@ -113,7 +114,9 @@ pub fn request_pass_for_event(
                 Instant::now() + ingest_disconnect_grace + std::time::Duration::from_millis(10),
             );
         }
-        EventKind::IngestConnected { .. } | EventKind::EgressStopped { .. } => requests.wake(),
+        EventKind::IngestConnected { .. }
+        | EventKind::IngestProbed { .. }
+        | EventKind::EgressStopped { .. } => requests.wake(),
         _ => {}
     }
 }

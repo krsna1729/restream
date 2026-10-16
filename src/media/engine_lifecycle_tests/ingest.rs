@@ -21,6 +21,49 @@ async fn health_input_on_after_register_off_after_unregister() {
 }
 
 #[tokio::test]
+async fn unprobed_media_opens_the_start_gate_only_after_the_probe_grace_from_its_first_byte() {
+    use std::sync::atomic::Ordering;
+    let engine = MediaEngine::new();
+    assert_eq!(engine.ingest_tracks_ready("p1").await, None);
+    engine
+        .try_register_ingest("p1", "key", "srt")
+        .await
+        .unwrap();
+    let first_media_ms = engine.ingests.active.read().await["p1"]
+        .first_media_ms
+        .clone();
+    assert_eq!(engine.ingest_tracks_ready("p1").await, Some(false));
+
+    engine.update_ingest_bytes("p1", 1316).await;
+    let anchor = first_media_ms.load(Ordering::Relaxed);
+    assert_ne!(anchor, 0, "the first media byte anchors the grace");
+    assert_eq!(
+        engine.ingest_tracks_ready("p1").await,
+        Some(false),
+        "media without a probe waits inside the grace"
+    );
+
+    // Just inside the bound, then at it; later bytes never move the anchor.
+    first_media_ms.store(
+        MediaEngine::now_epoch_ms()
+            - (crate::media::engine_ingest_metadata::PROBE_GRACE_MS - 1_000),
+        Ordering::Relaxed,
+    );
+    engine.update_ingest_bytes("p1", 1316).await;
+    assert_eq!(engine.ingest_tracks_ready("p1").await, Some(false));
+    first_media_ms.store(
+        MediaEngine::now_epoch_ms() - crate::media::engine_ingest_metadata::PROBE_GRACE_MS,
+        Ordering::Relaxed,
+    );
+    engine.update_ingest_bytes("p1", 1316).await;
+    assert_eq!(
+        engine.ingest_tracks_ready("p1").await,
+        Some(true),
+        "a source that never probes starts track-less after the grace"
+    );
+}
+
+#[tokio::test]
 async fn health_snapshot_preserves_recent_ingest_disconnect_details_after_unregister() {
     let engine = MediaEngine::new();
     let pipelines = vec!["p1".to_string()];

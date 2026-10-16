@@ -94,12 +94,11 @@ impl EgressReconciler {
                     continue;
                 }
                 OutputStartAction::SkipProbePending => {
-                    // Nothing wakes the reconciler when a probe lands — it is
-                    // media-plane state, not a topology change — so re-check
-                    // on the next interval the pass gap allows instead of
-                    // waiting for the backstop. The window is one probe's
-                    // worth of media (milliseconds for a publisher that
-                    // probes at connect, the first segment for HLS push).
+                    // The probe landing emits `ingest.probed`, which wakes a
+                    // pass. Also re-check on the next interval the pass gap
+                    // allows: a source that never probes opens the gate only
+                    // when its probe grace from the first media byte runs
+                    // out, and nothing wakes a pass for that.
                     let interval_ms = self.tuning.reconciler_interval_ms;
                     next_retry = Some(next_retry.map_or(interval_ms, |next| next.min(interval_ms)));
                     continue;

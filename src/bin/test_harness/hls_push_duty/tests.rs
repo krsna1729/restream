@@ -205,7 +205,8 @@ fn input_and_gop_helpers_read_the_runtime_fields() {
 fn published_and_delivered_checks_require_media() {
     let probe = json!({
         "ingest": {"bytesReceived": 100},
-        "video": {"codec": "h264"}
+        "video": {"codec": "h264"},
+        "audioTracks": [{"codec": "aac"}]
     });
     assert!(published_ok(&probe, Some(1)));
     assert!(!published_ok(&probe, None));
@@ -213,6 +214,11 @@ fn published_and_delivered_checks_require_media() {
     let mut no_bytes = probe.clone();
     no_bytes["ingest"]["bytesReceived"] = json!(0);
     assert!(!published_ok(&no_bytes, Some(1)));
+    // Every publisher maps the fixture's AAC: an ingest that reports no
+    // audio tracks lost them, whatever it says about its source.
+    let mut no_audio_tracks = probe.clone();
+    no_audio_tracks["audioTracks"] = json!([]);
+    assert!(!published_ok(&no_audio_tracks, Some(1)));
 
     let delivered = json!({
         "videoCount": 10,
@@ -221,28 +227,23 @@ fn published_and_delivered_checks_require_media() {
         "bytes": 4096,
         "dtsMonotone": true
     });
-    assert!(delivered_ok(&delivered, true));
-    assert!(delivered_ok(&delivered, false));
+    assert!(delivered_ok(&delivered));
     let mut non_monotone = delivered.clone();
     non_monotone["dtsMonotone"] = json!(false);
-    assert!(!delivered_ok(&non_monotone, true));
+    assert!(!delivered_ok(&non_monotone));
     let mut no_keyframe = delivered.clone();
     no_keyframe["keyframeCount"] = json!(0);
-    assert!(!delivered_ok(&no_keyframe, true));
+    assert!(!delivered_ok(&no_keyframe));
     let mut no_video = delivered.clone();
     no_video["videoCount"] = json!(0);
-    assert!(!delivered_ok(&no_video, true));
+    assert!(!delivered_ok(&no_video));
     let mut no_bytes = delivered.clone();
     no_bytes["bytes"] = json!(0);
-    assert!(!delivered_ok(&no_bytes, true));
+    assert!(!delivered_ok(&no_bytes));
 
-    // A source that published audio tracks must deliver audio: this is the
-    // HLS push failure (video delivered, `audioCount: 0`) the mode catches.
+    // Video delivered with `audioCount: 0` is the HLS push failure the mode
+    // catches; the source always carries audio, so it is always a failure.
     let mut no_audio = delivered.clone();
     no_audio["audioCount"] = json!(0);
-    assert!(!delivered_ok(&no_audio, true));
-    assert!(
-        delivered_ok(&no_audio, false),
-        "a video-only source has no audio to deliver"
-    );
+    assert!(!delivered_ok(&no_audio));
 }

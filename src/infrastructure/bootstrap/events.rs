@@ -28,6 +28,17 @@ pub(super) fn persist_runtime_event(event: crate::events::Event) {
             seq,
             "publisher disconnected",
         ),
+        EventKind::IngestProbed {
+            pipeline_id,
+            protocol,
+        } => info!(
+            pipeline_id = %pipeline_id,
+            event_class = "lifecycle",
+            event_type = "ingest.probed",
+            protocol = %protocol,
+            seq,
+            "publisher probed",
+        ),
         EventKind::StageRegistered {
             pipeline_id,
             encoding,

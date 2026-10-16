@@ -51,6 +51,12 @@ pub struct ActiveIngest {
     pub start_time: Instant,
     pub protocol: String,
     pub bytes_received: Arc<AtomicU64>,
+    /// Epoch-ms of the session's first media byte, 0 until one arrives.
+    /// The output start gate counts its probe grace from here, not from
+    /// registration: a probe may legitimately complete long after the source
+    /// starts sending (an SRT publisher reconnecting mid-GOP sends bytes at
+    /// once but completes its TS probe only on the next SPS).
+    pub first_media_ms: Arc<AtomicU64>,
     pub metrics: Arc<StageMetrics>,
     pub last_progress_ms: Arc<AtomicU64>,
     pub metadata: std::sync::RwLock<IngestMetadata>,
@@ -68,6 +74,24 @@ pub struct ActiveIngest {
 impl ActiveIngest {
     pub fn metadata(&self) -> IngestMetadata {
         crate::sync::read(&self.metadata).clone()
+    }
+}
+
+/// Count one media chunk's bytes and, on the session's first byte, the wall
+/// clock the output start gate counts its probe grace from.
+///
+/// Called on the media path (per 64 KiB chunk for HLS push and file ingest,
+/// per packet for RTMP and SRT), so it reuses the bump that is already there:
+/// one comparison of the value `fetch_add` returns, and one
+/// `compare_exchange` in the whole session.
+pub(crate) fn note_media_bytes(
+    bytes_received: &AtomicU64,
+    first_media_ms: &AtomicU64,
+    bytes: u64,
+    now_ms: u64,
+) {
+    if bytes_received.fetch_add(bytes, Ordering::Relaxed) == 0 && bytes > 0 {
+        let _ = first_media_ms.compare_exchange(0, now_ms, Ordering::Relaxed, Ordering::Relaxed);
     }
 }
 

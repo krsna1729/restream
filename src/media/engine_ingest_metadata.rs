@@ -7,11 +7,26 @@ use crate::media::engine::{IngestRegistration, MediaEngine};
 use crate::media::metadata::{AudioMeta, VideoMeta};
 use crate::media::snapshots::PublisherQuality;
 
+/// How long a source may publish media without reporting a probe before an
+/// output stops waiting for one and starts video-only.
+///
+/// Ten seconds: longer than a long GOP, so an SRT publisher that reconnects
+/// mid-GOP and completes its TS probe on the next SPS is still covered, and
+/// longer than an HLS target duration. A source that never probes is the
+/// exception this bound exists for; starting it a few seconds late costs far
+/// less than a silent run without audio.
+pub(crate) const PROBE_GRACE_MS: u64 = 10_000;
+
 impl MediaEngine {
     pub async fn update_ingest_bytes(&self, pipeline_id: &str, bytes: u64) {
         let ingests = self.ingests.active.read().await;
         if let Some(ingest) = ingests.get(pipeline_id) {
-            ingest.bytes_received.fetch_add(bytes, Ordering::Relaxed);
+            crate::media::engine::note_media_bytes(
+                &ingest.bytes_received,
+                &ingest.first_media_ms,
+                bytes,
+                Self::now_epoch_ms(),
+            );
             ingest
                 .last_progress_ms
                 .store(Self::now_epoch_ms(), Ordering::Relaxed);
@@ -108,6 +123,26 @@ impl MediaEngine {
                 ring.set_codec_hint(&video.codec);
             }
         }
+    }
+
+    /// Report that a session's probe has been recorded in full: its video
+    /// and audio metadata, audio tracks, selection and sequence headers.
+    ///
+    /// The probe an output plans its tracks from is media-plane state that
+    /// no other event reports, so this wakes the reconciler and an output
+    /// skipped waiting for the probe starts on the next pass, not on its next
+    /// retry interval. A probe recorder calls it once it has written the
+    /// whole probe, so the pass it wakes never sees half of one.
+    pub async fn note_ingest_session_probed(&self, registration: &IngestRegistration) {
+        let Some(ingest) = self.current_ingest_session(registration).await else {
+            return;
+        };
+        self.runtime
+            .event_log
+            .emit(crate::events::EventKind::IngestProbed {
+                pipeline_id: ingest.pipeline_id.clone(),
+                protocol: ingest.protocol.clone(),
+            });
     }
 
     pub async fn update_ingest_video_track_selection(
@@ -265,21 +300,32 @@ impl MediaEngine {
     /// on that `IngestConnected` plans video-only tracks and then loses the
     /// whole stream's audio. Wait for the probe instead.
     ///
+    /// The probe is the video or audio metadata, which every probe recorder
+    /// writes after the audio tracks, the track selection and the sequence
+    /// headers, so an open gate never shows a half-recorded probe.
+    ///
     /// A source that publishes media without ever reporting one (no
-    /// sequence header an ingest parses) is treated as track-less after the
-    /// same grace the stage runtime waits, so its output starts video-only
-    /// rather than never.
+    /// sequence header an ingest parses) is treated as track-less once its
+    /// media has flowed for [`PROBE_GRACE_MS`], so its output starts
+    /// video-only rather than never. That grace counts from the first media
+    /// byte, never from registration: an SRT publisher reconnecting mid-GOP
+    /// sends bytes at once and completes its TS probe only on the next SPS,
+    /// and an HLS session whose first object is a playlist uploads its first
+    /// segment one target duration later.
     pub async fn ingest_tracks_ready(&self, pipeline_id: &str) -> Option<bool> {
         let ingests = self.ingests.active.read().await;
         let ingest = ingests.get(pipeline_id)?;
-        if ingest.metadata().video.is_some() || !crate::sync::lock(&ingest.audio_tracks).is_empty()
         {
-            return Some(true);
+            let metadata = crate::sync::read(&ingest.metadata);
+            if metadata.video.is_some() || metadata.audio.is_some() {
+                return Some(true);
+            }
         }
-        Some(
-            ingest.bytes_received.load(Ordering::Relaxed) > 0
-                && ingest.start_time.elapsed() >= crate::media::stage_runtime::AUDIO_ABSENCE_GRACE,
-        )
+        let first_media_ms = ingest.first_media_ms.load(Ordering::Relaxed);
+        if first_media_ms == 0 {
+            return Some(false);
+        }
+        Some(Self::now_epoch_ms().saturating_sub(first_media_ms) >= PROBE_GRACE_MS)
     }
 
     pub async fn update_ingest_session_quality(

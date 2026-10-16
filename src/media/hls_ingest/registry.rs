@@ -54,8 +54,11 @@ struct SessionHandle {
 /// FFmpeg uploads its `EXT-X-MAP` init once per run, so the key keeps it:
 /// a session that starts after an idle timeout, a retry or a failure
 /// applies the same init again. It lives here, with the rest of the key's
-/// state, so it is bounded by the configured inputs and can never be
-/// evicted while the key exists.
+/// state, so it can never be evicted while the key exists, and there is at
+/// most one per input that has pushed fMP4 HLS. Deleting an input does not
+/// reach this registry, so a deleted input's init (at most
+/// `max_init_bytes`) stays until the process restarts: no upload can name
+/// that key again.
 #[derive(Clone)]
 pub(super) struct AppliedInit {
     pub(super) uri: String,
@@ -336,7 +339,8 @@ impl HlsIngest {
         // init the key applied last — FFmpeg uploads its `EXT-X-MAP` init
         // once per run, so an encoder that resumes after an idle timeout
         // needs it. The key state is that init's home, so it lives as long
-        // as the init does: bounded by the configured inputs.
+        // as the init does: one per input that has pushed fMP4 (see
+        // `AppliedInit` for a deleted input's).
         if idle
             && keys.get(input_id).is_some_and(|key| {
                 crate::sync::lock(&key.init).is_none()

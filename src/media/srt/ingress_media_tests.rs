@@ -33,6 +33,7 @@ fn publisher(ring: Arc<RingBuffer>) -> Box<SrtPublisherMedia> {
         packets: Vec::new(),
         keyframe_times: Arc::new(Mutex::new(Vec::new())),
         bytes_received: Arc::new(AtomicU64::new(0)),
+        first_media_ms: Arc::new(AtomicU64::new(0)),
         ingest_metrics: Arc::new(StageMetrics::new()),
         last_progress_ms: Arc::new(AtomicU64::new(0)),
         probe_sent: false,

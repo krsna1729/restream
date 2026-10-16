@@ -378,11 +378,18 @@ impl SrtServer {
                 Some(peer.to_string()),
             )
             .await;
-        let Some((bytes_received, ingest_metrics, last_progress_ms, keyframe_times)) = self
+        let Some((
+            bytes_received,
+            first_media_ms,
+            ingest_metrics,
+            last_progress_ms,
+            keyframe_times,
+        )) = self
             .engine
             .with_ingest_session(&registration, |ingest| {
                 (
                     ingest.bytes_received.clone(),
+                    ingest.first_media_ms.clone(),
                     ingest.metrics.clone(),
                     ingest.last_progress_ms.clone(),
                     ingest.keyframe_times.clone(),
@@ -404,6 +411,7 @@ impl SrtServer {
             packets: Vec::with_capacity(16),
             keyframe_times,
             bytes_received,
+            first_media_ms,
             ingest_metrics,
             last_progress_ms,
             probe_sent: false,
@@ -420,6 +428,10 @@ impl SrtServer {
     /// Apply a publisher's first stream probe to its ingest session, and adapt
     /// the pipeline ring when this input is selected. Returns the replacement
     /// ring for the Owner.
+    ///
+    /// The video/audio metadata is written after the audio tracks and the
+    /// track selection: it opens an output's start gate
+    /// (`MediaEngine::ingest_tracks_ready`).
     pub(super) async fn apply_probe(
         &self,
         publisher: &PublisherSession,
@@ -429,15 +441,6 @@ impl SrtServer {
         let audio_track_count = probe.audio_tracks.len();
         let first_audio = probe.audio_tracks.first().cloned();
         let selected_video_track_index = probe.video.as_ref().map(|_| 0);
-        self.engine
-            .update_ingest_session_meta(
-                &publisher.pipeline_id,
-                &publisher.registration,
-                probe.video,
-                first_audio,
-                None,
-            )
-            .await;
         self.engine
             .update_ingest_session_video_track_selection(
                 &publisher.registration,
@@ -454,7 +457,16 @@ impl SrtServer {
                 )
                 .await;
         }
-        if self
+        self.engine
+            .update_ingest_session_meta(
+                &publisher.pipeline_id,
+                &publisher.registration,
+                probe.video,
+                first_audio,
+                None,
+            )
+            .await;
+        let ring = if self
             .engine
             .is_ingest_session_selected(&publisher.pipeline_id, &publisher.registration)
             .await
@@ -464,7 +476,11 @@ impl SrtServer {
                 .await
         } else {
             None
-        }
+        };
+        self.engine
+            .note_ingest_session_probed(&publisher.registration)
+            .await;
+        ring
     }
 
     async fn start_reader(&self, pipeline_id: &str) -> Result<SrtReaderMedia, String> {

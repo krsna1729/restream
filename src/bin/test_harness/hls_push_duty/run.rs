@@ -268,14 +268,9 @@ impl Session {
                 });
             let sink_summary = task.metrics.summary();
             let input = input_published_summary(&probe);
-            let input_has_audio = input
-                .get("audioTracks")
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-                > 0;
             let keyframe_count = gop_keyframe_count(&probe);
             let published = published_ok(&probe, keyframe_count);
-            let delivered = delivered_ok(&sink_summary, input_has_audio);
+            let delivered = delivered_ok(&sink_summary);
             if !published {
                 failures.push(format!("{}: ingest published no media", task.name));
             }
@@ -463,24 +458,31 @@ fn sink_ports(count: usize) -> Result<Vec<u16>, String> {
     Ok(ports)
 }
 
+/// Every publisher this mode starts maps the fixture's video and ADTS AAC
+/// audio, so both checks require audio outright rather than asking the
+/// system under test whether its source had any.
 pub(crate) fn published_ok(probe: &Value, keyframe_count: Option<u64>) -> bool {
     let bytes = probe
         .pointer("/ingest/bytesReceived")
         .and_then(Value::as_u64)
         .unwrap_or(0);
     let video_present = probe.get("video").is_some_and(|video| !video.is_null());
-    bytes > 0 && video_present && keyframe_count.is_some_and(|count| count >= 1)
+    let audio_present = probe
+        .get("audioTracks")
+        .and_then(Value::as_array)
+        .is_some_and(|tracks| !tracks.is_empty());
+    bytes > 0 && video_present && audio_present && keyframe_count.is_some_and(|count| count >= 1)
 }
 
-pub(crate) fn delivered_ok(sink_summary: &Value, input_has_audio: bool) -> bool {
+pub(crate) fn delivered_ok(sink_summary: &Value) -> bool {
     let count = |name: &str| sink_summary.get(name).and_then(Value::as_u64).unwrap_or(0);
     count("videoCount") > 0
         && count("keyframeCount") > 0
         && count("bytes") > 0
-        // A source that published audio tracks and delivered none of them is
-        // the HLS-push failure this mode catches (the output planned its
-        // tracks before the ingest's probe was recorded).
-        && (!input_has_audio || count("audioCount") > 0)
+        // An output that delivered none of the source's audio is the
+        // HLS-push failure this mode catches (the output planned its tracks
+        // before the ingest's probe was recorded).
+        && count("audioCount") > 0
         && sink_summary.get("dtsMonotone").and_then(Value::as_bool) == Some(true)
 }
 
