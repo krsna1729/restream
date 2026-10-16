@@ -136,6 +136,7 @@ test("the inspection reads only the group's outputs: worst delivery, lag, resync
   );
   assert.deepEqual(inspection.degraded, [
     {
+      id: "b",
       name: "b",
       layer: "destination",
       cause: "backpressured and stalled",

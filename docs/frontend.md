@@ -191,8 +191,8 @@ to `/`.
   its inspector (`operate-group-model.ts`): delivering count, worst delivery
   ratio, worst feed lag and resyncs from the engine telemetry; the fabric
   shards its running outputs are placed on (`fabricFeed`, `shardId`), with
-  state, command queue and progress age from `/engine/health`
-  `egressFabricShards` (shared 10 s query with System); and each diagnosed
+  state, command queue and progress age from the live store's 2 s
+  `/metrics/system` sample (`egressShards`); and each diagnosed
   output's layer, cause and ruled-out layers. Then the
   destination matrix from the state stream (feed lag from the running egress,
   rate from the telemetry rates) with Start/Stop, degraded first and capped

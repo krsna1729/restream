@@ -96,6 +96,8 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
           atMs={graph.atMs}
           outputs={outputs}
           egresses={props.live.telemetry?.egresses ?? null}
+          shards={props.live.metrics?.egressShards ?? null}
+          shardsAtMs={props.live.metricsAtMs}
         />
       </div>
       <DestinationMatrix

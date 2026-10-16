@@ -3,20 +3,19 @@
 
 import type { TelemetryEgress } from "../core/api-types.js";
 import type { Layer, OutputState } from "../core/generated/runtime-state.js";
-import type { HealthData } from "../types.js";
+import type { EgressShardStatus } from "../types.js";
 import { describeCause, isDelivering } from "./fleet-model.js";
 import type { EgressGroup } from "./operate-model.js";
-
-type ShardStatus = NonNullable<HealthData["egressFabricShards"]>[number];
 
 export interface GroupShard {
   readonly feedId: string;
   readonly shardIndex: number;
-  /** `null` while the engine health has not reported the shard. */
-  readonly status: ShardStatus | null;
+  /** `null` while the engine has not reported the shard. */
+  readonly status: EgressShardStatus | null;
 }
 
 export interface DegradedOutput {
+  readonly id: string;
   readonly name: string;
   readonly layer: Layer;
   readonly cause: string;
@@ -43,7 +42,7 @@ export function inspectGroup(
   group: EgressGroup,
   outputs: readonly OutputState[],
   egresses: readonly TelemetryEgress[] | null,
-  shardStatuses: readonly ShardStatus[] | null,
+  shardStatuses: readonly EgressShardStatus[] | null,
 ): GroupInspection {
   const members = new Set(group.outputIds);
   const running = new Map(
@@ -65,6 +64,7 @@ export function inspectGroup(
     if (isDelivering(output)) delivering += 1;
     if (output.diagnosis) {
       degraded.push({
+        id: output.id,
         name: output.name,
         layer: output.diagnosis.layer,
         cause: describeCause(output.diagnosis.cause),

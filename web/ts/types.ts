@@ -344,18 +344,22 @@ export interface HealthData {
     /** Summed over every running SRT ingress Owner. */
     ingressOwner?: SrtIngressOwnerHealth;
   } | null;
-  egressFabricShards?: Array<{
-    protocol: string;
-    feedId: string;
-    shardIndex: number;
-    state: string;
-    /** Commands queued for the shard thread, and the queue's bound. */
-    commandDepth: number;
-    commandCapacity: number;
-    /** Since the shard last made progress; `null` before its first. */
-    progressAgeMs: number | null;
-  }>;
+  egressFabricShards?: EgressShardStatus[];
   containedPanics?: number;
+}
+
+/** One egress fabric shard as the engine reports it (`/engine/health`
+ * `egressFabricShards`, `/metrics/system` `egressShards`). */
+export interface EgressShardStatus {
+  protocol: string;
+  feedId: string;
+  shardIndex: number;
+  state: string;
+  /** Commands queued for the shard thread, and the queue's bound. */
+  commandDepth: number;
+  commandCapacity: number;
+  /** Since the shard last made progress; `null` before its first. */
+  progressAgeMs: number | null;
 }
 
 /** The SRT ingress Owners' counters (cumulative) and gauges (now). */
@@ -437,6 +441,7 @@ export interface SystemMetrics {
   mediaExecutor?: { configuredWorkers?: number; workers?: unknown[] };
   ioUring?: { available?: boolean; deploymentTier?: string };
   rtmps?: { ktlsCapabilities?: Record<string, boolean> };
+  egressShards?: EgressShardStatus[];
 }
 
 export interface AppLogRow {

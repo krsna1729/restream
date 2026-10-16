@@ -3,9 +3,10 @@ import { useMemo, useState } from "react";
 import { programPreviewUrl } from "../core/api.js";
 import type { TelemetryEgress } from "../core/api-types.js";
 import type { OutputState } from "../core/generated/runtime-state.js";
+import type { EgressShardStatus } from "../types.js";
 import { inspectGroup } from "./operate-group-model.js";
 import type { EgressGroup, GraphColumn } from "./operate-model.js";
-import { Freshness, useEngineHealth, useLifecycleEvents } from "./polled.js";
+import { Freshness, useLifecycleEvents } from "./polled.js";
 import { Preview } from "./preview.js";
 
 type Tab = "graph" | "destinations" | "timeline" | "preview";
@@ -34,6 +35,9 @@ export function MediaGraph(props: {
   atMs: number | null;
   outputs: readonly OutputState[];
   egresses: readonly TelemetryEgress[] | null;
+  /** The live store's sampled shard statuses and when they were read. */
+  shards: readonly EgressShardStatus[] | null;
+  shardsAtMs: number | null;
 }) {
   const [tab, setTab] = useState<Tab>("graph");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -88,7 +92,13 @@ export function MediaGraph(props: {
         </div>
       </section>
       {selected && (
-        <GroupInspector group={selected} outputs={props.outputs} egresses={props.egresses} />
+        <GroupInspector
+          group={selected}
+          outputs={props.outputs}
+          egresses={props.egresses}
+          shards={props.shards}
+          shardsAtMs={props.shardsAtMs}
+        />
       )}
     </div>
   );
@@ -241,14 +251,10 @@ function GroupInspector(props: {
   group: EgressGroup;
   outputs: readonly OutputState[];
   egresses: readonly TelemetryEgress[] | null;
+  shards: readonly EgressShardStatus[] | null;
+  shardsAtMs: number | null;
 }) {
-  const health = useEngineHealth();
-  const inspection = inspectGroup(
-    props.group,
-    props.outputs,
-    props.egresses,
-    health.value?.egressFabricShards ?? null,
-  );
+  const inspection = inspectGroup(props.group, props.outputs, props.egresses, props.shards);
   const title = `${groupName(props.group)} group · ${props.group.upstream}`;
   return (
     <section className="card bg-base-200" aria-label={`Selected ${groupName(props.group)} group`}>
@@ -282,7 +288,7 @@ function GroupInspector(props: {
           <div>
             <div className="flex items-center justify-between">
               <h4 className="text-xs font-semibold uppercase opacity-70">Execution owner</h4>
-              <Freshness atMs={health.atMs} staleAfterMs={health.staleAfterMs} />
+              <Freshness atMs={props.shardsAtMs} />
             </div>
             {inspection.shards.length === 0 ? (
               <p className="text-sm opacity-70">No running output of this group is on a fabric shard.</p>
@@ -292,7 +298,7 @@ function GroupInspector(props: {
                   <li key={`${shard.feedId}#${shard.shardIndex}`}>
                     shard {shard.shardIndex}
                     {shard.status === null ? (
-                      <span className="opacity-70"> · not yet in the health report</span>
+                      <span className="opacity-70"> · not in the latest sample</span>
                     ) : (
                       <>
                         {" · "}
@@ -316,7 +322,7 @@ function GroupInspector(props: {
           ) : (
             <ul className="space-y-1 text-sm" aria-label="Diagnosed outputs">
               {inspection.degraded.map((output) => (
-                <li key={output.name}>
+                <li key={output.id}>
                   <b>{output.name}</b>: {output.layer}: {output.cause}
                   {output.ruledOut.length > 0 && (
                     <span className="opacity-70"> · ruled out {output.ruledOut.join(", ")}</span>
