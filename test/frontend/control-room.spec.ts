@@ -103,6 +103,66 @@ test("fleet shows a no-publisher cause live and drops it when the output stops",
   }
 });
 
+test("fleet: shared work, open incidents, the history and the worst-first table", async ({
+  page,
+}) => {
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+
+  const stamp = Date.now();
+  const name = `cr-fleetrow-${stamp}`;
+  const created = await page.request.post("/api/v1/pipelines", {
+    data: { name, streamKey: `crfleetrow_${stamp}` },
+  });
+  expect(created.ok()).toBe(true);
+  const pipelineId: string = (await created.json()).pipeline.id;
+
+  try {
+    const output = await page.request.post(`/api/v1/pipelines/${pipelineId}/outputs`, {
+      data: {
+        name: "cr-out",
+        url: "rtmp://127.0.0.1:9/live/cr",
+        config: { video: { mode: "source" }, audio: { mode: "all" } },
+      },
+    });
+    expect(output.ok()).toBe(true);
+    const outputId: string = (await output.json()).output.id;
+    expect(
+      (await page.request.post(`/api/v1/pipelines/${pipelineId}/outputs/${outputId}/start`)).ok(),
+    ).toBe(true);
+
+    await page.goto("/?w=fleet");
+    await expect(page.locator(".stat").filter({ hasText: "Shared work" })).toContainText(
+      /\d+ stages/,
+    );
+    await expect(page.locator(".stat").filter({ hasText: "Open incidents" })).toContainText(
+      /\d+ critical · \d+ warning/,
+    );
+
+    // The wanted output with no publisher is a degraded ingest output, sampled
+    // into the page's history on the store's 2 s clock.
+    const history = page.getByRole("region", { name: /Fleet history/ });
+    await expect(history.getByRole("img", { name: "Headroom over time" })).toBeVisible();
+    await expect(history).toContainText(/Now by layer:.*ingest [1-9]/);
+    await expect(history.getByLabel("Degraded outputs now")).toHaveText(/^[1-9]\d*$/);
+    await expect(history).toContainText(/[2-9]\d* samples|\d{2,} samples/);
+
+    // Degraded rows come first, each linked to its Operate view.
+    const table = page.getByRole("table", { name: "Fleet pipelines" });
+    const row = table.getByRole("row").filter({ hasText: name });
+    await expect(row).toContainText("1 degraded");
+    await expect(row.getByRole("link", { name })).toHaveAttribute(
+      "href",
+      new RegExp(`[?&]w=operate&p=${pipelineId}$`),
+    );
+    await expect(table.getByRole("row").nth(1)).toContainText("degraded");
+  } finally {
+    await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
+  }
+});
+
 test("operate: find a pipeline, start and stop an output, promote an input", async ({
   page,
 }) => {

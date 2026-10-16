@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { getAggregateAlerts } from "../core/api.js";
-import type { AlertsSnapshot, OperatorAlert } from "../core/api-types.js";
+import type { OperatorAlert } from "../core/api-types.js";
 import { formatAge } from "./format.js";
 import {
   evidencePacket,
@@ -11,7 +10,7 @@ import {
   updateResolved,
 } from "./incidents-model.js";
 import type { ResolvedIncident } from "./incidents-model.js";
-import { Freshness, useLifecycleEvents, usePolled } from "./polled.js";
+import { Freshness, useLifecycleEvents, useOpenAlerts } from "./polled.js";
 import { PlaceLink } from "./router.js";
 import { useNow } from "./store.js";
 import type { LiveSnapshot } from "./store.js";
@@ -20,9 +19,7 @@ const RESOLVED_CAP = 20;
 
 /** Open incidents, what failed and what did not, and what to do. */
 export function Incidents({ live }: { live: LiveSnapshot }) {
-  const alerts = usePolled<AlertsSnapshot>(["aggregate-alerts"], () =>
-    getAggregateAlerts(),
-  );
+  const alerts = useOpenAlerts();
   const open = useMemo(
     () => rankIncidents(alerts.value?.alerts ?? []),
     [alerts.value],

@@ -5,9 +5,11 @@ import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
 const { buildResourceRows, nodeCards, ringFromGraph, shardsFrom } =
   await loadCompiledFrontendModule("control-room/inspect-model.js");
-const { appendSample, sparkline, takeSample } = await loadCompiledFrontendModule(
-  "control-room/monitor-model.js",
+const { takeSample } = await loadCompiledFrontendModule("control-room/monitor-model.js");
+const { appendSample, sparkline } = await loadCompiledFrontendModule(
+  "control-room/sample-window.js",
 );
+const ingest = (sample) => sample.ingestBps;
 
 function resource(id, overrides = {}) {
   return { id, kind: "egress", label: id, ...overrides };
@@ -200,14 +202,19 @@ test("a sparkline spans the window, peaks at the top and breaks at a gap", () =>
     { atMs: 100, ingestBps: 5 },
   ];
   // The lone last value is a zero-length segment: a dot, not nothing.
-  assert.deepEqual(sparkline(history, "ingestBps", 0, 100, 200, 40), [
+  assert.deepEqual(sparkline(history, ingest, 0, 100, 200, 40), [
     "0.0,40.0 100.0,0.0",
     "200.0,20.0 200.0,20.0",
   ]);
   // All zero: a flat line on the floor, not a division by zero.
   assert.deepEqual(
-    sparkline([{ atMs: 0, ingestBps: 0 }, { atMs: 10, ingestBps: 0 }], "ingestBps", 0, 10, 100, 40),
+    sparkline([{ atMs: 0, ingestBps: 0 }, { atMs: 10, ingestBps: 0 }], ingest, 0, 10, 100, 40),
     ["0.0,40.0 100.0,40.0"],
+  );
+  // A fixed scale (a percentage): 50 of 100 is half way up, whatever the max.
+  assert.deepEqual(
+    sparkline([{ atMs: 0, ingestBps: 50 }, { atMs: 10, ingestBps: 50 }], ingest, 0, 10, 100, 40, 100),
+    ["0.0,20.0 100.0,20.0"],
   );
 });
 

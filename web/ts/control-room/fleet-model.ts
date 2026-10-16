@@ -223,6 +223,24 @@ export function pipelineHealth(row: FleetPipelineRow): PipelineHealth {
   return { tone: "ok", label: "healthy" };
 }
 
+const HEALTH_RANK: Record<PipelineHealth["tone"], number> = {
+  warning: 0,
+  info: 1,
+  ok: 2,
+  idle: 3,
+};
+
+/** Degraded first, then starting, healthy, idle; within one, the pipeline
+ * with the most wanted outputs first, then by name. */
+export function worstFirst(rows: readonly FleetPipelineRow[]): readonly FleetPipelineRow[] {
+  return [...rows].sort(
+    (a, b) =>
+      HEALTH_RANK[pipelineHealth(a).tone] - HEALTH_RANK[pipelineHealth(b).tone] ||
+      b.wanted - a.wanted ||
+      a.name.localeCompare(b.name),
+  );
+}
+
 /** One operator sentence for a diagnosis cause. */
 export function describeCause(cause: Cause): string {
   switch (cause.code) {

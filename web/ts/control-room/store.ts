@@ -12,8 +12,11 @@ import type {
   RuntimeStateStreamStatus,
 } from "../core/state-stream.js";
 import type { SystemMetrics } from "../types.js";
+import { takeFleetSample } from "./fleet-history.js";
+import type { FleetSample } from "./fleet-history.js";
 import { telemetryRates } from "./rates.js";
 import type { TelemetryRates } from "./rates.js";
+import { appendSample, WINDOW_MS } from "./sample-window.js";
 
 export interface LiveSnapshot {
   readonly state: RuntimeState | null;
@@ -24,6 +27,9 @@ export interface LiveSnapshot {
   /** Wall-clock ms of the last successful sample of each sampled source. */
   readonly telemetryAtMs: number | null;
   readonly metricsAtMs: number | null;
+  /** Fleet-wide signals, one per sample, for the last `WINDOW_MS` of this
+   * session (empty after a restart). */
+  readonly history: readonly FleetSample[];
 }
 
 export const SAMPLE_INTERVAL_MS = 2000;
@@ -49,6 +55,7 @@ const EMPTY: LiveSnapshot = {
   metrics: null,
   telemetryAtMs: null,
   metricsAtMs: null,
+  history: [],
 };
 
 let snapshot = EMPTY;
@@ -67,6 +74,12 @@ async function sample(signal: AbortSignal): Promise<void> {
   ]);
   if (signal.aborted) return;
   const now = Date.now();
+  const sampled = takeFleetSample({
+    atMs: now,
+    // While the stream is down, its last snapshot is not now.
+    outputs: snapshot.stream === "live" ? (snapshot.state?.outputs ?? null) : null,
+    capacity: metrics?.capacity ?? null,
+  });
   // A failed source keeps its last value; its timestamp shows the age.
   publish({
     ...(telemetry && {
@@ -75,6 +88,7 @@ async function sample(signal: AbortSignal): Promise<void> {
       telemetryAtMs: now,
     }),
     ...(metrics && { metrics, metricsAtMs: now }),
+    history: appendSample(snapshot.history, sampled, WINDOW_MS),
   });
 }
 
