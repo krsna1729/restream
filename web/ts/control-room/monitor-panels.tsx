@@ -125,13 +125,7 @@ function SharedPath(props: { live: LiveSnapshot; graph: Polled<GraphData> }) {
                   .join(" · "),
               ],
             ),
-            [
-              "Reader overflow",
-              String(
-                (path.ring?.overflows ?? 0) +
-                  path.stages.reduce((sum, stage) => sum + stage.overflows, 0),
-              ),
-            ],
+            ["Reader overflow", path.ring ? String(path.ring.overflows) : "--"],
           ]}
         />
       )}

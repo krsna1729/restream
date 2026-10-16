@@ -65,8 +65,6 @@ export interface PathStage {
   readonly label: string;
   readonly active: boolean;
   readonly packetsPerSec: number | null;
-  /** Times this stage's reader fell off the source ring. */
-  readonly overflows: number;
   /** Wanted outputs whose running attempt reads this stage last. */
   readonly outputs: number;
 }
@@ -75,6 +73,8 @@ export interface MediaPath {
   readonly ring: {
     readonly fill: number;
     readonly capacity: number;
+    /** Times any reader fell off the ring, counted once: a stage node's
+     * `details.overflowCount` repeats its reader's counter. */
     readonly overflows: number;
     readonly worstLagSlots: number | null;
   } | null;
@@ -109,7 +109,6 @@ export function mediaPath(graph: GraphData, outputs: readonly OutputState[]): Me
       label: node.label,
       active: node.active,
       packetsPerSec: finite(node.metrics?.packetsPerSec),
-      overflows: finite(node.details?.overflowCount) ?? 0,
       outputs: readersOf.get(node.stageKey ?? "") ?? 0,
     }))
     .sort((a, b) => b.outputs - a.outputs || a.label.localeCompare(b.label));
@@ -158,11 +157,13 @@ export function destinationOutlier(
     .filter(
       (peer) =>
         peer !== worst &&
+        worst.output.stage !== null &&
         peer.output.stage === worst.output.stage &&
         peer.output.protocol === worst.output.protocol,
     )
     .map((peer) => peer.ratio)
     .sort((a, b) => a - b);
+  const middle = Math.floor(peers.length / 2);
   return {
     outputId: worst.output.id,
     name: worst.output.name,
@@ -170,6 +171,11 @@ export function destinationOutlier(
     offeredBps: finite(worst.egress.quality?.offeredBps),
     deliveredBps: finite(worst.egress.quality?.deliveredBps),
     feedLag: finite(worst.egress.feedLagUnits),
-    peersRatio: peers.length === 0 ? null : (peers[Math.floor(peers.length / 2)] ?? null),
+    peersRatio:
+      peers.length === 0
+        ? null
+        : peers.length % 2 === 1
+          ? (peers[middle] ?? null)
+          : ((peers[middle - 1] ?? 0) + (peers[middle] ?? 0)) / 2,
   };
 }

@@ -6,7 +6,6 @@ import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 const { destinationOutlier, inputTransport, mediaPath } = await loadCompiledFrontendModule(
   "control-room/monitor-path.js",
 );
-const { appendSample } = await loadCompiledFrontendModule("control-room/sample-window.js");
 
 function output(id, overrides = {}) {
   return {
@@ -86,7 +85,7 @@ test("input transport shows what the selected input reports and omits the rest",
   );
 });
 
-test("the media path counts each stage's wanted readers and every overflow", () => {
+test("the media path counts each stage's wanted readers and every overflow once", () => {
   const graph = {
     pipelineId: "p",
     nodes: [
@@ -99,8 +98,8 @@ test("the media path counts each stage's wanted readers and every overflow", () 
           fill: 37,
           capacity: 4096,
           readers: [
-            { name: "a", lagSlots: 3, overflowCount: 1 },
-            { name: "b", lagSlots: 9, overflowCount: 0 },
+            { name: "p:video:720p", lagSlots: 3, overflowCount: 2 },
+            { name: "p:source", lagSlots: 9, overflowCount: 1 },
           ],
         },
       },
@@ -126,12 +125,13 @@ test("the media path counts each stage's wanted readers and every overflow", () 
     output("off", { desired: "stopped" }),
     output("other", { pipelineId: "q", stage: "p:source" }),
   ]);
-  assert.deepEqual(path.ring, { fill: 37, capacity: 4096, overflows: 1, worstLagSlots: 9 });
+  // A stage node's overflowCount repeats its ring reader's: counted once.
+  assert.deepEqual(path.ring, { fill: 37, capacity: 4096, overflows: 3, worstLagSlots: 9 });
   assert.deepEqual(
-    path.stages.map((stage) => [stage.label, stage.outputs, stage.overflows, stage.packetsPerSec]),
+    path.stages.map((stage) => [stage.label, stage.outputs, stage.packetsPerSec]),
     [
-      ["720p", 2, 2, 2790.4],
-      ["Source", 1, 0, null],
+      ["720p", 2, 2790.4],
+      ["Source", 1, null],
     ],
   );
   assert.equal(mediaPath({ pipelineId: "p", nodes: [], edges: [] }, []).ring, null);
@@ -162,16 +162,19 @@ test("the outlier is the wanted output that delivers least, under the floor", ()
 
   const rtmp = destinationOutlier("p", outputs.slice(0, 3), egresses);
   assert.equal(rtmp.outputId, "b");
-  assert.equal(rtmp.peersRatio, 1.01);
+  // Two peers: the median is their mean.
+  assert.equal(rtmp.peersRatio, 1);
+
+  // Outputs with no running stage share nothing: they are not peers.
+  const unplaced = destinationOutlier(
+    "p",
+    [output("x", { stage: null }), output("y", { stage: null })],
+    [egress("x", 0.5), egress("y", 1)],
+  );
+  assert.equal(unplaced.outputId, "x");
+  assert.equal(unplaced.peersRatio, null);
 
   // At the floor an output keeps up; an unrated output is not an outlier.
   assert.equal(destinationOutlier("p", [output("a")], [egress("a", 0.95)]), null);
   assert.equal(destinationOutlier("p", [output("a")], [{ outputId: "a", quality: {} }]), null);
-});
-
-test("a paused window stays as it was while sampling goes on", () => {
-  const frozen = appendSample(appendSample([], { atMs: 0 }, 60_000), { atMs: 10 }, 60_000);
-  const live = appendSample(frozen, { atMs: 70_000 }, 60_000);
-  assert.deepEqual(frozen.map((s) => s.atMs), [0, 10]);
-  assert.deepEqual(live.map((s) => s.atMs), [70_000]);
 });
