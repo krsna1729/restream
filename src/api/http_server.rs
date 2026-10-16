@@ -23,7 +23,7 @@ use hyper_util::rt::TokioIo;
 use hyper_util::service::TowerToHyperService;
 use tokio::net::TcpListener;
 use tower::{Service, ServiceExt};
-use tracing::{error, trace};
+use tracing::{debug, error};
 
 /// Serve `app` on `listener` until the task is dropped. Accept errors that
 /// concern one connection are skipped; others (descriptor exhaustion) are
@@ -59,7 +59,7 @@ pub async fn serve(listener: TcpListener, app: Router) {
                 .serve_connection(TokioIo::new(stream), service)
                 .with_upgrades();
             if let Err(serve_error) = connection.await {
-                trace!(err = %serve_error, "HTTP connection ended with an error");
+                debug!(err = %serve_error, "HTTP connection ended with an error");
             }
         });
     }

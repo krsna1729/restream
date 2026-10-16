@@ -253,8 +253,17 @@ async fn a_stalled_body_times_out_with_408_and_returns_its_budget() {
 }
 
 /// FFmpeg pushes the checked-in TS fixture as HLS; media must reach the
-/// pipeline ring, and the session must end and release its input.
-async fn ffmpeg_push_reaches_the_ring(method: &str, persistent: bool) {
+/// pipeline ring, and the session must end on its ENDLIST.
+///
+/// FFmpeg runs with its default of one connection per object. With
+/// `-http_persistent 1` it sends requests ahead of the replies and, on
+/// exit, closes without reading them: the next reply that reaches the closed
+/// socket draws an RST, and the server's kernel discards the requests still
+/// unread in its receive queue (captured: the final `index3.ts` and ENDLIST
+/// playlist lost). No server can recover those bytes, so an encoder that
+/// pipelines and exits without reading the replies can lose its final
+/// objects; this test keeps that encoder limit out of the server's bar.
+async fn ffmpeg_push_reaches_the_ring(method: &str) {
     let server = serve(HlsIngestLimits::default()).await;
     let ring = server.engine.get_or_create_pipeline(PIPELINE_ID).await;
     let start = ring.get_write_idx();
@@ -273,7 +282,7 @@ async fn ffmpeg_push_reaches_the_ring(method: &str, persistent: bool) {
             "3",
         ])
         .args(["-hls_flags", "delete_segments", "-method", method])
-        .args(["-http_persistent", if persistent { "1" } else { "0" }])
+        .args(["-http_persistent", "0"])
         .arg(url(&server, STREAM_KEY, "index.m3u8"))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -285,6 +294,16 @@ async fn ffmpeg_push_reaches_the_ring(method: &str, persistent: bool) {
         .unwrap();
     assert!(status.success(), "ffmpeg {method} push failed: {status}");
     wait_until_unregistered(&server.engine).await;
+    let phase = server
+        .engine
+        .recent_ingest_outcome(PIPELINE_ID)
+        .await
+        .and_then(|outcome| outcome.failure_phase);
+    assert_eq!(
+        phase.as_deref(),
+        Some("eof"),
+        "the session ends on EXT-X-ENDLIST"
+    );
 
     let packets: Vec<_> = (start..ring.get_write_idx())
         .filter_map(|index| ring.read_at(index))
@@ -298,12 +317,9 @@ async fn ffmpeg_push_reaches_the_ring(method: &str, persistent: bool) {
         .iter()
         .filter(|packet| packet.media_type == MediaType::Video && packet.is_keyframe)
         .count();
-    // 8 s of 30 fps video in four 2 s segments, all of it in order. FFmpeg
-    // exits right after its final upload; under parallel test load the last
-    // segment's request was seen to be lost (the session then ends idle, not
-    // on ENDLIST), so three segments (180 frames) are the floor.
+    // 8 s of 30 fps video with a keyframe every 2 s, all of it in order.
     assert!(
-        video_dts.len() >= 180,
+        video_dts.len() > 200,
         "only {} video packets reached the ring",
         video_dts.len()
     );
@@ -318,11 +334,11 @@ async fn ffmpeg_push_reaches_the_ring(method: &str, persistent: bool) {
 }
 
 #[tokio::test]
-async fn ffmpeg_hls_put_over_one_persistent_connection_reaches_the_ring() {
-    ffmpeg_push_reaches_the_ring("PUT", true).await;
+async fn ffmpeg_hls_put_with_a_connection_per_object_reaches_the_ring() {
+    ffmpeg_push_reaches_the_ring("PUT").await;
 }
 
 #[tokio::test]
 async fn ffmpeg_hls_post_with_a_connection_per_object_reaches_the_ring() {
-    ffmpeg_push_reaches_the_ring("POST", false).await;
+    ffmpeg_push_reaches_the_ring("POST").await;
 }

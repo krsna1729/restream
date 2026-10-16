@@ -1392,7 +1392,7 @@ The stream key is checked first, before any body byte is read, under the
 | `409` | Another publisher (RTMP, SRT, file) holds the input |
 | `413` | Over the limit: playlist 1 MiB, segment 64 MiB |
 | `415` | Neither `.m3u8` nor `.ts` (fMP4 is not ingested yet) |
-| `503` | The 512 MiB HLS ingest buffer is full (`Retry-After: 1`), the session ended with the object queued (`Retry-After: 1`), or the key lookup or session is unavailable |
+| `503` | The 512 MiB HLS ingest buffer is full, or the session ended with the object queued (all `Retry-After: 1`); or the key lookup or session is unavailable |
 
 Ordering, sessions and per-key bounds are described in
 [HLS push ingest](media-pipeline.md#hls-push-ingest).
