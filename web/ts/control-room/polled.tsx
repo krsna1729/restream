@@ -5,8 +5,18 @@
 import { useQuery } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
 
+import { getEngineHealth, getLifecycleEvents } from "../core/api.js";
+import type { LifecycleEventsSnapshot } from "../core/api-types.js";
+import type { HealthData } from "../types.js";
 import { formatAge } from "./format.js";
 import { SAMPLE_INTERVAL_MS, SAMPLE_STALE_AFTER_MS, useNow } from "./store.js";
+
+/** How often `/engine/health` reloads: it samples host settings and every
+ * pipeline, and most of it changes rarely. */
+const HEALTH_INTERVAL_MS = 10_000;
+
+/** The lifecycle events a panel reads at most. */
+const EVENT_LIMIT = 200;
 
 export interface Polled<T> {
   readonly value: T | null;
@@ -49,6 +59,20 @@ export function usePolled<T>(
     staleAfterMs: intervalMs * (SAMPLE_STALE_AFTER_MS / SAMPLE_INTERVAL_MS),
     refresh: () => void query.refetch(),
   };
+}
+
+/** The engine's health report, shared by every panel that reads it. */
+export function useEngineHealth(): Polled<HealthData> {
+  return usePolled(["engine-health"], () => getEngineHealth<HealthData>(), HEALTH_INTERVAL_MS);
+}
+
+/** The latest lifecycle events of one pipeline (`null`: of every one). */
+export function useLifecycleEvents(
+  pipelineId: string | null,
+): Polled<LifecycleEventsSnapshot> {
+  return usePolled(["lifecycle-events", pipelineId, EVENT_LIMIT], () =>
+    getLifecycleEvents({ pipelineId, limit: EVENT_LIMIT }),
+  );
 }
 
 /** How old a polled panel's data is; amber once it missed two loads. */

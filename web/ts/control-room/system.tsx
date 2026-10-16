@@ -1,14 +1,13 @@
 import { useEffect, useState } from "react";
 
 import {
-  getEngineHealth,
   getEngineSbom,
   getEngineSbomEndpoint,
   getEngineStatus,
 } from "../core/api.js";
 import type { HealthData, SrtIngressOwnerHealth } from "../types.js";
 import { formatBytes, formatPercent } from "./format.js";
-import { Freshness, usePolled } from "./polled.js";
+import { Freshness, useEngineHealth } from "./polled.js";
 import type { LiveSnapshot } from "./store.js";
 import {
   executionTopology,
@@ -31,19 +30,11 @@ const CHECK_LABEL: Record<CheckStatus, string> = {
   unknown: "a host check is unknown",
 };
 
-/** How often System reloads `/engine/health`: it samples host settings and
- * every pipeline, and most of what this page shows changes rarely. */
-const HEALTH_INTERVAL_MS = 10_000;
-
 /** Whether this host suits the engine, what runs, and what this build is.
  * Counts are the engine's report; a class it reports only as configured
  * says so. */
 export function System({ live }: { live: LiveSnapshot }) {
-  const health = usePolled(
-    ["engine-health"],
-    () => getEngineHealth<HealthData>(),
-    HEALTH_INTERVAL_MS,
-  );
+  const health = useEngineHealth();
   const [status, setStatus] = useState<EngineStatus | null>(null);
   useEffect(() => {
     void getEngineStatus<EngineStatus>().then(setStatus);

@@ -940,6 +940,8 @@ test("previews and stage detail: play the program and an input; a transcode stag
     const pipelineId = await liveFilePipeline(page, `crpreview${stamp}`);
     pipelineIds.push(pipelineId);
     await page.goto(`/?w=operate&p=${pipelineId}`);
+    // The program plays in the media path's Preview view.
+    await page.getByRole("tab", { name: "Preview" }).click();
     await playing("program", 16);
     await playing("Primary", 16);
 
@@ -990,6 +992,7 @@ test("previews and stage detail: play the program and an input; a transcode stag
       return route.fulfill({ response, body });
     });
     await page.goto(`/?w=operate&p=${pipelineId}`);
+    await page.getByRole("tab", { name: "Preview" }).click();
     const program = page.getByRole("group", { name: "Preview program" });
     await program.getByRole("button", { name: "Preview program" }).click();
     const status = program.getByRole("status");
@@ -1054,5 +1057,66 @@ test("matrix: a large fleet renders a bounded window and can show the rest", asy
     await expect(matrix.getByRole("row")).toHaveCount(total + 1);
   } finally {
     await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
+  }
+});
+
+test("operate views: inspect an egress group, list the groups, read the pipeline's timeline", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  const stamp = Date.now();
+  const pipelineIds: string[] = [];
+  try {
+    const pipelineId = await liveFilePipeline(page, `crgroup${stamp}`);
+    pipelineIds.push(pipelineId);
+    // One sink per output: a sink's key takes one publisher at a time.
+    for (const name of ["cr-group-a", "cr-group-b"]) {
+      const sink = await loopbackSink(page, `crgroupsink${name}${stamp}`.replaceAll("-", ""));
+      pipelineIds.push(sink.pipelineId);
+      const created = await page.request.post(`/api/v1/pipelines/${pipelineId}/outputs`, {
+        data: {
+          name,
+          url: sink.url,
+          config: { video: { mode: "source" }, audio: { mode: "selectTracks", tracks: [0] } },
+        },
+      });
+      expect(created.ok()).toBe(true);
+      const outputId: string = (await created.json()).output.id;
+      expect(
+        (await page.request.post(`/api/v1/pipelines/${pipelineId}/outputs/${outputId}/start`)).ok(),
+      ).toBe(true);
+    }
+
+    await page.goto(`/?w=operate&p=${pipelineId}`);
+    // Both RTMP destinations read one stage: one group, inspected in place.
+    await page.getByRole("button", { name: /^Inspect RTMP group from / }).click();
+    const inspector = page.getByRole("region", { name: "Selected RTMP group" });
+    const delivery = inspector.getByRole("definition").first();
+    await expect(delivery).toHaveText("2 / 2", { timeout: 30_000 });
+    // The fabric shard carrying them comes from the engine's health report.
+    await expect(inspector.getByRole("list", { name: "Fabric shards" })).toContainText(
+      /shard \d+ · healthy · queue \d+ \/ \d+/,
+      { timeout: 30_000 },
+    );
+    await expect(inspector).toContainText("No output of this group has a diagnosed fault.");
+
+    // The same group in the table view; the selection follows.
+    await page.getByRole("tab", { name: "Destinations" }).click();
+    const groups = page.getByRole("table", { name: "Destination groups" });
+    const row = groups.getByRole("row").filter({ hasText: "RTMP" });
+    await expect(row).toContainText("2 / 2");
+    await expect(row.getByRole("button", { name: "Inspect" })).toHaveAttribute("aria-pressed", "true");
+    await row.getByRole("button", { name: "Inspect" }).click();
+    await expect(inspector).toHaveCount(0);
+
+    // The engine's kept lifecycle events for this pipeline, newest first.
+    await page.getByRole("tab", { name: "Timeline" }).click();
+    await expect(page.getByRole("list", { name: "Pipeline timeline" })).toContainText("cr-group-a");
+  } finally {
+    for (const id of pipelineIds) await page.request.delete(`/api/v1/pipelines/${id}`);
   }
 });

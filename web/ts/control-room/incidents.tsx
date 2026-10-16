@@ -1,11 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { getAggregateAlerts, getLifecycleEvents } from "../core/api.js";
-import type {
-  AlertsSnapshot,
-  LifecycleEventsSnapshot,
-  OperatorAlert,
-} from "../core/api-types.js";
+import { getAggregateAlerts } from "../core/api.js";
+import type { AlertsSnapshot, OperatorAlert } from "../core/api-types.js";
 import { formatAge } from "./format.js";
 import {
   evidencePacket,
@@ -15,13 +11,12 @@ import {
   updateResolved,
 } from "./incidents-model.js";
 import type { ResolvedIncident } from "./incidents-model.js";
-import { Freshness, usePolled } from "./polled.js";
+import { Freshness, useLifecycleEvents, usePolled } from "./polled.js";
 import { PlaceLink } from "./router.js";
 import { useNow } from "./store.js";
 import type { LiveSnapshot } from "./store.js";
 
 const RESOLVED_CAP = 20;
-const EVENT_LIMIT = 200;
 
 /** Open incidents, what failed and what did not, and what to do. */
 export function Incidents({ live }: { live: LiveSnapshot }) {
@@ -187,14 +182,7 @@ function Detail(props: {
   names: Map<string, string>;
 }) {
   const { alert } = props;
-  const events = usePolled<LifecycleEventsSnapshot>(
-    ["lifecycle-events", alert.pipelineId ?? null, EVENT_LIMIT],
-    () =>
-      getLifecycleEvents({
-        pipelineId: alert.pipelineId ?? null,
-        limit: EVENT_LIMIT,
-      }),
-  );
+  const events = useLifecycleEvents(alert.pipelineId ?? null);
   const timeline = useMemo(
     () => (events.value ? incidentTimeline(alert, events.value.events) : null),
     [alert, events.value],

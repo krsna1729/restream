@@ -6,7 +6,6 @@ import {
   getPipelineInputs,
   getProcessingGraph,
   getYoutubeMonitoringStatus,
-  programPreviewUrl,
   promotePipelineInput,
   startOut,
   stopOut,
@@ -19,6 +18,7 @@ import { ConfirmDelete } from "./confirm.js";
 import { describeCause } from "./fleet-model.js";
 import { formatBps } from "./format.js";
 import { AddInput, InputActions, PipelineBar } from "./operate-manage.js";
+import { MediaGraph } from "./operate-graph.js";
 import {
   buildDestinationRows,
   buildMediaGraph,
@@ -27,7 +27,7 @@ import {
   windowDestinationRows,
   youtubeVerdict,
 } from "./operate-model.js";
-import type { DestinationRow, GraphColumn } from "./operate-model.js";
+import type { DestinationRow } from "./operate-model.js";
 import { OutputForm } from "./output-form.js";
 import { PipelineScope } from "./pipeline-scope.js";
 import { Freshness, usePolled } from "./polled.js";
@@ -90,7 +90,15 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
           atMs={inputs.atMs}
           onChanged={inputs.refresh}
         />
-        <MediaGraph columns={columns} atMs={graph.atMs} />
+        <MediaGraph
+          pipelineId={pipelineId}
+          columns={columns}
+          atMs={graph.atMs}
+          outputs={outputs}
+          egresses={props.live.telemetry?.egresses ?? null}
+          shards={props.live.metrics?.egressShards ?? null}
+          shardsAtMs={props.live.metricsAtMs}
+        />
       </div>
       <DestinationMatrix
         key={pipelineId}
@@ -142,7 +150,6 @@ function SourceDeck(props: {
           </h3>
           <Freshness atMs={props.atMs} />
         </div>
-        <Preview url={programPreviewUrl(props.pipelineId)} label="program" />
         {inputs === null ? (
           <p className="opacity-70">Loading inputs…</p>
         ) : (
@@ -216,84 +223,6 @@ function SourceDeck(props: {
           </ul>
         )}
         <AddInput pipelineId={props.pipelineId} onChanged={props.onChanged} />
-      </div>
-    </section>
-  );
-}
-
-function MediaGraph(props: {
-  columns: readonly GraphColumn[] | null;
-  atMs: number | null;
-}) {
-  const { columns } = props;
-  return (
-    <section className="card bg-base-200" aria-labelledby="operate-graph">
-      <div className="card-body gap-3 p-4">
-        <div className="flex items-center justify-between gap-2">
-          <h3 id="operate-graph" className="card-title text-base">
-            Live media graph
-            <span className="text-xs font-normal opacity-70">
-              shared work drawn once
-            </span>
-          </h3>
-          <Freshness atMs={props.atMs} />
-        </div>
-        {columns === null ? (
-          <p className="opacity-70">Loading graph…</p>
-        ) : (
-          <ol className="flex items-stretch gap-2 overflow-x-auto">
-            {columns.map((column, index) => (
-              <li key={index} className="flex items-center gap-2">
-                {index > 0 && <span aria-hidden="true">→</span>}
-                <ul className="flex flex-col gap-2">
-                  {column.stages.map((stage) => (
-                    <li
-                      key={stage.id}
-                      aria-label={`Stage ${stage.label}`}
-                      className={`min-w-40 rounded border-l-4 bg-base-100 p-2 text-sm ${
-                        stage.active ? "border-success" : "border-base-300"
-                      }`}
-                    >
-                      <div className="text-xs uppercase opacity-60">
-                        {stage.type.replace("_", " ")}
-                      </div>
-                      <div className="font-medium">{stage.label}</div>
-                      <div className="text-xs opacity-70">
-                        {stage.consumers} consumer{stage.consumers === 1 ? "" : "s"}
-                        {stage.packetsPerSec !== null &&
-                          ` · ${stage.packetsPerSec.toFixed(0)} pkt/s`}
-                      </div>
-                    </li>
-                  ))}
-                  {column.groups.map((group) => (
-                    <li
-                      key={group.key}
-                      aria-label={`Destinations ${group.protocol ?? "unknown"}`}
-                      className={`min-w-40 rounded border-l-4 bg-base-100 p-2 text-sm ${
-                        group.attention > 0
-                          ? "border-warning"
-                          : group.delivering === group.outputs
-                            ? "border-success"
-                            : "border-base-300"
-                      }`}
-                    >
-                      <div className="text-xs uppercase opacity-60">
-                        egress group
-                      </div>
-                      <div className="font-medium">
-                        {(group.protocol ?? "unknown").toUpperCase()}
-                      </div>
-                      <div className="text-xs opacity-70">
-                        {group.delivering} / {group.outputs} delivering
-                        {group.attention > 0 && ` · ${group.attention} degraded`}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </li>
-            ))}
-          </ol>
-        )}
       </div>
     </section>
   );

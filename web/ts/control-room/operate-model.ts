@@ -24,6 +24,10 @@ export interface EgressGroup {
   readonly key: string;
   /** `null` for an egress node with no output in the runtime state. */
   readonly protocol: EgressProtocol | null;
+  /** The labels of the stages that feed the group. */
+  readonly upstream: string;
+  /** The group's outputs in the runtime state. */
+  readonly outputIds: readonly string[];
   readonly outputs: number;
   readonly delivering: number;
   readonly attention: number;
@@ -54,6 +58,7 @@ export function buildMediaGraph(
   outputs: readonly OutputState[],
 ): readonly GraphColumn[] {
   const outputById = new Map(outputs.map((output) => [output.id, output]));
+  const labels = new Map(graph.nodes.map((node) => [node.id, node.label]));
   const incoming = new Map<string, string[]>();
   const consumers = new Map<string, number>();
   for (const edge of graph.edges) {
@@ -83,7 +88,11 @@ export function buildMediaGraph(
   const stagesByDepth = new Map<number, GraphStage[]>();
   const groupsByKey = new Map<
     string,
-    { depth: number; group: { -readonly [K in keyof EgressGroup]: EgressGroup[K] } }
+    {
+      depth: number;
+      ids: string[];
+      group: { -readonly [K in keyof EgressGroup]: EgressGroup[K] };
+    }
   >();
   for (const node of graph.nodes) {
     const depth = depthOf(node.id);
@@ -103,17 +112,28 @@ export function buildMediaGraph(
     }
     const output = node.outputId ? outputById.get(node.outputId) : undefined;
     const protocol = output?.protocol ?? null;
-    const upstream = [...(incoming.get(node.id) ?? [])].sort().join(",");
-    const key = `${upstream}|${protocol ?? ""}`;
+    const upstreamIds = [...(incoming.get(node.id) ?? [])].sort();
+    const key = `${upstreamIds.join(",")}|${protocol ?? ""}`;
     let entry = groupsByKey.get(key);
     if (!entry) {
+      const ids: string[] = [];
       entry = {
         depth,
-        group: { key, protocol, outputs: 0, delivering: 0, attention: 0 },
+        ids,
+        group: {
+          key,
+          protocol,
+          upstream: upstreamIds.map((id) => labels.get(id) ?? id).join(" + "),
+          outputIds: ids,
+          outputs: 0,
+          delivering: 0,
+          attention: 0,
+        },
       };
       groupsByKey.set(key, entry);
     }
     entry.group.outputs += 1;
+    if (output) entry.ids.push(output.id);
     if (output && isDelivering(output)) entry.group.delivering += 1;
     if (output?.diagnosis) entry.group.attention += 1;
   }
