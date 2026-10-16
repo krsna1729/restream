@@ -18,7 +18,7 @@ items).
 - [Q-033 host-level shard pool](#q-033-architecture-opus-run-egress-shards-from-one-host-level-pool-instead-of-per-feed-groups)
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
 - [Q-036 enforced runtime truth table](#q-036-docs-sonnet-make-runtime-crossings-an-enforced-truth-table)
-- [Q-047 MoQ](#q-047-protocol-opus-moq-interop-spike-parked)
+- [Q-047 MoQ egress](#q-047-protocol-opus-moq-egress)
 - [Q-049 silent SRT leaves](#q-049-resilience-opus-find-why-connected-srt-leaves-sent-nothing-under-host-overload)
 - [Q-050 inputs and stages in runtime state](#q-050-architecture-sonnet-project-inputs-and-stages-into-the-runtime-state)
 - [Q-051 bounded ingress transfer pump](#q-051-architecture-sonnet-bound-the-ingress-transfer-pump-per-owner-visit)
@@ -27,6 +27,10 @@ items).
 - [Q-064 incident signals before the page opened](#q-064-observability-sonnet-incident-correlation-before-the-page-opened)
 - [Q-065 capacity cost of HLS, sink and pipeline outputs](#q-065-performance-sonnet-price-hls-sink-and-pipeline-outputs-from-a-measured-cost)
 - [Q-066 SRT ingress test port race](#q-066-testing-sonnet-srt-multi-owner-test-port-can-join-a-foreign-reuseport-group)
+- [Q-067 HLS push ingest](#q-067-protocol-opus-hls-push-ingest-over-http-put-and-post)
+- [Q-068 HLS pull ingest](#q-068-protocol-opus-hls-pull-ingest)
+- [Q-069 frame-level media units](#q-069-architecture-opus-frame-level-media-units-for-moq-and-fmp4-ingest)
+- [Q-070 MoQ ingest](#q-070-protocol-opus-moq-ingest)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -249,12 +253,21 @@ items).
 - Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
   review).
 
-### Q-047 [protocol] [opus] MoQ interop spike (parked)
-- Goal: a pinned-SHA spike on `moq-dev/moq` (IETF MOQT with MSF/LOC)
-  with one retention layer (no ring to MoQ-cache copy) behind a Compio
-  adapter; moxygen and MediaMTX as oracles.
-- Parked until transport convergence (Q-025).
-- Status: open (Filed: 2026-10-05 by claude, from the architecture reviews; claims checked against `master`).
+### Q-047 [protocol] [opus] MoQ egress
+- Goal: subscribers receive a live pipeline over MoQ: IETF MOQT with the
+  MSF catalog and LOC objects, one object per frame, one group per GOP,
+  read from the pipeline ring (one retention layer, no ring to MoQ-cache
+  copy), on Owner threads behind a Compio QUIC adapter.
+- Sources: a pinned-SHA `moq-dev/moq` (or moxygen) wire profile; a new
+  `EgressProtocol` variant, planner capability and fabric backend
+  (`src/domain/output_spec/protocol.rs`, `src/media/egress/`). Needs
+  Q-069 first.
+- Gates: interop with moxygen and MediaMTX as subscribers (one harness
+  mode); a loom model for the subscriber hand-off; bench before and after
+  on the egress shard.
+- Status: open; unparked by the user 2026-10-16. Q-025 (cross-host shard law)
+  is still open, so the shard sizing for MoQ starts from the current-host
+  priors (Filed: 2026-10-05 by claude, from the architecture reviews).
 
 ### Q-049 [resilience] [opus] Find why connected SRT leaves sent nothing under host overload
 - Evidence: while `mixed.signal` ran an H.265 case beside another case on a
@@ -421,3 +434,82 @@ items).
   binding Owner 0 first and the rest to its port.
 - Gates: none until it flakes.
 - Status: open (Filed: 2026-10-16 by claude).
+
+### Q-067 [protocol] [opus] HLS push ingest over HTTP PUT and POST
+- Goal: an encoder pushes HLS to Restream as it pushes to YouTube or
+  Akamai MSL. FFmpeg (`-f hls -method PUT|POST`), hardware and software
+  encoders all work without special settings.
+- Contract:
+  - Route `/ingest/hls/{stream_key}/{*path}`. The stream key selects the
+    pipeline input, like RTMP and SRT (`src/media/ingest_auth.rs`).
+    The catch-all path takes FFmpeg `var_stream_map` subdirectories.
+    Primary and backup are two keys.
+  - PUT and POST; chunked and content-length bodies; persistent and
+    per-request connections. DELETE answers 200 and does nothing.
+    Optional basic auth over the key.
+  - Media playlists drive order (`EXT-X-MEDIA-SEQUENCE`), with
+    deduplication. A segment that arrives before any playlist lists it is
+    the normal case (FFmpeg uploads each segment before the playlist that
+    lists it). It answers 202 at once and the session holds it, bounded in
+    bytes and age, until a playlist lists it. The handler never waits for
+    the playlist. `EXT-X-DISCONTINUITY` and `EXT-X-ENDLIST` are
+    handled. A master playlist picks one variant by a policy (default:
+    highest `BANDWIDTH`).
+  - TS segments go to the existing `TsDemuxer`. fMP4 segments
+    (`EXT-X-MAP` init) go to `shiguredo_mp4::demux::Fmp4SegmentDemuxer`.
+    Both are native.
+  - The axum handler only reads the body and checks the key. Demux and
+    ring publication run off Tokio workers, on a session thread that
+    follows the media-pipeline skill. Bodies, held segments and sessions
+    are bounded.
+  - It registers as an input attempt (`try_register_pipeline_input_attempt`,
+    protocol `"hls"`) and ends after `EXT-X-ENDLIST` or an idle timeout.
+- Gates: unit tests for playlist ordering, dedup and early segments; a
+  fuzz target for the m3u8 parser, and for each segment demuxer over
+  arbitrary bytes (`TsDemuxer`, `Fmp4SegmentDemuxer`); a panic in a
+  session ends only that session; one harness mode with FFmpeg pushing TS
+  and fMP4 over PUT and POST.
+- Status: open (Filed: 2026-10-16 by claude, user request).
+
+### Q-068 [protocol] [opus] HLS pull ingest
+- Goal: a pipeline input pulls a remote live HLS URL.
+- Contract: the input stores the source URL and a variant rule (default
+  highest `BANDWIDTH`). The puller fetches the playlist again every
+  target duration (half of it after a reload that brought nothing new, RFC
+  8216 section 6.3.4), fetches new segments in order with `reqwest`, with
+  bounded playlist and segment sizes, and
+  feeds the same session assembler as Q-067 (ordering, demux, ring),
+  with bounded retry and backoff. API and frontend input forms gain the
+  source kind.
+- Gates: unit tests for refresh and variant choice; one harness mode that
+  pulls Restream's own HLS output.
+- Status: open (Filed: 2026-10-16 by claude, user request; after Q-067).
+
+### Q-069 [architecture] [opus] Frame-level media units for MoQ and fMP4 ingest
+- Goal: the ring can feed per-frame consumers (MoQ objects, LL-HLS parts).
+- Sources: `MediaPacket` (`src/media/packet.rs`) has no codec
+  configuration, configuration generation, duration or group id. A
+  TS-ingest `MediaPacket` is one PES, which can hold several AAC frames. Timestamps are
+  milliseconds: per-frame jitter is at most 0.5 ms, and the fMP4 path
+  derives durations from DTS deltas (`build_mux_samples` in
+  `src/media/hls/fmp4/codec.rs`),
+  so the total does not drift.
+- Change: split audio PES into frames at ingest; a per-track
+  configuration with a generation number that readers can follow; a GOP
+  sequence number from the keyframe gate. `MediaPacket` is pinned at 56
+  bytes by a layout test, so the configuration generation and group id go
+  in a side table keyed by ring sequence unless the ring bench shows that
+  a larger packet costs nothing.
+- Gates: proptest of the frame split against a simple model; the existing
+  fMP4 and TS output tests unchanged; bench of the ring hot path before
+  and after.
+- Status: open (Filed: 2026-10-16 by claude; blocks Q-047 and Q-070).
+
+### Q-070 [protocol] [opus] MoQ ingest
+- Goal: a MoQ publisher (MSF catalog, LOC objects) feeds a pipeline input.
+- Contract: the track namespace carries the stream key. Objects map to
+  `MediaPacket`s through Q-069, and the input registers as protocol
+  `"moq"`. The QUIC listener runs on Owner threads.
+- Gates: interop with moxygen and MediaMTX as publishers (one harness
+  mode); a fuzz target for the object parser.
+- Status: open (Filed: 2026-10-16 by claude, user request; after Q-047).
