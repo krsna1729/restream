@@ -4,17 +4,15 @@ import { getProcessingGraph, getResourceMap } from "../core/api.js";
 import type { GraphData, ResourceMapSnapshot } from "../core/api-types.js";
 import { formatBps, formatPercent } from "./format.js";
 import { MAP_TOP_N } from "./inspect-model.js";
-import { appendSample, SIGNALS, sparkline, takeSample } from "./monitor-model.js";
+import { SIGNALS, takeSample } from "./monitor-model.js";
 import type { MonitorSample, Signal } from "./monitor-model.js";
 import { PipelineScope } from "./pipeline-scope.js";
 import { Freshness, usePolled } from "./polled.js";
 import type { Polled } from "./polled.js";
+import { appendSample, WINDOW_MS } from "./sample-window.js";
+import { Sparkline } from "./sparkline.js";
 import { SAMPLE_INTERVAL_MS, SAMPLE_STALE_AFTER_MS } from "./store.js";
 import type { LiveSnapshot } from "./store.js";
-
-const WINDOW_MS = 15 * 60 * 1000;
-const PLOT_WIDTH = 600;
-const PLOT_HEIGHT = 40;
 
 const SIGNAL_LABELS: Record<Signal, string> = {
   ingestBps: "Ingest rate",
@@ -126,28 +124,11 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
               >
                 <dt className="text-sm">{SIGNAL_LABELS[signal]}</dt>
                 <dd>
-                  <svg
-                    viewBox={`0 0 ${PLOT_WIDTH} ${PLOT_HEIGHT}`}
-                    preserveAspectRatio="none"
-                    className="h-10 w-full rounded bg-base-100"
-                    role="img"
-                    aria-label={`${SIGNAL_LABELS[signal]} over time`}
-                  >
-                    {sparkline(history, signal, first.atMs, last.atMs, PLOT_WIDTH, PLOT_HEIGHT).map(
-                      (points) => (
-                        <polyline
-                          key={points}
-                          points={points}
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          vectorEffect="non-scaling-stroke"
-                        />
-                      ),
-                    )}
-                  </svg>
+                  <Sparkline
+                    history={history}
+                    pick={(sample) => sample[signal]}
+                    label={`${SIGNAL_LABELS[signal]} over time`}
+                  />
                 </dd>
                 <dd
                   className="text-right text-sm tabular-nums"

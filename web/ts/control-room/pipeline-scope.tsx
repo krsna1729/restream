@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 
 import { buildFleetModel } from "./fleet-model.js";
 import { formatBps } from "./format.js";
-import { HealthBadge } from "./pipelines.js";
+import { HealthBadge } from "./pipeline-table.js";
 import type { Workspace } from "./route.js";
 import { PlaceLink, useGo } from "./router.js";
 import type { LiveSnapshot } from "./store.js";

@@ -177,7 +177,17 @@ to `/`.
   healthy. Headroom from `/metrics/system`: measured host use; egress flow
   only when shards measured it (`flowMeasured`); and, labeled as such, the
   capacity model's projection onto service centers from calibration priors
-  (observe-only until Q-031 measures the coefficients). Pipelines: the
+  (observe-only until Q-031 measures the coefficients). Fleet also shows the
+  shared work (`uniqueStages` serving `activeLeaves`, from the capacity
+  snapshot), the open-alert count with its age (the same `aggregate-alerts`
+  query Incidents lists), a history of headroom (100 less the projected
+  utilization: the calibration priors, raised to the deepest egress shard's
+  measured queue when shards run), delivery and degraded outputs by
+  layer (`LiveSnapshot.history`: one `fleet-history.ts` sample per store
+  sample, kept for 15 min of this page session, since the engine keeps no
+  metric history; a source with nothing to say is a gap, not a zero), and a
+  worst-first table of at most 10 pipelines that shares its rows with
+  Pipelines (`pipeline-table.tsx`) and links to it for the rest. Pipelines: the
   inventory (attention first, then size), searchable by name or id and
   filterable by the same health rule as Fleet's count, with outputs by
   protocol; above it, all from the runtime state (`pipelines-model.ts`), the
@@ -328,6 +338,7 @@ selected stage adds its pipe counters (`/stages/{key}/telemetry`), which the
 resource map leaves out, and says so when the engine no longer has the stage.
 
 Proof: `test/frontend/control-room-fleet.test.mjs`,
+`test/frontend/control-room-fleet-history.test.mjs`,
 `test/frontend/control-room-operate.test.mjs`,
 `test/frontend/control-room-inspect.test.mjs`,
 `test/frontend/control-room-incidents.test.mjs`,

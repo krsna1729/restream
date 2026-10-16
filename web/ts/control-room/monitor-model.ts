@@ -7,6 +7,7 @@ import type { OutputState } from "../core/generated/runtime-state.js";
 import { isDelivering } from "./fleet-model.js";
 import { ringFromGraph, shardsFrom } from "./inspect-model.js";
 import type { TelemetryRates } from "./rates.js";
+import { max } from "./sample-window.js";
 
 /** One instant; `null` where the source had nothing to say. */
 export interface MonitorSample {
@@ -30,14 +31,6 @@ export const SIGNALS = [
 ] as const;
 
 export type Signal = (typeof SIGNALS)[number];
-
-function max(values: Iterable<number | null>): number | null {
-  let best: number | null = null;
-  for (const value of values) {
-    if (value !== null && (best === null || value > best)) best = value;
-  }
-  return best;
-}
 
 export function takeSample(input: {
   atMs: number;
@@ -79,51 +72,4 @@ export function takeSample(input: {
         ? max(shardsFrom(input.resources).map((shard) => shard.progressAgeMs))
         : null,
   };
-}
-
-/**
- * `history` with `sample` appended, keeping the samples no older than
- * `windowMs` before it. Bounded by time, not count: a hidden tab's timers
- * slow down, and the window must still mean what its label says.
- */
-export function appendSample(
-  history: readonly MonitorSample[],
-  sample: MonitorSample,
-  windowMs: number,
-): readonly MonitorSample[] {
-  return [...history.filter((kept) => kept.atMs >= sample.atMs - windowMs), sample];
-}
-
-/**
- * SVG polyline point lists for one signal over `[fromMs, toMs]`, scaled to
- * `width` x `height` with 0 at the bottom and the window's maximum at the
- * top. A missing value breaks the line rather than drawing a zero; a lone
- * value between gaps is a zero-length segment, drawn as a dot by a round cap.
- */
-export function sparkline(
-  history: readonly MonitorSample[],
-  signal: Signal,
-  fromMs: number,
-  toMs: number,
-  width: number,
-  height: number,
-): readonly string[] {
-  const top = max(history.map((sample) => sample[signal])) ?? 0;
-  const span = Math.max(1, toMs - fromMs);
-  const segments: string[][] = [[]];
-  for (const sample of history) {
-    const value = sample[signal];
-    if (value === null) {
-      segments.push([]);
-      continue;
-    }
-    const x = ((sample.atMs - fromMs) / span) * width;
-    const y = top > 0 ? height - (value / top) * height : height;
-    segments[segments.length - 1]?.push(`${x.toFixed(1)},${y.toFixed(1)}`);
-  }
-  return segments
-    .filter((points) => points.length > 0)
-    .map((points) =>
-      points.length === 1 ? `${points[0]} ${points[0]}` : points.join(" "),
-    );
 }

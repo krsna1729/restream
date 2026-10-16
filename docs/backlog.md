@@ -23,7 +23,6 @@ items).
 - [Q-050 inputs and stages in runtime state](#q-050-architecture-sonnet-project-inputs-and-stages-into-the-runtime-state)
 - [Q-051 bounded ingress transfer pump](#q-051-architecture-sonnet-bound-the-ingress-transfer-pump-per-owner-visit)
 - [Q-053 external FFmpeg process topology](#q-053-architecture-sonnet-external-ffmpeg-process-topology-per-rendition)
-- [Q-057 control-room Fleet gaps](#q-057-frontend-sonnet-control-room-fleet-shared-work-open-incidents-fleet-table-headroom-history)
 - [Q-058 control-room Monitor gaps](#q-058-frontend-sonnet-control-room-monitor-input-transport-shared-path-outlier-incident-cursor-pausecompare)
 - [Q-059 control-room Media gaps](#q-059-frontend-sonnet-control-room-media-recording-timeline-use-as-source)
 - [Q-060 control-room Changes gaps](#q-060-frontend-sonnet-control-room-changes-numeric-impact-topology-diff-convergence-timeline-gates)
@@ -374,33 +373,6 @@ items).
   2026-10-15. The former board item "FFmpeg A/B: external per-stage vs external
   multi-output" cannot be run as written: the second arm does not exist).
 
-### Q-057 [frontend] [sonnet] Control room Fleet: shared work, open incidents, fleet table, headroom history
-- Goal: Fleet shows shared-work and open-incident metrics, a fleet table, and
-  a headroom history.
-- Sources: `uniqueStages`/`activeLeaves` in the capacity snapshot
-  (`capacity.rs:150-151`, `/metrics/system`); `/api/v1/overview.alertCount`
-  `{critical, warning}` (there is no incident entity; the metric is their
-  sum);
-  `/api/v1/pipelines` with `/api/v1/engine/health` for the table. Per-row
-  limiting center and cost have no per-pipeline field: the limiting center is
-  engine-wide (`hottestCenter`). Leave those columns out or add the fields.
-- History: the engine keeps no metric history, only the current sample
-  (`capacity.rs`); the runtime-state delta ring (`runtime_state/hub.rs`) is
-  stream resume, not samples. Decided: one bounded page-level ring beside
-  `web/ts/control-room/store.ts`, fed by the store's 2 s sample, holding only
-  fleet-wide signals: headroom (`/metrics/system` capacity), delivery
-  (engine telemetry), and degraded-output counts by layer from the runtime
-  state's diagnoses (the store has no alert poll; diagnoses feed the alerts).
-  The ring lives while a view is subscribed, so it starts empty at page load
-  and covers only this session. Fleet headroom
-  history (here), the Monitor incident cursor (Q-058) and the Incidents
-  correlation chart (Q-061) read it; no backend history store. Monitor keeps
-  its own per-pipeline series (`monitor.tsx` `Trends` samples the pipeline's
-  graph and resource-map queries, which the store does not carry), so per-
-  pipeline samples do not go into the shared ring.
-- Gates: node tests for the ring bound and eviction; Playwright for the table.
-- Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
-
 ### Q-058 [frontend] [sonnet] Control room Monitor: input transport, shared path, outlier, incident cursor, Pause/Compare
 - Goal: Monitor shows input transport quality, the shared media path, the
   destination outlier, an incident cursor across its series, and Pause/Compare.
@@ -410,8 +382,10 @@ items).
   The mockup's "blocked AVIO writes" is out of scope: the stage input queue
   was deleted in #327, and the remaining `MemoryQueue` counter
   (`media/avio.rs`) serves recording only.
-- Incident cursor: marks diagnosis onsets from the shared fleet ring (Q-057) on
-  Monitor's own per-pipeline series. Pause freezes the page window; Compare
+- Incident cursor: marks this pipeline's diagnosis onsets, taken in
+  Monitor's own per-pipeline sample (`takeSample`), on its series. The
+  store's fleet history has no pipeline identity, so it cannot mark them
+  without marking other pipelines' faults. Pause freezes the page window; Compare
   overlays two windows the page already holds. No new route.
 - Gates: node tests for the outlier pick and window freeze; Playwright.
 - Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
@@ -447,8 +421,9 @@ items).
 ### Q-061 [frontend] [opus] Control room Incidents: correlation chart, evidence confidence, time range, export
 - Goal: Incidents shows a correlation chart, per-signal evidence confidence,
   a time range, and an export.
-- Sources: all four are missing. The correlation chart reads the shared fleet
-  ring (Q-057), which covers only the current page session; a time range
+- Sources: all four are missing. The correlation chart reads the store's
+  fleet history (`LiveSnapshot.history`), which covers only the current page
+  session; a time range
   before it needs the `since` added below.
   Alerts carry `evidence: string[]` only; confidence needs a
   measured/derived marker per signal from the evidence engine. Neither

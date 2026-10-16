@@ -5,8 +5,8 @@
 import { useQuery } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
 
-import { getEngineHealth, getLifecycleEvents } from "../core/api.js";
-import type { LifecycleEventsSnapshot } from "../core/api-types.js";
+import { getAggregateAlerts, getEngineHealth, getLifecycleEvents } from "../core/api.js";
+import type { AlertsSnapshot, LifecycleEventsSnapshot } from "../core/api-types.js";
 import type { HealthData } from "../types.js";
 import { formatAge } from "./format.js";
 import { SAMPLE_INTERVAL_MS, SAMPLE_STALE_AFTER_MS, useNow } from "./store.js";
@@ -64,6 +64,11 @@ export function usePolled<T>(
 /** The engine's health report, shared by every panel that reads it. */
 export function useEngineHealth(): Polled<HealthData> {
   return usePolled(["engine-health"], () => getEngineHealth<HealthData>(), HEALTH_INTERVAL_MS);
+}
+
+/** Every open alert, shared by Fleet's count and the Incidents list. */
+export function useOpenAlerts(): Polled<AlertsSnapshot> {
+  return usePolled(["aggregate-alerts"], () => getAggregateAlerts());
 }
 
 /** The latest lifecycle events of one pipeline (`null`: of every one). */

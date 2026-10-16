@@ -1,11 +1,19 @@
 import { useMemo } from "react";
+import type { ReactNode } from "react";
 
+import type { AlertsSnapshot } from "../core/api-types.js";
 import type { CapacitySnapshot } from "../core/generated/runtime-state.js";
 import type { SystemMetrics } from "../types.js";
-import { buildFleetModel, describeCause } from "./fleet-model.js";
-import type { AttentionItem, FleetModel } from "./fleet-model.js";
+import { degradedTotal } from "./fleet-history.js";
+import type { FleetSample } from "./fleet-history.js";
+import { buildFleetModel, describeCause, worstFirst } from "./fleet-model.js";
+import type { AttentionItem, FleetModel, FleetPipelineRow } from "./fleet-model.js";
 import { formatBps, formatPercent } from "./format.js";
+import { PipelineTable } from "./pipeline-table.js";
+import { Freshness, useOpenAlerts } from "./polled.js";
+import type { Polled } from "./polled.js";
 import { PlaceLink } from "./router.js";
+import { Sparkline } from "./sparkline.js";
 import type { LiveSnapshot } from "./store.js";
 
 export function Fleet({ live }: { live: LiveSnapshot }) {
@@ -13,17 +21,53 @@ export function Fleet({ live }: { live: LiveSnapshot }) {
     () => (live.state ? buildFleetModel(live.state, live.rates) : null),
     [live.state, live.rates],
   );
+  const alerts = useOpenAlerts();
   if (model === null) {
     return <p className="opacity-70">Waiting for runtime state…</p>;
   }
   return (
     <div className="space-y-4">
-      <Headline model={model} />
+      <Headline
+        model={model}
+        capacity={live.metrics?.capacity ?? null}
+        alerts={alerts}
+      />
       <div className="grid gap-4 lg:grid-cols-2">
         <Attention items={model.attention} />
         <Headroom metrics={live.metrics} />
       </div>
+      <History history={live.history} />
+      <FleetTable rows={model.pipelines} />
     </div>
+  );
+}
+
+/** The fleet table shows at most this many pipelines; Pipelines lists all. */
+const FLEET_TABLE_ROWS = 10;
+
+function FleetTable({ rows }: { rows: readonly FleetPipelineRow[] }) {
+  const shown = useMemo(() => worstFirst(rows).slice(0, FLEET_TABLE_ROWS), [rows]);
+  return (
+    <section className="card bg-base-200" aria-labelledby="fleet-table">
+      <div className="card-body gap-3">
+        <div className="flex items-center justify-between">
+          <h3 id="fleet-table" className="card-title text-base">
+            Fleet
+            <span className="text-xs font-normal opacity-70">worst first</span>
+          </h3>
+          {rows.length > shown.length && (
+            <PlaceLink className="link text-sm" place={{ workspace: "pipelines", pipelineId: null }}>
+              All {rows.length} pipelines
+            </PlaceLink>
+          )}
+        </div>
+        {rows.length === 0 ? (
+          <p className="opacity-70">No pipeline yet.</p>
+        ) : (
+          <PipelineTable rows={shown} label="Fleet pipelines" />
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -41,7 +85,14 @@ function headline(model: FleetModel): string {
     : "Every wanted output is delivering";
 }
 
-function Headline({ model }: { model: FleetModel }) {
+function Headline(props: {
+  model: FleetModel;
+  capacity: CapacitySnapshot | null;
+  alerts: Polled<AlertsSnapshot>;
+}) {
+  const { model, capacity } = props;
+  const alerts = props.alerts.value;
+  const critical = alerts?.alerts.filter((alert) => alert.severity === "critical").length ?? 0;
   return (
     <section aria-labelledby="fleet-headline">
       <h2 id="fleet-headline" className="text-xl font-semibold">
@@ -63,18 +114,106 @@ function Headline({ model }: { model: FleetModel }) {
           value={formatBps(model.egressBps)}
           detail="bit rate across active outputs"
         />
+        <Stat
+          title="Shared work"
+          value={capacity ? `${capacity.uniqueStages} stages` : "--"}
+          detail={
+            capacity
+              ? `serve ${capacity.activeLeaves} active outputs`
+              : "no capacity sample yet"
+          }
+        />
+        <Stat
+          title="Open incidents"
+          value={alerts ? String(alerts.alerts.length) : "--"}
+          detail={
+            alerts ? (
+              <span className="flex items-center gap-2">
+                {critical} critical · {alerts.alerts.length - critical} warning
+                <Freshness atMs={props.alerts.atMs} />
+              </span>
+            ) : (
+              "loading alerts"
+            )
+          }
+        />
       </div>
     </section>
   );
 }
 
-function Stat(props: { title: string; value: string; detail: string }) {
+function Stat(props: { title: string; value: string; detail: ReactNode }) {
   return (
     <div className="stat">
       <div className="stat-title">{props.title}</div>
       <div className="stat-value text-2xl">{props.value}</div>
       <div className="stat-desc">{props.detail}</div>
     </div>
+  );
+}
+
+/** The store's fleet-wide samples: how headroom, delivery and faults moved. */
+function History({ history }: { history: readonly FleetSample[] }) {
+  const last = history[history.length - 1];
+  const rows: Array<[string, (sample: FleetSample) => number | null, string, number | undefined]> = [
+    [
+      "Headroom",
+      (sample) => sample.headroomPercent,
+      formatPercent(last?.headroomPercent ?? null),
+      100,
+    ],
+    [
+      "Outputs delivering",
+      (sample) => sample.deliveringPercent,
+      formatPercent(last?.deliveringPercent ?? null),
+      100,
+    ],
+    [
+      "Degraded outputs",
+      degradedTotal,
+      last ? String(degradedTotal(last) ?? "--") : "--",
+      undefined,
+    ],
+  ];
+  return (
+    <section className="card bg-base-200" aria-labelledby="fleet-history">
+      <div className="card-body gap-3">
+        <h3 id="fleet-history" className="card-title text-base">
+          Fleet history
+          <span className="text-xs font-normal opacity-70">
+            since this page opened, up to 15 min · {history.length} samples · headroom
+            projected from the calibration priors, raised by the measured egress queue
+            when shards run
+          </span>
+        </h3>
+        {last === undefined ? (
+          <p className="opacity-70">Collecting the first sample…</p>
+        ) : (
+          <dl className="space-y-2">
+            {rows.map(([label, pick, now, top]) => (
+              <div key={label} className="grid grid-cols-[12rem_1fr_7rem] items-center gap-3">
+                <dt className="text-sm">{label}</dt>
+                <dd>
+                  <Sparkline history={history} pick={pick} label={`${label} over time`} top={top} />
+                </dd>
+                <dd className="text-right tabular-nums" aria-label={`${label} now`}>
+                  {now}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        {last?.degraded && degradedTotal(last) ? (
+          <p className="text-sm opacity-70">
+            Now by layer:{" "}
+            {Object.entries(last.degraded)
+              .filter(([, count]) => count > 0)
+              .map(([layer, count]) => `${layer} ${count}`)
+              .join(" · ")}
+          </p>
+        ) : null}
+      </div>
+    </section>
   );
 }
 
