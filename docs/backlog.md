@@ -383,13 +383,14 @@ items).
   Q-054 to Q-062 are the 2026-10-15 mockup-gap audit; the user asked for all
   of them, one PR per workspace, in Q-number order.
 - Sources: the protocol mix and the needs-attention card derive from the
-  runtime state (`OutputState.protocol`, `diagnosis`). The rest exist only per
-  pipeline: shared stages in `delivery[]` on `/api/v1/pipelines/{id}/telemetry`,
-  warm standby in `forwardingState` on `/pipelines/{id}/inputs`, bonding in
-  the publisher `quality.srtBonded` (`media/snapshots.rs:100`), recording in
-  `/api/v1/engine/health`. A fleet-wide page must not poll every pipeline, so
-  the runtime state gains the output's stage, the standby-input count, the
-  recording flag and the bonded flag.
+  runtime state (`OutputState.protocol`, `diagnosis`). Shared stages
+  (`delivery[]` on `/api/v1/pipelines/{id}/telemetry`) and warm standby
+  (`forwardingState` on `/api/v1/pipelines/{pipeline_id}/inputs`) exist only
+  per pipeline. Bonding (`publisher.quality.srtBonded`) and recording
+  (`recording.active`) arrive fleet-wide in one `/api/v1/engine/health`, but
+  that is the expensive view (`api/health.rs`) and the page already has the
+  state stream. So the runtime state gains all four: the output's stage, the
+  standby-input count, the recording flag and the bonded flag.
 - Gates: node tests for the derivations; one Playwright case per structure.
 - Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
 
