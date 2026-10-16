@@ -1,7 +1,9 @@
 // Per-view polling for data the live store does not carry (one pipeline's
-// inputs, graph or resource map), with the age of what is on screen.
+// inputs, graph or resource map), read through TanStack Query and shown with
+// the age of what is on screen.
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import type { QueryKey } from "@tanstack/react-query";
 
 import { formatAge } from "./format.js";
 import { SAMPLE_INTERVAL_MS, SAMPLE_STALE_AFTER_MS, useNow } from "./store.js";
@@ -15,42 +17,37 @@ export interface Polled<T> {
   readonly refresh: () => void;
 }
 
+/** A load that read nothing: no value to show, not a failure to report. */
+export class NoValue extends Error {}
+
 /**
- * `load` now and every `intervalMs` while mounted; `refresh` loads now.
- * A failed load keeps the last value; `atMs` shows its age. The caller is
- * keyed by its subject, so a new subject remounts and starts from nothing:
- * one pipeline's data never shows under another's name.
+ * `queryKey` names the subject; `load` runs now and every `intervalMs` while
+ * the panel is mounted, and `refresh` loads now. A load that reads nothing
+ * (`null`) is not a value: the last one stays, and `atMs` shows its age. Two
+ * panels naming the same subject share one query.
  */
 export function usePolled<T>(
+  queryKey: QueryKey,
   load: () => Promise<T | null>,
   intervalMs: number = SAMPLE_INTERVAL_MS,
 ): Polled<T> {
-  const [loaded, setLoaded] = useState<{ value: T; atMs: number } | null>(null);
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    let alive = true;
-    let timer: number | undefined;
-    const loop = async () => {
-      try {
-        const next = await load();
-        if (alive && next !== null) setLoaded({ value: next, atMs: Date.now() });
-      } catch (error) {
-        console.error("control room poll failed", error);
-      } finally {
-        if (alive) timer = window.setTimeout(loop, intervalMs);
-      }
-    };
-    void loop();
-    return () => {
-      alive = false;
-      window.clearTimeout(timer);
-    };
-  }, [tick]);
+  const query = useQuery({
+    queryKey,
+    queryFn: async () => {
+      const next = await load();
+      if (next === null) throw new NoValue();
+      return next;
+    },
+    refetchInterval: intervalMs,
+  });
+  // The query keeps its data when a load fails, so an empty read leaves the
+  // last value and its age in place; a new subject starts with no data.
+  const value = query.data ?? null;
   return {
-    value: loaded?.value ?? null,
-    atMs: loaded?.atMs ?? null,
+    value,
+    atMs: value === null ? null : query.dataUpdatedAt,
     staleAfterMs: intervalMs * (SAMPLE_STALE_AFTER_MS / SAMPLE_INTERVAL_MS),
-    refresh: () => setTick((n) => n + 1),
+    refresh: () => void query.refetch(),
   };
 }
 

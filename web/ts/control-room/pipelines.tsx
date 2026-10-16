@@ -15,7 +15,7 @@ import type {
 } from "./fleet-model.js";
 import { formatBps } from "./format.js";
 import { PipelineForm } from "./pipeline-form.js";
-import { PlaceLink, go } from "./place-link.js";
+import { PlaceLink, useGo } from "./router.js";
 import type { LiveSnapshot } from "./store.js";
 
 const HEALTH_FILTERS: ReadonlyArray<[HealthFilter, string]> = [
@@ -40,6 +40,7 @@ export function Pipelines({ live }: { live: LiveSnapshot }) {
       live.state ? buildFleetModel(live.state, live.rates).pipelines : null,
     [live.state, live.rates],
   );
+  const go = useGo();
   if (rows === null) {
     return <p className="opacity-70">Waiting for runtime state…</p>;
   }

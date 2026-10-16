@@ -3,9 +3,9 @@ import type { ReactNode } from "react";
 
 import { buildFleetModel } from "./fleet-model.js";
 import { formatBps } from "./format.js";
-import { go, PlaceLink } from "./place-link.js";
 import { HealthBadge } from "./pipelines.js";
 import type { Workspace } from "./route.js";
+import { PlaceLink, useGo } from "./router.js";
 import type { LiveSnapshot } from "./store.js";
 
 /**
@@ -21,6 +21,7 @@ export function PipelineScope(props: {
   children: (pipelineId: string) => ReactNode;
 }) {
   const { live, workspace, pipelineId } = props;
+  const go = useGo();
   const state = live.state;
   const row = useMemo(
     () =>

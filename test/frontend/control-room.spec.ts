@@ -5,6 +5,41 @@ import { expect, test, type Page } from "@playwright/test";
 // The control room against a running engine: Fleet follows the runtime state
 // stream, so a change made through the API shows without a reload.
 
+test("a stale deep path still opens the workspace in the query", async ({
+  page,
+}) => {
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+
+  // The engine serves the page for unknown paths, and for /index.html: the
+  // place comes from the query whatever the path is.
+  await page.goto("/index.html?w=incidents");
+  await expect(
+    page.getByRole("navigation", { name: "Workspaces" }).getByRole("link", {
+      name: "Incidents",
+    }),
+  ).toHaveAttribute("aria-current", "page");
+
+  // One segment: the page's own asset URLs are relative, so only a
+  // file-like path can load them (a nested path is a serving matter, not a
+  // router one).
+  await page.goto("/old-path?w=media");
+  await expect(
+    page.getByRole("navigation", { name: "Workspaces" }).getByRole("link", {
+      name: "Media",
+    }),
+  ).toHaveAttribute("aria-current", "page");
+
+  // A link from such a path canonicalises to the root.
+  await page
+    .getByRole("navigation", { name: "Workspaces" })
+    .getByRole("link", { name: "Fleet" })
+    .click();
+  await expect(page).toHaveURL(/\/\?w=fleet$/);
+});
+
 test("fleet shows a no-publisher cause live and drops it when the output stops", async ({
   page,
 }) => {

@@ -48,10 +48,13 @@ export function Inspect(props: { live: LiveSnapshot; pipelineId: string | null }
 }
 
 function Anatomy({ pipelineId }: { pipelineId: string }) {
-  const map = usePolled<ResourceMapSnapshot>(() =>
-    getResourceMap(pipelineId, { view: "detail", topN: MAP_TOP_N }),
+  const map = usePolled<ResourceMapSnapshot>(
+    ["resource-map", pipelineId, MAP_TOP_N],
+    () => getResourceMap(pipelineId, { view: "detail", topN: MAP_TOP_N }),
   );
-  const graph = usePolled<GraphData>(() => getProcessingGraph(pipelineId));
+  const graph = usePolled<GraphData>(["processing-graph", pipelineId], () =>
+    getProcessingGraph(pipelineId),
+  );
   const rows = useMemo(
     () => (map.value ? buildResourceRows(map.value) : null),
     [map.value],
@@ -221,7 +224,9 @@ function NodeDetail({ row }: { row: ResourceRow | null }) {
 function StagePipe(props: { stageKey: string }) {
   // Every answer counts as a load, so a stage the engine no longer has
   // (null) is told apart from one not read yet.
-  const stage = usePolled(async () => ({ snapshot: await getStageTelemetry(props.stageKey) }));
+  const stage = usePolled(["stage-telemetry", props.stageKey], async () => ({
+    snapshot: await getStageTelemetry(props.stageKey),
+  }));
   const snapshot = stage.value?.snapshot;
   const rows = scalarEntries(snapshot?.pipeMetrics);
   return (

@@ -9,9 +9,8 @@ const { buildFleetModel, pipelineHealth } = await loadCompiledFrontendModule(
 const { telemetryRates } = await loadCompiledFrontendModule(
   "control-room/rates.js",
 );
-const { parsePlace, placeSearch } = await loadCompiledFrontendModule(
-  "control-room/route.js",
-);
+const { parseSearch, placeFromSearch, placeSearch, stringifySearch } =
+  await loadCompiledFrontendModule("control-room/route.js");
 
 const INGEST = { inputId: "in", protocol: "srt", videoCodec: "h264" };
 
@@ -197,22 +196,70 @@ test("rates come from two samples of one session", () => {
 });
 
 test("an unknown or absent workspace opens Fleet; the pipeline is kept", () => {
-  assert.equal(parsePlace("").workspace, "fleet");
-  assert.deepEqual(parsePlace("?w=nope&p=p1"), {
+  assert.equal(placeFromSearch({}).workspace, "fleet");
+  assert.deepEqual(placeFromSearch({ w: "nope", p: "p1" }), {
     workspace: "fleet",
     pipelineId: "p1",
   });
-  assert.deepEqual(parsePlace("?w=operate&p="), {
+  assert.deepEqual(placeFromSearch({ w: "operate", p: "" }), {
     workspace: "operate",
     pipelineId: null,
   });
 });
 
-test("a place without a pipeline drops `p`; other parameters stay", () => {
+test("a place without a pipeline drops `p`; other parameters stay, after them", () => {
+  assert.deepEqual(
+    placeSearch(
+      { w: "operate", p: "p1", debug: "1" },
+      { workspace: "fleet", pipelineId: null },
+    ),
+    { w: "fleet", debug: "1" },
+  );
+  const search = placeSearch({}, { workspace: "operate", pipelineId: "a b" });
+  assert.deepEqual(placeFromSearch(search), {
+    workspace: "operate",
+    pipelineId: "a b",
+  });
+  // The router writes `w` then `p`, so a shared link reads as the e2e asserts.
+  assert.deepEqual(
+    Object.keys(
+      placeSearch({ debug: "1" }, { workspace: "operate", pipelineId: "p1" }),
+    ),
+    ["w", "p", "debug"],
+  );
+});
+
+test("a query string stays plain strings through the round trip", () => {
+  // A numeric-looking id is a string, not JSON: `p=123` names pipeline 123.
+  // (A JSON-parsing parseSearch would make this a number and drop it.)
+  assert.deepEqual(placeFromSearch(parseSearch("?w=operate&p=123")), {
+    workspace: "operate",
+    pipelineId: "123",
+  });
+  // The first value of a repeated parameter wins, as `get` did before.
+  assert.deepEqual(parseSearch("?w=operate&w=media"), { w: "operate" });
+  // A name the object prototype also has stays an own parameter.
+  assert.deepEqual(parseSearch("?toString=1"), { toString: "1" });
+  assert.deepEqual(Object.keys(parseSearch("?__proto__=x")), ["__proto__"]);
   assert.equal(
-    placeSearch("?w=operate&p=p1&debug=1", { workspace: "fleet", pipelineId: null }),
+    stringifySearch(
+      placeSearch(parseSearch("?debug=1&p=123&w=operate"), {
+        workspace: "operate",
+        pipelineId: "123",
+      }),
+    ),
+    "?w=operate&p=123&debug=1",
+  );
+  const spaced = placeSearch({}, { workspace: "operate", pipelineId: "a b" });
+  assert.deepEqual(placeFromSearch(parseSearch(stringifySearch(spaced))), {
+    workspace: "operate",
+    pipelineId: "a b",
+  });
+  assert.equal(
+    stringifySearch(
+      placeSearch({ p: "", debug: "1" }, { workspace: "fleet", pipelineId: null }),
+    ),
     "?w=fleet&debug=1",
   );
-  const search = placeSearch("", { workspace: "operate", pipelineId: "a b" });
-  assert.deepEqual(parsePlace(search), { workspace: "operate", pipelineId: "a b" });
+  assert.equal(stringifySearch({}), "");
 });

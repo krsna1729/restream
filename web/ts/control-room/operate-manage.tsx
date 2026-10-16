@@ -24,8 +24,8 @@ import type {
 import type { ConfigPipeline, PipelineInput } from "../types.js";
 import { ConfirmDelete } from "./confirm.js";
 import { PipelineForm } from "./pipeline-form.js";
-import { go } from "./place-link.js";
 import { usePolled } from "./polled.js";
+import { useGo } from "./router.js";
 
 /** Recording and file ingest switches, the settings form and delete. */
 export function PipelineBar(props: {
@@ -36,7 +36,11 @@ export function PipelineBar(props: {
   onChanged: () => void;
 }) {
   const { pipeline } = props;
-  const summary = usePolled<PipelineSummarySnapshot>(() => getPipelineSummary(pipeline.id));
+  const go = useGo();
+  const summary = usePolled<PipelineSummarySnapshot>(
+    ["pipeline-summary", pipeline.id],
+    () => getPipelineSummary(pipeline.id),
+  );
   const recording = summary.value?.recording ?? null;
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -116,7 +120,10 @@ function FileSwitch(props: {
   busy: boolean;
   act: (action: () => Promise<unknown>, after: () => void) => Promise<void>;
 }) {
-  const state = usePolled<PipelineFileIngestConfig>(() => getPipelineFileIngest(props.pipelineId));
+  const state = usePolled<PipelineFileIngestConfig>(
+    ["pipeline-file-ingest", props.pipelineId],
+    () => getPipelineFileIngest(props.pipelineId),
+  );
   const file = state.value;
   const fileId = file?.configured ? file.id : undefined;
   if (!file || !fileId) return null;
