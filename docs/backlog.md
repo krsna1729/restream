@@ -553,3 +553,57 @@ items).
 - Gates: an `ffmpeg -hls_segment_type fmp4` end-to-end test with an HEVC
   input in `tests/hls_push_ingest.rs`; a unit test for the `hvcC` parser.
 - Status: open (Filed: 2026-10-16 by claude).
+
+### Q-074 [performance] [opus] HLS ingest poll latency grows faster than the session count
+- Goal: one HLS ingest session's poll stays bounded, so the shared MEDIA
+  executor cannot be held by it as sessions multiply.
+- Sources: the `hls-push-duty` harness mode with release binaries
+  (`target/qual-release`, master 1891c876), 2 RTMP base publishers plus M
+  HLS push sessions, 60 s, 6-vCPU host, one run per arm:
+  - M=0: `hlsIngest` idle; executor queue latency 0 samples.
+  - M=4: busy 619 ms, 6420 polls, `maxPollUs` 5259; queue latency max 225 µs.
+  - M=8: busy 1689 ms (2.7x for 2x sessions), 13006 polls, `maxPollUs`
+    30892; queue latency max 841 µs.
+  The RTMP egress counters stayed at zero in every arm (resync, feed lag,
+  stalls, overflows, budget, ring drops, TX failures) and base delivery was
+  flat (59.0 / 59.0 / 58.9 video per second), so nothing was visibly starved
+  at this load — but a 31 ms single poll on a shared executor is the shape
+  the placement rule exists to prevent, and it is the number that scales.
+- A poll publishes at most one `PUBLISH_CHUNK_BYTES` (64 KiB) chunk, and the
+  publisher bench measures that path at 2.13 GiB/s (~30 µs), so the time is
+  not the demux. Candidate: whatever the session's `select!` turn does
+  besides one chunk — the due-release burst, `take_probe`'s engine hop, the
+  ring push's backpressure, or the outbox drain. Instrument the turn to find
+  it, then bound it (a unit or time budget per poll, or a yield between
+  units).
+- Gates: the same three arms with `maxPollUs` flat between M=4 and M=8, on
+  release binaries, numbers in the commit message; a unit test for whatever
+  bound is added.
+- Status: open (Filed: 2026-10-16 by claude, from the HLS ingest isolation
+  measurement).
+
+### Q-075 [protocol] [opus] Multi-frame AAC reaches RTMP outputs as one FLV audio message
+- Goal: one RTMP audio message carries exactly one AAC frame, whatever the
+  ingest path produced.
+- Sources: a TS-ingest `MediaPacket` is one PES, and a PES can carry several
+  ADTS frames (`adts_frame_count` exists for exactly that, used by the TS
+  muxer and the fMP4 packager). The RTMP egress does not split:
+  `encode_unit` makes one wire packet per `MediaPacket`
+  (`egress/backends/rtmp.rs`), and `audio_for_rtmp_into` calls
+  `strip_adts`, which removes only the first 7- or 9-byte header
+  (`codec/aac.rs`), leaving the later frames' ADTS headers inside the
+  payload.
+- Evidence: in the isolation measurement, the same fixture delivered 2890
+  audio messages per RTMP pipeline (one frame per message, 46.9/s) but 364
+  per HLS pipeline over the same window — about 7.7 ADTS frames per packet.
+  Video counts matched, so this is audio packaging, not loss. It is not
+  HLS-specific: any TS source (SRT, file, HLS) shares the path.
+- Change: split a multi-frame ADTS payload into per-frame messages in the
+  RTMP egress (or normalize at the TS demuxer, which would also give the
+  fMP4 packager one frame per packet). One decision, applied once.
+- Gates: a unit test that a payload with N ADTS frames becomes N FLV audio
+  messages each starting `0xAF 0x01` with one raw frame; the SRT-to-RTMP and
+  HLS-to-RTMP harness modes still deliver audio; a check that an RTMP
+  receiver's frame count matches the source's.
+- Status: open (Filed: 2026-10-16 by claude, from the HLS ingest isolation
+  measurement).
