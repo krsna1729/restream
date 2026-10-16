@@ -1538,6 +1538,8 @@ Some nodes carry `judgement`: whether the node limits the pipeline.
   and state, through the flow diagnosis the engine applies to its deepest
   shard: `limiting` when it is not `healthy`, when its queue is at 80% of its
   bound or more, or when it has not progressed for 1 s; otherwise `clear`.
+  A shard has no `pressured` tier: its 80% queue mark is already the
+  diagnosis's saturation point.
 - A fabric `egress` node takes the judgement of the shard it is placed on
   (`fabricFeed`, `shardId`), so a stalled sibling shard does not touch it.
   An output off the fabric has none.
