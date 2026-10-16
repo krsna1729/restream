@@ -241,6 +241,16 @@ test("a query string stays plain strings through the round trip", () => {
   // A name the object prototype also has stays an own parameter.
   assert.deepEqual(parseSearch("?toString=1"), { toString: "1" });
   assert.deepEqual(Object.keys(parseSearch("?__proto__=x")), ["__proto__"]);
+  // ...and survives a move to another place.
+  assert.equal(
+    stringifySearch(
+      placeSearch(parseSearch("?__proto__=x"), {
+        workspace: "fleet",
+        pipelineId: null,
+      }),
+    ),
+    "?w=fleet&__proto__=x",
+  );
   assert.equal(
     stringifySearch(
       placeSearch(parseSearch("?debug=1&p=123&w=operate"), {

@@ -71,10 +71,10 @@ export function placeSearch(
   search: Record<string, unknown>,
   place: Place,
 ): PlaceSearch {
-  const rest: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(search)) {
-    if (key !== "w" && key !== "p") rest[key] = value;
-  }
+  // fromEntries defines own properties, so `__proto__` stays a parameter.
+  const rest = Object.fromEntries(
+    Object.entries(search).filter(([key]) => key !== "w" && key !== "p"),
+  );
   return {
     w: place.workspace,
     ...(place.pipelineId === null ? {} : { p: place.pipelineId }),
