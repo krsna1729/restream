@@ -143,8 +143,10 @@ None open.
 
 `/` is the dashboard: one React root (`web/ts/control-room/main.tsx`) in
 `web/pages/index.html`, mounting a TanStack Router (`router.tsx`). The engine
-serves the same page for unknown paths, so a reload keeps the workspace in
-the URL (`?w=`).
+serves the same page for unknown paths, so the place is read from the query
+whatever path the page was served from (`/index.html?w=operate` included:
+the router matches its root route there) and a link from there canonicalises
+to `/`.
 
 - Data: one store (`web/ts/control-room/store.ts`) for what is pushed or
   sampled for the whole page, plus TanStack Query for the per-view polls

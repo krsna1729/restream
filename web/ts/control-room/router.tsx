@@ -1,13 +1,13 @@
-// The control room's router: one route whose search is the place (route.ts),
-// so reload, back/forward and shared links land on the same view. TanStack
-// Router owns history and link clicks; `usePlace`, `PlaceLink` and `useGo`
-// keep the app's own vocabulary for it. `createControlRoomRouter` takes the
-// root component, so this module does not import the app that imports it.
+// The control room's router: one route, the root, whose search is the place
+// (route.ts), so reload, back/forward and shared links land on the same view
+// on any path the engine serves the page from. TanStack Router owns history
+// and link clicks; `usePlace`, `PlaceLink` and `useGo` keep the app's own
+// vocabulary for it. `createControlRoomRouter` takes the root component, so
+// this module does not import the app that imports it.
 
 import {
   Link,
   createRootRoute,
-  createRoute,
   createRouter,
   useNavigate,
   useSearch,
@@ -25,15 +25,16 @@ import type { Place, PlaceSearch } from "./route.js";
 
 /** The control room's router over `root`, which renders the app. */
 export function createControlRoomRouter(root: () => ReactNode) {
-  const rootRoute = createRootRoute({ component: root });
-  const placeRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: "/",
+  // The search lives on the root route, which matches every path: the engine
+  // serves the page for unknown paths, so a stale deep link
+  // (`/index.html?w=operate`) must still render the workspace it names.
+  const rootRoute = createRootRoute({
+    component: root,
     validateSearch: (search: Record<string, unknown>): PlaceSearch =>
       placeSearch(search, placeFromSearch(search)),
   });
   return createRouter({
-    routeTree: rootRoute.addChildren([placeRoute]),
+    routeTree: rootRoute,
     basepath: getBasePath() || "/",
     parseSearch,
     stringifySearch,
@@ -48,7 +49,7 @@ declare module "@tanstack/react-router" {
 
 /** The place the URL names. */
 export function usePlace(): Place {
-  return placeFromSearch(useSearch({ from: "/" }));
+  return placeFromSearch(useSearch({ from: "__root__" }));
 }
 
 /** A link to a place: a real href, and the router handles the click. */

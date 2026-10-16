@@ -4,7 +4,6 @@
 
 import { useQuery } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
-import { useRef } from "react";
 
 import { formatAge } from "./format.js";
 import { SAMPLE_INTERVAL_MS, SAMPLE_STALE_AFTER_MS, useNow } from "./store.js";
@@ -17,6 +16,9 @@ export interface Polled<T> {
   readonly staleAfterMs: number;
   readonly refresh: () => void;
 }
+
+/** A load that read nothing: no value to show, not a failure to report. */
+export class NoValue extends Error {}
 
 /**
  * `queryKey` names the subject; `load` runs now and every `intervalMs` while
@@ -31,22 +33,19 @@ export function usePolled<T>(
 ): Polled<T> {
   const query = useQuery({
     queryKey,
-    queryFn: load,
+    queryFn: async () => {
+      const next = await load();
+      if (next === null) throw new NoValue();
+      return next;
+    },
     refetchInterval: intervalMs,
   });
-  // A null load keeps the last value and its age; a new subject starts from
-  // nothing, so one pipeline's data never shows under another's name.
-  const key = JSON.stringify(queryKey);
-  const kept = useRef<{ key: string; value: T; atMs: number } | null>(null);
-  if (query.data !== null && query.data !== undefined) {
-    kept.current = { key, value: query.data, atMs: query.dataUpdatedAt };
-  } else if (kept.current !== null && kept.current.key !== key) {
-    kept.current = null;
-  }
-  const value = kept.current?.value ?? null;
+  // The query keeps its data when a load fails, so an empty read leaves the
+  // last value and its age in place; a new subject starts with no data.
+  const value = query.data ?? null;
   return {
     value,
-    atMs: value === null ? null : (kept.current?.atMs ?? null),
+    atMs: value === null ? null : query.dataUpdatedAt,
     staleAfterMs: intervalMs * (SAMPLE_STALE_AFTER_MS / SAMPLE_INTERVAL_MS),
     refresh: () => void query.refetch(),
   };
