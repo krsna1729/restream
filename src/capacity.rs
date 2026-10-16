@@ -472,7 +472,7 @@ impl MediaEngine {
             .map(|(pipeline_id, ingest)| {
                 let bps = MediaEngine::sample_ingest_bitrate_kbps(ingest)
                     .map_or(0.0, |rate| (rate * 1_000.0).max(0.0));
-                let pps = ingest.metrics.snapshot().packets_per_sec as f64;
+                let pps = ingest.metrics.snapshot().packets_per_sec;
                 (pipeline_id.clone(), IngestRate { bps, pps })
             })
             .collect()
