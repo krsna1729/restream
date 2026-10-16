@@ -250,11 +250,19 @@ impl Session {
     /// Forget the init a map holds. A *refused* init upload must leave
     /// nothing behind: otherwise the map keeps the previous run's init and
     /// the encoder's next segments are demuxed with it (an encoder never
-    /// reads the refusal).
+    /// reads the refusal). The seed goes too: a map recreated later (a
+    /// variant switch, an evicted entry) must not take the stale init again.
     pub(super) fn void_map(&mut self, uri: &str) {
         if let Some(map) = self.maps.iter_mut().find(|map| map.uri == uri) {
             map.pending = None;
             map.delivered = None;
+        }
+        if self
+            .seeded
+            .as_ref()
+            .is_some_and(|(seeded, _)| seeded == uri)
+        {
+            self.seeded = None;
         }
     }
 

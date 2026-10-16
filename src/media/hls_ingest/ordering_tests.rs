@@ -499,6 +499,57 @@ fn a_segment_needs_only_the_map_it_was_listed_under() {
     );
 }
 
+/// A voided map does not take the seed again when it is recreated: the
+/// stale init cannot come back through a variant switch or an evicted entry.
+#[test]
+fn a_recreated_map_does_not_take_the_voided_seed_again() {
+    let t0 = Instant::now();
+    let mut session = Session::new(limits());
+    session.seed_init("init.mp4", Bytes::from_static(b"stale init"));
+    let master = |bandwidth| {
+        Playlist::Master(MasterPlaylist {
+            variants: vec![Variant {
+                bandwidth,
+                path: format!("v{bandwidth}/index.m3u8"),
+            }],
+        })
+    };
+    session.on_playlist("master.m3u8", master(800_000), t0);
+    session.on_playlist(
+        "v800000/index.m3u8",
+        with_map(media("v800000/", 0, 1, false), "init.mp4"),
+        t0,
+    );
+    assert!(
+        session.init_ready(Some("init.mp4")),
+        "the seed is delivered"
+    );
+
+    // A refused init upload voids the map...
+    session.void_map("init.mp4");
+    // ...and a variant switch forgets it entirely; the same URI comes back
+    // with the new variant's playlist.
+    session.on_playlist("master.m3u8", master(2_500_000), t0);
+    session.on_playlist(
+        "v2500000/index.m3u8",
+        with_map(media("v2500000/", 0, 1, false), "init.mp4"),
+        t0,
+    );
+    assert_eq!(
+        seg(&mut session, "v2500000/index0.ts", t0),
+        SegmentOutcome::Attached
+    );
+    assert!(
+        released_with_init(&mut session, t0).is_empty(),
+        "the recreated map must wait for a real init"
+    );
+    assert!(
+        released_with_init(&mut session, t0 + TARGET).is_empty(),
+        "and the stale seed must not come back"
+    );
+    assert_eq!(session.counters().skipped, 1);
+}
+
 /// A variant switch forgets the map of the variant it leaves: the new
 /// variant's first fMP4 segment is normally uploaded before its playlist,
 /// and the old variant's map must not refuse it as "no EXT-X-MAP".

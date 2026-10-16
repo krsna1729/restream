@@ -691,7 +691,15 @@ keeps the container it started with.
     evicting the oldest first, so it stays inside the ingest's accounting: a
     single init larger than the whole bound is kept alone. The entry goes
     when `EXT-X-ENDLIST` ends the run, or when an init upload for that key
-    is refused.
+    is refused (which also voids the map's init, and the seed a later session
+    would take from it).
+  - **Known limit.** The two rules above cover an init the ingest *refused*.
+    An init *lost* on the way (an unread `503` or `408`, a reset) under the
+    same `EXT-X-MAP` URI is not visible to the ingest, and a run whose audio
+    settings changed then gets ADTS headers built from the stale
+    AudioSpecificConfig. Video is not affected in practice: FFmpeg carries
+    SPS/PPS in band, and a stale `avcC` is only injected into a keyframe that
+    lacks one.
 - **Discontinuities.** A new epoch starts on an encoder restart inside the
   idle window (the media sequence or the segment names go back) and on
   `EXT-X-DISCONTINUITY`. The next segment is demuxed from scratch, and its
@@ -720,11 +728,10 @@ keeps the container it started with.
   cannot come and are skipped.
 - **A segment that cannot be demuxed.** A rejection while publishing an
   already-answered segment — a truncated access unit, a sample that runs past
-  its fragment, a decode failure — drops that segment: the session counts it,
-  logs the reason once, discards everything that segment produced (packets
-  from its earlier fragments were never paced against the session's chunks,
-  so they are not published either), re-anchors the timeline for the next
-  segment, and keeps publishing. Only a session that no longer has a
+  its fragment, a decode failure — drops that segment whole: the session
+  counts it, logs the reason once, discards whatever the segment had already
+  demuxed (a segment is either published or not), re-anchors the timeline for
+  the next segment, and keeps publishing. Only a session that no longer has a
   demuxer at all (its publisher failed to open) ends failed; the engine
   survives either way, and the encoder's next object starts a fresh session
   if the session does end.
