@@ -166,7 +166,24 @@ pub fn build_adts_header(frame_len: usize, sample_rate: u32, channels: u32) -> O
         8000 => 11,
         _ => 3,
     };
-    let chan_cfg = channels.min(7) as u8;
+    build_adts_header_for(frame_len, 2, freq_idx, channels.min(7) as u8)
+}
+
+/// Build a 7-byte ADTS header from an AudioSpecificConfig's fields: MPEG-4
+/// audio object type (1..=4, the ones ADTS's 2-bit profile can carry),
+/// sampling-frequency index (0..=12) and channel configuration (0..=7).
+/// `None` for a field ADTS cannot express, or a frame over
+/// [`MAX_ADTS_PAYLOAD`].
+pub fn build_adts_header_for(
+    frame_len: usize,
+    object_type: u8,
+    freq_idx: u8,
+    chan_cfg: u8,
+) -> Option<[u8; 7]> {
+    if !(1..=4).contains(&object_type) || freq_idx > 12 || chan_cfg > 7 {
+        return None;
+    }
+    let profile = object_type.saturating_sub(1);
     let total_len = u16::try_from(frame_len)
         .ok()
         .and_then(|len| len.checked_add(7))
@@ -175,7 +192,7 @@ pub fn build_adts_header(frame_len: usize, sample_rate: u32, channels: u32) -> O
     Some([
         0xFF,
         0xF1,                                                // MPEG-4, Layer 0, no CRC
-        (1 << 6) | (freq_idx << 2) | (chan_cfg >> 2),        // AAC-LC profile
+        (profile << 6) | (freq_idx << 2) | (chan_cfg >> 2),  // profile = object type - 1
         ((chan_cfg & 0x03) << 6) | ((len_high >> 3) & 0x03), // length bits 12..11
         (len_high << 5) | (len_low >> 3),                    // length bits 10..3
         ((len_low & 0x07) << 5) | 0x1F,                      // length bits 2..0

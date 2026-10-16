@@ -179,7 +179,7 @@ impl HlsIngest {
                 .ok_or(BodyError::TooLarge)
         })?;
         let key = self.key_state(input_id);
-        let segment = (kind == ObjectKind::Segment).then(|| SegmentShare {
+        let segment = (kind != ObjectKind::Playlist).then(|| SegmentShare {
             share: key.share.clone(),
             lock: key.share_lock.clone(),
             growing: None,
@@ -298,6 +298,7 @@ impl HlsIngest {
                 hold_bytes: self.limits.hold_bytes,
                 idle_floor: self.limits.idle_floor,
             },
+            max_init_bytes: self.limits.max_init_bytes,
         };
         tokio::spawn(Arc::clone(self).supervise(context, receiver));
         Ok((attempt_id, objects))
@@ -407,7 +408,7 @@ mod tests {
             },
         );
         let mut body = ingest
-            .object_body(ObjectKind::Segment, None, INPUT_ID)
+            .object_body(ObjectKind::TsSegment, None, INPUT_ID)
             .await
             .unwrap();
         body.push(b"segment").await.unwrap();
@@ -417,7 +418,7 @@ mod tests {
                 &authenticated(),
                 STREAM_KEY,
                 "127.0.0.1:9",
-                ObjectKind::Segment,
+                ObjectKind::TsSegment,
                 "index0.ts".to_string(),
                 body,
             )
@@ -482,7 +483,7 @@ mod tests {
         let segment = fixture();
         let playlist = "#EXTM3U\n#EXT-X-TARGETDURATION:8\n#EXTINF:8.0,\nindex0.ts\n";
         assert_eq!(
-            send(&ingest, ObjectKind::Segment, "index0.ts", &segment).await,
+            send(&ingest, ObjectKind::TsSegment, "index0.ts", &segment).await,
             ObjectOutcome::Held
         );
         assert_eq!(
@@ -499,7 +500,7 @@ mod tests {
         // index0 (6.7 MB) publishes over 8 s and holds most of the 8 MB share.
         let started = std::time::Instant::now();
         let mut next = ingest
-            .object_body(ObjectKind::Segment, None, INPUT_ID)
+            .object_body(ObjectKind::TsSegment, None, INPUT_ID)
             .await
             .unwrap();
         let throttled = tokio::spawn(async move {
@@ -519,7 +520,7 @@ mod tests {
             send_to(
                 &ingest,
                 &other,
-                ObjectKind::Segment,
+                ObjectKind::TsSegment,
                 "index0.ts",
                 other_segment
             )
@@ -572,13 +573,13 @@ mod tests {
             ..HlsIngestLimits::default()
         });
         let mut first = ingest
-            .object_body(ObjectKind::Segment, None, INPUT_ID)
+            .object_body(ObjectKind::TsSegment, None, INPUT_ID)
             .await
             .unwrap();
         first.push(&[0x47; 1024]).await.unwrap();
 
         let mut second = ingest
-            .object_body(ObjectKind::Segment, None, INPUT_ID)
+            .object_body(ObjectKind::TsSegment, None, INPUT_ID)
             .await
             .unwrap();
         let waiting = tokio::spawn(async move {
@@ -625,7 +626,7 @@ mod tests {
             let path = format!("index{index}.ts");
             let bytes = &fixture[index * slice..end];
             assert_eq!(
-                send(&ingest, ObjectKind::Segment, &path, bytes).await,
+                send(&ingest, ObjectKind::TsSegment, &path, bytes).await,
                 ObjectOutcome::Held
             );
             playlist.push_str(&format!("#EXTINF:1.0,\n{path}\n"));
@@ -674,7 +675,7 @@ mod tests {
             "#EXTM3U\n#EXT-X-TARGETDURATION:8\n#EXTINF:8.0,\nindex0.ts\n#EXT-X-ENDLIST\n";
 
         assert_eq!(
-            send(&ingest, ObjectKind::Segment, "index0.ts", &segment).await,
+            send(&ingest, ObjectKind::TsSegment, "index0.ts", &segment).await,
             ObjectOutcome::Held
         );
         assert_eq!(
@@ -694,7 +695,7 @@ mod tests {
         assert_eq!(
             send(
                 &ingest,
-                ObjectKind::Segment,
+                ObjectKind::TsSegment,
                 "index1.ts",
                 &segment[..18_800]
             )

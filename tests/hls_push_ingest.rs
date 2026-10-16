@@ -1,7 +1,8 @@
 //! HLS push ingest end to end on a real HTTP server: FFmpeg pushes the
-//! checked-in TS fixture over PUT and over POST, and a raw client carries a
-//! whole stream over one persistent connection. Each run must publish the
-//! whole fixture, in order, and end its session on `EXT-X-ENDLIST`.
+//! checked-in TS fixture over PUT and over POST, as MPEG-TS and as fMP4
+//! segments, and a raw client carries a whole stream over one persistent
+//! connection. Each run must publish the whole fixture, in order, and end
+//! its session on `EXT-X-ENDLIST`.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -135,7 +136,10 @@ async fn assert_whole_fixture_published(server: &Server, ring: &RingBuffer, star
 /// reading the replies can lose its final objects; this test keeps that
 /// encoder limit out of the server's bar, and the persistent path is
 /// covered by `a_persistent_connection_carries_a_whole_stream`.
-async fn ffmpeg_push_reaches_the_ring(method: &str) {
+///
+/// `segment_args` selects the segment container; the binary is the one
+/// production resolves.
+async fn ffmpeg_push_reaches_the_ring(method: &str, segment_args: &[&str]) {
     let server = serve().await;
     let ring = server.engine.get_or_create_pipeline(PIPELINE_ID).await;
     let start = ring.get_write_idx();
@@ -143,7 +147,7 @@ async fn ffmpeg_push_reaches_the_ring(method: &str) {
         "http://{}/ingest/hls/{STREAM_KEY}/index.m3u8",
         server.address
     );
-    let status = tokio::process::Command::new("/usr/bin/ffmpeg")
+    let status = tokio::process::Command::new(restream::ffmpeg_binary::ffmpeg_bin_path())
         .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-i"])
         .arg(fixture_path())
         .args([
@@ -156,6 +160,7 @@ async fn ffmpeg_push_reaches_the_ring(method: &str) {
             "-hls_list_size",
             "3",
         ])
+        .args(segment_args)
         .args(["-hls_flags", "delete_segments", "-method", method])
         .args(["-http_persistent", "0"])
         .arg(url)
@@ -173,12 +178,23 @@ async fn ffmpeg_push_reaches_the_ring(method: &str) {
 
 #[tokio::test]
 async fn ffmpeg_hls_put_with_a_connection_per_object_reaches_the_ring() {
-    ffmpeg_push_reaches_the_ring("PUT").await;
+    ffmpeg_push_reaches_the_ring("PUT", &[]).await;
 }
 
 #[tokio::test]
 async fn ffmpeg_hls_post_with_a_connection_per_object_reaches_the_ring() {
-    ffmpeg_push_reaches_the_ring("POST").await;
+    ffmpeg_push_reaches_the_ring("POST", &[]).await;
+}
+
+/// FFmpeg's fMP4 HLS: `init.mp4` (named by `EXT-X-MAP`) ahead of
+/// `styp sidx moof mdat` segments, AAC as raw access units in the MP4.
+#[tokio::test]
+async fn ffmpeg_hls_fmp4_segments_reach_the_ring() {
+    ffmpeg_push_reaches_the_ring(
+        "PUT",
+        &["-hls_segment_type", "fmp4", "-bsf:a", "aac_adtstoasc"],
+    )
+    .await;
 }
 
 /// Send one PUT on `stream` and read its whole reply; returns the status.

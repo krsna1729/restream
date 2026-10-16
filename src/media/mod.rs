@@ -63,10 +63,10 @@ pub mod standby_gop;
 pub mod startup_policy;
 
 pub mod ffmpeg;
+pub mod ingest_publisher;
 pub mod tcp_stats;
 pub mod timing;
 pub mod ts_chunk_ring;
-pub mod ts_publisher;
 pub mod uring_capabilities;
 
 use ring_buffer::MEDIA_PULL_BURST_PACKETS;

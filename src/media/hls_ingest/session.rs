@@ -1,6 +1,11 @@
 //! One stream key's HLS push session on the MEDIA executor: applies objects
 //! to the ordering state and replies at once; publishes what it releases,
 //! paced to media time, between objects.
+//!
+//! The first media object fixes the session's container (MPEG-TS or fMP4);
+//! an object of the other container is refused. fMP4 objects are checked
+//! here, before their reply: an init against its bound and the codec scope,
+//! a media segment against the box walk.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -17,8 +22,12 @@ use super::pacing::Pacer;
 use super::playlist;
 use super::{ObjectKind, ObjectOutcome};
 use crate::media::engine::{IngestRegistration, MediaEngine};
+use crate::media::ingest_publisher::fmp4::{Fmp4Demux, boxes};
+use crate::media::ingest_publisher::{
+    Container, IngestTimestamps, MediaRejection, PUBLISH_CHUNK_BYTES, PublishTarget,
+    SegmentPublisher,
+};
 use crate::media::ring_buffer::RingBuffer;
-use crate::media::ts_publisher::{PUBLISH_CHUNK_BYTES, TsPublishTarget, TsPublisher, TsTimestamps};
 
 /// One uploaded object handed from the HTTP handler to its session.
 pub(super) struct HlsObject {
@@ -36,6 +45,8 @@ pub(super) struct SessionContext {
     /// Where the session publishes its pacing lead for the body deadline.
     pub(super) lead_ms: Arc<AtomicU64>,
     pub(super) limits: SessionLimits,
+    /// Bound on an fMP4 init segment.
+    pub(super) max_init_bytes: usize,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -53,8 +64,9 @@ pub(super) async fn run(
 ) -> (SessionEnd, Counters) {
     let cancel = context.registration.cancel_token.clone();
     let outbox_limit = context.limits.hold_bytes;
+    let max_init_bytes = context.max_init_bytes;
     let mut session = Session::new(context.limits);
-    let end = match TsPublishTarget::open(
+    let end = match PublishTarget::open(
         context.engine,
         context.pipeline_id,
         context.registration,
@@ -63,14 +75,20 @@ pub(super) async fn run(
     .await
     {
         Ok(target) => {
-            let mut outbox = Outbox::default();
+            let mut state = Publishing {
+                outbox: Outbox::default(),
+                outbox_limit,
+                max_init_bytes,
+                container: None,
+                publisher: None,
+                pacer: Pacer::default(),
+            };
             drive(
                 &mut session,
                 &target,
                 &cancel,
                 &mut objects,
-                &mut outbox,
-                outbox_limit,
+                &mut state,
                 &context.lead_ms,
             )
             .await
@@ -112,26 +130,43 @@ impl Outbox {
     }
 }
 
+/// What publishing needs besides the ordering state.
+struct Publishing {
+    outbox: Outbox,
+    outbox_limit: usize,
+    max_init_bytes: usize,
+    /// Fixed by the first accepted media object.
+    container: Option<Container>,
+    /// Built with the container.
+    publisher: Option<SegmentPublisher>,
+    pacer: Pacer,
+}
+
 async fn drive(
     session: &mut Session,
-    target: &TsPublishTarget,
+    target: &PublishTarget,
     cancel: &CancellationToken,
     objects: &mut mpsc::Receiver<HlsObject>,
-    outbox: &mut Outbox,
-    outbox_limit: usize,
+    state: &mut Publishing,
     lead_ms: &AtomicU64,
 ) -> SessionEnd {
-    let mut publisher = TsPublisher::new(TsTimestamps::default());
-    let mut pacer = Pacer::default();
     let mut releases: Vec<Release> = Vec::new();
     let mut last_activity = Instant::now();
 
     loop {
         let now = Instant::now();
-        let publish_at = (!outbox.is_empty())
-            .then(|| now + pacer.delay(now, publisher.media_time_ms(), session.pacing_lead()));
+        let publish_at = state
+            .publisher
+            .as_ref()
+            .filter(|_| !state.outbox.is_empty())
+            .map(|publisher| {
+                now + state
+                    .pacer
+                    .delay(now, publisher.media_time_ms(), session.pacing_lead())
+            });
         // Idle counts only once everything released has been published.
-        let idle_at = outbox
+        let idle_at = state
+            .outbox
             .is_empty()
             .then(|| last_activity + session.idle_timeout());
         let wake_at = match (session.next_deadline(), idle_at) {
@@ -142,7 +177,8 @@ async fn drive(
         // through its upload slots, its next uploads) once two target
         // durations of media, or a hold's worth of bytes, wait to publish.
         let lead = session.pacing_lead();
-        let accepting = outbox.media < lead.saturating_mul(2) && outbox.bytes <= outbox_limit;
+        let accepting =
+            state.outbox.media < lead.saturating_mul(2) && state.outbox.bytes <= state.outbox_limit;
         tokio::select! {
             biased;
             _ = cancel.cancelled() => return SessionEnd::Cancelled,
@@ -151,18 +187,22 @@ async fn drive(
                 // registered, so a closed queue means it was forgotten.
                 let Some(object) = object else { return SessionEnd::Cancelled };
                 last_activity = Instant::now();
-                let outcome = apply(session, object.kind, object.path, object.payload, last_activity);
+                let outcome = apply(session, state, object.kind, object.path, object.payload, last_activity);
                 let _ = object.reply.send(outcome);
                 let lead = u64::try_from(session.pacing_lead().as_millis()).unwrap_or(u64::MAX);
                 lead_ms.store(lead, Ordering::Relaxed);
             }
             _ = sleep_until(publish_at) => {
-                publish_next_chunk(&mut publisher, &mut pacer, target, outbox).await;
+                if let Err(error) = publish_next_chunk(state, target).await {
+                    return SessionEnd::Failed(error);
+                }
                 last_activity = Instant::now();
             }
             _ = sleep_until(wake_at) => {
                 if idle_at.is_some_and(|idle| Instant::now() >= idle) {
-                    publisher.flush(target);
+                    if let Some(publisher) = state.publisher.as_mut() {
+                        publisher.flush(target);
+                    }
                     return SessionEnd::Idle;
                 }
             }
@@ -174,12 +214,15 @@ async fn drive(
                 sequence = release.sequence,
                 epoch = release.epoch,
                 discontinuity = release.discontinuity,
+                init = release.init.is_some(),
                 "hls ingest segment released"
             );
-            outbox.push(release);
+            state.outbox.push(release);
         }
-        if session.finished() && outbox.is_empty() {
-            publisher.flush(target);
+        if session.finished() && state.outbox.is_empty() {
+            if let Some(publisher) = state.publisher.as_mut() {
+                publisher.flush(target);
+            }
             return SessionEnd::Ended;
         }
     }
@@ -192,53 +235,143 @@ async fn sleep_until(at: Option<Instant>) {
     }
 }
 
-/// Publish at most one chunk of the outbox's first release.
-async fn publish_next_chunk(
-    publisher: &mut TsPublisher,
-    pacer: &mut Pacer,
-    target: &TsPublishTarget,
-    outbox: &mut Outbox,
-) {
-    let Some(release) = outbox.releases.front() else {
-        return;
+/// Publish at most one chunk of the outbox's first release. A release that
+/// starts applies its discontinuity and its init first; one that ends
+/// closes its object. An error ends the session: the object was answered
+/// when it arrived.
+async fn publish_next_chunk(state: &mut Publishing, target: &PublishTarget) -> Result<(), String> {
+    let Publishing {
+        outbox,
+        publisher,
+        pacer,
+        max_init_bytes,
+        ..
+    } = state;
+    let (Some(release), Some(publisher)) = (outbox.releases.front(), publisher.as_mut()) else {
+        return Ok(());
     };
-    if outbox.offset == 0 && release.discontinuity {
-        publisher.discontinuity(target);
-        pacer.reset();
-    }
+    let failed = |error: MediaRejection| format!("segment {}: {error}", release.sequence);
     let bytes = &release.payload.bytes;
+    if outbox.offset == 0 {
+        if release.discontinuity {
+            publisher.discontinuity(target);
+            pacer.reset();
+        }
+        if let Some(init) = &release.init {
+            publisher
+                .apply_init(target, &init.bytes, *max_init_bytes)
+                .await
+                .map_err(|error| format!("init segment: {error}"))?;
+        }
+        publisher.begin_object(bytes).map_err(failed)?;
+    }
     let end = bytes.len().min(outbox.offset + PUBLISH_CHUNK_BYTES);
-    publisher.publish(target, &bytes[outbox.offset..end]).await;
+    publisher
+        .publish(target, &bytes[outbox.offset..end])
+        .await
+        .map_err(failed)?;
     if end < bytes.len() {
         outbox.offset = end;
-    } else {
-        outbox.offset = 0;
-        outbox.bytes -= bytes.len();
-        outbox.media = outbox.media.saturating_sub(release.duration);
-        // Dropping the release returns its bytes to the global budget.
-        outbox.releases.pop_front();
+        return Ok(());
     }
+    publisher.end_object(target).map_err(failed)?;
+    outbox.offset = 0;
+    outbox.bytes -= bytes.len();
+    outbox.media = outbox.media.saturating_sub(release.duration);
+    // Dropping the release returns its bytes to the global budget.
+    outbox.releases.pop_front();
+    Ok(())
 }
 
 fn apply(
     session: &mut Session,
+    state: &mut Publishing,
     kind: ObjectKind,
     path: String,
     payload: Payload,
     now: Instant,
 ) -> ObjectOutcome {
-    match kind {
-        ObjectKind::Segment => match session.on_segment(path, payload, now) {
-            SegmentOutcome::Held => ObjectOutcome::Held,
-            SegmentOutcome::Attached => ObjectOutcome::Stored,
-            SegmentOutcome::Duplicate | SegmentOutcome::OtherVariant => ObjectOutcome::Dropped,
-        },
-        ObjectKind::Playlist => match playlist::parse(&payload.bytes, &path) {
-            Ok(parsed) => match session.on_playlist(&path, parsed, now) {
-                PlaylistOutcome::Accepted => ObjectOutcome::Stored,
-                PlaylistOutcome::OtherVariant => ObjectOutcome::Dropped,
-            },
-            Err(error) => ObjectOutcome::Malformed(error.to_string()),
-        },
+    let container = match kind {
+        ObjectKind::Playlist => {
+            return match playlist::parse(&payload.bytes, &path) {
+                Ok(parsed) => match session.on_playlist(&path, parsed, now) {
+                    PlaylistOutcome::Accepted => ObjectOutcome::Stored,
+                    PlaylistOutcome::OtherVariant => ObjectOutcome::Dropped,
+                },
+                Err(error) => ObjectOutcome::Malformed(error.to_string()),
+            };
+        }
+        ObjectKind::TsSegment => Container::Ts,
+        ObjectKind::Fmp4 => Container::Fmp4,
+    };
+    if let Some(current) = state.container
+        && current != container
+    {
+        return ObjectOutcome::Unsupported(format!(
+            "this HLS ingest publishes {}; {} objects cannot join it",
+            container_name(current),
+            container_name(container)
+        ));
+    }
+    if container == Container::Fmp4
+        && let Err(rejection) = check_fmp4(
+            &payload.bytes,
+            &path,
+            session.map_uri(),
+            state.max_init_bytes,
+        )
+    {
+        return rejection.into();
+    }
+    if state.container.is_none() {
+        state.container = Some(container);
+        state.publisher = Some(SegmentPublisher::new(
+            container.demux(),
+            IngestTimestamps::default(),
+        ));
+    }
+    match session.on_segment(path, payload, now) {
+        SegmentOutcome::Held => ObjectOutcome::Held,
+        SegmentOutcome::Attached | SegmentOutcome::Init => ObjectOutcome::Stored,
+        SegmentOutcome::Duplicate | SegmentOutcome::OtherVariant => ObjectOutcome::Dropped,
+    }
+}
+
+fn container_name(container: Container) -> &'static str {
+    match container {
+        Container::Ts => "MPEG-TS",
+        Container::Fmp4 => "fMP4",
+    }
+}
+
+/// An fMP4 object before it is held: an init (a top-level `moov`) is
+/// checked against its bound and the codec scope, anything else must walk
+/// as a media segment. The current `EXT-X-MAP` object must be an init.
+fn check_fmp4(
+    bytes: &[u8],
+    path: &str,
+    map_uri: Option<&str>,
+    max_init_bytes: usize,
+) -> Result<(), MediaRejection> {
+    if boxes::is_init_segment(bytes) {
+        return Fmp4Demux::check_init(bytes, max_init_bytes);
+    }
+    if map_uri == Some(path) {
+        return Err(MediaRejection::Malformed(
+            "the EXT-X-MAP object is not an fMP4 init segment".to_string(),
+        ));
+    }
+    boxes::media_fragments(bytes, &mut Vec::new())
+        .map(|_| ())
+        .map_err(|error| MediaRejection::Malformed(error.to_string()))
+}
+
+impl From<MediaRejection> for ObjectOutcome {
+    fn from(rejection: MediaRejection) -> Self {
+        match rejection {
+            MediaRejection::Unsupported(reason) => Self::Unsupported(reason),
+            MediaRejection::Malformed(reason) => Self::Malformed(reason),
+            MediaRejection::TooLarge(reason) => Self::TooLarge(reason),
+        }
     }
 }

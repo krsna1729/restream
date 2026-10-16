@@ -2,10 +2,11 @@
 //! error out. Malformed input is an error, never a panic.
 //!
 //! It reads what ordering needs: `#EXTM3U`, `EXT-X-TARGETDURATION`,
-//! `EXT-X-MEDIA-SEQUENCE`, `EXTINF`, `EXT-X-DISCONTINUITY`, `EXT-X-ENDLIST`
-//! and master playlists (`EXT-X-STREAM-INF` with `BANDWIDTH`). Every other
-//! tag is ignored. URIs resolve against the playlist's own path; only
-//! relative URIs that stay inside the stream key's namespace are accepted.
+//! `EXT-X-MEDIA-SEQUENCE`, `EXTINF`, `EXT-X-DISCONTINUITY`, `EXT-X-MAP`,
+//! `EXT-X-ENDLIST` and master playlists (`EXT-X-STREAM-INF` with
+//! `BANDWIDTH`). Every other tag is ignored. URIs resolve against the
+//! playlist's own path; only relative URIs that stay inside the stream key's
+//! namespace are accepted.
 
 use std::fmt;
 use std::time::Duration;
@@ -25,6 +26,10 @@ pub struct MediaPlaylist {
     pub media_sequence: u64,
     pub segments: Vec<SegmentEntry>,
     pub ended: bool,
+    /// The current `EXT-X-MAP` init URI, resolved against the playlist
+    /// directory like a segment URI; the last `EXT-X-MAP` wins, because
+    /// that is the map the segments that follow it use.
+    pub map_uri: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,6 +124,7 @@ pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistErro
     let mut target_duration = None;
     let mut media_sequence = 0u64;
     let mut ended = false;
+    let mut map_uri = None;
     let mut pending_duration = None;
     let mut pending_discontinuity = false;
     let mut pending_bandwidth = None;
@@ -149,6 +155,12 @@ pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistErro
             pending_discontinuity = true;
         } else if line == "#EXT-X-ENDLIST" {
             ended = true;
+        } else if let Some(value) = line.strip_prefix("#EXT-X-MAP:") {
+            let uri = attribute(value, "URI").ok_or_else(|| invalid("EXT-X-MAP"))?;
+            map_uri = Some(
+                resolve_uri(playlist_path, uri)
+                    .ok_or(PlaylistError::InvalidUri { line: line_number })?,
+            );
         } else if let Some(attributes) = line.strip_prefix("#EXT-X-STREAM-INF:") {
             let bandwidth = attribute(attributes, "BANDWIDTH")
                 .and_then(|value| value.parse().ok())
@@ -199,6 +211,7 @@ pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistErro
         media_sequence,
         segments,
         ended,
+        map_uri,
     }))
 }
 
@@ -328,6 +341,50 @@ mod tests {
     }
 
     #[test]
+    fn map_tag_resolves_the_init_uri_against_the_playlist_directory() {
+        let playlist = media(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MAP:URI=\"init.mp4\"\n\
+             #EXTINF:2,\nindex7.ts\n",
+        );
+        assert_eq!(playlist.map_uri.as_deref(), Some("live/init.mp4"));
+
+        let playlist = media("#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nindex7.ts\n");
+        assert_eq!(playlist.map_uri, None);
+    }
+
+    #[test]
+    fn later_map_tag_overwrites_an_earlier_one() {
+        let playlist = media(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MAP:URI=\"a/init.mp4\"\n\
+             #EXTINF:2,\nindex7.ts\n#EXT-X-MAP:URI=\"b/init2.mp4\"\n#EXTINF:2,\nindex8.ts\n",
+        );
+        assert_eq!(playlist.map_uri.as_deref(), Some("live/b/init2.mp4"));
+    }
+
+    #[test]
+    fn malformed_map_tags_are_errors() {
+        assert_eq!(
+            parse(
+                b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MAP:BYTERANGE=\"100@200\"\n\
+                  #EXTINF:2,\nindex7.ts\n",
+                "live/index.m3u8"
+            ),
+            Err(PlaylistError::InvalidTag {
+                line: 3,
+                tag: "EXT-X-MAP",
+            })
+        );
+        assert_eq!(
+            parse(
+                b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MAP:URI=\"../../init.mp4\"\n\
+                  #EXTINF:2,\nindex7.ts\n",
+                "live/index.m3u8"
+            ),
+            Err(PlaylistError::InvalidUri { line: 3 })
+        );
+    }
+
+    #[test]
     fn malformed_playlists_are_errors() {
         let path = "index.m3u8";
         let cases: [(&[u8], PlaylistError); 9] = [
@@ -415,6 +472,7 @@ mod tests {
                     Just("#EXT-X-DISCONTINUITY".to_string()),
                     Just("#EXT-X-ENDLIST".to_string()),
                     "#EXT-X-STREAM-INF:[A-Z=0-9,\"]{0,24}",
+                    "#EXT-X-MAP:[A-Z=0-9,\"]{0,24}",
                     "[./a-z0-9?#]{0,12}",
                 ],
                 0..40,

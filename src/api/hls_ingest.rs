@@ -60,7 +60,7 @@ pub async fn hls_ingest_handler(
     let Some(kind) = ObjectKind::of(&path) else {
         return (
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "only .m3u8 playlists and MPEG-TS .ts segments are ingested",
+            "only .m3u8 playlists, MPEG-TS .ts segments and fMP4 .mp4/.m4s objects are ingested",
         )
             .into_response();
     };
@@ -126,6 +126,12 @@ pub async fn hls_ingest_handler(
         Ok(Ok(ObjectOutcome::Stored | ObjectOutcome::Dropped)) => StatusCode::OK.into_response(),
         Ok(Ok(ObjectOutcome::Held)) => StatusCode::ACCEPTED.into_response(),
         Ok(Ok(ObjectOutcome::Malformed(error))) => (StatusCode::BAD_REQUEST, error).into_response(),
+        Ok(Ok(ObjectOutcome::Unsupported(error))) => {
+            (StatusCode::UNSUPPORTED_MEDIA_TYPE, error).into_response()
+        }
+        Ok(Ok(ObjectOutcome::TooLarge(error))) => {
+            (StatusCode::PAYLOAD_TOO_LARGE, error).into_response()
+        }
         Ok(Err(DispatchError::PublisherActive)) => (
             StatusCode::CONFLICT,
             "input already has an active publisher",

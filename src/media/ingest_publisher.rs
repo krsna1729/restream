@@ -1,15 +1,22 @@
-//! MPEG-TS bytes to a pipeline ring, shared by every ingest whose source is
-//! a TS byte stream (file ingest's FFmpeg pipe, HLS push segments).
+//! One source's media bytes to a pipeline ring, shared by every ingest whose
+//! source is a byte stream: file ingest's FFmpeg pipe (MPEG-TS) and HLS push
+//! (MPEG-TS or fragmented MP4).
+//!
+//! The container lives behind [`SegmentDemux`]; continuity, preview, the input
+//! gate, promotion, parameter sets, ring push and the counters are one core
+//! for both.
 //!
 //! Runs on the MEDIA executor. Each `publish` call takes one bounded chunk
 //! (at most 64 KiB), forwards what it completes, and yields, so a source that
 //! is always ready cannot monopolize a shared media worker.
 
 mod continuity;
+pub mod fmp4;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use bytes::Bytes;
 use continuity::ContinuousTimestampState;
 
 use crate::media::engine::{IngestRegistration, MediaEngine};
@@ -19,11 +26,129 @@ use crate::media::packet::{MediaPacket, MediaType};
 use crate::media::ring_buffer::{MEDIA_PRODUCER_BATCH_PACKETS, RingBuffer};
 use crate::media::stage_metrics::StageMetrics;
 
-/// Largest chunk a caller should hand to [`TsPublisher::publish`] at once.
+/// Largest chunk a caller should hand to [`SegmentPublisher::publish`] at once.
 pub const PUBLISH_CHUNK_BYTES: usize = 64 * 1024;
 
+/// The container one ingest publishes, decided by its first object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Container {
+    /// MPEG-TS (file ingest's pipe, HLS `.ts` segments).
+    Ts,
+    /// Fragmented MP4 objects (HLS `.mp4`/`.m4s`).
+    Fmp4,
+}
+
+impl Container {
+    /// A fresh demux for this container.
+    pub fn demux(self) -> Box<dyn SegmentDemux> {
+        match self {
+            Self::Ts => Box::new(TsDemux::default()),
+            Self::Fmp4 => Box::new(fmp4::Fmp4Demux::default()),
+        }
+    }
+}
+
+/// Why one step of a demux cannot be used. A session maps each variant to the
+/// response the object gets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MediaRejection {
+    /// The codec or feature is not implemented (`415`).
+    Unsupported(String),
+    /// The bytes are not a usable object (`400`).
+    Malformed(String),
+    /// The object is over its kind's bound (`413`).
+    TooLarge(String),
+}
+
+impl MediaRejection {
+    /// The reason, as it is reported to the encoder and the log.
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Unsupported(message) | Self::Malformed(message) | Self::TooLarge(message) => {
+                message
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for MediaRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+/// One segment container's demux. What differs between containers (init
+/// objects, object ends, discontinuities) is a method here, so the publisher
+/// core never inspects the bytes it carries.
+pub trait SegmentDemux: Send {
+    /// A new object starts; `object` is all of it. HLS objects arrive whole,
+    /// so a container that needs a whole object (fMP4) demuxes from this and
+    /// lets the chunks that follow pace the release. MPEG-TS ignores it.
+    fn begin_object(&mut self, _object: &Bytes) -> Result<(), MediaRejection> {
+        Ok(())
+    }
+
+    /// The next chunk of the current object (or of the stream) arrived:
+    /// demux what it completes.
+    fn feed(&mut self, chunk: &[u8]) -> Result<(), MediaRejection>;
+
+    /// Move demuxed packets into `out`; returns how many moved.
+    fn drain_into(&mut self, out: &mut Vec<MediaPacket>) -> usize;
+
+    /// The current object ended. A container that needs whole objects rejects
+    /// one that ends mid-box here; MPEG-TS is a continuous stream and does not.
+    fn end_object(&mut self) -> Result<(), MediaRejection>;
+
+    /// End of the stream: forward whatever the demux still holds.
+    fn flush(&mut self);
+
+    /// The next bytes start an unrelated stream.
+    fn discontinuity(&mut self);
+
+    /// Apply the playlist's `EXT-X-MAP` init object. MPEG-TS has none.
+    fn apply_init(&mut self, _bytes: &[u8], _max_bytes: usize) -> Result<(), MediaRejection> {
+        Err(MediaRejection::Unsupported(
+            "this ingest container has no init segment".to_string(),
+        ))
+    }
+
+    /// The one-time probe: codecs, tracks and parameter sets.
+    fn take_probe(&mut self) -> Option<DemuxProbe>;
+}
+
+/// MPEG-TS: the streaming demuxer every TS ingest already used.
+#[derive(Default)]
+pub struct TsDemux(TsDemuxer);
+
+impl SegmentDemux for TsDemux {
+    fn feed(&mut self, chunk: &[u8]) -> Result<(), MediaRejection> {
+        self.0.feed(chunk);
+        Ok(())
+    }
+
+    fn drain_into(&mut self, out: &mut Vec<MediaPacket>) -> usize {
+        self.0.drain_into(out)
+    }
+
+    fn end_object(&mut self) -> Result<(), MediaRejection> {
+        Ok(())
+    }
+
+    fn flush(&mut self) {
+        self.0.flush();
+    }
+
+    fn discontinuity(&mut self) {
+        self.0 = TsDemuxer::new();
+    }
+
+    fn take_probe(&mut self) -> Option<DemuxProbe> {
+        self.0.take_probe()
+    }
+}
+
 /// Where one registered ingest attempt publishes. Resolved once per attempt.
-pub struct TsPublishTarget {
+pub struct PublishTarget {
     engine: Arc<MediaEngine>,
     pipeline_id: String,
     registration: IngestRegistration,
@@ -34,7 +159,7 @@ pub struct TsPublishTarget {
     keyframe_times: Arc<std::sync::Mutex<Vec<i64>>>,
 }
 
-impl TsPublishTarget {
+impl PublishTarget {
     /// Resolve the attempt's counters; fails once the attempt is no longer
     /// the input's current session.
     pub async fn open(
@@ -74,25 +199,25 @@ impl TsPublishTarget {
 /// Timestamp state that outlives one source pass (file-ingest loops keep it
 /// across FFmpeg restarts so every stream keeps increasing).
 #[derive(Default)]
-pub struct TsTimestamps {
+pub struct IngestTimestamps {
     continuous: ContinuousTimestampState,
     promotion: InputTimestampMapper,
 }
 
 /// Demux and forwarding state for one ingest attempt.
-pub struct TsPublisher {
-    demuxer: TsDemuxer,
+pub struct SegmentPublisher {
+    demux: Box<dyn SegmentDemux>,
     packets: Vec<MediaPacket>,
     probe_sent: bool,
-    timestamps: TsTimestamps,
+    timestamps: IngestTimestamps,
     /// Highest continuity-adjusted DTS demuxed so far (milliseconds).
     media_time_ms: Option<i64>,
 }
 
-impl TsPublisher {
-    pub fn new(timestamps: TsTimestamps) -> Self {
+impl SegmentPublisher {
+    pub fn new(demux: Box<dyn SegmentDemux>, timestamps: IngestTimestamps) -> Self {
         Self {
-            demuxer: TsDemuxer::new(),
+            demux,
             packets: Vec::with_capacity(MEDIA_PRODUCER_BATCH_PACKETS),
             probe_sent: false,
             timestamps,
@@ -100,7 +225,7 @@ impl TsPublisher {
         }
     }
 
-    pub fn into_timestamps(self) -> TsTimestamps {
+    pub fn into_timestamps(self) -> IngestTimestamps {
         self.timestamps
     }
 
@@ -112,15 +237,14 @@ impl TsPublisher {
     }
 
     /// Demux one chunk, forward the packets it completes, count it, yield.
-    pub async fn publish(&mut self, target: &TsPublishTarget, chunk: &[u8]) {
-        self.demuxer.feed(chunk);
+    pub async fn publish(
+        &mut self,
+        target: &PublishTarget,
+        chunk: &[u8],
+    ) -> Result<(), MediaRejection> {
+        self.demux.feed(chunk)?;
         self.forward(target);
-        if !self.probe_sent
-            && let Some(probe) = self.demuxer.take_probe()
-        {
-            self.probe_sent = true;
-            record_probe(target, probe).await;
-        }
+        self.take_probe(target).await;
 
         let read = chunk.len() as u64;
         target.bytes_received.fetch_add(read, Ordering::Relaxed);
@@ -129,25 +253,68 @@ impl TsPublisher {
             .last_progress_ms
             .store(MediaEngine::now_epoch_ms(), Ordering::Relaxed);
         tokio::task::yield_now().await;
+        Ok(())
     }
 
-    /// End of the TS stream: forward the PES each stream still holds.
-    pub fn flush(&mut self, target: &TsPublishTarget) {
-        self.demuxer.flush();
+    /// A new object starts (an HLS segment); its chunks follow through
+    /// [`Self::publish`].
+    pub fn begin_object(&mut self, object: &Bytes) -> Result<(), MediaRejection> {
+        self.demux.begin_object(object)
+    }
+
+    /// The current object ended: forward what its last bytes completed.
+    pub fn end_object(&mut self, target: &PublishTarget) -> Result<(), MediaRejection> {
+        self.demux.end_object()?;
+        self.forward(target);
+        Ok(())
+    }
+
+    /// Apply the playlist's `EXT-X-MAP` init object: the tracks, codecs and
+    /// parameter sets every segment of that map is demuxed with. A different
+    /// init rebuilds the demuxer; the session flags the discontinuity.
+    pub async fn apply_init(
+        &mut self,
+        target: &PublishTarget,
+        bytes: &[u8],
+        max_bytes: usize,
+    ) -> Result<(), MediaRejection> {
+        self.demux.apply_init(bytes, max_bytes)?;
+        self.take_probe(target).await;
+        Ok(())
+    }
+
+    /// End of the stream: forward the PES each stream still holds.
+    pub fn flush(&mut self, target: &PublishTarget) {
+        self.demux.flush();
         self.forward(target);
     }
 
-    /// The next bytes start an unrelated TS stream (HLS discontinuity or an
-    /// encoder restart): finish the current one, demux the next from scratch,
-    /// and re-anchor its timestamps right after the last forwarded ones.
-    pub fn discontinuity(&mut self, target: &TsPublishTarget) {
+    /// The next bytes start an unrelated stream (HLS discontinuity or an
+    /// encoder restart): finish the current one and re-anchor its timestamps
+    /// right after the last forwarded ones. A container whose fragments are
+    /// anchored by their own `tfdt` keeps its init and needs no other reset.
+    pub fn discontinuity(&mut self, target: &PublishTarget) {
         self.flush(target);
-        self.demuxer = TsDemuxer::new();
+        self.demux.discontinuity();
         self.timestamps.continuous.mark_discontinuity();
     }
 
-    fn forward(&mut self, target: &TsPublishTarget) {
-        if self.demuxer.drain_into(&mut self.packets) == 0 {
+    /// The stream's one-time probe becomes the ingest's metadata. Parameter
+    /// sets reach the ring from the keyframes `forward` publishes (an fMP4
+    /// demux puts its init's `avcC` SPS/PPS ahead of each keyframe).
+    async fn take_probe(&mut self, target: &PublishTarget) {
+        if self.probe_sent {
+            return;
+        }
+        let Some(probe) = self.demux.take_probe() else {
+            return;
+        };
+        self.probe_sent = true;
+        record_probe(target, probe).await;
+    }
+
+    fn forward(&mut self, target: &PublishTarget) {
+        if self.demux.drain_into(&mut self.packets) == 0 {
             return;
         }
         let registration = &target.registration;
@@ -211,7 +378,7 @@ impl TsPublisher {
 }
 
 /// The stream's one-time probe becomes the ingest's metadata.
-async fn record_probe(target: &TsPublishTarget, probe: DemuxProbe) {
+async fn record_probe(target: &PublishTarget, probe: DemuxProbe) {
     let engine = &target.engine;
     let first_audio = probe.audio_tracks.first().cloned();
     let selected_video_track_index = probe.video.as_ref().map(|_| 0);

@@ -68,6 +68,9 @@ pub(super) enum SegmentOutcome {
     Duplicate,
     /// Listed by a variant this session does not follow.
     OtherVariant,
+    /// The object is the followed playlist's current `EXT-X-MAP` init: it is
+    /// delivered ahead of the next segment, never released as one.
+    Init,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,11 +82,13 @@ pub(super) enum PlaylistOutcome {
 pub(super) struct Release {
     pub(super) sequence: u64,
     pub(super) epoch: u64,
-    /// The bytes start an unrelated TS stream (EXT-X-DISCONTINUITY, a new
-    /// epoch, or a variant switch).
+    /// The bytes start an unrelated stream (EXT-X-DISCONTINUITY, a new
+    /// epoch, a variant switch, or a changed `EXT-X-MAP` init).
     pub(super) discontinuity: bool,
     /// The playlist's `EXTINF` for this segment.
     pub(super) duration: Duration,
+    /// A new `EXT-X-MAP` init segment to apply before this segment.
+    pub(super) init: Option<Payload>,
     pub(super) payload: Payload,
 }
 
@@ -93,6 +98,15 @@ pub(super) struct Counters {
     pub(super) duplicates: u64,
     pub(super) evicted: u64,
     pub(super) epochs: u64,
+}
+
+/// The followed playlist's `EXT-X-MAP` and its init object.
+struct MapState {
+    uri: String,
+    /// Init bytes uploaded for `uri`, not yet delivered with a release.
+    pending: Option<Payload>,
+    /// An init for `uri` has been delivered, so its segments may leave.
+    delivered: bool,
 }
 
 enum Lock {
@@ -148,6 +162,10 @@ pub(super) struct Session {
     discontinuity_pending: bool,
     ended: bool,
     counters: Counters,
+    map: Option<MapState>,
+    /// Hash of the init last delivered, to tell a re-upload of the same init
+    /// from a new one (an encoder restart, `-hls_fmp4_init_resend`).
+    applied_init: Option<u64>,
 }
 
 impl Session {
@@ -167,11 +185,18 @@ impl Session {
             discontinuity_pending: false,
             ended: false,
             counters: Counters::default(),
+            map: None,
+            applied_init: None,
         }
     }
 
     pub(super) fn counters(&self) -> Counters {
         self.counters
+    }
+
+    /// The followed playlist's current `EXT-X-MAP` URI.
+    pub(super) fn map_uri(&self) -> Option<&str> {
+        self.map.as_ref().map(|map| map.uri.as_str())
     }
 
     #[cfg(test)]
@@ -208,6 +233,13 @@ impl Session {
         payload: Payload,
         now: Instant,
     ) -> SegmentOutcome {
+        if let Some(map) = &mut self.map
+            && map.uri == path
+        {
+            // The newest upload of the init wins, like a held segment's.
+            map.pending = Some(payload);
+            return SegmentOutcome::Init;
+        }
         if let Some(&sequence) = self.latest_listing.get(&path)
             && let Some(listed) = self.listed.get_mut(&sequence)
             && listed.path == path
@@ -292,6 +324,8 @@ impl Session {
         self.next_seq = None;
         self.ended = false;
         self.discontinuity_pending = true;
+        // The new variant's playlist names its own `EXT-X-MAP`.
+        self.map = None;
     }
 
     fn on_other_variant(&mut self, playlist_path: &str, media: &MediaPlaylist) {
@@ -337,7 +371,55 @@ impl Session {
             })
     }
 
-    fn on_followed(&mut self, media: MediaPlaylist, now: Instant) {
+    /// Follow the playlist's `EXT-X-MAP`. A new URI takes its init from the
+    /// hold (encoders upload it before the playlist that names it); its
+    /// segments wait for that init.
+    fn follow_map(&mut self, uri: Option<String>) {
+        if self.map_uri() == uri.as_deref() {
+            return;
+        }
+        self.map = match uri {
+            Some(uri) => {
+                let pending = self.take_held(&uri);
+                Some(MapState {
+                    uri,
+                    pending,
+                    delivered: false,
+                })
+            }
+            None => None,
+        };
+    }
+
+    /// Whether the head segment may leave: no map, or its init is known.
+    fn init_ready(&self) -> bool {
+        self.map
+            .as_ref()
+            .is_none_or(|map| map.pending.is_some() || map.delivered)
+    }
+
+    /// The init to deliver with the next release, if it differs from the
+    /// last one delivered, and whether it replaces an earlier init.
+    fn take_init(&mut self) -> (Option<Payload>, bool) {
+        let Some(map) = &mut self.map else {
+            return (None, false);
+        };
+        let Some(pending) = map.pending.take() else {
+            return (None, false);
+        };
+        map.delivered = true;
+        let mut hasher = std::hash::DefaultHasher::new();
+        std::hash::Hash::hash(&pending.bytes[..], &mut hasher);
+        let hash = std::hash::Hasher::finish(&hasher);
+        if self.applied_init == Some(hash) {
+            return (None, false);
+        }
+        let replaces = self.applied_init.replace(hash).is_some();
+        (Some(pending), replaces)
+    }
+
+    fn on_followed(&mut self, mut media: MediaPlaylist, now: Instant) {
+        self.follow_map(media.map_uri.take());
         self.target = Some(media.target_duration);
         let (Some(first), Some(last)) = (media.segments.first(), media.segments.last()) else {
             // An empty listing says nothing about order or epochs.
@@ -419,19 +501,38 @@ impl Session {
                 self.next_seq = Some(sequence);
                 continue;
             }
+            let waiting_since = head.listed_at;
             if head.payload.is_none() && !self.gap_expired(head, now) {
                 break;
+            }
+            if head.payload.is_some() && !self.init_ready() {
+                // Its init has not arrived: wait a target duration, then
+                // skip it, so segments of a map without an init cannot pile up.
+                if self
+                    .target
+                    .is_none_or(|target| now.saturating_duration_since(waiting_since) < target)
+                {
+                    break;
+                }
+                self.listed.remove(&sequence);
+                self.counters.skipped = self.counters.skipped.saturating_add(1);
+                self.next_seq = sequence.checked_add(1);
+                continue;
             }
             let Some(listed) = self.listed.remove(&sequence) else {
                 break;
             };
             match listed.payload {
                 Some(payload) => {
+                    let (init, replaces) = self.take_init();
                     out.push(Release {
                         sequence,
                         epoch: self.epoch,
-                        discontinuity: listed.discontinuity || self.discontinuity_pending,
+                        discontinuity: listed.discontinuity
+                            || self.discontinuity_pending
+                            || replaces,
                         duration: listed.duration,
+                        init,
                         payload,
                     });
                     self.discontinuity_pending = false;
@@ -454,7 +555,9 @@ impl Session {
     /// When `poll` may next make progress without a new object.
     pub(super) fn next_deadline(&self) -> Option<Instant> {
         let gap = self.listed.first_key_value().and_then(|(_, head)| {
-            (head.payload.is_none() && self.later_bytes_ready())
+            let waits_for_bytes = head.payload.is_none() && self.later_bytes_ready();
+            let waits_for_init = head.payload.is_some() && !self.init_ready();
+            (waits_for_bytes || waits_for_init)
                 .then(|| self.target.map(|target| head.listed_at + target))
                 .flatten()
         });

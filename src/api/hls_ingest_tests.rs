@@ -138,12 +138,42 @@ async fn bodies_over_their_bound_are_refused_by_length_or_while_streaming() {
 #[tokio::test]
 async fn unsupported_objects_and_paths_are_refused() {
     let server = serve(HlsIngestLimits::default()).await;
-    let fmp4 = put(&server, STREAM_KEY, "init.mp4", vec![0u8; 8]).await;
-    assert_eq!(fmp4.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    let matroska = put(&server, STREAM_KEY, "index0.mkv", vec![0u8; 8]).await;
+    assert_eq!(matroska.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
     let backslash = put(&server, STREAM_KEY, "a%5Cb.ts", vec![0u8; 8]).await;
     assert_eq!(backslash.status(), StatusCode::BAD_REQUEST);
     let malformed = put(&server, STREAM_KEY, "index.m3u8", "not a playlist").await;
     assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+    server.engine.cancel_pipeline_input(INPUT_ID).await;
+}
+
+/// One top-level box: a 32-bit size, a type, then `payload_len` zeros.
+fn mp4_box(kind: &[u8; 4], payload_len: usize) -> Vec<u8> {
+    let size = u32::try_from(payload_len + 8).unwrap();
+    let mut bytes = size.to_be_bytes().to_vec();
+    bytes.extend_from_slice(kind);
+    bytes.resize(payload_len + 8, 0);
+    bytes
+}
+
+#[tokio::test]
+async fn fmp4_objects_are_checked_on_arrival_and_cannot_join_a_ts_stream() {
+    let server = serve(HlsIngestLimits {
+        max_init_bytes: 64,
+        ..HlsIngestLimits::default()
+    })
+    .await;
+    // A box walk that finds no fragment is malformed.
+    let not_fmp4 = put(&server, STREAM_KEY, "index0.m4s", mp4_box(b"free", 8)).await;
+    assert_eq!(not_fmp4.status(), StatusCode::BAD_REQUEST);
+    // An init (a top-level `moov`) over its own bound.
+    let oversized = put(&server, STREAM_KEY, "init.mp4", mp4_box(b"moov", 100)).await;
+    assert_eq!(oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    // The first accepted media object fixes MPEG-TS; fMP4 cannot join.
+    let ts = put(&server, STREAM_KEY, "index0.ts", vec![0x47u8; 188]).await;
+    assert_eq!(ts.status(), StatusCode::ACCEPTED);
+    let mixed = put(&server, STREAM_KEY, "index1.m4s", mp4_box(b"free", 8)).await;
+    assert_eq!(mixed.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
     server.engine.cancel_pipeline_input(INPUT_ID).await;
 }
 

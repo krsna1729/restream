@@ -1374,7 +1374,7 @@ origins can pull segments and playlists without CORS preflight errors.
 
 | Method | Route | Purpose |
 |---|---|---|
-| `PUT`, `POST` | `/ingest/hls/:streamKey/*path` | Upload a `.m3u8` playlist or an MPEG-TS `.ts` segment |
+| `PUT`, `POST` | `/ingest/hls/:streamKey/*path` | Upload a `.m3u8` playlist, an MPEG-TS `.ts` segment, or an fMP4 `.mp4`/`.m4s` object |
 | `DELETE` | `/ingest/hls/:streamKey/*path` | Accepted and ignored (FFmpeg `delete_segments`) |
 
 The stream key is checked first, before any body byte is read, under the
@@ -1385,14 +1385,17 @@ The stream key is checked first, before any body byte is read, under the
 |---|---|
 | `200` | The playlist was applied, the segment completed a listed sequence, or the object was a duplicate or belonged to another variant |
 | `202` | The segment is held until a playlist lists it |
-| `400` | The object path is invalid, or the playlist does not parse |
+| `400` | The object path is invalid, the playlist does not parse, or the fMP4 object does not parse |
 | `403` | Wrong key, disabled input, or banned client |
 | `405` | Any other method (`Allow: PUT, POST, DELETE`) |
 | `408` | The request body sent nothing for 10 s, took longer than max(4 × target duration, 40 s), or the key's 2 upload slots stayed busy for 10 s |
 | `409` | Another publisher (RTMP, SRT, file) holds the input |
-| `413` | Over the limit: playlist 1 MiB, segment 64 MiB |
-| `415` | Neither `.m3u8` nor `.ts` (fMP4 is not ingested yet) |
+| `413` | Over the limit: playlist 1 MiB, segment 64 MiB, fMP4 init 4 MiB |
+| `415` | Neither `.m3u8`, `.ts` nor `.mp4`/`.m4s`; a stream that mixes MPEG-TS and fMP4 objects; or an HEVC fMP4 init (HEVC fMP4 ingest is not implemented) |
 | `503` | The 512 MiB HLS ingest buffer is full (FFmpeg never reads this: the segment is lost), or the session ended with the object queued (all `Retry-After: 1`); or the key lookup or session is unavailable |
+
+fMP4 ingest is H.264 video and AAC audio only, and it names its init segment
+through the playlist's `EXT-X-MAP` URI rather than by file extension.
 
 Ordering, sessions and per-key bounds are described in
 [HLS push ingest](media-pipeline.md#hls-push-ingest).
