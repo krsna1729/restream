@@ -162,6 +162,9 @@ pub struct PublishTarget {
     registration: IngestRegistration,
     ring: Arc<RingBuffer>,
     bytes_received: Arc<AtomicU64>,
+    /// The session's first-media wall clock, shared with the ingest state
+    /// (see `ActiveIngest::first_media_ms`).
+    first_media_ms: Arc<AtomicU64>,
     metrics: Arc<StageMetrics>,
     last_progress_ms: Arc<AtomicU64>,
     keyframe_times: Arc<std::sync::Mutex<Vec<i64>>>,
@@ -176,10 +179,11 @@ impl PublishTarget {
         registration: IngestRegistration,
         ring: Arc<RingBuffer>,
     ) -> Result<Self, String> {
-        let (bytes_received, metrics, last_progress_ms, keyframe_times) = engine
+        let (bytes_received, first_media_ms, metrics, last_progress_ms, keyframe_times) = engine
             .with_ingest_session(&registration, |ingest| {
                 (
                     ingest.bytes_received.clone(),
+                    ingest.first_media_ms.clone(),
                     ingest.metrics.clone(),
                     ingest.last_progress_ms.clone(),
                     ingest.keyframe_times.clone(),
@@ -193,6 +197,7 @@ impl PublishTarget {
             registration,
             ring,
             bytes_received,
+            first_media_ms,
             metrics,
             last_progress_ms,
             keyframe_times,
@@ -255,11 +260,15 @@ impl SegmentPublisher {
         self.take_probe(target).await;
 
         let read = chunk.len() as u64;
-        target.bytes_received.fetch_add(read, Ordering::Relaxed);
+        let now_ms = MediaEngine::now_epoch_ms();
+        crate::media::engine::note_media_bytes(
+            &target.bytes_received,
+            &target.first_media_ms,
+            read,
+            now_ms,
+        );
         target.metrics.record_in(read);
-        target
-            .last_progress_ms
-            .store(MediaEngine::now_epoch_ms(), Ordering::Relaxed);
+        target.last_progress_ms.store(now_ms, Ordering::Relaxed);
         tokio::task::yield_now().await;
         Ok(())
     }
@@ -300,8 +309,8 @@ impl SegmentPublisher {
         self.forward(target);
     }
 
-    /// The current object could not be demuxed. The segment is dropped
-    /// whole: what it had demuxed but not yet published is discarded, and the
+    /// The current object could not be demuxed. The segment is dropped:
+    /// what it had demuxed but not yet published is discarded, and the
     /// timeline is re-anchored for the next segment, like a discontinuity.
     pub fn discard_failed_object(&mut self) {
         self.demux.discard_object();
@@ -398,19 +407,14 @@ impl SegmentPublisher {
 }
 
 /// The stream's one-time probe becomes the ingest's metadata.
+///
+/// The video/audio metadata is written last: it is what opens an output's
+/// start gate (`MediaEngine::ingest_tracks_ready`), so the audio tracks, the
+/// track selection and the sequence header must already be in place.
 async fn record_probe(target: &PublishTarget, probe: DemuxProbe) {
     let engine = &target.engine;
     let first_audio = probe.audio_tracks.first().cloned();
     let selected_video_track_index = probe.video.as_ref().map(|_| 0);
-    engine
-        .update_ingest_session_meta(
-            &target.pipeline_id,
-            &target.registration,
-            probe.video,
-            first_audio,
-            None,
-        )
-        .await;
     if let Some(sequence_header) = probe.video_sequence_header {
         engine
             .cache_ingest_session_sequence_header(&target.registration, true, sequence_header)
@@ -432,4 +436,16 @@ async fn record_probe(target: &PublishTarget, probe: DemuxProbe) {
             )
             .await;
     }
+    engine
+        .update_ingest_session_meta(
+            &target.pipeline_id,
+            &target.registration,
+            probe.video,
+            first_audio,
+            None,
+        )
+        .await;
+    engine
+        .note_ingest_session_probed(&target.registration)
+        .await;
 }

@@ -258,6 +258,7 @@ fn test_publisher_media(
         packets: Vec::new(),
         keyframe_times: Arc::new(std::sync::Mutex::new(Vec::new())),
         bytes_received: bytes_received.clone(),
+        first_media_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         ingest_metrics: Arc::new(crate::media::stage_metrics::StageMetrics::new()),
         last_progress_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         probe_sent: false,

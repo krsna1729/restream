@@ -83,6 +83,7 @@ impl EgressReconciler {
                 output.retries_exhausted,
                 snapshot.is_active,
                 snapshot.effective_has_ingest,
+                snapshot.ingest_tracks_ready,
                 failure,
                 self.tuning.output_retry_policy(),
                 &output.id,
@@ -90,6 +91,16 @@ impl EgressReconciler {
                 OutputStartAction::NotApplicable => {}
                 OutputStartAction::SkipNoIngest => {
                     self.engine.clear_egress_retry_state(&output.id).await;
+                    continue;
+                }
+                OutputStartAction::SkipProbePending => {
+                    // The probe landing emits `ingest.probed`, which wakes a
+                    // pass. Also re-check on the next interval the pass gap
+                    // allows: a source that never probes opens the gate only
+                    // when its probe grace from the first media byte runs
+                    // out, and nothing wakes a pass for that.
+                    let interval_ms = self.tuning.reconciler_interval_ms;
+                    next_retry = Some(next_retry.map_or(interval_ms, |next| next.min(interval_ms)));
                     continue;
                 }
                 OutputStartAction::MarkFailed => {

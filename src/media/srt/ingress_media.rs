@@ -70,6 +70,8 @@ pub(crate) struct SrtPublisherMedia {
     pub(super) packets: Vec<MediaPacket>,
     pub(super) keyframe_times: Arc<Mutex<Vec<i64>>>,
     pub(super) bytes_received: Arc<std::sync::atomic::AtomicU64>,
+    /// The session's first-media wall clock, shared with the ingest state.
+    pub(super) first_media_ms: Arc<std::sync::atomic::AtomicU64>,
     pub(super) ingest_metrics: Arc<crate::media::stage_metrics::StageMetrics>,
     pub(super) last_progress_ms: Arc<std::sync::atomic::AtomicU64>,
     pub(super) probe_sent: bool,
@@ -263,11 +265,15 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
         }
         let media = &mut slot.media;
         let len = payload.len() as u64;
-        media.bytes_received.fetch_add(len, Ordering::Relaxed);
+        let now_ms = MediaEngine::now_epoch_ms();
+        crate::media::engine::note_media_bytes(
+            &media.bytes_received,
+            &media.first_media_ms,
+            len,
+            now_ms,
+        );
         media.ingest_metrics.record_in(len);
-        media
-            .last_progress_ms
-            .store(MediaEngine::now_epoch_ms(), Ordering::Relaxed);
+        media.last_progress_ms.store(now_ms, Ordering::Relaxed);
         if media.probe_sent {
             return None;
         }

@@ -684,15 +684,16 @@ keeps the container it started with.
   - The init a stream key applied last is kept in the ingest itself, not in
     the session, because FFmpeg uploads its init once per run: a session
     that starts after an idle timeout, a retry or a failure applies the same
-    init again from that cache when the playlist names the same
+    init again from that slot when the playlist names the same
     `EXT-X-MAP` URI, so a resumed encoder keeps publishing. A playlist that
-    names a different URI gets nothing from it. The cache holds the inits of
-    at most 64 stream keys and at most 8 MiB (a normal init is about 1 KiB),
-    evicting the oldest first, so it stays inside the ingest's accounting: a
-    single init larger than the whole bound is kept alone. The entry goes
-    when `EXT-X-ENDLIST` ends the run, or when an init upload for that key
-    is refused (which also voids the map's init, and the seed a later session
-    would take from it).
+    names a different URI gets nothing from it. The slot lives in the stream
+    key's own state, so nothing evicts it while the input exists, and it
+    holds at most one init (the 4 MiB init bound). Its entry is cleared when
+    `EXT-X-ENDLIST` ends the run, or when an init upload for that key is
+    refused (which also voids the map's init, and the seed a later session
+    would take from it). Deleting an input does not reach the ingest, so a
+    deleted input's slot stays until restart: at most one init per input
+    that has ever pushed fMP4, and no upload can name that key again.
   - **Known limit.** The two rules above cover an init the ingest *refused*.
     An init *lost* on the way (an unread `503` or `408`, a reset) under the
     same `EXT-X-MAP` URI is not visible to the ingest, and a run whose audio
@@ -728,7 +729,7 @@ keeps the container it started with.
   cannot come and are skipped.
 - **A segment that cannot be demuxed.** A rejection while publishing an
   already-answered segment — a truncated access unit, a sample that runs past
-  its fragment, a decode failure — drops that segment whole: the session
+  its fragment, a decode failure — drops that segment: the session
   counts it, logs the reason once, discards what the segment had demuxed but
   not yet published, re-anchors the timeline for
   the next segment, and keeps publishing. Packets from an earlier fragment of
@@ -795,6 +796,28 @@ Probing must use the same read protocol as the active ingest. Cross-protocol
 probing can create false positives (e.g., probing SRT ingest through RTMP
 requires additional packetization). The diagnostics endpoint rejects mismatched
 probe protocols.
+
+### Output start waits for the source probe
+
+A direct egress plans its tracks once, when it starts: the RTMP leaf builds
+its audio track, AAC sequence header and stream metadata from the ingest's
+probe, and drops audio it cannot announce. So the reconciler does not start an
+output while its pipeline's active ingest has no probe yet
+(`MediaEngine::ingest_tracks_ready`, `OutputStartAction::SkipProbePending`).
+This matters most for HLS push, which registers its input on the playlist, one
+segment before any media. Every probe recorder writes the audio tracks, track
+selection and sequence header (and SRT resizes the source ring, so an output
+attaches to the sized ring) before the video/audio metadata that opens the
+gate, then emits `ingest.probed`, which wakes the reconciler, so the output
+starts on the next pass. A source whose media never yields a probe starts
+track-less 10 s after its first media byte (longer than a long GOP), counted
+from that byte and not from registration. The skipped output is rechecked at
+the reconciler interval as well.
+
+Known window: RTMP probes video and audio from two separate sequence headers,
+and the first of them opens the gate. A pass that lands in the few
+milliseconds between them plans a video-only output. The gate does not wait
+for both, because an RTMP source may publish only one.
 
 ### SRT Stream ID normalization
 

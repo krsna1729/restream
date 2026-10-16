@@ -630,6 +630,7 @@ fn standby_publisher_promotes_with_headers_before_the_cached_gop() {
         },
         ring: ring.clone(),
         bytes_received: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        first_media_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         ingest_metrics: Arc::new(crate::media::stage_metrics::StageMetrics::new()),
         last_progress_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         keyframe_times: Arc::new(std::sync::Mutex::new(Vec::new())),

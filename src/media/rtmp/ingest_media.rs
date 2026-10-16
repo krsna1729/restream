@@ -46,6 +46,8 @@ pub(super) struct RtmpPublisherMedia {
     pub(super) registration: IngestRegistration,
     pub(super) ring: Arc<RingBuffer>,
     pub(super) bytes_received: Arc<AtomicU64>,
+    /// The session's first-media wall clock, shared with the ingest state.
+    pub(super) first_media_ms: Arc<AtomicU64>,
     pub(super) ingest_metrics: Arc<StageMetrics>,
     pub(super) last_progress_ms: Arc<AtomicU64>,
     pub(super) keyframe_times: Arc<Mutex<Vec<i64>>>,
@@ -59,10 +61,15 @@ pub(super) struct RtmpPublisherMedia {
 
 impl RtmpPublisherMedia {
     fn account(&self, len: usize) {
-        self.bytes_received.fetch_add(len as u64, Ordering::Relaxed);
+        let now_ms = MediaEngine::now_epoch_ms();
+        crate::media::engine::note_media_bytes(
+            &self.bytes_received,
+            &self.first_media_ms,
+            len as u64,
+            now_ms,
+        );
         self.ingest_metrics.record_in(len as u64);
-        self.last_progress_ms
-            .store(MediaEngine::now_epoch_ms(), Ordering::Relaxed);
+        self.last_progress_ms.store(now_ms, Ordering::Relaxed);
     }
 
     /// One decoded video message. Returns the stream's first complete video

@@ -114,6 +114,7 @@ impl MediaEngine {
             start_time: now,
             protocol: protocol.to_string(),
             bytes_received: Arc::new(AtomicU64::new(0)),
+            first_media_ms: Arc::new(AtomicU64::new(0)),
             metrics: Arc::new(StageMetrics::new()),
             last_progress_ms: Arc::new(AtomicU64::new(0)),
             metadata: std::sync::RwLock::new(IngestMetadata::default()),

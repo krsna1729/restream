@@ -7,12 +7,11 @@
 //! here, before their reply: an init against its bound and the codec scope,
 //! a media segment against the box walk.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use bytes::Bytes;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -21,6 +20,7 @@ use super::ordering::{
 };
 use super::pacing::Pacer;
 use super::playlist;
+use super::registry::AppliedInit;
 use super::{ObjectKind, ObjectOutcome};
 use crate::media::engine::{IngestRegistration, MediaEngine};
 use crate::media::ingest_publisher::fmp4::{Fmp4Demux, boxes};
@@ -48,146 +48,12 @@ pub(super) struct SessionContext {
     pub(super) limits: SessionLimits,
     /// Bound on an fMP4 init segment.
     pub(super) max_init_bytes: usize,
-    /// The init each stream key applied last: FFmpeg uploads its init once
+    /// The init this stream key applied last: FFmpeg uploads its init once
     /// per run, so a session that starts after an idle timeout, a retry or
-    /// a failure still needs it.
-    pub(super) inits: Arc<Mutex<InitCache>>,
-}
-
-/// The last init a stream key applied, and the `EXT-X-MAP` it belongs to.
-#[derive(Clone)]
-pub(super) struct AppliedInit {
-    pub(super) uri: String,
-    pub(super) bytes: Bytes,
-}
-
-/// Most stream keys' inits one ingest keeps, besides the byte bound.
-const CACHED_INITS: usize = 64;
-
-/// The init each stream key applied last, kept across sessions: FFmpeg
-/// uploads its `EXT-X-MAP` init once per run, so a session that starts
-/// after an idle timeout, a retry or a failure must apply the same init
-/// again. Bounded by bytes and by key count, oldest first out, so a hostile
-/// or broken encoder cannot hold memory outside the ingest budget; a single
-/// init larger than the whole byte bound is kept alone.
-pub(super) struct InitCache {
-    max_bytes: usize,
-    bytes: usize,
-    by_key: HashMap<String, AppliedInit>,
-    order: VecDeque<String>,
-}
-
-impl InitCache {
-    pub(super) fn new(max_bytes: usize) -> Self {
-        Self {
-            max_bytes,
-            bytes: 0,
-            by_key: HashMap::new(),
-            order: VecDeque::new(),
-        }
-    }
-
-    pub(super) fn get(&self, key: &str) -> Option<AppliedInit> {
-        self.by_key.get(key).cloned()
-    }
-
-    /// Forget `key`'s init. A refused init upload and an ended run leave
-    /// nothing that a later session may apply.
-    pub(super) fn remove(&mut self, key: &str) {
-        if let Some(removed) = self.by_key.remove(key) {
-            self.bytes = self.bytes.saturating_sub(removed.bytes.len());
-            if let Some(index) = self.order.iter().position(|cached| cached == key) {
-                self.order.remove(index);
-            }
-        }
-    }
-
-    /// Remember `key`'s init, evicting other keys oldest first until both
-    /// bounds hold. The entry just inserted is never evicted.
-    pub(super) fn put(&mut self, key: &str, init: AppliedInit) {
-        let size = init.bytes.len();
-        if let Some(previous) = self.by_key.insert(key.to_string(), init) {
-            self.bytes = self.bytes.saturating_sub(previous.bytes.len());
-        } else {
-            self.order.push_back(key.to_string());
-        }
-        self.bytes = self.bytes.saturating_add(size);
-        while (self.bytes > self.max_bytes || self.order.len() > CACHED_INITS)
-            && self.order.len() > 1
-        {
-            let Some(index) = self.order.iter().position(|cached| cached != key) else {
-                break;
-            };
-            let Some(victim) = self.order.remove(index) else {
-                break;
-            };
-            if let Some(removed) = self.by_key.remove(&victim) {
-                self.bytes = self.bytes.saturating_sub(removed.bytes.len());
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn init(uri: &str, len: usize) -> AppliedInit {
-        AppliedInit {
-            uri: uri.to_string(),
-            bytes: Bytes::from(vec![0u8; len]),
-        }
-    }
-
-    /// Over the byte bound: the oldest entries go, the newest stays, and the
-    /// total never exceeds the bound.
-    #[test]
-    fn the_init_cache_evicts_oldest_first_inside_its_byte_bound() {
-        let mut cache = InitCache::new(1000);
-        cache.put("a", init("init.mp4", 400));
-        cache.put("b", init("init.mp4", 400));
-        assert_eq!(cache.bytes, 800);
-        cache.put("c", init("init.mp4", 400));
-        assert!(cache.get("a").is_none(), "the oldest went first");
-        assert!(cache.get("b").is_some() && cache.get("c").is_some());
-        assert!(cache.bytes <= 1000, "{} bytes cached", cache.bytes);
-
-        // Replacing a key's init counts once, not twice.
-        cache.put("b", init("init.mp4", 400));
-        assert_eq!(cache.bytes, 800);
-        assert!(cache.bytes <= 1000);
-    }
-
-    /// A single init larger than the whole bound is kept alone, and the next
-    /// init still evicts it oldest-first rather than looping.
-    #[test]
-    fn an_init_over_the_whole_bound_is_kept_alone_then_evicted() {
-        let mut cache = InitCache::new(100);
-        cache.put("a", init("init.mp4", 50));
-        cache.put("b", init("init.mp4", 5000));
-        assert!(cache.get("b").is_some(), "the newest init is never evicted");
-        assert!(cache.get("a").is_none(), "it is kept alone");
-        assert_eq!(cache.order.len(), 1);
-
-        cache.put("c", init("init.mp4", 10));
-        assert!(cache.get("c").is_some());
-        assert!(cache.get("b").is_none());
-        assert!(cache.bytes <= 100);
-        assert_eq!(cache.order, VecDeque::from(["c".to_string()]));
-    }
-
-    /// The key bound holds on its own, however small the inits are.
-    #[test]
-    fn the_init_cache_evicts_by_key_count_too() {
-        let mut cache = InitCache::new(usize::MAX);
-        for key in 0..CACHED_INITS + 3 {
-            cache.put(&format!("key{key}"), init("init.mp4", 1));
-        }
-        assert_eq!(cache.order.len(), CACHED_INITS);
-        assert_eq!(cache.bytes, CACHED_INITS);
-        assert!(cache.get("key0").is_none());
-        assert!(cache.get(&format!("key{}", CACHED_INITS + 2)).is_some());
-    }
+    /// a failure still needs it. It lives in the key's registry state, so it
+    /// is bounded by the configured inputs and never evicted while the key
+    /// exists.
+    pub(super) init: Arc<Mutex<Option<AppliedInit>>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -207,8 +73,7 @@ pub(super) async fn run(
     let outbox_limit = context.limits.hold_bytes;
     let max_init_bytes = context.max_init_bytes;
     let mut session = Session::new(context.limits);
-    let key = context.registration.input_id.clone();
-    if let Some(applied) = crate::sync::lock(&context.inits).get(&key) {
+    if let Some(applied) = crate::sync::lock(&context.init).clone() {
         session.seed_init(&applied.uri, applied.bytes);
     }
     let end = match PublishTarget::open(
@@ -224,8 +89,7 @@ pub(super) async fn run(
                 outbox: Outbox::default(),
                 outbox_limit,
                 max_init_bytes,
-                inits: context.inits.clone(),
-                key: key.clone(),
+                init: context.init.clone(),
                 failed_logged: false,
                 container: None,
                 publisher: None,
@@ -245,7 +109,7 @@ pub(super) async fn run(
     };
     if end == SessionEnd::Ended {
         // The stream is over: the next run uploads its own init.
-        crate::sync::lock(&context.inits).remove(&key);
+        *crate::sync::lock(&context.init) = None;
     }
     // End the attempt before the queue closes: a handler whose send then
     // fails must find the attempt cancelled, so its one restart registers
@@ -288,9 +152,7 @@ struct Publishing {
     outbox_limit: usize,
     max_init_bytes: usize,
     /// The stream key's init slot: an applied init outlives the session.
-    inits: Arc<Mutex<InitCache>>,
-    /// The stream key this session publishes for.
-    key: String,
+    init: Arc<Mutex<Option<AppliedInit>>>,
     /// One log line per session for dropped segments.
     failed_logged: bool,
     /// Fixed by the first accepted media object.
@@ -416,8 +278,7 @@ async fn publish_next_chunk(
         publisher,
         pacer,
         max_init_bytes,
-        inits,
-        key,
+        init,
         ..
     } = state;
     let (Some(release), Some(publisher)) = (outbox.releases.front(), publisher.as_mut()) else {
@@ -433,19 +294,16 @@ async fn publish_next_chunk(
             publisher.discontinuity(target);
             pacer.reset();
         }
-        if let Some(init) = &release.init {
+        if let Some(release_init) = &release.init {
             publisher
-                .apply_init(target, &init.payload.bytes, *max_init_bytes)
+                .apply_init(target, &release_init.payload.bytes, *max_init_bytes)
                 .await
                 .map_err(failed)?;
             // The init outlives this session: an encoder uploads it once.
-            crate::sync::lock(inits).put(
-                key,
-                AppliedInit {
-                    uri: init.uri.clone(),
-                    bytes: init.payload.bytes.clone(),
-                },
-            );
+            *crate::sync::lock(init) = Some(AppliedInit {
+                uri: release_init.uri.clone(),
+                bytes: release_init.payload.bytes.clone(),
+            });
         }
         publisher.begin_object(bytes).map_err(failed)?;
     }
@@ -538,7 +396,7 @@ fn apply(
             // stream as H.264, another codec's frames as AAC.
             if is_map_object || boxes::is_init_segment(&payload.bytes) {
                 session.void_map(&path);
-                crate::sync::lock(&state.inits).remove(&state.key);
+                *crate::sync::lock(&state.init) = None;
             }
             return rejection.into();
         }

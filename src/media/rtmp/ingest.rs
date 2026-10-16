@@ -450,6 +450,7 @@ async fn authorize_publish(
         ingest = engine.with_ingest_session(&registration, |ingest| {
             (
                 ingest.bytes_received.clone(),
+                ingest.first_media_ms.clone(),
                 ingest.metrics.clone(),
                 ingest.last_progress_ms.clone(),
                 ingest.keyframe_times.clone(),
@@ -466,6 +467,7 @@ async fn authorize_publish(
     };
     let Some((
         bytes_received,
+        first_media_ms,
         ingest_metrics,
         last_progress_ms,
         keyframe_times,
@@ -506,6 +508,7 @@ async fn authorize_publish(
         registration,
         ring,
         bytes_received,
+        first_media_ms,
         ingest_metrics,
         last_progress_ms,
         keyframe_times,
@@ -518,7 +521,8 @@ async fn authorize_publish(
     }))
 }
 
-/// Record a publisher's one-time stream probe as ingest metadata.
+/// Record a publisher's one-time stream probe as ingest metadata; the audio
+/// tracks land before the metadata that opens an output's start gate.
 async fn record_media_probe(
     engine: &MediaEngine,
     active: &RtmpIngestSession,
@@ -546,23 +550,26 @@ async fn record_media_probe(
                 meta.codec, meta.sample_rate, meta.channels
             );
             engine
+                .update_ingest_session_audio_tracks(
+                    &active.pipeline_id,
+                    &active.registration,
+                    vec![meta.clone()],
+                )
+                .await;
+            engine
                 .update_ingest_session_meta(
                     &active.pipeline_id,
                     &active.registration,
                     None,
-                    Some(meta.clone()),
+                    Some(meta),
                     None,
-                )
-                .await;
-            engine
-                .update_ingest_session_audio_tracks(
-                    &active.pipeline_id,
-                    &active.registration,
-                    vec![meta],
                 )
                 .await;
         }
     }
+    engine
+        .note_ingest_session_probed(&active.registration)
+        .await;
 }
 
 async fn authorize_play(

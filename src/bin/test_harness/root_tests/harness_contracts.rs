@@ -467,3 +467,51 @@ fn hls_preview_plan_uses_graph_planner() {
     assert!(runtime.contains("preview_transcode_key"));
     assert!(runtime.contains("spawn_codec_edge_stage"));
 }
+
+#[test]
+fn hls_push_duty_is_a_bench_profile_namespace_mode() {
+    let spec = mode_spec("hls-push-duty").expect("hls-push-duty must be listed");
+    assert!(
+        spec.requires_bench_profile,
+        "the isolation comparison only means anything on bench-profile binaries"
+    );
+    assert!(
+        spec.requires_port_namespace,
+        "hls-push-duty binds the default harness ports and must stay isolated"
+    );
+    assert!(
+        !spec.suite_default,
+        "hls-push-duty is not a default suite mode"
+    );
+    assert!(
+        supported_mode_names()
+            .iter()
+            .any(|name| name == "hls-push-duty"),
+        "hls-push-duty must be offered as a command"
+    );
+    assert!(
+        unknown_command_error("nope").contains("hls-push-duty"),
+        "the unknown-command hint must list hls-push-duty"
+    );
+}
+
+#[test]
+fn hls_push_duty_resolves_ffmpeg_through_the_resolver() {
+    let source = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/bin/test_harness/hls_push_duty/run.rs"
+    ));
+
+    assert!(
+        source.contains("restream::ffmpeg_binary::ffmpeg_bin_path()"),
+        "the HLS publisher must use the project FFmpeg resolver"
+    );
+    assert!(
+        !source.contains("/usr/bin/ffmpeg"),
+        "no hardcoded FFmpeg path may bypass the resolver"
+    );
+    assert!(
+        source.contains("canonical_h264_ts_fixture()"),
+        "the publisher must use the checked-in transport fixture contract"
+    );
+}

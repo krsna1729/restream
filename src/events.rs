@@ -37,6 +37,15 @@ pub enum EventKind {
         pipeline_id: String,
         protocol: String,
     },
+    /// The ingest recorded the stream probe an output plans its tracks from.
+    /// No other event reports it — it is media-plane state, not a topology
+    /// change — so the reconciler wakes on this one to start an output whose
+    /// start was waiting for it.
+    IngestProbed {
+        #[serde(rename = "pipelineId")]
+        pipeline_id: String,
+        protocol: String,
+    },
     StageRegistered {
         #[serde(rename = "pipelineId")]
         pipeline_id: String,
@@ -104,6 +113,7 @@ impl EventKind {
         match self {
             Self::IngestConnected { .. } => "ingest.connected",
             Self::IngestDisconnected { .. } => "ingest.disconnected",
+            Self::IngestProbed { .. } => "ingest.probed",
             Self::StageRegistered { .. } => "stage.registered",
             Self::StageWaitingForCapacity { .. } => "stage.waitingForCapacity",
             Self::StageBackendSpawned { .. } => "stage.backendSpawned",
@@ -121,6 +131,7 @@ impl EventKind {
         match self {
             Self::IngestConnected { pipeline_id, .. }
             | Self::IngestDisconnected { pipeline_id, .. }
+            | Self::IngestProbed { pipeline_id, .. }
             | Self::StageRegistered { pipeline_id, .. }
             | Self::StageWaitingForCapacity { pipeline_id, .. }
             | Self::StageBackendSpawned { pipeline_id, .. }
@@ -150,6 +161,9 @@ impl EventKind {
             }
             Self::IngestDisconnected { protocol, .. } => {
                 format!("{} publisher disconnected", protocol.to_uppercase())
+            }
+            Self::IngestProbed { protocol, .. } => {
+                format!("{} publisher probed", protocol.to_uppercase())
             }
             Self::StageRegistered { encoding, .. } => format!("Stage registered: {}", encoding),
             Self::StageWaitingForCapacity {
@@ -352,6 +366,14 @@ mod tests {
             }
             .event_type(),
             "ingest.disconnected"
+        );
+        assert_eq!(
+            EventKind::IngestProbed {
+                pipeline_id: "p".into(),
+                protocol: "hls".into()
+            }
+            .event_type(),
+            "ingest.probed"
         );
         assert_eq!(
             EventKind::StageRegistered {

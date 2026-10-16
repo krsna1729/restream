@@ -11,7 +11,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tracing::{error, info, warn};
 
 use super::ordering::SessionLimits;
-use super::session::{self, HlsObject, InitCache, SessionContext, SessionEnd};
+use super::session::{self, HlsObject, SessionContext, SessionEnd};
 use super::{
     BodyError, HlsIngestLimits, KeyCharge, ObjectBody, ObjectKind, ObjectOutcome, SegmentShare,
 };
@@ -50,6 +50,21 @@ struct SessionHandle {
     objects: mpsc::Sender<HlsObject>,
 }
 
+/// The last init a stream key applied, and the `EXT-X-MAP` it belongs to.
+/// FFmpeg uploads its `EXT-X-MAP` init once per run, so the key keeps it:
+/// a session that starts after an idle timeout, a retry or a failure
+/// applies the same init again. It lives here, with the rest of the key's
+/// state, so it can never be evicted while the key exists, and there is at
+/// most one per input that has pushed fMP4 HLS. Deleting an input does not
+/// reach this registry, so a deleted input's init (at most
+/// `max_init_bytes`) stays until the process restarts: no upload can name
+/// that key again.
+#[derive(Clone)]
+pub(super) struct AppliedInit {
+    pub(super) uri: String,
+    pub(super) bytes: bytes::Bytes,
+}
+
 /// Per stream key (input id): its upload slots and the lock that keeps two
 /// first objects from both registering an attempt.
 struct KeyState {
@@ -63,6 +78,8 @@ struct KeyState {
     /// The session's pacing lead in ms (target duration, or the idle floor
     /// before a playlist); sizes the whole-body deadline.
     lead_ms: Arc<AtomicU64>,
+    /// The init the key applied last, across sessions.
+    init: Arc<std::sync::Mutex<Option<AppliedInit>>>,
     start: tokio::sync::Mutex<()>,
 }
 
@@ -75,9 +92,6 @@ pub struct HlsIngest {
     /// Keyed by input id; held for lookups only, never across an await.
     sessions: std::sync::Mutex<HashMap<String, SessionHandle>>,
     keys: std::sync::Mutex<HashMap<String, Arc<KeyState>>>,
-    /// The init each stream key applied last: an encoder uploads its
-    /// `EXT-X-MAP` init once per run, so it outlives the session.
-    inits: Arc<std::sync::Mutex<InitCache>>,
 }
 
 impl HlsIngest {
@@ -95,9 +109,6 @@ impl HlsIngest {
             budget: Arc::new(Semaphore::new(limits.total_buffer_bytes)),
             sessions: std::sync::Mutex::new(HashMap::new()),
             keys: std::sync::Mutex::new(HashMap::new()),
-            inits: Arc::new(std::sync::Mutex::new(InitCache::new(
-                limits.init_cache_bytes,
-            ))),
         })
     }
 
@@ -145,6 +156,7 @@ impl HlsIngest {
                     share_lock: Arc::new(tokio::sync::Mutex::new(())),
                     outstanding: Arc::new(AtomicUsize::new(0)),
                     lead_ms: Arc::new(AtomicU64::new(0)),
+                    init: Arc::new(std::sync::Mutex::new(None)),
                     start: tokio::sync::Mutex::new(()),
                 })
             })
@@ -305,7 +317,7 @@ impl HlsIngest {
                 idle_floor: self.limits.idle_floor,
             },
             max_init_bytes: self.limits.max_init_bytes,
-            inits: self.inits.clone(),
+            init: key.init.clone(),
         };
         tokio::spawn(Arc::clone(self).supervise(context, receiver));
         Ok((attempt_id, objects))
@@ -323,15 +335,22 @@ impl HlsIngest {
         drop(sessions);
         let mut keys = crate::sync::lock(&self.keys);
         // Keep the key's state while anything still uses it: an upload slot
-        // in flight, bytes counted against it, or a start in progress.
+        // in flight, bytes counted against it, a start in progress, or the
+        // init the key applied last — FFmpeg uploads its `EXT-X-MAP` init
+        // once per run, so an encoder that resumes after an idle timeout
+        // needs it. The key state is that init's home, so it lives as long
+        // as the init does: one per input that has pushed fMP4 (see
+        // `AppliedInit` for a deleted input's).
         if idle
             && keys.get(input_id).is_some_and(|key| {
-                Arc::strong_count(key) == 1
+                crate::sync::lock(&key.init).is_none()
+                    && Arc::strong_count(key) == 1
                     && Arc::strong_count(&key.uploads) == 1
                     && Arc::strong_count(&key.share) == 1
                     && Arc::strong_count(&key.share_lock) == 1
                     && Arc::strong_count(&key.outstanding) == 1
                     && Arc::strong_count(&key.lead_ms) == 1
+                    && Arc::strong_count(&key.init) == 1
             })
         {
             keys.remove(input_id);

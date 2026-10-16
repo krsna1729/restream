@@ -268,6 +268,7 @@ mod tests {
             start_time: Instant::now() - Duration::from_secs(10),
             protocol: protocol.to_string(),
             bytes_received: Arc::new(AtomicU64::new(bytes_received)),
+            first_media_ms: Arc::new(AtomicU64::new(0)),
             metrics: Arc::new(StageMetrics::new()),
             last_progress_ms: Arc::new(AtomicU64::new(last_progress_ms)),
             metadata: RwLock::new(crate::media::engine::IngestMetadata {
