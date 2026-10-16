@@ -79,7 +79,9 @@ pub fn new_critical_alerts(before: &[String], after: &[String]) -> VerifyGate {
 /// service center on the calibration priors, before the apply and now. A
 /// host already past it before the change passes, so a change that sheds
 /// load can verify; the measured flow of the outputs the change set running
-/// is the delivery floor's to judge.
+/// is `outputs_running`'s to judge. The priors are host-wide, so a change on
+/// another pipeline that crosses the threshold between this apply and its
+/// verify fails it too: a real host-wide event in a short window.
 pub fn capacity_state(before: f32, after: f32, safe_utilization: f64) -> VerifyGate {
     let (before, after) = (f64::from(before), f64::from(after));
     VerifyGate {

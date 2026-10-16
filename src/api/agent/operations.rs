@@ -649,7 +649,12 @@ async fn verify_operation(
         .collect();
     let wanted: Vec<&crate::application::models::Output> = outputs
         .iter()
-        .filter(|output| touched.contains(output.id.as_str()) && output.wants_running())
+        // Desired running, not `wants_running`: an output whose retries ran
+        // out after the change is a failure, not an output it stopped.
+        .filter(|output| {
+            touched.contains(output.id.as_str())
+                && output.desired_state == DesiredOutputState::Running
+        })
         .collect();
     let delivering = wanted
         .iter()

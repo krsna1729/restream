@@ -138,7 +138,7 @@ export function Convergence(props: { operation: ChangeOperation; live: LiveSnaps
               className="tabular-nums opacity-70"
               title={new Date(step.atMs).toISOString()}
             >
-              {index === 0 ? new Date(step.atMs).toISOString().slice(11, 19) : offset(step.offsetMs)}
+              {index === 0 ? new Date(step.atMs).toLocaleTimeString() : offset(step.offsetMs)}
             </span>
             <span>{step.label}</span>
           </li>

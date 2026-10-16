@@ -139,7 +139,7 @@ const GATE_LABEL: Record<VerifyGate["gate"], string> = {
   desiredState: "Desired state converged",
   outputsRunning: "Outputs it started are running",
   newCriticalAlerts: "No new critical alerts",
-  capacityState: "Capacity state healthy",
+  capacityState: "Host not pushed past safe utilization",
 };
 
 /** What the engine proved after applying: the fixed gates, which alone
