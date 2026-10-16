@@ -14,8 +14,9 @@ export const LAYERS: readonly Layer[] = ["ingest", "feed", "shard", "destination
 /** One instant; `null` where the source had nothing to say. */
 export interface FleetSample {
   readonly atMs: number;
-  /** 100 less the projected utilization of the hottest service center
-   * (calibration priors), floored at 0. */
+  /** 100 less the capacity snapshot's projected utilization, floored at 0:
+   * the hottest service center from the calibration priors, raised to the
+   * deepest egress shard's measured queue when shards run. */
   readonly headroomPercent: number | null;
   /** Wanted outputs delivering; `null` when none is wanted. */
   readonly deliveringPercent: number | null;

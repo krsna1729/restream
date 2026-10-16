@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import type { ReactNode } from "react";
 
 import type { AlertsSnapshot } from "../core/api-types.js";
 import type { CapacitySnapshot } from "../core/generated/runtime-state.js";
@@ -9,7 +10,8 @@ import { buildFleetModel, describeCause, worstFirst } from "./fleet-model.js";
 import type { AttentionItem, FleetModel, FleetPipelineRow } from "./fleet-model.js";
 import { formatBps, formatPercent } from "./format.js";
 import { PipelineTable } from "./pipeline-table.js";
-import { useOpenAlerts } from "./polled.js";
+import { Freshness, useOpenAlerts } from "./polled.js";
+import type { Polled } from "./polled.js";
 import { PlaceLink } from "./router.js";
 import { Sparkline } from "./sparkline.js";
 import type { LiveSnapshot } from "./store.js";
@@ -28,7 +30,7 @@ export function Fleet({ live }: { live: LiveSnapshot }) {
       <Headline
         model={model}
         capacity={live.metrics?.capacity ?? null}
-        alerts={alerts.value}
+        alerts={alerts}
       />
       <div className="grid gap-4 lg:grid-cols-2">
         <Attention items={model.attention} />
@@ -86,9 +88,10 @@ function headline(model: FleetModel): string {
 function Headline(props: {
   model: FleetModel;
   capacity: CapacitySnapshot | null;
-  alerts: AlertsSnapshot | null;
+  alerts: Polled<AlertsSnapshot>;
 }) {
-  const { model, capacity, alerts } = props;
+  const { model, capacity } = props;
+  const alerts = props.alerts.value;
   const critical = alerts?.alerts.filter((alert) => alert.severity === "critical").length ?? 0;
   return (
     <section aria-labelledby="fleet-headline">
@@ -124,9 +127,14 @@ function Headline(props: {
           title="Open incidents"
           value={alerts ? String(alerts.alerts.length) : "--"}
           detail={
-            alerts
-              ? `${critical} critical · ${alerts.alerts.length - critical} warning`
-              : "loading alerts"
+            alerts ? (
+              <span className="flex items-center gap-2">
+                {critical} critical · {alerts.alerts.length - critical} warning
+                <Freshness atMs={props.alerts.atMs} />
+              </span>
+            ) : (
+              "loading alerts"
+            )
           }
         />
       </div>
@@ -134,7 +142,7 @@ function Headline(props: {
   );
 }
 
-function Stat(props: { title: string; value: string; detail: string }) {
+function Stat(props: { title: string; value: string; detail: ReactNode }) {
   return (
     <div className="stat">
       <div className="stat-title">{props.title}</div>
@@ -173,8 +181,9 @@ function History({ history }: { history: readonly FleetSample[] }) {
         <h3 id="fleet-history" className="card-title text-base">
           Fleet history
           <span className="text-xs font-normal opacity-70">
-            since this page opened, up to 15 min · {history.length} samples · headroom from
-            the calibration priors
+            since this page opened, up to 15 min · {history.length} samples · headroom
+            projected from the calibration priors, raised by the measured egress queue
+            when shards run
           </span>
         </h3>
         {last === undefined ? (

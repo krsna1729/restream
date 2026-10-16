@@ -179,8 +179,10 @@ to `/`.
   capacity model's projection onto service centers from calibration priors
   (observe-only until Q-031 measures the coefficients). Fleet also shows the
   shared work (`uniqueStages` serving `activeLeaves`, from the capacity
-  snapshot), the open-alert count (the same `aggregate-alerts` query
-  Incidents lists), a history of headroom, delivery and degraded outputs by
+  snapshot), the open-alert count with its age (the same `aggregate-alerts`
+  query Incidents lists), a history of headroom (100 less the projected
+  utilization: the calibration priors, raised to the deepest egress shard's
+  measured queue when shards run), delivery and degraded outputs by
   layer (`LiveSnapshot.history`: one `fleet-history.ts` sample per store
   sample, kept for 15 min of this page session, since the engine keeps no
   metric history; a source with nothing to say is a gap, not a zero), and a

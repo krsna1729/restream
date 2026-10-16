@@ -382,9 +382,10 @@ items).
   The mockup's "blocked AVIO writes" is out of scope: the stage input queue
   was deleted in #327, and the remaining `MemoryQueue` counter
   (`media/avio.rs`) serves recording only.
-- Incident cursor: marks diagnosis onsets from the store's fleet history
-  (`LiveSnapshot.history`, `web/ts/control-room/fleet-history.ts`) on
-  Monitor's own per-pipeline series. Pause freezes the page window; Compare
+- Incident cursor: marks this pipeline's diagnosis onsets, taken in
+  Monitor's own per-pipeline sample (`takeSample`), on its series. The
+  store's fleet history has no pipeline identity, so it cannot mark them
+  without marking other pipelines' faults. Pause freezes the page window; Compare
   overlays two windows the page already holds. No new route.
 - Gates: node tests for the outlier pick and window freeze; Playwright.
 - Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
