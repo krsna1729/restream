@@ -42,8 +42,7 @@ pub async fn agent_operation_create_handler(
         return response;
     }
     let plan = build_agent_plan(&state, request.plan_request()).await;
-    let pre_alert_count = current_agent_alert_count(&state).await;
-    let result = match state.agent_execution.create(request, plan, pre_alert_count) {
+    let result = match state.agent_execution.create(request, plan) {
         Ok(result) => result,
         Err(err) => return operation_store_error(err),
     };
@@ -132,7 +131,8 @@ pub async fn agent_operation_apply_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    let record = match state.agent_execution.start_apply(&operation_id) {
+    let alerts = current_agent_alerts(&state).await;
+    let record = match state.agent_execution.start_apply(&operation_id, alerts) {
         Ok(record) => record,
         Err(err) => return operation_store_error(err),
     };
@@ -528,7 +528,6 @@ async fn verify_operation(
     let (_, health) = agent_health_snapshot(state, &pipeline_ids).await;
     let alerts = alerts::derive_alerts(&health);
     let mut checks = Vec::new();
-    let mut success = true;
 
     for change in &record.request.proposed_changes {
         let pipeline_id = change
@@ -608,7 +607,6 @@ async fn verify_operation(
             }
             _ => (false, "unsupportedChangeKind"),
         };
-        success &= passed;
         checks.push(serde_json::json!({
             "kind": change.kind,
             "pipelineId": pipeline_id,
@@ -631,7 +629,50 @@ async fn verify_operation(
         .flatten()
         .filter(|node| node["active"].as_bool().unwrap_or(false))
         .count();
-    let alert_delta = alerts.len() as isize - record.pre_apply_alert_count.unwrap_or(0) as isize;
+    let pre = record.pre_apply_alerts.clone().unwrap_or_default();
+    let post = alert_baseline(&alerts);
+    let alert_delta = post.total as isize - pre.total as isize;
+
+    // Delivery on the pipelines the operation changed, after the change.
+    let changed_pipelines: std::collections::HashSet<&str> = record
+        .request
+        .proposed_changes
+        .iter()
+        .filter_map(|change| {
+            change
+                .pipeline_id
+                .as_deref()
+                .or(record.request.pipeline_id.as_deref())
+        })
+        .collect();
+    let wanted: Vec<&crate::application::models::Output> = outputs
+        .iter()
+        .filter(|output| {
+            changed_pipelines.contains(output.pipeline_id.as_str()) && output.wants_running()
+        })
+        .collect();
+    let delivering = wanted
+        .iter()
+        .filter(|output| {
+            output_runtime_is_running(
+                &health["pipelines"][&output.pipeline_id]["outputs"][&output.id],
+            )
+        })
+        .count();
+    let passed_checks = checks
+        .iter()
+        .filter(|check| check["passed"].as_bool() == Some(true))
+        .count();
+    let gates = [
+        crate::agent_plane::desired_state(passed_checks, checks.len()),
+        crate::agent_plane::delivery_floor(wanted.len(), delivering),
+        crate::agent_plane::new_critical_alerts(&pre.critical_ids, &post.critical_ids),
+        crate::agent_plane::capacity_state(
+            &state.engine.capacity_snapshot().await,
+            crate::capacity::CapacityModel::default().safe_utilization,
+        ),
+    ];
+    let success = gates.iter().all(|gate| gate.passed);
 
     crate::agent_plane::redact_secrets(serde_json::json!({
         "success": success,
@@ -647,15 +688,16 @@ async fn verify_operation(
             "activeNodes": active_graph_nodes,
         },
         "incidentDelta": {
-            "preApplyAlertCount": record.pre_apply_alert_count,
-            "postApplyAlertCount": alerts.len(),
+            "preApplyAlertCount": pre.total,
+            "postApplyAlertCount": post.total,
             "delta": alert_delta,
         },
         "checks": checks,
+        "gates": gates,
         "explanation": if success {
-            "All operation checks matched persisted state and runtime expectations."
+            "Every gate passed: the changes reached their state, delivery holds the floor, no new critical alert, and the host has headroom."
         } else {
-            "One or more operation checks did not match persisted state or runtime expectations."
+            "One or more gates failed; each gate says why."
         },
     }))
 }
@@ -687,7 +729,7 @@ fn change_output_id(
 }
 
 #[cfg(feature = "agent-execution")]
-async fn current_agent_alert_count(state: &AppState) -> usize {
+async fn current_agent_alerts(state: &AppState) -> crate::agent_execution::AlertBaseline {
     let catalog = state.agent_service.load_pipeline_output_catalog().await;
     let pipeline_ids = catalog
         .pipelines
@@ -695,7 +737,19 @@ async fn current_agent_alert_count(state: &AppState) -> usize {
         .map(|pipeline| pipeline.id.clone())
         .collect::<Vec<_>>();
     let (_, health) = agent_health_snapshot(state, &pipeline_ids).await;
-    alerts::derive_alerts(&health).len()
+    alert_baseline(&alerts::derive_alerts(&health))
+}
+
+#[cfg(feature = "agent-execution")]
+fn alert_baseline(alerts: &[alerts::Alert]) -> crate::agent_execution::AlertBaseline {
+    crate::agent_execution::AlertBaseline {
+        total: alerts.len(),
+        critical_ids: alerts
+            .iter()
+            .filter(|alert| alert.severity == alerts::Severity::Critical)
+            .map(|alert| alert.id.clone())
+            .collect(),
+    }
 }
 
 #[cfg(feature = "agent-execution")]

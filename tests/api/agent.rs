@@ -359,7 +359,8 @@ async fn agent_plan_validates_and_previews_stage_impact() {
                         "kind": "addOutput",
                         "name": "Primary CDN",
                         "url": "rtmp://example/live/key",
-                        "config": {"video": {"mode": "preset", "preset": "720p"}, "audio": {"mode": "downmix", "track": 0}}
+                        "config": {"video": {"mode": "preset", "preset": "720p"}, "audio": {"mode": "downmix", "track": 0}},
+                        "desiredState": "running"
                     }]
                 })
                 .to_string(),
@@ -386,6 +387,18 @@ async fn agent_plan_validates_and_previews_stage_impact() {
             .unwrap()
             .iter()
             .any(|stage| stage.as_str() == Some("video:720p:codec:h264"))
+    );
+    // Nothing runs yet; the add is wanted running, so it is the whole after
+    // side, on a stage the change starts.
+    let topology = &body["graphPreview"]["topology"];
+    assert_eq!(topology["pipelineId"], pid);
+    assert_eq!(topology["before"], serde_json::json!([]));
+    assert_eq!(topology["after"].as_array().unwrap().len(), 1, "{topology}");
+    assert_eq!(topology["after"][0]["protocol"], "rtmp");
+    assert_eq!(topology["after"][0]["outputs"], 1);
+    assert!(
+        !topology["addedStages"].as_array().unwrap().is_empty(),
+        "{topology}"
     );
 }
 
@@ -709,6 +722,22 @@ async fn agent_operation_lifecycle_is_approval_gated_redacted_and_verified() {
         verified_body["verificationResult"]["checks"][0]["reason"],
         "stopped"
     );
+    let gates = verified_body["verificationResult"]["gates"]
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        gates
+            .iter()
+            .map(|gate| gate["gate"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "desiredState",
+            "deliveryFloor",
+            "newCriticalAlerts",
+            "capacityState"
+        ]
+    );
+    assert!(gates.iter().all(|gate| gate["passed"] == true), "{gates:?}");
     assert!(verified_body["auditLog"].as_array().unwrap().len() >= 4);
 }
 
@@ -733,4 +762,129 @@ async fn agent_graph_diff_preview_returns_404_when_compiled_out() {
         "expected 404 (compiled out) or 200, got {}",
         resp.status()
     );
+}
+
+#[cfg(feature = "agent-execution")]
+async fn agent_call(
+    app: &axum::Router,
+    cookie: &str,
+    method: &str,
+    path: &str,
+    body: Option<serde_json::Value>,
+) -> (StatusCode, serde_json::Value) {
+    let body = body.map(|value| value.to_string());
+    let resp = app
+        .clone()
+        .oneshot(auth_req(method, path, cookie, body.as_deref()))
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = body_bytes(resp).await;
+    let json = serde_json::from_slice(&bytes).unwrap_or_else(|_| {
+        panic!(
+            "{method} {path} answered {status}: {}",
+            String::from_utf8_lossy(&bytes)
+        )
+    });
+    (status, json)
+}
+
+#[cfg(feature = "agent-execution")]
+#[tokio::test]
+async fn verify_fails_the_delivery_floor_when_a_wanted_output_on_the_pipeline_does_not_deliver() {
+    let (app, cookie) = authenticated_app().await;
+    let (_, pipeline) = agent_call(
+        &app,
+        &cookie,
+        "POST",
+        "/api/v1/pipelines",
+        Some(serde_json::json!({ "name": "agent-floor", "streamKey": "agent-floor-key" })),
+    )
+    .await;
+    let pid = pipeline["pipeline"]["id"].as_str().unwrap().to_string();
+    // A destination the pipeline wants running; with no publisher it cannot
+    // deliver.
+    let (_, output) = agent_call(
+        &app,
+        &cookie,
+        "POST",
+        &format!("/api/v1/pipelines/{pid}/outputs"),
+        Some(serde_json::json!({
+            "name": "wanted",
+            "url": "rtmp://127.0.0.1:9/live/wanted",
+            "config": {"video": {"mode": "source"}, "audio": {"mode": "all"}}
+        })),
+    )
+    .await;
+    let wanted = output["output"]["id"].as_str().unwrap().to_string();
+    let (status, _) = agent_call(
+        &app,
+        &cookie,
+        "POST",
+        &format!("/api/v1/pipelines/{pid}/outputs/{wanted}/start"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The change itself (a stopped destination) reaches its state.
+    let (status, created) = agent_call(
+        &app,
+        &cookie,
+        "POST",
+        "/api/v1/agent/operations",
+        Some(serde_json::json!({
+            "intent": "add a stopped backup",
+            "pipelineId": pid,
+            "proposedChanges": [{
+                "kind": "addOutput",
+                "name": "backup",
+                "url": "rtmp://127.0.0.1:9/live/backup",
+                "config": {"video": {"mode": "source"}, "audio": {"mode": "all"}},
+                "desiredState": "stopped"
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    // The alert baseline is taken at apply, not at create.
+    assert!(created["preApplyCriticalAlertIds"].is_null(), "{created}");
+    let op = created["operationId"].as_str().unwrap().to_string();
+    for step in ["approve", "apply"] {
+        let (status, _) = agent_call(
+            &app,
+            &cookie,
+            "POST",
+            &format!("/api/v1/agent/operations/{op}/{step}"),
+            (step == "approve").then(|| serde_json::json!({ "approvedBy": "t", "reason": "test" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{step}");
+    }
+    let (_, verified) = agent_call(
+        &app,
+        &cookie,
+        "POST",
+        &format!("/api/v1/agent/operations/{op}/verify"),
+        None,
+    )
+    .await;
+    assert_eq!(verified["status"], "verificationFailed", "{verified}");
+    let gate = |name: &str| {
+        verified["verificationResult"]["gates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|gate| gate["gate"] == name)
+            .unwrap_or_else(|| panic!("no {name} gate: {verified}"))
+            .clone()
+    };
+    assert_eq!(gate("desiredState")["passed"], true);
+    assert_eq!(gate("deliveryFloor")["passed"], false);
+    assert_eq!(
+        gate("deliveryFloor")["detail"],
+        "0 of 1 wanted outputs deliver (floor 0.95)"
+    );
+    assert_eq!(gate("newCriticalAlerts")["passed"], true);
+    assert_eq!(gate("capacityState")["passed"], true);
 }

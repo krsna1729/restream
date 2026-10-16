@@ -17,7 +17,8 @@ import {
   progress,
   verification,
 } from "./changes-model.js";
-import type { ChangeDraft, StageState } from "./changes-model.js";
+import type { ChangeDraft, Gate, StageState } from "./changes-model.js";
+import { Convergence, Impact } from "./changes-impact.js";
 import type { LiveSnapshot } from "./store.js";
 
 const STAGE_BADGE: Record<StageState, string> = {
@@ -85,6 +86,7 @@ export function Changes({ live }: { live: LiveSnapshot }) {
         />
       ) : (
         <Operation
+          live={live}
           operation={operation}
           busy={busy}
           run={run}
@@ -298,6 +300,7 @@ function DefineChange(props: {
       </section>
 
       {currentPlan && <Judgement plan={currentPlan} />}
+      {currentPlan?.graphPreview.topology && <Impact topology={currentPlan.graphPreview.topology} />}
 
       {currentPlan?.validation.valid && (
         <button
@@ -320,6 +323,7 @@ function DefineChange(props: {
 }
 
 function Operation(props: {
+  live: LiveSnapshot;
   operation: ChangeOperation;
   busy: boolean;
   run: Run;
@@ -412,6 +416,7 @@ function Operation(props: {
           </button>
         </div>
         <OperationResult operation={operation} />
+        <Convergence operation={operation} live={props.live} />
       </div>
     </section>
   );
@@ -458,8 +463,26 @@ function Judgement({ plan }: { plan: ChangePlan }) {
   );
 }
 
+function GateTable(props: { label: string; rows: readonly Gate[] }) {
+  return (
+    <table className="table table-sm" aria-label={props.label}>
+      <tbody>
+        {props.rows.map((row, index) => (
+          <tr key={index}>
+            <td>{row.label}</td>
+            <td className={row.passed ? "text-success" : "text-error"}>
+              {row.passed ? "passed" : "failed"}
+            </td>
+            <td className="opacity-70">{row.detail}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 function OperationResult({ operation }: { operation: ChangeOperation }) {
-  const { gates, observations } = verification(operation);
+  const { gates, checks, observations } = verification(operation);
   const execution = operation.executionResult;
   return (
     <>
@@ -478,21 +501,8 @@ function OperationResult({ operation }: { operation: ChangeOperation }) {
           ))}
         </ul>
       )}
-      {gates.length > 0 && (
-        <table className="table table-sm" aria-label="Verification">
-          <tbody>
-            {gates.map((gate, index) => (
-              <tr key={index}>
-                <td>{gate.label}</td>
-                <td className={gate.passed ? "text-success" : "text-error"}>
-                  {gate.passed ? "passed" : "failed"}
-                </td>
-                <td className="opacity-70">{gate.detail}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      {gates.length > 0 && <GateTable label="Verification gates" rows={gates} />}
+      {checks.length > 0 && <GateTable label="Per-change checks" rows={checks} />}
       {operation.verificationResult?.explanation && (
         <p className="text-sm">{operation.verificationResult.explanation}</p>
       )}
@@ -501,18 +511,6 @@ function OperationResult({ operation }: { operation: ChangeOperation }) {
           {line}
         </p>
       ))}
-      <details>
-        <summary className="cursor-pointer text-xs opacity-70">
-          Audit log ({operation.auditLog.length})
-        </summary>
-        <ol className="mt-1 text-xs">
-          {operation.auditLog.map((event, index) => (
-            <li key={index}>
-              <span className="font-mono">{event.at}</span> {event.kind}: {event.summary}
-            </li>
-          ))}
-        </ol>
-      </details>
     </>
   );
 }

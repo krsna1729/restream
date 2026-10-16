@@ -636,6 +636,10 @@ test("changes: the engine refuses an incomplete change, then a destination is ad
     await expect(judgement).toHaveCount(0);
     await define.getByRole("button", { name: "Preview" }).click();
     await expect(judgement.getByText("valid", { exact: true })).toBeVisible();
+    // A stopped destination is wanted by nothing yet: no topology change, no load.
+    await expect(page.getByRole("region", { name: "Impact" })).toContainText(
+      "The change adds no outputs or stages",
+    );
     await page.getByRole("button", { name: "Create operation" }).click();
 
     const operation = page.getByRole("region", { name: "Operation" });
@@ -648,7 +652,13 @@ test("changes: the engine refuses an incomplete change, then a destination is ad
     await expect(status).toHaveText("applied");
     await operation.getByRole("button", { name: "Verify" }).click();
     await expect(status).toHaveText("verified");
-    await expect(operation.getByRole("table", { name: "Verification" })).toContainText("passed");
+    await expect(operation.getByRole("table", { name: "Per-change checks" })).toContainText("passed");
+    const gates = operation.getByRole("table", { name: "Verification gates" });
+    await expect(gates.getByRole("row")).toHaveCount(4);
+    await expect(gates).not.toContainText("failed");
+    await expect(operation.getByRole("list", { name: "Convergence timeline" })).toContainText(
+      "created, desired stopped",
+    );
     await expect(stages.nth(3)).toHaveAttribute("data-state", "done");
 
     // The engine stored the destination on this pipeline.
@@ -695,6 +705,11 @@ test("changes: an operation survives a reload, and a verification that failed ca
     await define.getByRole("combobox", { name: /^Change\b/ }).selectOption("startOutput");
     await define.getByRole("combobox", { name: /^Destination\b/ }).selectOption({ label: "cr-start" });
     await define.getByRole("button", { name: "Preview" }).click();
+    // Starting it adds one wanted RTMP output, which the scenario prices.
+    const impact = page.getByRole("region", { name: "Impact" });
+    const rtmp = impact.getByRole("table", { name: "Topology diff" }).getByRole("row", { name: /RTMP/ });
+    await expect(rtmp.getByRole("cell")).toHaveText([/source/, "RTMP", "0", "1"]);
+    await expect(impact.getByLabel("Projected load")).toContainText("Hottest center");
     await page.getByRole("button", { name: "Create operation" }).click();
     const operation = page.getByRole("region", { name: "Operation" });
     const status = operation.locator("[data-status]");
@@ -712,7 +727,12 @@ test("changes: an operation survives a reload, and a verification that failed ca
     // and offers the check again instead of ending the operation.
     await operation.getByRole("button", { name: "Verify", exact: true }).click();
     await expect(status).toHaveText("verificationFailed");
-    await expect(operation.getByRole("table", { name: "Verification" })).toContainText("pendingInput");
+    await expect(operation.getByRole("table", { name: "Per-change checks" })).toContainText("pendingInput");
+    // The fixed gates say why: nothing on the pipeline delivers yet.
+    await expect(
+      operation.getByRole("table", { name: "Verification gates" }).getByRole("row", { name: /Delivery floor/ }),
+    ).toContainText("failed");
+    await expect(operation.getByLabel("Live convergence")).toContainText("0 of 1 changed outputs converged");
     await expect(operation.getByRole("button", { name: "Verify again" })).toBeVisible();
 
     await operation.getByRole("button", { name: "Start a new change" }).click();

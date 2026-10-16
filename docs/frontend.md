@@ -301,9 +301,18 @@ asks the engine to judge them (`/agent/plans`, which mutates nothing) and is
 shown only while the form still matches what was judged; a valid preview
 creates an operation from that same request, which the operator approves
 (as this dashboard session, with an audited reason: confirmation, not a
-second person's sign-off), applies and verifies. Only the engine's
-per-change checks decide "verified"; the alert delta and active graph nodes
-are shown as observations. Verification checks one moment, so a failed one
+second person's sign-off), applies and verifies. A valid preview also shows
+the impact: the plan's topology diff (outputs wanted running by stage and
+protocol, before and after, marking a stage the change starts and an add
+that reuses a stage) and, when the change adds outputs or stages, the
+capacity scenario (`/capacity/scenario`) for those additions, before and
+after on the calibration priors (removals are counted, not credited). The
+engine's four fixed gates decide "verified" (desired state, the engine's
+delivery floor 0.95, no new critical alert since the apply, capacity healthy); the per-change checks are
+listed under them, and the alert delta and active graph nodes are shown as
+observations. The operation card's convergence timeline merges the audit
+events and each output change the apply made, in time order from creation,
+and ends with where the changed outputs stand in the live state. Verification checks one moment, so a failed one
 can run again (a just-started destination needs seconds to connect). A
 refused apply answers 400 with the failed record; the page reads the record
 back and shows the reason, and warns that earlier changes may already be

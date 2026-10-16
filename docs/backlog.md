@@ -23,7 +23,6 @@ items).
 - [Q-050 inputs and stages in runtime state](#q-050-architecture-sonnet-project-inputs-and-stages-into-the-runtime-state)
 - [Q-051 bounded ingress transfer pump](#q-051-architecture-sonnet-bound-the-ingress-transfer-pump-per-owner-visit)
 - [Q-053 external FFmpeg process topology](#q-053-architecture-sonnet-external-ffmpeg-process-topology-per-rendition)
-- [Q-060 control-room Changes gaps](#q-060-frontend-sonnet-control-room-changes-numeric-impact-topology-diff-convergence-timeline-gates)
 - [Q-061 control-room Incidents gaps](#q-061-frontend-opus-control-room-incidents-correlation-chart-evidence-confidence-time-range-export)
 - [Q-062 control-room Capacity gaps](#q-062-frontend-opus-control-room-capacity-calibration-provenance-scenario-controls-topology-diff)
 - [Q-063 control-room nested-path boot](#q-063-frontend-sonnet-control-room-boots-on-nested-unknown-paths)
@@ -370,23 +369,6 @@ items).
 - Status: open (Filed: 2026-10-15 by claude; the cost measurement closed
   2026-10-15. The former board item "FFmpeg A/B: external per-stage vs external
   multi-output" cannot be run as written: the second arm does not exist).
-
-### Q-060 [frontend] [sonnet] Control room Changes: numeric impact, topology diff, convergence timeline, gates
-- Goal: Change Studio shows numeric impact, a topology diff, a convergence
-  timeline, and fixed verification gates.
-- Sources: topology diff from `POST /api/v1/agent/graph-diff-preview`
-  (`GraphPreview`); convergence timeline from `GET
-  /api/v1/agent/operations/{id}` (`stateTransitions`, `progressSnapshots`;
-  in memory, at most 1024 operations, lost on restart). Missing: per-change
-  numeric impact (`ImpactPreview`, `agent_plane.rs:57`, lists affected
-  pipelines, outputs and shared-stage candidates with a summary, but no
-  numbers; derive them from the capacity scenario for the change's added
-  outputs and stages) and the delivery-floor and capacity-state gates in
-  `POST .../verify`, which today returns per-change checks, post-change
-  health, freshness recovery, graph convergence and incident delta.
-- Gates: Rust tests for each new verify gate (failing case included); API
-  drift check; Playwright.
-- Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
 
 ### Q-061 [frontend] [opus] Control room Incidents: correlation chart, evidence confidence, time range, export
 - Goal: Incidents shows a correlation chart, per-signal evidence confidence,
