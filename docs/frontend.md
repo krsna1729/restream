@@ -181,10 +181,19 @@ to `/`.
   inventory (attention first, then size), searchable by name or id and
   filterable by the same health rule as Fleet's count, with outputs by
   protocol. Operate (one pipeline): the source deck from
-  `/pipelines/{id}/inputs` with Promote; the media graph from
+  `/pipelines/{id}/inputs` with Promote and each input's preview; the media
+  path (`operate-graph.tsx`) in four views: Graph (from
   `/pipelines/{id}/graph`, laid out by longest path, each shared stage drawn
   once with its consumer count and destinations folded per upstream stage
-  and protocol (egress nodes join outputs on their `outputId`); the
+  and protocol; egress nodes join outputs on their `outputId`), Destinations
+  (the same groups as a table), Timeline (the pipeline's kept lifecycle
+  events, newest first) and Preview (the program). Selecting a group opens
+  its inspector (`operate-group-model.ts`): delivering count, worst delivery
+  ratio, worst feed lag and resyncs from the engine telemetry; the fabric
+  shards its running outputs are placed on (`fabricFeed`, `shardId`), with
+  state, command queue and progress age from `/engine/health`
+  `egressFabricShards` (shared 10 s query with System); and each diagnosed
+  output's layer, cause and ruled-out layers. Then the
   destination matrix from the state stream (feed lag from the running egress,
   rate from the telemetry rates) with Start/Stop, degraded first and capped
   at 200 rendered rows, with the hidden count (and how many of them need
@@ -295,8 +304,8 @@ checks on the pipeline's live input (`POST /pipelines/{id}/diagnostics/run`)
 on request, each with its result, issues, help and output, and the run
 downloads as a `restream.diagnostics.v1` report.
 
-Previews (`preview.tsx`): the source deck plays the program
-(`/hls/{pipeline}/master.m3u8`) and each connected input (its `previewUrl`)
+Previews (`preview.tsx`): the media path's Preview view plays the program
+(`/hls/{pipeline}/master.m3u8`) and the source deck each connected input (its `previewUrl`)
 muted through hls.js, only when asked, because a preview makes the engine
 segment that stream. The engine answers 404 until the first segment exists,
 so the player retries 404s for up to 15 s (Safari's own player does not

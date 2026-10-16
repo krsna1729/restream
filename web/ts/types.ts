@@ -349,6 +349,11 @@ export interface HealthData {
     feedId: string;
     shardIndex: number;
     state: string;
+    /** Commands queued for the shard thread, and the queue's bound. */
+    commandDepth: number;
+    commandCapacity: number;
+    /** Since the shard last made progress; `null` before its first. */
+    progressAgeMs: number | null;
   }>;
   containedPanics?: number;
 }

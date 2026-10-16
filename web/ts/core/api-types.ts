@@ -106,6 +106,14 @@ export interface TelemetryEgress {
   failurePhase?: string | null;
   quality?: TelemetryMetrics;
   metrics?: TelemetryMetrics;
+  /** Times the egress cursor resynchronised to its feed. */
+  resyncCount?: number;
+  /** How far the egress cursor is behind its feed. */
+  feedLagUnits?: number;
+  /** The fabric feed the output reads; with `shardId` it names the shard
+   * in the engine health's `egressFabricShards`. */
+  fabricFeed?: string | null;
+  shardId?: number | null;
 }
 
 export interface EngineTelemetrySnapshot {
