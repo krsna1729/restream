@@ -382,20 +382,24 @@ items).
   (`docs/design/control-room-mockup.html`) that have no shipped counterpart.
   Q-054 to Q-062 are the 2026-10-15 mockup-gap audit; the user asked for all
   of them, one PR per workspace, in Q-number order.
-- Sources (all exist, counts are derived in the page): `egresses[].protocol`
-  (`api_runtime_views/telemetry_projection.rs:99`); per-feed `delivery[]` with
-  `destinations` on `/api/v1/pipelines/{id}/telemetry` (`api/telemetry.rs`);
-  `/api/v1/alerts`, input `forwardingState`, `quality.srtBonded`, and
-  `recording.active` for the filter cards.
+- Sources: the protocol mix and the needs-attention card derive from the
+  runtime state (`OutputState.protocol`, `diagnosis`). The rest exist only per
+  pipeline: shared stages in `delivery[]` on `/api/v1/pipelines/{id}/telemetry`,
+  warm standby in `forwardingState` on `/pipelines/{id}/inputs`, bonding in
+  the publisher `quality.srtBonded` (`media/snapshots.rs:100`), recording in
+  `/api/v1/engine/health`. A fleet-wide page must not poll every pipeline, so
+  the runtime state gains the output's stage, the standby-input count, the
+  recording flag and the bonded flag.
 - Gates: node tests for the derivations; one Playwright case per structure.
 - Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
 
 ### Q-055 [frontend] [sonnet] Control room Operate: SRT-group inspector, execution owner, graph tabs
 - Goal: Operate gets the SRT-group inspector, the execution-owner and evidence
   subsection, and the graph Destinations/Timeline/Preview tabs.
-- Sources (all exist; the tabs are UI only): output `quality`
-  (`api_runtime_views/common.rs:208-238`) and `diagnosis` from the runtime
-  state; `egressFabricShards` (`media/engine_egress_fabric_diagnostics.rs`);
+- Sources (all exist; the tabs are UI only): the live output `quality`
+  (`EgressRuntimeView.quality`, `api_runtime_views/common.rs:104`) and
+  `diagnosis` from the runtime state; `egressFabricShards` on
+  `/api/v1/engine/health` (`api_runtime_views/status.rs`);
   `/api/v1/events?pipeline_id` for Timeline; `/hls/{id}/master.m3u8` for
   Preview. Per-group "hottest shard" is engine-wide only
   (`hottestShardUtil`); show it as engine-wide, not per group.
@@ -419,8 +423,9 @@ items).
 - Goal: Fleet shows shared-work and open-incident metrics, a fleet table, and
   a headroom history.
 - Sources: `uniqueStages`/`activeLeaves` in the capacity snapshot
-  (`capacity.rs:152-153`, `/metrics/system`); `/api/v1/overview.alertCount`
-  (there is no incident entity; the metric is the open-alert count);
+  (`capacity.rs:150-151`, `/metrics/system`); `/api/v1/overview.alertCount`
+  `{critical, warning}` (there is no incident entity; the metric is their
+  sum);
   `/api/v1/pipelines` with `/api/v1/engine/health` for the table. Per-row
   limiting center and cost have no per-pipeline field: the limiting center is
   engine-wide (`hottestCenter`). Leave those columns out or add the fields.
@@ -428,7 +433,11 @@ items).
   (`capacity.rs`); the runtime-state delta ring (`runtime_state/hub.rs`) is
   stream resume, not samples. Decided: one bounded page-level ring beside
   `web/ts/control-room/store.ts`, fed by the store's 2 s sample, holding only
-  fleet-wide signals (headroom, delivery, open-alert counts). Fleet headroom
+  fleet-wide signals: headroom (`/metrics/system` capacity), delivery
+  (engine telemetry), and degraded-output counts by layer from the runtime
+  state's diagnoses (the store has no alert poll; diagnoses feed the alerts).
+  The ring lives while a view is subscribed, so it starts empty at page load
+  and covers only this session. Fleet headroom
   history (here), the Monitor incident cursor (Q-058) and the Incidents
   correlation chart (Q-061) read it; no backend history store. Monitor keeps
   its own per-pipeline series (`monitor.tsx` `Trends` samples the pipeline's
@@ -442,11 +451,11 @@ items).
   destination outlier, an incident cursor across its series, and Pause/Compare.
 - Sources: `publisher.quality` on `/api/v1/engine/health`; `sourceRing`,
   `stages` and reader `overflowCount` on `/api/v1/pipelines/{id}/telemetry`;
-  per-output `quality.deliveryRatio` and telemetry `delivery{ratioMin,jain}`.
+  per-output `quality.deliveryRatio` and telemetry `delivery[].{ratioMin,jain}`.
   The mockup's "blocked AVIO writes" is out of scope: the stage input queue
   was deleted in #327, and the remaining `MemoryQueue` counter
   (`media/avio.rs`) serves recording only.
-- Incident cursor: marks alert onsets from the shared fleet ring (Q-057) on
+- Incident cursor: marks diagnosis onsets from the shared fleet ring (Q-057) on
   Monitor's own per-pipeline series. Pause freezes the page window; Compare
   overlays two windows the page already holds. No new route.
 - Gates: node tests for the outlier pick and window freeze; Playwright.
@@ -470,10 +479,12 @@ items).
   (`GraphPreview`); convergence timeline from `GET
   /api/v1/agent/operations/{id}` (`stateTransitions`, `progressSnapshots`;
   in memory, at most 1024 operations, lost on restart). Missing: per-change
-  numeric impact (`ImpactPreview` is text; derive it from the capacity
-  scenario for the change's added outputs and stages) and the delivery-floor
-  and capacity-state gates in `POST .../verify`, which today returns only
-  per-change checks, graph convergence and incident delta.
+  numeric impact (`ImpactPreview`, `agent_plane.rs:57`, lists affected
+  pipelines, outputs and shared-stage candidates with a summary, but no
+  numbers; derive them from the capacity scenario for the change's added
+  outputs and stages) and the delivery-floor and capacity-state gates in
+  `POST .../verify`, which today returns per-change checks, post-change
+  health, freshness recovery, graph convergence and incident delta.
 - Gates: Rust tests for each new verify gate (failing case included); API
   drift check; Playwright.
 - Status: open (Filed: 2026-10-15 by claude, from the mockup-gap audit).
@@ -482,7 +493,9 @@ items).
 - Goal: Incidents shows a correlation chart, per-signal evidence confidence,
   a time range, and an export.
 - Sources: all four are missing. The correlation chart reads the shared fleet
-  ring (Q-057). Alerts carry `evidence: string[]` only; confidence needs a
+  ring (Q-057), which covers only the current page session; a time range
+  before it needs the `since` added below.
+  Alerts carry `evidence: string[]` only; confidence needs a
   measured/derived marker per signal from the evidence engine. Neither
   `/api/v1/alerts` nor `/api/v1/events` takes `since`. There is no export
   route (the SBOM is the only attachment).
@@ -495,7 +508,9 @@ items).
   scenario controls, and a topology-diff entry.
 - Sources: the topology diff exists (`graph-diff-preview`). Provenance is
   missing: the scenario carries only `observeOnly`/`flowMeasured`, and
-  `CapacityLimits` (model version, prior source) is never serialized.
+  the calibrated `CapacityLimits` (`capacity.rs:40-50`, six per-center
+  ceilings) appear in no response, and provenance (model version, prior
+  source) does not exist and must be added.
   Scenario controls are missing: `/api/v1/capacity/scenario` takes only
   `add_outputs`/`add_stages`, and the model takes no protocol or pipeline
   (`docs/api-reference.md`). Adding them changes the capacity model, not
