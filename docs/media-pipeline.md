@@ -741,9 +741,10 @@ keeps the container it started with.
   its fragment, a decode failure — drops that segment: the session
   counts it, logs the reason once, discards what the segment had demuxed but
   not yet published, re-anchors the timeline for
-  the next segment, and keeps publishing. Packets from an earlier fragment of
-  that segment that were already released stay in the ring; only what was
-  demuxed and still pending is dropped. Only a session that no longer has a
+  the next segment, and keeps publishing. Packets of that segment that were
+  already released stay in the ring — from an earlier fragment, or earlier in
+  the failing one; only what was demuxed and still pending is dropped. Only a
+  session that no longer has a
   demuxer at all (its publisher failed to open) ends failed; the engine
   survives either way, and the encoder's next object starts a fresh session
   if the session does end.
