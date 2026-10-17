@@ -382,6 +382,7 @@ impl HlsIngest {
     /// dispatch another object after the cancel and reopen that session; its
     /// cancel branch is first in its `select!`, so the join costs one poll
     /// rather than an origin's request timeout.
+    #[cfg(test)]
     pub async fn cancel_pull(&self, input_id: &str) -> bool {
         !self
             .cancel_pulls(std::slice::from_ref(&input_id.to_string()))
@@ -413,8 +414,13 @@ impl HlsIngest {
             stopping.into_iter().map(|(_, running)| running.task.join()),
         )
         .await;
-        for input_id in input_ids {
+        // Only an input whose pull was running has a session to end here; the
+        // init is cleared for every requested input, because a session that
+        // ended earlier leaves the init it applied behind.
+        for input_id in &stopped {
             self.engine.cancel_pipeline_input(input_id).await;
+        }
+        for input_id in input_ids {
             self.clear_applied_init(input_id);
         }
         stopped

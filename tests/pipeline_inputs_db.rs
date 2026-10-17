@@ -355,10 +355,16 @@ async fn a_row_whose_auth_does_not_parse_does_not_fail_the_list() {
         "its unusable credential reads as none, so only this input is affected"
     );
 
+    // The pull list leaves it out instead: a pull whose credential does not
+    // parse is refused rather than fetched without one, which would let an
+    // origin that answers unauthenticated requests publish a slate here.
     let pulls = db::list_pull_inputs(&pool)
         .await
         .expect("the pull list is not failed by it either");
-    assert!(pulls.iter().any(|input| input.id == "input-bad"));
+    assert!(
+        !pulls.iter().any(|input| input.id == "input-bad"),
+        "a pull whose credential does not parse is not started: {pulls:?}"
+    );
 
     let other = db::list_pipeline_inputs(&pool, "p2")
         .await

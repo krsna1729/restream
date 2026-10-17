@@ -24,6 +24,7 @@ impl TryFrom<PipelineInputRow> for PipelineInput {
     type Error = sqlx::Error;
 
     fn try_from(row: PipelineInputRow) -> Result<Self, Self::Error> {
+        let input_id = row.id.clone();
         let role = PipelineInputRole::try_from(row.role.as_str())
             .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
         let source_kind = PipelineInputSourceKind::try_from(row.source_kind.as_str())
@@ -41,7 +42,7 @@ impl TryFrom<PipelineInputRow> for PipelineInput {
             source_kind,
             source_url: row.source_url,
             variant_rule,
-            source_auth: deserialize_auth(row.source_auth.as_deref()),
+            source_auth: deserialize_auth(row.source_auth.as_deref(), &input_id),
         })
     }
 }
@@ -64,14 +65,26 @@ fn serialize_auth(auth: &PullAuth) -> Option<String> {
 /// row can hold `{"kind":"bearer"}` with no token; failing the whole row (or
 /// the whole list) over one input's credential would take the inputs list and
 /// with it SRT's policy store down for every pipeline.
-fn deserialize_auth(raw: Option<&str>) -> PullAuth {
+fn deserialize_auth(raw: Option<&str>, input_id: &str) -> PullAuth {
     match raw {
         Some(raw) if !raw.trim().is_empty() => serde_json::from_str::<PullAuth>(raw)
             .inspect_err(|error| {
-                warn!(err = %error, "pipeline input source auth does not parse; treating it as none");
+                warn!(input_id = %input_id, err = %error,
+                    "pipeline input source auth does not parse; showing it as none");
             })
             .unwrap_or(PullAuth::None),
         _ => PullAuth::None,
+    }
+}
+
+/// Whether the stored credential parses as the variant its kind names. A pull
+/// whose credential does not parse is refused rather than fetched without it:
+/// an origin that answers an unauthenticated request with a slate or a preview
+/// would otherwise publish that as this input's content.
+fn auth_parses(raw: Option<&str>) -> bool {
+    match raw {
+        Some(raw) if !raw.trim().is_empty() => serde_json::from_str::<PullAuth>(raw).is_ok(),
+        _ => true,
     }
 }
 
@@ -80,11 +93,15 @@ fn deserialize_auth(raw: Option<&str>) -> PullAuth {
 /// inputs (and the SRT policy store built from them) with it.
 fn convert_rows(rows: Vec<PipelineInputRow>) -> Vec<PipelineInput> {
     rows.into_iter()
-        .filter_map(|row| match PipelineInput::try_from(row) {
-            Ok(input) => Some(input),
-            Err(error) => {
-                warn!(err = %error, "pipeline input row skipped: it does not match the schema");
-                None
+        .filter_map(|row| {
+            let input_id = row.id.clone();
+            match PipelineInput::try_from(row) {
+                Ok(input) => Some(input),
+                Err(error) => {
+                    warn!(input_id = %input_id, err = %error,
+                        "pipeline input row skipped: it does not match the schema");
+                    None
+                }
             }
         })
         .collect()
@@ -199,7 +216,21 @@ pub async fn list_pull_inputs(pool: &SqlitePool) -> Result<Vec<PipelineInput>, s
     let rows = sqlx::query_as::<_, PipelineInputRow>(sqlx::AssertSqlSafe(query))
         .fetch_all(pool)
         .await?;
-    Ok(convert_rows(rows))
+    // A row whose credential does not parse is left out of *this* list, so the
+    // pull is refused instead of fetched without it; the inputs list still
+    // shows the row, so an operator can see and fix it.
+    let usable: Vec<PipelineInputRow> = rows
+        .into_iter()
+        .filter(|row| {
+            let parses = auth_parses(row.source_auth.as_deref());
+            if !parses {
+                warn!(input_id = %row.id,
+                    "HLS pull not started: its stored credential does not parse");
+            }
+            parses
+        })
+        .collect();
+    Ok(convert_rows(usable))
 }
 
 pub async fn promote_pipeline_input(

@@ -63,7 +63,7 @@ pub(super) struct SessionContext {
     /// a failure still needs it. It lives in the key's registry state, which
     /// is evicted only once nothing else uses it — including this init, so a
     /// keyed input's init lives until the input pushes again or the process
-    /// restarts (a stopped pull clears it: see `HlsIngest::cancel_pull`).
+    /// restarts (a stopped pull clears it: see `HlsIngest::cancel_pulls`).
     /// One per input that has pushed fMP4, each bounded by `max_init_bytes`.
     pub(super) init: Arc<Mutex<Option<AppliedInit>>>,
 }
