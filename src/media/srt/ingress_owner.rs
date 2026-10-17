@@ -117,6 +117,12 @@ const CLOSING_GRACE: Duration = Duration::from_millis(500);
 /// Closing peers examined per visit.
 const CLOSING_CHECKS_PER_VISIT: usize = 32;
 
+/// Listener transfers (forwarded handshakes, relocated bonded legs) accepted
+/// per visit. srt-rs bounds what each sender has outstanding, not how fast the
+/// inbox refills, so the drain is capped like the command drain; the busy
+/// predicate's `!inbox.is_empty()` runs the next visit without parking.
+const TRANSFERS_PER_VISIT: usize = 32;
+
 /// Receive-quality sampling: each live peer is sampled about once per interval,
 /// in slices, so sampling cost per visit is bounded and independent of the
 /// peer count.
@@ -446,15 +452,15 @@ impl OwnerLoop {
 
     /// Take in what the other Owners of this listener sent: forwarded
     /// handshakes and relocated bonded legs (each with its connected socket),
-    /// and slot releases. Bounded by srt-rs: at most its handshake queue per
-    /// sender plus one transfer per live relocated session.
+    /// and slot releases, at most `TRANSFERS_PER_VISIT` per visit.
     fn accept_transfers(&mut self, now: Timestamp) {
-        if let Some(transfer) = self.transfer_stash.take() {
-            self.owner.accept_listener_transfer(transfer, now);
-        }
-        while let Ok(transfer) = self.inbox.try_recv() {
-            self.owner.accept_listener_transfer(transfer, now);
-        }
+        let owner = &mut self.owner;
+        drain_bounded(
+            &mut self.transfer_stash,
+            &self.inbox,
+            TRANSFERS_PER_VISIT,
+            |transfer| owner.accept_listener_transfer(transfer, now),
+        );
     }
 
     /// Hand the transfers this Owner owes to their members. The inboxes are
@@ -846,3 +852,30 @@ async fn first_ready<T>(
         Either::Left((value, _)) | Either::Right((value, _)) => value,
     }
 }
+
+/// Apply the stashed item, then queued items, at most `limit` in all; what is
+/// left stays queued for the next visit. Returns how many were applied.
+fn drain_bounded<T>(
+    stash: &mut Option<T>,
+    queue: &flume::Receiver<T>,
+    limit: usize,
+    mut apply: impl FnMut(T),
+) -> usize {
+    let mut applied = 0;
+    if let Some(item) = stash.take() {
+        apply(item);
+        applied = 1;
+    }
+    while applied < limit {
+        let Ok(item) = queue.try_recv() else {
+            break;
+        };
+        apply(item);
+        applied = applied.saturating_add(1);
+    }
+    applied
+}
+
+#[cfg(test)]
+#[path = "ingress_owner_tests.rs"]
+mod tests;
