@@ -4,7 +4,6 @@
 import { useEffect, useState } from "react";
 
 import {
-  createPipelineInput,
   deletePipeline,
   deletePipelineInput,
   getPipelineFileIngest,
@@ -23,6 +22,7 @@ import type {
 } from "../core/api-types.js";
 import type { ConfigPipeline, PipelineInput } from "../types.js";
 import { ConfirmDelete } from "./confirm.js";
+import { InputForm } from "./input-form.js";
 import { PipelineForm } from "./pipeline-form.js";
 import { usePolled } from "./polled.js";
 import { useGo } from "./router.js";
@@ -173,30 +173,54 @@ export function InputActions(props: {
   );
 }
 
-/** A new backup input; its publish URLs show in the deck once created. */
-export function AddInput(props: { pipelineId: string; onChanged: () => void }) {
-  const [label, setLabel] = useState("");
+/** Change one input: its label, the source it receives media from, and for a
+ * pull input its rendition and credential. Open to every input. */
+export function EditInput(props: {
+  pipelineId: string;
+  input: PipelineInput;
+  onChanged: () => void;
+}) {
+  const [open, setOpen] = useState(false);
   return (
-    <form
-      className="flex gap-2"
-      onSubmit={async (event) => {
-        event.preventDefault();
-        if ((await createPipelineInput(props.pipelineId, label.trim())) !== null) {
-          setLabel("");
-          props.onChanged();
-        }
-      }}
-    >
-      <input
-        className="input input-xs input-bordered flex-1"
-        aria-label="New input label"
-        placeholder="Backup input label"
-        value={label}
-        onChange={(event) => setLabel(event.target.value)}
-      />
-      <button type="submit" className="btn btn-xs" disabled={!label.trim()}>
+    <>
+      <button
+        type="button"
+        className="btn btn-xs btn-ghost mt-2"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+      >
+        {open ? "Close" : `Edit ${props.input.label}`}
+      </button>
+      {open && (
+        <InputForm
+          pipelineId={props.pipelineId}
+          stored={props.input}
+          onSaved={props.onChanged}
+        />
+      )}
+    </>
+  );
+}
+
+/** A new input: one that waits for a publisher, or one that pulls a remote HLS
+ * URL. Its source line shows in the deck once created. */
+export function AddInput(props: { pipelineId: string; onChanged: () => void }) {
+  const [open, setOpen] = useState(false);
+  if (!open) {
+    return (
+      <button type="button" className="btn btn-xs btn-outline" onClick={() => setOpen(true)}>
         Add input
       </button>
-    </form>
+    );
+  }
+  return (
+    <InputForm
+      pipelineId={props.pipelineId}
+      stored={null}
+      onSaved={() => {
+        setOpen(false);
+        props.onChanged();
+      }}
+    />
   );
 }

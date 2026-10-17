@@ -2,7 +2,7 @@
 //! and the session registry. Runs on Tokio CONTROL; per object it does one
 //! lookup and one bounded channel send, never media work.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -17,6 +17,7 @@ use super::{
 };
 use crate::media::engine::{IngestRegistration, MediaEngine};
 use crate::media::executor::{MediaService, MediaServiceClass};
+use crate::media::hls_pull::{HlsPullTask, PullIdentity, PullSource};
 use crate::media::ingest_auth::{
     AuthenticatedPipeline, PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessMode,
 };
@@ -43,6 +44,26 @@ pub enum DispatchError {
     /// The session ended under the object twice, or the MEDIA executor is
     /// unavailable.
     Unavailable,
+}
+
+/// Where an object came from. It decides the protocol recorded on the ingest
+/// session: an upload is `hls`, and an object the engine fetched itself is
+/// `hls-pull`. The two share one session, one ordering and one publisher, so
+/// a pipeline reads the same whichever way its segments arrive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchOrigin {
+    Push,
+    Pull,
+}
+
+impl DispatchOrigin {
+    /// The protocol label recorded on the ingest session.
+    pub const fn protocol(self) -> &'static str {
+        match self {
+            Self::Push => "hls",
+            Self::Pull => "hls-pull",
+        }
+    }
 }
 
 struct SessionHandle {
@@ -92,6 +113,18 @@ pub struct HlsIngest {
     /// Keyed by input id; held for lookups only, never across an await.
     sessions: std::sync::Mutex<HashMap<String, SessionHandle>>,
     keys: std::sync::Mutex<HashMap<String, Arc<KeyState>>>,
+    /// One pull task per `hls_pull` input, with the source it was started
+    /// for so a changed row restarts it. Held for lookups only, never across
+    /// an await.
+    pulls: std::sync::Mutex<HashMap<String, RunningPull>>,
+}
+
+/// A running pull and the source it was started from. A row whose URL,
+/// rendition or credential differs is a different origin, so the task is
+/// replaced rather than left pulling what the row no longer says.
+struct RunningPull {
+    source: PullSource,
+    task: HlsPullTask,
 }
 
 impl HlsIngest {
@@ -109,11 +142,64 @@ impl HlsIngest {
             budget: Arc::new(Semaphore::new(limits.total_buffer_bytes)),
             sessions: std::sync::Mutex::new(HashMap::new()),
             keys: std::sync::Mutex::new(HashMap::new()),
+            pulls: std::sync::Mutex::new(HashMap::new()),
         })
     }
 
     pub fn limits(&self) -> &HlsIngestLimits {
         &self.limits
+    }
+
+    /// Ensure the input is pulling `source`, starting a task if none runs or
+    /// if the running one was started for a different source.
+    ///
+    /// Returns whether a task was started, so the caller can log a change and
+    /// a repeated reconcile pass costs one comparison.
+    pub fn ensure_pull(self: &Arc<Self>, identity: PullIdentity, source: PullSource) -> bool {
+        let mut pulls = crate::sync::lock(&self.pulls);
+        if let Some(running) = pulls.get(&identity.input_id) {
+            if running.source == source {
+                return false;
+            }
+            running.task.cancel();
+        }
+        let input_id = identity.input_id.clone();
+        let task = crate::media::hls_pull::spawn(
+            self.engine.clone(),
+            self.clone(),
+            identity,
+            source.clone(),
+            self.limits,
+        );
+        pulls.insert(input_id, RunningPull { source, task });
+        true
+    }
+
+    /// Stop the input's pull task, if one runs. The task ends at its next
+    /// await; it is not joined, because that would put an origin's request
+    /// timeout inside the reconcile pass.
+    pub fn cancel_pull(&self, input_id: &str) -> bool {
+        let running = crate::sync::lock(&self.pulls).remove(input_id);
+        match running {
+            Some(running) => {
+                running.task.cancel();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The inputs currently pulling.
+    pub fn pull_input_ids(&self) -> HashSet<String> {
+        crate::sync::lock(&self.pulls).keys().cloned().collect()
+    }
+
+    /// Stop every pull task. Called once, on shutdown.
+    pub fn cancel_all_pulls(&self) {
+        let running: Vec<_> = crate::sync::lock(&self.pulls).drain().collect();
+        for (_, running) in running {
+            running.task.cancel();
+        }
     }
 
     /// Resolve the stream key exactly as RTMP and SRT publish do.
@@ -224,11 +310,16 @@ impl HlsIngest {
     /// Hand one fully read object to the key's session, starting it if
     /// needed. A session that ended under the object gets one restart with
     /// the same object; a refused start (another publisher) is final.
+    // Every argument is a distinct fact about the object or its session
+    // (which pipeline, which key, from where, pushed or pulled, what kind,
+    // which path, and the bytes); bundling them would only move the list.
+    #[allow(clippy::too_many_arguments)]
     pub async fn dispatch(
         self: &Arc<Self>,
         pipeline: &AuthenticatedPipeline,
         stream_key: &str,
         client_addr: &str,
+        origin: DispatchOrigin,
         kind: ObjectKind,
         path: String,
         body: ObjectBody,
@@ -241,7 +332,9 @@ impl HlsIngest {
             reply,
         };
         for _attempt in 0..2 {
-            let (attempt_id, objects) = self.session_for(pipeline, stream_key, client_addr).await?;
+            let (attempt_id, objects) = self
+                .session_for(pipeline, stream_key, client_addr, origin)
+                .await?;
             match objects.send(object).await {
                 Ok(()) => return outcome.await.map_err(|_| DispatchError::Unavailable),
                 Err(mpsc::error::SendError(returned)) => {
@@ -264,6 +357,7 @@ impl HlsIngest {
         pipeline: &AuthenticatedPipeline,
         stream_key: &str,
         client_addr: &str,
+        origin: DispatchOrigin,
     ) -> Result<(u64, mpsc::Sender<HlsObject>), DispatchError> {
         if let Some(session) = self.current_session(&pipeline.input_id) {
             return Ok(session);
@@ -280,7 +374,7 @@ impl HlsIngest {
                 &pipeline.id,
                 &pipeline.input_id,
                 stream_key,
-                "hls",
+                origin.protocol(),
                 pipeline.selected,
             )
             .await

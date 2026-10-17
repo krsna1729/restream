@@ -8,13 +8,14 @@
 //! restart starts from the same rows.
 
 use std::collections::{BTreeSet, HashSet};
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use sqlx::SqlitePool;
 use tokio::sync::Notify;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::application::models::Output;
 use crate::media::engine::MediaEngine;
@@ -180,6 +181,69 @@ pub async fn converge_topology(pool: &SqlitePool, engine: &MediaEngine, outputs:
 
     for pipeline_id in runtime_pipelines.difference(&pipelines) {
         engine.teardown_pipeline_runtime(pipeline_id).await;
+    }
+}
+
+/// Converge HLS pull inputs with their rows: an enabled `hls_pull` input has
+/// a running pull task, and every other pull task is stopped.
+///
+/// The row is the whole instruction, so a pass is one read and a comparison:
+/// an input that is disabled, deleted (the cascade takes its row), or whose
+/// URL, rendition or credential changed is stopped or replaced, and one that
+/// is newly enabled starts. A source that is running is left alone, so a pass
+/// costs no work while nothing changes.
+///
+/// This runs before [`converge_topology`] so a deleted pipeline's pull tasks
+/// stop before its runtime is torn down, and a pull task can never recreate
+/// the ring of a pipeline that is going away.
+pub async fn converge_pull_inputs(
+    pool: &SqlitePool,
+    ingest: &Arc<crate::media::hls_ingest::HlsIngest>,
+) {
+    let pulls = match crate::db::list_pull_inputs(pool).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            warn!(err = %error, "DB error reading pull inputs; pull inputs not converged this pass");
+            return;
+        }
+    };
+    let wanted = pulls
+        .iter()
+        .filter(|input| input.enabled && input.source_url.is_some())
+        .map(|input| input.id.as_str())
+        .collect::<HashSet<_>>();
+
+    for input_id in ingest.pull_input_ids() {
+        if !wanted.contains(input_id.as_str()) && ingest.cancel_pull(&input_id) {
+            info!(input_id = %input_id, "HLS pull stopped");
+        }
+    }
+
+    for input in pulls
+        .iter()
+        .filter(|input| wanted.contains(input.id.as_str()))
+    {
+        // Validation requires a URL for a pull input; a row without one is
+        // left alone rather than pulled from nowhere.
+        let Some(url) = input.source_url.clone() else {
+            continue;
+        };
+        let started = ingest.ensure_pull(
+            crate::media::hls_pull::PullIdentity {
+                pipeline_id: input.pipeline_id.clone(),
+                input_id: input.id.clone(),
+                stream_key: input.stream_key.clone(),
+                selected: input.selected,
+            },
+            crate::media::hls_pull::PullSource {
+                url,
+                variant: input.variant_rule,
+                auth: input.source_auth.clone(),
+            },
+        );
+        if started {
+            info!(input_id = %input.id, pipeline_id = %input.pipeline_id, "HLS pull started");
+        }
     }
 }
 

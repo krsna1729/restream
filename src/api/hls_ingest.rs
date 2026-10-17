@@ -16,7 +16,7 @@ use futures_util::StreamExt;
 
 use crate::media::hls_ingest::playlist::normalize_path;
 use crate::media::hls_ingest::{
-    AuthorizeError, BodyError, DispatchError, HlsIngest, ObjectKind, ObjectOutcome,
+    AuthorizeError, BodyError, DispatchError, DispatchOrigin, HlsIngest, ObjectKind, ObjectOutcome,
 };
 
 pub async fn hls_ingest_handler(
@@ -117,7 +117,15 @@ pub async fn hls_ingest_handler(
     let client_addr = client.map_or_else(|| "unknown".to_string(), |addr| addr.to_string());
     let dispatch = tokio::spawn(async move {
         let outcome = ingest
-            .dispatch(&pipeline, &stream_key, &client_addr, kind, path, object)
+            .dispatch(
+                &pipeline,
+                &stream_key,
+                &client_addr,
+                DispatchOrigin::Push,
+                kind,
+                path,
+                object,
+            )
             .await;
         drop(slot);
         outcome

@@ -67,6 +67,17 @@ impl MasterPlaylist {
             }
         })
     }
+
+    /// The variant to follow: the lowest `BANDWIDTH`, the first on a tie.
+    pub fn lowest_bandwidth(&self) -> Option<&Variant> {
+        self.variants.iter().reduce(|best, next| {
+            if next.bandwidth < best.bandwidth {
+                next
+            } else {
+                best
+            }
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +123,16 @@ impl std::error::Error for PlaylistError {}
 
 /// Parse the playlist uploaded at `playlist_path` (already normalized).
 pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistError> {
+    parse_with(bytes, |uri| resolve_uri(playlist_path, uri))
+}
+
+/// Parse a playlist whose URIs a caller resolves (push uploads against their
+/// namespace, pull ingest against the remote playlist URL). The resolver gets
+/// each raw URI; `None` rejects it.
+pub fn parse_with(
+    bytes: &[u8],
+    mut resolve: impl FnMut(&str) -> Option<String>,
+) -> Result<Playlist, PlaylistError> {
     let text = std::str::from_utf8(bytes).map_err(|_| PlaylistError::NotUtf8)?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut lines = text
@@ -160,10 +181,7 @@ pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistErro
             ended = true;
         } else if let Some(value) = line.strip_prefix("#EXT-X-MAP:") {
             let uri = attribute(value, "URI").ok_or_else(|| invalid("EXT-X-MAP"))?;
-            map_uri = Some(
-                resolve_uri(playlist_path, uri)
-                    .ok_or(PlaylistError::InvalidUri { line: line_number })?,
-            );
+            map_uri = Some(resolve(uri).ok_or(PlaylistError::InvalidUri { line: line_number })?);
         } else if let Some(attributes) = line.strip_prefix("#EXT-X-STREAM-INF:") {
             let bandwidth = attribute(attributes, "BANDWIDTH")
                 .and_then(|value| value.parse().ok())
@@ -172,8 +190,7 @@ pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistErro
         } else if line.starts_with('#') {
             // Comments and tags this ingest does not need.
         } else {
-            let path = resolve_uri(playlist_path, line)
-                .ok_or(PlaylistError::InvalidUri { line: line_number })?;
+            let path = resolve(line).ok_or(PlaylistError::InvalidUri { line: line_number })?;
             if let Some(bandwidth) = pending_bandwidth.take() {
                 variants.push(Variant { bandwidth, path });
             } else {
@@ -339,6 +356,13 @@ mod tests {
             })
         );
         assert_eq!(master.variants[0].path, "low/index.m3u8");
+        assert_eq!(
+            master.lowest_bandwidth(),
+            Some(&Variant {
+                bandwidth: 800_000,
+                path: "low/index.m3u8".into()
+            })
+        );
     }
 
     #[test]

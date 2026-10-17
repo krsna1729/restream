@@ -48,6 +48,17 @@ export interface PipelineInputRuntime {
   quality: PublisherQuality | null;
 }
 
+/** How an input receives media: a publisher that presents its stream key on
+ * one of the ingest listeners, or a remote HLS origin the engine pulls. */
+export type PipelineInputKind = "keyed" | "hlsPull";
+
+/** Which rendition of a remote master playlist a pull input follows. */
+export type VariantRule = "highestBandwidth" | "lowestBandwidth";
+
+/** How a pull input authenticates to its origin. The credential is write-only:
+ * the API returns only this variant and, for "basic", a username. */
+export type PullAuthKind = "none" | "bearer" | "basic" | "headers";
+
 export interface PipelineInput {
   id: string;
   pipelineId: string;
@@ -56,7 +67,17 @@ export interface PipelineInput {
   role: "primary" | "backup";
   enabled: boolean;
   selected: boolean;
-  ingestUrls: IngestUrls;
+  /** "keyed" waits for a publisher on `ingestUrls`; "hlsPull" fetches
+   * `sourceUrl` and accepts no pushes. */
+  kind: PipelineInputKind;
+  /** The remote origin, for a pull input only. */
+  sourceUrl: string | null;
+  variantRule: VariantRule;
+  authKind: PullAuthKind;
+  /** A basic username is not a secret; every other credential field is. */
+  authUsername: string | null;
+  /** null for a pull input: it accepts no pushes. */
+  ingestUrls: IngestUrls | null;
   previewUrl: string;
   runtime: PipelineInputRuntime;
 }

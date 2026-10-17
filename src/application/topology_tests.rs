@@ -42,6 +42,83 @@ fn forwarded_input(engine: &MediaEngine, pipeline_id: &str) -> Option<String> {
         .map(|ingest| ingest.input_id.clone())
 }
 
+/// One pull input's rows: an enabled input starts a pull task, disabling it
+/// stops the task, re-enabling starts a fresh one, and a pass that changes
+/// nothing leaves the running task alone.
+#[tokio::test]
+async fn pull_inputs_follow_their_rows_across_passes() {
+    let pool = pool().await;
+    crate::db::create_pipeline(&pool, "pipe", "P", "key-p", None, None)
+        .await
+        .unwrap();
+    let (_engine, ingest) = crate::media::hls_ingest::test_support::test_ingest(
+        crate::media::hls_ingest::HlsIngestLimits::default(),
+    );
+    let pull = crate::domain::pipeline_input::PipelineInputSource {
+        kind: crate::domain::pipeline_input::PipelineInputSourceKind::HlsPull,
+        url: Some("http://127.0.0.1:9/master.m3u8".to_string()),
+        variant_rule: crate::domain::pipeline_input::VariantRule::HighestBandwidth,
+        auth: crate::domain::pipeline_input::PullAuth::None,
+    };
+    crate::db::create_pipeline_input(&pool, "in-pull", "pipe", "pull", "key-pull", &pull)
+        .await
+        .unwrap();
+    crate::db::create_pipeline_input(
+        &pool,
+        "in-keyed",
+        "pipe",
+        "keyed",
+        "key-keyed",
+        &crate::domain::pipeline_input::PipelineInputSource::keyed(),
+    )
+    .await
+    .unwrap();
+
+    converge_pull_inputs(&pool, &ingest).await;
+    assert_eq!(
+        ingest.pull_input_ids(),
+        ["in-pull".to_string()].into_iter().collect(),
+        "only the pull input pulls"
+    );
+
+    converge_pull_inputs(&pool, &ingest).await;
+    assert!(
+        ingest.pull_input_ids().contains("in-pull"),
+        "a pass that changes nothing leaves the task running"
+    );
+
+    crate::db::update_pipeline_input(&pool, "pipe", "in-pull", "pull", false, &pull)
+        .await
+        .unwrap();
+    converge_pull_inputs(&pool, &ingest).await;
+    assert!(
+        ingest.pull_input_ids().is_empty(),
+        "a disabled input stops pulling"
+    );
+
+    crate::db::update_pipeline_input(
+        &pool,
+        "pipe",
+        "in-pull",
+        "pull",
+        true,
+        &crate::domain::pipeline_input::PipelineInputSource {
+            kind: crate::domain::pipeline_input::PipelineInputSourceKind::HlsPull,
+            url: Some("http://127.0.0.1:9/other.m3u8".to_string()),
+            variant_rule: crate::domain::pipeline_input::VariantRule::HighestBandwidth,
+            auth: crate::domain::pipeline_input::PullAuth::None,
+        },
+    )
+    .await
+    .unwrap();
+    converge_pull_inputs(&pool, &ingest).await;
+    assert!(
+        ingest.pull_input_ids().contains("in-pull"),
+        "an edited row pulls again"
+    );
+    ingest.cancel_all_pulls();
+}
+
 #[tokio::test]
 async fn a_deleted_output_loses_its_egress_and_its_sibling_keeps_running() {
     let pool = pool().await;
@@ -122,9 +199,16 @@ async fn a_persisted_promotion_switches_the_forwarded_input_on_request() {
     crate::db::create_pipeline(&pool, "pipe", "P", "key-p", None, None)
         .await
         .unwrap();
-    crate::db::create_pipeline_input(&pool, "input-backup", "pipe", "Backup", "key-b")
-        .await
-        .unwrap();
+    crate::db::create_pipeline_input(
+        &pool,
+        "input-backup",
+        "pipe",
+        "Backup",
+        "key-b",
+        &crate::domain::pipeline_input::PipelineInputSource::keyed(),
+    )
+    .await
+    .unwrap();
     let primary = engine
         .try_register_pipeline_input_attempt("pipe", "input_primary_pipe", "key-p", "rtmp", true)
         .await

@@ -102,12 +102,27 @@ impl PipelineAccessAuthenticator for PipelineStoreIngestAuthenticator {
                 .map_err(pipeline_access_error)?,
             };
 
+            // A pull input has no listener of its own: it never accepts a
+            // push, so its key resolves only for reads. Publishing to it
+            // would otherwise race the pull task for the input's session.
+            let pushing = matches!(
+                mode,
+                PipelineAccessMode::RtmpPublish
+                    | PipelineAccessMode::SrtPublish
+                    | PipelineAccessMode::HlsPublish
+            );
             let input = self
                 .input_lookup
                 .get_by_stream_key(stream_key)
                 .await
                 .map_err(|error| PipelineAccessError::LookupFailed(error.to_string()))?
-                .filter(|input| input.pipeline_id == pipeline.id && input.enabled)
+                .filter(|input| {
+                    input.pipeline_id == pipeline.id
+                        && input.enabled
+                        && (!pushing
+                            || input.source_kind
+                                == crate::domain::pipeline_input::PipelineInputSourceKind::Keyed)
+                })
                 .ok_or(PipelineAccessError::InvalidStreamKey)?;
 
             Ok(AuthenticatedPipeline {

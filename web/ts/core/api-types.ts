@@ -6,7 +6,9 @@ import type {
   ConfigPipeline,
   ConfigOutput,
   OutputConfig,
+  PipelineInputKind,
   SrtPipelineIngestConfig,
+  VariantRule,
   AppLogRow,
 } from "../types.js";
 import type {
@@ -582,6 +584,38 @@ export interface PipelineWrite {
     liveOptimized: boolean;
     targetGopSeconds: number;
   } | null;
+}
+
+/** One request header a pull input presents to its origin. Its value is a
+ * credential: stored and used, never returned. */
+export interface PullHeaderPair {
+  name: string;
+  value: string;
+}
+
+/** The `auth` object of a pipeline input write: one tagged mechanism. A signed
+ * URL carries its own token and the fetcher's cookie jar carries what the
+ * origin sets, so `None` covers both. Every secret here is write-only. */
+export type PullAuthPayload =
+  | { kind: "none" }
+  | { kind: "bearer"; token: string }
+  | { kind: "basic"; username: string; password: string }
+  | { kind: "headers"; headers: PullHeaderPair[] };
+
+/** The body of a pipeline input create. */
+export interface PipelineInputWrite {
+  label: string;
+  kind: PipelineInputKind;
+  /** The remote origin; null when `kind` is "keyed", which accepts pushes. */
+  sourceUrl?: string | null;
+  variantRule?: VariantRule;
+  auth?: PullAuthPayload;
+}
+
+/** The body of a pipeline input update. An omitted `auth` keeps the stored
+ * credential; `{"kind":"none"}` clears it. */
+export interface PipelineInputPatch extends Partial<PipelineInputWrite> {
+  enabled?: boolean;
 }
 
 export interface ProbeAudioTrack {

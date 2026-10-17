@@ -164,8 +164,8 @@ Returns the frontend's platform/protocol audio capability matrix.
 | `PATCH` | `/api/v1/pipelines/:id` | Replace editable pipeline fields |
 | `DELETE` | `/api/v1/pipelines/:id` | Delete a pipeline |
 | `GET` | `/api/v1/pipelines/:pipelineId/inputs` | List configured inputs and runtime state |
-| `POST` | `/api/v1/pipelines/:pipelineId/inputs` | Add a backup input |
-| `PATCH` | `/api/v1/pipelines/:pipelineId/inputs/:inputId` | Rename or enable/disable an input |
+| `POST` | `/api/v1/pipelines/:pipelineId/inputs` | Add a backup or HLS pull input |
+| `PATCH` | `/api/v1/pipelines/:pipelineId/inputs/:inputId` | Rename, enable/disable, or reconfigure an input's source |
 | `DELETE` | `/api/v1/pipelines/:pipelineId/inputs/:inputId` | Delete an unselected backup input |
 | `POST` | `/api/v1/pipelines/:pipelineId/inputs/:inputId/promote` | Select and promote an input |
 
@@ -225,10 +225,28 @@ stream key and RTMP/SRT URL. Exactly one enabled input is selected. Role records
 how the input was created; promoting a backup changes selection without
 rewriting its role.
 
-Create body:
+An input's `kind` is `keyed` (the default: it waits for an external publisher)
+or `hlsPull`. A `hlsPull` input has no ingest listener; the engine fetches a
+remote live HLS origin instead. Its response carries `sourceUrl` and a
+`variantRule` of `highestBandwidth` (default) or `lowestBandwidth`, which picks
+the rendition from the origin's master playlist.
+
+Keyed create body:
 
 ```json
 { "label": "Venue encoder B" }
+```
+
+HLS pull create body:
+
+```json
+{
+  "label": "Origin",
+  "kind": "hlsPull",
+  "sourceUrl": "https://origin.example/live/master.m3u8",
+  "variantRule": "highestBandwidth",
+  "auth": { "kind": "bearer", "token": "…" }
+}
 ```
 
 Patch body:
@@ -237,8 +255,45 @@ Patch body:
 { "label": "Venue encoder B", "enabled": true }
 ```
 
+An `hlsPull` input requires an absolute `http` or `https` `sourceUrl` no longer
+than 2048 bytes. A `keyed` input must not carry `sourceUrl` or `auth`. An
+unknown `kind`, `variantRule`, or `auth.kind` is rejected rather than defaulted.
+
+#### Pull credentials
+
+A remote origin behind a token or cookie needs an `auth` entry; everything in
+it is write-only, stored and used but **never** returned:
+
+- **Signed URL** — the token is already in the URL, so no `auth` entry is
+  needed.
+- **Signed cookies** — the fetcher carries the origin's cookie jar
+  automatically, so no `auth` entry is needed.
+- **Basic auth** — `{ "kind": "basic", "username": "…", "password": "…" }`.
+- **Bearer token** — `{ "kind": "bearer", "token": "…" }`.
+- **Custom headers** — `{ "kind": "headers", "headers": [ { "name": "…",
+  "value": "…" } ] }`, for referer, `X-*` tokens or explicit cookies.
+
+`auth` is one tagged object. `bearer.token` is 1 to 4096 bytes; `basic`
+`username` is 1 to 256 bytes and `password` 1 to 4096 bytes; `headers` accepts
+at most 8 entries with names of at most 64 bytes of HTTP token characters and
+values of at most 1024 bytes. No name or value may contain CR, LF or NUL.
+`{ "kind": "none" }` clears the credential and must carry no payload.
+
+On patch, an absent `auth` keeps the stored credential, so a request that does
+not mention it never clears it; `{ "kind": "none" }` clears it, and any other
+variant replaces it wholesale. Responses expose only `authKind`
+(`none`, `bearer`, `basic`, or `headers`) and `authUsername` — a username is
+not a secret, but a token, password, or header value never is. Disabling a
+pull input keeps its stored `sourceUrl` and `auth`; `enabled` alone starts or
+stops its puller.
+
 List and mutation responses expose each input's `id`, `label`, `streamKey`,
-`role`, `enabled`, `selected`, `ingestUrls`, `previewUrl`, and `runtime`.
+`role`, `kind`, `sourceUrl`, `variantRule`, `authKind`, `authUsername`,
+`enabled`, `selected`, `ingestUrls`, `previewUrl`, and `runtime`. A keyed
+input's `ingestUrls` holds its `rtmp` and `srt` URLs; a pull input accepts no
+pushes, so its `ingestUrls` is `null`. `sourceUrl`, `variantRule`, `authKind`,
+and `authUsername` are always present (a keyed input has `sourceUrl: null`,
+`variantRule: "highestBandwidth"`, and `authKind: "none"`).
 Runtime includes `connected`, `forwardingState`, protocol, uptime, bytes,
 remote address, media metadata, and transport quality. A connected unselected
 input reports `forwardingState: "standby"`; a promoted input may briefly report

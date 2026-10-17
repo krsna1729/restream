@@ -77,10 +77,38 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
             role TEXT NOT NULL CHECK(role IN ('primary', 'backup')),
             enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
             selected INTEGER NOT NULL DEFAULT 0 CHECK(selected IN (0, 1)),
+            source_kind TEXT NOT NULL DEFAULT 'keyed' CHECK(source_kind IN ('keyed', 'hls_pull')),
+            source_url TEXT,
+            variant_rule TEXT NOT NULL DEFAULT 'highest_bandwidth' CHECK(variant_rule IN ('highest_bandwidth', 'lowest_bandwidth')),
+            source_auth TEXT CHECK(source_auth IS NULL OR (json_valid(source_auth) AND json_extract(source_auth, '$.kind') IN ('none', 'bearer', 'basic', 'headers'))),
             FOREIGN KEY(pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE
         );",
     )
     .execute(pool)
+    .await?;
+    // HLS pull inputs (Q-068) add a source kind, remote URL, variant rule and
+    // write-only auth to rows created before this feature.
+    super::migrations::ensure_column_exists(
+        pool,
+        "pipeline_inputs",
+        "source_kind",
+        "TEXT NOT NULL DEFAULT 'keyed' CHECK(source_kind IN ('keyed', 'hls_pull'))",
+    )
+    .await?;
+    super::migrations::ensure_column_exists(pool, "pipeline_inputs", "source_url", "TEXT").await?;
+    super::migrations::ensure_column_exists(
+        pool,
+        "pipeline_inputs",
+        "variant_rule",
+        "TEXT NOT NULL DEFAULT 'highest_bandwidth' CHECK(variant_rule IN ('highest_bandwidth', 'lowest_bandwidth'))",
+    )
+    .await?;
+    super::migrations::ensure_column_exists(
+        pool,
+        "pipeline_inputs",
+        "source_auth",
+        "TEXT CHECK(source_auth IS NULL OR (json_valid(source_auth) AND json_extract(source_auth, '$.kind') IN ('none', 'bearer', 'basic', 'headers')))",
+    )
     .await?;
     sqlx::query(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_pipeline_inputs_stream_key_unique

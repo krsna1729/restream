@@ -28,12 +28,14 @@ items).
 - [Q-065 capacity cost of HLS, sink and pipeline outputs](#q-065-performance-sonnet-price-hls-sink-and-pipeline-outputs-from-a-measured-cost)
 - [Q-066 SRT ingress test port race](#q-066-testing-sonnet-srt-multi-owner-test-port-can-join-a-foreign-reuseport-group)
 - [Q-067 HLS push ingest: remaining gates](#q-067-protocol-opus-hls-push-ingest-remaining-gates)
-- [Q-068 HLS pull ingest](#q-068-protocol-opus-hls-pull-ingest)
 - [Q-069 frame-level media units](#q-069-architecture-opus-frame-level-media-units-for-moq-and-fmp4-ingest)
 - [Q-070 MoQ ingest](#q-070-protocol-opus-moq-ingest)
 - [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
 - [Q-072 dedicated HLS ingest listener](#q-072-architecture-sonnet-dedicated-hls-ingest-listener-with-half-close)
 - [Q-073 HEVC fMP4 HLS push ingest](#q-073-protocol-opus-hevc-fmp4-hls-push-ingest)
+- [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
+- [Q-075 one raw AAC frame per unit](#q-075-protocol-opus-one-raw-aac-frame-per-message-and-per-sample)
+- [Q-076 HTTP Digest for pull origins](#q-076-protocol-sonnet-http-digest-authentication-for-hls-pull-origins)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -451,20 +453,6 @@ items).
 - Status: open (Filed: 2026-10-16 by claude, user request; TS and
   H.264/AAC fMP4 push done).
 
-### Q-068 [protocol] [opus] HLS pull ingest
-- Goal: a pipeline input pulls a remote live HLS URL.
-- Contract: the input stores the source URL and a variant rule (default
-  highest `BANDWIDTH`). The puller fetches the playlist again every
-  target duration (half of it after a reload that brought nothing new, RFC
-  8216 section 6.3.4), fetches new segments in order with `reqwest`, with
-  bounded playlist and segment sizes, and
-  feeds the same session assembler as Q-067 (ordering, demux, ring),
-  with bounded retry and backoff. API and frontend input forms gain the
-  source kind.
-- Gates: unit tests for refresh and variant choice; one harness mode that
-  pulls Restream's own HLS output.
-- Status: open (Filed: 2026-10-16 by claude, user request; after Q-067).
-
 ### Q-069 [architecture] [opus] Frame-level media units for MoQ and fMP4 ingest
 - Goal: the ring can feed per-frame consumers (MoQ objects, LL-HLS parts).
 - Sources: `MediaPacket` (`src/media/packet.rs`) has no codec
@@ -675,4 +663,27 @@ items).
   delivered_ok requires only audioCount > 0), which a mutation reverting the
   split must fail; the SRT-to-RTMP and HLS-to-RTMP paths still deliver.
 - Status: open (Filed: 2026-10-16 by claude, from the HLS ingest isolation
-  measurement). Fix before HLS pull ingest, which reuses the same path.
+  measurement). Every TS source shares the path — SRT, file ingest, HLS push
+  and HLS pull — so this is a defect of the demuxer, not of one ingest kind.
+
+### Q-076 [protocol] [sonnet] HTTP Digest authentication for HLS pull origins
+- Goal: a pull input authenticates to an origin that answers `401` with a
+  `WWW-Authenticate: Digest` challenge, as FFmpeg's `-auth_type digest` and
+  an AWS MediaLive HLS input both support.
+- Why it is not in the shipped pull feature: the credential variants are
+  `none`, `bearer`, `basic` and `headers` (`PullAuth` in
+  `src/domain/pipeline_input.rs`), and no HTTP-digest crate is in the tree. A
+  hand-rolled RFC 7616 (MD5, MD5-sess, SHA-256, `qop=auth`, nonce counting,
+  a stale nonce) is a correctness risk for a mechanism most origins have
+  replaced with signed URLs or bearer tokens, and the harness gate does not
+  need it.
+- Change: add a `digest` variant to `PullAuth` with the same write-only rule,
+  validation and `Debug` redaction as `basic`, and implement the
+  challenge/response on the request path in `src/media/hls_pull.rs` — or
+  adopt a maintained crate if one is vetted.
+- Gates: a test against a local origin that challenges with each supported
+  algorithm and `qop`; one that answers `stale=true` and must be retried
+  once; a rejection, with a stated reason, when the challenge offers no
+  supported algorithm.
+- Status: open (Filed: 2026-10-17 by claude, from the pull-credential
+  decision: all four mechanisms ship as a choice, digest does not).

@@ -33,8 +33,8 @@ pub use output_repo::{
 };
 pub use pipeline_input_repo::{
     create_pipeline_input, delete_pipeline_input, get_pipeline_input,
-    get_pipeline_input_by_stream_key, list_pipeline_inputs, promote_pipeline_input,
-    update_pipeline_input,
+    get_pipeline_input_by_stream_key, list_pipeline_inputs, list_pull_inputs,
+    promote_pipeline_input, update_pipeline_input,
 };
 pub use pipeline_repo::{
     PipelineRecord, create_pipeline, delete_pipeline, get_pipeline, get_pipeline_by_stream_key,

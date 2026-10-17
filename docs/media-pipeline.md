@@ -25,6 +25,7 @@ For the performance optimization plan and benchmark results, see
 - [SRT bonding](#srt-bonding)
 - [SRT ingress owner](#srt-ingress-owner)
 - [HLS push ingest](#hls-push-ingest)
+- [HLS pull ingest](#hls-pull-ingest)
 - [Protocol correctness requirements](#protocol-correctness-requirements)
 
 ## Current shape
@@ -812,6 +813,63 @@ keeps the container it started with.
     ~77 µs and its ring publication ~76 µs); averaged over every poll,
     including the turns that only apply an object or wait, ~84 µs.
   - A panic in a session ends only that session and releases its input.
+
+## HLS pull ingest
+
+An `HlsPull` pipeline input has no listener: one task fetches a remote live
+HLS origin and feeds what it fetches into the same session assembler as push
+ingest (`src/media/hls_pull.rs`, session registered as protocol `hls-pull`).
+Ordering, discontinuity handling, demuxing, timestamps and pacing are the push
+path's; the puller only decides what to fetch.
+
+- **Source.** The input stores the playlist URL, a variant rule (`highest`
+  or `lowest` `BANDWIDTH`, default highest) and origin credentials:
+  bearer, basic, or a set of request headers. A source URL may carry its own
+  token in the query; that query is forwarded on every relative URI the
+  playlist resolves and is stripped from logs. Credentials are write-only —
+  stored and used, never returned by the API.
+- **Cookies.** The client always has a cookie jar: a `Set-Cookie` returned
+  with a playlist is presented with that playlist's segments, as a browser or
+  FFmpeg `-cookies` does. Cookies are scoped by the jar to the origin's
+  domain.
+- **Redirects.** Reqwest follows at most 10 hops. On a redirect that changes
+  host or port it removes `Authorization`, `Cookie`, `cookie2`,
+  `Proxy-Authorization` and `WWW-Authenticate` (`remove_sensitive_headers` in
+  reqwest 0.12.28), so credentials cannot leak to another host.
+- **Variant choice.** A master playlist is resolved once; the chosen media
+  playlist is followed directly on later refreshes. The master itself is not
+  fed to the assembler, which means the puller's rule (not ordering's
+  highest-only push rule) decides the rendition.
+- **Refresh cadence.** The media playlist is fetched again every target
+  duration, and half a target duration after a reload that brought nothing
+  new (RFC 8216 section 6.3.4). Segments listed with a sequence below the
+  first not-yet-fetched one are skipped, never refetched.
+- **Feeding.** URIs in a remote playlist are absolute URLs, while the
+  assembler parses upload paths inside one stream key's namespace. Each
+  fetched media playlist is rewritten into that namespace (sequence `N` is
+  `pull/sN.ts` or `pull/sN.m4s`; an `EXT-X-MAP` becomes `pull/m<hash>.mp4`)
+  with its target duration, media sequence, `EXTINF`, discontinuity, map and
+  `EXT-X-ENDLIST` tags preserved. The playlist is dispatched first, then its
+  new segments in order, then an init before the segments of a new map, all
+  through `HlsIngest::object_body` → `ObjectBody::push` →
+  `HlsIngest::dispatch` with `DispatchOrigin::Pull`. Ordering therefore sees
+  exactly the objects an encoder would have sent.
+- **Bounds.** Playlists are bounded by `max_playlist_bytes`, segments by
+  `max_segment_bytes`, and fMP4 inits by `max_init_bytes`, both from the
+  declared length and while streaming; an over-bound object is refused before
+  it is dispatched.
+- **Retries.** Transport errors and non-2xx responses retry with the HLS
+  upload backoff (200 ms doubling to a 5 s cap). After six consecutive
+  failures the puller waits 30 s before the next burst, so a wrong URL or a
+  down origin is a slow poll, never a spin. Only an invalid source or
+  credential configuration, a master playlist that points at another master,
+  and another publisher holding the input end the task. `EXT-X-ENDLIST` ends
+  it after the last listed segment is handed over.
+- **Cancellation.** `cancel` stops the task at its next await (in-flight HTTP
+  requests are dropped) and `join` waits for it. The session it opened ends on
+  its own idle timeout, or when the input is cancelled. No per-packet work and
+  no blocking call runs on Tokio; requests are async and the assembler runs on
+  the MEDIA executor.
 
 ## Protocol correctness requirements
 

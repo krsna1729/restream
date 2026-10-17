@@ -8,17 +8,43 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::domain::pipeline_input::PipelineInput;
+use crate::domain::pipeline_input::{
+    HeaderPair, PipelineInput, PipelineInputSource, PipelineInputSourceKind, PullAuth, VariantRule,
+};
 
 use super::error::ApiError;
 use super::state::{
-    AppState, MAX_NAME_LEN, check_field_len, refresh_srt_ingest_policy_store, require_authenticated,
+    AppState, MAX_NAME_LEN, MAX_URL_LEN, check_field_len, refresh_srt_ingest_policy_store,
+    require_authenticated,
 };
+
+/// Longest bearer token, in bytes.
+const MAX_AUTH_TOKEN_LEN: usize = 4096;
+/// Longest basic-auth username, in bytes.
+const MAX_AUTH_USERNAME_LEN: usize = 256;
+/// Longest basic-auth password, in bytes.
+const MAX_AUTH_PASSWORD_LEN: usize = 4096;
+/// At most this many request headers in a `headers` auth entry.
+const MAX_INPUT_HEADERS: usize = 8;
+/// Longest request header name, in bytes.
+const MAX_HEADER_NAME_LEN: usize = 64;
+/// Longest request header value, in bytes.
+const MAX_HEADER_VALUE_LEN: usize = 1024;
+/// RFC 7230 token characters beyond ASCII alphanumerics.
+const HTTP_TOKEN_CHARS: &str = "!#$%&'*+-.^_`|~";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateInputPayload {
     label: String,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    source_url: Option<String>,
+    #[serde(default)]
+    variant_rule: Option<String>,
+    #[serde(default)]
+    auth: Option<AuthPayload>,
 }
 
 #[derive(Deserialize)]
@@ -26,6 +52,202 @@ pub struct CreateInputPayload {
 pub struct UpdateInputPayload {
     label: Option<String>,
     enabled: Option<bool>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    source_url: Option<String>,
+    #[serde(default)]
+    variant_rule: Option<String>,
+    #[serde(default)]
+    auth: Option<AuthPayload>,
+}
+
+/// The `auth` object on create/update: one tagged credential mechanism.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthPayload {
+    kind: String,
+    #[serde(default)]
+    token: Option<String>,
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default)]
+    password: Option<String>,
+    #[serde(default)]
+    headers: Option<Vec<HeaderPair>>,
+}
+
+fn bad_request(message: impl Into<String>) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({ "error": message.into() })),
+    )
+        .into_response()
+}
+
+/// Parse the request `kind` string. Unknown values are rejected rather than
+/// silently defaulting to a keyed input.
+fn parse_source_kind(raw: &str) -> Result<PipelineInputSourceKind, String> {
+    serde_json::from_value::<PipelineInputSourceKind>(serde_json::Value::String(raw.to_string()))
+        .map_err(|_| format!("unknown input kind \"{raw}\": expected \"keyed\" or \"hlsPull\""))
+}
+
+/// Parse the request `variantRule` string. Unknown values are rejected.
+fn parse_variant_rule(raw: &str) -> Result<VariantRule, String> {
+    serde_json::from_value::<VariantRule>(serde_json::Value::String(raw.to_string())).map_err(|_| {
+        format!(
+            "unknown variant rule \"{raw}\": expected \"highestBandwidth\" or \"lowestBandwidth\""
+        )
+    })
+}
+
+fn is_http_token(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || HTTP_TOKEN_CHARS.contains(byte as char))
+}
+
+fn contains_control(value: &str) -> bool {
+    value
+        .bytes()
+        .any(|byte| matches!(byte, b'\r' | b'\n' | b'\0'))
+}
+
+fn validate_headers(headers: &[HeaderPair]) -> Option<String> {
+    if headers.len() > MAX_INPUT_HEADERS {
+        return Some(format!(
+            "at most {MAX_INPUT_HEADERS} request headers are allowed"
+        ));
+    }
+    for header in headers {
+        if header.name.len() > MAX_HEADER_NAME_LEN {
+            return Some(format!(
+                "header name exceeds maximum length of {MAX_HEADER_NAME_LEN} bytes"
+            ));
+        }
+        if header.value.len() > MAX_HEADER_VALUE_LEN {
+            return Some(format!(
+                "header value exceeds maximum length of {MAX_HEADER_VALUE_LEN} bytes"
+            ));
+        }
+        if contains_control(&header.name) || contains_control(&header.value) {
+            return Some("request headers may not contain CR, LF, or NUL characters".to_string());
+        }
+        if !is_http_token(&header.name) {
+            return Some(format!(
+                "header name \"{}\" is not a valid HTTP token",
+                header.name
+            ));
+        }
+    }
+    None
+}
+
+fn validate_source_url(url: &str) -> Option<String> {
+    if url.len() > MAX_URL_LEN {
+        return Some(format!(
+            "sourceUrl exceeds maximum length of {MAX_URL_LEN} bytes"
+        ));
+    }
+    match url::Url::parse(url) {
+        Ok(parsed) if matches!(parsed.scheme(), "http" | "https") => None,
+        _ => Some("sourceUrl must be an absolute http or https URL".to_string()),
+    }
+}
+
+/// Build and validate the credential an input presents to its origin.
+fn build_auth(payload: AuthPayload) -> Result<PullAuth, String> {
+    let AuthPayload {
+        kind,
+        token,
+        username,
+        password,
+        headers,
+    } = payload;
+    if token.is_some() && kind != "bearer"
+        || (username.is_some() || password.is_some()) && kind != "basic"
+        || headers.is_some() && kind != "headers"
+    {
+        return Err(format!(
+            "auth kind \"{kind}\" carries a payload for a different mechanism"
+        ));
+    }
+    match kind.as_str() {
+        "none" => Ok(PullAuth::None),
+        "bearer" => {
+            let token = token.ok_or_else(|| "a bearer auth requires token".to_string())?;
+            if token.is_empty() || token.len() > MAX_AUTH_TOKEN_LEN {
+                return Err(format!(
+                    "bearer token must be 1 to {MAX_AUTH_TOKEN_LEN} bytes"
+                ));
+            }
+            if contains_control(&token) {
+                return Err("bearer token may not contain CR, LF, or NUL".to_string());
+            }
+            Ok(PullAuth::Bearer { token })
+        }
+        "basic" => {
+            let username = username.ok_or_else(|| "a basic auth requires username".to_string())?;
+            let password = password.ok_or_else(|| "a basic auth requires password".to_string())?;
+            if username.is_empty() || username.len() > MAX_AUTH_USERNAME_LEN {
+                return Err(format!(
+                    "basic username must be 1 to {MAX_AUTH_USERNAME_LEN} bytes"
+                ));
+            }
+            if password.is_empty() || password.len() > MAX_AUTH_PASSWORD_LEN {
+                return Err(format!(
+                    "basic password must be 1 to {MAX_AUTH_PASSWORD_LEN} bytes"
+                ));
+            }
+            if contains_control(&username) || contains_control(&password) {
+                return Err("basic credentials may not contain CR, LF, or NUL".to_string());
+            }
+            Ok(PullAuth::Basic { username, password })
+        }
+        "headers" => {
+            let headers = headers.ok_or_else(|| "a headers auth requires headers".to_string())?;
+            if let Some(message) = validate_headers(&headers) {
+                return Err(message);
+            }
+            Ok(PullAuth::Headers { headers })
+        }
+        other => Err(format!(
+            "unknown auth kind \"{other}\": expected \"none\", \"bearer\", \"basic\", or \"headers\""
+        )),
+    }
+}
+
+/// Assemble and validate the source half of an input mutation.
+fn build_source(
+    kind: PipelineInputSourceKind,
+    url: Option<String>,
+    variant_rule: VariantRule,
+    auth: PullAuth,
+) -> Result<PipelineInputSource, String> {
+    match kind {
+        PipelineInputSourceKind::Keyed => {
+            if url.is_some() {
+                return Err("a keyed input cannot carry sourceUrl".to_string());
+            }
+            if auth != PullAuth::None {
+                return Err("a keyed input cannot carry auth".to_string());
+            }
+            Ok(PipelineInputSource::keyed())
+        }
+        PipelineInputSourceKind::HlsPull => {
+            let url = url.ok_or_else(|| "a hlsPull input requires sourceUrl".to_string())?;
+            if let Some(message) = validate_source_url(&url) {
+                return Err(message);
+            }
+            Ok(PipelineInputSource {
+                kind,
+                url: Some(url),
+                variant_rule,
+                auth,
+            })
+        }
+    }
 }
 
 async fn input_json(state: &AppState, input: &PipelineInput, host: &str) -> serde_json::Value {
@@ -66,6 +288,14 @@ async fn input_json(state: &AppState, input: &PipelineInput, host: &str) -> serd
                 "quality": null,
             })
         });
+    let ingest_urls = match input.source_kind {
+        PipelineInputSourceKind::Keyed => serde_json::json!({
+            "rtmp": format!("rtmp://{host}:{}/live/{}", state.ports.rtmp, input.stream_key),
+            "srt": format!("srt://{host}:{}?streamid=publish:{}", state.ports.srt, input.stream_key),
+        }),
+        // A pull input accepts no pushes, so it has no ingest URLs.
+        PipelineInputSourceKind::HlsPull => serde_json::Value::Null,
+    };
     serde_json::json!({
         "id": input.id,
         "pipelineId": input.pipeline_id,
@@ -74,10 +304,14 @@ async fn input_json(state: &AppState, input: &PipelineInput, host: &str) -> serd
         "role": input.role.as_str(),
         "enabled": input.enabled,
         "selected": input.selected,
-        "ingestUrls": {
-            "rtmp": format!("rtmp://{host}:{}/live/{}", state.ports.rtmp, input.stream_key),
-            "srt": format!("srt://{host}:{}?streamid=publish:{}", state.ports.srt, input.stream_key),
-        },
+        "kind": input.source_kind,
+        "sourceUrl": input.source_url,
+        "variantRule": input.variant_rule,
+        // Auth is write-only: the variant and (for basic) the username are
+        // safe to echo, but no token, password or header value ever is.
+        "authKind": input.source_auth.kind_str(),
+        "authUsername": input.source_auth.username(),
+        "ingestUrls": ingest_urls,
         "previewUrl": format!("/hls/inputs/{}/master.m3u8", input.id),
         "runtime": runtime,
     })
@@ -139,9 +373,34 @@ pub async fn pipeline_inputs_post_handler(
     if let Some(response) = validate_label(&payload.label) {
         return response;
     }
+    let kind = match payload.kind.as_deref() {
+        None => PipelineInputSourceKind::Keyed,
+        Some(raw) => match parse_source_kind(raw) {
+            Ok(kind) => kind,
+            Err(message) => return bad_request(message),
+        },
+    };
+    let variant_rule = match payload.variant_rule.as_deref() {
+        None => VariantRule::default(),
+        Some(raw) => match parse_variant_rule(raw) {
+            Ok(rule) => rule,
+            Err(message) => return bad_request(message),
+        },
+    };
+    let auth = match payload.auth {
+        Some(auth) => match build_auth(auth) {
+            Ok(auth) => auth,
+            Err(message) => return bad_request(message),
+        },
+        None => PullAuth::None,
+    };
+    let source = match build_source(kind, payload.source_url, variant_rule, auth) {
+        Ok(source) => source,
+        Err(message) => return bad_request(message),
+    };
     let input = match state
         .pipeline_input_service
-        .create(&pipeline_id, payload.label.trim())
+        .create(&pipeline_id, payload.label.trim(), source)
         .await
     {
         Ok(input) => input,
@@ -185,6 +444,41 @@ pub async fn pipeline_input_patch_handler(
         .as_deref()
         .map(str::trim)
         .unwrap_or(&current.label);
+    let kind = match payload.kind.as_deref() {
+        None => current.source_kind,
+        Some(raw) => match parse_source_kind(raw) {
+            Ok(kind) => kind,
+            Err(message) => return bad_request(message),
+        },
+    };
+    let variant_rule = match payload.variant_rule.as_deref() {
+        None => current.variant_rule,
+        Some(raw) => match parse_variant_rule(raw) {
+            Ok(rule) => rule,
+            Err(message) => return bad_request(message),
+        },
+    };
+    // Auth is write-only. An absent `auth` keeps the stored credential so a
+    // PATCH that does not mention auth never clears it; `{"kind":"none"}`
+    // clears it and any other variant replaces it wholesale.
+    let auth = match payload.auth {
+        Some(auth) => match build_auth(auth) {
+            Ok(auth) => auth,
+            Err(message) => return bad_request(message),
+        },
+        None => current.source_auth.clone(),
+    };
+    let url = match kind {
+        // A keyed input has no URL: passing one is rejected, not ignored.
+        PipelineInputSourceKind::Keyed => payload.source_url,
+        PipelineInputSourceKind::HlsPull => {
+            payload.source_url.or_else(|| current.source_url.clone())
+        }
+    };
+    let source = match build_source(kind, url, variant_rule, auth) {
+        Ok(source) => source,
+        Err(message) => return bad_request(message),
+    };
     let input = match state
         .pipeline_input_service
         .update(
@@ -192,6 +486,7 @@ pub async fn pipeline_input_patch_handler(
             &input_id,
             label,
             payload.enabled.unwrap_or(current.enabled),
+            source,
         )
         .await
     {

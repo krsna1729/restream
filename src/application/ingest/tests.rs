@@ -126,6 +126,7 @@ impl PipelineInputLookup for FakePipelineStore {
                     role: crate::domain::pipeline_input::PipelineInputRole::Primary,
                     enabled: true,
                     selected: true,
+                    ..crate::domain::pipeline_input::PipelineInput::keyed_default()
                 }))
         })
     }
@@ -394,6 +395,63 @@ async fn srt_auth_clears_failure_state_after_success() {
             .is_ip_banned_for(RateLimitScope::SrtPublish, ip)
             .is_none()
     );
+}
+
+/// The input lookup for one key, holding an `hlsPull` input: a pull input
+/// has no listener, so its key must resolve for a read and never for a push.
+struct PullInputLookup;
+
+impl PipelineInputLookup for PullInputLookup {
+    fn get_by_stream_key<'a>(&'a self, stream_key: &'a str) -> PipelineInputLookupFuture<'a> {
+        Box::pin(async move {
+            Ok(Some(crate::domain::pipeline_input::PipelineInput {
+                id: "input-pull".to_string(),
+                pipeline_id: "pipeline-1".to_string(),
+                label: "Pull".to_string(),
+                stream_key: stream_key.to_string(),
+                role: crate::domain::pipeline_input::PipelineInputRole::Primary,
+                enabled: true,
+                selected: true,
+                source_kind: crate::domain::pipeline_input::PipelineInputSourceKind::HlsPull,
+                source_url: Some("http://origin.example/master.m3u8".to_string()),
+                variant_rule: crate::domain::pipeline_input::VariantRule::HighestBandwidth,
+                source_auth: crate::domain::pipeline_input::PullAuth::None,
+            }))
+        })
+    }
+}
+
+/// A pull input accepts no publisher. Every push mode must refuse its key, so
+/// an encoder cannot take the input's session from the pull task; a read
+/// still resolves, because the pipeline's media is readable either way.
+#[tokio::test]
+async fn pipeline_access_authenticator_refuses_pushes_to_a_pull_input() {
+    let pipeline_lookup = Arc::new(FakePipelineStore::success("live"));
+    let input_lookup = Arc::new(PullInputLookup);
+    let security = Arc::new(IngestSecurityService::new(test_security_config()));
+    let auth = PipelineStoreIngestAuthenticator::new(pipeline_lookup, input_lookup, security);
+
+    // A distinct client per mode: a third failure from one address is banned,
+    // and the ban would answer instead of the refusal under test.
+    let pushes = [
+        (PipelineAccessMode::RtmpPublish, "10.0.0.11"),
+        (PipelineAccessMode::SrtPublish, "10.0.0.12"),
+        (PipelineAccessMode::HlsPublish, "10.0.0.13"),
+    ];
+    for (mode, ip) in pushes {
+        let result = auth.authenticate(mode, "live", ip).await;
+        assert!(
+            matches!(result, Err(PipelineAccessError::InvalidStreamKey)),
+            "{mode:?} must refuse a pull input's key, got {result:?}"
+        );
+    }
+
+    let read = auth
+        .authenticate(PipelineAccessMode::SrtRead, "live", "10.0.0.14")
+        .await
+        .expect("a read of a pull input's media still resolves");
+    assert_eq!(read.id, "pipeline-1");
+    assert_eq!(read.input_id, "input-pull");
 }
 
 #[tokio::test]

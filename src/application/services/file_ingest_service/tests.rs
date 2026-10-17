@@ -199,6 +199,7 @@ impl PipelineInputLookup for StaticPipelineStore {
                     role: crate::domain::pipeline_input::PipelineInputRole::Primary,
                     enabled: true,
                     selected: true,
+                    ..crate::domain::pipeline_input::PipelineInput::keyed_default()
                 }
             }))
         })

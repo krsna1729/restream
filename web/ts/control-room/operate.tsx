@@ -17,7 +17,8 @@ import type { ConfigData, PipelineInput, PipelineInputsResponse } from "../types
 import { ConfirmDelete } from "./confirm.js";
 import { describeCause } from "./fleet-model.js";
 import { formatBps } from "./format.js";
-import { AddInput, InputActions, PipelineBar } from "./operate-manage.js";
+import { VARIANT_LABELS, inputSourceLines } from "./input-model.js";
+import { AddInput, EditInput, InputActions, PipelineBar } from "./operate-manage.js";
 import { MediaGraph } from "./operate-graph.js";
 import {
   buildDestinationRows,
@@ -158,6 +159,7 @@ function SourceDeck(props: {
               const status = inputStatus(input);
               const video = input.runtime.video;
               const rtt = input.runtime.quality?.msRtt;
+              const urls = inputSourceLines(input);
               return (
                 <li
                   key={input.id}
@@ -202,17 +204,38 @@ function SourceDeck(props: {
                       {busy === input.id ? "Promoting…" : `Promote ${input.label}`}
                     </button>
                   )}
-                  {input.role === "backup" && (
-                    <details className="mt-1 text-xs">
-                      <summary className="cursor-pointer opacity-70">Publish URLs</summary>
-                      {[input.ingestUrls?.rtmp, input.ingestUrls?.srt].filter(Boolean).map((url) => (
+                  {input.kind === "hlsPull" ? (
+                    <div className="mt-1 text-xs">
+                      {urls.map((url) => (
                         <p key={url} className="break-all font-mono">
                           {url}
                         </p>
                       ))}
-                    </details>
+                      <p className="opacity-70">
+                        {VARIANT_LABELS[input.variantRule]} ·{" "}
+                        <a className="link" href={withBasePath(input.previewUrl)}>
+                          Preview
+                        </a>
+                      </p>
+                    </div>
+                  ) : (
+                    urls.length > 0 && (
+                      <details className="mt-1 text-xs">
+                        <summary className="cursor-pointer opacity-70">Publish URLs</summary>
+                        {urls.map((url) => (
+                          <p key={url} className="break-all font-mono">
+                            {url}
+                          </p>
+                        ))}
+                      </details>
+                    )
                   )}
                   <InputActions
+                    pipelineId={props.pipelineId}
+                    input={input}
+                    onChanged={props.onChanged}
+                  />
+                  <EditInput
                     pipelineId={props.pipelineId}
                     input={input}
                     onChanged={props.onChanged}

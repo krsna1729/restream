@@ -33,6 +33,7 @@ async fn an_object_for_a_session_that_just_ended_restarts_it_once() {
             &authenticated(),
             STREAM_KEY,
             "127.0.0.1:9",
+            DispatchOrigin::Push,
             ObjectKind::TsSegment,
             "index0.ts".to_string(),
             body,
@@ -72,6 +73,7 @@ async fn send_to(
             pipeline,
             STREAM_KEY,
             "127.0.0.1:9",
+            DispatchOrigin::Push,
             kind,
             path.to_string(),
             body,
@@ -820,4 +822,48 @@ async fn a_released_segment_reaches_the_ring_at_media_pace() {
         wall_ms <= u128::try_from(media_ms).unwrap() + 2_000,
         "pacing must not lag: {media_ms} ms of media took {wall_ms} ms"
     );
+}
+
+/// The reconciler converges every pass, so starting a pull must be
+/// idempotent: the same source is left running, a row edit (URL, rendition
+/// or credential) replaces the task, and a cancel removes it.
+#[tokio::test]
+async fn a_pull_task_starts_once_per_source_and_is_replaced_when_the_row_changes() {
+    let (_engine, ingest) = test_ingest(HlsIngestLimits::default());
+    let identity = crate::media::hls_pull::PullIdentity {
+        pipeline_id: PIPELINE_ID.to_string(),
+        input_id: "input-pull".to_string(),
+        stream_key: "pull-key".to_string(),
+        selected: true,
+    };
+    let source = |url: &str| crate::media::hls_pull::PullSource {
+        url: url.to_string(),
+        variant: crate::domain::pipeline_input::VariantRule::HighestBandwidth,
+        auth: crate::domain::pipeline_input::PullAuth::None,
+    };
+    let origin = source("http://127.0.0.1:9/master.m3u8");
+
+    assert!(
+        ingest.ensure_pull(identity.clone(), origin.clone()),
+        "the first pass starts the task"
+    );
+    assert!(
+        !ingest.ensure_pull(identity.clone(), origin.clone()),
+        "a repeated pass leaves the running task alone"
+    );
+    assert!(ingest.pull_input_ids().contains(&identity.input_id));
+
+    let mut changed = origin.clone();
+    changed.variant = crate::domain::pipeline_input::VariantRule::LowestBandwidth;
+    assert!(
+        ingest.ensure_pull(identity.clone(), changed),
+        "an edited row is a different origin and replaces the task"
+    );
+
+    assert!(ingest.cancel_pull(&identity.input_id));
+    assert!(
+        !ingest.cancel_pull(&identity.input_id),
+        "cancelling twice reports that nothing ran"
+    );
+    assert!(ingest.pull_input_ids().is_empty());
 }

@@ -209,6 +209,16 @@ pub async fn run_app(config: Arc<AppConfig>) {
         }
     });
 
+    // Created before the reconciler because the reconciler converges HLS
+    // pull inputs through it; the router gets the same registry from the
+    // runtime launch below.
+    let hls_ingest = crate::media::hls_ingest::HlsIngest::new(
+        engine.clone(),
+        ingest_authenticator.clone(),
+        security.clone(),
+        crate::media::hls_ingest::HlsIngestLimits::default(),
+    );
+
     let reconciler = reconcile::Reconciler::new(
         config.clone(),
         pool.clone(),
@@ -219,6 +229,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
         recording_metadata,
         state.reconcile.clone(),
         state.runtime_state.clone(),
+        hls_ingest.clone(),
     );
     let projector_stop = tokio_util::sync::CancellationToken::new();
     tokio::spawn(crate::application::runtime_state::hub::run_projector(
@@ -235,6 +246,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
         security,
         pipeline_access: ingest_authenticator,
         srt_ingest_policy_store,
+        hls_ingest,
     })
     .await;
     let shutdown = shutdown::spawn_signal_watcher();
