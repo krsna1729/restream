@@ -445,10 +445,13 @@ async fn a_batch_cancel_stops_every_pull_and_clears_every_applied_init() {
     // An input whose pull has already ended: its init is still cleared.
     let gone = "input-pull-gone".to_string();
     let key = ingest.key_state(&gone);
-    *crate::sync::lock(&key.init) = Some(AppliedInit {
-        uri: "init.mp4".to_string(),
-        bytes: bytes::Bytes::from_static(b"init"),
-    });
+    crate::sync::lock(&key.init).set(
+        0,
+        AppliedInit {
+            uri: "init.mp4".to_string(),
+            bytes: bytes::Bytes::from_static(b"init"),
+        },
+    );
     ids.push(gone);
 
     let stopped = ingest.cancel_pulls(&ids).await;
@@ -462,7 +465,7 @@ async fn a_batch_cancel_stops_every_pull_and_clears_every_applied_init() {
         "no pull is left running"
     );
     assert!(
-        crate::sync::lock(&key.init).is_none(),
+        crate::sync::lock(&key.init).is_empty(),
         "an input with no pull running still has its applied init cleared"
     );
     assert!(

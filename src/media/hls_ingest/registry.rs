@@ -11,7 +11,7 @@ use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tracing::{error, info, warn};
 
-use super::ordering::{Counters, SessionLimits};
+use super::ordering::{Counters, MAX_RENDITIONS, SessionLimits};
 use super::session::{self, HlsObject, SessionContext, SessionEnd};
 use super::{
     BodyError, HlsIngestLimits, KeyCharge, ObjectBody, ObjectKind, ObjectOutcome, SegmentShare,
@@ -81,14 +81,48 @@ struct SessionHandle {
 /// a session that starts after an idle timeout, a retry or a failure
 /// applies the same init again. It lives here, with the rest of the key's
 /// state, so it can never be evicted while the key exists, and there is at
-/// most one per input that has pushed fMP4 HLS. The reconciler releases it
-/// when the input's row is gone (`HlsIngest::forget_input`), so a deleted
-/// input's init (at most `max_init_bytes`) is not held until the process
-/// restarts.
+/// most one per followed rendition of an input that has pushed fMP4 HLS
+/// (see `AppliedInits`). The reconciler releases it when the input's row is
+/// gone (`HlsIngest::forget_input`), so a deleted input's init (at most
+/// `max_init_bytes`) is not held until the process restarts.
 #[derive(Clone)]
 pub(super) struct AppliedInit {
     pub(super) uri: String,
     pub(super) bytes: bytes::Bytes,
+}
+
+/// The init each followed rendition applied last: the variant's and its
+/// separate audio rendition's demuxers each hold their own.
+#[derive(Clone, Default)]
+pub(super) struct AppliedInits([Option<AppliedInit>; MAX_RENDITIONS]);
+
+impl AppliedInits {
+    pub(super) fn is_empty(&self) -> bool {
+        self.0.iter().all(Option::is_none)
+    }
+
+    pub(super) fn set(&mut self, rendition: usize, init: AppliedInit) {
+        if let Some(slot) = self.0.get_mut(rendition) {
+            *slot = Some(init);
+        }
+    }
+
+    /// Forget the init applied under `uri` (a refused re-upload of it).
+    pub(super) fn forget_uri(&mut self, uri: &str) {
+        for slot in &mut self.0 {
+            if slot.as_ref().is_some_and(|init| init.uri == uri) {
+                *slot = None;
+            }
+        }
+    }
+
+    /// Each rendition's init, by rendition.
+    pub(super) fn iter(&self) -> impl Iterator<Item = (usize, &AppliedInit)> {
+        self.0
+            .iter()
+            .enumerate()
+            .filter_map(|(rendition, init)| init.as_ref().map(|init| (rendition, init)))
+    }
 }
 
 /// Per stream key (input id): its upload slots and the lock that keeps two
@@ -104,8 +138,8 @@ struct KeyState {
     /// The session's pacing lead in ms (target duration, or the idle floor
     /// before a playlist); sizes the whole-body deadline.
     lead_ms: Arc<AtomicU64>,
-    /// The init the key applied last, across sessions.
-    init: Arc<std::sync::Mutex<Option<AppliedInit>>>,
+    /// The inits the key applied last, across sessions.
+    init: Arc<std::sync::Mutex<AppliedInits>>,
     start: tokio::sync::Mutex<()>,
 }
 
@@ -429,7 +463,7 @@ impl HlsIngest {
     fn clear_applied_init(&self, input_id: &str) {
         let keys = crate::sync::lock(&self.keys);
         if let Some(key) = keys.get(input_id) {
-            *crate::sync::lock(&key.init) = None;
+            *crate::sync::lock(&key.init) = AppliedInits::default();
         }
     }
 
@@ -502,7 +536,7 @@ impl HlsIngest {
                     share_lock: Arc::new(tokio::sync::Mutex::new(())),
                     outstanding: Arc::new(AtomicUsize::new(0)),
                     lead_ms: Arc::new(AtomicU64::new(0)),
-                    init: Arc::new(std::sync::Mutex::new(None)),
+                    init: Arc::new(std::sync::Mutex::new(AppliedInits::default())),
                     start: tokio::sync::Mutex::new(()),
                 })
             })
@@ -771,7 +805,7 @@ impl HlsIngest {
         let mut keys = crate::sync::lock(&self.keys);
         if idle
             && keys.get(input_id).is_some_and(|key| {
-                crate::sync::lock(&key.init).is_none()
+                crate::sync::lock(&key.init).is_empty()
                     && Arc::strong_count(key) == 1
                     && Arc::strong_count(&key.uploads) == 1
                     && Arc::strong_count(&key.share) == 1
@@ -791,10 +825,13 @@ impl HlsIngest {
     #[cfg(test)]
     pub(crate) fn seed_applied_init_for_tests(&self, input_id: &str) {
         let key = self.key_state(input_id);
-        *crate::sync::lock(&key.init) = Some(AppliedInit {
-            uri: "init.mp4".to_string(),
-            bytes: bytes::Bytes::from_static(b"init"),
-        });
+        crate::sync::lock(&key.init).set(
+            0,
+            AppliedInit {
+                uri: "init.mp4".to_string(),
+                bytes: bytes::Bytes::from_static(b"init"),
+            },
+        );
     }
 
     /// Runs the session on MEDIA and, whatever ends it (ENDLIST, idle,
