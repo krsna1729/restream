@@ -406,7 +406,10 @@ mod tests {
             .subscribe(Arc::new(PublicationSignal(published)));
         let ts = timestamped_audio_ts();
         let mut timestamps = IngestTimestamps::default();
-        for expected in [[100, 249], [250, 399]] {
+        // The fixture payload is one AAC frame (the demuxer splits a PES into
+        // frames), so the second packet at 200 does not overlap the first and
+        // keeps its timestamp; a restarted pump continues after the last one.
+        for expected in [[100, 200], [201, 301]] {
             let (stdout, mut writer) = stdout_pair();
             let mut pump =
                 std::pin::pin!(transport::pump_stdout(runtime.clone(), stdout, timestamps,));

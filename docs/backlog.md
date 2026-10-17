@@ -34,13 +34,11 @@ items).
 - [Q-072 dedicated HLS ingest listener](#q-072-architecture-sonnet-dedicated-hls-ingest-listener-with-half-close)
 - [Q-073 HEVC fMP4 HLS push ingest](#q-073-protocol-opus-hevc-fmp4-hls-push-ingest)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
-- [Q-075 one raw AAC frame per unit](#q-075-protocol-opus-one-raw-aac-frame-per-message-and-per-sample)
 - [Q-076 HTTP Digest for pull origins](#q-076-protocol-sonnet-http-digest-authentication-for-hls-pull-origins)
 - [Q-077 follow every rendition into one ring](#q-077-architecture-opus-follow-every-rendition-of-a-master-playlist-into-one-ring)
 - [Q-078 choose versions the ingest can decode](#q-078-protocol-opus-choose-the-versions-and-codecs-the-ingest-can-decode)
 - [Q-079 resolve a pull target before fetching it](#q-079-security-opus-resolve-a-pull-target-before-fetching-it)
 - [Q-083 measure RTMP and SRT under pull load](#q-083-performance-sonnet-measure-rtmp-and-srt-under-pull-load)
-- [Q-084 parse a big playlist off the ingest turn](#q-084-performance-opus-parse-a-big-playlist-off-the-ingest-turn)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -461,21 +459,20 @@ items).
 ### Q-069 [architecture] [opus] Frame-level media units for MoQ and fMP4 ingest
 - Goal: the ring can feed per-frame consumers (MoQ objects, LL-HLS parts).
 - Sources: `MediaPacket` (`src/media/packet.rs`) has no codec
-  configuration, configuration generation, duration or group id. A
-  TS-ingest `MediaPacket` is one PES, which can hold several AAC frames. Timestamps are
+  configuration, configuration generation, duration or group id. The TS
+  demuxer already emits one AAC frame per packet. Timestamps are
   milliseconds: per-frame jitter is at most 0.5 ms, and the fMP4 path
   derives durations from DTS deltas (`build_mux_samples` in
   `src/media/hls/fmp4/codec.rs`),
   so the total does not drift.
-- Change: split audio PES into frames at ingest; a per-track
+- Change: a per-track
   configuration with a generation number that readers can follow; a GOP
   sequence number from the keyframe gate. `MediaPacket` is pinned at 56
   bytes by a layout test, so the configuration generation and group id go
   in a side table keyed by ring sequence unless the ring bench shows that
   a larger packet costs nothing.
-- Gates: proptest of the frame split against a simple model; the existing
-  fMP4 and TS output tests unchanged; bench of the ring hot path before
-  and after.
+- Gates: the existing fMP4 and TS output tests unchanged; bench of the ring
+  hot path before and after.
 - Status: open (Filed: 2026-10-16 by claude; blocks Q-047 and Q-070).
 
 ### Q-070 [protocol] [opus] MoQ ingest
@@ -629,48 +626,6 @@ items).
   measurement; rewritten 2026-10-17 from the attribution that measurement
   asked for).
 
-### Q-075 [protocol] [opus] One raw AAC frame per message and per sample
-- Goal: every raw-AAC consumer receives exactly one AAC access unit per unit,
-  whatever the ingest path produced.
-- Sources: a TS-ingest `MediaPacket` is one PES, and a PES can carry several
-  ADTS frames (`adts_frame_count` exists for that). Two consumers assume
-  one frame per unit and neither splits (the TS muxer
-  counts frames per payload and is unaffected):
-  - **RTMP egress:** `RtmpMediaEncoder::encode_audio`
-    (`rtmp/egress_engine.rs:142`) emits one action per packet and
-    `encode_unit` writes one wire message per action
-    (`egress/backends/rtmp.rs:257`); the payload goes through
-    `audio_for_rtmp_into` and `strip_adts`, which removes only the first
-    7- or 9-byte header (`codec/aac.rs:248`).
-  - **fMP4 packager:** `AudioRenditionState::push_packet`
-    (`hls/fmp4/rendition.rs:228`) strips the whole packet, so one MP4 sample
-    holds N raw frames with N−1 ADTS headers inside it — an AAC sample must be
-    one access unit. `audio_default_duration` already counts N×1024 for that
-    sample (`hls/fmp4/codec.rs:189`).
-- Evidence: in the M=4 isolation run the fixture delivered 2890 audio
-  messages per RTMP pipeline (one frame per message, 46.9/s) against 364 per
-  HLS pipeline — 2890/364 = 7.9. The M=8 run gave 2995 against 369,
-  which is 7.85 after normalising by the video counts (1838 against 1906),
-  since the HLS sessions start about 1 s later. Video counts matched, so this
-  is packaging, not loss. Any TS source (SRT, file, HLS)
-  shares the path, and an fMP4 output fed by a TS source carries the same
-  corruption.
-- Change: **normalise at the TS demuxer** — one `MediaPacket` per ADTS frame,
-  DTS stepped by 1024/sample_rate, so every consumer is fixed once. Splitting
-  in each consumer instead means two split sites and leaves the ring's units
-  inconsistent with what the fMP4 sample model needs. Price the extra ring
-  units for audio with the relevant bench.
-- Gates: a unit test that a 3-frame ADTS payload becomes three packets with
-  timestamps stepped by 1024/sample_rate (monotonic after rounding); the RTMP
-  leaf test that it writes one `0xAF 0x01` message per frame; an fMP4 gate
-  that the sample count equals the frame count with no ADTS sync word inside a
-  sample; add an audio/video ratio floor to hls-push-duty (it has none today:
-  delivered_ok requires only audioCount > 0), which a mutation reverting the
-  split must fail; the SRT-to-RTMP and HLS-to-RTMP paths still deliver.
-- Status: open (Filed: 2026-10-16 by claude, from the HLS ingest isolation
-  measurement). Every TS source shares the path — SRT, file ingest, HLS push
-  and HLS pull — so this is a defect of the demuxer, not of one ingest kind.
-
 ### Q-076 [protocol] [sonnet] HTTP Digest authentication for HLS pull origins
 - Goal: a pull input authenticates to an origin that answers `401` with a
   `WWW-Authenticate: Digest` challenge, as FFmpeg's `-auth_type digest` and
@@ -801,29 +756,3 @@ items).
   reported side by side.
 - Status: open (Filed: 2026-10-17 by claude, from the #354 non-HLS audit: the
   push ingest has this arm, the pull ingest does not).
-
-### Q-084 [performance] [opus] Parse a big playlist off the ingest turn
-
-- Goal: a 1 MiB playlist never costs the MEDIA executor a multi-millisecond
-  poll.
-- Why: a session's turn parses a playlist object inline (`session.rs:383`,
-  `playlist::parse`), and parsing is linear in the playlist with per-URI work.
-  A measured 1 MiB media playlist — 10 280 segments, every URI resolved and
-  rendered — takes about 29 ms. A push, or a pull's dispatch, can carry that
-  object, so one turn can hold a shared MEDIA worker for tens of milliseconds:
-  the class Q-074 bounds, and its `maxPollUs` record would show it. The pull's
-  own parse and its other per-segment passes have been off its Tokio worker
-  since the #354 follow-up (`prepare_off_worker` → `parse_and_prepare`, which
-  also carries the timing test); this is the turn's half.
-- Change: parse the playlist where it is received (the upload handler and the
-  pull's dispatch) and hand the session the parsed playlist, or bound the parse
-  per turn the way the fMP4 walk is bounded by `MAX_BOXES`. The pull already
-  holds the parsed `MediaPlaylist` and renders it back to text for the session
-  to parse again, so handing over the parsed form removes both the render and
-  the second parse for every pulled playlist — or dispatch only the entries from
-  the sequence the pull will fetch next, which bounds both to the live window.
-- Gates: a `hlsIngest` poll carrying a 1 MiB playlist object stays inside the
-  Q-074 budget — a unit test with a synthetic playlist, plus the poll timing
-  the harness already records.
-- Status: open (Filed: 2026-10-17 by claude, from the #354 follow-up: measured
-  29 ms for a 1 MiB playlist of 10 280 segments).

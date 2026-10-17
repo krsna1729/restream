@@ -15,6 +15,7 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use memchr::memchr;
+use tracing::debug;
 
 use super::mpegts_probe::{
     audio_meta_complete, h264_is_keyframe, h265_is_keyframe, probe_audio, probe_video,
@@ -466,6 +467,45 @@ impl TsDemuxer {
             self.try_build_probe(stream_idx, &payload);
         }
 
+        // A TS audio PES can carry several ADTS frames, and every consumer that
+        // takes one access unit per unit — RTMP's audio messages, the fMP4
+        // packager's samples — would otherwise hold N frames, with N-1 ADTS
+        // headers inside the unit. Split once, here, so they all see one frame;
+        // the timestamps step by 1024 samples per frame. One rule: a PES that
+        // is exactly one frame, is not ADTS, or names no known rate is
+        // forwarded as it is; any other is cut into its complete frames, and
+        // bytes after the last complete frame (a frame cut at the PES end) are
+        // dropped, since no consumer can use part of a frame.
+        if kind == StreamKind::AacAdts
+            && let Some(first) = crate::media::codec::adts_frame_ranges(&payload).next()
+            && first.end != payload.len()
+            && let Some(rate) = crate::media::codec::adts_sample_rate(&payload)
+            && let Some(step_90k) = FRAME_TICKS_90K.checked_div(i64::from(rate))
+        {
+            let mut covered = 0;
+            for (index, range) in crate::media::codec::adts_frame_ranges(&payload).enumerate() {
+                let offset = step_90k.saturating_mul(index as i64);
+                covered = range.end;
+                self.output.push(MediaPacket {
+                    media_type: MediaType::Audio,
+                    track_index,
+                    pts: ts_to_ms(pts_90k.saturating_add(offset)),
+                    dts: ts_to_ms(dts_90k.saturating_add(offset)),
+                    is_keyframe: false,
+                    format: PayloadFormat::Raw,
+                    payload: payload.slice(range),
+                });
+            }
+            if covered != payload.len() {
+                debug!(
+                    track = track_index,
+                    dropped = payload.len().saturating_sub(covered),
+                    "AAC PES ended inside a frame; its tail was dropped"
+                );
+            }
+            return;
+        }
+
         self.output.push(MediaPacket {
             media_type: kind.media_type(),
             track_index,
@@ -716,6 +756,9 @@ impl TsDemuxer {
         }
     }
 }
+
+/// One AAC frame is 1024 samples; timestamps here are 90 kHz ticks.
+const FRAME_TICKS_90K: i64 = 1024 * 90_000;
 
 #[inline]
 pub(super) fn find_ts_sync(data: &[u8]) -> usize {

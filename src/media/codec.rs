@@ -14,9 +14,9 @@ mod h264_sps;
 mod video;
 
 pub use aac::{
-    MAX_ADTS_PAYLOAD, adts_frame_count, audio_for_rtmp, audio_for_rtmp_into, audio_for_ts,
-    audio_for_ts_into, build_aac_sequence_header, build_adts_header, build_adts_header_for,
-    strip_adts,
+    MAX_ADTS_PAYLOAD, adts_frame_count, adts_frame_ranges, adts_sample_rate, audio_for_rtmp,
+    audio_for_rtmp_into, audio_for_ts, audio_for_ts_into, build_aac_sequence_header,
+    build_adts_header, build_adts_header_for, strip_adts,
 };
 pub(crate) use bits::{BitReader, rbsp};
 pub use enhanced_rtmp_hevc::{

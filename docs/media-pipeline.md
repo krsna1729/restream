@@ -957,10 +957,7 @@ path's; the puller only decides what to fetch.
   per-packet work and no blocking call runs on Tokio; requests are async and
   the assembler runs on the MEDIA executor.
 - **Known limits.** A master that carries audio as a separate `EXT-X-MEDIA`
-  rendition is pulled video-only (Q-077). And because Q-075 has not landed, a
-  pulled MPEG-TS source reaches an RTMP output with multi-frame AAC messages:
-  the `rtmp` sink wants one raw AAC frame per message, and the pull feeds the
-  demuxer's own units, as push ingest does.
+  rendition is pulled video-only (Q-077).
 
 ## Protocol correctness requirements
 

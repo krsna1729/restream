@@ -76,7 +76,10 @@ async fn queue(count: usize) -> (mpsc::Sender<HlsObject>, mpsc::Receiver<HlsObje
         sender
             .send(HlsObject {
                 path: format!("index-{index}.m3u8"),
-                kind: ObjectKind::Playlist,
+                content: ObjectContent::Playlist(crate::media::hls_ingest::playlist::parse(
+                    PLAYLIST,
+                    &format!("index-{index}.m3u8"),
+                )),
                 payload: Payload::new(PLAYLIST.into(), None, None, None),
                 reply,
             })
@@ -129,4 +132,34 @@ async fn a_poll_that_receives_nothing_applies_nothing() {
 
     assert!(poll_once(&mut session).is_pending());
     assert_eq!(answers.count(), 0);
+}
+
+/// The session turn applies the playlist that dispatch parsed and never parses
+/// the bytes itself: parsing is linear in the playlist (about 29 ms for a
+/// 1 MiB one) and the turn runs on the shared MEDIA worker. The bytes here are
+/// not a playlist at all, so a turn that parsed them would answer `Malformed`.
+#[tokio::test]
+async fn a_turn_applies_the_parsed_playlist_without_parsing_the_bytes() {
+    let (sender, receiver) = mpsc::channel(1);
+    let (reply, mut outcome) = oneshot::channel();
+    sender
+        .send(HlsObject {
+            path: "index.m3u8".to_string(),
+            content: ObjectContent::Playlist(crate::media::hls_ingest::playlist::parse(
+                PLAYLIST,
+                "index.m3u8",
+            )),
+            payload: Payload::new(b"not a playlist".as_slice().into(), None, None, None),
+            reply,
+        })
+        .await
+        .expect("the queue has room");
+    let mut session = pin!(run(context().await, receiver));
+
+    assert!(poll_once(&mut session).is_pending());
+    assert_eq!(
+        outcome.try_recv(),
+        Ok(ObjectOutcome::Stored),
+        "the turn applied the parsed playlist"
+    );
 }
