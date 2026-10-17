@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use crate::media::engine::{
     ActiveIngest, IngestMetadata, IngestRegistration, MediaEngine, RecentIngestOutcome,
 };
+use crate::media::input_gate::InputForwardState;
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
 use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_metrics::StageMetrics;
@@ -57,11 +58,16 @@ impl MediaEngine {
             .get(pipeline_id)
             .map(|selected_input| selected_input == input_id)
             .unwrap_or(selected);
+        // A previous input demoted here is restored if this future is dropped
+        // before the new ingest is inserted: otherwise it stays in `active`
+        // but forwards nothing, and nothing re-promotes it.
+        let mut demoted = DemotedGate(None);
         if selected {
             let previous = self.ingests.active.read().await.get(pipeline_id).cloned();
             if let Some(previous) = previous
                 && previous.input_id != input_id
             {
+                demoted = DemotedGate(Some((previous.gate.clone(), previous.gate.state())));
                 previous.gate.demote();
                 previous.gate.wait_until_idle().await;
             }
@@ -154,6 +160,7 @@ impl MediaEngine {
             active.insert(pipeline_id.to_string(), ingest);
         }
         drop((sessions, selected_inputs, active, tokens));
+        demoted.disarm();
 
         self.runtime
             .event_log
@@ -568,5 +575,40 @@ impl MediaEngine {
 
     pub async fn recent_ingest_outcome(&self, pipeline_id: &str) -> Option<RecentIngestOutcome> {
         self.ingests.recent.read().await.get(pipeline_id).cloned()
+    }
+}
+
+/// A gate this registration demoted, with the state it had. Dropped while
+/// armed — the registration's future was dropped before the new ingest was
+/// inserted — it restores that state, so the input it was replacing is left
+/// exactly as it was found.
+///
+/// Restoring `Active` resumes forwarding at once, so a video packet dropped
+/// during the window (milliseconds, so zero or one frame) leaves a gap until
+/// the next keyframe. Re-arming for promotion instead would stall the input
+/// for up to a GOP on every dropped registration, dropped packet or not; the
+/// rarer cost was chosen.
+struct DemotedGate(
+    Option<(
+        Arc<crate::media::input_gate::InputPacketGate>,
+        InputForwardState,
+    )>,
+);
+
+impl DemotedGate {
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for DemotedGate {
+    fn drop(&mut self) {
+        if let Some((gate, state)) = self.0.take() {
+            match state {
+                InputForwardState::Active => gate.activate(),
+                InputForwardState::AwaitingKeyframe => gate.arm_for_promotion(),
+                InputForwardState::Standby => gate.demote(),
+            }
+        }
     }
 }

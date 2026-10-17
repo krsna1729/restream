@@ -39,3 +39,56 @@ async fn a_registration_dropped_at_a_write_guard_leaves_nothing_behind() {
         "a dropped registration left a token that blocks the input"
     );
 }
+
+/// A registration that replaces the active input demotes it before it takes its
+/// write guards. A caller dropped after the demote must leave that input
+/// forwarding as it was, not registered and silent.
+#[tokio::test]
+async fn a_registration_dropped_after_the_demote_restores_the_previous_input() {
+    let engine = MediaEngine::new();
+    engine
+        .try_register_pipeline_input_attempt("pipe", "first", "key-1", "hls", true)
+        .await
+        .expect("the first input registers");
+    let previous = engine
+        .ingests
+        .active
+        .read()
+        .await
+        .get("pipe")
+        .cloned()
+        .expect("the first input is active");
+    let before = previous.gate.state();
+    engine
+        .ingests
+        .selected_inputs
+        .write()
+        .await
+        .insert("pipe".to_string(), "second".to_string());
+
+    // Park the replacement on `timelines`, which it takes after the demote.
+    let held = engine.ingests.timelines.read().await;
+    let mut attempt = Box::pin(
+        engine.try_register_pipeline_input_attempt("pipe", "second", "key-2", "hls", true),
+    );
+    assert!(
+        attempt
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending(),
+        "the replacement must wait for the held reader"
+    );
+    assert_ne!(
+        previous.gate.state(),
+        before,
+        "the replacement demoted the previous input before parking"
+    );
+    drop(attempt);
+    drop(held);
+
+    assert_eq!(
+        previous.gate.state(),
+        before,
+        "a dropped replacement left the previous input demoted"
+    );
+}
