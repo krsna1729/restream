@@ -786,6 +786,14 @@ keeps the container it started with.
   - The session task parses playlists, orders segments and publishes them
     through the ingest publisher it shares with file ingest
     (`media::ingest_publisher`; MPEG-TS and fMP4 are its two demuxes).
+  - A turn is one unit of work: it applies at most one object, then yields,
+    and it publishes at most one `PUBLISH_CHUNK_BYTES` (64 KiB) chunk, which
+    the publisher yields after. A poll of the session never joins two units,
+    so the work in one poll does not follow how fast the HTTP handlers refill
+    the queue or how much of a segment is left. Measured per poll on the
+    `hls-push-duty` harness (2 RTMP + 8 HLS publishers, 60 s, 6-vCPU host):
+    ~100 µs of thread CPU, dominated by the 64 KiB chunk (its demux ~77 µs
+    and its ring publication ~76 µs per chunk).
   - A panic in a session ends only that session and releases its input.
 
 ## Protocol correctness requirements
