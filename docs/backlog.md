@@ -30,7 +30,6 @@ items).
 - [Q-070 MoQ ingest](#q-070-protocol-opus-moq-ingest)
 - [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
-- [Q-077 follow every rendition into one ring](#q-077-architecture-opus-follow-every-rendition-of-a-master-playlist-into-one-ring)
 - [Q-083 measure RTMP and SRT under pull load](#q-083-performance-sonnet-measure-rtmp-and-srt-under-pull-load)
 - [Q-086 reassemble ADTS frames across PES](#q-086-protocol-sonnet-reassemble-adts-frames-that-span-pes-boundaries)
 
@@ -561,44 +560,6 @@ items).
 - Status: open (Filed: 2026-10-16 by claude, from the HLS ingest isolation
   measurement; rewritten 2026-10-17 from the attribution that measurement
   asked for).
-
-### Q-077 [architecture] [opus] Follow every rendition of a master playlist into one ring
-- Goal: an HLS ingest session whose master carries audio as a separate
-  `EXT-X-MEDIA` rendition delivers both video and audio — for push and pull
-  alike.
-- Why it is not one ingest kind: the assembler is shared, and two independent
-  places stop it today.
-  - `ordering::Session` locks onto one playlist path (`Lock::Media(path)` /
-    `Lock::Master(path)`); `Lock::follows()` answers `Some(false)` for any
-    other path, so a second playlist and every segment of it take the
-    `on_other_variant` path and are dropped (`ordering.rs:380-390,427-441`,
-    `session.rs:384,431`). Two tests pin that behaviour:
-    `without_a_master_the_first_media_playlist_is_followed` and
-    `a_master_playlist_selects_the_highest_bandwidth_variant`.
-  - `SegmentPublisher` holds one `Box<dyn SegmentDemux>`, and the fMP4 path
-    replaces init and probe on `apply_init` (`ingest_publisher/fmp4.rs:411-416`)
-    while `plan_fragment` skips samples outside the current init. Two
-    renditions alternate inits: the audio init replaces the video track set,
-    and `take_init` will not re-deliver the video init (its hash is already
-    delivered), so the video segments after it are demuxed against the wrong
-    init.
-  This is why a pull of Restream's own preview is video-only: its master has
-  `video/index.m3u8` and `audio/{track}/index.m3u8` as separate fMP4
-  renditions, each with its own `EXT-X-MAP`.
-- Change: a second followed path with its own sequence space in
-  `ordering::Session`; per-rendition demuxers in `SegmentPublisher` feeding
-  one ring, with pacing and continuity answering the rendition set (which
-  timeline decides `media_time_ms`, and how two renditions' DTS align). The
-  puller then follows the chosen variant's default audio rendition
-  (`DEFAULT=YES`, else `AUTOSELECT=YES`, else the first), as FFmpeg's HLS
-  demuxer does.
-- Gates: a session whose master has separate audio and video renditions
-  publishes both to the ring, for push and for pull; `hls-pull-duty` and
-  `hls-push-duty` both report non-zero audio and video counts; the
-  single-rendition and pacing tests still hold.
-- Status: open (Filed: 2026-10-17 by claude, from the pull audio
-  investigation; the pull feature reports the gap with a warning instead of
-  losing audio silently).
 
 ### Q-083 [performance] [sonnet] Measure RTMP and SRT under pull load
 

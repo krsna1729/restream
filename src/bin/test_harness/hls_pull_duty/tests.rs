@@ -87,22 +87,21 @@ fn input_row_and_session_protocol_read_the_runtime_fields() {
 }
 
 #[test]
-fn pull_published_requires_bytes_video_and_a_keyframe_without_audio() {
+fn pull_published_requires_bytes_video_audio_and_a_keyframe() {
     let probe = json!({
         "ingest": {"protocol": "hls-pull", "bytesReceived": 100, "uptimeSeconds": 10.0},
         "video": {"codec": "h264"},
-        "audioTracks": [],
+        "audioTracks": [{"codec": "aac"}],
         "gop": {"keyframeCount": 3, "averageIntervalSec": 2.0}
     });
-    // The pull follows one rendition, so the preview master's separate audio
-    // rendition is not in the ring; the mode reports that gap as `audioGap`.
     assert!(pull_published_ok(&probe));
     assert_eq!(pull_media_summary(&probe)["mediaSeconds"], 4.0);
-    assert_eq!(
-        pull_media_summary(&probe)["audioTracks"],
-        0,
-        "the report shows the absent audio"
-    );
+
+    // The preview master's audio is a separate rendition the pull follows: a
+    // pull that publishes no audio has lost it.
+    let mut no_audio = probe.clone();
+    no_audio["audioTracks"] = json!([]);
+    assert!(!pull_published_ok(&no_audio));
 
     let mut no_bytes = probe.clone();
     no_bytes["ingest"]["bytesReceived"] = json!(0);
@@ -117,9 +116,10 @@ fn pull_published_requires_bytes_video_and_a_keyframe_without_audio() {
 }
 
 #[test]
-fn pull_delivered_requires_monotone_video_media() {
+fn pull_delivered_requires_monotone_video_and_audio() {
     let delivered = json!({
         "videoCount": 10,
+        "audioCount": 20,
         "keyframeCount": 2,
         "bytes": 4096,
         "dtsMonotone": true
@@ -128,6 +128,7 @@ fn pull_delivered_requires_monotone_video_media() {
 
     for broken in [
         ("videoCount", json!(0)),
+        ("audioCount", json!(0)),
         ("keyframeCount", json!(0)),
         ("bytes", json!(0)),
         ("dtsMonotone", json!(false)),
@@ -144,25 +145,6 @@ fn log_reports_pull_failure_needs_the_input_and_the_message() {
     assert!(log_reports_pull_failure(log, "input_abc"));
     assert!(!log_reports_pull_failure(log, "input_other"));
     assert!(!log_reports_pull_failure("nothing here", "input_abc"));
-}
-
-#[test]
-fn audio_rendition_gap_reads_the_pulls_own_line() {
-    let log = "2026-10-17T00:00:00Z WARN restream: pipeline=pipe input=input_abc \
-               group=\"audio\" name=\"Track 1 (en)\" uri=\"http://origin/audio/0/index.m3u8\" \
-               HLS pull follows the video variant only: the audio is the separate \
-               EXT-X-MEDIA rendition \"Track 1 (en)\" of group \"audio\", which this puller \
-               does not follow yet; the pulled stream is video-only\n";
-    let found = audio_rendition_gap(log, "input_abc").expect("the line is found");
-    assert!(found.contains("EXT-X-MEDIA rendition"), "{found}");
-    assert!(
-        audio_rendition_gap(log, "input_other").is_none(),
-        "another input's line is not this pull's"
-    );
-    assert!(
-        audio_rendition_gap("nothing here", "input_abc").is_none(),
-        "a log without the line reports no gap"
-    );
 }
 
 #[test]

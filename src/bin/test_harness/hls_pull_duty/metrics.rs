@@ -78,14 +78,9 @@ pub(crate) fn pull_media_summary(probe: &Value) -> Value {
     })
 }
 
-/// Media reached the pull pipeline's ring: bytes counted, video probed, and at
-/// least one keyframe released.
-///
-/// Audio is not required here: the pull follows one rendition, and the preview
-/// master carries its audio as a separate `EXT-X-MEDIA` rendition the puller
-/// does not follow yet. That gap is not hidden — the pull states it once per
-/// pull, the mode records it as [`audio_rendition_gap`], and the probe's
-/// `audioTracks` count in [`pull_media_summary`] shows the absence.
+/// Media reached the pull pipeline's ring: bytes counted, video and audio
+/// probed, and at least one keyframe released. The preview master carries its
+/// audio as a separate `EXT-X-MEDIA` rendition, which the pull follows.
 pub(crate) fn pull_published_ok(probe: &Value) -> bool {
     let bytes = probe
         .pointer("/ingest/bytesReceived")
@@ -93,13 +88,19 @@ pub(crate) fn pull_published_ok(probe: &Value) -> bool {
         .unwrap_or(0);
     bytes > 0
         && probe.get("video").is_some_and(|video| !video.is_null())
+        && probe
+            .get("audioTracks")
+            .and_then(Value::as_array)
+            .is_some_and(|tracks| !tracks.is_empty())
         && keyframe_count(probe).is_some_and(|count| count >= 1)
 }
 
-/// The pull pipeline's sink delivered media with monotone decode timestamps.
+/// The pull pipeline's sink delivered video and audio with monotone decode
+/// timestamps.
 pub(crate) fn pull_delivered_ok(sink_summary: &Value) -> bool {
     let count = |name: &str| sink_summary.get(name).and_then(Value::as_u64).unwrap_or(0);
     count("videoCount") > 0
+        && count("audioCount") > 0
         && count("keyframeCount") > 0
         && count("bytes") > 0
         && sink_summary.get("dtsMonotone").and_then(Value::as_bool) == Some(true)
@@ -133,17 +134,6 @@ pub(crate) fn log_reports_pull_failure(log: &str, input_id: &str) -> bool {
     let needle = format!("input={input_id}");
     log.lines()
         .any(|line| line.contains("HLS pull failed") && line.contains(&needle))
-}
-
-/// The engine log line that states the pulled master's audio is a separate
-/// `EXT-X-MEDIA` rendition this puller does not follow: the observable that
-/// the pulled stream is video-only. Recorded as a finding, never as a check
-/// that cannot pass.
-pub(crate) fn audio_rendition_gap(log: &str, input_id: &str) -> Option<String> {
-    let needle = format!("input={input_id}");
-    log.lines()
-        .find(|line| line.contains("EXT-X-MEDIA rendition") && line.contains(&needle))
-        .map(str::to_string)
 }
 
 /// Whether a `/api/v1/pipelines` listing still carries the pipeline.
