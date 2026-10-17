@@ -39,6 +39,26 @@ fn login_redirect_response() -> Response {
     Redirect::to("login").into_response()
 }
 
+/// Where a nested dashboard path (`a/b`, `a/`) is sent: back to the shell's
+/// own directory, by a *relative* `../` per level, with the query kept (the
+/// workspace lives in it). The shell's asset URLs are relative so it can sit
+/// under a proxy prefix this server never sees; served at a nested path they
+/// would resolve under it and the page would stay blank, and so would the
+/// relative login redirect. A relative target resolves against the browser's
+/// full URL, prefix included. `None` for a top-level path or an asset.
+fn nested_shell_redirect(path: &str, query: Option<&str>) -> Option<String> {
+    let depth = path.matches('/').count();
+    if depth == 0 || request_targets_embedded_asset(path) {
+        return None;
+    }
+    let mut target = "../".repeat(depth);
+    if let Some(query) = query.filter(|query| !query.is_empty()) {
+        target.push('?');
+        target.push_str(query);
+    }
+    Some(target)
+}
+
 fn request_targets_embedded_asset(path: &str) -> bool {
     !path.is_empty() && path.contains('.')
 }
@@ -196,6 +216,9 @@ pub async fn spa_fallback_handler(
     uri: Uri,
 ) -> Response {
     let path = uri.path().trim_start_matches('/');
+    if let Some(root) = nested_shell_redirect(path, uri.query()) {
+        return Redirect::to(&root).into_response();
+    }
     if request_targets_embedded_asset(path) {
         if request_targets_authenticated_html(path)
             && !request_is_authenticated(&state, &headers).await
@@ -227,8 +250,8 @@ pub async fn api_not_found_handler(uri: Uri) -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::{
-        cache_control, request_targets_authenticated_html, request_targets_embedded_asset,
-        static_asset_content_type,
+        cache_control, nested_shell_redirect, request_targets_authenticated_html,
+        request_targets_embedded_asset, static_asset_content_type,
     };
     use axum::http::HeaderValue;
 
@@ -273,5 +296,24 @@ mod tests {
         assert!(request_targets_authenticated_html("login.html"));
         assert!(request_targets_authenticated_html("nested/index.html"));
         assert!(!request_targets_authenticated_html("output.css"));
+    }
+
+    /// A nested dashboard path goes back to the shell's directory by a
+    /// relative `../` per level, query kept; a top-level path and an asset
+    /// path are served where they are.
+    #[test]
+    fn a_nested_dashboard_path_redirects_relatively_to_the_shell() {
+        assert_eq!(
+            nested_shell_redirect("a/b", Some("w=inspect")),
+            Some("../?w=inspect".to_string())
+        );
+        assert_eq!(nested_shell_redirect("a/", None), Some("../".to_string()));
+        assert_eq!(
+            nested_shell_redirect("a/b/c", Some("")),
+            Some("../../".to_string())
+        );
+        assert_eq!(nested_shell_redirect("old-path", Some("w=media")), None);
+        assert_eq!(nested_shell_redirect("", None), None);
+        assert_eq!(nested_shell_redirect("js/control-room/main.js", None), None);
     }
 }
