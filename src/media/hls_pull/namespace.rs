@@ -4,10 +4,10 @@
 //! URIs in a remote playlist are absolute URLs, while the assembler parses
 //! upload paths inside one stream key's namespace, so sequence `N` becomes
 //! `pull/sN.ts` (or `.m4s`) and an `EXT-X-MAP` URI becomes a stable
-//! `pull/m<hash>.mp4` ([`map_name`]). Parse a remote playlist with
-//! [`parse_remote`], refuse what this ingest cannot fetch with
-//! [`refuse_unfetchable`] and [`refuse_private_targets`], then rewrite it
-//! with [`push_playlist_text`].
+//! `pull/m<hash>.mp4` ([`map_name`]). A fetched playlist is parsed and
+//! prepared with [`parse_and_prepare`] — which refuses what this ingest cannot
+//! fetch, including a private target — and rewritten with
+//! [`push_playlist_text`].
 
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::Write as _;
@@ -19,7 +19,9 @@ use reqwest::Url;
 use super::PullError;
 use super::fetch::{host_refused, log_url};
 use crate::media::hls_ingest::ObjectKind;
-use crate::media::hls_ingest::playlist::{self, Encryption, MediaPlaylist, Playlist, SegmentEntry};
+use crate::media::hls_ingest::playlist::{
+    self, Encryption, MasterPlaylist, MediaPlaylist, Playlist, SegmentEntry,
+};
 
 /// The container a pulled segment carries. A playlist that names an
 /// `EXT-X-MAP` carries fMP4 media; otherwise the URL's extension decides,
@@ -85,41 +87,56 @@ pub(super) fn live_start(media: &MediaPlaylist) -> u64 {
     start
 }
 
-/// Refuse a playlist whose URIs point the pull into a refused address range,
-/// unless the source itself is there. The bytes only reach the demuxer, but a
-/// playlist is attacker-influenced text and an internal endpoint answers
-/// differently from outside, which is enough to map a network.
-pub(super) fn refuse_private_targets(
-    parsed: &Playlist,
+/// A parsed playlist, prepared for the pull: a media playlist carries the text
+/// the ingest reads, a master playlist carries nothing because the pull has yet
+/// to choose a variant from it.
+#[derive(Debug)]
+pub(super) enum Prepared {
+    Media(MediaPlaylist, String),
+    Master(MasterPlaylist),
+}
+
+/// Parse a playlist fetched from a remote origin, refuse what this pull cannot
+/// fetch, and render the text the ingest will read.
+///
+/// All of it belongs together and off the caller's worker: each pass is linear
+/// in the playlist (a 1 MiB playlist is ~10 000 segments), and the private-host
+/// question is decided from the `Url` the resolver has already built — parsing
+/// each rendered URI a second time to ask it again was avoidable work.
+pub(super) fn parse_and_prepare(
+    base: &Url,
+    bytes: &[u8],
     allow_private: bool,
-) -> Result<(), PullError> {
-    if allow_private {
-        return Ok(());
+) -> Result<Prepared, PullError> {
+    let mut refused: Option<String> = None;
+    let parsed = playlist::parse_with(bytes, |uri| {
+        let mut url = base.join(uri).ok()?;
+        // The fragment never reaches the origin.
+        url.set_fragment(None);
+        if !allow_private && host_refused(&url) && refused.is_none() {
+            refused = Some(log_url(url.as_ref()));
+        }
+        Some(url.to_string())
+    })
+    .map_err(|error| PullError::Retry(format!("HLS playlist does not parse: {error}")))?;
+    if let Some(target) = refused {
+        return Err(PullError::Fatal(format!(
+            "HLS pull refuses a playlist that points at a private address: {target}"
+        )));
     }
-    let mut targets: Vec<&str> = Vec::new();
-    match parsed {
+    Ok(match parsed {
         Playlist::Media(media) => {
-            for segment in &media.segments {
-                targets.push(&segment.path);
-                targets.extend(segment.map_uri.as_deref());
-            }
+            refuse_unfetchable(&media)?;
+            let text = push_playlist_text(&media);
+            Prepared::Media(media, text)
         }
         Playlist::Master(master) => {
-            targets.extend(master.variants.iter().map(|variant| variant.path.as_str()));
+            if let Some(encryption) = &master.session_key {
+                return Err(encryption_refusal(encryption));
+            }
+            Prepared::Master(master)
         }
-    }
-    for target in targets {
-        let refused = Url::parse(target)
-            .ok()
-            .is_some_and(|url| host_refused(&url));
-        if refused {
-            return Err(PullError::Fatal(format!(
-                "HLS pull refuses a playlist that points at a private address: {}",
-                log_url(target)
-            )));
-        }
-    }
-    Ok(())
+    })
 }
 
 /// Why an encrypted playlist is not fetched, in one line. The method is the
@@ -196,16 +213,4 @@ pub(super) fn push_playlist_text(media: &MediaPlaylist) -> String {
         let _ = writeln!(text, "#EXT-X-ENDLIST");
     }
     text
-}
-
-/// Parse a playlist fetched from a remote origin: URIs resolve against the
-/// playlist URL (an absolute URI is kept), and the fragment is dropped
-/// because it never reaches the origin.
-pub(super) fn parse_remote(base: &Url, bytes: &[u8]) -> Result<Playlist, PullError> {
-    playlist::parse_with(bytes, |uri| {
-        let mut url = base.join(uri).ok()?;
-        url.set_fragment(None);
-        Some(url.to_string())
-    })
-    .map_err(|error| PullError::Retry(format!("HLS playlist does not parse: {error}")))
 }
