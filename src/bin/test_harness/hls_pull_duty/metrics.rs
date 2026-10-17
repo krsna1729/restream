@@ -51,14 +51,10 @@ fn average_interval_sec(probe: &Value) -> Option<f64> {
         .and_then(Value::as_f64)
 }
 
-fn uptime_sec(probe: &Value) -> Option<f64> {
-    probe
-        .pointer("/ingest/uptimeSeconds")
-        .and_then(Value::as_f64)
-}
-
 /// The media time the ingest's keyframe timeline covers, in seconds. It is
-/// frozen by a stalled pull while the wall clock keeps moving.
+/// frozen by a stalled pull while the wall clock keeps moving — and capped
+/// with the timeline itself, which is why keep-up is measured on the sink's
+/// monotonic media clock instead.
 fn media_seconds(probe: &Value) -> Option<f64> {
     let count = keyframe_count(probe)?;
     let interval = average_interval_sec(probe)?;
@@ -109,18 +105,26 @@ pub(crate) fn pull_delivered_ok(sink_summary: &Value) -> bool {
         && sink_summary.get("dtsMonotone").and_then(Value::as_bool) == Some(true)
 }
 
-/// The pulled media clock keeps up with the wall clock: at least half the
-/// session's wall time is covered by its keyframe timeline.
+/// The pulled media clock keeps up with the wall clock **inside the window**:
+/// the media time the sink received advanced by at least half the wall time
+/// the window took.
 ///
-/// This is the media-time-versus-wall-time shape the push arm uses: the pull
-/// is real-time, so a healthy pull advances media at roughly the wall rate. A
-/// pull that starts and then stalls (stops fetching) grows `uptimeSeconds`
-/// while `mediaSeconds` freezes, and the ratio collapses toward zero.
-pub(crate) fn pull_keeps_up(probe: &Value) -> bool {
-    let (Some(media), Some(wall)) = (media_seconds(probe), uptime_sec(probe)) else {
-        return false;
+/// Progress, not lifetime totals. The probe's keyframe timeline is capped at
+/// 30 entries, so its media seconds stop advancing once the cap is reached
+/// while `uptimeSeconds` keeps growing — a lifetime comparison fails a healthy
+/// pull on a window longer than about two minutes. `mediaProgressMs` is the
+/// sink's accumulated forward media time, so the difference between two samples
+/// is exactly the media time the window carried, and a re-anchor inside the
+/// window neither freezes it nor makes it go backwards.
+pub(crate) fn pull_keeps_up_over_window(start: &Value, end: &Value, wall_secs: f64) -> bool {
+    let progress_ms = |summary: &Value| {
+        summary
+            .get("mediaProgressMs")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
     };
-    wall > 0.0 && media >= 0.5 * wall
+    let media_secs = progress_ms(end).saturating_sub(progress_ms(start)) as f64 / 1000.0;
+    wall_secs > 0.0 && media_secs >= 0.5 * wall_secs
 }
 
 /// The engine log names the failing input on a retry line: the observable that

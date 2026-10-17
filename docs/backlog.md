@@ -39,6 +39,7 @@ items).
 - [Q-077 follow every rendition into one ring](#q-077-architecture-opus-follow-every-rendition-of-a-master-playlist-into-one-ring)
 - [Q-078 choose versions the ingest can decode](#q-078-protocol-opus-choose-the-versions-and-codecs-the-ingest-can-decode)
 - [Q-079 resolve a pull target before fetching it](#q-079-security-opus-resolve-a-pull-target-before-fetching-it)
+- [Q-080 release a deleted input's applied init](#q-080-architecture-opus-release-a-deleted-inputs-applied-init)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -778,3 +779,28 @@ items).
   the check is mutation-verified by weakening the resolved-address test.
 - Status: open (Filed: 2026-10-17 by claude, from the HLS pull review round:
   the literal-address guard, `host_refused`, covers addresses, not names).
+
+### Q-080 [architecture] [opus] Release a deleted input's applied init
+
+- Goal: deleting a keyed input releases the init its stream key applied, so
+  the registry's key state does not outlive the row.
+- Why: a key's state holds the `EXT-X-MAP` init its last session applied, so
+  an encoder that resumes after an idle timeout can keep publishing without
+  re-uploading it. Eviction waits for that init to be empty
+  (`HlsIngest::forget`), and nothing clears it when the input's row is
+  deleted, so up to `max_init_bytes` (4 MiB) per deleted fMP4 input is held
+  until the process restarts. A stopped *pull* clears it
+  (`HlsIngest::cancel_pull`); the keyed case has no hook: the delete handler
+  reaches the engine (`cancel_pipeline_input`) but not the registry, and the
+  registry has no "this input is gone" entry point. An operator who creates
+  and deletes many fMP4 inputs accumulates them.
+- Change: give the registry a way to release one input's key state — for
+  example `HlsIngest::forget_input(input_id)`, called from the input-delete
+  handler the way the pull path is called from the reconciler — and have it
+  clear `init` so the existing eviction can run. Keep the resume case: a key
+  whose input still exists must keep its init.
+- Gates: a test that deletes an input whose key has an applied init and finds
+  the key state gone (or the init cleared and the state evictable); the
+  resume case (`a_seeded_init_is_delivered_without_an_upload`) still passes.
+- Status: open (Filed: 2026-10-17 by claude, from the HLS pull review round:
+  the pull hook exists, the keyed one does not).

@@ -874,9 +874,11 @@ test("manage: create a pipeline, edit its inputs, destinations, source and key, 
     pipelineId = new URL(page.url()).searchParams.get("p") ?? "";
     expect((await stored(pipelineId)).name).toBe(name);
 
-    // A backup input: added, disabled, deleted.
-    await page.getByLabel("New input label").fill("cr-backup");
+    // A backup input: added through the new-input form, disabled, deleted.
     await page.getByRole("button", { name: "Add input" }).click();
+    const newInput = page.getByRole("region", { name: "New input" });
+    await newInput.getByLabel("Label").fill("cr-backup");
+    await newInput.getByRole("button", { name: "Save" }).click();
     await page.getByRole("button", { name: "Disable cr-backup" }).click();
     await expect(page.getByRole("button", { name: "Enable cr-backup" })).toBeVisible();
     await page.getByRole("button", { name: "Delete input cr-backup" }).click();

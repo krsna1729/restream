@@ -247,3 +247,35 @@ fn published_and_delivered_checks_require_media() {
     no_audio["audioCount"] = json!(0);
     assert!(!delivered_ok(&no_audio));
 }
+
+/// The rated window is what this mode measures, so its pass checks require
+/// progress *inside* the window: a sink whose counters are unchanged from the
+/// baseline delivered nothing during it, however large its lifetime totals are.
+/// A mutation that drops the baseline comparison (or the media-clock clause)
+/// fails here.
+#[test]
+fn progress_checks_require_movement_since_the_baseline() {
+    let baseline_probe = json!({"ingest": {"bytesReceived": 4096}});
+    let moved = json!({"ingest": {"bytesReceived": 8192}});
+    assert!(published_progress_ok(&baseline_probe, &moved));
+    assert!(
+        !published_progress_ok(&baseline_probe, &baseline_probe),
+        "an unchanged byte counter received nothing"
+    );
+    assert!(!published_progress_ok(
+        &baseline_probe,
+        &json!({"ingest": {}})
+    ));
+
+    let baseline_sink = json!({"videoCount": 40, "audioCount": 40, "mediaProgressMs": 20_000});
+    let delivered = json!({"videoCount": 45, "audioCount": 45, "mediaProgressMs": 22_000});
+    assert!(delivered_progress_ok(&baseline_sink, &delivered));
+    assert!(
+        !delivered_progress_ok(&baseline_sink, &baseline_sink),
+        "an unchanged sink delivered nothing"
+    );
+    // Counts that moved while the media clock froze is a stall, not progress:
+    // the sink received messages, not media.
+    let stalled = json!({"videoCount": 45, "audioCount": 45, "mediaProgressMs": 20_000});
+    assert!(!delivered_progress_ok(&baseline_sink, &stalled));
+}

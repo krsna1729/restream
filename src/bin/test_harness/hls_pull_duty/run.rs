@@ -331,7 +331,13 @@ impl Session {
             json!({"phase": "pull-session", "protocol": protocol})
         );
 
+        // A baseline before the window, so keep-up measures progress inside it
+        // rather than lifetime totals (the probe's keyframe timeline is capped,
+        // so its media seconds freeze while uptime keeps growing).
+        let sink_before = self.sink_metrics.summary();
+        let window_started = std::time::Instant::now();
         tokio::time::sleep(options.window()).await;
+        let wall_secs = window_started.elapsed().as_secs_f64();
 
         // ── Sample the good path over the window ──────────────────────
         let probe = self
@@ -352,9 +358,11 @@ impl Session {
         );
         checks.record(
             "pullKeepsUp",
-            pull_keeps_up(&probe),
+            pull_keeps_up_over_window(&sink_before, &sink_summary, wall_secs),
             json!({
-                "mediaSeconds": pull_media_summary(&probe).get("mediaSeconds").cloned().unwrap_or(Value::Null),
+                "wallSeconds": (wall_secs * 10.0).round() / 10.0,
+                "mediaProgressMsBefore": sink_before.get("mediaProgressMs").cloned().unwrap_or(Value::Null),
+                "mediaProgressMs": sink_summary.get("mediaProgressMs").cloned().unwrap_or(Value::Null),
                 "uptimeSeconds": pull_media_summary(&probe).get("uptimeSeconds").cloned().unwrap_or(Value::Null),
             }),
         );

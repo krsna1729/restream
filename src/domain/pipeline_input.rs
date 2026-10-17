@@ -56,26 +56,28 @@ pub struct PipelineInput {
 }
 
 impl fmt::Debug for PipelineInput {
-    /// `source_url` is itself a credential when the origin signs its URLs, so
-    /// it prints redacted; `source_auth` redacts itself.
+    /// `source_url` is itself a credential when the origin signs its URLs, and
+    /// `stream_key` authenticates a push, so both print as a fixed marker;
+    /// `source_auth` redacts itself.
+    ///
+    /// The domain prints the marker rather than a partly-redacted URL on
+    /// purpose. Redacting a URL means deciding which part of it is the
+    /// credential, and that decision belongs to the log formatter, which knows
+    /// the origin it is talking to (`hdnts`, `Signature` and `X-Amz-Signature`
+    /// are queries, and a token can sit in a path segment). The domain keeps
+    /// the invariant — no credential, ever, in a `{:?}` — and prints nothing.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PipelineInput")
             .field("id", &self.id)
             .field("pipeline_id", &self.pipeline_id)
             .field("label", &self.label)
-            .field("stream_key", &self.stream_key)
+            .field("stream_key", &REDACTED)
             .field("role", &self.role)
             .field("enabled", &self.enabled)
             .field("selected", &self.selected)
             .field("source_kind", &self.source_kind)
-            .field(
-                "source_url",
-                &self
-                    .source_url
-                    .as_deref()
-                    .map(crate::secret_display::redact_url),
-            )
+            .field("source_url", &self.source_url.as_ref().map(|_| REDACTED))
             .field("variant_rule", &self.variant_rule)
             .field("source_auth", &self.source_auth)
             .finish()
@@ -242,9 +244,10 @@ pub enum PullAuth {
     },
 }
 
-/// What a credential prints as. `redact_secret` keeps a prefix and a suffix,
-/// which suits a long high-entropy stream key but shows half of a short
-/// password, cookie or header value; a fixed marker shows nothing.
+/// What a credential prints as. The domain prints one fixed marker for every
+/// secret: a prefix and a suffix would be half of a short password, cookie or
+/// header value, and a URL's host and path are not safe to print either when
+/// the origin signs its URLs.
 const REDACTED: &str = "<redacted>";
 
 impl fmt::Debug for PullAuth {
@@ -252,15 +255,16 @@ impl fmt::Debug for PullAuth {
     /// through the input, the write spec and the pull source. Only the variant
     /// and a username are printed.
     ///
-    /// A bearer token keeps `redact_secret`'s four-character prefix and suffix
-    /// on purpose: operators identify which token is configured by its ends,
-    /// and a token is long and high-entropy, unlike a password.
+    /// Every secret prints as the same fixed marker, including a bearer token.
+    /// Showing a token's ends would help an operator tell two tokens apart,
+    /// but it is still half of a short token, and the domain does not decide
+    /// what part of a secret is safe to print.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::None => formatter.write_str("None"),
-            Self::Bearer { token } => formatter
+            Self::Bearer { .. } => formatter
                 .debug_struct("Bearer")
-                .field("token", &crate::secret_display::redact_secret(token))
+                .field("token", &REDACTED)
                 .finish(),
             Self::Cookies { .. } => formatter
                 .debug_struct("Cookies")
@@ -314,16 +318,13 @@ pub struct PipelineInputSource {
 }
 
 impl fmt::Debug for PipelineInputSource {
-    /// Same rule as [`PipelineInput`]: a signed URL is a credential, and
-    /// `auth` redacts itself.
+    /// Same rule as [`PipelineInput`]: a signed URL is a credential, so it
+    /// prints as a fixed marker, and `auth` redacts itself.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PipelineInputSource")
             .field("kind", &self.kind)
-            .field(
-                "url",
-                &self.url.as_deref().map(crate::secret_display::redact_url),
-            )
+            .field("url", &self.url.as_ref().map(|_| REDACTED))
             .field("variant_rule", &self.variant_rule)
             .field("auth", &self.auth)
             .finish()
@@ -381,16 +382,15 @@ mod tests {
         }
         // The username is not a secret, and showing it is the ergonomic part.
         assert!(format!("{:?}", auths[2]).contains("operator"));
-        // A short password or cookie value shows nothing at all: `redact_secret`
-        // keeps a prefix and a suffix, which would be half of an eight-byte
-        // secret. A bearer token keeps its ends on purpose, to identify it.
-        for auth in [&auths[1], &auths[2], &auths[3]] {
+        // Every secret prints as the same fixed marker. A prefix and a suffix
+        // would be half of a short password or cookie, and the domain does not
+        // decide what part of a secret is safe to print.
+        for auth in &auths {
             assert!(
                 format!("{auth:?}").contains("<redacted>"),
                 "{auth:?} prints a fixed marker, not a partial secret"
             );
         }
-        assert!(format!("{:?}", auths[0]).contains("Bear"));
 
         let input = PipelineInput {
             id: "input-pull".to_string(),
@@ -412,12 +412,27 @@ mod tests {
             !printed.contains(token),
             "the input row must redact its auth"
         );
+        // The stream key authenticates a push, so it is a credential too: the
+        // rest of the code prints it through `redact_secret`.
+        assert!(
+            !printed.contains("pull-key"),
+            "the input row must redact its stream key: {printed}"
+        );
         // A signed URL is a credential: its query carries the token.
         assert!(
             !printed.contains(url_secret),
             "the input row must redact its source URL: {printed}"
         );
-        assert!(printed.contains("origin.example"), "the origin still shows");
+        // The whole URL prints as the marker, host included: the domain does
+        // not decide which part of a URL is safe to print.
+        assert!(
+            printed.contains("<redacted>"),
+            "the input row prints a fixed marker for its source URL: {printed}"
+        );
+        assert!(
+            !printed.contains("origin.example"),
+            "no part of the source URL prints: {printed}"
+        );
         assert!(printed.contains("input-pull"), "the rest still prints");
 
         let source = PipelineInputSource {

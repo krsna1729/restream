@@ -4,8 +4,11 @@
 
 use std::time::Duration;
 
-use super::fetch::redirect_refusal;
-use super::tests_origin::{AUDIO_MASTER, CapturedMessages};
+use reqwest::Client;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+
+use super::fetch::{log_url, redirect_refusal};
+use super::tests_origin::{AUDIO_MASTER, CapturedMessages, source};
 use super::*;
 use crate::domain::pipeline_input::{HeaderPair, PullAuth, VariantRule};
 use crate::media::hls_ingest::playlist;
@@ -23,6 +26,152 @@ fn refresh_cadence_halves_after_an_empty_reload() {
         refresh_delay(Duration::from_secs(1), false),
         Duration::from_millis(500)
     );
+    // A hostile playlist cannot set the cadence: a near-zero target duration
+    // is polled at the floor, not as fast as round-trip time allows.
+    assert_eq!(
+        refresh_delay(Duration::from_millis(1), true),
+        MIN_REFRESH_INTERVAL
+    );
+    assert_eq!(
+        refresh_delay(Duration::from_micros(500), false),
+        MIN_REFRESH_INTERVAL
+    );
+    assert_eq!(MIN_REFRESH_INTERVAL, Duration::from_millis(500));
+}
+
+/// The origin a credential is scoped to is RFC 6454's: scheme, host *and*
+/// port. Another host, another port or the other scheme is another place the
+/// credential would be presented, and it is presented at none of them.
+#[test]
+fn a_credential_is_scoped_to_the_source_origin_including_its_scheme() {
+    let source = Url::parse("https://origin.example/live/index.m3u8").unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_static("x-api-key"),
+        HeaderValue::from_static("KEY"),
+    );
+    headers.insert(
+        HeaderName::from_static("authorization"),
+        HeaderValue::from_static("Bearer TOKEN"),
+    );
+    let scope = AuthScope::new(&source, RequestAuth::Headers(headers));
+    let client = Client::new();
+    let applied = |raw: &str| {
+        scope
+            .apply(&Url::parse(raw).unwrap(), client.get(raw))
+            .build()
+            .unwrap()
+            .headers()
+            .contains_key("x-api-key")
+    };
+    assert!(
+        applied("https://origin.example/live/seg0.ts"),
+        "the source's own origin"
+    );
+    assert!(
+        applied("https://origin.example/other/seg0.ts"),
+        "any path in that origin"
+    );
+    assert!(
+        !applied("http://origin.example/live/seg0.ts"),
+        "the same host over http is another origin: an https source must not          send its credential in the clear"
+    );
+    assert!(
+        !applied("https://origin.example:8443/live/seg0.ts"),
+        "another port is another origin"
+    );
+    assert!(
+        !applied("https://cdn.example/live/seg0.ts"),
+        "another host is another origin"
+    );
+    // Nothing configured: nothing to scope.
+    let bare = AuthScope::new(&source, RequestAuth::None);
+    assert!(!bare.is_configured());
+}
+
+/// A retry burst is six failures — every burst, not just the later ones — and
+/// then the quiet period, from which the next burst starts at the first
+/// attempt again.
+#[test]
+fn a_retry_burst_is_six_failures_and_the_quiet_period() {
+    let mut attempts = 0;
+    let mut delays = Vec::new();
+    for _ in 0..MAX_ATTEMPTS {
+        delays.push(retry_delay(&mut attempts));
+    }
+    assert_eq!(
+        delays,
+        vec![
+            backoff(1),
+            backoff(2),
+            backoff(3),
+            backoff(4),
+            backoff(5),
+            QUIET_PERIOD,
+        ],
+        "the sixth failure starts the quiet period"
+    );
+    assert_eq!(
+        attempts, 0,
+        "and the next burst starts from the first attempt"
+    );
+    assert_eq!(
+        retry_delay(&mut attempts),
+        backoff(1),
+        "a later burst is six failures too"
+    );
+    assert_eq!(attempts, 1);
+}
+
+/// Every pull log line renders a URL without its query: an origin that signs
+/// its URLs — Akamai `hdnts`, CloudFront `Policy`/`Signature`/`Key-Pair-Id`,
+/// S3 `X-Amz-Signature` — puts its credential there, and none of those keys
+/// are on `redact_url`'s allowlist.
+#[test]
+fn a_log_url_drops_the_whole_query() {
+    for signed in [
+        "https://cdn.example/live/seg0.ts?hdnts=st=1~exp=2~acl=*~hmac=SECRETSIG",
+        "https://cdn.example/live/seg0.ts?Policy=SECRETPOLICY&Signature=SECRETSIG&Key-Pair-Id=SECRETKEY",
+        "https://bucket.s3.example/live/seg0.ts?X-Amz-Signature=SECRETSIG&X-Amz-Credential=SECRETKEY",
+        "https://cdn.example/live/seg0.ts?token=SECRETTOKEN",
+    ] {
+        let rendered = log_url(signed);
+        assert!(!rendered.contains("SECRET"), "{rendered}");
+        assert!(
+            !rendered.contains('?') || rendered.ends_with("?<redacted>"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("cdn.example") || rendered.contains("s3.example"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("live/seg0.ts"), "{rendered}");
+        assert!(rendered.contains("?<redacted>"), "{rendered}");
+    }
+    // Nothing to drop: the URL is rendered as it stands, and a URL that is
+    // not one keeps the part before the query.
+    assert_eq!(
+        log_url("https://cdn.example/live/index.m3u8"),
+        "https://cdn.example/live/index.m3u8"
+    );
+    assert_eq!(
+        log_url("https://cdn.example:8443/live/index.m3u8?hdnts=x"),
+        "https://cdn.example:8443/live/index.m3u8?<redacted>"
+    );
+    assert_eq!(log_url("not a url?secret=x"), "not a url?<redacted>");
+    // A signed source URL is what `PullSource`'s Debug renders, and the
+    // credentials it carries are write-only.
+    let mut signed_source = source(
+        "https://cdn.example/live/index.m3u8?hdnts=st=1~exp=2~hmac=SECRETSIG".to_string(),
+        VariantRule::HighestBandwidth,
+    );
+    signed_source.auth = PullAuth::Bearer {
+        token: "SECRETTOKEN".to_string(),
+    };
+    let debugged = format!("{signed_source:?}");
+    assert!(!debugged.contains("SECRET"), "{debugged}");
+    assert!(debugged.contains("?<redacted>"), "{debugged}");
+    assert!(debugged.contains("cdn.example"), "{debugged}");
 }
 
 #[test]
@@ -313,9 +462,23 @@ fn a_live_window_is_entered_three_target_durations_from_its_end() {
     };
     assert_eq!(
         live_start(&window(10)),
-        106,
-        "the last entry at least three target durations from the end (RFC 8216 6.3.3)"
+        107,
+        "the entry closest to the end whose start is still three target durations \
+         before the playlist ends (RFC 8216 6.3.3)"
     );
+    // Three 6 s entries fill three 6 s target durations exactly: the earliest
+    // of them is the edge, not the one before it.
+    let six = "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:0\n\
+               #EXTINF:6.0,\nseg0.ts\n#EXTINF:6.0,\nseg1.ts\n#EXTINF:6.0,\nseg2.ts\n\
+               #EXTINF:6.0,\nseg3.ts\n";
+    match parse_remote(&base, six.as_bytes()).unwrap() {
+        Playlist::Media(media) => assert_eq!(
+            live_start(&media),
+            1,
+            "seg1, seg2 and seg3 are the last three target durations"
+        ),
+        other => panic!("expected a media playlist, got {other:?}"),
+    }
     assert_eq!(
         live_start(&window(3)),
         100,
@@ -373,8 +536,17 @@ fn private_and_link_local_hosts_are_refused() {
         "http://[fd00:ec2::254]/s.ts",
         "http://[::ffff:127.0.0.1]/s.ts",
         "http://[::ffff:169.254.169.254]/s.ts",
+        "http://100.64.0.1/s.ts",
+        "http://100.100.100.200/s.ts",
+        "http://100.127.255.254/s.ts",
+        "http://[64:ff9b::7f00:1]/s.ts",
+        "http://[64:ff9b::a9fe:a9fe]/s.ts",
         "http://localhost/s.ts",
         "http://LOCALHOST/s.ts",
+        "http://localhost./s.ts",
+        "http://a.localhost/s.ts",
+        "http://a.b.localhost/s.ts",
+        "http://LOCALHOST./s.ts",
     ] {
         assert!(refused(url), "{url} is a refused range");
     }
@@ -382,8 +554,13 @@ fn private_and_link_local_hosts_are_refused() {
         "http://93.184.216.34/s.ts",
         "http://172.32.0.1/s.ts",
         "http://8.8.8.8/s.ts",
+        "http://100.63.255.254/s.ts",
+        "http://100.128.0.1/s.ts",
         "http://[2606:4700::1111]/s.ts",
+        "http://[64:ff9b::808:808]/s.ts",
         "http://origin.example/s.ts",
+        "http://notlocalhost.example/s.ts",
+        "http://localhost.example/s.ts",
     ] {
         assert!(!refused(url), "{url} is routable");
     }
@@ -424,42 +601,64 @@ fn a_playlist_pointing_at_a_private_address_is_refused() {
 }
 
 #[test]
-fn a_redirect_out_of_the_origin_or_to_the_clear_is_refused() {
+fn a_redirect_is_refused_for_credentials_a_private_target_or_a_downgrade() {
     let source = Url::parse("https://origin.example/live/index.m3u8").unwrap();
     let same_origin = Url::parse("https://origin.example/live/other.m3u8").unwrap();
+    let other_port = Url::parse("https://origin.example:8443/x.m3u8").unwrap();
+    let public = Url::parse("https://cdn.example/live/x.m3u8").unwrap();
+    let private = Url::parse("https://10.0.0.5/x.m3u8").unwrap();
+    // https so that only the address rule, not the downgrade rule, applies.
+    let loopback = Url::parse("https://127.0.0.1/x.m3u8").unwrap();
+    let downgrade = Url::parse("http://origin.example/live/other.m3u8").unwrap();
+
     assert_eq!(
-        redirect_refusal(&source, &same_origin, true),
+        redirect_refusal(&source, &same_origin, true, false),
         None,
         "a redirect inside the origin is followed"
     );
+    // Credentials: another origin is another place they would be presented,
+    // so the hop is refused however public the target is.
     assert_eq!(
-        redirect_refusal(
-            &source,
-            &Url::parse("https://cdn.example/live/x.m3u8").unwrap(),
-            true
-        ),
-        Some("redirect leaves the source origin")
+        redirect_refusal(&source, &public, true, false),
+        Some("redirect would carry credentials to another origin")
     );
     assert_eq!(
-        redirect_refusal(
-            &source,
-            &Url::parse("https://origin.example:8443/x.m3u8").unwrap(),
-            false
-        ),
-        Some("redirect leaves the source origin"),
+        redirect_refusal(&source, &other_port, true, false),
+        Some("redirect would carry credentials to another origin"),
         "another port is another origin"
     );
-    let downgrade = Url::parse("http://origin.example/live/other.m3u8").unwrap();
+    // Without credentials, the target's address decides.
     assert_eq!(
-        redirect_refusal(&source, &downgrade, true),
-        Some("redirect would send credentials over http")
+        redirect_refusal(&source, &public, false, false),
+        None,
+        "a credential-less pull may follow its nearest edge"
     );
-    // Without credentials, an https→http hop on the same host and port is
-    // still another origin (RFC 6454), so it is not followed either.
+    assert_eq!(
+        redirect_refusal(&source, &private, false, false),
+        Some("redirect points at a private address")
+    );
+    assert_eq!(
+        redirect_refusal(&source, &loopback, false, false),
+        Some("redirect points at a private address")
+    );
+    // A source that is itself in one of those ranges may be redirected within
+    // them: the same allowance the playlist's own URIs get.
+    assert_eq!(redirect_refusal(&source, &loopback, false, true), None);
+    // A downgrade is refused for every pull: an https source must not be
+    // silently weakened.
+    assert_eq!(
+        redirect_refusal(&source, &downgrade, true, false),
+        Some("redirect would take the pull to http")
+    );
+    assert_eq!(
+        redirect_refusal(&source, &downgrade, false, false),
+        Some("redirect would take the pull to http")
+    );
     let secure = Url::parse("https://origin.example:8080/x.m3u8").unwrap();
     let clear = Url::parse("http://origin.example:8080/x.m3u8").unwrap();
     assert_eq!(
-        redirect_refusal(&secure, &clear, false),
-        Some("redirect leaves the source origin")
+        redirect_refusal(&secure, &clear, false, false),
+        Some("redirect would take the pull to http"),
+        "the same host and port over the clear is still a downgrade"
     );
 }

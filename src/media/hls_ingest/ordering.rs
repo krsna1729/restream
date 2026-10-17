@@ -120,6 +120,12 @@ struct MapState {
     /// Hash of the init for `uri` already delivered, so a re-upload of the
     /// same bytes is not delivered again (an encoder's `resend`).
     delivered: Option<u64>,
+    /// The payload this map last delivered, so a return to it can deliver its
+    /// bytes again without a re-upload: the demuxer holds one init, so a stream
+    /// that goes content map → ad map → content map must re-deliver the content
+    /// map's init or its segments are demuxed with the ad map's tracks. The
+    /// payload — not bare bytes — so the cache stays inside the byte budget.
+    last: Option<Payload>,
 }
 
 enum Lock {
@@ -183,9 +189,11 @@ pub(super) struct Session {
     current_map: Option<String>,
     /// A followed media playlist was applied, so its (missing) map is known.
     playlist_seen: bool,
-    /// An init has been applied by this session's demuxer: a later, different
-    /// init starts an unrelated timeline (a discontinuity).
-    init_applied: bool,
+    /// The map whose init the demuxer currently holds: its URI and the hash of
+    /// the bytes delivered for it. One init is held at a time, so this — not
+    /// each map's own last delivery — decides whether a delivery is needed. A
+    /// later, different init starts an unrelated timeline (a discontinuity).
+    applied: Option<(String, u64)>,
     /// The init the stream key applied last, from before this session. It is
     /// delivered to this session's demuxer like a fresh upload, because the
     /// demuxer starts empty.
@@ -212,7 +220,7 @@ impl Session {
             maps: Vec::new(),
             current_map: None,
             playlist_seen: false,
-            init_applied: false,
+            applied: None,
             seeded: None,
         }
     }
@@ -256,6 +264,7 @@ impl Session {
         if let Some(map) = self.maps.iter_mut().find(|map| map.uri == uri) {
             map.pending = None;
             map.delivered = None;
+            map.last = None;
         }
         if self
             .seeded
@@ -290,6 +299,7 @@ impl Session {
             uri: uri.to_string(),
             pending,
             delivered: None,
+            last: None,
         });
     }
 
@@ -489,21 +499,43 @@ impl Session {
         let Some(map) = self.maps.iter_mut().find(|map| map.uri == uri) else {
             return (None, false);
         };
-        let Some(pending) = map.pending.take() else {
-            return (None, false);
+        // Fresh bytes for this map win; otherwise the bytes it last delivered,
+        // so a return to an earlier map re-delivers its init instead of
+        // leaving the other map's tracks in the demuxer.
+        let (bytes, hash) = match map.pending.take() {
+            Some(payload) => {
+                let mut hasher = std::hash::DefaultHasher::new();
+                std::hash::Hash::hash(&payload.bytes[..], &mut hasher);
+                let hash = std::hash::Hasher::finish(&hasher);
+                let bytes = payload.bytes.clone();
+                // The map keeps the charged payload; the delivered handle below
+                // shares its bytes without a second charge.
+                map.last = Some(payload);
+                (bytes, hash)
+            }
+            None => {
+                let (Some(hash), Some(kept)) = (map.delivered, map.last.as_ref()) else {
+                    return (None, false);
+                };
+                (kept.bytes.clone(), hash)
+            }
         };
-        let mut hasher = std::hash::DefaultHasher::new();
-        std::hash::Hash::hash(&pending.bytes[..], &mut hasher);
-        let hash = std::hash::Hasher::finish(&hasher);
-        if map.delivered == Some(hash) {
+        // The demuxer already holds exactly these bytes: a re-upload of the
+        // same init (an encoder's `resend`), or a return to the map it is on.
+        let held = map.delivered == Some(hash)
+            && self
+                .applied
+                .as_ref()
+                .is_some_and(|(applied_uri, applied)| applied_uri == uri && *applied == hash);
+        if held {
             return (None, false);
         }
-        let replaces = map.delivered.replace(hash).is_some() || self.init_applied;
-        self.init_applied = true;
+        map.delivered = Some(hash);
+        let replaces = self.applied.replace((uri.to_string(), hash)).is_some();
         (
             Some(Init {
                 uri: uri.to_string(),
-                payload: pending,
+                payload: Payload::new(bytes, None, None, None),
             }),
             replaces,
         )

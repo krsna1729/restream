@@ -3,6 +3,7 @@
 //! lookup and one bounded channel send, never media work.
 
 use std::collections::{HashMap, HashSet};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -323,14 +324,25 @@ impl HlsIngest {
         // The removal is its own statement so the map's guard is released
         // before the join, never held across it.
         let removed = crate::sync::lock(&self.pulls).remove(input_id);
-        match removed {
-            Some(running) => {
-                running.task.cancel();
-                running.task.join().await;
-                self.engine.cancel_pipeline_input(input_id).await;
-                true
-            }
-            None => false,
+        let had_pull = removed.is_some();
+        if let Some(running) = removed {
+            running.task.cancel();
+            running.task.join().await;
+            self.engine.cancel_pipeline_input(input_id).await;
+        }
+        // After the join: until it returns, the task's session could apply an
+        // init again between a clear and the join, leaving it cached. Also
+        // cleared when no pull was running, because a session that ended
+        // earlier leaves the init it applied behind.
+        self.clear_applied_init(input_id);
+        had_pull
+    }
+
+    /// Drop the init a key applied last, so its state can be evicted.
+    fn clear_applied_init(&self, input_id: &str) {
+        let keys = crate::sync::lock(&self.keys);
+        if let Some(key) = keys.get(input_id) {
+            *crate::sync::lock(&key.init) = None;
         }
     }
 
@@ -512,6 +524,42 @@ impl HlsIngest {
         let _starting = key.start.lock().await;
         if let Some(session) = self.current_session(&pipeline.input_id) {
             return Ok(session);
+        }
+        // An upload was authorized before its body was read, and a body may
+        // arrive up to four target durations later. Re-resolve the key here,
+        // under the key's start lock, so an input disabled, deleted or changed
+        // to a pull input in that window cannot open a session — or recreate
+        // the ring of a pipeline that is going away — afterwards. A pull is
+        // authorized by its own row on every pass, and its objects never carry
+        // a stream key a peer supplied.
+        //
+        // This is a second authorization of the same attempt, so it also runs
+        // the security accounting a second time: a success resets that IP's
+        // failure count again (idempotent), and only the rare disable-or-remap
+        // race adds a failure. Re-checking the input row directly instead would
+        // put a second copy of the authorization rule in this module.
+        if origin == DispatchOrigin::Push {
+            // The security layer keys bans and rate limits by bare IP, and the
+            // ingest protocols pass it that way; `client_addr` is the peer
+            // address the session meta records, so derive the IP from it.
+            let client_ip = client_addr
+                .parse::<SocketAddr>()
+                .map_or_else(|_| client_addr.to_string(), |addr| addr.ip().to_string());
+            match self.authorize(stream_key, &client_ip).await {
+                Ok(current) if current.input_id == pipeline.input_id => {}
+                Ok(_) => {
+                    warn!(
+                        input = %pipeline.input_id,
+                        "hls ingest upload authorized for another input; refused"
+                    );
+                    return Err(DispatchError::PublisherActive);
+                }
+                Err(AuthorizeError::Forbidden) => return Err(DispatchError::PublisherActive),
+                Err(AuthorizeError::LookupFailed(error)) => {
+                    error!(%error, "hls ingest stream key lookup failed at session start");
+                    return Err(DispatchError::Unavailable);
+                }
+            }
         }
         let engine = &self.engine;
         let registration = engine

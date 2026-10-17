@@ -828,7 +828,11 @@ path's; the puller only decides what to fetch.
   token in the query: it is what that URL is fetched with, and a relative
   URI a playlist names does not inherit it (RFC 3986 section 5.3), so a token
   that must reach segments belongs in a credential choice, not the query.
-  The URL is stripped from logs. The URL itself — its query
+  Every log line renders a URL with its whole query dropped (scheme, host,
+  port, path, then `?<redacted>`): a signed origin carries its credential
+  under its own key — Akamai `hdnts`, CloudFront `Policy`/`Signature`/
+  `Key-Pair-Id`, S3 `X-Amz-Signature` — and `redact_url`'s allowlist of query
+  keys would print it verbatim. The URL itself — its query
   included — is configuration the operator typed, so it is returned in full
   and readable by any authenticated reader of the input: `bearer`, `cookies`
   and `headers` are the choices for a credential that must stay write-only,
@@ -847,20 +851,27 @@ path's; the puller only decides what to fetch.
   with a playlist is presented with that playlist's segments, as a browser or
   FFmpeg `-cookies` does. Cookies are scoped by the jar to the origin's
   domain.
-- **Redirects.** A redirect is followed only inside the source's origin, and
-  at most 10 hops. A redirect to another host or port, or an `https`→`http`
-  hop while credentials are configured, is refused: the pull then reports the
-  3xx and retries, so a redirect can carry nothing anywhere.
+- **Redirects.** At most 10 hops, each one checked against the URL it came
+  from rather than against the source: a credential-less pull that has already
+  moved to a third-party host may follow that host's own redirects. An
+  `https`→`http` hop is refused for every pull — an https source is not
+  silently weakened into fetching the clear. A hop that crosses an origin is
+  refused when the pull has credentials to protect (they are presented per
+  origin, and a custom header would otherwise survive reqwest's own cross-host
+  guard) or when the target fails the address guard below; with neither, it is
+  followed, so a credential-less origin that answers `302` to its nearest edge
+  works. A refused redirect is reported as a 3xx and retried.
 - **Address ranges.** A playlist URI in loopback, link-local (cloud metadata
-  lives at `169.254.169.254` and `fd00:ec2::254`) or a private / unique-local
-  range is refused as fatal, unless the source itself is in one of those
-  ranges — an internal origin implies an internal origin's playlist. IPv6
-  literals are covered by their brackets as much as IPv4 ones. A redirect
-  cannot reach one either, because a redirect to another host is refused
-  outright. Only literal addresses and `localhost` are decided here: a domain
-  name that *resolves* to one of these ranges (DNS rebinding) still gets
-  through the guard, because refusing it would need resolution the pull does
-  not do.
+  lives at `169.254.169.254`, `100.100.100.200` and `fd00:ec2::254`, and each
+  of those is reachable through the NAT64 prefix `64:ff9b::/96` as much as
+  through `::ffff:0:0/96`), carrier-grade NAT (`100.64.0.0/10`), a private or
+  unique-local range, or under `localhost` — the name, `localhost.`, and
+  `*.localhost` (RFC 6761) — is refused as fatal, unless the source itself is
+  in one of those ranges: an internal origin implies an internal origin's
+  playlist. IPv6 literals are covered by their brackets as much as IPv4 ones.
+  Only literal addresses and those names are decided here: a domain name that
+  *resolves* to one of these ranges (DNS rebinding) still gets through the
+  guard, because refusing it would need resolution the pull does not do.
 - **Variant choice.** A master playlist is resolved once, and its chosen media
   playlist is followed directly on later refreshes. The master itself is not
   fed to the assembler, which means the puller's rule (not ordering's
@@ -874,7 +885,9 @@ path's; the puller only decides what to fetch.
   chosen video variant: one task follows one rendition, and the assembler
   follows one playlist path, so a second followed rendition is a capability
   the shared HLS path does not have yet (Q-077). The pull states that once per
-  pull rather than dropping the audio silently: one `WARN` naming the group
+  master resolution — the first cycle, and again whenever an expired variant
+  URL sends it back to the master — rather than dropping the audio silently:
+  one `WARN` naming the group
   and the rendition and saying the pulled stream is video-only, and the pull
   continues. A variant whose audio is muxed into its own segments — no `AUDIO`
   attribute, or a group member with no `URI` — is complete as it stands and is
@@ -884,8 +897,11 @@ path's; the puller only decides what to fetch.
   `AUTOSELECT=YES`, else the first.
 - **Refresh cadence.** The media playlist is fetched again every target
   duration, and half a target duration after a reload that brought nothing
-  new (RFC 8216 section 6.3.4). Segments listed with a sequence below the
-  first not-yet-fetched one are skipped, never refetched.
+  new (RFC 8216 section 6.3.4), never faster than 500 ms. `TARGETDURATION` is
+  the origin's number and a hostile one is near zero, which without that floor
+  would re-poll, re-parse and re-dispatch a megabyte of playlist as fast as
+  round-trip time allows. Segments listed with a sequence below the first
+  not-yet-fetched one are skipped, never refetched.
 - **Entry point.** The first cycle of a live playlist starts at the last
   segment at least three target durations from its end (RFC 8216 section
   6.3.3). A DVR or EVENT window is therefore not read from its start — which

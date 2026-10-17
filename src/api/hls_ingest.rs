@@ -113,7 +113,9 @@ pub async fn hls_ingest_handler(
 
     // The object is complete. Encoders that never read the response may
     // reset the connection now, which drops this handler; the object must
-    // still reach its session, so the dispatch runs detached.
+    // still reach its session, so the dispatch runs detached. The address is
+    // the full peer, as the ingest protocols record it; the session start
+    // re-authorizes from it and needs the bare IP, which it derives.
     let client_addr = client.map_or_else(|| "unknown".to_string(), |addr| addr.to_string());
     let dispatch = tokio::spawn(async move {
         let outcome = ingest

@@ -661,6 +661,54 @@ fn a_new_init_is_delivered_with_a_discontinuity() {
     );
 }
 
+/// Going back to an earlier map delivers its init again. The demuxer holds one
+/// init, so a stream that goes content map → ad map → content map — the shape
+/// server-side ad insertion produces, and the shape the pull's docs name —
+/// must deliver the content map's init again: without it, the content's
+/// segments are demuxed with the ad map's tracks, `avcC` parameter sets and
+/// AAC config, and a differing track id skips every sample.
+#[test]
+fn a_return_to_an_earlier_map_delivers_its_init_again() {
+    let t0 = Instant::now();
+    let mut session = Session::new(limits());
+    // The content map's init, uploaded before the playlist that names it.
+    assert_eq!(seg(&mut session, "content.mp4", t0), SegmentOutcome::Held);
+    assert_eq!(seg(&mut session, "index0.ts", t0), SegmentOutcome::Held);
+    session.on_playlist(
+        "index.m3u8",
+        with_map(media("", 0, 1, false), "content.mp4"),
+        t0,
+    );
+    assert_eq!(
+        released_with_init(&mut session, t0),
+        vec![(0, "index0.ts".into(), Some("content.mp4".into()), false)],
+        "the first init replaces nothing"
+    );
+
+    // The ad break: a second map, its init uploaded before its playlist.
+    assert_eq!(seg(&mut session, "ad.mp4", t0), SegmentOutcome::Held);
+    assert_eq!(seg(&mut session, "index1.ts", t0), SegmentOutcome::Held);
+    session.on_playlist("index.m3u8", with_map(media("", 1, 1, false), "ad.mp4"), t0);
+    assert_eq!(
+        released_with_init(&mut session, t0),
+        vec![(1, "index1.ts".into(), Some("ad.mp4".into()), true)],
+        "the ad map's init replaces the content map's"
+    );
+
+    // Back to the content map, with no re-upload of its init.
+    assert_eq!(seg(&mut session, "index2.ts", t0), SegmentOutcome::Held);
+    session.on_playlist(
+        "index.m3u8",
+        with_map(media("", 2, 1, false), "content.mp4"),
+        t0,
+    );
+    assert_eq!(
+        released_with_init(&mut session, t0),
+        vec![(2, "index2.ts".into(), Some("content.mp4".into()), true)],
+        "the content map's init is delivered again, as a replacement"
+    );
+}
+
 #[derive(Debug, Clone)]
 enum Op {
     Segment { index: u64, len: usize },

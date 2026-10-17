@@ -139,27 +139,6 @@ fn pull_delivered_requires_monotone_video_media() {
 }
 
 #[test]
-fn pull_keeps_up_compares_the_media_clock_to_the_wall_clock() {
-    let healthy = json!({
-        "ingest": {"uptimeSeconds": 12.0},
-        "gop": {"keyframeCount": 7, "averageIntervalSec": 2.0}
-    });
-    // 6 intervals * 2 s = 12 s of media against 12 s of wall time.
-    assert!(pull_keeps_up(&healthy));
-
-    // A stalled pull: the wall clock advances while the media clock freezes.
-    let stalled = json!({
-        "ingest": {"uptimeSeconds": 60.0},
-        "gop": {"keyframeCount": 7, "averageIntervalSec": 2.0}
-    });
-    assert!(!pull_keeps_up(&stalled));
-
-    // No media probe at all cannot keep up.
-    let none = json!({"ingest": {"uptimeSeconds": 60.0}});
-    assert!(!pull_keeps_up(&none));
-}
-
-#[test]
 fn log_reports_pull_failure_needs_the_input_and_the_message() {
     let log = "2026-10-17T00:00:00Z WARN restream: pipeline=pipe input=input_abc error=\"dns\" HLS pull failed; retrying\n";
     assert!(log_reports_pull_failure(log, "input_abc"));
@@ -205,4 +184,31 @@ fn pipeline_present_finds_the_row() {
     assert!(pipeline_present(&list, "p2"));
     assert!(!pipeline_present(&list, "p3"));
     assert!(!pipeline_present(&json!({}), "p1"));
+}
+
+/// Keep-up is measured inside the window on the sink's monotonic media clock.
+/// The probe's keyframe timeline is capped at 30 entries, so its media seconds
+/// freeze while uptime keeps growing: a lifetime comparison fails a healthy
+/// pull on a window longer than about two minutes, which is why the check
+/// takes two samples instead.
+#[test]
+fn keep_up_is_measured_over_the_window() {
+    let start = json!({"mediaProgressMs": 0});
+    assert!(pull_keeps_up_over_window(
+        &start,
+        &json!({"mediaProgressMs": 14_000}),
+        15.0
+    ));
+    assert!(
+        !pull_keeps_up_over_window(&start, &json!({"mediaProgressMs": 6_000}), 15.0),
+        "6 s of media in a 15 s window is below half"
+    );
+    assert!(
+        !pull_keeps_up_over_window(&start, &start, 60.0),
+        "a frozen media clock fails however long the window ran"
+    );
+    assert!(
+        !pull_keeps_up_over_window(&start, &json!({"mediaProgressMs": 14_000}), 0.0),
+        "a zero-length window says nothing"
+    );
 }

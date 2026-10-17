@@ -40,8 +40,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use self::fetch::{
-    AuthScope, FetchError, RequestAuth, build_client, fetch_small, host_refused, pump_body, send,
-    variant_expired,
+    AuthScope, FetchError, RequestAuth, build_client, fetch_small, host_refused, log_url,
+    pump_body, send, variant_expired,
 };
 use self::namespace::{
     encryption_refusal, live_start, map_name, object_kind, parse_remote, push_playlist_text,
@@ -52,10 +52,10 @@ use crate::media::engine::MediaEngine;
 use crate::media::hls::upload_policy::backoff;
 use crate::media::hls_ingest::playlist::{MasterPlaylist, Playlist, SegmentEntry, Variant};
 use crate::media::hls_ingest::{
-    BodyError, DispatchError, DispatchOrigin, HlsIngest, HlsIngestLimits, ObjectKind, ObjectOutcome,
+    BodyError, DispatchError, DispatchOrigin, HlsIngest, HlsIngestLimits, ObjectBody, ObjectKind,
+    ObjectOutcome,
 };
 use crate::media::ingest_auth::AuthenticatedPipeline;
-use crate::secret_display::redact_url;
 
 mod audio;
 mod fetch;
@@ -76,6 +76,12 @@ const MAX_ATTEMPTS: u32 = 6;
 /// After a burst, wait this long before starting the next one, so a wrong
 /// URL or an origin that stays down is a slow poll, never a spin.
 const QUIET_PERIOD: Duration = Duration::from_secs(30);
+/// The shortest refresh delay a playlist can ask for. A hostile or broken
+/// origin can offer any non-zero fractional `EXT-X-TARGETDURATION`, and the
+/// pull sleeps one target duration (or half of it): without a floor,
+/// `TARGETDURATION:0.001` would re-poll, re-parse and re-dispatch as fast as
+/// round-trip time allows.
+const MIN_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 /// Attempts one segment gets before it is skipped. A 404 on one object would
 /// otherwise fail every cycle until it leaves the window, which is as long as
 /// the window is; the gap a skipped segment leaves is the assembler's to
@@ -102,12 +108,13 @@ pub struct PullSource {
 }
 
 impl std::fmt::Debug for PullSource {
-    /// A signed URL carries its own token in the query, and `auth` carries
-    /// the rest, so neither is printed.
+    /// A signed URL carries its own credential in the query, and `auth`
+    /// carries the rest, so neither is printed: the URL is rendered with its
+    /// query dropped (see [`log_url`]).
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("PullSource")
-            .field("url", &crate::secret_display::redact_url(&self.url))
+            .field("url", &log_url(&self.url))
             .field("variant", &self.variant)
             .field("auth", &self.auth)
             .finish()
@@ -270,7 +277,7 @@ async fn run(
         Ok(url) if matches!(url.scheme(), "http" | "https") => url,
         Ok(url) => {
             error!(
-                url = %redact_url(url.as_str()),
+                url = %log_url(url.as_str()),
                 "HLS pull source must be an HTTP or HTTPS URL"
             );
             return PullEnd::Fatal;
@@ -283,11 +290,11 @@ async fn run(
     };
     url.set_fragment(None);
     if !url.username().is_empty() || url.password().is_some() {
-        // Userinfo in the URL is a password printed by every `redact_url`,
+        // Userinfo in the URL is a password a log line would render in part,
         // and a URL is not the place for this credential: it is configuration
         // that gets copied around and shown back.
         error!(
-            url = %redact_url(url.as_str()),
+            url = %log_url(url.as_str()),
             "HLS pull source URL carries userinfo; use the basic credential choice instead"
         );
         return PullEnd::Fatal;
@@ -308,7 +315,7 @@ async fn run(
     let allow_private = host_refused(&url);
     // One client — and one cookie jar — per pull task: an origin's
     // `Set-Cookie` is scoped to this task's requests, never another input's.
-    let client = build_client(scope.is_configured());
+    let client = build_client(scope.is_configured(), allow_private);
     let mut state = PullState {
         source_url: url.clone(),
         next_url: url,
@@ -333,7 +340,7 @@ async fn run(
     info!(
         pipeline = %state.pipeline.id,
         input = %state.pipeline.input_id,
-        url = %redact_url(state.next_url.as_str()),
+        url = %log_url(state.next_url.as_str()),
         "HLS pull started"
     );
 
@@ -407,20 +414,16 @@ async fn run(
                     );
                     last_error = Some(error);
                 }
-                attempts = attempts.saturating_add(1);
-                let delay = if attempts > MAX_ATTEMPTS {
-                    attempts = 1;
-                    // A burst that failed six times says the URL the pull is
-                    // following is gone or the edge serving it is: go back to
-                    // the source and resolve the master again, which is where
-                    // a fresh signed per-variant URL comes from. A source that
-                    // never resolved a variant has nowhere to go back to, and
-                    // `re_resolve` says nothing in that case.
+                let delay = retry_delay(&mut attempts);
+                if delay == QUIET_PERIOD {
+                    // A burst failed: the URL the pull is following is gone or
+                    // the edge serving it is, so go back to the source and
+                    // resolve the master again, which is where a fresh signed
+                    // per-variant URL comes from. A source that never resolved
+                    // a variant has nowhere to go back to, and `re_resolve`
+                    // says nothing in that case.
                     state.re_resolve("the retry burst failed six times");
-                    QUIET_PERIOD
-                } else {
-                    backoff(attempts)
-                };
+                }
                 if sleep_or_cancel(delay, &cancel).await {
                     break;
                 }
@@ -576,7 +579,7 @@ impl PullState {
                         pipeline = %self.pipeline.id,
                         input = %self.pipeline.input_id,
                         sequence = segment.sequence,
-                        url = %redact_url(&segment.path),
+                        url = %log_url(&segment.path),
                         tries,
                         %reason,
                         "HLS pull skipped a segment that would not fetch"
@@ -611,7 +614,7 @@ impl PullState {
             warn!(
                 pipeline = %self.pipeline.id,
                 input = %self.pipeline.input_id,
-                url = %redact_url(self.next_url.as_str()),
+                url = %log_url(self.next_url.as_str()),
                 %reason,
                 "HLS pull resolves the master playlist again"
             );
@@ -643,18 +646,14 @@ impl PullState {
             .map_err(playlist_body_error)?;
         body.push(&bytes).await.map_err(playlist_body_error)?;
         self.may_dispatch()?;
-        let outcome = ingest
+        let outcome = self
             .dispatch(
-                &self.pipeline,
-                &self.stream_key,
-                &self.client_addr,
-                DispatchOrigin::Pull,
+                ingest,
                 ObjectKind::Playlist,
                 PLAYLIST_PATH.to_string(),
                 body,
             )
-            .await
-            .map_err(dispatch_error)?;
+            .await?;
         match outcome {
             ObjectOutcome::Stored => Ok(()),
             ObjectOutcome::Retry => Err(PullError::Retry(
@@ -724,7 +723,7 @@ impl PullState {
                     warn!(
                         pipeline = %self.pipeline.id,
                         input = %self.pipeline.input_id,
-                        url = %redact_url(url.as_str()),
+                        url = %log_url(url.as_str()),
                         %reason,
                         "HLS pull segment refused"
                     );
@@ -766,7 +765,7 @@ impl PullState {
                 warn!(
                     pipeline = %self.pipeline.id,
                     input = %self.pipeline.input_id,
-                    url = %redact_url(url.as_str()),
+                    url = %log_url(url.as_str()),
                     %reason,
                     "HLS pull init segment refused"
                 );
@@ -803,18 +802,49 @@ impl PullState {
         // read must not reach `dispatch`, whose `session_for` would open a
         // session under an input another source is about to own.
         self.may_dispatch()?;
-        ingest
-            .dispatch(
-                &self.pipeline,
-                &self.stream_key,
-                &self.client_addr,
-                DispatchOrigin::Pull,
-                kind,
-                path,
-                body,
-            )
-            .await
-            .map_err(dispatch_error)
+        self.dispatch(ingest, kind, path, body).await
+    }
+
+    /// Hand one object to the ingest on its own task, as an upload handler
+    /// does, and wait for what it did.
+    ///
+    /// The task is what keeps a cancellation honest: `session_for` registers
+    /// the attempt and then awaits the pipeline and its metadata before
+    /// spawning the session's owner, so a cancel that landed in that window
+    /// would drop the dispatch future and leave the registration with nothing
+    /// holding it — a disabled input still shown as connected. Dropping the
+    /// *await* instead leaves the dispatch to finish, and the session it opens
+    /// is the one the caller's own teardown ends.
+    async fn dispatch(
+        &self,
+        ingest: &Arc<HlsIngest>,
+        kind: ObjectKind,
+        path: String,
+        body: ObjectBody,
+    ) -> Result<ObjectOutcome, PullError> {
+        let ingest = ingest.clone();
+        let pipeline = self.pipeline.clone();
+        let stream_key = self.stream_key.clone();
+        let client_addr = self.client_addr.clone();
+        let dispatched = tokio::spawn(async move {
+            ingest
+                .dispatch(
+                    &pipeline,
+                    &stream_key,
+                    &client_addr,
+                    DispatchOrigin::Pull,
+                    kind,
+                    path,
+                    body,
+                )
+                .await
+        });
+        match dispatched.await {
+            Ok(outcome) => outcome.map_err(dispatch_error),
+            Err(error) => Err(PullError::Retry(format!(
+                "the pulled object's dispatch did not finish: {error}"
+            ))),
+        }
     }
 }
 
@@ -850,9 +880,26 @@ fn dispatch_error(error: DispatchError) -> PullError {
 }
 
 /// Refresh cadence: one target duration normally, half of it after a reload
-/// that brought nothing new (RFC 8216 section 6.3.4).
+/// that brought nothing new (RFC 8216 section 6.3.4), and never shorter than
+/// [`MIN_REFRESH_INTERVAL`].
 fn refresh_delay(target: Duration, had_new: bool) -> Duration {
-    if had_new { target } else { target / 2 }
+    let delay = if had_new { target } else { target / 2 };
+    delay.max(MIN_REFRESH_INTERVAL)
+}
+
+/// The delay before the cycle after the `attempts`-th consecutive failure,
+/// and the count the next burst starts from: [`MAX_ATTEMPTS`] failures make a
+/// burst, then the pull waits [`QUIET_PERIOD`] before starting the next one,
+/// whether that is the first burst or the tenth. [`backoff`] paces the
+/// requests inside a burst.
+fn retry_delay(attempts: &mut u32) -> Duration {
+    *attempts = attempts.saturating_add(1);
+    if *attempts >= MAX_ATTEMPTS {
+        *attempts = 0;
+        QUIET_PERIOD
+    } else {
+        backoff(*attempts)
+    }
 }
 
 async fn sleep_or_cancel(delay: Duration, cancel: &CancellationToken) -> bool {

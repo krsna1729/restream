@@ -127,9 +127,51 @@ async fn credentials_do_not_leave_the_source_origin() {
     engine.cancel_pipeline_input(INPUT_ID).await;
 }
 
-/// A redirect out of the source's origin is not followed at all, so nothing
+/// A redirect out of the source's origin is not followed while a credential could
 /// carries the credentials there — not even a custom header, which reqwest's
 /// own cross-host guard leaves in place.
+#[tokio::test]
+async fn a_credential_less_redirect_to_another_origin_is_followed() {
+    let origin = Origin::new();
+    let other = Origin::new();
+    let other_base = other.spawn().await;
+    origin.serve("/live/index.m3u8", media_playlist(&["seg0.ts"]));
+    origin.redirect("/live/seg0.ts", &format!("{other_base}/seg0.ts"));
+    other.serve("/seg0.ts", ts_segment());
+    let base = origin.spawn().await;
+
+    let (engine, ingest) = test_ingest(limits());
+    let ring = engine.get_or_create_pipeline(PIPELINE_ID).await;
+    let start = ring.get_write_idx();
+    // No credentials to protect, and the source itself is on loopback, so the
+    // hop passes both rules: a nearest-edge redirect works.
+    let task = spawn(
+        engine.clone(),
+        ingest,
+        identity(),
+        source(
+            format!("{base}/live/index.m3u8"),
+            VariantRule::HighestBandwidth,
+        ),
+        limits(),
+    );
+
+    wait_for_request(&other, "/seg0.ts").await;
+    let packets = wait_for_media(&engine, start).await;
+    assert!(
+        packets
+            .iter()
+            .any(|packet| packet.media_type == MediaType::Video),
+        "the followed hop delivered the segment"
+    );
+
+    task.cancel();
+    tokio::time::timeout(Duration::from_secs(5), task.join())
+        .await
+        .expect("the pull task stops");
+    engine.cancel_pipeline_input(INPUT_ID).await;
+}
+
 #[tokio::test]
 async fn a_redirect_out_of_the_source_origin_is_not_followed() {
     let origin = Origin::new();
@@ -186,7 +228,7 @@ async fn a_live_window_is_entered_near_its_end() {
             "seg8.ts", "seg9.ts",
         ]),
     );
-    for sequence in 3..10 {
+    for sequence in 4..10 {
         origin.serve(&format!("/live/seg{sequence}.ts"), ts_segment());
     }
     let base = origin.spawn().await;
@@ -203,17 +245,17 @@ async fn a_live_window_is_entered_near_its_end() {
         limits(),
     );
 
-    // Half-second segments with a one-second target: 3 s from the end is
-    // sequence 3, so 0..2 are never fetched.
+    // Half-second segments with a one-second target: three target durations
+    // is six entries, so sequence 4 is the edge and 0..3 are never fetched.
     wait_for_request(&origin, "/live/seg9.ts").await;
-    for sequence in 0..3 {
+    for sequence in 0..4 {
         assert_eq!(
             origin.count(&format!("/live/seg{sequence}.ts")),
             0,
             "the window's start (seg{sequence}) is left alone"
         );
     }
-    assert_eq!(origin.count("/live/seg3.ts"), 1, "entry point");
+    assert_eq!(origin.count("/live/seg4.ts"), 1, "entry point");
     assert_eq!(origin.count("/live/seg9.ts"), 1);
 
     task.cancel();
@@ -335,9 +377,11 @@ async fn a_resigned_map_uri_does_not_refetch_the_init() {
 #[tokio::test]
 async fn a_missing_segment_is_skipped_after_bounded_tries() {
     let origin = Origin::new();
+    // The listed segment carries a signature of its own, which the warning
+    // about it must not print.
     origin.serve(
         "/live/index.m3u8",
-        media_playlist(&["missing0.ts", "seg1.ts"]),
+        media_playlist(&["missing0.ts?hdnts=st=1~exp=2~hmac=SECRETSIG", "seg1.ts"]),
     );
     origin.serve("/live/seg1.ts", ts_segment());
     let base = origin.spawn().await;
@@ -378,6 +422,11 @@ async fn a_missing_segment_is_skipped_after_bounded_tries() {
         "the warning names the object: {}",
         lines[0]
     );
+    assert!(
+        !lines[0].contains("SECRETSIG") && !lines[0].contains("hdnts"),
+        "and not its signature: {}",
+        lines[0]
+    );
 
     task.cancel();
     tokio::time::timeout(Duration::from_secs(5), task.join())
@@ -396,7 +445,8 @@ async fn a_refused_segment_is_logged_once() {
     origin.serve(
         "/live/index.m3u8",
         "#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n\
-         #EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:1.0,\nseg0.m4s\n#EXTINF:1.0,\nseg1.m4s\n",
+         #EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:1.0,\nseg0.m4s?Policy=SECRETPOLICY\n\
+         #EXTINF:1.0,\nseg1.m4s?Policy=SECRETPOLICY\n",
     );
     origin.serve("/live/init.mp4", vec![0u8; 512]);
     origin.serve("/live/seg0.m4s", vec![0u8; 512]);
@@ -423,6 +473,11 @@ async fn a_refused_segment_is_logged_once() {
     assert_eq!(origin.count("/live/seg1.m4s"), 1);
     let lines = log.messages.matching("HLS pull segment refused");
     assert_eq!(lines.len(), 1, "one line for one reason: {lines:?}");
+    assert!(
+        !lines[0].contains("SECRETPOLICY"),
+        "the refused segment's signature is dropped: {}",
+        lines[0]
+    );
 
     task.cancel();
     tokio::time::timeout(Duration::from_secs(5), task.join())
@@ -572,7 +627,7 @@ async fn a_cancelled_task_dispatches_nothing() {
         "and opens no session"
     );
 
-    let client = build_client(false);
+    let client = build_client(false, true);
     let url = Url::parse(&format!("{base}/live/seg0.ts")).unwrap();
     let object = state
         .fetch_object(

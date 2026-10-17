@@ -7,8 +7,9 @@
 //! and `AUDIO`, and the `EXT-X-MEDIA` renditions those groups name). Every
 //! other tag is ignored, except the three that say the media cannot be
 //! fetched whole and in the clear — `EXT-X-KEY`/`EXT-X-SESSION-KEY`
-//! ([`Encryption`]) and `EXT-X-BYTERANGE` ([`MediaPlaylist::byte_range`]) —
-//! which are recorded as data. The pull refuses those; push ignores them as
+//! ([`Encryption`], recorded for the segments actually listed under a key)
+//! and `EXT-X-BYTERANGE` ([`MediaPlaylist::byte_range`]) — which are recorded
+//! as data. The pull refuses those; push ignores them as
 //! it always has. URIs resolve against the playlist's own path; only
 //! relative URIs that stay inside the stream key's namespace are accepted.
 
@@ -34,10 +35,12 @@ pub struct MediaPlaylist {
     /// playlist directory like a segment URI: the map its newest segments
     /// use. Each [`SegmentEntry`] records the map in force for itself.
     pub map_uri: Option<String>,
-    /// The `EXT-X-KEY` in force (a `METHOD` other than `NONE`), or the
-    /// session key this media playlist names out of place. Recorded as data:
-    /// the pull refuses an encrypted playlist, push ignores it as it always
-    /// has.
+    /// The encryption a listed segment is under: the first `EXT-X-KEY` with a
+    /// `METHOD` other than `NONE` that was in force where a segment URI was
+    /// reached, or the session key this media playlist names out of place.
+    /// Sticky, so a `METHOD=NONE` later in the list does not hide an earlier
+    /// encrypted entry. Recorded as data: the pull refuses an encrypted
+    /// playlist, push ignores it as it always has.
     pub encryption: Option<Encryption>,
     /// The playlist names `EXT-X-BYTERANGE` on an entry or a `BYTERANGE`
     /// attribute on its `EXT-X-MAP`: an entry is a slice of a resource.
@@ -220,7 +223,12 @@ pub fn parse_with(
     let mut ended = false;
     let mut map_uri = None;
     let mut byte_range = false;
-    let mut media_encryption = None;
+    // The key in force, and the encryption a *listed segment* is under: the
+    // latter is sticky and records the first non-`NONE` method a segment was
+    // listed with, which is what makes an encrypted entry anywhere in the
+    // list visible however the list ends.
+    let mut key_in_force: Option<Encryption> = None;
+    let mut media_encryption: Option<Encryption> = None;
     let mut session_encryption = None;
     let mut pending_duration = None;
     let mut pending_discontinuity = false;
@@ -275,7 +283,7 @@ pub fn parse_with(
             if session {
                 session_encryption = encryption;
             } else {
-                media_encryption = encryption;
+                key_in_force = encryption;
             }
         } else if let Some(value) = line.strip_prefix("#EXT-X-MAP:") {
             let uri = attribute(value, "URI").ok_or_else(|| invalid("EXT-X-MAP"))?;
@@ -335,6 +343,11 @@ pub fn parse_with(
                 let duration = pending_duration
                     .take()
                     .ok_or(PlaylistError::SegmentWithoutDuration { line: line_number })?;
+                // This entry is under the key in force, whatever the list
+                // does after it.
+                if media_encryption.is_none() {
+                    media_encryption.clone_from(&key_in_force);
+                }
                 segment_uris.push((
                     path,
                     duration,
@@ -482,10 +495,43 @@ mod tests {
         );
         assert!(!playlist.byte_range);
 
-        // `METHOD=NONE` clears the key, as RFC 8216's own example does.
+        // `METHOD=NONE` clears the key for the segments listed after it, but
+        // it does not un-encrypt the entry listed before it: that one is
+        // under AES-128, and the record says so.
         let playlist = media(
             "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-KEY:METHOD=AES-128,URI=\"key\"\n\
              #EXTINF:2.0,\nindex0.ts\n#EXT-X-KEY:METHOD=NONE\n#EXTINF:2.0,\nindex1.ts\n",
+        );
+        assert_eq!(
+            playlist.encryption,
+            Some(Encryption {
+                method: "AES-128".to_string(),
+                session: false,
+            }),
+            "an encrypted entry anywhere in the list is recorded"
+        );
+
+        // The first method a listed entry was under wins, so the reason names
+        // the key that entry actually used.
+        let playlist = media(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"a\"\n\
+             #EXTINF:2.0,\nindex0.ts\n#EXT-X-KEY:METHOD=AES-128,URI=\"b\"\n\
+             #EXTINF:2.0,\nindex1.ts\n",
+        );
+        assert_eq!(
+            playlist.encryption,
+            Some(Encryption {
+                method: "SAMPLE-AES".to_string(),
+                session: false,
+            }),
+            "the first method listed with a segment is the one recorded"
+        );
+
+        // A key that is never in force where an entry is listed is not an
+        // encrypted playlist: `METHOD=NONE` first, then no key at all.
+        let playlist = media(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-KEY:METHOD=NONE\n\
+             #EXTINF:2.0,\nindex0.ts\n",
         );
         assert_eq!(playlist.encryption, None);
 

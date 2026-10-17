@@ -3,7 +3,9 @@
 //! The puller follows one rendition, so a master whose audio is a separate
 //! `EXT-X-MEDIA` rendition — packaged live HLS, and Restream's own preview —
 //! is pulled video-only. That is a known gap (Q-077), and it is stated once
-//! per pull instead of being dropped silently.
+//! per master resolution — the first cycle, and again when an expired variant
+//! URL sends the pull back to the master — instead of being dropped
+//! silently.
 //!
 //! The decision is separate from the pull loop so it can be read and tested
 //! on its own: the loop only calls [`report_audio_rendition`] where a master
@@ -11,9 +13,9 @@
 
 use tracing::warn;
 
+use super::fetch::log_url;
 use crate::media::hls_ingest::playlist::{MasterPlaylist, Variant};
 use crate::media::ingest_auth::AuthenticatedPipeline;
-use crate::secret_display::redact_url;
 
 /// What the chosen variant says about audio, and what this puller does about
 /// it.
@@ -73,7 +75,7 @@ pub(super) fn audio_plan(master: &MasterPlaylist, variant: &Variant) -> AudioPla
             group: group.to_string(),
             // A member may omit `NAME`; its URI then names it.
             name: match rendition.name.as_str() {
-                "" => redact_url(url),
+                "" => log_url(url),
                 name => name.to_string(),
             },
             url: url.clone(),
@@ -82,8 +84,10 @@ pub(super) fn audio_plan(master: &MasterPlaylist, variant: &Variant) -> AudioPla
 }
 
 /// State what the pull does with the audio the chosen variant does not carry
-/// itself. Called once, where a master playlist is resolved, so a pull logs at
-/// most one line about it; the pull continues either way.
+/// itself. Called wherever a master playlist is resolved — the first cycle,
+/// and again after an expired variant URL sends the pull back to it — so a
+/// pull logs one line per resolution, not one per pull; the pull continues
+/// either way.
 pub(super) fn report_audio_rendition(
     master: &MasterPlaylist,
     variant: &Variant,
@@ -99,7 +103,7 @@ pub(super) fn report_audio_rendition(
             input = %pipeline.input_id,
             group = %group,
             name = %name,
-            uri = %redact_url(url),
+            uri = %log_url(url),
             "{}", reason
         ),
         AudioPlan::MissingGroup { group } => warn!(

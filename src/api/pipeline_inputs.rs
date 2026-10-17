@@ -104,10 +104,15 @@ fn parse_variant_rule(raw: &str) -> Result<VariantRule, String> {
     })
 }
 
-fn contains_control(value: &str) -> bool {
-    value
-        .bytes()
-        .any(|byte| matches!(byte, b'\r' | b'\n' | b'\0'))
+/// A credential the puller sends as an HTTP header value. The puller builds a
+/// `HeaderValue` from it, so a value that type refuses must be refused here:
+/// a hand-rolled control-byte check lets bytes through (a lone `\x01`, a
+/// `\x7f`, a non-ASCII byte) that the client then refuses on every attempt,
+/// and the operator sees a pull that fails forever with nothing to fix.
+fn invalid_header_value(kind: &str, value: &str) -> Option<String> {
+    axum::http::HeaderValue::from_str(value)
+        .err()
+        .map(|error| format!("{kind} is not a valid HTTP header value: {error}"))
 }
 
 fn validate_headers(headers: &[HeaderPair]) -> Option<String> {
@@ -217,8 +222,8 @@ fn build_auth(payload: AuthPayload) -> Result<PullAuth, String> {
                     "bearer token must be 1 to {MAX_AUTH_TOKEN_LEN} bytes"
                 ));
             }
-            if contains_control(&token) {
-                return Err("bearer token may not contain CR, LF, or NUL".to_string());
+            if let Some(message) = invalid_header_value("bearer token", &token) {
+                return Err(message);
             }
             Ok(PullAuth::Bearer { token })
         }
@@ -229,10 +234,10 @@ fn build_auth(payload: AuthPayload) -> Result<PullAuth, String> {
                     "cookie string must be 1 to {MAX_AUTH_COOKIES_LEN} bytes"
                 ));
             }
-            // One header line: a line break would split the request, and a
-            // control byte would make the header value invalid.
-            if contains_control(&cookies) {
-                return Err("a cookie string may not contain CR, LF, or NUL".to_string());
+            // One header line, sent as one `Cookie` header: the same type the
+            // puller builds decides what a valid value is.
+            if let Some(message) = invalid_header_value("cookie string", &cookies) {
+                return Err(message);
             }
             Ok(PullAuth::Cookies { cookies })
         }
@@ -249,8 +254,13 @@ fn build_auth(payload: AuthPayload) -> Result<PullAuth, String> {
                     "basic password must be 1 to {MAX_AUTH_PASSWORD_LEN} bytes"
                 ));
             }
-            if contains_control(&username) || contains_control(&password) {
-                return Err("basic credentials may not contain CR, LF, or NUL".to_string());
+            // Basic is base64-encoded into an `Authorization` header, so any
+            // UTF-8 survives — including control and non-ASCII bytes, which is
+            // why a legitimate non-ASCII password must not be refused here. The
+            // one rule is RFC 7617's: the first colon delimits, so a colon in
+            // the username would be read as the start of the password.
+            if username.contains(':') {
+                return Err("basic username must not contain a colon".to_string());
             }
             Ok(PullAuth::Basic { username, password })
         }
@@ -262,7 +272,7 @@ fn build_auth(payload: AuthPayload) -> Result<PullAuth, String> {
             Ok(PullAuth::Headers { headers })
         }
         other => Err(format!(
-            "unknown auth kind \"{other}\": expected \"none\", \"bearer\", \"basic\", or \"headers\""
+            "unknown auth kind \"{other}\": expected \"none\", \"bearer\", \"cookies\", \"basic\", or \"headers\""
         )),
     }
 }

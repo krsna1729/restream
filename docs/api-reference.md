@@ -282,11 +282,14 @@ it is write-only, stored and used but **never** returned:
 `auth` is one tagged object. `bearer.token` is 1 to 4096 bytes; `cookies` is
 1 to 4096 bytes; `basic` `username` is 1 to 256 bytes and `password` 1 to
 4096 bytes; `headers` accepts at most 8 entries with names of at most 64
-bytes and values of at most 1024 bytes. No name or value may contain CR, LF
-or NUL, a header name and value must parse as HTTP (`Host`,
-`Content-Length`, `Transfer-Encoding` and `Connection` are refused because
-they belong to the connection the fetcher opens), and a cookie string must be
-one line.
+bytes and values of at most 1024 bytes. Every one of these values must be a
+valid HTTP header value, which is the rule the fetcher's client applies: no
+CR, LF or NUL, and no other control or non-ASCII byte either. `headers` names
+must also be valid header names (`Host`, `Content-Length`,
+`Transfer-Encoding` and `Connection` are refused because they belong to the
+connection the fetcher opens), and a cookie string must be one line.
+A value this API accepts is one the puller can send; a value it refuses would
+otherwise be stored and then fail the pull on every attempt.
 `{ "kind": "none" }` clears the credential and must carry no payload.
 
 On patch, an absent `auth` keeps the stored credential, so a request that does

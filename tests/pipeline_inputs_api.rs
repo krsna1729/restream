@@ -525,6 +525,14 @@ async fn pull_input_validation_rejects_bad_configuration() {
             "bearer auth requires a token",
         ),
         (
+            serde_json::json!({"label":"x","kind":"hlsPull","sourceUrl":"https://o.example/p.m3u8","auth":{"kind":"bearer","token":"tok\u{1}en"}}),
+            "a bearer token must be a valid HTTP header value, not just free of CR/LF",
+        ),
+        (
+            serde_json::json!({"label":"x","kind":"hlsPull","sourceUrl":"https://o.example/p.m3u8","auth":{"kind":"cookies","cookies":"session=abc\u{7f}"}}),
+            "a cookie string must be a valid HTTP header value",
+        ),
+        (
             serde_json::json!({"label":"x","kind":"hlsPull","sourceUrl":"https://o.example/p.m3u8","auth":{"kind":"basic","username":"u"}}),
             "basic auth requires a password",
         ),
@@ -584,6 +592,13 @@ async fn pull_input_validation_rejects_bad_configuration() {
             serde_json::json!({"label":"x","kind":"hlsPull","sourceUrl":"https://o.example/p.m3u8","auth":{"kind":"headers","headers":[{"name":"x-token","value":"bad\u{7f}"}]}}),
             "a header value the HTTP client refuses is refused at save",
         ),
+        // Basic is base64-encoded into its header, so a control or non-ASCII
+        // byte in either half is legal; a colon in the username is not, because
+        // the origin splits the credential at the first one.
+        (
+            serde_json::json!({"label":"x","kind":"hlsPull","sourceUrl":"https://o.example/p.m3u8","auth":{"kind":"basic","username":"user:name","password":"p"}}),
+            "a basic username must not contain a colon",
+        ),
     ];
 
     for (body, description) in cases {
@@ -596,6 +611,31 @@ async fn pull_input_validation_rejects_bad_configuration() {
         assert!(
             parse(&response)["error"].is_string(),
             "expected a JSON error message for {description}"
+        );
+    }
+}
+
+/// The complement of the rejections above: credentials the origin accepts must
+/// save, or the operator has a source they cannot configure. A non-ASCII
+/// password is the case a header-value check gets wrong — it is base64-encoded
+/// before it reaches the header, so the header never sees the byte.
+#[tokio::test]
+async fn basic_auth_accepts_credentials_that_survive_encoding() {
+    let (app, _, cookie) = authenticated_app().await;
+    let pipeline_id = create_pipeline(&app, &cookie).await;
+
+    for (username, password) in [("pässwort", "pässwort"), ("user", "pä\u{1}ss\u{7f}")] {
+        let body = serde_json::json!({
+            "label": "x",
+            "kind": "hlsPull",
+            "sourceUrl": "https://o.example/p.m3u8",
+            "auth": {"kind": "basic", "username": username, "password": password},
+        });
+        let (status, response) = post_input(&app, &cookie, &pipeline_id, &body.to_string()).await;
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "expected 201 for basic {username:?}; got {status} {response}"
         );
     }
 }

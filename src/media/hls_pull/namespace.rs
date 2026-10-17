@@ -17,10 +17,9 @@ use std::time::Duration;
 use reqwest::Url;
 
 use super::PullError;
-use super::fetch::host_refused;
+use super::fetch::{host_refused, log_url};
 use crate::media::hls_ingest::ObjectKind;
 use crate::media::hls_ingest::playlist::{self, Encryption, MediaPlaylist, Playlist, SegmentEntry};
-use crate::secret_display::redact_url;
 
 /// The container a pulled segment carries. A playlist that names an
 /// `EXT-X-MAP` carries fMP4 media; otherwise the URL's extension decides,
@@ -61,22 +60,27 @@ pub(super) fn map_name(url: &str) -> String {
     format!("m{:016x}.mp4", hasher.finish())
 }
 
-/// The first sequence a live playlist is followed from: the last segment at
-/// least three target durations from the end, or the start of a window
-/// shorter than that (RFC 8216 section 6.3.3). Entering near the end is what
-/// keeps a DVR or EVENT window from being read from its start and paced in
-/// real time, and what keeps the whole window off the origin.
+/// The first sequence a live playlist is followed from: the segment closest
+/// to the end whose start is still at least three target durations before the
+/// playlist ends, or the first segment of a window shorter than that
+/// (RFC 8216 section 6.3.3). Entering at that edge is what keeps a DVR or
+/// EVENT window from being read from its start and paced in real time, and
+/// what keeps the whole window off the origin.
+///
+/// The distance is measured from the chosen segment's start to the end of the
+/// last listed segment, so the segment itself counts: three 6 s segments fill
+/// three 6 s target durations exactly, and the earliest of them is the one a
+/// client enters at.
 pub(super) fn live_start(media: &MediaPlaylist) -> u64 {
     let horizon = media.target_duration.saturating_mul(3);
-    let mut behind = Duration::ZERO;
+    let mut covered = Duration::ZERO;
     let mut start = media.media_sequence;
     for segment in media.segments.iter().rev() {
-        if behind >= horizon {
-            start = segment.sequence;
+        covered = covered.saturating_add(segment.duration);
+        start = segment.sequence;
+        if covered >= horizon {
             break;
         }
-        behind = behind.saturating_add(segment.duration);
-        start = segment.sequence;
     }
     start
 }
@@ -111,7 +115,7 @@ pub(super) fn refuse_private_targets(
         if refused {
             return Err(PullError::Fatal(format!(
                 "HLS pull refuses a playlist that points at a private address: {}",
-                redact_url(target)
+                log_url(target)
             )));
         }
     }

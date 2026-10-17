@@ -332,7 +332,7 @@ async fn an_oversize_playlist_is_refused() {
     let origin = Origin::new();
     origin.serve("/live/huge.m3u8", "#EXTM3U\n".repeat(512));
     let base = origin.spawn().await;
-    let client = build_client(false);
+    let client = build_client(false, false);
     let url = Url::parse(&format!("{base}/live/huge.m3u8")).unwrap();
     let error = fetch_small(&client, &url, &AuthScope::new(&url, RequestAuth::None), 64)
         .await
@@ -345,7 +345,7 @@ async fn an_oversize_segment_is_refused_declared_or_streamed() {
     let origin = Origin::new();
     origin.serve("/live/huge.ts", vec![0x47u8; 4_096]);
     let base = origin.spawn().await;
-    let client = build_client(false);
+    let client = build_client(false, false);
     let (_engine, ingest) = test_ingest(limits());
 
     let declared = Url::parse(&format!("{base}/live/huge.ts")).unwrap();
@@ -691,19 +691,22 @@ async fn a_finished_pull_reports_why_it_stopped() {
 }
 
 #[tokio::test]
-async fn a_failing_pull_never_logs_the_source_token() {
+async fn a_failing_pull_never_logs_a_signed_url_query() {
     let (engine, ingest) = test_ingest(limits());
     let messages = CapturedMessages::default();
     let dispatch = tracing::Dispatch::new(tracing_subscriber::registry().with(messages.clone()));
     let guard = tracing::dispatcher::set_default(&dispatch);
     // Nothing listens on port 1, so the request fails at the transport, whose
-    // `Display` embeds the URL unless it is stripped first.
+    // `Display` embeds the URL unless it is stripped first. The query keys are
+    // the ones a signed origin uses, which `redact_url`'s allowlist does not
+    // know: a formatter that kept the query would print the signature.
     let task = spawn(
         engine.clone(),
         ingest,
         identity(),
         source(
-            "http://127.0.0.1:1/live/index.m3u8?token=SECRETVALUE".to_string(),
+            "http://127.0.0.1:1/live/index.m3u8?hdnts=st=1~exp=2~acl=*&Signature=SECRETSIG"
+                .to_string(),
             VariantRule::HighestBandwidth,
         ),
         limits(),
@@ -721,12 +724,11 @@ async fn a_failing_pull_never_logs_the_source_token() {
 
     let logged = all.join("\n");
     assert_eq!(lines.len(), 1, "one retry line: {logged}");
-    // `redact_url` keeps a prefix and a suffix of a token, as every other
-    // credential in this codebase does; what it must never do is print the
-    // token whole.
+    // The whole query is dropped from a rendered URL: what a signed URL
+    // carries in it is a credential, under a key no allowlist knows.
     assert!(
-        !logged.contains("SECRETVALUE") && !logged.contains("token=SECRETVALUE"),
-        "no line prints the signed query whole: {logged}"
+        !logged.contains("SECRETSIG") && !logged.contains("hdnts") && !logged.contains("Signature"),
+        "no line prints the signed query: {logged}"
     );
     // The transport error is named without its URL, which `Display` would
     // otherwise embed along with the token.
@@ -741,11 +743,13 @@ async fn a_failing_pull_never_logs_the_source_token() {
     // callsites process-wide and race this thread-local capture — so the
     // redaction itself is asserted, and the captured line must agree when it
     // arrives at all.
-    let redacted = redact_url("http://127.0.0.1:1/live/index.m3u8?token=SECRETVALUE");
+    let redacted =
+        log_url("http://127.0.0.1:1/live/index.m3u8?hdnts=st=1~exp=2&Signature=SECRETSIG");
     assert!(redacted.contains("127.0.0.1"), "{redacted}");
-    assert!(!redacted.contains("SECRETVALUE"), "{redacted}");
+    assert!(redacted.contains("?<redacted>"), "{redacted}");
+    assert!(!redacted.contains("SECRETSIG"), "{redacted}");
     let started = messages.matching("HLS pull started").join("\n");
-    assert!(!started.contains("SECRETVALUE"), "{started}");
+    assert!(!started.contains("SECRETSIG"), "{started}");
     if !started.is_empty() {
         assert!(started.contains("127.0.0.1"), "{started}");
     }

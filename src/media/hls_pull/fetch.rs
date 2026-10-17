@@ -10,7 +10,7 @@
 //! redirect's hop into loopback, link-local (cloud metadata) or a private
 //! range, unless the source itself is there.
 
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 
 use futures_util::StreamExt as _;
@@ -55,8 +55,9 @@ impl RequestAuth {
                 Self::Bearer(token.clone())
             }
             PullAuth::Cookies { cookies } => {
-                // The API already refuses a control byte; a header value that
-                // still cannot be built must not reach a request.
+                // The API validates a cookie string as a header value, so this
+                // cannot fail for a saved input; a value that still cannot be
+                // built must not reach a request.
                 Self::Cookies(
                     HeaderValue::from_str(cookies)
                         .map_err(|_| "invalid cookie string".to_string())?,
@@ -147,8 +148,9 @@ impl AuthScope {
 }
 
 /// Whether `url`'s host is in an address range a pull must not reach on its
-/// own: loopback, link-local (cloud metadata lives at 169.254.169.254 and at
-/// fd00:ec2::254), the private and unique-local ranges, and `localhost`.
+/// own: loopback, link-local (cloud metadata lives at 169.254.169.254,
+/// 100.100.100.200, fd00:ec2::254 and their NAT64 forms), carrier-grade NAT,
+/// the private and unique-local ranges, and the `localhost` names.
 ///
 /// The host comes from [`Url::host`], never from `host_str`: `host_str`
 /// returns an IPv6 literal *bracketed* (`"[::1]"`), which parses as no address
@@ -161,10 +163,11 @@ impl AuthScope {
 pub(super) fn host_refused(url: &Url) -> bool {
     match url.host() {
         Some(Host::Ipv4(address)) => ipv4_refused(address),
-        Some(Host::Ipv6(address)) => match address.to_ipv4_mapped() {
-            // ::ffff:169.254.169.254 is the metadata endpoint reached the
-            // other way round.
-            Some(mapped) => ipv4_refused(mapped),
+        Some(Host::Ipv6(address)) => match embedded_ipv4(address) {
+            // ::ffff:a.b.c.d and the NAT64 prefix 64:ff9b::/96 both carry an
+            // IPv4 address: the metadata endpoint can be reached that way
+            // round too.
+            Some(embedded) => ipv4_refused(embedded),
             None => {
                 let octets = address.octets();
                 address.is_loopback()
@@ -175,9 +178,32 @@ pub(super) fn host_refused(url: &Url) -> bool {
                     || (octets[0] & 0xfe) == 0xfc
             }
         },
-        Some(Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
+        Some(Host::Domain(name)) => localhost_name(name),
         None => false,
     }
+}
+
+/// The IPv4 address an IPv6 literal carries, when it carries one:
+/// `::ffff:0:0/96` (v4-mapped) and `64:ff9b::/96` (the well-known NAT64
+/// prefix, whose low 32 bits are the destination).
+fn embedded_ipv4(address: Ipv6Addr) -> Option<Ipv4Addr> {
+    if let Some(mapped) = address.to_ipv4_mapped() {
+        return Some(mapped);
+    }
+    let [first, second, third, fourth, gap @ .., a, b, c, d] = address.octets();
+    let is_nat64 = [first, second, third, fourth] == [0x00, 0x64, 0xff, 0x9b]
+        && gap.iter().all(|byte| *byte == 0);
+    is_nat64.then_some(Ipv4Addr::new(a, b, c, d))
+}
+
+/// `localhost` in the forms a URL can carry it (RFC 6761): the name, the name
+/// with a trailing dot, and any name under it.
+fn localhost_name(name: &str) -> bool {
+    let name = name.strip_suffix('.').unwrap_or(name);
+    name.eq_ignore_ascii_case("localhost")
+        || name
+            .rsplit_once('.')
+            .is_some_and(|(_, label)| label.eq_ignore_ascii_case("localhost"))
 }
 
 fn ipv4_refused(address: Ipv4Addr) -> bool {
@@ -186,30 +212,79 @@ fn ipv4_refused(address: Ipv4Addr) -> bool {
         || first == 10
         || first == 127
         || (first == 169 && second == 254)
+        // 172.16.0.0/12 (RFC 1918) and 100.64.0.0/10 (RFC 6598 carrier-grade
+        // NAT, where Alibaba Cloud's metadata endpoint 100.100.100.200 lives).
         || (first == 172 && (16..=31).contains(&second))
         || (first == 192 && second == 168)
+        || (first == 100 && (64..=127).contains(&second))
+}
+
+/// How a URL is rendered in a pull log line: scheme, host, port and path,
+/// with any query replaced by `?<redacted>`.
+///
+/// [`crate::secret_display::redact_url`] redacts only the query keys it knows
+/// (`streamid`, `passphrase`, `key`, `stream_key`, `token`, `cid`), while a
+/// signed origin carries its credential under its own key — Akamai `hdnts`,
+/// CloudFront `Policy`/`Signature`/`Key-Pair-Id`, S3 `X-Amz-Signature` — which
+/// it would print verbatim. The whole query is therefore dropped, at every
+/// site that renders a URL: a segment or map URL from a signed playlist
+/// carries a signature of its own, and so does a master that hands out signed
+/// variant URLs. Userinfo is dropped with it, the same reason the source URL
+/// may not carry any.
+pub(super) fn log_url(raw: &str) -> String {
+    let Ok(url) = Url::parse(raw) else {
+        // Not a URL: keep the part before any query, which is where a
+        // credential would sit.
+        return match raw.split_once('?') {
+            Some((head, _)) => format!("{head}?<redacted>"),
+            None => raw.to_string(),
+        };
+    };
+    let mut rendered = String::with_capacity(raw.len());
+    rendered.push_str(url.scheme());
+    rendered.push_str("://");
+    rendered.push_str(url.host_str().unwrap_or_default());
+    if let Some(port) = url.port() {
+        rendered.push(':');
+        rendered.push_str(&port.to_string());
+    }
+    rendered.push_str(url.path());
+    if url.query().is_some() {
+        rendered.push_str("?<redacted>");
+    }
+    rendered
 }
 
 /// Why a redirect must not be followed, or `None` when the pull may follow
-/// it. A pull presents its credentials per origin, so a redirect out of the
-/// source's origin is refused outright — reqwest's own guard strips
-/// `Authorization`, `Cookie` and `Proxy-Authorization` but leaves a custom
-/// header such as `X-Api-Key` on the request. Origin is scheme, host and port
-/// (RFC 6454), so the same host and port over another scheme is another origin
-/// too, which is what refuses an `https`→`http` hop. A redirect to another
-/// host is refused whatever it points at, which is also why a redirect into a
-/// private range is refused: a same-origin one cannot reach a host other than
-/// the source's own.
+/// it.
+///
+/// A downgrade is refused for every pull: an `https` source must not be
+/// silently weakened into fetching the clear.
+///
+/// A hop out of the source's origin is refused when the pull has credentials
+/// to protect — they are presented per origin, and reqwest's own guard leaves
+/// a custom header such as `X-Api-Key` on the request — or when the target
+/// fails the address guard. With neither, it is followed, so a credential-less
+/// origin that answers `302` to its nearest edge works. `allow_private` is the
+/// source's own answer to that guard: a source that is itself in one of those
+/// ranges may be redirected within them.
 pub(super) fn redirect_refusal(
     previous: &Url,
     next: &Url,
     auth_configured: bool,
+    allow_private: bool,
 ) -> Option<&'static str> {
-    if auth_configured && previous.scheme() == "https" && next.scheme() == "http" {
-        return Some("redirect would send credentials over http");
+    if previous.scheme() == "https" && next.scheme() == "http" {
+        return Some("redirect would take the pull to http");
     }
-    if Origin::of(previous) != Origin::of(next) {
-        return Some("redirect leaves the source origin");
+    if Origin::of(previous) == Origin::of(next) {
+        return None;
+    }
+    if auth_configured {
+        return Some("redirect would carry credentials to another origin");
+    }
+    if !allow_private && host_refused(next) {
+        return Some("redirect points at a private address");
     }
     None
 }
@@ -235,9 +310,9 @@ pub(super) fn pair_headers(pairs: &[HeaderPair]) -> Result<HeaderMap, String> {
     Ok(headers)
 }
 
-/// The pull's HTTP client. `auth_configured` is what makes an `https`→`http`
-/// downgrade a refusal.
-pub(super) fn build_client(auth_configured: bool) -> Client {
+/// The pull's HTTP client. `auth_configured` and `allow_private` are what the
+/// redirect policy refuses on; see [`redirect_refusal`].
+pub(super) fn build_client(auth_configured: bool, allow_private: bool) -> Client {
     let tls = crate::media::egress::tls::resolve_client_config(None).unwrap_or_else(|error| {
         warn!(%error, "HLS pull TLS configuration unusable; using the default roots");
         crate::media::egress::tls::rustls_client_config()
@@ -248,15 +323,18 @@ pub(super) fn build_client(auth_configured: bool) -> Client {
         // presented with that playlist's segments, as a browser or FFmpeg
         // `-cookies` does. Cookies are scoped by domain by the jar.
         .cookie_store(true)
-        // A redirect is followed only inside the source's origin and only
-        // within the hop count; anything else is stopped, and the 3xx is what
-        // the caller then sees. Credentials are applied per origin on top of
-        // this (see `AuthScope`), so this is the second of the two guards
-        // rather than the only one. A custom policy owns its own hop bound.
+        // A redirect is followed inside the hop count, and otherwise only as
+        // `redirect_refusal` allows: a downgrade is refused outright, and a
+        // hop out of the origin only for a credential-less pull pointed at a
+        // host the address guard accepts. Anything else is stopped, and the
+        // 3xx is what the caller then sees. Credentials are applied per origin
+        // on top of this (see `AuthScope`), so this is the second guard rather
+        // than the only one. A custom policy owns its own hop bound.
         .redirect(redirect::Policy::custom(move |attempt| {
             let refused = attempt.previous().len() > MAX_REDIRECTS
                 || attempt.previous().last().is_some_and(|previous| {
-                    redirect_refusal(previous, attempt.url(), auth_configured).is_some()
+                    redirect_refusal(previous, attempt.url(), auth_configured, allow_private)
+                        .is_some()
                 });
             if refused {
                 attempt.stop()
