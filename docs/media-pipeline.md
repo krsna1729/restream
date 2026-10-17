@@ -706,10 +706,11 @@ keeps the container it started with.
   idle window (the media sequence or the segment names go back) and on
   `EXT-X-DISCONTINUITY`. The next segment is demuxed from scratch, and its
   timestamps continue right after the last ones forwarded.
-- **Codecs.** fMP4 ingest is H.264 video and AAC audio only. An HEVC
-  (`hev1`/`hvc1`) init segment is refused with `415` and the reason "HEVC
-  fMP4 ingest is not implemented". An accepted init's `avcC` SPS/PPS become
-  the ring's video parameter sets, so downstream stages see an fMP4 input
+- **Codecs.** fMP4 ingest takes H.264 or HEVC (`hev1`/`hvc1`) video and
+  AAC audio; an init of any other codec is refused with `415` naming it. An
+  accepted init's parameter sets — `avcC`'s SPS/PPS, or `hvcC`'s VPS/SPS/PPS —
+  lead every keyframe that lacks them, and an HEVC track is probed by the same
+  SPS parser a TS input's HEVC uses, so downstream stages see an fMP4 input
   exactly as they see a TS one.
 - **fMP4 demuxing.** The session walks each media segment's top-level boxes
   itself (`styp`, `sidx`, `free`, `emsg` and `prft` are skipped, and an

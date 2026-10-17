@@ -305,23 +305,34 @@ pub(crate) fn emptied_mdat(segment: &[u8]) -> Vec<u8> {
     segment.to_vec()
 }
 
-/// An HEVC fMP4 init segment (`hvc1`): this ingest refuses it.
-pub(crate) fn fmp4_hevc_init() -> Vec<u8> {
-    use shiguredo_mp4::bitstream::h265::{
-        H265ConstantFrameRate, H265SampleEntryConfig, LengthSize, build_hvc1_box_from_annexb,
-    };
+/// An fMP4 init segment of one Opus audio track: a codec this ingest
+/// refuses ("fMP4 audio codec Opus is not supported; AAC only").
+pub(crate) fn fmp4_opus_init() -> Vec<u8> {
+    use shiguredo_mp4::TrackKind;
+    use shiguredo_mp4::bitstream::opus::{ChannelCount, OpusSampleEntryConfig, build_opus_box};
     use shiguredo_mp4::boxes::SampleEntry;
+    use shiguredo_mp4::mux::Sample;
 
-    let config = H265SampleEntryConfig {
-        length_size: LengthSize::FourBytes,
-        avg_frame_rate: H265SampleEntryConfig::AVG_FRAME_RATE_UNSPECIFIED,
-        constant_frame_rate: H265ConstantFrameRate::Unknown,
+    let entry = SampleEntry::Opus(build_opus_box(&OpusSampleEntryConfig {
+        channel_count: ChannelCount::Stereo,
+        pre_skip: 312,
+        input_sample_rate: 48_000,
+        output_gain: 0,
+    }));
+    let data = [0xFCu8, 0xFF, 0xFE];
+    let sample = Sample {
+        track_kind: TrackKind::Audio,
+        sample_entry: Some(entry),
+        keyframe: true,
+        timescale: std::num::NonZeroU32::new(48_000).unwrap(),
+        duration: 960,
+        composition_time_offset: None,
+        data_offset: 0,
+        data_size: data.len(),
     };
-    let entry = SampleEntry::Hvc1(
-        build_hvc1_box_from_annexb(&fixture_keyframe("h265"), &config)
-            .expect("the fixture's VPS/SPS/PPS parse"),
-    );
     let mut muxer = shiguredo_mp4::mux::Fmp4SegmentMuxer::new().expect("the muxer builds");
-    let _ = fmp4_segment(&mut muxer, &entry, 1);
+    let _ = muxer
+        .create_media_segment_metadata(&[sample])
+        .expect("the segment muxes");
     muxer.init_segment_bytes().expect("the init builds")
 }
