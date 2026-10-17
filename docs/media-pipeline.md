@@ -238,6 +238,7 @@ the next reconciler cycle.
 |---|---|
 | RTMP H.264/AAC | Native ingest/play/egress; video uses DTS and carries FLV composition offset. B-frame round-trip still an E2E gate |
 | SRT H.264/AAC | Native ingest/read/egress with MPEG-TS demux/remux |
+| MPEG-TS AAC (ADTS) | One AAC frame per packet whatever the PES cuts: a frame a PES ends inside is completed by the next PES (a PES without a PTS continues the frames before it); a PES timestamp belongs to the first frame that starts in it, later frames step by 1024 samples. Bytes with no frame start (a stream joined mid-frame, a frame whose rest was lost) are dropped; a stream that names no known sample rate passes each PES whole |
 | SRT H.265 | Codec mapping implemented; full E2E matrix remains a gate |
 | RTMP H.265 | Enhanced RTMP ingest (H.265 arriving over RTMP) is not implemented. RTMP *egress* with H.265 source works: `hevc_to_h264` stage does full libavcodec decode→encode |
 | Multi-track audio | SRT ingest preserves audio track indices plus MPEG-TS PID/language metadata where present |

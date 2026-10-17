@@ -46,9 +46,9 @@ fn mux_demux_two_audio_tracks_round_trip() {
     // metadata-completeness gate can build the probe.
     let (video_payload, _) = first_probe_ready_payloads();
     // ADTS frame for AAC-LC 48 kHz stereo (7-byte header, no CRC)
-    let audio0_payload = vec![0xFF, 0xF1, 0x50, 0x80, 0x02, 0x1F, 0xFC, 0x21, 0x10];
+    let audio0_payload = vec![0xFF, 0xF1, 0x50, 0x80, 0x01, 0x3F, 0xFC, 0x21, 0x10];
     // ADTS frame for AAC-LC 44.1 kHz mono
-    let audio1_payload = vec![0xFF, 0xF1, 0x58, 0x40, 0x02, 0x1F, 0xFC, 0x21, 0x10];
+    let audio1_payload = vec![0xFF, 0xF1, 0x58, 0x40, 0x01, 0x3F, 0xFC, 0x21, 0x10];
 
     for i in 0..3u32 {
         let pts = (i as i64) * 33;
@@ -149,7 +149,7 @@ fn mux_demux_32_audio_tracks_spans_pmt_packets() {
     // Probe-ready H.264 access unit (contains SPS/PPS) so the demuxer's
     // metadata-completeness gate can build the probe.
     let (video_payload, _) = first_probe_ready_payloads();
-    let audio_payload = vec![0xFF, 0xF1, 0x4C, 0x40, 0x02, 0x1F, 0xFC, 0x21, 0x10];
+    let audio_payload = vec![0xFF, 0xF1, 0x4C, 0x40, 0x01, 0x3F, 0xFC, 0x21, 0x10];
 
     all_ts.extend_from_slice(muxer.mux_packet(MediaType::Video, 0, 0, 0, true, &video_payload));
     for index in 0..audio_tracks.len() {
@@ -220,7 +220,7 @@ fn remux_segment_view_splits_video_and_selected_audio() {
     let mut muxer = TsMuxer::new(Some(&video), &audio_tracks);
     let mut source = Vec::new();
     let video_payload = vec![0x00, 0x00, 0x00, 0x01, 0x65, 0x88];
-    let audio_payload = vec![0xFF, 0xF1, 0x4C, 0x80, 0x02, 0x1F, 0xFC, 0x21, 0x10];
+    let audio_payload = vec![0xFF, 0xF1, 0x4C, 0x80, 0x01, 0x3F, 0xFC, 0x21, 0x10];
 
     for frame in 0..3 {
         let pts = frame * 33;
