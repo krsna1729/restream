@@ -29,6 +29,17 @@ pub const MAX_FRAGMENTS: usize = 64;
 /// hold a worker for millions of iterations: past this it is refused.
 pub const MAX_BOXES: usize = 4096;
 
+/// Largest `moof` accepted. The demuxer decodes a whole `moof` (every `traf`
+/// and `trun` entry) in the poll whose chunk first reaches it, so its size
+/// bounds that poll's parse; FFmpeg's 6 s, 60 fps segment needs ~10 KiB.
+pub const MAX_MOOF_BYTES: usize = 256 * 1024;
+
+/// Most samples (`trun` entries) one media segment may declare. A `trun`
+/// whose per-sample fields all come from defaults has zero-byte entries, so
+/// [`MAX_MOOF_BYTES`] alone does not bound the sample count the demuxer
+/// expands; a 6 s, 60 fps segment with AAC declares ~640.
+pub const MAX_SEGMENT_SAMPLES: usize = 16 * 1024;
+
 /// `tfhd` flag: `base_data_offset` is present.
 const TFHD_BASE_DATA_OFFSET_PRESENT: u32 = 0x00_0001;
 
@@ -67,6 +78,12 @@ pub enum WalkError {
     TooManyFragments,
     /// More top-level boxes than [`MAX_BOXES`]: the walk is per poll.
     TooManyBoxes,
+    /// A `moof` larger than [`MAX_MOOF_BYTES`].
+    MoofTooLarge {
+        offset: usize,
+    },
+    /// More `trun` samples than [`MAX_SEGMENT_SAMPLES`] in one segment.
+    TooManySamples,
     /// A `moof` whose `traf`s set an explicit `base_data_offset`.
     ExplicitBaseDataOffset,
     /// A `traf` has no `tfdt`, so the fragment carries no timeline.
@@ -105,6 +122,18 @@ impl fmt::Display for WalkError {
             }
             Self::TooManyBoxes => {
                 write!(f, "media segment has more than {MAX_BOXES} top-level boxes")
+            }
+            Self::MoofTooLarge { offset } => {
+                write!(
+                    f,
+                    "moof at byte {offset} is larger than {MAX_MOOF_BYTES} bytes"
+                )
+            }
+            Self::TooManySamples => {
+                write!(
+                    f,
+                    "media segment declares more than {MAX_SEGMENT_SAMPLES} samples"
+                )
             }
             Self::ExplicitBaseDataOffset => write!(
                 f,
@@ -217,6 +246,7 @@ pub fn media_fragments(
     let mut report = WalkReport::default();
     let mut offset = 0usize;
     let mut walked = 0usize;
+    let mut samples = 0usize;
     while offset < bytes.len() {
         walked = walked.saturating_add(1);
         if walked > MAX_BOXES {
@@ -228,7 +258,13 @@ pub fn media_fragments(
                 if span.to_end {
                     return Err(WalkError::SizeToEnd { kind: span.kind });
                 }
-                check_moof(bytes.get(span.body..span.end).unwrap_or_default())?;
+                if span.end.saturating_sub(span.start) > MAX_MOOF_BYTES {
+                    return Err(WalkError::MoofTooLarge { offset });
+                }
+                check_moof(
+                    bytes.get(span.body..span.end).unwrap_or_default(),
+                    &mut samples,
+                )?;
                 if span.end >= bytes.len() {
                     return Err(WalkError::MoofWithoutMdat { offset });
                 }
@@ -260,8 +296,10 @@ pub fn media_fragments(
     Ok(report)
 }
 
-/// Refuse a `moof` whose `traf`s set an explicit `base_data_offset`.
-fn check_moof(moof: &[u8]) -> Result<(), WalkError> {
+/// Refuse a `moof` whose `traf`s set an explicit `base_data_offset` or
+/// lack a `tfdt`, and add its `trun` sample counts to `samples`, refusing
+/// the segment past [`MAX_SEGMENT_SAMPLES`].
+fn check_moof(moof: &[u8], samples: &mut usize) -> Result<(), WalkError> {
     for_each_child(moof, |child, body| {
         if &child.kind != b"traf" {
             return Ok(());
@@ -282,6 +320,19 @@ fn check_moof(moof: &[u8]) -> Result<(), WalkError> {
                 let flags = u32::from_be_bytes([0, f0, f1, f2]);
                 if flags & TFHD_BASE_DATA_OFFSET_PRESENT != 0 {
                     return Err(WalkError::ExplicitBaseDataOffset);
+                }
+                Ok(())
+            }
+            b"trun" => {
+                // FullBox header, then the 32-bit sample_count.
+                let count = body
+                    .get(4..8)
+                    .and_then(|count| <[u8; 4]>::try_from(count).ok())
+                    .ok_or(WalkError::Truncated { offset: child.body })?;
+                let count = usize::try_from(u32::from_be_bytes(count)).unwrap_or(usize::MAX);
+                *samples = samples.saturating_add(count);
+                if *samples > MAX_SEGMENT_SAMPLES {
+                    return Err(WalkError::TooManySamples);
                 }
                 Ok(())
             }

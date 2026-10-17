@@ -511,14 +511,16 @@ fn a_truncated_access_unit_is_refused() {
 }
 
 /// One fragment much larger than a chunk — FFmpeg writes one `moof` + `mdat`
-/// per segment — is converted across the chunks that publish it: the first
-/// chunk's poll converts at most one budget of sample payload, not the whole
-/// fragment, and the object still yields every packet in decode order.
+/// per segment — is released at the pace of the chunks that publish it, and
+/// converted only as it is released: after half the chunks about half the
+/// packets are out and no more are converted, so the segment neither enters
+/// the ring in one burst nor is converted in one poll.
 #[test]
-fn a_large_fragment_is_demuxed_across_chunks_not_in_one() {
+fn a_large_fragment_is_released_and_converted_at_chunk_pace() {
+    const CHUNK: usize = crate::media::ingest_publisher::PUBLISH_CHUNK_BYTES;
     let avc1 = avc1(LengthSize::FourBytes);
     let mut muxer = Fmp4SegmentMuxer::new().unwrap();
-    // 64 samples of 16 KiB: one 1 MiB fragment, 16 conversion budgets.
+    // 64 samples of 16 KiB: one 1 MiB fragment, 16 chunks.
     let payload = length_prefixed(&[&[0x41; 16 * 1024 - 4][..]], 4);
     let samples: Vec<In> = (0..64)
         .map(|index| video(&avc1, 3000, index == 0, 0, payload.clone()))
@@ -529,36 +531,75 @@ fn a_large_fragment_is_demuxed_across_chunks_not_in_one() {
     let mut demux = Fmp4Demux::default();
     demux.apply_init(&init, MAX_INIT).unwrap();
     demux.begin_object(&Bytes::from(media.clone())).unwrap();
-    demux
-        .feed(&media[..crate::media::ingest_publisher::PUBLISH_CHUNK_BYTES])
-        .unwrap();
-    let converted = demux
-        .object
-        .as_ref()
-        .and_then(|object| object.converting.as_ref())
-        .map(|converting| converting.next)
-        .unwrap_or(samples.len());
-    assert!(
-        converted < samples.len(),
-        "the first chunk converted the whole fragment ({converted} of {} samples)",
-        samples.len()
-    );
-    assert!(
-        converted * payload.len() <= CONVERT_BUDGET_BYTES + payload.len(),
-        "one call converts at most one budget (plus the sample that crosses it): {converted} samples"
-    );
-
+    let converted = |demux: &Fmp4Demux| {
+        demux
+            .object
+            .as_ref()
+            .and_then(|object| object.releasing.as_ref())
+            .map_or(samples.len(), |releasing| releasing.next)
+    };
     let mut out = Vec::new();
-    for piece in media[crate::media::ingest_publisher::PUBLISH_CHUNK_BYTES..]
-        .chunks(crate::media::ingest_publisher::PUBLISH_CHUNK_BYTES)
-    {
-        demux.feed(piece).unwrap();
+    let chunks: Vec<&[u8]> = media.chunks(CHUNK).collect();
+    let half = chunks.len() / 2;
+    for (index, chunk) in chunks.iter().enumerate() {
+        demux.feed(chunk).unwrap();
         demux.drain_into(&mut out);
+        if index == 0 {
+            assert!(
+                converted(&demux) <= CHUNK / payload.len() + 1,
+                "the first chunk converted {} samples",
+                converted(&demux)
+            );
+        }
+        if index + 1 == half {
+            let expected = samples.len() / 2;
+            assert!(
+                out.len().abs_diff(expected) <= 2,
+                "after half the chunks {} of {} packets are released",
+                out.len(),
+                samples.len()
+            );
+            assert_eq!(converted(&demux), out.len(), "conversion follows release");
+        }
     }
     demux.end_object().unwrap();
     demux.drain_into(&mut out);
     assert_eq!(out.len(), samples.len(), "every sample is published once");
     assert!(out.windows(2).all(|pair| pair[0].dts <= pair[1].dts));
+}
+
+/// A sample that cannot be converted in the tail `end_object` releases
+/// fails the segment, so the session counts and re-anchors it.
+#[test]
+fn a_sample_failing_at_the_end_of_an_object_fails_the_segment() {
+    let avc1 = avc1(LengthSize::FourBytes);
+    let mut muxer = Fmp4SegmentMuxer::new().unwrap();
+    let good = length_prefixed(&[&[0x41; 16 * 1024 - 4][..]], 4);
+    // A length field that runs past the sample: a truncated access unit.
+    let mut truncated = good.clone();
+    truncated[..4].copy_from_slice(&u32::MAX.to_be_bytes());
+    let samples: Vec<In> = (0..8)
+        .map(|index| {
+            let data = if index == 7 {
+                truncated.clone()
+            } else {
+                good.clone()
+            };
+            video(&avc1, 3000, index == 0, 0, data)
+        })
+        .collect();
+    let media = segment(&mut muxer, &samples);
+    let init = muxer.init_segment_bytes().unwrap();
+
+    let mut demux = Fmp4Demux::default();
+    demux.apply_init(&init, MAX_INIT).unwrap();
+    demux.begin_object(&Bytes::from(media.clone())).unwrap();
+    demux.feed(&media[..media.len() / 2]).unwrap();
+    let error = demux.end_object().unwrap_err();
+    assert!(
+        error.to_string().contains("NALU length"),
+        "unexpected error: {error}"
+    );
 }
 
 /// A segment of many tiny top-level boxes is refused at the box bound, so

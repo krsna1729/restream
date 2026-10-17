@@ -604,13 +604,14 @@ items).
   bound removed) — now yields after one object, so a poll never joins two
   units (invariant in `docs/media-pipeline.md`, gate in
   `src/media/hls_ingest/session_turn_tests.rs`). Within an fMP4 unit, the
-  top-level box walk stops at 4096 boxes and a fragment's samples are
-  converted at most one 64 KiB chunk's worth per publish (gates in
-  `src/media/ingest_publisher/fmp4_tests.rs`). Still per fragment:
-  `shiguredo_mp4`'s `handle_media_segment` decodes the whole `moof` (the
-  sample table, not the payload) in the poll that first reaches it, bounded
-  only by the segment's 64 MiB; a library-side incremental `trun` parse is
-  the remaining work for fMP4.
+  top-level box walk stops at 4096 boxes, a `moof` is at most 256 KiB, a
+  segment declares at most 16384 samples, and a publish converts only the
+  samples its chunk released (gates in `boxes_tests.rs` and
+  `fmp4_tests.rs` under `src/media/ingest_publisher/`). Still per fragment,
+  not per chunk: `shiguredo_mp4`'s `handle_media_segment` decodes the whole
+  `moof` and the session plans its samples in the poll that first reaches
+  it, within those caps; a library-side incremental `trun` parse is the
+  remaining work for fMP4.
 - Steps:
   1. Land per-poll thread CPU in the executor metrics: beside `maxPollUs`, a
      `maxCpuUs` and a count of polls above fixed CPU thresholds (1, 4, 16 ms)

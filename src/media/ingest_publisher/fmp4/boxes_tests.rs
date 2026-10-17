@@ -252,3 +252,44 @@ proptest! {
         let _ = moov_range(&bytes);
     }
 }
+
+/// A fragment whose `moof` is padded to `moof_bytes` in total.
+fn fragment_with_moof_of(moof_bytes: usize) -> Vec<u8> {
+    let children = moof(0)[8..].to_vec();
+    let pad = bx(b"free", &vec![0; moof_bytes - 16 - children.len()]);
+    [bx(b"moof", &[children, pad].concat()), bx(b"mdat", &[0; 4])].concat()
+}
+
+/// The demuxer decodes a whole `moof` in one poll, so its size is bounded.
+#[test]
+fn a_moof_past_its_size_bound_is_refused() {
+    assert!(walk(&fragment_with_moof_of(MAX_MOOF_BYTES)).is_ok());
+    assert_eq!(
+        walk(&fragment_with_moof_of(MAX_MOOF_BYTES + 1)).unwrap_err(),
+        WalkError::MoofTooLarge { offset: 0 }
+    );
+}
+
+/// A fragment whose one `traf` declares `count` samples in one `trun` of
+/// zero-byte entries (every field from defaults).
+fn fragment_with_samples(count: u32) -> Vec<u8> {
+    let tfhd = bx(b"tfhd", &[0, 0, 0, 0, 0, 0, 0, 1]);
+    let tfdt = bx(b"tfdt", &[0; 8]);
+    let mut trun = vec![0u8; 4];
+    trun.extend_from_slice(&count.to_be_bytes());
+    let traf = bx(b"traf", &[tfhd, tfdt, bx(b"trun", &trun)].concat());
+    let moof = bx(b"moof", &[bx(b"mfhd", &[0; 8]), traf].concat());
+    [moof, bx(b"mdat", &[0; 4])].concat()
+}
+
+/// Zero-byte `trun` entries make the sample count independent of the
+/// `moof` size, so the segment's declared samples are bounded on their own,
+/// summed across its fragments.
+#[test]
+fn a_segment_declaring_too_many_samples_is_refused() {
+    let half = u32::try_from(MAX_SEGMENT_SAMPLES / 2).unwrap();
+    let at_bound = [fragment_with_samples(half), fragment_with_samples(half)].concat();
+    assert!(walk(&at_bound).is_ok());
+    let over = [fragment_with_samples(half), fragment_with_samples(half + 1)].concat();
+    assert_eq!(walk(&over).unwrap_err(), WalkError::TooManySamples);
+}

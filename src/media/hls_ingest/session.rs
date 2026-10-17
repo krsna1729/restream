@@ -7,10 +7,10 @@
 //! at the end of one). A poll therefore never joins two units of work, so
 //! the work in one poll does not follow how fast the HTTP handlers feed the
 //! queue or how much of a segment is left. Within a unit, MPEG-TS demuxes
-//! only the chunk; fMP4 walks at most `MAX_BOXES` top-level boxes when an
-//! object is applied and converts at most one chunk's worth of a fragment's
-//! samples per publish, though the library still parses a fragment's `moof`
-//! (its sample table, not its payload) in the poll that first reaches it.
+//! only the chunk. fMP4 walks at most `MAX_BOXES` top-level boxes when an
+//! object is applied; the poll that first reaches a fragment decodes its
+//! whole `moof`, bounded by `MAX_MOOF_BYTES` and `MAX_SEGMENT_SAMPLES` rather
+//! than by the chunk; each publish converts only the samples it released.
 //!
 //! The first media object fixes the session's container (MPEG-TS or fMP4);
 //! an object of the other container is refused. fMP4 objects are checked
