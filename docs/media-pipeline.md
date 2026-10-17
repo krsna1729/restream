@@ -945,8 +945,14 @@ path's; the puller only decides what to fetch.
   segment of a ladder the ingest will not take.
 - **What ends the task.** An invalid source or credential configuration, a
   playlist this pull refuses (encrypted, byte-range, or pointing at a private
-  address), a master playlist that points at another master, and another
-  publisher holding the input. `EXT-X-ENDLIST` ends it after the last listed
+  address), a host whose name resolves to a private, loopback or link-local
+  address, a master playlist that points at another master, and another
+  publisher holding the input. The address guard applies to literals in a
+  playlist and, through the pull client's resolver, to every name it connects
+  to — the source, each variant, segment and map host, and redirect targets.
+  The client connects to the addresses the resolver checked, so a name cannot
+  rebind between the check and the connect. A source that is itself private
+  (by literal or by name) may point at private targets. `EXT-X-ENDLIST` ends it after the last listed
   segment is handed over.
 - **Cancellation.** `cancel` stops the task at its next await (in-flight HTTP
   requests are dropped) and `join` waits for it. A cancelled task dispatches

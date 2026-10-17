@@ -10,7 +10,8 @@
 //! redirect's hop into loopback, link-local (cloud metadata) or a private
 //! range, unless the source itself is there.
 
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt as _;
@@ -158,12 +159,25 @@ impl AuthScope {
 /// unique-local and v4-mapped target through.
 ///
 /// A literal is what is decided here: a name that *resolves* to one of these
-/// ranges (`ssrf.example` pointing at 169.254.169.254) is the resolver's
-/// business and gets through this guard.
+/// ranges (`ssrf.example` pointing at 169.254.169.254) is refused by the
+/// client's resolver ([`GuardedResolver`]), which judges every answer by the
+/// same rule before any connection is made.
 pub(super) fn host_refused(url: &Url) -> bool {
     match url.host() {
-        Some(Host::Ipv4(address)) => ipv4_refused(address),
-        Some(Host::Ipv6(address)) => match embedded_ipv4(address) {
+        Some(Host::Ipv4(address)) => ip_refused(IpAddr::V4(address)),
+        Some(Host::Ipv6(address)) => ip_refused(IpAddr::V6(address)),
+        Some(Host::Domain(name)) => localhost_name(name),
+        None => false,
+    }
+}
+
+/// Whether an address is in one of the refused ranges. The literal guard above
+/// and the resolver below share it, so a name and the address it resolves to
+/// are judged by one rule.
+pub(super) fn ip_refused(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => ipv4_refused(address),
+        IpAddr::V6(address) => match embedded_ipv4(address) {
             // ::ffff:a.b.c.d and the NAT64 prefix 64:ff9b::/96 both carry an
             // IPv4 address: the metadata endpoint can be reached that way
             // round too.
@@ -178,8 +192,65 @@ pub(super) fn host_refused(url: &Url) -> bool {
                     || (octets[0] & 0xfe) == 0xfc
             }
         },
-        Some(Host::Domain(name)) => localhost_name(name),
-        None => false,
+    }
+}
+
+/// Whether the source's host resolves into a refused range: a source there
+/// says the operator meant an internal origin. A name that does not resolve
+/// is not private; the fetch reports it.
+pub(super) async fn source_resolves_private(url: &Url) -> bool {
+    let Some(Host::Domain(name)) = url.host() else {
+        return false;
+    };
+    let port = url.port_or_known_default().unwrap_or(0);
+    match tokio::net::lookup_host((name, port)).await {
+        Ok(mut addresses) => addresses.any(|address| ip_refused(address.ip())),
+        Err(_) => false,
+    }
+}
+
+/// The pull client's resolver. Every name the client connects to — the
+/// source, each variant, segment and map host, and each redirect target —
+/// resolves here, and a set of answers that is not entirely public is refused
+/// unless the pull is allowed private targets. The client connects to the
+/// addresses returned, so the address checked is the address connected to:
+/// a name cannot rebind between the check and the connect.
+#[derive(Debug, Clone, Copy)]
+struct GuardedResolver {
+    allow_private: bool,
+}
+
+/// A name the guarded resolver refused: it resolved into a refused range.
+#[derive(Debug)]
+pub(super) struct PrivateTarget(String);
+
+impl std::fmt::Display for PrivateTarget {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{} resolves to a private, loopback or link-local address",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for PrivateTarget {}
+
+impl reqwest::dns::Resolve for GuardedResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let allow_private = self.allow_private;
+        Box::pin(async move {
+            let host = name.as_str().to_string();
+            let addresses: Vec<SocketAddr> =
+                tokio::net::lookup_host((host.as_str(), 0)).await?.collect();
+            if !allow_private && addresses.iter().any(|address| ip_refused(address.ip())) {
+                return Err(
+                    Box::new(PrivateTarget(host)) as Box<dyn std::error::Error + Send + Sync>
+                );
+            }
+            let addresses: reqwest::dns::Addrs = Box::new(addresses.into_iter());
+            Ok(addresses)
+        })
     }
 }
 
@@ -353,6 +424,7 @@ pub(super) fn build_client(auth_configured: bool, allow_private: bool) -> Client
             }
         }))
         .use_preconfigured_tls((*tls).clone())
+        .dns_resolver(Arc::new(GuardedResolver { allow_private }))
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(REQUEST_TIMEOUT)
         .build()
@@ -371,7 +443,10 @@ pub(super) async fn send(
         .apply(url, client.get(url.clone()))
         .send()
         .await
-        .map_err(|error| FetchError::Request(error.without_url().to_string()))?;
+        .map_err(|error| match private_target(&error) {
+            Some(refused) => FetchError::PrivateTarget(refused.to_string()),
+            None => FetchError::Request(error.without_url().to_string()),
+        })?;
     let status = response.status();
     if !status.is_success() {
         return Err(FetchError::Status(status.as_u16()));
@@ -435,6 +510,8 @@ pub(super) async fn pump_body(
 #[derive(Debug)]
 pub(super) enum FetchError {
     Request(String),
+    /// The resolver refused the host: no request was issued.
+    PrivateTarget(String),
     Status(u16),
     TooLarge,
     Body(String),
@@ -445,6 +522,9 @@ impl std::fmt::Display for FetchError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Request(error) => write!(formatter, "origin request failed: {error}"),
+            Self::PrivateTarget(refused) => {
+                write!(formatter, "HLS pull refuses a target that {refused}")
+            }
             // A 3xx the pull did not follow: the client's redirect policy
             // refuses anything outside the source's origin, and an
             // `https`→`http` downgrade when there are credentials.
@@ -463,4 +543,16 @@ impl std::fmt::Display for FetchError {
             }
         }
     }
+}
+
+/// The resolver's refusal, if that is what failed the request.
+fn private_target(error: &reqwest::Error) -> Option<&PrivateTarget> {
+    let mut source = std::error::Error::source(error);
+    while let Some(current) = source {
+        if let Some(refused) = current.downcast_ref::<PrivateTarget>() {
+            return Some(refused);
+        }
+        source = current.source();
+    }
+    None
 }

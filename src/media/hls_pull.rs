@@ -41,7 +41,7 @@ use tracing::{debug, error, info, warn};
 
 use self::fetch::{
     AuthScope, FetchError, RequestAuth, build_client, fetch_small, host_refused, log_url,
-    pump_body, send, variant_expired,
+    pump_body, send, source_resolves_private, variant_expired,
 };
 use self::namespace::{
     Prepared, live_start, map_name, object_kind, parse_and_prepare, segment_name,
@@ -238,7 +238,12 @@ enum PullError {
 
 impl From<FetchError> for PullError {
     fn from(error: FetchError) -> Self {
-        Self::Retry(error.to_string())
+        match error {
+            // A refused target stays refused: retrying would ask the same
+            // question and log it again on every backoff.
+            FetchError::PrivateTarget(_) => Self::Fatal(error.to_string()),
+            error => Self::Retry(error.to_string()),
+        }
     }
 }
 
@@ -327,7 +332,7 @@ async fn run(
     // A source in one of the refused ranges says the operator meant an
     // internal origin, so its playlist may point there too; anything else may
     // not.
-    let allow_private = host_refused(&url);
+    let allow_private = host_refused(&url) || source_resolves_private(&url).await;
     // One client — and one cookie jar — per pull task: an origin's
     // `Set-Cookie` is scoped to this task's requests, never another input's.
     let client = build_client(scope.is_configured(), allow_private);

@@ -749,3 +749,60 @@ async fn a_playlist_parse_does_not_block_the_pull_task_worker() {
     task.cancel();
     task.join().await;
 }
+
+// ---- the resolver guard ----------------------------------------------------
+
+/// A *name* that resolves into a refused range is refused by the client's
+/// resolver, so no request is issued: the literal guard sees only addresses,
+/// and `localhost` stands here for any name an attacker points at an internal
+/// address. The client connects to the addresses the resolver returned, so
+/// the name cannot rebind between the check and the connect.
+#[tokio::test]
+async fn a_name_that_resolves_to_a_private_address_is_refused_before_any_request() {
+    let origin = Origin::new();
+    origin.serve("/live/index.m3u8", media_playlist(&["seg0.ts"]));
+    let base = origin.spawn().await;
+    let port = Url::parse(&base).unwrap().port().unwrap();
+    let url = Url::parse(&format!("http://localhost:{port}/live/index.m3u8")).unwrap();
+    let scope = AuthScope::new(&url, RequestAuth::new(&PullAuth::None).unwrap());
+
+    let refused = super::fetch::fetch_small(&build_client(false, false), &url, &scope, 4096).await;
+    match refused {
+        Err(super::fetch::FetchError::PrivateTarget(reason)) => {
+            assert!(reason.contains("localhost"), "{reason}")
+        }
+        other => panic!("a private name is refused by the resolver, got {other:?}"),
+    }
+    assert_eq!(
+        origin.count("/live/index.m3u8"),
+        0,
+        "no request reaches a refused address"
+    );
+    assert!(
+        matches!(
+            PullError::from(super::fetch::FetchError::PrivateTarget(String::new())),
+            PullError::Fatal(_)
+        ),
+        "a refused target is final, not retried every backoff"
+    );
+
+    // A pull whose own source is private may reach it.
+    let allowed = super::fetch::fetch_small(&build_client(false, true), &url, &scope, 4096).await;
+    assert!(
+        allowed.is_ok(),
+        "a private pull reaches its origin: {allowed:?}"
+    );
+    assert_eq!(origin.count("/live/index.m3u8"), 1);
+}
+
+/// A source whose name resolves into a refused range is a private pull.
+#[tokio::test]
+async fn a_source_named_into_a_private_range_is_a_private_pull() {
+    let url = Url::parse("http://localhost:9/live/index.m3u8").unwrap();
+    assert!(super::fetch::source_resolves_private(&url).await);
+    let public = Url::parse("http://192.0.2.1/live/index.m3u8").unwrap();
+    assert!(
+        !super::fetch::source_resolves_private(&public).await,
+        "a literal is judged by the literal guard, not resolved"
+    );
+}
