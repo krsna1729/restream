@@ -29,7 +29,6 @@ items).
 - [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
 - [Q-083 measure RTMP and SRT under pull load](#q-083-performance-sonnet-measure-rtmp-and-srt-under-pull-load)
-- [Q-086 reassemble ADTS frames across PES](#q-086-protocol-sonnet-reassemble-adts-frames-that-span-pes-boundaries)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -554,22 +553,3 @@ items).
 - Status: open (Filed: 2026-10-17 by claude, from the #354 non-HLS audit: the
   push ingest has this arm, the pull ingest does not).
 
-### Q-086 [protocol] [sonnet] Reassemble ADTS frames that span PES boundaries
-
-- Goal: a TS source whose audio PES packets do not start and end on ADTS frame
-  boundaries (`data_alignment_indicator = 0`) still yields one complete AAC
-  frame per packet.
-- Why: `TsDemuxer::flush_pes` cuts an AAC PES into its complete ADTS frames
-  and drops bytes after the last one; the next PES then starts mid-frame, finds
-  no sync at offset 0, and is forwarded whole. Such a stream loses the tail
-  frame of every PES and hands consumers a misaligned unit. Muxers that
-  align audio PES (FFmpeg, MediaMTX, most encoders) never hit this; the
-  behaviour predates the split.
-- Change: carry an audio stream's trailing partial frame into its next PES
-  and resync on the next ADTS header, with the carried bytes bounded by one
-  maximum ADTS frame (8191 bytes).
-- Gates: a demuxer test with frames split across two PES packets yields every
-  frame once, in order, with stepped timestamps; a fuzz case of random
-  PES cuts never yields a unit without a leading sync word.
-- Status: open (Filed: 2026-10-17 by claude, from the #358 review: the
-  frame split drops the cut tail rather than carrying it).

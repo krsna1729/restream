@@ -453,7 +453,8 @@ fn a_multi_frame_audio_pes_becomes_one_packet_per_adts_frame() {
 /// The split's one rule: a PES that is exactly one frame, or names no known
 /// sample rate, is forwarded as it is (a rate-less split would give every
 /// frame one timestamp); any other ADTS PES becomes its complete frames, and a
-/// partial frame at its end is dropped, whether one or several frames precede it.
+/// partial frame at its end waits for the next PES, so one the stream never
+/// completes is dropped, whether one or several frames precede it.
 #[test]
 fn an_audio_pes_is_split_by_one_rule() {
     let pid = 0x0101;
@@ -507,4 +508,190 @@ fn an_audio_pes_is_split_by_one_rule() {
         vec![94],
         "a PES with no known rate is forwarded whole, not split onto one timestamp"
     );
+}
+
+/// One AAC frame: an ADTS header and `len` bytes of `fill`.
+fn adts_frame(len: usize, fill: u8) -> Vec<u8> {
+    let mut frame = crate::media::codec::build_adts_header(len, 48_000, 2)
+        .expect("the payload fits one ADTS frame")
+        .to_vec();
+    frame.extend(std::iter::repeat_n(fill, len));
+    frame
+}
+
+/// An audio PES in one TS packet, with a PTS or (when no frame starts in it,
+/// or its muxer left it out) without.
+fn audio_pes(pid: u16, cc: u8, pts_90k: Option<i64>, es_payload: &[u8]) -> [u8; TS_PACKET_SIZE] {
+    let header_len: u8 = if pts_90k.is_some() { 5 } else { 0 };
+    let pes_packet_len = 3 + u16::from(header_len) + es_payload.len() as u16;
+    let mut pes = vec![0x00, 0x00, 0x01, 0xC0];
+    pes.extend_from_slice(&pes_packet_len.to_be_bytes());
+    pes.push(0x80);
+    pes.push(if pts_90k.is_some() { 0x80 } else { 0x00 });
+    pes.push(header_len);
+    if let Some(pts) = pts_90k {
+        write_timestamp(&mut pes, pts, 0x02);
+    }
+    pes.extend_from_slice(es_payload);
+    build_ts_packet(pid, true, 0x01, cc, &[], &pes)
+}
+
+/// Demux `pieces` (each a PES payload with its PTS, if any) as one AAC stream.
+fn demux_audio_pes(pieces: &[(Option<i64>, Vec<u8>)]) -> Vec<crate::media::packet::MediaPacket> {
+    let pid = 0x0101;
+    let mut demuxer = TsDemuxer::new();
+    demuxer.streams = vec![aac_adts_stream_info(pid, 0)];
+    demuxer.pid_to_stream[pid as usize] = 0;
+    for (index, (pts, payload)) in pieces.iter().enumerate() {
+        demuxer.feed(&audio_pes(pid, (index % 16) as u8, *pts, payload));
+    }
+    demuxer.flush();
+    demuxer.drain()
+}
+
+/// 1024 samples at 48 kHz, in 90 kHz ticks.
+const STEP_90K: i64 = 1024 * 90_000 / 48_000;
+
+/// A muxer that does not align audio PES to frames (`data_alignment_indicator`
+/// 0) cuts a frame across two PES: the next PES completes it, so every frame
+/// arrives once, whole. The carried frame keeps the time it started with, and
+/// the PES timestamp belongs to the first frame that starts in the PES (here
+/// 10 ms late, as after a gap in the source).
+#[test]
+fn a_frame_cut_across_two_pes_is_completed_by_the_next() {
+    let frames = [adts_frame(40, 0x11), adts_frame(40, 0x22), adts_frame(40, 0x33)];
+    let mut first = frames[0].clone();
+    first.extend_from_slice(&frames[1][..20]);
+    let mut second = frames[1][20..].to_vec();
+    second.extend_from_slice(&frames[2]);
+
+    let late = 90_000 + 2 * STEP_90K + 900;
+    let packets = demux_audio_pes(&[(Some(90_000), first), (Some(late), second)]);
+
+    let payloads: Vec<&[u8]> = packets.iter().map(|packet| &packet.payload[..]).collect();
+    assert_eq!(payloads, frames.iter().map(Vec::as_slice).collect::<Vec<_>>());
+    let dts: Vec<i64> = packets.iter().map(|packet| packet.dts).collect();
+    let expected = vec![ts_to_ms(90_000), ts_to_ms(90_000 + STEP_90K), ts_to_ms(late)];
+    assert_eq!(dts, expected, "each frame keeps its own time");
+}
+
+/// A frame whose rest was lost (dropped TS packets) never swallows what comes
+/// next: a PES that starts with a frame of its own is framed on its own, and
+/// one that starts mid-frame resyncs on its next frame. Only the cut frame
+/// (and what was lost with it) is gone.
+#[test]
+fn a_cut_frame_whose_rest_was_lost_does_not_swallow_the_next_pes() {
+    let frames = [
+        adts_frame(40, 0x11),
+        adts_frame(40, 0x22),
+        adts_frame(3, 0x33),
+        adts_frame(40, 0x44),
+        adts_frame(40, 0x55),
+    ];
+    let payloads = |pieces: &[(Option<i64>, Vec<u8>)]| -> Vec<Vec<u8>> {
+        demux_audio_pes(pieces)
+            .iter()
+            .map(|packet| packet.payload.to_vec())
+            .collect()
+    };
+    let mut cut = frames[0].clone();
+    cut.extend_from_slice(&frames[1][..12]);
+
+    // The next PES is aligned, and its frame is shorter than the cut one.
+    assert_eq!(
+        payloads(&[
+            (Some(90_000), cut.clone()),
+            (Some(90_000 + 2 * STEP_90K), frames[2].clone()),
+        ]),
+        vec![frames[0].clone(), frames[2].clone()]
+    );
+
+    // The next PES starts inside a later frame: joined with the cut frame it
+    // would be long enough, but no frame starts where that one would end.
+    let mut after_loss = frames[3][20..].to_vec();
+    after_loss.extend_from_slice(&frames[4]);
+    assert_eq!(
+        payloads(&[
+            (Some(90_000), cut),
+            (Some(90_000 + 4 * STEP_90K), after_loss),
+        ]),
+        vec![frames[0].clone(), frames[4].clone()]
+    );
+}
+
+/// A stream joined mid-frame resyncs on a header whose frame ends where the
+/// next one starts: AAC payload bytes that happen to read as a header (a
+/// stray 0xFFF sync word) are not taken for a frame.
+#[test]
+fn a_stray_sync_word_inside_a_frame_is_not_taken_for_one() {
+    // A header naming a 9-byte frame, inside the first frame's payload.
+    let fake = [0xFF, 0xF1, 0x50, 0x80, 0x01, 0x3F, 0xFC];
+    let mut body = vec![0x11; 10];
+    body.extend_from_slice(&fake);
+    body.extend_from_slice(&[0x11; 10]);
+    let mut first = crate::media::codec::build_adts_header(body.len(), 48_000, 2)
+        .expect("the payload fits one ADTS frame")
+        .to_vec();
+    first.extend_from_slice(&body);
+    let next = adts_frame(40, 0x22);
+
+    let mut joined = first[12..].to_vec();
+    joined.extend_from_slice(&next);
+    let packets = demux_audio_pes(&[(Some(90_000), joined)]);
+
+    let payloads: Vec<&[u8]> = packets.iter().map(|packet| &packet.payload[..]).collect();
+    assert_eq!(payloads, vec![&next[..]], "only the real frame comes out");
+}
+
+proptest! {
+    /// Whatever the PES cuts, every frame comes out once, whole, in order,
+    /// with its own time; a stream joined mid-frame starts at the next frame.
+    #[test]
+    fn random_pes_cuts_yield_every_frame_once(
+        lens in proptest::collection::vec(1usize..60, 1..24),
+        cuts in proptest::collection::vec(1usize..150, 1..64),
+        joined_mid_frame in any::<bool>(),
+    ) {
+        // Payload bytes never 0xFF, so only real headers carry a sync word.
+        let frames: Vec<Vec<u8>> = lens
+            .iter()
+            .enumerate()
+            .map(|(index, len)| adts_frame(*len, (index % 200) as u8))
+            .collect();
+        let starts: Vec<usize> = frames
+            .iter()
+            .scan(0, |at, frame| {
+                let start = *at;
+                *at += frame.len();
+                Some(start)
+            })
+            .collect();
+        let stream: Vec<u8> = frames.concat();
+        let skip = if joined_mid_frame { frames[0].len() / 2 } else { 0 };
+
+        let mut pieces = Vec::new();
+        let mut at = skip;
+        let mut cut = cuts.iter().cycle();
+        while at < stream.len() {
+            let end = (at + cut.next().copied().unwrap_or(1)).min(stream.len());
+            // The PTS of the first frame that starts in the piece, if one does.
+            let pts = starts
+                .iter()
+                .position(|&start| start >= at && start < end)
+                .map(|index| index as i64 * STEP_90K);
+            pieces.push((pts, stream[at..end].to_vec()));
+            at = end;
+        }
+
+        let packets = demux_audio_pes(&pieces);
+        let expected = if joined_mid_frame { &frames[1..] } else { &frames[..] };
+        prop_assert_eq!(packets.len(), expected.len());
+        let first = frames.len() - expected.len();
+        for (offset, (packet, frame)) in packets.iter().zip(expected).enumerate() {
+            let index = (first + offset) as i64;
+            prop_assert_eq!(packet.payload[0], 0xFF, "every unit starts at a sync word");
+            prop_assert_eq!(&packet.payload[..], &frame[..]);
+            prop_assert_eq!(packet.dts, ts_to_ms(index * STEP_90K));
+        }
+    }
 }

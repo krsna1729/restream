@@ -15,7 +15,9 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use memchr::memchr;
-use tracing::debug;
+
+mod adts;
+use adts::{AdtsFraming, Framed};
 
 use super::mpegts_probe::{
     audio_meta_complete, h264_is_keyframe, h265_is_keyframe, probe_audio, probe_video,
@@ -88,6 +90,8 @@ pub(super) struct PesAccumulator {
     pub(super) dts: i64,
     pub(super) has_timestamp: bool,
     pub(super) random_access: bool,
+    /// An AAC stream's framing across its PES packets; `reset` keeps it.
+    pub(super) adts: AdtsFraming,
 }
 
 impl PesAccumulator {
@@ -99,6 +103,7 @@ impl PesAccumulator {
             dts: 0,
             has_timestamp: false,
             random_access: false,
+            adts: AdtsFraming::default(),
         }
     }
 
@@ -435,15 +440,18 @@ impl TsDemuxer {
         let Some(stream) = self.streams.get_mut(stream_idx) else {
             return;
         };
-        if stream.pes.buf.is_empty() || !stream.pes.has_timestamp {
+        let kind = stream.kind;
+        // An AAC PES without a timestamp continues its stream's frames (no
+        // frame starts in it, or its muxer left the timestamp out).
+        if stream.pes.buf.is_empty() || !(stream.pes.has_timestamp || kind == StreamKind::AacAdts) {
             stream.pes.reset();
             return;
         }
 
-        let kind = stream.kind;
         let track_index = stream.track_index;
         let pts_90k = stream.pes.pts;
         let dts_90k = stream.pes.dts;
+        let has_timestamp = stream.pes.has_timestamp;
         let random_access = stream.pes.random_access;
 
         // Copy payload to a fresh Bytes, then reset the PES buffer keeping its
@@ -463,47 +471,39 @@ impl TsDemuxer {
             _ => false,
         };
 
-        if !self.probed {
-            self.try_build_probe(stream_idx, &payload);
-        }
-
         // A TS audio PES can carry several ADTS frames, and every consumer that
         // takes one access unit per unit — RTMP's audio messages, the fMP4
         // packager's samples — would otherwise hold N frames, with N-1 ADTS
-        // headers inside the unit. Split once, here, so they all see one frame;
-        // the timestamps step by 1024 samples per frame. One rule: a PES that
-        // is exactly one frame, is not ADTS, or names no known rate is
-        // forwarded as it is; any other is cut into its complete frames, and
-        // bytes after the last complete frame (a frame cut at the PES end) are
-        // dropped, since no consumer can use part of a frame.
-        if kind == StreamKind::AacAdts
-            && let Some(first) = crate::media::codec::adts_frame_ranges(&payload).next()
-            && first.end != payload.len()
-            && let Some(rate) = crate::media::codec::adts_sample_rate(&payload)
-            && let Some(step_90k) = FRAME_TICKS_90K.checked_div(i64::from(rate))
-        {
-            let mut covered = 0;
-            for (index, range) in crate::media::codec::adts_frame_ranges(&payload).enumerate() {
-                let offset = step_90k.saturating_mul(index as i64);
-                covered = range.end;
-                self.output.push(MediaPacket {
-                    media_type: MediaType::Audio,
-                    track_index,
-                    pts: ts_to_ms(pts_90k.saturating_add(offset)),
-                    dts: ts_to_ms(dts_90k.saturating_add(offset)),
-                    is_keyframe: false,
-                    format: PayloadFormat::Raw,
-                    payload: payload.slice(range),
-                });
+        // headers inside the unit. Frame once, here, so they all see one
+        // frame, stepped by 1024 samples; a frame the PES ends inside is
+        // completed by the next PES. No known rate: forwarded as it is.
+        let payload = if kind == StreamKind::AacAdts {
+            let Some(stream) = self.streams.get_mut(stream_idx) else {
+                return;
+            };
+            let timestamps = has_timestamp.then_some((pts_90k, dts_90k));
+            match stream
+                .pes
+                .adts
+                .frame(payload, timestamps, track_index, &mut self.output)
+            {
+                Framed::Frames { first } => {
+                    if !self.probed
+                        && let Some(first) = first
+                    {
+                        self.try_build_probe(stream_idx, &first);
+                    }
+                    return;
+                }
+                Framed::Whole(payload) if has_timestamp => payload,
+                Framed::Whole(_) => return,
             }
-            if covered != payload.len() {
-                debug!(
-                    track = track_index,
-                    dropped = payload.len().saturating_sub(covered),
-                    "AAC PES ended inside a frame; its tail was dropped"
-                );
-            }
-            return;
+        } else {
+            payload
+        };
+
+        if !self.probed {
+            self.try_build_probe(stream_idx, &payload);
         }
 
         self.output.push(MediaPacket {
