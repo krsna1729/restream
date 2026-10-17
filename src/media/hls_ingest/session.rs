@@ -2,6 +2,16 @@
 //! to the ordering state and replies at once; publishes what it releases,
 //! paced to media time, between objects.
 //!
+//! A turn is one unit: it applies at most one object (then yields) or
+//! publishes at most one `PUBLISH_CHUNK_BYTES` chunk (the publisher yields
+//! at the end of one). A poll therefore never joins two units of work, so
+//! the work in one poll does not follow how fast the HTTP handlers feed the
+//! queue or how much of a segment is left. Within a unit, MPEG-TS demuxes
+//! only the chunk. fMP4 walks at most `MAX_BOXES` top-level boxes when an
+//! object is applied; the poll that first reaches a fragment decodes its
+//! whole `moof`, bounded by `MAX_MOOF_BYTES` and `MAX_SEGMENT_SAMPLES` rather
+//! than by the chunk; each publish converts only the samples it released.
+//!
 //! The first media object fixes the session's container (MPEG-TS or fMP4);
 //! an object of the other container is refused. fMP4 objects are checked
 //! here, before their reply: an init against its bound and the codec scope,
@@ -211,6 +221,13 @@ async fn drive(
                 let _ = object.reply.send(outcome);
                 let lead = u64::try_from(session.pacing_lead().as_millis()).unwrap_or(u64::MAX);
                 lead_ms.store(lead, Ordering::Relaxed);
+                // One object is one unit of work, and this path has nothing
+                // to await: without a yield here a single poll would apply
+                // every object the sender queues while it runs, so how much
+                // work one poll does would be set by another runtime's
+                // progress rather than by a bound. The publisher's chunk
+                // publish yields the same way (one chunk is one unit).
+                tokio::task::yield_now().await;
             }
             _ = sleep_until(publish_at) => {
                 // A segment whose bytes cannot be demuxed is dropped, not
@@ -459,3 +476,7 @@ impl From<MediaRejection> for ObjectOutcome {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "session_turn_tests.rs"]
+mod turn_tests;

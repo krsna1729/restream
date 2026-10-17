@@ -712,15 +712,24 @@ keeps the container it started with.
   exactly as they see a TS one.
 - **fMP4 demuxing.** The session walks each media segment's top-level boxes
   itself (`styp`, `sidx`, `free`, `emsg` and `prft` are skipped, and an
-  unknown box is logged once per session) and demuxes each `moof` + `mdat`
-  pair, at most 64 fragments per segment. Every fragment must carry its own
-  `tfdt`: without it the demuxer would place the fragment at decode time 0
-  and glue a restarted timeline onto the previous one. A `moof` with no
-  `mdat`, a `traf` with no `tfdt`, a box size below its header, a truncated
-  object, or a `tfhd` that sets an explicit `base_data_offset` (whose offsets
-  would measure from the whole segment, not from the fragment handed to the
-  demuxer) is refused with `400`. An fMP4 media object under a playlist that
-  names no `EXT-X-MAP` is refused with `415`: it can never be demuxed. An
+  unknown box is logged once per session), at most 4096 boxes per segment,
+  and demuxes each `moof` + `mdat` pair, at most 64 fragments per segment,
+  each `moof` at most 256 KiB, and at most 16384 `trun` samples per segment.
+  When the first chunk reaches a fragment, its samples are planned in
+  decode order across tracks, each released once the fragment's bytes up
+  to its cumulative share have arrived, like the interleaved TS stream it
+  replaces; a sample is converted to a packet only when it is released.
+  FFmpeg writes one fragment per segment, so the segment reaches the ring
+  at the pace of its chunks, not in one burst. Every fragment must
+  carry its own `tfdt`: without it the demuxer would place the fragment at
+  decode time 0 and glue a restarted timeline onto the previous one. A
+  `moof` with no `mdat`, a `traf` with no `tfdt`, a box size below its
+  header, more than 4096 top-level boxes, a `moof` over 256 KiB, more than
+  16384 samples, a truncated object, or a `tfhd`
+  that sets an explicit `base_data_offset` (whose offsets would measure from
+  the whole segment, not from the fragment handed to the demuxer) is refused
+  with `400`. An fMP4 media object under a playlist that names no
+  `EXT-X-MAP` is refused with `415`: it can never be demuxed. An
   fMP4 init object that is answered on its own upload carries the refusal
   (`415`, `400` or `413`) directly, and voids that map's init plus the key's
   cached init: encoders never read a refusal, and a stale init would
@@ -732,9 +741,10 @@ keeps the container it started with.
   its fragment, a decode failure — drops that segment: the session
   counts it, logs the reason once, discards what the segment had demuxed but
   not yet published, re-anchors the timeline for
-  the next segment, and keeps publishing. Packets from an earlier fragment of
-  that segment that were already released stay in the ring; only what was
-  demuxed and still pending is dropped. Only a session that no longer has a
+  the next segment, and keeps publishing. Packets of that segment that were
+  already released stay in the ring — from an earlier fragment, or earlier in
+  the failing one; only what was demuxed and still pending is dropped. Only a
+  session that no longer has a
   demuxer at all (its publisher failed to open) ends failed; the engine
   survives either way, and the encoder's next object starts a fresh session
   if the session does end.
@@ -786,6 +796,21 @@ keeps the container it started with.
   - The session task parses playlists, orders segments and publishes them
     through the ingest publisher it shares with file ingest
     (`media::ingest_publisher`; MPEG-TS and fMP4 are its two demuxes).
+  - A turn is one unit of work: it applies at most one object, then yields,
+    and it publishes at most one `PUBLISH_CHUNK_BYTES` (64 KiB) chunk, which
+    the publisher yields after. A poll of the session never joins two units,
+    so the work in one poll does not follow how fast the HTTP handlers refill
+    the queue or how much of a segment is left. Within a unit, MPEG-TS
+    demuxes only the chunk. fMP4 walks at most 4096 top-level boxes, and
+    every child of each `moof`, when an object is applied; the poll whose
+    chunk first reaches a fragment decodes its whole `moof` in
+    `shiguredo_mp4` and plans its samples, bounded by the 256 KiB `moof` and
+    16384-sample caps rather than by the chunk; each publish converts only
+    the samples its chunk released, about one chunk of payload. Measured on
+    the `hls-push-duty` harness (2 RTMP + 8 HLS MPEG-TS publishers, 60 s,
+    6-vCPU host): a chunk-publish poll costs ~170 µs of thread CPU (its demux
+    ~77 µs and its ring publication ~76 µs); averaged over every poll,
+    including the turns that only apply an object or wait, ~84 µs.
   - A panic in a session ends only that session and releases its input.
 
 ## Protocol correctness requirements
