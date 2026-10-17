@@ -22,9 +22,8 @@ test("a stale deep path still opens the workspace in the query", async ({
     }),
   ).toHaveAttribute("aria-current", "page");
 
-  // One segment: the page's own asset URLs are relative, so only a
-  // file-like path can load them (a nested path is a serving matter, not a
-  // router one).
+  // One segment: the page's own asset URLs are relative and resolve at the
+  // root, so the shell is served in place.
   await page.goto("/old-path?w=media");
   await expect(
     page.getByRole("navigation", { name: "Workspaces" }).getByRole("link", {
@@ -38,6 +37,16 @@ test("a stale deep path still opens the workspace in the query", async ({
     .getByRole("link", { name: "Fleet" })
     .click();
   await expect(page).toHaveURL(/\/\?w=fleet$/);
+
+  // A nested path is sent back to the shell's directory with its query, so
+  // the relative asset URLs load and the workspace opens.
+  await page.goto("/a/b?w=inspect");
+  await expect(page).toHaveURL(/\/\?w=inspect$/);
+  await expect(
+    page.getByRole("navigation", { name: "Workspaces" }).getByRole("link", {
+      name: "Inspect",
+    }),
+  ).toHaveAttribute("aria-current", "page");
 });
 
 test("fleet shows a no-publisher cause live and drops it when the output stops", async ({

@@ -22,7 +22,6 @@ items).
 - [Q-049 silent SRT leaves](#q-049-resilience-opus-find-why-connected-srt-leaves-sent-nothing-under-host-overload)
 - [Q-050 inputs and stages in runtime state](#q-050-architecture-sonnet-project-inputs-and-stages-into-the-runtime-state)
 - [Q-053 external FFmpeg process topology](#q-053-architecture-sonnet-external-ffmpeg-process-topology-per-rendition)
-- [Q-063 control-room nested-path boot](#q-063-frontend-sonnet-control-room-boots-on-nested-unknown-paths)
 - [Q-064 incident signals before the page opened](#q-064-observability-sonnet-incident-correlation-before-the-page-opened)
 - [Q-065 capacity cost of HLS, sink and pipeline outputs](#q-065-performance-sonnet-price-hls-sink-and-pipeline-outputs-from-a-measured-cost)
 - [Q-066 SRT ingress test port race](#q-066-testing-sonnet-srt-multi-owner-test-port-can-join-a-foreign-reuseport-group)
@@ -369,19 +368,6 @@ items).
 - Status: open (Filed: 2026-10-15 by claude; the cost measurement closed
   2026-10-15. The former board item "FFmpeg A/B: external per-stage vs external
   multi-output" cannot be run as written: the second arm does not exist).
-
-### Q-063 [frontend] [sonnet] Control room boots on nested unknown paths
-- Goal: any served path boots the control room.
-- Evidence: a nested unknown path (`/a/b`) serves `index.html`, whose
-  relative asset URLs (`js/control-room/main.js`, `base-path.js`,
-  `output.css`) then resolve under `/a/`, so the page stays blank. `/`,
-  `/index.html` and single-segment paths work (#333 test "a stale deep path
-  still opens the workspace in the query"). The app never links to such a
-  path; pre-existing.
-- Fix: asset URLs from `window.__RESTREAM_BASE_PATH__`, or a redirect to the
-  base path.
-- Gates: a Playwright case on `/a/b?w=inspect`.
-- Status: open (Filed: 2026-10-15 by claude, found while testing #333).
 
 ### Q-064 [observability] [sonnet] Incident correlation before the page opened
 - Goal: the Incidents correlation chart covers the incident's whole span,
