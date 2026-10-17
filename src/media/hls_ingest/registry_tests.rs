@@ -4,8 +4,8 @@
 
 use super::*;
 use crate::media::hls_ingest::test_support::{
-    INPUT_ID, PIPELINE_ID, STREAM_KEY, authenticated, emptied_mdat, fmp4_hevc_init, fmp4_playlist,
-    fmp4_video_objects, test_ingest,
+    INPUT_ID, IndexedKeys, PIPELINE_ID, RevocableKey, STREAM_KEY, authenticated, emptied_mdat,
+    fmp4_hevc_init, fmp4_playlist, fmp4_video_objects, test_ingest, test_ingest_with,
 };
 
 /// A session that ended between lookup and send gets exactly one
@@ -33,6 +33,7 @@ async fn an_object_for_a_session_that_just_ended_restarts_it_once() {
             &authenticated(),
             STREAM_KEY,
             "127.0.0.1:9",
+            DispatchOrigin::Push,
             ObjectKind::TsSegment,
             "index0.ts".to_string(),
             body,
@@ -55,9 +56,68 @@ async fn send(
     send_to(ingest, &authenticated(), kind, path, bytes).await
 }
 
+/// Send through the pull origin, as the puller does. A pull session records
+/// `hls-pull`, and a pulled object must reach the same assembler a pushed one
+/// does.
+pub(super) async fn send_pull(
+    ingest: &Arc<HlsIngest>,
+    pipeline: &AuthenticatedPipeline,
+    kind: ObjectKind,
+    path: &str,
+    bytes: &[u8],
+) -> ObjectOutcome {
+    send_from(ingest, pipeline, DispatchOrigin::Pull, kind, path, bytes).await
+}
+
 async fn send_to(
     ingest: &Arc<HlsIngest>,
     pipeline: &AuthenticatedPipeline,
+    kind: ObjectKind,
+    path: &str,
+    bytes: &[u8],
+) -> ObjectOutcome {
+    send_from(ingest, pipeline, DispatchOrigin::Push, kind, path, bytes).await
+}
+
+/// The same, presenting `stream_key`: a session opens only for a key that
+/// resolves to `pipeline`'s own input, so a test that publishes from a second
+/// input presents that input's key.
+async fn send_as(
+    ingest: &Arc<HlsIngest>,
+    pipeline: &AuthenticatedPipeline,
+    stream_key: &str,
+    kind: ObjectKind,
+    path: &str,
+    bytes: &[u8],
+) -> ObjectOutcome {
+    send_keyed(
+        ingest,
+        pipeline,
+        stream_key,
+        DispatchOrigin::Push,
+        kind,
+        path,
+        bytes,
+    )
+    .await
+}
+
+async fn send_from(
+    ingest: &Arc<HlsIngest>,
+    pipeline: &AuthenticatedPipeline,
+    origin: DispatchOrigin,
+    kind: ObjectKind,
+    path: &str,
+    bytes: &[u8],
+) -> ObjectOutcome {
+    send_keyed(ingest, pipeline, STREAM_KEY, origin, kind, path, bytes).await
+}
+
+async fn send_keyed(
+    ingest: &Arc<HlsIngest>,
+    pipeline: &AuthenticatedPipeline,
+    stream_key: &str,
+    origin: DispatchOrigin,
     kind: ObjectKind,
     path: &str,
     bytes: &[u8],
@@ -70,8 +130,9 @@ async fn send_to(
     ingest
         .dispatch(
             pipeline,
-            STREAM_KEY,
+            stream_key,
             "127.0.0.1:9",
+            origin,
             kind,
             path.to_string(),
             body,
@@ -80,14 +141,14 @@ async fn send_to(
         .unwrap()
 }
 
-fn fixture() -> Vec<u8> {
+pub(super) fn fixture() -> Vec<u8> {
     std::fs::read(crate::test_fixtures::canonical_h264_ts_fixture().unwrap()).unwrap()
 }
 
 /// Wait until the pipeline's current ring satisfies `predicate`, or fail
 /// the test after `secs`. The engine can swap the ring after a probe, so
 /// the buffer is re-read every pass.
-async fn wait_for_ring(
+pub(super) async fn wait_for_ring(
     engine: &MediaEngine,
     secs: u64,
     what: &str,
@@ -107,7 +168,7 @@ async fn wait_for_ring(
 }
 
 /// How many packets the pipeline's current ring holds.
-async fn published(engine: &MediaEngine) -> usize {
+pub(super) async fn published(engine: &MediaEngine) -> usize {
     engine
         .get_or_create_pipeline(PIPELINE_ID)
         .await
@@ -408,10 +469,13 @@ async fn an_ended_run_leaves_no_init_seed_for_the_next_session() {
 #[tokio::test]
 async fn more_keys_than_a_shared_cache_would_hold_do_not_evict_the_first_init() {
     const KEYS: u64 = 65;
-    let (engine, ingest) = test_ingest(HlsIngestLimits {
-        idle_floor: std::time::Duration::from_millis(150),
-        ..HlsIngestLimits::default()
-    });
+    let (engine, ingest) = test_ingest_with(
+        HlsIngestLimits {
+            idle_floor: std::time::Duration::from_millis(150),
+            ..HlsIngestLimits::default()
+        },
+        Arc::new(IndexedKeys),
+    );
     let (init, segments) = fmp4_video_objects(2, 4);
     let key = |index: u64| AuthenticatedPipeline {
         id: format!("pipe-{index}"),
@@ -421,14 +485,24 @@ async fn more_keys_than_a_shared_cache_would_hold_do_not_evict_the_first_init() 
 
     for index in 0..KEYS {
         let pipeline = key(index);
+        let stream_key = format!("key-{index}");
         assert_eq!(
-            send_to(&ingest, &pipeline, ObjectKind::Fmp4, "init.mp4", &init).await,
+            send_as(
+                &ingest,
+                &pipeline,
+                &stream_key,
+                ObjectKind::Fmp4,
+                "init.mp4",
+                &init
+            )
+            .await,
             ObjectOutcome::Held
         );
         assert_eq!(
-            send_to(
+            send_as(
                 &ingest,
                 &pipeline,
+                &stream_key,
                 ObjectKind::Fmp4,
                 "index0.m4s",
                 &segments[0]
@@ -437,9 +511,10 @@ async fn more_keys_than_a_shared_cache_would_hold_do_not_evict_the_first_init() 
             ObjectOutcome::Held
         );
         assert_eq!(
-            send_to(
+            send_as(
                 &ingest,
                 &pipeline,
+                &stream_key,
                 ObjectKind::Playlist,
                 "index.m3u8",
                 fmp4_playlist(0, &["index0.m4s"], false).as_bytes(),
@@ -468,9 +543,10 @@ async fn more_keys_than_a_shared_cache_would_hold_do_not_evict_the_first_init() 
     let before = ring_write_idx(&engine, &key(0).id).await;
     let pipeline = key(0);
     assert_eq!(
-        send_to(
+        send_as(
             &ingest,
             &pipeline,
+            "key-0",
             ObjectKind::Fmp4,
             "index1.m4s",
             &segments[1]
@@ -479,9 +555,10 @@ async fn more_keys_than_a_shared_cache_would_hold_do_not_evict_the_first_init() 
         ObjectOutcome::Held
     );
     assert_eq!(
-        send_to(
+        send_as(
             &ingest,
             &pipeline,
+            "key-0",
             ObjectKind::Playlist,
             "index.m3u8",
             fmp4_playlist(1, &["index1.m4s"], true).as_bytes(),
@@ -554,10 +631,13 @@ async fn a_segment_that_fails_demux_is_skipped_and_the_next_one_publishes() {
 /// a full TCP window, which no test covers yet.
 #[tokio::test]
 async fn a_key_at_its_share_is_throttled_while_another_key_publishes() {
-    let (engine, ingest) = test_ingest(HlsIngestLimits {
-        key_buffer_bytes: 8_000_000,
-        ..HlsIngestLimits::default()
-    });
+    let (engine, ingest) = test_ingest_with(
+        HlsIngestLimits {
+            key_buffer_bytes: 8_000_000,
+            ..HlsIngestLimits::default()
+        },
+        Arc::new(IndexedKeys),
+    );
     let segment = fixture();
     let playlist = "#EXTM3U\n#EXT-X-TARGETDURATION:8\n#EXTINF:8.0,\nindex0.ts\n";
     assert_eq!(
@@ -587,17 +667,19 @@ async fn a_key_at_its_share_is_throttled_while_another_key_publishes() {
     });
 
     let other = AuthenticatedPipeline {
-        id: "pipe-hls-b".to_string(),
-        input_id: "input-hls-b".to_string(),
+        id: "pipe-1".to_string(),
+        input_id: "input-1".to_string(),
         selected: true,
     };
+    let other_key = "key-1";
     let other_ring = engine.get_or_create_pipeline(&other.id).await;
     let other_playlist = "#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1.0,\nindex0.ts\n";
     let other_segment = &segment[..188 * 2_000];
     assert_eq!(
-        send_to(
+        send_as(
             &ingest,
             &other,
+            other_key,
             ObjectKind::TsSegment,
             "index0.ts",
             other_segment
@@ -606,9 +688,10 @@ async fn a_key_at_its_share_is_throttled_while_another_key_publishes() {
         ObjectOutcome::Held
     );
     assert_eq!(
-        send_to(
+        send_as(
             &ingest,
             &other,
+            other_key,
             ObjectKind::Playlist,
             "index.m3u8",
             other_playlist.as_bytes()
@@ -819,5 +902,57 @@ async fn a_released_segment_reaches_the_ring_at_media_pace() {
     assert!(
         wall_ms <= u128::try_from(media_ms).unwrap() + 2_000,
         "pacing must not lag: {media_ms} ms of media took {wall_ms} ms"
+    );
+}
+
+/// An upload is authorized before its body is read, and a body may arrive up
+/// to four target durations later. The input's row can change in that window —
+/// disabled, deleted, or switched to a pull input — so the session opens only
+/// if the key still resolves to the same input. Without the re-check, the
+/// upload registers an `hls` session for an input that no longer accepts
+/// pushes, and recreates the ring of a pipeline that is going away.
+#[tokio::test]
+async fn an_upload_whose_input_changed_before_its_body_opens_no_session() {
+    let access = RevocableKey::new();
+    let (engine, ingest) = test_ingest_with(HlsIngestLimits::default(), access.clone());
+    let pipeline = ingest
+        .authorize(STREAM_KEY, "127.0.0.1")
+        .await
+        .expect("the key resolves while the row stands");
+
+    // The row changes before the body the authorization was for arrives.
+    access.revoke();
+
+    let mut body = ingest
+        .object_body(ObjectKind::Playlist, None, &pipeline.input_id)
+        .await
+        .unwrap();
+    body.push(b"#EXTM3U\n#EXT-X-VERSION:3\n").await.unwrap();
+    let error = ingest
+        .dispatch(
+            &pipeline,
+            STREAM_KEY,
+            // The peer address the session meta records, as the API passes it:
+            // the re-check must derive the bare IP from it, because the security
+            // layer keys bans and rate limits by IP.
+            "127.0.0.1:9",
+            DispatchOrigin::Push,
+            ObjectKind::Playlist,
+            "index.m3u8".to_string(),
+            body,
+        )
+        .await
+        .expect_err("the session must not open for a key that no longer resolves");
+    assert_eq!(error, DispatchError::AuthorizationChanged);
+    assert!(
+        !engine
+            .input_has_session(PIPELINE_ID, &pipeline.input_id)
+            .await,
+        "no session, and no ring, for an input whose key no longer resolves"
+    );
+    assert_eq!(
+        access.seen_client_ips(),
+        vec!["127.0.0.1".to_string(), "127.0.0.1".to_string()],
+        "the authorization and the re-check both see the bare IP, not the peer address"
     );
 }

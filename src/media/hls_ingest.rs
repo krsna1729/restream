@@ -24,7 +24,7 @@ use bytes::{Bytes, BytesMut};
 use tokio::sync::{OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 use tracing::warn;
 
-pub use registry::{AuthorizeError, DispatchError, HlsIngest};
+pub use registry::{AuthorizeError, DispatchError, DispatchOrigin, HlsIngest};
 
 /// Every bound on what HLS push ingest buffers. `Default` is production;
 /// tests inject smaller values through `HlsIngest::new`.

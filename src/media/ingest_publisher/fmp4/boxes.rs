@@ -24,9 +24,12 @@ use std::ops::Range;
 /// cannot force unbounded demux work.
 pub const MAX_FRAGMENTS: usize = 64;
 
-/// Top-level boxes one media segment may carry. The walk runs inside a poll
+/// Walk iterations one media segment may take, one per top-level box except
+/// that a `moof` and its paired `mdat` share one: the walk runs inside a poll
 /// on a shared MEDIA executor, so a segment of tiny boxes must not be able to
-/// hold a worker for millions of iterations: past this it is refused.
+/// hold a worker for millions of iterations. Past this it is refused, so a
+/// segment carries at most this many counted boxes plus one `mdat` per
+/// fragment (itself capped by [`MAX_FRAGMENTS`]).
 pub const MAX_BOXES: usize = 4096;
 
 /// Largest `moof` accepted. The demuxer decodes a whole `moof` (every `traf`
@@ -121,7 +124,10 @@ impl fmt::Display for WalkError {
                 write!(f, "media segment has more than {MAX_FRAGMENTS} fragments")
             }
             Self::TooManyBoxes => {
-                write!(f, "media segment has more than {MAX_BOXES} top-level boxes")
+                write!(
+                    f,
+                    "media segment takes more than {MAX_BOXES} top-level box walks"
+                )
             }
             Self::MoofTooLarge { offset } => {
                 write!(

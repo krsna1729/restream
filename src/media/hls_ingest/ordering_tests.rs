@@ -50,6 +50,8 @@ fn media_with_map(dir: &str, first: u64, len: u64, ended: bool, map: Option<&str
             .collect(),
         ended,
         map_uri: map,
+        encryption: None,
+        byte_range: false,
     })
 }
 
@@ -163,12 +165,16 @@ fn a_master_playlist_selects_the_highest_bandwidth_variant() {
             Variant {
                 bandwidth: 800_000,
                 path: "low/index.m3u8".into(),
+                audio_group: None,
             },
             Variant {
                 bandwidth: 2_500_000,
                 path: "high/index.m3u8".into(),
+                audio_group: None,
             },
         ],
+        audio: Vec::new(),
+        session_key: None,
     });
     assert_eq!(
         session.on_playlist("master.m3u8", master, t0),
@@ -511,7 +517,10 @@ fn a_recreated_map_does_not_take_the_voided_seed_again() {
             variants: vec![Variant {
                 bandwidth,
                 path: format!("v{bandwidth}/index.m3u8"),
+                audio_group: None,
             }],
+            audio: Vec::new(),
+            session_key: None,
         })
     };
     session.on_playlist("master.m3u8", master(800_000), t0);
@@ -562,7 +571,10 @@ fn a_variant_switch_forgets_the_old_map_until_the_new_playlist_arrives() {
             variants: vec![Variant {
                 bandwidth,
                 path: format!("v{bandwidth}/index.m3u8"),
+                audio_group: None,
             }],
+            audio: Vec::new(),
+            session_key: None,
         })
     };
     // The first variant's playlist names an init.
@@ -646,6 +658,94 @@ fn a_new_init_is_delivered_with_a_discontinuity() {
     assert_eq!(
         released_with_init(&mut session, t0),
         vec![(1, "v2/index1.ts".into(), Some("other init".into()), true)]
+    );
+}
+
+/// Going back to an earlier map delivers its init again. The demuxer holds one
+/// init, so a stream that goes content map → ad map → content map — the shape
+/// server-side ad insertion produces, and the shape the pull's docs name —
+/// must deliver the content map's init again: without it, the content's
+/// segments are demuxed with the ad map's tracks, `avcC` parameter sets and
+/// AAC config, and a differing track id skips every sample.
+#[test]
+fn a_return_to_an_earlier_map_delivers_its_init_again() {
+    let t0 = Instant::now();
+    let mut session = Session::new(limits());
+    // The content map's init, uploaded before the playlist that names it.
+    assert_eq!(seg(&mut session, "content.mp4", t0), SegmentOutcome::Held);
+    assert_eq!(seg(&mut session, "index0.ts", t0), SegmentOutcome::Held);
+    session.on_playlist(
+        "index.m3u8",
+        with_map(media("", 0, 1, false), "content.mp4"),
+        t0,
+    );
+    assert_eq!(
+        released_with_init(&mut session, t0),
+        vec![(0, "index0.ts".into(), Some("content.mp4".into()), false)],
+        "the first init replaces nothing"
+    );
+
+    // The ad break: a second map, its init uploaded before its playlist.
+    assert_eq!(seg(&mut session, "ad.mp4", t0), SegmentOutcome::Held);
+    assert_eq!(seg(&mut session, "index1.ts", t0), SegmentOutcome::Held);
+    session.on_playlist("index.m3u8", with_map(media("", 1, 1, false), "ad.mp4"), t0);
+    assert_eq!(
+        released_with_init(&mut session, t0),
+        vec![(1, "index1.ts".into(), Some("ad.mp4".into()), true)],
+        "the ad map's init replaces the content map's"
+    );
+
+    // Back to the content map, with no re-upload of its init.
+    assert_eq!(seg(&mut session, "index2.ts", t0), SegmentOutcome::Held);
+    session.on_playlist(
+        "index.m3u8",
+        with_map(media("", 2, 1, false), "content.mp4"),
+        t0,
+    );
+    assert_eq!(
+        released_with_init(&mut session, t0),
+        vec![(2, "index2.ts".into(), Some("content.mp4".into()), true)],
+        "the content map's init is delivered again, as a replacement"
+    );
+}
+
+/// The demuxer holds bytes, not URIs: the same init listed under a second map
+/// is already in it, so the switch delivers nothing and flags no discontinuity.
+/// A discontinuity re-anchors at what is a seamless boundary.
+#[test]
+fn the_same_init_under_a_second_map_is_not_delivered_again() {
+    let t0 = Instant::now();
+    let mut session = Session::new(limits());
+    assert_eq!(seg(&mut session, "content.mp4", t0), SegmentOutcome::Held);
+    assert_eq!(seg(&mut session, "index0.ts", t0), SegmentOutcome::Held);
+    session.on_playlist(
+        "index.m3u8",
+        with_map(media("", 0, 1, false), "content.mp4"),
+        t0,
+    );
+    assert_eq!(
+        released_with_init(&mut session, t0),
+        vec![(0, "index0.ts".into(), Some("content.mp4".into()), false)]
+    );
+
+    // A second map whose bytes are the ones the demuxer already holds, with
+    // two segments under it: the first releases with no init, and the second
+    // proves the map was left ready rather than waiting for an init it never
+    // delivered.
+    assert_eq!(
+        session.on_segment("ad.mp4".to_string(), payload("content.mp4"), t0),
+        SegmentOutcome::Held
+    );
+    assert_eq!(seg(&mut session, "index1.ts", t0), SegmentOutcome::Held);
+    assert_eq!(seg(&mut session, "index2.ts", t0), SegmentOutcome::Held);
+    session.on_playlist("index.m3u8", with_map(media("", 1, 2, false), "ad.mp4"), t0);
+    assert_eq!(
+        released_with_init(&mut session, t0),
+        vec![
+            (1, "index1.ts".into(), None, false),
+            (2, "index2.ts".into(), None, false),
+        ],
+        "identical bytes need no delivery, and the map still releases"
     );
 }
 

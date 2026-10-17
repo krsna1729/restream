@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::application::services::{PipelineService, ServiceError, ServiceResult};
-use crate::domain::pipeline_input::{PipelineInput, PipelineInputRole};
+use crate::domain::pipeline_input::{PipelineInput, PipelineInputRole, PipelineInputSource};
 
 pub const MAX_PIPELINE_INPUTS: usize = 4;
 
@@ -47,6 +47,7 @@ pub trait PipelineInputStore: Send + Sync {
         pipeline_id: &'a str,
         label: &'a str,
         stream_key: &'a str,
+        source: PipelineInputSource,
     ) -> InputWriteFuture<'a>;
     fn update<'a>(
         &'a self,
@@ -54,6 +55,7 @@ pub trait PipelineInputStore: Send + Sync {
         input_id: &'a str,
         label: &'a str,
         enabled: bool,
+        source: PipelineInputSource,
     ) -> InputUpdateFuture<'a>;
     fn delete<'a>(&'a self, pipeline_id: &'a str, input_id: &'a str) -> InputDeleteFuture<'a>;
     fn promote<'a>(&'a self, pipeline_id: &'a str, input_id: &'a str) -> InputUpdateFuture<'a>;
@@ -89,7 +91,12 @@ impl PipelineInputService {
             .map_err(|error| ServiceError::internal(format!("get pipeline input: {error}")))
     }
 
-    pub async fn create(&self, pipeline_id: &str, label: &str) -> ServiceResult<PipelineInput> {
+    pub async fn create(
+        &self,
+        pipeline_id: &str,
+        label: &str,
+        source: PipelineInputSource,
+    ) -> ServiceResult<PipelineInput> {
         let existing = self.list(pipeline_id).await?;
         if existing.len() >= MAX_PIPELINE_INPUTS {
             return Err(ServiceError::conflict(format!(
@@ -101,7 +108,7 @@ impl PipelineInputService {
             let stream_key = generated_stream_key();
             match self
                 .store
-                .create(&input_id, pipeline_id, label, &stream_key)
+                .create(&input_id, pipeline_id, label, &stream_key, source.clone())
                 .await
             {
                 Ok(input) => return Ok(input),
@@ -131,6 +138,7 @@ impl PipelineInputService {
         input_id: &str,
         label: &str,
         enabled: bool,
+        source: PipelineInputSource,
     ) -> ServiceResult<PipelineInput> {
         let current = self.get(pipeline_id, input_id).await?;
         if !enabled && (current.role == PipelineInputRole::Primary || current.selected) {
@@ -139,7 +147,7 @@ impl PipelineInputService {
             ));
         }
         self.store
-            .update(pipeline_id, input_id, label, enabled)
+            .update(pipeline_id, input_id, label, enabled, source)
             .await
             .map_err(store_error)?
             .ok_or_else(|| input_not_found(input_id))

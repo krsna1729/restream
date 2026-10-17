@@ -26,6 +26,15 @@ pub(crate) struct GeneralizedSinkMetrics {
     pub(crate) video_count: AtomicU64,
     pub(crate) audio_count: AtomicU64,
     pub(crate) keyframe_count: AtomicU64,
+    /// The last video timestamp the sink received, in milliseconds of media
+    /// time, or [`UNSEEN_VIDEO_TS`] before the first media packet.
+    pub(crate) last_video_ts_ms: AtomicU64,
+    /// Media time the video clock has advanced, in milliseconds: the sum of the
+    /// positive steps between consecutive video packets. A window's media
+    /// progress is this at the end minus this at the start, and unlike the last
+    /// timestamp it survives a re-anchor (a pull restart, or a discontinuity
+    /// moving the timeline backwards) instead of freezing.
+    pub(crate) media_progress_ms: AtomicU64,
     pub(crate) packets: Mutex<Vec<SinkPacket>>,
     pub(crate) video_codec: Mutex<Option<String>>,
     pub(crate) audio_codec: Mutex<Option<String>>,
@@ -65,6 +74,43 @@ impl GeneralizedSinkMetrics {
             .map(|bytes| bytes.load(Ordering::Relaxed))
             .collect()
     }
+
+    /// Records a video packet's media time: the first packet sets the baseline,
+    /// and each later one adds its positive step to the progress. A backwards
+    /// step (a re-anchor) adds nothing and moves the baseline, so progress never
+    /// goes backwards and never freezes.
+    fn note_video_time(&self, timestamp_ms: u64) {
+        let previous = self.last_video_ts_ms.swap(timestamp_ms, Ordering::Relaxed);
+        // `previous` is `UNSEEN_VIDEO_TS` until the first packet, so that one is
+        // a baseline: nothing is greater than the sentinel.
+        if timestamp_ms > previous {
+            self.media_progress_ms
+                .fetch_add(timestamp_ms - previous, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Sentinel for "no video packet yet", so the first one sets a baseline
+/// instead of counting its absolute timestamp as progress.
+const UNSEEN_VIDEO_TS: u64 = u64::MAX;
+
+/// Whether a video message carries configuration rather than media. An
+/// enhanced-RTMP message (`tag & 0x80`) names its packet type in the low nibble,
+/// where 0 is SequenceStart; a legacy one puts it in the second byte, where 0 is
+/// the AVC/HEVC sequence header.
+fn video_is_sequence_header(data: &[u8]) -> bool {
+    let tag = data.first().copied().unwrap_or(0);
+    if tag & 0x80 != 0 {
+        tag & 0x0F == 0
+    } else {
+        data.get(1).copied() == Some(0)
+    }
+}
+
+/// Whether a video tag is a keyframe. The frame type sits in the high nibble of
+/// a legacy tag and in bits 6–4 of an enhanced one, so one mask covers both.
+fn video_is_keyframe(tag: u8) -> bool {
+    tag & 0x70 == 0x10
 }
 
 impl Default for GeneralizedSinkMetrics {
@@ -77,6 +123,8 @@ impl Default for GeneralizedSinkMetrics {
             video_count: AtomicU64::new(0),
             audio_count: AtomicU64::new(0),
             keyframe_count: AtomicU64::new(0),
+            last_video_ts_ms: AtomicU64::new(UNSEEN_VIDEO_TS),
+            media_progress_ms: AtomicU64::new(0),
             packets: Mutex::new(Vec::new()),
             video_codec: Mutex::new(None),
             audio_codec: Mutex::new(None),
@@ -152,6 +200,11 @@ impl GeneralizedSinkMetrics {
             "videoCount": self.video_count.load(Ordering::Relaxed),
             "audioCount": self.audio_count.load(Ordering::Relaxed),
             "keyframeCount": self.keyframe_count.load(Ordering::Relaxed),
+            "mediaTimestampMs": match self.last_video_ts_ms.load(Ordering::Relaxed) {
+                UNSEEN_VIDEO_TS => 0,
+                ts => ts,
+            },
+            "mediaProgressMs": self.media_progress_ms.load(Ordering::Relaxed),
             "dtsMonotone": self.dts_monotone(),
             "firstAudioPacketType": first_audio_packet_type,
             "audioSequenceHeaders": audio_sequence_headers,
@@ -267,11 +320,16 @@ where
                     metrics.publishing.fetch_add(1, Ordering::Relaxed);
                     pending.extend(accepted.drain(..));
                 }
-                ServerSessionEvent::VideoDataReceived { data, .. } if !metrics.record_packets => {
+                ServerSessionEvent::VideoDataReceived {
+                    data, timestamp, ..
+                } if !metrics.record_packets => {
                     metrics.messages.fetch_add(1, Ordering::Relaxed);
                     metrics
                         .bytes
                         .fetch_add(data.len() as u64, Ordering::Relaxed);
+                    // The media clock is cheap and every duty mode's window
+                    // check reads it, so the counting-only arm keeps it too.
+                    metrics.note_video_time(timestamp.value as u64);
                 }
                 ServerSessionEvent::AudioDataReceived { data, .. } if !metrics.record_packets => {
                     metrics.messages.fetch_add(1, Ordering::Relaxed);
@@ -286,11 +344,19 @@ where
                     metrics
                         .bytes
                         .fetch_add(data.len() as u64, Ordering::Relaxed);
-                    metrics.video_count.fetch_add(1, Ordering::Relaxed);
                     let tag = data.first().copied().unwrap_or(0);
-                    let is_keyframe = (tag & 0xF0) == 0x10 || tag == 0x90;
-                    if is_keyframe {
-                        metrics.keyframe_count.fetch_add(1, Ordering::Relaxed);
+                    // A sequence header is configuration, not media: counting
+                    // it as a video message and as a keyframe would let a
+                    // delivery check pass on headers alone.
+                    let is_sequence_header = video_is_sequence_header(&data);
+                    if !is_sequence_header {
+                        metrics.video_count.fetch_add(1, Ordering::Relaxed);
+                        if video_is_keyframe(tag) {
+                            metrics.keyframe_count.fetch_add(1, Ordering::Relaxed);
+                        }
+                        // Media time, monotonic: a window's progress is the
+                        // difference between two samples of it.
+                        metrics.note_video_time(timestamp.value as u64);
                     }
                     if metrics.video_codec.lock().unwrap().is_none() {
                         let codec = if tag & 0x80 != 0 {
@@ -321,8 +387,7 @@ where
                             timestamp_ms: timestamp.value as u64,
                             audio_packet_type: None,
                             audio_has_adts_sync: false,
-                            video_is_sequence_header: (tag & 0x80) == 0
-                                && data.get(1).copied() == Some(0),
+                            video_is_sequence_header: video_is_sequence_header(&data),
                         });
                     }
                 }
@@ -333,7 +398,14 @@ where
                     metrics
                         .bytes
                         .fetch_add(data.len() as u64, Ordering::Relaxed);
-                    metrics.audio_count.fetch_add(1, Ordering::Relaxed);
+                    // As for video: an AAC sequence header is configuration,
+                    // not audio.
+                    let is_sequence_header =
+                        data.first().is_some_and(|tag| (tag >> 4) & 0x0F == 10)
+                            && data.get(1).copied() == Some(0);
+                    if !is_sequence_header {
+                        metrics.audio_count.fetch_add(1, Ordering::Relaxed);
+                    }
                     if metrics.audio_codec.lock().unwrap().is_none()
                         && let Some(&tag) = data.first()
                     {
@@ -881,3 +953,7 @@ async fn wait_for_sink_probe_stopped(api: &RampApi, pipeline_id: &str, output_id
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
+
+#[cfg(test)]
+#[path = "sinks_tests.rs"]
+mod tests;

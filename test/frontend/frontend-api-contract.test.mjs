@@ -122,10 +122,21 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
   await api.getConfig({ jobs: "latest" });
   await api.getSystemMetrics({ view: "summary" });
   await api.getPipelineInputs("pipe /1");
-  await api.createPipelineInput("pipe /1", "Encoder B");
+  await api.createPipelineInput("pipe /1", {
+    label: "Encoder B",
+    kind: "keyed",
+    sourceUrl: null,
+  });
   await api.updatePipelineInput("pipe /1", "input /1", {
     label: "Encoder C",
     enabled: false,
+  });
+  await api.updatePipelineInput("pipe /1", "input /1", {
+    label: "Origin",
+    kind: "hlsPull",
+    sourceUrl: "https://origin.example/live/master.m3u8",
+    variantRule: "lowestBandwidth",
+    auth: { kind: "headers", headers: [{ name: "X-Token", value: "s3cret" }] },
   });
   await api.promotePipelineInput("pipe /1", "input /1");
   await api.deletePipelineInput("pipe /1", "input /1");
@@ -164,6 +175,7 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
       ["GET", "/api/v1/pipelines/pipe%20%2F1/inputs"],
       ["POST", "/api/v1/pipelines/pipe%20%2F1/inputs"],
       ["PATCH", "/api/v1/pipelines/pipe%20%2F1/inputs/input%20%2F1"],
+      ["PATCH", "/api/v1/pipelines/pipe%20%2F1/inputs/input%20%2F1"],
       [
         "POST",
         "/api/v1/pipelines/pipe%20%2F1/inputs/input%20%2F1/promote",
@@ -192,10 +204,21 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
       ["POST", "/api/v1/auth/logout"],
     ],
   );
-  assert.deepEqual(requests[5].body, { label: "Encoder B" });
+  assert.deepEqual(requests[5].body, {
+    label: "Encoder B",
+    kind: "keyed",
+    sourceUrl: null,
+  });
   assert.deepEqual(requests[6].body, {
     label: "Encoder C",
     enabled: false,
+  });
+  assert.deepEqual(requests[7].body, {
+    label: "Origin",
+    kind: "hlsPull",
+    sourceUrl: "https://origin.example/live/master.m3u8",
+    variantRule: "lowestBandwidth",
+    auth: { kind: "headers", headers: [{ name: "X-Token", value: "s3cret" }] },
   });
   const pipelineUpdate = requests.find(
     (request) =>

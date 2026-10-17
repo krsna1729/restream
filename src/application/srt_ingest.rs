@@ -113,6 +113,11 @@ pub fn srt_ingest_policy_entries(
     inputs
         .iter()
         .filter(|input| input.enabled)
+        // The policy store answers a publishing SRT peer by stream key, and a
+        // pull input accepts no peer: its key must not resolve there.
+        .filter(|input| {
+            input.source_kind == crate::domain::pipeline_input::PipelineInputSourceKind::Keyed
+        })
         .filter_map(|input| {
             let policy = policies.get(input.pipeline_id.as_str())?;
             Some(SrtIngestPolicyEntry::new(
@@ -155,7 +160,7 @@ mod tests {
     use crate::application::ports::{
         MetaLookupError, MetaLookupFuture, MetaStore, PipelineListFuture, PipelineStore,
     };
-    use crate::domain::pipeline_input::{PipelineInput, PipelineInputRole};
+    use crate::domain::pipeline_input::{PipelineInput, PipelineInputRole, PipelineInputSource};
     use crate::domain::srt_ingest::{
         DEFAULT_SRT_INGEST_LATENCY_MS, ResolvedSrtCrypto, ResolvedSrtIngestConfig,
     };
@@ -215,6 +220,7 @@ mod tests {
             _pipeline_id: &'a str,
             _label: &'a str,
             _stream_key: &'a str,
+            _source: PipelineInputSource,
         ) -> InputWriteFuture<'a> {
             Box::pin(async {
                 Err(PipelineInputStoreError::Internal(
@@ -229,6 +235,7 @@ mod tests {
             _input_id: &'a str,
             _label: &'a str,
             _enabled: bool,
+            _source: PipelineInputSource,
         ) -> InputUpdateFuture<'a> {
             Box::pin(async { Ok(None) })
         }
@@ -511,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn srt_policy_entries_include_every_enabled_pipeline_input() {
+    fn srt_policy_entries_cover_every_enabled_keyed_input() {
         let pipeline = Pipeline {
             id: "pipeline-1".to_string(),
             name: "Pipeline One".to_string(),
@@ -531,6 +538,7 @@ mod tests {
                 role: PipelineInputRole::Primary,
                 enabled: true,
                 selected: true,
+                ..PipelineInput::keyed_default()
             },
             PipelineInput {
                 id: "input-standby".to_string(),
@@ -540,6 +548,7 @@ mod tests {
                 role: PipelineInputRole::Backup,
                 enabled: true,
                 selected: false,
+                ..PipelineInput::keyed_default()
             },
             PipelineInput {
                 id: "input-disabled".to_string(),
@@ -549,6 +558,19 @@ mod tests {
                 role: PipelineInputRole::Backup,
                 enabled: false,
                 selected: false,
+                ..PipelineInput::keyed_default()
+            },
+            PipelineInput {
+                id: "input-pull".to_string(),
+                pipeline_id: pipeline.id.clone(),
+                label: "Pull".to_string(),
+                stream_key: "pull-key".to_string(),
+                role: PipelineInputRole::Backup,
+                enabled: true,
+                selected: false,
+                source_kind: crate::domain::pipeline_input::PipelineInputSourceKind::HlsPull,
+                source_url: Some("http://origin.example/master.m3u8".to_string()),
+                ..PipelineInput::keyed_default()
             },
         ];
 
@@ -558,6 +580,8 @@ mod tests {
             .map(|entry| entry.stream_key.as_str())
             .collect::<Vec<_>>();
 
+        // An enabled pull input is left out: the policy store answers a
+        // publishing SRT peer by stream key, and a pull input takes no peer.
         assert_eq!(stream_keys, vec!["primary-key", "standby-key"]);
         assert!(
             entries
@@ -621,6 +645,7 @@ mod tests {
             role: PipelineInputRole::Primary,
             enabled: true,
             selected: true,
+            ..PipelineInput::keyed_default()
         }
     }
 

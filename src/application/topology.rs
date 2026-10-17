@@ -8,13 +8,14 @@
 //! restart starts from the same rows.
 
 use std::collections::{BTreeSet, HashSet};
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use sqlx::SqlitePool;
 use tokio::sync::Notify;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::application::models::Output;
 use crate::media::engine::MediaEngine;
@@ -181,6 +182,84 @@ pub async fn converge_topology(pool: &SqlitePool, engine: &MediaEngine, outputs:
     for pipeline_id in runtime_pipelines.difference(&pipelines) {
         engine.teardown_pipeline_runtime(pipeline_id).await;
     }
+}
+
+/// Converge HLS pull inputs with their rows: an enabled `hls_pull` input has
+/// a running pull task, and every other pull task is stopped.
+///
+/// The row is the whole instruction, so a pass is one read and a comparison:
+/// an input that is disabled, deleted (the cascade takes its row), or whose
+/// URL, rendition or credential changed is stopped or replaced, and one that
+/// is newly enabled starts. A source that is running is left alone, so a pass
+/// costs no work while nothing changes.
+///
+/// Returns the inputs this pass started or replaced: what a caller logs, and
+/// what a test asserts on — a second pass over unchanged rows starts nothing.
+///
+/// This runs before [`converge_topology`] so a deleted pipeline's pull tasks
+/// stop before its runtime is torn down, and a pull task can never recreate
+/// the ring of a pipeline that is going away.
+pub async fn converge_pull_inputs(
+    pool: &SqlitePool,
+    ingest: &Arc<crate::media::hls_ingest::HlsIngest>,
+) -> Vec<String> {
+    let pulls = match crate::db::list_pull_inputs(pool).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            warn!(err = %error, "DB error reading pull inputs; pull inputs not converged this pass");
+            return Vec::new();
+        }
+    };
+    let wanted = pulls
+        .iter()
+        .filter(|input| input.enabled && input.source_url.is_some())
+        .map(|input| input.id.as_str())
+        .collect::<HashSet<_>>();
+
+    // Cancel every stale pull before awaiting any of them: the joins run
+    // together, so one stalled origin cannot hold this pass — and with it every
+    // other pipeline's topology convergence, which runs after — behind each
+    // join in turn.
+    let stale: Vec<String> = ingest
+        .pull_input_ids()
+        .into_iter()
+        .filter(|input_id| !wanted.contains(input_id.as_str()))
+        .collect();
+    for input_id in ingest.cancel_pulls(&stale).await {
+        info!(input_id = %input_id, "HLS pull stopped");
+    }
+
+    let mut started = Vec::new();
+    for input in pulls
+        .iter()
+        .filter(|input| wanted.contains(input.id.as_str()))
+    {
+        // Validation requires a URL for a pull input; a row without one is
+        // left alone rather than pulled from nowhere.
+        let Some(url) = input.source_url.clone() else {
+            continue;
+        };
+        let did_start = ingest
+            .ensure_pull(
+                crate::media::hls_pull::PullIdentity {
+                    pipeline_id: input.pipeline_id.clone(),
+                    input_id: input.id.clone(),
+                    stream_key: input.stream_key.clone(),
+                    selected: input.selected,
+                },
+                crate::media::hls_pull::PullSource {
+                    url,
+                    variant: input.variant_rule,
+                    auth: input.source_auth.clone(),
+                },
+            )
+            .await;
+        if did_start {
+            info!(input_id = %input.id, pipeline_id = %input.pipeline_id, "HLS pull started");
+            started.push(input.id.clone());
+        }
+    }
+    started
 }
 
 #[cfg(test)]

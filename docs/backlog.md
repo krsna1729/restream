@@ -28,12 +28,20 @@ items).
 - [Q-065 capacity cost of HLS, sink and pipeline outputs](#q-065-performance-sonnet-price-hls-sink-and-pipeline-outputs-from-a-measured-cost)
 - [Q-066 SRT ingress test port race](#q-066-testing-sonnet-srt-multi-owner-test-port-can-join-a-foreign-reuseport-group)
 - [Q-067 HLS push ingest: remaining gates](#q-067-protocol-opus-hls-push-ingest-remaining-gates)
-- [Q-068 HLS pull ingest](#q-068-protocol-opus-hls-pull-ingest)
 - [Q-069 frame-level media units](#q-069-architecture-opus-frame-level-media-units-for-moq-and-fmp4-ingest)
 - [Q-070 MoQ ingest](#q-070-protocol-opus-moq-ingest)
 - [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
 - [Q-072 dedicated HLS ingest listener](#q-072-architecture-sonnet-dedicated-hls-ingest-listener-with-half-close)
 - [Q-073 HEVC fMP4 HLS push ingest](#q-073-protocol-opus-hevc-fmp4-hls-push-ingest)
+- [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
+- [Q-075 one raw AAC frame per unit](#q-075-protocol-opus-one-raw-aac-frame-per-message-and-per-sample)
+- [Q-076 HTTP Digest for pull origins](#q-076-protocol-sonnet-http-digest-authentication-for-hls-pull-origins)
+- [Q-077 follow every rendition into one ring](#q-077-architecture-opus-follow-every-rendition-of-a-master-playlist-into-one-ring)
+- [Q-078 choose versions the ingest can decode](#q-078-protocol-opus-choose-the-versions-and-codecs-the-ingest-can-decode)
+- [Q-079 resolve a pull target before fetching it](#q-079-security-opus-resolve-a-pull-target-before-fetching-it)
+- [Q-080 release a deleted input's applied init](#q-080-architecture-opus-release-a-deleted-inputs-applied-init)
+- [Q-081 make the ingest registration cancel-safe](#q-081-architecture-opus-make-the-ingest-registration-cancel-safe)
+- [Q-083 measure RTMP and SRT under pull load](#q-083-performance-sonnet-measure-rtmp-and-srt-under-pull-load)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -451,20 +459,6 @@ items).
 - Status: open (Filed: 2026-10-16 by claude, user request; TS and
   H.264/AAC fMP4 push done).
 
-### Q-068 [protocol] [opus] HLS pull ingest
-- Goal: a pipeline input pulls a remote live HLS URL.
-- Contract: the input stores the source URL and a variant rule (default
-  highest `BANDWIDTH`). The puller fetches the playlist again every
-  target duration (half of it after a reload that brought nothing new, RFC
-  8216 section 6.3.4), fetches new segments in order with `reqwest`, with
-  bounded playlist and segment sizes, and
-  feeds the same session assembler as Q-067 (ordering, demux, ring),
-  with bounded retry and backoff. API and frontend input forms gain the
-  source kind.
-- Gates: unit tests for refresh and variant choice; one harness mode that
-  pulls Restream's own HLS output.
-- Status: open (Filed: 2026-10-16 by claude, user request; after Q-067).
-
 ### Q-069 [architecture] [opus] Frame-level media units for MoQ and fMP4 ingest
 - Goal: the ring can feed per-frame consumers (MoQ objects, LL-HLS parts).
 - Sources: `MediaPacket` (`src/media/packet.rs`) has no codec
@@ -675,4 +669,181 @@ items).
   delivered_ok requires only audioCount > 0), which a mutation reverting the
   split must fail; the SRT-to-RTMP and HLS-to-RTMP paths still deliver.
 - Status: open (Filed: 2026-10-16 by claude, from the HLS ingest isolation
-  measurement). Fix before HLS pull ingest, which reuses the same path.
+  measurement). Every TS source shares the path — SRT, file ingest, HLS push
+  and HLS pull — so this is a defect of the demuxer, not of one ingest kind.
+
+### Q-076 [protocol] [sonnet] HTTP Digest authentication for HLS pull origins
+- Goal: a pull input authenticates to an origin that answers `401` with a
+  `WWW-Authenticate: Digest` challenge, as FFmpeg's `-auth_type digest` and
+  an AWS MediaLive HLS input both support.
+- Why it is not in the shipped pull feature: the credential variants are
+  `none`, `bearer`, `basic` and `headers` (`PullAuth` in
+  `src/domain/pipeline_input.rs`), and no HTTP-digest crate is in the tree. A
+  hand-rolled RFC 7616 (MD5, MD5-sess, SHA-256, `qop=auth`, nonce counting,
+  a stale nonce) is a correctness risk for a mechanism most origins have
+  replaced with signed URLs or bearer tokens, and the harness gate does not
+  need it.
+- Change: add a `digest` variant to `PullAuth` with the same write-only rule,
+  validation and `Debug` redaction as `basic`, and implement the
+  challenge/response on the request path in `src/media/hls_pull.rs` — or
+  adopt a maintained crate if one is vetted.
+- Gates: a test against a local origin that challenges with each supported
+  algorithm and `qop`; one that answers `stale=true` and must be retried
+  once; a rejection, with a stated reason, when the challenge offers no
+  supported algorithm.
+- Status: open (Filed: 2026-10-17 by claude, from the pull-credential
+  decision: all four mechanisms ship as a choice, digest does not).
+
+### Q-077 [architecture] [opus] Follow every rendition of a master playlist into one ring
+- Goal: an HLS ingest session whose master carries audio as a separate
+  `EXT-X-MEDIA` rendition delivers both video and audio — for push and pull
+  alike.
+- Why it is not one ingest kind: the assembler is shared, and two independent
+  places stop it today.
+  - `ordering::Session` locks onto one playlist path (`Lock::Media(path)` /
+    `Lock::Master(path)`); `Lock::follows()` answers `Some(false)` for any
+    other path, so a second playlist and every segment of it take the
+    `on_other_variant` path and are dropped (`ordering.rs:380-390,427-441`,
+    `session.rs:384,431`). Two tests pin that behaviour:
+    `without_a_master_the_first_media_playlist_is_followed` and
+    `a_master_playlist_selects_the_highest_bandwidth_variant`.
+  - `SegmentPublisher` holds one `Box<dyn SegmentDemux>`, and the fMP4 path
+    replaces init and probe on `apply_init` (`ingest_publisher/fmp4.rs:411-416`)
+    while `plan_fragment` skips samples outside the current init. Two
+    renditions alternate inits: the audio init replaces the video track set,
+    and `take_init` will not re-deliver the video init (its hash is already
+    delivered), so the video segments after it are demuxed against the wrong
+    init.
+  This is why a pull of Restream's own preview is video-only: its master has
+  `video/index.m3u8` and `audio/{track}/index.m3u8` as separate fMP4
+  renditions, each with its own `EXT-X-MAP`.
+- Change: a second followed path with its own sequence space in
+  `ordering::Session`; per-rendition demuxers in `SegmentPublisher` feeding
+  one ring, with pacing and continuity answering the rendition set (which
+  timeline decides `media_time_ms`, and how two renditions' DTS align). The
+  puller then follows the chosen variant's default audio rendition
+  (`DEFAULT=YES`, else `AUTOSELECT=YES`, else the first), as FFmpeg's HLS
+  demuxer does.
+- Gates: a session whose master has separate audio and video renditions
+  publishes both to the ring, for push and for pull; `hls-pull-duty` and
+  `hls-push-duty` both report non-zero audio and video counts; the
+  single-rendition and pacing tests still hold.
+- Status: open (Filed: 2026-10-17 by claude, from the pull audio
+  investigation; the pull feature reports the gap with a warning instead of
+  losing audio silently).
+
+### Q-078 [protocol] [opus] Choose the versions and codecs the ingest can decode
+- Goal: a pull that follows a master playlist picks a variant whose media
+  this ingest can publish, so a ladder is not refused from the top down.
+- Why: the pull's rule is `BANDWIDTH` (`highest`, the default, or `lowest`)
+  and nothing else. `EXT-X-STREAM-INF` carries `CODECS`, `RESOLUTION` and
+  `FRAME-RATE`, and the parser already keeps the variant's `path`,
+  `BANDWIDTH` and `AUDIO` group; a ladder whose highest variant is HEVC
+  (`hvc1`) is pulled, its frames are refused one segment at a time
+  (`ObjectOutcome::Unsupported`), and the pull keeps refusing until the
+  operator changes the rule. `hls-push-duty` has the same shape from the
+  encoder side: a single ingest protocol cannot carry two dialects.
+- Change: record `CODECS`' video and audio codecs on `Variant` (additive, the
+  parser is shared) and have `choose_variant` prefer a variant whose codecs
+  the assembler accepts (H.264 video, AAC audio, and whatever Q-073 lands),
+  falling back to the current rule when every variant is unsupported or none
+  declares its codecs. Where the ladder is the pull's, the variant rule
+  becomes a preference rather than a promise; the refusal path stays as it is.
+- Gates: a master whose highest variant is HEVC and whose lower one is H.264
+  publishes media with the default rule; a master whose variants declare no
+  codecs behaves exactly as today; the push parser's behaviour is unchanged.
+- Status: open (Filed: 2026-10-17 by claude, from the HLS pull review: the
+  ingest-unsupported top variant has no way out but a manual rule change).
+
+### Q-079 [security] [opus] Resolve a pull target before fetching it
+
+- Goal: a pulled playlist cannot make the engine fetch a host that resolves
+  into a private, loopback or link-local address, and the pull says so once
+  rather than issuing the request.
+- Why: the guard that refuses those targets matches the *literal* address
+  (`url::Host::Ipv4`/`Ipv6`), so `http://internal-admin.example/` passes and
+  the request goes out. The threat model is the one the pull already accepts:
+  a compromised edge, an SSAI ad segment, a second CDN. The blast radius is
+  small — the response reaches the demuxer and, if it parses, the operator's
+  own outputs; no credential crosses the origin boundary (`AuthScope`), and a
+  cross-origin redirect is refused — so this is filed rather than fixed
+  urgently. Resolution also has a rebinding race: the address checked is not
+  the address connected to unless the client is pinned to it.
+- Change: resolve the host of the source URL, of each playlist's variant,
+  segment and map URI, and of each redirect target, and refuse a set of
+  answers that is not entirely public, unless the source itself resolves into
+  such a range (the harness and the local demo pull from loopback). Cache the
+  answers per host for the pull's lifetime. To close the race, pin the
+  resolved address for the connection (a connector that takes the address
+  rather than the name) or re-check the peer address after connect.
+- Gates: a playlist naming a host that resolves to `127.0.0.1` is refused
+  with one reason and no request is issued; a source on loopback still pulls;
+  the check is mutation-verified by weakening the resolved-address test.
+- Status: open (Filed: 2026-10-17 by claude, from the HLS pull review round:
+  the literal-address guard, `host_refused`, covers addresses, not names).
+
+### Q-080 [architecture] [opus] Release a deleted input's applied init
+
+- Goal: deleting a keyed input releases the init its stream key applied, so
+  the registry's key state does not outlive the row.
+- Why: a key's state holds the `EXT-X-MAP` init its last session applied, so
+  an encoder that resumes after an idle timeout can keep publishing without
+  re-uploading it. Eviction waits for that init to be empty
+  (`HlsIngest::forget`), and nothing clears it when the input's row is
+  deleted, so up to `max_init_bytes` (4 MiB) per deleted fMP4 input is held
+  until the process restarts. A stopped *pull* clears it
+  (`HlsIngest::cancel_pulls`); the keyed case has no hook: the delete handler
+  reaches the engine (`cancel_pipeline_input`) but not the registry, and the
+  registry has no "this input is gone" entry point. An operator who creates
+  and deletes many fMP4 inputs accumulates them.
+- Change: give the registry a way to release one input's key state — for
+  example `HlsIngest::forget_input(input_id)`, called from the input-delete
+  handler the way the pull path is called from the reconciler — and have it
+  clear `init` so the existing eviction can run. Keep the resume case: a key
+  whose input still exists must keep its init.
+- Gates: a test that deletes an input whose key has an applied init and finds
+  the key state gone (or the init cleared and the state evictable); the
+  resume case (`a_seeded_init_is_delivered_without_an_upload`) still passes.
+- Status: open (Filed: 2026-10-17 by claude, from the HLS pull review round:
+  the pull hook exists, the keyed one does not).
+
+### Q-081 [architecture] [opus] Make the ingest registration cancel-safe
+
+- Goal: dropping a future inside `try_register_pipeline_input_attempt` leaves
+  no half-written ingest state.
+- Why: the function inserts into `cancel_tokens` and then awaits
+  `ingests.sessions.write()`, `selected_inputs.write()` and `active.write()`.
+  Tokio's `RwLock` write waits whenever a reader holds it (the input-status
+  JSON reads `sessions`), so a caller whose future is dropped at one of those
+  awaits leaves a token that is not cancelled and a `sessions` entry with no
+  owner: the input shows as connected until the next registration overwrites
+  it. `HlsIngest::session_for` guards the window *after* the call returns
+  (`RegistrationGuard`), and a pull's cancel can drop it before that.
+- Change: take every write guard before the first insert, so no await follows
+  it, or run the register-plus-guard pair on a spawned task whose result the
+  caller awaits. Either way the call becomes cancel-safe on its own.
+- Gates: a test that drops a future parked inside the call (a reader holding
+  `sessions`) and finds no token and no `sessions` entry for the input.
+- Status: open (Filed: 2026-10-17 by claude, from the #354 review round: the
+  window predates the PR, and the pull's cancel path is what reaches it).
+
+### Q-083 [performance] [sonnet] Measure RTMP and SRT under pull load
+
+- Goal: the isolation of the other protocols under M pull sessions is measured
+  the way `hls-push-duty` measures it under M push sessions.
+- Why: `hls-push-duty` has a baseline arm (`--hls-publishers 0`) and an HLS arm
+  (base RTMP publishers plus M HLS push sessions), which is how Q-074 priced the
+  push ingest. `hls-pull-duty` has no base arm: it runs only its own pull
+  pipeline, so "RTMP under pull load" cannot be measured from the catalog. The
+  pull's incremental cost is bounded by construction — a fetch on a Tokio
+  worker (not the MEDIA executor), a playlist parse of at most
+  `max_playlist_bytes` per refresh no shorter than `MIN_REFRESH_INTERVAL`
+  (500 ms), and one read of pull rows per reconcile pass — but it is unmeasured
+  beside a live RTMP or SRT pipeline.
+- Change: give `hls-pull-duty` a `--base-publishers N` arm, or add M pull
+  inputs to `hls-push-duty`, so one release-binary run compares the base
+  publishers' delivery and per-poll CPU with and without pulls.
+- Gates: both arms pass, and the base publishers' delivery and per-poll CPU are
+  reported side by side.
+- Status: open (Filed: 2026-10-17 by claude, from the #354 non-HLS audit: the
+  push ingest has this arm, the pull ingest does not).

@@ -21,6 +21,7 @@ pub(super) struct RuntimeLaunch {
     pub security: Arc<IngestSecurityService>,
     pub pipeline_access: Arc<dyn PipelineAccessAuthenticator>,
     pub srt_ingest_policy_store: Arc<SrtIngestPolicyStore>,
+    pub hls_ingest: Arc<crate::media::hls_ingest::HlsIngest>,
 }
 
 pub(super) struct RuntimeTasks {
@@ -38,15 +39,10 @@ impl RuntimeTasks {
             security,
             pipeline_access,
             srt_ingest_policy_store,
+            hls_ingest,
         } = launch;
 
         let http_addr = format!("{}:{}", config.http_bind_addr, config.ports.http);
-        let hls_ingest = crate::media::hls_ingest::HlsIngest::new(
-            engine.clone(),
-            pipeline_access.clone(),
-            security.clone(),
-            crate::media::hls_ingest::HlsIngestLimits::default(),
-        );
         let app = crate::api::create_router(state)
             .merge(crate::api::create_hls_ingest_router(hls_ingest));
         let listener = tokio::net::TcpListener::bind(&http_addr)

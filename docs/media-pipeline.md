@@ -25,6 +25,7 @@ For the performance optimization plan and benchmark results, see
 - [SRT bonding](#srt-bonding)
 - [SRT ingress owner](#srt-ingress-owner)
 - [HLS push ingest](#hls-push-ingest)
+- [HLS pull ingest](#hls-pull-ingest)
 - [Protocol correctness requirements](#protocol-correctness-requirements)
 
 ## Current shape
@@ -812,6 +813,154 @@ keeps the container it started with.
     ~77 µs and its ring publication ~76 µs); averaged over every poll,
     including the turns that only apply an object or wait, ~84 µs.
   - A panic in a session ends only that session and releases its input.
+
+## HLS pull ingest
+
+An `HlsPull` pipeline input has no listener: one task fetches a remote live
+HLS origin and feeds what it fetches into the same session assembler as push
+ingest (`src/media/hls_pull.rs`, session registered as protocol `hls-pull`).
+Ordering, discontinuity handling, demuxing, timestamps and pacing are the push
+path's; the puller only decides what to fetch.
+
+- **Source.** The input stores the playlist URL, a variant rule (`highest`
+  or `lowest` `BANDWIDTH`, default highest) and origin credentials:
+  bearer, cookies, basic, or a set of request headers. A source URL may carry its own
+  token in the query: it is what that URL is fetched with, and a relative
+  URI a playlist names does not inherit it (RFC 3986 section 5.3), so a token
+  that must reach segments belongs in a credential choice, not the query.
+  Every log line renders a URL with its whole query dropped (scheme, host,
+  port, path, then `?<redacted>`): a signed origin carries its credential
+  under its own key — Akamai `hdnts`, CloudFront `Policy`/`Signature`/
+  `Key-Pair-Id`, S3 `X-Amz-Signature` — and `redact_url`'s allowlist of query
+  keys would print it verbatim. The URL itself — its query
+  included — is configuration the operator typed, so it is returned in full
+  and readable by any authenticated reader of the input: `bearer`, `cookies`
+  and `headers` are the choices for a credential that must stay write-only,
+  and a URL carrying userinfo (`https://user:pw@…`) is refused with that
+  advice, because userinfo is a password every log line would redact half of.
+  Credentials are write-only — stored and used, never returned by the API.
+- **Credentials.** Origin credentials are presented only to the source's own
+  origin — scheme, host and port, as RFC 6454 defines it. A playlist may name
+  another origin (an SSAI ad segment, a second CDN, a compromised edge), and
+  that origin receives none of them, custom headers included; an `https`
+  source whose playlist lists `http://` URIs on the same host and port is
+  another origin too, so it receives none either. This is what reqwest's own
+  guard does not do: on a cross-host redirect it strips `Authorization`,
+  `Cookie` and `Proxy-Authorization` but leaves `X-Api-Key` alone.
+- **Cookies.** The client always has a cookie jar: a `Set-Cookie` returned
+  with a playlist is presented with that playlist's segments, as a browser or
+  FFmpeg `-cookies` does. Cookies are scoped by the jar to the origin's
+  domain.
+- **Redirects.** At most 10 hops, each one checked against the URL it came
+  from rather than against the source: a credential-less pull that has already
+  moved to a third-party host may follow that host's own redirects. An
+  `https`→`http` hop is refused for every pull — an https source is not
+  silently weakened into fetching the clear. A hop that crosses an origin is
+  refused when the pull has credentials to protect (they are presented per
+  origin, and a custom header would otherwise survive reqwest's own cross-host
+  guard) or when the target fails the address guard below; with neither, it is
+  followed, so a credential-less origin that answers `302` to its nearest edge
+  works. A refused redirect is reported as a 3xx and retried.
+- **Address ranges.** A playlist URI in loopback, link-local (cloud metadata
+  lives at `169.254.169.254`, `100.100.100.200` and `fd00:ec2::254`, and each
+  of those is reachable through the NAT64 prefix `64:ff9b::/96` as much as
+  through `::ffff:0:0/96`), carrier-grade NAT (`100.64.0.0/10`), a private or
+  unique-local range, or under `localhost` — the name, `localhost.`, and
+  `*.localhost` (RFC 6761) — is refused as fatal, unless the source itself is
+  in one of those ranges: an internal origin implies an internal origin's
+  playlist. IPv6 literals are covered by their brackets as much as IPv4 ones.
+  Only literal addresses and those names are decided here: a domain name that
+  *resolves* to one of these ranges (DNS rebinding) still gets through the
+  guard, because refusing it would need resolution the pull does not do.
+- **Variant choice.** A master playlist is resolved once, and its chosen media
+  playlist is followed directly on later refreshes. The master itself is not
+  fed to the assembler, which means the puller's rule (not ordering's
+  highest-only push rule) decides the rendition. A variant's URL is the one a
+  signed origin expires, so the master is resolved again when the media
+  playlist answers 401, 403 or 404, and after a retry burst fails six times:
+  the master is the URL that gets renewed.
+- **Audio.** A master that carries audio as a separate `EXT-X-MEDIA`
+  rendition — packaged live HLS, and Restream's own preview
+  (`video/index.m3u8` plus `audio/{track}/index.m3u8`), do — is pulled as its
+  chosen video variant: one task follows one rendition, and the assembler
+  follows one playlist path, so a second followed rendition is a capability
+  the shared HLS path does not have yet (Q-077). The pull states that once per
+  master resolution — the first cycle, and again whenever an expired variant
+  URL sends it back to the master — rather than dropping the audio silently:
+  one `WARN` naming the group
+  and the rendition and saying the pulled stream is video-only, and the pull
+  continues. A variant whose audio is muxed into its own segments — no `AUDIO`
+  attribute, or a group member with no `URI` — is complete as it stands and is
+  not reported; a variant that names a group the master does not define is
+  reported with that as its reason. The rendition is chosen as RFC 8216
+  section 4.3.4.1 chooses among a group's members: `DEFAULT=YES`, else
+  `AUTOSELECT=YES`, else the first.
+- **Refresh cadence.** The media playlist is fetched again every target
+  duration, and half a target duration after a reload that brought nothing
+  new (RFC 8216 section 6.3.4), never faster than 500 ms. `TARGETDURATION` is
+  the origin's number and a hostile one is near zero, which without that floor
+  would re-poll, re-parse and re-dispatch a megabyte of playlist as fast as
+  round-trip time allows. Segments listed with a sequence below the first
+  not-yet-fetched one are skipped, never refetched.
+- **Entry point.** The first cycle of a live playlist starts at the last
+  segment at least three target durations from its end (RFC 8216 section
+  6.3.3). A DVR or EVENT window is therefore not read from its start — which
+  would pace the output a whole window behind live and load the origin with
+  the backfill. A playlist that reached `EXT-X-ENDLIST` starts at its first
+  segment instead, so a finished source is not truncated.
+- **Feeding.** URIs in a remote playlist are absolute URLs, while the
+  assembler parses upload paths inside one stream key's namespace. Each
+  fetched media playlist is rewritten into that namespace (sequence `N` is
+  `pull/sN.ts` or `pull/sN.m4s`; an `EXT-X-MAP` becomes `pull/m<hash>.mp4`,
+  hashed over scheme, host and path, because a signed origin re-signs the same
+  init URI on every reload and the query is the credential, not the map's
+  identity — so the init is fetched once per map change, and the assembler
+  sees the same map name across reloads)
+  with its target duration, media sequence, `EXTINF`, discontinuity, map and
+  `EXT-X-ENDLIST` tags preserved. The playlist is dispatched first, then its
+  new segments in order, then an init before the segments of a new map, all
+  through `HlsIngest::object_body` → `ObjectBody::push` →
+  `HlsIngest::dispatch` with `DispatchOrigin::Pull`. Ordering therefore sees
+  exactly the objects an encoder would have sent.
+- **Bounds.** Playlists are bounded by `max_playlist_bytes`, segments by
+  `max_segment_bytes`, and fMP4 inits by `max_init_bytes`, both from the
+  declared length and while streaming; an over-bound object is refused before
+  it is dispatched.
+- **Refused playlists.** The shared parser records `EXT-X-KEY` and
+  `EXT-X-SESSION-KEY` (a `METHOD` other than `NONE`) and `EXT-X-BYTERANGE`
+  (including a map's `BYTERANGE` attribute) as data, and the pull refuses such
+  a playlist as fatal with one reason, logged once: an `AES-128` segment fails
+  per segment, a `SAMPLE-AES` one keeps its container and would demux as
+  garbage media, and a byte range is a slice of a resource this pull fetches
+  whole — a large one would never fit the size bound. Push shares that parser
+  and has always ignored those tags, so the refusal lives in the pull.
+- **Retries.** Transport errors and non-2xx responses retry with the HLS
+  upload backoff (200 ms doubling to a 5 s cap). After six consecutive
+  failures the puller waits 30 s before the next burst, so a wrong URL or a
+  down origin is a slow poll, never a spin. One segment cannot hold that up:
+  after four tries it is skipped with one warning naming it, and the gap it
+  leaves is ordering's to count, exactly as an upload that never arrives is.
+  A segment the assembler refuses (malformed, unsupported, over a bound) does
+  not become valid on a retry either; its reason is logged once, not once per
+  segment of a ladder the ingest will not take.
+- **What ends the task.** An invalid source or credential configuration, a
+  playlist this pull refuses (encrypted, byte-range, or pointing at a private
+  address), a master playlist that points at another master, and another
+  publisher holding the input. `EXT-X-ENDLIST` ends it after the last listed
+  segment is handed over.
+- **Cancellation.** `cancel` stops the task at its next await (in-flight HTTP
+  requests are dropped) and `join` waits for it. A cancelled task dispatches
+  nothing more: the dispatch itself checks the token before it hands an object
+  over, so a cancel that lands while a body is being read cannot open a new
+  session under the input the next source is about to own. The session it
+  opened ends on its own idle timeout, or when the input is cancelled. No
+  per-packet work and no blocking call runs on Tokio; requests are async and
+  the assembler runs on the MEDIA executor.
+- **Known limits.** A master that carries audio as a separate `EXT-X-MEDIA`
+  rendition is pulled video-only (Q-077). And because Q-075 has not landed, a
+  pulled MPEG-TS source reaches an RTMP output with multi-frame AAC messages:
+  the `rtmp` sink wants one raw AAC frame per message, and the pull feeds the
+  demuxer's own units, as push ingest does.
 
 ## Protocol correctness requirements
 

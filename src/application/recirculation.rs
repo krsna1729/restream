@@ -215,6 +215,7 @@ mod tests {
             _pipeline_id: &'a str,
             _label: &'a str,
             _stream_key: &'a str,
+            _source: crate::domain::pipeline_input::PipelineInputSource,
         ) -> crate::application::pipeline_inputs::InputWriteFuture<'a> {
             Box::pin(async move {
                 Err(
@@ -231,6 +232,7 @@ mod tests {
             _input_id: &'a str,
             _label: &'a str,
             _enabled: bool,
+            _source: crate::domain::pipeline_input::PipelineInputSource,
         ) -> crate::application::pipeline_inputs::InputUpdateFuture<'a> {
             Box::pin(async move {
                 Err(
@@ -357,6 +359,7 @@ mod tests {
             role: PipelineInputRole::Backup,
             enabled: true,
             selected: false,
+            ..PipelineInput::keyed_default()
         }
     }
 

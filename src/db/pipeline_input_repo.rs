@@ -1,5 +1,9 @@
-use crate::domain::pipeline_input::{PipelineInput, PipelineInputRole};
+use crate::domain::pipeline_input::{
+    PipelineInput, PipelineInputRole, PipelineInputSource, PipelineInputSourceKind, PullAuth,
+    VariantRule,
+};
 use sqlx::{FromRow, SqlitePool};
+use tracing::warn;
 
 #[derive(FromRow)]
 struct PipelineInputRow {
@@ -10,13 +14,22 @@ struct PipelineInputRow {
     role: String,
     enabled: bool,
     selected: bool,
+    source_kind: String,
+    source_url: Option<String>,
+    variant_rule: String,
+    source_auth: Option<String>,
 }
 
 impl TryFrom<PipelineInputRow> for PipelineInput {
     type Error = sqlx::Error;
 
     fn try_from(row: PipelineInputRow) -> Result<Self, Self::Error> {
+        let input_id = row.id.clone();
         let role = PipelineInputRole::try_from(row.role.as_str())
+            .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+        let source_kind = PipelineInputSourceKind::try_from(row.source_kind.as_str())
+            .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+        let variant_rule = VariantRule::try_from(row.variant_rule.as_str())
             .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
         Ok(Self {
             id: row.id,
@@ -26,11 +39,73 @@ impl TryFrom<PipelineInputRow> for PipelineInput {
             role,
             enabled: row.enabled,
             selected: row.selected,
+            source_kind,
+            source_url: row.source_url,
+            variant_rule,
+            source_auth: deserialize_auth(row.source_auth.as_deref(), &input_id),
         })
     }
 }
 
-const SELECT_FIELDS: &str = "id, pipeline_id, label, stream_key, role, enabled, selected";
+const SELECT_FIELDS: &str = "id, pipeline_id, label, stream_key, role, enabled, selected, \
+     source_kind, source_url, variant_rule, source_auth";
+
+/// Serialize the pull auth for the `source_auth` column; `None` for no auth.
+fn serialize_auth(auth: &PullAuth) -> Option<String> {
+    match auth {
+        PullAuth::None => None,
+        _ => serde_json::to_string(auth).ok(),
+    }
+}
+
+/// Parse the `source_auth` column. An empty or absent value means no auth.
+///
+/// A value that does not parse is treated as no auth, and logged. The column's
+/// CHECK constrains the JSON and the kind, not the variant's own fields, so a
+/// row can hold `{"kind":"bearer"}` with no token; failing the whole row (or
+/// the whole list) over one input's credential would take the inputs list and
+/// with it SRT's policy store down for every pipeline.
+fn deserialize_auth(raw: Option<&str>, input_id: &str) -> PullAuth {
+    match raw {
+        Some(raw) if !raw.trim().is_empty() => serde_json::from_str::<PullAuth>(raw)
+            .inspect_err(|error| {
+                warn!(input_id = %input_id, err = %error,
+                    "pipeline input source auth does not parse; showing it as none");
+            })
+            .unwrap_or(PullAuth::None),
+        _ => PullAuth::None,
+    }
+}
+
+/// Whether the stored credential parses as the variant its kind names. A pull
+/// whose credential does not parse is refused rather than fetched without it:
+/// an origin that answers an unauthenticated request with a slate or a preview
+/// would otherwise publish that as this input's content.
+fn auth_parses(raw: Option<&str>) -> bool {
+    match raw {
+        Some(raw) if !raw.trim().is_empty() => serde_json::from_str::<PullAuth>(raw).is_ok(),
+        _ => true,
+    }
+}
+
+/// Convert listed rows, skipping one the schema cannot describe rather than
+/// failing the list: an unreadable row must not take every other pipeline's
+/// inputs (and the SRT policy store built from them) with it.
+fn convert_rows(rows: Vec<PipelineInputRow>) -> Vec<PipelineInput> {
+    rows.into_iter()
+        .filter_map(|row| {
+            let input_id = row.id.clone();
+            match PipelineInput::try_from(row) {
+                Ok(input) => Some(input),
+                Err(error) => {
+                    warn!(input_id = %input_id, err = %error,
+                        "pipeline input row skipped: it does not match the schema");
+                    None
+                }
+            }
+        })
+        .collect()
+}
 
 fn primary_input_id(pipeline_id: &str) -> String {
     format!("input_primary_{pipeline_id}")
@@ -95,13 +170,11 @@ pub async fn list_pipeline_inputs(
         "SELECT {SELECT_FIELDS} FROM pipeline_inputs
          WHERE pipeline_id = ? ORDER BY role DESC, rowid ASC"
     );
-    sqlx::query_as::<_, PipelineInputRow>(sqlx::AssertSqlSafe(query))
+    let rows = sqlx::query_as::<_, PipelineInputRow>(sqlx::AssertSqlSafe(query))
         .bind(pipeline_id)
         .fetch_all(pool)
-        .await?
-        .into_iter()
-        .map(PipelineInput::try_from)
-        .collect()
+        .await?;
+    Ok(convert_rows(rows))
 }
 
 pub async fn create_pipeline_input(
@@ -110,21 +183,54 @@ pub async fn create_pipeline_input(
     pipeline_id: &str,
     label: &str,
     stream_key: &str,
+    source: &PipelineInputSource,
 ) -> Result<PipelineInput, sqlx::Error> {
     sqlx::query(
         "INSERT INTO pipeline_inputs
-         (id, pipeline_id, label, stream_key, role, enabled, selected)
-         VALUES (?, ?, ?, ?, 'backup', 1, 0)",
+         (id, pipeline_id, label, stream_key, role, enabled, selected,
+          source_kind, source_url, variant_rule, source_auth)
+         VALUES (?, ?, ?, ?, 'backup', 1, 0, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(pipeline_id)
     .bind(label)
     .bind(stream_key)
+    .bind(source.kind.as_str())
+    .bind(source.url.as_deref())
+    .bind(source.variant_rule.as_str())
+    .bind(serialize_auth(&source.auth))
     .execute(pool)
     .await?;
     get_pipeline_input(pool, pipeline_id, id)
         .await?
         .ok_or(sqlx::Error::RowNotFound)
+}
+
+/// Every `hls_pull` input, enabled or not: the reconciler needs the disabled
+/// ones too, to cancel a puller that is already running.
+pub async fn list_pull_inputs(pool: &SqlitePool) -> Result<Vec<PipelineInput>, sqlx::Error> {
+    let query = format!(
+        "SELECT {SELECT_FIELDS} FROM pipeline_inputs
+         WHERE source_kind = 'hls_pull' ORDER BY pipeline_id ASC, id ASC"
+    );
+    let rows = sqlx::query_as::<_, PipelineInputRow>(sqlx::AssertSqlSafe(query))
+        .fetch_all(pool)
+        .await?;
+    // A row whose credential does not parse is left out of *this* list, so the
+    // pull is refused instead of fetched without it; the inputs list still
+    // shows the row, so an operator can see and fix it.
+    let usable: Vec<PipelineInputRow> = rows
+        .into_iter()
+        .filter(|row| {
+            let parses = auth_parses(row.source_auth.as_deref());
+            if !parses {
+                warn!(input_id = %row.id,
+                    "HLS pull not started: its stored credential does not parse");
+            }
+            parses
+        })
+        .collect();
+    Ok(convert_rows(usable))
 }
 
 pub async fn promote_pipeline_input(
@@ -178,13 +284,20 @@ pub async fn update_pipeline_input(
     input_id: &str,
     label: &str,
     enabled: bool,
+    source: &PipelineInputSource,
 ) -> Result<Option<PipelineInput>, sqlx::Error> {
     let result = sqlx::query(
-        "UPDATE pipeline_inputs SET label = ?, enabled = ?
+        "UPDATE pipeline_inputs
+         SET label = ?, enabled = ?, source_kind = ?, source_url = ?,
+             variant_rule = ?, source_auth = ?
          WHERE pipeline_id = ? AND id = ?",
     )
     .bind(label)
     .bind(enabled)
+    .bind(source.kind.as_str())
+    .bind(source.url.as_deref())
+    .bind(source.variant_rule.as_str())
+    .bind(serialize_auth(&source.auth))
     .bind(pipeline_id)
     .bind(input_id)
     .execute(pool)
@@ -230,9 +343,16 @@ mod tests {
         create_pipeline(&pool, "p1", "Pipeline", "sk1", None, None)
             .await
             .unwrap();
-        create_pipeline_input(&pool, "input_backup_1", "p1", "Backup", "sk2")
-            .await
-            .unwrap();
+        create_pipeline_input(
+            &pool,
+            "input_backup_1",
+            "p1",
+            "Backup",
+            "sk2",
+            &PipelineInputSource::keyed(),
+        )
+        .await
+        .unwrap();
 
         let promoted = promote_pipeline_input(&pool, "p1", "input_backup_1")
             .await

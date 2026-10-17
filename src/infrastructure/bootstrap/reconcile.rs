@@ -10,7 +10,7 @@ use tracing::warn;
 use crate::application::ports::PipelineStore;
 use crate::application::reconcile::build_recording_reconcile_plan;
 use crate::application::topology::{
-    ReconcileRequests, apply_requested_selections, converge_topology,
+    ReconcileRequests, apply_requested_selections, converge_pull_inputs, converge_topology,
 };
 use crate::config::AppConfig;
 use crate::infrastructure::sqlite_ports::SqliteMetaStore;
@@ -34,6 +34,7 @@ pub(super) struct Reconciler {
     recording_metadata: RecordingMetadataReporter,
     egress: EgressReconciler,
     requests: Arc<ReconcileRequests>,
+    hls_ingest: Arc<crate::media::hls_ingest::HlsIngest>,
 }
 
 impl Reconciler {
@@ -48,6 +49,7 @@ impl Reconciler {
         recording_metadata: RecordingMetadataReporter,
         requests: Arc<ReconcileRequests>,
         runtime_state: Arc<crate::application::runtime_state::hub::StateHub>,
+        hls_ingest: Arc<crate::media::hls_ingest::HlsIngest>,
     ) -> Self {
         let egress =
             EgressReconciler::new(engine.clone(), pool.clone(), config.tuning, runtime_state);
@@ -61,6 +63,7 @@ impl Reconciler {
             recording_metadata,
             egress,
             requests,
+            hls_ingest,
         }
     }
 
@@ -133,6 +136,9 @@ impl Reconciler {
                 }
             }
         }
+        // Pull tasks fetch from origins that are not ours: stop them with the
+        // runtime rather than leaving requests in flight at shutdown.
+        self.hls_ingest.cancel_all_pulls();
     }
 
     async fn output_pass(&self, interval: Duration) {
@@ -149,6 +155,7 @@ impl Reconciler {
             }
         };
 
+        converge_pull_inputs(&self.pool, &self.hls_ingest).await;
         converge_topology(&self.pool, &self.engine, &outputs).await;
         if let Some(wait) = self.egress.reconcile(&outputs).await {
             self.requests.wake_at(Instant::now() + wait);

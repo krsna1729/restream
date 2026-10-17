@@ -131,9 +131,29 @@ impl Session {
             json!({"phase": "ready", "pipelines": self.tasks.len()})
         );
 
+        // Each task's probe and sink counters before the window, so the pass
+        // checks below require progress inside the rated window rather than
+        // totals since the mode started.
+        let baselines = self.snapshot_baselines().await;
         tokio::time::sleep(options.window()).await;
-        let report = self.sample(options, plan, started, args).await?;
+        let report = self
+            .sample(options, plan, started, args, &baselines)
+            .await?;
         Ok(report)
+    }
+
+    /// Each task's probe and sink summary as the rated window opens.
+    async fn snapshot_baselines(&self) -> Vec<(Value, Value)> {
+        let mut out = Vec::with_capacity(self.tasks.len());
+        for task in &self.tasks {
+            let probe = self
+                .api
+                .get_json(&format!("/api/v1/pipelines/{}/probe", task.pipeline_id))
+                .await
+                .unwrap_or(Value::Null);
+            out.push((probe, task.metrics.summary()));
+        }
+        out
     }
 
     async fn create_pipelines_and_sinks(
@@ -215,6 +235,7 @@ impl Session {
         plan: &Plan,
         started: Instant,
         args: &[String],
+        baselines: &[(Value, Value)],
     ) -> Result<Value, String> {
         let dashboard = self.api.get_json("/api/v1/dashboard/runtime").await?;
         let metrics = dashboard.get("metrics").cloned().unwrap_or(Value::Null);
@@ -242,7 +263,7 @@ impl Session {
 
         let mut rows = Vec::with_capacity(self.tasks.len());
         let mut failures: Vec<String> = Vec::new();
-        for task in &self.tasks {
+        for (index, task) in self.tasks.iter().enumerate() {
             let probe = self
                 .api
                 .get_json(&format!("/api/v1/pipelines/{}/probe", task.pipeline_id))
@@ -269,13 +290,36 @@ impl Session {
             let sink_summary = task.metrics.summary();
             let input = input_published_summary(&probe);
             let keyframe_count = gop_keyframe_count(&probe);
-            let published = published_ok(&probe, keyframe_count);
-            let delivered = delivered_ok(&sink_summary);
-            if !published {
+            let (baseline_probe, baseline_sink) = baselines
+                .get(index)
+                .map(|(probe, sink)| (probe.clone(), sink.clone()))
+                .unwrap_or((Value::Null, Value::Null));
+            // The rated window is what this mode measures, so a check requires
+            // progress *inside* it: an output that delivered during readiness
+            // and then stalled for the whole window passes a lifetime check.
+            let published_now = published_ok(&probe, keyframe_count);
+            let published_progress = published_progress_ok(&baseline_probe, &probe);
+            let delivered_now = delivered_ok(&sink_summary);
+            let delivered_progress = delivered_progress_ok(&baseline_sink, &sink_summary);
+            let published = published_now && published_progress;
+            let delivered = delivered_now && delivered_progress;
+            if !published_now {
                 failures.push(format!("{}: ingest published no media", task.name));
             }
-            if !delivered {
+            if !published_progress {
+                failures.push(format!(
+                    "{}: ingest received no new media during the window",
+                    task.name
+                ));
+            }
+            if !delivered_now {
                 failures.push(format!("{}: output delivered no media", task.name));
+            }
+            if !delivered_progress {
+                failures.push(format!(
+                    "{}: output delivered no new media during the window",
+                    task.name
+                ));
             }
             rows.push(json!({
                 "name": task.name,
@@ -297,6 +341,8 @@ impl Session {
                 "checks": {
                     "inputPublished": published,
                     "outputDelivered": delivered,
+                    "inputPublishedProgress": published_progress,
+                    "outputDeliveredProgress": delivered_progress,
                 },
             }));
         }
@@ -484,6 +530,31 @@ pub(crate) fn delivered_ok(sink_summary: &Value) -> bool {
         // before the ingest's probe was recorded).
         && count("audioCount") > 0
         && sink_summary.get("dtsMonotone").and_then(Value::as_bool) == Some(true)
+}
+
+/// Whether the ingest received media **during the window**: its byte counter
+/// moved since the baseline. The rated window is what this mode measures, so a
+/// publisher that delivered during readiness and then stalled for the whole
+/// window must fail rather than pass on lifetime totals.
+pub(crate) fn published_progress_ok(baseline: &Value, probe: &Value) -> bool {
+    let bytes = |value: &Value| {
+        value
+            .pointer("/ingest/bytesReceived")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    };
+    bytes(probe) > bytes(baseline)
+}
+
+/// The same for the sink: media arrived at the output during the window.
+/// `mediaProgressMs` is the sink's accumulated forward media time, so a stall
+/// inside the window shows up here even when the counts were already non-zero,
+/// and a re-anchor does not freeze it.
+pub(crate) fn delivered_progress_ok(baseline: &Value, sink_summary: &Value) -> bool {
+    let count = |value: &Value, name: &str| value.get(name).and_then(Value::as_u64).unwrap_or(0);
+    count(sink_summary, "videoCount") > count(baseline, "videoCount")
+        && count(sink_summary, "mediaProgressMs") > count(baseline, "mediaProgressMs")
+        && count(sink_summary, "audioCount") > count(baseline, "audioCount")
 }
 
 fn round2(value: f64) -> f64 {

@@ -6,6 +6,7 @@ use crate::application::pipeline_inputs::{
     PipelineInputStore, PipelineInputStoreError,
 };
 use crate::application::ports::PipelineStoreError;
+use crate::domain::pipeline_input::PipelineInputSource;
 
 #[derive(Clone)]
 pub struct SqlitePipelineInputStore {
@@ -53,10 +54,18 @@ impl PipelineInputStore for SqlitePipelineInputStore {
         pipeline_id: &'a str,
         label: &'a str,
         stream_key: &'a str,
+        source: PipelineInputSource,
     ) -> InputWriteFuture<'a> {
         Box::pin(async move {
             crate::db::with_busy_retry(|| {
-                crate::db::create_pipeline_input(&self.pool, id, pipeline_id, label, stream_key)
+                crate::db::create_pipeline_input(
+                    &self.pool,
+                    id,
+                    pipeline_id,
+                    label,
+                    stream_key,
+                    &source,
+                )
             })
             .await
             .map_err(map_error)
@@ -69,10 +78,18 @@ impl PipelineInputStore for SqlitePipelineInputStore {
         input_id: &'a str,
         label: &'a str,
         enabled: bool,
+        source: PipelineInputSource,
     ) -> InputUpdateFuture<'a> {
         Box::pin(async move {
             crate::db::with_busy_retry(|| {
-                crate::db::update_pipeline_input(&self.pool, pipeline_id, input_id, label, enabled)
+                crate::db::update_pipeline_input(
+                    &self.pool,
+                    pipeline_id,
+                    input_id,
+                    label,
+                    enabled,
+                    &source,
+                )
             })
             .await
             .map_err(map_error)

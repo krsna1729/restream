@@ -16,7 +16,7 @@ use futures_util::StreamExt;
 
 use crate::media::hls_ingest::playlist::normalize_path;
 use crate::media::hls_ingest::{
-    AuthorizeError, BodyError, DispatchError, HlsIngest, ObjectKind, ObjectOutcome,
+    AuthorizeError, BodyError, DispatchError, DispatchOrigin, HlsIngest, ObjectKind, ObjectOutcome,
 };
 
 pub async fn hls_ingest_handler(
@@ -113,11 +113,21 @@ pub async fn hls_ingest_handler(
 
     // The object is complete. Encoders that never read the response may
     // reset the connection now, which drops this handler; the object must
-    // still reach its session, so the dispatch runs detached.
+    // still reach its session, so the dispatch runs detached. The address is
+    // the full peer, as the ingest protocols record it; the session start
+    // re-authorizes from it and needs the bare IP, which it derives.
     let client_addr = client.map_or_else(|| "unknown".to_string(), |addr| addr.to_string());
     let dispatch = tokio::spawn(async move {
         let outcome = ingest
-            .dispatch(&pipeline, &stream_key, &client_addr, kind, path, object)
+            .dispatch(
+                &pipeline,
+                &stream_key,
+                &client_addr,
+                DispatchOrigin::Push,
+                kind,
+                path,
+                object,
+            )
             .await;
         drop(slot);
         outcome
@@ -135,6 +145,11 @@ pub async fn hls_ingest_handler(
         Ok(Err(DispatchError::PublisherActive)) => (
             StatusCode::CONFLICT,
             "input already has an active publisher",
+        )
+            .into_response(),
+        Ok(Err(DispatchError::AuthorizationChanged)) => (
+            StatusCode::FORBIDDEN,
+            "the stream key no longer authorizes this input",
         )
             .into_response(),
         Ok(Ok(ObjectOutcome::Retry)) => retry_later("ingest session ended"),

@@ -39,11 +39,114 @@ impl PipelineAccessAuthenticator for OneKey {
     }
 }
 
+/// Accepts [`STREAM_KEY`] until [`RevocableKey::revoke`] is called, so a test
+/// can authorize an upload and then change the input's row before the body it
+/// was authorized for arrives.
+pub(crate) struct RevocableKey {
+    revoked: std::sync::atomic::AtomicBool,
+    /// Every client address the authenticator was asked about, in order, so a
+    /// test can check the key a caller passes: the security layer bans and rate
+    /// limits by bare IP.
+    seen_client_ips: std::sync::Mutex<Vec<String>>,
+}
+
+impl RevocableKey {
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            revoked: std::sync::atomic::AtomicBool::new(false),
+            seen_client_ips: std::sync::Mutex::new(Vec::new()),
+        })
+    }
+
+    /// The row changed: the key no longer resolves.
+    pub(crate) fn revoke(&self) {
+        self.revoked
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub(crate) fn seen_client_ips(&self) -> Vec<String> {
+        crate::sync::lock(&self.seen_client_ips).clone()
+    }
+}
+
+impl PipelineAccessAuthenticator for RevocableKey {
+    fn authenticate<'a>(
+        &'a self,
+        mode: PipelineAccessMode,
+        stream_key: &'a str,
+        client_ip: &'a str,
+    ) -> PipelineAccessFuture<'a> {
+        Box::pin(async move {
+            crate::sync::lock(&self.seen_client_ips).push(client_ip.to_string());
+            if mode == PipelineAccessMode::HlsPublish
+                && stream_key == STREAM_KEY
+                && !self.revoked.load(std::sync::atomic::Ordering::Relaxed)
+            {
+                Ok(AuthenticatedPipeline {
+                    id: PIPELINE_ID.to_string(),
+                    input_id: INPUT_ID.to_string(),
+                    selected: true,
+                })
+            } else {
+                Err(PipelineAccessError::InvalidStreamKey)
+            }
+        })
+    }
+}
+
+/// Accepts [`STREAM_KEY`] for the primary input (as [`OneKey`] does) and
+/// `key-<index>` for `pipe-<index>`/`input-<index>`, so a test can publish
+/// from several inputs at once. A session is opened only for a key that still
+/// resolves to the input the caller authorized, so a test that dispatches for
+/// a second input needs a key that resolves to it.
+pub(crate) struct IndexedKeys;
+
+impl PipelineAccessAuthenticator for IndexedKeys {
+    fn authenticate<'a>(
+        &'a self,
+        mode: PipelineAccessMode,
+        stream_key: &'a str,
+        _client_ip: &'a str,
+    ) -> PipelineAccessFuture<'a> {
+        Box::pin(async move {
+            if mode != PipelineAccessMode::HlsPublish {
+                return Err(PipelineAccessError::InvalidStreamKey);
+            }
+            if stream_key == STREAM_KEY {
+                return Ok(AuthenticatedPipeline {
+                    id: PIPELINE_ID.to_string(),
+                    input_id: INPUT_ID.to_string(),
+                    selected: true,
+                });
+            }
+            match stream_key
+                .strip_prefix("key-")
+                .and_then(|index| index.parse::<u64>().ok())
+            {
+                Some(index) => Ok(AuthenticatedPipeline {
+                    id: format!("pipe-{index}"),
+                    input_id: format!("input-{index}"),
+                    selected: true,
+                }),
+                None => Err(PipelineAccessError::InvalidStreamKey),
+            }
+        })
+    }
+}
+
 pub(crate) fn test_ingest(limits: HlsIngestLimits) -> (Arc<MediaEngine>, Arc<HlsIngest>) {
+    test_ingest_with(limits, Arc::new(OneKey))
+}
+
+/// The same ingest with the caller's own access double.
+pub(crate) fn test_ingest_with(
+    limits: HlsIngestLimits,
+    access: Arc<dyn PipelineAccessAuthenticator>,
+) -> (Arc<MediaEngine>, Arc<HlsIngest>) {
     let engine = Arc::new(MediaEngine::new());
     let ingest = HlsIngest::new(
         engine.clone(),
-        Arc::new(OneKey),
+        access,
         Arc::new(IngestSecurityService::new(IngestSecurityConfig::default())),
         limits,
     );
@@ -56,6 +159,31 @@ pub(crate) fn authenticated() -> AuthenticatedPipeline {
         input_id: INPUT_ID.to_string(),
         selected: true,
     }
+}
+
+/// A listener that accepts connections and never answers, so a pull task
+/// parks in its first request. A closed port would refuse the connection and
+/// the puller would log a warning on every backoff, and passing test logs
+/// stay quiet (`cargo xtask test-hygiene`).
+///
+/// The caller aborts the returned task when the test ends.
+pub(crate) fn stalled_origin() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a stalled origin");
+    let addr = listener
+        .local_addr()
+        .expect("read the stalled origin's port");
+    listener
+        .set_nonblocking(true)
+        .expect("set the stalled origin non-blocking");
+    let handle = tokio::spawn(async move {
+        let listener = tokio::net::TcpListener::from_std(listener).expect("adopt the listener");
+        // Held, never read: the socket stays open so the request hangs.
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            held.push(socket);
+        }
+    });
+    (addr, handle)
 }
 
 /// The first keyframe of a canonical fixture, as Annex B: it carries the

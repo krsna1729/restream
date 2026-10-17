@@ -77,7 +77,7 @@ async fn schema_setup_records_current_migration_version_once() {
             .await
             .unwrap();
 
-    assert_eq!(rows, vec![(1, "pipeline_inputs_schema_v1".to_string())]);
+    assert_eq!(rows, vec![(2, "pipeline_inputs_hls_pull_v2".to_string())]);
 }
 
 #[tokio::test]

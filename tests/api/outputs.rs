@@ -1,4 +1,5 @@
 use super::*;
+use restream::domain::pipeline_input::PipelineInputSource;
 
 #[tokio::test]
 async fn rtmps_output_is_accepted_by_api() {
@@ -102,9 +103,16 @@ async fn pipeline_recirculation_rejects_media_transforms() {
     db::create_pipeline(&pool, "p_pipe_tgt", "Target", "key_pipe_tgt", None, None)
         .await
         .unwrap();
-    db::create_pipeline_input(&pool, "backup", "p_pipe_tgt", "Backup", "key_pipe_backup")
-        .await
-        .unwrap();
+    db::create_pipeline_input(
+        &pool,
+        "backup",
+        "p_pipe_tgt",
+        "Backup",
+        "key_pipe_backup",
+        &PipelineInputSource::keyed(),
+    )
+    .await
+    .unwrap();
 
     for config in [
         r#"{"video":{"mode":"preset","preset":"720p"},"audio":{"mode":"all"}}"#,
@@ -140,12 +148,26 @@ async fn pipeline_recirculation_output_lifecycle_uses_api_status_and_cleanup() {
     db::create_pipeline(&pool, "p_life_tgt", "Target", "key_life_tgt", None, None)
         .await
         .unwrap();
-    db::create_pipeline_input(&pool, "backup-a", "p_life_tgt", "Backup A", "key_life_a")
-        .await
-        .unwrap();
-    db::create_pipeline_input(&pool, "backup-b", "p_life_tgt", "Backup B", "key_life_b")
-        .await
-        .unwrap();
+    db::create_pipeline_input(
+        &pool,
+        "backup-a",
+        "p_life_tgt",
+        "Backup A",
+        "key_life_a",
+        &PipelineInputSource::keyed(),
+    )
+    .await
+    .unwrap();
+    db::create_pipeline_input(
+        &pool,
+        "backup-b",
+        "p_life_tgt",
+        "Backup B",
+        "key_life_b",
+        &PipelineInputSource::keyed(),
+    )
+    .await
+    .unwrap();
 
     let resp = app
         .clone()

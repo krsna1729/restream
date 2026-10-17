@@ -264,6 +264,14 @@
             "benchProfile": true
           },
           "purpose": "executor-isolation harness for HLS push ingest: a baseline arm of `--base-publishers` RTMP publishers plus a treatment arm of `--hls-publishers` HLS push (TS or fMP4) publishers, each pipeline an ingest input and one RTMP sink output over a rated window; reports per-pipeline published/delivered packet counts, the media executor queue-latency max, per-output egress resync/stall/drop counters, wall-clock duration and host CPU count"
+        },
+        "hls-pull-duty": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": true
+          },
+          "purpose": "HLS pull ingest end to end: one pipeline fed by an FFmpeg RTMP publisher whose own `/hls/{pipeline}/master.m3u8` is pulled into a second pipeline by a `hlsPull` input (session cookie as a request header), with an RTMP sink output on the pull pipeline; checks the input round-trip, the `hls-pull` session label, published and delivered media, media-clock versus wall-clock keep-up, a reported failure and an unstopped pipeline for an unresolvable URL, and that disabling then re-enabling the input stops and restarts the pull; `--fail-unresolvable` runs the refusal variant"
         }
       }
     }

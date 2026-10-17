@@ -3,10 +3,15 @@
 //!
 //! It reads what ordering needs: `#EXTM3U`, `EXT-X-TARGETDURATION`,
 //! `EXT-X-MEDIA-SEQUENCE`, `EXTINF`, `EXT-X-DISCONTINUITY`, `EXT-X-MAP`,
-//! `EXT-X-ENDLIST` and master playlists (`EXT-X-STREAM-INF` with
-//! `BANDWIDTH`). Every other tag is ignored. URIs resolve against the
-//! playlist's own path; only relative URIs that stay inside the stream key's
-//! namespace are accepted.
+//! `EXT-X-ENDLIST` and master playlists (`EXT-X-STREAM-INF` with `BANDWIDTH`
+//! and `AUDIO`, and the `EXT-X-MEDIA` renditions those groups name). Every
+//! other tag is ignored, except the three that say the media cannot be
+//! fetched whole and in the clear — `EXT-X-KEY`/`EXT-X-SESSION-KEY`
+//! ([`Encryption`], recorded for the segments actually listed under a key)
+//! and `EXT-X-BYTERANGE` ([`MediaPlaylist::byte_range`]) — which are recorded
+//! as data. The pull refuses those; push ignores them as
+//! it always has. URIs resolve against the playlist's own path; only
+//! relative URIs that stay inside the stream key's namespace are accepted.
 
 use std::fmt;
 use std::time::Duration;
@@ -30,6 +35,29 @@ pub struct MediaPlaylist {
     /// playlist directory like a segment URI: the map its newest segments
     /// use. Each [`SegmentEntry`] records the map in force for itself.
     pub map_uri: Option<String>,
+    /// The encryption a listed segment is under: the first `EXT-X-KEY` with a
+    /// `METHOD` other than `NONE` that was in force where a segment URI was
+    /// reached, or the session key this media playlist names out of place.
+    /// Sticky, so a `METHOD=NONE` later in the list does not hide an earlier
+    /// encrypted entry. Recorded as data: the pull refuses an encrypted
+    /// playlist, push ignores it as it always has.
+    pub encryption: Option<Encryption>,
+    /// The playlist names `EXT-X-BYTERANGE` on an entry or a `BYTERANGE`
+    /// attribute on its `EXT-X-MAP`: an entry is a slice of a resource.
+    /// Recorded as data, like [`Self::encryption`].
+    pub byte_range: bool,
+}
+
+/// An `EXT-X-KEY` (media) or `EXT-X-SESSION-KEY` (master) the playlist
+/// names, with a `METHOD` other than `NONE`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Encryption {
+    /// The `METHOD` attribute verbatim (`AES-128`, `SAMPLE-AES`,
+    /// `SAMPLE-AES-CTR`). Empty when the tag names none, which the RFC does
+    /// not allow: recorded, so the pull still refuses the playlist.
+    pub method: String,
+    /// The key came from `EXT-X-SESSION-KEY`.
+    pub session: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,12 +76,40 @@ pub struct SegmentEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MasterPlaylist {
     pub variants: Vec<Variant>,
+    /// The master's `EXT-X-MEDIA` renditions of `TYPE=AUDIO`. A variant that
+    /// names one of these groups in its `AUDIO` attribute takes its audio
+    /// from the group, not from the variant's own segments.
+    pub audio: Vec<AudioRendition>,
+    /// The `EXT-X-SESSION-KEY` the master names (`METHOD` other than
+    /// `NONE`): its media playlists are encrypted. Recorded as data, like
+    /// [`MediaPlaylist::encryption`].
+    pub session_key: Option<Encryption>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Variant {
     pub bandwidth: u64,
     pub path: String,
+    /// The `AUDIO` group this variant's audio comes from, if it names one.
+    /// A variant that names none carries its own audio (RFC 8216 4.3.4.1).
+    pub audio_group: Option<String>,
+}
+
+/// One `EXT-X-MEDIA:TYPE=AUDIO` rendition: a named member of the audio group
+/// a variant may select with `AUDIO="group"`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioRendition {
+    pub group_id: String,
+    pub name: String,
+    /// `DEFAULT=YES`: the member a client plays unless it chooses otherwise.
+    pub default: bool,
+    /// `AUTOSELECT=YES`: the member a client may play when it has no other
+    /// basis for a choice.
+    pub autoselect: bool,
+    /// The rendition's own media playlist URI, resolved like any other URI.
+    /// `None` means the rendition has no URI: its audio is muxed into the
+    /// variants of the group, so there is nothing separate to follow.
+    pub path: Option<String>,
 }
 
 impl MasterPlaylist {
@@ -66,6 +122,34 @@ impl MasterPlaylist {
                 best
             }
         })
+    }
+
+    /// The variant to follow: the lowest `BANDWIDTH`, the first on a tie.
+    pub fn lowest_bandwidth(&self) -> Option<&Variant> {
+        self.variants.iter().reduce(|best, next| {
+            if next.bandwidth < best.bandwidth {
+                next
+            } else {
+                best
+            }
+        })
+    }
+
+    /// The audio rendition to follow with `variant`, in the order RFC 8216
+    /// section 4.3.4.1 gives a client for choosing among the members of one
+    /// group: the `DEFAULT=YES` member, else the `AUTOSELECT=YES` member,
+    /// else the first listed. `None` when `variant` names no group, and also
+    /// when it names one this master does not define — the caller states
+    /// which of the two it is, because only the second is a broken master.
+    pub fn audio_rendition(&self, variant: &Variant) -> Option<&AudioRendition> {
+        let group = variant.audio_group.as_deref()?;
+        let members = || self.audio.iter().filter(|audio| audio.group_id == group);
+        // `DEFAULT` outranks `AUTOSELECT`; within one kind the first listed
+        // wins, so each pass takes the first member that carries its flag.
+        members()
+            .find(|audio| audio.default)
+            .or_else(|| members().find(|audio| audio.autoselect))
+            .or_else(|| members().next())
     }
 }
 
@@ -112,6 +196,16 @@ impl std::error::Error for PlaylistError {}
 
 /// Parse the playlist uploaded at `playlist_path` (already normalized).
 pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistError> {
+    parse_with(bytes, |uri| resolve_uri(playlist_path, uri))
+}
+
+/// Parse a playlist whose URIs a caller resolves (push uploads against their
+/// namespace, pull ingest against the remote playlist URL). The resolver gets
+/// each raw URI; `None` rejects it.
+pub fn parse_with(
+    bytes: &[u8],
+    mut resolve: impl FnMut(&str) -> Option<String>,
+) -> Result<Playlist, PlaylistError> {
     let text = std::str::from_utf8(bytes).map_err(|_| PlaylistError::NotUtf8)?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut lines = text
@@ -128,11 +222,21 @@ pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistErro
     let mut media_sequence = 0u64;
     let mut ended = false;
     let mut map_uri = None;
+    let mut byte_range = false;
+    // The key in force, and the encryption a *listed segment* is under: the
+    // latter is sticky and records the first non-`NONE` method a segment was
+    // listed with, which is what makes an encrypted entry anywhere in the
+    // list visible however the list ends.
+    let mut key_in_force: Option<Encryption> = None;
+    let mut media_encryption: Option<Encryption> = None;
+    let mut session_encryption = None;
     let mut pending_duration = None;
     let mut pending_discontinuity = false;
     let mut pending_bandwidth = None;
+    let mut pending_audio_group = None;
     let mut segment_uris: Vec<(String, Duration, bool, Option<String>)> = Vec::new();
     let mut variants = Vec::new();
+    let mut audio = Vec::new();
 
     for (line_number, line) in lines {
         let invalid = |tag| PlaylistError::InvalidTag {
@@ -158,28 +262,92 @@ pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistErro
             pending_discontinuity = true;
         } else if line == "#EXT-X-ENDLIST" {
             ended = true;
+        } else if line.starts_with("#EXT-X-BYTERANGE:") {
+            // Recorded whether or not the tag carries a range: an entry is a
+            // slice either way. Neither tag becomes a parse error here, both
+            // were ignored before, and push must go on reading what it
+            // always read.
+            byte_range = true;
+        } else if let Some(attributes) = key_attributes(line) {
+            // Both tags carry the same attributes; only which one is
+            // remembered differs. `METHOD=NONE` clears the key, as in the
+            // RFC's own example, and a tag that names no `METHOD` — which the
+            // RFC requires — is recorded with an empty method rather than
+            // refused.
+            let session = line.starts_with("#EXT-X-SESSION-KEY:");
+            let method = attribute(attributes, "METHOD")
+                .unwrap_or_default()
+                .to_string();
+            let encryption =
+                (!method.eq_ignore_ascii_case("NONE")).then_some(Encryption { method, session });
+            if session {
+                session_encryption = encryption;
+            } else {
+                key_in_force = encryption;
+            }
         } else if let Some(value) = line.strip_prefix("#EXT-X-MAP:") {
             let uri = attribute(value, "URI").ok_or_else(|| invalid("EXT-X-MAP"))?;
-            map_uri = Some(
-                resolve_uri(playlist_path, uri)
-                    .ok_or(PlaylistError::InvalidUri { line: line_number })?,
-            );
+            // A map with its own `BYTERANGE` is a slice too: the pull would
+            // fetch the whole resource as the init.
+            byte_range |= attribute(value, "BYTERANGE").is_some_and(|range| !range.is_empty());
+            map_uri = Some(resolve(uri).ok_or(PlaylistError::InvalidUri { line: line_number })?);
+        } else if let Some(attributes) = line.strip_prefix("#EXT-X-MEDIA:") {
+            // Only audio groups matter here: `SUBTITLES` and
+            // `CLOSED-CAPTIONS` renditions carry no media this ingest
+            // publishes, so they are ignored like any other tag.
+            match attribute(attributes, "TYPE") {
+                Some(kind) if kind.eq_ignore_ascii_case("AUDIO") => {}
+                _ => continue,
+            }
+            let group_id = attribute(attributes, "GROUP-ID")
+                .filter(|group| !group.is_empty())
+                .ok_or_else(|| invalid("EXT-X-MEDIA"))?;
+            // A missing URI means the group's audio is muxed into the
+            // variants that name it, so nothing separate can be followed.
+            let path = match attribute(attributes, "URI").filter(|uri| !uri.is_empty()) {
+                Some(uri) => {
+                    Some(resolve(uri).ok_or(PlaylistError::InvalidUri { line: line_number })?)
+                }
+                None => None,
+            };
+            audio.push(AudioRendition {
+                group_id: group_id.to_string(),
+                name: attribute(attributes, "NAME")
+                    .unwrap_or_default()
+                    .to_string(),
+                default: attribute(attributes, "DEFAULT")
+                    .is_some_and(|value| value.eq_ignore_ascii_case("YES")),
+                autoselect: attribute(attributes, "AUTOSELECT")
+                    .is_some_and(|value| value.eq_ignore_ascii_case("YES")),
+                path,
+            });
         } else if let Some(attributes) = line.strip_prefix("#EXT-X-STREAM-INF:") {
             let bandwidth = attribute(attributes, "BANDWIDTH")
                 .and_then(|value| value.parse().ok())
                 .ok_or_else(|| invalid("EXT-X-STREAM-INF"))?;
             pending_bandwidth = Some(bandwidth);
+            pending_audio_group = attribute(attributes, "AUDIO")
+                .filter(|group| !group.is_empty())
+                .map(str::to_string);
         } else if line.starts_with('#') {
             // Comments and tags this ingest does not need.
         } else {
-            let path = resolve_uri(playlist_path, line)
-                .ok_or(PlaylistError::InvalidUri { line: line_number })?;
+            let path = resolve(line).ok_or(PlaylistError::InvalidUri { line: line_number })?;
             if let Some(bandwidth) = pending_bandwidth.take() {
-                variants.push(Variant { bandwidth, path });
+                variants.push(Variant {
+                    bandwidth,
+                    path,
+                    audio_group: pending_audio_group.take(),
+                });
             } else {
                 let duration = pending_duration
                     .take()
                     .ok_or(PlaylistError::SegmentWithoutDuration { line: line_number })?;
+                // This entry is under the key in force, whatever the list
+                // does after it.
+                if media_encryption.is_none() {
+                    media_encryption.clone_from(&key_in_force);
+                }
                 segment_uris.push((
                     path,
                     duration,
@@ -197,7 +365,11 @@ pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistErro
         if !segment_uris.is_empty() || target_duration.is_some() {
             return Err(PlaylistError::MixedMasterAndMedia);
         }
-        return Ok(Playlist::Master(MasterPlaylist { variants }));
+        return Ok(Playlist::Master(MasterPlaylist {
+            variants,
+            audio,
+            session_key: session_encryption,
+        }));
     }
 
     let target_duration = target_duration.ok_or(PlaylistError::MissingTargetDuration)?;
@@ -221,7 +393,19 @@ pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistErro
         segments,
         ended,
         map_uri,
+        // A media playlist that names a session key is out of place; it is
+        // still recorded, so the pull refuses the playlist rather than
+        // demuxing encrypted frames as media.
+        encryption: media_encryption.or(session_encryption),
+        byte_range,
     }))
+}
+
+/// The attribute list of an `EXT-X-KEY` or `EXT-X-SESSION-KEY` line, if it is
+/// one.
+fn key_attributes(line: &str) -> Option<&str> {
+    line.strip_prefix("#EXT-X-KEY:")
+        .or_else(|| line.strip_prefix("#EXT-X-SESSION-KEY:"))
 }
 
 fn parse_seconds(value: &str) -> Option<Duration> {
@@ -291,6 +475,117 @@ mod tests {
         }
     }
 
+    /// The tags that say the media cannot be fetched whole and in the clear
+    /// are recorded as data. Push ignores them, as it always has; the pull is
+    /// what refuses a playlist that carries one.
+    #[test]
+    fn encryption_and_byte_ranges_are_recorded_as_data() {
+        let playlist = media(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n\
+             #EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"skd://key\",IV=0x1\n\
+             #EXTINF:2.0,\nindex0.ts\n",
+        );
+        assert_eq!(
+            playlist.encryption,
+            Some(Encryption {
+                method: "SAMPLE-AES".to_string(),
+                session: false,
+            }),
+            "push still parses an encrypted playlist, and knows its method"
+        );
+        assert!(!playlist.byte_range);
+
+        // `METHOD=NONE` clears the key for the segments listed after it, but
+        // it does not un-encrypt the entry listed before it: that one is
+        // under AES-128, and the record says so.
+        let playlist = media(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-KEY:METHOD=AES-128,URI=\"key\"\n\
+             #EXTINF:2.0,\nindex0.ts\n#EXT-X-KEY:METHOD=NONE\n#EXTINF:2.0,\nindex1.ts\n",
+        );
+        assert_eq!(
+            playlist.encryption,
+            Some(Encryption {
+                method: "AES-128".to_string(),
+                session: false,
+            }),
+            "an encrypted entry anywhere in the list is recorded"
+        );
+
+        // The first method a listed entry was under wins, so the reason names
+        // the key that entry actually used.
+        let playlist = media(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"a\"\n\
+             #EXTINF:2.0,\nindex0.ts\n#EXT-X-KEY:METHOD=AES-128,URI=\"b\"\n\
+             #EXTINF:2.0,\nindex1.ts\n",
+        );
+        assert_eq!(
+            playlist.encryption,
+            Some(Encryption {
+                method: "SAMPLE-AES".to_string(),
+                session: false,
+            }),
+            "the first method listed with a segment is the one recorded"
+        );
+
+        // A key that is never in force where an entry is listed is not an
+        // encrypted playlist: `METHOD=NONE` first, then no key at all.
+        let playlist = media(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-KEY:METHOD=NONE\n\
+             #EXTINF:2.0,\nindex0.ts\n",
+        );
+        assert_eq!(playlist.encryption, None);
+
+        let playlist = media(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-BYTERANGE:1200@0\n\
+             #EXTINF:2.0,\nindex0.ts\n",
+        );
+        assert!(playlist.byte_range);
+        assert_eq!(playlist.encryption, None);
+
+        // A map's own `BYTERANGE` is a slice too.
+        let playlist = media(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MAP:URI=\"init.mp4\",BYTERANGE=\"800@0\"\n\
+             #EXTINF:2.0,\nindex0.m4s\n",
+        );
+        assert!(playlist.byte_range);
+
+        // A master's session key is recorded, and a master stays a master.
+        let master = match parse(
+            "#EXTM3U\n#EXT-X-SESSION-KEY:METHOD=AES-128,URI=\"key\"\n\
+             #EXT-X-STREAM-INF:BANDWIDTH=800000\nlow/index.m3u8\n"
+                .as_bytes(),
+            "live/index.m3u8",
+        ) {
+            Ok(Playlist::Master(master)) => master,
+            other => panic!("expected a master playlist, got {other:?}"),
+        };
+        assert_eq!(
+            master.session_key,
+            Some(Encryption {
+                method: "AES-128".to_string(),
+                session: true,
+            })
+        );
+
+        // A tag the RFC cannot mean anything without is recorded all the
+        // same, never refused: push ignored both before, and a parse error
+        // here would change what push accepts.
+        let playlist = media(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-KEY:URI=\"key\"\n#EXTINF:2.0,\nindex0.ts\n",
+        );
+        assert_eq!(
+            playlist.encryption,
+            Some(Encryption {
+                method: String::new(),
+                session: false,
+            }),
+            "a key tag naming no METHOD is still a key"
+        );
+        let playlist =
+            media("#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-BYTERANGE:\n#EXTINF:2.0,\nindex0.ts\n");
+        assert!(playlist.byte_range);
+    }
+
     #[test]
     fn media_playlist_lists_segments_by_sequence_resolved_to_the_playlist_directory() {
         let playlist = media(
@@ -335,10 +630,205 @@ mod tests {
             master.highest_bandwidth(),
             Some(&Variant {
                 bandwidth: 2_500_000,
-                path: "high/index.m3u8".into()
+                path: "high/index.m3u8".into(),
+                audio_group: None,
             })
         );
         assert_eq!(master.variants[0].path, "low/index.m3u8");
+        assert_eq!(
+            master.lowest_bandwidth(),
+            Some(&Variant {
+                bandwidth: 800_000,
+                path: "low/index.m3u8".into(),
+                audio_group: None,
+            })
+        );
+    }
+
+    /// A master whose audio is a group of `EXT-X-MEDIA` renditions, as
+    /// packaged live HLS writes it: one rendition per language, each with its
+    /// own playlist URI, and the variant naming the group.
+    #[test]
+    fn master_playlist_reads_the_audio_group_and_the_variant_that_names_it() {
+        let text = "#EXTM3U\n\
+            #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"Track 1 (en)\",LANGUAGE=\"en\",\
+            DEFAULT=YES,AUTOSELECT=YES,CHANNELS=\"2\",URI=\"audio/en/index.m3u8\"\n\
+            #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"Track 2 (de)\",LANGUAGE=\"de\",\
+            DEFAULT=NO,AUTOSELECT=YES,URI=\"audio/de/index.m3u8\"\n\
+            #EXT-X-STREAM-INF:BANDWIDTH=2500000,AUDIO=\"audio\"\n\
+            video/index.m3u8\n";
+        let Ok(Playlist::Master(master)) = parse(text.as_bytes(), "master.m3u8") else {
+            panic!("expected master playlist");
+        };
+        assert_eq!(
+            master.audio,
+            vec![
+                AudioRendition {
+                    group_id: "audio".into(),
+                    name: "Track 1 (en)".into(),
+                    default: true,
+                    autoselect: true,
+                    path: Some("audio/en/index.m3u8".into()),
+                },
+                AudioRendition {
+                    group_id: "audio".into(),
+                    name: "Track 2 (de)".into(),
+                    default: false,
+                    autoselect: true,
+                    path: Some("audio/de/index.m3u8".into()),
+                },
+            ]
+        );
+        let variant = master.highest_bandwidth().expect("one variant");
+        assert_eq!(variant.audio_group.as_deref(), Some("audio"));
+        assert_eq!(
+            master
+                .audio_rendition(variant)
+                .map(|audio| audio.name.as_str()),
+            Some("Track 1 (en)"),
+            "DEFAULT=YES wins"
+        );
+    }
+
+    #[test]
+    fn audio_rendition_selection_prefers_default_then_autoselect_then_the_first() {
+        let rendition = |name: &str, default: bool, autoselect: bool| AudioRendition {
+            group_id: "audio".into(),
+            name: name.into(),
+            default,
+            autoselect,
+            path: Some(format!("audio/{name}.m3u8")),
+        };
+        let variant = Variant {
+            bandwidth: 1,
+            path: "video/index.m3u8".into(),
+            audio_group: Some("audio".into()),
+        };
+        let chosen = |audio: Vec<AudioRendition>| {
+            let master = MasterPlaylist {
+                variants: vec![variant.clone()],
+                audio,
+                session_key: None,
+            };
+            master
+                .audio_rendition(&variant)
+                .map(|audio| audio.name.clone())
+        };
+
+        assert_eq!(
+            chosen(vec![
+                rendition("first", false, false),
+                rendition("default", true, false),
+                rendition("autoselect", false, true),
+            ])
+            .as_deref(),
+            Some("default"),
+            "DEFAULT=YES outranks AUTOSELECT=YES and the first listed"
+        );
+        assert_eq!(
+            chosen(vec![
+                rendition("first", false, false),
+                rendition("autoselect", false, true),
+            ])
+            .as_deref(),
+            Some("autoselect"),
+            "AUTOSELECT=YES outranks the first listed"
+        );
+        assert_eq!(
+            chosen(vec![
+                rendition("first", false, false),
+                rendition("second", false, false),
+            ])
+            .as_deref(),
+            Some("first"),
+            "the first listed wins when neither flag is set"
+        );
+        assert_eq!(
+            chosen(vec![
+                rendition("first-default", true, false),
+                rendition("second-default", true, false),
+            ])
+            .as_deref(),
+            Some("first-default"),
+            "the first of a tie wins"
+        );
+        assert_eq!(
+            chosen(vec![]),
+            None,
+            "a group with no member selects nothing"
+        );
+        // A variant that names no group has no rendition to select.
+        let no_group = MasterPlaylist {
+            variants: vec![Variant {
+                bandwidth: 1,
+                path: "video/index.m3u8".into(),
+                audio_group: None,
+            }],
+            audio: vec![rendition("audio", true, true)],
+            session_key: None,
+        };
+        assert_eq!(no_group.audio_rendition(&no_group.variants[0]), None);
+    }
+
+    #[test]
+    fn audio_renditions_without_a_uri_are_muxed_into_the_variant() {
+        // `URI` is optional: without it the group's audio is muxed into the
+        // variants that name the group, so there is no playlist to follow.
+        let text = "#EXTM3U\n\
+            #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"Track 1\",DEFAULT=YES\n\
+            #EXT-X-STREAM-INF:BANDWIDTH=100,AUDIO=\"audio\"\n\
+            video/index.m3u8\n";
+        let Ok(Playlist::Master(master)) = parse(text.as_bytes(), "master.m3u8") else {
+            panic!("expected master playlist");
+        };
+        assert_eq!(master.audio.len(), 1);
+        assert_eq!(master.audio[0].path, None);
+        assert_eq!(
+            master
+                .audio_rendition(master.highest_bandwidth().expect("one variant"))
+                .and_then(|audio| audio.path.as_deref()),
+            None
+        );
+    }
+
+    #[test]
+    fn non_audio_media_renditions_are_ignored() {
+        let text = "#EXTM3U\n\
+            #EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"English\",\
+            URI=\"subs/en/index.m3u8\"\n\
+            #EXT-X-MEDIA:TYPE=CLOSED-CAPTIONS,GROUP-ID=\"cc\",NAME=\"CC1\"\n\
+            #EXT-X-STREAM-INF:BANDWIDTH=100\n\
+            video/index.m3u8\n";
+        let Ok(Playlist::Master(master)) = parse(text.as_bytes(), "master.m3u8") else {
+            panic!("expected master playlist");
+        };
+        assert!(master.audio.is_empty(), "{:?}", master.audio);
+    }
+
+    #[test]
+    fn a_malformed_audio_rendition_is_an_error() {
+        // `GROUP-ID` is required on `EXT-X-MEDIA`.
+        assert_eq!(
+            parse(
+                b"#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,NAME=\"Track 1\",URI=\"a.m3u8\"\n\
+                  #EXT-X-STREAM-INF:BANDWIDTH=1\nvideo/index.m3u8\n",
+                "master.m3u8"
+            ),
+            Err(PlaylistError::InvalidTag {
+                line: 2,
+                tag: "EXT-X-MEDIA",
+            })
+        );
+        // A rendition URI resolves like any other: it may not leave the
+        // namespace.
+        assert_eq!(
+            parse(
+                b"#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",URI=\"../../a.m3u8\"\n\
+                  #EXT-X-STREAM-INF:BANDWIDTH=1,AUDIO=\"audio\"\nvideo/index.m3u8\n",
+                "master.m3u8"
+            ),
+            Err(PlaylistError::InvalidUri { line: 2 })
+        );
     }
 
     #[test]
@@ -494,6 +984,7 @@ mod tests {
                     Just("#EXT-X-DISCONTINUITY".to_string()),
                     Just("#EXT-X-ENDLIST".to_string()),
                     "#EXT-X-STREAM-INF:[A-Z=0-9,\"]{0,24}",
+                    "#EXT-X-MEDIA:[A-Z=0-9,\"/.]{0,32}",
                     "#EXT-X-MAP:[A-Z=0-9,\"]{0,24}",
                     "[./a-z0-9?#]{0,12}",
                 ],

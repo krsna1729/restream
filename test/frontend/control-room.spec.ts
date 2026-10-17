@@ -874,9 +874,11 @@ test("manage: create a pipeline, edit its inputs, destinations, source and key, 
     pipelineId = new URL(page.url()).searchParams.get("p") ?? "";
     expect((await stored(pipelineId)).name).toBe(name);
 
-    // A backup input: added, disabled, deleted.
-    await page.getByLabel("New input label").fill("cr-backup");
+    // A backup input: added through the new-input form, disabled, deleted.
     await page.getByRole("button", { name: "Add input" }).click();
+    const newInput = page.getByRole("region", { name: "New input" });
+    await newInput.getByLabel("Label").fill("cr-backup");
+    await newInput.getByRole("button", { name: "Save" }).click();
     await page.getByRole("button", { name: "Disable cr-backup" }).click();
     await expect(page.getByRole("button", { name: "Enable cr-backup" })).toBeVisible();
     await page.getByRole("button", { name: "Delete input cr-backup" }).click();
@@ -1355,9 +1357,16 @@ test("pipelines: protocol mix, the stage two outputs share, and the recording ca
   try {
     const pipelineId = await liveFilePipeline(page, name);
     pipelineIds.push(pipelineId);
-    const sink = await loopbackSink(page, `crpipessink${stamp}`);
-    pipelineIds.push(sink.pipelineId);
+    const sinkIds: string[] = [];
+    // One sink per output. Two outputs publishing to one ingest URL race for
+    // that input's single publisher slot: the engine refuses the second
+    // ("Input already has an active publisher"), and whether its retry lands
+    // after the other's reconnect decides the card this test reads — so the
+    // test measured a race, not the card.
     for (const output of ["cr-share-a", "cr-share-b"]) {
+      const sink = await loopbackSink(page, `crpipessink${stamp}${output.slice(-1)}`);
+      pipelineIds.push(sink.pipelineId);
+      sinkIds.push(sink.pipelineId);
       const created = await page.request.post(`/api/v1/pipelines/${pipelineId}/outputs`, {
         data: {
           name: output,
@@ -1395,10 +1404,11 @@ test("pipelines: protocol mix, the stage two outputs share, and the recording ca
     await expect(recording).toHaveAttribute("aria-pressed", "true");
     const rows = page.getByRole("table").getByRole("row");
     await expect(rows.filter({ hasText: pipelineId })).toHaveCount(1);
-    await expect(rows.filter({ hasText: sink.pipelineId })).toHaveCount(0);
+    // Neither sink is recording, so neither is listed while the filter is on.
+    for (const id of sinkIds) await expect(rows.filter({ hasText: id })).toHaveCount(0);
     // A second click clears the card.
     await recording.click();
-    await expect(rows.filter({ hasText: sink.pipelineId })).toHaveCount(1);
+    for (const id of sinkIds) await expect(rows.filter({ hasText: id })).toHaveCount(1);
   } finally {
     for (const id of pipelineIds) await page.request.delete(`/api/v1/pipelines/${id}`);
   }

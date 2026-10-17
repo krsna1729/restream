@@ -37,6 +37,8 @@ import type {
   ChangePlan,
   ChangeOperation,
   PipelineWrite,
+  PipelineInputPatch,
+  PipelineInputWrite,
   PipelineProbe,
   LogFilters,
   LogPage,
@@ -361,18 +363,20 @@ async function getPipelineInputs(
 
 async function createPipelineInput(
   pipeId: string,
-  label: string,
+  body: PipelineInputWrite,
 ): Promise<PipelineInputMutationResponse | null> {
   return apiRequest<PipelineInputMutationResponse>(
     `/api/v1/pipelines/${encodeURIComponent(pipeId)}/inputs`,
-    { method: "POST", body: { label } },
+    { method: "POST", body },
   );
 }
 
+/** An omitted `auth` keeps the stored credential: callers that do not change
+ * the credential must not send one. */
 async function updatePipelineInput(
   pipeId: string,
   inputId: string,
-  data: { label?: string; enabled?: boolean },
+  data: PipelineInputPatch,
 ): Promise<PipelineInputMutationResponse | null> {
   return apiRequest<PipelineInputMutationResponse>(
     `/api/v1/pipelines/${encodeURIComponent(pipeId)}/inputs/${encodeURIComponent(inputId)}`,

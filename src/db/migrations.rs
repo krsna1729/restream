@@ -1,7 +1,7 @@
 use sqlx::{AssertSqlSafe, Row, SqlitePool};
 
-pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 1;
-pub(crate) const CURRENT_SCHEMA_MIGRATION_NAME: &str = "pipeline_inputs_schema_v1";
+pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 2;
+pub(crate) const CURRENT_SCHEMA_MIGRATION_NAME: &str = "pipeline_inputs_hls_pull_v2";
 
 pub(crate) async fn ensure_schema_migrations_table(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
