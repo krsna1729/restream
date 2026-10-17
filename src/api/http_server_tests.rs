@@ -93,7 +93,10 @@ async fn a_departed_streaming_client_is_released_at_once() {
         .await
         .unwrap();
     let mut first = [0u8; 256];
-    let read = client.read(&mut first).await.unwrap();
+    let read = tokio::time::timeout(Duration::from_secs(2), client.read(&mut first))
+        .await
+        .expect("the stream answers")
+        .unwrap();
     assert!(String::from_utf8_lossy(&first[..read]).contains("hello"));
     drop(client);
 
@@ -131,4 +134,44 @@ async fn an_upload_half_closed_after_its_body_is_read() {
         .expect("the half-closed upload reaches its handler")
         .unwrap();
     assert_eq!(&body[..], b"hello");
+}
+
+/// A request line that arrives in pieces, with a stall between them, is
+/// served whole: the bytes read to classify the connection reach hyper ahead
+/// of the rest. Both policies replay them.
+#[tokio::test]
+async fn a_request_line_split_by_a_stall_is_served_whole() {
+    let app = Router::new()
+        .route("/api/ping", get(|| async { "pong" }))
+        .route(
+            "/ingest/hls/{key}/{*path}",
+            put(|body: Bytes| async move { body }),
+        );
+    let address = start(app).await;
+
+    for (first, rest, expected) in [
+        (
+            &b"GE"[..],
+            &b"T /api/ping HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n"[..],
+            "pong",
+        ),
+        (
+            &b"PUT /ingest/h"[..],
+            &b"ls/key/index0.ts HTTP/1.1\r\nHost: test\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello"[..],
+            "hello",
+        ),
+    ] {
+        let mut client = TcpStream::connect(address).await.unwrap();
+        client.write_all(first).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        client.write_all(rest).await.unwrap();
+        let mut response = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), client.read_to_end(&mut response))
+            .await
+            .expect("the request is answered")
+            .unwrap();
+        let response = String::from_utf8_lossy(&response);
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(response.ends_with(expected), "{response}");
+    }
 }

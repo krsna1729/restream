@@ -11,10 +11,15 @@
 //! (SSE) would be noticed only when a write to it fails (20-40 s for the
 //! state stream's 20 s heartbeat). Half-close is a per-connection setting
 //! fixed before routing, so a connection is classified by its first request
-//! line, peeked without consuming it: an encoder opens a connection per
-//! upload, and one that keeps a connection open uses it only for uploads.
+//! line: an encoder opens a connection per upload, and one that keeps a
+//! connection open uses it only for uploads. The line is read (a stalled
+//! client costs nothing while it waits), and the bytes read are given back to
+//! hyper ahead of the socket.
 
+use std::io;
 use std::net::SocketAddr;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use axum::Router;
@@ -23,6 +28,7 @@ use axum::extract::Request;
 use hyper::body::Incoming;
 use hyper_util::rt::TokioIo;
 use hyper_util::service::TowerToHyperService;
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tower::{Service, ServiceExt};
 use tracing::{debug, error};
@@ -56,7 +62,7 @@ pub async fn serve(listener: TcpListener, app: Router) {
             service.map_request(|request: Request<Incoming>| request.map(Body::new)),
         );
         tokio::spawn(async move {
-            let half_close = first_request_is_hls_upload(&stream).await;
+            let (half_close, stream) = classify(stream).await;
             let connection = hyper::server::conn::http1::Builder::new()
                 .half_close(half_close)
                 .serve_connection(TokioIo::new(stream), service)
@@ -75,34 +81,90 @@ const SNIFF_BYTES: usize = 64;
 /// How long a connection may take to send that much; past it, the connection
 /// is served with the default policy and hyper's own timeouts apply.
 const SNIFF_TIMEOUT: Duration = Duration::from_secs(5);
-/// Between peeks while the request line is still arriving: `peek` returns at
-/// once while any byte is buffered, so it cannot wait for more on its own.
-const SNIFF_RETRY: Duration = Duration::from_millis(5);
-
-/// Whether the connection's first request targets HLS push ingest, read from
-/// its request line without consuming it.
-async fn first_request_is_hls_upload(stream: &TcpStream) -> bool {
-    let mut buffer = [0u8; SNIFF_BYTES];
-    let sniff = async {
-        loop {
-            let read = stream.peek(&mut buffer).await.ok()?;
-            if read == 0 {
-                return None;
-            }
-            let seen = buffer.get(..read).unwrap_or_default();
-            if let Some(decided) = targets_hls_upload(seen) {
-                return Some(decided);
-            }
-            if read == buffer.len() {
-                return Some(false);
-            }
-            tokio::time::sleep(SNIFF_RETRY).await;
+/// Read the start of the connection's first request line, until it settles
+/// whether that request targets HLS push ingest (or `SNIFF_TIMEOUT`, EOF or
+/// a read error ends the wait: default policy). The bytes read are not lost:
+/// the returned stream yields them first.
+async fn classify(mut stream: TcpStream) -> (bool, Prefixed) {
+    let mut prefix = [0u8; SNIFF_BYTES];
+    let mut filled = 0usize;
+    let deadline = tokio::time::Instant::now() + SNIFF_TIMEOUT;
+    let mut upload = false;
+    while let Some(free) = prefix.get_mut(filled..).filter(|free| !free.is_empty()) {
+        let read = match tokio::time::timeout_at(deadline, stream.read(free)).await {
+            Ok(Ok(read)) if read > 0 => read,
+            _ => break,
+        };
+        filled = filled.saturating_add(read).min(SNIFF_BYTES);
+        if let Some(decided) = targets_hls_upload(prefix.get(..filled).unwrap_or_default()) {
+            upload = decided;
+            break;
         }
+    }
+    let stream = Prefixed {
+        prefix,
+        start: 0,
+        end: filled,
+        stream,
     };
-    matches!(
-        tokio::time::timeout(SNIFF_TIMEOUT, sniff).await,
-        Ok(Some(true))
-    )
+    (upload, stream)
+}
+
+/// A connection whose first bytes were read to classify it: reads yield
+/// those bytes, then the socket's; writes go to the socket.
+struct Prefixed {
+    prefix: [u8; SNIFF_BYTES],
+    start: usize,
+    end: usize,
+    stream: TcpStream,
+}
+
+impl AsyncRead for Prefixed {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        let pending = this.prefix.get(this.start..this.end).unwrap_or_default();
+        if pending.is_empty() {
+            return Pin::new(&mut this.stream).poll_read(cx, buf);
+        }
+        let take = pending.len().min(buf.remaining());
+        buf.put_slice(pending.get(..take).unwrap_or_default());
+        this.start = this.start.saturating_add(take);
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl AsyncWrite for Prefixed {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().stream).poll_write(cx, buf)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().stream).poll_write_vectored(cx, bufs)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.stream.is_write_vectored()
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().stream).poll_shutdown(cx)
+    }
 }
 
 /// Decide from the start of a request line (`METHOD SP path …`): `Some` once
