@@ -17,6 +17,15 @@ pub use mux::{MuxStreamConfig, PacketMeta, TsMuxer, TsSegmentView, TsServiceMeta
 
 use demux::StreamKind;
 
+/// The video metadata of an HEVC stream from Annex B bytes that carry its
+/// SPS, read by the same parser a TS input's HEVC probe uses, so an fMP4
+/// HEVC input describes itself exactly as a TS one does.
+pub(crate) fn hevc_video_meta(annex_b: &[u8]) -> VideoMeta {
+    let mut meta = mpegts_probe::probe_video(StreamKind::H265, 0, None, None, annex_b);
+    meta.pid = None;
+    meta
+}
+
 pub fn remux_segment_view(
     segment: &[u8],
     video: Option<&VideoMeta>,

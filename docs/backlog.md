@@ -31,10 +31,8 @@ items).
 - [Q-070 MoQ ingest](#q-070-protocol-opus-moq-ingest)
 - [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
 - [Q-072 dedicated HLS ingest listener](#q-072-architecture-sonnet-dedicated-hls-ingest-listener-with-half-close)
-- [Q-073 HEVC fMP4 HLS push ingest](#q-073-protocol-opus-hevc-fmp4-hls-push-ingest)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
 - [Q-077 follow every rendition into one ring](#q-077-architecture-opus-follow-every-rendition-of-a-master-playlist-into-one-ring)
-- [Q-078 choose versions the ingest can decode](#q-078-protocol-opus-choose-the-versions-and-codecs-the-ingest-can-decode)
 - [Q-083 measure RTMP and SRT under pull load](#q-083-performance-sonnet-measure-rtmp-and-srt-under-pull-load)
 - [Q-086 reassemble ADTS frames across PES](#q-086-protocol-sonnet-reassemble-adts-frames-that-span-pes-boundaries)
 
@@ -511,19 +509,6 @@ items).
   SSE client releases its receiver within one heartbeat.
 - Status: open (Filed: 2026-10-16 by claude).
 
-### Q-073 [protocol] [opus] HEVC fMP4 HLS push ingest
-- Goal: HLS push ingest accepts fMP4 segments with HEVC video, as it does
-  H.264.
-- Sources: `src/media/ingest_publisher/fmp4.rs` rejects an HEVC init
-  (`hvc1`/`hev1`) with `415` "HEVC fMP4 ingest is not implemented".
-  Supporting it needs an `hvcC` parser: the VPS/SPS/PPS arrays and the
-  NALU length size from the `hvcC` record, with the parameter sets
-  injected at keyframes as the H.264 path does from `avcC`.
-  `codec/enhanced_rtmp_hevc.rs` only builds an `hvcC` and never parses one.
-- Gates: an `ffmpeg -hls_segment_type fmp4` end-to-end test with an HEVC
-  input in `tests/hls_push_ingest.rs`; a unit test for the `hvcC` parser.
-- Status: open (Filed: 2026-10-16 by claude).
-
 ### Q-074 [performance] [opus] A rare multi-millisecond HLS ingest poll is bounded whatever its cause
 - Goal: a `hlsIngest` poll on the MEDIA executor never spends multiple
   milliseconds of thread CPU, so one session's turn cannot hold a shared
@@ -643,29 +628,6 @@ items).
 - Status: open (Filed: 2026-10-17 by claude, from the pull audio
   investigation; the pull feature reports the gap with a warning instead of
   losing audio silently).
-
-### Q-078 [protocol] [opus] Choose the versions and codecs the ingest can decode
-- Goal: a pull that follows a master playlist picks a variant whose media
-  this ingest can publish, so a ladder is not refused from the top down.
-- Why: the pull's rule is `BANDWIDTH` (`highest`, the default, or `lowest`)
-  and nothing else. `EXT-X-STREAM-INF` carries `CODECS`, `RESOLUTION` and
-  `FRAME-RATE`, and the parser already keeps the variant's `path`,
-  `BANDWIDTH` and `AUDIO` group; a ladder whose highest variant is HEVC
-  (`hvc1`) is pulled, its frames are refused one segment at a time
-  (`ObjectOutcome::Unsupported`), and the pull keeps refusing until the
-  operator changes the rule. `hls-push-duty` has the same shape from the
-  encoder side: a single ingest protocol cannot carry two dialects.
-- Change: record `CODECS`' video and audio codecs on `Variant` (additive, the
-  parser is shared) and have `choose_variant` prefer a variant whose codecs
-  the assembler accepts (H.264 video, AAC audio, and whatever Q-073 lands),
-  falling back to the current rule when every variant is unsupported or none
-  declares its codecs. Where the ladder is the pull's, the variant rule
-  becomes a preference rather than a promise; the refusal path stays as it is.
-- Gates: a master whose highest variant is HEVC and whose lower one is H.264
-  publishes media with the default rule; a master whose variants declare no
-  codecs behaves exactly as today; the push parser's behaviour is unchanged.
-- Status: open (Filed: 2026-10-17 by claude, from the HLS pull review: the
-  ingest-unsupported top variant has no way out but a manual rule change).
 
 ### Q-083 [performance] [sonnet] Measure RTMP and SRT under pull load
 

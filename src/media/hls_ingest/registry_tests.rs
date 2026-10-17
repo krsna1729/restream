@@ -5,8 +5,11 @@
 use super::*;
 use crate::media::hls_ingest::test_support::{
     INPUT_ID, IndexedKeys, PIPELINE_ID, RevocableKey, STREAM_KEY, authenticated, emptied_mdat,
-    fmp4_hevc_init, fmp4_playlist, fmp4_video_objects, test_ingest, test_ingest_with,
+    fmp4_opus_init, fmp4_playlist, fmp4_video_objects, test_ingest, test_ingest_with,
 };
+
+/// How an init of a codec this ingest does not take is refused.
+const OPUS_REFUSED: &str = "fMP4 audio codec Opus is not supported; AAC only";
 
 /// A session that ended between lookup and send gets exactly one
 /// restart, with the object already read.
@@ -303,11 +306,11 @@ async fn a_refused_init_voids_the_map_and_its_segments_do_not_publish() {
     })
     .await;
 
-    // The operator switches the key to HEVC: the same `init.mp4` path
-    // now carries `hvc1`, which is refused.
+    // The operator switches the key to Opus: the same `init.mp4` path now
+    // carries a codec this ingest refuses.
     assert_eq!(
-        send(&ingest, ObjectKind::Fmp4, "init.mp4", &fmp4_hevc_init()).await,
-        ObjectOutcome::Unsupported("HEVC fMP4 ingest is not implemented".to_string())
+        send(&ingest, ObjectKind::Fmp4, "init.mp4", &fmp4_opus_init()).await,
+        ObjectOutcome::Unsupported(OPUS_REFUSED.to_string())
     );
 
     // The next run's media must not be demuxed with the old init: it
@@ -371,10 +374,10 @@ async fn a_refused_init_leaves_no_seed_for_the_next_session() {
         ring.get_write_idx() > 0
     })
     .await;
-    // The encoder switches to HEVC under the same init path: refused.
+    // The encoder switches to Opus under the same init path: refused.
     assert_eq!(
-        send(&ingest, ObjectKind::Fmp4, "init.mp4", &fmp4_hevc_init()).await,
-        ObjectOutcome::Unsupported("HEVC fMP4 ingest is not implemented".to_string())
+        send(&ingest, ObjectKind::Fmp4, "init.mp4", &fmp4_opus_init()).await,
+        ObjectOutcome::Unsupported(OPUS_REFUSED.to_string())
     );
     wait_until_unregistered(&engine).await;
 

@@ -77,14 +77,39 @@ fn fixture_path() -> std::path::PathBuf {
     restream::test_fixtures::canonical_h264_ts_fixture().unwrap()
 }
 
+/// Which checked-in fixture a push carries, and the Annex B NAL headers of
+/// the parameter sets its first keyframe must lead with.
+#[derive(Clone, Copy)]
+enum Codec {
+    H264,
+    Hevc,
+}
+
+impl Codec {
+    fn fixture(self) -> std::path::PathBuf {
+        match self {
+            Self::H264 => fixture_path(),
+            Self::Hevc => restream::test_fixtures::canonical_h265_ts_fixture().unwrap(),
+        }
+    }
+
+    /// SPS and PPS for H.264; VPS, SPS and PPS for HEVC.
+    fn parameter_set_headers(self) -> &'static [u8] {
+        match self {
+            Self::H264 => &[0x67, 0x68],
+            Self::Hevc => &[0x40, 0x42, 0x44],
+        }
+    }
+}
+
 /// The session ended on its ENDLIST and the ring holds the whole fixture:
 /// 8 s of 30 fps video with a keyframe every 2 s, all of it in order.
-/// `annexb`: an fMP4 push, whose audio and H.264 conversion are checked too.
+/// `annexb`: an fMP4 push, whose audio and Annex B conversion are checked too.
 async fn assert_whole_fixture_published(
     server: &Server,
     ring: &RingBuffer,
     start: usize,
-    annexb: bool,
+    annexb: Option<Codec>,
 ) {
     // Long enough for an 8 s fixture published at media pace.
     tokio::time::timeout(Duration::from_secs(30), async {
@@ -130,21 +155,21 @@ async fn assert_whole_fixture_published(
         video_dts.windows(2).all(|pair| pair[1] > pair[0]),
         "video DTS leaves the ring in order"
     );
-    if annexb {
+    if let Some(codec) = annexb {
         let audio = packets
             .iter()
             .filter(|packet| packet.media_type == MediaType::Audio)
             .count();
         assert!(audio > 0, "the fMP4 push carried no audio");
         // The first keyframe is Annex B and carries the parameter sets the
-        // TS path carries in band: FFmpeg's sample keeps the SPS/PPS it
-        // muxed into `avcC` (after the access unit delimiter), or the
-        // conversion injects them when a keyframe lacks them.
+        // TS path carries in band: FFmpeg's sample keeps the parameter sets
+        // it muxed into `avcC`/`hvcC` (after the access unit delimiter), or
+        // the conversion injects them when a keyframe lacks them.
         let first_keyframe = packets
             .iter()
             .find(|packet| packet.media_type == MediaType::Video && packet.is_keyframe)
             .expect("a keyframe reached the ring");
-        let head = &first_keyframe.payload[..first_keyframe.payload.len().min(64)];
+        let head = &first_keyframe.payload[..first_keyframe.payload.len().min(256)];
         let has = |nalu: u8| head.windows(5).any(|window| window == [0, 0, 0, 1, nalu]);
         assert!(
             head.starts_with(&[0, 0, 0, 1]),
@@ -152,8 +177,8 @@ async fn assert_whole_fixture_published(
             head
         );
         assert!(
-            has(0x67) && has(0x68),
-            "the first keyframe carries no SPS/PPS: {:02x?}",
+            codec.parameter_set_headers().iter().all(|&nalu| has(nalu)),
+            "the first keyframe lacks a parameter set: {:02x?}",
             head
         );
     }
@@ -172,7 +197,12 @@ async fn assert_whole_fixture_published(
 ///
 /// `segment_args` selects the segment container; the binary is the one
 /// production resolves.
-async fn ffmpeg_push_reaches_the_ring(method: &str, segment_args: &[&str], annexb: bool) {
+async fn ffmpeg_push_reaches_the_ring(
+    method: &str,
+    segment_args: &[&str],
+    codec: Codec,
+    annexb: bool,
+) {
     let server = serve().await;
     let ring = server.engine.get_or_create_pipeline(PIPELINE_ID).await;
     let start = ring.get_write_idx();
@@ -182,7 +212,7 @@ async fn ffmpeg_push_reaches_the_ring(method: &str, segment_args: &[&str], annex
     );
     let status = tokio::process::Command::new(restream::ffmpeg_binary::ffmpeg_bin_path())
         .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-i"])
-        .arg(fixture_path())
+        .arg(codec.fixture())
         .args([
             "-c",
             "copy",
@@ -206,17 +236,17 @@ async fn ffmpeg_push_reaches_the_ring(method: &str, segment_args: &[&str], annex
         .expect("ffmpeg finished")
         .expect("ffmpeg ran");
     assert!(status.success(), "ffmpeg exited with {status}");
-    assert_whole_fixture_published(&server, &ring, start, annexb).await;
+    assert_whole_fixture_published(&server, &ring, start, annexb.then_some(codec)).await;
 }
 
 #[tokio::test]
 async fn ffmpeg_hls_put_with_a_connection_per_object_reaches_the_ring() {
-    ffmpeg_push_reaches_the_ring("PUT", &[], false).await;
+    ffmpeg_push_reaches_the_ring("PUT", &[], Codec::H264, false).await;
 }
 
 #[tokio::test]
 async fn ffmpeg_hls_post_with_a_connection_per_object_reaches_the_ring() {
-    ffmpeg_push_reaches_the_ring("POST", &[], false).await;
+    ffmpeg_push_reaches_the_ring("POST", &[], Codec::H264, false).await;
 }
 
 /// FFmpeg's fMP4 HLS: `init.mp4` (named by `EXT-X-MAP`) ahead of
@@ -226,6 +256,20 @@ async fn ffmpeg_hls_fmp4_segments_reach_the_ring() {
     ffmpeg_push_reaches_the_ring(
         "PUT",
         &["-hls_segment_type", "fmp4", "-bsf:a", "aac_adtstoasc"],
+        Codec::H264,
+        true,
+    )
+    .await;
+}
+
+/// The same with HEVC: FFmpeg writes an `hvcC` init, and its VPS/SPS/PPS
+/// lead the first keyframe as the TS path's in-band ones do.
+#[tokio::test]
+async fn ffmpeg_hls_fmp4_hevc_segments_reach_the_ring() {
+    ffmpeg_push_reaches_the_ring(
+        "PUT",
+        &["-hls_segment_type", "fmp4", "-bsf:a", "aac_adtstoasc"],
+        Codec::Hevc,
         true,
     )
     .await;
@@ -288,5 +332,5 @@ async fn a_persistent_connection_carries_a_whole_stream() {
         200
     );
 
-    assert_whole_fixture_published(&server, &ring, start, false).await;
+    assert_whole_fixture_published(&server, &ring, start, None).await;
 }

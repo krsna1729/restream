@@ -706,11 +706,15 @@ keeps the container it started with.
   idle window (the media sequence or the segment names go back) and on
   `EXT-X-DISCONTINUITY`. The next segment is demuxed from scratch, and its
   timestamps continue right after the last ones forwarded.
-- **Codecs.** fMP4 ingest is H.264 video and AAC audio only. An HEVC
-  (`hev1`/`hvc1`) init segment is refused with `415` and the reason "HEVC
-  fMP4 ingest is not implemented". An accepted init's `avcC` SPS/PPS become
-  the ring's video parameter sets, so downstream stages see an fMP4 input
-  exactly as they see a TS one.
+- **Codecs.** fMP4 ingest takes H.264 or HEVC (`hev1`/`hvc1`) video and
+  AAC audio; an init of any other codec is refused with `415` naming it. An
+  accepted init's parameter sets — `avcC`'s SPS/PPS, or `hvcC`'s VPS/SPS/PPS —
+  lead every keyframe that lacks them, and an HEVC track is probed by the same
+  SPS parser a TS input's HEVC uses, so downstream stages see an fMP4 input
+  exactly as they see a TS one. An HEVC sample is a keyframe only when its
+  sync flag is set *and* it carries an IRAP picture (NAL types 16-23), as TS
+  ingest requires. `hev1` must carry its parameter sets in `hvcC`; one that
+  leaves the arrays empty and sends them only in-band is refused.
 - **fMP4 demuxing.** The session walks each media segment's top-level boxes
   itself (`styp`, `sidx`, `free`, `emsg` and `prft` are skipped, and an
   unknown box is logged once per session), at most 4096 boxes per segment,
@@ -823,7 +827,10 @@ Ordering, discontinuity handling, demuxing, timestamps and pacing are the push
 path's; the puller only decides what to fetch.
 
 - **Source.** The input stores the playlist URL, a variant rule (`highest`
-  or `lowest` `BANDWIDTH`, default highest) and origin credentials:
+  or `lowest` `BANDWIDTH`, default highest, applied among the variants whose
+  declared `CODECS` the ingest publishes — `avc1`/`avc3`, `hvc1`/`hev1`,
+  `mp4a.40.2` — and among all variants when none declares such a set) and
+  origin credentials:
   bearer, cookies, basic, or a set of request headers. A source URL may carry its own
   token in the query: it is what that URL is fetched with, and a relative
   URI a playlist names does not inherit it (RFC 3986 section 5.3), so a token

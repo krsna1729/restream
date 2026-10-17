@@ -409,8 +409,17 @@ fn the_init_segment_becomes_the_probe() {
     ));
 }
 
+/// An HEVC init (`hev1` or `hvc1`) is accepted: its probe names HEVC at the
+/// size the `hvcC` describes, and a keyframe that lacks the parameter sets
+/// gets the VPS, SPS and PPS ahead of it, as an H.264 keyframe gets `avcC`'s.
 #[test]
-fn an_hevc_init_is_refused_as_not_implemented() {
+fn an_hevc_init_publishes_like_a_ts_hevc_input() {
+    /// An IDR_W_RADL slice (NAL type 19) without its parameter sets.
+    const HEVC_IDR: &[u8] = &[0x26, 0x01, 0xAF, 0x02];
+    /// A TRAIL_R slice (NAL type 1).
+    const HEVC_TRAIL: &[u8] = &[0x02, 0x01, 0xD0, 0x11];
+    /// An SPS NAL header (type 33); its body is not read on this path.
+    const HEVC_SPS: &[u8] = &[0x42, 0x01, 0x01];
     let keyframe = fixture_keyframe("h265");
     let config = H265SampleEntryConfig {
         length_size: LengthSize::FourBytes,
@@ -421,22 +430,80 @@ fn an_hevc_init_is_refused_as_not_implemented() {
         SampleEntry::Hev1(build_hev1_box_from_annexb(&keyframe, &config).unwrap()),
         SampleEntry::Hvc1(build_hvc1_box_from_annexb(&keyframe, &config).unwrap()),
     ] {
+        let (width, height) = match &entry {
+            SampleEntry::Hev1(hevc) => (hevc.visual.width, hevc.visual.height),
+            SampleEntry::Hvc1(hevc) => (hevc.visual.width, hevc.visual.height),
+            _ => unreachable!(),
+        };
         let mut muxer = Fmp4SegmentMuxer::new().unwrap();
-        segment(&mut muxer, &[video(&entry, 3000, true, 0, vec![0; 8])]);
-        let init = muxer.init_segment_bytes().unwrap();
-        assert!(boxes::is_init_segment(&init));
-        assert_eq!(
-            Fmp4Demux::check_init(&init, MAX_INIT),
-            Err(MediaRejection::Unsupported(
-                HEVC_NOT_IMPLEMENTED.to_string()
-            ))
+        let media = segment(
+            &mut muxer,
+            &[
+                video(&entry, 3000, true, 0, length_prefixed(&[HEVC_IDR], 4)),
+                video(&entry, 3000, false, 0, length_prefixed(&[HEVC_TRAIL], 4)),
+                video(
+                    &entry,
+                    3000,
+                    true,
+                    0,
+                    length_prefixed(&[HEVC_SPS, HEVC_IDR], 4),
+                ),
+                video(&entry, 3000, true, 0, length_prefixed(&[HEVC_TRAIL], 4)),
+            ],
         );
+        let init = muxer.init_segment_bytes().unwrap();
+
+        Fmp4Demux::check_init(&init, MAX_INIT).expect("an HEVC init is accepted");
         let mut demux = Fmp4Demux::default();
+        demux
+            .apply_init(&init, MAX_INIT)
+            .expect("an HEVC init applies");
+        let probe = demux.take_probe().expect("the init becomes the probe");
+        assert_eq!(probe.video_track_count, 1);
+        let video_meta = probe.video.expect("the probe describes the video");
+        assert_eq!(video_meta.codec, "hevc");
         assert_eq!(
-            demux.apply_init(&init, MAX_INIT),
-            Err(MediaRejection::Unsupported(
-                HEVC_NOT_IMPLEMENTED.to_string()
-            ))
+            (video_meta.width, video_meta.height),
+            (u32::from(width), u32::from(height)),
+            "the SPS gives the size the hvcC describes"
+        );
+
+        let packets = demux_all(&init, &[media], usize::MAX);
+        let videos = of_type(&packets, MediaType::Video);
+        assert_eq!(videos.len(), 4);
+        assert!(videos[0].is_keyframe);
+        let first = &videos[0].payload;
+        assert!(
+            first.starts_with(&[0, 0, 0, 1, 0x40]),
+            "the hvcC VPS leads a keyframe that lacks it"
+        );
+        assert!(
+            first.windows(5).any(|w| w == [0, 0, 0, 1, 0x42]),
+            "and the SPS"
+        );
+        assert!(
+            first.windows(5).any(|w| w == [0, 0, 0, 1, 0x44]),
+            "and the PPS"
+        );
+        assert!(first.ends_with(&[&[0, 0, 0, 1][..], HEVC_IDR].concat()));
+        assert_eq!(
+            &videos[1].payload[..],
+            &[&[0, 0, 0, 1][..], HEVC_TRAIL].concat()[..],
+            "a non-keyframe is converted without parameter sets"
+        );
+        assert_eq!(
+            &videos[2].payload[..],
+            &[&[0, 0, 0, 1][..], HEVC_SPS, &[0, 0, 0, 1], HEVC_IDR].concat()[..],
+            "a keyframe carrying its own SPS gets no second copy"
+        );
+        assert!(
+            !videos[3].is_keyframe,
+            "a sync-flagged sample without an IRAP picture is not a keyframe, as in TS"
+        );
+        assert_eq!(
+            &videos[3].payload[..],
+            &[&[0, 0, 0, 1][..], HEVC_TRAIL].concat()[..],
+            "and gets no parameter sets"
         );
     }
 }
