@@ -25,11 +25,10 @@ items).
 - [Q-064 incident signals before the page opened](#q-064-observability-sonnet-incident-correlation-before-the-page-opened)
 - [Q-065 capacity cost of HLS, sink and pipeline outputs](#q-065-performance-sonnet-price-hls-sink-and-pipeline-outputs-from-a-measured-cost)
 - [Q-066 SRT ingress test port race](#q-066-testing-sonnet-srt-multi-owner-test-port-can-join-a-foreign-reuseport-group)
-- [Q-067 HLS push ingest: remaining gates](#q-067-protocol-opus-hls-push-ingest-remaining-gates)
+- [Q-067 optional Basic auth for HLS push](#q-067-protocol-opus-optional-basic-auth-for-hls-push)
 - [Q-069 frame-level media units](#q-069-architecture-opus-frame-level-media-units-for-moq-and-fmp4-ingest)
 - [Q-070 MoQ ingest](#q-070-protocol-opus-moq-ingest)
 - [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
-- [Q-072 dedicated HLS ingest listener](#q-072-architecture-sonnet-dedicated-hls-ingest-listener-with-half-close)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
 - [Q-077 follow every rendition into one ring](#q-077-architecture-opus-follow-every-rendition-of-a-master-playlist-into-one-ring)
 - [Q-083 measure RTMP and SRT under pull load](#q-083-performance-sonnet-measure-rtmp-and-srt-under-pull-load)
@@ -407,18 +406,20 @@ items).
 - Gates: none until it flakes.
 - Status: open (Filed: 2026-10-16 by claude).
 
-### Q-067 [protocol] [opus] HLS push ingest: remaining gates
-- Goal: what HLS push ingest (`src/media/hls_ingest/`, TS and H.264/AAC
-  fMP4 segments over PUT and POST) still lacks for encoders that need more
-  than the stream key, and the gates it has not yet passed.
-- Contract:
-  - Optional basic auth over the stream key.
-  - Generated `ingestUrls.hls`: `AppState` does not know the HTTP port yet.
-- Gates: a test that a panic inside one session ends only that session and
-  releases its input; one harness mode with FFmpeg pushing TS and fMP4
-  over PUT and POST.
-- Status: open (Filed: 2026-10-16 by claude, user request; TS and
-  H.264/AAC fMP4 push done).
+### Q-067 [protocol] [opus] Optional Basic auth for HLS push
+- Goal: an encoder that must authenticate with a username and password (as
+  `http://user:pass@host/ingest/hls/KEY/index.m3u8`) can push, on top of the
+  stream key.
+- Why: HLS push authorizes by the stream key in the path alone
+  (`src/api/hls_ingest.rs`). A per-input push credential is new stored state:
+  a write-only field on the input (as pull `source_auth` is), its API
+  validation and redaction, and the input form.
+- Gates: an upload with the configured credentials is accepted and one
+  without (or with wrong ones) is refused with `401` before any body byte is
+  read; an input with no credential behaves as today.
+- Status: open (Filed: 2026-10-16 by claude, user request; TS and HEVC/H.264
+  fMP4 push, `ingestUrls.hls`, panic isolation and the PUT/POST harness gate
+  are done).
 
 ### Q-069 [architecture] [opus] Frame-level media units for MoQ and fMP4 ingest
 - Goal: the ring can feed per-frame consumers (MoQ objects, LL-HLS parts).
@@ -478,22 +479,6 @@ items).
   (a stage, or a non-HLS output) falls back with the reason recorded.
 - Status: open (Filed: 2026-10-16 by claude, user question on passthrough;
   after Q-067/Q-068).
-
-### Q-072 [architecture] [sonnet] Dedicated HLS ingest listener with half-close
-- Goal: only HLS push uploads get HTTP/1.1 half-close; dashboard SSE
-  streams notice a departed client at once again.
-- Sources: `src/api/http_server.rs` serves every dashboard route with
-  `half_close(true)` because FFmpeg (default `-http_persistent 0`) closes
-  its side after the body and hyper otherwise drops the upload. With it,
-  a client that leaves an SSE stream (`/api/v1/state/stream`, logs) is
-  noticed only when a write fails, at the second write after the reset
-  (20 to 40 s with the 20 s heartbeat), not at `tx.closed()`.
-- Change: serve `/ingest/hls/` on its own listener (or a per-route
-  connection policy) that sets half-close, and return the dashboard to
-  hyper's default.
-- Gates: the FFmpeg POST push test still passes; a test that a dropped
-  SSE client releases its receiver within one heartbeat.
-- Status: open (Filed: 2026-10-16 by claude).
 
 ### Q-074 [performance] [opus] A rare multi-millisecond HLS ingest poll is bounded whatever its cause
 - Goal: a `hlsIngest` poll on the MEDIA executor never spends multiple

@@ -12,7 +12,8 @@
 //!   RTMP publishers, each an ingest input and one RTMP sink output.
 //! - **Treatment arm** (`--hls-publishers N`): the same base load plus `N`
 //!   pipelines whose input is an HLS push session driven by FFmpeg
-//!   (`-f hls -method PUT`), each with the same RTMP sink output.
+//!   (`-f hls -method PUT`, or POST with `--method post`), each with the same
+//!   RTMP sink output.
 //!
 //! Every pipeline's output goes to its own in-process RTMP sink, so delivery
 //! is asserted per pipeline and the egress side of the fabric carries real
@@ -24,6 +25,7 @@
 //! ```text
 //! scripts/harness/run.sh hls-push-duty
 //! scripts/harness/run.sh hls-push-duty -- --hls-publishers 4 --segment-type fmp4
+//! scripts/harness/run.sh hls-push-duty -- --hls-publishers 2 --method post
 //! ```
 //!
 //! FFmpeg is resolved through the project's `ffmpeg_binary` resolver; the

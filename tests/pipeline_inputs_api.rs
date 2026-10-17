@@ -133,6 +133,10 @@ async fn pipeline_inputs_list_exposes_primary_ingest_urls() {
         inputs[0]["ingestUrls"]["srt"],
         format!("srt://ingest.example.com:10080?streamid=publish:{key}")
     );
+    assert_eq!(
+        inputs[0]["ingestUrls"]["hls"],
+        format!("http://ingest.example.com:3030/ingest/hls/{key}/index.m3u8")
+    );
 }
 
 #[tokio::test]

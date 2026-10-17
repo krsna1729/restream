@@ -49,6 +49,7 @@ fn session_cookie_security_attr(secure: bool) -> &'static str {
 }
 
 pub struct PortConfig {
+    pub http: u16,
     pub rtmp: u16,
     pub srt: u16,
 }
@@ -74,6 +75,7 @@ impl From<&AppConfig> for AppStateRuntimeConfig {
         Self {
             ingest_disconnect_grace_ms: config.tuning.ingest_disconnect_grace_ms,
             ports: PortConfig {
+                http: config.ports.http,
                 rtmp: config.ports.rtmp,
                 srt: config.ports.srt,
             },

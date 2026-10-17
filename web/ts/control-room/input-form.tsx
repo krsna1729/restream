@@ -92,11 +92,13 @@ export function InputForm(props: {
       {current && current.kind === "keyed" && (
         <div className="space-y-1 text-sm">
           <p className="text-xs opacity-70">Publish to</p>
-          {[current.ingestUrls?.rtmp, current.ingestUrls?.srt].filter(Boolean).map((url) => (
-            <p key={url} className="break-all font-mono text-xs">
-              {url}
-            </p>
-          ))}
+          {[current.ingestUrls?.rtmp, current.ingestUrls?.srt, current.ingestUrls?.hls]
+            .filter(Boolean)
+            .map((url) => (
+              <p key={url} className="break-all font-mono text-xs">
+                {url}
+              </p>
+            ))}
           <p className="text-xs opacity-70">
             <a className="link" href={withBasePath(current.previewUrl)}>
               Preview

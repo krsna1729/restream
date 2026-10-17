@@ -210,6 +210,7 @@ impl Session {
                     &plan.hls_url(&task.stream_key),
                     options.segment_secs,
                     options.segment_type,
+                    options.method,
                 )
             } else {
                 rtmp_publisher_args(&plan.fixture, &plan.rtmp_publish_url(&task.stream_key))
@@ -327,6 +328,7 @@ impl Session {
                 "pipelineId": task.pipeline_id,
                 "streamKey": task.stream_key,
                 "segmentType": (task.kind == "hls").then(|| options.segment_type.as_str()),
+                "method": (task.kind == "hls").then(|| options.method.as_str()),
                 "outputId": task.output_id,
                 "sinkPort": task.sink_port,
                 "input": input,
@@ -358,6 +360,7 @@ impl Session {
                 "basePublishers": options.base_publishers,
                 "hlsPublishers": options.hls_publishers,
                 "segmentType": options.segment_type.as_str(),
+                "method": options.method.as_str(),
                 "durationSecs": options.duration_secs,
                 "segmentSecs": options.segment_secs,
                 "cliArgs": args,
@@ -446,6 +449,7 @@ pub(crate) fn hls_publisher_args(
     url: &str,
     segment_secs: u64,
     segment_type: HlsSegmentType,
+    method: HlsMethod,
 ) -> Vec<String> {
     let mut argv = vec![
         "-re".to_string(),
@@ -462,7 +466,7 @@ pub(crate) fn hls_publisher_args(
         "-f".to_string(),
         "hls".to_string(),
         "-method".to_string(),
-        "PUT".to_string(),
+        method.as_str().to_string(),
         "-hls_time".to_string(),
         segment_secs.to_string(),
     ];

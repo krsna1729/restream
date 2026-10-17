@@ -327,10 +327,14 @@ that must stay write-only, and note that a userinfo component
 List and mutation responses expose each input's `id`, `label`, `streamKey`,
 `role`, `kind`, `sourceUrl`, `variantRule`, `authKind`, `authUsername`,
 `enabled`, `selected`, `ingestUrls`, `previewUrl`, and `runtime`. A keyed
-input's `ingestUrls` holds its `rtmp` and `srt` URLs; a pull input accepts no
-pushes, so its `ingestUrls` is `null`. `sourceUrl`, `variantRule`, `authKind`,
-and `authUsername` are always present (a keyed input has `sourceUrl: null`,
-`variantRule: "highestBandwidth"`, and `authKind: "none"`).
+input's `ingestUrls` holds its `rtmp` and `srt` URLs and its `hls` push
+playlist URL (`http://HOST:PORT/ingest/hls/KEY/index.m3u8`, with the ingest
+host and the HTTP port: it assumes the listener is reached directly, so behind
+a TLS proxy or a path prefix the encoder needs the proxy's scheme, host and
+prefix instead); a pull input accepts no pushes, so its `ingestUrls` is
+`null`. `sourceUrl`, `variantRule`, `authKind`, and `authUsername` are always
+present (a keyed input has `sourceUrl: null`, `variantRule:
+"highestBandwidth"`, and `authKind: "none"`).
 Runtime includes `connected`, `forwardingState`, protocol, uptime, bytes,
 remote address, media metadata, and transport quality. A connected unselected
 input reports `forwardingState: "standby"`; a promoted input may briefly report

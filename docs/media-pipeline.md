@@ -634,7 +634,10 @@ ffmpeg -re -i input.mp4 -c:v libx264 -g 60 -c:a aac \
 ```
 
 These all work: `-method POST`; FFmpeg's default of one connection per
-object, closed without reading the response; persistent connections
+object, closed without reading the response (the listener serves a connection
+whose first request is an `/ingest/hls/` upload with HTTP/1.1 half-close, and
+every other connection without it, so dashboard streams notice a departed
+client at once); persistent connections
 (`-http_persistent 1`), with one limit: FFmpeg then sends requests ahead of
 the replies and, on exit, closes without reading them, so the connection is
 reset and its final segment and `EXT-X-ENDLIST` playlist can be lost (the
