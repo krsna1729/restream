@@ -117,8 +117,11 @@ struct MapState {
     uri: String,
     /// Init bytes uploaded for `uri`, not yet delivered with a release.
     pending: Option<Payload>,
-    /// Hash of the init for `uri` already delivered, so a re-upload of the
-    /// same bytes is not delivered again (an encoder's `resend`).
+    /// The init this map has: the hash of its bytes, delivered or already held
+    /// by the demuxer when a re-upload or a second map URI made a delivery
+    /// unnecessary. `init_ready` reads it, a return to this map re-delivers
+    /// `last` behind it, and whether a delivery is *needed* is decided by
+    /// `applied` — so record it before that decision, never after.
     delivered: Option<u64>,
     /// The payload this map last delivered, so a return to it can deliver its
     /// bytes again without a re-upload: the demuxer holds one init, so a stream
