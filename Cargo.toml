@@ -139,7 +139,7 @@ sha2 = "0.11"
 
 [dev-dependencies]
 criterion = "0.8"
-rtrb = "0.3"
+rtrb = "0.4"
 crossbeam-queue = "0.3"
 http-body-util = "0.1"
 pulp = { version = "0.22", features = ["x86-v4"] }
