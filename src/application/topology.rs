@@ -193,18 +193,21 @@ pub async fn converge_topology(pool: &SqlitePool, engine: &MediaEngine, outputs:
 /// is newly enabled starts. A source that is running is left alone, so a pass
 /// costs no work while nothing changes.
 ///
+/// Returns the inputs this pass started or replaced: what a caller logs, and
+/// what a test asserts on — a second pass over unchanged rows starts nothing.
+///
 /// This runs before [`converge_topology`] so a deleted pipeline's pull tasks
 /// stop before its runtime is torn down, and a pull task can never recreate
 /// the ring of a pipeline that is going away.
 pub async fn converge_pull_inputs(
     pool: &SqlitePool,
     ingest: &Arc<crate::media::hls_ingest::HlsIngest>,
-) {
+) -> Vec<String> {
     let pulls = match crate::db::list_pull_inputs(pool).await {
         Ok(rows) => rows,
         Err(error) => {
             warn!(err = %error, "DB error reading pull inputs; pull inputs not converged this pass");
-            return;
+            return Vec::new();
         }
     };
     let wanted = pulls
@@ -214,11 +217,12 @@ pub async fn converge_pull_inputs(
         .collect::<HashSet<_>>();
 
     for input_id in ingest.pull_input_ids() {
-        if !wanted.contains(input_id.as_str()) && ingest.cancel_pull(&input_id) {
+        if !wanted.contains(input_id.as_str()) && ingest.cancel_pull(&input_id).await {
             info!(input_id = %input_id, "HLS pull stopped");
         }
     }
 
+    let mut started = Vec::new();
     for input in pulls
         .iter()
         .filter(|input| wanted.contains(input.id.as_str()))
@@ -228,23 +232,27 @@ pub async fn converge_pull_inputs(
         let Some(url) = input.source_url.clone() else {
             continue;
         };
-        let started = ingest.ensure_pull(
-            crate::media::hls_pull::PullIdentity {
-                pipeline_id: input.pipeline_id.clone(),
-                input_id: input.id.clone(),
-                stream_key: input.stream_key.clone(),
-                selected: input.selected,
-            },
-            crate::media::hls_pull::PullSource {
-                url,
-                variant: input.variant_rule,
-                auth: input.source_auth.clone(),
-            },
-        );
-        if started {
+        let did_start = ingest
+            .ensure_pull(
+                crate::media::hls_pull::PullIdentity {
+                    pipeline_id: input.pipeline_id.clone(),
+                    input_id: input.id.clone(),
+                    stream_key: input.stream_key.clone(),
+                    selected: input.selected,
+                },
+                crate::media::hls_pull::PullSource {
+                    url,
+                    variant: input.variant_rule,
+                    auth: input.source_auth.clone(),
+                },
+            )
+            .await;
+        if did_start {
             info!(input_id = %input.id, pipeline_id = %input.pipeline_id, "HLS pull started");
+            started.push(input.id.clone());
         }
     }
+    started
 }
 
 #[cfg(test)]

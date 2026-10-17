@@ -57,7 +57,7 @@ export type VariantRule = "highestBandwidth" | "lowestBandwidth";
 
 /** How a pull input authenticates to its origin. The credential is write-only:
  * the API returns only this variant and, for "basic", a username. */
-export type PullAuthKind = "none" | "bearer" | "basic" | "headers";
+export type PullAuthKind = "none" | "bearer" | "cookies" | "basic" | "headers";
 
 export interface PipelineInput {
   id: string;

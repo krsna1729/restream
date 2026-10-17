@@ -3,10 +3,10 @@
 //!
 //! It reads what ordering needs: `#EXTM3U`, `EXT-X-TARGETDURATION`,
 //! `EXT-X-MEDIA-SEQUENCE`, `EXTINF`, `EXT-X-DISCONTINUITY`, `EXT-X-MAP`,
-//! `EXT-X-ENDLIST` and master playlists (`EXT-X-STREAM-INF` with
-//! `BANDWIDTH`). Every other tag is ignored. URIs resolve against the
-//! playlist's own path; only relative URIs that stay inside the stream key's
-//! namespace are accepted.
+//! `EXT-X-ENDLIST` and master playlists (`EXT-X-STREAM-INF` with `BANDWIDTH`
+//! and `AUDIO`, and the `EXT-X-MEDIA` renditions those groups name). Every
+//! other tag is ignored. URIs resolve against the playlist's own path; only
+//! relative URIs that stay inside the stream key's namespace are accepted.
 
 use std::fmt;
 use std::time::Duration;
@@ -48,12 +48,36 @@ pub struct SegmentEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MasterPlaylist {
     pub variants: Vec<Variant>,
+    /// The master's `EXT-X-MEDIA` renditions of `TYPE=AUDIO`. A variant that
+    /// names one of these groups in its `AUDIO` attribute takes its audio
+    /// from the group, not from the variant's own segments.
+    pub audio: Vec<AudioRendition>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Variant {
     pub bandwidth: u64,
     pub path: String,
+    /// The `AUDIO` group this variant's audio comes from, if it names one.
+    /// A variant that names none carries its own audio (RFC 8216 4.3.4.1).
+    pub audio_group: Option<String>,
+}
+
+/// One `EXT-X-MEDIA:TYPE=AUDIO` rendition: a named member of the audio group
+/// a variant may select with `AUDIO="group"`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioRendition {
+    pub group_id: String,
+    pub name: String,
+    /// `DEFAULT=YES`: the member a client plays unless it chooses otherwise.
+    pub default: bool,
+    /// `AUTOSELECT=YES`: the member a client may play when it has no other
+    /// basis for a choice.
+    pub autoselect: bool,
+    /// The rendition's own media playlist URI, resolved like any other URI.
+    /// `None` means the rendition has no URI: its audio is muxed into the
+    /// variants of the group, so there is nothing separate to follow.
+    pub path: Option<String>,
 }
 
 impl MasterPlaylist {
@@ -77,6 +101,23 @@ impl MasterPlaylist {
                 best
             }
         })
+    }
+
+    /// The audio rendition to follow with `variant`, in the order RFC 8216
+    /// section 4.3.4.1 gives a client for choosing among the members of one
+    /// group: the `DEFAULT=YES` member, else the `AUTOSELECT=YES` member,
+    /// else the first listed. `None` when `variant` names no group, and also
+    /// when it names one this master does not define — the caller states
+    /// which of the two it is, because only the second is a broken master.
+    pub fn audio_rendition(&self, variant: &Variant) -> Option<&AudioRendition> {
+        let group = variant.audio_group.as_deref()?;
+        let members = || self.audio.iter().filter(|audio| audio.group_id == group);
+        // `DEFAULT` outranks `AUTOSELECT`; within one kind the first listed
+        // wins, so each pass takes the first member that carries its flag.
+        members()
+            .find(|audio| audio.default)
+            .or_else(|| members().find(|audio| audio.autoselect))
+            .or_else(|| members().next())
     }
 }
 
@@ -152,8 +193,10 @@ pub fn parse_with(
     let mut pending_duration = None;
     let mut pending_discontinuity = false;
     let mut pending_bandwidth = None;
+    let mut pending_audio_group = None;
     let mut segment_uris: Vec<(String, Duration, bool, Option<String>)> = Vec::new();
     let mut variants = Vec::new();
+    let mut audio = Vec::new();
 
     for (line_number, line) in lines {
         let invalid = |tag| PlaylistError::InvalidTag {
@@ -182,17 +225,54 @@ pub fn parse_with(
         } else if let Some(value) = line.strip_prefix("#EXT-X-MAP:") {
             let uri = attribute(value, "URI").ok_or_else(|| invalid("EXT-X-MAP"))?;
             map_uri = Some(resolve(uri).ok_or(PlaylistError::InvalidUri { line: line_number })?);
+        } else if let Some(attributes) = line.strip_prefix("#EXT-X-MEDIA:") {
+            // Only audio groups matter here: `SUBTITLES` and
+            // `CLOSED-CAPTIONS` renditions carry no media this ingest
+            // publishes, so they are ignored like any other tag.
+            match attribute(attributes, "TYPE") {
+                Some(kind) if kind.eq_ignore_ascii_case("AUDIO") => {}
+                _ => continue,
+            }
+            let group_id = attribute(attributes, "GROUP-ID")
+                .filter(|group| !group.is_empty())
+                .ok_or_else(|| invalid("EXT-X-MEDIA"))?;
+            // A missing URI means the group's audio is muxed into the
+            // variants that name it, so nothing separate can be followed.
+            let path = match attribute(attributes, "URI").filter(|uri| !uri.is_empty()) {
+                Some(uri) => {
+                    Some(resolve(uri).ok_or(PlaylistError::InvalidUri { line: line_number })?)
+                }
+                None => None,
+            };
+            audio.push(AudioRendition {
+                group_id: group_id.to_string(),
+                name: attribute(attributes, "NAME")
+                    .unwrap_or_default()
+                    .to_string(),
+                default: attribute(attributes, "DEFAULT")
+                    .is_some_and(|value| value.eq_ignore_ascii_case("YES")),
+                autoselect: attribute(attributes, "AUTOSELECT")
+                    .is_some_and(|value| value.eq_ignore_ascii_case("YES")),
+                path,
+            });
         } else if let Some(attributes) = line.strip_prefix("#EXT-X-STREAM-INF:") {
             let bandwidth = attribute(attributes, "BANDWIDTH")
                 .and_then(|value| value.parse().ok())
                 .ok_or_else(|| invalid("EXT-X-STREAM-INF"))?;
             pending_bandwidth = Some(bandwidth);
+            pending_audio_group = attribute(attributes, "AUDIO")
+                .filter(|group| !group.is_empty())
+                .map(str::to_string);
         } else if line.starts_with('#') {
             // Comments and tags this ingest does not need.
         } else {
             let path = resolve(line).ok_or(PlaylistError::InvalidUri { line: line_number })?;
             if let Some(bandwidth) = pending_bandwidth.take() {
-                variants.push(Variant { bandwidth, path });
+                variants.push(Variant {
+                    bandwidth,
+                    path,
+                    audio_group: pending_audio_group.take(),
+                });
             } else {
                 let duration = pending_duration
                     .take()
@@ -214,7 +294,7 @@ pub fn parse_with(
         if !segment_uris.is_empty() || target_duration.is_some() {
             return Err(PlaylistError::MixedMasterAndMedia);
         }
-        return Ok(Playlist::Master(MasterPlaylist { variants }));
+        return Ok(Playlist::Master(MasterPlaylist { variants, audio }));
     }
 
     let target_duration = target_duration.ok_or(PlaylistError::MissingTargetDuration)?;
@@ -352,7 +432,8 @@ mod tests {
             master.highest_bandwidth(),
             Some(&Variant {
                 bandwidth: 2_500_000,
-                path: "high/index.m3u8".into()
+                path: "high/index.m3u8".into(),
+                audio_group: None,
             })
         );
         assert_eq!(master.variants[0].path, "low/index.m3u8");
@@ -360,8 +441,193 @@ mod tests {
             master.lowest_bandwidth(),
             Some(&Variant {
                 bandwidth: 800_000,
-                path: "low/index.m3u8".into()
+                path: "low/index.m3u8".into(),
+                audio_group: None,
             })
+        );
+    }
+
+    /// A master whose audio is a group of `EXT-X-MEDIA` renditions, as
+    /// packaged live HLS writes it: one rendition per language, each with its
+    /// own playlist URI, and the variant naming the group.
+    #[test]
+    fn master_playlist_reads_the_audio_group_and_the_variant_that_names_it() {
+        let text = "#EXTM3U\n\
+            #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"Track 1 (en)\",LANGUAGE=\"en\",\
+            DEFAULT=YES,AUTOSELECT=YES,CHANNELS=\"2\",URI=\"audio/en/index.m3u8\"\n\
+            #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"Track 2 (de)\",LANGUAGE=\"de\",\
+            DEFAULT=NO,AUTOSELECT=YES,URI=\"audio/de/index.m3u8\"\n\
+            #EXT-X-STREAM-INF:BANDWIDTH=2500000,AUDIO=\"audio\"\n\
+            video/index.m3u8\n";
+        let Ok(Playlist::Master(master)) = parse(text.as_bytes(), "master.m3u8") else {
+            panic!("expected master playlist");
+        };
+        assert_eq!(
+            master.audio,
+            vec![
+                AudioRendition {
+                    group_id: "audio".into(),
+                    name: "Track 1 (en)".into(),
+                    default: true,
+                    autoselect: true,
+                    path: Some("audio/en/index.m3u8".into()),
+                },
+                AudioRendition {
+                    group_id: "audio".into(),
+                    name: "Track 2 (de)".into(),
+                    default: false,
+                    autoselect: true,
+                    path: Some("audio/de/index.m3u8".into()),
+                },
+            ]
+        );
+        let variant = master.highest_bandwidth().expect("one variant");
+        assert_eq!(variant.audio_group.as_deref(), Some("audio"));
+        assert_eq!(
+            master
+                .audio_rendition(variant)
+                .map(|audio| audio.name.as_str()),
+            Some("Track 1 (en)"),
+            "DEFAULT=YES wins"
+        );
+    }
+
+    #[test]
+    fn audio_rendition_selection_prefers_default_then_autoselect_then_the_first() {
+        let rendition = |name: &str, default: bool, autoselect: bool| AudioRendition {
+            group_id: "audio".into(),
+            name: name.into(),
+            default,
+            autoselect,
+            path: Some(format!("audio/{name}.m3u8")),
+        };
+        let variant = Variant {
+            bandwidth: 1,
+            path: "video/index.m3u8".into(),
+            audio_group: Some("audio".into()),
+        };
+        let chosen = |audio: Vec<AudioRendition>| {
+            let master = MasterPlaylist {
+                variants: vec![variant.clone()],
+                audio,
+            };
+            master
+                .audio_rendition(&variant)
+                .map(|audio| audio.name.clone())
+        };
+
+        assert_eq!(
+            chosen(vec![
+                rendition("first", false, false),
+                rendition("default", true, false),
+                rendition("autoselect", false, true),
+            ])
+            .as_deref(),
+            Some("default"),
+            "DEFAULT=YES outranks AUTOSELECT=YES and the first listed"
+        );
+        assert_eq!(
+            chosen(vec![
+                rendition("first", false, false),
+                rendition("autoselect", false, true),
+            ])
+            .as_deref(),
+            Some("autoselect"),
+            "AUTOSELECT=YES outranks the first listed"
+        );
+        assert_eq!(
+            chosen(vec![
+                rendition("first", false, false),
+                rendition("second", false, false),
+            ])
+            .as_deref(),
+            Some("first"),
+            "the first listed wins when neither flag is set"
+        );
+        assert_eq!(
+            chosen(vec![
+                rendition("first-default", true, false),
+                rendition("second-default", true, false),
+            ])
+            .as_deref(),
+            Some("first-default"),
+            "the first of a tie wins"
+        );
+        assert_eq!(
+            chosen(vec![]),
+            None,
+            "a group with no member selects nothing"
+        );
+        // A variant that names no group has no rendition to select.
+        let no_group = MasterPlaylist {
+            variants: vec![Variant {
+                bandwidth: 1,
+                path: "video/index.m3u8".into(),
+                audio_group: None,
+            }],
+            audio: vec![rendition("audio", true, true)],
+        };
+        assert_eq!(no_group.audio_rendition(&no_group.variants[0]), None);
+    }
+
+    #[test]
+    fn audio_renditions_without_a_uri_are_muxed_into_the_variant() {
+        // `URI` is optional: without it the group's audio is muxed into the
+        // variants that name the group, so there is no playlist to follow.
+        let text = "#EXTM3U\n\
+            #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"Track 1\",DEFAULT=YES\n\
+            #EXT-X-STREAM-INF:BANDWIDTH=100,AUDIO=\"audio\"\n\
+            video/index.m3u8\n";
+        let Ok(Playlist::Master(master)) = parse(text.as_bytes(), "master.m3u8") else {
+            panic!("expected master playlist");
+        };
+        assert_eq!(master.audio.len(), 1);
+        assert_eq!(master.audio[0].path, None);
+        assert_eq!(
+            master
+                .audio_rendition(master.highest_bandwidth().expect("one variant"))
+                .and_then(|audio| audio.path.as_deref()),
+            None
+        );
+    }
+
+    #[test]
+    fn non_audio_media_renditions_are_ignored() {
+        let text = "#EXTM3U\n\
+            #EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"English\",\
+            URI=\"subs/en/index.m3u8\"\n\
+            #EXT-X-MEDIA:TYPE=CLOSED-CAPTIONS,GROUP-ID=\"cc\",NAME=\"CC1\"\n\
+            #EXT-X-STREAM-INF:BANDWIDTH=100\n\
+            video/index.m3u8\n";
+        let Ok(Playlist::Master(master)) = parse(text.as_bytes(), "master.m3u8") else {
+            panic!("expected master playlist");
+        };
+        assert!(master.audio.is_empty(), "{:?}", master.audio);
+    }
+
+    #[test]
+    fn a_malformed_audio_rendition_is_an_error() {
+        // `GROUP-ID` is required on `EXT-X-MEDIA`.
+        assert_eq!(
+            parse(
+                b"#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,NAME=\"Track 1\",URI=\"a.m3u8\"\n\
+                  #EXT-X-STREAM-INF:BANDWIDTH=1\nvideo/index.m3u8\n",
+                "master.m3u8"
+            ),
+            Err(PlaylistError::InvalidTag {
+                line: 2,
+                tag: "EXT-X-MEDIA",
+            })
+        );
+        // A rendition URI resolves like any other: it may not leave the
+        // namespace.
+        assert_eq!(
+            parse(
+                b"#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",URI=\"../../a.m3u8\"\n\
+                  #EXT-X-STREAM-INF:BANDWIDTH=1,AUDIO=\"audio\"\nvideo/index.m3u8\n",
+                "master.m3u8"
+            ),
+            Err(PlaylistError::InvalidUri { line: 2 })
         );
     }
 
@@ -518,6 +784,7 @@ mod tests {
                     Just("#EXT-X-DISCONTINUITY".to_string()),
                     Just("#EXT-X-ENDLIST".to_string()),
                     "#EXT-X-STREAM-INF:[A-Z=0-9,\"]{0,24}",
+                    "#EXT-X-MEDIA:[A-Z=0-9,\"/.]{0,32}",
                     "#EXT-X-MAP:[A-Z=0-9,\"]{0,24}",
                     "[./a-z0-9?#]{0,12}",
                 ],

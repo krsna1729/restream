@@ -56,9 +56,33 @@ async fn send(
     send_to(ingest, &authenticated(), kind, path, bytes).await
 }
 
+/// Send through the pull origin, as the puller does. A pull session records
+/// `hls-pull`, and a pulled object must reach the same assembler a pushed one
+/// does.
+pub(super) async fn send_pull(
+    ingest: &Arc<HlsIngest>,
+    pipeline: &AuthenticatedPipeline,
+    kind: ObjectKind,
+    path: &str,
+    bytes: &[u8],
+) -> ObjectOutcome {
+    send_from(ingest, pipeline, DispatchOrigin::Pull, kind, path, bytes).await
+}
+
 async fn send_to(
     ingest: &Arc<HlsIngest>,
     pipeline: &AuthenticatedPipeline,
+    kind: ObjectKind,
+    path: &str,
+    bytes: &[u8],
+) -> ObjectOutcome {
+    send_from(ingest, pipeline, DispatchOrigin::Push, kind, path, bytes).await
+}
+
+async fn send_from(
+    ingest: &Arc<HlsIngest>,
+    pipeline: &AuthenticatedPipeline,
+    origin: DispatchOrigin,
     kind: ObjectKind,
     path: &str,
     bytes: &[u8],
@@ -73,7 +97,7 @@ async fn send_to(
             pipeline,
             STREAM_KEY,
             "127.0.0.1:9",
-            DispatchOrigin::Push,
+            origin,
             kind,
             path.to_string(),
             body,
@@ -82,14 +106,14 @@ async fn send_to(
         .unwrap()
 }
 
-fn fixture() -> Vec<u8> {
+pub(super) fn fixture() -> Vec<u8> {
     std::fs::read(crate::test_fixtures::canonical_h264_ts_fixture().unwrap()).unwrap()
 }
 
 /// Wait until the pipeline's current ring satisfies `predicate`, or fail
 /// the test after `secs`. The engine can swap the ring after a probe, so
 /// the buffer is re-read every pass.
-async fn wait_for_ring(
+pub(super) async fn wait_for_ring(
     engine: &MediaEngine,
     secs: u64,
     what: &str,
@@ -109,7 +133,7 @@ async fn wait_for_ring(
 }
 
 /// How many packets the pipeline's current ring holds.
-async fn published(engine: &MediaEngine) -> usize {
+pub(super) async fn published(engine: &MediaEngine) -> usize {
     engine
         .get_or_create_pipeline(PIPELINE_ID)
         .await
@@ -822,48 +846,4 @@ async fn a_released_segment_reaches_the_ring_at_media_pace() {
         wall_ms <= u128::try_from(media_ms).unwrap() + 2_000,
         "pacing must not lag: {media_ms} ms of media took {wall_ms} ms"
     );
-}
-
-/// The reconciler converges every pass, so starting a pull must be
-/// idempotent: the same source is left running, a row edit (URL, rendition
-/// or credential) replaces the task, and a cancel removes it.
-#[tokio::test]
-async fn a_pull_task_starts_once_per_source_and_is_replaced_when_the_row_changes() {
-    let (_engine, ingest) = test_ingest(HlsIngestLimits::default());
-    let identity = crate::media::hls_pull::PullIdentity {
-        pipeline_id: PIPELINE_ID.to_string(),
-        input_id: "input-pull".to_string(),
-        stream_key: "pull-key".to_string(),
-        selected: true,
-    };
-    let source = |url: &str| crate::media::hls_pull::PullSource {
-        url: url.to_string(),
-        variant: crate::domain::pipeline_input::VariantRule::HighestBandwidth,
-        auth: crate::domain::pipeline_input::PullAuth::None,
-    };
-    let origin = source("http://127.0.0.1:9/master.m3u8");
-
-    assert!(
-        ingest.ensure_pull(identity.clone(), origin.clone()),
-        "the first pass starts the task"
-    );
-    assert!(
-        !ingest.ensure_pull(identity.clone(), origin.clone()),
-        "a repeated pass leaves the running task alone"
-    );
-    assert!(ingest.pull_input_ids().contains(&identity.input_id));
-
-    let mut changed = origin.clone();
-    changed.variant = crate::domain::pipeline_input::VariantRule::LowestBandwidth;
-    assert!(
-        ingest.ensure_pull(identity.clone(), changed),
-        "an edited row is a different origin and replaces the task"
-    );
-
-    assert!(ingest.cancel_pull(&identity.input_id));
-    assert!(
-        !ingest.cancel_pull(&identity.input_id),
-        "cancelling twice reports that nothing ran"
-    );
-    assert!(ingest.pull_input_ids().is_empty());
 }

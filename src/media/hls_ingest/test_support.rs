@@ -58,6 +58,31 @@ pub(crate) fn authenticated() -> AuthenticatedPipeline {
     }
 }
 
+/// A listener that accepts connections and never answers, so a pull task
+/// parks in its first request. A closed port would refuse the connection and
+/// the puller would log a warning on every backoff, and passing test logs
+/// stay quiet (`cargo xtask test-hygiene`).
+///
+/// The caller aborts the returned task when the test ends.
+pub(crate) fn stalled_origin() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a stalled origin");
+    let addr = listener
+        .local_addr()
+        .expect("read the stalled origin's port");
+    listener
+        .set_nonblocking(true)
+        .expect("set the stalled origin non-blocking");
+    let handle = tokio::spawn(async move {
+        let listener = tokio::net::TcpListener::from_std(listener).expect("adopt the listener");
+        // Held, never read: the socket stays open so the request hangs.
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            held.push(socket);
+        }
+    });
+    (addr, handle)
+}
+
 /// The first keyframe of a canonical fixture, as Annex B: it carries the
 /// parameter sets a sample entry is built from.
 fn fixture_keyframe(codec: &str) -> Vec<u8> {

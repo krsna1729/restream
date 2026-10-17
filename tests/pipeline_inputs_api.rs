@@ -342,6 +342,64 @@ async fn pull_input_header_auth_values_never_appear_in_responses() {
     assert_eq!(input["sourceUrl"], "https://origin.example/master.m3u8");
 }
 
+/// A signed-cookie origin is configured by pasting the cookie string, which
+/// is a credential like any other: stored, reported as a kind, and never
+/// returned.
+#[tokio::test]
+async fn pull_input_cookie_auth_round_trips_without_returning_the_string() {
+    let (app, _, cookie) = authenticated_app().await;
+    let pipeline_id = create_pipeline(&app, &cookie).await;
+
+    let (status, body) = post_input(
+        &app,
+        &cookie,
+        &pipeline_id,
+        r#"{"label":"Signed","kind":"hlsPull","sourceUrl":"https://signed.example/master.m3u8","auth":{"kind":"cookies","cookies":"CloudFront-Policy=p;CloudFront-Signature=cookie-secret;CloudFront-Key-Pair-Id=k"}}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert!(
+        !body.contains("cookie-secret"),
+        "a cookie string is a credential and must never appear in a response body"
+    );
+
+    let value = parse(&body);
+    let input_id = value["input"]["id"].as_str().unwrap().to_string();
+    assert_eq!(value["input"]["authKind"], "cookies");
+    assert_eq!(value["input"]["authUsername"], serde_json::Value::Null);
+
+    // The list must not return it either: the whole row is serialized there.
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "GET",
+            &format!("/api/v1/pipelines/{pipeline_id}/inputs"),
+            Some(&cookie),
+            None,
+        ))
+        .await
+        .expect("inputs response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let list = response_text(response).await;
+    assert!(
+        !list.contains("cookie-secret"),
+        "the list must not carry a stored cookie string"
+    );
+
+    // The kind survives an update that does not mention auth.
+    let (status, body) = patch_input(
+        &app,
+        &cookie,
+        &pipeline_id,
+        &input_id,
+        r#"{"enabled":false}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(parse(&body)["input"]["authKind"], "cookies");
+    assert!(!body.contains("cookie-secret"));
+}
+
 #[tokio::test]
 async fn patch_keeps_replaces_and_clears_pull_auth() {
     let (app, _, cookie) = authenticated_app().await;
@@ -489,6 +547,38 @@ async fn pull_input_validation_rejects_bad_configuration() {
         (
             serde_json::json!({"label":"x","kind":"hlsPull","sourceUrl":"https://o.example/p.m3u8","auth":{"kind":"headers","headers":[{"name":"x-token","value":"a\r\nb"}]}}),
             "header value must not contain CR or LF",
+        ),
+        (
+            serde_json::json!({"label":"x","kind":"hlsPull","sourceUrl":"https://o.example/p.m3u8","auth":{"kind":"cookies"}}),
+            "a cookies auth requires the cookie string",
+        ),
+        (
+            serde_json::json!({"label":"x","kind":"hlsPull","sourceUrl":"https://o.example/p.m3u8","auth":{"kind":"cookies","cookies":""}}),
+            "a cookie string must not be empty",
+        ),
+        (
+            serde_json::json!({"label":"x","kind":"hlsPull","sourceUrl":"https://o.example/p.m3u8","auth":{"kind":"cookies","cookies":"a=1\r\nb=2"}}),
+            "a cookie string must be one header line",
+        ),
+        (
+            serde_json::json!({"label":"x","kind":"hlsPull","sourceUrl":"https://o.example/p.m3u8","auth":{"kind":"bearer","cookies":"a=1"}}),
+            "bearer auth carries no cookie string",
+        ),
+        // A header the client itself sets: accepting it would break framing in
+        // ways the operator cannot see from the dashboard.
+        (
+            serde_json::json!({"label":"x","kind":"hlsPull","sourceUrl":"https://o.example/p.m3u8","auth":{"kind":"headers","headers":[{"name":"Host","value":"evil.example"}]}}),
+            "a header that belongs to the connection is refused",
+        ),
+        (
+            serde_json::json!({"label":"x","kind":"hlsPull","sourceUrl":"https://o.example/p.m3u8","auth":{"kind":"headers","headers":[{"name":"Content-Length","value":"5"}]}}),
+            "a framing header is refused whatever its case",
+        ),
+        // `HeaderValue` refuses DEL, and the puller would refuse it on every
+        // request, so the save must not accept it.
+        (
+            serde_json::json!({"label":"x","kind":"hlsPull","sourceUrl":"https://o.example/p.m3u8","auth":{"kind":"headers","headers":[{"name":"x-token","value":"bad\u{7f}"}]}}),
+            "a header value the HTTP client refuses is refused at save",
         ),
     ];
 

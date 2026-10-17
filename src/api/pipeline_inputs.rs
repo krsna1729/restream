@@ -20,6 +20,9 @@ use super::state::{
 
 /// Longest bearer token, in bytes.
 const MAX_AUTH_TOKEN_LEN: usize = 4096;
+/// A signed-cookie triple is a few hundred bytes; this leaves room for a
+/// whole session's cookies without letting the row grow without bound.
+const MAX_AUTH_COOKIES_LEN: usize = 4096;
 /// Longest basic-auth username, in bytes.
 const MAX_AUTH_USERNAME_LEN: usize = 256;
 /// Longest basic-auth password, in bytes.
@@ -30,8 +33,6 @@ const MAX_INPUT_HEADERS: usize = 8;
 const MAX_HEADER_NAME_LEN: usize = 64;
 /// Longest request header value, in bytes.
 const MAX_HEADER_VALUE_LEN: usize = 1024;
-/// RFC 7230 token characters beyond ASCII alphanumerics.
-const HTTP_TOKEN_CHARS: &str = "!#$%&'*+-.^_`|~";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -70,6 +71,8 @@ pub struct AuthPayload {
     #[serde(default)]
     token: Option<String>,
     #[serde(default)]
+    cookies: Option<String>,
+    #[serde(default)]
     username: Option<String>,
     #[serde(default)]
     password: Option<String>,
@@ -101,13 +104,6 @@ fn parse_variant_rule(raw: &str) -> Result<VariantRule, String> {
     })
 }
 
-fn is_http_token(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || HTTP_TOKEN_CHARS.contains(byte as char))
-}
-
 fn contains_control(value: &str) -> bool {
     value
         .bytes()
@@ -131,12 +127,36 @@ fn validate_headers(headers: &[HeaderPair]) -> Option<String> {
                 "header value exceeds maximum length of {MAX_HEADER_VALUE_LEN} bytes"
             ));
         }
-        if contains_control(&header.name) || contains_control(&header.value) {
-            return Some("request headers may not contain CR, LF, or NUL characters".to_string());
-        }
-        if !is_http_token(&header.name) {
+        // Parse with the same types reqwest uses, so a value accepted here is
+        // one the puller can send. A hand-rolled check lets bytes through
+        // that the client then refuses on every request, with nothing shown
+        // to the operator.
+        let name = match axum::http::HeaderName::from_bytes(header.name.as_bytes()) {
+            Ok(name) => name,
+            Err(_) => {
+                return Some(format!(
+                    "header name \"{}\" is not a valid HTTP header name",
+                    header.name
+                ));
+            }
+        };
+        if let Err(error) = axum::http::HeaderValue::from_str(&header.value) {
             return Some(format!(
-                "header name \"{}\" is not a valid HTTP token",
+                "header value for \"{}\" is not a valid HTTP header value: {error}",
+                header.name
+            ));
+        }
+        // These belong to the connection the client opens, not to the input:
+        // setting them breaks framing in ways that are hard to diagnose.
+        if matches!(
+            name,
+            axum::http::header::HOST
+                | axum::http::header::CONTENT_LENGTH
+                | axum::http::header::TRANSFER_ENCODING
+                | axum::http::header::CONNECTION
+        ) {
+            return Some(format!(
+                "header \"{}\" belongs to the connection and cannot be set here",
                 header.name
             ));
         }
@@ -161,11 +181,13 @@ fn build_auth(payload: AuthPayload) -> Result<PullAuth, String> {
     let AuthPayload {
         kind,
         token,
+        cookies,
         username,
         password,
         headers,
     } = payload;
     if token.is_some() && kind != "bearer"
+        || cookies.is_some() && kind != "cookies"
         || (username.is_some() || password.is_some()) && kind != "basic"
         || headers.is_some() && kind != "headers"
     {
@@ -186,6 +208,20 @@ fn build_auth(payload: AuthPayload) -> Result<PullAuth, String> {
                 return Err("bearer token may not contain CR, LF, or NUL".to_string());
             }
             Ok(PullAuth::Bearer { token })
+        }
+        "cookies" => {
+            let cookies = cookies.ok_or_else(|| "a cookies auth requires cookies".to_string())?;
+            if cookies.is_empty() || cookies.len() > MAX_AUTH_COOKIES_LEN {
+                return Err(format!(
+                    "cookie string must be 1 to {MAX_AUTH_COOKIES_LEN} bytes"
+                ));
+            }
+            // One header line: a line break would split the request, and a
+            // control byte would make the header value invalid.
+            if contains_control(&cookies) {
+                return Err("a cookie string may not contain CR, LF, or NUL".to_string());
+            }
+            Ok(PullAuth::Cookies { cookies })
         }
         "basic" => {
             let username = username.ok_or_else(|| "a basic auth requires username".to_string())?;

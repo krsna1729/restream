@@ -16,16 +16,22 @@
 //! `pull/m<hash>.mp4`. The objects are dispatched under those same paths, so
 //! the assembler sees the playlist and segments it would have seen from an
 //! encoder.
+//!
+//! Audio. One task follows one rendition, so a master that carries audio as a
+//! separate `EXT-X-MEDIA` rendition — packaged live HLS does, and so does
+//! Restream's own preview — is pulled as its video variant. That is a known
+//! gap, and the pull states it once per pull ([`AudioPlan`]) rather than
+//! dropping the audio silently.
 
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::StreamExt as _;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Url};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -42,6 +48,14 @@ use crate::media::hls_ingest::{
     ObjectOutcome,
 };
 use crate::media::ingest_auth::AuthenticatedPipeline;
+use crate::secret_display::redact_url;
+
+mod audio;
+use audio::report_audio_rendition;
+// Re-exported for the tests in `hls_pull/tests.rs`, which exercise the audio
+// plan through this module.
+#[cfg(test)]
+use audio::{AudioPlan, audio_plan};
 
 /// The namespace the assembler sees: the media playlist's fixed path and the
 /// prefix of every object the puller dispatches under it.
@@ -91,11 +105,30 @@ impl std::fmt::Debug for PullSource {
     }
 }
 
+/// Why a pull task stopped, once it has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullEnd {
+    /// The playlist reached `EXT-X-ENDLIST` and every listed segment was
+    /// delivered. The source is finished: restarting would replay it.
+    Ended,
+    /// Every other stop: a fatal error (a bad URL, refused credentials, a
+    /// master that points at another master), another publisher holding the
+    /// input, a cancellation, or a run that gave up. The source may recover,
+    /// so a caller may restart the task behind a backoff. A cancelled task
+    /// reports this too; the registry drops a cancelled task's handle and
+    /// never reads its end.
+    Fatal,
+}
+
 /// A running pull. `cancel` stops it at its next await; `join` waits for it
-/// to release every resource.
+/// to release every resource; `end` says how it stopped once it has.
 pub struct HlsPullTask {
     cancel: CancellationToken,
     join: JoinHandle<()>,
+    /// Why the task stopped, or `None` while it runs. The task's last act is
+    /// to set it, and a caller may keep a clone ([`Self::end_state`]) so it
+    /// can still tell how the task ended after dropping the handle.
+    end: Arc<Mutex<Option<PullEnd>>>,
 }
 
 impl HlsPullTask {
@@ -111,6 +144,25 @@ impl HlsPullTask {
             Err(error) => warn!(%error, "HLS pull task did not finish cleanly"),
         }
     }
+
+    /// Whether the task has stopped. A stopped task is still the row's
+    /// running task: only a changed source replaces it, so a caller that
+    /// wants a stopped task restarted drops it first.
+    pub fn is_finished(&self) -> bool {
+        self.join.is_finished()
+    }
+
+    /// Why the task stopped, or `None` while it runs. `EXT-X-ENDLIST` is the
+    /// one end a restart would replay, so it is the one a caller must not
+    /// restart.
+    pub fn end(&self) -> Option<PullEnd> {
+        *crate::sync::lock(&self.end)
+    }
+
+    /// The state [`Self::end`] reads, shared with the task.
+    pub fn end_state(&self) -> Arc<Mutex<Option<PullEnd>>> {
+        self.end.clone()
+    }
 }
 
 /// Start pulling `source` for `identity`. The task runs on Tokio: the
@@ -124,10 +176,13 @@ pub fn spawn(
 ) -> HlsPullTask {
     let cancel = CancellationToken::new();
     let token = cancel.clone();
+    let end = Arc::new(Mutex::new(None));
+    let task_end = end.clone();
     let join = tokio::spawn(async move {
-        run(engine, ingest, identity, source, limits, token).await;
+        let ended = run(engine, ingest, identity, source, limits, token).await;
+        *crate::sync::lock(&task_end) = Some(ended);
     });
-    HlsPullTask { cancel, join }
+    HlsPullTask { cancel, join, end }
 }
 
 /// What one playlist cycle did.
@@ -160,7 +215,12 @@ impl From<FetchError> for PullError {
 enum RequestAuth {
     None,
     Bearer(String),
-    Basic { username: String, password: String },
+    /// A whole cookie string, sent as the one `Cookie` header.
+    Cookies(HeaderValue),
+    Basic {
+        username: String,
+        password: String,
+    },
     Headers(HeaderMap),
 }
 
@@ -172,6 +232,14 @@ impl RequestAuth {
                 // An invalid token would only fail at send time; reject it once.
                 HeaderValue::from_str(token).map_err(|_| "invalid bearer token".to_string())?;
                 Self::Bearer(token.clone())
+            }
+            PullAuth::Cookies { cookies } => {
+                // The API already refuses a control byte; a header value that
+                // still cannot be built must not reach a request.
+                Self::Cookies(
+                    HeaderValue::from_str(cookies)
+                        .map_err(|_| "invalid cookie string".to_string())?,
+                )
             }
             PullAuth::Basic { username, password } => Self::Basic {
                 username: username.clone(),
@@ -185,6 +253,9 @@ impl RequestAuth {
         match self {
             Self::None => builder,
             Self::Bearer(token) => builder.bearer_auth(token),
+            // One header, as a player sends it. The jar's own cookies are
+            // added beside it for their domain, as reqwest merges them.
+            Self::Cookies(cookies) => builder.header(header::COOKIE, cookies.clone()),
             Self::Basic { username, password } => builder.basic_auth(username, Some(password)),
             Self::Headers(headers) => builder.headers(headers.clone()),
         }
@@ -215,17 +286,20 @@ async fn run(
     source: PullSource,
     limits: HlsIngestLimits,
     cancel: CancellationToken,
-) {
+) -> PullEnd {
     let mut url = match Url::parse(&source.url) {
         Ok(url) if matches!(url.scheme(), "http" | "https") => url,
         Ok(url) => {
-            error!(url = %safe_url(&url), "HLS pull source must be an HTTP or HTTPS URL");
-            return;
+            error!(
+                url = %redact_url(url.as_str()),
+                "HLS pull source must be an HTTP or HTTPS URL"
+            );
+            return PullEnd::Fatal;
         }
         Err(error) => {
             // The URL itself may carry a token, so only the parse error is logged.
             error!(%error, "HLS pull source URL does not parse");
-            return;
+            return PullEnd::Fatal;
         }
     };
     url.set_fragment(None);
@@ -235,9 +309,11 @@ async fn run(
         Err(error) => {
             // The error names the mechanism, never its secret.
             error!(%error, "HLS pull origin credentials are invalid");
-            return;
+            return PullEnd::Fatal;
         }
     };
+    // One client — and one cookie jar — per pull task: an origin's
+    // `Set-Cookie` is scoped to this task's requests, never another input's.
     let client = build_client();
     let mut state = PullState {
         next_url: url,
@@ -257,12 +333,13 @@ async fn run(
     info!(
         pipeline = %state.pipeline.id,
         input = %state.pipeline.input_id,
-        url = %safe_url(&state.next_url),
+        url = %redact_url(state.next_url.as_str()),
         "HLS pull started"
     );
 
     let mut attempts = 0u32;
     let mut last_error: Option<String> = None;
+    let mut end = PullEnd::Fatal;
     loop {
         let result = tokio::select! {
             _ = cancel.cancelled() => break,
@@ -275,6 +352,7 @@ async fn run(
                     input = %state.pipeline.input_id,
                     "HLS pull reached EXT-X-ENDLIST"
                 );
+                end = PullEnd::Ended;
                 break;
             }
             Ok(Cycle::Live { had_new, target }) => {
@@ -341,6 +419,7 @@ async fn run(
         input = %state.pipeline.input_id,
         "HLS pull stopped"
     );
+    end
 }
 
 impl PullState {
@@ -366,6 +445,7 @@ impl PullState {
                 let variant = choose_variant(&master, self.variant).ok_or_else(|| {
                     PullError::Fatal("HLS master playlist lists no variant".to_string())
                 })?;
+                report_audio_rendition(&master, variant, &self.pipeline);
                 let media_url = Url::parse(&variant.path).map_err(|error| {
                     PullError::Fatal(format!("HLS variant URL does not parse: {error}"))
                 })?;
@@ -519,7 +599,7 @@ impl PullState {
                 warn!(
                     pipeline = %self.pipeline.id,
                     input = %self.pipeline.input_id,
-                    url = %safe_url(&url),
+                    url = %redact_url(url.as_str()),
                     %reason,
                     "HLS pull segment refused"
                 );
@@ -559,7 +639,7 @@ impl PullState {
                 warn!(
                     pipeline = %self.pipeline.id,
                     input = %self.pipeline.input_id,
-                    url = %safe_url(&url),
+                    url = %redact_url(url.as_str()),
                     %reason,
                     "HLS pull init segment refused"
                 );
@@ -733,7 +813,7 @@ async fn send(
         .apply(client.get(url.clone()))
         .send()
         .await
-        .map_err(|error| FetchError::Request(error.to_string()))?;
+        .map_err(|error| FetchError::Request(error.without_url().to_string()))?;
     let status = response.status();
     if !status.is_success() {
         return Err(FetchError::Status(status.as_u16()));
@@ -760,7 +840,7 @@ async fn fetch_small(
     let mut body = Vec::with_capacity(capacity);
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| FetchError::Body(error.to_string()))?;
+        let chunk = chunk.map_err(|error| FetchError::Body(error.without_url().to_string()))?;
         if body.len().saturating_add(chunk.len()) > max_bytes {
             return Err(FetchError::TooLarge);
         }
@@ -784,7 +864,7 @@ async fn pump_body(
     let mut total = 0usize;
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| FetchError::Body(error.to_string()))?;
+        let chunk = chunk.map_err(|error| FetchError::Body(error.without_url().to_string()))?;
         total = total.saturating_add(chunk.len());
         if total > limit {
             return Err(FetchError::TooLarge);
@@ -854,14 +934,6 @@ async fn sleep_or_cancel(delay: Duration, cancel: &CancellationToken) -> bool {
         _ = cancel.cancelled() => true,
         _ = tokio::time::sleep(delay) => false,
     }
-}
-
-/// A URL safe to log: signed URLs carry their token in the query.
-fn safe_url(url: &Url) -> String {
-    let mut safe = url.clone();
-    safe.set_query(None);
-    safe.set_fragment(None);
-    safe.to_string()
 }
 
 #[cfg(test)]

@@ -270,22 +270,32 @@ it is write-only, stored and used but **never** returned:
   automatically, so no `auth` entry is needed.
 - **Basic auth** — `{ "kind": "basic", "username": "…", "password": "…" }`.
 - **Bearer token** — `{ "kind": "bearer", "token": "…" }`.
+- **Cookies** — `{ "kind": "cookies", "cookies": "…" }`, sent as one `Cookie`
+  header. This is the choice for an origin that hands the player a signed
+  cookie (CloudFront's `CloudFront-Policy` / `-Signature` / `-Key-Pair-Id`
+  triple, for instance): paste the whole string rather than typing a header
+  row. An origin that *sets* its own cookies needs nothing here — the jar
+  carries them.
 - **Custom headers** — `{ "kind": "headers", "headers": [ { "name": "…",
-  "value": "…" } ] }`, for referer, `X-*` tokens or explicit cookies.
+  "value": "…" } ] }`, for referer or `X-*` tokens.
 
-`auth` is one tagged object. `bearer.token` is 1 to 4096 bytes; `basic`
-`username` is 1 to 256 bytes and `password` 1 to 4096 bytes; `headers` accepts
-at most 8 entries with names of at most 64 bytes of HTTP token characters and
-values of at most 1024 bytes. No name or value may contain CR, LF or NUL.
+`auth` is one tagged object. `bearer.token` is 1 to 4096 bytes; `cookies` is
+1 to 4096 bytes; `basic` `username` is 1 to 256 bytes and `password` 1 to
+4096 bytes; `headers` accepts at most 8 entries with names of at most 64
+bytes and values of at most 1024 bytes. No name or value may contain CR, LF
+or NUL, a header name and value must parse as HTTP (`Host`,
+`Content-Length`, `Transfer-Encoding` and `Connection` are refused because
+they belong to the connection the fetcher opens), and a cookie string must be
+one line.
 `{ "kind": "none" }` clears the credential and must carry no payload.
 
 On patch, an absent `auth` keeps the stored credential, so a request that does
 not mention it never clears it; `{ "kind": "none" }` clears it, and any other
 variant replaces it wholesale. Responses expose only `authKind`
-(`none`, `bearer`, `basic`, or `headers`) and `authUsername` — a username is
-not a secret, but a token, password, or header value never is. Disabling a
-pull input keeps its stored `sourceUrl` and `auth`; `enabled` alone starts or
-stops its puller.
+(`none`, `bearer`, `cookies`, `basic`, or `headers`) and `authUsername` — a
+username is not a secret, but a token, cookie string, password, or header
+value never is. Disabling a pull input keeps its stored `sourceUrl` and
+`auth`; `enabled` alone starts or stops its puller.
 
 List and mutation responses expose each input's `id`, `label`, `streamKey`,
 `role`, `kind`, `sourceUrl`, `variantRule`, `authKind`, `authUsername`,

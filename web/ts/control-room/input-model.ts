@@ -38,11 +38,18 @@ export const VARIANT_LABELS: Record<VariantRule, string> = {
 };
 
 /** The credential mechanisms, in select order. */
-export const AUTH_KINDS: readonly PullAuthKind[] = ["none", "bearer", "basic", "headers"];
+export const AUTH_KINDS: readonly PullAuthKind[] = [
+  "none",
+  "bearer",
+  "cookies",
+  "basic",
+  "headers",
+];
 
 export const AUTH_LABELS: Record<PullAuthKind, string> = {
   none: "None",
   bearer: "Bearer token",
+  cookies: "Cookies",
   basic: "Username and password",
   headers: "Custom headers",
 };
@@ -51,6 +58,18 @@ export const AUTH_LABELS: Record<PullAuthKind, string> = {
  * or for the cookies an origin sets. */
 export const AUTH_NONE_NOTE =
   "Usually enough: a signed URL carries its own token, and cookies the origin sets are carried automatically.";
+
+/** The real case a cookie credential is pasted from: the three cookies of a
+ * signed CloudFront URL. */
+export const AUTH_COOKIES_PLACEHOLDER =
+  "CloudFront-Policy=…; CloudFront-Signature=…; CloudFront-Key-Pair-Id=…";
+
+export const AUTH_COOKIES_NOTE =
+  "Sent as the Cookie header on every request. An origin that sets its own cookies needs nothing here.";
+
+/** Header names the engine refuses as custom request headers: they belong to
+ * the connection, not to the credential. */
+const RESERVED_HEADER_NAMES = ["host", "content-length", "transfer-encoding", "connection"];
 
 export interface InputDraft {
   readonly label: string;
@@ -63,6 +82,7 @@ export interface InputDraft {
    * and no `auth` field is sent. */
   readonly keepAuth: boolean;
   readonly token: string;
+  readonly cookies: string;
   readonly username: string;
   readonly password: string;
   readonly headers: readonly PullHeaderPair[];
@@ -80,6 +100,7 @@ export function inputDraft(stored: PipelineInput | null): InputDraft {
     authKind,
     keepAuth: authKind !== "none",
     token: "",
+    cookies: "",
     username: "",
     password: "",
     headers: [{ name: "", value: "" }],
@@ -87,7 +108,7 @@ export function inputDraft(stored: PipelineInput | null): InputDraft {
 }
 
 export type PullField = "sourceUrl" | "variantRule" | "auth";
-export type AuthField = "token" | "username" | "password" | "headers";
+export type AuthField = "token" | "cookies" | "username" | "password" | "headers";
 
 /** The pull fields the editor shows: none for a keyed input, which waits for a
  * publisher on its ingest URLs instead. */
@@ -102,6 +123,8 @@ export function authFields(draft: InputDraft): readonly AuthField[] {
   switch (draft.authKind) {
     case "bearer":
       return ["token"];
+    case "cookies":
+      return ["cookies"];
     case "basic":
       return ["username", "password"];
     case "headers":
@@ -131,6 +154,8 @@ export function storedAuthNote(stored: PipelineInput | null): string | null {
   switch (stored.authKind) {
     case "bearer":
       return "Token stored";
+    case "cookies":
+      return "Cookies stored";
     case "basic":
       return stored.authUsername ? `Signed in as ${stored.authUsername}` : "Credentials stored";
     case "headers":
@@ -150,14 +175,24 @@ function isHttpUrl(url: string): boolean {
   return parsed.protocol === "http:" || parsed.protocol === "https:";
 }
 
-/** RFC 7230 token characters, the names the engine accepts. */
+/** RFC 7230 token characters: what `http::HeaderName` accepts, which is what
+ * the engine now parses custom header names with. */
 const HEADER_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/** A cookie string is one line, sent as a `Cookie` header value. */
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
 
 function headerProblem(headers: readonly PullHeaderPair[]): string | null {
   const named = headers.filter((header) => header.name.trim());
   if (named.length === 0) return "Add a header, or choose None.";
-  const invalid = named.find((header) => !HEADER_TOKEN.test(header.name.trim()));
-  return invalid ? `"${invalid.name.trim()}" is not a valid header name.` : null;
+  for (const header of named) {
+    const name = header.name.trim();
+    if (!HEADER_TOKEN.test(name)) return `"${name}" is not a valid header name.`;
+    if (RESERVED_HEADER_NAMES.includes(name.toLowerCase())) {
+      return `"${name}" belongs to the connection; it cannot be set here.`;
+    }
+  }
+  return null;
 }
 
 /** The source lines a deck row lists: a pull input names the remote URL it
@@ -182,6 +217,13 @@ export function inputProblem(draft: InputDraft): string | null {
   switch (draft.authKind) {
     case "bearer":
       return draft.token.trim() ? null : "A bearer token needs a token.";
+    case "cookies": {
+      const cookies = draft.cookies.trim();
+      if (!cookies) return "The cookie credential needs the cookie string.";
+      return CONTROL_CHARACTER.test(cookies)
+        ? "A cookie string is one line, without control characters."
+        : null;
+    }
     case "basic":
       if (!draft.username.trim()) return "Basic auth needs a username.";
       return draft.password ? null : "Basic auth needs a password.";
@@ -205,6 +247,8 @@ function authWrite(draft: InputDraft, stored: PipelineInput | null): PullAuthPay
   switch (draft.authKind) {
     case "bearer":
       return { kind: "bearer", token: draft.token.trim() };
+    case "cookies":
+      return { kind: "cookies", cookies: draft.cookies.trim() };
     case "basic":
       return { kind: "basic", username: draft.username.trim(), password: draft.password };
     case "headers":

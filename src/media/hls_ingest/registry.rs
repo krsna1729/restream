@@ -17,7 +17,7 @@ use super::{
 };
 use crate::media::engine::{IngestRegistration, MediaEngine};
 use crate::media::executor::{MediaService, MediaServiceClass};
-use crate::media::hls_pull::{HlsPullTask, PullIdentity, PullSource};
+use crate::media::hls_pull::{HlsPullTask, PullEnd, PullIdentity, PullSource};
 use crate::media::ingest_auth::{
     AuthenticatedPipeline, PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessMode,
 };
@@ -125,6 +125,84 @@ pub struct HlsIngest {
 struct RunningPull {
     source: PullSource,
     task: HlsPullTask,
+    /// Set when the task ended fatally: the earliest instant a pass may start
+    /// it again. `None` while it runs and after a restart.
+    retry_at: Option<std::time::Instant>,
+}
+
+/// How long a pass waits before restarting a pull that ended fatally. The
+/// puller already retries inside itself; this is the outer bound for a source
+/// that gave up entirely (a wrong URL, refused credentials), so a broken row
+/// costs one attempt per interval rather than a spin.
+const PULL_RESTART_BACKOFF: Duration = Duration::from_secs(30);
+
+/// What a pass should do with one input's pull.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PullAction {
+    Leave,
+    /// Start a task; `replaced` says whether one was running and must be
+    /// cancelled, which also ends the session it opened.
+    Start {
+        replaced: bool,
+    },
+    /// The task ended fatally and its backoff has not elapsed.
+    WaitToRetry,
+}
+
+/// Decide one input's pull from what the registry knows about it.
+///
+/// Pure so every branch is testable without a clock or an origin: the caller
+/// supplies the current instant and records the retry deadline when the
+/// answer is [`PullAction::WaitToRetry`].
+fn pull_action(
+    observed: Option<&PullObservation>,
+    source: &PullSource,
+    now: std::time::Instant,
+) -> PullAction {
+    let Some(observed) = observed else {
+        return PullAction::Start { replaced: false };
+    };
+    if observed.source != *source {
+        // The row names a different origin, so whatever the old task is
+        // doing, it is not what the row says.
+        return PullAction::Start { replaced: true };
+    }
+    if !observed.finished {
+        return PullAction::Leave;
+    }
+    match observed.end {
+        // A finished playlist is terminal for this source: restarting would
+        // replay it.
+        Some(PullEnd::Ended) => PullAction::Leave,
+        // A source that gave up may recover, so wait out the backoff.
+        Some(PullEnd::Fatal) => match observed.retry_at {
+            Some(retry_at) if now >= retry_at => PullAction::Start { replaced: false },
+            Some(_) | None => PullAction::WaitToRetry,
+        },
+        // Finished without recording why: leave it rather than restart
+        // something that may be about to be reaped.
+        None => PullAction::Leave,
+    }
+}
+
+/// What the registry knows about an input's pull, apart from the task itself,
+/// so [`pull_action`] can be read and tested on its own.
+struct PullObservation {
+    source: PullSource,
+    finished: bool,
+    end: Option<PullEnd>,
+    retry_at: Option<std::time::Instant>,
+}
+
+impl RunningPull {
+    fn observe(&self) -> PullObservation {
+        PullObservation {
+            source: self.source.clone(),
+            finished: self.task.is_finished(),
+            end: self.task.end(),
+            retry_at: self.retry_at,
+        }
+    }
 }
 
 impl HlsIngest {
@@ -155,13 +233,46 @@ impl HlsIngest {
     ///
     /// Returns whether a task was started, so the caller can log a change and
     /// a repeated reconcile pass costs one comparison.
-    pub fn ensure_pull(self: &Arc<Self>, identity: PullIdentity, source: PullSource) -> bool {
-        let mut pulls = crate::sync::lock(&self.pulls);
-        if let Some(running) = pulls.get(&identity.input_id) {
-            if running.source == source {
+    ///
+    /// A replaced task takes its ingest session with it. The session holds
+    /// the ordering state — the media sequence it has already seen, the
+    /// timeline it is publishing against — and a new origin numbers its
+    /// segments independently, so inheriting the old state would classify its
+    /// first segments as duplicates or rewind the timeline. The next object
+    /// the new task dispatches opens a fresh session.
+    ///
+    /// A task that ended fatally is reaped and started again behind
+    /// [`PULL_RESTART_BACKOFF`]; one that ended at `EXT-X-ENDLIST` is left
+    /// alone, because its playlist is complete and restarting would replay it.
+    pub async fn ensure_pull(self: &Arc<Self>, identity: PullIdentity, source: PullSource) -> bool {
+        let now = std::time::Instant::now();
+        let action = {
+            let pulls = crate::sync::lock(&self.pulls);
+            let observed = pulls.get(&identity.input_id).map(RunningPull::observe);
+            pull_action(observed.as_ref(), &source, now)
+        };
+        let replaced = match action {
+            PullAction::Leave => return false,
+            PullAction::WaitToRetry => {
+                // Record the deadline once: the next pass that finds it
+                // elapsed starts the task.
+                let mut pulls = crate::sync::lock(&self.pulls);
+                if let Some(running) = pulls.get_mut(&identity.input_id)
+                    && running.retry_at.is_none()
+                {
+                    running.retry_at = Some(now + PULL_RESTART_BACKOFF);
+                }
                 return false;
             }
-            running.task.cancel();
+            PullAction::Start { replaced } => replaced,
+        };
+        if replaced {
+            // Cancel the old task before its session goes, so it cannot
+            // publish into a session the new origin has already replaced.
+            if let Some(running) = crate::sync::lock(&self.pulls).remove(&identity.input_id) {
+                running.task.cancel();
+            }
+            self.engine.cancel_pipeline_input(&identity.input_id).await;
         }
         let input_id = identity.input_id.clone();
         let task = crate::media::hls_pull::spawn(
@@ -171,18 +282,26 @@ impl HlsIngest {
             source.clone(),
             self.limits,
         );
-        pulls.insert(input_id, RunningPull { source, task });
+        crate::sync::lock(&self.pulls).insert(
+            input_id,
+            RunningPull {
+                source,
+                task,
+                retry_at: None,
+            },
+        );
         true
     }
 
-    /// Stop the input's pull task, if one runs. The task ends at its next
-    /// await; it is not joined, because that would put an origin's request
-    /// timeout inside the reconcile pass.
-    pub fn cancel_pull(&self, input_id: &str) -> bool {
+    /// Stop the input's pull task, if one runs, and end the session it
+    /// opened. The task ends at its next await; it is not joined, because
+    /// that would put an origin's request timeout inside the reconcile pass.
+    pub async fn cancel_pull(&self, input_id: &str) -> bool {
         let running = crate::sync::lock(&self.pulls).remove(input_id);
         match running {
             Some(running) => {
                 running.task.cancel();
+                self.engine.cancel_pipeline_input(input_id).await;
                 true
             }
             None => false,
@@ -506,7 +625,13 @@ impl HlsIngest {
     }
 }
 
-/// Tests live in `registry_tests.rs` (this file is at the line cap).
+/// Tests live in `registry_tests.rs` (this file is at the line cap); the
+/// pull-registry cases live in `pull_registry_tests.rs`, which keeps that
+/// file's growth bounded too.
 #[cfg(test)]
 #[path = "registry_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "pull_registry_tests.rs"]
+mod pull_tests;

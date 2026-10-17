@@ -599,6 +599,8 @@ export interface PullHeaderPair {
 export type PullAuthPayload =
   | { kind: "none" }
   | { kind: "bearer"; token: string }
+  /** The whole cookie string of a signed cookie, sent as `Cookie`. */
+  | { kind: "cookies"; cookies: string }
   | { kind: "basic"; username: string; password: string }
   | { kind: "headers"; headers: PullHeaderPair[] };
 

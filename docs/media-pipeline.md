@@ -824,7 +824,7 @@ path's; the puller only decides what to fetch.
 
 - **Source.** The input stores the playlist URL, a variant rule (`highest`
   or `lowest` `BANDWIDTH`, default highest) and origin credentials:
-  bearer, basic, or a set of request headers. A source URL may carry its own
+  bearer, cookies, basic, or a set of request headers. A source URL may carry its own
   token in the query; that query is forwarded on every relative URI the
   playlist resolves and is stripped from logs. Credentials are write-only —
   stored and used, never returned by the API.
@@ -840,6 +840,20 @@ path's; the puller only decides what to fetch.
   playlist is followed directly on later refreshes. The master itself is not
   fed to the assembler, which means the puller's rule (not ordering's
   highest-only push rule) decides the rendition.
+- **Audio.** A master that carries audio as a separate `EXT-X-MEDIA`
+  rendition — packaged live HLS, and Restream's own preview
+  (`video/index.m3u8` plus `audio/{track}/index.m3u8`), do — is pulled as its
+  chosen video variant: one task follows one rendition, and the assembler
+  follows one playlist path, so a second followed rendition is a capability
+  the shared HLS path does not have yet (Q-077). The pull states that once per
+  pull rather than dropping the audio silently: one `WARN` naming the group
+  and the rendition and saying the pulled stream is video-only, and the pull
+  continues. A variant whose audio is muxed into its own segments — no `AUDIO`
+  attribute, or a group member with no `URI` — is complete as it stands and is
+  not reported; a variant that names a group the master does not define is
+  reported with that as its reason. The rendition is chosen as RFC 8216
+  section 4.3.4.1 chooses among a group's members: `DEFAULT=YES`, else
+  `AUTOSELECT=YES`, else the first.
 - **Refresh cadence.** The media playlist is fetched again every target
   duration, and half a target duration after a reload that brought nothing
   new (RFC 8216 section 6.3.4). Segments listed with a sequence below the

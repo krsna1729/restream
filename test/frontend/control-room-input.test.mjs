@@ -4,7 +4,10 @@ import test from "node:test";
 import { installFakeDom, loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
 const {
+  AUTH_COOKIES_NOTE,
+  AUTH_COOKIES_PLACEHOLDER,
   AUTH_KINDS,
+  AUTH_LABELS,
   AUTH_NONE_NOTE,
   authFields,
   chooseAuthKind,
@@ -75,11 +78,12 @@ test("the Source choice decides which pull fields the editor shows", () => {
 });
 
 test("each authentication choice reveals exactly its own fields", () => {
-  assert.deepEqual(AUTH_KINDS, ["none", "bearer", "basic", "headers"]);
+  assert.deepEqual(AUTH_KINDS, ["none", "bearer", "cookies", "basic", "headers"]);
   const pulling = { ...inputDraft(null), kind: "hlsPull" };
   const shown = {
     none: [],
     bearer: ["token"],
+    cookies: ["cookies"],
     basic: ["username", "password"],
     headers: ["headers"],
   };
@@ -90,6 +94,11 @@ test("each authentication choice reveals exactly its own fields", () => {
   assert.deepEqual(authFields({ ...pulling, kind: "keyed" }), []);
   assert.match(AUTH_NONE_NOTE, /signed URL/);
   assert.match(AUTH_NONE_NOTE, /cookies/);
+  // One multi-line field, labelled for the real case and sent as `Cookie`.
+  assert.match(AUTH_COOKIES_PLACEHOLDER, /^CloudFront-Policy=/);
+  assert.match(AUTH_COOKIES_PLACEHOLDER, /CloudFront-Signature=/);
+  assert.match(AUTH_COOKIES_NOTE, /Cookie header/);
+  assert.equal(AUTH_LABELS.cookies, "Cookies");
 });
 
 test("a stored credential is state, not a value", () => {
@@ -97,6 +106,7 @@ test("a stored credential is state, not a value", () => {
   const draft = inputDraft(bearer);
   assert.equal(draft.keepAuth, true);
   assert.equal(draft.token, "");
+  assert.equal(draft.cookies, "");
   assert.equal(draft.username, "");
   assert.equal(draft.password, "");
   assert.equal(storedAuthNote(bearer), "Token stored");
@@ -106,6 +116,41 @@ test("a stored credential is state, not a value", () => {
   assert.equal(storedAuthNote(pull({ authKind: "basic", authUsername: "alice" })), "Signed in as alice");
   assert.equal(storedAuthNote(pull({ authKind: "headers" })), "Custom headers stored");
   assert.equal(storedAuthNote(input()), null);
+});
+
+test("a cookie credential is one field, state when stored, never an empty string", () => {
+  const storedCookies = pull({ authKind: "cookies" });
+  // One field, and a label that names the real case.
+  const replacing = chooseAuthKind(inputDraft(storedCookies), "cookies");
+  assert.deepEqual(authFields(replacing), ["cookies"]);
+  assert.equal(inputDraft(storedCookies).cookies, "");
+  assert.equal(replacing.keepAuth, false);
+  assert.equal(AUTH_LABELS[replacing.authKind], "Cookies");
+
+  // Stored, it reads as state: the string itself is never read back.
+  assert.equal(storedAuthNote(storedCookies), "Cookies stored");
+  assert.deepEqual(authFields(inputDraft(storedCookies)), []);
+  assert.equal(inputDraft(storedCookies).keepAuth, true);
+
+  // Saving it untouched carries no `auth` at all.
+  const kept = inputDraft(storedCookies);
+  assert.ok(!("auth" in inputWrite(kept, storedCookies)));
+
+  // A value is trimmed and sent whole; an empty one is refused, not sent.
+  const cookie = "CloudFront-Policy=eyJTdGF0ZW1lbnQiOiJ4";
+  assert.deepEqual(inputWrite({ ...replacing, cookies: ` ${cookie} ` }, storedCookies).auth, {
+    kind: "cookies",
+    cookies: cookie,
+  });
+  assert.equal(
+    inputProblem(replacing),
+    "The cookie credential needs the cookie string.",
+  );
+  assert.equal(
+    inputProblem({ ...replacing, cookies: `${cookie}\nsession=abc` }),
+    "A cookie string is one line, without control characters.",
+  );
+  assert.equal(inputProblem({ ...replacing, cookies: ` ${cookie} ` }), null);
 });
 
 test("saving a stored credential untouched sends no auth at all", async () => {
@@ -250,6 +295,20 @@ test("what the engine would refuse is caught before submit", () => {
     }),
     '"X Token" is not a valid header name.',
   );
+  // Names that belong to the connection, in any case, are refused here rather
+  // than by a 400 on save.
+  for (const name of ["Host", "content-length", "Transfer-Encoding", "CONNECTION"]) {
+    assert.equal(
+      inputProblem({
+        ...origin,
+        sourceUrl: ORIGIN,
+        authKind: "headers",
+        headers: [{ name, value: "v" }],
+      }),
+      `"${name}" belongs to the connection; it cannot be set here.`,
+      name,
+    );
+  }
   // A keyed input needs neither URL nor credential, but still a label.
   assert.equal(inputProblem({ ...origin, kind: "keyed", sourceUrl: "" }), null);
   assert.equal(inputProblem({ ...origin, sourceUrl: ORIGIN, label: "   " }), "An input needs a label.");

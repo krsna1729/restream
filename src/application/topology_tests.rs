@@ -44,7 +44,7 @@ fn forwarded_input(engine: &MediaEngine, pipeline_id: &str) -> Option<String> {
 
 /// One pull input's rows: an enabled input starts a pull task, disabling it
 /// stops the task, re-enabling starts a fresh one, and a pass that changes
-/// nothing leaves the running task alone.
+/// nothing starts nothing at all.
 #[tokio::test]
 async fn pull_inputs_follow_their_rows_across_passes() {
     let pool = pool().await;
@@ -54,15 +54,26 @@ async fn pull_inputs_follow_their_rows_across_passes() {
     let (_engine, ingest) = crate::media::hls_ingest::test_support::test_ingest(
         crate::media::hls_ingest::HlsIngestLimits::default(),
     );
-    let pull = crate::domain::pipeline_input::PipelineInputSource {
+    // A listener that accepts and never answers, so the pull task parks in
+    // its first request; a closed port would log a warning on every backoff.
+    let (origin, stalled) = crate::media::hls_ingest::test_support::stalled_origin();
+    let pull = |url: String| crate::domain::pipeline_input::PipelineInputSource {
         kind: crate::domain::pipeline_input::PipelineInputSourceKind::HlsPull,
-        url: Some("http://127.0.0.1:9/master.m3u8".to_string()),
+        url: Some(url),
         variant_rule: crate::domain::pipeline_input::VariantRule::HighestBandwidth,
         auth: crate::domain::pipeline_input::PullAuth::None,
     };
-    crate::db::create_pipeline_input(&pool, "in-pull", "pipe", "pull", "key-pull", &pull)
-        .await
-        .unwrap();
+    let first_url = format!("http://{origin}/master.m3u8");
+    crate::db::create_pipeline_input(
+        &pool,
+        "in-pull",
+        "pipe",
+        "pull",
+        "key-pull",
+        &pull(first_url.clone()),
+    )
+    .await
+    .unwrap();
     crate::db::create_pipeline_input(
         &pool,
         "in-keyed",
@@ -74,26 +85,33 @@ async fn pull_inputs_follow_their_rows_across_passes() {
     .await
     .unwrap();
 
-    converge_pull_inputs(&pool, &ingest).await;
+    assert_eq!(
+        converge_pull_inputs(&pool, &ingest).await,
+        ["in-pull".to_string()],
+        "only the pull input pulls, and the pass reports what it started"
+    );
     assert_eq!(
         ingest.pull_input_ids(),
-        ["in-pull".to_string()].into_iter().collect(),
-        "only the pull input pulls"
+        ["in-pull".to_string()].into_iter().collect()
     );
 
-    converge_pull_inputs(&pool, &ingest).await;
     assert!(
-        ingest.pull_input_ids().contains("in-pull"),
-        "a pass that changes nothing leaves the task running"
+        converge_pull_inputs(&pool, &ingest).await.is_empty(),
+        "a pass that changes nothing starts nothing: the running task is left alone"
     );
+    assert!(ingest.pull_input_ids().contains("in-pull"));
 
-    crate::db::update_pipeline_input(&pool, "pipe", "in-pull", "pull", false, &pull)
+    crate::db::update_pipeline_input(&pool, "pipe", "in-pull", "pull", false, &pull(first_url))
         .await
         .unwrap();
     converge_pull_inputs(&pool, &ingest).await;
     assert!(
         ingest.pull_input_ids().is_empty(),
         "a disabled input stops pulling"
+    );
+    assert!(
+        converge_pull_inputs(&pool, &ingest).await.is_empty(),
+        "a disabled input is not started again"
     );
 
     crate::db::update_pipeline_input(
@@ -102,21 +120,18 @@ async fn pull_inputs_follow_their_rows_across_passes() {
         "in-pull",
         "pull",
         true,
-        &crate::domain::pipeline_input::PipelineInputSource {
-            kind: crate::domain::pipeline_input::PipelineInputSourceKind::HlsPull,
-            url: Some("http://127.0.0.1:9/other.m3u8".to_string()),
-            variant_rule: crate::domain::pipeline_input::VariantRule::HighestBandwidth,
-            auth: crate::domain::pipeline_input::PullAuth::None,
-        },
+        &pull(format!("http://{origin}/other.m3u8")),
     )
     .await
     .unwrap();
-    converge_pull_inputs(&pool, &ingest).await;
-    assert!(
-        ingest.pull_input_ids().contains("in-pull"),
+    assert_eq!(
+        converge_pull_inputs(&pool, &ingest).await,
+        ["in-pull".to_string()],
         "an edited row pulls again"
     );
+    assert!(ingest.pull_input_ids().contains("in-pull"));
     ingest.cancel_all_pulls();
+    stalled.abort();
 }
 
 #[tokio::test]

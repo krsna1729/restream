@@ -38,7 +38,7 @@ impl fmt::Display for PipelineInputRoleParseError {
 
 impl std::error::Error for PipelineInputRoleParseError {}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PipelineInput {
     pub id: String,
     pub pipeline_id: String,
@@ -53,6 +53,33 @@ pub struct PipelineInput {
     /// How the input authenticates to its origin. A credential: stored and
     /// used, never returned by the API. [`PullAuth::None`] when unset.
     pub source_auth: PullAuth,
+}
+
+impl fmt::Debug for PipelineInput {
+    /// `source_url` is itself a credential when the origin signs its URLs, so
+    /// it prints redacted; `source_auth` redacts itself.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PipelineInput")
+            .field("id", &self.id)
+            .field("pipeline_id", &self.pipeline_id)
+            .field("label", &self.label)
+            .field("stream_key", &self.stream_key)
+            .field("role", &self.role)
+            .field("enabled", &self.enabled)
+            .field("selected", &self.selected)
+            .field("source_kind", &self.source_kind)
+            .field(
+                "source_url",
+                &self
+                    .source_url
+                    .as_deref()
+                    .map(crate::secret_display::redact_url),
+            )
+            .field("variant_rule", &self.variant_rule)
+            .field("source_auth", &self.source_auth)
+            .finish()
+    }
 }
 
 impl PipelineInput {
@@ -95,14 +122,6 @@ impl PipelineInputSourceKind {
         match self {
             Self::Keyed => "keyed",
             Self::HlsPull => "hls_pull",
-        }
-    }
-
-    /// The protocol label recorded on the ingest session this input opens.
-    pub const fn protocol(self) -> &'static str {
-        match self {
-            Self::Keyed => "keyed",
-            Self::HlsPull => "hls-pull",
         }
     }
 }
@@ -188,7 +207,7 @@ impl fmt::Debug for HeaderPair {
         formatter
             .debug_struct("HeaderPair")
             .field("name", &self.name)
-            .field("value", &crate::secret_display::redact_secret(&self.value))
+            .field("value", &REDACTED)
             .finish()
     }
 }
@@ -208,6 +227,12 @@ pub enum PullAuth {
     Bearer {
         token: String,
     },
+    /// A whole cookie string, sent as one `Cookie` header. A signed-cookie
+    /// origin (CloudFront's three-part token, for instance) is configured by
+    /// pasting what the player would send, rather than by typing a header row.
+    Cookies {
+        cookies: String,
+    },
     Basic {
         username: String,
         password: String,
@@ -217,22 +242,34 @@ pub enum PullAuth {
     },
 }
 
+/// What a credential prints as. `redact_secret` keeps a prefix and a suffix,
+/// which suits a long high-entropy stream key but shows half of a short
+/// password, cookie or header value; a fixed marker shows nothing.
+const REDACTED: &str = "<redacted>";
+
 impl fmt::Debug for PullAuth {
     /// Every variant carries a credential, and this type reaches log lines
-    /// through the input, the write spec and the pull source, so it prints
-    /// the variant and a username and redacts the rest.
+    /// through the input, the write spec and the pull source. Only the variant
+    /// and a username are printed.
+    ///
+    /// A bearer token keeps `redact_secret`'s four-character prefix and suffix
+    /// on purpose: operators identify which token is configured by its ends,
+    /// and a token is long and high-entropy, unlike a password.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let redacted = |secret: &str| crate::secret_display::redact_secret(secret);
         match self {
             Self::None => formatter.write_str("None"),
             Self::Bearer { token } => formatter
                 .debug_struct("Bearer")
-                .field("token", &redacted(token))
+                .field("token", &crate::secret_display::redact_secret(token))
                 .finish(),
-            Self::Basic { username, password } => formatter
+            Self::Cookies { .. } => formatter
+                .debug_struct("Cookies")
+                .field("cookies", &REDACTED)
+                .finish(),
+            Self::Basic { username, .. } => formatter
                 .debug_struct("Basic")
                 .field("username", username)
-                .field("password", &redacted(password))
+                .field("password", &REDACTED)
                 .finish(),
             Self::Headers { headers } => formatter
                 .debug_struct("Headers")
@@ -248,6 +285,7 @@ impl PullAuth {
         match self {
             Self::None => "none",
             Self::Bearer { .. } => "bearer",
+            Self::Cookies { .. } => "cookies",
             Self::Basic { .. } => "basic",
             Self::Headers { .. } => "headers",
         }
@@ -267,12 +305,29 @@ impl PullAuth {
 ///
 /// This is the write-side view; the read model carries the same facts as flat
 /// fields on [`PipelineInput`]. `auth` defaults to [`PullAuth::None`].
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub struct PipelineInputSource {
     pub kind: PipelineInputSourceKind,
     pub url: Option<String>,
     pub variant_rule: VariantRule,
     pub auth: PullAuth,
+}
+
+impl fmt::Debug for PipelineInputSource {
+    /// Same rule as [`PipelineInput`]: a signed URL is a credential, and
+    /// `auth` redacts itself.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PipelineInputSource")
+            .field("kind", &self.kind)
+            .field(
+                "url",
+                &self.url.as_deref().map(crate::secret_display::redact_url),
+            )
+            .field("variant_rule", &self.variant_rule)
+            .field("auth", &self.auth)
+            .finish()
+    }
 }
 
 impl PipelineInputSource {
@@ -295,9 +350,13 @@ mod tests {
         let token = "Bearer-secret-token";
         let password = "hunter2-secret";
         let cookie = "session=abc123secret";
+        let url_secret = "url-secret";
         let auths = [
             PullAuth::Bearer {
                 token: token.to_string(),
+            },
+            PullAuth::Cookies {
+                cookies: cookie.to_string(),
             },
             PullAuth::Basic {
                 username: "operator".to_string(),
@@ -321,7 +380,17 @@ mod tests {
             }
         }
         // The username is not a secret, and showing it is the ergonomic part.
-        assert!(format!("{:?}", auths[1]).contains("operator"));
+        assert!(format!("{:?}", auths[2]).contains("operator"));
+        // A short password or cookie value shows nothing at all: `redact_secret`
+        // keeps a prefix and a suffix, which would be half of an eight-byte
+        // secret. A bearer token keeps its ends on purpose, to identify it.
+        for auth in [&auths[1], &auths[2], &auths[3]] {
+            assert!(
+                format!("{auth:?}").contains("<redacted>"),
+                "{auth:?} prints a fixed marker, not a partial secret"
+            );
+        }
+        assert!(format!("{:?}", auths[0]).contains("Bear"));
 
         let input = PipelineInput {
             id: "input-pull".to_string(),
@@ -332,7 +401,9 @@ mod tests {
             enabled: true,
             selected: true,
             source_kind: PipelineInputSourceKind::HlsPull,
-            source_url: Some("http://origin.example/master.m3u8?token=url-secret".to_string()),
+            source_url: Some(format!(
+                "http://origin.example/master.m3u8?token={url_secret}"
+            )),
             variant_rule: VariantRule::HighestBandwidth,
             source_auth: auths[0].clone(),
         };
@@ -341,6 +412,26 @@ mod tests {
             !printed.contains(token),
             "the input row must redact its auth"
         );
+        // A signed URL is a credential: its query carries the token.
+        assert!(
+            !printed.contains(url_secret),
+            "the input row must redact its source URL: {printed}"
+        );
+        assert!(printed.contains("origin.example"), "the origin still shows");
         assert!(printed.contains("input-pull"), "the rest still prints");
+
+        let source = PipelineInputSource {
+            kind: PipelineInputSourceKind::HlsPull,
+            url: Some(format!(
+                "http://origin.example/master.m3u8?token={url_secret}"
+            )),
+            variant_rule: VariantRule::HighestBandwidth,
+            auth: auths[1].clone(),
+        };
+        let printed = format!("{source:?}");
+        assert!(
+            !printed.contains(url_secret) && !printed.contains(cookie),
+            "the write spec redacts its URL and its auth: {printed}"
+        );
     }
 }

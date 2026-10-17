@@ -5,6 +5,8 @@ import { withBasePath } from "../core/base-path.js";
 import type { PullHeaderPair } from "../core/api-types.js";
 import type { PipelineInput, PipelineInputKind, PullAuthKind, VariantRule } from "../types.js";
 import {
+  AUTH_COOKIES_NOTE,
+  AUTH_COOKIES_PLACEHOLDER,
   AUTH_KINDS,
   AUTH_LABELS,
   AUTH_NONE_NOTE,
@@ -180,6 +182,20 @@ export function InputForm(props: {
                 value={draft.token}
                 onChange={(event) => set({ token: event.target.value })}
               />
+            </label>
+          )}
+          {shown.includes("cookies") && (
+            <label className="form-control">
+              <span className="label-text">Cookie string (copied from the origin)</span>
+              <textarea
+                rows={3}
+                autoComplete="off"
+                className="textarea textarea-sm textarea-bordered font-mono"
+                placeholder={AUTH_COOKIES_PLACEHOLDER}
+                value={draft.cookies}
+                onChange={(event) => set({ cookies: event.target.value })}
+              />
+              <span className="text-xs opacity-70">{AUTH_COOKIES_NOTE}</span>
             </label>
           )}
           {shown.includes("username") && (

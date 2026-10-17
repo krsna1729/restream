@@ -105,12 +105,16 @@ impl PipelineAccessAuthenticator for PipelineStoreIngestAuthenticator {
             // A pull input has no listener of its own: it never accepts a
             // push, so its key resolves only for reads. Publishing to it
             // would otherwise race the pull task for the input's session.
-            let pushing = matches!(
-                mode,
+            //
+            // Exhaustive on purpose: a new publish mode (a MoQ publish, say)
+            // must decide this question at compile time rather than inherit
+            // "not a publish" from a wildcard arm.
+            let pushing = match mode {
                 PipelineAccessMode::RtmpPublish
-                    | PipelineAccessMode::SrtPublish
-                    | PipelineAccessMode::HlsPublish
-            );
+                | PipelineAccessMode::SrtPublish
+                | PipelineAccessMode::HlsPublish => true,
+                PipelineAccessMode::RtmpPlay | PipelineAccessMode::SrtRead => false,
+            };
             let input = self
                 .input_lookup
                 .get_by_stream_key(stream_key)

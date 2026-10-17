@@ -348,11 +348,12 @@ inputs with their publish URLs, and enables, disables or deletes them; the
 primary and the selected input offer neither, as the engine refuses both. An
 input's source is either a stream key (live push over RTMP, SRT or HLS) or a
 remote HLS URL the engine pulls, with a rendition rule (highest or lowest
-bandwidth) and one credential choice: none, a bearer token, a username and
-password, or custom headers. A signed URL needs no credential (its token is
-in the URL) and origin cookies are carried automatically, so `none` is the
-usual choice; a stored secret is written once and shown only as state, never
-as a value, and a save that does not touch it leaves it in place.
+bandwidth) and one credential choice: none, a bearer token, a pasted cookie
+string, a username and password, or custom headers. A signed URL needs no
+credential (its token is in the URL) and origin cookies are carried
+automatically, so `none` is the usual choice; a stored secret is written once
+and shown only as state, never as a value, and a save that does not touch it
+leaves it in place.
 The destination matrix adds, edits and deletes destinations: a preset server
 plus key or a full URL, SRT as fields, the RTMP flavour from the preset (or
 chosen for a custom server), video passthrough or a profile (stored custom

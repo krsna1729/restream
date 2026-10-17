@@ -163,12 +163,15 @@ fn a_master_playlist_selects_the_highest_bandwidth_variant() {
             Variant {
                 bandwidth: 800_000,
                 path: "low/index.m3u8".into(),
+                audio_group: None,
             },
             Variant {
                 bandwidth: 2_500_000,
                 path: "high/index.m3u8".into(),
+                audio_group: None,
             },
         ],
+        audio: Vec::new(),
     });
     assert_eq!(
         session.on_playlist("master.m3u8", master, t0),
@@ -511,7 +514,9 @@ fn a_recreated_map_does_not_take_the_voided_seed_again() {
             variants: vec![Variant {
                 bandwidth,
                 path: format!("v{bandwidth}/index.m3u8"),
+                audio_group: None,
             }],
+            audio: Vec::new(),
         })
     };
     session.on_playlist("master.m3u8", master(800_000), t0);
@@ -562,7 +567,9 @@ fn a_variant_switch_forgets_the_old_map_until_the_new_playlist_arrives() {
             variants: vec![Variant {
                 bandwidth,
                 path: format!("v{bandwidth}/index.m3u8"),
+                audio_group: None,
             }],
+            audio: Vec::new(),
         })
     };
     // The first variant's playlist names an init.
