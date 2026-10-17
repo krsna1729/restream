@@ -4,7 +4,10 @@
 //! origin asks for. Supported: `MD5`, `MD5-sess`, `SHA-256` and
 //! `SHA-256-sess`, with `qop=auth` or no `qop` (RFC 2069). `auth-int` and
 //! `userhash` are not: an origin that offers only those is refused with that
-//! reason.
+//! reason. Challenges are read one per `WWW-Authenticate` value, which is how
+//! origins send several; a single value joining a Digest challenge after
+//! another scheme's (`Basic realm="x", Digest …`, RFC 7235's comma form) is
+//! read as its leading scheme only.
 
 use std::fmt::Write as _;
 

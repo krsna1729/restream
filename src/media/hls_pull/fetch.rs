@@ -142,11 +142,20 @@ impl AuthScope {
     /// Learn from a `401`: whether the request is worth sending again, now
     /// answering the origin's Digest challenge. A username and password
     /// answer whichever scheme the origin asks for, as FFmpeg's HTTP client
-    /// does. A first challenge is answered, and a `stale=true` one (the nonce
-    /// expired, the credentials did not) once more; a Digest answer refused
-    /// without `stale` means the credentials are wrong, and the `401` stands.
+    /// does. A first challenge is answered at once, and a `stale=true` one
+    /// (the nonce expired, the credentials did not) once more. A Digest answer
+    /// refused without `stale` leaves this request's `401` standing, but its
+    /// new challenge is still kept: an origin that restarted forgets its
+    /// nonces and may not say `stale`, and the next request answers afresh.
+    ///
+    /// The answer's `uri` is the request URL's. A same-origin redirect that
+    /// reqwest follows on its own keeps that answer, which a strict origin
+    /// refuses; HLS origins rarely redirect inside one origin.
     fn learn_challenge(&self, url: &Url, response: &reqwest::Response) -> Result<bool, FetchError> {
-        if !matches!(self.auth, RequestAuth::Basic { .. }) || !self.in_origin(url) {
+        let RequestAuth::Basic { username, .. } = &self.auth else {
+            return Ok(false);
+        };
+        if !self.in_origin(url) {
             return Ok(false);
         }
         let values = response
@@ -159,12 +168,22 @@ impl AuthScope {
             Err(digest::Refusal::NotDigest) => return Ok(false),
             Err(digest::Refusal::Unsupported(reason)) => return Err(FetchError::Auth(reason)),
         };
-        let mut state = crate::sync::lock(&self.digest);
-        if state.is_some() && !challenge.stale {
-            return Ok(false);
+        // A Digest username is a quoted string, not base64: outside visible
+        // ASCII it needs RFC 7616's `username*`, and a header could not carry
+        // it. Say so once rather than fail every backoff at the builder.
+        if username
+            .bytes()
+            .any(|byte| !(byte == b' ' || byte.is_ascii_graphic()))
+        {
+            return Err(FetchError::Auth(
+                "a Digest username outside visible ASCII needs RFC 7616 username*, which is not supported"
+                    .to_string(),
+            ));
         }
+        let mut state = crate::sync::lock(&self.digest);
+        let answer_now = state.is_none() || challenge.stale;
         *state = Some((challenge, 0));
-        Ok(true)
+        Ok(answer_now)
     }
 
     /// Whether this pull has a credential to protect, which is what makes a
@@ -475,6 +494,11 @@ pub(super) fn build_client(auth_configured: bool, allow_private: bool) -> Client
             }
         }))
         .use_preconfigured_tls((*tls).clone())
+        // The resolver guard holds only when the client connects directly: a
+        // proxy (reqwest reads `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` by
+        // default) resolves the target name itself, out of the guard's
+        // sight, and an internal proxy's own name would be refused anyway.
+        .no_proxy()
         .dns_resolver(Arc::new(GuardedResolver { allow_private }))
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(REQUEST_TIMEOUT)

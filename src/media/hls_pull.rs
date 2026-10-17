@@ -921,6 +921,9 @@ mod tests;
 // both integration modules use, `tests_guards` the guards a real origin can
 // prove. Split because one file of them would break the 999-line cap.
 #[cfg(test)]
+#[path = "hls_pull/tests_auth.rs"]
+mod tests_auth;
+#[cfg(test)]
 #[path = "hls_pull/tests_guards.rs"]
 mod tests_guards;
 #[cfg(test)]

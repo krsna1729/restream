@@ -951,9 +951,11 @@ path's; the puller only decides what to fetch.
   playlist and, through the pull client's resolver, to every name it connects
   to — the source, each variant, segment and map host, and redirect targets.
   The client connects to the addresses the resolver checked, so a name cannot
-  rebind between the check and the connect. A source that is itself private
-  (by literal or by name) may point at private targets. `EXT-X-ENDLIST` ends it after the last listed
-  segment is handed over.
+  rebind between the check and the connect; the pull client ignores proxy
+  environment variables, since a proxy would resolve names itself. A source
+  that is itself private (by literal or by name) may point at private
+  targets. `EXT-X-ENDLIST` ends it after the last listed segment is handed
+  over.
 - **Cancellation.** `cancel` stops the task at its next await (in-flight HTTP
   requests are dropped) and `join` waits for it. A cancelled task dispatches
   nothing more: the dispatch itself checks the token before it hands an object
