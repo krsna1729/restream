@@ -5,12 +5,13 @@ use std::time::{Duration, Instant};
 use sqlx::SqlitePool;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::application::ports::PipelineStore;
 use crate::application::reconcile::build_recording_reconcile_plan;
 use crate::application::topology::{
-    ReconcileRequests, apply_requested_selections, converge_pull_inputs, converge_topology,
+    ReconcileRequests, apply_requested_selections, converge_ingest_key_state, converge_pull_inputs,
+    converge_topology,
 };
 use crate::config::AppConfig;
 use crate::infrastructure::sqlite_ports::SqliteMetaStore;
@@ -156,6 +157,9 @@ impl Reconciler {
         };
 
         converge_pull_inputs(&self.pool, &self.hls_ingest).await;
+        for input_id in converge_ingest_key_state(&self.pool, &self.hls_ingest).await {
+            info!(input_id = %input_id, "ingest key state released for a deleted input");
+        }
         converge_topology(&self.pool, &self.engine, &outputs).await;
         if let Some(wait) = self.egress.reconcile(&outputs).await {
             self.requests.wake_at(Instant::now() + wait);

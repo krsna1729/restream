@@ -134,6 +134,49 @@ async fn pull_inputs_follow_their_rows_across_passes() {
     stalled.abort();
 }
 
+/// A deleted input's key state is released by the pass; a live input's is not.
+#[tokio::test]
+async fn a_deleted_inputs_key_state_is_released() {
+    let pool = pool().await;
+    crate::db::create_pipeline(&pool, "pipe", "P", "key-p", None, None)
+        .await
+        .unwrap();
+    let (_engine, ingest) = crate::media::hls_ingest::test_support::test_ingest(
+        crate::media::hls_ingest::HlsIngestLimits::default(),
+    );
+    for input_id in ["in-live", "in-gone"] {
+        crate::db::create_pipeline_input(
+            &pool,
+            input_id,
+            "pipe",
+            input_id,
+            &format!("key-{input_id}"),
+            &crate::domain::pipeline_input::PipelineInputSource::keyed(),
+        )
+        .await
+        .unwrap();
+        ingest.seed_applied_init_for_tests(input_id);
+    }
+
+    crate::db::delete_pipeline_input(&pool, "pipe", "in-gone")
+        .await
+        .unwrap();
+    assert_eq!(
+        converge_ingest_key_state(&pool, &ingest).await,
+        vec!["in-gone".to_string()],
+        "only the deleted input's key state is released"
+    );
+    assert_eq!(
+        ingest.keyed_input_ids(),
+        HashSet::from(["in-live".to_string()]),
+        "a live input keeps the init its encoder may resume with"
+    );
+    assert!(
+        converge_ingest_key_state(&pool, &ingest).await.is_empty(),
+        "a second pass releases nothing"
+    );
+}
+
 #[tokio::test]
 async fn a_deleted_output_loses_its_egress_and_its_sibling_keeps_running() {
     let pool = pool().await;
