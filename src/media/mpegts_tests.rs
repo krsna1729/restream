@@ -92,6 +92,27 @@ fn valid_video_pes_packet(
     build_ts_packet(pid, true, 0x01, cc, &[], &pes)
 }
 
+/// An audio PES (stream id `0xC0`) in one TS packet, PTS-only, with an
+/// explicit length — the shape a TS audio PES has when it carries one or more
+/// ADTS frames.
+fn valid_audio_pes_packet(
+    pid: u16,
+    cc: u8,
+    pts_90k: i64,
+    es_payload: &[u8],
+) -> [u8; TS_PACKET_SIZE] {
+    const PES_HEADER_LEN: u8 = 5; // PTS-only optional header
+    let pes_packet_len = 3 + PES_HEADER_LEN as u16 + es_payload.len() as u16;
+    let mut pes = vec![0x00, 0x00, 0x01, 0xC0];
+    pes.extend_from_slice(&pes_packet_len.to_be_bytes());
+    pes.push(0x80);
+    pes.push(0x80);
+    pes.push(PES_HEADER_LEN);
+    write_timestamp(&mut pes, pts_90k, 0x02);
+    pes.extend_from_slice(es_payload);
+    build_ts_packet(pid, true, 0x01, cc, &[], &pes)
+}
+
 /// Like [`valid_video_pes_packet`], but leaves `pes_packet_len` at 0
 /// (unbounded), the standard MPEG-TS encoding for a video PES whose length
 /// isn't known up front — completion then depends solely on the next

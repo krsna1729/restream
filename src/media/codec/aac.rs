@@ -206,21 +206,58 @@ pub(super) fn has_adts_sync(data: &[u8]) -> bool {
 
 /// Count complete AAC ADTS frames in a payload.
 pub fn adts_frame_count(data: &[u8]) -> usize {
-    let mut rest = data;
-    let mut count = 0usize;
-    while let Some(&[0xFF, sync_low, _, b3, b4, b5, _]) = rest.first_chunk::<7>() {
+    adts_frame_ranges(data).count()
+}
+
+/// The byte ranges of the complete ADTS frames in `data`, in order. A payload
+/// that does not start with a frame, or whose last frame is cut short, yields
+/// the frames that are complete — the shape a TS audio PES has when it carries
+/// several frames.
+pub fn adts_frame_ranges(data: &[u8]) -> AdtsFrameRanges<'_> {
+    AdtsFrameRanges { data, offset: 0 }
+}
+
+/// See [`adts_frame_ranges`].
+pub struct AdtsFrameRanges<'a> {
+    data: &'a [u8],
+    offset: usize,
+}
+
+impl Iterator for AdtsFrameRanges<'_> {
+    type Item = std::ops::Range<usize>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let rest = self.data.get(self.offset..)?;
+        let Some(&[0xFF, sync_low, _, b3, b4, b5, _]) = rest.first_chunk::<7>() else {
+            return None;
+        };
         if sync_low & 0xF0 != 0xF0 {
-            break;
+            return None;
         }
         let frame_len =
             (usize::from(b3 & 0x03) << 11) | (usize::from(b4) << 3) | (usize::from(b5 & 0xE0) >> 5);
-        let Some(tail) = rest.get(frame_len..).filter(|_| frame_len >= 7) else {
-            break;
-        };
-        count = count.saturating_add(1);
-        rest = tail;
+        if frame_len < 7 || rest.len() < frame_len {
+            return None;
+        }
+        let start = self.offset;
+        self.offset = self.offset.saturating_add(frame_len);
+        Some(start..self.offset)
     }
-    count
+}
+
+/// The sample rate an ADTS header names, or `None` for a header that is not
+/// ADTS or names an explicit rate (index 15, which carries the rate in the
+/// frame).
+pub fn adts_sample_rate(data: &[u8]) -> Option<u32> {
+    let header = data.first_chunk::<3>()?;
+    if header[0] != 0xFF || header[1] & 0xF0 != 0xF0 {
+        return None;
+    }
+    const RATES: [u32; 13] = [
+        96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025,
+        8_000, 7_350,
+    ];
+    RATES.get(usize::from((header[2] >> 2) & 0x0F)).copied()
 }
 
 /// `raw_aac` behind an ADTS header, or `None` when it is too long for one.

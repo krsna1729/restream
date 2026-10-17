@@ -231,6 +231,12 @@ fn published_and_delivered_checks_require_media() {
     let mut non_monotone = delivered.clone();
     non_monotone["dtsMonotone"] = json!(false);
     assert!(!delivered_ok(&non_monotone));
+    // Several AAC frames packed per audio message: audio falls far below
+    // half a message per video frame.
+    let mut packed_audio = delivered.clone();
+    packed_audio["videoCount"] = json!(160);
+    packed_audio["audioCount"] = json!(20);
+    assert!(!delivered_ok(&packed_audio));
     let mut no_keyframe = delivered.clone();
     no_keyframe["keyframeCount"] = json!(0);
     assert!(!delivered_ok(&no_keyframe));

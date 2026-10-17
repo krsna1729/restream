@@ -34,7 +34,6 @@ items).
 - [Q-072 dedicated HLS ingest listener](#q-072-architecture-sonnet-dedicated-hls-ingest-listener-with-half-close)
 - [Q-073 HEVC fMP4 HLS push ingest](#q-073-protocol-opus-hevc-fmp4-hls-push-ingest)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
-- [Q-075 one raw AAC frame per unit](#q-075-protocol-opus-one-raw-aac-frame-per-message-and-per-sample)
 - [Q-076 HTTP Digest for pull origins](#q-076-protocol-sonnet-http-digest-authentication-for-hls-pull-origins)
 - [Q-077 follow every rendition into one ring](#q-077-architecture-opus-follow-every-rendition-of-a-master-playlist-into-one-ring)
 - [Q-078 choose versions the ingest can decode](#q-078-protocol-opus-choose-the-versions-and-codecs-the-ingest-can-decode)
@@ -628,48 +627,6 @@ items).
 - Status: open (Filed: 2026-10-16 by claude, from the HLS ingest isolation
   measurement; rewritten 2026-10-17 from the attribution that measurement
   asked for).
-
-### Q-075 [protocol] [opus] One raw AAC frame per message and per sample
-- Goal: every raw-AAC consumer receives exactly one AAC access unit per unit,
-  whatever the ingest path produced.
-- Sources: a TS-ingest `MediaPacket` is one PES, and a PES can carry several
-  ADTS frames (`adts_frame_count` exists for that). Two consumers assume
-  one frame per unit and neither splits (the TS muxer
-  counts frames per payload and is unaffected):
-  - **RTMP egress:** `RtmpMediaEncoder::encode_audio`
-    (`rtmp/egress_engine.rs:142`) emits one action per packet and
-    `encode_unit` writes one wire message per action
-    (`egress/backends/rtmp.rs:257`); the payload goes through
-    `audio_for_rtmp_into` and `strip_adts`, which removes only the first
-    7- or 9-byte header (`codec/aac.rs:248`).
-  - **fMP4 packager:** `AudioRenditionState::push_packet`
-    (`hls/fmp4/rendition.rs:228`) strips the whole packet, so one MP4 sample
-    holds N raw frames with N−1 ADTS headers inside it — an AAC sample must be
-    one access unit. `audio_default_duration` already counts N×1024 for that
-    sample (`hls/fmp4/codec.rs:189`).
-- Evidence: in the M=4 isolation run the fixture delivered 2890 audio
-  messages per RTMP pipeline (one frame per message, 46.9/s) against 364 per
-  HLS pipeline — 2890/364 = 7.9. The M=8 run gave 2995 against 369,
-  which is 7.85 after normalising by the video counts (1838 against 1906),
-  since the HLS sessions start about 1 s later. Video counts matched, so this
-  is packaging, not loss. Any TS source (SRT, file, HLS)
-  shares the path, and an fMP4 output fed by a TS source carries the same
-  corruption.
-- Change: **normalise at the TS demuxer** — one `MediaPacket` per ADTS frame,
-  DTS stepped by 1024/sample_rate, so every consumer is fixed once. Splitting
-  in each consumer instead means two split sites and leaves the ring's units
-  inconsistent with what the fMP4 sample model needs. Price the extra ring
-  units for audio with the relevant bench.
-- Gates: a unit test that a 3-frame ADTS payload becomes three packets with
-  timestamps stepped by 1024/sample_rate (monotonic after rounding); the RTMP
-  leaf test that it writes one `0xAF 0x01` message per frame; an fMP4 gate
-  that the sample count equals the frame count with no ADTS sync word inside a
-  sample; add an audio/video ratio floor to hls-push-duty (it has none today:
-  delivered_ok requires only audioCount > 0), which a mutation reverting the
-  split must fail; the SRT-to-RTMP and HLS-to-RTMP paths still deliver.
-- Status: open (Filed: 2026-10-16 by claude, from the HLS ingest isolation
-  measurement). Every TS source shares the path — SRT, file ingest, HLS push
-  and HLS pull — so this is a defect of the demuxer, not of one ingest kind.
 
 ### Q-076 [protocol] [sonnet] HTTP Digest authentication for HLS pull origins
 - Goal: a pull input authenticates to an origin that answers `401` with a

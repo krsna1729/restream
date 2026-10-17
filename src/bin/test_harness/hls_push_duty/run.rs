@@ -529,6 +529,12 @@ pub(crate) fn delivered_ok(sink_summary: &Value) -> bool {
         // HLS-push failure this mode catches (the output planned its tracks
         // before the ingest's probe was recorded).
         && count("audioCount") > 0
+        // One AAC frame per audio message: the fixture's ~47 frames/s against
+        // ~58 video frames/s puts audio near 0.8 per video frame. A TS audio
+        // PES packs several frames (Q-075), so an output that forwards one
+        // PES per message falls to about 0.1; half a message per video frame
+        // separates the two with room for start-up skew.
+        && count("audioCount").saturating_mul(2) >= count("videoCount")
         && sink_summary.get("dtsMonotone").and_then(Value::as_bool) == Some(true)
 }
 

@@ -57,6 +57,29 @@ fn adts_round_trip() {
 }
 
 #[test]
+fn adts_frame_ranges_walks_every_complete_frame() {
+    let mut payload = Vec::new();
+    for fill in [0x11u8, 0x22, 0x33] {
+        payload.extend_from_slice(&build_adts_header(40, 48_000, 2).unwrap());
+        payload.extend(std::iter::repeat_n(fill, 40));
+    }
+    let ranges: Vec<_> = adts_frame_ranges(&payload).collect();
+    assert_eq!(ranges.len(), 3, "three frames");
+    assert_eq!(ranges[0], 0..47);
+    assert_eq!(ranges[1], 47..94);
+    assert_eq!(ranges[2], 94..141);
+    assert_eq!(adts_frame_ranges(&payload).count(), adts_frame_count(&payload));
+
+    // A truncated last frame is not yielded.
+    let cut = &payload[..payload.len() - 10];
+    assert_eq!(adts_frame_ranges(cut).count(), 2);
+
+    // The rate comes from the header, and a non-ADTS payload has none.
+    assert_eq!(adts_sample_rate(&payload), Some(48_000));
+    assert_eq!(adts_sample_rate(&[0x00, 0x00, 0x00]), None);
+}
+
+#[test]
 fn adts_frame_count_counts_complete_frames() {
     let mut payload = Vec::new();
     let frame_a = build_adts_header(2, 48000, 2).unwrap();

@@ -466,6 +466,37 @@ impl TsDemuxer {
             self.try_build_probe(stream_idx, &payload);
         }
 
+        // A TS audio PES can carry several ADTS frames, and every consumer that
+        // takes one access unit per unit — RTMP's audio messages, the fMP4
+        // packager's samples — would otherwise hold N frames, with N-1 ADTS
+        // headers inside the unit. Split once, here, so they all see one frame;
+        // the timestamps step by 1024 samples per frame.
+        if kind == StreamKind::AacAdts {
+            let ranges: Vec<std::ops::Range<usize>> =
+                crate::media::codec::adts_frame_ranges(&payload).collect();
+            if ranges.len() > 1 {
+                /// One AAC frame is 1024 samples, and the timestamps here are
+                /// 90 kHz ticks.
+                const FRAME_TICKS: i64 = 1024 * 90_000;
+                let step_90k = crate::media::codec::adts_sample_rate(&payload)
+                    .and_then(|rate| FRAME_TICKS.checked_div(i64::from(rate)))
+                    .unwrap_or(0);
+                for (index, range) in ranges.into_iter().enumerate() {
+                    let offset = step_90k.saturating_mul(index as i64);
+                    self.output.push(MediaPacket {
+                        media_type: MediaType::Audio,
+                        track_index,
+                        pts: ts_to_ms(pts_90k.saturating_add(offset)),
+                        dts: ts_to_ms(dts_90k.saturating_add(offset)),
+                        is_keyframe: false,
+                        format: PayloadFormat::Raw,
+                        payload: payload.slice(range),
+                    });
+                }
+                return;
+            }
+        }
+
         self.output.push(MediaPacket {
             media_type: kind.media_type(),
             track_index,

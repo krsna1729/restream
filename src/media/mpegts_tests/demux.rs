@@ -400,3 +400,52 @@ fn h265_demux_requires_irap_for_keyframe_even_with_random_access_bit() {
     );
 }
 
+
+/// A TS audio PES that carries three ADTS frames becomes three packets, one
+/// per frame, with the timestamps stepped by 1024 samples. Consumers that take
+/// one access unit per unit — RTMP's audio messages, the fMP4 packager's
+/// samples — depend on that: otherwise one unit holds N frames, with N−1 ADTS
+/// headers inside it.
+#[test]
+fn a_multi_frame_audio_pes_becomes_one_packet_per_adts_frame() {
+    let pid = 0x0101;
+    let mut demuxer = TsDemuxer::new();
+    demuxer.streams = vec![aac_adts_stream_info(pid, 0)];
+    demuxer.pid_to_stream[pid as usize] = 0;
+
+    let frame = |fill: u8| {
+        let mut frame = crate::media::codec::build_adts_header(40, 48_000, 2)
+            .expect("a 40-byte payload fits one ADTS frame")
+            .to_vec();
+        frame.extend(std::iter::repeat_n(fill, 40));
+        frame
+    };
+    let mut payload = Vec::new();
+    for fill in [0x11u8, 0x22, 0x33] {
+        payload.extend_from_slice(&frame(fill));
+    }
+    let packet = valid_audio_pes_packet(pid, 0, 90_000, &payload);
+    demuxer.feed(&packet);
+    demuxer.flush();
+    let packets = demuxer.drain();
+
+    assert_eq!(packets.len(), 3, "one packet per ADTS frame");
+    assert_eq!(
+        packets[0].dts, 1000,
+        "the first frame keeps the PES timestamp"
+    );
+    for (index, packet) in packets.iter().enumerate() {
+        assert_eq!(packet.media_type, MediaType::Audio);
+        assert_eq!(packet.payload.len(), 47, "one frame: header plus 40 bytes");
+        assert_eq!(packet.payload[0], 0xFF, "each unit starts at a frame header");
+        assert_eq!(packet.pts, packet.dts);
+        if index > 0 {
+            // 1024 samples at 48 kHz is 21.33 ms, so 21 or 22 after rounding.
+            let delta = packet.dts - packets[index - 1].dts;
+            assert!(
+                (21..=22).contains(&delta),
+                "frame {index} steps {delta} ms, not 1024 samples"
+            );
+        }
+    }
+}
