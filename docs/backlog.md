@@ -554,40 +554,63 @@ items).
   input in `tests/hls_push_ingest.rs`; a unit test for the `hvcC` parser.
 - Status: open (Filed: 2026-10-16 by claude).
 
-### Q-074 [performance] [opus] HLS ingest poll latency grows faster than the session count
-- Goal: one HLS ingest session's poll stays bounded in **CPU time**, so the
-  shared MEDIA executor cannot be held by it as sessions multiply.
-- Sources: the `hls-push-duty` harness mode with release binaries
-  (`target/qual-release`, master 1891c876), 2 RTMP base publishers plus M
-  HLS push sessions, 60 s, 6-vCPU host, one run per arm:
-  - M=0: `hlsIngest` idle; executor queue latency 0 samples.
-  - M=4: busy 619 ms, 6420 polls, `maxPollUs` 5259; queue latency max 225 µs.
-  - M=8: busy 1689 ms, 13006 polls, `maxPollUs` 30892; queue latency max
-    841 µs.
-- **The first hypothesis is OS preemption, not ingest code.** `maxPollUs` and
-  `busyUs` are wall time (`Instant::now()` before the poll, `elapsed()`
-  after, `src/media/executor.rs`), so a worker descheduled mid-poll counts as
-  poll time. The M=8 arm ran 10 FFmpeg publishers, the sinks, the harness and
-  restream on 6 vCPUs. The shape fits: every `hlsIngest` service in the M=8
-  report carries a multi-ms tail (8536, 8062, 26253 µs), which is uniform
-  across sessions rather than one session's hot path, and the per-poll average
-  only moved 96 µs to 130 µs.
-- Sources read so far do not support a 30 ms CPU path in the session turn: one
-  poll publishes at most one 64 KiB chunk and ends in `yield_now`; `apply`
-  does no O(segment) work; `take_probe`'s engine hop runs once per session and
-  awaits; the release burst, ring push and outbox drain are per-chunk
-  bookkeeping. The demux of a chunk is about 30 µs at the benched rate.
-- Steps: separate CPU time from wall time per poll (thread CPU clock in the
-  poll wrapper, or scheduler data for the worker threads); record host load
-  per arm; repeat each arm several times; re-run M=8 with the publishers
-  pinned away from restream's CPUs (`scripts/harness/restream-pinned.sh`).
-  Only if the CPU time stays high with the host idle is there a code cause.
-- Gates: per-poll CPU time (or p99 over repeated runs) flat between M=4 and
-  M=8 on an otherwise idle host, with the numbers and the host load in the
-  commit message. A wall-clock maximum on a shared host is not a gate any code
-  change can meet.
+### Q-074 [performance] [opus] A rare multi-millisecond HLS ingest poll is bounded whatever its cause
+- Goal: a `hlsIngest` poll on the MEDIA executor never spends multiple
+  milliseconds of thread CPU, so one session's turn cannot hold a shared
+  worker whatever the stall's cause is.
+- Files: `src/media/executor.rs` (poll timing), `src/media/ingest_publisher.rs`
+  (the 64 KiB chunk publish), `src/media/mpegts/demux.rs`,
+  `src/media/ring_buffer.rs`, `src/malloc_tuning.rs`.
+- Sources: the `hls-push-duty` harness mode (release binaries, 2 RTMP base
+  publishers plus M HLS push sessions, 60 s, 6-vCPU shared host, one run per
+  arm), with the poll wrapper extended to time the polling thread's own CPU
+  (`CLOCK_THREAD_CPUTIME_ID`) beside the wall time and the session turn
+  instrumented per phase.
+- **A poll is one 64 KiB chunk publish**, ~170 µs of thread CPU: demux/feed
+  77 µs, ring publication 76 µs (2.8 packets per chunk; 16812 packets over
+  6034 calls), preview push 2 µs, input gate 1 µs, parameter sets and
+  keyframe bookkeeping 6 µs, continuity/timestamps 3 µs, and the probe's
+  engine hop 673 µs once per session (`apply_init` never ran: the arm pushes
+  MPEG-TS). The turn's other work is negligible: `session.poll` (the
+  due-release burst) ≤402 µs and its outbox drain ≤9 µs per turn, at most 2
+  releases in a turn (23 in 800 turns).
+- **The multi-millisecond poll is not per-unit work.** The same 64 KiB feed
+  costs 10 µs at best and 32069 µs at worst, and the same 2.8-packet ring
+  push 1 µs at best and 12077 µs at worst (54 of 6034 calls above 1 ms). The
+  polling thread's own CPU tracks the poll's wall time (maxCpuUs 51337 of
+  maxPollUs 52507 µs), so the thread is executing, not waiting on a lock and
+  not descheduled: host load was ~25 % of 6 vCPUs, steal 0 %,
+  `cpu.stat nr_throttled` 0, no D-state.
+  `MALLOC_TRIM_THRESHOLD_=-1` (with `MALLOC_MMAP_THRESHOLD_=16M`) cuts the
+  tail: one run each on the fixed build, M=8, class `maxPollUs` 15882 → 6022
+  µs and `maxCpuUs` 12443 → 8051 µs, with the per-service maxima 4.5–15.9 ms →
+  2.8–6.0 ms while per-poll CPU stayed 84 µs in both arms — the tuning cannot
+  change the work, only the stall. Direction confirmed; one run each, so these
+  are a direction, not a gate. The direction is allocation and memory-system
+  behaviour, not per-unit cost.
+- **The reported scaling does not reproduce.** Control re-runs of the
+  unmodified code (executor poll CPU clock only) gave `maxPollUs` 21985 µs at
+  M=4 and 23328 µs at M=8 with per-poll busy 110 → 139 µs, while the
+  per-session stall varied 12–52 ms across runs of either build: the 5259 µs
+  M=4 arm was a lucky run beside an unlucky M=8 one. `maxPollUs` alone is not
+  a gate; per-poll CPU time is.
+- Done in this change: the one path whose work per poll was unbounded by
+  design — the object branch applied every object the HTTP handlers queued
+  while the poll ran (2 in the measured run, 3 in the unit test with the
+  bound removed) — now yields after one object, so a poll never joins two
+  units (invariant in `docs/media-pipeline.md`, gate in
+  `src/media/hls_ingest/session_turn_tests.rs`).
+- Steps: repeat each arm several times on an idle host for a p99 of per-poll
+  CPU time; then choose between allocator tuning (glibc `mallopt` at startup
+  next to the arena policy in `src/malloc_tuning.rs`, or a different
+  allocator) and leaving the tail to host qualification, and record either
+  result, negative included.
+- Gates: p99 of per-poll **CPU** time flat between M=4 and M=8 over repeated
+  runs on an otherwise idle host. A wall-clock maximum on a shared host is
+  not a gate any code change can meet.
 - Status: open (Filed: 2026-10-16 by claude, from the HLS ingest isolation
-  measurement).
+  measurement; rewritten 2026-10-17 from the attribution that measurement
+  asked for).
 
 ### Q-075 [protocol] [opus] One raw AAC frame per message and per sample
 - Goal: every raw-AAC consumer receives exactly one AAC access unit per unit,
