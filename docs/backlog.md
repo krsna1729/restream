@@ -41,7 +41,6 @@ items).
 - [Q-079 resolve a pull target before fetching it](#q-079-security-opus-resolve-a-pull-target-before-fetching-it)
 - [Q-080 release a deleted input's applied init](#q-080-architecture-opus-release-a-deleted-inputs-applied-init)
 - [Q-081 make the ingest registration cancel-safe](#q-081-architecture-opus-make-the-ingest-registration-cancel-safe)
-- [Q-082 the protocol-mix end-to-end test needs both outputs running](#q-082-testing-sonnet-the-protocol-mix-end-to-end-test-needs-both-outputs-running)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -826,21 +825,3 @@ items).
   `sessions`) and finds no token and no `sessions` entry for the input.
 - Status: open (Filed: 2026-10-17 by claude, from the #354 review round: the
   window predates the PR, and the pull's cancel path is what reaches it).
-
-### Q-082 [testing] [sonnet] The protocol-mix end-to-end test needs both outputs running
-
-- Goal: `pipelines: protocol mix, the stage two outputs share, and the
-  recording card` fails only for a real reason.
-- Why: the test starts two RTMP outputs and then expects the "Shared-stage
-  efficiency" card to read "2 outputs" within 30 s. On a loaded runner the
-  second output can still be starting: the card read "1 running outputs, each
-  on its own stage" for the whole timeout, twice (the retry too). It failed on
-  `bb80522c` and on `a1e22785` and passed in isolation locally and on `7936bfe5`
-  in CI, so it is a race against the output's start, not a product defect.
-- Change: wait for both outputs to report running through the API before
-  navigating to the card, so the assertion measures the card rather than the
-  start path — and fails with the output's status when one never runs.
-- Gates: the test still fails when the card's text is wrong, and no longer
-  depends on how fast an output starts.
-- Status: open (Filed: 2026-10-17 by claude, from the #354 review round: the
-  same test failed three times on loaded hosts and passed alone).
