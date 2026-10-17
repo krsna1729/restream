@@ -24,32 +24,31 @@
 //! the assembler sees the playlist and segments it would have seen from an
 //! encoder.
 //!
-//! Audio. One task follows one rendition, so a master that carries audio as a
-//! separate `EXT-X-MEDIA` rendition — packaged live HLS does, and so does
-//! Restream's own preview — is pulled as its video variant. That is a known
-//! gap, and the pull states it once per pull ([`AudioPlan`]) rather than
-//! dropping the audio silently.
+//! Audio. A master that carries the chosen variant's audio as a separate
+//! `EXT-X-MEDIA` rendition — packaged live HLS does, and so does Restream's
+//! own preview — has that rendition followed too, as FFmpeg's HLS demuxer
+//! does (`DEFAULT`, else `AUTOSELECT`, else the first of the group,
+//! [`AudioPlan`]): its playlist and objects go under `pull/a/`, and the pull
+//! hands the assembler a master of its own naming both, so the session merges
+//! them as it does a push of separate renditions.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use reqwest::{Client, Url};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use self::fetch::{
     AuthScope, FetchError, RequestAuth, build_client, fetch_small, host_refused, log_url,
     pump_body, send, source_resolves_private, variant_expired,
 };
-use self::namespace::{
-    Prepared, live_start, map_name, object_kind, parse_and_prepare, segment_name,
-};
+use self::namespace::{Prepared, parse_and_prepare};
 use crate::domain::pipeline_input::{PullAuth, VariantRule};
 use crate::media::engine::MediaEngine;
 use crate::media::hls::upload_policy::backoff;
-use crate::media::hls_ingest::playlist::{MasterPlaylist, SegmentEntry, Variant};
+use crate::media::hls_ingest::playlist::{MasterPlaylist, MediaPlaylist, Variant};
 use crate::media::hls_ingest::{
     BodyError, DispatchError, DispatchOrigin, HlsIngest, HlsIngestLimits, ObjectBody, ObjectKind,
     ObjectOutcome,
@@ -59,17 +58,25 @@ use crate::media::ingest_auth::AuthenticatedPipeline;
 mod audio;
 mod digest;
 mod fetch;
+mod follow;
 mod namespace;
-use audio::report_audio_rendition;
+use audio::{AudioPlan, report_audio_rendition};
+use follow::{AudioFollow, Follow, Followed};
 // Re-exported for the tests in `hls_pull/tests.rs`, which exercise the audio
 // plan through this module.
 #[cfg(test)]
-use audio::{AudioPlan, audio_plan};
+use audio::audio_plan;
 
 /// The namespace the assembler sees: the media playlist's fixed path and the
 /// prefix of every object the puller dispatches under it.
 const PULL_DIR: &str = "pull";
 const PLAYLIST_PATH: &str = "pull/index.m3u8";
+/// The master the pull hands the assembler when the variant it follows has a
+/// separate audio rendition (and when it no longer has one), and that
+/// rendition's namespace.
+const MASTER_PATH: &str = "pull/master.m3u8";
+const AUDIO_DIR: &str = "pull/a";
+const AUDIO_PLAYLIST_PATH: &str = "pull/a/index.m3u8";
 /// Attempts in one retry burst before the puller waits a quiet period. The
 /// requests inside a burst follow [`backoff`].
 const MAX_ATTEMPTS: u32 = 6;
@@ -265,19 +272,14 @@ struct PullState {
     pipeline: AuthenticatedPipeline,
     stream_key: String,
     client_addr: String,
-    /// First sequence not yet fetched, and the first sequence the previous
-    /// playlist listed (to notice a restarted encoder).
-    next_sequence: Option<u64>,
-    last_media_sequence: Option<u64>,
-    /// The map identity in force: the object name of the `EXT-X-MAP` whose
-    /// init this task already handed to the session. Only the current one is
-    /// kept, because a map *change* is what the assembler must see; the
-    /// history of maps is worth nothing and would grow one `String` per
-    /// playlist reload.
-    current_map: Option<String>,
-    /// Failed attempts per sequence not yet skipped, so one persistently
-    /// missing object cannot stall the pull until it leaves the window.
-    segment_tries: HashMap<u64, u32>,
+    /// The chosen variant's media playlist (or the source's, when it is one).
+    video: Follow,
+    /// The variant's separate audio rendition, when its audio is one.
+    audio: Option<AudioFollow>,
+    /// The audio rendition failed `MAX_ATTEMPTS` cycles in a row: this pull
+    /// stays video-only. (An audio 404 re-resolves the master, which would
+    /// otherwise follow the rendition again and again.)
+    audio_abandoned: bool,
     /// The last refusal reason logged, so a playlist whose every segment is
     /// refused logs one line rather than one per segment.
     last_refused: Option<String>,
@@ -352,10 +354,9 @@ async fn run(
         },
         stream_key: identity.stream_key,
         client_addr,
-        next_sequence: None,
-        last_media_sequence: None,
-        current_map: None,
-        segment_tries: HashMap::new(),
+        video: Follow::new(PULL_DIR, PLAYLIST_PATH),
+        audio: None,
+        audio_abandoned: false,
         last_refused: None,
         re_expired: false,
     };
@@ -500,7 +501,8 @@ impl PullState {
                 let variant = choose_variant(&master, self.variant).ok_or_else(|| {
                     PullError::Fatal("HLS master playlist lists no variant".to_string())
                 })?;
-                report_audio_rendition(&master, variant, &self.pipeline);
+                let audio = report_audio_rendition(&master, variant, &self.pipeline);
+                self.follow_audio(ingest, audio).await?;
                 if let Some(skipped) = by_bandwidth(master.variants.iter(), self.variant)
                     .filter(|plain| plain.path != variant.path)
                 {
@@ -533,101 +535,147 @@ impl PullState {
                 }
             }
         };
-        self.dispatch_playlist(ingest, text.into_bytes()).await?;
+        self.follow_cycle(client, ingest, limits, media, text).await
+    }
 
-        if media.media_sequence < self.last_media_sequence.unwrap_or(media.media_sequence) {
-            // The origin restarted its numbering; follow the new run.
-            debug!(
-                pipeline = %self.pipeline.id,
-                input = %self.pipeline.input_id,
-                sequence = media.media_sequence,
-                "HLS pull media sequence restarted"
-            );
-            self.next_sequence = Some(media.media_sequence);
-            self.segment_tries.clear();
-        }
-        self.last_media_sequence = Some(media.media_sequence);
-
-        // The first cycle of a live playlist starts near the end: RFC 8216
-        // section 6.3.3 has a client enter no less than three target
-        // durations from it, so a DVR or EVENT window is not read from its
-        // start and paced in real time — a whole window behind live, with the
-        // backfill loaded onto the origin.
-        let mut next = self.next_sequence.unwrap_or_else(|| {
-            if media.ended {
-                media.media_sequence
-            } else {
-                live_start(&media)
-            }
-        });
-        let first_new = media
-            .segments
-            .iter()
-            .find(|segment| segment.sequence >= next);
-        if let Some(first) = first_new
-            && first.sequence > next
-        {
-            // The window slid past sequences this task never saw.
-            debug!(
-                pipeline = %self.pipeline.id,
-                input = %self.pipeline.input_id,
-                skipped = first.sequence - next,
-                "HLS pull playlist moved past segments"
-            );
-            next = first.sequence;
-            self.next_sequence = Some(next);
-            self.segment_tries.retain(|sequence, _| *sequence >= next);
-        }
-
-        let mut had_new = false;
-        for segment in media
-            .segments
-            .iter()
-            .filter(|segment| segment.sequence >= next)
-        {
-            match self.fetch_segment(client, ingest, limits, segment).await {
-                Ok(()) => {
-                    self.segment_tries.remove(&segment.sequence);
-                    self.next_sequence = Some(segment.sequence.saturating_add(1));
-                    had_new = true;
+    /// Follow the variant's media playlist, then the separate audio
+    /// rendition's when there is one: the pull has ended once both have.
+    async fn follow_cycle(
+        &mut self,
+        client: &Client,
+        ingest: &Arc<HlsIngest>,
+        limits: &HlsIngestLimits,
+        media: MediaPlaylist,
+        text: String,
+    ) -> Result<Cycle, PullError> {
+        let mut video = std::mem::replace(&mut self.video, Follow::new(PULL_DIR, PLAYLIST_PATH));
+        let followed = self
+            .follow_media(&mut video, client, ingest, limits, media, text)
+            .await;
+        self.video = video;
+        let mut cycle = followed?;
+        if let Some(mut audio) = self.audio.take() {
+            // The audio rendition's failures stay its own: the variant's
+            // cycle stands, so a broken rendition never throttles the video
+            // it accompanies. After `MAX_ATTEMPTS` failed cycles in a row the
+            // pull stops following it for good.
+            match self
+                .follow_audio_cycle(&mut audio, client, ingest, limits)
+                .await
+            {
+                Ok(followed) => {
+                    audio.failures = 0;
+                    cycle.had_new |= followed.had_new;
+                    cycle.ended &= followed.ended;
+                    self.audio = Some(audio);
                 }
-                // One object that will not fetch must not stall the pull
-                // until it leaves the window: after a few tries it is
-                // skipped, and the gap it leaves is the assembler's to
-                // account for, as a push upload that never arrives is.
-                Err(PullError::Retry(reason)) => {
-                    let tries = {
-                        let tries = self.segment_tries.entry(segment.sequence).or_insert(0);
-                        *tries = tries.saturating_add(1);
-                        *tries
-                    };
-                    if tries < SEGMENT_ATTEMPTS {
-                        return Err(PullError::Retry(reason));
+                Err(error @ (PullError::Cancelled | PullError::PublisherActive)) => {
+                    self.audio = Some(audio);
+                    return Err(error);
+                }
+                Err(PullError::Retry(reason) | PullError::Fatal(reason)) => {
+                    audio.failures = audio.failures.saturating_add(1);
+                    cycle.ended = false;
+                    if audio.failures < MAX_ATTEMPTS {
+                        if audio.failures == 1 {
+                            warn!(
+                                pipeline = %self.pipeline.id,
+                                input = %self.pipeline.input_id,
+                                %reason,
+                                "HLS pull audio rendition failed; retrying with the video"
+                            );
+                        }
+                        self.audio = Some(audio);
+                    } else {
+                        warn!(
+                            pipeline = %self.pipeline.id,
+                            input = %self.pipeline.input_id,
+                            %reason,
+                            tries = audio.failures,
+                            "HLS pull stops following the audio rendition; the pulled stream is video-only"
+                        );
+                        self.audio_abandoned = true;
+                        self.follow_audio(ingest, AudioPlan::Muxed).await?;
                     }
-                    warn!(
-                        pipeline = %self.pipeline.id,
-                        input = %self.pipeline.input_id,
-                        sequence = segment.sequence,
-                        url = %log_url(&segment.path),
-                        tries,
-                        %reason,
-                        "HLS pull skipped a segment that would not fetch"
-                    );
-                    self.segment_tries.remove(&segment.sequence);
-                    self.next_sequence = Some(segment.sequence.saturating_add(1));
                 }
-                Err(error) => return Err(error),
             }
         }
-
-        if media.ended {
-            Ok(Cycle::Ended)
+        Ok(if cycle.ended {
+            Cycle::Ended
         } else {
-            Ok(Cycle::Live {
-                had_new,
-                target: media.target_duration,
-            })
+            Cycle::Live {
+                had_new: cycle.had_new,
+                target: cycle.target,
+            }
+        })
+    }
+
+    async fn follow_audio_cycle(
+        &mut self,
+        audio: &mut AudioFollow,
+        client: &Client,
+        ingest: &Arc<HlsIngest>,
+        limits: &HlsIngestLimits,
+    ) -> Result<Followed, PullError> {
+        let bytes =
+            match fetch_small(client, &audio.url, &self.scope, limits.max_playlist_bytes).await {
+                Ok(bytes) => bytes,
+                // A signed rendition URL expires like a variant's: the master
+                // hands out a fresh one.
+                Err(error) if variant_expired(&error) => {
+                    self.re_resolve("the audio rendition playlist answered 401, 403 or 404");
+                    return Err(PullError::Retry(error.to_string()));
+                }
+                Err(error) => return Err(error.into()),
+            };
+        match prepare_off_worker(audio.url.clone(), bytes, self.allow_private).await? {
+            Prepared::Media(media, text) => {
+                self.follow_media(&mut audio.follow, client, ingest, limits, media, text)
+                    .await
+            }
+            Prepared::Master(_) => Err(PullError::Retry(
+                "HLS audio rendition URI points at a master playlist".to_string(),
+            )),
         }
+    }
+
+    /// Follow the separate audio rendition `plan` names (or stop following
+    /// one), and tell the assembler with a master of its own: the variant's
+    /// playlist and, when there is one, the rendition's.
+    async fn follow_audio(
+        &mut self,
+        ingest: &Arc<HlsIngest>,
+        plan: AudioPlan,
+    ) -> Result<(), PullError> {
+        let url = match plan {
+            AudioPlan::Separate { .. } if self.audio_abandoned => None,
+            AudioPlan::Separate { url, .. } => Some(Url::parse(&url).map_err(|error| {
+                PullError::Fatal(format!("HLS audio rendition URL does not parse: {error}"))
+            })?),
+            AudioPlan::Muxed | AudioPlan::MissingGroup { .. } => None,
+        };
+        self.audio = match (self.audio.take(), url) {
+            // The same rendition, maybe re-signed: keep its cursor.
+            (Some(mut audio), Some(url)) => {
+                audio.url = url;
+                Some(audio)
+            }
+            (None, Some(url)) => Some(AudioFollow {
+                url,
+                follow: Follow::new(AUDIO_DIR, AUDIO_PLAYLIST_PATH),
+                failures: 0,
+            }),
+            (_, None) => None,
+        };
+        let master = if self.audio.is_some() {
+            "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"audio\",DEFAULT=YES,\
+             AUTOSELECT=YES,URI=\"a/index.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=1,AUDIO=\"audio\"\n\
+             index.m3u8\n"
+        } else {
+            "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nindex.m3u8\n"
+        };
+        self.dispatch_playlist(ingest, master.as_bytes().to_vec(), MASTER_PATH)
+            .await
     }
 
     /// Go back to the source URL, so the master is resolved again and a fresh
@@ -666,6 +714,7 @@ impl PullState {
         &self,
         ingest: &Arc<HlsIngest>,
         bytes: Vec<u8>,
+        path: &str,
     ) -> Result<(), PullError> {
         self.may_dispatch()?;
         let length = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
@@ -676,12 +725,7 @@ impl PullState {
         body.push(&bytes).await.map_err(playlist_body_error)?;
         self.may_dispatch()?;
         let outcome = self
-            .dispatch(
-                ingest,
-                ObjectKind::Playlist,
-                PLAYLIST_PATH.to_string(),
-                body,
-            )
+            .dispatch(ingest, ObjectKind::Playlist, path.to_string(), body)
             .await?;
         match outcome {
             ObjectOutcome::Stored => Ok(()),
@@ -691,115 +735,6 @@ impl PullState {
             other => Err(PullError::Fatal(format!(
                 "pulled playlist did not apply: {other:?}"
             ))),
-        }
-    }
-
-    async fn fetch_segment(
-        &mut self,
-        client: &Client,
-        ingest: &Arc<HlsIngest>,
-        limits: &HlsIngestLimits,
-        segment: &SegmentEntry,
-    ) -> Result<(), PullError> {
-        let kind = object_kind(segment);
-        if kind == ObjectKind::Fmp4
-            && let Some(map) = &segment.map_uri
-        {
-            // Only a *change* of map identity needs the init sent again: a
-            // signed origin re-signs the same `EXT-X-MAP` URI on every
-            // reload, and the query is the credential, not the identity.
-            let name = map_name(map);
-            if self.current_map.as_deref() != Some(name.as_str()) {
-                self.fetch_init(client, ingest, limits, map).await?;
-                self.current_map = Some(name);
-            }
-        }
-        let url = Url::parse(&segment.path).map_err(|error| {
-            PullError::Retry(format!("HLS segment URL does not parse: {error}"))
-        })?;
-        let path = format!("{PULL_DIR}/{}", segment_name(segment.sequence, kind));
-        let outcome = self
-            .fetch_object(client, ingest, &url, kind.max_bytes(limits), kind, path)
-            .await?;
-        match outcome {
-            ObjectOutcome::Stored | ObjectOutcome::Held => {
-                // A refusal said its reason; a delivered segment means the
-                // reason is old news, so the next one logs again.
-                self.last_refused = None;
-                Ok(())
-            }
-            ObjectOutcome::Dropped => {
-                debug!(
-                    pipeline = %self.pipeline.id,
-                    input = %self.pipeline.input_id,
-                    "HLS pull segment was already taken"
-                );
-                Ok(())
-            }
-            ObjectOutcome::Retry => Err(PullError::Retry(
-                "HLS ingest ended under the pulled segment".to_string(),
-            )),
-            ObjectOutcome::Malformed(reason)
-            | ObjectOutcome::Unsupported(reason)
-            | ObjectOutcome::TooLarge(reason) => {
-                // The same bytes cannot become valid on a retry; skip the
-                // segment and let ordering count the gap. One reason repeats
-                // for every segment of a playlist the assembler will not take
-                // (a ladder whose top variant is HEVC, say), so it is logged
-                // once, as the retry reason is; a segment that is delivered
-                // clears it, so a later refusal logs again.
-                if self.last_refused.as_deref() != Some(reason.as_str()) {
-                    warn!(
-                        pipeline = %self.pipeline.id,
-                        input = %self.pipeline.input_id,
-                        url = %log_url(url.as_str()),
-                        %reason,
-                        "HLS pull segment refused"
-                    );
-                    self.last_refused = Some(reason);
-                }
-                Ok(())
-            }
-        }
-    }
-
-    async fn fetch_init(
-        &mut self,
-        client: &Client,
-        ingest: &Arc<HlsIngest>,
-        limits: &HlsIngestLimits,
-        map: &str,
-    ) -> Result<(), PullError> {
-        let url = Url::parse(map)
-            .map_err(|error| PullError::Retry(format!("HLS map URL does not parse: {error}")))?;
-        let path = format!("{PULL_DIR}/{}", map_name(map));
-        let outcome = self
-            .fetch_object(
-                client,
-                ingest,
-                &url,
-                limits.max_init_bytes,
-                ObjectKind::Fmp4,
-                path,
-            )
-            .await?;
-        match outcome {
-            ObjectOutcome::Stored | ObjectOutcome::Held | ObjectOutcome::Dropped => Ok(()),
-            ObjectOutcome::Retry => Err(PullError::Retry(
-                "HLS ingest ended under the pulled init segment".to_string(),
-            )),
-            ObjectOutcome::Malformed(reason)
-            | ObjectOutcome::Unsupported(reason)
-            | ObjectOutcome::TooLarge(reason) => {
-                warn!(
-                    pipeline = %self.pipeline.id,
-                    input = %self.pipeline.input_id,
-                    url = %log_url(url.as_str()),
-                    %reason,
-                    "HLS pull init segment refused"
-                );
-                Ok(())
-            }
         }
     }
 

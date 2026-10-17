@@ -7,6 +7,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::time::Duration;
 
 use super::fetch::{log_url, redirect_refusal};
+use super::namespace::{live_start, map_name};
 use super::tests_origin::{AUDIO_MASTER, CapturedMessages, source};
 use super::*;
 use crate::domain::pipeline_input::{HeaderPair, PullAuth, VariantRule};
@@ -376,10 +377,7 @@ fn audio_plan_states_what_the_chosen_variant_does_with_audio() {
             url: "https://origin.example/live/audio/0/index.m3u8".to_string(),
         }
     );
-    let reason = plan.reason().expect("a separate rendition is stated");
-    assert!(reason.contains("\"audio\""), "{reason}");
-    assert!(reason.contains("Track 1 (en)"), "{reason}");
-    assert!(reason.contains("video-only"), "{reason}");
+    assert_eq!(plan.reason(), None, "a followed rendition loses nothing");
 
     // A group the master does not define is a broken master, stated as such.
     let master = parsed_master(
@@ -399,12 +397,12 @@ fn audio_plan_states_what_the_chosen_variant_does_with_audio() {
 }
 
 #[test]
-fn a_separate_audio_rendition_is_reported_once_naming_it() {
+fn a_followed_audio_rendition_is_stated_once_naming_it() {
     let lines = reported(&parsed_master(AUDIO_MASTER));
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(lines[0].contains("\"audio\""), "{}", lines[0]);
     assert!(lines[0].contains("Track 1 (en)"), "{}", lines[0]);
-    assert!(lines[0].contains("video-only"), "{}", lines[0]);
+    assert!(lines[0].contains("follows"), "{}", lines[0]);
 }
 
 #[test]

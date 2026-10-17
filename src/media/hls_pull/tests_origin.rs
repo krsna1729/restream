@@ -223,6 +223,15 @@ pub(super) fn ts_segment() -> Vec<u8> {
     bytes[..wanted - wanted % 188].to_vec()
 }
 
+/// As much of the canonical fixture as one segment may carry (256 KiB): unlike
+/// [`ts_segment`], enough to hold audio as well as video.
+fn av_segment() -> Vec<u8> {
+    let path = crate::test_fixtures::canonical_h264_ts_fixture().unwrap();
+    let bytes = std::fs::read(path).unwrap();
+    let wanted = limits().max_segment_bytes.min(bytes.len());
+    bytes[..wanted - wanted % 188].to_vec()
+}
+
 pub(super) async fn wait_for_request(origin: &Origin, path: &str) {
     tokio::time::timeout(Duration::from_secs(15), async {
         while origin.count(path) == 0 {
@@ -464,24 +473,23 @@ async fn pull_reaches_the_assembler_and_never_refetches_a_segment() {
     engine.cancel_pipeline_input(INPUT_ID).await;
 }
 
+/// A master whose chosen variant's audio is a separate `EXT-X-MEDIA`
+/// rendition: both are followed, and the ring gets the variant's video and
+/// the rendition's audio. Both serve the same muxed TS here, so the variant's
+/// own audio and the rendition's video are what the publisher must drop.
 #[tokio::test]
-async fn a_master_with_a_separate_audio_rendition_is_pulled_video_only_and_says_so() {
+async fn a_master_with_a_separate_audio_rendition_is_pulled_with_its_audio() {
     let origin = Origin::new();
     origin.serve("/live/master.m3u8", AUDIO_MASTER);
     origin.serve("/live/high.m3u8", media_playlist(&["seg0.ts"]));
-    origin.serve("/live/seg0.ts", ts_segment());
+    origin.serve("/live/seg0.ts", av_segment());
     origin.serve("/live/audio/0/index.m3u8", media_playlist(&["a0.ts"]));
-    origin.serve("/live/audio/0/a0.ts", ts_segment());
+    origin.serve("/live/audio/0/a0.ts", av_segment());
     let base = origin.spawn().await;
 
     let (engine, ingest) = test_ingest(limits());
     let ring = engine.get_or_create_pipeline(PIPELINE_ID).await;
     let start = ring.get_write_idx();
-    // The pull task runs on this test's runtime thread, so a thread-local
-    // default subscriber sees its lines.
-    let messages = CapturedMessages::default();
-    let dispatch = tracing::Dispatch::new(tracing_subscriber::registry().with(messages.clone()));
-    let guard = tracing::dispatcher::set_default(&dispatch);
     let task = spawn(
         engine.clone(),
         ingest,
@@ -493,35 +501,90 @@ async fn a_master_with_a_separate_audio_rendition_is_pulled_video_only_and_says_
         limits(),
     );
 
-    wait_for_request(&origin, "/live/seg0.ts").await;
-    let packets = wait_for_media(&engine, start).await;
-    drop(guard);
-
-    assert!(
-        packets
-            .iter()
-            .any(|packet| packet.media_type == MediaType::Video),
-        "the chosen video variant is pulled"
-    );
-    assert_eq!(
-        origin.count("/live/audio/0/index.m3u8"),
-        0,
-        "a separate audio rendition is not followed"
-    );
-    assert_eq!(origin.count("/live/audio/0/a0.ts"), 0);
+    wait_for_request(&origin, "/live/audio/0/a0.ts").await;
+    let has = |media_type: MediaType| {
+        (start..ring.get_write_idx())
+            .filter_map(|index| ring.read_at(index))
+            .any(|packet| packet.media_type == media_type)
+    };
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while !(has(MediaType::Video) && has(MediaType::Audio)) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the variant's video and the rendition's audio reach the ring");
     assert_eq!(
         origin.count("/live/low.m3u8"),
         0,
         "the highest variant is still the one followed"
     );
-    let lines = messages.matching("EXT-X-MEDIA rendition");
-    assert_eq!(
-        lines.len(),
-        1,
-        "the pull states the audio gap once, not once per segment: {lines:?}"
+
+    task.cancel();
+    tokio::time::timeout(Duration::from_secs(5), task.join())
+        .await
+        .expect("the pull task stops");
+    engine.cancel_pipeline_input(INPUT_ID).await;
+}
+
+/// A separate audio rendition whose playlist never answers costs the variant
+/// nothing: its video keeps being pulled at the playlist's cadence, and after
+/// `MAX_ATTEMPTS` failed cycles the pull stops asking for the audio.
+#[tokio::test]
+async fn a_failing_audio_rendition_does_not_hold_back_the_video() {
+    let origin = Origin::new();
+    origin.serve("/live/master.m3u8", AUDIO_MASTER);
+    origin.serve("/live/high.m3u8", media_playlist(&["seg0.ts"]));
+    origin.serve("/live/seg0.ts", av_segment());
+    let base = origin.spawn().await;
+
+    let (engine, ingest) = test_ingest(limits());
+    let ring = engine.get_or_create_pipeline(PIPELINE_ID).await;
+    let start = ring.get_write_idx();
+    let task = spawn(
+        engine.clone(),
+        ingest,
+        identity(),
+        source(
+            format!("{base}/live/master.m3u8"),
+            VariantRule::HighestBandwidth,
+        ),
+        limits(),
     );
-    assert!(lines[0].contains("Track 1 (en)"), "{}", lines[0]);
-    assert!(lines[0].contains("video-only"), "{}", lines[0]);
+
+    let audio = "/live/audio/0/index.m3u8";
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while origin.count(audio) < MAX_ATTEMPTS as usize {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the audio rendition is tried once per cycle");
+    // The video waits for the audio for at most the merge window, and goes
+    // out at once when the pull gives the audio up after its last attempt.
+    let has_video = || {
+        (start..ring.get_write_idx())
+            .filter_map(|index| ring.read_at(index))
+            .any(|packet| packet.media_type == MediaType::Video)
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !has_video() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the variant's video reaches the ring while its audio fails");
+    let polled = origin.count("/live/high.m3u8");
+    tokio::time::sleep(Duration::from_millis(2_500)).await;
+    assert_eq!(
+        origin.count(audio),
+        MAX_ATTEMPTS as usize,
+        "after MAX_ATTEMPTS failed cycles the audio rendition is no longer asked for"
+    );
+    assert!(
+        origin.count("/live/high.m3u8") > polled,
+        "the video playlist is still polled at its cadence"
+    );
 
     task.cancel();
     tokio::time::timeout(Duration::from_secs(5), task.join())

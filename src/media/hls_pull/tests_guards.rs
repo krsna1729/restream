@@ -606,17 +606,16 @@ async fn a_cancelled_task_dispatches_nothing() {
         pipeline: authenticated(),
         stream_key: STREAM_KEY.to_string(),
         client_addr: "127.0.0.1".to_string(),
-        next_sequence: None,
-        last_media_sequence: None,
-        current_map: None,
-        segment_tries: HashMap::new(),
+        video: Follow::new(PULL_DIR, PLAYLIST_PATH),
+        audio: None,
+        audio_abandoned: false,
         last_refused: None,
         re_expired: false,
     };
     cancel.cancel();
 
     let playlist = state
-        .dispatch_playlist(&ingest, b"#EXTM3U\n".to_vec())
+        .dispatch_playlist(&ingest, b"#EXTM3U\n".to_vec(), PLAYLIST_PATH)
         .await;
     assert!(
         matches!(playlist, Err(PullError::Cancelled)),
