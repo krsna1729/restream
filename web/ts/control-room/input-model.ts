@@ -201,7 +201,7 @@ function headerProblem(headers: readonly PullHeaderPair[]): string | null {
 export function inputSourceLines(input: PipelineInput): string[] {
   if (input.kind === "hlsPull") return input.sourceUrl ? [input.sourceUrl] : [];
   if (input.role !== "backup") return [];
-  return [input.ingestUrls?.rtmp, input.ingestUrls?.srt].filter(
+  return [input.ingestUrls?.rtmp, input.ingestUrls?.srt, input.ingestUrls?.hls].filter(
     (url): url is string => Boolean(url),
   );
 }

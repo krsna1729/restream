@@ -46,6 +46,11 @@ fn flags_parse_in_both_forms() {
         .expect("inline flags parse");
     assert_eq!(inline.hls_publishers, 2);
     assert_eq!(inline.segment_type, HlsSegmentType::Ts);
+    assert_eq!(inline.method, HlsMethod::Put, "PUT by default");
+
+    let post = HlsPushOptions::from_args(&args(&["--method", "post"])).expect("--method parses");
+    assert_eq!(post.method, HlsMethod::Post);
+    assert!(HlsPushOptions::from_args(&args(&["--method", "patch"])).is_err());
 }
 
 #[test]
@@ -88,6 +93,7 @@ fn hls_publisher_argv_pushes_over_put() {
         "http://127.0.0.1:3030/ingest/hls/key/index.m3u8",
         2,
         HlsSegmentType::Fmp4,
+        HlsMethod::Put,
     );
     let text = argv.join(" ");
     assert!(text.contains("-f hls"));
@@ -105,8 +111,10 @@ fn hls_publisher_argv_pushes_over_put() {
         "http://h/ingest/hls/k/i.m3u8",
         1,
         HlsSegmentType::Ts,
+        HlsMethod::Post,
     );
     assert!(!ts.join(" ").contains("-hls_segment_type"));
+    assert!(ts.join(" ").contains("-method POST"));
 }
 
 #[test]

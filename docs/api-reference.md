@@ -327,7 +327,8 @@ that must stay write-only, and note that a userinfo component
 List and mutation responses expose each input's `id`, `label`, `streamKey`,
 `role`, `kind`, `sourceUrl`, `variantRule`, `authKind`, `authUsername`,
 `enabled`, `selected`, `ingestUrls`, `previewUrl`, and `runtime`. A keyed
-input's `ingestUrls` holds its `rtmp` and `srt` URLs; a pull input accepts no
+input's `ingestUrls` holds its `rtmp` and `srt` URLs and its `hls` push
+playlist URL (`http://HOST:PORT/ingest/hls/KEY/index.m3u8`); a pull input accepts no
 pushes, so its `ingestUrls` is `null`. `sourceUrl`, `variantRule`, `authKind`,
 and `authUsername` are always present (a keyed input has `sourceUrl: null`,
 `variantRule: "highestBandwidth"`, and `authKind: "none"`).

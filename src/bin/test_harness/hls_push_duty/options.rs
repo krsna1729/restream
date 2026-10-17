@@ -43,6 +43,31 @@ impl HlsSegmentType {
     }
 }
 
+/// Which HTTP method the HLS-arm publishers upload with (`-method`). The
+/// ingest takes both; FFmpeg's default is POST, the docs' examples use PUT.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HlsMethod {
+    Put,
+    Post,
+}
+
+impl HlsMethod {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Put => "PUT",
+            Self::Post => "POST",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Result<Self, String> {
+        match value.to_ascii_lowercase().as_str() {
+            "put" => Ok(Self::Put),
+            "post" => Ok(Self::Post),
+            _ => Err(format!("--method must be put or post (got {value:?})")),
+        }
+    }
+}
+
 /// Upper bounds keep a mistyped argument from spawning hundreds of FFmpeg
 /// processes on a shared host.
 const MAX_PUBLISHERS: usize = 64;
@@ -56,6 +81,7 @@ pub(crate) struct HlsPushOptions {
     /// Extra HLS push publishers: 0 is the baseline, >0 the treatment arm.
     pub(crate) hls_publishers: usize,
     pub(crate) segment_type: HlsSegmentType,
+    pub(crate) method: HlsMethod,
     /// Rated window, in seconds, measured after every input has published.
     pub(crate) duration_secs: u64,
     /// `-hls_time`: the HLS arm's target segment duration.
@@ -68,6 +94,7 @@ impl Default for HlsPushOptions {
             base_publishers: 2,
             hls_publishers: 0,
             segment_type: HlsSegmentType::Ts,
+            method: HlsMethod::Put,
             duration_secs: 12,
             segment_secs: 2,
         }
@@ -75,7 +102,7 @@ impl Default for HlsPushOptions {
 }
 
 pub(crate) const USAGE: &str = "hls-push-duty [--base-publishers N] [--hls-publishers N] \
-[--segment-type ts|fmp4] [--duration-secs N] [--segment-secs N]";
+[--segment-type ts|fmp4] [--method put|post] [--duration-secs N] [--segment-secs N]";
 
 impl HlsPushOptions {
     pub(crate) fn from_args(args: &[String]) -> Result<Self, String> {
@@ -105,6 +132,7 @@ impl HlsPushOptions {
                 "--segment-type" => {
                     options.segment_type = HlsSegmentType::parse(&value(&mut index)?)?
                 }
+                "--method" => options.method = HlsMethod::parse(&value(&mut index)?)?,
                 "--duration-secs" => options.duration_secs = parse_u64(&value(&mut index)?, name)?,
                 "--segment-secs" => options.segment_secs = parse_u64(&value(&mut index)?, name)?,
                 other => {

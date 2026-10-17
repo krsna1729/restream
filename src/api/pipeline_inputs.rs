@@ -351,6 +351,9 @@ async fn input_json(state: &AppState, input: &PipelineInput, host: &str) -> serd
         PipelineInputSourceKind::Keyed => serde_json::json!({
             "rtmp": format!("rtmp://{host}:{}/live/{}", state.ports.rtmp, input.stream_key),
             "srt": format!("srt://{host}:{}?streamid=publish:{}", state.ports.srt, input.stream_key),
+            // HLS push (`-f hls -method PUT|POST`): the playlist URL; the
+            // segments go next to it.
+            "hls": format!("http://{host}:{}/ingest/hls/{}/index.m3u8", state.ports.http, input.stream_key),
         }),
         // A pull input accepts no pushes, so it has no ingest URLs.
         PipelineInputSourceKind::HlsPull => serde_json::Value::Null,

@@ -415,7 +415,8 @@ Restream, then builds two arms that differ only by the HLS addition:
   each an ingest input and one RTMP sink output.
 - **Treatment arm** (`--hls-publishers N`, default 0): the same base load plus
   `N` pipelines whose input is an HLS push session, driven by one FFmpeg
-  process each (`-re -f hls -method PUT`), to the same RTMP sink output kind.
+  process each (`-re -f hls -method PUT`, or POST with `--method post`), to
+  the same RTMP sink output kind.
 
 Every pipeline's output goes to its own in-process RTMP sink, so delivery is
 asserted per pipeline (video, audio, a keyframe, monotonic DTS) and the egress
@@ -425,6 +426,7 @@ side of the fabric carries real work. `--hls-publishers 0` is the baseline and
 ```sh
 scripts/harness/run.sh hls-push-duty
 scripts/harness/run.sh hls-push-duty -- --hls-publishers 4 --segment-type fmp4
+scripts/harness/run.sh hls-push-duty -- --hls-publishers 2 --method post
 ```
 
 | Option | Default | Meaning |
@@ -432,6 +434,7 @@ scripts/harness/run.sh hls-push-duty -- --hls-publishers 4 --segment-type fmp4
 | `--base-publishers N` | `2` | RTMP baseline publishers with one sink output each |
 | `--hls-publishers N` | `0` | Extra HLS push pipelines with one sink output each |
 | `--segment-type ts\|fmp4` | `ts` | Container the HLS arm pushes |
+| `--method put\|post` | `put` | HTTP method the HLS arm uploads with |
 | `--duration-secs N` | `12` | Rated window after every input has published |
 | `--segment-secs N` | `2` | `-hls_time` for the HLS arm |
 

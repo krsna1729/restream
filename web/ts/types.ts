@@ -34,6 +34,8 @@ export interface VideoTrackSelection {
 export interface IngestUrls {
   rtmp: string | null;
   srt: string | null;
+  /** HLS push playlist URL; inputs carry it, pipelines do not. */
+  hls?: string | null;
 }
 
 export interface PipelineInputRuntime {

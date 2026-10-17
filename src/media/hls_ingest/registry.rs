@@ -11,7 +11,7 @@ use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tracing::{error, info, warn};
 
-use super::ordering::SessionLimits;
+use super::ordering::{Counters, SessionLimits};
 use super::session::{self, HlsObject, SessionContext, SessionEnd};
 use super::{
     BodyError, HlsIngestLimits, KeyCharge, ObjectBody, ObjectKind, ObjectOutcome, SegmentShare,
@@ -807,6 +807,18 @@ impl HlsIngest {
     ) {
         let pipeline_id = context.pipeline_id.clone();
         let registration: IngestRegistration = context.registration.clone();
+        self.supervise_session(pipeline_id, registration, session::run(context, objects))
+            .await;
+    }
+
+    /// The supervision half of `supervise`, for any session future: run it as
+    /// a contained MEDIA service, then report and release whatever ended it.
+    async fn supervise_session(
+        self: Arc<Self>,
+        pipeline_id: String,
+        registration: IngestRegistration,
+        session: impl Future<Output = (SessionEnd, Counters)> + Send + 'static,
+    ) {
         let service = MediaService {
             class: MediaServiceClass::HlsIngest,
             pipeline_id: pipeline_id.clone(),
@@ -815,7 +827,7 @@ impl HlsIngest {
         let result = crate::media::executor::run_with_class(
             service,
             registration.cancel_token.clone(),
-            session::run(context, objects),
+            session,
         )
         .await;
         let (phase, reason, had_error) = match &result {
@@ -871,3 +883,7 @@ mod pull_tests;
 #[cfg(test)]
 #[path = "session_start_tests.rs"]
 mod session_start_tests;
+
+#[cfg(test)]
+#[path = "session_end_tests.rs"]
+mod session_end_tests;

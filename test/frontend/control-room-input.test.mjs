@@ -22,6 +22,7 @@ const {
 
 const RTMP = "rtmp://host:1935/live/key-a";
 const SRT = "srt://host:8890?streamid=publish:key-a";
+const HLS = "http://host:3030/ingest/hls/key-a/index.m3u8";
 const ORIGIN = "https://origin.example/live/master.m3u8";
 
 function input(overrides = {}) {
@@ -38,7 +39,7 @@ function input(overrides = {}) {
     variantRule: "highestBandwidth",
     authKind: "none",
     authUsername: null,
-    ingestUrls: { rtmp: RTMP, srt: SRT },
+    ingestUrls: { rtmp: RTMP, srt: SRT, hls: HLS },
     previewUrl: "/hls/inputs/in-1/master.m3u8",
     runtime: {
       connected: false,
@@ -256,6 +257,7 @@ test("a keyed input keeps today's behaviour", () => {
   assert.deepEqual(inputSourceLines(input({ id: "in-2", role: "backup", label: "Backup" })), [
     RTMP,
     SRT,
+    HLS,
   ]);
 
   const body = inputWrite({ ...draft, label: " Encoder A " }, keyed);
