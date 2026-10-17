@@ -268,7 +268,15 @@ it is write-only, stored and used but **never** returned:
   needed.
 - **Signed cookies** — the fetcher carries the origin's cookie jar
   automatically, so no `auth` entry is needed.
-- **Basic auth** — `{ "kind": "basic", "username": "…", "password": "…" }`.
+- **Username and password** — `{ "kind": "basic", "username": "…",
+  "password": "…" }`. Sent as Basic auth; an origin that answers `401` with a
+  `WWW-Authenticate: Digest` challenge is answered with HTTP Digest
+  (RFC 7616: `MD5`, `MD5-sess`, `SHA-256`, `SHA-256-sess`, `qop=auth` or
+  none) from then on, as FFmpeg's HTTP client does. A `stale=true` challenge
+  is answered once more with the new nonce. A Digest challenge offering only
+  `auth-int`, `userhash` or another algorithm ends the pull with that reason.
+  The first request still carries Basic, so use `https` for an origin that
+  must not see the password in clear.
 - **Bearer token** — `{ "kind": "bearer", "token": "…" }`.
 - **Cookies** — `{ "kind": "cookies", "cookies": "…" }`, sent as one `Cookie`
   header. This is the choice for an origin that hands the player a signed

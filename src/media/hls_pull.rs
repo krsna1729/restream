@@ -41,7 +41,7 @@ use tracing::{debug, error, info, warn};
 
 use self::fetch::{
     AuthScope, FetchError, RequestAuth, build_client, fetch_small, host_refused, log_url,
-    pump_body, send, variant_expired,
+    pump_body, send, source_resolves_private, variant_expired,
 };
 use self::namespace::{
     Prepared, live_start, map_name, object_kind, parse_and_prepare, segment_name,
@@ -57,6 +57,7 @@ use crate::media::hls_ingest::{
 use crate::media::ingest_auth::AuthenticatedPipeline;
 
 mod audio;
+mod digest;
 mod fetch;
 mod namespace;
 use audio::report_audio_rendition;
@@ -238,7 +239,13 @@ enum PullError {
 
 impl From<FetchError> for PullError {
     fn from(error: FetchError) -> Self {
-        Self::Retry(error.to_string())
+        match error {
+            // A refused target, or an authentication the pull cannot answer,
+            // stays refused: retrying would ask the same question and log it
+            // again on every backoff.
+            FetchError::PrivateTarget(_) | FetchError::Auth(_) => Self::Fatal(error.to_string()),
+            error => Self::Retry(error.to_string()),
+        }
     }
 }
 
@@ -327,7 +334,7 @@ async fn run(
     // A source in one of the refused ranges says the operator meant an
     // internal origin, so its playlist may point there too; anything else may
     // not.
-    let allow_private = host_refused(&url);
+    let allow_private = host_refused(&url) || source_resolves_private(&url).await;
     // One client — and one cookie jar — per pull task: an origin's
     // `Set-Cookie` is scoped to this task's requests, never another input's.
     let client = build_client(scope.is_configured(), allow_private);
@@ -913,6 +920,9 @@ mod tests;
 // The integration halves: `tests_origin` owns the origin stub and the helpers
 // both integration modules use, `tests_guards` the guards a real origin can
 // prove. Split because one file of them would break the 999-line cap.
+#[cfg(test)]
+#[path = "hls_pull/tests_auth.rs"]
+mod tests_auth;
 #[cfg(test)]
 #[path = "hls_pull/tests_guards.rs"]
 mod tests_guards;
