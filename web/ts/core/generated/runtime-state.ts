@@ -198,4 +198,10 @@ deliveringPercent: number | null, degraded: DegradedByLayer, };
 
 export type DegradedByLayer = { ingest: number, feed: number, shard: number, destination: number, };
 
-export type FleetHistoryWindow = { samples: Array<FleetSample>, completeFromMs: number, intervalMs: number, };
+export type FleetHistoryWindow = { samples: Array<FleetSample>, completeFromMs: number, intervalMs: number, 
+/**
+ * The newest sample the server keeps, whatever the window: once it is
+ * at or past a closed window's end, every sample in that window was
+ * taken (server time, so a client's clock does not matter).
+ */
+newestMs: number | null, };

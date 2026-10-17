@@ -15,6 +15,7 @@ import type { AlertsSnapshot, LifecycleEventsSnapshot } from "../core/api-types.
 import type { FleetHistoryWindow } from "../core/generated/runtime-state.js";
 import type { HealthData } from "../types.js";
 import { formatAge } from "./format.js";
+import { fleetSpanSettled } from "./incidents-model.js";
 import { SAMPLE_INTERVAL_MS, SAMPLE_STALE_AFTER_MS, useNow } from "./store.js";
 
 /** How often `/engine/health` reloads: it samples host settings and every
@@ -42,8 +43,8 @@ export class NoValue extends Error {}
 
 /**
  * `queryKey` names the subject; `load` runs now and every `intervalMs` while
- * the panel is mounted (until `settledAfterMs`, when given: a load after
- * then is the last), and `refresh` loads now. A load that reads nothing
+ * the panel is mounted (until `settled`, when given, says a value is final),
+ * and `refresh` loads now. A load that reads nothing
  * (`null`) is not a value: the last one stays, and `atMs` shows its age. Two
  * panels naming the same subject share one query.
  */
@@ -51,10 +52,10 @@ export function usePolled<T>(
   queryKey: QueryKey,
   load: () => Promise<T | null>,
   intervalMs: number = SAMPLE_INTERVAL_MS,
-  settledAfterMs: number | null = null,
+  settled: ((value: T) => boolean) | null = null,
 ): Polled<T> {
-  const settled = (dataUpdatedAt: number) =>
-    settledAfterMs !== null && dataUpdatedAt > settledAfterMs;
+  const final = (value: T | undefined) =>
+    value !== undefined && settled !== null && settled(value);
   const query = useQuery({
     queryKey,
     queryFn: async () => {
@@ -62,10 +63,7 @@ export function usePolled<T>(
       if (next === null) throw new NoValue();
       return next;
     },
-    refetchInterval: (current) =>
-      current.state.data !== undefined && settled(current.state.dataUpdatedAt)
-        ? false
-        : intervalMs,
+    refetchInterval: (current) => (final(current.state.data) ? false : intervalMs),
   });
   // The query keeps its data when a load fails, so an empty read leaves the
   // last value and its age in place; a new subject starts with no data.
@@ -75,7 +73,7 @@ export function usePolled<T>(
     atMs: value === null ? null : query.dataUpdatedAt,
     // A settled subject no longer changes, so its age is never stale.
     staleAfterMs:
-      value !== null && settled(query.dataUpdatedAt)
+      final(query.data)
         ? Number.POSITIVE_INFINITY
         : intervalMs * (SAMPLE_STALE_AFTER_MS / SAMPLE_INTERVAL_MS),
     refresh: () => void query.refetch(),
@@ -113,8 +111,9 @@ export function useLifecycleEvents(
  * finite) through `toMs` (`null`: up to now). The first load reads the whole
  * span, each later one only the samples after the last held, so an incident
  * hours long is not re-read every few seconds; held samples the engine no
- * longer keeps are dropped. A closed span stops loading once a load ran an
- * interval past its end (every sample in it was taken by then).
+ * longer keeps are dropped. A closed span stops loading once the server's
+ * newest sample (or the start of what it keeps) is at or past its end: every
+ * sample in it was taken, by the server's clock, not this browser's.
  */
 export function useFleetHistory(
   fromMs: number,
@@ -139,7 +138,7 @@ export function useFleetHistory(
       return { ...next, samples: [...kept, ...next.samples] };
     },
     FLEET_HISTORY_INTERVAL_MS,
-    toMs === null ? null : toMs + FLEET_HISTORY_INTERVAL_MS,
+    toMs === null ? null : (window) => fleetSpanSettled(window, toMs),
   );
 }
 

@@ -6,9 +6,11 @@
 use super::{FRAME_TICKS_90K, ts_to_ms};
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
 use bytes::Bytes;
-use tracing::debug;
+use tracing::{debug, warn};
 
 const ADTS_HEADER_LEN: usize = 7;
+/// The 13-bit ADTS frame length's ceiling.
+const MAX_ADTS_FRAME: usize = 8191;
 
 /// A stream's ADTS framing state across its PES packets.
 #[derive(Debug, Default)]
@@ -20,6 +22,22 @@ pub(in crate::media) struct AdtsFraming {
     /// after the last frame emitted. A PES with no timestamp of its own (no
     /// frame starts in it, or its muxer left it out) continues from here.
     next: Option<(i64, i64)>,
+    /// Bytes dropped before this stream framed anything: past two whole
+    /// frames' worth, it carries no ADTS at all (raw AAC mislabelled as
+    /// stream type 0x0F), and that is said once.
+    unframed: usize,
+    framed: bool,
+}
+
+/// What the next PES made of a carried frame start.
+enum Carried {
+    /// Completed by the first `consumed` bytes of the PES, and followed by a
+    /// frame or by the PES end.
+    Completed { frame: Vec<u8>, consumed: usize },
+    /// Still incomplete: the whole PES joined the carry.
+    Pending,
+    /// The PES does not continue it (data was lost): dropped.
+    Rejected,
 }
 
 /// What became of one PES.
@@ -44,55 +62,61 @@ impl AdtsFraming {
         track_index: u32,
         output: &mut Vec<MediaPacket>,
     ) -> Framed {
-        let mut data = payload;
-        let mut carried = false;
+        let data = payload;
+        let mut first = None;
+        let mut expected = self.next;
+        let mut resume = None;
         if !self.carry.is_empty() {
-            // A PES that starts with a frame of its own is aligned: the
-            // carried frame must end inside it, on that PES's frames.
-            let aligned = frame_len(&data).is_some();
-            let mut joined = std::mem::take(&mut self.carry);
-            joined.extend_from_slice(&data);
-            if continues(&joined, aligned) {
-                data = Bytes::from(joined);
-                carried = true;
-            } else {
-                debug!(
-                    track = track_index,
-                    "an AAC frame the last PES ended inside does not continue in this one; dropped"
-                );
+            match self.complete_carry(&data) {
+                Carried::Completed { frame, consumed } => {
+                    // The carried frame keeps the time it started with.
+                    match (expected, step_90k(&frame)) {
+                        (Some((pts, dts)), Some(step)) => {
+                            let unit = Bytes::from(frame);
+                            first = Some(unit.clone());
+                            push(output, track_index, pts, dts, unit);
+                            expected = Some((pts.saturating_add(step), dts.saturating_add(step)));
+                        }
+                        _ => debug!(
+                            track = track_index,
+                            "a carried AAC frame with no time or rate to give it; dropped"
+                        ),
+                    }
+                    resume = Some(consumed);
+                }
+                Carried::Pending => return Framed::Frames { first: None },
+                Carried::Rejected => {
+                    // Its time goes with it: a PES without a PTS must not
+                    // take the dropped frame's slot.
+                    expected = None;
+                    debug!(
+                        track = track_index,
+                        "an AAC frame the last PES ended inside does not continue in this one; dropped"
+                    );
+                }
             }
         }
+        let carried = resume.is_some();
 
-        let start = if carried {
-            0
-        } else {
+        let start = match resume {
+            Some(start) => start,
             // Stream type 0x0F is ADTS: bytes with no frame start in them
             // are a fragment (a stream joined mid-frame, or a frame whose
             // start was lost), never a unit of their own.
-            let Some(start) = resync(&data) else {
-                if !data.is_empty() {
-                    debug!(
-                        track = track_index,
-                        dropped = data.len(),
-                        "AAC PES holds no frame start; dropped"
-                    );
+            None => match resync(&data) {
+                Some(start) => start,
+                None => {
+                    self.next = expected;
+                    self.drop_unframed(track_index, data.len());
+                    return Framed::Frames { first };
                 }
-                return Framed::Frames { first: None };
-            };
-            start
+            },
         };
-        let mut first = None;
-        let mut expected = self.next;
         let mut pes_first = pes_timestamps;
         let mut offset = start;
         while let Some(rest) = data.get(offset..).filter(|rest| !rest.is_empty()) {
-            // The carried frame keeps its own time; the first frame that
-            // starts in this PES takes the PES timestamp.
-            let at = if carried && offset == 0 {
-                expected
-            } else {
-                pes_first.take().or(expected)
-            };
+            // The first frame that starts in this PES takes its timestamp.
+            let at = pes_first.take().or(expected);
             let Some((pts, dts)) = at else {
                 debug!(
                     track = track_index,
@@ -102,9 +126,7 @@ impl AdtsFraming {
             };
             match frame_len(rest) {
                 Some(len) if len <= rest.len() => {
-                    let Some(step) = crate::media::codec::adts_sample_rate(rest)
-                        .and_then(|rate| FRAME_TICKS_90K.checked_div(i64::from(rate)))
-                    else {
+                    let Some(step) = step_90k(rest) else {
                         // No known rate: its frames cannot be timed apart, so
                         // a PES of them goes whole, on its own timestamp.
                         if first.is_none() && !carried {
@@ -122,15 +144,7 @@ impl AdtsFraming {
                     if first.is_none() {
                         first = Some(unit.clone());
                     }
-                    output.push(MediaPacket {
-                        media_type: MediaType::Audio,
-                        track_index,
-                        pts: ts_to_ms(pts),
-                        dts: ts_to_ms(dts),
-                        is_keyframe: false,
-                        format: PayloadFormat::Raw,
-                        payload: unit,
-                    });
+                    push(output, track_index, pts, dts, unit);
                     expected = Some((pts.saturating_add(step), dts.saturating_add(step)));
                     offset = offset.saturating_add(len);
                 }
@@ -155,8 +169,93 @@ impl AdtsFraming {
             }
         }
         self.next = expected;
+        if first.is_some() {
+            self.framed = true;
+        }
         Framed::Frames { first }
     }
+
+    /// Join the carried frame start with what of `data` completes it, copying
+    /// only those bytes: a frame must end where another starts or at the PES
+    /// end, and a PES that starts with a frame of its own (aligned) must
+    /// complete it.
+    fn complete_carry(&mut self, data: &[u8]) -> Carried {
+        let aligned = frame_len(data).is_some();
+        let carry = std::mem::take(&mut self.carry);
+        // The header itself may be cut: read it across the two.
+        let mut header = [0u8; ADTS_HEADER_LEN];
+        let mut header_len: usize = 0;
+        for (slot, byte) in header.iter_mut().zip(carry.iter().chain(data)) {
+            *slot = *byte;
+            header_len = header_len.saturating_add(1);
+        }
+        let header = header.get(..header_len).unwrap_or_default();
+        match frame_len(header) {
+            Some(len) => {
+                let need = len.saturating_sub(carry.len());
+                match (data.get(..need), data.get(need..)) {
+                    (Some(rest), Some(after)) if after.is_empty() || sync_prefix(after) => {
+                        let mut frame = carry;
+                        frame.extend_from_slice(rest);
+                        Carried::Completed {
+                            frame,
+                            consumed: need,
+                        }
+                    }
+                    (None, _) if !aligned => {
+                        self.carry = carry;
+                        self.carry.extend_from_slice(data);
+                        Carried::Pending
+                    }
+                    _ => Carried::Rejected,
+                }
+            }
+            None if !aligned && header_len < ADTS_HEADER_LEN && sync_prefix(header) => {
+                self.carry = carry;
+                self.carry.extend_from_slice(data);
+                Carried::Pending
+            }
+            None => Carried::Rejected,
+        }
+    }
+
+    fn drop_unframed(&mut self, track_index: u32, dropped: usize) {
+        if dropped == 0 {
+            return;
+        }
+        if !self.framed {
+            let before = self.unframed;
+            self.unframed = self.unframed.saturating_add(dropped);
+            if before <= 2 * MAX_ADTS_FRAME && self.unframed > 2 * MAX_ADTS_FRAME {
+                warn!(
+                    track = track_index,
+                    "MPEG-TS AAC stream (type 0x0F) carries no ADTS frames; its audio is dropped"
+                );
+            }
+        }
+        debug!(
+            track = track_index,
+            dropped, "AAC PES holds no frame start; dropped"
+        );
+    }
+}
+
+fn push(output: &mut Vec<MediaPacket>, track_index: u32, pts: i64, dts: i64, payload: Bytes) {
+    output.push(MediaPacket {
+        media_type: MediaType::Audio,
+        track_index,
+        pts: ts_to_ms(pts),
+        dts: ts_to_ms(dts),
+        is_keyframe: false,
+        format: PayloadFormat::Raw,
+        payload,
+    });
+}
+
+/// 1024 samples in 90 kHz ticks, at the rate a frame's header names.
+fn step_90k(frame: &[u8]) -> Option<i64> {
+    crate::media::codec::adts_sample_rate(frame)
+        .and_then(|rate| FRAME_TICKS_90K.checked_div(i64::from(rate)))
 }
 
 /// The length an ADTS header at the start of `data` names: a 12-bit sync
@@ -179,19 +278,6 @@ fn sync_prefix(data: &[u8]) -> bool {
         [0xFF] => true,
         [0xFF, b1, ..] => b1 & 0xF6 == 0xF0,
         _ => false,
-    }
-}
-
-/// A carried frame start joined with the next PES continues as a frame: the
-/// frame ends where another starts or at the end of the bytes, or (unless the
-/// PES is `aligned`, starting with a frame of its own) it is still incomplete.
-fn continues(joined: &[u8], aligned: bool) -> bool {
-    match frame_len(joined) {
-        Some(len) => match joined.get(len..) {
-            Some(after) => after.is_empty() || sync_prefix(after),
-            None => !aligned,
-        },
-        None => !aligned && joined.len() < ADTS_HEADER_LEN && sync_prefix(joined),
     }
 }
 

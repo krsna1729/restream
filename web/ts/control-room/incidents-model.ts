@@ -10,7 +10,7 @@ import type {
   OperatorAlert,
   ResolvedAlert,
 } from "../core/api-types.js";
-import type { Layer } from "../core/generated/runtime-state.js";
+import type { FleetHistoryWindow, Layer } from "../core/generated/runtime-state.js";
 import type { FleetSample } from "./fleet-history.js";
 import { describeCause } from "./fleet-model.js";
 
@@ -206,4 +206,13 @@ export function evidenceExport(input: {
           },
     signals: input.history.filter((sample) => sample.atMs >= fromMs && sample.atMs <= toMs),
   };
+}
+
+/**
+ * A closed span (`toMs`) is final once the server's newest sample, or the
+ * start of what it keeps, is at or past its end: every sample in it has been
+ * taken. Both are server times, so this browser's clock does not matter.
+ */
+export function fleetSpanSettled(window: FleetHistoryWindow, toMs: number): boolean {
+  return (window.newestMs !== null && window.newestMs >= toMs) || window.completeFromMs >= toMs;
 }
