@@ -459,21 +459,20 @@ items).
 ### Q-069 [architecture] [opus] Frame-level media units for MoQ and fMP4 ingest
 - Goal: the ring can feed per-frame consumers (MoQ objects, LL-HLS parts).
 - Sources: `MediaPacket` (`src/media/packet.rs`) has no codec
-  configuration, configuration generation, duration or group id. A
-  TS-ingest `MediaPacket` is one PES, which can hold several AAC frames. Timestamps are
+  configuration, configuration generation, duration or group id. The TS
+  demuxer already emits one AAC frame per packet. Timestamps are
   milliseconds: per-frame jitter is at most 0.5 ms, and the fMP4 path
   derives durations from DTS deltas (`build_mux_samples` in
   `src/media/hls/fmp4/codec.rs`),
   so the total does not drift.
-- Change: split audio PES into frames at ingest; a per-track
+- Change: a per-track
   configuration with a generation number that readers can follow; a GOP
   sequence number from the keyframe gate. `MediaPacket` is pinned at 56
   bytes by a layout test, so the configuration generation and group id go
   in a side table keyed by ring sequence unless the ring bench shows that
   a larger packet costs nothing.
-- Gates: proptest of the frame split against a simple model; the existing
-  fMP4 and TS output tests unchanged; bench of the ring hot path before
-  and after.
+- Gates: the existing fMP4 and TS output tests unchanged; bench of the ring
+  hot path before and after.
 - Status: open (Filed: 2026-10-16 by claude; blocks Q-047 and Q-070).
 
 ### Q-070 [protocol] [opus] MoQ ingest

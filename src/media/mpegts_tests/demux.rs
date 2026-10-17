@@ -449,3 +449,62 @@ fn a_multi_frame_audio_pes_becomes_one_packet_per_adts_frame() {
         }
     }
 }
+
+/// The split's one rule: a PES that is exactly one frame, or names no known
+/// sample rate, is forwarded as it is (a rate-less split would give every
+/// frame one timestamp); any other ADTS PES becomes its complete frames, and a
+/// partial frame at its end is dropped, whether one or several frames precede it.
+#[test]
+fn an_audio_pes_is_split_by_one_rule() {
+    let pid = 0x0101;
+    let frame = |fill: u8| {
+        let mut frame = crate::media::codec::build_adts_header(40, 48_000, 2)
+            .expect("a 40-byte payload fits one ADTS frame")
+            .to_vec();
+        frame.extend(std::iter::repeat_n(fill, 40));
+        frame
+    };
+    let demux = |payload: &[u8]| {
+        let mut demuxer = TsDemuxer::new();
+        demuxer.streams = vec![aac_adts_stream_info(pid, 0)];
+        demuxer.pid_to_stream[pid as usize] = 0;
+        demuxer.feed(&valid_audio_pes_packet(pid, 0, 90_000, payload));
+        demuxer.flush();
+        demuxer
+            .drain()
+            .into_iter()
+            .map(|packet| packet.payload.len())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(demux(&frame(0x11)), vec![47], "one exact frame passes as it is");
+
+    let mut one_and_a_tail = frame(0x11);
+    one_and_a_tail.extend_from_slice(&frame(0x22)[..20]);
+    assert_eq!(
+        demux(&one_and_a_tail),
+        vec![47],
+        "a partial frame after one complete frame is dropped"
+    );
+
+    let mut two_and_a_tail = frame(0x11);
+    two_and_a_tail.extend_from_slice(&frame(0x22));
+    two_and_a_tail.extend_from_slice(&frame(0x33)[..20]);
+    assert_eq!(
+        demux(&two_and_a_tail),
+        vec![47, 47],
+        "and after several, by the same rule"
+    );
+
+    // Sampling-frequency index 13 is reserved: the rate is unknown.
+    let mut no_rate = frame(0x11);
+    no_rate.extend_from_slice(&frame(0x22));
+    for header in [0, 47] {
+        no_rate[header + 2] = (no_rate[header + 2] & !0x3C) | (13 << 2);
+    }
+    assert_eq!(
+        demux(&no_rate),
+        vec![94],
+        "a PES with no known rate is forwarded whole, not split onto one timestamp"
+    );
+}

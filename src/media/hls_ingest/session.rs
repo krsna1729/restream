@@ -52,6 +52,14 @@ pub(super) struct HlsObject {
 /// already parsed: parsing is linear in the playlist (a 1 MiB playlist takes
 /// about 29 ms), so it runs on the blocking pool before the object is queued,
 /// never on the shared MEDIA worker that runs the turn.
+///
+/// The parse is not charged to the byte budget, which holds the playlist's
+/// bytes. It is bounded: a key holds at most one queue (`OBJECT_QUEUE`) of
+/// parsed objects plus one per dispatch still waiting to send, each roughly the
+/// size of its playlist (at most `max_playlist_bytes`). A pulled playlist is
+/// parsed twice, once from the origin's bytes and once from the rendered text,
+/// both on the blocking pool; one parse per object keeps a single path for
+/// pushed and pulled playlists.
 pub(super) enum ObjectContent {
     Playlist(Result<playlist::Playlist, playlist::PlaylistError>),
     TsSegment,
