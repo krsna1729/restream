@@ -792,7 +792,7 @@ items).
   (`HlsIngest::forget`), and nothing clears it when the input's row is
   deleted, so up to `max_init_bytes` (4 MiB) per deleted fMP4 input is held
   until the process restarts. A stopped *pull* clears it
-  (`HlsIngest::cancel_pull`); the keyed case has no hook: the delete handler
+  (`HlsIngest::cancel_pulls`); the keyed case has no hook: the delete handler
   reaches the engine (`cancel_pipeline_input`) but not the registry, and the
   registry has no "this input is gone" entry point. An operator who creates
   and deletes many fMP4 inputs accumulates them.
