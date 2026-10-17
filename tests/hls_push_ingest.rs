@@ -275,6 +275,110 @@ async fn ffmpeg_hls_fmp4_hevc_segments_reach_the_ring() {
     .await;
 }
 
+/// FFmpeg's separate-rendition fMP4 HLS (`-var_stream_map`), at media pace
+/// as a live encoder pushes: a master whose variant is video only and whose
+/// audio is an `EXT-X-MEDIA` rendition with its own playlist and `EXT-X-MAP`
+/// init. FFmpeg writes the master only after every rendition's first
+/// playlist, so what a rendition uploads before the master names it may be
+/// lost (the first video segment, at most); everything after reaches the
+/// ring, both renditions merged in DTS order.
+#[tokio::test]
+async fn ffmpeg_hls_with_a_separate_audio_rendition_publishes_both() {
+    let server = serve().await;
+    let ring = server.engine.get_or_create_pipeline(PIPELINE_ID).await;
+    let start = ring.get_write_idx();
+    let url = format!(
+        "http://{}/ingest/hls/{STREAM_KEY}/stream_%v/index.m3u8",
+        server.address
+    );
+    let status = tokio::process::Command::new(restream::ffmpeg_binary::ffmpeg_bin_path())
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-re",
+            "-i",
+        ])
+        .arg(Codec::H264.fixture())
+        .args(["-map", "0:v:0", "-map", "0:a:0", "-c", "copy"])
+        .args(["-bsf:a", "aac_adtstoasc", "-f", "hls", "-hls_time", "1"])
+        .args(["-hls_list_size", "3", "-hls_segment_type", "fmp4"])
+        .args([
+            "-var_stream_map",
+            "v:0,agroup:aud a:0,agroup:aud,default:yes",
+        ])
+        .args(["-master_pl_name", "master.m3u8"])
+        .args(["-hls_flags", "delete_segments", "-method", "PUT"])
+        .args(["-http_persistent", "0"])
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .status();
+    let status = tokio::time::timeout(Duration::from_secs(60), status)
+        .await
+        .expect("ffmpeg finished")
+        .expect("ffmpeg ran");
+    assert!(status.success(), "ffmpeg exited with {status}");
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while server.engine.input_has_session(PIPELINE_ID, INPUT_ID).await {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("HLS session unregistered");
+    let phase = server
+        .engine
+        .recent_ingest_outcome(PIPELINE_ID)
+        .await
+        .and_then(|outcome| outcome.failure_phase);
+    assert_eq!(
+        phase.as_deref(),
+        Some("eof"),
+        "the session ends on both ENDLISTs"
+    );
+
+    let packets: Vec<_> = (start..ring.get_write_idx())
+        .filter_map(|index| ring.read_at(index))
+        .collect();
+    let dts = |media_type: MediaType| -> Vec<i64> {
+        packets
+            .iter()
+            .filter(|packet| packet.media_type == media_type)
+            .map(|packet| packet.dts)
+            .collect()
+    };
+    let (video, audio) = (dts(MediaType::Video), dts(MediaType::Audio));
+    // 8 s of 30 fps video (its first 2 s segment precedes the master and is
+    // lost) and of 48 kHz AAC (375 frames, all of them).
+    assert!(video.len() >= 150, "only {} video packets", video.len());
+    assert!(audio.len() >= 340, "only {} audio packets", audio.len());
+    for track in [&video, &audio] {
+        assert!(
+            track.windows(2).all(|pair| pair[1] > pair[0]),
+            "a track goes backwards"
+        );
+    }
+    let keyframes = packets
+        .iter()
+        .filter(|packet| packet.media_type == MediaType::Video && packet.is_keyframe)
+        .count();
+    assert!(keyframes >= 3, "only {keyframes} keyframes");
+    // Merged by DTS: no packet trails the newest one before it by more than
+    // a frame or two.
+    let mut newest = i64::MIN;
+    for packet in &packets {
+        assert!(
+            packet.dts >= newest.saturating_sub(100),
+            "{:?} at {} trails {newest}",
+            packet.media_type,
+            packet.dts
+        );
+        newest = newest.max(packet.dts);
+    }
+}
+
 /// Send one PUT on `stream` and read its whole reply; returns the status.
 async fn request(stream: &mut tokio::net::TcpStream, path: &str, body: &[u8]) -> u16 {
     let head = format!(

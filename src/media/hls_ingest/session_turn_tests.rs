@@ -43,7 +43,7 @@ async fn context() -> SessionContext {
             idle_floor: Duration::from_secs(10),
         },
         max_init_bytes: 1 << 20,
-        init: Arc::new(Mutex::new(None)),
+        init: Arc::new(Mutex::new(Default::default())),
     }
 }
 

@@ -29,7 +29,7 @@ fn sized(len: usize) -> Payload {
     Payload::new(Bytes::from(vec![0u8; len]), None, None, None)
 }
 
-fn media(dir: &str, first: u64, len: u64, ended: bool) -> Playlist {
+pub(super) fn media(dir: &str, first: u64, len: u64, ended: bool) -> Playlist {
     media_with_map(dir, first, len, ended, None)
 }
 
@@ -330,7 +330,7 @@ fn a_resent_identical_playlist_is_not_a_new_epoch() {
 }
 
 /// The listing with an `EXT-X-MAP` before every entry, as FFmpeg writes it.
-fn with_map(playlist: Playlist, map: &str) -> Playlist {
+pub(super) fn with_map(playlist: Playlist, map: &str) -> Playlist {
     match playlist {
         Playlist::Media(mut media) => {
             media.map_uri = Some(map.to_string());
@@ -442,7 +442,7 @@ fn a_segment_waits_for_its_init_then_is_released_with_it() {
 fn a_seeded_init_is_delivered_without_an_upload() {
     let t0 = Instant::now();
     let mut session = Session::new(limits());
-    session.seed_init("init.mp4", Bytes::from_static(b"init.mp4"));
+    session.seed_init(0, "init.mp4", Bytes::from_static(b"init.mp4"));
     assert_eq!(seg(&mut session, "index0.ts", t0), SegmentOutcome::Held);
     session.on_playlist(
         "index.m3u8",
@@ -457,7 +457,7 @@ fn a_seeded_init_is_delivered_without_an_upload() {
 
     // A playlist that names a different init does not get the seed.
     let mut other = Session::new(limits());
-    other.seed_init("init.mp4", Bytes::from_static(b"init.mp4"));
+    other.seed_init(0, "init.mp4", Bytes::from_static(b"init.mp4"));
     seg(&mut other, "index0.ts", t0);
     other.on_playlist(
         "index.m3u8",
@@ -513,7 +513,7 @@ fn a_segment_needs_only_the_map_it_was_listed_under() {
 fn a_recreated_map_does_not_take_the_voided_seed_again() {
     let t0 = Instant::now();
     let mut session = Session::new(limits());
-    session.seed_init("init.mp4", Bytes::from_static(b"stale init"));
+    session.seed_init(0, "init.mp4", Bytes::from_static(b"stale init"));
     let master = |bandwidth| {
         Playlist::Master(MasterPlaylist {
             variants: vec![Variant {

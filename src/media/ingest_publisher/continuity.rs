@@ -12,6 +12,9 @@ pub(super) struct ContinuousTimestampState {
     /// The next packet starts an unrelated timeline: re-anchor it right after
     /// the latest timestamp forwarded on any stream, whichever way it jumped.
     rebase_pending: bool,
+    /// The raw (source) timestamp of the last packet, before the offset: what
+    /// another rendition on the same source clock compares itself with.
+    last_raw_ms: Option<i64>,
 }
 
 impl ContinuousTimestampState {
@@ -19,7 +22,40 @@ impl ContinuousTimestampState {
         ((packet.media_type as u64) << 32) | u64::from(packet.track_index)
     }
 
-    fn continuity_timestamp_ms(packet: &MediaPacket) -> i64 {
+    /// A state whose first packet is re-anchored, like one after a
+    /// discontinuity: a rendition that joins a stream already under way.
+    pub(super) fn joining() -> Self {
+        Self {
+            rebase_pending: true,
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn rebase_pending(&self) -> bool {
+        self.rebase_pending
+    }
+
+    pub(super) fn offset_ms(&self) -> i64 {
+        self.offset_ms
+    }
+
+    pub(super) fn last_raw_ms(&self) -> Option<i64> {
+        self.last_raw_ms
+    }
+
+    /// The latest timestamp forwarded on any of this state's streams.
+    pub(super) fn latest_ms(&self) -> Option<i64> {
+        self.last_timestamp_ms_by_stream.values().copied().max()
+    }
+
+    /// Settle a pending re-anchor with an offset chosen by the caller (one
+    /// that keeps this state aligned with another on the same source clock).
+    pub(super) fn rebase_to(&mut self, offset_ms: i64) {
+        self.rebase_pending = false;
+        self.offset_ms = offset_ms;
+    }
+
+    pub(super) fn continuity_timestamp_ms(packet: &MediaPacket) -> i64 {
         if packet.dts >= 0 {
             packet.dts
         } else {
@@ -51,6 +87,7 @@ impl ContinuousTimestampState {
             }
         }
 
+        self.last_raw_ms = Some(raw_timestamp_ms);
         packet.pts = packet.pts.saturating_add(self.offset_ms);
         packet.dts = packet.dts.saturating_add(self.offset_ms);
         let adjusted_timestamp_ms = Self::continuity_timestamp_ms(packet);

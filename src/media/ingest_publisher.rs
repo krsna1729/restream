@@ -6,6 +6,11 @@
 //! gate, promotion, parameter sets, ring push and the counters are one core
 //! for both.
 //!
+//! An HLS session that follows a variant and its separate audio rendition
+//! publishes both through one publisher: each rendition has its own demux
+//! and probe, and their packets share one continuity state and are merged in
+//! DTS order before they reach the ring (see [`SegmentPublisher::interleave`]).
+//!
 //! Runs on the MEDIA executor. Each `publish` call takes one bounded chunk
 //! (at most 64 KiB), forwards what it completes, and yields, so a source that
 //! is always ready cannot monopolize a shared media worker.
@@ -13,11 +18,16 @@
 mod continuity;
 pub mod fmp4;
 #[cfg(test)]
+#[path = "ingest_publisher/rendition_tests.rs"]
+mod rendition_tests;
+#[cfg(test)]
 #[path = "ingest_publisher/tests.rs"]
 mod tests;
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use bytes::Bytes;
 use continuity::ContinuousTimestampState;
@@ -217,24 +227,110 @@ pub struct IngestTimestamps {
     promotion: InputTimestampMapper,
 }
 
+/// One rendition's demux, its last probe, and (when renditions are merged)
+/// its timeline and its packets that wait for the others.
+struct Rendition {
+    demux: Box<dyn SegmentDemux>,
+    /// This demux's probe was taken; an applied init clears it.
+    probe_taken: bool,
+    probe: Option<DemuxProbe>,
+    /// Continuity-adjusted packets not yet forwarded, in DTS order.
+    queue: VecDeque<MediaPacket>,
+    /// The timeline of a rendition after the first. Rendition 0's is
+    /// `IngestTimestamps::continuous`, which outlives the publisher.
+    continuous: ContinuousTimestampState,
+    /// It had nothing queued when the others' wait for it ran out: they no
+    /// longer wait for it until it delivers again.
+    absent: bool,
+}
+
+impl Rendition {
+    fn new(demux: Box<dyn SegmentDemux>) -> Self {
+        Self {
+            demux,
+            probe_taken: false,
+            probe: None,
+            queue: VecDeque::new(),
+            continuous: ContinuousTimestampState::joining(),
+            absent: false,
+        }
+    }
+}
+
 /// Demux and forwarding state for one ingest attempt.
 pub struct SegmentPublisher {
-    demux: Box<dyn SegmentDemux>,
+    /// Never empty; rendition 0 is the only one outside HLS.
+    renditions: Vec<Rendition>,
+    /// The rendition the current object belongs to.
+    current: usize,
+    /// Renditions whose packets the merge waits for (see `interleave`).
+    expected: usize,
+    /// How far ahead of a missing rendition the others may queue before they
+    /// are forwarded without it.
+    window_ms: i64,
     packets: Vec<MediaPacket>,
-    probe_sent: bool,
+    /// A rendition probed since the merged probe was last recorded.
+    probe_pending: bool,
+    /// Packets were forwarded without every expected rendition: record the
+    /// probe of those present instead of waiting for the rest.
+    probe_forced: bool,
+    /// An expected rendition not even created yet when a wait ran out: as
+    /// `Rendition::absent`, until it is.
+    unborn_absent: bool,
     timestamps: IngestTimestamps,
-    /// Highest continuity-adjusted DTS demuxed so far (milliseconds).
+    /// Highest continuity-adjusted DTS forwarded so far (milliseconds).
     media_time_ms: Option<i64>,
 }
 
 impl SegmentPublisher {
     pub fn new(demux: Box<dyn SegmentDemux>, timestamps: IngestTimestamps) -> Self {
         Self {
-            demux,
+            renditions: vec![Rendition::new(demux)],
+            current: 0,
+            expected: 1,
+            window_ms: 0,
             packets: Vec::with_capacity(MEDIA_PRODUCER_BATCH_PACKETS),
-            probe_sent: false,
+            probe_pending: false,
+            probe_forced: false,
+            unborn_absent: false,
             timestamps,
             media_time_ms: None,
+        }
+    }
+
+    /// The objects that follow belong to `rendition`, demuxed by its own
+    /// demux (`demux` builds it the first time).
+    pub fn select_rendition(
+        &mut self,
+        rendition: usize,
+        demux: impl FnOnce() -> Box<dyn SegmentDemux>,
+    ) {
+        if rendition >= self.renditions.len() {
+            self.renditions.push(Rendition::new(demux()));
+            self.unborn_absent = false;
+        }
+        self.current = rendition.min(self.renditions.len().saturating_sub(1));
+    }
+
+    /// Merge `renditions` streams (a variant and its separate audio) in DTS
+    /// order: a packet is forwarded once every one of them has queued media
+    /// at or after it, or once the queued media runs `window` past the
+    /// oldest packet (a rendition that stalls or never comes). The variant
+    /// contributes its video and a separate rendition its audio: what else
+    /// each carries would alias the other's track 0. One rendition forwards
+    /// as it demuxes.
+    /// When fewer renditions are expected than before (the master dropped
+    /// one, or a pull stopped following its audio), what waited only for
+    /// them leaves now rather than with the next segment, which may never
+    /// come.
+    pub fn interleave(&mut self, renditions: usize, window: Duration, target: &PublishTarget) {
+        let expected = renditions.max(1);
+        let shrank = expected < self.expected;
+        self.expected = expected;
+        self.window_ms = i64::try_from(window.as_millis()).unwrap_or(i64::MAX);
+        if shrank {
+            self.release_interleaved(false);
+            self.forward_batch(target);
         }
     }
 
@@ -243,7 +339,7 @@ impl SegmentPublisher {
     }
 
     /// The media time this publisher has reached: the highest DTS it has
-    /// demuxed, after continuity. Callers pace against it; the publisher
+    /// forwarded, after continuity. Callers pace against it; the publisher
     /// itself never waits on the clock.
     pub fn media_time_ms(&self) -> Option<i64> {
         self.media_time_ms
@@ -255,7 +351,7 @@ impl SegmentPublisher {
         target: &PublishTarget,
         chunk: &[u8],
     ) -> Result<(), MediaRejection> {
-        self.demux.feed(chunk)?;
+        self.demux().feed(chunk)?;
         self.forward(target);
         self.take_probe(target).await;
 
@@ -276,12 +372,12 @@ impl SegmentPublisher {
     /// A new object starts (an HLS segment); its chunks follow through
     /// [`Self::publish`].
     pub fn begin_object(&mut self, object: &Bytes) -> Result<(), MediaRejection> {
-        self.demux.begin_object(object)
+        self.demux().begin_object(object)
     }
 
     /// The current object ended: forward what its last bytes completed.
     pub fn end_object(&mut self, target: &PublishTarget) -> Result<(), MediaRejection> {
-        self.demux.end_object()?;
+        self.demux().end_object()?;
         self.forward(target);
         Ok(())
     }
@@ -295,17 +391,33 @@ impl SegmentPublisher {
         bytes: &[u8],
         max_bytes: usize,
     ) -> Result<(), MediaRejection> {
-        self.demux.apply_init(bytes, max_bytes)?;
+        self.demux().apply_init(bytes, max_bytes)?;
         // A new init may change resolution, profile or the audio track: its
         // probe replaces the recorded metadata, so the one-shot gate opens.
-        self.probe_sent = false;
+        if let Some(rendition) = self.renditions.get_mut(self.current) {
+            rendition.probe_taken = false;
+        }
         self.take_probe(target).await;
         Ok(())
     }
 
-    /// End of the stream: forward the PES each stream still holds.
+    /// End of the stream: forward the PES each stream still holds, and
+    /// every packet that waited for another rendition.
     pub fn flush(&mut self, target: &PublishTarget) {
-        self.demux.flush();
+        let current = self.current;
+        for rendition in 0..self.renditions.len() {
+            self.current = rendition;
+            self.flush_current(target);
+        }
+        self.current = current;
+        if self.renditions.len() > 1 {
+            self.release_interleaved(true);
+            self.forward_batch(target);
+        }
+    }
+
+    fn flush_current(&mut self, target: &PublishTarget) {
+        self.demux().flush();
         self.forward(target);
     }
 
@@ -313,9 +425,9 @@ impl SegmentPublisher {
     /// what it had demuxed but not yet published is discarded, and the
     /// timeline is re-anchored for the next segment, like a discontinuity.
     pub fn discard_failed_object(&mut self) {
-        self.demux.discard_object();
+        self.demux().discard_object();
         self.packets.clear();
-        self.timestamps.continuous.mark_discontinuity();
+        self.continuity(self.current).mark_discontinuity();
     }
 
     /// The next bytes start an unrelated stream (HLS discontinuity or an
@@ -323,33 +435,216 @@ impl SegmentPublisher {
     /// right after the last forwarded ones. A container whose fragments are
     /// anchored by their own `tfdt` keeps its init and needs no other reset.
     pub fn discontinuity(&mut self, target: &PublishTarget) {
-        self.flush(target);
-        self.demux.discontinuity();
-        self.timestamps.continuous.mark_discontinuity();
+        self.flush_current(target);
+        self.demux().discontinuity();
+        self.continuity(self.current).mark_discontinuity();
+    }
+
+    /// A rendition's timeline: each is re-anchored on its own discontinuities,
+    /// so one rendition's re-anchor never moves the other's packets.
+    fn continuity(&mut self, rendition: usize) -> &mut ContinuousTimestampState {
+        match self.renditions.get_mut(rendition) {
+            Some(other) if rendition > 0 => &mut other.continuous,
+            _ => &mut self.timestamps.continuous,
+        }
+    }
+
+    fn continuity_of(&self, rendition: usize) -> &ContinuousTimestampState {
+        match self.renditions.get(rendition) {
+            Some(other) if rendition > 0 => &other.continuous,
+            _ => &self.timestamps.continuous,
+        }
+    }
+
+    /// Settle a pending re-anchor of `rendition` before its next packet:
+    /// renditions share their source's clock, so one whose last raw time is
+    /// within the window of this packet's lends its offset and the two stay
+    /// aligned (the second rendition to cross a discontinuity, or a variant
+    /// switch onto the same clock). Otherwise the packet is anchored right
+    /// after the latest timestamp forwarded on any rendition.
+    fn align_rebase(&mut self, rendition: usize) {
+        if !self.continuity_of(rendition).rebase_pending() {
+            return;
+        }
+        let Some(first) = self.packets.first() else {
+            return;
+        };
+        let raw = ContinuousTimestampState::continuity_timestamp_ms(first);
+        let window = u64::try_from(self.window_ms).unwrap_or(0);
+        let mut aligned = None;
+        let mut latest = None;
+        for index in 0..self.renditions.len() {
+            let state = self.continuity_of(index);
+            latest = latest.max(state.latest_ms());
+            if index != rendition
+                && aligned.is_none()
+                && state
+                    .last_raw_ms()
+                    .is_some_and(|last| last.abs_diff(raw) <= window)
+            {
+                aligned = Some(state.offset_ms());
+            }
+        }
+        let offset = match (aligned, latest) {
+            (Some(offset), _) => offset,
+            (None, Some(latest)) => latest.saturating_add(1).saturating_sub(raw),
+            (None, None) => 0,
+        };
+        self.continuity(rendition).rebase_to(offset);
+    }
+
+    fn demux(&mut self) -> &mut dyn SegmentDemux {
+        // `current` is clamped into `renditions` by `select_rendition`, and
+        // rendition 0 is made by `new` and never removed.
+        let index = if self.current < self.renditions.len() {
+            self.current
+        } else {
+            0
+        };
+        self.renditions[index].demux.as_mut()
     }
 
     /// The stream's one-time probe becomes the ingest's metadata. Parameter
     /// sets reach the ring from the keyframes `forward` publishes (an fMP4
     /// demux puts its init's `avcC` SPS/PPS ahead of each keyframe).
+    ///
+    /// With several renditions, the probe recorded is their merge (video from
+    /// the variant, audio from the separate rendition), once every expected
+    /// rendition has probed or packets had to be forwarded without one.
     async fn take_probe(&mut self, target: &PublishTarget) {
-        if self.probe_sent {
+        if let Some(rendition) = self.renditions.get_mut(self.current)
+            && !rendition.probe_taken
+            && let Some(probe) = rendition.demux.take_probe()
+        {
+            rendition.probe_taken = true;
+            rendition.probe = Some(probe);
+            self.probe_pending = true;
+        }
+        if !self.probe_pending {
             return;
         }
-        let Some(probe) = self.demux.take_probe() else {
+        let probed = self
+            .renditions
+            .iter()
+            .filter(|rendition| rendition.probe.is_some())
+            .count();
+        if probed < self.expected && !self.probe_forced {
+            return;
+        }
+        self.probe_pending = false;
+        self.probe_forced = false;
+        let Some(probe) = merged_probe(&mut self.renditions, self.expected) else {
             return;
         };
-        self.probe_sent = true;
         record_probe(target, probe).await;
     }
 
     fn forward(&mut self, target: &PublishTarget) {
-        if self.demux.drain_into(&mut self.packets) == 0 {
+        let current = self.current;
+        let Some(rendition) = self.renditions.get_mut(current) else {
+            return;
+        };
+        if rendition.demux.drain_into(&mut self.packets) == 0 {
+            return;
+        }
+        let merged = self.renditions.len() > 1 || self.expected > 1;
+        if !merged {
+            for packet in &mut self.packets {
+                self.timestamps.continuous.apply(packet);
+            }
+            self.forward_batch(target);
+            return;
+        }
+        // The variant carries the video, a separate rendition the audio; what
+        // each carries besides would alias the other's track 0. Left out:
+        // rendition 0 once the master no longer names an audio rendition
+        // (`expected` back to 1), which keeps its own audio. Before
+        // continuity: a dropped packet must not become its stream's last
+        // timestamp.
+        let keep = if current == 0 {
+            MediaType::Video
+        } else {
+            MediaType::Audio
+        };
+        if current > 0 || self.expected > 1 {
+            self.packets.retain(|packet| packet.media_type == keep);
+        }
+        self.align_rebase(current);
+        let state = match self.renditions.get_mut(current) {
+            Some(other) if current > 0 => &mut other.continuous,
+            _ => &mut self.timestamps.continuous,
+        };
+        for packet in &mut self.packets {
+            state.apply(packet);
+        }
+        if let Some(rendition) = self.renditions.get_mut(current) {
+            if !self.packets.is_empty() {
+                rendition.absent = false;
+            }
+            rendition.queue.extend(self.packets.drain(..));
+        }
+        self.release_interleaved(false);
+        self.forward_batch(target);
+    }
+
+    /// Move queued packets to `packets` in DTS order while every expected
+    /// rendition has media queued, or (`all`, or the queued media spanning
+    /// more than the window) regardless.
+    fn release_interleaved(&mut self, all: bool) {
+        loop {
+            let mut oldest: Option<(usize, i64)> = None;
+            let mut newest = i64::MIN;
+            let mut waiting = false;
+            for (index, rendition) in self.renditions.iter().enumerate() {
+                match (rendition.queue.front(), rendition.queue.back()) {
+                    (Some(front), Some(back)) => {
+                        if oldest.is_none_or(|(_, dts)| front.dts < dts) {
+                            oldest = Some((index, front.dts));
+                        }
+                        newest = newest.max(back.dts);
+                    }
+                    _ => waiting |= index < self.expected && !rendition.absent,
+                }
+            }
+            if self.renditions.len() < self.expected && !self.unborn_absent {
+                waiting = true;
+            }
+            let Some((index, dts)) = oldest else {
+                return;
+            };
+            if waiting && !all {
+                if newest.saturating_sub(dts) <= self.window_ms {
+                    return;
+                }
+                // The wait ran out: what has nothing queued is absent, and
+                // the others stop waiting for it until it delivers again, so
+                // a rendition that stalls or never comes costs one window,
+                // not one per packet.
+                self.probe_forced = true;
+                let expected = self.expected;
+                for rendition in self.renditions.iter_mut().take(expected) {
+                    if rendition.queue.is_empty() {
+                        rendition.absent = true;
+                    }
+                }
+                self.unborn_absent = true;
+            }
+            let Some(packet) = self
+                .renditions
+                .get_mut(index)
+                .and_then(|rendition| rendition.queue.pop_front())
+            else {
+                return;
+            };
+            self.packets.push(packet);
+        }
+    }
+
+    fn forward_batch(&mut self, target: &PublishTarget) {
+        if self.packets.is_empty() {
             return;
         }
         let registration = &target.registration;
-        for packet in &mut self.packets {
-            self.timestamps.continuous.apply(packet);
-        }
         // One comparison per batch: DTS increases per stream, and the last
         // packet of a demuxed batch is within one frame of its maximum.
         if let Some(last) = self.packets.last() {
@@ -404,6 +699,31 @@ impl SegmentPublisher {
         }
         target.ring.push_drained_batch_capped(&mut self.packets);
     }
+}
+
+/// The probe to record: rendition 0's alone, or with several renditions the
+/// video of the first that has video and the audio of the last that has
+/// audio (a separate audio rendition outranks the variant's own).
+fn merged_probe(renditions: &mut [Rendition], expected: usize) -> Option<DemuxProbe> {
+    if expected <= 1 && renditions.len() <= 1 {
+        return renditions
+            .first_mut()
+            .and_then(|rendition| rendition.probe.take());
+    }
+    let probes = || {
+        renditions
+            .iter()
+            .filter_map(|rendition| rendition.probe.as_ref())
+    };
+    let video = probes().find(|probe| probe.video.is_some());
+    let audio = probes()
+        .filter(|probe| !probe.audio_tracks.is_empty())
+        .last();
+    let mut merged = video.or(audio)?.clone();
+    if let Some(audio) = audio {
+        merged.audio_tracks = audio.audio_tracks.clone();
+    }
+    Some(merged)
 }
 
 /// The stream's one-time probe becomes the ingest's metadata.

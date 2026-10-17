@@ -31,7 +31,7 @@ use super::ordering::{
 };
 use super::pacing::Pacer;
 use super::playlist;
-use super::registry::AppliedInit;
+use super::registry::{AppliedInit, AppliedInits};
 use crate::media::engine::{IngestRegistration, MediaEngine};
 use crate::media::ingest_publisher::fmp4::{Fmp4Demux, boxes};
 use crate::media::ingest_publisher::{
@@ -83,8 +83,9 @@ pub(super) struct SessionContext {
     /// keyed input's init lives until the input pushes again, its row is
     /// deleted (see `HlsIngest::forget_input`), or the process restarts (a
     /// stopped pull clears it: see `HlsIngest::cancel_pulls`).
-    /// One per input that has pushed fMP4, each bounded by `max_init_bytes`.
-    pub(super) init: Arc<Mutex<Option<AppliedInit>>>,
+    /// One per followed rendition of an input that has pushed fMP4, each
+    /// bounded by `max_init_bytes`.
+    pub(super) init: Arc<Mutex<AppliedInits>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -104,8 +105,8 @@ pub(super) async fn run(
     let outbox_limit = context.limits.hold_bytes;
     let max_init_bytes = context.max_init_bytes;
     let mut session = Session::new(context.limits);
-    if let Some(applied) = crate::sync::lock(&context.init).clone() {
-        session.seed_init(&applied.uri, applied.bytes);
+    for (rendition, applied) in crate::sync::lock(&context.init).clone().iter() {
+        session.seed_init(rendition, &applied.uri, applied.bytes.clone());
     }
     let end = match PublishTarget::open(
         context.engine,
@@ -140,7 +141,7 @@ pub(super) async fn run(
     };
     if end == SessionEnd::Ended {
         // The stream is over: the next run uploads its own init.
-        *crate::sync::lock(&context.init) = None;
+        *crate::sync::lock(&context.init) = AppliedInits::default();
     }
     // End the attempt before the queue closes: a handler whose send then
     // fails must find the attempt cancelled, so its one restart registers
@@ -156,7 +157,9 @@ pub(super) async fn run(
 }
 
 /// Released segments not yet fully published, and where the first one is;
-/// sized in bytes and in listed (`EXTINF`) media time.
+/// sized in bytes and in listed (`EXTINF`) media time. Only the followed
+/// variant's segments count as media time: a separate audio rendition covers
+/// the same time, not more.
 #[derive(Default)]
 struct Outbox {
     releases: VecDeque<Release>,
@@ -168,8 +171,17 @@ struct Outbox {
 impl Outbox {
     fn push(&mut self, release: Release) {
         self.bytes += release.payload.bytes.len();
-        self.media = self.media.saturating_add(release.duration);
+        self.media = self.media.saturating_add(release.media());
         self.releases.push_back(release);
+    }
+
+    /// Take the first release off, returning its bytes to the budget.
+    fn pop_front(&mut self) {
+        self.offset = 0;
+        if let Some(release) = self.releases.pop_front() {
+            self.bytes -= release.payload.bytes.len();
+            self.media = self.media.saturating_sub(release.media());
+        }
     }
 
     fn is_empty(&self) -> bool {
@@ -182,8 +194,8 @@ struct Publishing {
     outbox: Outbox,
     outbox_limit: usize,
     max_init_bytes: usize,
-    /// The stream key's init slot: an applied init outlives the session.
-    init: Arc<Mutex<Option<AppliedInit>>>,
+    /// The stream key's init slots: an applied init outlives the session.
+    init: Arc<Mutex<AppliedInits>>,
     /// One log line per session for dropped segments.
     failed_logged: bool,
     /// Fixed by the first accepted media object.
@@ -271,6 +283,16 @@ async fn drive(
         }
 
         session.poll(Instant::now(), &mut releases);
+        if let Some(publisher) = state.publisher.as_mut() {
+            // A separate audio rendition's segment is released after the
+            // variant's segment of the same time, so the merge must hold up
+            // to two target durations of one while the other arrives.
+            publisher.interleave(
+                session.renditions(),
+                session.pacing_lead().saturating_mul(3),
+                target,
+            );
+        }
         for release in releases.drain(..) {
             tracing::trace!(
                 sequence = release.sequence,
@@ -317,6 +339,7 @@ async fn publish_next_chunk(
         pacer,
         max_init_bytes,
         init,
+        container,
         ..
     } = state;
     let (Some(release), Some(publisher)) = (outbox.releases.front(), publisher.as_mut()) else {
@@ -328,6 +351,10 @@ async fn publish_next_chunk(
     };
     let bytes = &release.payload.bytes;
     if outbox.offset == 0 {
+        let container = *container;
+        publisher.select_rendition(release.rendition, || {
+            container.unwrap_or(Container::Ts).demux()
+        });
         if release.discontinuity {
             publisher.discontinuity(target);
             pacer.reset();
@@ -338,10 +365,13 @@ async fn publish_next_chunk(
                 .await
                 .map_err(failed)?;
             // The init outlives this session: an encoder uploads it once.
-            *crate::sync::lock(init) = Some(AppliedInit {
-                uri: release_init.uri.clone(),
-                bytes: release_init.payload.bytes.clone(),
-            });
+            crate::sync::lock(init).set(
+                release.rendition,
+                AppliedInit {
+                    uri: release_init.uri.clone(),
+                    bytes: release_init.payload.bytes.clone(),
+                },
+            );
         }
         publisher.begin_object(bytes).map_err(failed)?;
     }
@@ -355,11 +385,8 @@ async fn publish_next_chunk(
         return Ok(());
     }
     publisher.end_object(target).map_err(failed)?;
-    outbox.offset = 0;
-    outbox.bytes -= bytes.len();
-    outbox.media = outbox.media.saturating_sub(release.duration);
     // Dropping the release returns its bytes to the global budget.
-    outbox.releases.pop_front();
+    outbox.pop_front();
     Ok(())
 }
 
@@ -381,11 +408,7 @@ impl Publishing {
             publisher.discard_failed_object();
         }
         self.pacer.reset();
-        self.outbox.offset = 0;
-        if let Some(release) = self.outbox.releases.pop_front() {
-            self.outbox.bytes -= release.payload.bytes.len();
-            self.outbox.media = self.outbox.media.saturating_sub(release.duration);
-        }
+        self.outbox.pop_front();
     }
 }
 
@@ -434,7 +457,7 @@ fn apply(
             // stream as H.264, another codec's frames as AAC.
             if is_map_object || boxes::is_init_segment(&payload.bytes) {
                 session.void_map(&path);
-                *crate::sync::lock(&state.init) = None;
+                crate::sync::lock(&state.init).forget_uri(&path);
             }
             return rejection.into();
         }

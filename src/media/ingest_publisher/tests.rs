@@ -10,7 +10,7 @@ use crate::media::ring_buffer::RingBuffer;
 
 /// The publication harness file ingest uses: an engine, a registered input
 /// attempt, its ring and the target over them.
-async fn harness(name: &str) -> (Arc<MediaEngine>, PublishTarget, Arc<RingBuffer>) {
+pub(super) async fn harness(name: &str) -> (Arc<MediaEngine>, PublishTarget, Arc<RingBuffer>) {
     let engine = Arc::new(MediaEngine::new());
     let ring = engine.get_or_create_pipeline(name).await;
     let registration = engine
