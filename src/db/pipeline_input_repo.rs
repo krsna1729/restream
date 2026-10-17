@@ -233,6 +233,19 @@ pub async fn list_pull_inputs(pool: &SqlitePool) -> Result<Vec<PipelineInput>, s
     Ok(convert_rows(usable))
 }
 
+/// The ids of every input row, whatever its source kind. The reconciler needs
+/// them to release the ingest key state of an input whose row is gone. An id
+/// query is enough there, and it cannot warn about or skip a row the way
+/// converting full rows would.
+pub async fn list_pipeline_input_ids(
+    pool: &SqlitePool,
+) -> Result<std::collections::HashSet<String>, sqlx::Error> {
+    let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM pipeline_inputs")
+        .fetch_all(pool)
+        .await?;
+    Ok(ids.into_iter().collect())
+}
+
 pub async fn promote_pipeline_input(
     pool: &SqlitePool,
     pipeline_id: &str,

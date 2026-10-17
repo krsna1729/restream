@@ -81,10 +81,10 @@ struct SessionHandle {
 /// a session that starts after an idle timeout, a retry or a failure
 /// applies the same init again. It lives here, with the rest of the key's
 /// state, so it can never be evicted while the key exists, and there is at
-/// most one per input that has pushed fMP4 HLS. Deleting an input does not
-/// reach this registry, so a deleted input's init (at most
-/// `max_init_bytes`) stays until the process restarts: no upload can name
-/// that key again.
+/// most one per input that has pushed fMP4 HLS. The reconciler releases it
+/// when the input's row is gone (`HlsIngest::forget_input`), so a deleted
+/// input's init (at most `max_init_bytes`) is not held until the process
+/// restarts.
 #[derive(Clone)]
 pub(super) struct AppliedInit {
     pub(super) uri: String,
@@ -438,6 +438,22 @@ impl HlsIngest {
         crate::sync::lock(&self.pulls).keys().cloned().collect()
     }
 
+    /// The inputs whose key state this registry holds.
+    pub fn keyed_input_ids(&self) -> HashSet<String> {
+        crate::sync::lock(&self.keys).keys().cloned().collect()
+    }
+
+    /// Release one input's key state, for an input whose row is gone.
+    ///
+    /// The applied init exists so an encoder that resumes after an idle
+    /// timeout can publish without re-uploading it, and a deleted input has no
+    /// encoder to resume: holding it would keep up to `max_init_bytes` per
+    /// deleted fMP4 input until the process restarts.
+    pub fn forget_input(&self, input_id: &str) {
+        self.clear_applied_init(input_id);
+        self.evict_key_if_idle(input_id);
+    }
+
     /// Stop every pull task. Called once, on shutdown.
     pub fn cancel_all_pulls(&self) {
         let running: Vec<_> = crate::sync::lock(&self.pulls).drain().collect();
@@ -722,16 +738,19 @@ impl HlsIngest {
         {
             sessions.remove(input_id);
         }
-        let idle = !sessions.contains_key(input_id);
         drop(sessions);
+        self.evict_key_if_idle(input_id);
+    }
+
+    /// Evict a key's state once nothing uses it: no session for the input, no
+    /// upload slot in flight, no bytes counted against it, no start in
+    /// progress, and no init applied — FFmpeg uploads its `EXT-X-MAP` init once
+    /// per run, so an encoder that resumes after an idle timeout needs it, and
+    /// the key state is that init's home. It lives as long as the init does:
+    /// one per input that has pushed fMP4 (see `AppliedInit`).
+    fn evict_key_if_idle(&self, input_id: &str) {
+        let idle = !crate::sync::lock(&self.sessions).contains_key(input_id);
         let mut keys = crate::sync::lock(&self.keys);
-        // Keep the key's state while anything still uses it: an upload slot
-        // in flight, bytes counted against it, a start in progress, or the
-        // init the key applied last — FFmpeg uploads its `EXT-X-MAP` init
-        // once per run, so an encoder that resumes after an idle timeout
-        // needs it. The key state is that init's home, so it lives as long
-        // as the init does: one per input that has pushed fMP4 (see
-        // `AppliedInit` for a deleted input's).
         if idle
             && keys.get(input_id).is_some_and(|key| {
                 crate::sync::lock(&key.init).is_none()
@@ -746,6 +765,18 @@ impl HlsIngest {
         {
             keys.remove(input_id);
         }
+    }
+
+    /// Seed an applied init for a test, as a session that applied one leaves
+    /// it. A caller that needs to hold the key state takes it with `key_state`
+    /// first; this seeds through the same entry.
+    #[cfg(test)]
+    pub(crate) fn seed_applied_init_for_tests(&self, input_id: &str) {
+        let key = self.key_state(input_id);
+        *crate::sync::lock(&key.init) = Some(AppliedInit {
+            uri: "init.mp4".to_string(),
+            bytes: bytes::Bytes::from_static(b"init"),
+        });
     }
 
     /// Runs the session on MEDIA and, whatever ends it (ENDLIST, idle,
@@ -810,6 +841,10 @@ impl HlsIngest {
 #[cfg(test)]
 #[path = "registry_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "key_state_tests.rs"]
+mod key_state_tests;
 
 #[cfg(test)]
 #[path = "pull_registry_tests.rs"]

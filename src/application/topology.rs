@@ -184,6 +184,36 @@ pub async fn converge_topology(pool: &SqlitePool, engine: &MediaEngine, outputs:
     }
 }
 
+/// Release the ingest key state of inputs whose rows are gone.
+///
+/// A key's state holds the `EXT-X-MAP` init its last session applied, so an
+/// encoder that resumes after an idle timeout can publish without re-uploading
+/// it. A deleted input has no encoder to resume, and eviction waits for the
+/// init to be empty, so without this pass the registry holds up to
+/// `max_init_bytes` per deleted fMP4 input until the process restarts.
+///
+/// Returns the inputs whose key state was released.
+pub async fn converge_ingest_key_state(
+    pool: &SqlitePool,
+    ingest: &Arc<crate::media::hls_ingest::HlsIngest>,
+) -> Vec<String> {
+    let live: HashSet<String> = match crate::db::list_pipeline_input_ids(pool).await {
+        Ok(ids) => ids,
+        Err(error) => {
+            warn!(err = %error, "DB error reading inputs; ingest key state not converged this pass");
+            return Vec::new();
+        }
+    };
+    let mut released = Vec::new();
+    for input_id in ingest.keyed_input_ids() {
+        if !live.contains(&input_id) {
+            ingest.forget_input(&input_id);
+            released.push(input_id);
+        }
+    }
+    released
+}
+
 /// Converge HLS pull inputs with their rows: an enabled `hls_pull` input has
 /// a running pull task, and every other pull task is stopped.
 ///
