@@ -673,6 +673,34 @@ keeps the container it started with.
   - With a master playlist, the highest-`BANDWIDTH` variant is followed;
     otherwise the first media playlist is. Objects of the other variants get
     `200` and are dropped.
+  - **Separate audio.** When the followed variant's audio is a separate
+    `EXT-X-MEDIA` rendition (`AUDIO="group"`, the group's `DEFAULT=YES`
+    member, else `AUTOSELECT=YES`, else the first, with a `URI`), that
+    rendition's playlist is followed too, with its own sequence space,
+    epochs and `EXT-X-MAP` init; the two share the hold and its bounds, and
+    the session ends once both have ended. Each rendition has its own demuxer
+    and the publisher merges their packets onto the ring in DTS order (the
+    variant contributes its video, the rendition its audio; audio muxed into
+    the variant's own segments is discarded in favour of the rendition's).
+    A packet waits for the other rendition's media of the same time, for at
+    most three target durations; when that wait runs out, a rendition with
+    nothing queued is absent and nothing waits for it until it delivers
+    again, so a rendition that stalls or never comes delays the other by one
+    window per stall and no longer, and the queue it holds back is bounded
+    by that window. Each rendition keeps its own timestamp continuity: a
+    discontinuity re-anchors only the rendition that crosses it, and the
+    second rendition to cross one takes the first one's offset (a rendition
+    whose last source time lies within the window shares its clock), so
+    audio of the old timeline released after the video crossed keeps its
+    place and the two stay aligned. The probe that opens an output's start
+    gate is recorded once both renditions have probed (or that wait ran out),
+    so an output does not plan video-only tracks while the audio is on its
+    way. FFmpeg (`-var_stream_map` with `-master_pl_name`) writes its master
+    only after every rendition's first playlist: until it arrives the first
+    media playlist is followed alone, and when the master names that playlist
+    the audio rendition, it moves to that place with its listing and init;
+    what the other rendition uploaded before the master (its first segment,
+    at most) is dropped.
   - **fMP4 segments.** The init segment is named by the playlist's
     `EXT-X-MAP` URI, not by its extension, and encoders upload it *before*
     the playlist that names it. Such an object is held (`202`), like any
@@ -692,12 +720,14 @@ keeps the container it started with.
     `EXT-X-MAP` URI, so a resumed encoder keeps publishing. A playlist that
     names a different URI gets nothing from it. The slot lives in the stream
     key's own state, so nothing evicts it while the input exists, and it
-    holds at most one init (the 4 MiB init bound). Its entry is cleared when
-    `EXT-X-ENDLIST` ends the run, or when an init upload for that key is
-    refused (which also voids the map's init, and the seed a later session
-    would take from it). Deleting an input does not reach the ingest, so a
-    deleted input's slot stays until restart: at most one init per input
-    that has ever pushed fMP4, and no upload can name that key again.
+    holds at most one init per followed rendition (the variant's, and a
+    separate audio rendition's; each within the init bound). Its entries are
+    cleared when `EXT-X-ENDLIST` ends the run; an init upload for that key
+    that is refused clears the entry applied under that URI (and voids the
+    map's init, and the seed a later session would take from it). Deleting
+    an input does not reach the ingest, so a deleted input's slot stays
+    until restart: at most two inits per input that has ever pushed fMP4,
+    and no upload can name that key again.
   - **Known limit.** The two rules above cover an init the ingest *refused*.
     An init *lost* on the way (an unread `503` or `408`, a reset) under the
     same `EXT-X-MAP` URI is not visible to the ingest, and a run whose audio
@@ -889,22 +919,25 @@ path's; the puller only decides what to fetch.
   signed origin expires, so the master is resolved again when the media
   playlist answers 401, 403 or 404, and after a retry burst fails six times:
   the master is the URL that gets renewed.
-- **Audio.** A master that carries audio as a separate `EXT-X-MEDIA`
-  rendition — packaged live HLS, and Restream's own preview
-  (`video/index.m3u8` plus `audio/{track}/index.m3u8`), do — is pulled as its
-  chosen video variant: one task follows one rendition, and the assembler
-  follows one playlist path, so a second followed rendition is a capability
-  the shared HLS path does not have yet (Q-077). The pull states that once per
-  master resolution — the first cycle, and again whenever an expired variant
-  URL sends it back to the master — rather than dropping the audio silently:
-  one `WARN` naming the group
-  and the rendition and saying the pulled stream is video-only, and the pull
-  continues. A variant whose audio is muxed into its own segments — no `AUDIO`
-  attribute, or a group member with no `URI` — is complete as it stands and is
-  not reported; a variant that names a group the master does not define is
-  reported with that as its reason. The rendition is chosen as RFC 8216
-  section 4.3.4.1 chooses among a group's members: `DEFAULT=YES`, else
-  `AUTOSELECT=YES`, else the first.
+- **Audio.** A master that carries the chosen variant's audio as a separate
+  `EXT-X-MEDIA` rendition — packaged live HLS, and Restream's own preview
+  (`video/index.m3u8` plus `audio/{track}/index.m3u8`), do — has that
+  rendition followed too, as FFmpeg's HLS demuxer does: the rendition is
+  chosen as RFC 8216 section 4.3.4.1 chooses among a group's members
+  (`DEFAULT=YES`, else `AUTOSELECT=YES`, else the first). Its playlist is
+  refreshed with the variant's, has its own sequence cursor, retries and map,
+  and goes under `pull/a/`; the pull hands the assembler a master of its own
+  (`pull/master.m3u8`) naming both, so the session follows and merges the two
+  as it does a push of separate renditions (see HLS push ingest), and the pull
+  has ended once both have. The pull states the rendition it follows once per
+  master resolution (one `INFO`). The rendition's failures are its own: the
+  variant's cycle stands, so a failing audio playlist never puts the video
+  into retry backoff; after six failed cycles in a row the pull stops
+  following it (one `WARN`) and the stream is video-only until the pull
+  restarts. A variant whose audio is muxed into its own
+  segments — no `AUDIO` attribute, or a group member with no `URI` — is
+  complete as it stands; a variant that names a group the master does not
+  define is pulled video-only, with one `WARN` saying so.
 - **Refresh cadence.** The media playlist is fetched again every target
   duration, and half a target duration after a reload that brought nothing
   new (RFC 8216 section 6.3.4), never faster than 500 ms. `TARGETDURATION` is
@@ -974,8 +1007,8 @@ path's; the puller only decides what to fetch.
   opened ends on its own idle timeout, or when the input is cancelled. No
   per-packet work and no blocking call runs on Tokio; requests are async and
   the assembler runs on the MEDIA executor.
-- **Known limits.** A master that carries audio as a separate `EXT-X-MEDIA`
-  rendition is pulled video-only (Q-077).
+- **Known limits.** One audio rendition is followed: a group's other members
+  (other languages) are not.
 
 ## Protocol correctness requirements
 

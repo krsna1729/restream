@@ -23,21 +23,6 @@ const SESSION_GONE_STABLE: Duration = Duration::from_secs(8);
 /// One lifecycle transition must complete within this budget.
 const LIFECYCLE_BUDGET: Duration = Duration::from_secs(45);
 
-/// What the mode reports about the pulled audio. The pull follows one
-/// rendition, and the preview master carries its audio as a separate
-/// `EXT-X-MEDIA` rendition, so the pulled pipeline publishes video only. The
-/// pull states it once per pull (the line the finding quotes); the mode
-/// records the gap instead of asserting audio it cannot get.
-const AUDIO_GAP_NOTE: &str = "The pull follows one rendition, so the preview master's \
-     separate EXT-X-MEDIA audio rendition is not followed and the pulled pipeline publishes \
-     video only. The quoted engine log line is the pull stating that; multi-rendition \
-     following is a separate item.";
-/// The same finding when no such line was seen: this source named no separate
-/// audio rendition, or the pull never resolved a master playlist (the
-/// unresolvable variant never reaches one).
-const AUDIO_GAP_UNREPORTED_NOTE: &str = "No separate audio rendition was reported for this \
-     pull: its master named none, or the pull never resolved a master playlist.";
-
 /// One API-created pull input under test.
 #[derive(Clone)]
 struct PullInput {
@@ -367,35 +352,6 @@ impl Session {
             }),
         );
 
-        // ── The audio gap, reported rather than hidden ────────────────
-        // The pull follows one rendition; the preview master carries its
-        // audio as a separate `EXT-X-MEDIA` rendition, so the pulled
-        // pipeline is video-only. The pull states it once per pull, and the
-        // mode records it here — the gap is not a check that cannot pass,
-        // and it is not silence either.
-        let audio_gap = audio_rendition_gap(
-            &std::fs::read_to_string(&plan.log_path).unwrap_or_default(),
-            &pull_input_id,
-        );
-        let audio_gap_finding = json!({
-            "reported": audio_gap.is_some(),
-            "logLine": audio_gap,
-            "probeAudioTracks": pull_media_summary(&probe)
-                .get("audioTracks")
-                .cloned()
-                .unwrap_or(Value::Null),
-            "sinkAudioCount": sink_summary.get("audioCount").cloned().unwrap_or(Value::Null),
-            "note": if audio_gap.is_some() {
-                AUDIO_GAP_NOTE
-            } else {
-                AUDIO_GAP_UNREPORTED_NOTE
-            },
-        });
-        println!(
-            "[hls-pull-duty] {}",
-            json!({"phase": "audio-gap", "reported": audio_gap_finding["reported"]})
-        );
-
         // ── The failure the gate exists for ───────────────────────────
         let failure = self
             .failure
@@ -474,7 +430,6 @@ impl Session {
             })),
             "probe": probe,
             "sink": sink_summary,
-            "audioGap": audio_gap_finding,
             "lifecycle": lifecycle,
             "checks": checks.rows,
             "failedChecks": checks.failures,
