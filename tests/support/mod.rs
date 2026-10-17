@@ -12,6 +12,14 @@ use tokio::sync::{RwLock, broadcast};
 use tower::ServiceExt;
 
 pub async fn authenticated_app() -> (axum::Router, SqlitePool, String) {
+    let (app, pool, cookie, _engine) = authenticated_app_with_engine().await;
+    (app, pool, cookie)
+}
+
+/// The same app, with the engine, so a test can see or drive an ingest
+/// session directly.
+pub async fn authenticated_app_with_engine() -> (axum::Router, SqlitePool, String, Arc<MediaEngine>)
+{
     let pool = SqlitePool::connect("sqlite::memory:")
         .await
         .expect("in-memory sqlite");
@@ -26,13 +34,14 @@ pub async fn authenticated_app() -> (axum::Router, SqlitePool, String) {
         &[],
     ));
     let (logs, _) = broadcast::channel(32);
+    let engine = Arc::new(MediaEngine::new());
     let state = Arc::new(api::AppState::test_new(
         restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
         pool.clone(),
         security,
         policies,
         sessions,
-        Arc::new(MediaEngine::new()),
+        engine.clone(),
         logs,
     ));
     let app = api::create_router(state);
@@ -57,7 +66,7 @@ pub async fn authenticated_app() -> (axum::Router, SqlitePool, String) {
         .next()
         .expect("cookie pair")
         .to_string();
-    (app, pool, cookie)
+    (app, pool, cookie, engine)
 }
 
 pub fn json_request(

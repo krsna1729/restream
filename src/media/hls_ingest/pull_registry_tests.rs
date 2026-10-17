@@ -258,8 +258,23 @@ fn a_finished_pull_is_reaped_by_reason_and_restarted_only_after_its_backoff() {
             &source,
             now
         ),
-        PullAction::Leave,
-        "finished without a reason is left alone rather than restarted blindly"
+        PullAction::WaitToRetry,
+        "a task that ended without recording why panicked: record a deadline instead of \
+         leaving the row's pull dead"
+    );
+    assert_eq!(
+        pull_action(
+            Some(&observe(
+                source.clone(),
+                true,
+                None,
+                Some(now - std::time::Duration::from_secs(1))
+            )),
+            &source,
+            now
+        ),
+        PullAction::Start { replaced: false },
+        "a panicked task is restarted once its backoff has elapsed, keeping its session"
     );
     assert_eq!(
         pull_action(
@@ -362,5 +377,48 @@ async fn a_source_change_ends_the_session_the_old_source_opened() {
     .await;
 
     ingest.cancel_all_pulls();
+    stalled.abort();
+}
+
+/// A cancel must ask the task to stop *before* it waits for the task, and the
+/// wait must not reach the origin. The origin here accepts the connection and
+/// never answers, so a task that was waited for before it was cancelled would
+/// park for the request timeout (20 s) inside the reconcile pass; the task's
+/// cancel branch is first in its `select!`, so asking first costs one poll.
+/// A mutation that joins before it cancels fails the elapsed bound.
+#[tokio::test]
+async fn a_cancel_asks_the_task_to_stop_before_it_waits_for_it() {
+    let (_engine, ingest) = test_ingest(HlsIngestLimits::default());
+    let (origin, stalled) = stalled_origin();
+    let identity = pull_identity();
+    let source = pull_source(&format!("http://{origin}/master.m3u8"));
+    assert!(ingest.ensure_pull(identity.clone(), source.clone()).await);
+    // Let the task reach its first request, which the origin never answers.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    // Where the task records how it ended, read through the map it lives in.
+    let end = {
+        let pulls = crate::sync::lock(&ingest.pulls);
+        pulls
+            .get(&identity.input_id)
+            .expect("the pull task is registered")
+            .task
+            .end_state()
+    };
+
+    let started = std::time::Instant::now();
+    assert!(ingest.cancel_pull(&identity.input_id).await);
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "the cancel waited for the parked request instead of the task's cancel: {elapsed:?}"
+    );
+    // The task recorded how it ended before the cancel returned, which is the
+    // join: a cancel that only asked the task to stop would return with the
+    // task still parked and its end still unset.
+    assert!(
+        crate::sync::lock(&end).is_some(),
+        "the task had not stopped when the cancel returned"
+    );
+    assert!(ingest.pull_input_ids().is_empty());
     stalled.abort();
 }

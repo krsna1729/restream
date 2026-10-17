@@ -297,6 +297,19 @@ username is not a secret, but a token, cookie string, password, or header
 value never is. Disabling a pull input keeps its stored `sourceUrl` and
 `auth`; `enabled` alone starts or stops its puller.
 
+Changing an input's `kind` ends the ingest session the old kind held: a keyed
+input's session belongs to a live push, and a pull input's to its puller, so a
+change disconnects the pusher (its encoder's connection is cancelled) and the
+new kind starts from a clean session. Without that, the new kind is refused as
+`PublisherActive` and backs off until the old publisher leaves on its own.
+
+`sourceUrl` is configuration, so a response returns it in full, query
+included: it is the value the operator typed and must be able to review. A
+signed URL's query is therefore visible to any authenticated reader. Use a
+credential choice (`bearer`, `cookies`, `headers`, or `basic`) for anything
+that must stay write-only, and note that a userinfo component
+(`https://user:password@…`) is refused in `sourceUrl` for that reason.
+
 List and mutation responses expose each input's `id`, `label`, `streamKey`,
 `role`, `kind`, `sourceUrl`, `variantRule`, `authKind`, `authUsername`,
 `enabled`, `selected`, `ingestUrls`, `previewUrl`, and `runtime`. A keyed

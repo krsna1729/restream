@@ -170,10 +170,23 @@ fn validate_source_url(url: &str) -> Option<String> {
             "sourceUrl exceeds maximum length of {MAX_URL_LEN} bytes"
         ));
     }
-    match url::Url::parse(url) {
-        Ok(parsed) if matches!(parsed.scheme(), "http" | "https") => None,
-        _ => Some("sourceUrl must be an absolute http or https URL".to_string()),
+    let Ok(parsed) = url::Url::parse(url) else {
+        return Some("sourceUrl must be an absolute http or https URL".to_string());
+    };
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Some("sourceUrl must be an absolute http or https URL".to_string());
     }
+    // A userinfo component is a password in the clear: it would be stored in
+    // the row and returned by every read of it. The `basic` credential choice
+    // stores the same password write-only instead.
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Some(
+            "sourceUrl must not carry a userinfo component; use the `basic` \
+             authentication choice for origin credentials"
+                .to_string(),
+        );
+    }
+    None
 }
 
 /// Build and validate the credential an input presents to its origin.
@@ -530,6 +543,14 @@ pub async fn pipeline_input_patch_handler(
         Err(error) => return ApiError::from(error).into_response(),
     };
     if !input.enabled {
+        state.engine.cancel_pipeline_input(&input.id).await;
+    }
+    // A changed source kind hands the input's session to a different
+    // publisher: a keyed input's session belongs to a live push, and a pull
+    // input's to its pull task. Left alone, the new kind is refused as
+    // `PublisherActive` and backs off until the old one leaves on its own —
+    // which, for a pusher that never stops, is never.
+    if kind != current.source_kind {
         state.engine.cancel_pipeline_input(&input.id).await;
     }
     refresh_srt_ingest_policy_store(&state).await;

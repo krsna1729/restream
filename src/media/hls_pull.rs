@@ -9,6 +9,13 @@
 //! pacing stay in that path; this module only decides what to fetch and
 //! bounds every read.
 //!
+//! Credentials belong to the source's origin and go nowhere else: a playlist
+//! URI on another host is fetched without them, and a redirect out of the
+//! origin — or an `https`→`http` downgrade with credentials configured — is
+//! not followed at all. The first live cycle enters three target durations
+//! from the end of a window (RFC 8216 section 6.3.3), so a DVR or EVENT
+//! window is neither read from its start nor paced a window behind live.
+//!
 //! URIs in a remote playlist are absolute URLs, while the assembler parses
 //! upload paths inside one stream key's namespace. The puller therefore
 //! rewrites each fetched media playlist into that namespace: sequence `N` is
@@ -23,34 +30,36 @@
 //! gap, and the pull states it once per pull ([`AudioPlan`]) rather than
 //! dropping the audio silently.
 
-use std::collections::HashSet;
-use std::collections::hash_map::DefaultHasher;
-use std::fmt::Write as _;
-use std::hash::{Hash, Hasher};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use futures_util::StreamExt as _;
-use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Url};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-use crate::domain::pipeline_input::{HeaderPair, PullAuth, VariantRule};
+use self::fetch::{
+    AuthScope, FetchError, RequestAuth, build_client, fetch_small, host_refused, pump_body, send,
+    variant_expired,
+};
+use self::namespace::{
+    encryption_refusal, live_start, map_name, object_kind, parse_remote, push_playlist_text,
+    refuse_private_targets, refuse_unfetchable, segment_name,
+};
+use crate::domain::pipeline_input::{PullAuth, VariantRule};
 use crate::media::engine::MediaEngine;
 use crate::media::hls::upload_policy::backoff;
-use crate::media::hls_ingest::playlist::{
-    self, MasterPlaylist, MediaPlaylist, Playlist, SegmentEntry, Variant,
-};
+use crate::media::hls_ingest::playlist::{MasterPlaylist, Playlist, SegmentEntry, Variant};
 use crate::media::hls_ingest::{
-    BodyError, DispatchError, DispatchOrigin, HlsIngest, HlsIngestLimits, ObjectBody, ObjectKind,
-    ObjectOutcome,
+    BodyError, DispatchError, DispatchOrigin, HlsIngest, HlsIngestLimits, ObjectKind, ObjectOutcome,
 };
 use crate::media::ingest_auth::AuthenticatedPipeline;
 use crate::secret_display::redact_url;
 
 mod audio;
+mod fetch;
+mod namespace;
 use audio::report_audio_rendition;
 // Re-exported for the tests in `hls_pull/tests.rs`, which exercise the audio
 // plan through this module.
@@ -61,17 +70,17 @@ use audio::{AudioPlan, audio_plan};
 /// prefix of every object the puller dispatches under it.
 const PULL_DIR: &str = "pull";
 const PLAYLIST_PATH: &str = "pull/index.m3u8";
-/// Connect timeout for origin requests; a stalled request is bounded by
-/// `REQUEST_TIMEOUT` and by task cancellation.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// Attempts in one retry burst before the puller waits a quiet period. The
 /// requests inside a burst follow [`backoff`].
 const MAX_ATTEMPTS: u32 = 6;
 /// After a burst, wait this long before starting the next one, so a wrong
 /// URL or an origin that stays down is a slow poll, never a spin.
 const QUIET_PERIOD: Duration = Duration::from_secs(30);
-const USER_AGENT: &str = concat!("Restream/", env!("CARGO_PKG_VERSION"));
+/// Attempts one segment gets before it is skipped. A 404 on one object would
+/// otherwise fail every cycle until it leaves the window, which is as long as
+/// the window is; the gap a skipped segment leaves is the assembler's to
+/// account for, as it is for a push upload that never arrives.
+const SEGMENT_ATTEMPTS: u32 = 4;
 
 /// The input this pull task serves.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,13 +202,16 @@ enum Cycle {
     Ended,
 }
 
-/// Why a cycle did not complete. Both variants are logged once and followed
-/// by a backoff; `Fatal` also ends the task.
+/// Why a cycle did not complete. `Fatal` and `PublisherActive` are logged
+/// once and end the task, `Retry` is logged once and followed by a backoff,
+/// and `Cancelled` stops the task without a line: the caller cancelling it is
+/// what happened.
 #[derive(Debug)]
 enum PullError {
     Fatal(String),
     PublisherActive,
     Retry(String),
+    Cancelled,
 }
 
 impl From<FetchError> for PullError {
@@ -208,66 +220,19 @@ impl From<FetchError> for PullError {
     }
 }
 
-/// A pull's origin credentials, validated once. Applied to every request;
-/// reqwest strips `Authorization` and `Cookie` on a cross-host redirect
-/// (see `remove_sensitive_headers`), and the cookie jar scopes cookies by
-/// domain, so a redirect cannot carry them to another host.
-enum RequestAuth {
-    None,
-    Bearer(String),
-    /// A whole cookie string, sent as the one `Cookie` header.
-    Cookies(HeaderValue),
-    Basic {
-        username: String,
-        password: String,
-    },
-    Headers(HeaderMap),
-}
-
-impl RequestAuth {
-    fn new(auth: &PullAuth) -> Result<Self, String> {
-        Ok(match auth {
-            PullAuth::None => Self::None,
-            PullAuth::Bearer { token } => {
-                // An invalid token would only fail at send time; reject it once.
-                HeaderValue::from_str(token).map_err(|_| "invalid bearer token".to_string())?;
-                Self::Bearer(token.clone())
-            }
-            PullAuth::Cookies { cookies } => {
-                // The API already refuses a control byte; a header value that
-                // still cannot be built must not reach a request.
-                Self::Cookies(
-                    HeaderValue::from_str(cookies)
-                        .map_err(|_| "invalid cookie string".to_string())?,
-                )
-            }
-            PullAuth::Basic { username, password } => Self::Basic {
-                username: username.clone(),
-                password: password.clone(),
-            },
-            PullAuth::Headers { headers } => Self::Headers(pair_headers(headers)?),
-        })
-    }
-
-    fn apply(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        match self {
-            Self::None => builder,
-            Self::Bearer(token) => builder.bearer_auth(token),
-            // One header, as a player sends it. The jar's own cookies are
-            // added beside it for their domain, as reqwest merges them.
-            Self::Cookies(cookies) => builder.header(header::COOKIE, cookies.clone()),
-            Self::Basic { username, password } => builder.basic_auth(username, Some(password)),
-            Self::Headers(headers) => builder.headers(headers.clone()),
-        }
-    }
-}
-
 struct PullState {
+    /// The URL the operator configured: where a master is resolved from, and
+    /// where an expired variant URL goes back to.
+    source_url: Url,
     /// The playlist to fetch this cycle: the source URL until a master
     /// playlist is resolved, then the chosen media playlist.
     next_url: Url,
+    /// The source's own host is in one of the refused address ranges, which
+    /// is what lets its playlist point there too.
+    allow_private: bool,
+    scope: AuthScope,
+    cancel: CancellationToken,
     variant: VariantRule,
-    auth: RequestAuth,
     pipeline: AuthenticatedPipeline,
     stream_key: String,
     client_addr: String,
@@ -275,8 +240,22 @@ struct PullState {
     /// playlist listed (to notice a restarted encoder).
     next_sequence: Option<u64>,
     last_media_sequence: Option<u64>,
-    /// `EXT-X-MAP` URLs whose init this task already handed to the session.
-    fetched_maps: HashSet<String>,
+    /// The map identity in force: the object name of the `EXT-X-MAP` whose
+    /// init this task already handed to the session. Only the current one is
+    /// kept, because a map *change* is what the assembler must see; the
+    /// history of maps is worth nothing and would grow one `String` per
+    /// playlist reload.
+    current_map: Option<String>,
+    /// Failed attempts per sequence not yet skipped, so one persistently
+    /// missing object cannot stall the pull until it leaves the window.
+    segment_tries: HashMap<u64, u32>,
+    /// The last refusal reason logged, so a playlist whose every segment is
+    /// refused logs one line rather than one per segment.
+    last_refused: Option<String>,
+    /// The pull is following a variant URL that has expired: the line saying
+    /// the master is resolved again is logged once per expiry, not once per
+    /// burst. Cleared when a variant playlist is fetched again.
+    re_expired: bool,
 }
 
 async fn run(
@@ -303,6 +282,16 @@ async fn run(
         }
     };
     url.set_fragment(None);
+    if !url.username().is_empty() || url.password().is_some() {
+        // Userinfo in the URL is a password printed by every `redact_url`,
+        // and a URL is not the place for this credential: it is configuration
+        // that gets copied around and shown back.
+        error!(
+            url = %redact_url(url.as_str()),
+            "HLS pull source URL carries userinfo; use the basic credential choice instead"
+        );
+        return PullEnd::Fatal;
+    }
     let client_addr = url.host_str().unwrap_or("hls-origin").to_string();
     let auth = match RequestAuth::new(&source.auth) {
         Ok(auth) => auth,
@@ -312,13 +301,21 @@ async fn run(
             return PullEnd::Fatal;
         }
     };
+    let scope = AuthScope::new(&url, auth);
+    // A source in one of the refused ranges says the operator meant an
+    // internal origin, so its playlist may point there too; anything else may
+    // not.
+    let allow_private = host_refused(&url);
     // One client — and one cookie jar — per pull task: an origin's
     // `Set-Cookie` is scoped to this task's requests, never another input's.
-    let client = build_client();
+    let client = build_client(scope.is_configured());
     let mut state = PullState {
+        source_url: url.clone(),
         next_url: url,
+        allow_private,
+        scope,
+        cancel: cancel.clone(),
         variant: source.variant,
-        auth,
         pipeline: AuthenticatedPipeline {
             id: identity.pipeline_id.clone(),
             input_id: identity.input_id.clone(),
@@ -328,7 +325,10 @@ async fn run(
         client_addr,
         next_sequence: None,
         last_media_sequence: None,
-        fetched_maps: HashSet::new(),
+        current_map: None,
+        segment_tries: HashMap::new(),
+        last_refused: None,
+        re_expired: false,
     };
     info!(
         pipeline = %state.pipeline.id,
@@ -342,6 +342,11 @@ async fn run(
     let mut end = PullEnd::Fatal;
     loop {
         let result = tokio::select! {
+            // Cancellation first, and biased: a task woken with both branches
+            // ready stops instead of racing its next request, so a caller that
+            // cancels and then joins (to hand the input to another source)
+            // knows nothing is still in flight.
+            biased;
             _ = cancel.cancelled() => break,
             result = state.pull_once(&client, &ingest, &limits) => result,
         };
@@ -391,6 +396,7 @@ async fn run(
                 }
                 break;
             }
+            Err(PullError::Cancelled) => break,
             Err(PullError::Retry(error)) => {
                 if last_error.as_deref() != Some(error.as_str()) {
                     warn!(
@@ -404,6 +410,13 @@ async fn run(
                 attempts = attempts.saturating_add(1);
                 let delay = if attempts > MAX_ATTEMPTS {
                     attempts = 1;
+                    // A burst that failed six times says the URL the pull is
+                    // following is gone or the edge serving it is: go back to
+                    // the source and resolve the master again, which is where
+                    // a fresh signed per-variant URL comes from. A source that
+                    // never resolved a variant has nowhere to go back to, and
+                    // `re_resolve` says nothing in that case.
+                    state.re_resolve("the retry burst failed six times");
                     QUIET_PERIOD
                 } else {
                     backoff(attempts)
@@ -431,17 +444,33 @@ impl PullState {
         ingest: &Arc<HlsIngest>,
         limits: &HlsIngestLimits,
     ) -> Result<Cycle, PullError> {
-        let mut bytes = fetch_small(
+        let mut bytes = match fetch_small(
             client,
             &self.next_url,
-            &self.auth,
+            &self.scope,
             limits.max_playlist_bytes,
         )
-        .await?;
+        .await
+        {
+            Ok(bytes) => bytes,
+            // A per-variant URL that a signed master handed out expires, and
+            // the session key behind it rotates; the master is the one URL
+            // that is renewed, so a media playlist that is gone sends the
+            // pull back to it instead of retrying a dead URL forever.
+            Err(error) if self.next_url != self.source_url && variant_expired(&error) => {
+                self.re_resolve("the variant playlist answered 401, 403 or 404");
+                return Err(PullError::Retry(error.to_string()));
+            }
+            Err(error) => return Err(error.into()),
+        };
         let mut parsed = parse_remote(&self.next_url, &bytes)?;
+        refuse_private_targets(&parsed, self.allow_private)?;
         let media = match parsed {
             Playlist::Media(media) => media,
             Playlist::Master(master) => {
+                if let Some(encryption) = &master.session_key {
+                    return Err(encryption_refusal(encryption));
+                }
                 let variant = choose_variant(&master, self.variant).ok_or_else(|| {
                     PullError::Fatal("HLS master playlist lists no variant".to_string())
                 })?;
@@ -450,12 +479,15 @@ impl PullState {
                     PullError::Fatal(format!("HLS variant URL does not parse: {error}"))
                 })?;
                 bytes =
-                    fetch_small(client, &media_url, &self.auth, limits.max_playlist_bytes).await?;
+                    fetch_small(client, &media_url, &self.scope, limits.max_playlist_bytes).await?;
                 parsed = parse_remote(&media_url, &bytes)?;
+                refuse_private_targets(&parsed, self.allow_private)?;
                 match parsed {
                     Playlist::Media(media) => {
-                        // Follow the chosen rendition from now on.
+                        // Follow the chosen rendition from now on, and forget
+                        // an earlier expiry: this URL works.
                         self.next_url = media_url;
+                        self.re_expired = false;
                         media
                     }
                     Playlist::Master(_) => {
@@ -466,6 +498,7 @@ impl PullState {
                 }
             }
         };
+        refuse_unfetchable(&media)?;
 
         let text = push_playlist_text(&media);
         self.dispatch_playlist(ingest, text.into_bytes()).await?;
@@ -479,10 +512,22 @@ impl PullState {
                 "HLS pull media sequence restarted"
             );
             self.next_sequence = Some(media.media_sequence);
+            self.segment_tries.clear();
         }
         self.last_media_sequence = Some(media.media_sequence);
 
-        let mut next = self.next_sequence.unwrap_or(media.media_sequence);
+        // The first cycle of a live playlist starts near the end: RFC 8216
+        // section 6.3.3 has a client enter no less than three target
+        // durations from it, so a DVR or EVENT window is not read from its
+        // start and paced in real time — a whole window behind live, with the
+        // backfill loaded onto the origin.
+        let mut next = self.next_sequence.unwrap_or_else(|| {
+            if media.ended {
+                media.media_sequence
+            } else {
+                live_start(&media)
+            }
+        });
         let first_new = media
             .segments
             .iter()
@@ -499,6 +544,7 @@ impl PullState {
             );
             next = first.sequence;
             self.next_sequence = Some(next);
+            self.segment_tries.retain(|sequence, _| *sequence >= next);
         }
 
         let mut had_new = false;
@@ -507,9 +553,39 @@ impl PullState {
             .iter()
             .filter(|segment| segment.sequence >= next)
         {
-            self.fetch_segment(client, ingest, limits, segment).await?;
-            self.next_sequence = Some(segment.sequence.saturating_add(1));
-            had_new = true;
+            match self.fetch_segment(client, ingest, limits, segment).await {
+                Ok(()) => {
+                    self.segment_tries.remove(&segment.sequence);
+                    self.next_sequence = Some(segment.sequence.saturating_add(1));
+                    had_new = true;
+                }
+                // One object that will not fetch must not stall the pull
+                // until it leaves the window: after a few tries it is
+                // skipped, and the gap it leaves is the assembler's to
+                // account for, as a push upload that never arrives is.
+                Err(PullError::Retry(reason)) => {
+                    let tries = {
+                        let tries = self.segment_tries.entry(segment.sequence).or_insert(0);
+                        *tries = tries.saturating_add(1);
+                        *tries
+                    };
+                    if tries < SEGMENT_ATTEMPTS {
+                        return Err(PullError::Retry(reason));
+                    }
+                    warn!(
+                        pipeline = %self.pipeline.id,
+                        input = %self.pipeline.input_id,
+                        sequence = segment.sequence,
+                        url = %redact_url(&segment.path),
+                        tries,
+                        %reason,
+                        "HLS pull skipped a segment that would not fetch"
+                    );
+                    self.segment_tries.remove(&segment.sequence);
+                    self.next_sequence = Some(segment.sequence.saturating_add(1));
+                }
+                Err(error) => return Err(error),
+            }
         }
 
         if media.ended {
@@ -522,17 +598,51 @@ impl PullState {
         }
     }
 
+    /// Go back to the source URL, so the master is resolved again and a fresh
+    /// per-variant URL comes with it. `reason` says why the URL the pull was
+    /// following is gone. Says so once per expiry: a master that keeps handing
+    /// out the same dead URL is a slow poll, not a line every burst.
+    fn re_resolve(&mut self, reason: &'static str) {
+        if self.next_url == self.source_url {
+            return;
+        }
+        if !self.re_expired {
+            self.re_expired = true;
+            warn!(
+                pipeline = %self.pipeline.id,
+                input = %self.pipeline.input_id,
+                url = %redact_url(self.next_url.as_str()),
+                %reason,
+                "HLS pull resolves the master playlist again"
+            );
+        }
+        self.next_url = self.source_url.clone();
+    }
+
+    /// Whether this pull may still hand an object to the ingest. A cancelled
+    /// task may not: the session it was writing to is being torn down for the
+    /// next source, and dispatching would open a fresh one under the input
+    /// that source is about to own.
+    fn may_dispatch(&self) -> Result<(), PullError> {
+        if self.cancel.is_cancelled() {
+            return Err(PullError::Cancelled);
+        }
+        Ok(())
+    }
+
     async fn dispatch_playlist(
         &self,
         ingest: &Arc<HlsIngest>,
         bytes: Vec<u8>,
     ) -> Result<(), PullError> {
+        self.may_dispatch()?;
         let length = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
         let mut body = ingest
             .object_body(ObjectKind::Playlist, Some(length), &self.pipeline.input_id)
             .await
             .map_err(playlist_body_error)?;
         body.push(&bytes).await.map_err(playlist_body_error)?;
+        self.may_dispatch()?;
         let outcome = ingest
             .dispatch(
                 &self.pipeline,
@@ -566,10 +676,15 @@ impl PullState {
         let kind = object_kind(segment);
         if kind == ObjectKind::Fmp4
             && let Some(map) = &segment.map_uri
-            && !self.fetched_maps.contains(map)
         {
-            self.fetch_init(client, ingest, limits, map).await?;
-            self.fetched_maps.insert(map.clone());
+            // Only a *change* of map identity needs the init sent again: a
+            // signed origin re-signs the same `EXT-X-MAP` URI on every
+            // reload, and the query is the credential, not the identity.
+            let name = map_name(map);
+            if self.current_map.as_deref() != Some(name.as_str()) {
+                self.fetch_init(client, ingest, limits, map).await?;
+                self.current_map = Some(name);
+            }
         }
         let url = Url::parse(&segment.path).map_err(|error| {
             PullError::Retry(format!("HLS segment URL does not parse: {error}"))
@@ -579,7 +694,12 @@ impl PullState {
             .fetch_object(client, ingest, &url, kind.max_bytes(limits), kind, path)
             .await?;
         match outcome {
-            ObjectOutcome::Stored | ObjectOutcome::Held => Ok(()),
+            ObjectOutcome::Stored | ObjectOutcome::Held => {
+                // A refusal said its reason; a delivered segment means the
+                // reason is old news, so the next one logs again.
+                self.last_refused = None;
+                Ok(())
+            }
             ObjectOutcome::Dropped => {
                 debug!(
                     pipeline = %self.pipeline.id,
@@ -595,14 +715,21 @@ impl PullState {
             | ObjectOutcome::Unsupported(reason)
             | ObjectOutcome::TooLarge(reason) => {
                 // The same bytes cannot become valid on a retry; skip the
-                // segment and let ordering count the gap.
-                warn!(
-                    pipeline = %self.pipeline.id,
-                    input = %self.pipeline.input_id,
-                    url = %redact_url(url.as_str()),
-                    %reason,
-                    "HLS pull segment refused"
-                );
+                // segment and let ordering count the gap. One reason repeats
+                // for every segment of a playlist the assembler will not take
+                // (a ladder whose top variant is HEVC, say), so it is logged
+                // once, as the retry reason is; a segment that is delivered
+                // clears it, so a later refusal logs again.
+                if self.last_refused.as_deref() != Some(reason.as_str()) {
+                    warn!(
+                        pipeline = %self.pipeline.id,
+                        input = %self.pipeline.input_id,
+                        url = %redact_url(url.as_str()),
+                        %reason,
+                        "HLS pull segment refused"
+                    );
+                    self.last_refused = Some(reason);
+                }
                 Ok(())
             }
         }
@@ -660,7 +787,8 @@ impl PullState {
         kind: ObjectKind,
         path: String,
     ) -> Result<ObjectOutcome, PullError> {
-        let response = send(client, url, &self.auth).await?;
+        self.may_dispatch()?;
+        let response = send(client, url, &self.scope).await?;
         if let Some(length) = response.content_length()
             && length > u64::try_from(limit).unwrap_or(u64::MAX)
         {
@@ -671,6 +799,10 @@ impl PullState {
             .await
             .map_err(ingest_body_error)?;
         pump_body(response, limit, &mut body).await?;
+        // The bytes are in hand; a cancellation that arrived while they were
+        // read must not reach `dispatch`, whose `session_for` would open a
+        // session under an input another source is about to own.
+        self.may_dispatch()?;
         ingest
             .dispatch(
                 &self.pipeline,
@@ -691,212 +823,6 @@ fn choose_variant(master: &MasterPlaylist, rule: VariantRule) -> Option<&Variant
     match rule {
         VariantRule::HighestBandwidth => master.highest_bandwidth(),
         VariantRule::LowestBandwidth => master.lowest_bandwidth(),
-    }
-}
-
-/// The container a pulled segment carries. A playlist that names an
-/// `EXT-X-MAP` carries fMP4 media; otherwise the URL's extension decides,
-/// and an unknown extension is tried as MPEG-TS (the assembler refuses it
-/// with a reason if that is wrong).
-fn object_kind(segment: &SegmentEntry) -> ObjectKind {
-    if segment.map_uri.is_some() {
-        return ObjectKind::Fmp4;
-    }
-    let path = segment.path.split(['?', '#']).next().unwrap_or_default();
-    ObjectKind::of(path).unwrap_or(ObjectKind::TsSegment)
-}
-
-fn segment_name(sequence: u64, kind: ObjectKind) -> String {
-    match kind {
-        ObjectKind::Fmp4 => format!("s{sequence}.m4s"),
-        ObjectKind::Playlist | ObjectKind::TsSegment => format!("s{sequence}.ts"),
-    }
-}
-
-/// A stable object name for one `EXT-X-MAP` URL, so the map's identity
-/// survives playlist reloads without keeping per-map state.
-fn map_name(url: &str) -> String {
-    let mut hasher = DefaultHasher::new();
-    url.hash(&mut hasher);
-    format!("m{:016x}.mp4", hasher.finish())
-}
-
-/// Rewrite a remote media playlist into the push namespace: sequence `N` is
-/// `sN.ts`/`sN.m4s`, the map is its [`map_name`], and every ordering-relevant
-/// tag survives. URIs are relative to [`PLAYLIST_PATH`]'s directory.
-fn push_playlist_text(media: &MediaPlaylist) -> String {
-    let mut text = String::with_capacity(256 + media.segments.len() * 40);
-    let _ = writeln!(text, "#EXTM3U");
-    let _ = writeln!(
-        text,
-        "#EXT-X-TARGETDURATION:{}",
-        media.target_duration.as_secs_f64()
-    );
-    let _ = writeln!(text, "#EXT-X-MEDIA-SEQUENCE:{}", media.media_sequence);
-    let mut current_map: Option<String> = None;
-    for segment in &media.segments {
-        if segment.discontinuity {
-            let _ = writeln!(text, "#EXT-X-DISCONTINUITY");
-        }
-        if let Some(map) = &segment.map_uri {
-            let name = map_name(map);
-            if current_map.as_deref() != Some(name.as_str()) {
-                let _ = writeln!(text, "#EXT-X-MAP:URI=\"{name}\"");
-                current_map = Some(name);
-            }
-        }
-        let _ = writeln!(text, "#EXTINF:{},", segment.duration.as_secs_f64());
-        let _ = writeln!(
-            text,
-            "{}",
-            segment_name(segment.sequence, object_kind(segment))
-        );
-    }
-    if media.ended {
-        let _ = writeln!(text, "#EXT-X-ENDLIST");
-    }
-    text
-}
-
-/// Parse a playlist fetched from a remote origin: URIs resolve against the
-/// playlist URL (an absolute URI is kept), and the fragment is dropped
-/// because it never reaches the origin.
-fn parse_remote(base: &Url, bytes: &[u8]) -> Result<Playlist, PullError> {
-    playlist::parse_with(bytes, |uri| {
-        let mut url = base.join(uri).ok()?;
-        url.set_fragment(None);
-        Some(url.to_string())
-    })
-    .map_err(|error| PullError::Retry(format!("HLS playlist does not parse: {error}")))
-}
-
-fn pair_headers(pairs: &[HeaderPair]) -> Result<HeaderMap, String> {
-    let mut headers = HeaderMap::new();
-    for pair in pairs {
-        let name = HeaderName::from_bytes(pair.name.trim().as_bytes())
-            .map_err(|_| format!("invalid request header name {:?}", pair.name))?;
-        // The value is a credential: the error names the header, never it.
-        let value = HeaderValue::from_str(&pair.value)
-            .map_err(|_| format!("invalid value for request header {:?}", pair.name))?;
-        headers.insert(name, value);
-    }
-    Ok(headers)
-}
-
-fn build_client() -> Client {
-    let tls = crate::media::egress::tls::resolve_client_config(None).unwrap_or_else(|error| {
-        warn!(%error, "HLS pull TLS configuration unusable; using the default roots");
-        crate::media::egress::tls::rustls_client_config()
-    });
-    Client::builder()
-        .user_agent(USER_AGENT)
-        // Mechanism 2 (signed cookies): a `Set-Cookie` on a playlist is
-        // presented with that playlist's segments, as a browser or FFmpeg
-        // `-cookies` does. Cookies are scoped by domain by the jar.
-        .cookie_store(true)
-        .use_preconfigured_tls((*tls).clone())
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
-        .build()
-        .unwrap_or_else(|error| {
-            warn!(%error, "HLS pull client build failed; using a default client");
-            Client::new()
-        })
-}
-
-async fn send(
-    client: &Client,
-    url: &Url,
-    auth: &RequestAuth,
-) -> Result<reqwest::Response, FetchError> {
-    let response = auth
-        .apply(client.get(url.clone()))
-        .send()
-        .await
-        .map_err(|error| FetchError::Request(error.without_url().to_string()))?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(FetchError::Status(status.as_u16()));
-    }
-    Ok(response)
-}
-
-/// Read a bounded playlist body.
-async fn fetch_small(
-    client: &Client,
-    url: &Url,
-    auth: &RequestAuth,
-    max_bytes: usize,
-) -> Result<Vec<u8>, FetchError> {
-    let response = send(client, url, auth).await?;
-    let declared = response.content_length();
-    if declared.is_some_and(|length| length > u64::try_from(max_bytes).unwrap_or(u64::MAX)) {
-        return Err(FetchError::TooLarge);
-    }
-    let capacity = declared
-        .and_then(|length| usize::try_from(length).ok())
-        .unwrap_or(0)
-        .min(max_bytes);
-    let mut body = Vec::with_capacity(capacity);
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| FetchError::Body(error.without_url().to_string()))?;
-        if body.len().saturating_add(chunk.len()) > max_bytes {
-            return Err(FetchError::TooLarge);
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
-}
-
-/// Stream a bounded segment body into an ingest body, as an upload handler
-/// frames its request body.
-async fn pump_body(
-    response: reqwest::Response,
-    limit: usize,
-    body: &mut ObjectBody,
-) -> Result<(), FetchError> {
-    if let Some(length) = response.content_length()
-        && length > u64::try_from(limit).unwrap_or(u64::MAX)
-    {
-        return Err(FetchError::TooLarge);
-    }
-    let mut total = 0usize;
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| FetchError::Body(error.without_url().to_string()))?;
-        total = total.saturating_add(chunk.len());
-        if total > limit {
-            return Err(FetchError::TooLarge);
-        }
-        body.push(&chunk).await.map_err(FetchError::BodyWrite)?;
-    }
-    Ok(())
-}
-
-#[derive(Debug)]
-enum FetchError {
-    Request(String),
-    Status(u16),
-    TooLarge,
-    Body(String),
-    BodyWrite(BodyError),
-}
-
-impl std::fmt::Display for FetchError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Request(error) => write!(formatter, "origin request failed: {error}"),
-            Self::Status(status) => write!(formatter, "origin answered HTTP {status}"),
-            Self::TooLarge => write!(formatter, "origin object is over its size bound"),
-            Self::Body(error) => write!(formatter, "origin body read failed: {error}"),
-            Self::BodyWrite(BodyError::TooLarge) => {
-                write!(formatter, "origin object is over the ingest bound")
-            }
-            Self::BodyWrite(BodyError::BufferFull) => {
-                write!(formatter, "HLS ingest buffer is full")
-            }
-        }
     }
 }
 
@@ -939,3 +865,12 @@ async fn sleep_or_cancel(delay: Duration, cancel: &CancellationToken) -> bool {
 #[cfg(test)]
 #[path = "hls_pull/tests.rs"]
 mod tests;
+// The integration halves: `tests_origin` owns the origin stub and the helpers
+// both integration modules use, `tests_guards` the guards a real origin can
+// prove. Split because one file of them would break the 999-line cap.
+#[cfg(test)]
+#[path = "hls_pull/tests_guards.rs"]
+mod tests_guards;
+#[cfg(test)]
+#[path = "hls_pull/tests_origin.rs"]
+mod tests_origin;

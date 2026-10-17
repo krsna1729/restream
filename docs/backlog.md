@@ -37,6 +37,8 @@ items).
 - [Q-075 one raw AAC frame per unit](#q-075-protocol-opus-one-raw-aac-frame-per-message-and-per-sample)
 - [Q-076 HTTP Digest for pull origins](#q-076-protocol-sonnet-http-digest-authentication-for-hls-pull-origins)
 - [Q-077 follow every rendition into one ring](#q-077-architecture-opus-follow-every-rendition-of-a-master-playlist-into-one-ring)
+- [Q-078 choose versions the ingest can decode](#q-078-protocol-opus-choose-the-versions-and-codecs-the-ingest-can-decode)
+- [Q-079 resolve a pull target before fetching it](#q-079-security-opus-resolve-a-pull-target-before-fetching-it)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -726,3 +728,53 @@ items).
 - Status: open (Filed: 2026-10-17 by claude, from the pull audio
   investigation; the pull feature reports the gap with a warning instead of
   losing audio silently).
+
+### Q-078 [protocol] [opus] Choose the versions and codecs the ingest can decode
+- Goal: a pull that follows a master playlist picks a variant whose media
+  this ingest can publish, so a ladder is not refused from the top down.
+- Why: the pull's rule is `BANDWIDTH` (`highest`, the default, or `lowest`)
+  and nothing else. `EXT-X-STREAM-INF` carries `CODECS`, `RESOLUTION` and
+  `FRAME-RATE`, and the parser already keeps the variant's `path`,
+  `BANDWIDTH` and `AUDIO` group; a ladder whose highest variant is HEVC
+  (`hvc1`) is pulled, its frames are refused one segment at a time
+  (`ObjectOutcome::Unsupported`), and the pull keeps refusing until the
+  operator changes the rule. `hls-push-duty` has the same shape from the
+  encoder side: a single ingest protocol cannot carry two dialects.
+- Change: record `CODECS`' video and audio codecs on `Variant` (additive, the
+  parser is shared) and have `choose_variant` prefer a variant whose codecs
+  the assembler accepts (H.264 video, AAC audio, and whatever Q-073 lands),
+  falling back to the current rule when every variant is unsupported or none
+  declares its codecs. Where the ladder is the pull's, the variant rule
+  becomes a preference rather than a promise; the refusal path stays as it is.
+- Gates: a master whose highest variant is HEVC and whose lower one is H.264
+  publishes media with the default rule; a master whose variants declare no
+  codecs behaves exactly as today; the push parser's behaviour is unchanged.
+- Status: open (Filed: 2026-10-17 by claude, from the HLS pull review: the
+  ingest-unsupported top variant has no way out but a manual rule change).
+
+### Q-079 [security] [opus] Resolve a pull target before fetching it
+
+- Goal: a pulled playlist cannot make the engine fetch a host that resolves
+  into a private, loopback or link-local address, and the pull says so once
+  rather than issuing the request.
+- Why: the guard that refuses those targets matches the *literal* address
+  (`url::Host::Ipv4`/`Ipv6`), so `http://internal-admin.example/` passes and
+  the request goes out. The threat model is the one the pull already accepts:
+  a compromised edge, an SSAI ad segment, a second CDN. The blast radius is
+  small — the response reaches the demuxer and, if it parses, the operator's
+  own outputs; no credential crosses the origin boundary (`AuthScope`), and a
+  cross-origin redirect is refused — so this is filed rather than fixed
+  urgently. Resolution also has a rebinding race: the address checked is not
+  the address connected to unless the client is pinned to it.
+- Change: resolve the host of the source URL, of each playlist's variant,
+  segment and map URI, and of each redirect target, and refuse a set of
+  answers that is not entirely public, unless the source itself resolves into
+  such a range (the harness and the local demo pull from loopback). Cache the
+  answers per host for the pull's lifetime. To close the race, pin the
+  resolved address for the connection (a connector that takes the address
+  rather than the name) or re-check the peer address after connect.
+- Gates: a playlist naming a host that resolves to `127.0.0.1` is refused
+  with one reason and no request is issued; a source on loopback still pulls;
+  the check is mutation-verified by weakening the resolved-address test.
+- Status: open (Filed: 2026-10-17 by claude, from the HLS pull review round:
+  the literal-address guard, `host_refused`, covers addresses, not names).

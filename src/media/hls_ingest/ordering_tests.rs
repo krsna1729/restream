@@ -50,6 +50,8 @@ fn media_with_map(dir: &str, first: u64, len: u64, ended: bool, map: Option<&str
             .collect(),
         ended,
         map_uri: map,
+        encryption: None,
+        byte_range: false,
     })
 }
 
@@ -172,6 +174,7 @@ fn a_master_playlist_selects_the_highest_bandwidth_variant() {
             },
         ],
         audio: Vec::new(),
+        session_key: None,
     });
     assert_eq!(
         session.on_playlist("master.m3u8", master, t0),
@@ -517,6 +520,7 @@ fn a_recreated_map_does_not_take_the_voided_seed_again() {
                 audio_group: None,
             }],
             audio: Vec::new(),
+            session_key: None,
         })
     };
     session.on_playlist("master.m3u8", master(800_000), t0);
@@ -570,6 +574,7 @@ fn a_variant_switch_forgets_the_old_map_until_the_new_playlist_arrives() {
                 audio_group: None,
             }],
             audio: Vec::new(),
+            session_key: None,
         })
     };
     // The first variant's playlist names an init.

@@ -5,7 +5,11 @@
 //! `EXT-X-MEDIA-SEQUENCE`, `EXTINF`, `EXT-X-DISCONTINUITY`, `EXT-X-MAP`,
 //! `EXT-X-ENDLIST` and master playlists (`EXT-X-STREAM-INF` with `BANDWIDTH`
 //! and `AUDIO`, and the `EXT-X-MEDIA` renditions those groups name). Every
-//! other tag is ignored. URIs resolve against the playlist's own path; only
+//! other tag is ignored, except the three that say the media cannot be
+//! fetched whole and in the clear — `EXT-X-KEY`/`EXT-X-SESSION-KEY`
+//! ([`Encryption`]) and `EXT-X-BYTERANGE` ([`MediaPlaylist::byte_range`]) —
+//! which are recorded as data. The pull refuses those; push ignores them as
+//! it always has. URIs resolve against the playlist's own path; only
 //! relative URIs that stay inside the stream key's namespace are accepted.
 
 use std::fmt;
@@ -30,6 +34,27 @@ pub struct MediaPlaylist {
     /// playlist directory like a segment URI: the map its newest segments
     /// use. Each [`SegmentEntry`] records the map in force for itself.
     pub map_uri: Option<String>,
+    /// The `EXT-X-KEY` in force (a `METHOD` other than `NONE`), or the
+    /// session key this media playlist names out of place. Recorded as data:
+    /// the pull refuses an encrypted playlist, push ignores it as it always
+    /// has.
+    pub encryption: Option<Encryption>,
+    /// The playlist names `EXT-X-BYTERANGE` on an entry or a `BYTERANGE`
+    /// attribute on its `EXT-X-MAP`: an entry is a slice of a resource.
+    /// Recorded as data, like [`Self::encryption`].
+    pub byte_range: bool,
+}
+
+/// An `EXT-X-KEY` (media) or `EXT-X-SESSION-KEY` (master) the playlist
+/// names, with a `METHOD` other than `NONE`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Encryption {
+    /// The `METHOD` attribute verbatim (`AES-128`, `SAMPLE-AES`,
+    /// `SAMPLE-AES-CTR`). Empty when the tag names none, which the RFC does
+    /// not allow: recorded, so the pull still refuses the playlist.
+    pub method: String,
+    /// The key came from `EXT-X-SESSION-KEY`.
+    pub session: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +77,10 @@ pub struct MasterPlaylist {
     /// names one of these groups in its `AUDIO` attribute takes its audio
     /// from the group, not from the variant's own segments.
     pub audio: Vec<AudioRendition>,
+    /// The `EXT-X-SESSION-KEY` the master names (`METHOD` other than
+    /// `NONE`): its media playlists are encrypted. Recorded as data, like
+    /// [`MediaPlaylist::encryption`].
+    pub session_key: Option<Encryption>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,6 +219,9 @@ pub fn parse_with(
     let mut media_sequence = 0u64;
     let mut ended = false;
     let mut map_uri = None;
+    let mut byte_range = false;
+    let mut media_encryption = None;
+    let mut session_encryption = None;
     let mut pending_duration = None;
     let mut pending_discontinuity = false;
     let mut pending_bandwidth = None;
@@ -222,8 +254,34 @@ pub fn parse_with(
             pending_discontinuity = true;
         } else if line == "#EXT-X-ENDLIST" {
             ended = true;
+        } else if line.starts_with("#EXT-X-BYTERANGE:") {
+            // Recorded whether or not the tag carries a range: an entry is a
+            // slice either way. Neither tag becomes a parse error here, both
+            // were ignored before, and push must go on reading what it
+            // always read.
+            byte_range = true;
+        } else if let Some(attributes) = key_attributes(line) {
+            // Both tags carry the same attributes; only which one is
+            // remembered differs. `METHOD=NONE` clears the key, as in the
+            // RFC's own example, and a tag that names no `METHOD` — which the
+            // RFC requires — is recorded with an empty method rather than
+            // refused.
+            let session = line.starts_with("#EXT-X-SESSION-KEY:");
+            let method = attribute(attributes, "METHOD")
+                .unwrap_or_default()
+                .to_string();
+            let encryption =
+                (!method.eq_ignore_ascii_case("NONE")).then_some(Encryption { method, session });
+            if session {
+                session_encryption = encryption;
+            } else {
+                media_encryption = encryption;
+            }
         } else if let Some(value) = line.strip_prefix("#EXT-X-MAP:") {
             let uri = attribute(value, "URI").ok_or_else(|| invalid("EXT-X-MAP"))?;
+            // A map with its own `BYTERANGE` is a slice too: the pull would
+            // fetch the whole resource as the init.
+            byte_range |= attribute(value, "BYTERANGE").is_some_and(|range| !range.is_empty());
             map_uri = Some(resolve(uri).ok_or(PlaylistError::InvalidUri { line: line_number })?);
         } else if let Some(attributes) = line.strip_prefix("#EXT-X-MEDIA:") {
             // Only audio groups matter here: `SUBTITLES` and
@@ -294,7 +352,11 @@ pub fn parse_with(
         if !segment_uris.is_empty() || target_duration.is_some() {
             return Err(PlaylistError::MixedMasterAndMedia);
         }
-        return Ok(Playlist::Master(MasterPlaylist { variants, audio }));
+        return Ok(Playlist::Master(MasterPlaylist {
+            variants,
+            audio,
+            session_key: session_encryption,
+        }));
     }
 
     let target_duration = target_duration.ok_or(PlaylistError::MissingTargetDuration)?;
@@ -318,7 +380,19 @@ pub fn parse_with(
         segments,
         ended,
         map_uri,
+        // A media playlist that names a session key is out of place; it is
+        // still recorded, so the pull refuses the playlist rather than
+        // demuxing encrypted frames as media.
+        encryption: media_encryption.or(session_encryption),
+        byte_range,
     }))
+}
+
+/// The attribute list of an `EXT-X-KEY` or `EXT-X-SESSION-KEY` line, if it is
+/// one.
+fn key_attributes(line: &str) -> Option<&str> {
+    line.strip_prefix("#EXT-X-KEY:")
+        .or_else(|| line.strip_prefix("#EXT-X-SESSION-KEY:"))
 }
 
 fn parse_seconds(value: &str) -> Option<Duration> {
@@ -386,6 +460,84 @@ mod tests {
             Ok(Playlist::Media(playlist)) => playlist,
             other => panic!("expected media playlist, got {other:?}"),
         }
+    }
+
+    /// The tags that say the media cannot be fetched whole and in the clear
+    /// are recorded as data. Push ignores them, as it always has; the pull is
+    /// what refuses a playlist that carries one.
+    #[test]
+    fn encryption_and_byte_ranges_are_recorded_as_data() {
+        let playlist = media(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n\
+             #EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"skd://key\",IV=0x1\n\
+             #EXTINF:2.0,\nindex0.ts\n",
+        );
+        assert_eq!(
+            playlist.encryption,
+            Some(Encryption {
+                method: "SAMPLE-AES".to_string(),
+                session: false,
+            }),
+            "push still parses an encrypted playlist, and knows its method"
+        );
+        assert!(!playlist.byte_range);
+
+        // `METHOD=NONE` clears the key, as RFC 8216's own example does.
+        let playlist = media(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-KEY:METHOD=AES-128,URI=\"key\"\n\
+             #EXTINF:2.0,\nindex0.ts\n#EXT-X-KEY:METHOD=NONE\n#EXTINF:2.0,\nindex1.ts\n",
+        );
+        assert_eq!(playlist.encryption, None);
+
+        let playlist = media(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-BYTERANGE:1200@0\n\
+             #EXTINF:2.0,\nindex0.ts\n",
+        );
+        assert!(playlist.byte_range);
+        assert_eq!(playlist.encryption, None);
+
+        // A map's own `BYTERANGE` is a slice too.
+        let playlist = media(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MAP:URI=\"init.mp4\",BYTERANGE=\"800@0\"\n\
+             #EXTINF:2.0,\nindex0.m4s\n",
+        );
+        assert!(playlist.byte_range);
+
+        // A master's session key is recorded, and a master stays a master.
+        let master = match parse(
+            "#EXTM3U\n#EXT-X-SESSION-KEY:METHOD=AES-128,URI=\"key\"\n\
+             #EXT-X-STREAM-INF:BANDWIDTH=800000\nlow/index.m3u8\n"
+                .as_bytes(),
+            "live/index.m3u8",
+        ) {
+            Ok(Playlist::Master(master)) => master,
+            other => panic!("expected a master playlist, got {other:?}"),
+        };
+        assert_eq!(
+            master.session_key,
+            Some(Encryption {
+                method: "AES-128".to_string(),
+                session: true,
+            })
+        );
+
+        // A tag the RFC cannot mean anything without is recorded all the
+        // same, never refused: push ignored both before, and a parse error
+        // here would change what push accepts.
+        let playlist = media(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-KEY:URI=\"key\"\n#EXTINF:2.0,\nindex0.ts\n",
+        );
+        assert_eq!(
+            playlist.encryption,
+            Some(Encryption {
+                method: String::new(),
+                session: false,
+            }),
+            "a key tag naming no METHOD is still a key"
+        );
+        let playlist =
+            media("#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-BYTERANGE:\n#EXTINF:2.0,\nindex0.ts\n");
+        assert!(playlist.byte_range);
     }
 
     #[test]
@@ -510,6 +662,7 @@ mod tests {
             let master = MasterPlaylist {
                 variants: vec![variant.clone()],
                 audio,
+                session_key: None,
             };
             master
                 .audio_rendition(&variant)
@@ -566,6 +719,7 @@ mod tests {
                 audio_group: None,
             }],
             audio: vec![rendition("audio", true, true)],
+            session_key: None,
         };
         assert_eq!(no_group.audio_rendition(&no_group.variants[0]), None);
     }

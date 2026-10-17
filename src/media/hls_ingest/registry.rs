@@ -174,14 +174,15 @@ fn pull_action(
         // A finished playlist is terminal for this source: restarting would
         // replay it.
         Some(PullEnd::Ended) => PullAction::Leave,
-        // A source that gave up may recover, so wait out the backoff.
-        Some(PullEnd::Fatal) => match observed.retry_at {
+        // A source that gave up may recover, so wait out the backoff. So may
+        // a task that panicked: the task records its end as its last act, and
+        // a cancelled task is removed from the map before it is cancelled, so
+        // a finished task with no recorded end is one that panicked. Leaving
+        // it would keep the row's pull dead for as long as the row stands.
+        Some(PullEnd::Fatal) | None => match observed.retry_at {
             Some(retry_at) if now >= retry_at => PullAction::Start { replaced: false },
             Some(_) | None => PullAction::WaitToRetry,
         },
-        // Finished without recording why: leave it rather than restart
-        // something that may be about to be reaped.
-        None => PullAction::Leave,
     }
 }
 
@@ -266,13 +267,33 @@ impl HlsIngest {
             }
             PullAction::Start { replaced } => replaced,
         };
-        if replaced {
-            // Cancel the old task before its session goes, so it cannot
-            // publish into a session the new origin has already replaced.
-            if let Some(running) = crate::sync::lock(&self.pulls).remove(&identity.input_id) {
-                running.task.cancel();
+        // Take the old task out, whatever state it is in, and wait for it
+        // before touching its session. A cancelled task must observe the
+        // cancel before it can dispatch another object, or it would open the
+        // very session the new source is about to replace — and, when the row
+        // is gone, recreate the ring of a pipeline that is going away. The
+        // join costs one poll, because the task's cancel branch is first in
+        // its `select!`.
+        //
+        // The removal is its own statement so the map's guard is released
+        // before the await, never held across it.
+        let previous = crate::sync::lock(&self.pulls).remove(&identity.input_id);
+        if let Some(previous) = previous {
+            previous.task.cancel();
+            let end = previous.task.end_state();
+            previous.task.join().await;
+            if crate::sync::lock(&end).is_none() {
+                warn!(
+                    input = %identity.input_id,
+                    "HLS pull task stopped without recording why; restarting it"
+                );
             }
-            self.engine.cancel_pipeline_input(&identity.input_id).await;
+            // A replaced task takes its session with it (see above). A task
+            // restarted for the same source keeps it, so its ordering state
+            // still dedupes whatever the retry replays.
+            if replaced {
+                self.engine.cancel_pipeline_input(&identity.input_id).await;
+            }
         }
         let input_id = identity.input_id.clone();
         let task = crate::media::hls_pull::spawn(
@@ -294,13 +315,18 @@ impl HlsIngest {
     }
 
     /// Stop the input's pull task, if one runs, and end the session it
-    /// opened. The task ends at its next await; it is not joined, because
-    /// that would put an origin's request timeout inside the reconcile pass.
+    /// opened. The task is joined before its session goes, so it cannot
+    /// dispatch another object after the cancel and reopen that session; its
+    /// cancel branch is first in its `select!`, so the join costs one poll
+    /// rather than an origin's request timeout.
     pub async fn cancel_pull(&self, input_id: &str) -> bool {
-        let running = crate::sync::lock(&self.pulls).remove(input_id);
-        match running {
+        // The removal is its own statement so the map's guard is released
+        // before the join, never held across it.
+        let removed = crate::sync::lock(&self.pulls).remove(input_id);
+        match removed {
             Some(running) => {
                 running.task.cancel();
+                running.task.join().await;
                 self.engine.cancel_pipeline_input(input_id).await;
                 true
             }

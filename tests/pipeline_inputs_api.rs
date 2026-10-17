@@ -6,7 +6,7 @@ use http_body_util::BodyExt;
 use restream::db;
 use tower::ServiceExt;
 
-use support::{authenticated_app, json_request, response_json};
+use support::{authenticated_app, authenticated_app_with_engine, json_request, response_json};
 
 /// The raw response body, so a test can assert a secret never appears in any
 /// serialized form (not merely that a named field is absent).
@@ -509,6 +509,10 @@ async fn pull_input_validation_rejects_bad_configuration() {
             "sourceUrl must be absolute",
         ),
         (
+            serde_json::json!({"label":"x","kind":"hlsPull","sourceUrl":"https://user:password@o.example/p.m3u8"}),
+            "sourceUrl must not carry userinfo, which every read would return",
+        ),
+        (
             serde_json::json!({"label":"x","kind":"hlsPull","sourceUrl":long_url}),
             "sourceUrl must fit MAX_URL_LEN",
         ),
@@ -626,4 +630,69 @@ async fn patch_validation_rejects_keyed_input_carrying_a_pull_source() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
+}
+
+/// A changed source kind hands the input's session to a different publisher,
+/// so the change must end the session the old kind left. A keyed input's
+/// session belongs to a live push: left running, the pull the row now asks
+/// for is refused as `PublisherActive` and backs off until the pusher leaves
+/// — which, for a pusher that never stops, is never. The token is the signal
+/// a live pusher tears down on, so awaiting it is what a real encoder does.
+#[tokio::test]
+async fn changing_an_inputs_source_kind_ends_the_session_the_old_kind_held() {
+    let (app, _, cookie, engine) = authenticated_app_with_engine().await;
+    let pipeline_id = create_pipeline(&app, &cookie).await;
+
+    let (_, body) = post_input(&app, &cookie, &pipeline_id, r#"{"label":"Venue"}"#).await;
+    let created = parse(&body);
+    let input_id = created["input"]["id"]
+        .as_str()
+        .expect("input id")
+        .to_string();
+    let stream_key = created["input"]["streamKey"]
+        .as_str()
+        .expect("stream key")
+        .to_string();
+
+    let registration = engine
+        .try_register_pipeline_input_attempt(&pipeline_id, &input_id, &stream_key, "rtmp", true)
+        .await
+        .expect("a keyed input accepts a push");
+    let pusher = registration.cancel_token.clone();
+    assert!(engine.input_has_session(&pipeline_id, &input_id).await);
+
+    // A patch that changes neither the kind nor the enablement leaves the
+    // live push alone: dropping an encoder on a rename would be worse than
+    // the defect this guards.
+    let (status, _) = patch_input(
+        &app,
+        &cookie,
+        &pipeline_id,
+        &input_id,
+        r#"{"label":"Renamed"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !pusher.is_cancelled(),
+        "a rename must not disconnect a live pusher"
+    );
+
+    let (status, body) = patch_input(
+        &app,
+        &cookie,
+        &pipeline_id,
+        &input_id,
+        r#"{"kind":"hlsPull","sourceUrl":"https://origin.example/master.m3u8"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(parse(&body)["input"]["kind"], "hlsPull");
+
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(5), pusher.cancelled()).await;
+    assert!(
+        ended.is_ok(),
+        "the change left the pusher's session standing, so the pull backs off behind it"
+    );
+    drop(registration);
 }
