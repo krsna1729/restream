@@ -102,6 +102,26 @@ impl MediaEngine {
             last_forwarded_dts,
             preview_ring,
         };
+        // Take every write guard before the first insert: no await may follow
+        // it. Lock order: `cancel_tokens` -> `sessions` -> `selected_inputs` ->
+        // `active`, and every other path takes these locks one at a time.
+        // Tokio's `RwLock` write waits while a reader holds it (the input
+        // status JSON reads `sessions`), so a caller whose future is dropped
+        // at one of those awaits — a pull's cancel lands in this window —
+        // would otherwise leave a token nothing cancels and a session with no
+        // owner: the input shows as connected until the next registration
+        // overwrites it.
+        let mut sessions = self.ingests.sessions.write().await;
+        let mut selected_inputs = if selected {
+            Some(self.ingests.selected_inputs.write().await)
+        } else {
+            None
+        };
+        let mut active = if selected {
+            Some(self.ingests.active.write().await)
+        } else {
+            None
+        };
         tokens.insert(input_id.to_string(), token.clone());
 
         let now = Instant::now();
@@ -126,23 +146,14 @@ impl MediaEngine {
             prev_sample_time: std::sync::Mutex::new(now),
             bitrate_kbps: std::sync::Mutex::new(None),
         });
-        self.ingests
-            .sessions
-            .write()
-            .await
-            .insert(input_id.to_string(), ingest.clone());
-        if selected {
-            self.ingests
-                .selected_inputs
-                .write()
-                .await
-                .insert(pipeline_id.to_string(), input_id.to_string());
-            self.ingests
-                .active
-                .write()
-                .await
-                .insert(pipeline_id.to_string(), ingest);
+        sessions.insert(input_id.to_string(), ingest.clone());
+        if let Some(selected_inputs) = selected_inputs.as_mut() {
+            selected_inputs.insert(pipeline_id.to_string(), input_id.to_string());
         }
+        if let Some(active) = active.as_mut() {
+            active.insert(pipeline_id.to_string(), ingest);
+        }
+        drop((sessions, selected_inputs, active, tokens));
 
         self.runtime
             .event_log

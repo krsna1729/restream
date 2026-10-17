@@ -39,9 +39,9 @@ items).
 - [Q-077 follow every rendition into one ring](#q-077-architecture-opus-follow-every-rendition-of-a-master-playlist-into-one-ring)
 - [Q-078 choose versions the ingest can decode](#q-078-protocol-opus-choose-the-versions-and-codecs-the-ingest-can-decode)
 - [Q-079 resolve a pull target before fetching it](#q-079-security-opus-resolve-a-pull-target-before-fetching-it)
-- [Q-081 make the ingest registration cancel-safe](#q-081-architecture-opus-make-the-ingest-registration-cancel-safe)
 - [Q-083 measure RTMP and SRT under pull load](#q-083-performance-sonnet-measure-rtmp-and-srt-under-pull-load)
 - [Q-084 parse a big playlist off the ingest turn](#q-084-performance-opus-parse-a-big-playlist-off-the-ingest-turn)
+- [Q-085 a demoted previous input stays demoted if the registration is dropped](#q-085-architecture-opus-a-demoted-previous-input-stays-demoted-if-the-registration-is-dropped)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -782,25 +782,6 @@ items).
 - Status: open (Filed: 2026-10-17 by claude, from the HLS pull review round:
   the literal-address guard, `host_refused`, covers addresses, not names).
 
-### Q-081 [architecture] [opus] Make the ingest registration cancel-safe
-
-- Goal: dropping a future inside `try_register_pipeline_input_attempt` leaves
-  no half-written ingest state.
-- Why: the function inserts into `cancel_tokens` and then awaits
-  `ingests.sessions.write()`, `selected_inputs.write()` and `active.write()`.
-  Tokio's `RwLock` write waits whenever a reader holds it (the input-status
-  JSON reads `sessions`), so a caller whose future is dropped at one of those
-  awaits leaves a token that is not cancelled and a `sessions` entry with no
-  owner: the input shows as connected until the next registration overwrites
-  it. `HlsIngest::session_for` guards the window *after* the call returns
-  (`RegistrationGuard`), and a pull's cancel can drop it before that.
-- Change: take every write guard before the first insert, so no await follows
-  it, or run the register-plus-guard pair on a spawned task whose result the
-  caller awaits. Either way the call becomes cancel-safe on its own.
-- Gates: a test that drops a future parked inside the call (a reader holding
-  `sessions`) and finds no token and no `sessions` entry for the input.
-- Status: open (Filed: 2026-10-17 by claude, from the #354 review round: the
-  window predates the PR, and the pull's cancel path is what reaches it).
 
 ### Q-083 [performance] [sonnet] Measure RTMP and SRT under pull load
 
@@ -848,3 +829,22 @@ items).
   the harness already records.
 - Status: open (Filed: 2026-10-17 by claude, from the #354 follow-up: measured
   29 ms for a 1 MiB playlist of 10 280 segments).
+
+### Q-085 [architecture] [opus] A demoted previous input stays demoted if the registration is dropped
+
+- Goal: dropping a future inside `try_register_pipeline_input_attempt` leaves
+  the input it was replacing exactly as it found it.
+- Why: when the registering input is selected and a different input is active,
+  `previous.gate.demote()` runs before `wait_until_idle().await` and before the
+  new attempt's write guards are taken. A drop at any await in between leaves
+  the previous ingest in `active` but demoted: still registered, forwarding
+  nothing, and nothing re-promotes it — the pipeline reads as having a live
+  ingest that carries no media. It needs `selected_inputs` to name the new
+  input while another is `active`, which is narrow, and it predates Q-081's
+  fix (which covers the token and the session inserts).
+- Change: hold the previous gate in a drop guard that re-arms it until the new
+  ingest is inserted. Re-ordering is not enough: the demote must wait for the
+  previous ingest to go idle, and that wait cannot run under the write guards.
+- Gates: a test that parks the call after the demote (a held `timelines`
+  reader) and drops it, then asserts the previous gate is armed again.
+- Status: open (Filed: 2026-10-17 by claude, from the #356 review).

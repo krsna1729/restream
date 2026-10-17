@@ -12,6 +12,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::process::Command;
 
+#[path = "engine_ingest_tests.rs"]
+mod engine_ingest_tests;
 #[path = "engine_lifecycle_tests.rs"]
 mod engine_lifecycle_tests;
 #[path = "engine_poison_recovery_tests.rs"]
