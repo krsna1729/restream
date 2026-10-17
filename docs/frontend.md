@@ -143,10 +143,13 @@ None open.
 
 `/` is the dashboard: one React root (`web/ts/control-room/main.tsx`) in
 `web/pages/index.html`, mounting a TanStack Router (`router.tsx`). The engine
-serves the same page for unknown paths, so the place is read from the query
-whatever path the page was served from (`/index.html?w=operate` included:
-the router matches its root route there) and a link from there canonicalises
-to `/`.
+serves the same page for unknown top-level paths, so the place is read from
+the query whatever path the page was served from (`/index.html?w=operate`
+included: the router matches its root route there) and a link from there
+canonicalises to `/`. A nested unknown path (`/a/b?w=inspect`) is redirected
+to the shell's directory by a relative `../` per level with the query kept,
+since the page's asset URLs are relative (so it can sit under a proxy prefix)
+and would not load from a nested path.
 
 - Data: one store (`web/ts/control-room/store.ts`) for what is pushed or
   sampled for the whole page, plus TanStack Query for the per-view polls
