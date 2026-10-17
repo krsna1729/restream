@@ -469,6 +469,49 @@ async fn aggregate_alerts_requires_auth_and_returns_array() {
     assert!(good["resolvedCompleteFrom"].is_string(), "{good}");
 }
 
+#[tokio::test]
+async fn fleet_history_rejects_a_malformed_bound_and_reports_its_window() {
+    let (app, cookie) = authenticated_app().await;
+
+    // `since` and `until` are RFC 3339; anything else is the caller's
+    // error, not "all".
+    for query in [
+        "since=1h",
+        "until=yesterday",
+        "since=2026-10-12T10%3A00%3A00Z&until=1h",
+    ] {
+        let bad = app
+            .clone()
+            .oneshot(auth_req(
+                "GET",
+                &format!("/api/v1/fleet/history?{query}"),
+                &cookie,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(bad.status(), StatusCode::BAD_REQUEST, "{query}");
+    }
+
+    // A window after the last sample is empty, and still says from when the
+    // kept history is complete and how often it samples.
+    let future = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            "/api/v1/fleet/history?since=2999-01-01T00%3A00%3A00Z",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(future.status(), StatusCode::OK);
+    let body = body_json(future).await;
+    assert_eq!(body["samples"], serde_json::json!([]), "{body}");
+    assert!(body["completeFromMs"].is_u64(), "{body}");
+    assert_eq!(body["intervalMs"], 5000, "{body}");
+}
+
 // ── coverage gap: metrics/system ────────────────────────────────────────
 
 #[tokio::test]

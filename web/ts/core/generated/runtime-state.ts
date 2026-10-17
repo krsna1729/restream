@@ -1,4 +1,4 @@
-// Generated from src/application/runtime_state, diagnosis and capacity (ts-rs). Do not edit.
+// Generated from src/application/runtime_state, diagnosis, capacity and fleet_history (ts-rs). Do not edit.
 // Regenerate: cargo test --lib runtime_state::tests::write_generated -- --ignored
 
 export type RuntimeState = { 
@@ -6,9 +6,17 @@ export type RuntimeState = {
  * Identifies this server run; revisions restart with each run, so a
  * resume token is `<epoch>.<revision>`.
  */
-epoch: string, revision: number, pipelines: Array<PipelineState>, outputs: Array<OutputState>, };
+epoch: string, revision: number, pipelines: Array<PipelineState>, outputs: Array<OutputState>, inputs: Array<InputState>, 
+/**
+ * One per pipeline.
+ */
+graphs: Array<PipelineGraph>, };
 
-export type StateDelta = { epoch: string, revision: number, pipelines: Array<PipelineState>, outputs: Array<OutputState>, removedPipelines: Array<string>, removedOutputs: Array<string>, };
+export type StateDelta = { epoch: string, revision: number, pipelines: Array<PipelineState>, outputs: Array<OutputState>, inputs: Array<InputState>, graphs: Array<PipelineGraph>, removedPipelines: Array<string>, removedOutputs: Array<string>, removedInputs: Array<string>, 
+/**
+ * Pipeline ids whose graph is gone (the pipeline was deleted).
+ */
+removedGraphs: Array<string>, };
 
 export type PipelineState = { id: string, name: string, 
 /**
@@ -57,6 +65,69 @@ backpressure: string | null, retry: RetryState | null, evidence: FailureEvidence
  * Why a desired-running output is degraded; `null` when it is not.
  */
 diagnosis: Diagnosis | null, };
+
+export type InputState = { id: string, pipelineId: string, 
+/**
+ * Where the input sits in its pipeline's list: the primary first, then
+ * the backups in the order they were added.
+ */
+position: number, label: string, streamKey: string, role: PipelineInputRole, enabled: boolean, selected: boolean, kind: PipelineInputSourceKind, 
+/**
+ * The remote origin, for a pull input only.
+ */
+sourceUrl: string | null, variantRule: VariantRule, 
+/**
+ * Auth is write-only: the variant and (for basic) the username are safe
+ * to show, but no token, password or header value ever is.
+ */
+authKind: "none" | "bearer" | "cookies" | "basic" | "headers", authUsername: string | null, ingestUrls: IngestUrls | null, previewUrl: string, runtime: InputRuntimeState, };
+
+export type InputRuntimeState = { connected: boolean, forwardingState: InputForwardState | null, protocol: string | null, remoteAddr: string | null, video: VideoDescriptor | null, audio: AudioDescriptor | null, };
+
+export type VideoDescriptor = { codec: string, width: number, height: number, };
+
+export type AudioDescriptor = { codec: string, sampleRate: number, channels: number, };
+
+export type IngestUrls = { rtmp: string, srt: string, 
+/**
+ * HLS push (`-f hls -method PUT|POST`): the playlist URL; the segments
+ * go next to it.
+ */
+hls: string, };
+
+export type PipelineInputRole = "primary" | "backup";
+
+export type PipelineInputSourceKind = "keyed" | "hlsPull";
+
+export type VariantRule = "highestBandwidth" | "lowestBandwidth";
+
+export type InputForwardState = "standby" | "awaitingKeyframe" | "active";
+
+export type PipelineGraph = { pipelineId: string, nodes: Array<GraphNode>, edges: Array<GraphEdge>, };
+
+export type GraphNode = { id: string, 
+/**
+ * `ingest`, `demux`, `ring_buffer`, a stage's type, `packetizer`,
+ * `egress`, `recirculation_input`, `recording` or `hls`.
+ */
+type: string, label: string, active: boolean, 
+/**
+ * On transcoder stage nodes: the stage (`<kind>` within the pipeline).
+ */
+stageKey: string | null, 
+/**
+ * On `egress` nodes: the output the node sends for.
+ */
+outputId: string | null, 
+/**
+ * The `stageKey` of the node's row in the engine telemetry's `stages`,
+ * where its counters are; `null` for nodes counted elsewhere (ingest
+ * and demux in `ingests`, the ring in `sourceRings`, egress in
+ * `egresses`).
+ */
+metricsStage: string | null, };
+
+export type GraphEdge = { from: string, to: string, label: string, };
 
 export type Convergence = "converged" | "starting" | "waitingForIngest" | "retrying" | "retriesExhausted" | "stopping";
 
@@ -110,3 +181,21 @@ export type FlowDiagnosis = { center: ServiceCenter, utilization: number, queue:
 deadlineSlackMs: number | null, delayMs: number, errors: number, amplification: number, status: FlowStatus, };
 
 export type FlowStatus = "healthy" | "saturated" | "overloaded";
+
+export type FleetSample = { 
+/**
+ * Unix epoch milliseconds.
+ */
+atMs: number, 
+/**
+ * 100 less the capacity snapshot's projected utilization, floored at 0.
+ */
+headroomPercent: number, 
+/**
+ * Wanted outputs delivering, as a percentage; `null` when none is wanted.
+ */
+deliveringPercent: number | null, degraded: DegradedByLayer, };
+
+export type DegradedByLayer = { ingest: number, feed: number, shard: number, destination: number, };
+
+export type FleetHistoryWindow = { samples: Array<FleetSample>, completeFromMs: number, intervalMs: number, };

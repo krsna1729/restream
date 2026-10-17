@@ -30,6 +30,7 @@ It does not expose a Prometheus text endpoint, proxy Grafana, or poll a sidecar.
 | `POST /api/v1/pipelines/:id/diagnostics/run` | Session | Protocol-aware batch diagnostic report |
 | `GET /api/v1/overview` | Session | Engine-wide operator summary: pipeline counts, alert rollup, SRT listener |
 | `GET /api/v1/alerts` | Session | Aggregate alerts across all pipelines with `firstSeen`/`lastSeen` tracking |
+| `GET /api/v1/fleet/history` | Session | Fleet headroom, delivering share and degraded outputs by layer, sampled every 5 s and kept 24 h; `?since=` |
 | `GET /api/v1/events` | Session | Lifecycle event log (ingest, stage, egress transitions) |
 | `GET /api/v1/logs` | Session | Process log query: level, module, pipeline, time range, event class filters |
 | `GET /api/v1/logs/stream` | Session | SSE live tail with Last-Event-ID resumption and 20 s heartbeat |

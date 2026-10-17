@@ -347,16 +347,9 @@ async fn input_json(state: &AppState, input: &PipelineInput, host: &str) -> serd
                 "quality": null,
             })
         });
-    let ingest_urls = match input.source_kind {
-        PipelineInputSourceKind::Keyed => serde_json::json!({
-            "rtmp": format!("rtmp://{host}:{}/live/{}", state.ports.rtmp, input.stream_key),
-            "srt": format!("srt://{host}:{}?streamid=publish:{}", state.ports.srt, input.stream_key),
-            // HLS push (`-f hls -method PUT|POST`): the playlist URL; the
-            // segments go next to it.
-            "hls": format!("http://{host}:{}/ingest/hls/{}/index.m3u8", state.ports.http, input.stream_key),
-        }),
-        // A pull input accepts no pushes, so it has no ingest URLs.
-        PipelineInputSourceKind::HlsPull => serde_json::Value::Null,
+    let endpoints = crate::application::runtime_state::IngestEndpoints {
+        host: host.to_string(),
+        ports: state.ports.server_ports(),
     };
     serde_json::json!({
         "id": input.id,
@@ -373,8 +366,8 @@ async fn input_json(state: &AppState, input: &PipelineInput, host: &str) -> serd
         // safe to echo, but no token, password or header value ever is.
         "authKind": input.source_auth.kind_str(),
         "authUsername": input.source_auth.username(),
-        "ingestUrls": ingest_urls,
-        "previewUrl": format!("/hls/inputs/{}/master.m3u8", input.id),
+        "ingestUrls": endpoints.urls(input),
+        "previewUrl": crate::application::runtime_state::inputs::input_preview_url(&input.id),
         "runtime": runtime,
     })
 }

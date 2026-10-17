@@ -158,6 +158,11 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
   await api.getLogs({ scope: "restream", level: "warn" }, 50);
   await api.listMediaFiles();
   await api.getAggregateAlerts();
+  await api.getFleetHistory({ since: new Date("2026-10-17T12:00:00Z") });
+  await api.getFleetHistory({
+    since: new Date("2026-10-17T12:00:00Z"),
+    until: new Date("2026-10-17T13:00:00Z"),
+  });
   await api.getLifecycleEvents({ pipelineId: "pipe /1", limit: 40 });
   await api.getEngineTelemetry();
   await api.getStageTelemetry("pipe /1:video:720p");
@@ -190,6 +195,11 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
       ["GET", "/api/v1/logs?limit=50&level=warn&scope=restream"],
       ["GET", "/api/v1/media"],
       ["GET", "/api/v1/alerts"],
+      ["GET", "/api/v1/fleet/history?since=2026-10-17T12%3A00%3A00.000Z"],
+      [
+        "GET",
+        "/api/v1/fleet/history?since=2026-10-17T12%3A00%3A00.000Z&until=2026-10-17T13%3A00%3A00.000Z",
+      ],
       ["GET", "/api/v1/events?pipeline_id=pipe+%2F1&limit=40"],
       ["GET", "/api/v1/engine/telemetry"],
       ["GET", "/api/v1/stages/pipe%20%2F1%3Avideo%3A720p/telemetry"],

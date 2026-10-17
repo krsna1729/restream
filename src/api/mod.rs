@@ -16,6 +16,7 @@ pub mod alerts;
 pub mod auth;
 pub mod error;
 pub mod file_ingest;
+pub mod fleet_history;
 pub mod health;
 pub mod hls;
 pub mod hls_ingest;

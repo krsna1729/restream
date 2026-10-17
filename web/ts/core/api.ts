@@ -32,7 +32,6 @@ import type {
   TranscodeProfiles,
   RateLimitState,
   YoutubeMonitoringStatus,
-  GraphData,
   ChangeRequest,
   ChangePlan,
   ChangeOperation,
@@ -43,6 +42,7 @@ import type {
   LogFilters,
   LogPage,
 } from "./api-types.js";
+import type { FleetHistoryWindow } from "./generated/runtime-state.js";
 
 let activeMutationRequestCount = 0;
 const DEFAULT_ENGINE_SBOM_ENDPOINT = "/api/v1/engine/sbom";
@@ -186,6 +186,20 @@ async function getAggregateAlerts(
     options.since
       ? `/api/v1/alerts?since=${encodeURIComponent(options.since.toISOString())}`
       : "/api/v1/alerts",
+  );
+}
+
+/** The fleet's sampled signals (Q-064) taken from `since` through `until`
+ * (each optional: every kept one, up to now), oldest first. */
+async function getFleetHistory(
+  options: { since?: Date; until?: Date } = {},
+): Promise<FleetHistoryWindow | null> {
+  const query = new URLSearchParams();
+  if (options.since) query.set("since", options.since.toISOString());
+  if (options.until) query.set("until", options.until.toISOString());
+  const search = query.toString();
+  return apiRequest<FleetHistoryWindow>(
+    search ? `/api/v1/fleet/history?${search}` : "/api/v1/fleet/history",
   );
 }
 
@@ -684,14 +698,6 @@ async function resetRateLimitState(body: {
   );
 }
 
-async function getProcessingGraph(
-  pipelineId: string,
-): Promise<GraphData | null> {
-  return apiRequest<GraphData>(
-    `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/graph`,
-  );
-}
-
 /** What YouTube's watch page says about a stream, fetched by the engine. */
 async function getYoutubeMonitoringStatus(
   url: string,
@@ -754,6 +760,7 @@ export {
   runPipelineDiagnostics,
   buildLogsStreamUrl,
   createPipeline,
+  getFleetHistory,
   getPipelineInputs,
   createPipelineInput,
   updatePipelineInput,
@@ -783,7 +790,6 @@ export {
   dismissPasswordChangePrompt,
   getRateLimitState,
   resetRateLimitState,
-  getProcessingGraph,
   getYoutubeMonitoringStatus,
   planChange,
   createOperation,

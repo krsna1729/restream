@@ -8,7 +8,10 @@ const ACTIVE: u8 = 2;
 const STATE_MASK: usize = 0b11;
 const IN_FLIGHT_ONE: usize = 1 << 2;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Serialized as [`InputForwardState::as_str`] names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
 pub enum InputForwardState {
     Standby,
     AwaitingKeyframe,

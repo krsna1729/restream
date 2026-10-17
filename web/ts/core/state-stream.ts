@@ -5,7 +5,9 @@
 
 import { buildRuntimeStateStreamUrl } from "./api.js";
 import type {
+  InputState,
   OutputState,
+  PipelineGraph,
   PipelineState,
   RuntimeState,
   StateDelta,
@@ -13,17 +15,23 @@ import type {
 
 export type { RuntimeState, StateDelta };
 
-function upsertById<T extends { id: string }>(
+/** `current` with `removed` keys gone and `upserts` in place, by key. */
+function upsertBy<T>(
   current: T[],
   upserts: T[],
   removed: string[],
+  key: (entity: T) => string,
 ): T[] {
   if (upserts.length === 0 && removed.length === 0) return current;
-  const byId = new Map(current.map((entity) => [entity.id, entity]));
-  for (const id of removed) byId.delete(id);
-  for (const entity of upserts) byId.set(entity.id, entity);
-  return [...byId.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const byKey = new Map(current.map((entity) => [key(entity), entity]));
+  for (const id of removed) byKey.delete(id);
+  for (const entity of upserts) byKey.set(key(entity), entity);
+  return [...byKey.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([, entity]) => entity);
 }
+
+const byId = (entity: { id: string }) => entity.id;
 
 /**
  * The state after `delta`, or `null` when `delta` does not directly follow
@@ -40,15 +48,19 @@ export function applyStateDelta(
   return {
     epoch: state.epoch,
     revision: delta.revision,
-    pipelines: upsertById<PipelineState>(
+    pipelines: upsertBy<PipelineState>(
       state.pipelines,
       delta.pipelines,
       delta.removedPipelines,
+      byId,
     ),
-    outputs: upsertById<OutputState>(
-      state.outputs,
-      delta.outputs,
-      delta.removedOutputs,
+    outputs: upsertBy<OutputState>(state.outputs, delta.outputs, delta.removedOutputs, byId),
+    inputs: upsertBy<InputState>(state.inputs, delta.inputs, delta.removedInputs, byId),
+    graphs: upsertBy<PipelineGraph>(
+      state.graphs,
+      delta.graphs,
+      delta.removedGraphs,
+      (graph) => graph.pipelineId,
     ),
   };
 }

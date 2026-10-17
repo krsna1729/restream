@@ -1,6 +1,9 @@
 // The fleet-wide signals the live store samples on its 2 s clock and keeps
-// for `WINDOW_MS` (the engine keeps no history): headroom, delivery, and the
-// diagnosed outputs by layer. Per-pipeline signals stay in Monitor.
+// for `WINDOW_MS` for Fleet's History panel: headroom, delivery, and the
+// diagnosed outputs by layer. The engine samples the same signals the same
+// way into its own 24 h history (`application/fleet_history.rs`,
+// `/fleet/history`), which Incidents reads. Per-pipeline signals stay in
+// Monitor.
 
 import type {
   CapacitySnapshot,

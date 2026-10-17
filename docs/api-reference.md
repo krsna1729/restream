@@ -953,6 +953,26 @@ costs at most one rebuild per 500 ms):
   Output alerts and the agent context (`desiredVsActual`) read the same
   diagnosis.
 
+- `inputs`: every pipeline input. The stored fields are those of
+  `GET /api/v1/pipelines/{id}/inputs` (`id`, `pipelineId`, `label`,
+  `streamKey`, `role`, `enabled`, `selected`, `kind`, `sourceUrl`,
+  `variantRule`, `authKind`, `authUsername`, `ingestUrls`, `previewUrl`;
+  credentials stay write-only), plus `position` (the input's place in that
+  list: the primary first, then backups by age). `runtime` holds the
+  session's state only: `connected`, `forwardingState` (`standby`,
+  `awaitingKeyframe`, `active`), `protocol`, `remoteAddr`, `video` (`codec`,
+  `width`, `height`) and `audio` (`codec`, `sampleRate`, `channels`).
+  Uptime, bytes and transport quality advance on every read, so they are
+  not state: `GET /api/v1/engine/telemetry` carries them per session in
+  `inputs` (`inputId`, `uptimeSecs`, `bytesReceived`, `quality`).
+- `graphs`: one processing graph per pipeline, the structure of
+  `GET /api/v1/pipelines/{id}/graph` without its `details` and `metrics`:
+  nodes (`id`, `type`, `label`, `active`, `stageKey`, `outputId`,
+  `metricsStage`) and edges (`from`, `to`, `label`). `metricsStage` names
+  the node's row in the telemetry's `stages`; ingest and demux counters are
+  in its `ingests`, the source ring's fill and reader lag in
+  `memoryAccounting.sourceRings`, an egress node's in `egresses`.
+
 The revision rises by 1 for each change in the projection. It restarts at 0
 when the process restarts.
 
@@ -965,8 +985,9 @@ matches.
 - `event: snapshot`: a whole state, as returned by `GET /api/v1/state`.
 - `event: delta`: what changed since the previous revision (it carries
   `epoch` too), with
-  `pipelines` and `outputs` (whole entities to insert or replace) and
-  `removedPipelines` and `removedOutputs` (ids).
+  `pipelines`, `outputs`, `inputs` and `graphs` (whole entities to insert
+  or replace) and `removedPipelines`, `removedOutputs`, `removedInputs` and
+  `removedGraphs` (ids; a graph's id is its pipeline id).
 - `event: heartbeat` (data `{}`): every 20 seconds. A steady system sends no
   deltas; the dashboard client treats a connection that sends no event for
   50 seconds (two and a half heartbeats) as dead and reconnects with `since`.
@@ -983,13 +1004,50 @@ The projection is rebuilt only while a stream client is connected: every
 reconcile interval, and soon after an engine lifecycle event or a successful
 mutating request, at most once per interval. An event storm (a destination
 outage) therefore costs at most one projection per interval. With no client
-connected, nothing is rebuilt; `GET /api/v1/state` and a new stream
-connection rebuild on demand, reusing a projection younger than 500 ms when
-nothing was marked changed since. Rebuilds run one at a time.
+connected, the projector rebuilds nothing; `GET /api/v1/state`, a new
+stream connection and the fleet-history sampler (every 5 s, see
+`GET /api/v1/fleet/history`) rebuild on demand, reusing a projection
+younger than 500 ms when nothing was marked changed since. Rebuilds run one
+at a time. The resource map (`GET /api/v1/engine/resource-map`) is
+process measurement, not state, and is not projected.
 
 A delivering output that stops making progress reports `flow: stalled` and
 stays `convergence: converged`: the stall is a flow problem, not a
 mismatch between desired and actual.
+
+### `GET /api/v1/fleet/history`
+
+The fleet's signals, sampled by the server every 5 s whether or not a client
+watches, and kept for 24 hours (at most 17 280 samples; the oldest goes
+first). `?since=<RFC 3339>` returns the samples taken at or after it and
+`?until=<RFC 3339>` those taken at or before it (both inclusive, each
+optional); a malformed `since` or `until` is `400` (after authentication).
+The server's clock stepping back does not reorder the history: a sample is
+never stamped earlier than the one before it.
+
+```json
+{
+  "samples": [
+    {
+      "atMs": 1792152000000,
+      "headroomPercent": 74.5,
+      "deliveringPercent": 50.0,
+      "degraded": { "ingest": 1, "feed": 0, "shard": 0, "destination": 0 }
+    }
+  ],
+  "completeFromMs": 1792151000000,
+  "intervalMs": 5000
+}
+```
+
+- `headroomPercent`: 100 less the capacity snapshot's projected
+  utilization, floored at 0.
+- `deliveringPercent`: wanted outputs that are converged and flowing;
+  `null` when none is wanted.
+- `degraded`: wanted outputs with a diagnosis, by `diagnosis.layer`.
+- `completeFromMs`: the history is complete only after this instant (the
+  server's start, or the latest dropped sample): a window starting at or
+  before it may be missing samples.
 
 ## Health and Status
 

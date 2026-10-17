@@ -111,12 +111,13 @@ impl PipelineService {
 
     /// Return the configured ingest host, or the default.
     pub async fn get_ingest_host(&self) -> String {
-        self.store
-            .get_ingest_host()
-            .await
-            .ok()
-            .flatten()
-            .filter(|host| !host.is_empty())
-            .unwrap_or_else(|| "localhost".to_string())
+        ingest_host_or_default(self.store.get_ingest_host().await.ok().flatten())
     }
+}
+
+/// The stored ingest host, or `localhost` when none (or an empty one) is set.
+pub fn ingest_host_or_default(stored: Option<String>) -> String {
+    stored
+        .filter(|host| !host.is_empty())
+        .unwrap_or_else(|| "localhost".to_string())
 }

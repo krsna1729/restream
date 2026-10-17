@@ -45,6 +45,15 @@ async fn stage_pipe_metrics_for(engine: &MediaEngine, key: &StageKey) -> Option<
 
 pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value {
     let generated_at = chrono::Utc::now().to_rfc3339();
+    // Read and released before the other maps: no new lock nesting.
+    let input_arr: Vec<serde_json::Value> = engine
+        .ingests
+        .sessions
+        .read()
+        .await
+        .values()
+        .map(|session| api_view_models::input_telemetry_json(session))
+        .collect();
     let ingests = engine.ingests.active.read().await;
     let egresses = engine.egresses.active.read().await;
     let runtimes = engine.stages.runtimes.read().await;
@@ -132,6 +141,7 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
     api_view_models::engine_telemetry_json(
         generated_at,
         ingest_arr,
+        input_arr,
         stage_arr,
         egress_arr,
         runtimes.len(),

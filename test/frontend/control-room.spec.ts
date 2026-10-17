@@ -245,6 +245,133 @@ test("operate: find a pipeline, start and stop an output, promote an input", asy
   }
 });
 
+test("operate: an input change shows from the state stream without a poll", async ({
+  page,
+}) => {
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  const stamp = Date.now();
+  const created = await page.request.post("/api/v1/pipelines", {
+    data: { name: `cr-pushed-${stamp}`, streamKey: `crpushed_${stamp}` },
+  });
+  expect(created.ok()).toBe(true);
+  const pipelineId: string = (await created.json()).pipeline.id;
+
+  // The page's own reads of a pipeline's inputs or graph: the deck and the
+  // media path come from the state stream, so there must be none.
+  const polls: string[] = [];
+  page.on("request", (request) => {
+    if (
+      request.method() === "GET" &&
+      /\/api\/v1\/pipelines\/[^/]+\/(inputs|graph)(\?|$)/.test(new URL(request.url()).pathname)
+    ) {
+      polls.push(request.url());
+    }
+  });
+  try {
+    await page.goto(`/?w=operate&p=${pipelineId}`);
+    const deck = page.getByRole("region", { name: /Source deck/ });
+    await expect(deck).toContainText("0 / 1 connected");
+
+    // Changed through the API, not the page: only the stream can tell it.
+    const backup = await page.request.post(`/api/v1/pipelines/${pipelineId}/inputs`, {
+      data: { label: "Backup" },
+    });
+    expect(backup.ok()).toBe(true);
+    const backupId: string = (await backup.json()).input.id;
+    const item = deck.getByRole("listitem", { name: "Input Backup" });
+    await expect(item).toContainText("offline");
+    expect(
+      (
+        await page.request.patch(`/api/v1/pipelines/${pipelineId}/inputs/${backupId}`, {
+          data: { enabled: false },
+        })
+      ).ok(),
+    ).toBe(true);
+    await expect(item).toContainText("disabled");
+    await expect(deck).toContainText("0 / 2 connected");
+    expect(polls).toEqual([]);
+  } finally {
+    await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
+  }
+});
+
+test("incidents: the correlation reaches back to an incident older than the page", async ({
+  page,
+}) => {
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  const stamp = Date.now();
+  const name = `cr-older-${stamp}`;
+  const created = await page.request.post("/api/v1/pipelines", {
+    data: { name, streamKey: `crolder_${stamp}` },
+  });
+  expect(created.ok()).toBe(true);
+  const pipelineId: string = (await created.json()).pipeline.id;
+  try {
+    const output = await page.request.post(`/api/v1/pipelines/${pipelineId}/outputs`, {
+      data: {
+        name: "cr-out",
+        url: "rtmp://127.0.0.1:9/live/cr",
+        config: { video: { mode: "source" }, audio: { mode: "all" } },
+      },
+    });
+    expect(output.ok()).toBe(true);
+    const outputId: string = (await output.json()).output.id;
+    expect(
+      (await page.request.post(`/api/v1/pipelines/${pipelineId}/outputs/${outputId}/start`)).ok(),
+    ).toBe(true);
+
+    // The incident opens before any page is there to see it.
+    let firstSeen = "";
+    await expect
+      .poll(async () => {
+        const alerts = await (await page.request.get("/api/v1/alerts")).json();
+        const alert = alerts.alerts.find(
+          (candidate: { pipelineId?: string }) => candidate.pipelineId === pipelineId,
+        );
+        firstSeen = alert?.firstSeen ?? "";
+        return firstSeen;
+      })
+      .not.toBe("");
+    // The engine has sampled the degraded fleet since then.
+    await expect
+      .poll(
+        async () => {
+          const history = await (
+            await page.request.get(
+              `/api/v1/fleet/history?since=${encodeURIComponent(firstSeen)}`,
+            )
+          ).json();
+          return history.samples.some(
+            (sample: { degraded: { ingest: number } }) => sample.degraded.ingest > 0,
+          );
+        },
+        { timeout: 20_000 },
+      )
+      .toBe(true);
+
+    await page.goto("/?w=incidents");
+    const incident = page
+      .getByRole("region", { name: /^Open/ })
+      .getByRole("button")
+      .filter({ hasText: `pipeline ${name}` })
+      .first();
+    await incident.click();
+    // The chart spans the open: its cursor is drawn although the page
+    // opened after it.
+    const correlation = page.getByLabel("Correlation");
+    await expect(correlation.locator('[data-series="incident"]').first()).toBeAttached();
+    await expect(correlation.getByRole("img", { name: "Degraded outputs over time" })).toBeVisible();
+  } finally {
+    await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
+  }
+});
+
 test("inspect and monitor: one pipeline's anatomy and signals on one clock", async ({
   page,
 }) => {

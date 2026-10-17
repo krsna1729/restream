@@ -142,6 +142,7 @@ pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
     "/api/v1/measure",
     "/api/v1/state",
     "/api/v1/state/stream",
+    "/api/v1/fleet/history",
     "/api/v1/agent/capabilities",
     "/api/v1/agent/context",
     "/api/v1/agent/investigations",
@@ -388,6 +389,10 @@ fn create_app_router() -> Router<Arc<AppState>> {
         .route(
             "/api/v1/state/stream",
             get(super::runtime_state::v1_state_stream_handler),
+        )
+        .route(
+            "/api/v1/fleet/history",
+            get(super::fleet_history::v1_fleet_history_handler),
         )
         .route(
             "/api/v1/agent/capabilities",

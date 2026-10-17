@@ -7,6 +7,7 @@ import type {
   ConfigOutput,
   OutputConfig,
   PipelineInputKind,
+  PublisherQuality,
   SrtPipelineIngestConfig,
   VariantRule,
   AppLogRow,
@@ -132,6 +133,31 @@ export interface TelemetryIngest {
   metrics: TelemetryMetrics;
 }
 
+/** One input session's counters; its state is the runtime state's input. */
+export interface TelemetryInput {
+  inputId: string;
+  pipelineId: string;
+  uptimeSecs: number;
+  bytesReceived: number;
+  quality: PublisherQuality;
+}
+
+export interface TelemetryRingReader {
+  name: string;
+  lagSlots?: number;
+  overflowCount?: number;
+  [key: string]: unknown;
+}
+
+/** A pipeline's source ring: how full it is and how far its readers lag. */
+export interface TelemetrySourceRing {
+  pipelineId: string;
+  fill: number;
+  capacity: number;
+  payloadStats: TelemetryMetrics;
+  readers: TelemetryRingReader[];
+}
+
 export interface TelemetryStage {
   stageKey?: string;
   pipelineId?: string;
@@ -172,10 +198,11 @@ export interface TelemetryEgress {
 export interface EngineTelemetrySnapshot {
   generatedAt: string;
   ingests: TelemetryIngest[];
+  inputs: TelemetryInput[];
   stages: TelemetryStage[];
   egresses: TelemetryEgress[];
   activeTranscoderBuffers: number;
-  memoryAccounting?: Record<string, unknown>;
+  memoryAccounting?: { sourceRings?: TelemetrySourceRing[]; [key: string]: unknown };
 }
 
 export interface StageTelemetrySnapshot extends TelemetryStage {
@@ -415,7 +442,10 @@ export interface YoutubeMonitoringStatus {
   title: string | null;
 }
 
-/** One node of `GET /api/v1/pipelines/{id}/graph` (runtime topology). */
+/** One node of a pipeline's processing graph: the runtime state's node
+ * (`PipelineGraph`) with the telemetry sample's counters attached
+ * (`pipelineGraph` in `control-room/state-views.ts`), or one node of
+ * `GET /api/v1/pipelines/{id}/graph`. */
 export interface GraphNode {
   id: string;
   type: string;
@@ -425,17 +455,8 @@ export interface GraphNode {
   /** On `egress` nodes: the output the node sends for. */
   outputId?: string;
   details?: Record<string, unknown> | null;
-  metrics?: {
-    packetsIn: number;
-    packetsOut: number;
-    bytesIn: number;
-    bytesOut: number;
-    processingUs: number;
-    avgUsPerPacket: number;
-    packetsPerSec: number;
-    uptimeSec?: number;
-    uptimeSecs?: number;
-  } | null;
+  /** The node's counters (`packetsPerSec`, `avgUsPerPacket`, ...). */
+  metrics?: TelemetryMetrics | null;
 }
 
 export interface GraphEdge {

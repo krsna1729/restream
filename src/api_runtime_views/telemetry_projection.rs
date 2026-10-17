@@ -4,7 +4,9 @@ use crate::domain::stage::StageKey;
 use crate::media::engine::ActiveIngest;
 use crate::media::ring_buffer::RingBuffer;
 
-pub(super) use super::common::{egress_runtime_json, ring_payload_stats_json};
+pub(super) use super::common::{
+    egress_runtime_json, reader_snapshot_json, ring_payload_stats_json,
+};
 
 pub(super) fn ingest_telemetry_json(pipeline_id: &str, ingest: &ActiveIngest) -> serde_json::Value {
     serde_json::json!({
@@ -13,6 +15,18 @@ pub(super) fn ingest_telemetry_json(pipeline_id: &str, ingest: &ActiveIngest) ->
         "uptimeSecs": ingest.start_time.elapsed().as_secs_f64(),
         "bytesReceived": ingest.bytes_received.load(Ordering::Relaxed),
         "metrics": ingest.metrics.snapshot(),
+    })
+}
+
+/// One input session's counters: the runtime state carries the session's
+/// state, these advance on every read.
+pub(super) fn input_telemetry_json(session: &ActiveIngest) -> serde_json::Value {
+    serde_json::json!({
+        "inputId": session.input_id,
+        "pipelineId": session.pipeline_id,
+        "uptimeSecs": session.start_time.elapsed().as_secs_f64(),
+        "bytesReceived": session.bytes_received.load(Ordering::Relaxed),
+        "quality": crate::sync::read(&session.metadata).quality,
     })
 }
 
@@ -45,13 +59,24 @@ pub(super) fn stage_telemetry_row_json(
     value
 }
 
+/// A pipeline's source ring: what it holds, how full it is, and how far
+/// each reader is behind (the processing graph's ring node details).
 pub(super) fn source_ring_telemetry_json(
     pipeline_id: &str,
     ring: &RingBuffer,
 ) -> serde_json::Value {
+    let (fill, capacity) = ring.fill_and_capacity();
+    let readers: Vec<serde_json::Value> = ring
+        .reader_snapshots()
+        .iter()
+        .map(reader_snapshot_json)
+        .collect();
     serde_json::json!({
         "pipelineId": pipeline_id,
+        "fill": fill,
+        "capacity": capacity,
         "payloadStats": ring_payload_stats_json(ring),
+        "readers": readers,
     })
 }
 
@@ -99,6 +124,7 @@ pub(super) fn memory_accounting_json(
 pub(super) fn engine_telemetry_json(
     generated_at: String,
     ingests: Vec<serde_json::Value>,
+    inputs: Vec<serde_json::Value>,
     stages: Vec<serde_json::Value>,
     egresses: Vec<serde_json::Value>,
     active_transcoder_buffers: usize,
@@ -107,6 +133,7 @@ pub(super) fn engine_telemetry_json(
     serde_json::json!({
         "generatedAt": generated_at,
         "ingests": ingests,
+        "inputs": inputs,
         "stages": stages,
         "egresses": egresses,
         "activeTranscoderBuffers": active_transcoder_buffers,
@@ -214,6 +241,7 @@ mod tests {
         let value = engine_telemetry_json(
             "2026-06-30T12:00:00Z".to_string(),
             vec![serde_json::json!({"pipelineId": "pipeline-a"})],
+            vec![serde_json::json!({"inputId": "input-a"})],
             vec![serde_json::json!({"stageKey": "pipeline-a:source"})],
             vec![serde_json::json!({"outputId": "egress-a"})],
             2,

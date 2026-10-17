@@ -3,17 +3,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   deleteOutput,
   getConfig,
-  getPipelineInputs,
-  getProcessingGraph,
   getYoutubeMonitoringStatus,
   promotePipelineInput,
   startOut,
   stopOut,
 } from "../core/api.js";
 import { withBasePath } from "../core/base-path.js";
-import type { GraphData } from "../core/api-types.js";
 import type { OutputState } from "../core/generated/runtime-state.js";
-import type { ConfigData, PipelineInput, PipelineInputsResponse } from "../types.js";
+import type { ConfigData, PipelineInput } from "../types.js";
 import { ConfirmDelete } from "./confirm.js";
 import { describeCause } from "./fleet-model.js";
 import { formatBps } from "./format.js";
@@ -33,6 +30,7 @@ import { OutputForm } from "./output-form.js";
 import { PipelineScope } from "./pipeline-scope.js";
 import { Freshness, usePolled } from "./polled.js";
 import { Preview } from "./preview.js";
+import { pipelineGraph, pipelineInputs } from "./state-views.js";
 import type { LiveSnapshot } from "./store.js";
 
 /** The live pipeline cockpit: sources, the media path and destinations. */
@@ -51,13 +49,17 @@ export function Operate(props: { live: LiveSnapshot; pipelineId: string | null }
 
 function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
   const { pipelineId } = props;
-  const outputs = props.live.state?.outputs ?? [];
-  const inputs = usePolled<PipelineInputsResponse>(
-    ["pipeline-inputs", pipelineId],
-    () => getPipelineInputs(pipelineId),
+  const { state, telemetry } = props.live;
+  const outputs = state?.outputs ?? [];
+  // Pushed state with the store's sampled counters: a change shows as soon
+  // as the state stream carries it.
+  const inputs = useMemo(
+    () => pipelineInputs(state, telemetry, pipelineId),
+    [state, telemetry, pipelineId],
   );
-  const graph = usePolled<GraphData>(["processing-graph", pipelineId], () =>
-    getProcessingGraph(pipelineId),
+  const graph = useMemo(
+    () => pipelineGraph(state, telemetry, pipelineId),
+    [state, telemetry, pipelineId],
   );
   // Stored settings (URLs, output configs, profiles) are not in the state
   // stream: read once, and again after every edit.
@@ -65,12 +67,12 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
   const reloadConfig = useCallback(() => void getConfig().then(setConfig), []);
   useEffect(reloadConfig, [reloadConfig]);
   const columns = useMemo(
-    () => (graph.value ? buildMediaGraph(graph.value, outputs) : null),
-    [graph.value, outputs],
+    () => (graph ? buildMediaGraph(graph, outputs) : null),
+    [graph, outputs],
   );
   const rows = useMemo(
-    () => buildDestinationRows(pipelineId, outputs, graph.value),
-    [pipelineId, outputs, graph.value],
+    () => buildDestinationRows(pipelineId, outputs, graph),
+    [pipelineId, outputs, graph],
   );
   const stored = config?.pipelines.find((pipeline) => pipeline.id === pipelineId) ?? null;
   return (
@@ -87,16 +89,15 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
       <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
         <SourceDeck
           pipelineId={pipelineId}
-          inputs={inputs.value}
-          atMs={inputs.atMs}
-          onChanged={inputs.refresh}
+          inputs={inputs}
+          atMs={props.live.telemetryAtMs}
         />
         <MediaGraph
           pipelineId={pipelineId}
           columns={columns}
-          atMs={graph.atMs}
+          atMs={props.live.telemetryAtMs}
           outputs={outputs}
-          egresses={props.live.telemetry?.egresses ?? null}
+          egresses={telemetry?.egresses ?? null}
           shards={props.live.metrics?.egressShards ?? null}
           shardsAtMs={props.live.metricsAtMs}
         />
@@ -115,7 +116,7 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
 
 function inputStatus(input: PipelineInput): { label: string; badge: string } {
   if (input.selected) {
-    if (input.runtime.forwardingState === "awaiting_keyframe") {
+    if (input.runtime.forwardingState === "awaitingKeyframe") {
       return { label: "awaiting keyframe", badge: "badge-info" };
     }
     return input.runtime.connected
@@ -130,12 +131,12 @@ function inputStatus(input: PipelineInput): { label: string; badge: string } {
 
 function SourceDeck(props: {
   pipelineId: string;
-  inputs: PipelineInputsResponse | null;
+  inputs: readonly PipelineInput[] | null;
+  /** When the counters (RTT) were sampled. */
   atMs: number | null;
-  onChanged: () => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
-  const inputs = props.inputs?.inputs ?? null;
+  const { inputs } = props;
   const connected = inputs?.filter((input) => input.runtime.connected).length;
   return (
     <section className="card bg-base-200" aria-labelledby="operate-sources">
@@ -197,7 +198,6 @@ function SourceDeck(props: {
                           await promotePipelineInput(props.pipelineId, input.id);
                         } finally {
                           setBusy(null);
-                          props.onChanged();
                         }
                       }}
                     >
@@ -230,22 +230,14 @@ function SourceDeck(props: {
                       </details>
                     )
                   )}
-                  <InputActions
-                    pipelineId={props.pipelineId}
-                    input={input}
-                    onChanged={props.onChanged}
-                  />
-                  <EditInput
-                    pipelineId={props.pipelineId}
-                    input={input}
-                    onChanged={props.onChanged}
-                  />
+                  <InputActions pipelineId={props.pipelineId} input={input} />
+                  <EditInput pipelineId={props.pipelineId} input={input} />
                 </li>
               );
             })}
           </ul>
         )}
-        <AddInput pipelineId={props.pipelineId} onChanged={props.onChanged} />
+        <AddInput pipelineId={props.pipelineId} />
       </div>
     </section>
   );

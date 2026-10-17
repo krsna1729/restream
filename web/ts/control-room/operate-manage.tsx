@@ -140,12 +140,9 @@ function FileSwitch(props: {
 }
 
 /** Enable, disable or delete one input. The primary input and the selected
- * one can do neither (the engine refuses). */
-export function InputActions(props: {
-  pipelineId: string;
-  input: PipelineInput;
-  onChanged: () => void;
-}) {
+ * one can do neither (the engine refuses). The deck follows the change over
+ * the state stream. */
+export function InputActions(props: { pipelineId: string; input: PipelineInput }) {
   const { input } = props;
   if (input.role === "primary" || input.selected) return null;
   return (
@@ -153,21 +150,18 @@ export function InputActions(props: {
       <button
         type="button"
         className="btn btn-xs btn-ghost"
-        onClick={async () => {
-          await updatePipelineInput(props.pipelineId, input.id, { enabled: !input.enabled });
-          props.onChanged();
-        }}
+        onClick={() =>
+          void updatePipelineInput(props.pipelineId, input.id, { enabled: !input.enabled })
+        }
       >
         {input.enabled ? `Disable ${input.label}` : `Enable ${input.label}`}
       </button>
       <ConfirmDelete
         label={`Delete input ${input.label}`}
         question="Delete this input?"
-        onDelete={async () => {
-          const deleted = (await deletePipelineInput(props.pipelineId, input.id)) !== null;
-          if (deleted) props.onChanged();
-          return deleted;
-        }}
+        onDelete={async () =>
+          (await deletePipelineInput(props.pipelineId, input.id)) !== null
+        }
       />
     </div>
   );
@@ -175,11 +169,7 @@ export function InputActions(props: {
 
 /** Change one input: its label, the source it receives media from, and for a
  * pull input its rendition and credential. Open to every input. */
-export function EditInput(props: {
-  pipelineId: string;
-  input: PipelineInput;
-  onChanged: () => void;
-}) {
+export function EditInput(props: { pipelineId: string; input: PipelineInput }) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -192,11 +182,7 @@ export function EditInput(props: {
         {open ? "Close" : `Edit ${props.input.label}`}
       </button>
       {open && (
-        <InputForm
-          pipelineId={props.pipelineId}
-          stored={props.input}
-          onSaved={props.onChanged}
-        />
+        <InputForm pipelineId={props.pipelineId} stored={props.input} />
       )}
     </>
   );
@@ -204,7 +190,7 @@ export function EditInput(props: {
 
 /** A new input: one that waits for a publisher, or one that pulls a remote HLS
  * URL. Its source line shows in the deck once created. */
-export function AddInput(props: { pipelineId: string; onChanged: () => void }) {
+export function AddInput(props: { pipelineId: string }) {
   const [open, setOpen] = useState(false);
   if (!open) {
     return (
@@ -217,10 +203,7 @@ export function AddInput(props: { pipelineId: string; onChanged: () => void }) {
     <InputForm
       pipelineId={props.pipelineId}
       stored={null}
-      onSaved={() => {
-        setOpen(false);
-        props.onChanged();
-      }}
+      onSaved={() => setOpen(false)}
     />
   );
 }

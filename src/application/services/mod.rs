@@ -18,5 +18,5 @@ pub use error::{ServiceError, ServiceResult};
 pub use file_ingest_service::FileIngestService;
 pub use ingest_service::IngestService;
 pub use media_library_service::MediaLibraryService;
-pub use pipeline_service::PipelineService;
+pub use pipeline_service::{PipelineService, ingest_host_or_default};
 pub use settings_service::SettingsService;

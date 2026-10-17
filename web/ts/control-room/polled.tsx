@@ -1,12 +1,18 @@
-// Per-view polling for data the live store does not carry (one pipeline's
-// inputs, graph or resource map), read through TanStack Query and shown with
-// the age of what is on screen.
+// Per-view polling for data the live store does not carry (a resource map,
+// alerts, events, the engine's fleet history), read through TanStack Query
+// and shown with the age of what is on screen.
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
 
-import { getAggregateAlerts, getEngineHealth, getLifecycleEvents } from "../core/api.js";
+import {
+  getAggregateAlerts,
+  getEngineHealth,
+  getFleetHistory,
+  getLifecycleEvents,
+} from "../core/api.js";
 import type { AlertsSnapshot, LifecycleEventsSnapshot } from "../core/api-types.js";
+import type { FleetHistoryWindow } from "../core/generated/runtime-state.js";
 import type { HealthData } from "../types.js";
 import { formatAge } from "./format.js";
 import { SAMPLE_INTERVAL_MS, SAMPLE_STALE_AFTER_MS, useNow } from "./store.js";
@@ -14,6 +20,10 @@ import { SAMPLE_INTERVAL_MS, SAMPLE_STALE_AFTER_MS, useNow } from "./store.js";
 /** How often `/engine/health` reloads: it samples host settings and every
  * pipeline, and most of it changes rarely. */
 const HEALTH_INTERVAL_MS = 10_000;
+
+/** How often the fleet history is asked for its new samples: the engine
+ * takes one every 5 s. */
+const FLEET_HISTORY_INTERVAL_MS = 5_000;
 
 /** The lifecycle events a panel reads at most. */
 const EVENT_LIMIT = 200;
@@ -32,7 +42,8 @@ export class NoValue extends Error {}
 
 /**
  * `queryKey` names the subject; `load` runs now and every `intervalMs` while
- * the panel is mounted, and `refresh` loads now. A load that reads nothing
+ * the panel is mounted (until `settledAfterMs`, when given: a load after
+ * then is the last), and `refresh` loads now. A load that reads nothing
  * (`null`) is not a value: the last one stays, and `atMs` shows its age. Two
  * panels naming the same subject share one query.
  */
@@ -40,7 +51,10 @@ export function usePolled<T>(
   queryKey: QueryKey,
   load: () => Promise<T | null>,
   intervalMs: number = SAMPLE_INTERVAL_MS,
+  settledAfterMs: number | null = null,
 ): Polled<T> {
+  const settled = (dataUpdatedAt: number) =>
+    settledAfterMs !== null && dataUpdatedAt > settledAfterMs;
   const query = useQuery({
     queryKey,
     queryFn: async () => {
@@ -48,7 +62,10 @@ export function usePolled<T>(
       if (next === null) throw new NoValue();
       return next;
     },
-    refetchInterval: intervalMs,
+    refetchInterval: (current) =>
+      current.state.data !== undefined && settled(current.state.dataUpdatedAt)
+        ? false
+        : intervalMs,
   });
   // The query keeps its data when a load fails, so an empty read leaves the
   // last value and its age in place; a new subject starts with no data.
@@ -56,7 +73,11 @@ export function usePolled<T>(
   return {
     value,
     atMs: value === null ? null : query.dataUpdatedAt,
-    staleAfterMs: intervalMs * (SAMPLE_STALE_AFTER_MS / SAMPLE_INTERVAL_MS),
+    // A settled subject no longer changes, so its age is never stale.
+    staleAfterMs:
+      value !== null && settled(query.dataUpdatedAt)
+        ? Number.POSITIVE_INFINITY
+        : intervalMs * (SAMPLE_STALE_AFTER_MS / SAMPLE_INTERVAL_MS),
     refresh: () => void query.refetch(),
   };
 }
@@ -84,6 +105,41 @@ export function useLifecycleEvents(
 ): Polled<LifecycleEventsSnapshot> {
   return usePolled(["lifecycle-events", pipelineId, EVENT_LIMIT], () =>
     getLifecycleEvents({ pipelineId, limit: EVENT_LIMIT }),
+  );
+}
+
+/**
+ * The engine's fleet samples from `fromMs` (every kept one when it is not
+ * finite) through `toMs` (`null`: up to now). The first load reads the whole
+ * span, each later one only the samples after the last held, so an incident
+ * hours long is not re-read every few seconds; held samples the engine no
+ * longer keeps are dropped. A closed span stops loading once a load ran an
+ * interval past its end (every sample in it was taken by then).
+ */
+export function useFleetHistory(
+  fromMs: number,
+  toMs: number | null,
+): Polled<FleetHistoryWindow> {
+  const client = useQueryClient();
+  const key = ["fleet-history", fromMs, toMs];
+  return usePolled(
+    key,
+    async () => {
+      const held = client.getQueryData<FleetHistoryWindow>(key);
+      const last = held?.samples[held.samples.length - 1];
+      const sinceMs = last ? last.atMs + 1 : fromMs;
+      const next = await getFleetHistory({
+        since: Number.isFinite(sinceMs) ? new Date(sinceMs) : undefined,
+        until: toMs === null ? undefined : new Date(toMs),
+      });
+      if (next === null) return null;
+      const kept = (held?.samples ?? []).filter(
+        (sample) => sample.atMs > next.completeFromMs,
+      );
+      return { ...next, samples: [...kept, ...next.samples] };
+    },
+    FLEET_HISTORY_INTERVAL_MS,
+    toMs === null ? null : toMs + FLEET_HISTORY_INTERVAL_MS,
   );
 }
 
