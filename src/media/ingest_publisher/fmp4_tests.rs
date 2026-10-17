@@ -509,3 +509,74 @@ fn a_truncated_access_unit_is_refused() {
         Err(MediaRejection::Malformed(_))
     ));
 }
+
+/// One fragment much larger than a chunk — FFmpeg writes one `moof` + `mdat`
+/// per segment — is converted across the chunks that publish it: the first
+/// chunk's poll converts at most one budget of sample payload, not the whole
+/// fragment, and the object still yields every packet in decode order.
+#[test]
+fn a_large_fragment_is_demuxed_across_chunks_not_in_one() {
+    let avc1 = avc1(LengthSize::FourBytes);
+    let mut muxer = Fmp4SegmentMuxer::new().unwrap();
+    // 64 samples of 16 KiB: one 1 MiB fragment, 16 conversion budgets.
+    let payload = length_prefixed(&[&[0x41; 16 * 1024 - 4][..]], 4);
+    let samples: Vec<In> = (0..64)
+        .map(|index| video(&avc1, 3000, index == 0, 0, payload.clone()))
+        .collect();
+    let media = segment(&mut muxer, &samples);
+    let init = muxer.init_segment_bytes().unwrap();
+
+    let mut demux = Fmp4Demux::default();
+    demux.apply_init(&init, MAX_INIT).unwrap();
+    demux.begin_object(&Bytes::from(media.clone())).unwrap();
+    demux
+        .feed(&media[..crate::media::ingest_publisher::PUBLISH_CHUNK_BYTES])
+        .unwrap();
+    let converted = demux
+        .object
+        .as_ref()
+        .and_then(|object| object.converting.as_ref())
+        .map(|converting| converting.next)
+        .unwrap_or(samples.len());
+    assert!(
+        converted < samples.len(),
+        "the first chunk converted the whole fragment ({converted} of {} samples)",
+        samples.len()
+    );
+    assert!(
+        converted * payload.len() <= CONVERT_BUDGET_BYTES + payload.len(),
+        "one call converts at most one budget (plus the sample that crosses it): {converted} samples"
+    );
+
+    let mut out = Vec::new();
+    for piece in media[crate::media::ingest_publisher::PUBLISH_CHUNK_BYTES..]
+        .chunks(crate::media::ingest_publisher::PUBLISH_CHUNK_BYTES)
+    {
+        demux.feed(piece).unwrap();
+        demux.drain_into(&mut out);
+    }
+    demux.end_object().unwrap();
+    demux.drain_into(&mut out);
+    assert_eq!(out.len(), samples.len(), "every sample is published once");
+    assert!(out.windows(2).all(|pair| pair[0].dts <= pair[1].dts));
+}
+
+/// A segment of many tiny top-level boxes is refused at the box bound, so
+/// walking it cannot hold a shared worker for millions of iterations.
+#[test]
+fn a_segment_of_too_many_boxes_is_refused_at_the_walk_bound() {
+    let free = [0, 0, 0, 8, b'f', b'r', b'e', b'e'];
+    let at_bound: Vec<u8> = free.repeat(boxes::MAX_BOXES);
+    let over: Vec<u8> = free.repeat(boxes::MAX_BOXES + 1);
+    let mut fragments = Vec::new();
+    assert_eq!(
+        boxes::media_fragments(&at_bound, &mut fragments),
+        Err(boxes::WalkError::NoFragments),
+        "at the bound every box is walked"
+    );
+    assert_eq!(
+        boxes::media_fragments(&over, &mut fragments),
+        Err(boxes::WalkError::TooManyBoxes),
+        "one box over the bound is refused"
+    );
+}

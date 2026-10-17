@@ -6,7 +6,11 @@
 //! publishes at most one `PUBLISH_CHUNK_BYTES` chunk (the publisher yields
 //! at the end of one). A poll therefore never joins two units of work, so
 //! the work in one poll does not follow how fast the HTTP handlers feed the
-//! queue or how much of a segment is left.
+//! queue or how much of a segment is left. Within a unit, MPEG-TS demuxes
+//! only the chunk; fMP4 walks at most `MAX_BOXES` top-level boxes when an
+//! object is applied and converts at most one chunk's worth of a fragment's
+//! samples per publish, though the library still parses a fragment's `moof`
+//! (its sample table, not its payload) in the poll that first reaches it.
 //!
 //! The first media object fixes the session's container (MPEG-TS or fMP4);
 //! an object of the other container is refused. fMP4 objects are checked
@@ -463,10 +467,6 @@ fn check_fmp4(
         .map_err(|error| MediaRejection::Malformed(error.to_string()))
 }
 
-#[cfg(test)]
-#[path = "session_turn_tests.rs"]
-mod turn_tests;
-
 impl From<MediaRejection> for ObjectOutcome {
     fn from(rejection: MediaRejection) -> Self {
         match rejection {
@@ -476,3 +476,7 @@ impl From<MediaRejection> for ObjectOutcome {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "session_turn_tests.rs"]
+mod turn_tests;

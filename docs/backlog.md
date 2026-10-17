@@ -566,7 +566,8 @@ items).
   arm), with the poll wrapper extended to time the polling thread's own CPU
   (`CLOCK_THREAD_CPUTIME_ID`) beside the wall time and the session turn
   instrumented per phase.
-- **A poll is one 64 KiB chunk publish**, ~170 µs of thread CPU: demux/feed
+- **A chunk-publish poll** costs ~170 µs of thread CPU (averaged over every
+  poll, including those that only apply an object or wait, ~84 µs): demux/feed
   77 µs, ring publication 76 µs (2.8 packets per chunk; 16812 packets over
   6034 calls), preview push 2 µs, input gate 1 µs, parameter sets and
   keyframe bookkeeping 6 µs, continuity/timestamps 3 µs, and the probe's
@@ -585,9 +586,12 @@ items).
   tail: one run each on the fixed build, M=8, class `maxPollUs` 15882 → 6022
   µs and `maxCpuUs` 12443 → 8051 µs, with the per-service maxima 4.5–15.9 ms →
   2.8–6.0 ms while per-poll CPU stayed 84 µs in both arms — the tuning cannot
-  change the work, only the stall. Direction confirmed; one run each, so these
-  are a direction, not a gate. The direction is allocation and memory-system
-  behaviour, not per-unit cost.
+  change the work, only the stall. One run each, so a direction, not a gate.
+  What it does not separate is which layer stalls: glibc's own work (heap
+  trim, `munmap` of mmap-threshold chunks, arena locking) and the kernel's
+  memory management behind it (page faults on fresh pages — up to 1762 minor
+  faults in one demux call — THP compaction, memcg reclaim) both shrink
+  when glibc stops returning memory.
 - **The reported scaling does not reproduce.** Control re-runs of the
   unmodified code (executor poll CPU clock only) gave `maxPollUs` 21985 µs at
   M=4 and 23328 µs at M=8 with per-poll busy 110 → 139 µs, while the
@@ -599,15 +603,34 @@ items).
   while the poll ran (2 in the measured run, 3 in the unit test with the
   bound removed) — now yields after one object, so a poll never joins two
   units (invariant in `docs/media-pipeline.md`, gate in
-  `src/media/hls_ingest/session_turn_tests.rs`).
-- Steps: repeat each arm several times on an idle host for a p99 of per-poll
-  CPU time; then choose between allocator tuning (glibc `mallopt` at startup
-  next to the arena policy in `src/malloc_tuning.rs`, or a different
-  allocator) and leaving the tail to host qualification, and record either
-  result, negative included.
-- Gates: p99 of per-poll **CPU** time flat between M=4 and M=8 over repeated
-  runs on an otherwise idle host. A wall-clock maximum on a shared host is
-  not a gate any code change can meet.
+  `src/media/hls_ingest/session_turn_tests.rs`). Within an fMP4 unit, the
+  top-level box walk stops at 4096 boxes and a fragment's samples are
+  converted at most one 64 KiB chunk's worth per publish (gates in
+  `src/media/ingest_publisher/fmp4_tests.rs`). Still per fragment:
+  `shiguredo_mp4`'s `handle_media_segment` decodes the whole `moof` (the
+  sample table, not the payload) in the poll that first reaches it, bounded
+  only by the segment's 64 MiB; a library-side incremental `trun` parse is
+  the remaining work for fMP4.
+- Steps:
+  1. Land per-poll thread CPU in the executor metrics: beside `maxPollUs`, a
+     `maxCpuUs` and a count of polls above fixed CPU thresholds (1, 4, 16 ms)
+     per class and service, read with the `thread_cpu_ns` helper in
+     `src/media/egress/shard.rs`; the investigation's patch did this and cost
+     one `clock_gettime(CLOCK_THREAD_CPUTIME_ID)` pair per poll.
+  2. Per arm, separate allocator from kernel: per-poll user/sys split and
+     minor faults from `getrusage(RUSAGE_THREAD)` around the poll, and
+     before/after deltas of `/proc/vmstat` `compact_stall` and
+     `allocstall_*`, the cgroup's `memory.events`, and the THP settings in
+     `/sys/kernel/mm/transparent_hugepage/{enabled,defrag}`.
+  3. Repeat each arm several times on an idle host; then choose between
+     allocator tuning (glibc `mallopt` at startup next to the arena policy in
+     `src/malloc_tuning.rs`, or a different allocator), a kernel-side setting
+     (THP `defrag`), and leaving the tail to host qualification, and record
+     the result, negative included.
+- Gates: at M=8 over five runs on an otherwise idle 6-vCPU host, `hlsIngest`
+  polls above 4 ms of thread CPU stay under 1 per minute per session, and
+  the class `maxCpuUs` stays under 4 ms in every run. A wall-clock maximum
+  on a shared host is not a gate any code change can meet.
 - Status: open (Filed: 2026-10-16 by claude, from the HLS ingest isolation
   measurement; rewritten 2026-10-17 from the attribution that measurement
   asked for).

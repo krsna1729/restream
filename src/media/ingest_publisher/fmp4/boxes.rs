@@ -24,6 +24,11 @@ use std::ops::Range;
 /// cannot force unbounded demux work.
 pub const MAX_FRAGMENTS: usize = 64;
 
+/// Top-level boxes one media segment may carry. The walk runs inside a poll
+/// on a shared MEDIA executor, so a segment of tiny boxes must not be able to
+/// hold a worker for millions of iterations: past this it is refused.
+pub const MAX_BOXES: usize = 4096;
+
 /// `tfhd` flag: `base_data_offset` is present.
 const TFHD_BASE_DATA_OFFSET_PRESENT: u32 = 0x00_0001;
 
@@ -60,7 +65,9 @@ pub enum WalkError {
     },
     NoFragments,
     TooManyFragments,
-    /// A `tfhd` sets `base_data_offset`, measured from the whole segment.
+    /// More top-level boxes than [`MAX_BOXES`]: the walk is per poll.
+    TooManyBoxes,
+    /// A `moof` whose `traf`s set an explicit `base_data_offset`.
     ExplicitBaseDataOffset,
     /// A `traf` has no `tfdt`, so the fragment carries no timeline.
     TrafWithoutTfdt,
@@ -95,6 +102,9 @@ impl fmt::Display for WalkError {
             Self::NoFragments => write!(f, "media segment has no moof"),
             Self::TooManyFragments => {
                 write!(f, "media segment has more than {MAX_FRAGMENTS} fragments")
+            }
+            Self::TooManyBoxes => {
+                write!(f, "media segment has more than {MAX_BOXES} top-level boxes")
             }
             Self::ExplicitBaseDataOffset => write!(
                 f,
@@ -206,7 +216,12 @@ pub fn media_fragments(
     fragments.clear();
     let mut report = WalkReport::default();
     let mut offset = 0usize;
+    let mut walked = 0usize;
     while offset < bytes.len() {
+        walked = walked.saturating_add(1);
+        if walked > MAX_BOXES {
+            return Err(WalkError::TooManyBoxes);
+        }
         let span = read_box(bytes, offset)?;
         match &span.kind {
             b"moof" => {
