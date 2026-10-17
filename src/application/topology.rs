@@ -216,10 +216,17 @@ pub async fn converge_pull_inputs(
         .map(|input| input.id.as_str())
         .collect::<HashSet<_>>();
 
-    for input_id in ingest.pull_input_ids() {
-        if !wanted.contains(input_id.as_str()) && ingest.cancel_pull(&input_id).await {
-            info!(input_id = %input_id, "HLS pull stopped");
-        }
+    // Cancel every stale pull before awaiting any of them: the joins run
+    // together, so one stalled origin cannot hold this pass — and with it every
+    // other pipeline's topology convergence, which runs after — behind each
+    // join in turn.
+    let stale: Vec<String> = ingest
+        .pull_input_ids()
+        .into_iter()
+        .filter(|input_id| !wanted.contains(input_id.as_str()))
+        .collect();
+    for input_id in ingest.cancel_pulls(&stale).await {
+        info!(input_id = %input_id, "HLS pull stopped");
     }
 
     let mut started = Vec::new();

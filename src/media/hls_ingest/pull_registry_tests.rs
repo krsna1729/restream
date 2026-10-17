@@ -422,3 +422,52 @@ async fn a_cancel_asks_the_task_to_stop_before_it_waits_for_it() {
     assert!(ingest.pull_input_ids().is_empty());
     stalled.abort();
 }
+
+/// A reconcile pass stops every stale pull in one call, and clears every
+/// input's applied init whether or not its pull was still running: a session
+/// that ended earlier leaves the init it applied behind, and nothing else
+/// clears it.
+#[tokio::test]
+async fn a_batch_cancel_stops_every_pull_and_clears_every_applied_init() {
+    let (_engine, ingest) = test_ingest(HlsIngestLimits::default());
+    let (origin, stalled) = stalled_origin();
+    let mut ids = Vec::new();
+    for index in 0..3 {
+        let mut identity = pull_identity();
+        identity.input_id = format!("input-pull-{index}");
+        let source = pull_source(&format!("http://{origin}/master.m3u8"));
+        assert!(
+            ingest.ensure_pull(identity.clone(), source).await,
+            "each pass starts a pull for a row it has not seen"
+        );
+        ids.push(identity.input_id);
+    }
+    // An input whose pull has already ended: its init is still cleared.
+    let gone = "input-pull-gone".to_string();
+    let key = ingest.key_state(&gone);
+    *crate::sync::lock(&key.init) = Some(AppliedInit {
+        uri: "init.mp4".to_string(),
+        bytes: bytes::Bytes::from_static(b"init"),
+    });
+    ids.push(gone);
+
+    let stopped = ingest.cancel_pulls(&ids).await;
+    assert_eq!(
+        stopped.len(),
+        3,
+        "every running pull is reported stopped: {stopped:?}"
+    );
+    assert!(
+        ingest.pull_input_ids().is_empty(),
+        "no pull is left running"
+    );
+    assert!(
+        crate::sync::lock(&key.init).is_none(),
+        "an input with no pull running still has its applied init cleared"
+    );
+    assert!(
+        ingest.cancel_pulls(&ids).await.is_empty(),
+        "a second pass reports nothing running"
+    );
+    stalled.abort();
+}

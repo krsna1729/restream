@@ -383,21 +383,41 @@ impl HlsIngest {
     /// cancel branch is first in its `select!`, so the join costs one poll
     /// rather than an origin's request timeout.
     pub async fn cancel_pull(&self, input_id: &str) -> bool {
-        // The removal is its own statement so the map's guard is released
-        // before the join, never held across it.
-        let removed = crate::sync::lock(&self.pulls).remove(input_id);
-        let had_pull = removed.is_some();
-        if let Some(running) = removed {
-            running.task.cancel();
-            running.task.join().await;
-            self.engine.cancel_pipeline_input(input_id).await;
+        !self
+            .cancel_pulls(std::slice::from_ref(&input_id.to_string()))
+            .await
+            .is_empty()
+    }
+
+    /// Stop several pulls, cancelling every task before awaiting any of them:
+    /// a reconcile pass stops the pulls whose rows went away, and one stalled
+    /// origin must not hold the pass (and with it every other pipeline's
+    /// topology convergence) behind each join in turn.
+    ///
+    /// Every requested input is cleared afterwards, not only the ones whose
+    /// pull was still running: a session that ended earlier leaves the init it
+    /// applied behind. Returns the inputs that had a pull to stop.
+    pub async fn cancel_pulls(&self, input_ids: &[String]) -> Vec<String> {
+        let mut stopping = Vec::new();
+        for input_id in input_ids {
+            if let Some(running) = crate::sync::lock(&self.pulls).remove(input_id) {
+                running.task.cancel();
+                stopping.push((input_id.clone(), running));
+            }
         }
-        // After the join: until it returns, the task's session could apply an
-        // init again between a clear and the join, leaving it cached. Also
-        // cleared when no pull was running, because a session that ended
-        // earlier leaves the init it applied behind.
-        self.clear_applied_init(input_id);
-        had_pull
+        let stopped: Vec<String> = stopping
+            .iter()
+            .map(|(input_id, _)| input_id.clone())
+            .collect();
+        futures_util::future::join_all(
+            stopping.into_iter().map(|(_, running)| running.task.join()),
+        )
+        .await;
+        for input_id in input_ids {
+            self.engine.cancel_pipeline_input(input_id).await;
+            self.clear_applied_init(input_id);
+        }
+        stopped
     }
 
     fn clear_applied_init(&self, input_id: &str) {

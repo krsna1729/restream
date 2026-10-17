@@ -315,3 +315,56 @@ async fn list_pull_inputs_returns_only_pull_inputs_in_pipeline_order() {
             .all(|input| input.source_kind == PipelineInputSourceKind::HlsPull)
     );
 }
+
+/// A row whose `source_auth` passes the column's CHECK (valid JSON, known kind)
+/// but does not parse as that variant — `{"kind":"bearer"}` with no token —
+/// must not fail the list it is in. The inputs list is what the SRT policy
+/// store is built from, so one bad row failing the query would take SRT
+/// admission down for every pipeline, not just this input.
+#[tokio::test]
+async fn a_row_whose_auth_does_not_parse_does_not_fail_the_list() {
+    let pool = schema_pool().await;
+    db::create_pipeline(&pool, "p1", "Main", "primary-key", None, None)
+        .await
+        .expect("pipeline create");
+    db::create_pipeline(&pool, "p2", "Other", "other-key", None, None)
+        .await
+        .expect("second pipeline");
+    // Written the way only a hand-edited database can: the API validates the
+    // credential before it stores it.
+    sqlx::query(
+        "INSERT INTO pipeline_inputs
+         (id, pipeline_id, label, stream_key, role, enabled, selected, source_kind, source_url, variant_rule, source_auth)
+         VALUES ('input-bad', 'p1', 'Broken', 'bad-key', 'backup', 1, 0, 'hls_pull',
+                 'https://origin.example/live/master.m3u8', 'highest_bandwidth', '{\"kind\":\"bearer\"}')",
+    )
+    .execute(&pool)
+    .await
+    .expect("a row the CHECK accepts");
+
+    let inputs = db::list_pipeline_inputs(&pool, "p1")
+        .await
+        .expect("one bad credential must not fail the list");
+    let bad = inputs
+        .iter()
+        .find(|input| input.id == "input-bad")
+        .expect("the row is still listed");
+    assert_eq!(
+        bad.source_auth,
+        PullAuth::None,
+        "its unusable credential reads as none, so only this input is affected"
+    );
+
+    let pulls = db::list_pull_inputs(&pool)
+        .await
+        .expect("the pull list is not failed by it either");
+    assert!(pulls.iter().any(|input| input.id == "input-bad"));
+
+    let other = db::list_pipeline_inputs(&pool, "p2")
+        .await
+        .expect("another pipeline's inputs list");
+    // The SRT policy store is built from this same list, so another pipeline
+    // still has its keyed input to admit with.
+    assert_eq!(other.len(), 1, "and it still carries that pipeline's input");
+    assert_eq!(other[0].stream_key, "other-key");
+}

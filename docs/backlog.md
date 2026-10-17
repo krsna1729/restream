@@ -41,6 +41,7 @@ items).
 - [Q-079 resolve a pull target before fetching it](#q-079-security-opus-resolve-a-pull-target-before-fetching-it)
 - [Q-080 release a deleted input's applied init](#q-080-architecture-opus-release-a-deleted-inputs-applied-init)
 - [Q-081 make the ingest registration cancel-safe](#q-081-architecture-opus-make-the-ingest-registration-cancel-safe)
+- [Q-083 measure RTMP and SRT under pull load](#q-083-performance-sonnet-measure-rtmp-and-srt-under-pull-load)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -825,3 +826,24 @@ items).
   `sessions`) and finds no token and no `sessions` entry for the input.
 - Status: open (Filed: 2026-10-17 by claude, from the #354 review round: the
   window predates the PR, and the pull's cancel path is what reaches it).
+
+### Q-083 [performance] [sonnet] Measure RTMP and SRT under pull load
+
+- Goal: the isolation of the other protocols under M pull sessions is measured
+  the way `hls-push-duty` measures it under M push sessions.
+- Why: `hls-push-duty` has a baseline arm (`--hls-publishers 0`) and an HLS arm
+  (base RTMP publishers plus M HLS push sessions), which is how Q-074 priced the
+  push ingest. `hls-pull-duty` has no base arm: it runs only its own pull
+  pipeline, so "RTMP under pull load" cannot be measured from the catalog. The
+  pull's incremental cost is bounded by construction — a fetch on a Tokio
+  worker (not the MEDIA executor), a playlist parse of at most
+  `max_playlist_bytes` per refresh no shorter than `MIN_REFRESH_INTERVAL`
+  (500 ms), and one read of pull rows per reconcile pass — but it is unmeasured
+  beside a live RTMP or SRT pipeline.
+- Change: give `hls-pull-duty` a `--base-publishers N` arm, or add M pull
+  inputs to `hls-push-duty`, so one release-binary run compares the base
+  publishers' delivery and per-poll CPU with and without pulls.
+- Gates: both arms pass, and the base publishers' delivery and per-poll CPU are
+  reported side by side.
+- Status: open (Filed: 2026-10-17 by claude, from the #354 non-HLS audit: the
+  push ingest has this arm, the pull ingest does not).
