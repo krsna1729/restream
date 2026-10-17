@@ -488,36 +488,51 @@ impl PullState {
             }
             Err(error) => return Err(error.into()),
         };
-        let (media, text) =
-            match prepare_off_worker(self.next_url.clone(), bytes, self.allow_private).await? {
-                Prepared::Media(media, text) => (media, text),
-                Prepared::Master(master) => {
-                    let variant = choose_variant(&master, self.variant).ok_or_else(|| {
-                        PullError::Fatal("HLS master playlist lists no variant".to_string())
-                    })?;
-                    report_audio_rendition(&master, variant, &self.pipeline);
-                    let media_url = Url::parse(&variant.path).map_err(|error| {
-                        PullError::Fatal(format!("HLS variant URL does not parse: {error}"))
-                    })?;
-                    let bytes =
-                        fetch_small(client, &media_url, &self.scope, limits.max_playlist_bytes)
-                            .await?;
-                    match prepare_off_worker(media_url.clone(), bytes, self.allow_private).await? {
-                        Prepared::Media(media, text) => {
-                            // Follow the chosen rendition from now on, and
-                            // forget an earlier expiry: this URL works.
-                            self.next_url = media_url;
-                            self.re_expired = false;
-                            (media, text)
-                        }
-                        Prepared::Master(_) => {
-                            return Err(PullError::Fatal(
-                                "HLS master playlist points at another master playlist".to_string(),
-                            ));
-                        }
+        let (media, text) = match prepare_off_worker(
+            self.next_url.clone(),
+            bytes,
+            self.allow_private,
+        )
+        .await?
+        {
+            Prepared::Media(media, text) => (media, text),
+            Prepared::Master(master) => {
+                let variant = choose_variant(&master, self.variant).ok_or_else(|| {
+                    PullError::Fatal("HLS master playlist lists no variant".to_string())
+                })?;
+                report_audio_rendition(&master, variant, &self.pipeline);
+                if let Some(skipped) = by_bandwidth(master.variants.iter(), self.variant)
+                    .filter(|plain| plain.path != variant.path)
+                {
+                    info!(
+                        pipeline_id = %self.pipeline.id,
+                        input_id = %self.pipeline.input_id,
+                        skipped_codecs = %skipped.codecs.join(","),
+                        chosen_codecs = %variant.codecs.join(","),
+                        "HLS pull follows a lower-ranked variant: the ingest cannot publish the codecs of the one the rule prefers"
+                    );
+                }
+                let media_url = Url::parse(&variant.path).map_err(|error| {
+                    PullError::Fatal(format!("HLS variant URL does not parse: {error}"))
+                })?;
+                let bytes =
+                    fetch_small(client, &media_url, &self.scope, limits.max_playlist_bytes).await?;
+                match prepare_off_worker(media_url.clone(), bytes, self.allow_private).await? {
+                    Prepared::Media(media, text) => {
+                        // Follow the chosen rendition from now on, and
+                        // forget an earlier expiry: this URL works.
+                        self.next_url = media_url;
+                        self.re_expired = false;
+                        (media, text)
+                    }
+                    Prepared::Master(_) => {
+                        return Err(PullError::Fatal(
+                            "HLS master playlist points at another master playlist".to_string(),
+                        ));
                     }
                 }
-            };
+            }
+        };
         self.dispatch_playlist(ingest, text.into_bytes()).await?;
 
         if media.media_sequence < self.last_media_sequence.unwrap_or(media.media_sequence) {
@@ -849,10 +864,47 @@ impl PullState {
 }
 
 /// Choose the rendition a pull follows.
+/// The variant to follow. The bandwidth rule is applied among the variants
+/// whose declared `CODECS` this ingest can publish — so a ladder whose top
+/// rung is AV1 or Dolby Vision is not refused one segment at a time — and
+/// among all variants when none declares a codec set it can (or any at all),
+/// which is exactly the plain bandwidth rule.
 fn choose_variant(master: &MasterPlaylist, rule: VariantRule) -> Option<&Variant> {
-    match rule {
-        VariantRule::HighestBandwidth => master.highest_bandwidth(),
-        VariantRule::LowestBandwidth => master.lowest_bandwidth(),
+    let decodable = master.variants.iter().filter(|variant| {
+        !variant.codecs.is_empty() && variant.codecs.iter().all(|codec| ingest_decodes(codec))
+    });
+    by_bandwidth(decodable, rule).or_else(|| by_bandwidth(master.variants.iter(), rule))
+}
+
+/// The highest or lowest `BANDWIDTH`, the first on a tie.
+fn by_bandwidth<'a>(
+    variants: impl Iterator<Item = &'a Variant>,
+    rule: VariantRule,
+) -> Option<&'a Variant> {
+    variants.reduce(|best, next| {
+        let better = match rule {
+            VariantRule::HighestBandwidth => next.bandwidth > best.bandwidth,
+            VariantRule::LowestBandwidth => next.bandwidth < best.bandwidth,
+        };
+        if better { next } else { best }
+    })
+}
+
+/// Whether an RFC 6381 codec string names media this ingest publishes:
+/// H.264 (`avc1`/`avc3`), HEVC (`hvc1`/`hev1`), and AAC-LC (`mp4a.40.2`).
+/// HE-AAC (`.5`, `.29`) is not: in fMP4 it is signalled explicitly in the
+/// AudioSpecificConfig, which the ADTS conversion refuses, so a variant that
+/// declares it would be refused at its init.
+fn ingest_decodes(codec: &str) -> bool {
+    let codec = codec.trim();
+    let family = codec.split('.').next().unwrap_or_default();
+    match family.to_ascii_lowercase().as_str() {
+        "avc1" | "avc3" | "hvc1" | "hev1" => true,
+        "mp4a" => matches!(
+            codec.get(5..).map(str::to_ascii_lowercase).as_deref(),
+            Some("40.2")
+        ),
+        _ => false,
     }
 }
 

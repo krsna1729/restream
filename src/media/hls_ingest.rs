@@ -126,7 +126,7 @@ pub enum ObjectOutcome {
     /// The playlist or fMP4 object does not parse; the session continues.
     Malformed(String),
     /// The object's codec or container is not ingested (a mixed TS/fMP4
-    /// stream, an HEVC fMP4 init).
+    /// stream, an fMP4 init of a codec other than H.264, HEVC or AAC).
     Unsupported(String),
     /// An fMP4 init over its bound.
     TooLarge(String),

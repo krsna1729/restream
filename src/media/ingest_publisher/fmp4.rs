@@ -32,9 +32,6 @@ use crate::media::metadata::{AudioMeta, VideoMeta};
 use crate::media::mpegts::DemuxProbe;
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
 
-/// The reason an HEVC init segment is refused.
-pub const HEVC_NOT_IMPLEMENTED: &str = "HEVC fMP4 ingest is not implemented";
-
 const START_CODE: [u8; 4] = [0, 0, 0, 1];
 const AAC_SAMPLE_RATES: [u32; 13] = [
     96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000,
@@ -120,13 +117,39 @@ impl AdtsConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Codec {
-    H264 {
+    /// H.264 or HEVC: length-prefixed NAL units, published as Annex B with
+    /// the configuration record's parameter sets ahead of a keyframe that
+    /// lacks them.
+    Video {
+        nal: VideoNal,
         nalu_length_size: usize,
-        /// SPS and PPS from `avcC`, as Annex B.
+        /// SPS and PPS from `avcC`, or VPS, SPS and PPS from `hvcC`, as
+        /// Annex B.
         parameter_sets: Bytes,
     },
     Aac(AdtsConfig),
 }
+
+/// Which NAL syntax a video track's samples use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VideoNal {
+    H264,
+    H265,
+}
+
+impl VideoNal {
+    /// Whether a NAL unit, by its first header byte, is a sequence
+    /// parameter set: type 7 in H.264, type 33 in HEVC.
+    fn is_sps(self, header: u8) -> bool {
+        match self {
+            Self::H264 => header & 0x1F == 7,
+            Self::H265 => (header >> 1) & 0x3F == 33,
+        }
+    }
+}
+
+/// HEVC parameter-set NAL unit types: VPS, SPS and PPS.
+const HEVC_PARAMETER_SETS: std::ops::RangeInclusive<u8> = 32..=34;
 
 /// One published track of the init segment.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -479,15 +502,29 @@ fn parse_init(bytes: &[u8], max_bytes: usize) -> Result<(Init, DemuxProbe), Medi
                     track_id,
                     media_type,
                     track_index: 0,
-                    codec: Codec::H264 {
+                    codec: Codec::Video {
+                        nal: VideoNal::H264,
                         nalu_length_size: usize::from(avcc.length_size_minus_one.get())
                             .saturating_add(1),
                         parameter_sets,
                     },
                 });
             }
-            (MediaType::Video, SampleEntry::Hev1(_) | SampleEntry::Hvc1(_)) => {
-                return Err(unsupported(HEVC_NOT_IMPLEMENTED));
+            (MediaType::Video, SampleEntry::Hev1(hevc)) => {
+                video_track_count = video_track_count.saturating_add(1);
+                if video.is_none() {
+                    let (meta, track) = hevc_track(track_id, &hevc.hvcc_box, &hevc.visual)?;
+                    video = Some(meta);
+                    tracks.push(track);
+                }
+            }
+            (MediaType::Video, SampleEntry::Hvc1(hevc)) => {
+                video_track_count = video_track_count.saturating_add(1);
+                if video.is_none() {
+                    let (meta, track) = hevc_track(track_id, &hevc.hvcc_box, &hevc.visual)?;
+                    video = Some(meta);
+                    tracks.push(track);
+                }
             }
             (MediaType::Audio, SampleEntry::Mp4a(mp4a)) => {
                 let asc = mp4a
@@ -521,7 +558,7 @@ fn parse_init(bytes: &[u8], max_bytes: usize) -> Result<(Init, DemuxProbe), Medi
             }
             (MediaType::Video, other) => {
                 return Err(unsupported(format!(
-                    "fMP4 video codec {} is not supported; H.264 only",
+                    "fMP4 video codec {} is not supported; H.264 or HEVC only",
                     shiguredo_mp4::BaseBox::box_type(other)
                 )));
             }
@@ -534,7 +571,9 @@ fn parse_init(bytes: &[u8], max_bytes: usize) -> Result<(Init, DemuxProbe), Medi
         }
     }
     if tracks.is_empty() {
-        return Err(unsupported("fMP4 init segment has no H.264 or AAC track"));
+        return Err(unsupported(
+            "fMP4 init segment has no H.264, HEVC or AAC track",
+        ));
     }
 
     let mut demuxer = Fmp4SegmentDemuxer::new();
@@ -548,6 +587,50 @@ fn parse_init(bytes: &[u8], max_bytes: usize) -> Result<(Init, DemuxProbe), Medi
         audio_tracks,
     };
     Ok((Init { demuxer, tracks }, probe))
+}
+
+/// An HEVC track from its `hvcC`: the VPS, SPS and PPS as Annex B, and the
+/// probe a TS input carrying the same stream would report. HEVC has no
+/// sequence header here, as in TS ingest; consumers that need one build it
+/// from the parameter sets at the keyframe.
+fn hevc_track(
+    track_id: u32,
+    hvcc: &shiguredo_mp4::boxes::HvccBox,
+    visual: &shiguredo_mp4::boxes::VisualSampleEntryFields,
+) -> Result<(VideoMeta, Track), MediaRejection> {
+    let mut parameter_sets = Vec::new();
+    for array in &hvcc.nalu_arrays {
+        if !HEVC_PARAMETER_SETS.contains(&array.nal_unit_type.get()) {
+            continue;
+        }
+        for nalu in &array.nalus {
+            parameter_sets.extend_from_slice(&START_CODE);
+            parameter_sets.extend_from_slice(nalu);
+        }
+    }
+    let has_sps = hvcc
+        .nalu_arrays
+        .iter()
+        .any(|array| array.nal_unit_type.get() == 33 && !array.nalus.is_empty());
+    if !has_sps {
+        return Err(malformed(format!("fMP4 track {track_id}: hvcC has no SPS")));
+    }
+    let mut meta = crate::media::mpegts::hevc_video_meta(&parameter_sets);
+    if meta.width == 0 || meta.height == 0 {
+        meta.width = u32::from(visual.width);
+        meta.height = u32::from(visual.height);
+    }
+    let track = Track {
+        track_id,
+        media_type: MediaType::Video,
+        track_index: 0,
+        codec: Codec::Video {
+            nal: VideoNal::H265,
+            nalu_length_size: usize::from(hvcc.length_size_minus_one.get()).saturating_add(1),
+            parameter_sets: Bytes::from(parameter_sets),
+        },
+    };
+    Ok((meta, track))
 }
 
 fn video_meta(sps: &[u8], width: u16, height: u16) -> VideoMeta {
@@ -606,15 +689,27 @@ fn convert_sample(
     let (Some(dts), Some(pts)) = (dts, pts) else {
         return Err(malformed("fMP4 sample timestamp is out of range"));
     };
+    // An HEVC sample is a keyframe only if it also carries an IRAP picture
+    // (NAL types 16-23): TS ingest requires the same of a random-access
+    // flag, and a sync flag on a non-IRAP picture would inject parameter
+    // sets, promote the gate and cut a segment at an undecodable picture.
+    let mut keyframe = keyframe;
     let payload = match &track.codec {
-        Codec::H264 {
+        Codec::Video {
+            nal,
             nalu_length_size,
             parameter_sets,
         } => {
             let nalu_units = avcc_nalus(data, *nalu_length_size).ok_or_else(|| {
-                malformed("H.264 sample ends inside a NALU length field or is empty")
+                malformed("video sample ends inside a NALU length field or is empty")
             })?;
-            let inject = keyframe && !avcc_carries_sps(data, *nalu_length_size);
+            if *nal == VideoNal::H265 {
+                keyframe &= nalu_units.iter().any(|nalu| {
+                    nalu.first()
+                        .is_some_and(|header| (16..=23).contains(&((header >> 1) & 0x3F)))
+                });
+            }
+            let inject = keyframe && !carries_sps(data, *nalu_length_size, *nal);
             let mut payload = Vec::with_capacity(
                 nalu_units
                     .iter()
@@ -686,7 +781,7 @@ fn avcc_nalus(data: &[u8], nalu_length_size: usize) -> Option<Vec<&[u8]>> {
 }
 
 /// Whether a length-prefixed H.264 sample carries an SPS (NAL type 7).
-fn avcc_carries_sps(mut data: &[u8], nalu_length_size: usize) -> bool {
+fn carries_sps(mut data: &[u8], nalu_length_size: usize, nal: VideoNal) -> bool {
     while let Some((length, rest)) = data.split_at_checked(nalu_length_size) {
         let length = length
             .iter()
@@ -694,7 +789,7 @@ fn avcc_carries_sps(mut data: &[u8], nalu_length_size: usize) -> bool {
         let Some((nalu, rest)) = rest.split_at_checked(length) else {
             return false;
         };
-        if nalu.first().is_some_and(|header| header & 0x1F == 7) {
+        if nalu.first().is_some_and(|header| nal.is_sps(*header)) {
             return true;
         }
         if length == 0 {
