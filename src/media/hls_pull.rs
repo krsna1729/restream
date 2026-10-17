@@ -44,13 +44,12 @@ use self::fetch::{
     pump_body, send, variant_expired,
 };
 use self::namespace::{
-    encryption_refusal, live_start, map_name, object_kind, parse_remote, push_playlist_text,
-    refuse_private_targets, refuse_unfetchable, segment_name,
+    Prepared, live_start, map_name, object_kind, parse_and_prepare, segment_name,
 };
 use crate::domain::pipeline_input::{PullAuth, VariantRule};
 use crate::media::engine::MediaEngine;
 use crate::media::hls::upload_policy::backoff;
-use crate::media::hls_ingest::playlist::{MasterPlaylist, Playlist, SegmentEntry, Variant};
+use crate::media::hls_ingest::playlist::{MasterPlaylist, SegmentEntry, Variant};
 use crate::media::hls_ingest::{
     BodyError, DispatchError, DispatchOrigin, HlsIngest, HlsIngestLimits, ObjectBody, ObjectKind,
     ObjectOutcome,
@@ -179,6 +178,22 @@ impl HlsPullTask {
     pub fn end_state(&self) -> Arc<Mutex<Option<PullEnd>>> {
         self.end.clone()
     }
+}
+
+/// Fetch-side refresh work off the worker this task runs on: parse the fetched
+/// playlist, refuse what the pull cannot fetch, and render the text the ingest
+/// reads. Each pass is linear in the playlist — a 1 MiB playlist is ~10 000
+/// segments, about 29 ms of parsing alone — which is blocking work on a Tokio
+/// worker that the API and every other protocol share. The bytes move to the
+/// blocking pool and the parsed playlist and its text come back.
+async fn prepare_off_worker(
+    base: Url,
+    bytes: Vec<u8>,
+    allow_private: bool,
+) -> Result<Prepared, PullError> {
+    tokio::task::spawn_blocking(move || parse_and_prepare(&base, &bytes, allow_private))
+        .await
+        .map_err(|error| PullError::Retry(format!("playlist parse did not finish: {error}")))?
 }
 
 /// Start pulling `source` for `identity`. The task runs on Tokio: the
@@ -447,7 +462,7 @@ impl PullState {
         ingest: &Arc<HlsIngest>,
         limits: &HlsIngestLimits,
     ) -> Result<Cycle, PullError> {
-        let mut bytes = match fetch_small(
+        let bytes = match fetch_small(
             client,
             &self.next_url,
             &self.scope,
@@ -466,44 +481,36 @@ impl PullState {
             }
             Err(error) => return Err(error.into()),
         };
-        let mut parsed = parse_remote(&self.next_url, &bytes)?;
-        refuse_private_targets(&parsed, self.allow_private)?;
-        let media = match parsed {
-            Playlist::Media(media) => media,
-            Playlist::Master(master) => {
-                if let Some(encryption) = &master.session_key {
-                    return Err(encryption_refusal(encryption));
-                }
-                let variant = choose_variant(&master, self.variant).ok_or_else(|| {
-                    PullError::Fatal("HLS master playlist lists no variant".to_string())
-                })?;
-                report_audio_rendition(&master, variant, &self.pipeline);
-                let media_url = Url::parse(&variant.path).map_err(|error| {
-                    PullError::Fatal(format!("HLS variant URL does not parse: {error}"))
-                })?;
-                bytes =
-                    fetch_small(client, &media_url, &self.scope, limits.max_playlist_bytes).await?;
-                parsed = parse_remote(&media_url, &bytes)?;
-                refuse_private_targets(&parsed, self.allow_private)?;
-                match parsed {
-                    Playlist::Media(media) => {
-                        // Follow the chosen rendition from now on, and forget
-                        // an earlier expiry: this URL works.
-                        self.next_url = media_url;
-                        self.re_expired = false;
-                        media
-                    }
-                    Playlist::Master(_) => {
-                        return Err(PullError::Fatal(
-                            "HLS master playlist points at another master playlist".to_string(),
-                        ));
+        let (media, text) =
+            match prepare_off_worker(self.next_url.clone(), bytes, self.allow_private).await? {
+                Prepared::Media(media, text) => (media, text),
+                Prepared::Master(master) => {
+                    let variant = choose_variant(&master, self.variant).ok_or_else(|| {
+                        PullError::Fatal("HLS master playlist lists no variant".to_string())
+                    })?;
+                    report_audio_rendition(&master, variant, &self.pipeline);
+                    let media_url = Url::parse(&variant.path).map_err(|error| {
+                        PullError::Fatal(format!("HLS variant URL does not parse: {error}"))
+                    })?;
+                    let bytes =
+                        fetch_small(client, &media_url, &self.scope, limits.max_playlist_bytes)
+                            .await?;
+                    match prepare_off_worker(media_url.clone(), bytes, self.allow_private).await? {
+                        Prepared::Media(media, text) => {
+                            // Follow the chosen rendition from now on, and
+                            // forget an earlier expiry: this URL works.
+                            self.next_url = media_url;
+                            self.re_expired = false;
+                            (media, text)
+                        }
+                        Prepared::Master(_) => {
+                            return Err(PullError::Fatal(
+                                "HLS master playlist points at another master playlist".to_string(),
+                            ));
+                        }
                     }
                 }
-            }
-        };
-        refuse_unfetchable(&media)?;
-
-        let text = push_playlist_text(&media);
+            };
         self.dispatch_playlist(ingest, text.into_bytes()).await?;
 
         if media.media_sequence < self.last_media_sequence.unwrap_or(media.media_sequence) {

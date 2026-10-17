@@ -2,18 +2,27 @@
 //! guards that are pure functions or state. What needs a real origin is in
 //! `tests_origin.rs`, which also owns the log capture these tests borrow.
 
-use std::time::Duration;
-
 use reqwest::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use std::time::Duration;
 
 use super::fetch::{log_url, redirect_refusal};
 use super::tests_origin::{AUDIO_MASTER, CapturedMessages, source};
 use super::*;
 use crate::domain::pipeline_input::{HeaderPair, PullAuth, VariantRule};
 use crate::media::hls_ingest::playlist;
+use crate::media::hls_ingest::playlist::Playlist;
 use crate::media::hls_ingest::test_support::authenticated;
 use tracing_subscriber::layer::SubscriberExt as _;
+
+/// Parse a remote playlist the way a pull from a private source does: the
+/// private-host refusal is off, which is what the origin tests need.
+fn parse_remote(base: &Url, bytes: &[u8]) -> Result<Playlist, PullError> {
+    Ok(match parse_and_prepare(base, bytes, true)? {
+        Prepared::Media(media, _) => Playlist::Media(media),
+        Prepared::Master(master) => Playlist::Master(master),
+    })
+}
 
 // ---- pure plans -----------------------------------------------------------
 
@@ -369,7 +378,7 @@ fn a_remote_playlist_is_rewritten_into_the_push_namespace() {
         "a signed query survives"
     );
 
-    let text = push_playlist_text(&media);
+    let text = crate::media::hls_pull::namespace::push_playlist_text(&media);
     let local = playlist::parse(text.as_bytes(), PLAYLIST_PATH).unwrap();
     let Playlist::Media(local) = local else {
         panic!("the rewritten playlist parses as media");
@@ -581,8 +590,7 @@ fn a_playlist_pointing_at_a_private_address_is_refused() {
     let base = Url::parse("https://origin.example/live/index.m3u8").unwrap();
     let text = "#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1.0,\n\
                 http://169.254.169.254/latest/meta-data/\n";
-    let parsed = parse_remote(&base, text.as_bytes()).unwrap();
-    match refuse_private_targets(&parsed, false) {
+    match parse_and_prepare(&base, text.as_bytes(), false) {
         Err(PullError::Fatal(reason)) => {
             assert!(reason.contains("169.254.169.254"), "{reason}");
             assert!(reason.contains("private address"), "{reason}");
@@ -590,21 +598,19 @@ fn a_playlist_pointing_at_a_private_address_is_refused() {
         other => panic!("a private target is refused, got {other:?}"),
     }
     assert!(
-        refuse_private_targets(&parsed, true).is_ok(),
+        parse_and_prepare(&base, text.as_bytes(), true).is_ok(),
         "a source that is itself private may point there"
     );
 
     // A map URI is a target too.
     let text = "#EXTM3U\n#EXT-X-TARGETDURATION:1\n\
                 #EXT-X-MAP:URI=\"http://10.0.0.5/init.mp4\"\n#EXTINF:1.0,\nseg0.m4s\n";
-    let parsed = parse_remote(&base, text.as_bytes()).unwrap();
-    assert!(refuse_private_targets(&parsed, false).is_err());
+    assert!(parse_and_prepare(&base, text.as_bytes(), false).is_err());
 
     // An IPv6 literal is a target like any other, and its brackets are not a
     // reason to miss it.
     let text = "#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1.0,\nhttp://[fd00::1]/s.ts\n";
-    let parsed = parse_remote(&base, text.as_bytes()).unwrap();
-    match refuse_private_targets(&parsed, false) {
+    match parse_and_prepare(&base, text.as_bytes(), false) {
         Err(PullError::Fatal(reason)) => assert!(reason.contains("fd00::1"), "{reason}"),
         other => panic!("an IPv6 private target is refused, got {other:?}"),
     }
