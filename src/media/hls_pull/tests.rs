@@ -201,16 +201,19 @@ fn variant_choice_follows_both_rules() {
                 bandwidth: 500_000,
                 path: "low.m3u8".to_string(),
                 audio_group: None,
+                codecs: Vec::new(),
             },
             Variant {
                 bandwidth: 2_000_000,
                 path: "mid.m3u8".to_string(),
                 audio_group: None,
+                codecs: Vec::new(),
             },
             Variant {
                 bandwidth: 2_000_000,
                 path: "high.m3u8".to_string(),
                 audio_group: None,
+                codecs: Vec::new(),
             },
         ],
         audio: Vec::new(),
@@ -240,6 +243,89 @@ fn variant_choice_follows_both_rules() {
         )
         .is_none()
     );
+}
+
+/// The rule is applied among variants whose declared codecs the ingest can
+/// publish: a ladder topped by AV1 is pulled at its best H.264/HEVC rung, by
+/// either rule; a variant with no `CODECS` is not preferred over one whose
+/// codecs are known to work; and when no variant declares a codec set the
+/// ingest takes, the plain bandwidth rule decides.
+#[test]
+fn a_variant_whose_codecs_the_ingest_cannot_publish_is_passed_over() {
+    let master = parsed_master(
+        "#EXTM3U\n\
+         #EXT-X-STREAM-INF:BANDWIDTH=9000000,CODECS=\"av01.0.08M.08,mp4a.40.2\"\n4k/index.m3u8\n\
+         #EXT-X-STREAM-INF:BANDWIDTH=6000000,CODECS=\"hvc1.1.6.L120.90,mp4a.40.2\"\nhevc/index.m3u8\n\
+         #EXT-X-STREAM-INF:BANDWIDTH=3000000,CODECS=\"avc1.64001f,mp4a.40.2\"\nhd/index.m3u8\n\
+         #EXT-X-STREAM-INF:BANDWIDTH=500000,CODECS=\"avc1.42e01e,ec-3\"\nlow/index.m3u8\n",
+    );
+    let path = |rule| choose_variant(&master, rule).unwrap().path.clone();
+    assert_eq!(
+        path(VariantRule::HighestBandwidth),
+        "https://origin.example/live/hevc/index.m3u8",
+        "the AV1 top rung is passed over for the best rung the ingest takes"
+    );
+    assert_eq!(
+        path(VariantRule::LowestBandwidth),
+        "https://origin.example/live/hd/index.m3u8",
+        "an E-AC-3 rung is passed over by the lowest rule too"
+    );
+
+    let undeclared_above = parsed_master(
+        "#EXTM3U\n\
+         #EXT-X-STREAM-INF:BANDWIDTH=9000000\nunknown/index.m3u8\n\
+         #EXT-X-STREAM-INF:BANDWIDTH=3000000,CODECS=\"avc1.64001f,mp4a.40.2\"\nhd/index.m3u8\n",
+    );
+    assert_eq!(
+        choose_variant(&undeclared_above, VariantRule::HighestBandwidth)
+            .unwrap()
+            .path,
+        "https://origin.example/live/hd/index.m3u8",
+        "a declared, publishable variant wins over an undeclared one"
+    );
+
+    let none_publishable = parsed_master(
+        "#EXTM3U\n\
+         #EXT-X-STREAM-INF:BANDWIDTH=9000000,CODECS=\"av01.0.08M.08\"\nav1/index.m3u8\n\
+         #EXT-X-STREAM-INF:BANDWIDTH=3000000,CODECS=\"vp09.00.10.08\"\nvp9/index.m3u8\n",
+    );
+    assert_eq!(
+        choose_variant(&none_publishable, VariantRule::HighestBandwidth)
+            .unwrap()
+            .path,
+        "https://origin.example/live/av1/index.m3u8",
+        "with nothing publishable, the plain rule decides"
+    );
+}
+
+#[test]
+fn rfc_6381_codec_strings_are_matched_to_what_the_ingest_publishes() {
+    for codec in [
+        "avc1.64001f",
+        "AVC1.4D401F",
+        "avc3.640028",
+        "hvc1.1.6.L120.90",
+        "hev1.2.4.L153.B0",
+        "mp4a.40.2",
+        "mp4a.40.5",
+        "mp4a.40.29",
+    ] {
+        assert!(ingest_decodes(codec), "{codec}");
+    }
+    for codec in [
+        "av01.0.08M.08",
+        "vp09.00.10.08",
+        "dvh1.05.06",
+        "ec-3",
+        "ac-3",
+        "opus",
+        "mp4a.40.34",
+        "mp4a.6B",
+        "mp4a.40.2x",
+        "",
+    ] {
+        assert!(!ingest_decodes(codec), "{codec}");
+    }
 }
 
 fn parsed_master(text: &str) -> MasterPlaylist {
