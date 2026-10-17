@@ -891,8 +891,10 @@ fn by_bandwidth<'a>(
 }
 
 /// Whether an RFC 6381 codec string names media this ingest publishes:
-/// H.264 (`avc1`/`avc3`), HEVC (`hvc1`/`hev1`), and AAC (`mp4a.40.2` LC,
-/// `.5` HE, `.29` HE v2).
+/// H.264 (`avc1`/`avc3`), HEVC (`hvc1`/`hev1`), and AAC-LC (`mp4a.40.2`).
+/// HE-AAC (`.5`, `.29`) is not: in fMP4 it is signalled explicitly in the
+/// AudioSpecificConfig, which the ADTS conversion refuses, so a variant that
+/// declares it would be refused at its init.
 fn ingest_decodes(codec: &str) -> bool {
     let codec = codec.trim();
     let family = codec.split('.').next().unwrap_or_default();
@@ -900,7 +902,7 @@ fn ingest_decodes(codec: &str) -> bool {
         "avc1" | "avc3" | "hvc1" | "hev1" => true,
         "mp4a" => matches!(
             codec.get(5..).map(str::to_ascii_lowercase).as_deref(),
-            Some("40.2" | "40.5" | "40.29")
+            Some("40.2")
         ),
         _ => false,
     }

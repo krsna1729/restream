@@ -127,17 +127,6 @@ impl MasterPlaylist {
         })
     }
 
-    /// The variant to follow: the lowest `BANDWIDTH`, the first on a tie.
-    pub fn lowest_bandwidth(&self) -> Option<&Variant> {
-        self.variants.iter().reduce(|best, next| {
-            if next.bandwidth < best.bandwidth {
-                next
-            } else {
-                best
-            }
-        })
-    }
-
     /// The audio rendition to follow with `variant`, in the order RFC 8216
     /// section 4.3.4.1 gives a client for choosing among the members of one
     /// group: the `DEFAULT=YES` member, else the `AUTOSELECT=YES` member,

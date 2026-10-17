@@ -307,8 +307,6 @@ fn rfc_6381_codec_strings_are_matched_to_what_the_ingest_publishes() {
         "hvc1.1.6.L120.90",
         "hev1.2.4.L153.B0",
         "mp4a.40.2",
-        "mp4a.40.5",
-        "mp4a.40.29",
     ] {
         assert!(ingest_decodes(codec), "{codec}");
     }
@@ -319,6 +317,8 @@ fn rfc_6381_codec_strings_are_matched_to_what_the_ingest_publishes() {
         "ec-3",
         "ac-3",
         "opus",
+        "mp4a.40.5",
+        "mp4a.40.29",
         "mp4a.40.34",
         "mp4a.6B",
         "mp4a.40.2x",

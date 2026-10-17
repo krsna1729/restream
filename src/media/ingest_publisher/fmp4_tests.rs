@@ -448,6 +448,7 @@ fn an_hevc_init_publishes_like_a_ts_hevc_input() {
                     0,
                     length_prefixed(&[HEVC_SPS, HEVC_IDR], 4),
                 ),
+                video(&entry, 3000, true, 0, length_prefixed(&[HEVC_TRAIL], 4)),
             ],
         );
         let init = muxer.init_segment_bytes().unwrap();
@@ -469,7 +470,7 @@ fn an_hevc_init_publishes_like_a_ts_hevc_input() {
 
         let packets = demux_all(&init, &[media], usize::MAX);
         let videos = of_type(&packets, MediaType::Video);
-        assert_eq!(videos.len(), 3);
+        assert_eq!(videos.len(), 4);
         assert!(videos[0].is_keyframe);
         let first = &videos[0].payload;
         assert!(
@@ -494,6 +495,15 @@ fn an_hevc_init_publishes_like_a_ts_hevc_input() {
             &videos[2].payload[..],
             &[&[0, 0, 0, 1][..], HEVC_SPS, &[0, 0, 0, 1], HEVC_IDR].concat()[..],
             "a keyframe carrying its own SPS gets no second copy"
+        );
+        assert!(
+            !videos[3].is_keyframe,
+            "a sync-flagged sample without an IRAP picture is not a keyframe, as in TS"
+        );
+        assert_eq!(
+            &videos[3].payload[..],
+            &[&[0, 0, 0, 1][..], HEVC_TRAIL].concat()[..],
+            "and gets no parameter sets"
         );
     }
 }

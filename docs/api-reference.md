@@ -229,7 +229,10 @@ An input's `kind` is `keyed` (the default: it waits for an external publisher)
 or `hlsPull`. A `hlsPull` input has no ingest listener; the engine fetches a
 remote live HLS origin instead. Its response carries `sourceUrl` and a
 `variantRule` of `highestBandwidth` (default) or `lowestBandwidth`, which picks
-the rendition from the origin's master playlist.
+the rendition from the origin's master playlist: the highest or lowest
+`BANDWIDTH` among the variants whose `CODECS` the ingest publishes (H.264 or
+HEVC video, AAC-LC audio), and among all variants when none declares such a
+set.
 
 Keyed create body:
 
@@ -1483,7 +1486,7 @@ The stream key is checked first, before any body byte is read, under the
 | `415` | Neither `.m3u8`, `.ts` nor `.mp4`/`.m4s`; a stream that mixes MPEG-TS and fMP4 objects; an fMP4 segment under a playlist that names no `EXT-X-MAP`; or an fMP4 init whose codec is neither H.264, HEVC nor AAC |
 | `503` | The 512 MiB HLS ingest buffer is full (FFmpeg never reads this: the segment is lost), or the session ended with the object queued (all `Retry-After: 1`); or the key lookup or session is unavailable |
 
-fMP4 ingest is H.264 video and AAC audio only, and it names its init segment
+fMP4 ingest is H.264 or HEVC video and AAC-LC audio, and it names its init segment
 through the playlist's `EXT-X-MAP` URI rather than by file extension. That
 init is remembered per stream key, so an encoder that uploads it once keeps
 publishing after its session ends; a refused init upload voids that memory

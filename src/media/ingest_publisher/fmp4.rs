@@ -689,6 +689,11 @@ fn convert_sample(
     let (Some(dts), Some(pts)) = (dts, pts) else {
         return Err(malformed("fMP4 sample timestamp is out of range"));
     };
+    // An HEVC sample is a keyframe only if it also carries an IRAP picture
+    // (NAL types 16-23): TS ingest requires the same of a random-access
+    // flag, and a sync flag on a non-IRAP picture would inject parameter
+    // sets, promote the gate and cut a segment at an undecodable picture.
+    let mut keyframe = keyframe;
     let payload = match &track.codec {
         Codec::Video {
             nal,
@@ -698,6 +703,12 @@ fn convert_sample(
             let nalu_units = avcc_nalus(data, *nalu_length_size).ok_or_else(|| {
                 malformed("video sample ends inside a NALU length field or is empty")
             })?;
+            if *nal == VideoNal::H265 {
+                keyframe &= nalu_units.iter().any(|nalu| {
+                    nalu.first()
+                        .is_some_and(|header| (16..=23).contains(&((header >> 1) & 0x3F)))
+                });
+            }
             let inject = keyframe && !carries_sps(data, *nalu_length_size, *nal);
             let mut payload = Vec::with_capacity(
                 nalu_units

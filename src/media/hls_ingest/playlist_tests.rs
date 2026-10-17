@@ -173,7 +173,7 @@ fn master_playlist_variants_carry_bandwidth_and_resolved_paths() {
     );
     assert_eq!(master.variants[0].path, "low/index.m3u8");
     assert_eq!(
-        master.lowest_bandwidth(),
+        master.variants.first(),
         Some(&Variant {
             bandwidth: 800_000,
             path: "low/index.m3u8".into(),
