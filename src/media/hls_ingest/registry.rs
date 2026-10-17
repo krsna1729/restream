@@ -585,10 +585,28 @@ impl HlsIngest {
         body: ObjectBody,
     ) -> Result<ObjectOutcome, DispatchError> {
         let (reply, outcome) = oneshot::channel();
+        let payload = body.into_payload();
+        // A playlist is parsed here, on the blocking pool, so the session turn
+        // that applies it on the shared MEDIA worker never parses: parsing is
+        // linear in the playlist, about 29 ms for a 1 MiB one.
+        let content = match kind {
+            ObjectKind::Playlist => {
+                let bytes = payload.bytes.clone();
+                let playlist_path = path.clone();
+                let parsed = tokio::task::spawn_blocking(move || {
+                    super::playlist::parse(&bytes, &playlist_path)
+                })
+                .await
+                .map_err(|_| DispatchError::Unavailable)?;
+                session::ObjectContent::Playlist(parsed)
+            }
+            ObjectKind::TsSegment => session::ObjectContent::TsSegment,
+            ObjectKind::Fmp4 => session::ObjectContent::Fmp4,
+        };
         let mut object = HlsObject {
             path,
-            kind,
-            payload: body.into_payload(),
+            content,
+            payload,
             reply,
         };
         for _attempt in 0..2 {

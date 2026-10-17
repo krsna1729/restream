@@ -39,7 +39,6 @@ items).
 - [Q-078 choose versions the ingest can decode](#q-078-protocol-opus-choose-the-versions-and-codecs-the-ingest-can-decode)
 - [Q-079 resolve a pull target before fetching it](#q-079-security-opus-resolve-a-pull-target-before-fetching-it)
 - [Q-083 measure RTMP and SRT under pull load](#q-083-performance-sonnet-measure-rtmp-and-srt-under-pull-load)
-- [Q-084 parse a big playlist off the ingest turn](#q-084-performance-opus-parse-a-big-playlist-off-the-ingest-turn)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -758,29 +757,3 @@ items).
   reported side by side.
 - Status: open (Filed: 2026-10-17 by claude, from the #354 non-HLS audit: the
   push ingest has this arm, the pull ingest does not).
-
-### Q-084 [performance] [opus] Parse a big playlist off the ingest turn
-
-- Goal: a 1 MiB playlist never costs the MEDIA executor a multi-millisecond
-  poll.
-- Why: a session's turn parses a playlist object inline (`session.rs:383`,
-  `playlist::parse`), and parsing is linear in the playlist with per-URI work.
-  A measured 1 MiB media playlist — 10 280 segments, every URI resolved and
-  rendered — takes about 29 ms. A push, or a pull's dispatch, can carry that
-  object, so one turn can hold a shared MEDIA worker for tens of milliseconds:
-  the class Q-074 bounds, and its `maxPollUs` record would show it. The pull's
-  own parse and its other per-segment passes have been off its Tokio worker
-  since the #354 follow-up (`prepare_off_worker` → `parse_and_prepare`, which
-  also carries the timing test); this is the turn's half.
-- Change: parse the playlist where it is received (the upload handler and the
-  pull's dispatch) and hand the session the parsed playlist, or bound the parse
-  per turn the way the fMP4 walk is bounded by `MAX_BOXES`. The pull already
-  holds the parsed `MediaPlaylist` and renders it back to text for the session
-  to parse again, so handing over the parsed form removes both the render and
-  the second parse for every pulled playlist — or dispatch only the entries from
-  the sequence the pull will fetch next, which bounds both to the live window.
-- Gates: a `hlsIngest` poll carrying a 1 MiB playlist object stays inside the
-  Q-074 budget — a unit test with a synthetic playlist, plus the poll timing
-  the harness already records.
-- Status: open (Filed: 2026-10-17 by claude, from the #354 follow-up: measured
-  29 ms for a 1 MiB playlist of 10 280 segments).

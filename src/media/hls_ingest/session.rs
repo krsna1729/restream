@@ -25,13 +25,13 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
+use super::ObjectOutcome;
 use super::ordering::{
     Counters, Payload, PlaylistOutcome, Release, SegmentOutcome, Session, SessionLimits,
 };
 use super::pacing::Pacer;
 use super::playlist;
 use super::registry::AppliedInit;
-use super::{ObjectKind, ObjectOutcome};
 use crate::media::engine::{IngestRegistration, MediaEngine};
 use crate::media::ingest_publisher::fmp4::{Fmp4Demux, boxes};
 use crate::media::ingest_publisher::{
@@ -43,9 +43,19 @@ use crate::media::ring_buffer::RingBuffer;
 /// One uploaded object handed from the HTTP handler to its session.
 pub(super) struct HlsObject {
     pub(super) path: String,
-    pub(super) kind: ObjectKind,
+    pub(super) content: ObjectContent,
     pub(super) payload: Payload,
     pub(super) reply: oneshot::Sender<ObjectOutcome>,
+}
+
+/// What an object is, as its session turn needs it. A playlist arrives
+/// already parsed: parsing is linear in the playlist (a 1 MiB playlist takes
+/// about 29 ms), so it runs on the blocking pool before the object is queued,
+/// never on the shared MEDIA worker that runs the turn.
+pub(super) enum ObjectContent {
+    Playlist(Result<playlist::Playlist, playlist::PlaylistError>),
+    TsSegment,
+    Fmp4,
 }
 
 pub(super) struct SessionContext {
@@ -220,7 +230,7 @@ async fn drive(
                 // registered, so a closed queue means it was forgotten.
                 let Some(object) = object else { return SessionEnd::Cancelled };
                 last_activity = Instant::now();
-                let outcome = apply(session, state, object.kind, object.path, object.payload, last_activity);
+                let outcome = apply(session, state, object.content, object.path, object.payload, last_activity);
                 let _ = object.reply.send(outcome);
                 let lead = u64::try_from(session.pacing_lead().as_millis()).unwrap_or(u64::MAX);
                 lead_ms.store(lead, Ordering::Relaxed);
@@ -374,14 +384,14 @@ impl Publishing {
 fn apply(
     session: &mut Session,
     state: &mut Publishing,
-    kind: ObjectKind,
+    content: ObjectContent,
     path: String,
     payload: Payload,
     now: Instant,
 ) -> ObjectOutcome {
-    let container = match kind {
-        ObjectKind::Playlist => {
-            return match playlist::parse(&payload.bytes, &path) {
+    let container = match content {
+        ObjectContent::Playlist(parsed) => {
+            return match parsed {
                 Ok(parsed) => match session.on_playlist(&path, parsed, now) {
                     PlaylistOutcome::Accepted => ObjectOutcome::Stored,
                     PlaylistOutcome::OtherVariant => ObjectOutcome::Dropped,
@@ -389,8 +399,8 @@ fn apply(
                 Err(error) => ObjectOutcome::Malformed(error.to_string()),
             };
         }
-        ObjectKind::TsSegment => Container::Ts,
-        ObjectKind::Fmp4 => Container::Fmp4,
+        ObjectContent::TsSegment => Container::Ts,
+        ObjectContent::Fmp4 => Container::Fmp4,
     };
     if let Some(current) = state.container
         && current != container
