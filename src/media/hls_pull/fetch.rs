@@ -219,8 +219,9 @@ fn ipv4_refused(address: Ipv4Addr) -> bool {
         || (first == 100 && (64..=127).contains(&second))
 }
 
-/// How a URL is rendered in a pull log line: scheme, host, port and path,
-/// with any query replaced by `?<redacted>`.
+/// How a URL is rendered in a pull log line: scheme, host, port and path, with
+/// any query replaced by `?<redacted>` and any path segment that carries a `=`
+/// replaced by `<redacted>`.
 ///
 /// [`crate::secret_display::redact_url`] redacts only the query keys it knows
 /// (`streamid`, `passphrase`, `key`, `stream_key`, `token`, `cid`), while a
@@ -230,7 +231,9 @@ fn ipv4_refused(address: Ipv4Addr) -> bool {
 /// site that renders a URL: a segment or map URL from a signed playlist
 /// carries a signature of its own, and so does a master that hands out signed
 /// variant URLs. Userinfo is dropped with it, the same reason the source URL
-/// may not carry any.
+/// may not carry any. Akamai's path form (`/hdntl=exp=…~acl=…~hmac=…/seg.ts`)
+/// puts the credential in a path segment, so a segment that carries a `=`
+/// prints as the marker too.
 pub(super) fn log_url(raw: &str) -> String {
     let Ok(url) = Url::parse(raw) else {
         // Not a URL: keep the part before any query, which is where a
@@ -248,7 +251,14 @@ pub(super) fn log_url(raw: &str) -> String {
         rendered.push(':');
         rendered.push_str(&port.to_string());
     }
-    rendered.push_str(url.path());
+    for segment in url.path_segments().into_iter().flatten() {
+        rendered.push('/');
+        if segment.contains('=') {
+            rendered.push_str("<redacted>");
+        } else {
+            rendered.push_str(segment);
+        }
+    }
     if url.query().is_some() {
         rendered.push_str("?<redacted>");
     }

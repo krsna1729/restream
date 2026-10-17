@@ -147,6 +147,11 @@ pub async fn hls_ingest_handler(
             "input already has an active publisher",
         )
             .into_response(),
+        Ok(Err(DispatchError::AuthorizationChanged)) => (
+            StatusCode::FORBIDDEN,
+            "the stream key no longer authorizes this input",
+        )
+            .into_response(),
         Ok(Ok(ObjectOutcome::Retry)) => retry_later("ingest session ended"),
         Ok(Err(DispatchError::Unavailable)) | Err(_) => {
             StatusCode::SERVICE_UNAVAILABLE.into_response()

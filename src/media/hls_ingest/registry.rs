@@ -42,6 +42,10 @@ pub enum AuthorizeError {
 pub enum DispatchError {
     /// Another publisher holds the input (RTMP, SRT, file).
     PublisherActive,
+    /// The stream key no longer authorizes this input: its row changed between
+    /// the upload's authorization and the session it tried to open — disabled,
+    /// deleted, or remapped to another input.
+    AuthorizationChanged,
     /// The session ended under the object twice, or the MEDIA executor is
     /// unavailable.
     Unavailable,
@@ -207,6 +211,64 @@ impl RunningPull {
     }
 }
 
+/// Releases an ingest attempt whose `session_for` future is dropped before a
+/// session owner takes it over.
+///
+/// `session_for` registers the attempt and then awaits the pipeline and its
+/// metadata before spawning the owner. A cancellation that lands in that window
+/// drops the future: without this guard the engine keeps an attempt nothing
+/// will end (a disabled input still shown as connected), and a session opened
+/// for an input another source is about to own. The guard is disarmed once the
+/// owner is spawned; the owner then releases the attempt itself.
+struct RegistrationGuard {
+    engine: Arc<MediaEngine>,
+    pipeline_id: String,
+    registration: IngestRegistration,
+    armed: bool,
+}
+
+impl RegistrationGuard {
+    fn new(
+        engine: &Arc<MediaEngine>,
+        pipeline_id: &str,
+        registration: &IngestRegistration,
+    ) -> Self {
+        Self {
+            engine: Arc::clone(engine),
+            pipeline_id: pipeline_id.to_string(),
+            registration: registration.clone(),
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for RegistrationGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let (engine, pipeline_id, registration) = (
+            Arc::clone(&self.engine),
+            self.pipeline_id.clone(),
+            self.registration.clone(),
+        );
+        // Drop cannot await. The attempt-scoped release runs on its own task,
+        // so it cannot end a registration that replaced this one; outside a
+        // runtime there is nothing to release.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                engine
+                    .unregister_ingest_if_current(&pipeline_id, &registration)
+                    .await;
+            });
+        }
+    }
+}
+
 impl HlsIngest {
     pub fn new(
         engine: Arc<MediaEngine>,
@@ -338,7 +400,6 @@ impl HlsIngest {
         had_pull
     }
 
-    /// Drop the init a key applied last, so its state can be evicted.
     fn clear_applied_init(&self, input_id: &str) {
         let keys = crate::sync::lock(&self.keys);
         if let Some(key) = keys.get(input_id) {
@@ -538,6 +599,11 @@ impl HlsIngest {
         // failure count again (idempotent), and only the rare disable-or-remap
         // race adds a failure. Re-checking the input row directly instead would
         // put a second copy of the authorization rule in this module.
+        // The row the key resolves to now is the one registered: the pipeline
+        // captured before the body was read may have been renamed or deselected
+        // since.
+        let refreshed: AuthenticatedPipeline;
+        let mut pipeline = pipeline;
         if origin == DispatchOrigin::Push {
             // The security layer keys bans and rate limits by bare IP, and the
             // ingest protocols pass it that way; `client_addr` is the peer
@@ -546,15 +612,20 @@ impl HlsIngest {
                 .parse::<SocketAddr>()
                 .map_or_else(|_| client_addr.to_string(), |addr| addr.ip().to_string());
             match self.authorize(stream_key, &client_ip).await {
-                Ok(current) if current.input_id == pipeline.input_id => {}
+                Ok(current) if current.input_id == pipeline.input_id => {
+                    refreshed = current;
+                    pipeline = &refreshed;
+                }
                 Ok(_) => {
                     warn!(
                         input = %pipeline.input_id,
                         "hls ingest upload authorized for another input; refused"
                     );
-                    return Err(DispatchError::PublisherActive);
+                    return Err(DispatchError::AuthorizationChanged);
                 }
-                Err(AuthorizeError::Forbidden) => return Err(DispatchError::PublisherActive),
+                Err(AuthorizeError::Forbidden) => {
+                    return Err(DispatchError::AuthorizationChanged);
+                }
                 Err(AuthorizeError::LookupFailed(error)) => {
                     error!(%error, "hls ingest stream key lookup failed at session start");
                     return Err(DispatchError::Unavailable);
@@ -572,6 +643,12 @@ impl HlsIngest {
             )
             .await
             .ok_or(DispatchError::PublisherActive)?;
+        // From here until the owner is spawned below, the attempt has no owner:
+        // a caller that drops this future in that window (a pull's cancel lands
+        // in it) must release the registration, or the engine keeps an attempt
+        // nothing will end — a disabled input still shown as connected — and the
+        // ring is recreated under it.
+        let mut guard = RegistrationGuard::new(engine, &pipeline.id, &registration);
         let ring = engine.get_or_create_pipeline(&pipeline.id).await;
         engine
             .update_ingest_session_meta(
@@ -607,6 +684,7 @@ impl HlsIngest {
             init: key.init.clone(),
         };
         tokio::spawn(Arc::clone(self).supervise(context, receiver));
+        guard.disarm();
         Ok((attempt_id, objects))
     }
 
@@ -700,8 +778,9 @@ impl HlsIngest {
 }
 
 /// Tests live in `registry_tests.rs` (this file is at the line cap); the
-/// pull-registry cases live in `pull_registry_tests.rs`, which keeps that
-/// file's growth bounded too.
+/// pull-registry cases live in `pull_registry_tests.rs`, and the session-start
+/// window in `session_start_tests.rs`, which keeps that file's growth bounded
+/// too.
 #[cfg(test)]
 #[path = "registry_tests.rs"]
 mod tests;
@@ -709,3 +788,7 @@ mod tests;
 #[cfg(test)]
 #[path = "pull_registry_tests.rs"]
 mod pull_tests;
+
+#[cfg(test)]
+#[path = "session_start_tests.rs"]
+mod session_start_tests;

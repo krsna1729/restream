@@ -159,6 +159,16 @@ fn a_log_url_drops_the_whole_query() {
         "https://cdn.example:8443/live/index.m3u8?<redacted>"
     );
     assert_eq!(log_url("not a url?secret=x"), "not a url?<redacted>");
+    // Akamai's path form carries the token in a path segment, so a segment
+    // with a `=` in it prints as the marker and the rest of the path stays.
+    assert_eq!(
+        log_url("https://cdn.example/hdntl=exp=1~acl=*~hmac=SECRETSIG/live/seg0.ts"),
+        "https://cdn.example/<redacted>/live/seg0.ts"
+    );
+    assert_eq!(
+        log_url("https://cdn.example/live/seg0.ts?hdntl=exp=1~hmac=SECRETSIG"),
+        "https://cdn.example/live/seg0.ts?<redacted>"
+    );
     // A signed source URL is what `PullSource`'s Debug renders, and the
     // credentials it carries are write-only.
     let mut signed_source = source(

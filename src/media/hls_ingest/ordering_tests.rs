@@ -709,6 +709,39 @@ fn a_return_to_an_earlier_map_delivers_its_init_again() {
     );
 }
 
+/// The demuxer holds bytes, not URIs: the same init listed under a second map
+/// is already in it, so the switch delivers nothing and flags no discontinuity.
+/// A discontinuity re-anchors at what is a seamless boundary.
+#[test]
+fn the_same_init_under_a_second_map_is_not_delivered_again() {
+    let t0 = Instant::now();
+    let mut session = Session::new(limits());
+    assert_eq!(seg(&mut session, "content.mp4", t0), SegmentOutcome::Held);
+    assert_eq!(seg(&mut session, "index0.ts", t0), SegmentOutcome::Held);
+    session.on_playlist(
+        "index.m3u8",
+        with_map(media("", 0, 1, false), "content.mp4"),
+        t0,
+    );
+    assert_eq!(
+        released_with_init(&mut session, t0),
+        vec![(0, "index0.ts".into(), Some("content.mp4".into()), false)]
+    );
+
+    // A second map whose bytes are the ones the demuxer already holds.
+    assert_eq!(
+        session.on_segment("ad.mp4".to_string(), payload("content.mp4"), t0),
+        SegmentOutcome::Held
+    );
+    assert_eq!(seg(&mut session, "index1.ts", t0), SegmentOutcome::Held);
+    session.on_playlist("index.m3u8", with_map(media("", 1, 1, false), "ad.mp4"), t0);
+    assert_eq!(
+        released_with_init(&mut session, t0),
+        vec![(1, "index1.ts".into(), None, false)],
+        "identical bytes need no delivery and are not a discontinuity"
+    );
+}
+
 #[derive(Debug, Clone)]
 enum Op {
     Segment { index: u64, len: usize },

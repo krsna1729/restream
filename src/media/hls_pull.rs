@@ -805,16 +805,13 @@ impl PullState {
         self.dispatch(ingest, kind, path, body).await
     }
 
-    /// Hand one object to the ingest on its own task, as an upload handler
-    /// does, and wait for what it did.
+    /// Hand one object to the ingest.
     ///
-    /// The task is what keeps a cancellation honest: `session_for` registers
-    /// the attempt and then awaits the pipeline and its metadata before
-    /// spawning the session's owner, so a cancel that landed in that window
-    /// would drop the dispatch future and leave the registration with nothing
-    /// holding it — a disabled input still shown as connected. Dropping the
-    /// *await* instead leaves the dispatch to finish, and the session it opens
-    /// is the one the caller's own teardown ends.
+    /// Inline, not on a task: the registry's own guard releases a registration
+    /// whose `session_for` future is dropped, so a cancellation that lands while
+    /// this is in flight cannot leave an attempt with no owner. Detaching here
+    /// would instead let the dispatch finish after the caller's teardown and
+    /// open a session for an input the next source is about to own.
     async fn dispatch(
         &self,
         ingest: &Arc<HlsIngest>,
@@ -822,29 +819,18 @@ impl PullState {
         path: String,
         body: ObjectBody,
     ) -> Result<ObjectOutcome, PullError> {
-        let ingest = ingest.clone();
-        let pipeline = self.pipeline.clone();
-        let stream_key = self.stream_key.clone();
-        let client_addr = self.client_addr.clone();
-        let dispatched = tokio::spawn(async move {
-            ingest
-                .dispatch(
-                    &pipeline,
-                    &stream_key,
-                    &client_addr,
-                    DispatchOrigin::Pull,
-                    kind,
-                    path,
-                    body,
-                )
-                .await
-        });
-        match dispatched.await {
-            Ok(outcome) => outcome.map_err(dispatch_error),
-            Err(error) => Err(PullError::Retry(format!(
-                "the pulled object's dispatch did not finish: {error}"
-            ))),
-        }
+        ingest
+            .dispatch(
+                &self.pipeline,
+                &self.stream_key,
+                &self.client_addr,
+                DispatchOrigin::Pull,
+                kind,
+                path,
+                body,
+            )
+            .await
+            .map_err(dispatch_error)
     }
 }
 
@@ -873,6 +859,11 @@ fn playlist_body_error(error: BodyError) -> PullError {
 fn dispatch_error(error: DispatchError) -> PullError {
     match error {
         DispatchError::PublisherActive => PullError::PublisherActive,
+        // The row changed under a pull of our own making: the pull is replaced
+        // on the next pass, so this is not a retry of the same source.
+        DispatchError::AuthorizationChanged => {
+            PullError::Fatal("the pull input no longer accepts its own objects".to_string())
+        }
         DispatchError::Unavailable => {
             PullError::Retry("HLS ingest session is unavailable".to_string())
         }

@@ -189,11 +189,12 @@ pub(super) struct Session {
     current_map: Option<String>,
     /// A followed media playlist was applied, so its (missing) map is known.
     playlist_seen: bool,
-    /// The map whose init the demuxer currently holds: its URI and the hash of
-    /// the bytes delivered for it. One init is held at a time, so this — not
-    /// each map's own last delivery — decides whether a delivery is needed. A
-    /// later, different init starts an unrelated timeline (a discontinuity).
-    applied: Option<(String, u64)>,
+    /// The hash of the init the demuxer currently holds. One init is held at a
+    /// time, and the demuxer holds bytes rather than URIs, so this — not each
+    /// map's own last delivery — decides whether a delivery is needed: the same
+    /// bytes listed under a second map need none. A later, different init starts
+    /// an unrelated timeline (a discontinuity).
+    applied: Option<u64>,
     /// The init the stream key applied last, from before this session. It is
     /// delivered to this session's demuxer like a fresh upload, because the
     /// demuxer starts empty.
@@ -520,18 +521,17 @@ impl Session {
                 (kept.bytes.clone(), hash)
             }
         };
-        // The demuxer already holds exactly these bytes: a re-upload of the
-        // same init (an encoder's `resend`), or a return to the map it is on.
-        let held = map.delivered == Some(hash)
-            && self
-                .applied
-                .as_ref()
-                .is_some_and(|(applied_uri, applied)| applied_uri == uri && *applied == hash);
+        // The demuxer holds one init, and it holds bytes rather than URIs: if it
+        // already holds exactly these bytes — a re-upload of the same init (an
+        // encoder's `resend`), a return to the map it is on, or the same bytes
+        // listed under another map URI — nothing is delivered, and nothing is a
+        // discontinuity.
+        let held = self.applied == Some(hash);
         if held {
             return (None, false);
         }
         map.delivered = Some(hash);
-        let replaces = self.applied.replace((uri.to_string(), hash)).is_some();
+        let replaces = self.applied.replace(hash).is_some();
         (
             Some(Init {
                 uri: uri.to_string(),

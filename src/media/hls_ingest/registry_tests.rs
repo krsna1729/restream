@@ -943,7 +943,7 @@ async fn an_upload_whose_input_changed_before_its_body_opens_no_session() {
         )
         .await
         .expect_err("the session must not open for a key that no longer resolves");
-    assert_eq!(error, DispatchError::PublisherActive);
+    assert_eq!(error, DispatchError::AuthorizationChanged);
     assert!(
         !engine
             .input_has_session(PIPELINE_ID, &pipeline.input_id)
