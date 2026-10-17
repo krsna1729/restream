@@ -133,10 +133,9 @@ pub async fn v1_state_stream_handler(
                     }
                 }
                 // Release the receiver (and the projector's cadence) once
-                // hyper drops the response body. The listener allows
-                // half-closed requests (`api::http_server`), so a departed
-                // client is seen only when a write fails: the second write
-                // after its reset, 20-40 s with the heartbeat (Q-072).
+                // hyper drops the response body: at once when the client
+                // goes, since only HLS upload connections are served with
+                // half-close (`api::http_server`).
                 () = tx.closed() => return,
             }
         }

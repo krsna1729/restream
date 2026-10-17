@@ -30,7 +30,6 @@ items).
 - [Q-069 frame-level media units](#q-069-architecture-opus-frame-level-media-units-for-moq-and-fmp4-ingest)
 - [Q-070 MoQ ingest](#q-070-protocol-opus-moq-ingest)
 - [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
-- [Q-072 dedicated HLS ingest listener](#q-072-architecture-sonnet-dedicated-hls-ingest-listener-with-half-close)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
 - [Q-077 follow every rendition into one ring](#q-077-architecture-opus-follow-every-rendition-of-a-master-playlist-into-one-ring)
 - [Q-083 measure RTMP and SRT under pull load](#q-083-performance-sonnet-measure-rtmp-and-srt-under-pull-load)
@@ -492,22 +491,6 @@ items).
   (a stage, or a non-HLS output) falls back with the reason recorded.
 - Status: open (Filed: 2026-10-16 by claude, user question on passthrough;
   after Q-067/Q-068).
-
-### Q-072 [architecture] [sonnet] Dedicated HLS ingest listener with half-close
-- Goal: only HLS push uploads get HTTP/1.1 half-close; dashboard SSE
-  streams notice a departed client at once again.
-- Sources: `src/api/http_server.rs` serves every dashboard route with
-  `half_close(true)` because FFmpeg (default `-http_persistent 0`) closes
-  its side after the body and hyper otherwise drops the upload. With it,
-  a client that leaves an SSE stream (`/api/v1/state/stream`, logs) is
-  noticed only when a write fails, at the second write after the reset
-  (20 to 40 s with the 20 s heartbeat), not at `tx.closed()`.
-- Change: serve `/ingest/hls/` on its own listener (or a per-route
-  connection policy) that sets half-close, and return the dashboard to
-  hyper's default.
-- Gates: the FFmpeg POST push test still passes; a test that a dropped
-  SSE client releases its receiver within one heartbeat.
-- Status: open (Filed: 2026-10-16 by claude).
 
 ### Q-074 [performance] [opus] A rare multi-millisecond HLS ingest poll is bounded whatever its cause
 - Goal: a `hlsIngest` poll on the MEDIA executor never spends multiple
