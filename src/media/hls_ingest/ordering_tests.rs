@@ -728,17 +728,24 @@ fn the_same_init_under_a_second_map_is_not_delivered_again() {
         vec![(0, "index0.ts".into(), Some("content.mp4".into()), false)]
     );
 
-    // A second map whose bytes are the ones the demuxer already holds.
+    // A second map whose bytes are the ones the demuxer already holds, with
+    // two segments under it: the first releases with no init, and the second
+    // proves the map was left ready rather than waiting for an init it never
+    // delivered.
     assert_eq!(
         session.on_segment("ad.mp4".to_string(), payload("content.mp4"), t0),
         SegmentOutcome::Held
     );
     assert_eq!(seg(&mut session, "index1.ts", t0), SegmentOutcome::Held);
-    session.on_playlist("index.m3u8", with_map(media("", 1, 1, false), "ad.mp4"), t0);
+    assert_eq!(seg(&mut session, "index2.ts", t0), SegmentOutcome::Held);
+    session.on_playlist("index.m3u8", with_map(media("", 1, 2, false), "ad.mp4"), t0);
     assert_eq!(
         released_with_init(&mut session, t0),
-        vec![(1, "index1.ts".into(), None, false)],
-        "identical bytes need no delivery and are not a discontinuity"
+        vec![
+            (1, "index1.ts".into(), None, false),
+            (2, "index2.ts".into(), None, false),
+        ],
+        "identical bytes need no delivery, and the map still releases"
     );
 }
 

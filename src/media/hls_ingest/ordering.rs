@@ -521,16 +521,19 @@ impl Session {
                 (kept.bytes.clone(), hash)
             }
         };
+        // The map has an init now, whether or not it is delivered: record it
+        // first, or a map whose bytes were already in the demuxer would be left
+        // waiting for an init it never delivered, and every later segment under
+        // it would be held.
+        map.delivered = Some(hash);
         // The demuxer holds one init, and it holds bytes rather than URIs: if it
         // already holds exactly these bytes — a re-upload of the same init (an
         // encoder's `resend`), a return to the map it is on, or the same bytes
         // listed under another map URI — nothing is delivered, and nothing is a
         // discontinuity.
-        let held = self.applied == Some(hash);
-        if held {
+        if self.applied == Some(hash) {
             return (None, false);
         }
-        map.delivered = Some(hash);
         let replaces = self.applied.replace(hash).is_some();
         (
             Some(Init {
