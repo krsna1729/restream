@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 
-import { getProcessingGraph, getResourceMap, getStageTelemetry } from "../core/api.js";
+import { getResourceMap, getStageTelemetry } from "../core/api.js";
 import type { GraphData, NodeJudgement, ResourceMapSnapshot } from "../core/api-types.js";
 import { formatBytes, formatPercent } from "./format.js";
 import {
@@ -14,6 +14,7 @@ import type { ResourceRow, RingView, ShardView } from "./inspect-model.js";
 import { Diagnostics } from "./diagnostics.js";
 import { PipelineScope } from "./pipeline-scope.js";
 import { Freshness, usePolled } from "./polled.js";
+import { pipelineGraph } from "./state-views.js";
 import type { LiveSnapshot } from "./store.js";
 
 const CONFIDENCE_BADGE: Record<string, string> = {
@@ -33,7 +34,7 @@ export function Inspect(props: { live: LiveSnapshot; pipelineId: string | null }
     >
       {(pipelineId) => (
         <>
-          <Anatomy pipelineId={pipelineId} />
+          <Anatomy live={props.live} pipelineId={pipelineId} />
           <Diagnostics
             pipeline={{
               id: pipelineId,
@@ -48,15 +49,17 @@ export function Inspect(props: { live: LiveSnapshot; pipelineId: string | null }
   );
 }
 
-function Anatomy({ pipelineId }: { pipelineId: string }) {
-  // The pipeline's map, or every pipeline's (the runtime scope).
+function Anatomy({ live, pipelineId }: { live: LiveSnapshot; pipelineId: string }) {
+  // The pipeline's map, or every pipeline's (the runtime scope). The map is
+  // process measurements (CPU, memory), so it is polled.
   const [global, setGlobal] = useState(false);
   const scope = global ? null : pipelineId;
   const map = usePolled<ResourceMapSnapshot>(["resource-map", scope, MAP_TOP_N], () =>
     getResourceMap(scope, { view: "detail", topN: MAP_TOP_N }),
   );
-  const graph = usePolled<GraphData>(["processing-graph", pipelineId], () =>
-    getProcessingGraph(pipelineId),
+  const graph = useMemo(
+    () => pipelineGraph(live.state, live.telemetry, pipelineId),
+    [live.state, live.telemetry, pipelineId],
   );
   const rows = useMemo(
     () => (map.value ? buildResourceRows(map.value) : null),
@@ -110,13 +113,10 @@ function Anatomy({ pipelineId }: { pipelineId: string }) {
           </div>
         </section>
         {/* The graph is this pipeline's: it names consumers only here. */}
-        <NodeDetail row={selected} graph={global ? null : graph.value} />
+        <NodeDetail row={selected} graph={global ? null : graph} />
       </div>
       <div className="grid gap-4 lg:grid-cols-3">
-        <RingPanel
-          ring={graph.value ? ringFromGraph(graph.value) : null}
-          atMs={graph.atMs}
-        />
+        <RingPanel ring={graph ? ringFromGraph(graph) : null} atMs={live.telemetryAtMs} />
         <ShardsPanel
           shards={map.value ? shardsFrom(map.value) : null}
           truncated={truncated > 0}

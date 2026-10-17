@@ -4,17 +4,27 @@
 //! the operator's intent (desired), what the engine is doing (actual), how
 //! the two relate (convergence), whether media moves (flow), queue pressure
 //! the latest failure evidence, and the diagnosis of a degraded output
-//! ([`crate::application::diagnosis`]). [`hub::StateHub`] keeps the current
-//! projection under a monotonically increasing revision and publishes the
-//! entity-level difference of each change as a [`StateDelta`], so a client
-//! fetches `/api/v1/state` once and then applies deltas from
+//! ([`crate::application::diagnosis`]). Each pipeline input carries its
+//! stored settings and its session's state ([`inputs`]), and each pipeline
+//! its processing graph ([`graph`]). Only state is projected: counters that
+//! advance on every read (rates, bytes, fill, lag, transport quality) are
+//! sampled from `/api/v1/engine/telemetry` instead, or every rebuild would
+//! be a delta. [`hub::StateHub`] keeps the current projection under a
+//! monotonically increasing revision and publishes the entity-level
+//! difference of each change as a [`StateDelta`], so a client fetches
+//! `/api/v1/state` once and then applies deltas from
 //! `/api/v1/state/stream`; a client that misses deltas resyncs from a full
 //! snapshot.
 //!
 //! The TypeScript contract for these types is generated from them
 //! (`web/ts/core/generated/runtime-state.ts`, see `tests.rs`).
 
+#[cfg(test)]
+#[path = "entity_tests.rs"]
+mod entity_tests;
+pub mod graph;
 pub mod hub;
+pub mod inputs;
 #[cfg(test)]
 mod tests;
 
@@ -29,6 +39,9 @@ use crate::domain::output_spec::EgressProtocol;
 use crate::domain::state::{DesiredOutputState, EgressPhase};
 use crate::media::engine::MediaEngine;
 
+pub use graph::{GraphEdge, GraphNode, PipelineGraph};
+pub use inputs::{IngestEndpoints, IngestUrls, InputState};
+
 /// The whole runtime state at one revision.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -41,6 +54,9 @@ pub struct RuntimeState {
     pub revision: u64,
     pub pipelines: Vec<PipelineState>,
     pub outputs: Vec<OutputState>,
+    pub inputs: Vec<InputState>,
+    /// One per pipeline.
+    pub graphs: Vec<PipelineGraph>,
 }
 
 /// What changed between revision `revision - 1` and `revision`: entities to
@@ -54,16 +70,25 @@ pub struct StateDelta {
     pub revision: u64,
     pub pipelines: Vec<PipelineState>,
     pub outputs: Vec<OutputState>,
+    pub inputs: Vec<InputState>,
+    pub graphs: Vec<PipelineGraph>,
     pub removed_pipelines: Vec<String>,
     pub removed_outputs: Vec<String>,
+    pub removed_inputs: Vec<String>,
+    /// Pipeline ids whose graph is gone (the pipeline was deleted).
+    pub removed_graphs: Vec<String>,
 }
 
 impl StateDelta {
     fn is_empty(&self) -> bool {
         self.pipelines.is_empty()
             && self.outputs.is_empty()
+            && self.inputs.is_empty()
+            && self.graphs.is_empty()
             && self.removed_pipelines.is_empty()
             && self.removed_outputs.is_empty()
+            && self.removed_inputs.is_empty()
+            && self.removed_graphs.is_empty()
     }
 }
 
@@ -173,21 +198,35 @@ pub struct FailureEvidence {
     pub at_ms: u64,
 }
 
-/// One projection of every entity, keyed by id.
+/// One projection of every entity, keyed by id (graphs by pipeline id).
 #[derive(Debug, Default, PartialEq)]
 pub struct Projection {
     pub pipelines: BTreeMap<String, PipelineState>,
     pub outputs: BTreeMap<String, OutputState>,
+    pub inputs: BTreeMap<String, InputState>,
+    pub graphs: BTreeMap<String, PipelineGraph>,
 }
 
-/// Projects pipelines and outputs from their rows and the engine's runtime
-/// maps. Each engine map is read once, so the projection is consistent per
-/// map and costs one pass over the outputs.
-pub async fn project(
-    engine: &MediaEngine,
-    pipelines: &[crate::db::PipelineRecord],
-    outputs: &[Output],
-) -> Projection {
+/// The stored rows a projection reads, and where inputs publish.
+#[derive(Clone, Copy)]
+pub struct Rows<'a> {
+    pub pipelines: &'a [crate::db::PipelineRecord],
+    pub outputs: &'a [Output],
+    /// In list order: by pipeline, the primary first, backups by age.
+    pub inputs: &'a [crate::domain::pipeline_input::PipelineInput],
+    pub endpoints: &'a IngestEndpoints,
+}
+
+/// Projects every entity from its rows and the engine's runtime maps. Each
+/// engine map is read once, so the projection is consistent per map and
+/// costs one pass over the outputs.
+pub async fn project(engine: &MediaEngine, rows: &Rows<'_>) -> Projection {
+    let Rows {
+        pipelines,
+        outputs,
+        inputs,
+        endpoints,
+    } = *rows;
     let ingests: HashMap<String, IngestState> = engine
         .ingests
         .active
@@ -315,6 +354,26 @@ pub async fn project(
                 standby_inputs: standby.get(&pipeline.id).copied().unwrap_or(0),
                 recording: recording.contains(&pipeline.id),
             },
+        );
+    }
+    projection.inputs = inputs::project_inputs(engine, inputs, endpoints).await;
+    let pipeline_ids: Vec<&str> = pipelines
+        .iter()
+        .map(|pipeline| pipeline.id.as_str())
+        .collect();
+    let runtime = graph::GraphRuntime::read(engine, &pipeline_ids).await;
+    let mut outputs_of: HashMap<&str, Vec<&Output>> = HashMap::new();
+    for output in outputs {
+        outputs_of
+            .entry(output.pipeline_id.as_str())
+            .or_default()
+            .push(output);
+    }
+    for pipeline_id in pipeline_ids {
+        let own = outputs_of.get(pipeline_id).map_or(&[][..], Vec::as_slice);
+        projection.graphs.insert(
+            pipeline_id.to_string(),
+            graph::pipeline_graph(pipeline_id, own, &runtime),
         );
     }
     projection
@@ -466,12 +525,18 @@ pub fn diff(old: &Projection, new: &Projection) -> StateDelta {
     }
     let (pipelines, removed_pipelines) = changed(&old.pipelines, &new.pipelines);
     let (outputs, removed_outputs) = changed(&old.outputs, &new.outputs);
+    let (inputs, removed_inputs) = changed(&old.inputs, &new.inputs);
+    let (graphs, removed_graphs) = changed(&old.graphs, &new.graphs);
     StateDelta {
         epoch: String::new(),
         revision: 0,
         pipelines,
         outputs,
+        inputs,
+        graphs,
         removed_pipelines,
         removed_outputs,
+        removed_inputs,
+        removed_graphs,
     }
 }

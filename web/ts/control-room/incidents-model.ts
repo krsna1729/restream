@@ -161,10 +161,25 @@ export function incidentMarks(alert: OperatorAlert, resolvedAt: string | null): 
 }
 
 /**
+ * The span the correlation chart reads from the engine's fleet history: from
+ * the timeline's start to a minute after the close, so the close cursor has
+ * samples on both sides (`toMs` `null`: open, up to now).
+ */
+export function correlationWindow(
+  alert: OperatorAlert,
+  resolvedAt: string | null,
+): { fromMs: number; toMs: number | null } {
+  return {
+    fromMs: timelineStartMs(alert),
+    toMs: resolvedAt === null ? null : seenMs(resolvedAt) + TIMELINE_LEAD_MS,
+  };
+}
+
+/**
  * One incident as a self-contained record an operator can attach to a
  * ticket: the alert as last judged, its evidence packet, the timeline the
- * page shows, and the page's fleet samples from the timeline's start to the
- * close (or now). `events` is `null` when the timeline was not loaded.
+ * page shows, and the engine's fleet samples from the timeline's start to
+ * the close (or now). `events` is `null` when the timeline was not loaded.
  */
 export function evidenceExport(input: {
   alert: OperatorAlert;

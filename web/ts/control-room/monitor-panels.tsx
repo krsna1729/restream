@@ -1,27 +1,20 @@
 import { useMemo } from "react";
 import type { ReactNode } from "react";
 
-import { getPipelineInputs } from "../core/api.js";
-import type { GraphData } from "../core/api-types.js";
-import type { PipelineInputsResponse } from "../types.js";
 import { formatBps, formatPercent } from "./format.js";
 import { destinationOutlier, DELIVERY_FLOOR, inputTransport, mediaPath } from "./monitor-path.js";
-import { Freshness, usePolled } from "./polled.js";
-import type { Polled } from "./polled.js";
+import { Freshness } from "./polled.js";
 import { PlaceLink } from "./router.js";
+import { pipelineGraph, pipelineInputs } from "./state-views.js";
 import type { LiveSnapshot } from "./store.js";
 
 /** The selected input's transport, the shared media path and the
  * destination outlier of one pipeline. */
-export function MonitorPanels(props: {
-  live: LiveSnapshot;
-  pipelineId: string;
-  graph: Polled<GraphData>;
-}) {
+export function MonitorPanels(props: { live: LiveSnapshot; pipelineId: string }) {
   return (
     <div className="grid gap-4 lg:grid-cols-3">
-      <InputTransport pipelineId={props.pipelineId} />
-      <SharedPath live={props.live} graph={props.graph} />
+      <InputTransport live={props.live} pipelineId={props.pipelineId} />
+      <SharedPath live={props.live} pipelineId={props.pipelineId} />
       <Outlier live={props.live} pipelineId={props.pipelineId} />
     </div>
   );
@@ -63,14 +56,15 @@ function Rows({ rows }: { rows: ReadonlyArray<[string, string]> }) {
   );
 }
 
-function InputTransport({ pipelineId }: { pipelineId: string }) {
-  const inputs = usePolled<PipelineInputsResponse>(["pipeline-inputs", pipelineId], () =>
-    getPipelineInputs(pipelineId),
-  );
-  const transport = inputs.value ? inputTransport(inputs.value.inputs) : null;
+function InputTransport(props: { live: LiveSnapshot; pipelineId: string }) {
+  const { state, telemetry } = props.live;
+  const transport = useMemo(() => {
+    const inputs = pipelineInputs(state, telemetry, props.pipelineId);
+    return inputs === null ? undefined : inputTransport(inputs);
+  }, [state, telemetry, props.pipelineId]);
   return (
-    <Panel id="monitor-transport" title="Input transport" atMs={inputs.atMs}>
-      {inputs.value === null ? (
+    <Panel id="monitor-transport" title="Input transport" atMs={props.live.telemetryAtMs}>
+      {transport === undefined ? (
         <p className="text-sm opacity-70">Loading inputs…</p>
       ) : transport === null ? (
         <p className="text-sm opacity-70">No selected input is connected.</p>
@@ -90,15 +84,14 @@ function InputTransport({ pipelineId }: { pipelineId: string }) {
   );
 }
 
-function SharedPath(props: { live: LiveSnapshot; graph: Polled<GraphData> }) {
-  const graph = props.graph.value;
-  const outputs = props.live.state?.outputs;
-  const path = useMemo(
-    () => (graph ? mediaPath(graph, outputs ?? []) : null),
-    [graph, outputs],
-  );
+function SharedPath(props: { live: LiveSnapshot; pipelineId: string }) {
+  const { state, telemetry } = props.live;
+  const path = useMemo(() => {
+    const graph = pipelineGraph(state, telemetry, props.pipelineId);
+    return graph ? mediaPath(graph, state?.outputs ?? []) : null;
+  }, [state, telemetry, props.pipelineId]);
   return (
-    <Panel id="monitor-path" title="Shared media path" atMs={props.graph.atMs}>
+    <Panel id="monitor-path" title="Shared media path" atMs={props.live.telemetryAtMs}>
       {path === null ? (
         <p className="text-sm opacity-70">Loading the processing graph…</p>
       ) : (

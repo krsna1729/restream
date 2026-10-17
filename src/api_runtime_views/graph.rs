@@ -1,146 +1,29 @@
 //! API/runtime graph adapters for visualizing a pipeline's active processing
 //! topology.
-//! This file owns the HTTP-facing node/edge projection over runtime stage and
-//! output state, including packetizer, recording, and preview branches.
+//! The structure (nodes, edges, labels, which nodes run) is the runtime
+//! state's ([`crate::application::runtime_state::graph`]); this file adds
+//! each node's details and counters for the HTTP view.
 
 use super::graph_projection as api_view_models;
 use crate::application::models::Output;
-use crate::domain::output_spec::{RecirculationTarget, VideoCodecKind};
-use crate::domain::stage::{StageKey, StageKind};
+use crate::application::runtime_state::graph::{
+    GraphNode, GraphRuntime, NodeSource, pipeline_graph,
+};
+use crate::domain::stage::StageKey;
 use crate::media::engine::MediaEngine;
-use crate::planner::{PlannedOutput, plan_pipeline_graph, plan_recording_graph};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 pub(crate) async fn processing_graph(
     engine: &MediaEngine,
     pipeline_id: &str,
     outputs: &[Output],
 ) -> serde_json::Value {
-    let hls_snapshot = engine.hls_dependency_snapshot(pipeline_id).await;
-    let ingests = engine.ingests.active.read().await;
-    let egresses = engine.egresses.active.read().await;
-    let pipelines = engine.ingests.pipelines.read().await;
-    let rec_tokens = engine.recordings.cancel_tokens.read().await;
-    let all_stage_metrics = engine.stages.metrics.read().await;
-    let ts_muxers = engine.stages.ts_muxers.read().await;
-
-    let mut nodes = Vec::new();
-    let mut edges = Vec::new();
-
-    let ingest = ingests.get(pipeline_id);
-    let ingest_node_id = format!("{pipeline_id}_ingest");
-    let ingest_protocol = ingest.map(|ingest| ingest.protocol.as_str());
-    nodes.push(api_view_models::processing_graph_node(
-        ingest_node_id.clone(),
-        "ingest",
-        ingest
-            .map(|ingest| format!("{} ingest", ingest.protocol.to_uppercase()))
-            .unwrap_or_else(|| "No ingest".to_string()),
-        ingest.is_some(),
-        ingest.map(|ingest| api_view_models::processing_graph_ingest_details(ingest.as_ref())),
-        ingest.map(|ingest| serde_json::to_value(ingest.metrics.snapshot()).unwrap_or_default()),
-    ));
-
-    let demux_node_id = format!("{pipeline_id}_ingest_demux");
-    nodes.push(api_view_models::processing_graph_node(
-        demux_node_id.clone(),
-        "demux",
-        ingest
-            .map(|ingest| {
-                format!(
-                    "{} demux/probe",
-                    MediaEngine::graph_protocol_label(&ingest.protocol)
-                )
-            })
-            .unwrap_or_else(|| "Demux/probe idle".to_string()),
-        ingest.is_some(),
-        ingest.map(|ingest| api_view_models::processing_graph_demux_details(ingest.as_ref())),
-        ingest.map(|ingest| serde_json::to_value(ingest.metrics.snapshot()).unwrap_or_default()),
-    ));
-
-    let rb_node_id = format!("{pipeline_id}_source_rb");
-    let source_reader_snapshots = pipelines
-        .get(pipeline_id)
-        .map(|ring| ring.reader_snapshots())
-        .unwrap_or_default();
-    let reader_overflows_by_stage: HashMap<String, usize> = source_reader_snapshots
-        .iter()
-        .filter(|reader| reader.overflow_count > 0)
-        .map(|reader| (reader.name.clone(), reader.overflow_count))
-        .collect();
-    let rb_info = pipelines.get(pipeline_id).map(|ring| {
-        let (fill, cap) = ring.fill_and_capacity();
-        let reader_stats: Vec<serde_json::Value> = ring
-            .reader_snapshots()
-            .into_iter()
-            .map(|reader| api_view_models::reader_snapshot_json(&reader))
-            .collect();
-        (
-            fill,
-            cap,
-            api_view_models::ring_payload_stats_json(ring),
-            reader_stats,
-        )
-    });
-    nodes.push(api_view_models::processing_graph_node(
-        rb_node_id.clone(),
-        "ring_buffer",
-        "Source Buffer",
-        rb_info.is_some(),
-        rb_info.map(|(fill, cap, payload_stats, readers)| {
-            api_view_models::processing_graph_source_ring_details(
-                fill,
-                cap,
-                payload_stats,
-                MediaEngine::source_buffer_format(ingest_protocol),
-                readers,
-            )
-        }),
-        None,
-    ));
-    edges.push(api_view_models::processing_graph_edge(
-        ingest_node_id,
-        demux_node_id.clone(),
-        ingest_protocol
-            .map(MediaEngine::graph_protocol_label)
-            .unwrap_or_else(|| "input".to_string()),
-    ));
-    edges.push(api_view_models::processing_graph_edge(
-        demux_node_id,
-        rb_node_id.clone(),
-        "push(MediaPacket)",
-    ));
-
-    let pipeline_outputs: Vec<_> = outputs
+    let pipeline_outputs: Vec<&Output> = outputs
         .iter()
         .filter(|output| output.pipeline_id == pipeline_id)
         .collect();
-    let ingest_metadata = ingest.map(|ingest| ingest.metadata());
-    let ingest_video_codec = ingest_metadata
-        .as_ref()
-        .and_then(|metadata| metadata.video.as_ref())
-        .map(|video| video.codec.as_str());
-    let visible_outputs = pipeline_outputs
-        .iter()
-        .filter(|output| {
-            ingest.is_some() && (output.wants_running() || egresses.contains_key(&output.id))
-        })
-        .map(|output| {
-            PlannedOutput::new(
-                output.id.as_str(),
-                output.config.clone(),
-                output.url.as_str(),
-            )
-        })
-        .collect::<Vec<_>>();
-    let visible_stage_plan =
-        plan_pipeline_graph(pipeline_id, ingest_video_codec, &visible_outputs, false);
-    let visible_stage_keys: HashSet<StageKey> = visible_stage_plan
-        .stages
-        .iter()
-        .filter(|stage| stage.kind != StageKind::Source)
-        .map(|stage| stage.key.clone())
-        .collect();
+    let runtime = GraphRuntime::read(engine, &[pipeline_id]).await;
+    let graph = pipeline_graph(pipeline_id, &pipeline_outputs, &runtime);
     let lifecycle_snapshots: HashMap<StageKey, crate::runtime::stage::StageRuntimeSnapshot> =
         engine
             .pipeline_stage_runtime_snapshots(pipeline_id)
@@ -149,187 +32,220 @@ pub(crate) async fn processing_graph(
             .map(|snapshot| (snapshot.key.clone(), snapshot))
             .collect();
 
-    let stage_runtimes = engine.stages.runtimes.read().await;
-    for (key, runtime) in stage_runtimes.iter() {
-        if key.pipeline.as_str() == pipeline_id && visible_stage_keys.contains(key) {
-            let Some(ring) = runtime.ring.as_ref() else {
-                continue;
-            };
-            let kind = &key.kind;
-            let stage_key_str = kind.to_string();
-            let stage_id = kind.graph_node_id(pipeline_id);
-            let pipe_stats = runtime
-                .pipe_metrics
-                .as_ref()
-                .map(|pipe| serde_json::to_value(pipe.snapshot()).unwrap_or_default());
-            let mut node = super::graph_projection::processing_graph_stage_node(
-                stage_id.clone(),
-                kind.graph_type(),
-                kind.graph_label(),
-                stage_key_str.as_str(),
-                lifecycle_snapshots.get(key),
-                !runtime.cancel.is_cancelled(),
-                Some(serde_json::to_value(runtime.metrics.snapshot()).unwrap_or_default()),
-                pipe_stats,
-                api_view_models::ring_payload_stats_json(ring),
-            );
-            if let Some(overflow_count) = reader_overflows_by_stage.get(&stage_key_str)
-                && let Some(details) = node
-                    .get_mut("details")
-                    .and_then(serde_json::Value::as_object_mut)
-            {
-                details.insert("healthStatus".to_string(), serde_json::json!("warning"));
-                details.insert(
-                    "healthReason".to_string(),
-                    serde_json::json!(format!("source reader overflowed {overflow_count} time(s)")),
-                );
-                details.insert(
-                    "overflowCount".to_string(),
-                    serde_json::json!(overflow_count),
-                );
-            }
-            nodes.push(node);
-
-            if let Some(upstream) = kind.upstream() {
-                let (from, label) = if matches!(upstream, StageKind::Source) {
-                    let label = if matches!(kind, StageKind::CodecEdge { .. }) {
-                        "codec conversion"
-                    } else {
-                        "audio select"
-                    };
-                    (rb_node_id.clone(), label)
-                } else if matches!(kind, StageKind::CodecEdge { .. }) {
-                    (upstream.graph_node_id(pipeline_id), "codec conversion")
-                } else {
+    // Each registry map is read into owned data and released before the
+    // next is taken, never nested: a reader holding one map while waiting
+    // on another deadlocks against a writer that takes them in the other
+    // order (`release_stage_runtime` holds `runtimes`, then takes `metrics`),
+    // and tokio's fair lock then queues every later reader behind it.
+    let ingest = engine.ingests.active.read().await.get(pipeline_id).cloned();
+    let ring = engine
+        .ingests
+        .pipelines
+        .read()
+        .await
+        .get(pipeline_id)
+        .cloned();
+    let egresses: HashMap<&str, (serde_json::Value, serde_json::Value)> = {
+        let active = engine.egresses.active.read().await;
+        graph
+            .nodes
+            .iter()
+            .filter_map(|node| node.output_id.as_deref())
+            .filter_map(|output_id| {
+                let egress = active.get(output_id)?;
+                Some((
+                    output_id,
                     (
-                        upstream.graph_node_id(pipeline_id),
-                        "video copy + audio select",
+                        api_view_models::processing_graph_egress_details(egress, ingest.is_some()),
+                        serde_json::to_value(egress.metrics.snapshot()).unwrap_or_default(),
+                    ),
+                ))
+            })
+            .collect()
+    };
+    let output_stage_metrics: HashMap<&StageKey, serde_json::Value> = {
+        let metrics = engine.stages.metrics.read().await;
+        graph
+            .nodes
+            .iter()
+            .filter_map(|node| match &node.source {
+                NodeSource::Recording(key) | NodeSource::Hls(key) => metrics
+                    .get(key)
+                    .map(|m| (key, serde_json::to_value(m.snapshot()).unwrap_or_default())),
+                _ => None,
+            })
+            .collect()
+    };
+    let packetizer_payloads: HashMap<&str, serde_json::Value> = {
+        let ts_muxers = engine.stages.ts_muxers.read().await;
+        graph
+            .nodes
+            .iter()
+            .filter_map(|node| match &node.source {
+                NodeSource::Packetizer { key, .. } => ts_muxers.get(key.as_str()).map(|stage| {
+                    (
+                        key.as_str(),
+                        api_view_models::ring_payload_stats_json(&stage.muxer.ring),
                     )
-                };
-                edges.push(api_view_models::processing_graph_edge(
-                    from, stage_id, label,
-                ));
-            } else if let StageKind::VideoPreset { preset, .. } = &kind {
-                edges.push(api_view_models::processing_graph_edge(
-                    rb_node_id.clone(),
-                    stage_id,
-                    format!("decode → {preset} encode"),
-                ));
-            }
-        }
+                }),
+                _ => None,
+            })
+            .collect()
+    };
+    /// What a stage node shows of its running stage.
+    struct StageView {
+        metrics: serde_json::Value,
+        pipe: Option<serde_json::Value>,
+        payload: Option<serde_json::Value>,
     }
-    let ingest_is_hevc = ingest_metadata
-        .as_ref()
-        .and_then(|metadata| metadata.video.as_ref())
-        .map(|video| VideoCodecKind::from_codec_name(&video.codec).is_hevc())
-        .unwrap_or(false);
-    let mut added_packetizers = std::collections::HashSet::new();
-    let mut added_recirculation_targets = std::collections::HashSet::new();
+    let stage_views: HashMap<&StageKey, StageView> = {
+        let runtimes = engine.stages.runtimes.read().await;
+        graph
+            .nodes
+            .iter()
+            .filter_map(|node| match &node.source {
+                NodeSource::Stage(key) => runtimes.get(key).map(|stage| {
+                    let view = StageView {
+                        metrics: serde_json::to_value(stage.metrics.snapshot()).unwrap_or_default(),
+                        pipe: stage
+                            .pipe_metrics
+                            .as_ref()
+                            .map(|pipe| serde_json::to_value(pipe.snapshot()).unwrap_or_default()),
+                        payload: stage
+                            .ring
+                            .as_ref()
+                            .map(|ring| api_view_models::ring_payload_stats_json(ring)),
+                    };
+                    (key, view)
+                }),
+                _ => None,
+            })
+            .collect()
+    };
 
-    for output in &pipeline_outputs {
-        let egress = egresses.get(&output.id);
-        let output_node_id = format!("{pipeline_id}_output_{}", output.id);
-        let protocol = MediaEngine::egress_protocol_from_url(&output.url);
-        let protocol_label = MediaEngine::graph_protocol_label(protocol);
+    let ingest = ingest.as_ref();
+    let ring = ring.as_ref();
+    let reader_overflows_by_stage: HashMap<String, usize> = ring
+        .map(|ring| ring.reader_snapshots())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|reader| reader.overflow_count > 0)
+        .map(|reader| (reader.name, reader.overflow_count))
+        .collect();
 
-        let mut egress_node = api_view_models::processing_graph_node(
-            output_node_id.clone(),
-            "egress",
-            format!("{protocol_label} sender: {}", output.name.as_str()),
-            egress.is_some_and(|egress| {
-                MediaEngine::egress_effective_status(egress, ingest.is_some()) == "running"
-            }),
-            egress.map(|egress| {
-                api_view_models::processing_graph_egress_details(egress, ingest.is_some())
-            }),
-            egress
-                .map(|egress| serde_json::to_value(egress.metrics.snapshot()).unwrap_or_default()),
-        );
-        // Clients join egress nodes to outputs on this, running or not.
-        egress_node["outputId"] = serde_json::Value::String(output.id.clone());
-        nodes.push(egress_node);
-
-        let output_for_plan = [PlannedOutput::new(
-            output.id.as_str(),
-            output.config.clone(),
-            output.url.as_str(),
-        )];
-        let output_stage_plan = plan_pipeline_graph(
-            pipeline_id,
-            ingest_is_hevc.then_some("hevc"),
-            &output_for_plan,
-            false,
-        );
-        let stage_encoding_label = output.stage_encoding_label();
-        let terminal_kind = output_stage_plan.terminal_stage.kind;
-        let terminal_node_id = if matches!(terminal_kind, StageKind::Source) {
-            rb_node_id.clone()
-        } else {
-            terminal_kind.graph_node_id(pipeline_id)
-        };
-
-        if protocol == "srt" {
-            let mux_slug = MediaEngine::graph_slug(stage_encoding_label.as_str());
-            let mux_node_id = format!(
-                "{pipeline_id}_ts_mux_{}",
-                if mux_slug.is_empty() {
-                    "source"
-                } else {
-                    mux_slug.as_str()
+    let nodes: Vec<serde_json::Value> = graph
+        .nodes
+        .iter()
+        .map(|node| {
+            let GraphNode {
+                id,
+                kind,
+                label,
+                active,
+                ..
+            } = node;
+            let plain = |details, metrics| {
+                api_view_models::processing_graph_node(
+                    id.clone(),
+                    kind.clone(),
+                    label.clone(),
+                    *active,
+                    details,
+                    metrics,
+                )
+            };
+            let ingest_metrics = || {
+                ingest.map(|ingest| {
+                    serde_json::to_value(ingest.metrics.snapshot()).unwrap_or_default()
+                })
+            };
+            match &node.source {
+                NodeSource::Ingest => plain(
+                    ingest.map(|ingest| {
+                        api_view_models::processing_graph_ingest_details(ingest.as_ref())
+                    }),
+                    ingest_metrics(),
+                ),
+                NodeSource::Demux => plain(
+                    ingest.map(|ingest| {
+                        api_view_models::processing_graph_demux_details(ingest.as_ref())
+                    }),
+                    ingest_metrics(),
+                ),
+                NodeSource::SourceRing => plain(
+                    ring.map(|ring| {
+                        let (fill, cap) = ring.fill_and_capacity();
+                        api_view_models::processing_graph_source_ring_details(
+                            fill,
+                            cap,
+                            api_view_models::ring_payload_stats_json(ring),
+                            MediaEngine::source_buffer_format(runtime.ingest_protocol(pipeline_id)),
+                            ring.reader_snapshots()
+                                .iter()
+                                .map(api_view_models::reader_snapshot_json)
+                                .collect(),
+                        )
+                    }),
+                    None,
+                ),
+                NodeSource::Stage(key) => {
+                    let stage = stage_views.get(key);
+                    let stage_key = key.kind.to_string();
+                    let mut value = api_view_models::processing_graph_stage_node(
+                        id.clone(),
+                        kind.clone(),
+                        label.clone(),
+                        stage_key.as_str(),
+                        lifecycle_snapshots.get(key),
+                        *active,
+                        stage.map(|stage| stage.metrics.clone()),
+                        stage.and_then(|stage| stage.pipe.clone()),
+                        stage
+                            .and_then(|stage| stage.payload.clone())
+                            .unwrap_or_default(),
+                    );
+                    if let Some(overflow_count) = reader_overflows_by_stage.get(&stage_key)
+                        && let Some(details) = value
+                            .get_mut("details")
+                            .and_then(serde_json::Value::as_object_mut)
+                    {
+                        details.insert("healthStatus".to_string(), serde_json::json!("warning"));
+                        details.insert(
+                            "healthReason".to_string(),
+                            serde_json::json!(format!(
+                                "source reader overflowed {overflow_count} time(s)"
+                            )),
+                        );
+                        details.insert(
+                            "overflowCount".to_string(),
+                            serde_json::json!(overflow_count),
+                        );
+                    }
+                    value
                 }
-            );
-            let mux_key = format!("{pipeline_id}:{stage_encoding_label}");
-            let mux_active = ts_muxers
-                .get(&mux_key)
-                .is_some_and(|stage| !stage.muxer.cancel.is_cancelled());
-            let mux_payload_stats = ts_muxers
-                .get(&mux_key)
-                .map(|stage| api_view_models::ring_payload_stats_json(&stage.muxer.ring));
-            if added_packetizers.insert(mux_node_id.clone()) {
-                nodes.push(api_view_models::processing_graph_node(
-                    mux_node_id.clone(),
-                    "packetizer",
-                    format!("MPEG-TS mux: {stage_encoding_label}"),
-                    mux_active,
+                NodeSource::Packetizer { key, encoding } => plain(
                     Some(api_view_models::processing_graph_packetizer_details(
                         "srt",
-                        stage_encoding_label.as_str(),
-                        mux_key,
-                        mux_payload_stats,
+                        encoding,
+                        key.clone(),
+                        packetizer_payloads.get(key.as_str()).cloned(),
                     )),
                     None,
-                ));
-                edges.push(api_view_models::processing_graph_edge(
-                    terminal_node_id,
-                    mux_node_id.clone(),
-                    "media packets",
-                ));
-            }
-            edges.push(api_view_models::processing_graph_edge(
-                mux_node_id,
-                output_node_id.clone(),
-                "SRT send",
-            ));
-        } else {
-            edges.push(api_view_models::processing_graph_edge(
-                terminal_node_id,
-                output_node_id.clone(),
-                MediaEngine::source_to_egress_label(protocol),
-            ));
-        }
-
-        if let Ok(target) = RecirculationTarget::parse(&output.url) {
-            let target_node_id = recirculation_target_node_id(&target);
-            if added_recirculation_targets.insert(target_node_id.clone()) {
-                nodes.push(api_view_models::processing_graph_node(
-                    target_node_id.clone(),
-                    "recirculation_input",
-                    format!(
-                        "Recirculation input: {}/{}",
-                        target.pipeline_id(),
-                        target.input_id()
-                    ),
-                    false,
+                ),
+                NodeSource::Egress => {
+                    let egress = node
+                        .output_id
+                        .as_deref()
+                        .and_then(|output| egresses.get(output));
+                    let mut value = plain(
+                        egress.map(|(details, _)| details.clone()),
+                        egress.map(|(_, metrics)| metrics.clone()),
+                    );
+                    // Clients join egress nodes to outputs on this, running or not.
+                    value["outputId"] = serde_json::json!(node.output_id);
+                    value
+                }
+                NodeSource::Recirculation(target) => plain(
                     Some(
                         api_view_models::processing_graph_recirculation_target_details(
                             target.pipeline_id(),
@@ -337,68 +253,29 @@ pub(crate) async fn processing_graph(
                         ),
                     ),
                     None,
-                ));
+                ),
+                NodeSource::Recording(key) | NodeSource::Hls(key) => {
+                    plain(None, output_stage_metrics.get(key).cloned())
+                }
             }
-            edges.push(api_view_models::processing_graph_edge(
-                output_node_id,
-                target_node_id,
-                "in-process recirculation",
-            ));
-        }
-    }
-
-    if let Some(token) = rec_tokens.get(pipeline_id) {
-        let rec_id = format!("{pipeline_id}_recording");
-        let rec_stage_key = plan_recording_graph(pipeline_id).terminal_stage;
-        nodes.push(api_view_models::processing_graph_node(
-            rec_id.clone(),
-            "recording",
-            "MKV Recording",
-            !token.is_cancelled(),
-            None,
-            all_stage_metrics
-                .get(&rec_stage_key)
-                .map(|metrics| serde_json::to_value(metrics.snapshot()).unwrap_or_default()),
-        ));
-        edges.push(api_view_models::processing_graph_edge(
-            rb_node_id.clone(),
-            rec_id,
-            "MKV mux",
-        ));
-    }
-
-    if hls_snapshot.store_exists {
-        let hls_id = format!("{pipeline_id}_hls_preview");
-        let hls_stage_key = StageKey::new(pipeline_id, StageKind::hls());
-        nodes.push(api_view_models::processing_graph_node(
-            hls_id.clone(),
-            "hls",
-            "HLS Preview",
-            hls_snapshot.active,
-            None,
-            all_stage_metrics
-                .get(&hls_stage_key)
-                .map(|metrics| serde_json::to_value(metrics.snapshot()).unwrap_or_default()),
-        ));
-        edges.push(api_view_models::processing_graph_edge(
-            rb_node_id,
-            hls_id,
-            "MPEG-TS segment",
-        ));
-    }
+        })
+        .collect();
+    let edges = graph
+        .edges
+        .iter()
+        .map(|edge| {
+            api_view_models::processing_graph_edge(
+                edge.from.clone(),
+                edge.to.clone(),
+                edge.label.clone(),
+            )
+        })
+        .collect();
 
     api_view_models::processing_graph_json(
         chrono::Utc::now().to_rfc3339(),
         pipeline_id,
         nodes,
         edges,
-    )
-}
-
-fn recirculation_target_node_id(target: &RecirculationTarget) -> String {
-    format!(
-        "{}_input_{}",
-        target.pipeline_id(),
-        MediaEngine::graph_slug(target.input_id())
     )
 }

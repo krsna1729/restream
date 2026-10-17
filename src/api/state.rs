@@ -54,6 +54,16 @@ pub struct PortConfig {
     pub srt: u16,
 }
 
+impl PortConfig {
+    pub fn server_ports(&self) -> crate::config::ServerPorts {
+        crate::config::ServerPorts {
+            http: self.http,
+            rtmp: self.rtmp,
+            srt: self.srt,
+        }
+    }
+}
+
 pub struct AppStateRuntimeConfig {
     pub ingest_disconnect_grace_ms: u64,
     pub ports: PortConfig,
@@ -116,6 +126,8 @@ pub struct AppState {
     pub reconcile: Arc<crate::application::topology::ReconcileRequests>,
     /// The revisioned runtime state behind `/api/v1/state` (Q-042).
     pub runtime_state: Arc<crate::application::runtime_state::hub::StateHub>,
+    /// The fleet's sampled signals behind `/api/v1/fleet/history` (Q-064).
+    pub fleet_history: Arc<crate::application::fleet_history::FleetHistory>,
     pub log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
     secure_session_cookies: bool,
     #[cfg(feature = "agent-execution")]
@@ -151,6 +163,9 @@ impl AppState {
             agent_service,
         } = services;
 
+        let runtime_state = Arc::new(crate::application::runtime_state::hub::StateHub::new(
+            runtime.ports.server_ports(),
+        ));
         Self {
             security,
             ingest_policy_store,
@@ -174,7 +189,8 @@ impl AppState {
             agent_service,
             alert_tracker: alerts::AlertTracker::new(),
             reconcile: Arc::new(crate::application::topology::ReconcileRequests::new()),
-            runtime_state: Arc::new(crate::application::runtime_state::hub::StateHub::new()),
+            runtime_state,
+            fleet_history: Arc::new(crate::application::fleet_history::FleetHistory::new()),
             log_broadcast,
             secure_session_cookies: runtime.secure_session_cookies,
             #[cfg(feature = "agent-execution")]

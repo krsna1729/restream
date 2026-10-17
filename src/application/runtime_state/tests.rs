@@ -13,6 +13,18 @@ fn render_contract() -> String {
         PipelineState::decl(&cfg),
         IngestState::decl(&cfg),
         OutputState::decl(&cfg),
+        InputState::decl(&cfg),
+        inputs::InputRuntimeState::decl(&cfg),
+        inputs::VideoDescriptor::decl(&cfg),
+        inputs::AudioDescriptor::decl(&cfg),
+        IngestUrls::decl(&cfg),
+        crate::domain::pipeline_input::PipelineInputRole::decl(&cfg),
+        crate::domain::pipeline_input::PipelineInputSourceKind::decl(&cfg),
+        crate::domain::pipeline_input::VariantRule::decl(&cfg),
+        crate::media::input_gate::InputForwardState::decl(&cfg),
+        PipelineGraph::decl(&cfg),
+        GraphNode::decl(&cfg),
+        GraphEdge::decl(&cfg),
         Convergence::decl(&cfg),
         Flow::decl(&cfg),
         RetryState::decl(&cfg),
@@ -27,9 +39,12 @@ fn render_contract() -> String {
         crate::capacity::ServiceCenter::decl(&cfg),
         crate::capacity::FlowDiagnosis::decl(&cfg),
         crate::capacity::FlowStatus::decl(&cfg),
+        crate::application::fleet_history::FleetSample::decl(&cfg),
+        crate::application::fleet_history::DegradedByLayer::decl(&cfg),
+        crate::application::fleet_history::FleetHistoryWindow::decl(&cfg),
     ];
     let mut out = String::from(
-        "// Generated from src/application/runtime_state, diagnosis and capacity (ts-rs). Do not edit.\n\
+        "// Generated from src/application/runtime_state, diagnosis, capacity and fleet_history (ts-rs). Do not edit.\n\
          // Regenerate: cargo test --lib runtime_state::tests::write_generated -- --ignored\n\n",
     );
     for decl in decls {
@@ -44,6 +59,29 @@ fn render_contract() -> String {
 
 fn generated_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(GENERATED)
+}
+
+pub(super) fn ports() -> crate::config::ServerPorts {
+    crate::AppConfig::default().ports
+}
+
+/// Projects `pipelines` and `outputs` with no input rows.
+pub(super) async fn project_rows(
+    engine: &MediaEngine,
+    pipelines: &[crate::db::PipelineRecord],
+    outputs: &[Output],
+) -> Projection {
+    let endpoints = IngestEndpoints {
+        host: "localhost".to_string(),
+        ports: ports(),
+    };
+    let rows = Rows {
+        pipelines,
+        outputs,
+        inputs: &[],
+        endpoints: &endpoints,
+    };
+    project(engine, &rows).await
 }
 
 /// The checked-in TypeScript contract matches the Rust types.
@@ -66,7 +104,7 @@ fn write_generated_typescript_contract() {
     std::fs::write(path, render_contract()).unwrap();
 }
 
-fn output(id: &str, desired: DesiredOutputState) -> Output {
+pub(super) fn output(id: &str, desired: DesiredOutputState) -> Output {
     Output {
         id: id.to_string(),
         pipeline_id: "pipe".to_string(),
@@ -107,7 +145,7 @@ fn projection_with(outputs: &[(&str, Convergence)]) -> Projection {
 
 #[tokio::test]
 async fn a_change_advances_the_revision_with_only_the_changed_entities() {
-    let hub = StateHub::new();
+    let hub = StateHub::new(ports());
     let first = hub
         .publish(projection_with(&[
             ("a", Convergence::Starting),
@@ -143,7 +181,7 @@ async fn a_change_advances_the_revision_with_only_the_changed_entities() {
 /// snapshot: a client that keeps up never needs another fetch.
 #[tokio::test]
 async fn deltas_after_a_revision_rebuild_the_current_state() {
-    let hub = StateHub::new();
+    let hub = StateHub::new(ports());
     hub.publish(projection_with(&[("a", Convergence::Starting)]))
         .await;
     let seen = hub.snapshot().await;
@@ -184,7 +222,7 @@ async fn deltas_after_a_revision_rebuild_the_current_state() {
 
 #[tokio::test]
 async fn a_client_behind_the_history_or_from_another_run_resyncs() {
-    let hub = StateHub::new();
+    let hub = StateHub::new(ports());
     for round in 0..(DELTA_HISTORY + 2) {
         let convergence = if round % 2 == 0 {
             Convergence::Starting
@@ -219,14 +257,14 @@ async fn a_client_behind_the_history_or_from_another_run_resyncs() {
 /// run's state: the epoch in the token forces a snapshot.
 #[tokio::test]
 async fn a_resume_from_another_server_run_resyncs_even_below_its_revision() {
-    let before = StateHub::with_epoch("run-a".to_string());
+    let before = StateHub::with_epoch("run-a".to_string(), ports());
     before
         .publish(projection_with(&[("a", Convergence::Starting)]))
         .await;
     let held = before.snapshot().await;
     assert_eq!(held.revision, 1);
 
-    let after = StateHub::with_epoch("run-b".to_string());
+    let after = StateHub::with_epoch("run-b".to_string(), ports());
     for convergence in [
         Convergence::Starting,
         Convergence::Converged,
@@ -253,7 +291,7 @@ async fn projection_derives_convergence_from_desired_and_runtime() {
         output("waiting", DesiredOutputState::Running),
         exhausted,
     ];
-    let projection = project(&engine, &[], &outputs).await;
+    let projection = project_rows(&engine, &[], &outputs).await;
     let convergence = |id: &str| projection.outputs[id].convergence;
     assert_eq!(convergence("stopped"), Convergence::Converged);
     assert_eq!(convergence("waiting"), Convergence::WaitingForIngest);
@@ -272,7 +310,7 @@ async fn projection_derives_convergence_from_desired_and_runtime() {
     engine
         .update_egress_retry_state("waiting", 2, 1_000, 1_000)
         .await;
-    let projection = project(&engine, &[], &outputs).await;
+    let projection = project_rows(&engine, &[], &outputs).await;
     let waiting = &projection.outputs["waiting"];
     assert_eq!(waiting.convergence, Convergence::Retrying);
     assert_eq!(waiting.retry.as_ref().map(|retry| retry.attempts), Some(2));
@@ -310,7 +348,7 @@ async fn projection_derives_convergence_from_desired_and_runtime() {
             None,
         )
         .await;
-    let projection = project(&engine, &[], &outputs).await;
+    let projection = project_rows(&engine, &[], &outputs).await;
     assert_eq!(
         projection.outputs["stopped"].convergence,
         Convergence::Stopping,
@@ -335,7 +373,7 @@ async fn projection_reports_standby_recording_bonding_and_the_output_stage() {
         output("shared", DesiredOutputState::Running),
         output("idle", DesiredOutputState::Running),
     ];
-    let projection = project(&engine, &pipelines, &outputs).await;
+    let projection = project_rows(&engine, &pipelines, &outputs).await;
     let pipe = &projection.pipelines["pipe"];
     assert_eq!((pipe.standby_inputs, pipe.recording), (0, false));
     assert_eq!(pipe.ingest, None);
@@ -376,7 +414,7 @@ async fn projection_reports_standby_recording_bonding_and_the_output_stage() {
         )
         .await;
 
-    let projection = project(&engine, &pipelines, &outputs).await;
+    let projection = project_rows(&engine, &pipelines, &outputs).await;
     let pipe = &projection.pipelines["pipe"];
     assert_eq!(
         pipe.standby_inputs, 1,
@@ -394,7 +432,7 @@ async fn projection_reports_standby_recording_bonding_and_the_output_stage() {
 
     // A cancelled recording token is a recording that has ended.
     recording.cancel();
-    let projection = project(&engine, &pipelines, &outputs).await;
+    let projection = project_rows(&engine, &pipelines, &outputs).await;
     assert!(!projection.pipelines["pipe"].recording);
 }
 
@@ -405,7 +443,7 @@ async fn the_projector_rebuilds_only_while_a_client_listens() {
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
     crate::db::setup_database_schema(&pool).await.unwrap();
     let engine = std::sync::Arc::new(MediaEngine::new());
-    let hub = std::sync::Arc::new(StateHub::new());
+    let hub = std::sync::Arc::new(StateHub::new(ports()));
     let stop = tokio_util::sync::CancellationToken::new();
     let projector = tokio::spawn(hub::run_projector(
         hub.clone(),
@@ -479,7 +517,7 @@ async fn on_demand_refresh_reuses_a_fresh_projection_until_a_change() {
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
     crate::db::setup_database_schema(&pool).await.unwrap();
     let engine = MediaEngine::new();
-    let hub = StateHub::new();
+    let hub = StateHub::new(ports());
     let pipelines = async |hub: &StateHub| hub.snapshot().await.pipelines.len();
 
     crate::db::create_pipeline(&pool, "pipe", "P", "key", None, None)

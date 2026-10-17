@@ -20,9 +20,7 @@ items).
 - [Q-036 enforced runtime truth table](#q-036-docs-sonnet-make-runtime-crossings-an-enforced-truth-table)
 - [Q-047 MoQ egress](#q-047-protocol-opus-moq-egress)
 - [Q-049 silent SRT leaves](#q-049-resilience-opus-find-why-connected-srt-leaves-sent-nothing-under-host-overload)
-- [Q-050 inputs and stages in runtime state](#q-050-architecture-sonnet-project-inputs-and-stages-into-the-runtime-state)
 - [Q-053 external FFmpeg process topology](#q-053-architecture-sonnet-external-ffmpeg-process-topology-per-rendition)
-- [Q-064 incident signals before the page opened](#q-064-observability-sonnet-incident-correlation-before-the-page-opened)
 - [Q-065 capacity cost of HLS, sink and pipeline outputs](#q-065-performance-sonnet-price-hls-sink-and-pipeline-outputs-from-a-measured-cost)
 - [Q-066 SRT ingress test port race](#q-066-testing-sonnet-srt-multi-owner-test-port-can-join-a-foreign-reuseport-group)
 - [Q-067 optional Basic auth for HLS push](#q-067-protocol-opus-optional-basic-auth-for-hls-push)
@@ -314,19 +312,6 @@ items).
   - which of the progress paths above fired.
 - Status: open (Filed: 2026-10-12 by claude, found while fixing Q-048).
 
-### Q-050 [architecture] [sonnet] Project inputs and stages into the runtime state
-- Goal: the control room reads pipeline inputs and stages from
-  `/api/v1/state/stream` (Q-042's projection: pipelines and outputs today)
-  instead of polling them; nothing else changes for operators.
-- Evidence: after the FE7 cut, Operate polls `/pipelines/{id}/inputs` and
-  the graph every 2 s; Inspect and Monitor poll the resource map and the
-  graph (`usePolled` in `operate.tsx`, `inspect.tsx`, `monitor.tsx`).
-- Gates: the drift test of the generated TypeScript contract; resync tests
-  for the new entities; a Playwright case that sees an input change without
-  a poll.
-- Status: open (Filed: 2026-10-13 by claude, the follow-up Q-042 named when
-  it closed at the FE7 cut).
-
 ### Q-053 [architecture] [sonnet] External FFmpeg process topology per rendition
 - Goal: one recorded decision for how many external FFmpeg children a pipeline
   runs, so nobody builds a merged multi-output child without an isolation gate.
@@ -366,19 +351,6 @@ items).
 - Status: open (Filed: 2026-10-15 by claude; the cost measurement closed
   2026-10-15. The former board item "FFmpeg A/B: external per-stage vs external
   multi-output" cannot be run as written: the second arm does not exist).
-
-### Q-064 [observability] [sonnet] Incident correlation before the page opened
-- Goal: the Incidents correlation chart covers the incident's whole span,
-  not only the page's last 15 minutes.
-- Sources: the chart reads the store's fleet samples
-  (`LiveSnapshot.history`, `WINDOW_MS` 15 minutes, from when the page
-  opened). The engine keeps no fleet signal history, so an incident older
-  than the page, or a 1h/6h/24h resolved window, has no chart before it.
-  Needs a bounded server-side history of the fleet signals (delivering,
-  headroom, degraded by layer) with `since`, and the chart reading it.
-- Gates: Rust tests for the history's bound and `since`; Playwright for an
-  incident older than the page.
-- Status: open (Filed: 2026-10-15 by claude, the rest of Q-061).
 
 ### Q-065 [performance] [sonnet] Price HLS, sink and pipeline outputs from a measured cost
 - Goal: the capacity model prices each output kind by what it costs.

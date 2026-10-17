@@ -177,6 +177,21 @@ pub async fn list_pipeline_inputs(
     Ok(convert_rows(rows))
 }
 
+/// Every input of every pipeline, each pipeline's in the order
+/// [`list_pipeline_inputs`] lists them.
+pub async fn list_all_pipeline_inputs(
+    pool: &SqlitePool,
+) -> Result<Vec<PipelineInput>, sqlx::Error> {
+    let query = format!(
+        "SELECT {SELECT_FIELDS} FROM pipeline_inputs
+         ORDER BY pipeline_id ASC, role DESC, rowid ASC"
+    );
+    let rows = sqlx::query_as::<_, PipelineInputRow>(sqlx::AssertSqlSafe(query))
+        .fetch_all(pool)
+        .await?;
+    Ok(convert_rows(rows))
+}
+
 pub async fn create_pipeline_input(
     pool: &SqlitePool,
     id: &str,

@@ -1,4 +1,4 @@
-import type { CapacitySnapshot } from "./core/generated/runtime-state.js";
+import type { CapacitySnapshot, InputForwardState } from "./core/generated/runtime-state.js";
 
 export interface VideoTrack {
   codec?: string;
@@ -40,7 +40,7 @@ export interface IngestUrls {
 
 export interface PipelineInputRuntime {
   connected: boolean;
-  forwardingState: "standby" | "awaiting_keyframe" | "active" | null;
+  forwardingState: InputForwardState | null;
   protocol: string | null;
   uptimeSeconds: number | null;
   bytesReceived: number;

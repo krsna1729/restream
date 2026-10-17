@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
-import { getProcessingGraph, getResourceMap } from "../core/api.js";
-import type { GraphData, ResourceMapSnapshot } from "../core/api-types.js";
+import { getResourceMap } from "../core/api.js";
+import type { ResourceMapSnapshot } from "../core/api-types.js";
 import { formatBps, formatPercent } from "./format.js";
 import { MAP_TOP_N } from "./inspect-model.js";
 import { incidentOnsets, SIGNALS, takeSample } from "./monitor-model.js";
@@ -12,6 +12,7 @@ import { Freshness, usePolled } from "./polled.js";
 import type { Polled } from "./polled.js";
 import { appendSample, WINDOW_MS } from "./sample-window.js";
 import { Sparkline } from "./sparkline.js";
+import { pipelineGraph } from "./state-views.js";
 import { SAMPLE_INTERVAL_MS, SAMPLE_STALE_AFTER_MS } from "./store.js";
 import type { LiveSnapshot } from "./store.js";
 
@@ -65,18 +66,14 @@ function fresh<T>(polled: Polled<T>, nowMs: number): T | null {
 }
 
 function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
-  const graph = usePolled<GraphData>(
-    ["processing-graph", props.pipelineId],
-    () => getProcessingGraph(props.pipelineId),
-  );
   const resources = usePolled<ResourceMapSnapshot>(
     ["resource-map", props.pipelineId, MAP_TOP_N],
     () => getResourceMap(props.pipelineId, { view: "detail", topN: MAP_TOP_N }),
   );
   // The sampler reads the newest sources without restarting its clock.
-  const latest = useRef({ live: props.live, graph, resources });
+  const latest = useRef({ live: props.live, resources });
   useEffect(() => {
-    latest.current = { live: props.live, graph, resources };
+    latest.current = { live: props.live, resources };
   });
   const [history, setHistory] = useState<readonly MonitorSample[]>([]);
   // Paused: the page shows the window as it was; sampling goes on.
@@ -84,17 +81,20 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
   const [comparing, setComparing] = useState(false);
   useEffect(() => {
     const timer = window.setInterval(() => {
-      const { live, graph, resources } = latest.current;
+      const { live, resources } = latest.current;
       const now = Date.now();
-      const ratesFresh =
+      const telemetryFresh =
         live.telemetryAtMs !== null && now - live.telemetryAtMs <= SAMPLE_STALE_AFTER_MS;
       const sample = takeSample({
         atMs: now,
         pipelineId: props.pipelineId,
         // While the state stream is down, its last snapshot is not now.
         outputs: live.stream === "live" ? (live.state?.outputs ?? []) : null,
-        rates: ratesFresh ? live.rates : null,
-        graph: fresh(graph, now),
+        rates: telemetryFresh ? live.rates : null,
+        // The ring fill and feed lag it reads are the telemetry sample's.
+        graph: telemetryFresh
+          ? pipelineGraph(live.state, live.telemetry, props.pipelineId)
+          : null,
         resources: fresh(resources, now),
       });
       setHistory((previous) => appendSample(previous, sample, WINDOW_MS));
@@ -142,7 +142,7 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
             >
               Compare
             </button>
-            <Freshness atMs={graph.atMs} />
+            <Freshness atMs={props.live.telemetryAtMs} />
             <Freshness atMs={resources.atMs} />
           </span>
         </div>
@@ -185,7 +185,7 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
         )}
       </div>
     </section>
-      <MonitorPanels live={props.live} pipelineId={props.pipelineId} graph={graph} />
+      <MonitorPanels live={props.live} pipelineId={props.pipelineId} />
     </div>
   );
 }

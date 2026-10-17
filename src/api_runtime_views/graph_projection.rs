@@ -8,7 +8,7 @@ pub(super) use super::common::{reader_snapshot_json, ring_payload_stats_json};
 
 pub(super) fn processing_graph_node(
     id: impl Into<String>,
-    node_type: &'static str,
+    node_type: impl Into<String>,
     label: impl Into<String>,
     active: bool,
     details: Option<serde_json::Value>,
@@ -16,7 +16,7 @@ pub(super) fn processing_graph_node(
 ) -> serde_json::Value {
     serde_json::json!({
         "id": id.into(),
-        "type": node_type,
+        "type": node_type.into(),
         "label": label.into(),
         "active": active,
         "details": details,
@@ -152,7 +152,7 @@ pub(super) fn processing_graph_source_ring_details(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn processing_graph_stage_node(
     id: impl Into<String>,
-    node_type: &'static str,
+    node_type: impl Into<String>,
     label: impl Into<String>,
     stage_key: impl Into<String>,
     lifecycle: Option<&crate::runtime::stage::StageRuntimeSnapshot>,
@@ -163,7 +163,7 @@ pub(crate) fn processing_graph_stage_node(
 ) -> serde_json::Value {
     serde_json::json!({
         "id": id.into(),
-        "type": node_type,
+        "type": node_type.into(),
         "label": label.into(),
         "stageKey": stage_key.into(),
         "active": active,

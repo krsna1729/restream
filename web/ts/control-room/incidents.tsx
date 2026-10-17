@@ -1,10 +1,12 @@
 import { useMemo, useState } from "react";
 
 import type { LifecycleEventsSnapshot, OperatorAlert, ResolvedAlert } from "../core/api-types.js";
-import type { FleetSample } from "./fleet-history.js";
+import type { FleetHistoryWindow } from "../core/generated/runtime-state.js";
+import { degradedTotal } from "./fleet-history.js";
 import { formatAge } from "./format.js";
 import {
   RESOLVED_WINDOWS,
+  correlationWindow,
   evidenceExport,
   evidencePacket,
   incidentMarks,
@@ -14,7 +16,7 @@ import {
   timelineMayBeIncomplete,
   visibleResolved,
 } from "./incidents-model.js";
-import { Freshness, useLifecycleEvents, useOpenAlerts } from "./polled.js";
+import { Freshness, useFleetHistory, useLifecycleEvents, useOpenAlerts } from "./polled.js";
 import type { Polled } from "./polled.js";
 import { PlaceLink } from "./router.js";
 import { Sparkline } from "./sparkline.js";
@@ -110,14 +112,12 @@ export function Incidents({ live }: { live: LiveSnapshot }) {
                 alert={selected}
                 resolvedAt={resolvedAt}
                 events={events}
-                history={live.history}
                 names={names}
               />
               <Evidence
                 alert={selected}
                 resolvedAt={resolvedAt}
                 events={events.value}
-                history={live.history}
                 names={names}
               />
             </>
@@ -214,7 +214,6 @@ function Detail(props: {
   alert: OperatorAlert;
   resolvedAt: string | null;
   events: Polled<LifecycleEventsSnapshot>;
-  history: readonly FleetSample[];
   names: Map<string, string>;
 }) {
   const { alert, events } = props;
@@ -225,6 +224,8 @@ function Detail(props: {
   );
   const incomplete =
     events.value !== null && timelineMayBeIncomplete(alert, events.value.events);
+  const span = correlationWindow(alert, props.resolvedAt);
+  const fleet = useFleetHistory(span.fromMs, span.toMs);
   return (
     <section className="card bg-base-200" aria-labelledby="incident-detail">
       <div className="card-body gap-3 p-4">
@@ -248,10 +249,7 @@ function Detail(props: {
           <b>{isOpen ? "Current judgement" : "Last judgement"}</b>
           <p>{alert.cause}</p>
         </div>
-        <Correlation
-          history={props.history}
-          marks={incidentMarks(alert, props.resolvedAt)}
-        />
+        <Correlation fleet={fleet} fromMs={span.fromMs} marks={incidentMarks(alert, props.resolvedAt)} />
         <div className="flex items-center justify-between">
           <h4 className="font-medium">Timeline</h4>
           <Freshness atMs={events.atMs} />
@@ -291,23 +289,44 @@ function Detail(props: {
   );
 }
 
-/** The fleet's signals around the incident, cursors at its open and close. */
-function Correlation(props: { history: readonly FleetSample[]; marks: readonly number[] }) {
+/** The fleet's signals around the incident from the engine's history,
+ * cursors at its open and close. */
+function Correlation(props: {
+  fleet: Polled<FleetHistoryWindow>;
+  fromMs: number;
+  marks: readonly number[];
+}) {
+  const kept = props.fleet.value;
+  const samples = kept?.samples ?? [];
+  const first = samples[0];
   return (
     <div aria-label="Correlation">
-      <h4 className="font-medium">Correlation</h4>
+      <div className="flex items-center justify-between">
+        <h4 className="font-medium">Correlation</h4>
+        <Freshness atMs={props.fleet.atMs} staleAfterMs={props.fleet.staleAfterMs} />
+      </div>
       <p className="text-xs opacity-70">
-        This page's last 15 minutes of fleet samples; the cursor marks when the
-        incident opened and, once it did, closed.
+        The engine's fleet samples from a minute before the incident opened
+        {first && ` (first at ${new Date(first.atMs).toLocaleTimeString()})`}; the
+        cursor marks when it opened and, once it did, closed.
       </p>
-      {props.history.length === 0 ? (
-        <p className="opacity-70">Collecting the first sample…</p>
+      {kept !== null && props.fromMs <= kept.completeFromMs && (
+        <p className="text-xs opacity-70">
+          The engine's fleet history is complete only from{" "}
+          {new Date(kept.completeFromMs).toLocaleString()} (it restarted then, or
+          dropped older samples): the chart starts there.
+        </p>
+      )}
+      {kept === null ? (
+        <p className="opacity-70">Loading the fleet history…</p>
+      ) : samples.length === 0 ? (
+        <p className="opacity-70">No fleet sample in this span yet.</p>
       ) : (
         <dl className="grid grid-cols-[7rem_1fr] items-center gap-x-2 text-sm">
           <dt>Delivering</dt>
           <dd>
             <Sparkline
-              history={props.history}
+              history={samples}
               pick={(sample) => sample.deliveringPercent}
               label="Delivering over time"
               top={100}
@@ -317,10 +336,19 @@ function Correlation(props: { history: readonly FleetSample[]; marks: readonly n
           <dt>Headroom</dt>
           <dd>
             <Sparkline
-              history={props.history}
+              history={samples}
               pick={(sample) => sample.headroomPercent}
               label="Headroom over time"
               top={100}
+              marks={props.marks}
+            />
+          </dd>
+          <dt>Degraded</dt>
+          <dd>
+            <Sparkline
+              history={samples}
+              pick={degradedTotal}
+              label="Degraded outputs over time"
               marks={props.marks}
             />
           </dd>
@@ -334,16 +362,18 @@ function Evidence(props: {
   alert: OperatorAlert;
   resolvedAt: string | null;
   events: LifecycleEventsSnapshot | null;
-  history: readonly FleetSample[];
   names: Map<string, string>;
 }) {
   const packet = evidencePacket(props.alert);
+  const span = correlationWindow(props.alert, props.resolvedAt);
+  // The chart's query: one fetch for both.
+  const fleet = useFleetHistory(span.fromMs, span.toMs);
   const download = () => {
     const record = evidenceExport({
       alert: props.alert,
       resolvedAt: props.resolvedAt,
       events: props.events?.events ?? null,
-      history: props.history,
+      history: fleet.value?.samples ?? [],
       nowMs: Date.now(),
     });
     const url = URL.createObjectURL(

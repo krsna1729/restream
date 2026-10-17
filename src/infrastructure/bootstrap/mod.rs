@@ -239,6 +239,14 @@ pub async fn run_app(config: Arc<AppConfig>) {
         std::time::Duration::from_millis(config.tuning.reconciler_interval_ms),
         projector_stop.clone(),
     ));
+    tokio::spawn(crate::application::fleet_history::run_fleet_sampler(
+        state.fleet_history.clone(),
+        state.runtime_state.clone(),
+        pool.clone(),
+        engine.clone(),
+        crate::application::fleet_history::FLEET_SAMPLE_INTERVAL,
+        projector_stop.clone(),
+    ));
     let mut runtime = runtime::RuntimeTasks::launch(runtime::RuntimeLaunch {
         config,
         state,

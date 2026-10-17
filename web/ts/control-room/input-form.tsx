@@ -32,12 +32,14 @@ import { SettingsForm } from "./settings-form.js";
 export function InputForm(props: {
   pipelineId: string;
   stored: PipelineInput | null;
-  onSaved: () => void;
+  /** After a save the engine accepted; the deck follows it over the state
+   * stream on its own. */
+  onSaved?: () => void;
 }) {
   const { stored } = props;
   // What the engine last reported for this input: the save response, not the
-  // polled prop, so a second save never races the refresh that follows the
-  // first and mis-reads what is stored.
+  // pushed prop, so a second save never races the state change that follows
+  // the first and mis-reads what is stored.
   const [current, setCurrent] = useState<PipelineInput | null>(stored);
   const [draft, setDraft] = useState<InputDraft>(() => inputDraft(stored));
   const set = (next: Partial<InputDraft>) => setDraft({ ...draft, ...next });
@@ -63,7 +65,7 @@ export function InputForm(props: {
         // kept, so the next save does not touch it either.
         setCurrent(saved.input);
         setDraft(inputDraft(saved.input));
-        props.onSaved();
+        props.onSaved?.();
         return true;
       }}
     >

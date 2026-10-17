@@ -5,11 +5,13 @@
 //! egress reconciler's retries-exhausted write. The projector
 //! ([`run_projector`]) rebuilds on a change and, while a stream client is
 //! connected, once per interval for state no event reports (flow, stalls,
-//! retry countdowns). With no client connected nothing runs between changes;
-//! `GET /api/v1/state` and a connecting stream refresh on demand, reusing a
-//! projection whose rebuild completed less than [`ON_DEMAND_REUSE`] ago
-//! when no change was marked since, so a client polling in a loop costs at
-//! most one rebuild per window.
+//! retry countdowns, an input's forwarding gate). With no client connected
+//! the projector rebuilds nothing; `GET /api/v1/state`, a connecting stream
+//! and the fleet-history sampler
+//! ([`crate::application::fleet_history::run_fleet_sampler`]) refresh on
+//! demand, reusing a projection whose rebuild completed less than
+//! [`ON_DEMAND_REUSE`] ago when no change was marked since, so a client
+//! polling in a loop costs at most one rebuild per window.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -21,7 +23,8 @@ use tokio::sync::{Mutex, Notify, broadcast};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use super::{Projection, RuntimeState, StateDelta, diff, project};
+use super::{IngestEndpoints, Projection, Rows, RuntimeState, StateDelta, diff, project};
+use crate::config::ServerPorts;
 use crate::media::engine::MediaEngine;
 
 /// Deltas kept for clients that reconnect with `since`; older gaps resync
@@ -60,6 +63,8 @@ pub struct StateHub {
     changed: Notify,
     /// Marked changes so far; a refresh records the count it read.
     changes: AtomicU64,
+    /// The listener ports inputs' publish URLs name.
+    ports: ServerPorts,
 }
 
 /// When the last rebuild completed, and the marked-change count it read
@@ -80,21 +85,15 @@ impl LastRefresh {
     }
 }
 
-impl Default for StateHub {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl StateHub {
-    pub fn new() -> Self {
+    pub fn new(ports: ServerPorts) -> Self {
         let started = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_nanos());
-        Self::with_epoch(format!("{started:x}-{:x}", std::process::id()))
+        Self::with_epoch(format!("{started:x}-{:x}", std::process::id()), ports)
     }
 
-    pub fn with_epoch(epoch: String) -> Self {
+    pub fn with_epoch(epoch: String, ports: ServerPorts) -> Self {
         Self {
             refreshing: Mutex::new(LastRefresh::default()),
             current: Mutex::new(Current {
@@ -106,6 +105,7 @@ impl StateHub {
             deltas: broadcast::channel(DELTA_HISTORY).0,
             changed: Notify::new(),
             changes: AtomicU64::new(0),
+            ports,
         }
     }
 
@@ -150,7 +150,14 @@ impl StateHub {
             revision: current.revision,
             pipelines: current.projection.pipelines.values().cloned().collect(),
             outputs: current.projection.outputs.values().cloned().collect(),
+            inputs: current.projection.inputs.values().cloned().collect(),
+            graphs: current.projection.graphs.values().cloned().collect(),
         }
+    }
+
+    /// Reads the current projection in place, without copying a snapshot.
+    pub async fn read<R>(&self, read: impl FnOnce(&Projection) -> R) -> R {
+        read(&self.current.lock().await.projection)
     }
 
     /// The deltas after a resume token `<epoch>.<revision>`.
@@ -221,8 +228,31 @@ impl StateHub {
                 return;
             }
         };
-        self.publish(project(engine, &pipelines, &outputs).await)
-            .await;
+        let inputs = match crate::db::list_all_pipeline_inputs(pool).await {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(err = %error, "DB error reading inputs for runtime state");
+                return;
+            }
+        };
+        let host = match crate::db::get_ingest_host(pool).await {
+            Ok(host) => crate::application::services::ingest_host_or_default(host),
+            Err(error) => {
+                tracing::warn!(err = %error, "DB error reading the ingest host for runtime state");
+                return;
+            }
+        };
+        let endpoints = IngestEndpoints {
+            host,
+            ports: self.ports,
+        };
+        let rows = Rows {
+            pipelines: &pipelines,
+            outputs: &outputs,
+            inputs: &inputs,
+            endpoints: &endpoints,
+        };
+        self.publish(project(engine, &rows).await).await;
         *last = LastRefresh {
             at: Some(Instant::now()),
             changes,

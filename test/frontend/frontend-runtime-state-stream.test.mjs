@@ -21,14 +21,19 @@ function output(id, convergence) {
   };
 }
 
-function delta(revision, outputs, removedOutputs = [], epoch = "e1") {
+function delta(revision, outputs, removedOutputs = [], epoch = "e1", extra = {}) {
   return {
     epoch,
     revision,
     pipelines: [],
     outputs,
+    inputs: [],
+    graphs: [],
     removedPipelines: [],
     removedOutputs,
+    removedInputs: [],
+    removedGraphs: [],
+    ...extra,
   };
 }
 
@@ -78,6 +83,44 @@ test("deltas apply in revision order; removed entities go", async () => {
     applyStateDelta(next, delta(5, [], [], "e2")),
     null,
     "a delta from another server run asks for a resync",
+  );
+});
+
+// Q-050: the views read inputs and graphs from the state instead of polling,
+// so a changed input must replace the held one and a deleted pipeline's input
+// and graph must go, or the deck shows a stale or orphaned source.
+test("input and graph deltas replace and remove what the client holds", async () => {
+  const { applyStateDelta } = await loadStream();
+  const input = (id, connected) => ({ id, pipelineId: "pipe", runtime: { connected } });
+  const graph = (pipelineId, label) => ({
+    pipelineId,
+    nodes: [{ id: `${pipelineId}_ingest`, type: "ingest", label }],
+    edges: [],
+  });
+  const base = {
+    epoch: "e1",
+    revision: 1,
+    pipelines: [],
+    outputs: [],
+    inputs: [input("main", false), input("other", false)],
+    graphs: [graph("pipe", "No ingest"), graph("gone", "No ingest")],
+  };
+  const next = applyStateDelta(
+    base,
+    delta(2, [], [], "e1", {
+      inputs: [input("main", true)],
+      graphs: [graph("pipe", "SRT ingest")],
+      removedInputs: ["other"],
+      removedGraphs: ["gone"],
+    }),
+  );
+  assert.deepEqual(
+    next.inputs.map((entry) => [entry.id, entry.runtime.connected]),
+    [["main", true]],
+  );
+  assert.deepEqual(
+    next.graphs.map((entry) => [entry.pipelineId, entry.nodes[0].label]),
+    [["pipe", "SRT ingest"]],
   );
 });
 

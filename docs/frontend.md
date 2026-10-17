@@ -187,8 +187,9 @@ and would not load from a nested path.
   utilization: the calibration priors, raised to the deepest egress shard's
   measured queue when shards run), delivery and degraded outputs by
   layer (`LiveSnapshot.history`: one `fleet-history.ts` sample per store
-  sample, kept for 15 min of this page session, since the engine keeps no
-  metric history; a source with nothing to say is a gap, not a zero), and a
+  sample, kept for 15 min of this page session; Incidents reads the
+  engine's own history instead; a source with nothing to say is a gap, not a
+  zero), and a
   worst-first table of at most 10 pipelines that shares its rows with
   Pipelines (`pipeline-table.tsx`) and links to it for the rest. Pipelines: the
   inventory (attention first, then size), searchable by name or id and
@@ -197,10 +198,11 @@ and would not load from a nested path.
   fleet-wide protocol mix, the shared stages (running outputs grouped by the
   `stage` they read, largest group first), and the operational cards (needs
   attention, warm standby, bonded SRT, recording) that narrow the table.
-  Operate (one pipeline): the source deck from
-  `/pipelines/{id}/inputs` with Promote and each input's preview; the media
-  path (`operate-graph.tsx`) in four views: Graph (from
-  `/pipelines/{id}/graph`, laid out by longest path, each shared stage drawn
+  Operate (one pipeline): the source deck from the runtime state's
+  `inputs` (RTT from the telemetry sample's `inputs`) with Promote and each
+  input's preview; the media path (`operate-graph.tsx`) in four views: Graph
+  (the state's `graphs` entry with the telemetry's counters attached,
+  `state-views.ts`, laid out by longest path, each shared stage drawn
   once with its consumer count and destinations folded per upstream stage
   and protocol; egress nodes join outputs on their `outputId`), Destinations
   (the same groups as a table), Timeline (the pipeline's kept lifecycle
@@ -214,11 +216,11 @@ and would not load from a nested path.
   destination matrix from the state stream (feed lag from the running egress,
   rate from the telemetry rates) with Start/Stop, degraded first and capped
   at 200 rendered rows, with the hidden count (and how many of them need
-  attention) and a "show all" button for the rest. Inputs and graph are polled
-  every 2 s only while Operate shows that pipeline (`polled.tsx`: one
-  TanStack Query per subject, shared by panels that name the same one); each
-  panel shows the age of its last successful update and turns amber once that
-  is older than 2.5 poll intervals. Inspect (one pipeline): the resource map
+  attention) and a "show all" button for the rest. Inputs and graph come
+  from the state stream, so an input change shows without a poll; their
+  counters come from the store's 2 s telemetry sample, whose age the panels
+  show (amber once older than 2.5 samples). Inspect (one pipeline): the
+  resource map, polled every 2 s (process measurements, not state)
   (`/engine/resource-map?pipeline_id=…&view=detail&top_n=200`), nodes under
   pressure first, then by memory held, each with its confidence (measured,
   derived, estimated, unmeasured), a detail panel and the count of nodes the
@@ -229,7 +231,7 @@ and would not load from a nested path.
   judgement. "Global resource map" switches to the runtime scope (no
   `pipeline_id`); there the graph is not the map's, so no consumer card. Then
   the source ring (fill and retained payload) from the
-  graph; the egress shards this pipeline's outputs run on (the server scopes
+  graph and the telemetry's `sourceRings`; the egress shards this pipeline's outputs run on (the server scopes
   them by feed and shard); and the map's attribution legend. Monitor (one
   pipeline): ingest and egress rate, the share of wanted outputs delivering,
   the worst feed lag, ring fill and the slowest of its shards' progress age,
@@ -242,7 +244,7 @@ and would not load from a nested path.
   onset in view). Pause shows the window as it was while sampling goes on;
   Compare, while paused, overlays the live window dashed on the same scale.
   Below (`monitor-path.ts`): the selected input's transport (what its
-  protocol reports, from `/pipelines/{id}/inputs`; an unreported metric is
+  protocol reports, from the telemetry sample's `inputs`; an unreported metric is
   left out, not 0), the shared media path from the processing graph (source
   ring fill, worst reader lag, each stage with its packet rate and the
   wanted outputs reading it, reader overflows), and the destination outlier:
@@ -258,8 +260,13 @@ and would not load from a nested path.
   `measured` or `derived` by the engine, and the recommended action. The
   resolved list is the engine's (`/alerts?since=`, a 15m/1h/6h/24h window),
   with a note when the window reaches past the engine's kept history.
-  A correlation chart draws the page's 15-minute delivering and headroom
-  samples with cursors at the incident's open and close, and "Export
+  A correlation chart draws the engine's fleet history
+  (`/fleet/history?since=&until=`, sampled every 5 s and kept 24 h, read
+  from a minute before the incident opened to a minute after it closed,
+  then only new samples, no longer than the engine keeps them; a resolved
+  incident's span stops loading once complete) as delivering,
+  headroom and degraded lines with cursors at the incident's open and
+  close, with a note when the kept history starts after that minute; "Export
   evidence" downloads the alert, packet, timeline and those samples as one
   JSON file, built in the browser. Capacity (fleet): the
   `/metrics/system` capacity snapshot (load per service center, labelled
