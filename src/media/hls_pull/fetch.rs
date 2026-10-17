@@ -20,6 +20,7 @@ use reqwest::{Client, Url, redirect};
 use tracing::warn;
 use url::Host;
 
+use super::digest;
 use crate::domain::pipeline_input::{HeaderPair, PullAuth};
 use crate::media::hls_ingest::{BodyError, ObjectBody};
 
@@ -120,6 +121,9 @@ impl Origin {
 pub(super) struct AuthScope {
     origin: Option<Origin>,
     auth: RequestAuth,
+    /// The origin's last Digest challenge, once it answered a `basic`
+    /// credential with one, and how many requests used its nonce.
+    digest: std::sync::Mutex<Option<(digest::Challenge, u32)>>,
 }
 
 impl AuthScope {
@@ -127,7 +131,40 @@ impl AuthScope {
         Self {
             origin: Origin::of(source),
             auth,
+            digest: std::sync::Mutex::new(None),
         }
+    }
+
+    fn in_origin(&self, url: &Url) -> bool {
+        matches!((&self.origin, Origin::of(url)), (Some(origin), Some(target)) if *origin == target)
+    }
+
+    /// Learn from a `401`: whether the request is worth sending again, now
+    /// answering the origin's Digest challenge. A username and password
+    /// answer whichever scheme the origin asks for, as FFmpeg's HTTP client
+    /// does. A first challenge is answered, and a `stale=true` one (the nonce
+    /// expired, the credentials did not) once more; a Digest answer refused
+    /// without `stale` means the credentials are wrong, and the `401` stands.
+    fn learn_challenge(&self, url: &Url, response: &reqwest::Response) -> Result<bool, FetchError> {
+        if !matches!(self.auth, RequestAuth::Basic { .. }) || !self.in_origin(url) {
+            return Ok(false);
+        }
+        let values = response
+            .headers()
+            .get_all(header::WWW_AUTHENTICATE)
+            .iter()
+            .filter_map(|value| value.to_str().ok());
+        let challenge = match digest::select(values) {
+            Ok(challenge) => challenge,
+            Err(digest::Refusal::NotDigest) => return Ok(false),
+            Err(digest::Refusal::Unsupported(reason)) => return Err(FetchError::Auth(reason)),
+        };
+        let mut state = crate::sync::lock(&self.digest);
+        if state.is_some() && !challenge.stale {
+            return Ok(false);
+        }
+        *state = Some((challenge, 0));
+        Ok(true)
     }
 
     /// Whether this pull has a credential to protect, which is what makes a
@@ -141,11 +178,25 @@ impl AuthScope {
         url: &Url,
         builder: reqwest::RequestBuilder,
     ) -> reqwest::RequestBuilder {
-        match (&self.origin, Origin::of(url)) {
-            (Some(origin), Some(target)) if *origin == target => self.auth.apply(builder),
-            _ => builder,
+        if !self.in_origin(url) {
+            return builder;
         }
+        if let RequestAuth::Basic { username, password } = &self.auth
+            && let Some((challenge, uses)) = crate::sync::lock(&self.digest).as_mut()
+        {
+            *uses = uses.saturating_add(1);
+            let uri = &url[url::Position::BeforePath..url::Position::AfterQuery];
+            let cnonce = hex_nonce(rand::random::<[u8; 16]>());
+            let value =
+                digest::authorization(challenge, username, password, "GET", uri, *uses, &cnonce);
+            return builder.header(header::AUTHORIZATION, value);
+        }
+        self.auth.apply(builder)
     }
+}
+
+fn hex_nonce(bytes: [u8; 16]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Whether `url`'s host is in an address range a pull must not reach on its
@@ -439,19 +490,37 @@ pub(super) async fn send(
     url: &Url,
     scope: &AuthScope,
 ) -> Result<reqwest::Response, FetchError> {
-    let response = scope
+    let mut response = request(client, url, scope).await?;
+    // A Digest origin answers the first request with a challenge, and may
+    // expire its nonce later (`stale=true`): at most two answers per request.
+    for _ in 0..2 {
+        if response.status() != reqwest::StatusCode::UNAUTHORIZED
+            || !scope.learn_challenge(url, &response)?
+        {
+            break;
+        }
+        response = request(client, url, scope).await?;
+    }
+    let status = response.status();
+    if !status.is_success() {
+        return Err(FetchError::Status(status.as_u16()));
+    }
+    Ok(response)
+}
+
+async fn request(
+    client: &Client,
+    url: &Url,
+    scope: &AuthScope,
+) -> Result<reqwest::Response, FetchError> {
+    scope
         .apply(url, client.get(url.clone()))
         .send()
         .await
         .map_err(|error| match private_target(&error) {
             Some(refused) => FetchError::PrivateTarget(refused.to_string()),
             None => FetchError::Request(error.without_url().to_string()),
-        })?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(FetchError::Status(status.as_u16()));
-    }
-    Ok(response)
+        })
 }
 
 /// Read a bounded playlist body.
@@ -512,6 +581,8 @@ pub(super) enum FetchError {
     Request(String),
     /// The resolver refused the host: no request was issued.
     PrivateTarget(String),
+    /// The origin asked for an authentication the pull cannot answer.
+    Auth(String),
     Status(u16),
     TooLarge,
     Body(String),
@@ -522,6 +593,7 @@ impl std::fmt::Display for FetchError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Request(error) => write!(formatter, "origin request failed: {error}"),
+            Self::Auth(reason) => write!(formatter, "origin authentication refused: {reason}"),
             Self::PrivateTarget(refused) => {
                 write!(formatter, "HLS pull refuses a target that {refused}")
             }

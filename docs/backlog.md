@@ -34,10 +34,10 @@ items).
 - [Q-072 dedicated HLS ingest listener](#q-072-architecture-sonnet-dedicated-hls-ingest-listener-with-half-close)
 - [Q-073 HEVC fMP4 HLS push ingest](#q-073-protocol-opus-hevc-fmp4-hls-push-ingest)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
-- [Q-076 HTTP Digest for pull origins](#q-076-protocol-sonnet-http-digest-authentication-for-hls-pull-origins)
 - [Q-077 follow every rendition into one ring](#q-077-architecture-opus-follow-every-rendition-of-a-master-playlist-into-one-ring)
 - [Q-078 choose versions the ingest can decode](#q-078-protocol-opus-choose-the-versions-and-codecs-the-ingest-can-decode)
 - [Q-083 measure RTMP and SRT under pull load](#q-083-performance-sonnet-measure-rtmp-and-srt-under-pull-load)
+- [Q-086 reassemble ADTS frames across PES](#q-086-protocol-sonnet-reassemble-adts-frames-that-span-pes-boundaries)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -625,28 +625,6 @@ items).
   measurement; rewritten 2026-10-17 from the attribution that measurement
   asked for).
 
-### Q-076 [protocol] [sonnet] HTTP Digest authentication for HLS pull origins
-- Goal: a pull input authenticates to an origin that answers `401` with a
-  `WWW-Authenticate: Digest` challenge, as FFmpeg's `-auth_type digest` and
-  an AWS MediaLive HLS input both support.
-- Why it is not in the shipped pull feature: the credential variants are
-  `none`, `bearer`, `basic` and `headers` (`PullAuth` in
-  `src/domain/pipeline_input.rs`), and no HTTP-digest crate is in the tree. A
-  hand-rolled RFC 7616 (MD5, MD5-sess, SHA-256, `qop=auth`, nonce counting,
-  a stale nonce) is a correctness risk for a mechanism most origins have
-  replaced with signed URLs or bearer tokens, and the harness gate does not
-  need it.
-- Change: add a `digest` variant to `PullAuth` with the same write-only rule,
-  validation and `Debug` redaction as `basic`, and implement the
-  challenge/response on the request path in `src/media/hls_pull.rs` — or
-  adopt a maintained crate if one is vetted.
-- Gates: a test against a local origin that challenges with each supported
-  algorithm and `qop`; one that answers `stale=true` and must be retried
-  once; a rejection, with a stated reason, when the challenge offers no
-  supported algorithm.
-- Status: open (Filed: 2026-10-17 by claude, from the pull-credential
-  decision: all four mechanisms ship as a choice, digest does not).
-
 ### Q-077 [architecture] [opus] Follow every rendition of a master playlist into one ring
 - Goal: an HLS ingest session whose master carries audio as a separate
   `EXT-X-MEDIA` rendition delivers both video and audio — for push and pull
@@ -728,3 +706,23 @@ items).
   reported side by side.
 - Status: open (Filed: 2026-10-17 by claude, from the #354 non-HLS audit: the
   push ingest has this arm, the pull ingest does not).
+
+### Q-086 [protocol] [sonnet] Reassemble ADTS frames that span PES boundaries
+
+- Goal: a TS source whose audio PES packets do not start and end on ADTS frame
+  boundaries (`data_alignment_indicator = 0`) still yields one complete AAC
+  frame per packet.
+- Why: `TsDemuxer::flush_pes` cuts an AAC PES into its complete ADTS frames
+  and drops bytes after the last one; the next PES then starts mid-frame, finds
+  no sync at offset 0, and is forwarded whole. Such a stream loses the tail
+  frame of every PES and hands consumers a misaligned unit. Muxers that
+  align audio PES (FFmpeg, MediaMTX, most encoders) never hit this; the
+  behaviour predates the split.
+- Change: carry an audio stream's trailing partial frame into its next PES
+  and resync on the next ADTS header, with the carried bytes bounded by one
+  maximum ADTS frame (8191 bytes).
+- Gates: a demuxer test with frames split across two PES packets yields every
+  frame once, in order, with stepped timestamps; a fuzz case of random
+  PES cuts never yields a unit without a leading sync word.
+- Status: open (Filed: 2026-10-17 by claude, from the #358 review: the
+  frame split drops the cut tail rather than carrying it).

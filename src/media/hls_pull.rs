@@ -57,6 +57,7 @@ use crate::media::hls_ingest::{
 use crate::media::ingest_auth::AuthenticatedPipeline;
 
 mod audio;
+mod digest;
 mod fetch;
 mod namespace;
 use audio::report_audio_rendition;
@@ -239,9 +240,10 @@ enum PullError {
 impl From<FetchError> for PullError {
     fn from(error: FetchError) -> Self {
         match error {
-            // A refused target stays refused: retrying would ask the same
-            // question and log it again on every backoff.
-            FetchError::PrivateTarget(_) => Self::Fatal(error.to_string()),
+            // A refused target, or an authentication the pull cannot answer,
+            // stays refused: retrying would ask the same question and log it
+            // again on every backoff.
+            FetchError::PrivateTarget(_) | FetchError::Auth(_) => Self::Fatal(error.to_string()),
             error => Self::Retry(error.to_string()),
         }
     }

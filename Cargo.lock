@@ -2638,6 +2638,7 @@ dependencies = [
  "libc",
  "libsqlite3-sys",
  "loom",
+ "md-5",
  "memchr",
  "percent-encoding",
  "pkg-config",
