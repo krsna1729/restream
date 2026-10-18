@@ -50,8 +50,9 @@ fix or suppress that output at the helper level instead.
 
 `fuzz/` holds cargo-fuzz targets for the parsers that read untrusted media
 bytes. They call the production functions; RTMP-private parsers are reached
-through `media::rtmp::fuzz_entry` and egress-private ones through
-`media::egress::fuzz_entry`, which exist only under `--cfg fuzzing`.
+through `media::rtmp::fuzz_entry`, egress-private ones through
+`media::egress::fuzz_entry` and MoQ ones through `media::moq_fuzz_entry`,
+which exist only under `--cfg fuzzing`.
 
 | Target | Input | Production code |
 |---|---|---|
@@ -63,6 +64,7 @@ through `media::rtmp::fuzz_entry` and egress-private ones through
 | `rtmp_client_requests` | publisher bytes after the handshake | ingest `ServerSession::handle_input` with the message-size limit |
 | `ts_demux` | SRT ingest MPEG-TS, sync-forced or raw | `TsDemuxer` (PAT/PMT, PES, `mpegts_probe`) |
 | `http_response` | HLS PUT destination server response, split into reads | `http1::ResponseReader` (the response must not depend on where reads split it) |
+| `moq_ingest` | MoQ ingest catalog and frames | `from_hang_catalog`, `TrackSet::new` (hex decoder configurations), `IngestTrack::push` (legacy timestamps, NAL units, AAC, CMAF fragments) |
 
 ```sh
 cd fuzz
@@ -396,6 +398,9 @@ Choose the narrowest catalog mode that crosses the changed boundary:
 - HLS push or pull ingest, or executor isolation — `hls-push-duty`, whose
   baseline arm (`--hls-publishers 0`) and treatment arms (`--hls-publishers N`,
   `--pull-sessions N`) differ only by the HLS addition;
+- MoQ egress, origin or ingest, or the egress fabric beside it —
+  `moq-dev-interop` (moq-lite-06 + hang against the pinned moq.dev tools;
+  `--browsers` adds the Chromium/Firefox specs);
 - broad regression confidence — a catalog suite after the scoped mode passes;
 - performance or capacity — a measurement workflow, run serially with
   bench-profile binaries.
@@ -476,6 +481,155 @@ deltas of `compact_stall`, `allocstall_*`, `thp_fault_alloc` and
 `pgmajfault`, the Restream cgroup's `memoryEvents` deltas, and the host's THP
 `enabled`/`defrag` modes. FFmpeg is resolved through `src/ffmpeg_binary.rs`
 and the source through `src/test_fixtures.rs`.
+
+### MoQ interop (`moq-dev-interop`)
+
+`moq-dev-interop` proves the phase-1 MoQ profile, moq-lite-06 with the hang
+catalog and container as `moq-net` 0.3.15 speaks it, against the moq.dev tools
+released from the same commit (`e2c5b505`): the `moq` CLI (moq-cli 0.14.7)
+and `moq-relay` 0.17.7. `scripts/dev/moq/fetch-moq-dev.sh` downloads both
+linux/amd64 release archives, checks each against the SHA256 the release
+publishes in `SHA256SUMS` (recorded in the script) and installs
+`.local/bin/moq-0.14.7` and `.local/bin/moq-relay-0.17.7`; the mode refuses a
+binary whose `--version` differs (`MOQ_DEV_INTEROP_MOQ_BIN` and
+`MOQ_DEV_INTEROP_RELAY_BIN` override the paths, not the versions).
+
+```sh
+scripts/dev/moq/fetch-moq-dev.sh
+scripts/harness/run.sh moq-dev-interop -- --no-netns
+# with the browser specs; install them and their browsers once per checkout
+(cd test/e2e/moq && npm ci && npx playwright install chromium firefox)
+scripts/harness/run.sh moq-dev-interop -- --no-netns --browsers
+```
+
+Firefox plays audio only through a running audio server; without one its
+`AudioContext` never starts and the Firefox audio checks fail with zero
+audio advance while video plays. On a headless host start a PulseAudio null
+sink first (CI does the same):
+
+```sh
+pulseaudio -D --exit-idle-time=-1
+pactl load-module module-null-sink sink_name=moq_null && pactl set-default-sink moq_null
+```
+
+Each run generates a CA and an ECDSA P-256 leaf (13 days,
+`localhost`/`127.0.0.1`) with `openssl`. moq-relay serves the leaf on
+QUIC/WebTransport and its HTTP API on the same loopback port
+(`--auth-public '**'`); Restream's MoQ listener (`RESTREAM_MOQ_INGEST_LISTEN`,
+`RESTREAM_MOQ_TLS_CERT`, `RESTREAM_MOQ_TLS_KEY`) serves it for ingest and as
+the origin. Every `moq` CLI session trusts the CA, offers only `moq-lite-06`
+and has the WebSocket fallback off, so a session that carries media
+negotiated moq-lite-06 over QUIC. The fixture and the retry backoff are the
+ones `moq-relay-interop` uses (below).
+
+| Phase | Path under test | Checks |
+|---|---|---|
+| Egress | FFmpeg RTMP → pipeline → `moqt://127.0.0.1:<relay>/?broadcast=live/egress.hang&ca=<ca.pem>` → moq-relay, plus an RTMP sibling output to the in-process sink | `egressRelayCatalog`: the relay announces `live/egress.hang` and serves a hang catalog with an H.264 (`avc1`/`avc3`) and an AAC rendition whose descriptions are hex (an `avc1` rendition must have one). `egressRelayLite06`: every session in the relay log so far (Restream's egress; no harness subscriber has dialled yet) negotiated `moq-lite-06`. `egressReadBack`: `moq export ts` from the relay for 24 s, then FFprobe: ≥ 20 s of media, H.264 + AAC, strictly increasing video PTS, non-decreasing audio PTS, video frame count within 5 % of the input rate |
+| Origin | The harness mints a subscribe grant with its API session (`POST /api/v1/pipelines/<id>/moq-token` → `{token, url, expiresAt}`) and runs `moq export ts` against the grant's URL on Restream's listener, `https://127.0.0.1:<moq>/…?token=<t>`, broadcast `<pipeline id>` | `originReadBack`: the read-back checks over ≥ 8 s. `originRefusesNoToken` and `originRefusesBadToken`: the same subscription without the token, and with its last character changed, dials once and must end within 10 s without media; the CLI's reason (`Error: unauthorized`) is recorded |
+| Browsers (`--browsers`) | Playwright Chromium and Firefox play the origin (a freshly minted grant) and the relay with `@moq/watch`; the origin page without its token must be refused | `browser-<chromium\|firefox>-<origin\|relay>` and `browser-<chromium\|firefox>-origin-no-token`, below |
+| Isolation | moq-relay SIGKILLed 10 s later, restarted 3 s after | `isolationMoqReconnected`: the broadcast is announced again with a valid catalog within 60 s. `isolationRelayLite06`: Restream's new session negotiated `moq-lite-06`. `isolationSiblingUninterrupted` and `isolationReadBackAfterReconnect` as in `moq-relay-interop` |
+| Ingest | moq-dev's `pub-ts` recipe, `ffmpeg -stream_loop -1 -re -i <fixture> -c copy -f mpegts -pes_payload_size 0 -muxdelay 0 - \| moq … --broadcast live/sk-moq-dev-ingest.hang import ts`, into Restream's listener (the URL path is empty, so the stream key is the last broadcast segment without `.hang`) → pipeline → RTMP output into an FFmpeg `-listen 1` RTMP server | `ingestMoqSession`: the input is live with protocol `moq`, H.264 video and audio. `ingestReadBack`: the read-back checks over ≥ 8 s of what the RTMP server received |
+
+The browser specs are their own package, `test/e2e/moq/` (`@moq/watch` 0.6.3,
+`@playwright/test` and Vite pinned exactly, `*.moq.ts` file names), so the
+frontend suite never collects them, and they skip unless the harness passes
+the endpoints in `MOQ_BROWSER_*`. Vite serves a minimal page on `localhost`
+(a secure context, which WebTransport and WebCodecs need); it connects with
+`serverCertificateHashes` set to the leaf's SHA-256 (to `127.0.0.1`, not
+`localhost`, which Chromium's WebTransport does not reach on an IPv4-only
+listener) and plays the broadcast with `Watch.Player`. Each test waits for
+both decoders to start, then over 10 s requires no page error, the negotiated
+protocol `moq-lite-06/webtransport` (kept as the `moq-protocol` annotation),
+at least 150 decoded video frames, a repainting canvas (sampled every
+animation frame at 16×9: at least two picture changes and a mean-luma range
+of at least 100, which the fixture's white marker flash every 5 s on black
+provides), audio bytes received, a configured audio decoder, and at least 5 s
+of decoded audio timeline. Chromium runs as full Chromium
+(`channel: 'chromium'`) with autoplay allowed. Firefox offers WebTransport
+protocols, and so moq-lite-06, from 155 (the Firefox Playwright 1.63 ships);
+an older Firefox records what it negotiated (moq-lite-02 or WebSocket, say)
+and what played, then skips, which the report lists as a `fallback` row:
+never a moq-lite-06 pass and never a failure. The refusal test opens the
+origin page with the token removed and requires a page error (recorded as the
+`moq-refusal` annotation) with no video decoded and no audio received. A
+(browser, test) pair with no result in the Playwright report fails.
+
+Safari 26.4 is a manual check: Playwright WebKit on Linux is not Safari, and
+CI has no macOS runner. On the Linux host, run Restream with the MoQ listener
+on a LAN address and a leaf generated as above, publish the fixture into a
+pipeline, mint a subscribe grant for it
+(`POST /api/v1/pipelines/<id>/moq-token`), and serve the spec page with
+`npx vite --config vite.config.ts --port 5180` in `test/e2e/moq`. On a Mac with
+Safari 26.4 or later, forward the page (`ssh -L 5180:localhost:5180 <host>`,
+so it stays a `localhost` secure context) and open
+`http://localhost:5180/index.html?url=<grant url, URL-encoded>&name=<pipeline id>&hash=<leaf SHA-256>`;
+MoQ itself goes straight to the host over UDP. The video must play with
+sound, and `window.moqWatch.state()` in Web Inspector must report
+`moq-lite-06` over `webtransport` with `videoFrames` rising. Record the Safari
+version and the result in the pull request.
+
+`.local/artifacts/moq-dev-interop/report.json` carries every check with its
+detail, every relay session parsed from the moq-relay log (relay life,
+connection, role hint, negotiated version, transport), the MoQ output's API
+status after the egress and isolation phases, the ports and the pinned
+versions. The directory also holds the relay log across both lives, the
+Restream, FFmpeg and `moq` logs, every `moq export` capture with its FFprobe
+JSON, and `browser/` with the Playwright log, JSON report, traces and failure
+screenshots.
+
+CI runs `moq-dev-interop --browsers` in the "MoQ interop" job on every push
+to `master` and on pull requests that touch a `src/`
+path with `moq` in it, `src/media/egress/`, `scripts/dev/moq/`,
+`test/e2e/moq/` or the workflow. The job reuses the bench binaries
+`integration-build` uploads and installs the spec package and its browsers
+itself, so it adds no step to any other job.
+
+### MoQ relay interop (`moq-relay-interop`)
+
+`moq-relay-interop` is the phase-2 check (not run by CI or any suite until
+the phase-2 IETF profile lands; Restream's MoQ code speaks moq-lite only):
+Restream's MoQ egress and ingest
+against MediaMTX. That wire profile is "MOQT draft-19 subset, interop-pinned to
+MediaMTX v1.21.2", so the relay is that release (commit `914e3953`), never the
+`/usr/local/bin/mediamtx` the other live modes and the demo use.
+`scripts/dev/moq/fetch-mediamtx.sh` downloads the linux/amd64 archive,
+checks it against the SHA256 from the release's published `checksums.sha256`
+(recorded in the script) and installs `.local/bin/mediamtx-1.21.2`; the mode
+refuses any binary that does not report `v1.21.2`
+(`MOQ_INTEROP_MEDIAMTX_BIN` overrides the path, not the version).
+
+```sh
+scripts/dev/moq/fetch-mediamtx.sh
+scripts/harness/run.sh moq-relay-interop -- --no-netns
+```
+
+Each run generates a CA and an ECDSA P-256 leaf (13 days,
+`localhost`/`127.0.0.1`) with `openssl`, and a MediaMTX config with native
+QUIC, RTSP (TCP only), RTMP and the API on harness-allocated loopback ports
+and every other listener off. The phases run on one Restream and one fixture,
+`av-marker-h264-bf0.ts` (30 fps H.264 without B-frames, stereo AAC):
+
+| Phase | Path under test | Checks |
+|---|---|---|
+| Egress | FFmpeg RTMP → pipeline → `moqt://127.0.0.1:<quic>/live?ca=<ca.pem>` → MediaMTX, plus an RTMP sibling output to the in-process sink | `egressRelayPublished`: the path is online, published by a `moqSession`, with H264 and MPEG-4 Audio. `egressReadBack`: FFprobe over RTSP for ≥ 20 s of media: H.264 + AAC, strictly increasing video PTS, non-decreasing audio PTS, video frame count within 5 % of the input rate over the same span |
+| Isolation | MediaMTX SIGKILLed 10 s later, restarted 3 s after | `isolationMoqReconnected`: the MoQ output republishes within 60 s of the restart. `isolationSiblingUninterrupted`: from the kill on, the RTMP sibling never goes more than 1 s without a new video frame and never reconnects. `isolationReadBackAfterReconnect`: the egress checks again over ≥ 8 s |
+| Ingest | FFmpeg RTSP → MediaMTX `ingest-src`, whose `forward` pushes `moqt://127.0.0.1:<restream>/sk-moq-ingest` (leaf SHA-256 as `destFingerprint`) → pipeline → RTMP output into MediaMTX `ingest-back` | `ingestMoqSession`: the input is live with protocol `moq`, H.264 video and audio. `ingestReadBack`: the egress checks on `ingest-back` over ≥ 8 s |
+
+Restream runs with `RESTREAM_MOQ_INGEST_LISTEN`, `RESTREAM_MOQ_TLS_CERT` and
+`RESTREAM_MOQ_TLS_KEY` set to the leaf, and with a 1 s/4 s output retry
+backoff so the reconnect check measures detection and reconnection rather than
+the production 5 s base delay. AAC PTS may repeat in the read-back because
+FFmpeg's RTP depacketizer stamps every access unit of an aggregated RTP packet
+with the packet's timestamp; video PTS may not.
+
+`.local/artifacts/moq-relay-interop/report.json` carries every check with its
+detail, the MoQ output's API status after the egress and isolation phases,
+the ports, and the pinned versions; the same directory holds the generated
+`mediamtx.yml`, the MediaMTX log across both lives, the Restream and
+publisher logs, and the FFprobe captures.
+
+CI runs it in the "MoQ interop" job right after `moq-dev-interop` (see that
+section), whether or not phase 1 passed.
 
 ### Transport live-CI tiers
 

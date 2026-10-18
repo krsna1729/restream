@@ -90,3 +90,10 @@ path = "fuzz_targets/fmp4_ingest.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "moq_ingest"
+path = "fuzz_targets/moq_ingest.rs"
+test = false
+doc = false
+bench = false

@@ -272,6 +272,22 @@
             "benchProfile": true
           },
           "purpose": "HLS pull ingest end to end: one pipeline fed by an FFmpeg RTMP publisher whose own `/hls/{pipeline}/master.m3u8` is pulled into a second pipeline by a `hlsPull` input (session cookie as a request header), with an RTMP sink output on the pull pipeline; checks the input round-trip, the `hls-pull` session label, published and delivered media, media-clock versus wall-clock keep-up, a reported failure and an unstopped pipeline for an unresolvable URL, and that disabling then re-enabling the input stops and restarts the pull; `--fail-unresolvable` runs the refusal variant"
+        },
+        "moq-dev-interop": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": false
+          },
+          "purpose": "MoQ phase-1 profile (moq-lite-06 + hang) against the pinned moq.dev tools (`scripts/dev/moq/fetch-moq-dev.sh` installs moq-cli 0.14.7 and moq-relay 0.17.7 under `.local/bin/`): an RTMP-fed pipeline with a `moqt://` output to moq-relay and an RTMP sibling; the relay must announce an H.264 + AAC hang catalog on moq-lite-06 and `moq export ts` reads it back for at least 20 s (monotonic PTS, video frame count within 5 % of the input rate); the same pipeline read from Restream's own MoQ origin with an API-minted subscribe token, refused without it or with a tampered one; moq-relay killed and restarted mid-run, the MoQ output must republish and the RTMP sibling must not stall or reconnect; then moq-dev's `ffmpeg | moq import ts` recipe publishes into Restream's MoQ listener and the pipeline's RTMP output is read back with the same checks; `--browsers` also plays the origin and the relay in Playwright Chromium and Firefox with `@moq/watch` (`test/e2e/moq/`) and checks the origin refuses a token-less page"
+        },
+        "moq-relay-interop": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": false
+          },
+          "purpose": "MoQ egress and ingest against the pinned MediaMTX v1.21.2 relay (`scripts/dev/moq/fetch-mediamtx.sh` installs it under `.local/bin/`): an RTMP-fed pipeline with a `moqt://` output to MediaMTX's native QUIC listener (per-run CA via `?ca=`) and an RTMP sibling, read back over RTSP with FFprobe for at least 20 s (H.264 + AAC, monotonic PTS, video frame count within 5 % of the input rate); MediaMTX killed and restarted mid-run, the MoQ output must republish and the RTMP sibling must not stall or reconnect; then an RTSP-published MediaMTX path forwarded over MoQ into Restream's ingest listener, its RTMP output read back with the same checks"
         }
       }
     }
