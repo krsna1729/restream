@@ -79,16 +79,19 @@ For the scale workload and its signal-calibration/probe controls, use the
 its topology for a single-feed fan-out test.
 
 The default peer is MediaMTX. `MSR_PEER=sink` uses harness counting
-receivers. RTMPS scenarios require the MediaMTX peer rather than that sink
-mode. `RESOURCE_SWEEP_HLS_TLS=1` enables the HLS PUT HTTPS sink with the
-checked-in certificate. The harness supplies its trust root to Restream.
+receivers, including RTMPS when `RESOURCE_SWEEP_RTMPS_CERT` and
+`RESOURCE_SWEEP_RTMPS_KEY` are set. `RESOURCE_SWEEP_HLS_TLS=1` enables the
+HLS PUT HTTPS sink with the checked-in certificate. The harness supplies
+its trust root to Restream.
 
 For remote SRT receivers, set `RESOURCE_SWEEP_SRT_PEER_HOSTS` to a
 comma-separated host list and run `srt-sink` on each host. The remote
-state endpoints supply same-window drop counters. Use the
+state endpoints supply same-window drop counters. Configure
+`SRT_SINK_PORTS` and `SRT_SINK_STATE_PORT` using
+[`srt_sink.rs`](../src/bin/test_harness/srt_sink.rs), and check
 [`peer_state_config`](../src/bin/test_harness/resource_sweep/config.rs)
-implementation and sink mode's help for ports and endpoint overrides;
-remote counters must be reachable to grade the workload's validity.
+for endpoint overrides. Remote counters must be reachable to grade the
+workload's validity.
 
 ## Controls
 
@@ -113,8 +116,8 @@ Configuration is parsed by
 | `PEER_COUNT` | Peer instances/ports, default 1 |
 | `RESOURCE_SWEEP_SRT_PEER_HOSTS` | Remote SRT receiver hosts; unset means loopback |
 | `RESOURCE_SWEEP_HLS_TLS` | `1` selects HTTPS on the counting HLS sink |
-| `RESOURCE_SWEEP_RTMPS_CERT`, `RESOURCE_SWEEP_RTMPS_KEY` | Certificate/key pair for the MediaMTX RTMPS listener |
-| `RESOURCE_SWEEP_NO_CLEANUP` | `1` leaves the final scenario available for inspection |
+| `RESOURCE_SWEEP_RTMPS_CERT`, `RESOURCE_SWEEP_RTMPS_KEY` | Certificate/key pair for MediaMTX or the counting RTMPS listener |
+| `RESOURCE_SWEEP_NO_CLEANUP` | `1` skips final stack cleanup; retaining a live workload also requires `cumulative` |
 
 Lifecycle determines what each row includes:
 
@@ -123,6 +126,12 @@ Lifecycle determines what each row includes:
 | `isolated` | Restart the stack between scenarios for attribution |
 | `continuous` | Keep processes, replace pipelines and publishers |
 | `cumulative` | Keep processes and earlier workloads; later rows include prior growth |
+
+To inspect a live workload after the harness exits, combine
+`RESOURCE_SWEEP_NO_CLEANUP=1` with `cumulative` and an external peer such
+as MediaMTX. `isolated` stops its per-scenario stack, and `continuous`
+removes publishers and pipelines. In-process counting sinks do not survive
+the harness process.
 
 A changed lifecycle is a changed experiment. Do not compare an isolated
 row directly with a cumulative row as if they measured the same work.
