@@ -495,6 +495,15 @@ impl SrtShardBackend {
         if connect_spec.peer_hosts().is_empty() {
             return;
         }
+        // Once per leaf start (the connect spec is built here, not per
+        // connect): a URL stored before the API checked `latency`.
+        if let Some(latency) = connect_spec.ignored_latency() {
+            tracing::warn!(
+                output_id = %output_id,
+                latency,
+                "srt output URL latency is not 20-8000 ms; ignored, retaining the last usable latency or transport default"
+            );
+        }
         // A replaced output's previous pending connect (and any queued Owner
         // request it made) is superseded; the stale request is retired when
         // the Owner later admits it (see `handle_owner_event`).

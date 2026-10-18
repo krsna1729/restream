@@ -489,7 +489,7 @@ Unrecognized parameters are ignored; in particular, `sndbuf`, `rcvbuf`,
 | `streamid` | Stream ID presented to the destination; percent-decoded |
 | `passphrase` | AES passphrase for an encrypted link; percent-decoded |
 | `pbkeylen` | AES key length in bytes (`16`, `24`, or `32`) |
-| `latency` | TSBPD delay proposed in the handshake, in milliseconds (`20`–`8000`, as libsrt's URI option; FFmpeg's microsecond value is rejected). The API refuses an output whose `latency` is outside the range or not an integer. Default: the transport's 120 ms; the peer can negotiate a larger delay |
+| `latency` | TSBPD delay proposed in the handshake, in milliseconds (`20`–`8000`, as libsrt's URI option; FFmpeg's microsecond value is rejected). The API refuses an output whose `latency` is outside the range or not an integer; an unusable value stored earlier is ignored with a warning when the leaf starts. Default: the transport's 120 ms; the peer can negotiate a larger delay |
 | `bond` | Comma-separated additional peer addresses |
 | `type` | Bond mode: `backup` (default) or `broadcast` |
 
