@@ -28,6 +28,6 @@
     "@tanstack/react-router": "^1.170.44",
     "hls.js": "^1.7.3",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.1"
   }
 }
