@@ -191,7 +191,8 @@ mod tests {
             ProtocolSpec::Srt { .. }
             | ProtocolSpec::Sink
             | ProtocolSpec::HlsPut { .. }
-            | ProtocolSpec::Pipeline { .. } => {
+            | ProtocolSpec::Pipeline { .. }
+            | ProtocolSpec::Moq { .. } => {
                 panic!("plain RTMP fabric spec must carry the RTMP protocol")
             }
         }
@@ -207,7 +208,8 @@ mod tests {
             ProtocolSpec::Srt { .. }
             | ProtocolSpec::Sink
             | ProtocolSpec::HlsPut { .. }
-            | ProtocolSpec::Pipeline { .. } => {
+            | ProtocolSpec::Pipeline { .. }
+            | ProtocolSpec::Moq { .. } => {
                 panic!("RTMPS fabric spec must carry the RTMP protocol with TLS")
             }
         }

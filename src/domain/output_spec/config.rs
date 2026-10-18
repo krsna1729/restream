@@ -163,6 +163,11 @@ impl ProtocolCapabilities {
                 VideoCodecKind::H264 | VideoCodecKind::Hevc | VideoCodecKind::Unknown,
             ) | (EgressProtocol::Hls, _, VideoCodecKind::H264)
                 | (
+                    EgressProtocol::Moq,
+                    _,
+                    VideoCodecKind::H264 | VideoCodecKind::Hevc
+                )
+                | (
                     EgressProtocol::Sink,
                     _,
                     VideoCodecKind::H264 | VideoCodecKind::Hevc | VideoCodecKind::Unknown,
@@ -172,9 +177,9 @@ impl ProtocolCapabilities {
 
     pub const fn default_codec(self) -> VideoCodecKind {
         match (self.protocol, self.rtmp_mode) {
-            (EgressProtocol::Rtmp, Some(RtmpOutputMode::Legacy)) | (EgressProtocol::Hls, _) => {
-                VideoCodecKind::H264
-            }
+            (EgressProtocol::Rtmp, Some(RtmpOutputMode::Legacy))
+            | (EgressProtocol::Hls, _)
+            | (EgressProtocol::Moq, _) => VideoCodecKind::H264,
             _ => VideoCodecKind::Unknown,
         }
     }

@@ -19,7 +19,8 @@ use crate::media::engine::MediaEngine;
 #[path = "egress_task.rs"]
 mod egress_task;
 use egress_task::{
-    EgressTask, HlsPutFabricTask, PipelineFabricTask, RtmpFabricTask, SinkFabricTask, SrtFabricTask,
+    EgressTask, HlsPutFabricTask, PipelineFabricTask, RtmpFabricTask, SinkFabricTask,
+    SrtFabricTask, prepare_moq_fabric_task,
 };
 
 pub(super) type FailureTracker = Arc<Mutex<HashMap<String, (Instant, u32)>>>;
@@ -503,6 +504,12 @@ impl EgressReconciler {
             None
         };
 
+        let moq_fabric = if matches!(url_scheme, OutputUrlScheme::Moqt) {
+            prepare_moq_fabric_task(&self.engine, output, &prepared, &registration).await
+        } else {
+            None
+        };
+
         let task = EgressTask {
             output_id: output.id.clone(),
             pipeline_id: output.pipeline_id.clone(),
@@ -522,6 +529,7 @@ impl EgressReconciler {
             sink_fabric,
             pipeline_fabric,
             hls_put_fabric,
+            moq_fabric,
         };
         tokio::spawn(task.run());
     }

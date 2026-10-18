@@ -176,3 +176,29 @@ fn sink_capabilities_accept_source_codecs() {
             .is_ok()
     );
 }
+
+#[test]
+fn moq_capabilities_carry_h264_and_hevc_and_default_to_h264() {
+    let capabilities = ProtocolCapabilities::from_output(
+        "moqt://relay.example:4443/live",
+        &OutputConfig::source(),
+    );
+
+    assert_eq!(capabilities.protocol, EgressProtocol::Moq);
+    assert_eq!(capabilities.rtmp_mode, None);
+    assert!(capabilities.supports(VideoCodecKind::H264));
+    assert!(capabilities.supports(VideoCodecKind::Hevc));
+    assert!(!capabilities.supports(VideoCodecKind::Unknown));
+    assert_eq!(capabilities.default_codec(), VideoCodecKind::H264);
+
+    // A source output follows a known input codec, HEVC included.
+    let resolved = OutputConfig::source()
+        .resolve_for_input_codec(capabilities, VideoCodecKind::Hevc)
+        .unwrap();
+    assert_eq!(
+        resolved.video,
+        ResolvedOutputVideo::Source {
+            codec: VideoCodecKind::Hevc
+        }
+    );
+}

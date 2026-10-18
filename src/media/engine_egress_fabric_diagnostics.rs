@@ -387,6 +387,13 @@ impl MediaEngine {
                 }),
             );
         }
+        for (feed_id, heartbeats) in self.moq_fabric_shard_heartbeats(stall_after).await {
+            statuses.extend(
+                heartbeats
+                    .into_iter()
+                    .map(|hb| EgressFabricShardStatus::from_heartbeat("moq", feed_id.clone(), hb)),
+            );
+        }
         statuses
     }
 }

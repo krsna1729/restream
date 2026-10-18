@@ -34,6 +34,10 @@ pub enum OutputProtocol {
     Rtmps,
     /// Priced by the SRT shard sizing prior.
     Srt,
+    /// MoQ (`moqt://`): one QUIC stream write per media object, priced as
+    /// RTMP — a recorded prior, not a measurement (backlog: measure MoQ
+    /// egress cost per output and replace this prior).
+    Moq,
 }
 
 impl OutputProtocol {
@@ -41,6 +45,7 @@ impl OutputProtocol {
         match protocol {
             "srt" => Self::Srt,
             "rtmps" => Self::Rtmps,
+            "moq" => Self::Moq,
             _ => Self::Rtmp,
         }
     }
@@ -55,7 +60,8 @@ impl OutputProtocol {
     pub fn egress_work_pps(self, ingest: IngestRate) -> f64 {
         use crate::config::EgressShardProfile;
         match self {
-            Self::Rtmp | Self::Rtmps => ingest.pps,
+            // Prior: one write per media packet, like RTMP (see `Moq`).
+            Self::Rtmp | Self::Rtmps | Self::Moq => ingest.pps,
             Self::Srt => {
                 ingest.pps * f64::from(EgressShardProfile::OutputCount.outputs_per_shard())
                     / f64::from(EgressShardProfile::SrtOutputCount.outputs_per_shard())
@@ -716,6 +722,13 @@ mod tests {
         assert_eq!(OutputProtocol::Rtmps.egress_work_pps(ingest), 100.0);
         // One shard fits 128 RTMP or 64 SRT outputs: one SRT is two RTMP.
         assert_eq!(OutputProtocol::Srt.egress_work_pps(ingest), 200.0);
+    }
+
+    #[test]
+    fn a_moq_output_is_named_and_priced_by_the_rtmp_prior() {
+        let ingest = rate(6_000_000.0, 100.0);
+        assert_eq!(OutputProtocol::of_egress("moq"), OutputProtocol::Moq);
+        assert_eq!(OutputProtocol::Moq.egress_work_pps(ingest), 100.0);
     }
 
     #[test]

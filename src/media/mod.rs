@@ -21,6 +21,7 @@ pub mod engine_hls;
 pub(crate) mod engine_hls_egress_fabric;
 mod engine_ingest;
 mod engine_ingest_metadata;
+mod engine_moq_egress_fabric;
 mod engine_pipeline;
 mod engine_pipeline_egress_fabric;
 pub mod engine_registries;

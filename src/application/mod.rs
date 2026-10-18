@@ -3,6 +3,7 @@
 
 pub mod diagnosis;
 pub mod egress;
+pub(crate) mod egress_moq_fabric;
 pub mod egress_rtmp_fabric;
 pub mod fleet_history;
 pub mod graph;
