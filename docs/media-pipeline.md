@@ -844,8 +844,10 @@ The diagram shows a publisher connection from QUIC accept to the ring.
   resizes the ring.
 - **Limits.** Each ends the session: no announcement, broadcast or catalog
   within 10 s each; no frame for 20 s; a frame over 16 MiB; 64 malformed
-  frames in a row (a single bad frame is dropped)
-  (`src/media/moq/ingest/session.rs`).
+  frames in a row (a single bad frame is dropped). A catalog that hang
+  refuses, or whose parser panics, ends the session as a protocol violation.
+  Parser panics are counted as contained; the input is released with that
+  reason (`src/media/moq/ingest/session.rs`).
 - **Shutdown.** The endpoint closes with code 0, sessions get 1 s, then the
   rest are dropped and their inputs released.
 
