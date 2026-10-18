@@ -84,9 +84,11 @@ url = "2"
 percent-encoding = "2"
 # MoQ catalog `initData` (the AAC AudioSpecificConfig) is base64.
 base64 = "0.22"
-# MoQ phase 1 (moq-lite-06 + hang): the moq.dev lite driver and media
-# conventions, pinned; Restream supplies the Compio transport.
-moq-net = "=0.3.15"
+# MoQ (moq-lite + hang, IETF MOQT drafts 14-22): the moq.dev drivers and media
+# conventions, pinned; Restream supplies the Compio transport. `unsend` is the
+# vendored patch (vendor/moq-net/PATCH.md) that lets the IETF entry points run
+# over that `!Send` transport.
+moq-net = { version = "=0.3.15", features = ["unsend"] }
 hang = "=0.21.16"
 # The poll transport traits moq-net 0.3.15 drives (`media::moq::transport`
 # implements them over compio-quic), its waiter primitive, and the HTTP/3 +
@@ -284,3 +286,5 @@ panic = "unwind"
 [patch.crates-io]
 hang = { path = "vendor/hang" }
 rml_rtmp = { path = "vendor/rml_rtmp" }
+# moq-net 0.3.15 plus the `unsend` feature (see vendor/moq-net/PATCH.md).
+moq-net = { path = "vendor/moq-net" }
