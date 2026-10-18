@@ -10,6 +10,8 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
+use crate::domain::srt_ingest::{SRT_LATENCY_MS_CEILING, SRT_LATENCY_MS_FLOOR};
+
 use srt_proto::handshake::GroupType;
 use srt_transport::{
     BondedCallerConfig, CallerConfig, EncryptionConfig, GroupConfig, SessionConfig,
@@ -58,6 +60,9 @@ pub(crate) struct SrtFabricEgressConnectSpec {
     stream_id: String,
     passphrase: Option<String>,
     key_length: Option<srt_proto::crypto::KeyLength>,
+    /// `latency=` (TSBPD delay proposed in the handshake); `None` keeps the
+    /// transport default.
+    latency: Option<Duration>,
     bond_type: GroupType,
     /// This output's own connect attempt duration
     /// (`LeafPolicy.connect_timeout`). It becomes the request-local
@@ -68,36 +73,31 @@ pub(crate) struct SrtFabricEgressConnectSpec {
 
 impl SrtFabricEgressConnectSpec {
     pub(crate) fn from_url(url: &str, connect_timeout: Duration) -> Self {
-        let clean = url.strip_prefix("srt://").unwrap_or(url);
-        let mut parts = clean.splitn(2, '?');
-        let host = parts.next().unwrap_or_default().to_string();
+        let (host, query) = split_url(url);
         let mut stream_id = String::new();
         let mut passphrase = None;
         let mut key_length = None;
+        let mut latency = None;
         let mut bond_type = GroupType::Backup;
-        let mut peers = vec![host];
-        if let Some(query) = parts.next() {
-            for pair in query.split('&') {
-                let Some((key, value)) = pair.split_once('=') else {
-                    continue;
-                };
-                match key {
-                    "streamid" => stream_id = percent_decode(value),
-                    "passphrase" => passphrase = Some(percent_decode(value)),
-                    "pbkeylen" => {
-                        key_length = value
-                            .parse::<usize>()
-                            .ok()
-                            .and_then(srt_proto::crypto::KeyLength::from_len)
-                    }
-                    "bond" => peers.extend(value.split(',').map(str::to_string)),
-                    "type" => match value.to_ascii_lowercase().as_str() {
-                        "broadcast" => bond_type = GroupType::Broadcast,
-                        "backup" => bond_type = GroupType::Backup,
-                        _ => {}
-                    },
-                    _ => {}
+        let mut peers = vec![host.to_string()];
+        for (key, value) in query_pairs(query) {
+            match key {
+                "streamid" => stream_id = percent_decode(value),
+                "passphrase" => passphrase = Some(percent_decode(value)),
+                "pbkeylen" => {
+                    key_length = value
+                        .parse::<usize>()
+                        .ok()
+                        .and_then(srt_proto::crypto::KeyLength::from_len)
                 }
+                "latency" => latency = parse_latency(value).ok(),
+                "bond" => peers.extend(value.split(',').map(str::to_string)),
+                "type" => match value.to_ascii_lowercase().as_str() {
+                    "broadcast" => bond_type = GroupType::Broadcast,
+                    "backup" => bond_type = GroupType::Backup,
+                    _ => {}
+                },
+                _ => {}
             }
         }
         Self {
@@ -105,6 +105,7 @@ impl SrtFabricEgressConnectSpec {
             stream_id,
             passphrase,
             key_length,
+            latency,
             bond_type,
             connect_timeout: connect_timeout.max(Duration::from_millis(1)),
         }
@@ -117,6 +118,11 @@ impl SrtFabricEgressConnectSpec {
     fn session(&self) -> SessionConfig {
         let mut session = SessionConfig::default();
         session.set_stream_id((!self.stream_id.is_empty()).then(|| self.stream_id.clone()));
+        if let Some(latency) = self.latency {
+            // `parse_latency` bounds the value far below the transport's u16
+            // millisecond limit, so this cannot fail.
+            let _ = session.set_latency(latency);
+        }
         if let Some(passphrase) = self.passphrase.as_deref() {
             let mut encryption = EncryptionConfig::new(passphrase);
             if let Some(key_length) = self.key_length {
@@ -205,6 +211,47 @@ static NEXT_GROUP_ID: AtomicU32 = AtomicU32::new(10);
 fn next_group_id() -> u32 {
     // `GroupConfig::new` applies the wire marker bit.
     NEXT_GROUP_ID.fetch_add(1, Ordering::Relaxed) & !srt_proto::handshake::SRTGROUP_MASK
+}
+
+/// Reject an SRT output URL whose `latency=` this egress could not honor.
+/// Run at the API boundary; `from_url` keeps the transport default for an
+/// unusable value stored before this check existed.
+pub(crate) fn validate_srt_egress_url(url: &str) -> Result<(), String> {
+    let (_, query) = split_url(url);
+    query_pairs(query)
+        .filter(|(key, _)| *key == "latency")
+        .try_for_each(|(_, value)| parse_latency(value).map(drop))
+}
+
+/// `latency=` is the TSBPD delay in milliseconds, as in libsrt's URI option
+/// (`SRTO_LATENCY`), within the protocol's documented range. FFmpeg's
+/// microsecond `latency` is out of range and refused rather than misread.
+fn parse_latency(value: &str) -> Result<Duration, String> {
+    value
+        .parse::<i32>()
+        .ok()
+        .filter(|ms| (SRT_LATENCY_MS_FLOOR..=SRT_LATENCY_MS_CEILING).contains(ms))
+        .and_then(|ms| u64::try_from(ms).ok())
+        .map(Duration::from_millis)
+        .ok_or_else(|| {
+            format!(
+                "SRT output latency must be {SRT_LATENCY_MS_FLOOR}-{SRT_LATENCY_MS_CEILING} \
+                 milliseconds (got `latency={value}`)"
+            )
+        })
+}
+
+fn split_url(url: &str) -> (&str, Option<&str>) {
+    let clean = url.strip_prefix("srt://").unwrap_or(url);
+    let mut parts = clean.splitn(2, '?');
+    (parts.next().unwrap_or_default(), parts.next())
+}
+
+fn query_pairs(query: Option<&str>) -> impl Iterator<Item = (&str, &str)> {
+    query
+        .into_iter()
+        .flat_map(|query| query.split('&'))
+        .filter_map(|pair| pair.split_once('='))
 }
 
 fn percent_decode(value: &str) -> String {
@@ -360,5 +407,73 @@ mod tests {
             .connect_request(&[addr("10.0.0.1:9000"), addr("10.9.9.9:19000")])
             .expect("distinct hosts and ports are accepted");
         assert!(matches!(request.kind, SrtConnectKind::Bonded(_)));
+    }
+
+    fn request_latencies(url: &str, peers: &[&str]) -> Vec<Duration> {
+        let peers: Vec<SocketAddr> = peers.iter().map(|peer| addr(peer)).collect();
+        match SrtFabricEgressConnectSpec::from_url(url, TIMEOUT)
+            .connect_request(&peers)
+            .expect("request")
+            .kind
+        {
+            SrtConnectKind::Direct(config) => vec![config.session.latency()],
+            SrtConnectKind::Bonded(config) => config
+                .legs
+                .iter()
+                .map(|leg| leg.caller.session.latency())
+                .collect(),
+        }
+    }
+
+    /// `latency=` (milliseconds) is the TSBPD delay every leg proposes in its
+    /// handshake; without it the transport default stands.
+    #[test]
+    fn latency_query_is_the_handshake_tsbpd_delay_of_every_leg() {
+        let default = SessionConfig::default().latency();
+        assert_ne!(default, Duration::from_millis(750));
+        assert_eq!(
+            request_latencies("srt://127.0.0.1:9000?latency=750", &["127.0.0.1:9000"]),
+            [Duration::from_millis(750)]
+        );
+        assert_eq!(
+            request_latencies(
+                "srt://127.0.0.1:9000?bond=127.0.0.1:9001&latency=750",
+                &["127.0.0.1:9000", "127.0.0.1:9001"]
+            ),
+            [Duration::from_millis(750); 2]
+        );
+        assert_eq!(
+            request_latencies("srt://127.0.0.1:9000", &["127.0.0.1:9000"]),
+            [default]
+        );
+    }
+
+    #[test]
+    fn latency_outside_the_protocol_range_is_refused() {
+        for url in [
+            "srt://127.0.0.1:9000?latency=20",
+            "srt://127.0.0.1:9000?streamid=k&latency=8000",
+            "srt://127.0.0.1:9000?fc=25600&rcvbuf=1",
+        ] {
+            validate_srt_egress_url(url).expect(url);
+        }
+        for url in [
+            "srt://127.0.0.1:9000?latency=19",
+            "srt://127.0.0.1:9000?latency=8001",
+            // FFmpeg's microsecond spelling of 200 ms.
+            "srt://127.0.0.1:9000?latency=200000",
+            "srt://127.0.0.1:9000?latency=fast",
+            "srt://127.0.0.1:9000?latency=",
+            "srt://127.0.0.1:9000?latency=-5",
+            "srt://127.0.0.1:9000?latency=200&latency=1",
+        ] {
+            let error = validate_srt_egress_url(url).expect_err(url);
+            assert!(error.contains("20-8000 milliseconds"), "{url}: {error}");
+        }
+        // A stored value the API would now refuse keeps the default.
+        assert_eq!(
+            request_latencies("srt://127.0.0.1:9000?latency=200000", &["127.0.0.1:9000"]),
+            [SessionConfig::default().latency()]
+        );
     }
 }

@@ -35,6 +35,7 @@ mod tokio_ingress;
 
 pub(crate) use egress_connect::{
     AddressFamily, SrtConnectKind, SrtConnectRequest, SrtFabricEgressConnectSpec,
+    validate_srt_egress_url,
 };
 pub(crate) use egress_stats::SrtSendBacklog;
 pub(crate) use ingress_media::ingest_packets::forward_ingest_packets;

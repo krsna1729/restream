@@ -11,8 +11,8 @@ pub const DEFAULT_SRT_INGEST_LATENCY_MS: i32 = 250;
 /// The SRT wire protocol's documented range for the negotiated TSBPD delay
 /// (`TsbPdDelay`/`RcvTsbPdDelay`/`SndTsbPdDelay` in the handshake spec,
 /// `docs/features/handshake.md`); not a value this repo invented.
-pub const SRT_INGEST_LATENCY_MS_FLOOR: i32 = 20;
-pub const SRT_INGEST_LATENCY_MS_CEILING: i32 = 8_000;
+pub const SRT_LATENCY_MS_FLOOR: i32 = 20;
+pub const SRT_LATENCY_MS_CEILING: i32 = 8_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -240,11 +240,11 @@ fn normalize_srt_pbkeylen(pbkeylen: i32) -> Result<i32, String> {
 }
 
 fn normalize_srt_ingest_latency_ms(latency_ms: i32) -> Result<i32, String> {
-    if (SRT_INGEST_LATENCY_MS_FLOOR..=SRT_INGEST_LATENCY_MS_CEILING).contains(&latency_ms) {
+    if (SRT_LATENCY_MS_FLOOR..=SRT_LATENCY_MS_CEILING).contains(&latency_ms) {
         Ok(latency_ms)
     } else {
         Err(format!(
-            "SRT ingest latency must be {SRT_INGEST_LATENCY_MS_FLOOR}-{SRT_INGEST_LATENCY_MS_CEILING}ms"
+            "SRT ingest latency must be {SRT_LATENCY_MS_FLOOR}-{SRT_LATENCY_MS_CEILING}ms"
         ))
     }
 }
@@ -422,17 +422,17 @@ mod tests {
     #[test]
     fn latency_bounds_are_inclusive() {
         let mut global = SrtGlobalIngestConfig {
-            latency_ms: SRT_INGEST_LATENCY_MS_FLOOR,
+            latency_ms: SRT_LATENCY_MS_FLOOR,
             ..SrtGlobalIngestConfig::default()
         };
         global.validate().unwrap();
-        assert_eq!(global.latency_ms, SRT_INGEST_LATENCY_MS_FLOOR);
+        assert_eq!(global.latency_ms, SRT_LATENCY_MS_FLOOR);
 
         let mut global = SrtGlobalIngestConfig {
-            latency_ms: SRT_INGEST_LATENCY_MS_CEILING,
+            latency_ms: SRT_LATENCY_MS_CEILING,
             ..SrtGlobalIngestConfig::default()
         };
         global.validate().unwrap();
-        assert_eq!(global.latency_ms, SRT_INGEST_LATENCY_MS_CEILING);
+        assert_eq!(global.latency_ms, SRT_LATENCY_MS_CEILING);
     }
 }

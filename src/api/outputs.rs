@@ -354,6 +354,11 @@ fn validate_output_transport(
     {
         return Err(Box::new(bad_request(error.message())));
     }
+    if scheme == OutputUrlScheme::Srt
+        && let Err(error) = crate::media::srt::validate_srt_egress_url(&url)
+    {
+        return Err(Box::new(bad_request(error)));
+    }
     if matches!(output_config.protocol, OutputProtocolConfig::Rtmp { .. })
         && !scheme.is_rtmp_family()
     {
@@ -775,6 +780,22 @@ mod tests {
             .expect_err("RTMP settings should be rejected for SRT outputs");
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn validate_output_payload_rejects_srt_latency_the_egress_cannot_honor() {
+        validate_output_payload(&test_output_payload(
+            "srt://example.com:9000?streamid=k&latency=200",
+        ))
+        .expect("200 ms is an SRT latency the egress applies");
+        for url in [
+            "srt://example.com:9000?latency=200000",
+            "srt://example.com:9000?latency=fast",
+        ] {
+            let response = validate_output_payload(&test_output_payload(url))
+                .expect_err("the SRT leaf cannot apply this latency");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{url}");
+        }
     }
 
     #[test]

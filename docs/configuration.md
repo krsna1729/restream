@@ -481,14 +481,16 @@ The transport owns protocol state and UDP sockets.
 ### Recognized SRT egress URL parameters
 
 Restream reads only these query parameters from an `srt://` output URL.
-Others (including `sndbuf`, `rcvbuf`, `fc`, `latency`, `maxbw`) are ignored.
+Unrecognized parameters are ignored; in particular, `sndbuf`, `rcvbuf`,
+`fc`, and `maxbw` are not egress URL settings:
 
 | Parameter | Purpose |
 |---|---|
-| `streamid` | Stream ID sent to the destination; percent-decoded |
-| `passphrase` | AES passphrase; percent-decoded |
-| `pbkeylen` | Key length in bytes (`16`, `24`, `32`) |
-| `bond` | Comma-separated extra peer addresses |
+| `streamid` | Stream ID presented to the destination; percent-decoded |
+| `passphrase` | AES passphrase for an encrypted link; percent-decoded |
+| `pbkeylen` | AES key length in bytes (`16`, `24`, or `32`) |
+| `latency` | TSBPD delay proposed in the handshake, in milliseconds (`20`–`8000`, as libsrt's URI option; FFmpeg's microsecond value is rejected). The API refuses an output whose `latency` is outside the range or not an integer. Default: the transport's 120 ms; the peer can negotiate a larger delay |
+| `bond` | Comma-separated additional peer addresses |
 | `type` | Bond mode: `backup` (default) or `broadcast` |
 
 The URL authority is the primary peer. `backup` prefers it and keeps the
