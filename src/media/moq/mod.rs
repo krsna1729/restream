@@ -12,6 +12,9 @@
 use std::fmt;
 
 pub(crate) mod egress;
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub mod fuzz_entry;
 pub(crate) mod ingest;
 pub(crate) mod media;
 pub(crate) mod origin;

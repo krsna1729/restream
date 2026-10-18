@@ -60,3 +60,17 @@ for segment in "$work"/index*.m4s; do
   { printf "\\x$(printf '%02x' $((init_len >> 8)))\\x$(printf '%02x' $((init_len & 255)))"
     cat "$work/init.mp4" "$segment"; } > "$out/seed-$name"
 done
+
+# moq_ingest: the catalog's length (2 bytes, big-endian), a hang catalog
+# (H.264 with inline parameter sets, AAC-LC 48 kHz stereo), then frames as
+# (track byte, 2-byte big-endian length, frame): an IDR access unit with
+# its SPS/PPS and an AAC frame, each behind a legacy varint timestamp.
+out=corpus/moq_ingest
+mkdir -p "$out"
+catalog='{"video":{"renditions":{"video":{"codec":"avc1.42001e","codedWidth":64,"codedHeight":36,"container":{"kind":"legacy"}}}},"audio":{"renditions":{"audio":{"codec":"mp4a.40.2","sampleRate":48000,"numberOfChannels":2,"description":"1190","container":{"kind":"legacy"}}}}}'
+catalog_len=${#catalog}
+video='\x00\x00\x00\x00\x01\x67\x42\x00\x1e\xf4\x05\x01\xec\x80\x00\x00\x00\x01\x68\xce\x06\xe2\x00\x00\x00\x01\x65\x88\x84\x00'
+{ printf "\\x$(printf '%02x' $((catalog_len >> 8)))\\x$(printf '%02x' $((catalog_len & 255)))"
+  printf '%s' "$catalog"
+  printf '\x00\x00\x1e'; printf "$video"
+  printf '\x01\x00\x05\x00\x21\x10\x05\x00'; } > "$out/seed-av"

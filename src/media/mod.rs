@@ -44,6 +44,9 @@ pub mod ingest_auth;
 pub mod input_gate;
 pub mod metadata;
 pub(crate) mod moq;
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub use moq::fuzz_entry as moq_fuzz_entry;
 #[forbid(unsafe_code)]
 pub mod mpegts;
 pub mod packet;

@@ -17,16 +17,19 @@ items).
 - [Q-031 one capacity allocator](#q-031-architecture-opus-derive-every-thread-count-from-one-capacity-allocator)
 - [Q-033 host-level shard pool](#q-033-architecture-opus-run-egress-shards-from-one-host-level-pool-instead-of-per-feed-groups)
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
-- [Q-047 MoQ egress](#q-047-protocol-opus-moq-egress)
+- [Q-047 MoQ egress: IETF MOQT profiles](#q-047-protocol-opus-moq-egress-ietf-moqt-profiles)
 - [Q-049 silent SRT leaves](#q-049-resilience-opus-find-why-connected-srt-leaves-sent-nothing-under-host-overload)
 - [Q-053 external FFmpeg process topology](#q-053-architecture-sonnet-external-ffmpeg-process-topology-per-rendition)
 - [Q-065 capacity cost of HLS, sink and pipeline outputs](#q-065-performance-sonnet-price-hls-sink-and-pipeline-outputs-from-a-measured-cost)
 - [Q-066 SRT ingress test port race](#q-066-testing-sonnet-srt-multi-owner-test-port-can-join-a-foreign-reuseport-group)
 - [Q-067 optional Basic auth for HLS push](#q-067-protocol-opus-optional-basic-auth-for-hls-push)
-- [Q-070 MoQ ingest](#q-070-protocol-opus-moq-ingest)
+- [Q-070 MoQ ingest: IETF MOQT profiles](#q-070-protocol-opus-moq-ingest-ietf-moqt-profiles)
 - [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
 - [Q-087 separate-rendition timeline breaks](#q-087-protocol-sonnet-align-separate-renditions-on-timeline-breaks-not-on-raw-proximity)
+- [Q-088 MoQ egress cost](#q-088-performance-sonnet-price-moq-egress-from-a-measured-cost)
+- [Q-089 MoQ origin track-set changes](#q-089-protocol-sonnet-the-moq-origin-follows-a-track-set-change-while-served)
+- [Q-090 MoQ `ca=` path confinement](#q-090-security-sonnet-confine-moq-egress-ca-files-to-a-configured-directory)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -238,23 +241,22 @@ items).
   cold prior prices this host at 1.4–1.9× its measured per-output cost
   until a healthy window measures it (Q-025).
 
-### Q-047 [protocol] [opus] MoQ egress
-- Goal: subscribers receive a live pipeline over MoQ: IETF MOQT with the
-  MSF catalog and LOC objects, one object per frame, one group per GOP,
-  read from the pipeline ring (one retention layer, no ring to MoQ-cache
-  copy), on Owner threads behind a Compio QUIC adapter.
-- Sources: a pinned-SHA `moq-dev/moq` (or moxygen) wire profile; a new
-  `EgressProtocol` variant, planner capability and fabric backend
-  (`src/domain/output_spec/protocol.rs`, `src/media/egress/`). Objects come
-  from the ring's frame units (`RingBuffer::frame_unit`, track configuration
-  generation per sequence); add the GOP id from the keyframe gate to the
-  frame-unit word for groups.
-- Gates: interop with moxygen and MediaMTX as subscribers (one harness
-  mode); a loom model for the subscriber hand-off; bench before and after
-  on the egress shard.
-- Status: open; unparked by the user 2026-10-16. Q-025 (cross-host shard law)
-  is still open, so the shard sizing for MoQ starts from the current-host
-  priors (Filed: 2026-10-05 by claude, from the architecture reviews).
+### Q-047 [protocol] [opus] MoQ egress: IETF MOQT profiles
+- Goal: the MoQ egress and origin also speak IETF MOQT draft-18 with the MSF
+  catalog and LOC objects, Cloudflare's draft-16 (token in the URL path) and
+  the MediaMTX v1.21.2 subset, beside the moq-lite-06 + hang profile.
+- Sources: the moq-lite profile in `src/media/moq/` (PR #371): egress shard
+  backend, origin, Compio QUIC/WebTransport transport. The draft-18 control
+  and object parsers are written and parked out of tree. MediaMTX reads
+  frame groups; hang keeps GOP groups, so the group policy becomes per
+  profile.
+- Gates: interop with moxygen, MediaMTX and Cloudflare's relay as
+  subscribers (one harness mode); fuzz targets for the control and object
+  parsers.
+- Status: open; phase 1 (moq-lite-06 + hang, loom model for the origin
+  hand-off) landed in #371 with no regression on the unchanged shared
+  egress and ring benches (A/A); the MoQ egress cost itself is Q-088
+  (Filed: 2026-10-05 by claude, from the architecture reviews).
 
 ### Q-049 [resilience] [opus] Find why connected SRT leaves sent nothing under host overload
 - Evidence: while `mixed.signal` ran an H.265 case beside another case on a
@@ -380,15 +382,18 @@ items).
   fMP4 push, `ingestUrls.hls`, panic isolation and the PUT/POST harness gate
   are done).
 
-### Q-070 [protocol] [opus] MoQ ingest
-- Goal: a MoQ publisher (MSF catalog, LOC objects) feeds a pipeline input.
-- Contract: the track namespace carries the stream key. Objects map to
-  `MediaPacket`s, the catalog's codec configuration to the ring's track
-  configuration (`RingBuffer::set_track_config`), and the input registers
-  as protocol `"moq"`. The QUIC listener runs on Owner threads.
-- Gates: interop with moxygen and MediaMTX as publishers (one harness
-  mode); a fuzz target for the object parser.
-- Status: open (Filed: 2026-10-16 by claude, user request; after Q-047).
+### Q-070 [protocol] [opus] MoQ ingest: IETF MOQT profiles
+- Goal: an IETF MOQT draft-18 publisher (MSF catalog, LOC objects) feeds a
+  pipeline input through the existing MoQ listener, as moq-lite + hang
+  publishers do since #371.
+- Contract: the stream key comes from the connection path, else the track
+  namespace; objects map to `MediaPacket`s and the catalog's codec
+  configuration to the ring's track configuration; the input registers as
+  protocol `"moq"`.
+- Gates: interop with moxygen and MediaMTX as publishers (one harness mode);
+  a fuzz target for the object parser.
+- Status: open; phase 1 landed in #371 (Filed: 2026-10-16 by claude, user
+  request; with Q-047).
 
 ### Q-071 [architecture] [sonnet] HLS-to-HLS passthrough
 - Goal: an HLS output relays the selected HLS input's segments instead of
@@ -548,3 +553,32 @@ items).
   audio again.
 - Status: open (Filed: 2026-10-18 by claude, from the #364 review NITs).
 
+### Q-088 [performance] [sonnet] Price MoQ egress from a measured cost
+- Goal: capacity planning prices a `moqt://` output from its measured cost
+  per output instead of the RTMP prior (`OutputProtocol::Moq` in
+  `src/capacity.rs`).
+- Gates: a capacity ramp of MoQ outputs against moq-relay on an idle host
+  (`cargo xtask build-release`), CPU and memory per output beside RTMP's.
+- Status: open (Filed: 2026-10-18 by claude, from the #371 review).
+
+### Q-089 [protocol] [sonnet] The MoQ origin follows a track-set change while served
+- Goal: a pipeline whose media gains or loses video or audio while viewers
+  watch it over MoQ republishes its broadcast with the new track set, so
+  current viewers do not keep the stale one. A served broadcast's track set
+  is fixed when its first viewer starts it (`origin::start`); a pipeline
+  with no media is refused (#371).
+- Contract: a `Served` generation per pipeline, so viewers of a replaced
+  broadcast detach from their own generation, and the replacement closes the
+  old broadcast.
+- Gates: an origin test that switches a ring from audio-only to audio and
+  video while a viewer is attached, and the viewer then receives video.
+- Status: open (Filed: 2026-10-18 by claude, from the #371 review).
+
+### Q-090 [security] [sonnet] Confine MoQ egress CA files to a configured directory
+- Goal: `moqt://…?ca=<file>` reads only PEM files under an operator-set
+  directory, so an authenticated dashboard user cannot make the engine read
+  any path it can read.
+- Sources: `src/media/moq/egress/url.rs`, the egress TLS trust-root setting.
+- Gates: a URL test refusing a path outside the directory, including `..`
+  and symlink escapes.
+- Status: open (Filed: 2026-10-18 by claude, from the #371 review NIT).

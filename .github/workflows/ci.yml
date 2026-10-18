@@ -533,3 +533,98 @@ jobs:
         ["mixed.live.srt.h264.a1.bf0","mixed.live.srt.h264.a1.bf2","mixed.live.srt.h264.a2.bf0","mixed.live.srt.h264.a2.bf2","mixed.live.srt.h265.a1.bf0","mixed.live.srt.h265.a1.bf2","mixed.live.srt.h265.a2.bf0","mixed.live.srt.h265.a2.bf2","mixed.live.rtmp.h264.a1.bf0","mixed.live.rtmp.h264.a1.bf2","srt-crypto-matrix","fault.resilience","direct-play"]
     secrets:
       gh_token: ${{ github.token }}
+
+  moq-interop:
+    # Restream's MoQ egress, origin and ingest against the pinned moq.dev
+    # tools (phase 1, moq-lite-06 + hang) with Playwright Chromium and Firefox
+    # playing the origin and the relay. The MediaMTX mode (moq-relay-interop)
+    # waits for the phase-2 IETF profile. docs/testing.md, "MoQ interop". It
+    # reuses the bench binaries integration-build already uploads and adds no
+    # step to any other job.
+    name: MoQ interop
+    runs-on: ubuntu-24.04
+    needs: integration-build
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: scope
+        name: Decide whether the MoQ interop check is needed
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # Pushes to master and manual runs always qualify; a pull request
+          # runs it when it touches MoQ, the egress fabric, or this check.
+          if [[ "$EVENT_NAME" != "pull_request" || -z "$BASE_SHA" ]]; then
+            echo "run=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --no-tags origin "$BASE_SHA" --depth=1 || true
+          if git diff --name-only "$BASE_SHA" "$GITHUB_SHA" | grep -Eq '^(src/.*moq.*|src/media/egress/.*|scripts/dev/moq/.*|test/e2e/moq/.*|\.github/workflows/ci\.yml)$'; then
+            echo "run=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "run=false" >>"$GITHUB_OUTPUT"
+          fi
+      - if: ${{ steps.scope.outputs.run == 'false' }}
+        name: MoQ paths unchanged; skip MoQ interop
+        run: echo "No MoQ, egress or MoQ-interop path changed; skipping."
+      - if: ${{ steps.scope.outputs.run == 'true' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: ci-harness-bin-${{ github.sha }}
+          path: .local/ci-harness-bin
+      - if: ${{ steps.scope.outputs.run == 'true' }}
+        name: Install harness binaries
+        run: |
+          mkdir -p target/bench
+          cp .local/ci-harness-bin/restream .local/ci-harness-bin/test_harness target/bench/
+          chmod 0755 target/bench/restream target/bench/test_harness
+      - if: ${{ steps.scope.outputs.run == 'true' }}
+        uses: ./.github/actions/system-deps
+        with:
+          profile: harness-runtime
+      - if: ${{ steps.scope.outputs.run == 'true' }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: test/e2e/moq/package-lock.json
+      - if: ${{ steps.scope.outputs.run == 'true' }}
+        name: Install the MoQ browser specs (@moq/watch 0.6.3, Chromium, Firefox)
+        working-directory: test/e2e/moq
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium firefox
+      - if: ${{ steps.scope.outputs.run == 'true' }}
+        # Headless Firefox plays audio only through a running audio server:
+        # without one its AudioContext never starts and decoded audio never
+        # advances. A null sink is enough (Chromium has its own fake output).
+        name: Start a PulseAudio null sink for Firefox audio
+        run: |
+          sudo apt-get install -y -qq pulseaudio
+          pulseaudio -D --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=moq_null
+          pactl set-default-sink moq_null
+      - if: ${{ steps.scope.outputs.run == 'true' }}
+        name: Fetch the pinned moq.dev tools (moq-cli 0.14.7, moq-relay 0.17.7, SHA256-verified, into .local/bin)
+        run: scripts/dev/moq/fetch-moq-dev.sh
+      - if: ${{ steps.scope.outputs.run == 'true' }}
+        name: Run moq-dev-interop with the browser specs
+        env:
+          BENCH_BUILD: never
+          HARNESS_BIN: target/bench/test_harness
+          RESTREAM_BIN: target/bench/restream
+        run: timeout --kill-after=30s 15m scripts/harness/run.sh moq-dev-interop -- --no-netns --browsers
+      - if: ${{ always() && steps.scope.outputs.run == 'true' }}
+        name: Upload MoQ interop evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: moq-interop-${{ github.sha }}
+          # Per mode: report.json, relay logs, Restream log, CLI/FFmpeg logs and
+          # captures with their FFprobe JSON; moq-dev-interop/browser/ holds the
+          # Playwright log, JSON report, traces and failure screenshots.
+          path: .local/artifacts/moq-dev-interop/
+          if-no-files-found: warn
+          retention-days: 7
