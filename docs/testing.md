@@ -453,10 +453,13 @@ The result JSON (`.local/artifacts/hls-push-duty/report.json`) carries
 `pipelines[].publishedPackets` (per-pipeline video/audio/keyframe counts from
 its sink), `pipelines[].input` (bytes received and GOP keyframe count),
 `pipelines[].egress` (resync count, `stalled`, queue overflows and RX/TX drop
-counters), `pipelines[].executor` (the pipeline's media executor services over
-the rated window: `polls`, `cpuUs`, `cpuUsPerPoll`, `busyUs`, the largest
-lifetime `maxCpuUs`, and `pollsOverCpu4Ms`), the raw `mediaExecutor` snapshot
-(`queueLatencyMaxUs` and the per-class rows of
+counters), `pipelines[].windowDelivery` (video and audio messages and media
+milliseconds the sink received inside the rated window, and `mediaRatio`,
+media time over window time), `pipelines[].executor` (the pipeline's media
+executor services over the rated window: `polls`, `cpuUs`, `cpuUsPerPoll`,
+`busyUs`, the largest lifetime `maxCpuUs`, and `pollsOverCpu4Ms`; the
+RTMP-to-RTMP base pipelines run none and read zero), the raw `mediaExecutor`
+snapshot (`queueLatencyMaxUs` and the per-class rows of
 [observability](observability.md#media-executor-mediaexecutor)), the raw
 `egressShards` list, `wallClockSecs`, `windowSecs`, and
 `environment.cpuCount` so runs are comparable.

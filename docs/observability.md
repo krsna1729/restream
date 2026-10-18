@@ -558,10 +558,10 @@ cumulative; compute rates from two snapshots.
   inside the same polls (`CLOCK_THREAD_CPUTIME_ID`, read around every poll):
   `cpuUs`, `maxCpuUs` (the most CPU one poll spent), and
   `pollsOverCpu1Ms`, `pollsOverCpu4Ms`, `pollsOverCpu16Ms` (polls strictly
-  above 1, 4 and 16 ms of thread CPU). CPU per poll is `Δ cpuUs / Δ polls`. A
-  descheduled vCPU advances wall time but not thread CPU, so a long poll whose
-  CPU matches its wall time was executing, and one whose CPU stays small was
-  stalled outside it.
+  above 1, 4 and 16 ms of thread CPU). CPU per poll is `Δ cpuUs / Δ polls`.
+  Thread CPU excludes time the guest scheduler gave other threads (a poll
+  preempted inside the VM), so a long poll whose CPU stays small waited for a
+  CPU.
 - `usage` (only with `RESTREAM_MEDIA_POLL_USAGE=1`, a diagnostic that adds
   two `getrusage(RUSAGE_THREAD)` calls per poll): `all` sums every poll's
   `userUs`, `sysUs`, `minorFaults` and `majorFaults`; `overCpu1Ms` sums the
@@ -587,11 +587,14 @@ cumulative; compute rates from two snapshots.
 
 `busyUs` is wall time. On a VM the hypervisor can deschedule a vCPU inside a
 poll without the guest reporting steal (measured 20–128 ms gaps on the capacity
-host), so busy time inflates on such hosts. A `maxPollUs` in the tens of
-milliseconds against microsecond-scale polls is a stall rather than work when
-`maxCpuUs` stays small, and work (or CPU the kernel spent on the thread's
-behalf, such as page faults) when it does not; compare with the capacity
-ramp's host jitter probe before sizing `RESTREAM_MEDIA_WORKERS`.
+host), so busy time inflates on such hosts — and so does thread CPU: a guest
+that does not account steal charges the lost time to whichever thread was
+running. On the 6-vCPU reference VPS a thread that only spins on the two
+clocks saw 29 gaps over 1 ms in one idle-host minute (worst 9.3 ms), each
+charged to it as thread CPU. A `maxPollUs` or `maxCpuUs` in the
+milliseconds against microsecond-scale polls can therefore be a host stall
+rather than work; compare with the capacity ramp's host jitter probe before
+sizing `RESTREAM_MEDIA_WORKERS` or reading it as service cost.
 
 ## Known instrumentation gaps
 

@@ -102,6 +102,29 @@ pub(crate) fn gop_keyframe_count(pipeline_telemetry: &Value) -> Option<u64> {
         .and_then(Value::as_u64)
 }
 
+/// What a pipeline's sink received inside the rated window: video and audio
+/// messages and media time, and `mediaRatio`, the media time over the
+/// window's wall time (about 1.0 for an output that keeps up).
+pub(crate) fn window_delivery(
+    baseline_sink: &Value,
+    sink_summary: &Value,
+    window_secs: f64,
+) -> Value {
+    let moved = |name: &str| {
+        let count = |value: &Value| value.get(name).and_then(Value::as_u64).unwrap_or(0);
+        count(sink_summary).saturating_sub(count(baseline_sink))
+    };
+    let media_ms = moved("mediaProgressMs");
+    let ratio = (window_secs > 0.0)
+        .then(|| (media_ms as f64 / (window_secs * 1000.0) * 1000.0).round() / 1000.0);
+    json!({
+        "video": moved("videoCount"),
+        "audio": moved("audioCount"),
+        "mediaProgressMs": media_ms,
+        "mediaRatio": ratio,
+    })
+}
+
 /// The cumulative executor poll counters a window subtracts.
 const POLL_COUNTERS: [&str; 6] = [
     "polls",

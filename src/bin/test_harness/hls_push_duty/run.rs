@@ -466,6 +466,7 @@ impl Session {
                     "bytes": sink_summary.get("bytes").cloned().unwrap_or(Value::Null),
                 },
                 "sink": sink_summary,
+                "windowDelivery": window_delivery(&baseline_sink, &sink_summary, window.secs),
                 "executor": pipeline_poll_window(&window.executor_start, &media_executor, &task.pipeline_id),
                 "egress": pipeline_egress_summary(egress, shard),
                 "checks": {
