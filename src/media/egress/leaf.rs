@@ -8,8 +8,7 @@ use std::time::Instant;
 
 use crate::media::egress::command::{FeedId, OutputId};
 use crate::media::egress::feed::FeedCursor;
-use crate::media::egress::lifecycle::LeafLifecycle;
-use crate::media::egress::policy::{LeafLimits, RetryState};
+use crate::media::egress::policy::LeafLimits;
 use crate::media::egress::scheduler::ScheduleState;
 
 // ---------------------------------------------------------------------------
@@ -159,14 +158,10 @@ pub struct LeafCommon {
     /// read overruns and the leaf resynchronizes from a stale position it
     /// should never have been at.
     pub cursor_primed: bool,
-    /// Current lifecycle state.
-    pub lifecycle: LeafLifecycle,
     /// Scheduler visibility and deficit accounting.
     pub schedule: ScheduleState,
     /// Absolute deadlines (resolve, connect, handshake, progress).
     pub deadlines: LeafDeadlines,
-    /// Retry backoff state.
-    pub retry: RetryState,
     /// Byte-progress tracking.
     pub progress: ProgressState,
     /// Strict per-leaf resource ceilings.
@@ -366,7 +361,7 @@ impl EgressProgressSink {
 }
 
 impl LeafCommon {
-    /// Create a new leaf shell in the `Created` state.
+    /// Create a new leaf shell.
     pub fn new(output_id: OutputId, generation: u64, feed: FeedId, limits: LeafLimits) -> Self {
         Self {
             output_id,
@@ -374,10 +369,8 @@ impl LeafCommon {
             feed,
             cursor: FeedCursor::new(0, 0),
             cursor_primed: false,
-            lifecycle: LeafLifecycle::Created,
             schedule: ScheduleState::new(),
             deadlines: LeafDeadlines::none(),
-            retry: RetryState::default(),
             progress: ProgressState::new(),
             limits,
             pending_application_bytes: 0,
@@ -429,10 +422,6 @@ impl<P> Leaf<P> {
     pub fn generation(&self) -> u64 {
         self.common.generation
     }
-
-    pub fn lifecycle(&self) -> LeafLifecycle {
-        self.common.lifecycle
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -456,9 +445,8 @@ mod tests {
     }
 
     #[test]
-    fn new_leaf_starts_in_created() {
+    fn new_leaf_starts_within_its_limits() {
         let c = make_common("out-1", 1);
-        assert_eq!(c.lifecycle, LeafLifecycle::Created);
         assert!(!c.is_limit_exceeded());
     }
 
@@ -537,7 +525,6 @@ mod tests {
         let leaf = Leaf::new(c, "fake-protocol");
         assert_eq!(leaf.output_id().as_str(), "out-1");
         assert_eq!(leaf.generation(), 3);
-        assert_eq!(leaf.lifecycle(), LeafLifecycle::Created);
     }
 
     /// The gap this closes: before `metrics` existed on `EgressProgressSink`,

@@ -2,7 +2,6 @@ use super::*;
 use crate::media::egress::backend::{Readiness, WaitCondition};
 use crate::media::egress::journal::{FeedEpoch, RingFeed};
 use crate::media::egress::leaf::ProgressState;
-use crate::media::egress::lifecycle::{LeafLifecycle, LifecycleEvent, apply_event};
 use crate::media::egress::metrics::LeafMetrics;
 use crate::media::egress::test_driver::FakeFeed;
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
@@ -220,9 +219,7 @@ fn sink_feed_overrun_uses_common_resynchronization_policy() {
     );
     assert!(matches!(progress, EngineProgress::FeedOverrun));
     progress_state.record_overrun();
-    let lifecycle = apply_event(LeafLifecycle::Active, LifecycleEvent::FeedOverrun);
 
-    assert_eq!(lifecycle, Ok(LeafLifecycle::Resynchronizing));
     assert_eq!(progress_state.overrun_count, 1);
     assert_eq!(progress_state.total_bytes_sent, 0);
     assert_eq!(progress_state.total_bytes_discarded, 0);

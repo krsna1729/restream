@@ -11,9 +11,8 @@
 //!   mod.rs          — this file, re-exports and feature gate
 //!   command.rs      — EgressCommand, OutputSpec, IDs
 //!   feed.rs         — EgressFeed trait, FeedCursor, FeedRead
-//!   lifecycle.rs    — LeafLifecycle state machine
 //!   scheduler.rs    — ReadyQueue, ScheduleState, round-robin
-//!   policy.rs       — LeafPolicy, RetryState, WorkBudget, LeafLimits
+//!   policy.rs       — LeafPolicy, WorkBudget, LeafLimits
 //!   backend.rs      — ProtocolEngine trait, EngineProgress, Readiness
 //!   backends/       — concrete fabric protocol engines
 //!   leaf.rs         — Leaf<P>, LeafCommon, LeafDeadlines, ProgressState
@@ -38,7 +37,6 @@ pub(crate) mod http1;
 pub mod journal;
 pub mod leaf;
 pub mod leaf_arena;
-pub mod lifecycle;
 pub mod manager;
 pub mod metrics;
 pub mod policy;
@@ -65,12 +63,11 @@ pub use backend::{
 pub use backends::sink::{SinkDiscardStats, SinkEngine, SinkTransport};
 pub use command::{EgressCommand, FeedId, OutputId, OutputSpec, ProtocolSpec, ShardId};
 pub use feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
-pub use lifecycle::LeafLifecycle;
 pub use manager::{
     DesiredOutput, EgressManager, EgressManagerCommandError, EgressManagerConfig,
     EgressManagerConfigError, EgressManagerDispatchError, ManagerCommandOutcome,
 };
-pub use policy::{LeafLimits, LeafPolicy, RetryState, WorkBudget};
+pub use policy::{LeafLimits, LeafPolicy, WorkBudget};
 pub use shard::{
     EgressShardBackend, EgressShardCommandEffect, EgressShardConfig, EgressShardConfigError,
     EgressShardGroup, EgressShardGroupError, EgressShardHandle, EgressShardHealth,
