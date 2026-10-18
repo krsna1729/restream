@@ -7,14 +7,14 @@ use std::sync::atomic::{AtomicI64, AtomicU64};
 use std::sync::{Arc, Mutex};
 
 use arc_swap::ArcSwapOption;
-use bytes::{BufMut, BytesMut};
+use bytes::BytesMut;
 
 use super::*;
 use crate::media::engine::IngestRegistration;
 use crate::media::input_gate::InputPacketGate;
 use crate::media::moq::ingest::publisher::{ProbeHoldLimits, PublisherCounters};
 use crate::media::moq::media::{
-    AudioConfig, CatalogTracks, TrackContainer, VideoCodec, VideoConfig, write_legacy_prefix,
+    AudioConfig, CatalogTracks, TrackContainer, VideoCodec, VideoConfig,
 };
 use crate::media::stage_metrics::StageMetrics;
 
@@ -109,10 +109,15 @@ fn avc3_tracks() -> TrackSet {
     })
 }
 
+/// A hang legacy frame, as hang writes it.
 fn legacy(us: u64, payload: &[u8]) -> Bytes {
     let mut frame = BytesMut::new();
-    write_legacy_prefix(us, &mut frame).unwrap();
-    frame.put_slice(payload);
+    hang::container::Frame {
+        timestamp: hang::container::Timestamp::from_micros(us).unwrap(),
+        payload: Bytes::copy_from_slice(payload),
+    }
+    .encode(&mut frame)
+    .unwrap();
     frame.freeze()
 }
 
@@ -144,6 +149,8 @@ fn the_connection_path_names_the_stream_key_before_the_broadcast() {
     assert_eq!(stream_key("", "tenant/key.hang").as_deref(), Some("key"));
     assert_eq!(stream_key("/", "key").as_deref(), Some("key"));
     assert_eq!(stream_key("/?a=b", "key.hang").as_deref(), Some("key"));
+    assert_eq!(stream_key("/", "tenant/key.msf").as_deref(), Some("key"));
+    assert_eq!(stream_key("/", ".msf"), None);
     assert_eq!(stream_key("/", ""), None);
     assert_eq!(stream_key("", ".hang"), None);
 }
@@ -199,6 +206,11 @@ fn audio_frames_wait_for_the_probe_then_reach_the_ring() {
     assert_eq!(ring.get_write_idx(), 0, "held while the probe is applied");
     ingest.probe_applied(None);
     assert_eq!(ring.get_write_idx(), 3);
+    assert!(
+        ingest.frame(0, legacy(64_000, &[])).unwrap().is_none(),
+        "an end marker"
+    );
+    assert_eq!(ring.get_write_idx(), 3, "an end marker is skipped");
     assert!(
         ingest.frame(7, legacy(0, &[1])).unwrap().is_none(),
         "unknown track ignored"
@@ -310,12 +322,13 @@ fn a_dropped_session_releases_its_input_exactly_once() {
 }
 
 /// A real moq-lite publisher (moq-net client over the Compio transport,
-/// publishing a hang broadcast) through [`publish`] into the ring.
+/// publishing Restream's own LOC broadcast) through [`publish`] into the
+/// ring.
 #[test]
 fn a_loopback_publisher_reaches_the_ring_and_shutdown_releases_it() {
-    use crate::media::moq::egress::media::HangFrame;
+    use crate::media::moq::egress::media::MediaFrame;
     use crate::media::moq::egress::publish::HangBroadcast;
-    use crate::media::moq::media::{TrackKind, hang_catalog};
+    use crate::media::moq::media::{LocBuffer, TrackKind, hang_catalog};
     use crate::media::moq::transport::test_support::{Loopback, run};
 
     run(async {
@@ -367,11 +380,11 @@ fn a_loopback_publisher_reaches_the_ring_and_shutdown_releases_it() {
             compio::runtime::spawn(transport::run_driver(driver)).detach();
             let mut pts_us = 0;
             while ring.get_write_idx() < 5 {
-                let frame = HangFrame {
+                let frame = MediaFrame {
                     track: TrackKind::Audio,
                     keyframe: false,
                     pts_us,
-                    data: legacy(pts_us, &[0x21, 0x10, 0x05]),
+                    data: LocBuffer::from_payload(&[0x21, 0x10, 0x05]),
                 };
                 broadcast.write(frame).unwrap();
                 pts_us += 21_333;
@@ -421,4 +434,185 @@ fn a_panicking_catalog_parser_ends_the_session_as_a_protocol_violation() {
         end.reason,
         "catalog.json: the parser panicked: end byte index 2 is not a char boundary"
     );
+}
+
+#[test]
+fn msf_only_catalog_maps_loc_h264_h265_and_aac_into_the_ring() {
+    use crate::media::moq::media::LocBuffer;
+
+    crate::media::moq::transport::test_support::run(async {
+        for (codec, nalus) in [
+            ("avc3.42001e", annexb(&[SPS, PPS, IDR])),
+            ("hev1.1.6.L93.B0", annexb(&[&[19 << 1, 1, 0xaf]])),
+        ] {
+            let mut video = moq_msf::Track::new("video", moq_msf::Packaging::Loc);
+            video.role = Some(moq_msf::Role::Video);
+            video.codec = Some(codec.to_string());
+            let mut audio = moq_msf::Track::new("audio", moq_msf::Packaging::Loc);
+            audio.role = Some(moq_msf::Role::Audio);
+            audio.codec = Some("mp4a.40.2".to_string());
+            audio.init_data = Some("EZA=".to_string());
+            // Omit optional samplerate/channelConfig: upstream derives
+            // both from the ASC, not local guesses or a second parser.
+            let catalog = moq_msf::Catalog::<()>::new(vec![video, audio]);
+            let broadcast = moq_net::broadcast::Info::new().produce();
+            let track = broadcast
+                .create_track(moq_msf::DEFAULT_NAME, hang::Catalog::default_track_info())
+                .unwrap();
+            let mut group = track.append_group().unwrap();
+            group
+                .write_frame(moq_net::Timestamp::ZERO, Bytes::from(catalog.to_json().unwrap()))
+                .unwrap();
+            group.finish().unwrap();
+            let catalog = first_catalog(
+                read_catalog(&broadcast.consume()),
+                Duration::from_secs(1),
+            )
+            .await
+            .expect("MSF-only publisher must not wait for catalog.json");
+            let tracks = from_hang_catalog(&catalog);
+            assert_eq!(tracks.video.as_ref().unwrap().1.container, TrackContainer::Loc);
+            assert_eq!(tracks.audio[0].1.sample_rate, 48_000);
+            assert_eq!(tracks.audio[0].1.channels, 2);
+            let ring = Arc::new(RingBuffer::new(16));
+            let (mut ingest, _) = ingest(&ring, SessionLimits::default());
+            assert_eq!(ingest.set_tracks(TrackSet::new(tracks)).unwrap(), ["video", "audio"]);
+            ingest
+                .frame(0, LocBuffer::from_payload(&nalus).into_frame(2_000_000).unwrap())
+                .unwrap();
+            ingest.probe_applied(None);
+            ingest
+                .frame(1, LocBuffer::from_payload(&[0x21, 0x10]).into_frame(2_021_000).unwrap())
+                .unwrap();
+            ingest.probe_applied(None);
+            let video = ring.read_at(0).expect("LOC video entered the ring");
+            assert!(video.is_keyframe);
+            assert_eq!((video.pts, video.dts), (2_000, 2_000));
+            assert_eq!(video.payload.as_ref(), nalus.as_slice());
+            let audio = ring.read_at(1).expect("LOC AAC entered the ring");
+            assert_eq!((audio.pts, audio.dts), (2_021, 2_021));
+            assert_eq!(&audio.payload[7..], &[0x21, 0x10]);
+        }
+    });
+}
+
+#[test]
+fn a_missing_catalog_profile_falls_back_but_malformed_input_does_not() {
+    use moq_mux::Error as CatalogError;
+
+    for error in [Error::NotFound, Error::Unroutable, Error::Unsupported] {
+        assert!(missing_catalog(&Err(CatalogError::Moq(error.clone()))));
+        assert!(missing_catalog(&Err(CatalogError::Hang(hang::Error::Moq(error)))));
+    }
+    assert!(missing_catalog(&Ok(None)));
+    assert!(!missing_catalog(&Err(CatalogError::Hang(hang::Error::Json(
+        "bad JSON".to_string(),
+    )))));
+    assert!(!missing_catalog(&Err(CatalogError::Moq(Error::ProtocolViolation))));
+    crate::media::moq::transport::test_support::run(async {
+        let broadcast = moq_net::broadcast::Info::new().produce();
+        let track = broadcast
+            .create_track(hang::Catalog::DEFAULT_NAME, hang::Catalog::default_track_info())
+            .unwrap();
+        let mut group = track.append_group().unwrap();
+        group.write_frame(moq_net::Timestamp::ZERO, Bytes::from_static(b"{")).unwrap();
+        group.finish().unwrap();
+        let consumer = broadcast.consume();
+        let result = first_catalog(read_catalog(&consumer), Duration::from_secs(1))
+            .now_or_never()
+            .expect("malformed hang must not wait on an absent MSF track");
+        assert!(matches!(result.unwrap_err().error, Error::ProtocolViolation));
+    });
+}
+
+#[test]
+fn an_oversized_declared_frame_is_rejected_before_waiting_for_payload() {
+    crate::media::moq::transport::test_support::run(async {
+        let broadcast = moq_net::broadcast::Info::new().produce();
+        let track = broadcast.create_track("audio", Default::default()).unwrap();
+        let mut subscriber = track.subscribe(None::<moq_net::track::Subscription>).ordered();
+        let mut group = track.append_group().unwrap();
+        group.write_frame(moq_net::Timestamp::ZERO, Bytes::from_static(b"12345678")).unwrap();
+        let _unfinished = group.create_frame(moq_net::frame::Info {
+            size: 9,
+            timestamp: moq_net::Timestamp::ZERO,
+        }).unwrap();
+        let mut received = subscriber.next_group().await.unwrap().unwrap();
+        assert_eq!(
+            bounded_frame(&mut received, 8).await.unwrap(),
+            Some(Bytes::from_static(b"12345678")),
+            "the exact bound remains accepted",
+        );
+        let result = bounded_frame(&mut received, 8)
+            .now_or_never()
+            .expect("the declared size is enough to reject an unfinished frame");
+        assert!(matches!(result, Err(Error::FrameTooLarge)));
+    });
+}
+
+#[test]
+fn an_ietf_msf_only_publisher_reaches_the_ring() {
+    use crate::media::moq::media::LocBuffer;
+    use crate::media::moq::transport::test_support::{Loopback, run};
+
+    run(async {
+        let loopback = Loopback::new().await;
+        let (client, accepted) = loopback.native_offering(&["moqt-16"]).await;
+        let (origin, driver, _budget) = crate::media::moq::budget::origin();
+        let broadcast = origin.create_broadcast("tenant/moq-key.msf").unwrap();
+        let catalog = broadcast
+            .create_track(moq_msf::DEFAULT_NAME, hang::Catalog::default_track_info())
+            .unwrap();
+        let mut audio_config = moq_msf::Track::new("audio", moq_msf::Packaging::Loc);
+        audio_config.role = Some(moq_msf::Role::Audio);
+        audio_config.codec = Some("mp4a.40.2".to_string());
+        audio_config.init_data = Some("EZA=".to_string());
+        let json = moq_msf::Catalog::new(vec![audio_config]).to_json().unwrap();
+        let mut catalog_group = catalog.append_group().unwrap();
+        catalog_group.write_frame(moq_net::Timestamp::ZERO, Bytes::from(json)).unwrap();
+        catalog_group.finish().unwrap();
+        let audio = broadcast.create_track("audio", Default::default()).unwrap();
+        broadcast.announce(Default::default()).unwrap();
+        compio::runtime::spawn(transport::run_driver(driver)).detach();
+        let ring = Arc::new(RingBuffer::new(64));
+        let recorder = Recorder { ring: Some(ring.clone()), ..Recorder::default() };
+        let shutdown = CancellationToken::new();
+        let server = async {
+            let handshake = moq_net::Server::new()
+                .accept_request(Instant::now(), accepted.session.clone())
+                .await.unwrap();
+            publish(
+                &recorder,
+                "198.51.100.9:4443".parse().unwrap(),
+                &accepted.path,
+                handshake,
+                SessionLimits::default(),
+                &shutdown,
+            ).await
+        };
+        let publisher = async {
+            let (session, driver) = moq_net::Client::new()
+                .with_publisher(&origin)
+                .connect(Instant::now(), client)
+                .await.unwrap();
+            compio::runtime::spawn(transport::run_driver(driver)).detach();
+            let mut group = audio.append_group().unwrap();
+            let mut timestamp = 0;
+            while ring.get_write_idx() < 3 {
+                group.write_frame(
+                    moq_net::Timestamp::ZERO,
+                    LocBuffer::from_payload(&[0x21, 0x10]).into_frame(timestamp).unwrap(),
+                ).unwrap();
+                timestamp += 21_333;
+                compio::time::sleep(Duration::from_millis(10)).await;
+            }
+            shutdown.cancel();
+            session
+        };
+        let (end, _session) = futures_util::future::join(server, publisher).await;
+        assert!(matches!(end.error, Error::Cancel), "{end:?}");
+        assert_eq!(*recorder.admitted.borrow(), ["moq-key"]);
+        assert_eq!(*recorder.finished.borrow(), ["Restream is shutting down"]);
+        assert_eq!(&ring.read_at(0).unwrap().payload[7..], &[0x21, 0x10]);
+    });
 }

@@ -536,12 +536,10 @@ jobs:
       gh_token: ${{ github.token }}
 
   moq-interop:
-    # Restream's MoQ egress, origin and ingest against the pinned moq.dev
-    # tools (phase 1, moq-lite-06 + hang) with Playwright Chromium and Firefox
-    # playing the origin and the relay. The MediaMTX mode (moq-relay-interop)
-    # waits for the phase-2 IETF profile. docs/testing.md, "MoQ interop". It
-    # reuses the bench binaries integration-build already uploads and adds no
-    # step to any other job.
+    # Both pinned moq.dev profiles: lite/browser coverage, then explicit
+    # moqt-19 MSF/LOC egress and relay-forwarded ingest. MediaMTX remains
+    # diagnostic-only until its dialect mismatch is resolved (Q-091).
+    # Reuse integration-build's binaries and the same downloaded peers.
     name: MoQ interop
     runs-on: ubuntu-24.04
     needs: integration-build
@@ -596,8 +594,8 @@ jobs:
         name: Install the MoQ browser specs (@moq/watch 0.6.3, Chromium, Firefox)
         working-directory: test/e2e/moq
         run: |
-          npm ci
-          npx playwright install --with-deps chromium firefox
+          flock -x /tmp/restream-host.lock npm ci
+          flock -x /tmp/restream-host.lock npx playwright install --with-deps chromium firefox
       - if: ${{ steps.scope.outputs.run == 'true' }}
         # Headless Firefox plays audio only through a running audio server:
         # without one its AudioContext never starts and decoded audio never
@@ -617,7 +615,14 @@ jobs:
           BENCH_BUILD: never
           HARNESS_BIN: target/bench/test_harness
           RESTREAM_BIN: target/bench/restream
-        run: timeout --kill-after=30s 15m scripts/harness/run.sh moq-dev-interop -- --no-netns --browsers
+        run: flock -x /tmp/restream-host.lock timeout --kill-after=30s 15m scripts/harness/run.sh moq-dev-interop -- --no-netns --browsers
+      - if: ${{ always() && steps.scope.outputs.run == 'true' }}
+        name: Run moqt-19 MSF/LOC in both directions through moq-relay
+        env:
+          BENCH_BUILD: never
+          HARNESS_BIN: target/bench/test_harness
+          RESTREAM_BIN: target/bench/restream
+        run: flock -x /tmp/restream-host.lock timeout --kill-after=30s 15m scripts/harness/run.sh moq-dev-interop -- --no-netns --ietf
       - if: ${{ always() && steps.scope.outputs.run == 'true' }}
         name: Upload MoQ interop evidence
         uses: actions/upload-artifact@v7
@@ -626,6 +631,8 @@ jobs:
           # Per mode: report.json, relay logs, Restream log, CLI/FFmpeg logs and
           # captures with their FFprobe JSON; moq-dev-interop/browser/ holds the
           # Playwright log, JSON report, traces and failure screenshots.
-          path: .local/artifacts/moq-dev-interop/
+          path: |
+            .local/artifacts/moq-dev-interop/
+            .local/artifacts/moq-dev-interop-ietf/
           if-no-files-found: warn
           retention-days: 7

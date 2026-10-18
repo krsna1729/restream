@@ -20,5 +20,18 @@ export default defineConfig({
             name: 'chromium',
             use: { ...devices['Desktop Chrome'] },
         },
+        {
+            name: 'firefox-moq',
+            grep: /program preview over MoQ/,
+            use: {
+                ...devices['Desktop Firefox'],
+                launchOptions: {
+                    firefoxUserPrefs: {
+                        'media.autoplay.default': 0,
+                        'media.autoplay.block-webaudio': false,
+                    },
+                },
+            },
+        },
     ],
 });

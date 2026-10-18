@@ -1,12 +1,11 @@
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
+use moq_net::track;
 
 use super::*;
 use crate::media::codec::build_avcc_sequence_header;
 use crate::media::egress::journal::FeedEpoch;
 use crate::media::moq::egress::startup::{MoqPublishStartup, MoqVideoStartup};
-use crate::media::moq::media::{
-    CATALOG_TRACK, VideoCodec, parse_legacy_frame, write_legacy_prefix,
-};
+use crate::media::moq::media::{CATALOG_TRACK, VideoCodec};
 use crate::media::moq::transport::{self, test_support::run};
 use crate::media::packet::PayloadFormat;
 use crate::media::ring_buffer::RingBuffer;
@@ -24,15 +23,12 @@ fn broadcast(name: &str, video: bool, audio: bool) -> (origin::Producer, HangBro
     (origin, broadcast)
 }
 
-fn frame(track: TrackKind, keyframe: bool, pts_us: u64) -> HangFrame {
-    let mut data = BytesMut::new();
-    write_legacy_prefix(pts_us, &mut data).unwrap();
-    data.extend_from_slice(&pts_us.to_be_bytes());
-    HangFrame {
+fn frame(track: TrackKind, keyframe: bool, pts_us: u64) -> MediaFrame {
+    MediaFrame {
         track,
         keyframe,
         pts_us,
-        data: data.freeze(),
+        data: LocBuffer::from_payload(&pts_us.to_be_bytes()),
     }
 }
 
@@ -52,9 +48,17 @@ async fn read(group: &mut group::Consumer, count: usize) -> Vec<u64> {
     let mut out = Vec::new();
     for _ in 0..count {
         let frame = group.read_frame().await.unwrap().expect("a frame");
-        out.push(parse_legacy_frame(frame.payload).unwrap().0);
+        out.push(parse_loc_frame(frame.payload).unwrap().0);
     }
     out
+}
+
+/// The next frame of `group`, a LOC end marker: its timestamp.
+async fn marker(group: &mut group::Consumer) -> u64 {
+    let frame = group.read_frame().await.unwrap().expect("a marker");
+    let (us, payload) = parse_loc_frame(frame.payload).unwrap();
+    assert!(payload.is_empty(), "a marker is empty");
+    us
 }
 
 #[test]
@@ -87,6 +91,7 @@ fn video_groups_are_gops_and_frames_before_the_first_keyframe_are_dropped() {
             broadcast.write(frame(TrackKind::Video, true, 166)),
             Ok(true)
         );
+        assert_eq!(marker(&mut gop).await, 166, "the GOP's end marker");
         assert!(
             gop.read_frame().await.unwrap().is_none(),
             "a keyframe ends the GOP"
@@ -97,7 +102,7 @@ fn video_groups_are_gops_and_frames_before_the_first_keyframe_are_dropped() {
 }
 
 #[test]
-fn audio_groups_span_about_a_second_and_restart_on_a_backwards_jump() {
+fn audio_groups_span_about_a_second() {
     run(async {
         let (_origin, mut broadcast) = broadcast("b", false, true);
         let mut audio = subscribe(&broadcast, AUDIO_TRACK).await;
@@ -117,11 +122,140 @@ fn audio_groups_span_about_a_second_and_restart_on_a_backwards_jump() {
         assert!(first.read_frame().await.unwrap().is_none());
         let mut second = audio.recv_group().await.unwrap().unwrap();
         assert_eq!(read(&mut second, 1).await, [6_000_000]);
+    });
+}
 
-        broadcast.write(frame(TrackKind::Audio, true, 10)).unwrap();
-        assert!(second.read_frame().await.unwrap().is_none());
-        let mut third = audio.recv_group().await.unwrap().unwrap();
-        assert_eq!(read(&mut third, 1).await, [10]);
+/// The timestamp of the next media frame on `track`, past any marker.
+async fn next_media(track: &mut track::Subscriber) -> u64 {
+    loop {
+        let mut group = track.recv_group().await.unwrap().expect("a group");
+        let frame = group.read_frame().await.unwrap().expect("a frame");
+        let (us, payload) = parse_loc_frame(frame.payload).unwrap();
+        if !payload.is_empty() {
+            return us;
+        }
+    }
+}
+
+#[test]
+fn a_rewind_moves_both_tracks_on_by_one_offset() {
+    run(async {
+        let (_origin, mut broadcast) = broadcast("b", true, true);
+        let mut video = subscribe(&broadcast, VIDEO_TRACK).await;
+        let mut audio = subscribe(&broadcast, AUDIO_TRACK).await;
+        for (track, keyframe, pts) in [
+            (TrackKind::Video, true, 10_000_000),
+            (TrackKind::Audio, true, 10_000_000),
+            (TrackKind::Video, false, 10_033_000),
+            (TrackKind::Audio, true, 10_021_000),
+        ] {
+            assert_eq!(broadcast.write(frame(track, keyframe, pts)), Ok(true));
+        }
+        let mut gop = video.recv_group().await.unwrap().unwrap();
+        assert_eq!(read(&mut gop, 2).await, [10_000_000, 10_033_000]);
+        let mut sound = audio.recv_group().await.unwrap().unwrap();
+        assert_eq!(read(&mut sound, 2).await, [10_000_000, 10_021_000]);
+
+        // A new ingest session: the ring starts again at zero.
+        assert_eq!(broadcast.write(frame(TrackKind::Video, true, 0)), Ok(true));
+        assert_eq!(
+            broadcast.write(frame(TrackKind::Audio, true, 21_000)),
+            Ok(true)
+        );
+        // The old GOP ends one frame after its last; the audio group ends
+        // at the discontinuity instead of taking the next frame.
+        assert_eq!(marker(&mut gop).await, 10_066_000);
+        assert!(gop.read_frame().await.unwrap().is_none());
+        assert!(sound.read_frame().await.unwrap().is_none());
+        // Both resume just past the furthest point presented (video, one
+        // step on), shifted alike: still 21 ms apart.
+        assert_eq!(next_media(&mut video).await, 10_066_000);
+        assert_eq!(next_media(&mut audio).await, 10_087_000);
+    });
+}
+
+#[test]
+fn reordered_video_stays_in_its_gop_without_reanchoring_audio() {
+    run(async {
+        let (_origin, mut broadcast) = broadcast("b", true, true);
+        let mut video = subscribe(&broadcast, VIDEO_TRACK).await;
+        let mut audio = subscribe(&broadcast, AUDIO_TRACK).await;
+        for (track, keyframe, pts) in [
+            (TrackKind::Video, true, 1_000_000),
+            (TrackKind::Video, false, 1_066_000),
+            (TrackKind::Video, false, 1_033_000),
+            (TrackKind::Audio, true, 1_021_000),
+        ] {
+            assert_eq!(broadcast.write(frame(track, keyframe, pts)), Ok(true));
+        }
+        let mut gop = video.recv_group().await.unwrap().unwrap();
+        assert_eq!(read(&mut gop, 3).await, [1_000_000, 1_066_000, 1_033_000]);
+        assert_eq!(next_media(&mut audio).await, 1_021_000);
+        assert_eq!(broadcast.timeline.offset_us, 0);
+    });
+}
+
+#[test]
+fn loc_subscribers_share_the_converters_payload_allocation() {
+    run(async {
+        let (_origin, mut broadcast) = broadcast("b", true, false);
+        let mut first = subscribe(&broadcast, VIDEO_TRACK).await;
+        let mut second = subscribe(&broadcast, VIDEO_TRACK).await;
+        let data = LocBuffer::from_payload(b"encoded access unit");
+        let payload_at = data.payload().as_ptr();
+        assert_eq!(
+            broadcast.write(MediaFrame {
+                track: TrackKind::Video,
+                keyframe: true,
+                pts_us: 42_000,
+                data,
+            }),
+            Ok(true)
+        );
+        for subscriber in [&mut first, &mut second] {
+            let mut group = subscriber.recv_group().await.unwrap().unwrap();
+            let frame = group.read_frame().await.unwrap().unwrap();
+            let (timestamp, payload) = parse_loc_frame(frame.payload).unwrap();
+            assert_eq!(timestamp, 42_000);
+            assert_eq!(payload.as_ref(), b"encoded access unit");
+            assert_eq!(payload.as_ptr(), payload_at);
+        }
+    });
+}
+
+#[test]
+fn audio_can_reanchor_both_tracks_before_the_next_video_keyframe() {
+    run(async {
+        let (_origin, mut broadcast) = broadcast("b", true, true);
+        let mut video = subscribe(&broadcast, VIDEO_TRACK).await;
+        let mut audio = subscribe(&broadcast, AUDIO_TRACK).await;
+        for (track, keyframe, pts) in [
+            (TrackKind::Video, true, 10_000_000),
+            (TrackKind::Video, false, 10_033_000),
+            (TrackKind::Audio, true, 10_000_000),
+            (TrackKind::Audio, true, 10_021_000),
+        ] {
+            assert_eq!(broadcast.write(frame(track, keyframe, pts)), Ok(true));
+        }
+        let mut gop = video.recv_group().await.unwrap().unwrap();
+        let mut sound = audio.recv_group().await.unwrap().unwrap();
+        assert_eq!(read(&mut gop, 2).await, [10_000_000, 10_033_000]);
+        assert_eq!(read(&mut sound, 2).await, [10_000_000, 10_021_000]);
+
+        assert_eq!(broadcast.write(frame(TrackKind::Audio, true, 0)), Ok(true));
+        assert_eq!(
+            broadcast.write(frame(TrackKind::Video, false, 12_000)),
+            Ok(false),
+            "video must reacquire a keyframe after the shared discontinuity"
+        );
+        assert_eq!(
+            broadcast.write(frame(TrackKind::Video, true, 33_000)),
+            Ok(true)
+        );
+        assert!(gop.read_frame().await.unwrap().is_none());
+        assert!(sound.read_frame().await.unwrap().is_none());
+        assert_eq!(next_media(&mut audio).await, 10_066_000);
+        assert_eq!(next_media(&mut video).await, 10_099_000);
     });
 }
 
@@ -185,6 +319,7 @@ fn the_ring_publisher_publishes_the_catalog_first_and_again_on_a_new_record() {
 
         let mut catalog = subscribe(&broadcast, CATALOG_TRACK).await;
         let mut video = subscribe(&broadcast, VIDEO_TRACK).await;
+        let mut msf = subscribe(&broadcast, "catalog").await;
         let mut publisher = RingPublisher::new(MediaConverter::new(&startup), broadcast);
         let ring = Arc::new(RingBuffer::new(64));
         let feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
@@ -202,13 +337,10 @@ fn the_ring_publisher_publishes_the_catalog_first_and_again_on_a_new_record() {
         ring.push(flv(false, 0, header.to_vec()));
         let idr = vec![0x17, 1, 0, 0, 0, 0, 0, 0, 2, 0x65, 0x88];
         ring.push(flv(true, 40, idr.clone()));
-        // 40 ms = 40 000 µs: a 4-byte prefix, then the 6-byte body.
+        // 40 ms: the 6-byte body (moq-net sees the 6-byte LOC header too).
         assert_eq!(
             publisher.pump(&feed, &mut cursor, budget),
-            Pump::Sent {
-                bytes: 10,
-                units: 2
-            }
+            Pump::Sent { bytes: 6, units: 2 }
         );
         assert_eq!(publisher.pump(&feed, &mut cursor, budget), Pump::Empty);
         let first = next_catalog(&mut catalog).await;
@@ -216,10 +348,18 @@ fn the_ring_publisher_publishes_the_catalog_first_and_again_on_a_new_record() {
             first.video.renditions[VIDEO_TRACK].description,
             Some(header.slice(5..))
         );
+        // The MSF catalog describes the same track, packaged as LOC.
+        let mut group = msf.recv_group().await.unwrap().unwrap();
+        let json = group.read_frame().await.unwrap().unwrap().payload;
+        let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        let tracks = json["tracks"].as_array().expect("MSF tracks");
+        assert_eq!(tracks.len(), 1, "{json}");
+        assert_eq!(tracks[0]["name"], VIDEO_TRACK, "{json}");
+        assert_eq!(tracks[0]["packaging"], "loc", "{json}");
         let mut gop = video.recv_group().await.unwrap().unwrap();
         let sent = gop.read_frame().await.unwrap().unwrap();
         assert_eq!(
-            parse_legacy_frame(sent.payload),
+            parse_loc_frame(sent.payload),
             Ok((40_000, Bytes::from(idr[5..].to_vec())))
         );
 
@@ -265,12 +405,12 @@ fn a_cursor_the_ring_overwrote_is_an_overrun_and_live_start_is_a_keyframe() {
 }
 
 /// A `size`-byte frame at `pts_us`.
-fn sized(track: TrackKind, keyframe: bool, pts_us: u64, size: usize) -> HangFrame {
-    HangFrame {
+fn sized(track: TrackKind, keyframe: bool, pts_us: u64, size: usize) -> MediaFrame {
+    MediaFrame {
         track,
         keyframe,
         pts_us,
-        data: Bytes::from(vec![0xAB; size]),
+        data: LocBuffer::from_payload(&vec![0xAB; size]),
     }
 }
 

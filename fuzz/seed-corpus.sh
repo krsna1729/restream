@@ -79,3 +79,29 @@ video='\x00\x00\x00\x00\x01\x67\x42\x00\x1e\xf4\x05\x01\xec\x80\x00\x00\x00\x01\
 # is six bytes but five characters), from the CI fuzz smoke crash.
 printf '%s' 'AQt7InZpZGVvIjp7InJlbmRpdGlvbnMiOnsiK3ZpZGVvIjp7ImNvZGVjIjoiYXZjMS40zqgwMWUiLCJjb2RlZFdpZHRoIjo2NCwiY29kZWRIZWlnaHQiOjM2LCJmcmE7ZXJhdGUiAAAAAACQADA6eyJraW5kIjoibGVvYWN5In19fXssIm51bWJlck9mQ2hhBwBubmVscyI69////2VzY2FyY2hpdmU6OiIwNTk1IiwiY29udGFpbg==' \
   | base64 -d > "$out/regression-h264-non-ascii-codec"
+# MSF-only publishers: both catalog drafts reach the upstream MSF -> hang
+# mapping, then production LOC video/AAC conversion (no legacy timestamp).
+for version in '1' '"draft-01"'; do
+  for codec in avc3.42001e hev1.1.6.L93.B0; do
+    catalog="{\"version\":$version,\"tracks\":[{\"name\":\"video\",\"packaging\":\"loc\",\"role\":\"video\",\"codec\":\"$codec\"},{\"name\":\"audio\",\"packaging\":\"loc\",\"role\":\"audio\",\"codec\":\"mp4a.40.2\",\"samplerate\":48000,\"channelConfig\":\"2\"}]}"
+    catalog_len=${#catalog}
+    if [[ "$codec" == avc3.* ]]; then
+      video='\x02\x10\x00\x00\x00\x00\x01\x67\x42\x00\x1e\xf4\x05\x01\xec\x80\x00\x00\x00\x01\x68\xce\x06\xe2\x00\x00\x00\x01\x65\x88\x84\x00'
+      video_len=32
+    else
+      video='\x02\x10\x00\x00\x00\x00\x01\x26\x01\xaf'
+      video_len=10
+    fi
+    { printf "\\x$(printf '%02x' $((catalog_len >> 8)))\\x$(printf '%02x' $((catalog_len & 255)))"
+      printf '%s' "$catalog"
+      printf "\\x00\\x00\\x$(printf '%02x' "$video_len")"; printf "$video"
+      printf '\x01\x00\x05\x02\x10\x00\x21\x10'
+      # Valid timescale override (90 kHz, one second), then zero
+      # timescale, missing timestamp and truncated property block.
+      printf '\x01\x00\x0d\x0a\x08\x80\x01\x5f\x90\x08\x80\x01\x5f\x90\x21\x10'
+      printf '\x01\x00\x05\x04\x08\x00\x08\x01'
+      printf '\x00\x00\x01\x00'
+      printf '\x00\x00\x03\x05\x10\x01'
+    } > "$out/seed-msf-$version-$codec"
+  done
+done

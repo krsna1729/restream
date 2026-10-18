@@ -24,7 +24,8 @@ pub(crate) const MOQ_RELAY: PinnedBin = PinnedBin {
     version: "moq-relay 0.17.7",
 };
 
-/// The protocol every session in this mode must negotiate.
+/// CLI/log spelling; the corresponding native ALPN is `moqt-19`.
+pub(crate) const IETF_VERSION: &str = "moq-transport-19";
 pub(crate) const LITE_VERSION: &str = "moq-lite-06";
 
 /// Resolve and version-check a pinned binary.
@@ -75,6 +76,8 @@ pub(crate) struct DevPorts {
     pub(crate) readback_rtmp: u16,
     /// Vite serving the browser specs' page.
     pub(crate) page: u16,
+    /// Dedicated IETF relay forwarding a source into Restream ingest.
+    pub(crate) ingest_relay: u16,
 }
 
 impl DevPorts {
@@ -93,6 +96,7 @@ impl DevPorts {
                 &mut reserved,
             ),
             page: env_or_allocated_port("MOQ_DEV_INTEROP_PAGE", 5180, &mut reserved),
+            ingest_relay: env_or_allocated_port("MOQ_DEV_INTEROP_INGEST_RELAY", 4445, &mut reserved),
         }
     }
 
@@ -102,6 +106,7 @@ impl DevPorts {
             "restreamMoq": self.restream_moq,
             "readbackRtmp": self.readback_rtmp,
             "page": self.page,
+            "ingestRelay": self.ingest_relay,
         })
     }
 }
@@ -116,6 +121,7 @@ pub(crate) struct DevRelay {
     log: PathBuf,
     child: Option<Child>,
     starts: u32,
+    forward: Option<(String, PathBuf)>,
 }
 
 impl DevRelay {
@@ -127,11 +133,17 @@ impl DevRelay {
             log,
             child: None,
             starts: 0,
+            forward: None,
         }
     }
 
     pub(crate) fn log_path(&self) -> &Path {
         &self.log
+    }
+
+    /// The relay itself publishes into Restream, with no CLI media bridge.
+    pub(crate) fn forward_to(&mut self, url: String, ca: &Path) {
+        self.forward = Some((url, ca.to_path_buf()));
     }
 
     pub(crate) async fn start(&mut self) -> Result<(), String> {
@@ -144,8 +156,15 @@ impl DevRelay {
         let _ = writeln!(log, "{RELAY_START_MARKER}{}", self.starts);
         let stderr = log.try_clone().map_err(|error| error.to_string())?;
         let listen = format!("127.0.0.1:{}", self.port);
-        let child = command_with_optional_cgroup(&self.bin, &format!("moq-relay-{}", self.port))
-            .args(["--log-level", "info", "--listen", &listen])
+        let mut command = command_with_optional_cgroup(&self.bin, &format!("moq-relay-{}", self.port));
+        if let Some((url, ca)) = &self.forward {
+            command
+                .args(["--cluster-connect", url, "--connect-version", IETF_VERSION])
+                .arg("--connect-tls-root")
+                .arg(ca)
+                .arg("--connect-websocket-enabled=false");
+        }
+        let child = command.args(["--log-level", "info", "--listen", &listen])
             .arg("--listen-tls-cert")
             .arg(&self.tls.0)
             .arg("--listen-tls-key")
@@ -206,13 +225,14 @@ impl DevRelay {
             .map_err(|error| format!("GET {url}: {error}"))
     }
 
-    /// Wait until the relay announces `broadcast` and serves a hang catalog
-    /// for it that passes [`catalog_failures`]; returns that catalog. On
+    /// Wait until the relay announces `broadcast` and serves the selected catalog
+    /// for it that passes the codec/container checks; returns that catalog. On
     /// timeout the error carries the last announce list and catalog seen.
     pub(crate) async fn wait_broadcast(
         &self,
         broadcast: &str,
         timeout: Duration,
+        ietf: bool,
     ) -> Result<Value, String> {
         let (prefix, name) = broadcast.rsplit_once('/').unwrap_or(("", broadcast));
         let deadline = Instant::now() + timeout;
@@ -227,14 +247,15 @@ impl DevRelay {
             let listed = announced.lines().any(|line| line.trim() == name);
             last["announced"] = Value::String(announced);
             if listed {
+                let track = if ietf { "catalog" } else { CATALOG_TRACK };
                 let catalog = self
-                    .get_text(&format!("fetch/{broadcast}/{CATALOG_TRACK}"))
+                    .get_text(&format!("fetch/{broadcast}/{track}"))
                     .await
                     .ok()
                     .flatten()
                     .and_then(|body| serde_json::from_str::<Value>(&body).ok());
                 if let Some(catalog) = catalog {
-                    if catalog_failures(&catalog).is_empty() {
+                    if profile_catalog_failures(&catalog, ietf).is_empty() {
                         return Ok(catalog);
                     }
                     last["catalog"] = catalog;
@@ -242,7 +263,7 @@ impl DevRelay {
             }
             if Instant::now() >= deadline {
                 return Err(format!(
-                    "moq-relay did not serve {broadcast} with an H.264 + AAC hang catalog within {}s; last={last}",
+                    "moq-relay did not serve {broadcast} with an H.264 + AAC catalog (ietf={ietf}) within {}s; last={last}",
                     timeout.as_secs()
                 ));
             }
@@ -257,6 +278,7 @@ pub(crate) struct CliTarget<'a> {
     pub(crate) url: &'a str,
     pub(crate) ca: &'a Path,
     pub(crate) broadcast: &'a str,
+    pub(crate) version: &'static str,
 }
 
 /// `moq` stage arguments: publish MPEG-TS from stdin.
@@ -266,9 +288,8 @@ pub(crate) const IMPORT_TS: &[&str] = &["import", "ts"];
 pub(crate) const EXPORT_TS: &[&str] = &["export", "--catalog-format", "hang", "ts"];
 
 impl CliTarget<'_> {
-    /// Global flags plus the stage ([`IMPORT_TS`] / [`EXPORT_TS`]). The CLI
-    /// offers only moq-lite-06, so a session that comes up proves that
-    /// version, and the WebSocket fallback is off so it is QUIC or nothing.
+    /// Global flags plus the stage. Offer exactly one version, and disable
+    /// WebSocket fallback so successful media requires QUIC/WebTransport.
     pub(crate) fn args(&self, stage: &[&str]) -> Vec<String> {
         let ca = self.ca.display().to_string();
         [
@@ -279,14 +300,20 @@ impl CliTarget<'_> {
             "--connect-tls-root",
             ca.as_str(),
             "--connect-version",
-            LITE_VERSION,
+            self.version,
             "--connect-websocket-enabled=false",
             "--broadcast",
             self.broadcast,
         ]
         .iter()
         .chain(stage)
-        .map(|arg| arg.to_string())
+        .map(|arg| {
+            if self.version == IETF_VERSION && *arg == "hang" {
+                "msf".to_string()
+            } else {
+                arg.to_string()
+            }
+        })
         .collect()
     }
 }

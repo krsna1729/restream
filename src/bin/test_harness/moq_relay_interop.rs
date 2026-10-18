@@ -1,7 +1,8 @@
-//! `moq-relay-interop`: Restream's MoQ egress and ingest against a real relay.
+//! `moq-relay-interop`: diagnostic reproduction against unmodified MediaMTX.
 //!
-//! The wire profile is "MOQT draft-19 subset, interop-pinned to MediaMTX
-//! v1.21.2", so the relay under test is that MediaMTX release, installed by
+//! MediaMTX v1.21.2 has SETUP, namespace discovery and LOC dialect mismatches
+//! documented with source/spec evidence in backlog Q-091. This is not a passing
+//! IETF gate; use `moq-dev-interop --ietf` for that. The pinned binary is installed by
 //! `scripts/dev/moq/fetch-mediamtx.sh` under `.local/bin/` (never the
 //! `/usr/local/bin/mediamtx` the other live modes use). Each run generates its
 //! own CA and ECDSA P-256 leaf with `openssl` and its own MediaMTX config with

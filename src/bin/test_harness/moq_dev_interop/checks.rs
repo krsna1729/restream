@@ -152,6 +152,61 @@ pub(crate) fn catalog_failures(catalog: &Value) -> Vec<String> {
     failures
 }
 
+/// Parse the real relay response with upstream MSF types. Media tracks must
+/// advertise LOC and usable H.264/AAC decoder configuration.
+pub(crate) fn profile_catalog_failures(catalog: &Value, ietf: bool) -> Vec<String> {
+    use base64::Engine as _;
+
+    if !ietf {
+        return catalog_failures(catalog);
+    }
+    let msf = match serde_json::from_value::<moq_msf::Catalog>(catalog.clone()) {
+        Ok(msf) => msf,
+        Err(error) => return vec![format!("invalid MSF catalog: {error}")],
+    };
+    let mut failures = Vec::new();
+    let mut video = false;
+    let mut audio = false;
+    for track in &msf.tracks {
+        let codec = track.codec.as_deref().unwrap_or_default();
+        let is_video = track.role == Some(moq_msf::Role::Video);
+        let is_audio = track.role == Some(moq_msf::Role::Audio);
+        if !is_video && !is_audio {
+            continue;
+        }
+        if track.packaging != moq_msf::Packaging::Loc {
+            failures.push(format!("{}: expected LOC packaging", track.name));
+        }
+        let init_ok = track.init_data.as_deref().is_some_and(|init| {
+            base64::engine::general_purpose::STANDARD
+                .decode(init)
+                .is_ok_and(|bytes| !bytes.is_empty())
+        });
+        if is_video && (codec.starts_with("avc1.") || codec.starts_with("avc3.")) {
+            video = true;
+            if codec.starts_with("avc1.") && !init_ok {
+                failures.push(format!("{}: avc1 without valid init data", track.name));
+            }
+        }
+        if is_audio && codec.starts_with("mp4a.40.") {
+            audio = true;
+            if !init_ok
+                || track.samplerate.unwrap_or(0) == 0
+                || track.channel_config.as_deref().unwrap_or_default().is_empty()
+            {
+                failures.push(format!("{}: AAC without init data/sample rate/channels", track.name));
+            }
+        }
+    }
+    if !video {
+        failures.push("no MSF H.264 video track".to_string());
+    }
+    if !audio {
+        failures.push("no MSF AAC audio track".to_string());
+    }
+    failures
+}
+
 fn is_hex_bytes(value: &str) -> bool {
     !value.is_empty()
         && value.len().is_multiple_of(2)
@@ -262,11 +317,13 @@ fn strip_ansi(line: &str) -> String {
     out
 }
 
-/// Whether relay life `life` saw at least one session and every one of them
-/// negotiated [`LITE_VERSION`]. Judged by life rather than by role: the
-/// role is an optional client hint, and the harness reads a life before any
-/// subscriber of its own connects, so every session in it is Restream's.
-pub(crate) fn sessions_on_lite(sessions: &[RelaySession], life: u32) -> (bool, Vec<Value>) {
+/// Whether relay life `life` saw sessions, all on the pinned version.
+/// Called before harness subscribers connect, so those sessions are Restream's.
+pub(crate) fn sessions_on_version(
+    sessions: &[RelaySession],
+    life: u32,
+    expected: &str,
+) -> (bool, Vec<Value>) {
     let in_life: Vec<&RelaySession> = sessions
         .iter()
         .filter(|session| session.life == life)
@@ -274,7 +331,7 @@ pub(crate) fn sessions_on_lite(sessions: &[RelaySession], life: u32) -> (bool, V
     let ok = !in_life.is_empty()
         && in_life
             .iter()
-            .all(|session| session.version.as_deref() == Some(LITE_VERSION));
+            .all(|session| session.version.as_deref() == Some(expected));
     (
         ok,
         in_life.iter().map(|session| session.to_json()).collect(),

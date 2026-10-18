@@ -90,6 +90,10 @@ base64 = "0.22"
 # over that `!Send` transport.
 moq-net = { version = "=0.3.15", features = ["unsend"] }
 hang = "=0.21.16"
+# The catalog producer/consumer (hang `catalog.json` + MSF `catalog`), group
+# management and LOC framing. Restream uses only paths that spawn nothing.
+moq-mux = "=0.10.16"
+moq-loc = "=0.2.24"
 # The poll transport traits moq-net 0.3.15 drives (`media::moq::transport`
 # implements them over compio-quic), its waiter primitive, and the HTTP/3 +
 # WebTransport framing for browser sessions; all pinned to moq-net's versions.
