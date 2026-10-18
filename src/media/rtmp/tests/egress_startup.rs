@@ -1,27 +1,4 @@
 #[test]
-fn h264_sequence_header_for_keyframe_uses_cached_parameter_sets() {
-    let mut cache = Vec::new();
-    cache_h264_parameter_sets(
-        &[
-            0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x68,
-            0xCE, 0x38, 0x80,
-        ],
-        &mut cache,
-    );
-    let (sequence_header, sps) =
-        h264_sequence_header_for_keyframe(&[0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x80], &cache)
-            .expect("cached SPS/PPS should synthesize a sequence header");
-
-    assert_eq!(sequence_header[0], 0x17);
-    assert_eq!(sequence_header[1], 0x00);
-    assert_eq!(
-        sps,
-        Some(vec![0x67, 0x42, 0x00, 0x1E, 0xAB]),
-        "cached SPS should be reused when the keyframe carries only IDR data"
-    );
-}
-
-#[test]
 fn classify_flv_video_packet_distinguishes_config_and_media() {
     assert_eq!(
         classify_flv_video_packet(&[0x17, 0x00, 0x00, 0x00, 0x00]),
@@ -99,7 +76,7 @@ fn startup_video_sequence_header_prefers_ring_parameter_sets() {
     let ingest_sequence_header =
         Bytes::from_static(&[0x17, 0x00, 0x00, 0x00, 0x00, 0x01, 0x64, 0x00, 0x1F]);
 
-    let selected =
+    let (selected, generation) =
         startup_video_sequence_header(&ring, Some(ingest_sequence_header.clone()), false)
             .expect("ring parameter sets should synthesize a startup header");
 
@@ -109,6 +86,11 @@ fn startup_video_sequence_header_prefers_ring_parameter_sets() {
     );
     assert_eq!(selected[0], 0x17);
     assert_eq!(selected[1], 0x00);
+    assert_eq!(
+        Some(generation),
+        ring.video_config().map(|config| config.generation),
+        "the header announces the ring configuration it was built from"
+    );
 }
 
 #[test]
@@ -139,7 +121,7 @@ fn startup_video_sequence_header_builds_enhanced_hevc_header() {
         .expect("fixture should carry HEVC parameter sets");
     ring.set_video_parameter_sets(parameter_sets);
 
-    let selected = startup_video_sequence_header(&ring, None, true)
+    let (selected, _) = startup_video_sequence_header(&ring, None, true)
         .expect("HEVC parameter sets should synthesize an enhanced startup header");
 
     assert_eq!(&selected[..5], &[0x80, b'h', b'v', b'c', b'1']);

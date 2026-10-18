@@ -12,10 +12,9 @@ use crate::media::egress::{FeedId, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::engine::MediaEngine;
 use crate::media::metadata::AudioMeta;
 use crate::media::rtmp::{
-    h264_sps_nalu, output_ring_video_codec_kind, resolved_output_audio_tracks,
-    rtmp_publish_metadata, should_defer_audio_until_video_ready,
-    should_send_startup_audio_sequence_header, startup_video_sequence_header,
-    validate_rtmp_output_audio_tracks,
+    output_ring_video_codec_kind, resolved_output_audio_tracks, rtmp_publish_metadata,
+    should_defer_audio_until_video_ready, should_send_startup_audio_sequence_header,
+    startup_video_sequence_header, validate_rtmp_output_audio_tracks,
 };
 
 pub struct PreparedRtmpFabricFeed {
@@ -26,11 +25,12 @@ pub struct PreparedRtmpFabricFeed {
 #[derive(Debug, Clone)]
 pub struct RtmpFabricStartup {
     pub enhanced_hevc_video: bool,
-    pub raw_video_parameter_sets: Vec<u8>,
     pub output_audio_track: Option<AudioMeta>,
     pub publish_metadata: Option<StreamMetadata>,
     pub startup_video_sequence_header: Option<Bytes>,
-    pub startup_video_config: Option<Vec<u8>>,
+    /// Ring configuration generation `startup_video_sequence_header` was
+    /// built from; 0 when it is the ingest header or absent.
+    pub startup_video_generation: u32,
     pub startup_audio_sequence_header: Option<Bytes>,
     pub deferred_audio_sequence_header: Option<Bytes>,
     pub defer_audio_until_video_ready: bool,
@@ -40,11 +40,10 @@ impl From<RtmpFabricStartup> for crate::media::egress::backends::rtmp::RtmpPubli
     fn from(startup: RtmpFabricStartup) -> Self {
         Self {
             enhanced_hevc_video: startup.enhanced_hevc_video,
-            raw_video_parameter_sets: startup.raw_video_parameter_sets,
             output_audio_track: startup.output_audio_track,
             publish_metadata: startup.publish_metadata,
             startup_video_sequence_header: startup.startup_video_sequence_header,
-            startup_video_config: startup.startup_video_config,
+            startup_video_generation: startup.startup_video_generation,
             startup_audio_sequence_header: startup.startup_audio_sequence_header,
             deferred_audio_sequence_header: startup.deferred_audio_sequence_header,
             defer_audio_until_video_ready: startup.defer_audio_until_video_ready,
@@ -86,21 +85,12 @@ pub async fn prepare_rtmp_fabric_startup(
             crate::media::codec::build_aac_sequence_header(track.sample_rate, track.channels)
         });
     }
-    let startup_video_sequence_header = startup_video_sequence_header(
+    let (startup_video_sequence_header, startup_video_generation) = startup_video_sequence_header(
         &prepared.ring,
         ingest_video_sequence_header,
         enhanced_hevc_video,
-    );
-    let startup_video_config = startup_video_sequence_header.as_ref().and_then(|_| {
-        if enhanced_hevc_video {
-            prepared.ring.video_parameter_sets()
-        } else {
-            prepared
-                .ring
-                .video_parameter_sets()
-                .and_then(|parameter_sets| h264_sps_nalu(&parameter_sets))
-        }
-    });
+    )
+    .unzip();
     let send_startup_audio = should_send_startup_audio_sequence_header(false, &prepared.ring);
     let startup_audio_sequence_header = send_startup_audio
         .then(|| audio_sequence_header.clone())
@@ -111,7 +101,6 @@ pub async fn prepare_rtmp_fabric_startup(
 
     Ok(RtmpFabricStartup {
         enhanced_hevc_video,
-        raw_video_parameter_sets: prepared.ring.video_parameter_sets().unwrap_or_default(),
         publish_metadata: rtmp_publish_metadata(
             engine,
             &output.pipeline_id,
@@ -121,7 +110,7 @@ pub async fn prepare_rtmp_fabric_startup(
         .await,
         output_audio_track,
         startup_video_sequence_header,
-        startup_video_config,
+        startup_video_generation: startup_video_generation.unwrap_or(0),
         startup_audio_sequence_header,
         deferred_audio_sequence_header,
         defer_audio_until_video_ready: should_defer_audio_until_video_ready(false, &prepared.ring),
@@ -235,7 +224,7 @@ mod tests {
             .expect("empty RTMP startup must remain valid");
 
         assert!(!startup.enhanced_hevc_video);
-        assert!(startup.raw_video_parameter_sets.is_empty());
+        assert_eq!(startup.startup_video_generation, 0);
         assert!(startup.publish_metadata.is_none());
         assert!(startup.startup_video_sequence_header.is_none());
         assert!(startup.startup_audio_sequence_header.is_none());
@@ -268,13 +257,16 @@ mod tests {
             .await
             .expect("prepared RTMP startup must remain valid");
 
-        assert_eq!(startup.raw_video_parameter_sets, parameter_sets);
+        assert_eq!(
+            Some(startup.startup_video_generation),
+            prepared.ring.video_config().map(|config| config.generation)
+        );
         assert_eq!(
             startup.output_audio_track.map(|track| track.track_index),
             Some(0)
         );
         assert!(startup.startup_video_sequence_header.is_some());
-        assert!(startup.startup_video_config.is_some());
+        assert_ne!(startup.startup_video_generation, 0);
         assert!(startup.startup_audio_sequence_header.is_some());
         assert!(startup.deferred_audio_sequence_header.is_none());
         assert!(startup.defer_audio_until_video_ready);

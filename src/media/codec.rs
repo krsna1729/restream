@@ -23,9 +23,11 @@ pub use enhanced_rtmp_hevc::{
     build_hevc_enhanced_rtmp_sequence_header, hevc_video_for_enhanced_rtmp_with_composition_into,
 };
 pub(crate) use h264_sps::{level_name, parse_h264_sps, profile_name};
+#[cfg(test)]
+pub(crate) use video::for_each_annexb_nalu;
 pub(crate) use video::{
-    AnnexbParameterSetAccumulator, annexb_parameter_sets, avcc_record, for_each_annexb_nalu,
-    raw_annexb_is_keyframe, take_u16_prefixed,
+    AnnexbParameterSetAccumulator, annexb_parameter_sets, avcc_record, raw_annexb_is_keyframe,
+    take_u16_prefixed,
 };
 pub use video::{
     annexb_to_avcc, annexb_to_avcc_into, annexb_to_avcc_with_scratch, avcc_to_annexb,

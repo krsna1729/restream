@@ -24,7 +24,6 @@ items).
 - [Q-065 capacity cost of HLS, sink and pipeline outputs](#q-065-performance-sonnet-price-hls-sink-and-pipeline-outputs-from-a-measured-cost)
 - [Q-066 SRT ingress test port race](#q-066-testing-sonnet-srt-multi-owner-test-port-can-join-a-foreign-reuseport-group)
 - [Q-067 optional Basic auth for HLS push](#q-067-protocol-opus-optional-basic-auth-for-hls-push)
-- [Q-069 frame-level media units](#q-069-architecture-opus-frame-level-media-units-for-moq-and-fmp4-ingest)
 - [Q-070 MoQ ingest](#q-070-protocol-opus-moq-ingest)
 - [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
@@ -259,8 +258,10 @@ items).
   copy), on Owner threads behind a Compio QUIC adapter.
 - Sources: a pinned-SHA `moq-dev/moq` (or moxygen) wire profile; a new
   `EgressProtocol` variant, planner capability and fabric backend
-  (`src/domain/output_spec/protocol.rs`, `src/media/egress/`). Needs
-  Q-069 first.
+  (`src/domain/output_spec/protocol.rs`, `src/media/egress/`). Objects come
+  from the ring's frame units (`RingBuffer::frame_unit`, track configuration
+  generation per sequence); add the GOP id from the keyframe gate to the
+  frame-unit word for groups.
 - Gates: interop with moxygen and MediaMTX as subscribers (one harness
   mode); a loom model for the subscriber hand-off; bench before and after
   on the egress shard.
@@ -392,30 +393,12 @@ items).
   fMP4 push, `ingestUrls.hls`, panic isolation and the PUT/POST harness gate
   are done).
 
-### Q-069 [architecture] [opus] Frame-level media units for MoQ and fMP4 ingest
-- Goal: the ring can feed per-frame consumers (MoQ objects, LL-HLS parts).
-- Sources: `MediaPacket` (`src/media/packet.rs`) has no codec
-  configuration, configuration generation, duration or group id. The TS
-  demuxer already emits one AAC frame per packet. Timestamps are
-  milliseconds: per-frame jitter is at most 0.5 ms, and the fMP4 path
-  derives durations from DTS deltas (`build_mux_samples` in
-  `src/media/hls/fmp4/codec.rs`),
-  so the total does not drift.
-- Change: a per-track
-  configuration with a generation number that readers can follow; a GOP
-  sequence number from the keyframe gate. `MediaPacket` is pinned at 56
-  bytes by a layout test, so the configuration generation and group id go
-  in a side table keyed by ring sequence unless the ring bench shows that
-  a larger packet costs nothing.
-- Gates: the existing fMP4 and TS output tests unchanged; bench of the ring
-  hot path before and after.
-- Status: open (Filed: 2026-10-16 by claude; blocks Q-047 and Q-070).
-
 ### Q-070 [protocol] [opus] MoQ ingest
 - Goal: a MoQ publisher (MSF catalog, LOC objects) feeds a pipeline input.
 - Contract: the track namespace carries the stream key. Objects map to
-  `MediaPacket`s through Q-069, and the input registers as protocol
-  `"moq"`. The QUIC listener runs on Owner threads.
+  `MediaPacket`s, the catalog's codec configuration to the ring's track
+  configuration (`RingBuffer::set_track_config`), and the input registers
+  as protocol `"moq"`. The QUIC listener runs on Owner threads.
 - Gates: interop with moxygen and MediaMTX as publishers (one harness
   mode); a fuzz target for the object parser.
 - Status: open (Filed: 2026-10-16 by claude, user request; after Q-047).

@@ -29,8 +29,6 @@ use std::rc::Rc;
 
 use bytes::Bytes;
 
-use super::egress_packets::cache_h264_parameter_sets;
-use super::enhanced::cache_hevc_parameter_sets;
 use crate::media::codec;
 use crate::media::packet::{MediaPacket, MediaType};
 
@@ -40,16 +38,6 @@ const ENTRIES: usize = 64;
 
 pub(crate) type SharedRtmpPayloadCache = Rc<RefCell<RtmpPayloadCache>>;
 
-/// One packet's conversion, shared by every output that reads it.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub(crate) struct ConvertedPayload {
-    /// Parameter sets this video packet carries, which an output adopts for
-    /// later keyframe sequence headers; `None` when it carries none.
-    pub(crate) parameter_sets: Option<Bytes>,
-    /// The FLV-ready payload; `None` when conversion found nothing to send.
-    pub(crate) payload: Option<Bytes>,
-}
-
 struct Slot {
     source: Bytes,
     media_type: MediaType,
@@ -57,7 +45,8 @@ struct Slot {
     is_keyframe: bool,
     pts: i64,
     dts: i64,
-    converted: ConvertedPayload,
+    /// The FLV-ready payload; `None` when conversion found nothing to send.
+    converted: Option<Bytes>,
 }
 
 impl Slot {
@@ -94,11 +83,7 @@ impl RtmpPayloadCache {
     }
 
     /// The FLV conversion of a Raw packet, computed once per shard.
-    pub(crate) fn convert(
-        &mut self,
-        packet: &MediaPacket,
-        enhanced_hevc: bool,
-    ) -> ConvertedPayload {
+    pub(crate) fn convert(&mut self, packet: &MediaPacket, enhanced_hevc: bool) -> Option<Bytes> {
         if let Some(slot) = self
             .recent
             .iter()
@@ -131,18 +116,12 @@ impl RtmpPayloadCache {
     }
 }
 
-/// Exactly what an output used to compute inline: the production parameter-set
-/// scan and the production Annex B / ADTS conversion, written straight into the
-/// buffer that becomes the shared `Bytes` (no intermediate copy).
-fn convert_raw(packet: &MediaPacket, enhanced_hevc: bool) -> ConvertedPayload {
+/// Exactly what an output used to compute inline: the production Annex B /
+/// ADTS conversion, written straight into the buffer that becomes the shared
+/// `Bytes` (no intermediate copy).
+fn convert_raw(packet: &MediaPacket, enhanced_hevc: bool) -> Option<Bytes> {
     match packet.media_type {
         MediaType::Video => {
-            let mut parameter_sets = Vec::new();
-            if enhanced_hevc {
-                cache_hevc_parameter_sets(&packet.payload, &mut parameter_sets);
-            } else {
-                cache_h264_parameter_sets(&packet.payload, &mut parameter_sets);
-            }
             // Publisher timestamps: saturate, never wrap, before the clamp.
             let composition = packet
                 .pts
@@ -164,18 +143,12 @@ fn convert_raw(packet: &MediaPacket, enhanced_hevc: bool) -> ConvertedPayload {
                     &mut out,
                 )
             };
-            ConvertedPayload {
-                parameter_sets: (!parameter_sets.is_empty()).then(|| Bytes::from(parameter_sets)),
-                payload: encoded.then(|| Bytes::from(out)),
-            }
+            encoded.then(|| Bytes::from(out))
         }
         MediaType::Audio => {
             let mut out = Vec::new();
             codec::audio_for_rtmp_into(&packet.payload, &mut out);
-            ConvertedPayload {
-                parameter_sets: None,
-                payload: Some(Bytes::from(out)),
-            }
+            Some(Bytes::from(out))
         }
     }
 }
@@ -219,21 +192,14 @@ mod tests {
             40,
             &mut expected_video
         ));
-        let mut expected_sets = Vec::new();
-        cache_h264_parameter_sets(&video.payload, &mut expected_sets);
         let converted = RtmpPayloadCache::default().convert(&video, false);
-        assert_eq!(converted.payload.as_deref(), Some(&expected_video[..]));
-        assert_eq!(
-            converted.parameter_sets.as_deref(),
-            Some(&expected_sets[..])
-        );
+        assert_eq!(converted.as_deref(), Some(&expected_video[..]));
 
         let audio = raw(MediaType::Audio, &adts_frame(), false, 1_000);
         let mut expected_audio = Vec::new();
         codec::audio_for_rtmp_into(&audio.payload, &mut expected_audio);
         let converted = RtmpPayloadCache::default().convert(&audio, false);
-        assert_eq!(converted.payload.as_deref(), Some(&expected_audio[..]));
-        assert_eq!(converted.parameter_sets, None);
+        assert_eq!(converted.as_deref(), Some(&expected_audio[..]));
     }
 
     #[test]
@@ -251,16 +217,16 @@ mod tests {
         let encode_all = |encoder: &mut RtmpMediaEncoder| {
             let mut actions = Vec::new();
             for packet in &packets {
-                encoder.encode(packet, &mut actions);
+                encoder.encode(packet, None, &mut actions);
             }
             actions
         };
-        let private = encode_all(&mut RtmpMediaEncoder::new(false, Vec::new()));
+        let private = encode_all(&mut RtmpMediaEncoder::new(false));
 
         let shared = RtmpPayloadCache::shared();
         let mut outputs = Vec::new();
         for _ in 0..3 {
-            let mut encoder = RtmpMediaEncoder::new(false, Vec::new());
+            let mut encoder = RtmpMediaEncoder::new(false);
             encoder.share_payload_cache(shared.clone());
             outputs.push(encode_all(&mut encoder));
         }
@@ -295,11 +261,11 @@ mod tests {
         let second = raw(MediaType::Audio, &other_frame, false, 500);
         let a = cache.convert(&first, false);
         let b = cache.convert(&second, false);
-        assert_ne!(a.payload, b.payload);
+        assert_ne!(a, b);
         assert_eq!(cache.hits_and_misses(), (0, 2));
         assert_ne!(
-            cache.convert(&first, true).payload.map(|p| p.as_ptr()),
-            a.payload.map(|p| p.as_ptr()),
+            cache.convert(&first, true).map(|p| p.as_ptr()),
+            a.map(|p| p.as_ptr()),
             "a different enhanced-HEVC mode is a different conversion"
         );
     }

@@ -31,6 +31,7 @@ use crate::media::egress::journal::RingFeed;
 use crate::media::egress::policy::WorkBudget;
 use crate::media::metadata::AudioMeta;
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
+use crate::media::ring_buffer::{NotRetained, TrackConfig};
 use crate::media::rtmp::{
     RtmpMediaAction, RtmpMediaEncoder, RtmpSessionCore, RtmpUrlParts,
     resolve_deferred_audio_sequence_header, validate_rtmp_output_audio_packet_track,
@@ -67,11 +68,10 @@ const MAX_VECTORED_PACKETS: usize = 16;
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RtmpPublishStartup {
     pub(crate) enhanced_hevc_video: bool,
-    pub(crate) raw_video_parameter_sets: Vec<u8>,
     pub(crate) output_audio_track: Option<AudioMeta>,
     pub(crate) publish_metadata: Option<StreamMetadata>,
     pub(crate) startup_video_sequence_header: Option<Bytes>,
-    pub(crate) startup_video_config: Option<Vec<u8>>,
+    pub(crate) startup_video_generation: u32,
     pub(crate) startup_audio_sequence_header: Option<Bytes>,
     pub(crate) deferred_audio_sequence_header: Option<Bytes>,
     pub(crate) defer_audio_until_video_ready: bool,
@@ -169,6 +169,8 @@ struct MediaPublisher {
     /// instead of allocating a new read vector for every visit.
     pending_units: Vec<Arc<MediaPacket>>,
     pending_units_index: usize,
+    /// Feed sequence of `pending_units[0]`.
+    pending_units_start: u64,
 }
 
 /// Feed units pulled per `feed.read_from` refill once `pending_units` is
@@ -181,10 +183,7 @@ impl MediaPublisher {
         startup: RtmpPublishStartup,
         payloads: SharedRtmpPayloadCache,
     ) -> Result<Self, String> {
-        let mut encoder = RtmpMediaEncoder::new(
-            startup.enhanced_hevc_video,
-            startup.raw_video_parameter_sets,
-        );
+        let mut encoder = RtmpMediaEncoder::new(startup.enhanced_hevc_video);
         encoder.share_payload_cache(payloads);
         let mut current_batch = VecDeque::with_capacity(32);
 
@@ -199,7 +198,7 @@ impl MediaPublisher {
                 .publish_video_data(video_sequence_header, RtmpTimestamp::new(0), false)
                 .map_err(|error| error.to_string())?;
             current_batch.push_back(MediaWirePacket::Bytes(wire));
-            encoder.set_startup_video_config(startup.startup_video_config);
+            encoder.set_startup_video_generation(startup.startup_video_generation);
         }
         let mut audio_sequence_header_sent = false;
         if let Some(audio_sequence_header) = startup.startup_audio_sequence_header {
@@ -227,6 +226,7 @@ impl MediaPublisher {
             actions: Vec::with_capacity(2),
             pending_units: Vec::with_capacity(FEED_READ_BURST),
             pending_units_index: 0,
+            pending_units_start: 0,
         })
     }
 
@@ -253,8 +253,13 @@ impl MediaPublisher {
     /// `current_batch`. Mirrors the per-packet dispatch in
     /// `src/media/rtmp/egress.rs`'s media-write arm: deferred/gated audio,
     /// the audio-track validation guard, and sequence-header-before-media
-    /// ordering — all pure, no engine/registry queries.
-    fn encode_unit(&mut self, packet: &MediaPacket) -> Result<(), String> {
+    /// ordering — all pure, no engine/registry queries. `video_config` is
+    /// [`keyframe_video_config`] of the unit.
+    fn encode_unit(
+        &mut self,
+        packet: &MediaPacket,
+        video_config: Option<&TrackConfig>,
+    ) -> Result<(), String> {
         if packet.media_type == MediaType::Audio {
             if self.defer_audio_until_video_ready && !self.encoder.video_ready() {
                 return Ok(());
@@ -283,7 +288,7 @@ impl MediaPublisher {
 
         let mut actions = std::mem::take(&mut self.actions);
         actions.clear();
-        self.encoder.encode(packet, &mut actions);
+        self.encoder.encode(packet, video_config, &mut actions);
         for action in actions.drain(..) {
             let wire = match action {
                 RtmpMediaAction::Video {
@@ -487,6 +492,7 @@ impl MediaPublisher {
             if self.pending_units_index >= self.pending_units.len() {
                 self.pending_units.clear();
                 self.pending_units_index = 0;
+                self.pending_units_start = cursor.next_sequence;
                 match feed.read_from_into(
                     *cursor,
                     ReadBudget::new(FEED_READ_BURST, budget.max_bytes()),
@@ -513,8 +519,16 @@ impl MediaPublisher {
                     WaitCondition::FeedOrIo(Interest::READ),
                 );
             };
+            let sequence = self.pending_units_start + self.pending_units_index as u64;
             self.pending_units_index += 1;
-            if let Err(detail) = self.encode_unit(&packet) {
+            let Ok(video_config) = keyframe_video_config(feed, sequence, &packet) else {
+                // The producer lapped this unit while it waited here: resync
+                // like any overrun rather than announce a stale configuration.
+                self.pending_units.clear();
+                self.pending_units_index = 0;
+                return EngineProgress::FeedOverrun;
+            };
+            if let Err(detail) = self.encode_unit(&packet, video_config.as_deref()) {
                 return EngineProgress::Failed(ProtocolFailure {
                     reason: "rtmp_media_encode",
                     detail,
@@ -532,6 +546,23 @@ impl MediaPublisher {
             EngineProgress::Needs(wait)
         }
     }
+}
+
+/// The ring configuration of a Raw video keyframe at `sequence`, which the
+/// encoder announces when its generation is new to this output. Other units
+/// need none.
+fn keyframe_video_config(
+    feed: &RingFeed,
+    sequence: u64,
+    packet: &MediaPacket,
+) -> Result<Option<Arc<TrackConfig>>, NotRetained> {
+    if packet.media_type != MediaType::Video
+        || packet.format != PayloadFormat::Raw
+        || !packet.is_keyframe
+    {
+        return Ok(None);
+    }
+    feed.track_config_at(sequence, packet.media_type, packet.track_index)
 }
 
 enum RtmpFabricState {
