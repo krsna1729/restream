@@ -654,6 +654,20 @@ export interface PipelineProbe {
   audioTracks: ProbeAudioTrack[];
 }
 
+/** `POST /pipelines/{id}/moq-token`: a viewer grant for the pipeline's MoQ
+ * broadcast; the token starts a session within 60 s. */
+export interface MoqPreviewGrant {
+  token: string;
+  /** `https://host:port/?token=…`: WebTransport straight to the engine. */
+  url: string;
+  /** The broadcast name (the pipeline id). */
+  broadcast: string;
+  expiresAt: string;
+  /** Hex SHA-256 of the listener's leaf certificate: pinned when normal
+   * certificate checks fail (a short-lived self-signed certificate). */
+  certificateSha256: string | null;
+}
+
 /** Filters shared by `GET /logs` and `GET /logs/stream`. `level` is the
  * lowest level shown; `scope` "restream" means engine-wide rows only. */
 export interface LogFilters {

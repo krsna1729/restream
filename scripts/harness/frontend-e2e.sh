@@ -38,13 +38,25 @@ if [[ ! -f "$FIXTURE" ]]; then
 fi
 
 rm -rf "$WORK_ROOT"
-mkdir -p "$WORK_ROOT/media" "$WORK_ROOT/logs"
+mkdir -p "$WORK_ROOT/media" "$WORK_ROOT/logs" "$WORK_ROOT/moq"
 cp "$FIXTURE" "$WORK_ROOT/media/"
+
+# The MoQ listener (origin for the MoQ preview): a short-lived ECDSA
+# self-signed certificate, which browsers accept pinned by hash (WebTransport
+# allows at most 14 days). Dual-stack so the default ingest host `localhost`
+# reaches it whichever address it resolves to.
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+    -days 10 -subj "/CN=localhost" \
+    -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1" \
+    -keyout "$WORK_ROOT/moq/key.pem" -out "$WORK_ROOT/moq/cert.pem" 2>/dev/null
 
 RESTREAM_DB_PATH="$WORK_ROOT/restream.db" \
 RESTREAM_MEDIA_DIR="$WORK_ROOT/media" \
 RESTREAM_LOG_DIR="$WORK_ROOT/logs" \
 RESTREAM_INITIAL_ADMIN_PASSWORD=admin \
+RESTREAM_MOQ_INGEST_LISTEN="[::]:4443" \
+RESTREAM_MOQ_TLS_CERT="$WORK_ROOT/moq/cert.pem" \
+RESTREAM_MOQ_TLS_KEY="$WORK_ROOT/moq/key.pem" \
 "$APP" >"$WORK_ROOT/restream.log" 2>&1 &
 APP_PID=$!
 

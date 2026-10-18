@@ -396,6 +396,17 @@ retry, so the page polls the playlist first). A stream whose buffered media
 has not grown for 20 s is stalled: a stopped source raises no player error,
 its playlist only stops growing. The preview then stops and offers Retry; a
 wait for data reads "buffering", never "live". A 401 goes to the login page.
+The program preview has an HLS | MoQ switch (`operate-graph.tsx`), HLS by
+default and kept in `localStorage` (`restream.previewTransport`); MoQ is
+offered only where the browser has WebTransport and WebCodecs. The MoQ
+preview (`moq-preview.tsx`) mints a viewer grant
+(`POST /pipelines/{id}/moq-token`), loads `@moq/watch` on demand and
+subscribes straight to the engine's [MoQ origin](media-pipeline.md#moq-origin)
+over WebTransport, painting a canvas. It connects with normal certificate
+checks first and pins the grant's `certificateSha256` only if they fail. It
+reads "live (MoQ)" once a frame decodes and fails with a reason when MoQ is
+off (409), the session ends, or no frame decodes within 15 s. Input previews
+stay HLS: the origin serves pipeline broadcasts.
 More than one audio track adds a track picker. Inspect's detail for a
 selected stage adds its pipe counters (`/stages/{key}/telemetry`), which the
 resource map leaves out, and says so when the engine no longer has the stage.

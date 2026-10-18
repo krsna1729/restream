@@ -6,6 +6,7 @@ import type { OutputState } from "../core/generated/runtime-state.js";
 import type { EgressShardStatus } from "../types.js";
 import { inspectGroup } from "./operate-group-model.js";
 import type { EgressGroup, GraphColumn } from "./operate-model.js";
+import { MoqPreview, moqPreviewSupported } from "./moq-preview.js";
 import { Freshness, useLifecycleEvents } from "./polled.js";
 import { Preview } from "./preview.js";
 
@@ -85,9 +86,7 @@ export function MediaGraph(props: {
             {tab === "timeline" && (
               <Timeline pipelineId={props.pipelineId} outputs={props.outputs} />
             )}
-            {tab === "preview" && (
-              <Preview url={programPreviewUrl(props.pipelineId)} label="program" />
-            )}
+            {tab === "preview" && <ProgramPreview pipelineId={props.pipelineId} />}
           </div>
         </div>
       </section>
@@ -99,6 +98,59 @@ export function MediaGraph(props: {
           shards={props.shards}
           shardsAtMs={props.shardsAtMs}
         />
+      )}
+    </div>
+  );
+}
+
+type PreviewTransport = "hls" | "moq";
+const PREVIEW_TRANSPORT_KEY = "restream.previewTransport";
+
+function storedTransport(): PreviewTransport {
+  try {
+    return localStorage.getItem(PREVIEW_TRANSPORT_KEY) === "moq" ? "moq" : "hls";
+  } catch {
+    return "hls";
+  }
+}
+
+/** The program preview over HLS (default, plays everywhere) or MoQ (lower
+ * latency; needs WebTransport and WebCodecs and the engine's MoQ listener).
+ * The operator's choice is kept across visits. */
+function ProgramPreview(props: { pipelineId: string }) {
+  const supported = moqPreviewSupported();
+  const [chosen, setChosen] = useState<PreviewTransport>(storedTransport);
+  const transport = supported ? chosen : "hls";
+  const choose = (next: PreviewTransport) => {
+    setChosen(next);
+    try {
+      localStorage.setItem(PREVIEW_TRANSPORT_KEY, next);
+    } catch {
+      // Storage blocked: the choice lasts this visit.
+    }
+  };
+  return (
+    <div className="space-y-2">
+      <div role="radiogroup" aria-label="Preview transport" className="join">
+        {(["hls", "moq"] as const).map((value) => (
+          <button
+            key={value}
+            type="button"
+            role="radio"
+            aria-checked={transport === value}
+            className={`btn btn-xs join-item ${transport === value ? "btn-active" : ""}`}
+            disabled={value === "moq" && !supported}
+            title={value === "moq" && !supported ? "This browser lacks WebTransport or WebCodecs" : undefined}
+            onClick={() => choose(value)}
+          >
+            {value.toUpperCase()}
+          </button>
+        ))}
+      </div>
+      {transport === "moq" ? (
+        <MoqPreview key="moq" pipelineId={props.pipelineId} label="program" />
+      ) : (
+        <Preview key="hls" url={programPreviewUrl(props.pipelineId)} label="program" />
       )}
     </div>
   );
