@@ -1365,6 +1365,60 @@ test("previews and stage detail: play the program and an input; a transcode stag
   }
 });
 
+test("program preview over MoQ: the switch plays the program straight from the engine and is kept", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  let pipelineId = "";
+  try {
+    pipelineId = await liveFilePipeline(page, `crmoq${Date.now()}`);
+    await page.goto(`/?w=operate&p=${pipelineId}`);
+    await page.getByRole("tab", { name: "Preview" }).click();
+    const moq = page.getByRole("radio", { name: "MOQ" });
+    await expect(page.getByRole("radio", { name: "HLS" })).toHaveAttribute("aria-checked", "true");
+    await moq.click();
+    const preview = page.getByRole("group", { name: "MoQ preview program" });
+    await preview.getByRole("button", { name: "Preview program" }).click();
+    // Live means a frame decoded; the canvas then shows the colour bars
+    // (bright and dark areas), not an unpainted black frame.
+    await expect(preview.getByRole("status")).toHaveText("live (MoQ)", { timeout: 30_000 });
+    const canvas = preview.getByLabel("Video program");
+    await expect
+      .poll(() =>
+        canvas.evaluate((element: HTMLCanvasElement) => {
+          const thumb = document.createElement("canvas");
+          thumb.width = 16;
+          thumb.height = 9;
+          const context = thumb.getContext("2d", { willReadFrequently: true });
+          if (!context || element.width === 0) return 0;
+          context.drawImage(element, 0, 0, 16, 9);
+          const pixels = context.getImageData(0, 0, 16, 9).data;
+          let low = 255;
+          let high = 0;
+          for (let index = 0; index < pixels.length; index += 4) {
+            const luma = 0.2126 * pixels[index] + 0.7152 * pixels[index + 1] + 0.0722 * pixels[index + 2];
+            low = Math.min(low, luma);
+            high = Math.max(high, luma);
+          }
+          return high - low;
+        }),
+      )
+      .toBeGreaterThan(64);
+    await preview.getByRole("button", { name: "Stop preview" }).click();
+    await expect(canvas).toHaveCount(0);
+    // The choice is kept across visits.
+    await page.reload();
+    await page.getByRole("tab", { name: "Preview" }).click();
+    await expect(page.getByRole("radio", { name: "MOQ" })).toHaveAttribute("aria-checked", "true");
+  } finally {
+    if (pipelineId) await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
+  }
+});
+
 test("matrix: a large fleet renders a bounded window and can show the rest", async ({
   page,
 }) => {

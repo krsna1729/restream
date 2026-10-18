@@ -38,6 +38,7 @@ import type {
   PipelineWrite,
   PipelineInputPatch,
   PipelineInputWrite,
+  MoqPreviewGrant,
   PipelineProbe,
   LogFilters,
   LogPage,
@@ -279,6 +280,16 @@ async function getPipelineProbe(pipelineId: string): Promise<PipelineProbe | nul
   return apiRequest<PipelineProbe>(
     `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/probe`,
     { silentStatuses: [404] },
+  );
+}
+
+/** A short-lived viewer grant for the pipeline's MoQ broadcast (its
+ * program): the WebTransport URL carries the token. Null, quietly, when the
+ * engine's MoQ listener is off (409) or the pipeline is gone (404). */
+async function mintMoqPreview(pipelineId: string): Promise<MoqPreviewGrant | null> {
+  return apiRequest<MoqPreviewGrant>(
+    `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/moq-token`,
+    { method: "POST", showMutationLoading: false, silentStatuses: [404, 409] },
   );
 }
 
@@ -748,6 +759,7 @@ export {
   getEngineTelemetry,
   getPipelineSummary,
   getPipelineProbe,
+  mintMoqPreview,
   getLogs,
   getStageTelemetry,
   getResourceMap,

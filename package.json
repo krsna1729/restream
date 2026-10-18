@@ -23,6 +23,7 @@
     "vite": "^8.3.2"
   },
   "dependencies": {
+    "@moq/watch": "^0.6.3",
     "@tanstack/react-query": "^5.104.3",
     "@tanstack/react-router": "^1.170.44",
     "hls.js": "^1.7.3",
