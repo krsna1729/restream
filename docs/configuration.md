@@ -449,8 +449,10 @@ Video and audio are configured separately:
 - Audio modes: `all`, `selectTracks` (packet-only), `remap` and `downmix`
   (external FFmpeg, stereo AAC).
 - RTMP/RTMPS `protocol.mode`: `legacy` (default) or `enhanced`. Enhanced
-  advertises `avc1`, `hvc1` and `mp4a`; HEVC goes out as Enhanced FLV `hvc1`.
-  With HEVC ingest, legacy adds the shared `hevc_to_h264` conversion first.
+  advertises `avc1`, `hvc1` and `mp4a` in the connect command's `fourCcList`,
+  independently of the chosen video codec. H.264 keeps normal AVC payloads;
+  HEVC uses Enhanced FLV `hvc1`. With HEVC ingest, legacy adds the shared
+  `hevc_to_h264` conversion first.
 
 ## File ingest configuration
 

@@ -67,6 +67,9 @@ const MAX_VECTORED_PACKETS: usize = 16;
 /// engine itself never queries anything beyond its own fields.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RtmpPublishStartup {
+    /// The output's RTMP mode is Enhanced: the connect advertises E-RTMP
+    /// FourCC support (`fourCcList`), whatever the video codec.
+    pub(crate) enhanced_rtmp: bool,
     pub(crate) enhanced_hevc_video: bool,
     pub(crate) output_audio_track: Option<AudioMeta>,
     pub(crate) publish_metadata: Option<StreamMetadata>,
@@ -583,6 +586,7 @@ pub(crate) struct RtmpFabricEngine {
     /// publisher is constructed; `None` afterward.
     publish_startup: Option<RtmpPublishStartup>,
     chunk_size: u32,
+    /// Send the E-RTMP connect (`RtmpPublishStartup::enhanced_rtmp`).
     enhanced: bool,
     /// Raw → FLV conversions, handed to the media publisher; private unless
     /// the shard shares its cache with `share_payload_cache`.
@@ -598,7 +602,6 @@ impl RtmpFabricEngine {
     pub(crate) fn new_client(
         parts: RtmpUrlParts,
         chunk_size: u32,
-        enhanced: bool,
         publish_startup: RtmpPublishStartup,
     ) -> Result<Self, String> {
         Ok(Self {
@@ -606,9 +609,9 @@ impl RtmpFabricEngine {
                 NonBlockingRtmpHandshake::new_client()?,
             ))),
             parts: Some(parts),
+            enhanced: publish_startup.enhanced_rtmp,
             publish_startup: Some(publish_startup),
             chunk_size,
-            enhanced,
             payloads: RtmpPayloadCache::shared(),
         })
     }

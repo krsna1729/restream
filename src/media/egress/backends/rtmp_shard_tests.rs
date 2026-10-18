@@ -415,6 +415,112 @@ fn shard_driven_leaf_reaches_publish_accepted_against_a_real_peer() {
     server.join().unwrap();
 }
 
+/// Handshakes as the server, then reads the client's connect command and
+/// reports whether it advertises E-RTMP FourCC support (`fourCcList`).
+fn read_connect_advertises_fourcc_list(mut stream: StdTcpStream) -> bool {
+    use rml_rtmp::chunk_io::ChunkDeserializer;
+    use rml_rtmp::messages::RtmpMessage;
+    use rml_rtmp::rml_amf0::Amf0Value;
+
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut handshake = PeerHandshake::new(PeerType::Server);
+    let mut buf = [0u8; 4096];
+    let mut input = loop {
+        let n = stream.read(&mut buf).expect("server handshake read");
+        assert_ne!(n, 0);
+        match handshake.process_bytes(&buf[..n]).unwrap() {
+            PeerResult::InProgress { response_bytes } => {
+                stream.write_all(&response_bytes).unwrap();
+            }
+            PeerResult::Completed {
+                response_bytes,
+                remaining_bytes,
+            } => {
+                stream.write_all(&response_bytes).unwrap();
+                break remaining_bytes;
+            }
+        }
+    };
+    let mut deserializer = ChunkDeserializer::new();
+    loop {
+        while let Some(payload) = deserializer.get_next_message(&input).unwrap() {
+            input.clear();
+            match payload.to_rtmp_message().unwrap() {
+                RtmpMessage::SetChunkSize { size } => {
+                    deserializer.set_max_chunk_size(size as usize).unwrap();
+                }
+                RtmpMessage::Amf0Command {
+                    command_name,
+                    command_object: Amf0Value::Object(properties),
+                    ..
+                } if command_name == "connect" => {
+                    return properties.contains_key("fourCcList");
+                }
+                _ => {}
+            }
+        }
+        let n = stream.read(&mut buf).expect("server connect read");
+        assert_ne!(n, 0, "client closed before sending connect");
+        input = buf[..n].to_vec();
+    }
+}
+
+/// Drives one shard-owned leaf, whose startup carries `enhanced_rtmp`, until
+/// the peer has read its connect.
+fn shard_connect_advertises_fourcc_list(enhanced_rtmp: bool) -> bool {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        read_connect_advertises_fourcc_list(stream)
+    });
+
+    let startup_source = SharedRtmpPublishStartupSource::new();
+    startup_source.set(
+        OutputId::new("out-1"),
+        RtmpPublishStartup {
+            enhanced_rtmp,
+            ..RtmpPublishStartup::default()
+        },
+    );
+    let (_sender, queue) = rtmp_resolve_completion_queue(1);
+    let mut backend = RtmpShardBackend::with_runtime_components(
+        CompioTcpPoller::new(4).unwrap(),
+        feed(),
+        budget(),
+        4096,
+        crate::media::egress::tls::rustls_client_config(),
+        queue,
+        startup_source,
+    );
+    let output_id = OutputId::new("out-1");
+    backend.on_command(EgressCommand::Add(output_spec(
+        "out-1",
+        &format!("rtmp://{addr}/live/key"),
+        1,
+    )));
+    assert!(backend.complete_pending_connect(&output_id, 1, addr));
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !server.is_finished() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the peer never received the connect"
+        );
+        backend.on_ready();
+        thread::sleep(Duration::from_millis(1));
+    }
+    server.join().unwrap()
+}
+
+#[test]
+fn only_an_enhanced_outputs_connect_advertises_fourcc_list() {
+    assert!(shard_connect_advertises_fourcc_list(true));
+    assert!(!shard_connect_advertises_fourcc_list(false));
+}
+
 #[test]
 fn sweep_stalled_leaves_closes_only_the_leaf_with_no_recent_progress() {
     // `LeafCommon::pending_application_bytes` (wired up in
