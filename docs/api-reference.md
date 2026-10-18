@@ -1023,7 +1023,8 @@ first). `?since=<RFC 3339>` returns the samples taken at or after it and
 `?until=<RFC 3339>` those taken at or before it (both inclusive, each
 optional); a malformed `since` or `until` is `400` (after authentication).
 The server's clock stepping back does not reorder the history: a sample is
-never stamped earlier than the one before it.
+stamped at least 1 ms after the one before it, so `since` one past the last
+sample held never skips one.
 
 ```json
 {
@@ -1036,7 +1037,8 @@ never stamped earlier than the one before it.
     }
   ],
   "completeFromMs": 1792151000000,
-  "intervalMs": 5000
+  "intervalMs": 5000,
+  "newestMs": 1792152005000
 }
 ```
 
@@ -1048,6 +1050,9 @@ never stamped earlier than the one before it.
 - `completeFromMs`: the history is complete only after this instant (the
   server's start, or the latest dropped sample): a window starting at or
   before it may be missing samples.
+- `newestMs`: the newest sample kept, whatever `until` (`null` before the
+  first). Once it is at or past a window's `until`, that window is final:
+  every sample in it has been taken, by the server's clock.
 
 ## Health and Status
 

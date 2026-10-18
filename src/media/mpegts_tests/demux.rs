@@ -619,6 +619,29 @@ fn a_cut_frame_whose_rest_was_lost_does_not_swallow_the_next_pes() {
     );
 }
 
+/// A dropped carried frame takes its time with it: when the next PES has no
+/// PTS, its frames wait for the next PES that has one rather than taking the
+/// lost frame's slot (an unknown number of frames went with the loss).
+#[test]
+fn a_dropped_carry_leaves_no_time_for_a_pes_without_a_pts() {
+    let frames: Vec<Vec<u8>> = (0..6).map(|index| adts_frame(40, 0x11 * (index + 1))).collect();
+    let mut cut = frames[0].clone();
+    cut.extend_from_slice(&frames[1][..12]);
+    let mut after_loss = frames[3][20..].to_vec();
+    after_loss.extend_from_slice(&frames[4]);
+    let resumed = 90_000 + 5 * STEP_90K;
+
+    let packets = demux_audio_pes(&[
+        (Some(90_000), cut),
+        (None, after_loss),
+        (Some(resumed), frames[5].clone()),
+    ]);
+
+    let payloads: Vec<&[u8]> = packets.iter().map(|packet| &packet.payload[..]).collect();
+    assert_eq!(payloads, vec![&frames[0][..], &frames[5][..]]);
+    assert_eq!(packets[1].dts, ts_to_ms(resumed));
+}
+
 /// A stream joined mid-frame resyncs on a header whose frame ends where the
 /// next one starts: AAC payload bytes that happen to read as a header (a
 /// stray 0xFFF sync word) are not taken for a frame.

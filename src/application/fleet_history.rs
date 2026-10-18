@@ -68,6 +68,11 @@ pub struct FleetHistoryWindow {
     pub complete_from_ms: u64,
     #[cfg_attr(test, ts(type = "number"))]
     pub interval_ms: u64,
+    /// The newest sample the server keeps, whatever the window: once it is
+    /// at or past a closed window's end, every sample in that window was
+    /// taken (server time, so a client's clock does not matter).
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub newest_ms: Option<u64>,
 }
 
 /// The control room's delivering predicate (`isDelivering` in
@@ -157,8 +162,12 @@ impl FleetHistory {
             samples,
             complete_from_ms,
         } = &mut *state;
+        // Strictly after the newest kept sample, even when the wall clock
+        // stepped back: the window's binary search needs the order, and a
+        // client that asks `since = last + 1` must not skip a sample that
+        // shares its predecessor's time.
         if let Some(newest) = samples.back() {
-            sample.at_ms = sample.at_ms.max(newest.at_ms);
+            sample.at_ms = sample.at_ms.max(newest.at_ms.saturating_add(1));
         }
         let oldest_kept = sample
             .at_ms
@@ -190,6 +199,7 @@ impl FleetHistory {
             samples: state.samples.range(first..end).cloned().collect(),
             complete_from_ms: state.complete_from_ms,
             interval_ms: FLEET_SAMPLE_INTERVAL.as_millis() as u64,
+            newest_ms: state.samples.back().map(|sample| sample.at_ms),
         }
     }
 }

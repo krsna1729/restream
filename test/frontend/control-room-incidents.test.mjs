@@ -6,6 +6,7 @@ import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 const {
   evidenceExport,
   evidencePacket,
+  fleetSpanSettled,
   incidentMarks,
   incidentTimeline,
   rankIncidents,
@@ -186,4 +187,21 @@ test("the timeline is complete only when the log reaches back to its start", () 
   // The log starts inside the window, or holds nothing: the lead-up may be gone.
   assert.equal(timelineMayBeIncomplete(opened, [inWindow, after]), true);
   assert.equal(timelineMayBeIncomplete(opened, []), true);
+});
+
+test("a closed span settles on the server's newest sample, not the browser's clock", () => {
+  const closedAt = 10_000;
+  const window = (newestMs, completeFromMs = 0) => ({
+    samples: [],
+    completeFromMs,
+    intervalMs: 5_000,
+    newestMs,
+  });
+  // The server has not sampled past the close yet: more may come.
+  assert.equal(fleetSpanSettled(window(null), closedAt), false);
+  assert.equal(fleetSpanSettled(window(9_999), closedAt), false);
+  // It has: every sample in the span was taken.
+  assert.equal(fleetSpanSettled(window(10_000), closedAt), true);
+  // The span aged out of what the server keeps: nothing more can come.
+  assert.equal(fleetSpanSettled(window(null, 10_000), closedAt), true);
 });

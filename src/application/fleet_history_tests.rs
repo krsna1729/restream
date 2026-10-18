@@ -89,12 +89,29 @@ fn a_clock_step_back_keeps_the_samples_in_order() {
     history.push(sample(4_000));
     assert_eq!(
         times(&history.window(0, u64::MAX)),
-        [1_000, 2_000, 3_000, 3_000, 4_000]
+        [1_000, 2_000, 3_000, 3_001, 4_000]
     );
     assert_eq!(
         times(&history.window(2_500, u64::MAX)),
-        [3_000, 3_000, 4_000]
+        [3_000, 3_001, 4_000]
     );
+    // A client that holds the sample at 3 000 asks from 3 001 and still gets
+    // the one taken while the clock was back.
+    assert_eq!(times(&history.window(3_001, u64::MAX)), [3_001, 4_000]);
+}
+
+/// A closed window reports how far the history reaches beyond it, so a
+/// client knows when every sample in the window has been taken.
+#[test]
+fn a_window_reports_the_newest_sample_beyond_its_end() {
+    let history = FleetHistory::started_at(0, 10);
+    assert_eq!(history.window(0, 2_500).newest_ms, None);
+    for at in [1_000, 2_000, 3_000] {
+        history.push(sample(at));
+    }
+    let window = history.window(0, 2_500);
+    assert_eq!(times(&window), [1_000, 2_000]);
+    assert_eq!(window.newest_ms, Some(3_000));
 }
 
 fn output(

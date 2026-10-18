@@ -29,6 +29,7 @@ items).
 - [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
 - [Q-083 measure RTMP and SRT under pull load](#q-083-performance-sonnet-measure-rtmp-and-srt-under-pull-load)
+- [Q-087 separate-rendition timeline breaks](#q-087-protocol-sonnet-align-separate-renditions-on-timeline-breaks-not-on-raw-proximity)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -552,4 +553,32 @@ items).
   reported side by side.
 - Status: open (Filed: 2026-10-17 by claude, from the #354 non-HLS audit: the
   push ingest has this arm, the pull ingest does not).
+
+### Q-087 [protocol] [sonnet] Align separate renditions on timeline breaks, not on raw proximity
+
+- Goal: a discontinuity crossed by a variant and its separate audio rendition
+  re-anchors both on the same new timeline, whatever the raw jump, and an
+  abandoned pulled audio rendition is tried again.
+- Why: since #364 each rendition keeps its own continuity, and a rendition
+  that re-anchors adopts the offset of another whose last raw time is within
+  the merge window (three target durations). A forward jump smaller than the
+  window at a discontinuity (an SSAI ad whose PTS starts a few seconds past
+  the content) is therefore adopted from the other rendition's old timeline
+  and stays in the output as a gap of up to the window; A and V stay aligned.
+  The proximity rule is what keeps a variant switch (only rendition 0 marks a
+  discontinuity, on the same clock) aligned, so it cannot simply go. Separately,
+  a pull that failed its audio rendition `MAX_ATTEMPTS` cycles in a row stays
+  video-only until it restarts.
+- Change: ordering tells the publisher which marks are timeline breaks
+  (`EXT-X-DISCONTINUITY`, a new epoch: shared by every rendition, counted as a
+  generation) and which keep the clock (a variant switch, an init change);
+  a rendition adopts an offset only from one that crossed the same generation,
+  and keeps the proximity rule for clock-keeping marks. The pull re-arms an
+  abandoned audio rendition at the next master resolution the video itself
+  triggers, or after a quiet period.
+- Gates: a publisher test with a sub-window forward jump at a discontinuity on
+  both renditions yields no gap; the variant-switch alignment test still
+  passes; a pull test whose audio playlist recovers after abandonment pulls
+  audio again.
+- Status: open (Filed: 2026-10-18 by claude, from the #364 review NITs).
 
