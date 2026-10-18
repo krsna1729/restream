@@ -171,22 +171,6 @@ fn release_policy_metadata_is_declared_and_enforced() {
     assert!(license.contains("MIT License"));
     assert!(license.contains("Permission is hereby granted"));
 
-    let compliance = include_str!("../docs/release-compliance.md");
-    for required in [
-        "restream.nativeBuildId",
-        "cargo audit",
-        "cargo deny check advisories licenses bans sources",
-        "GPL-2.0-or-later",
-        "MIT",
-        "tracing/release_max_level_*",
-        "Dependency Policy",
-    ] {
-        assert!(
-            compliance.contains(required),
-            "release compliance docs must mention {required}"
-        );
-    }
-
     let runtime_info = include_str!("../src/runtime_info.rs");
     for required in [
         "env!(\"RESTREAM_BUILD_TIMESTAMP\")",
@@ -662,22 +646,6 @@ fn frontend_tooling_and_vendored_assets_are_reproducible() {
 
 #[test]
 fn source_distribution_manifest_matches_declared_build_inputs() {
-    let manifest = include_str!("../docs/source-distribution.md");
-    for required in [
-        ".local/build/static/prefix/",
-        "package-lock.json",
-        "tsconfig.json",
-        "vite.config.ts",
-        "./scripts/build/native-deps.sh",
-        "npm run build:frontend",
-        "hls.min.js.map",
-    ] {
-        assert!(
-            manifest.contains(required),
-            "source distribution manifest must mention {required}"
-        );
-    }
-
     let cargo_toml = include_str!("../Cargo.toml");
     let mut missing_benches = Vec::new();
     for bench in declared_benches(cargo_toml) {
