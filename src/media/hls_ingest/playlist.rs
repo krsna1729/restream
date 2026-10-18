@@ -13,6 +13,14 @@
 //! it always has. URIs resolve against the playlist's own path; only
 //! relative URIs that stay inside the stream key's namespace are accepted.
 
+#![deny(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
+
 use std::fmt;
 use std::time::Duration;
 
@@ -203,7 +211,7 @@ pub fn parse_with(
     let mut lines = text
         .lines()
         .enumerate()
-        .map(|(index, line)| (index + 1, line.trim()))
+        .map(|(index, line)| (index.saturating_add(1), line.trim()))
         .filter(|(_, line)| !line.is_empty());
     match lines.next() {
         Some((_, "#EXTM3U")) => {}

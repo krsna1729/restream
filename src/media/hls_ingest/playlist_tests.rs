@@ -1,6 +1,16 @@
 //! The playlist parser's tests: media and master playlists, URI resolution,
 //! and the tags the ingest reads or refuses.
 
+// Test code may index, unwrap and do plain arithmetic; the parent module's
+// deny lints guard the parser, not its tests.
+#![allow(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
+
 use super::*;
 use proptest::prelude::*;
 

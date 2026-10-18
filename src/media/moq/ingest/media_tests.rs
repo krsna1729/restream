@@ -1,5 +1,15 @@
 //! Catalog → track selection and legacy frame → packet conversion.
 
+// Test code may index, unwrap and do plain arithmetic; the parent module's
+// deny lints guard the parser, not its tests.
+#![allow(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
+
 use std::time::Duration;
 
 use super::*;

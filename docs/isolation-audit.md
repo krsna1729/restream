@@ -77,10 +77,10 @@ the RTMP admission deadline, lock poisoning, the `ts_demux` fuzz target).
   `rtmp/egress_payload_cache.rs`, `rtmp/egress_engine.rs`,
   `mpegts/demux.rs`, `mpegts_probe.rs`,
   `codec/{bits, h264_sps, video, aac, enhanced_rtmp_hevc}`,
-  `hls/fmp4/codec.rs`, `egress/http1.rs` and `ingest_publisher/fmp4`.
-  Not converted: `hls_ingest::playlist` and the MoQ ingest catalog and frame
-  code (`media::moq`). Both are fuzzed (`hls_playlist`, `moq_ingest`), but
-  neither denies the lints.
+  `hls/fmp4/codec.rs`, `egress/http1.rs`, `ingest_publisher/fmp4`,
+  `hls_ingest/playlist.rs`, `moq/media.rs` and
+  `moq/ingest/{media,cmaf}.rs`. The latter HLS and MoQ paths are also fuzzed
+  by `hls_playlist` and `moq_ingest`.
 - **F7 (decided: off). Release builds wrap on integer overflow.** Global
   `overflow-checks` cost measurable CPU on the SRT ingest hot path and gained
   no isolation. Parsers of untrusted bytes deny
