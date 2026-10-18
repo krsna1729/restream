@@ -1,17 +1,20 @@
 //! `moqt://` output URLs:
-//! `moqt://host[:port][/path][?broadcast=<name>&ca=<file>&insecure=1]`.
+//! `moqt://host[:port][/path][?broadcast=<name>&ca=<file>&insecure=1&version=<alpn>]`.
 //!
 //! The relay address and the session path (the relay's scope, e.g. `/anon`)
-//! come from the URL. Three query keys belong to Restream and never reach
+//! come from the URL. Four query keys belong to Restream and never reach
 //! the relay: `broadcast` (the broadcast name announced under that scope;
 //! the pipeline id when absent), `ca` (a PEM file of extra trusted CA
-//! certificates, for a relay with a private CA) and `insecure` (skip
-//! certificate verification). Every other query pair stays in the path sent
-//! to the relay, in its original encoding (e.g. `?jwt=`).
+//! certificates, for a relay with a private CA), `insecure` (skip
+//! certificate verification) and `version` (offer only this MoQ ALPN, e.g.
+//! `moqt-19` or `moq-lite-06`; by default every version moq-net speaks is
+//! offered and the relay picks). Every other query pair stays in the path
+//! sent to the relay, in its original encoding (e.g. `?jwt=`).
 
 use percent_encoding::percent_decode_str;
 
 use crate::domain::output_spec::OutputUrlScheme;
+use crate::media::moq::transport::MOQ_ALPNS;
 
 /// Port used when the URL names none: the MoQ client convention (MediaMTX
 /// appends `:443` too), not the relay listener's own default.
@@ -23,6 +26,8 @@ const BROADCAST_KEY: &str = "broadcast";
 const CA_KEY: &str = "ca";
 /// Query key disabling relay certificate verification.
 const INSECURE_KEY: &str = "insecure";
+/// Query key restricting the offered MoQ versions to one ALPN.
+const VERSION_KEY: &str = "version";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MoqUrl {
@@ -38,6 +43,8 @@ pub(crate) struct MoqUrl {
     /// Extra trusted CA certificates (PEM file path), percent-decoded.
     pub(crate) ca_file: Option<String>,
     pub(crate) insecure: bool,
+    /// The only MoQ ALPN to offer; `None` offers every one.
+    pub(crate) version: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +58,8 @@ pub(crate) enum MoqUrlError {
     Credentials,
     InvalidInsecure,
     EmptyCa,
+    /// `version=` names no MoQ version moq-net speaks.
+    UnknownVersion,
 }
 
 impl MoqUrlError {
@@ -63,6 +72,9 @@ impl MoqUrlError {
             Self::Credentials => "MoQ output URL must not carry a user name or password",
             Self::InvalidInsecure => "MoQ output URL `insecure` must be 1, 0, true or false",
             Self::EmptyCa => "MoQ output URL `ca` must name a PEM file",
+            Self::UnknownVersion => {
+                "MoQ output URL `version` must be a MoQ ALPN such as moqt-19 or moq-lite-06"
+            }
         }
     }
 }
@@ -88,6 +100,7 @@ pub(crate) fn parse_moq_url(url: &str) -> Result<MoqUrl, MoqUrlError> {
     let mut broadcast = None;
     let mut ca_file = None;
     let mut insecure = false;
+    let mut version = None;
     let mut relay_query = String::new();
     for pair in parsed.query().unwrap_or_default().split('&') {
         if pair.is_empty() {
@@ -113,6 +126,15 @@ pub(crate) fn parse_moq_url(url: &str) -> Result<MoqUrl, MoqUrlError> {
                 "0" | "false" => false,
                 _ => return Err(MoqUrlError::InvalidInsecure),
             };
+        } else if key == VERSION_KEY {
+            let value = decode_component(raw_value);
+            version = Some(
+                MOQ_ALPNS
+                    .iter()
+                    .copied()
+                    .find(|alpn| *alpn == value)
+                    .ok_or(MoqUrlError::UnknownVersion)?,
+            );
         } else {
             if !relay_query.is_empty() {
                 relay_query.push('&');
@@ -133,6 +155,7 @@ pub(crate) fn parse_moq_url(url: &str) -> Result<MoqUrl, MoqUrlError> {
         broadcast,
         ca_file,
         insecure,
+        version,
     })
 }
 

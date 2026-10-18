@@ -8,7 +8,7 @@ use std::time::Duration;
 use compio::quic::{ClientConfig, Endpoint};
 
 use super::{
-    Accepted, CLIENT_ALPNS, MoqSession, SERVER_ALPNS, TransportError, accept, client_endpoint,
+    Accepted, MOQ_ALPNS, MoqSession, SERVER_ALPNS, TransportError, accept, client_endpoint,
     connect, server_endpoint,
 };
 use crate::media::moq::tls;
@@ -65,7 +65,7 @@ pub(crate) struct Loopback {
 
 impl Loopback {
     pub(crate) async fn new() -> Self {
-        let (server, addr) = loopback_server(SERVER_ALPNS).await;
+        let (server, addr) = loopback_server(&SERVER_ALPNS).await;
         let client = client_endpoint(AddressFamily::V4)
             .await
             .expect("loopback client endpoint");
@@ -83,11 +83,16 @@ impl Loopback {
 
     /// A native QUIC session pair: (client, accepted server side).
     pub(crate) async fn native(&self) -> (MoqSession, Accepted) {
+        self.native_offering(MOQ_ALPNS).await
+    }
+
+    /// [`Self::native`] with the client offering only `alpns`.
+    pub(crate) async fn native_offering(&self, alpns: &[&str]) -> (MoqSession, Accepted) {
         let dial = connect(
             &self.client,
             self.addr,
             LOOPBACK_SERVER_NAME,
-            loopback_client_tls(CLIENT_ALPNS),
+            loopback_client_tls(alpns),
         );
         let (client, server) = futures_util::future::join(dial, self.accept()).await;
         (

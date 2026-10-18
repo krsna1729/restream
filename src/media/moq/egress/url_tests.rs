@@ -12,6 +12,7 @@ fn port_defaults_to_443_and_path_keeps_its_leading_slash() {
             broadcast: None,
             ca_file: None,
             insecure: false,
+            version: None,
         }
     );
 }
@@ -88,5 +89,19 @@ fn invalid_urls_are_rejected_with_their_reason() {
         ),
     ] {
         assert_eq!(parse_moq_url(url), Err(error), "{url}");
+    }
+}
+
+#[test]
+fn version_offers_one_moq_alpn_and_stays_off_the_relay_path() {
+    let url = parse_moq_url("moqt://relay.example/live?version=moqt-19&jwt=x").unwrap();
+    assert_eq!(url.version, Some("moqt-19"));
+    assert_eq!(url.path, "/live?jwt=x");
+    for unknown in ["moqt-99", "h3", ""] {
+        assert_eq!(
+            parse_moq_url(&format!("moqt://relay.example/live?version={unknown}")),
+            Err(MoqUrlError::UnknownVersion),
+            "{unknown}"
+        );
     }
 }

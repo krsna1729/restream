@@ -1,8 +1,9 @@
-//! One MoQ egress leaf: a QUIC connection to a relay over which a moq-lite
-//! client publishes one hang broadcast.
+//! One MoQ egress leaf: a QUIC connection to a relay over which a moq-net
+//! client (moq-lite or IETF MOQT, whichever the relay negotiates) publishes
+//! one broadcast.
 //!
 //! The connection lives in a local Compio task on the shard thread
-//! ([`spawn_link`]): resolve → QUIC (+TLS) → `Client::connect_lite` →
+//! ([`spawn_link`]): resolve → QUIC (+TLS) → `Client::connect` →
 //! drive the session until it ends. The task reports its state through a
 //! [`LeafLink`]; the shard's visits ([`MoqEngine`]) read the ring and write
 //! the broadcast, which moq-net sends from that task. Writes never block:
@@ -41,7 +42,7 @@ use super::url::MoqUrl;
 /// Opens the transport session a leaf publishes over. Production is
 /// [`QuicConnector`]; tests inject sessions of their own.
 pub(crate) trait MoqConnector: 'static {
-    type Session: moq_net::transport::poll::Session;
+    type Session: moq_net::transport::poll::Boxable;
 
     fn connect(
         self: Rc<Self>,
@@ -81,11 +82,11 @@ impl MoqConnector for QuicConnector {
         extra_ca_pem: Option<Vec<u8>>,
     ) -> LocalBoxFuture<'static, Result<Self::Session, String>> {
         Box::pin(async move {
-            let tls = tls::client_config(
-                transport::CLIENT_ALPNS,
-                extra_ca_pem.as_deref(),
-                url.insecure,
-            )?;
+            let alpns = match &url.version {
+                Some(version) => std::slice::from_ref(version),
+                None => transport::MOQ_ALPNS,
+            };
+            let tls = tls::client_config(alpns, extra_ca_pem.as_deref(), url.insecure)?;
             let addr = resolve(&url.host, url.port).await?;
             let family = if addr.is_ipv4() {
                 AddressFamily::V4
@@ -262,8 +263,8 @@ pub(crate) fn spawn_link<C: MoqConnector>(
     })
 }
 
-/// Connect, run the moq-lite handshake, and drive the session; returns why
-/// it ended.
+/// Connect, run the MoQ handshake (the version the ALPN negotiated), and
+/// drive the session; returns why it ended.
 async fn publish<C: MoqConnector>(
     connector: Rc<C>,
     url: MoqUrl,
@@ -279,7 +280,7 @@ async fn publish<C: MoqConnector>(
     };
     let mut closer = session.clone();
     let client = Client::new().with_publisher(origin).with_path(path);
-    let (moq, driver) = match client.connect_lite(Instant::now(), session).await {
+    let (moq, driver) = match client.connect(Instant::now(), session).await {
         Ok(connected) => connected,
         Err(error) => return format!("MoQ handshake failed: {error}"),
     };

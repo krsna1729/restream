@@ -1,11 +1,12 @@
 //! The MoQ listener: one OS thread "moq-ingest" with its own Compio runtime
-//! owns the UDP endpoint (native QUIC moq-lite and HTTP/3 WebTransport on
-//! one port), every connection and its media. Tokio only admits, probes and
-//! records ([`super::TokioLifecycle`]).
+//! owns the UDP endpoint (native QUIC and HTTP/3 WebTransport on one port,
+//! moq-lite or IETF MOQT), every connection and its media. Tokio only admits,
+//! probes and records ([`super::TokioLifecycle`]).
 //!
-//! Each accepted connection runs as a local task: transport handshake,
-//! moq-lite SETUP, then routing. A connection that presents an origin token
-//! or declares itself a subscriber is served by the origin
+//! Each accepted connection runs as a local task: transport handshake, MoQ
+//! SETUP (`Server::accept_request`, any version), then routing. A connection
+//! that presents an origin token or declares itself a subscriber (moq-lite
+//! only has the role) is served by the origin
 //! ([`crate::media::moq::origin`]); any other is a publisher
 //! ([`super::session::publish`]). At most `max_connections` handshakes and
 //! publishers run at once; further handshakes are refused. An admitted
@@ -199,7 +200,7 @@ async fn bind(config: &MoqIngestConfig) -> Result<Endpoint, String> {
         .map_err(|error| format!("read {}: {error}", config.tls_cert_path))?;
     let key = std::fs::read(&config.tls_key_path)
         .map_err(|error| format!("read {}: {error}", config.tls_key_path))?;
-    let tls = tls::server_config(transport::SERVER_ALPNS, &cert, &key)?;
+    let tls = tls::server_config(&transport::SERVER_ALPNS, &cert, &key)?;
     transport::server_endpoint(config.listen, tls)
         .await
         .map_err(|error| format!("bind MoQ listener on {}: {error}", config.listen))
@@ -249,7 +250,7 @@ async fn serve_connection(incoming: Incoming, listener: &Rc<Listener>, slot: Cap
     // A peer that never sends its SETUP must not hold a connection slot.
     let setup = compio::time::timeout(
         transport::HANDSHAKE_TIMEOUT,
-        moq_net::Server::new().accept_request_lite(Instant::now(), accepted.session.clone()),
+        moq_net::Server::new().accept_request(Instant::now(), accepted.session.clone()),
     )
     .await;
     let handshake = match setup {

@@ -86,7 +86,7 @@ async fn an_unreadable_certificate_fails_the_start_and_leaves_nothing_running() 
 fn publish_until(addr: SocketAddr, done: Arc<AtomicBool>) {
     run(async move {
         let endpoint = transport::client_endpoint(AddressFamily::V4).await.unwrap();
-        let tls = loopback_client_tls(transport::CLIENT_ALPNS);
+        let tls = loopback_client_tls(transport::MOQ_ALPNS);
         let session = transport::connect(&endpoint, addr, LOOPBACK_SERVER_NAME, tls)
             .await
             .unwrap();
@@ -105,7 +105,7 @@ fn publish_until(addr: SocketAddr, done: Arc<AtomicBool>) {
             .unwrap();
         let (_session, driver) = moq_net::Client::new()
             .with_publisher(&origin)
-            .connect_lite(Instant::now(), session)
+            .connect(Instant::now(), session)
             .await
             .unwrap();
         compio::runtime::spawn(transport::run_driver(driver)).detach();
@@ -214,7 +214,7 @@ async fn connections_past_the_cap_are_refused() {
     tokio::task::spawn_blocking(move || {
         run(async move {
             let endpoint = transport::client_endpoint(AddressFamily::V4).await.unwrap();
-            let tls = || loopback_client_tls(transport::CLIENT_ALPNS);
+            let tls = || loopback_client_tls(transport::MOQ_ALPNS);
             // The first holds the only slot while the listener awaits its SETUP.
             let _first = transport::connect(&endpoint, addr, LOOPBACK_SERVER_NAME, tls())
                 .await
@@ -250,7 +250,7 @@ async fn an_admitted_viewer_leaves_the_connection_cap_to_publishers() {
     tokio::task::spawn_blocking(move || {
         run(async move {
             let endpoint = transport::client_endpoint(AddressFamily::V4).await.unwrap();
-            let tls = || loopback_client_tls(transport::CLIENT_ALPNS);
+            let tls = || loopback_client_tls(transport::MOQ_ALPNS);
             // The publisher holds one slot; this viewer takes the other while
             // it handshakes, then watches the pipeline.
             let client = transport::connect(&endpoint, addr, LOOPBACK_SERVER_NAME, tls())
@@ -264,7 +264,7 @@ async fn an_admitted_viewer_leaves_the_connection_cap_to_publishers() {
             let (_session, driver) = moq_net::Client::new()
                 .with_subscriber(viewer.clone())
                 .with_path(format!("/?token={token}"))
-                .connect_lite(Instant::now(), client)
+                .connect(Instant::now(), client)
                 .await
                 .unwrap();
             compio::runtime::spawn(transport::run_driver(driver)).detach();
