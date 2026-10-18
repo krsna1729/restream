@@ -38,6 +38,9 @@ Use the narrowest proof that can actually catch the bug:
      - `egress_feed_wake_loom` (queued coalescing, independent heads and the
        full-channel retry bit; both arming and taking the retry bit use
        `AcqRel` swaps, and the consumer clears it before observing the head)
+     - `ring_frame_unit_loom` (a frame-unit read by sequence never returns
+       the unit of a sequence that lapped it, including a batch that
+       overwrote the slot before moving the write index)
      - `ring_migration_loom`
      - `input_selection_loom`
      - `ts_chunk_ring_loom`

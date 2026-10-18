@@ -60,9 +60,6 @@ impl MediaEngine {
         if let Some(hint) = old_rb.codec_hint.get() {
             new_rb.set_codec_hint(hint);
         }
-        if let Some(parameter_sets) = old_rb.video_parameter_sets() {
-            new_rb.set_video_parameter_sets(parameter_sets);
-        }
         if let Some(audio_tracks) = old_rb.audio_tracks() {
             new_rb.set_audio_tracks(audio_tracks.to_vec());
         }

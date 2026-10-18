@@ -651,7 +651,7 @@ impl SegmentPublisher {
             self.media_time_ms = self.media_time_ms.max(Some(last.dts));
         }
         if let Some(preview_ring) = registration.preview_ring.load_full() {
-            preview_ring.push_batch(self.packets.iter().cloned());
+            preview_ring.push_batch_recording_config(self.packets.iter().cloned());
         }
 
         let first_keyframe = self
@@ -680,12 +680,6 @@ impl SegmentPublisher {
             );
         }
         for packet in &self.packets {
-            if packet.media_type == MediaType::Video
-                && let Some(parameter_sets) =
-                    crate::media::codec::annexb_parameter_sets(&packet.payload)
-            {
-                target.ring.set_video_parameter_sets(parameter_sets);
-            }
             if packet.media_type == MediaType::Video && packet.is_keyframe {
                 let mut times = crate::sync::lock(&target.keyframe_times);
                 times.push(packet.pts);
@@ -697,7 +691,9 @@ impl SegmentPublisher {
         if let Some(last) = self.packets.iter().max_by_key(|packet| packet.dts) {
             InputTimestampMapper::record_forwarded(last, &registration.last_forwarded_dts);
         }
-        target.ring.push_drained_batch_capped(&mut self.packets);
+        target
+            .ring
+            .push_drained_batch_recording_config(&mut self.packets);
     }
 }
 

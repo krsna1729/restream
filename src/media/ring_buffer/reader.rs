@@ -121,6 +121,12 @@ impl Reader {
         &self.buffer
     }
 
+    /// Ring sequence of the next packet this reader pulls; a successful
+    /// `pull_burst` returns the packets from here on, in sequence order.
+    pub fn next_sequence(&self) -> usize {
+        self.read_idx
+    }
+
     pub fn is_caught_up_to_end_of_stream(&self) -> bool {
         self.buffer.is_end_of_stream() && self.buffer.get_write_idx() == self.read_idx
     }

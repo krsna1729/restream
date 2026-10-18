@@ -7,7 +7,9 @@ use crate::domain::audio_routing::AudioRouting;
 use crate::domain::stage::StageKey;
 use crate::media::metadata::AudioMeta;
 use crate::media::packet::{MediaPacket, MediaType};
-use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
+use crate::media::ring_buffer::{
+    MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer, VideoConfigFollower,
+};
 
 /// Lightweight audio routing stage with no FFmpeg or MPEG-TS round-trip.
 ///
@@ -81,6 +83,7 @@ pub async fn start_audio_router(
     // packet payloads and does not grow batch storage.
     let mut out_batch: Vec<MediaPacket> = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
     let mut packets: Vec<Arc<MediaPacket>> = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
+    let mut video_config = VideoConfigFollower::default();
     loop {
         tokio::select! {
             _ = cancel.cancelled() => break,
@@ -88,6 +91,7 @@ pub async fn start_audio_router(
                 if reader.is_caught_up_to_end_of_stream() {
                     break;
                 }
+                let first_sequence = reader.next_sequence();
                 if reader.pull_burst(&mut packets, MEDIA_PULL_BURST_PACKETS).is_err() {
                     continue;
                 }
@@ -95,18 +99,15 @@ pub async fn start_audio_router(
                     first_input_recorded = true;
                     lifecycle.record_first_input();
                 }
-                for packet in packets.drain(..) {
+                for (index, packet) in packets.drain(..).enumerate() {
                     stage_metrics.record_in(packet.payload.len() as u64);
-                    if packet.media_type == MediaType::Video
-                        && output_buffer.video_parameter_sets().is_none()
-                    {
-                        if let Some(parameter_sets) = reader.current_ring().video_parameter_sets() {
-                            output_buffer.set_video_parameter_sets(parameter_sets);
-                        } else if let Some(parameter_sets) =
-                            crate::media::codec::annexb_parameter_sets(&packet.payload)
-                        {
-                            output_buffer.set_video_parameter_sets(parameter_sets);
-                        }
+                    if packet.media_type == MediaType::Video {
+                        video_config.follow(
+                            reader.current_ring(),
+                            first_sequence + index,
+                            &output_buffer,
+                            &mut out_batch,
+                        );
                     }
                     if output_buffer.audio_tracks().is_none()
                         && let Some(input_tracks) = reader.current_ring().audio_tracks()

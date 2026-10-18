@@ -179,3 +179,32 @@ async fn a_corrupt_stretch_still_publishes_the_rest() {
         "no keyframe published after the corrupt stretch"
     );
 }
+
+/// The publisher records the in-band parameter sets of the TS it publishes:
+/// a keyframe carries the configuration generation its sets started.
+#[tokio::test]
+async fn published_keyframes_carry_the_in_band_configuration() {
+    let (_engine, target, ring) = harness("publish-records-config").await;
+    let mut publisher = SegmentPublisher::new(Container::Ts.demux(), IngestTimestamps::default());
+    let start = ring.get_write_idx();
+    for chunk in fixture().chunks(PUBLISH_CHUNK_BYTES) {
+        publisher
+            .publish(&target, chunk)
+            .await
+            .expect("fixture publishes");
+    }
+    publisher.flush(&target);
+
+    let last_keyframe = (start..ring.get_write_idx())
+        .rev()
+        .find(|&sequence| {
+            ring.read_at(sequence)
+                .is_some_and(|packet| packet.media_type == MediaType::Video && packet.is_keyframe)
+        })
+        .expect("the fixture has a keyframe");
+    let config = ring
+        .track_config_at(last_keyframe, MediaType::Video, 0)
+        .expect("retained")
+        .expect("the keyframe's parameter sets were recorded");
+    assert!(!config.bytes.is_empty());
+}
