@@ -387,7 +387,8 @@ runs it.
   kTLS fails the capability preflight; it never falls back to userspace TLS.
 - `master` pushes: `master-transport-shards` and `concurrency-contract`
   (`fault.resilience`, `fault.egress-retry`, `fault.output-stall`,
-  `recovery`). `fault.resilience` also proves RTMPS delivery, sink loss
+  `fault.srt-output-stall`, `recovery`). `fault.resilience` also proves
+  RTMPS delivery, sink loss
   reaching `retrying`, and SIGTERM shutdown with `restream.shutdown.completed`
   within 5 s.
 - Nightly: file and live matrices, crypto, bitrate sweeps, ramps, resource

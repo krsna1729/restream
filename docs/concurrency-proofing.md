@@ -88,7 +88,7 @@ the ownership model was broken.
 | `fault.egress-retry` | RTMP and SRT dead sinks show `retrying`, then `failed` when the retry budget runs out | `contract` |
 | `fault.output-stall` | a connected RTMP sink that stops draining shows `stalled` in output status and health | `contract` |
 | `recovery` | hung HLS PUT destinations time out and recover; rapid SRT publisher replacement; repeated RTMP/SRT sink flaps show as recovered but unstable; a killed transcoder FFmpeg is retried from a new stage process | `contract` |
-| `fault.srt-output-stall` | bounded RSS while retrying a frozen SRT receiver; against `src/bin/test_harness/srt_raw_sink.rs`, a real handshake and data while siblings progress; the retired output stops and two sibling receivers keep advancing | manual only; no CI job runs it |
+| `fault.srt-output-stall` | bounded RSS while retrying a frozen SRT receiver; against `src/bin/test_harness/srt_raw_sink.rs`, a real handshake and data while siblings progress; the retired output stops and two sibling receivers keep advancing | `contract`, nightly and release shards |
 
 srt-rs exposes no hook for an application-unread receive buffer, so
 `fault.srt-output-stall` does not claim that backpressure shape.
@@ -106,7 +106,7 @@ cargo xtask concurrency contract   # CI: concurrency-contract, master only
 | All loom models | yes | yes |
 | `COMMON_TESTS`: focused API, db, lib, proptest and transcoder tests | yes | yes |
 | `FAST_ONLY_TESTS`: RTMP feed-wake, two SRT ingress Owners, health view, `test_harness` unit tests | yes | — |
-| Build `restream` and `test_harness`, run the four `CONTRACT_MODES` | — | yes |
+| Build `restream` and `test_harness`, run the five `CONTRACT_MODES` | — | yes |
 | No new `restream`, `mediamtx`, `ffmpeg`, `ffprobe` or `test_harness` process survives a mode | — | yes |
 
 `contract` logs each step to `.local/artifacts/concurrency-contract-logs/`

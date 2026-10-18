@@ -115,6 +115,10 @@ const CONTRACT_MODES: &[(&str, &str)] = &[
         "fault.output-stall",
         ".local/artifacts/concurrency-fault-output-stall",
     ),
+    (
+        "fault.srt-output-stall",
+        ".local/artifacts/concurrency-fault-srt-output-stall",
+    ),
     ("recovery", ".local/artifacts/concurrency-recovery"),
 ];
 
