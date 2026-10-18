@@ -484,6 +484,9 @@ other scheme is `400`:
   `/` and the app keeps the query
   (`rtmp://host/live2?backup=1/stream-key`). An RTMP output stored without a
   key fails at every start until its retries are exhausted.
+- SRT `latency` is the proposed TSBPD delay in milliseconds. Values outside
+  `20..=8000` or non-integers are `400`; see
+  [SRT egress URL parameters](configuration.md#recognized-srt-egress-url-parameters).
 - `moqt://host[:port][/path][?broadcast=&ca=&insecure=]` (`parse_moq_url` in
   `src/media/moq/egress/url.rs`): the port defaults to 443. `broadcast` names
   the broadcast (default: the pipeline id), `ca` names a PEM file of extra
