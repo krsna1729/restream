@@ -90,10 +90,9 @@ fn publish_until(addr: SocketAddr, done: Arc<AtomicBool>) {
         let session = transport::connect(&endpoint, addr, LOOPBACK_SERVER_NAME, tls)
             .await
             .unwrap();
-        let (origin, origin_driver) =
-            moq_net::origin::Producer::new(moq_net::origin::Config::default());
+        let (origin, origin_driver, budget) = crate::media::moq::budget::origin();
         compio::runtime::spawn(transport::run_driver(origin_driver)).detach();
-        let mut broadcast = HangBroadcast::create(&origin, "moq-key", false, true).unwrap();
+        let mut broadcast = HangBroadcast::create(&origin, budget, "moq-key", false, true).unwrap();
         let audio = AudioConfig {
             sample_rate: 48_000,
             channels: 2,

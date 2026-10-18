@@ -2,15 +2,15 @@
 //! through [`RingPublisher`] (media conversion, framing, moq-net groups),
 //! the per-broadcast work every egress leaf and origin broadcast does.
 //!
-//! moq-net reclaims published groups by a wall-clock idle window (30 s) or
-//! a byte budget. The bench publishes far faster than real time, so its
-//! origin's pool has a byte budget ([`POOL_BYTES`]): groups are evicted
-//! inline as frames are written, and memory stays bounded.
+//! The bench publishes far faster than real time, so moq-net's wall-clock
+//! idle window never reclaims anything; the production cache budget
+//! ([`crate::media::moq::budget`]) evicts inline as frames are written and
+//! keeps memory bounded.
 
 use std::sync::Arc;
 
 use bytes::{BufMut, Bytes, BytesMut};
-use moq_net::{cache, origin};
+use moq_net::origin;
 
 use crate::media::codec::build_avcc_sequence_header;
 use crate::media::egress::feed::{EgressFeed, FeedCursor, ReadBudget};
@@ -32,8 +32,6 @@ const DELTA_BYTES: usize = 12_000;
 /// AAC-LC at 48 kHz: one 1024-sample frame every 21.33 ms.
 const AUDIO_FRAMES: i64 = 94;
 const AUDIO_BYTES: usize = 370;
-/// The origin pool's byte budget: a few GOPs.
-const POOL_BYTES: u64 = 8 << 20;
 
 /// How the ring units look: what the pipeline's ingest left there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,9 +57,7 @@ pub struct PublishBench {
 impl PublishBench {
     /// H.264 (avcC known at startup) plus AAC, as `units`.
     pub fn new(units: RingUnits) -> Self {
-        let mut config = origin::Config::new(moq_net::Hop::random());
-        config.pool = cache::Pool::new(cache::Config::default().with_capacity(POOL_BYTES));
-        let (origin, driver) = origin::Producer::new(config);
+        let (origin, driver, budget) = crate::media::moq::budget::origin();
         let video = VideoConfig::from_parameter_sets(VideoCodec::H264, PARAMETER_SETS);
         let startup = MoqPublishStartup {
             video: Some(MoqVideoStartup {
@@ -80,7 +76,7 @@ impl PublishBench {
             ..MoqPublishStartup::default()
         };
         let broadcast =
-            HangBroadcast::create(&origin, "bench", true, true).expect("bench broadcast");
+            HangBroadcast::create(&origin, budget, "bench", true, true).expect("bench broadcast");
         let publisher = RingPublisher::new(MediaConverter::new(&startup), broadcast);
         let ring = Arc::new(RingBuffer::new(4096));
         let feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));

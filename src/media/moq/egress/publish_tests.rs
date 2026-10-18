@@ -15,10 +15,13 @@ const PARAMETER_SETS: &[u8] = &[
     0, 0, 0, 1, 0x67, 0x42, 0, 0x1e, 0xf4, 0x05, 1, 0xec, 0x80, 0, 0, 0, 1, 0x68, 0xce, 0x06, 0xe2,
 ];
 
-fn new_origin() -> origin::Producer {
-    let (origin, driver) = origin::Producer::new(origin::Config::new(moq_net::Hop::random()));
+/// A broadcast on its own budgeted origin, as the leaf and the origin make
+/// one; the origin is returned so it outlives the test's reads.
+fn broadcast(name: &str, video: bool, audio: bool) -> (origin::Producer, HangBroadcast) {
+    let (origin, driver, budget) = crate::media::moq::budget::origin();
     compio::runtime::spawn(transport::run_driver(driver)).detach();
-    origin
+    let broadcast = HangBroadcast::create(&origin, budget, name, video, audio).unwrap();
+    (origin, broadcast)
 }
 
 fn frame(track: TrackKind, keyframe: bool, pts_us: u64) -> HangFrame {
@@ -57,8 +60,7 @@ async fn read(group: &mut group::Consumer, count: usize) -> Vec<u64> {
 #[test]
 fn video_groups_are_gops_and_frames_before_the_first_keyframe_are_dropped() {
     run(async {
-        let origin = new_origin();
-        let mut broadcast = HangBroadcast::create(&origin, "b", true, false).unwrap();
+        let (_origin, mut broadcast) = broadcast("b", true, false);
         let mut video = subscribe(&broadcast, VIDEO_TRACK).await;
 
         assert_eq!(
@@ -97,8 +99,7 @@ fn video_groups_are_gops_and_frames_before_the_first_keyframe_are_dropped() {
 #[test]
 fn audio_groups_span_about_a_second_and_restart_on_a_backwards_jump() {
     run(async {
-        let origin = new_origin();
-        let mut broadcast = HangBroadcast::create(&origin, "b", false, true).unwrap();
+        let (_origin, mut broadcast) = broadcast("b", false, true);
         let mut audio = subscribe(&broadcast, AUDIO_TRACK).await;
 
         for pts in [5_000_000, 5_500_000, 5_999_999] {
@@ -127,8 +128,7 @@ fn audio_groups_span_about_a_second_and_restart_on_a_backwards_jump() {
 #[test]
 fn a_dropped_broadcast_ends_every_track_cleanly_after_its_media() {
     run(async {
-        let origin = new_origin();
-        let mut broadcast = HangBroadcast::create(&origin, "b", true, false).unwrap();
+        let (_origin, mut broadcast) = broadcast("b", true, false);
         let mut video = subscribe(&broadcast, VIDEO_TRACK).await;
         let mut catalog = subscribe(&broadcast, CATALOG_TRACK).await;
         assert_eq!(
@@ -174,7 +174,7 @@ async fn next_catalog(catalog: &mut track::Subscriber) -> hang::Catalog {
 #[test]
 fn the_ring_publisher_publishes_the_catalog_first_and_again_on_a_new_record() {
     run(async {
-        let origin = new_origin();
+        let (_origin, broadcast) = broadcast("b", true, false);
         let startup = MoqPublishStartup {
             video: Some(MoqVideoStartup {
                 codec: VideoCodec::H264,
@@ -182,7 +182,7 @@ fn the_ring_publisher_publishes_the_catalog_first_and_again_on_a_new_record() {
             }),
             ..MoqPublishStartup::default()
         };
-        let broadcast = HangBroadcast::create(&origin, "b", true, false).unwrap();
+
         let mut catalog = subscribe(&broadcast, CATALOG_TRACK).await;
         let mut video = subscribe(&broadcast, VIDEO_TRACK).await;
         let mut publisher = RingPublisher::new(MediaConverter::new(&startup), broadcast);
@@ -245,9 +245,8 @@ fn the_ring_publisher_publishes_the_catalog_first_and_again_on_a_new_record() {
 #[test]
 fn a_cursor_the_ring_overwrote_is_an_overrun_and_live_start_is_a_keyframe() {
     run(async {
-        let origin = new_origin();
         let startup = MoqPublishStartup::default();
-        let broadcast = HangBroadcast::create(&origin, "b", false, false).unwrap();
+        let (_origin, broadcast) = broadcast("b", false, false);
         let mut publisher = RingPublisher::new(MediaConverter::new(&startup), broadcast);
         let ring = Arc::new(RingBuffer::new(4));
         let feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
@@ -262,5 +261,50 @@ fn a_cursor_the_ring_overwrote_is_an_overrun_and_live_start_is_a_keyframe() {
             "an overrun leaves the cursor for the caller"
         );
         assert_eq!(live_start(&feed).next_sequence, 7);
+    });
+}
+
+/// A `size`-byte frame at `pts_us`.
+fn sized(track: TrackKind, keyframe: bool, pts_us: u64, size: usize) -> HangFrame {
+    HangFrame {
+        track,
+        keyframe,
+        pts_us,
+        data: Bytes::from(vec![0xAB; size]),
+    }
+}
+
+#[test]
+fn sustained_writes_keep_the_origin_cache_within_about_two_gops() {
+    run(async {
+        let (_origin, mut broadcast) = broadcast("b", true, true);
+        // 2 s GOPs at 30 fps (60 kB keyframe, 12 kB deltas) and AAC
+        // (370 B every 21.33 ms): 16 s at a time would be 6 MB.
+        const GOPS: u64 = 40;
+        let gop_bytes = (60_000 + 59 * 12_000 + 94 * 370) as u64;
+        for gop in 0..GOPS {
+            let start = gop * 2_000_000;
+            for index in 0..60 {
+                let size = if index == 0 { 60_000 } else { 12_000 };
+                let pts = start + index * 1_000_000 / 30;
+                assert_eq!(
+                    broadcast.write(sized(TrackKind::Video, index == 0, pts, size)),
+                    Ok(true)
+                );
+            }
+            for index in 0..94 {
+                let pts = start + index * 1024 * 1_000_000 / 48_000;
+                assert_eq!(
+                    broadcast.write(sized(TrackKind::Audio, true, pts, 370)),
+                    Ok(true)
+                );
+            }
+            let used = broadcast.budget.used();
+            assert!(
+                used <= 3 * gop_bytes,
+                "after GOP {gop} the cache holds {used} bytes, over three GOPs ({})",
+                3 * gop_bytes
+            );
+        }
     });
 }

@@ -321,10 +321,9 @@ fn a_loopback_publisher_reaches_the_ring_and_shutdown_releases_it() {
     run(async {
         let loopback = Loopback::new().await;
         let (client, accepted) = loopback.native().await;
-        let (origin, origin_driver) =
-            moq_net::origin::Producer::new(moq_net::origin::Config::default());
+        let (origin, origin_driver, budget) = crate::media::moq::budget::origin();
         let mut broadcast =
-            HangBroadcast::create(&origin, "tenant/moq-key.hang", false, true).unwrap();
+            HangBroadcast::create(&origin, budget, "tenant/moq-key.hang", false, true).unwrap();
         let audio = AudioConfig {
             sample_rate: 48_000,
             channels: 2,
