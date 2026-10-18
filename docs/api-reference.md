@@ -495,6 +495,8 @@ other scheme is `400`:
   starts at the newest segment, PUTs each new segment, then PUTs a playlist
   of the last three acknowledged segments (media sequence from 0 per
   attempt). On stop it PUTs a final playlist ending in `#EXT-X-ENDLIST`.
+  The rules follow the YouTube HLS ingestion guide and the Akamai MSL HTTP
+  ingest requirements (`src/media/hls/upload_policy.rs` module doc).
 
 ### Output lifecycle
 

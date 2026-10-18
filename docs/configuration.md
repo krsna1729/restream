@@ -123,7 +123,7 @@ the output fails. There is no userspace-TLS fallback.
 | `RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD` | `0` (off) | `0..=10000` | When set, a new shared TS muxer shard is created as each pipeline+encoding cohort crosses this many outputs |
 | `RESTREAM_SRT_EGRESS_MUXER_MAX_SHARDS` | `64` | `1..=64` | Muxer shard limit; beyond it new outputs join the least-loaded shard (warning logged) |
 | `RESTREAM_TS_RING_CAPACITY` | `256` chunks | `32..=16384` | Shared SRT TS ring between muxer and socket write |
-| `RESTREAM_SRT_UDP_BUF_BYTES` | unset | positive bytes | UDP socket buffer for ingress and egress Owners (`src/media/srt/knobs.rs`). Unset: egress requests 8 MiB, ingress uses the transport default |
+| `RESTREAM_SRT_UDP_BUF_BYTES` | unset | positive bytes | UDP socket buffer for ingress and egress Owners (`src/media/srt/knobs.rs`). Unset: 8 MiB (`DESIRED_UDP_BUF`) for ingress and egress Owner sockets |
 | `RESTREAM_SRT_RECV_BUDGET_DATAGRAMS` | unset | positive | Test-harness SRT sinks only (`src/media/srt/knobs.rs`); production Owner work is bounded by `OwnerServiceBudget` |
 
 ### HLS

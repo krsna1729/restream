@@ -38,7 +38,7 @@ flowchart LR
     Gate["InputPacketGate<br/>+ StandbyGopCache"] --> Source[("source RingBuffer")]
     Source --> Stages["shared stages<br/>FFmpeg child or AudioRouter"]
     Stages --> StageRing[("stage output RingBuffer")]
-    Source --> Fabric["egress fabric shards<br/>egress-N"]
+    Source --> Fabric["egress fabric shards<br/>egress-shard-N"]
     StageRing --> Fabric
     Source --> Preview["HLS fMP4 preview"]
     Source --> Origin["MoQ origin pump"]
@@ -373,7 +373,7 @@ with one Compio runtime; the protocol engine and the socket workers share it.
 ```mermaid
 flowchart LR
     Ring[("output RingBuffer")] --> Feed["RingFeed"]
-    Feed --> Backend["RtmpShardBackend<br/>(egress-N)"]
+    Feed --> Backend["RtmpShardBackend<br/>(egress-shard-N)"]
     Backend --> Engine["RtmpFabricEngine<br/>Handshaking, Negotiating, Publishing"]
     Engine --> Cache["RtmpPayloadCache<br/>Raw to FLV, shared per shard"]
     Engine --> Tls["TlsTcpConnection<br/>plain, or Rustls then kTLS"]
@@ -469,7 +469,6 @@ lifecycle and probe events (dotted).
 | `RESTREAM_SRT_PORT` | 10080 | invalid values fall back to the default |
 | `RESTREAM_SRT_INGRESS_OWNERS` | 1 | clamp 1–CPU count |
 | `RESTREAM_SRT_UDP_BUF_BYTES` | 8 MiB | socket buffer request, ingress and egress |
-| `RESTREAM_SRT_RECV_BUDGET_DATAGRAMS` | upstream default | receive budget per visit |
 | `RESTREAM_SRT_MAX_PEERS_PER_IP` | 64 | clamp 1–4096 |
 | `RESTREAM_SRT_INGRESS_WINDOW_MEMORY_BYTES` | available memory / 4 / owners | 0 disables |
 | `RESTREAM_SRT_PASSPHRASE`, `RESTREAM_SRT_PBKEYLEN` | unset, 16 | used only when no SRT ingest config is saved |
@@ -521,7 +520,7 @@ its chunks through one owner per shard and address family.
 flowchart LR
     Ring[("output RingBuffer")] --> Mux["start_shared_ts_muxer<br/>TsMuxer (restream-media)"]
     Mux --> Chunks[("TsChunkRing")]
-    Chunks --> Leaf["SrtShardBackend<br/>SrtFabricLeaf (egress-N)"]
+    Chunks --> Leaf["SrtShardBackend<br/>SrtFabricLeaf (egress-shard-N)"]
     Leaf --> Engine["SrtEgressEngine<br/>1316-byte messages"]
     Engine --> Owners["SrtOwners<br/>one Owner per family"]
     Owners --> Udp["shared caller UDP socket"]
@@ -715,7 +714,7 @@ starts it on its own ring, and later HLS outputs of the pipeline share it.
 flowchart LR
     Ring[("output RingBuffer")] --> Seg["run_hls_segmenter<br/>TsPacketFeeder"]
     Seg --> Store[("HlsStore")]
-    Store --> Backend["HlsPutShardBackend<br/>UploadPolicy (egress-N)"]
+    Store --> Backend["HlsPutShardBackend<br/>UploadPolicy (egress-shard-N)"]
     Backend --> Poller["CompioTcpPoller"]
     Store --> Reqwest["start_hls_put_upload<br/>reqwest (https without kTLS)"]
     Poller --> Dest["HTTP origin"]
@@ -918,7 +917,7 @@ QUIC.
 
 ```mermaid
 flowchart LR
-    Ring[("output RingBuffer")] --> Backend["MoqShardBackend<br/>(egress-N)"]
+    Ring[("output RingBuffer")] --> Backend["MoqShardBackend<br/>(egress-shard-N)"]
     Backend --> Engine["MoqEngine"]
     Engine --> Convert["MediaConverter<br/>Raw or FLV to hang frames"]
     Convert --> Publish["RingPublisher<br/>catalog on config change"]
@@ -933,7 +932,7 @@ The diagram shows one MoQ output from its ring to the relay.
   default port 443, no userinfo (`src/media/moq/egress/url.rs`). `PATH` and
   every other query pair form the session path sent to the relay.
   `broadcast` defaults to the pipeline id.
-- **Thread.** Each output is a leaf on a MoQ fabric shard (`egress-N`); its
+- **Thread.** Each output is a leaf on a MoQ fabric shard (`egress-shard-N`); its
   Compio runtime owns the connection and the session
   (`src/media/engine_moq_egress_fabric.rs`). Startup metadata and the `ca`
   file are prepared on Tokio.
@@ -960,7 +959,7 @@ standby: it forwards nothing until an operator promotes it.
 
 ```mermaid
 flowchart LR
-    RingA[("pipeline A RingBuffer")] --> Leaf["PipelineShardBackend<br/>PipelineFabricLeaf (egress-N)"]
+    RingA[("pipeline A RingBuffer")] --> Leaf["PipelineShardBackend<br/>PipelineFabricLeaf (egress-shard-N)"]
     Leaf --> Engine["PipelineEngine"]
     Engine --> Pub["RecirculationInputPublisher"]
     Pub -->|"standby"| Gop["StandbyGopCache"]
