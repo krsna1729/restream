@@ -26,6 +26,9 @@ For the performance optimization plan and benchmark results, see
 - [SRT ingress owner](#srt-ingress-owner)
 - [HLS push ingest](#hls-push-ingest)
 - [HLS pull ingest](#hls-pull-ingest)
+- [MoQ ingest](#moq-ingest)
+- [MoQ egress](#moq-egress)
+- [MoQ origin](#moq-origin)
 - [Protocol correctness requirements](#protocol-correctness-requirements)
 
 ## Current shape
@@ -1041,6 +1044,125 @@ path's; the puller only decides what to fetch.
   the assembler runs on the MEDIA executor.
 - **Known limits.** One audio rendition is followed: a group's other members
   (other languages) are not.
+
+## MoQ ingest
+
+A publisher pushes a live stream over Media over QUIC (moq-lite 03–06 with the
+hang media format: `catalog.json` plus one track per rendition), by native QUIC
+or by HTTP/3 WebTransport on the same UDP port. Off unless
+`RESTREAM_MOQ_INGEST_LISTEN` is set ([configuration](configuration.md)); an
+invalid setting is logged as `restream.moq.ingest.config_invalid` and nothing
+MoQ runs. RTMP, SRT and HLS ingest are unaffected either way.
+
+- **Thread.** One OS thread, `moq-ingest`, with its own Compio runtime owns
+  the endpoint, every connection, frame conversion and the ring push. Tokio
+  only authenticates, registers the input, applies the probe and records the
+  disconnect; the listener awaits those answers over oneshot channels and
+  never blocks. `RESTREAM_MOQ_MAX_CONNECTIONS` caps concurrent handshakes and
+  publishers; further handshakes are refused. An admitted viewer leaves that
+  count (the origin's viewer cap bounds viewers).
+- **Transport.** The ALPN picks the wire: `moq-lite-06`…`03` is native QUIC;
+  `h3` is WebTransport over HTTP/3, whose CONNECT must offer one of those
+  moq-lite versions as subprotocol (else `400` and close `0x10b`). CONNECT
+  headers are bounded to 64 KiB and decoded so malformed input closes the
+  connection (`0x10e`) instead of panicking; streams for another session or
+  of unknown type are stopped. The whole handshake is bounded to 10 s.
+- **Routing.** After the transport handshake and the moq-lite SETUP, a
+  connection that carries an origin `token` (WebTransport query or SETUP path
+  query) or declares the subscriber role is served by the MoQ origin; any
+  other is a publisher.
+- **Stream key.** The connection path's last segment names the input, query
+  dropped; when the path is empty, the publisher's first announced broadcast
+  names it instead (its last segment, a trailing `.hang` removed). So
+  `https://<host>:<port>/<streamKey>` works whatever the broadcast is called,
+  and `https://<host>:<port>/` works with broadcast `<streamKey>`. The key is checked
+  under the `moq-publish` scope (bans, rate limits) and registers the input
+  attempt as protocol `moq`; an unknown key, a ban or an input that already
+  has a publisher closes the session with that reason.
+- **Tracks.** From the catalog Restream takes the best-ranked H.264 or H.265
+  rendition (ring track 0) and up to eight AAC renditions (ring audio tracks
+  in catalog order); every other rendition is logged
+  (`restream.moq.ingest.track_rejected`) and not subscribed. A catalog with
+  none of these ends the session. Only the first catalog is read: a later
+  catalog update (new codec configuration or tracks) is ignored, so a
+  publisher that changes renditions mid-session must reconnect.
+- **Frames.** Legacy frames (varint µs timestamp, then the payload) become the
+  packets a TS input carries: video as Annex B, with the last parameter sets
+  inserted ahead of a keyframe that lacks them (avcC/hvcC from the catalog, or
+  in band for avc3/hev1); keyframes are IDR (H.264) or IRAP (H.265) pictures;
+  AAC gets an ADTS header. hang carries presentation time only, so decode
+  time trails it by the catalog's `jitter` and never goes back. CMAF tracks
+  go through the HLS-push fMP4 demux, which carries real decode times.
+- **Publication.** Identical to SRT ingest after demux: preview ring, input
+  gate, timestamp mapping, standby GOP and probe metadata. Packets are held
+  (bounded by bytes and time) while the probe resizes the ring.
+- **Bounds.** Each ends the session with a reason (logged as
+  `restream.moq.ingest.session_ended` and recorded as the input's
+  disconnect): no moq-lite SETUP within 10 s of the transport handshake, no
+  announcement within 10 s, no catalog within 10 s, no frame
+  for 20 s, a frame over 16 MiB, or 64 malformed frames in a row (a single
+  malformed frame is dropped). Peer input never panics the engine.
+- **Shutdown.** The listener stops with the engine: the endpoint closes,
+  sessions get a second to close cleanly, and any left are dropped with their
+  input released.
+
+## MoQ egress
+
+A `moqt://HOST[:PORT][/PATH][?broadcast=NAME&ca=FILE&insecure=1]` output
+publishes the pipeline to a moq-lite relay (moq-lite 03–06 with the hang
+format) over native QUIC. `PATH` and every query pair other than Restream's
+own three keys form the session path sent to the relay (e.g. `/anon?jwt=…`);
+`broadcast` names the announced broadcast (default: the pipeline id); `ca`
+adds a PEM file of trusted CAs and `insecure=1` skips certificate checks.
+
+- **Thread.** Outputs run as leaves of an egress-fabric shard whose Compio
+  runtime owns every connection: per leaf one local task connects, runs the
+  moq-lite client and drives the session. The shard visits the leaf within
+  its work budget to read the ring and write frames; nothing runs on Tokio.
+- **Media.** The startup snapshot (ring configuration or ingest sequence
+  header) gives the catalog its avcC/hvcC record and AAC config, so frames
+  carry no parameter sets. Video and audio are hang legacy frames with µs
+  timestamps. FLV rings (RTMP ingest) are rewritten to length-prefixed
+  NAL units; Raw rings (SRT/TS, MoQ ingest) take the configuration the ring
+  recorded for the frame's generation, or the keyframe's in-band sets, and
+  ADTS audio is split per AAC frame. A changed record (new generation, FLV
+  sequence header or AAC config) republishes `catalog.json` before the next
+  frame. Video waits for its first configuration and keyframe.
+- **Groups.** A video group is one GOP (a keyframe opens it). An audio group
+  spans about one second and restarts when time goes backwards. Media
+  tracks keep only their newest group, so a late subscriber joins at the
+  current GOP and a slow relay skips whole old groups; the ring cursor never
+  lags, so this is the output's backpressure.
+- **Lifecycle.** A refused or failed connection, a relay close, or an
+  unusable URL or startup terminates the output unexpectedly and the usual
+  output retry runs; a dead relay is caught by the QUIC idle timeout. A
+  removed output finishes the broadcast, drains the session for a bounded
+  time, then closes it with code 0.
+- **Loom.** The egress shares no state across threads beyond the fabric's
+  feed wake (`egress_feed_wake_loom`); it needs no model of its own.
+
+## MoQ origin
+
+The MoQ ingest listener also serves pipelines to direct subscribers (a
+browser player over WebTransport, or a moq-lite client over native QUIC).
+
+- **Admission.** A subscriber presents a token minted by
+  [`POST /api/v1/pipelines/{id}/moq-token`](api-reference.md#post-apiv1pipelinespipelineidmoq-token)
+  as `?token=` on the WebTransport URL or in the moq-lite SETUP path. The
+  token is `v1.<pipeline>.<expiry>.<HMAC-SHA256>` under a key generated at
+  process start, admits only its own pipeline, and must be used within
+  60 seconds of minting. A missing, forged or expired token is refused as
+  unauthorized. At most `RESTREAM_MOQ_ORIGIN_MAX_VIEWERS` (default 64)
+  viewers play at once across all pipelines; the next is refused with
+  application error 1.
+- **Serving.** The first viewer of a pipeline starts one broadcast, named
+  by the pipeline id, fed from the pipeline's ring by a task on the listener
+  thread. The task uses the egress mapping and grouping above, reads in
+  bounded batches, and sleeps until the ring publishes. Viewers of the same
+  pipeline share it; when the last leaves, the task stops. Each viewer
+  sees only its pipeline's broadcast.
+- **Loom.** `moq_origin_loom` models the viewer cap under concurrent
+  admission and the ring-to-pump wake.
 
 ## Protocol correctness requirements
 

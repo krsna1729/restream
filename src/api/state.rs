@@ -52,6 +52,8 @@ pub struct PortConfig {
     pub http: u16,
     pub rtmp: u16,
     pub srt: u16,
+    /// The MoQ ingest listener's UDP port; `None` while MoQ ingest is off.
+    pub moq: Option<u16>,
 }
 
 impl PortConfig {
@@ -60,6 +62,7 @@ impl PortConfig {
             http: self.http,
             rtmp: self.rtmp,
             srt: self.srt,
+            moq: self.moq,
         }
     }
 }
@@ -72,6 +75,10 @@ pub struct AppStateRuntimeConfig {
     pub srt_passphrase: Option<String>,
     pub srt_pbkeylen: i32,
     pub secure_session_cookies: bool,
+    /// Hex SHA-256 of the MoQ listener's leaf certificate, read once at
+    /// startup as the listener reads it: viewer grants carry it so a browser
+    /// can pin a short-lived self-signed certificate.
+    pub moq_certificate_sha256: Option<String>,
 }
 
 impl Default for AppStateRuntimeConfig {
@@ -88,12 +95,18 @@ impl From<&AppConfig> for AppStateRuntimeConfig {
                 http: config.ports.http,
                 rtmp: config.ports.rtmp,
                 srt: config.ports.srt,
+                moq: config.ports.moq,
             },
             media_dir: config.media_dir.clone(),
             db_path: config.db_path.clone(),
             srt_passphrase: config.srt_passphrase.clone(),
             srt_pbkeylen: config.srt_pbkeylen,
             secure_session_cookies: config.secure_session_cookies,
+            moq_certificate_sha256: config
+                .moq_ingest
+                .config()
+                .and_then(|moq| std::fs::read(&moq.tls_cert_path).ok())
+                .and_then(|pem| crate::media::moq::tls::leaf_sha256_hex(&pem)),
         }
     }
 }
@@ -108,6 +121,8 @@ pub struct AppState {
     pub db: SqlitePool,
     pub ingest_disconnect_grace_ms: u64,
     pub ports: PortConfig,
+    /// See [`AppStateRuntimeConfig::moq_certificate_sha256`].
+    pub moq_certificate_sha256: Option<String>,
     pub media_dir: String,
     pub db_path: String,
     srt_passphrase: Option<String>,
@@ -174,6 +189,7 @@ impl AppState {
             db,
             ingest_disconnect_grace_ms: runtime.ingest_disconnect_grace_ms,
             ports: runtime.ports,
+            moq_certificate_sha256: runtime.moq_certificate_sha256,
             media_dir: runtime.media_dir,
             db_path: runtime.db_path,
             srt_passphrase: runtime.srt_passphrase,

@@ -437,9 +437,70 @@ pub async fn pipeline_probe_handler(
     }
 }
 
+/// Mints a short-lived viewer token for the pipeline's MoQ origin broadcast
+/// (`POST /api/v1/pipelines/{pipeline_id}/moq-token`). The token starts a
+/// session for at most 60 seconds; the URL is the listener's WebTransport
+/// address with the token in its query, and the broadcast is the pipeline id.
+/// `certificateSha256` lets a browser pin a short-lived self-signed listener
+/// certificate when normal certificate checks fail.
+pub async fn pipeline_moq_token_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(pipeline_id): Path<String>,
+) -> impl IntoResponse {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
+    }
+    let Some(port) = state.ports.moq else {
+        return (StatusCode::CONFLICT, "The MoQ listener is off").into_response();
+    };
+    if let Err(error) = state.pipeline_service.get_by_id(&pipeline_id).await {
+        return ApiError::from(error).into_response();
+    }
+    let ingest_host = state.pipeline_service.get_ingest_host().await;
+    let (token, expires_at) = crate::media::moq::origin::mint_token(&pipeline_id);
+    Json(moq_token_response(
+        &ingest_host,
+        port,
+        &pipeline_id,
+        &token,
+        expires_at,
+        state.moq_certificate_sha256.as_deref(),
+    ))
+    .into_response()
+}
+
+fn moq_token_response(
+    host: &str,
+    port: u16,
+    pipeline_id: &str,
+    token: &str,
+    expires_at_secs: u64,
+    certificate_sha256: Option<&str>,
+) -> serde_json::Value {
+    let host = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    };
+    let expires_at = i64::try_from(expires_at_secs)
+        .ok()
+        .and_then(|secs| chrono::DateTime::from_timestamp(secs, 0))
+        .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    serde_json::json!({
+        "token": token,
+        "url": format!("https://{host}:{port}/?token={token}"),
+        "broadcast": pipeline_id,
+        "expiresAt": expires_at,
+        "certificateSha256": certificate_sha256,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{PipelinePayload, requested_stream_key, validate_pipeline_payload};
+    use super::{
+        PipelinePayload, moq_token_response, requested_stream_key, validate_pipeline_payload,
+    };
     use axum::http::StatusCode;
 
     fn payload_with_name(name: &str) -> PipelinePayload {
@@ -467,5 +528,17 @@ mod tests {
         let response = validate_pipeline_payload(&payload_with_name("   "))
             .expect("blank names should be rejected");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn the_moq_token_response_names_the_webtransport_url_broadcast_and_expiry() {
+        let response =
+            moq_token_response("10.0.0.5", 4443, "pipe-1", "v1.x.1.y", 1_800_000_060, None);
+        assert_eq!(response["token"], "v1.x.1.y");
+        assert_eq!(response["url"], "https://10.0.0.5:4443/?token=v1.x.1.y");
+        assert_eq!(response["broadcast"], "pipe-1");
+        assert_eq!(response["expiresAt"], "2027-01-15T08:01:00Z");
+        let ipv6 = moq_token_response("::1", 4443, "pipe-1", "t", 0, None);
+        assert_eq!(ipv6["url"], "https://[::1]:4443/?token=t");
     }
 }

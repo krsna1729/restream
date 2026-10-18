@@ -331,7 +331,10 @@ input's `ingestUrls` holds its `rtmp` and `srt` URLs and its `hls` push
 playlist URL (`http://HOST:PORT/ingest/hls/KEY/index.m3u8`, with the ingest
 host and the HTTP port: it assumes the listener is reached directly, so behind
 a TLS proxy or a path prefix the encoder needs the proxy's scheme, host and
-prefix instead); a pull input accepts no pushes, so its `ingestUrls` is
+prefix instead), and `moq`: `moqt://HOST:PORT/KEY` with the MoQ ingest
+listener's UDP port while `RESTREAM_MOQ_INGEST_LISTEN` is set, else `null`
+(MoQ publishes authenticate the key under the `moq-publish` rate-limit
+scope); a pull input accepts no pushes, so its `ingestUrls` is
 `null`. `sourceUrl`, `variantRule`, `authKind`, and `authUsername` are always
 present (a keyed input has `sourceUrl: null`, `variantRule:
 "highestBandwidth"`, and `authKind: "none"`).
@@ -585,6 +588,22 @@ RTMP and SRT inputs run the transport-oriented checks documented in
 [Observability](observability.md). File inputs switch to file-aware checks:
 source-file presence and analysis, file-ingest runtime state, and preview /
 recording readiness.
+
+### `POST /api/v1/pipelines/:pipelineId/moq-token`
+
+Mints a viewer token for the pipeline's broadcast on the
+[MoQ origin](media-pipeline.md#moq-origin). The POST has no request body.
+Returns `{token, url, broadcast, expiresAt, certificateSha256}`: `url` is the
+MoQ listener's WebTransport address (`https://HOST:PORT/?token=…`),
+`broadcast` is the pipeline id, and `expiresAt` (RFC 3339) is when the token
+stops admitting new sessions, 60 seconds after minting; a session already
+admitted keeps playing. `certificateSha256` is the hex SHA-256 of the
+listener's leaf certificate as read at startup (`null` if unreadable); a
+browser pins it (WebTransport `serverCertificateHashes`) only when normal
+certificate checks fail, which works for a self-signed certificate valid for
+at most 14 days. A token admits only its own pipeline and is signed with a key
+generated at process start, so a restart invalidates outstanding tokens.
+Returns `404` for an unknown pipeline and `409` when the MoQ listener is off.
 
 ## Agent Plane
 

@@ -12,7 +12,9 @@
 use std::fmt;
 
 pub(crate) mod egress;
+pub(crate) mod ingest;
 pub(crate) mod media;
+pub(crate) mod origin;
 pub(crate) mod tls;
 pub(crate) mod transport;
 

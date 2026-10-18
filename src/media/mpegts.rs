@@ -26,6 +26,14 @@ pub(crate) fn hevc_video_meta(annex_b: &[u8]) -> VideoMeta {
     meta
 }
 
+/// The H.264 counterpart of [`hevc_video_meta`]: what a TS input's H.264
+/// probe reports from Annex B bytes that carry the SPS.
+pub(crate) fn h264_video_meta(annex_b: &[u8]) -> VideoMeta {
+    let mut meta = mpegts_probe::probe_video(StreamKind::H264, 0, None, None, annex_b);
+    meta.pid = None;
+    meta
+}
+
 pub fn remux_segment_view(
     segment: &[u8],
     video: Option<&VideoMeta>,

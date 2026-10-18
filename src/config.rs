@@ -8,6 +8,9 @@ use crate::capacity::{CapacityLimits, HostCapacity, LimitSource, LimitSources};
 use crate::media::egress::policy::WorkBudgetConfig;
 use crate::media::egress::shard::EgressShardConfig;
 
+mod moq;
+pub use moq::{MoqIngestConfig, MoqIngestSetting};
+
 /// Default location for media-library files relative to the process working directory.
 ///
 /// Keep this as the single source of truth: tests and harness fallbacks use the same
@@ -20,6 +23,8 @@ pub struct ServerPorts {
     pub http: u16,
     pub rtmp: u16,
     pub srt: u16,
+    /// The MoQ ingest listener's UDP port, when `AppConfig::moq_ingest` is on.
+    pub moq: Option<u16>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -373,6 +378,7 @@ pub struct AppConfig {
     pub initial_admin_password: Option<String>,
     pub secure_session_cookies: bool,
     pub rtmps_extra_trust_roots_pem_path: Option<String>,
+    pub moq_ingest: MoqIngestSetting,
 }
 
 /// Every configuration read of the environment goes through here (tests
@@ -582,6 +588,7 @@ impl ServerPorts {
             http: env_port("RESTREAM_HTTP_PORT", 3030),
             rtmp: env_port("RESTREAM_RTMP_PORT", 1935),
             srt: env_port("RESTREAM_SRT_PORT", 10080),
+            moq: None,
         }
     }
 }
@@ -641,6 +648,7 @@ impl Default for AppConfig {
             http: 3030,
             rtmp: 1935,
             srt: 10080,
+            moq: None,
         };
         let tuning = RuntimeTuning::default();
         let tokio_runtime = TokioRuntimeConfig::default();
@@ -699,13 +707,18 @@ impl Default for AppConfig {
             initial_admin_password: None,
             secure_session_cookies: false,
             rtmps_extra_trust_roots_pem_path: None,
+            moq_ingest: MoqIngestSetting::Off,
         }
     }
 }
 
 impl AppConfig {
     pub fn from_env() -> Self {
-        let ports = ServerPorts::from_env();
+        let moq_ingest = MoqIngestSetting::from_env();
+        let ports = ServerPorts {
+            moq: moq_ingest.port(),
+            ..ServerPorts::from_env()
+        };
         let http_bind_addr =
             env_var("RESTREAM_HTTP_BIND_ADDR").unwrap_or_else(|| "127.0.0.1".to_string());
         let tuning = RuntimeTuning::from_env();
@@ -874,6 +887,7 @@ impl AppConfig {
             initial_admin_password,
             secure_session_cookies,
             rtmps_extra_trust_roots_pem_path,
+            moq_ingest,
         }
     }
 
@@ -883,6 +897,7 @@ impl AppConfig {
                 "http": self.ports.http,
                 "rtmp": self.ports.rtmp,
                 "srt": self.ports.srt,
+                "moq": self.ports.moq,
                 "httpBindAddr": self.http_bind_addr,
             },
             "tuning": {
@@ -971,6 +986,7 @@ impl AppConfig {
                 "streamBufferBytes": self.rtmp_stream_buffer_bytes,
                 "egressChunkSize": self.rtmp_egress_chunk_size,
             },
+            "moq": self.moq_ingest.summary(),
         })
     }
 }

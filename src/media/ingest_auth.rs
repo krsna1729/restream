@@ -14,6 +14,7 @@ pub enum PipelineAccessMode {
     SrtPublish,
     SrtRead,
     HlsPublish,
+    MoqPublish,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

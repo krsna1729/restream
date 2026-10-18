@@ -27,7 +27,7 @@ use crate::media::standby_gop::StandbyGopCache;
 use crate::media::ts_chunk_ring::TsChunkReader;
 
 #[path = "ingest_packets.rs"]
-mod ingest_packets;
+pub(super) mod ingest_packets;
 
 pub(crate) const SRT_MESSAGE_PAYLOAD_MAX: usize = 1316;
 

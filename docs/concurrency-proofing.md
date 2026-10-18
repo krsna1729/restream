@@ -43,6 +43,9 @@ Use the narrowest proof that can actually catch the bug:
        overwrote the slot before moving the write index)
      - `ring_migration_loom`
      - `input_selection_loom`
+     - `moq_origin_loom` (the MoQ origin's viewer cap never admits past its
+       maximum and every release frees its slot; the ring-to-pump wake over a
+       one-slot channel loses no publication)
      - `ts_chunk_ring_loom`
      - `ts_muxer_stage_loom`
      - `transcoder_stage_loom`

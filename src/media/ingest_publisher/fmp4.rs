@@ -91,21 +91,32 @@ impl AdtsConfig {
         })
     }
 
-    fn sample_rate(self) -> u32 {
+    /// The 7-byte ADTS header for a raw frame of `frame_len` bytes; `None`
+    /// above [`crate::media::codec::MAX_ADTS_PAYLOAD`].
+    pub(crate) fn adts_header(self, frame_len: usize) -> Option<[u8; 7]> {
+        build_adts_header_for(
+            frame_len,
+            self.object_type,
+            self.freq_index,
+            self.channel_config,
+        )
+    }
+
+    pub(crate) fn sample_rate(self) -> u32 {
         AAC_SAMPLE_RATES
             .get(usize::from(self.freq_index))
             .copied()
             .unwrap_or_default()
     }
 
-    fn channels(self) -> u32 {
+    pub(crate) fn channels(self) -> u32 {
         match self.channel_config {
             7 => 8,
             channels => u32::from(channels),
         }
     }
 
-    fn profile(self) -> &'static str {
+    pub(crate) fn profile(self) -> &'static str {
         match self.object_type {
             1 => "Main",
             2 => "LC",
