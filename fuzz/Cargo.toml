@@ -17,8 +17,9 @@ restream = { path = ".." }
 [workspace]
 members = ["."]
 
-# Same patched RTMP crate as the root workspace (a [patch] is not inherited).
+# Same patched crates as the root workspace (a [patch] is not inherited).
 [patch.crates-io]
+hang = { path = "../vendor/hang" }
 rml_rtmp = { path = "../vendor/rml_rtmp" }
 
 [[bin]]

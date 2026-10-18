@@ -4,10 +4,10 @@
 //! A panic while handling one entity must end only that entity: the thread
 //! that serves many of them keeps running. Each boundary sits at the single
 //! seam where the entity's bytes enter (`egress::visit::visit_leaf`, the RTMP
-//! connection future, the SRT ingress per-peer media step) and turns a panic
-//! into that entity's failure. State shared with other entities must be safe
-//! to observe after an unwind there: atomics, poison-tolerant locks, and
-//! per-entity state that is dropped with the entity.
+//! connection future, the SRT ingress per-peer media step, the MoQ publisher's
+//! catalog read) and turns a panic into that entity's failure. State shared
+//! with other entities must be safe to observe after an unwind there: atomics,
+//! poison-tolerant locks, and per-entity state that is dropped with the entity.
 
 use std::any::Any;
 

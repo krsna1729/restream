@@ -401,3 +401,25 @@ fn a_silent_publisher_is_cut_off_after_the_idle_bound() {
         assert!(started.elapsed() >= Duration::from_millis(50));
     });
 }
+
+/// hang parses the catalog from peer bytes; a panic in it ends the session
+/// as a protocol violation instead of unwinding the session task.
+#[test]
+fn a_panicking_catalog_parser_ends_the_session_as_a_protocol_violation() {
+    let end = crate::test_support::with_expected_panic_suppressed(|| {
+        crate::media::moq::transport::test_support::run(first_catalog(
+            std::future::poll_fn(
+                |_| -> std::task::Poll<hang::Result<Option<hang::Catalog>>> {
+                    panic!("end byte index 2 is not a char boundary")
+                },
+            ),
+            Duration::from_secs(1),
+        ))
+    })
+    .unwrap_err();
+    assert!(matches!(end.error, Error::ProtocolViolation), "{end:?}");
+    assert_eq!(
+        end.reason,
+        "catalog.json: the parser panicked: end byte index 2 is not a char boundary"
+    );
+}

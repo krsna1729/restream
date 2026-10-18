@@ -1542,8 +1542,6 @@ dependencies = [
 [[package]]
 name = "hang"
 version = "0.21.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7b4732cece6ac98cadf7ceef6b9846c714d88008bcdbb69100e5c37f8d55b80"
 dependencies = [
  "bytes",
  "derive_more",

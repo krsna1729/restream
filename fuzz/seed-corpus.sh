@@ -74,3 +74,8 @@ video='\x00\x00\x00\x00\x01\x67\x42\x00\x1e\xf4\x05\x01\xec\x80\x00\x00\x00\x01\
   printf '%s' "$catalog"
   printf '\x00\x00\x1e'; printf "$video"
   printf '\x01\x00\x05\x00\x21\x10\x05\x00'; } > "$out/seed-av"
+
+# The catalog that panicked hang 0.21.16's H.264 codec parser (`avc1.4Ψ01e`
+# is six bytes but five characters), from the CI fuzz smoke crash.
+printf '%s' 'AQt7InZpZGVvIjp7InJlbmRpdGlvbnMiOnsiK3ZpZGVvIjp7ImNvZGVjIjoiYXZjMS40zqgwMWUiLCJjb2RlZFdpZHRoIjo2NCwiY29kZWRIZWlnaHQiOjM2LCJmcmE7ZXJhdGUiAAAAAACQADA6eyJraW5kIjoibGVvYWN5In19fXssIm51bWJlck9mQ2hhBwBubmVscyI69////2VzY2FyY2hpdmU6OiIwNTk1IiwiY29udGFpbg==' \
+  | base64 -d > "$out/regression-h264-non-ascii-codec"

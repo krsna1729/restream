@@ -11,6 +11,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::net::SocketAddr;
+use std::panic::AssertUnwindSafe;
 use std::pin::pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -327,20 +328,19 @@ async fn ingest<L: Lifecycle + Clone>(
         Ok(Err(error)) => return SessionEnd::moq("broadcast", error),
         Ok(Ok(broadcast)) => broadcast,
     };
-    let catalog = compio::time::timeout(limits.catalog_timeout, async {
-        hang::Catalog::<()>::subscribe(&broadcast)
-            .await?
-            .next()
-            .await
-    })
-    .await;
-    let catalog = match catalog {
-        Err(_) => return SessionEnd::new(Error::Timeout, "no catalog.json arrived"),
-        Ok(Err(error)) => {
-            return SessionEnd::new(Error::ProtocolViolation, format!("catalog.json: {error}"));
-        }
-        Ok(Ok(None)) => return SessionEnd::new(Error::Closed, "catalog.json ended empty"),
-        Ok(Ok(Some(catalog))) => catalog,
+    let catalog = match first_catalog(
+        async {
+            hang::Catalog::<()>::subscribe(&broadcast)
+                .await?
+                .next()
+                .await
+        },
+        limits.catalog_timeout,
+    )
+    .await
+    {
+        Ok(catalog) => catalog,
+        Err(end) => return end,
     };
     let tracks = TrackSet::new(from_hang_catalog(&catalog));
     let (names, probe) = {
@@ -385,6 +385,35 @@ async fn ingest<L: Lifecycle + Clone>(
                 None => return SessionEnd::new(Error::Closed, "the publisher finished every track"),
             },
         }
+    }
+}
+
+/// The publisher's first `catalog.json`, as `read` yields it within
+/// `timeout`. hang parses it from peer bytes, so this is the session's panic
+/// boundary for that parser (hang 0.21.16 sliced a non-ASCII H.264 codec
+/// string off a char boundary): a panic ends the session as a protocol
+/// violation, like a catalog hang refuses, and the caller releases the input
+/// with that reason.
+async fn first_catalog(
+    read: impl Future<Output = hang::Result<Option<hang::Catalog>>>,
+    timeout: Duration,
+) -> Result<hang::Catalog, SessionEnd> {
+    let read = futures_util::FutureExt::catch_unwind(AssertUnwindSafe(read));
+    match compio::time::timeout(timeout, read).await {
+        Err(_) => Err(SessionEnd::new(Error::Timeout, "no catalog.json arrived")),
+        Ok(Err(payload)) => {
+            let panic = crate::panic_boundary::record_contained(payload.as_ref());
+            Err(SessionEnd::new(
+                Error::ProtocolViolation,
+                format!("catalog.json: the parser panicked: {panic}"),
+            ))
+        }
+        Ok(Ok(Err(error))) => Err(SessionEnd::new(
+            Error::ProtocolViolation,
+            format!("catalog.json: {error}"),
+        )),
+        Ok(Ok(Ok(None))) => Err(SessionEnd::new(Error::Closed, "catalog.json ended empty")),
+        Ok(Ok(Ok(Some(catalog)))) => Ok(catalog),
     }
 }
 

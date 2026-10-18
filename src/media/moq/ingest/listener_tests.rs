@@ -127,6 +127,51 @@ fn publish_until(addr: SocketAddr, done: Arc<AtomicBool>) {
     });
 }
 
+/// A catalog whose H.264 codec string is six bytes but five characters
+/// (`Ψ` is two bytes): hang 0.21.16 sliced it at byte offsets and panicked
+/// off a char boundary (found by the `moq_ingest` fuzz target).
+const NON_ASCII_CODEC_CATALOG: &str = r#"{"video":{"renditions":{"video":{"codec":"avc1.4Ψ01e","codedWidth":64,"codedHeight":36,"container":{"kind":"legacy"}}}}}"#;
+
+/// Publish key `moq-key` with `catalog` as its raw `catalog.json`, until the
+/// listener closes the session.
+fn publish_raw_catalog(addr: SocketAddr, catalog: &'static str) {
+    run(async move {
+        let endpoint = transport::client_endpoint(AddressFamily::V4).await.unwrap();
+        let tls = loopback_client_tls(transport::CLIENT_ALPNS);
+        let session = transport::connect(&endpoint, addr, LOOPBACK_SERVER_NAME, tls)
+            .await
+            .unwrap();
+        let (origin, origin_driver) =
+            moq_net::origin::Producer::new(moq_net::origin::Config::default());
+        compio::runtime::spawn(transport::run_driver(origin_driver)).detach();
+        let broadcast = origin.create_broadcast("moq-key").unwrap();
+        let track = broadcast
+            .create_track(
+                hang::Catalog::DEFAULT_NAME,
+                hang::Catalog::default_track_info(),
+            )
+            .unwrap();
+        let mut group = track.append_group().unwrap();
+        group
+            .write_frame(
+                moq_net::Timestamp::now(),
+                Bytes::from_static(catalog.as_bytes()),
+            )
+            .unwrap();
+        group.finish().unwrap();
+        broadcast.announce(Default::default()).unwrap();
+        let (session, driver) = moq_net::Client::new()
+            .with_publisher(&origin)
+            .connect_lite(Instant::now(), session)
+            .await
+            .unwrap();
+        compio::runtime::spawn(transport::run_driver(driver)).detach();
+        compio::time::timeout(Duration::from_secs(10), session.closed())
+            .await
+            .expect("the listener closes the session");
+    })
+}
+
 async fn input_bytes(engine: &MediaEngine) -> Option<(String, u64)> {
     let sessions = engine.ingests.sessions.read().await;
     sessions.get(INPUT_ID).map(|ingest| {
@@ -298,4 +343,57 @@ async fn a_publisher_feeds_a_moq_input_and_shutdown_joins_the_thread() {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+/// A catalog hang refuses ends that publisher's session with its input
+/// released and the reason recorded, and the listener serves the next
+/// publisher. Before the fix hang panicked on this catalog: Compio's task
+/// boundary dropped the session, so the input was released as "the MoQ
+/// ingest listener stopped".
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_catalog_hang_cannot_parse_ends_only_that_publisher() {
+    let (engine, addr) = listen(4, "bad-catalog").await;
+    tokio::task::spawn_blocking(move || publish_raw_catalog(addr, NON_ASCII_CODEC_CATALOG))
+        .await
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let reason = loop {
+        if input_bytes(&engine).await.is_none()
+            && let Some(outcome) = engine.recent_ingest_outcome("pipe-moq").await
+        {
+            break outcome.reason.unwrap_or_default();
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the input is never released"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    // hang refuses the codec string (the vendored patch), not the session's
+    // panic boundary.
+    assert_eq!(
+        reason,
+        "catalog.json: json error: json: video.renditions.video.codec: invalid codec"
+    );
+
+    // The listener thread still serves the next publisher.
+    let done = Arc::new(AtomicBool::new(false));
+    let publisher = tokio::task::spawn_blocking({
+        let done = done.clone();
+        move || publish_until(addr, done)
+    });
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while input_bytes(&engine)
+        .await
+        .is_none_or(|(_, bytes)| bytes == 0)
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the next publisher never fed the input"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    done.store(true, Ordering::Release);
+    publisher.await.unwrap();
+    engine.shutdown_listeners();
 }
