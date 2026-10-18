@@ -27,7 +27,6 @@ items).
 - [Q-070 MoQ ingest](#q-070-protocol-opus-moq-ingest)
 - [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
-- [Q-083 measure RTMP and SRT under pull load](#q-083-performance-sonnet-measure-rtmp-and-srt-under-pull-load)
 - [Q-087 separate-rendition timeline breaks](#q-087-protocol-sonnet-align-separate-renditions-on-timeline-breaks-not-on-raw-proximity)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
@@ -492,50 +491,44 @@ items).
   `moof` and the session plans its samples in the poll that first reaches
   it, within those caps; a library-side incremental `trun` parse is the
   remaining work for fMP4.
-- Steps:
-  1. Land per-poll thread CPU in the executor metrics: beside `maxPollUs`, a
-     `maxCpuUs` and a count of polls above fixed CPU thresholds (1, 4, 16 ms)
-     per class and service, read with the `thread_cpu_ns` helper in
-     `src/media/egress/shard.rs`; the investigation's patch did this and cost
-     one `clock_gettime(CLOCK_THREAD_CPUTIME_ID)` pair per poll.
-  2. Per arm, separate allocator from kernel: per-poll user/sys split and
-     minor faults from `getrusage(RUSAGE_THREAD)` around the poll, and
-     before/after deltas of `/proc/vmstat` `compact_stall` and
-     `allocstall_*`, the cgroup's `memory.events`, and the THP settings in
-     `/sys/kernel/mm/transparent_hugepage/{enabled,defrag}`.
-  3. Repeat each arm several times on an idle host; then choose between
-     allocator tuning (glibc `mallopt` at startup next to the arena policy in
-     `src/malloc_tuning.rs`, or a different allocator), a kernel-side setting
-     (THP `defrag`), and leaving the tail to host qualification, and record
-     the result, negative included.
+- Steps 1–3 are done (2026-10-18): executor rows carry `cpuUs`, `maxCpuUs`
+  and `pollsOverCpu{1,4,16}Ms`, with `RESTREAM_MEDIA_POLL_USAGE=1` the
+  per-poll `getrusage` split (`docs/observability.md`), and `hls-push-duty`
+  reports the window per class and session plus `/proc/vmstat`, cgroup
+  `memory.events` and THP (`docs/testing.md`).
+- **Measured (release, M=8, 60 s, `--poll-usage`, 6-vCPU KVM VPS):** five
+  control runs at load-1m 1.38–1.46: class `maxCpuUs` 247781, 33407, 56333,
+  35231, 22511 µs; polls above 4 ms 2.38, 0.63, 1.37, 0.75, 0.13 per minute
+  per session; CPU per poll 67–119 µs. The gate fails in every run on
+  `maxCpuUs`, and in two of five on the rate.
+- **Not the kernel's memory management:** `compact_stall`, `allocstall_*`,
+  `thp_fault_alloc` and every `memory.events` counter moved 0 in all runs;
+  THP is `madvise`/`madvise` and glibc does not madvise its heap; polls above
+  1 ms took 0.2–4.0 minor faults each. **Not the allocator:** five strictly
+  interleaved A/B pairs (load-1m 1.23–1.49) with
+  `MALLOC_MMAP_THRESHOLD_=32 MiB` and `MALLOC_TRIM_THRESHOLD_=256 MiB`
+  (no trim, no per-chunk mmap): `maxCpuUs` 6172–109490 µs against
+  21764–91604, above-4 ms rate 0.88–9.75 against 0.88–6.38, peak RSS
+  297–306 against 296–311 MiB.
+- **The host:** 38–59 % of the polls' CPU is system time (48–65 % in the
+  polls above 1 ms), and this guest accounts no steal (`/proc/stat` steal
+  0 for 15 days): a thread that only spins on the two clocks saw 29 gaps
+  over 1 ms in an idle minute (worst 9.3 ms), each charged to it as thread
+  CPU. Thread CPU on this VPS therefore includes hypervisor descheduling,
+  and a poll's multi-millisecond CPU is not evidence of work.
+- Decision: no allocator or kernel setting; the tail is left to host
+  qualification. What would close the item is the same five runs on a host
+  that reports steal (or bare metal), or a poll cost measured in guest
+  cycles (vPMU) rather than thread CPU — the gate as written cannot be met
+  on this VPS by any code change.
 - Gates: at M=8 over five runs on an otherwise idle 6-vCPU host, `hlsIngest`
   polls above 4 ms of thread CPU stay under 1 per minute per session, and
   the class `maxCpuUs` stays under 4 ms in every run. A wall-clock maximum
   on a shared host is not a gate any code change can meet.
-- Status: open (Filed: 2026-10-16 by claude, from the HLS ingest isolation
-  measurement; rewritten 2026-10-17 from the attribution that measurement
-  asked for).
-
-### Q-083 [performance] [sonnet] Measure RTMP and SRT under pull load
-
-- Goal: the isolation of the other protocols under M pull sessions is measured
-  the way `hls-push-duty` measures it under M push sessions.
-- Why: `hls-push-duty` has a baseline arm (`--hls-publishers 0`) and an HLS arm
-  (base RTMP publishers plus M HLS push sessions), which is how Q-074 priced the
-  push ingest. `hls-pull-duty` has no base arm: it runs only its own pull
-  pipeline, so "RTMP under pull load" cannot be measured from the catalog. The
-  pull's incremental cost is bounded by construction — a fetch on a Tokio
-  worker (not the MEDIA executor), a playlist parse of at most
-  `max_playlist_bytes` per refresh no shorter than `MIN_REFRESH_INTERVAL`
-  (500 ms), and one read of pull rows per reconcile pass — but it is unmeasured
-  beside a live RTMP or SRT pipeline.
-- Change: give `hls-pull-duty` a `--base-publishers N` arm, or add M pull
-  inputs to `hls-push-duty`, so one release-binary run compares the base
-  publishers' delivery and per-poll CPU with and without pulls.
-- Gates: both arms pass, and the base publishers' delivery and per-poll CPU are
-  reported side by side.
-- Status: open (Filed: 2026-10-17 by claude, from the #354 non-HLS audit: the
-  push ingest has this arm, the pull ingest does not).
+- Status: open, blocked on a qualifying host (Filed: 2026-10-16 by claude,
+  from the HLS ingest isolation measurement; rewritten 2026-10-17 from the
+  attribution that measurement asked for; steps 1–3 measured 2026-10-18,
+  gate not met on the reference VPS).
 
 ### Q-087 [protocol] [sonnet] Align separate renditions on timeline breaks, not on raw proximity
 
