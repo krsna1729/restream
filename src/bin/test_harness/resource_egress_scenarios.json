@@ -100,6 +100,20 @@
     ]
   },
   {
+    "name": "egress-growth-source-downmix",
+    "configIndex": 1,
+    "outputKinds": [
+      "rtmpSourceDownmix"
+    ]
+  },
+  {
+    "name": "egress-growth-hevc-to-h264",
+    "configIndex": 2,
+    "outputKinds": [
+      "hlsPut"
+    ]
+  },
+  {
     "name": "egress-growth-source-rtmps",
     "configIndex": 1,
     "outputKinds": [
