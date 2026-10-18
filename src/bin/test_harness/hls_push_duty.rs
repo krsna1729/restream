@@ -1,11 +1,11 @@
-//! `hls-push-duty`: the harness mode that drives HLS push ingest.
+//! `hls-push-duty`: the harness mode that drives HLS push (and pull) ingest.
 //!
 //! The mode exists for two purposes: it is the Q-067 harness gate for HLS
 //! push ingest, and it is the treatment arm of an executor-isolation
 //! measurement — does adding HLS ingest sessions degrade the existing
 //! RTMP/SRT ingest-and-egress guarantees?
 //!
-//! Both arms are the same run with the same base load, and they differ only
+//! All arms are the same run with the same base load, and they differ only
 //! by the HLS addition:
 //!
 //! - **Baseline arm** (`--hls-publishers 0`, the default): `--base-publishers`
@@ -14,23 +14,31 @@
 //!   pipelines whose input is an HLS push session driven by FFmpeg
 //!   (`-f hls -method PUT`, or POST with `--method post`), each with the same
 //!   RTMP sink output.
+//! - **Pull arm** (`--pull-sessions N`): the same base load plus one
+//!   `pull-source` RTMP pipeline and `N` pipelines pulling its HLS preview
+//!   through a selected `hlsPull` input, each with the same RTMP sink output.
 //!
 //! Every pipeline's output goes to its own in-process RTMP sink, so delivery
 //! is asserted per pipeline and the egress side of the fabric carries real
 //! work. The result JSON carries the numbers the isolation comparison needs:
-//! per-pipeline published packet counts, the media executor's queue-latency
-//! max and per-class counters, per-output egress resync/stall/drop counters,
-//! the wall-clock duration and the host CPU count.
+//! per-pipeline published packet counts and executor CPU per poll, the media
+//! executor's queue-latency max and per-class window (thread CPU per poll,
+//! polls above 1/4/16 ms of CPU per session-minute), the host's memory
+//! management counters over the window, per-output egress resync/stall/drop
+//! counters, the wall-clock duration and the host CPU count.
 //!
 //! ```text
 //! scripts/harness/run.sh hls-push-duty
 //! scripts/harness/run.sh hls-push-duty -- --hls-publishers 4 --segment-type fmp4
 //! scripts/harness/run.sh hls-push-duty -- --hls-publishers 2 --method post
+//! scripts/harness/run.sh hls-push-duty -- --pull-sessions 4 --poll-usage
 //! ```
 //!
 //! FFmpeg is resolved through the project's `ffmpeg_binary` resolver; the
 //! media comes from the checked-in transport fixture contract.
 
+#[path = "hls_push_duty/host_memory.rs"]
+pub(super) mod host_memory;
 #[path = "hls_push_duty/metrics.rs"]
 pub(super) mod metrics;
 #[path = "hls_push_duty/options.rs"]

@@ -203,8 +203,7 @@ impl Session {
 
         let preview_url = plan.preview_master_url(&source_pipeline_id);
         let preview_path = Plan::preview_master_path(&source_pipeline_id);
-        self.wait_for_source_preview(&preview_path, PREVIEW_TIMEOUT)
-            .await?;
+        wait_for_preview_master(&self.api, &preview_path, PREVIEW_TIMEOUT).await?;
         println!(
             "[hls-pull-duty] {}",
             json!({"phase": "source-ready", "pipelineId": source_pipeline_id, "url": preview_url})
@@ -577,44 +576,6 @@ impl Session {
             .await
     }
 
-    /// Poll the source preview until it serves a master playlist the pull can
-    /// follow. A preview with no segments yet answers 404, which is expected
-    /// until the preview graph's first segment. `path` is the API-relative
-    /// path (`get_text_response` prepends the base URL).
-    async fn wait_for_source_preview(&self, path: &str, timeout: Duration) -> Result<(), String> {
-        let deadline = Instant::now() + timeout;
-        let mut next_log = Instant::now() + Duration::from_secs(5);
-        let mut last;
-        loop {
-            last = match self.api.get_text_response(path).await {
-                Ok((status, body)) => {
-                    if status.is_success()
-                        && body.contains("#EXTM3U")
-                        && body.contains("EXT-X-STREAM-INF")
-                    {
-                        return Ok(());
-                    }
-                    Some((status.as_u16(), truncate_body(&body)))
-                }
-                Err(error) => Some((0, error)),
-            };
-            if Instant::now() >= next_log {
-                println!(
-                    "[hls-pull-duty] {}",
-                    json!({"phase": "preview-wait", "last": last}),
-                );
-                next_log += Duration::from_secs(5);
-            }
-            if Instant::now() >= deadline {
-                return Err(format!(
-                    "source preview {path} did not serve a master playlist within {}s; last={last:?}",
-                    timeout.as_secs(),
-                ));
-            }
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
-    }
-
     /// Wait until the pull input's session registers; returns the protocol it
     /// registered with, or `None` if the budget expires first.
     async fn wait_for_pull_session(
@@ -708,7 +669,7 @@ impl Session {
 
 /// Create an `hlsPull` input that presents `cookie` through the `headers`
 /// auth variant, returning its id.
-async fn create_pull_input(
+pub(crate) async fn create_pull_input(
     api: &RampApi,
     pipeline_id: &str,
     label: &str,
@@ -736,12 +697,58 @@ async fn create_pull_input(
 
 /// Promote the input to the pipeline's selected input, so its session
 /// forwards into the pipeline ring.
-async fn promote_input(api: &RampApi, pipeline_id: &str, input_id: &str) -> Result<(), String> {
+pub(crate) async fn promote_input(
+    api: &RampApi,
+    pipeline_id: &str,
+    input_id: &str,
+) -> Result<(), String> {
     api.post_null(&format!(
         "/api/v1/pipelines/{pipeline_id}/inputs/{input_id}/promote"
     ))
     .await
     .map(|_| ())
+}
+
+/// Poll a pipeline's preview until it serves a master playlist a pull can
+/// follow. A preview with no segments yet answers 404, which is expected
+/// until the preview graph's first segment. `path` is the API-relative path
+/// (`get_text_response` prepends the base URL).
+pub(crate) async fn wait_for_preview_master(
+    api: &RampApi,
+    path: &str,
+    timeout: Duration,
+) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    let mut next_log = Instant::now() + Duration::from_secs(5);
+    let mut last;
+    loop {
+        last = match api.get_text_response(path).await {
+            Ok((status, body)) => {
+                if status.is_success()
+                    && body.contains("#EXTM3U")
+                    && body.contains("EXT-X-STREAM-INF")
+                {
+                    return Ok(());
+                }
+                Some((status.as_u16(), truncate_body(&body)))
+            }
+            Err(error) => Some((0, error)),
+        };
+        if Instant::now() >= next_log {
+            println!(
+                "[harness-progress] {}",
+                json!({"phase": "preview-wait", "path": path, "last": last}),
+            );
+            next_log += Duration::from_secs(5);
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "preview {path} did not serve a master playlist within {}s; last={last:?}",
+                timeout.as_secs(),
+            ));
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
 }
 
 /// The source publisher: real-time copy of the checked-in fixture over RTMP.

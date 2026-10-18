@@ -393,9 +393,9 @@ Choose the narrowest catalog mode that crosses the changed boundary:
 - teardown or recovery — the matching fault workflow;
 - HLS, recording, or file ingest — a scenario whose resolved plan includes the
   relevant sink and checks;
-- HLS push ingest or executor isolation — `hls-push-duty`, whose baseline arm
-  (`--hls-publishers 0`) and treatment arm (`--hls-publishers N`) differ only
-  by the HLS addition;
+- HLS push or pull ingest, or executor isolation — `hls-push-duty`, whose
+  baseline arm (`--hls-publishers 0`) and treatment arms (`--hls-publishers N`,
+  `--pull-sessions N`) differ only by the HLS addition;
 - broad regression confidence — a catalog suite after the scoped mode passes;
 - performance or capacity — a measurement workflow, run serially with
   bench-profile binaries.
@@ -417,37 +417,60 @@ Restream, then builds two arms that differ only by the HLS addition:
   `N` pipelines whose input is an HLS push session, driven by one FFmpeg
   process each (`-re -f hls -method PUT`, or POST with `--method post`), to
   the same RTMP sink output kind.
+- **Pull arm** (`--pull-sessions N`, default 0): the same base load plus one
+  `pull-source` RTMP pipeline and `N` pipelines whose selected input is an
+  `hlsPull` of the source's own preview master (the harness's session cookie
+  as a request header), each to the same RTMP sink output kind. The source is
+  a pipeline of its own so the base pipelines do not also package the pulled
+  preview; pull pipelines are held to the `hls-pull-duty` media checks.
 
 Every pipeline's output goes to its own in-process RTMP sink, so delivery is
 asserted per pipeline (video, audio, a keyframe, monotonic DTS) and the egress
 side of the fabric carries real work. `--hls-publishers 0` is the baseline and
-`--hls-publishers 4` the treatment, with the same base load in both.
+`--hls-publishers 4` (or `--pull-sessions 4`) the treatment, with the same
+base load in both.
 
 ```sh
 scripts/harness/run.sh hls-push-duty
 scripts/harness/run.sh hls-push-duty -- --hls-publishers 4 --segment-type fmp4
 scripts/harness/run.sh hls-push-duty -- --hls-publishers 2 --method post
+scripts/harness/run.sh hls-push-duty -- --pull-sessions 4 --duration-secs 60
+scripts/harness/run.sh hls-push-duty -- --hls-publishers 8 --duration-secs 60 --poll-usage
 ```
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--base-publishers N` | `2` | RTMP baseline publishers with one sink output each |
 | `--hls-publishers N` | `0` | Extra HLS push pipelines with one sink output each |
+| `--pull-sessions N` | `0` | HLS pull pipelines (plus one pull-source pipeline) with one sink output each |
 | `--segment-type ts\|fmp4` | `ts` | Container the HLS arm pushes |
 | `--method put\|post` | `put` | HTTP method the HLS arm uploads with |
 | `--duration-secs N` | `12` | Rated window after every input has published |
 | `--segment-secs N` | `2` | `-hls_time` for the HLS arm |
+| `--poll-usage` | off | Start Restream with `RESTREAM_MEDIA_POLL_USAGE=1` (per-poll user/system time and faults) |
 
 The result JSON (`.local/artifacts/hls-push-duty/report.json`) carries
 `pipelines[].publishedPackets` (per-pipeline video/audio/keyframe counts from
 its sink), `pipelines[].input` (bytes received and GOP keyframe count),
 `pipelines[].egress` (resync count, `stalled`, queue overflows and RX/TX drop
-counters), the raw `mediaExecutor` snapshot (`queueLatencyMaxUs` and the
-per-class `active`/`polls`/`busyUs`/`maxPollUs` rows), the raw
-`egressShards` list, `wallClockSecs`, and `environment.cpuCount` so runs are
-comparable. The media executor exposes one global queue-latency max; per-class
-rows carry its poll/busy counters. FFmpeg is resolved through
-`src/ffmpeg_binary.rs` and the source through `src/test_fixtures.rs`.
+counters), `pipelines[].executor` (the pipeline's media executor services over
+the rated window: `polls`, `cpuUs`, `cpuUsPerPoll`, `busyUs`, the largest
+lifetime `maxCpuUs`, and `pollsOverCpu4Ms`), the raw `mediaExecutor` snapshot
+(`queueLatencyMaxUs` and the per-class rows of
+[observability](observability.md#media-executor-mediaexecutor)), the raw
+`egressShards` list, `wallClockSecs`, `windowSecs`, and
+`environment.cpuCount` so runs are comparable.
+
+`pollCpu` is the per-class executor window: every counter subtracted from its
+value as the window opened, `cpuUsPerPoll`, the lifetime `maxCpuUs` and
+`maxPollUs`, `perMinutePerSession` (polls above 1, 4 and 16 ms of thread CPU
+per window minute per active service of the class — for `hlsIngest`, per HLS
+session), and with `--poll-usage` the window's `usage` sums. `hostMemory`
+separates the allocator from the kernel around the same window: `/proc/vmstat`
+deltas of `compact_stall`, `allocstall_*`, `thp_fault_alloc` and
+`pgmajfault`, the Restream cgroup's `memoryEvents` deltas, and the host's THP
+`enabled`/`defrag` modes. FFmpeg is resolved through `src/ffmpeg_binary.rs`
+and the source through `src/test_fixtures.rs`.
 
 ### Transport live-CI tiers
 

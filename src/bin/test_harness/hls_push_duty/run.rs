@@ -2,6 +2,12 @@
 //! emit the isolation result JSON.
 
 use super::*;
+use crate::hls_pull_duty::metrics::{pull_delivered_ok, pull_published_ok};
+use crate::hls_pull_duty::run::{create_pull_input, promote_input, wait_for_preview_master};
+
+/// The pull source's preview must serve a master playlist before the pulls
+/// can start.
+const PREVIEW_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// One pipeline under test: an ingest input plus one RTMP sink output.
 struct PipelineTask {
@@ -46,6 +52,14 @@ struct Session {
     publishers: Vec<Child>,
 }
 
+/// What the rated window started from: the executor snapshot and the host's
+/// memory counters, subtracted from the end of the window in the report.
+struct Window {
+    secs: f64,
+    executor_start: Value,
+    memory_start: host_memory::HostMemorySample,
+}
+
 pub(crate) async fn run_hls_push_duty(
     options: HlsPushOptions,
     args: &[String],
@@ -61,7 +75,7 @@ pub(crate) async fn run_hls_push_duty(
     let plan = Plan {
         ffmpeg: restream::ffmpeg_binary::ffmpeg_bin_path().to_path_buf(),
         fixture: restream::test_fixtures::canonical_h264_ts_fixture()?,
-        sink_ports: sink_ports(options.total_publishers())?,
+        sink_ports: sink_ports(options.total_pipelines())?,
         ports: TestPorts {
             http: ports.http,
             rtmp: ports.rtmp,
@@ -78,16 +92,26 @@ pub(crate) async fn run_hls_push_duty(
             "phase": "config",
             "basePublishers": options.base_publishers,
             "hlsPublishers": options.hls_publishers,
+            "pullSessions": options.pull_sessions,
             "segmentType": options.segment_type.as_str(),
             "durationSecs": options.duration_secs,
             "segmentSecs": options.segment_secs,
+            "pollUsage": options.poll_usage,
             "ports": {"http": ports.http, "rtmp": ports.rtmp, "srt": ports.srt},
             "ffmpeg": plan.ffmpeg.display().to_string(),
             "fixture": plan.fixture.display().to_string(),
         })
     );
 
-    let (restream, api) = start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
+    let env_overrides: Vec<(&str, String)> = if options.poll_usage {
+        vec![("RESTREAM_MEDIA_POLL_USAGE", "1".to_string())]
+    } else {
+        Vec::new()
+    };
+    let restream =
+        start_restream_child_with_env(&restream_bin, &ports, &db_path, &log_path, &env_overrides)
+            .await?;
+    let api = login_api(&ports).await?;
     let mut session = Session {
         restream,
         api,
@@ -119,12 +143,11 @@ impl Session {
     ) -> Result<Value, String> {
         self.create_pipelines_and_sinks(options, plan).await?;
         self.spawn_publishers(options, plan)?;
-        for task in &self.tasks {
-            wait_for_api_input_live(&self.api, &task.pipeline_id, Duration::from_secs(60)).await?;
-        }
-        for task in &self.tasks {
-            wait_for_api_input_media_ready(&self.api, &task.pipeline_id, Duration::from_secs(60))
-                .await?;
+        self.wait_for_media(0).await?;
+        if options.pull_sessions > 0 {
+            let published = self.tasks.len();
+            self.create_pulls(options, plan).await?;
+            self.wait_for_media(published).await?;
         }
         println!(
             "[hls-push-duty] {}",
@@ -133,13 +156,42 @@ impl Session {
 
         // Each task's probe and sink counters before the window, so the pass
         // checks below require progress inside the rated window rather than
-        // totals since the mode started.
+        // totals since the mode started; the executor and host memory
+        // counters likewise, so the report carries the window's deltas.
         let baselines = self.snapshot_baselines().await;
+        let executor_start = self.media_executor().await?;
+        let memory_start = host_memory::capture(self.restream.id());
+        let window_started = Instant::now();
         tokio::time::sleep(options.window()).await;
+        let window = Window {
+            secs: window_started.elapsed().as_secs_f64(),
+            executor_start,
+            memory_start,
+        };
         let report = self
-            .sample(options, plan, started, args, &baselines)
+            .sample(options, plan, started, args, &baselines, &window)
             .await?;
         Ok(report)
+    }
+
+    /// Wait until every task from `first` on has a live ingest with media.
+    async fn wait_for_media(&self, first: usize) -> Result<(), String> {
+        for task in &self.tasks[first..] {
+            wait_for_api_input_live(&self.api, &task.pipeline_id, Duration::from_secs(60)).await?;
+        }
+        for task in &self.tasks[first..] {
+            wait_for_api_input_media_ready(&self.api, &task.pipeline_id, Duration::from_secs(60))
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn media_executor(&self) -> Result<Value, String> {
+        let dashboard = self.api.get_json("/api/v1/dashboard/runtime").await?;
+        Ok(dashboard
+            .pointer("/metrics/mediaExecutor")
+            .cloned()
+            .unwrap_or(Value::Null))
     }
 
     /// Each task's probe and sink summary as the rated window opens.
@@ -156,6 +208,42 @@ impl Session {
         out
     }
 
+    /// One pipeline with an RTMP sink output of its own; `kind` labels it.
+    async fn create_pipeline_with_sink(
+        &mut self,
+        plan: &Plan,
+        kind: &'static str,
+        name: String,
+        stream_key: String,
+    ) -> Result<(), String> {
+        let index = self.tasks.len();
+        let pipeline_id = create_resource_pipeline(&self.api, &name, &stream_key).await?;
+        let sink_port = plan.sink_ports[index];
+        let metrics = Arc::new(GeneralizedSinkMetrics::default());
+        let sink = start_generalized_sink_server(sink_port, metrics.clone()).await?;
+        let output_url = format!("rtmp://127.0.0.1:{sink_port}/live/{name}");
+        let output_id = create_output(
+            &self.api,
+            &pipeline_id,
+            &format!("sink-{index:02}"),
+            &output_url,
+            "source",
+        )
+        .await?;
+        start_output(&self.api, &pipeline_id, &output_id).await?;
+        self.tasks.push(PipelineTask {
+            kind,
+            name,
+            stream_key,
+            pipeline_id,
+            output_id,
+            sink_port,
+            metrics,
+            sink: Some(sink),
+        });
+        Ok(())
+    }
+
     async fn create_pipelines_and_sinks(
         &mut self,
         options: &HlsPushOptions,
@@ -164,39 +252,67 @@ impl Session {
         for index in 0..options.total_publishers() {
             let kind = if index < options.base_publishers {
                 "rtmp"
-            } else {
+            } else if index < options.base_publishers + options.hls_publishers {
                 "hls"
+            } else {
+                // The pull arm's origin: an RTMP pipeline of its own, so
+                // the base pipelines do not also package the pulled preview.
+                "pull-source"
             };
             let name = format!("hls-push-{kind}-{index:02}");
             let stream_key = format!("sk-hls-push-{kind}-{index:02}");
-            let pipeline_id = create_resource_pipeline(&self.api, &name, &stream_key).await?;
-            let sink_port = plan.sink_ports[index];
-            let metrics = Arc::new(GeneralizedSinkMetrics::default());
-            let sink = start_generalized_sink_server(sink_port, metrics.clone()).await?;
-            let output_url = format!("rtmp://127.0.0.1:{sink_port}/live/{name}");
-            let output_id = create_output(
-                &self.api,
-                &pipeline_id,
-                &format!("sink-{index:02}"),
-                &output_url,
-                "source",
-            )
-            .await?;
-            start_output(&self.api, &pipeline_id, &output_id).await?;
-            self.tasks.push(PipelineTask {
-                kind,
-                name,
-                stream_key,
-                pipeline_id,
-                output_id,
-                sink_port,
-                metrics,
-                sink: Some(sink),
-            });
+            self.create_pipeline_with_sink(plan, kind, name, stream_key)
+                .await?;
         }
         println!(
             "[hls-push-duty] {}",
             json!({"phase": "pipelines-live", "pipelines": self.tasks.len()})
+        );
+        Ok(())
+    }
+
+    /// The pull arm: once the pull source's preview serves a master
+    /// playlist, `pull_sessions` pipelines, each with a selected `hlsPull`
+    /// input on that preview (presenting the harness's session cookie) and
+    /// its own sink output.
+    async fn create_pulls(&mut self, options: &HlsPushOptions, plan: &Plan) -> Result<(), String> {
+        let source = self
+            .tasks
+            .iter()
+            .find(|task| task.kind == "pull-source")
+            .ok_or("the pull arm has no pull-source pipeline")?;
+        let preview_path = format!("/hls/{}/master.m3u8", source.pipeline_id);
+        let preview_url = format!("http://127.0.0.1:{}{preview_path}", plan.ports.http);
+        wait_for_preview_master(&self.api, &preview_path, PREVIEW_TIMEOUT).await?;
+        let cookie = self
+            .api
+            .cookie
+            .clone()
+            .ok_or("harness logged in without a session cookie to present to the preview")?;
+        for pull in 0..options.pull_sessions {
+            let index = self.tasks.len();
+            self.create_pipeline_with_sink(
+                plan,
+                "hls-pull",
+                format!("hls-push-hls-pull-{index:02}"),
+                format!("sk-hls-push-hls-pull-{index:02}"),
+            )
+            .await?;
+            let pipeline_id = self.tasks[index].pipeline_id.clone();
+            let input_id = create_pull_input(
+                &self.api,
+                &pipeline_id,
+                &format!("Pull {pull:02}"),
+                &preview_url,
+                &cookie,
+            )
+            .await?;
+            // The pull only publishes while selected (see hls-pull-duty).
+            promote_input(&self.api, &pipeline_id, &input_id).await?;
+        }
+        println!(
+            "[hls-push-duty] {}",
+            json!({"phase": "pulls-created", "pulls": options.pull_sessions, "url": preview_url})
         );
         Ok(())
     }
@@ -237,7 +353,9 @@ impl Session {
         started: Instant,
         args: &[String],
         baselines: &[(Value, Value)],
+        window: &Window,
     ) -> Result<Value, String> {
+        let memory_end = host_memory::capture(self.restream.id());
         let dashboard = self.api.get_json("/api/v1/dashboard/runtime").await?;
         let metrics = dashboard.get("metrics").cloned().unwrap_or(Value::Null);
         let media_executor = metrics.get("mediaExecutor").cloned().unwrap_or(Value::Null);
@@ -298,9 +416,18 @@ impl Session {
             // The rated window is what this mode measures, so a check requires
             // progress *inside* it: an output that delivered during readiness
             // and then stalled for the whole window passes a lifetime check.
-            let published_now = published_ok(&probe, keyframe_count);
+            // The pulled preview is Restream's own HLS output, whose audio
+            // cadence is the preview's, so a pull pipeline is held to the
+            // hls-pull-duty gate's checks rather than the push ingests'.
+            let (published_now, delivered_now) = if task.kind == "hls-pull" {
+                (pull_published_ok(&probe), pull_delivered_ok(&sink_summary))
+            } else {
+                (
+                    published_ok(&probe, keyframe_count),
+                    delivered_ok(&sink_summary),
+                )
+            };
             let published_progress = published_progress_ok(&baseline_probe, &probe);
-            let delivered_now = delivered_ok(&sink_summary);
             let delivered_progress = delivered_progress_ok(&baseline_sink, &sink_summary);
             let published = published_now && published_progress;
             let delivered = delivered_now && delivered_progress;
@@ -339,6 +466,7 @@ impl Session {
                     "bytes": sink_summary.get("bytes").cloned().unwrap_or(Value::Null),
                 },
                 "sink": sink_summary,
+                "executor": pipeline_poll_window(&window.executor_start, &media_executor, &task.pipeline_id),
                 "egress": pipeline_egress_summary(egress, shard),
                 "checks": {
                     "inputPublished": published,
@@ -359,10 +487,12 @@ impl Session {
             "config": {
                 "basePublishers": options.base_publishers,
                 "hlsPublishers": options.hls_publishers,
+                "pullSessions": options.pull_sessions,
                 "segmentType": options.segment_type.as_str(),
                 "method": options.method.as_str(),
                 "durationSecs": options.duration_secs,
                 "segmentSecs": options.segment_secs,
+                "pollUsage": options.poll_usage,
                 "cliArgs": args,
             },
             "environment": {
@@ -373,6 +503,13 @@ impl Session {
                 "ports": {"http": plan.ports.http, "rtmp": plan.ports.rtmp},
             },
             "wallClockSecs": round2(started.elapsed().as_secs_f64()),
+            "windowSecs": round2(window.secs),
+            "pollCpu": executor_class_windows(&window.executor_start, &media_executor, window.secs),
+            "hostMemory": host_memory::host_memory_report(
+                &window.memory_start,
+                &memory_end,
+                host_memory::thp_settings(),
+            ),
             "mediaExecutor": media_executor,
             "egressShards": shards,
             "pipelines": rows,

@@ -263,7 +263,7 @@
             "portNamespace": true,
             "benchProfile": true
           },
-          "purpose": "executor-isolation harness for HLS push ingest: a baseline arm of `--base-publishers` RTMP publishers plus a treatment arm of `--hls-publishers` HLS push (TS or fMP4) publishers, each pipeline an ingest input and one RTMP sink output over a rated window; reports per-pipeline published/delivered packet counts, the media executor queue-latency max, per-output egress resync/stall/drop counters, wall-clock duration and host CPU count"
+          "purpose": "executor-isolation harness for HLS ingest: a baseline arm of `--base-publishers` RTMP publishers plus a treatment arm of `--hls-publishers` HLS push (TS or fMP4) publishers and/or `--pull-sessions` HLS pulls of a separate source pipeline's preview, each pipeline an ingest input and one RTMP sink output over a rated window; reports per-pipeline published/delivered packet counts and executor CPU per poll, the media executor's per-class window (thread CPU per poll, polls above 1/4/16 ms of CPU per session-minute, with `--poll-usage` the user/system and fault split), host vmstat/cgroup memory-event deltas and THP modes, per-output egress resync/stall/drop counters, wall-clock duration and host CPU count"
         },
         "hls-pull-duty": {
           "suiteDefault": false,
