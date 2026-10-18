@@ -1,278 +1,171 @@
-# Egress Capacity Ramp
+# Egress capacity ramp
 
-How to measure Restream's RTMP, RTMPS and SRT fan-out capacity on any Linux
-host, reproducibly, and compare hosts. One 8 Mbit/s H.264 ingest fans out to
-N outputs of one protocol; the receiver is the harness's own in-process sink
-(`MSR_PEER=sink`), because mediamtx saturates first (it received almost
-nothing at 100 SRT outputs). Restream and the receiver apparatus run on
-disjoint CPU sets.
+Measure delivered fan-out, not just connected outputs. The ramp runs one
+protocol and output count at a time, repeats each rung, and records the
+highest rung where every repeat delivers to every destination.
 
 ## Contents
 
 - [What it measures](#what-it-measures)
 - [Run it](#run-it)
+- [CPU and receiver placement](#cpu-and-receiver-placement)
 - [Reading the results](#reading-the-results)
 - [HLS PUT transports](#hls-put-transports)
-- [Reference results](#reference-results)
-- [Prompt for running on another machine](#prompt-for-running-on-another-machine)
+- [Compare builds or hosts](#compare-builds-or-hosts)
 
 ## What it measures
 
-Per rung (protocol × output count × repeat), from one `test_harness
-resource-sweep` run:
+The runner is [crates/xtask/src/capacity.rs](../crates/xtask/src/capacity.rs).
+It invokes the resource-sweep harness for each rung. Default protocols are
+RTMP, RTMPS, SRT and HLS PUT; `transcode` is an additional workload.
 
-- **Receiver delivery**: per-destination bytes at the sink over the rated
-  window divided by the offered (ingest) rate. A destination is delivered at
-  ≥ 0.95. A rung **passes** when every destination was delivered.
-- **HLS PUT** is graded per segment, not by bytes: a 30 s window holds only
-  about ten segments, so a byte ratio is too coarse. A segment is due once any
-  output has it and 3 s have passed; an output is delivered when it received
-  every due segment of the window, each within 3 s of the first output
-  (`resource-sweep-results.json` `delivery.hls` carries the lag p50/p99/max).
-- **Worst interval ratio**: the lowest one-sample ratio, which exposes stalls
-  an average hides (not applicable to HLS PUT).
-- **Jain fairness** over destination rates.
-- **Restream's own view** (`/api/v1/pipelines/{id}/telemetry` `delivery`):
-  RTMP from TCP `bytes_acked`, SRT from ACK coverage (an upper bound; see
-  [observability](observability.md#per-destination-delivery)).
-- Restream CPU (average and peak, % of one core), RSS and thread count.
+The workload separates the server from its measurement apparatus:
 
-**Capacity** for a protocol is the highest rung where every repeat passed.
-Default ladders stop at 1000 outputs per protocol (`CAPACITY_*_OUTPUTS`
-overrides them); protocols default to `rtmp,rtmps,srt,hls`.
+```mermaid
+flowchart LR
+    Runner["capacity-ramp"] --> Harness["test_harness resource-sweep"]
+    Harness --> Publisher["fixture publisher"]
+    Publisher --> Restream["restream on server CPU set"]
+    Restream --> Sinks["receivers on harness CPU set"]
+    Restream --> Measure["/api/v1/measure and process counters"]
+    Sinks --> Delivery["receiver delivery"]
+    Measure --> Report["summary and provenance"]
+    Delivery --> Report
+```
 
-**Observation cost.** The harness polls `/api/v1/engine/health` and each
-pipeline's telemetry every second, and Restream builds those responses as
-`serde_json::Value` trees. At RTMP×100 (release, 43b68dc0) API handling was
-~21% of Restream samples, the health snapshot alone 7–10%, and it grows with
-output count; Restream CPU in the tables includes it.
+| Measurement | Meaning |
+|---|---|
+| Receiver delivery | Per-destination received bytes divided by offered bytes over the rated window; a destination passes at 0.95 or above |
+| HLS PUT delivery | Every due segment arrives within the 3 s lag budget relative to the first receiver; not a byte-ratio grade |
+| Worst interval ratio | Lowest sample-window delivery ratio, to expose short stalls |
+| Jain fairness | Spread of delivery across destinations |
+| Reported delivery | Restream's own delivery view, kept separate from receiver evidence |
+| CPU | Average and peak usage; 100% means one CPU |
+| Memory and threads | Restream RSS and thread count; see the resource sweep for child-process accounting |
+
+A successful capped ladder establishes a lower bound, not maximum capacity.
+Default ladders end at 1000 outputs except the transcode ladder. Use the
+runner's help for exact ladders and all options.
 
 ## Run it
 
-Prerequisites: a Linux host with `io_uring` enabled (kernel ≥ 6.1), the `tls`
-kernel module for RTMPS kTLS (`sudo modprobe tls`), ≥ 4 online CPUs, ≥ 8 GB
-RAM, and the repository toolchain (`scripts/dev/bootstrap.sh` on Debian/Ubuntu,
-then `scripts/dev/prepare.sh`). Nothing else may run media on the host.
+Use an otherwise idle Linux host. Stop only media processes that belong to
+your run. Do not build while any live pipeline is running, and do not run
+another benchmark or build beside a measurement.
 
-Recommended sysctls (the script warns when lower):
+1. Use a worktree at the revision under test. Record any dirty changes; do
+   not compare an unexplained dirty tree with a clean build.
+2. Prepare the pinned toolchain and native dependencies as described in
+   [Development](development.md).
+3. Check disk space and running `restream`, `mediamtx`, `ffmpeg` and Cargo
+   processes. The runner refuses live media and, by default, a dirty tree.
+4. Check `io_uring` availability, CPU affinity and the file-descriptor
+   limit. The runner requires a limit of at least 65536. For RTMPS kTLS,
+   load the kernel `tls` module where required.
+5. Run the ramp under the host measurement lock:
+
+```sh
+flock -x /tmp/restream-host.lock cargo xtask capacity-ramp --help
+flock -x /tmp/restream-host.lock cargo xtask capacity-ramp
+```
+
+The default builds real release binaries with `cargo xtask build-release`
+in `target/qual-release/`. `CAPACITY_BUILD_PROFILE=bench` selects the
+inner-loop binaries; do not substitute those for committed release
+performance evidence. `CAPACITY_SKIP_BUILD=1` reuses existing binaries;
+verify their provenance before using it.
+
+Artifacts go to `.local/artifacts/capacity-ramp/<utc stamp>/`, or
+`CAPACITY_ARTIFACT_ROOT`. Keep `summary.md`, `summary.csv`,
+`provenance.json`, and the failed rung's harness logs. Each rung and repeat
+also has its own resource-sweep artifacts.
+
+A narrow run keeps the method but reduces the ladder:
+
+```sh
+CAPACITY_PROTOCOLS=rtmp CAPACITY_RTMP_OUTPUTS=100 CAPACITY_REPEATS=3 \
+  flock -x /tmp/restream-host.lock cargo xtask capacity-ramp
+```
+
+Recommended socket limits, if the host permits changing them:
 
 ```sh
 sudo sysctl -w net.core.somaxconn=4096 \
   net.core.rmem_max=26214400 net.core.wmem_max=26214400
 ```
 
-Run on a clean checkout of the agreed commit:
+## CPU and receiver placement
 
-```sh
-git checkout <agreed commit>
-cargo xtask capacity-ramp
-```
+By default, Restream gets the first half of online CPUs; publishers,
+harness and receivers get the rest. `CAPACITY_RESTREAM_CPUS` and
+`CAPACITY_HARNESS_CPUS` override the split. On a NUMA host, choose and
+record CPU sets that make the intended locality explicit.
 
-It builds release binaries (`cargo xtask build-release`, into
-`target/qual-release/`; `CAPACITY_BUILD_PROFILE=bench` uses the inner-loop
-bench profile instead), refuses a
-dirty worktree or running `restream`/`mediamtx`/`ffmpeg`, and writes
-`.local/artifacts/capacity-ramp/<utc stamp>/` with `summary.md`,
-`summary.csv`, `provenance.json` and one resource-sweep directory per rung
-and repeat. `cargo xtask capacity-ramp --help` lists every knob.
+- `CAPACITY_EGRESS_SHARDS` overrides the product's shard ceiling. Compare
+  the default first; changing the ceiling is a separate experiment.
+- `CAPACITY_SINK_THREADS` sets the SRT receiver thread budget.
+  `CAPACITY_PEER_COUNT` controls sink instances and ports. Keep both fixed
+  across A/B runs.
+- Sink-port count changes SRT send batching as well as receiver parallelism.
+  Outputs to one destination address can share batched sends. A single-port
+  sink is not equivalent to independent remote destinations.
+- `CAPACITY_MALLOC_ARENA_MAX` changes Restream's allocator arena policy for
+  the run. Qualify it separately; do not change it between comparison arms.
 
-CPU split. By default Restream gets the first half of the online CPUs and the
-harness, publisher and sinks the second half. On large hosts:
-
-- Split by NUMA node when there is more than one: `CAPACITY_RESTREAM_CPUS` =
-  one node's CPUs, `CAPACITY_HARNESS_CPUS` = another's (`lscpu -e` shows the
-  mapping). Record which you chose.
-- The product default egress shard count is CPU-derived and clamped to
-  `2..=8`. Run once with the default, then again with
-  `CAPACITY_EGRESS_SHARDS=<number of Restream CPUs>` to see whether more
-  shards buy capacity.
-- `CAPACITY_SINK_THREADS` defaults to the harness CPU count; raise
-  `CAPACITY_PEER_COUNT` (more sink ports/listeners) if the receiver, not
-  Restream, saturates. The sink port count also changes Restream's SRT cost:
-  srt-rs GSO coalesces consecutive datagrams to one destination address, so
-  outputs sharing a sink port share sends. SRT×50, same binary, interleaved:
-  one port 102–105% CPU with ~10 datagrams per batched send; three ports
-  135–144% with ~2.9; one port per output (the real-fan-out case) 142–156%
-  with ~1. The default (one port per sink thread) is therefore close to, but
-  slightly under, the cost of fully distinct destinations; compare SRT rows
-  only across runs with the same `peer_count`. Check the sink side with `top` during a high rung: the
-  `test_harness` process should stay below its CPU budget.
-- `CAPACITY_MALLOC_ARENA_MAX` sets Restream's glibc arena cap for the run
-  (`default` = glibc policy). Restream's own default of 2 was measured on one
-  6-CPU host only; qualify it per host before treating it as final.
-- Ladders stop at 1000 outputs by default; go beyond only when that is the
-  question being asked (`CAPACITY_*_OUTPUTS`). A ladder stops after a rung
-  with no passing repeat (`CAPACITY_STOP_AFTER_FAIL=0` to keep going).
-
-A full default run takes roughly 1–2 hours (3 repeats, 30 s windows).
+Monitor receiver CPU and kernel drops at high rungs. If the receiver hits
+its CPU budget or loses datagrams, the run does not isolate Restream's
+capacity. Remote receivers and their same-window counters are described in
+[Resource sweep](resource-sweep.md).
 
 ## Reading the results
 
-- Compare capacity per protocol, and CPU per output at the same rung.
-  Restream's CPU is reported in % of one core, so divide by the Restream CPU
-  count for utilization.
-- A rung that fails while Restream's CPU is well below its budget points at
-  the receiver or the network stack; check the harness CPU and kernel drops
-  (`nstat -az | grep -i -E 'drop|overflow|RcvbufErrors'`).
-- SRT failure shape matters as much as the capacity number: note whether
-  delivery degrades for a few destinations (graceful) or collapses for all.
+A rung passes only when every destination passes in every repeat. By
+default the ladder stops after a rung where no repeat passes;
+`CAPACITY_STOP_AFTER_FAIL=0` continues it.
+
+1. Check the harness exit status and workload validity before comparing CPU.
+2. Check receiver delivery, then Restream's delivery view. A completed send
+   or a connected socket alone does not prove delivery.
+3. Compare CPU at equal delivered workload and equal output counts. Divide
+   CPU percentage by the server CPU count to get utilization.
+4. Inspect interval minima and fairness. A good mean can hide a stalled
+   destination or a short outage.
+5. Separate sender saturation from receiver drops, network limits and host
+   scheduling gaps. Do not call a receiver bottleneck a server regression.
+
+The runner probes host jitter before the ramp unless
+`CAPACITY_JITTER_SECS=0`. The results are in `provenance.json`. Virtual
+CPUs can lose execution time even when reported steal time is zero.
 
 ## HLS PUT transports
 
-HLS×1000 over HTTP, 8 Mbit/s, Restream on CPUs 0–2, the same harness grading
-every variant (segment identity by length and edge bytes), two interleaved
-repeats, 2026-10-04:
+HLS PUT shares a segmenter across outputs but uploads separately per
+destination. The Compio egress-fabric path is the default.
+`RESTREAM_HLS_PUT_FABRIC=0` selects the Reqwest fallback. HTTPS without
+usable kTLS also falls back to Reqwest.
 
-| Variant | Delivered | p99 segment lag | CPU avg |
-|---|---|---|---|
-| Reqwest, a 500 ms timer and a client per output (before #246) | 1000, 1000 | 0.96–1.15 s | 83–89% |
-| Reqwest, publish-driven, one client (#246) | 1000, 1000 | 0.86–0.93 s | 52–59% |
-| Reqwest with the YouTube/Akamai upload policy (#248, default) | 1000, 1000 | 0.80–0.86 s | 54–57% |
-| Egress-fabric shards, same policy (`RESTREAM_HLS_PUT_FABRIC=1`, #251) | 1000, 1000 | 1.00–1.03 s | 80% |
+Compare the transports with the same binary, segment policy, output count,
+receiver, CPU split and TLS setting. Use interleaved rounds. Record segment
+lag p50/p99/max as well as delivery and CPU. An HTTPS loopback receiver
+performs decryption on the same host, so its CPU can cap the test before
+the sender does. Do not extrapolate a loopback limit to a remote network.
 
-Most of the old cost was the per-output shape (a timer, a snapshot and a
-client per output), not Tokio: fixing that on Tokio cut CPU by about a third.
-The shard path as first merged cost about 24 points more CPU at this rung, so
-Reqwest stayed the default.
+Upload ordering, retry and acknowledged-playlist rules are in
+[Media pipeline](media-pipeline.md) and
+[`upload_policy.rs`](../src/media/hls/upload_policy.rs).
 
-Profiling it at HTTPS rungs found four costs, now fixed: a scan of every
-slot per event for the next deadline (a min-heap now), shards that joined the
-pool late carrying few outputs (least-loaded placement), kernel TLS pushing
-each 16 KiB record as its own segment (`MSG_MORE` until the request's last
-byte) and a 64 KiB send bound (512 KiB for uploads). A fifth finding was a
-TLS bug on both shard transports: session tickets that arrived before the
-kernel-TLS hand-off stalled the connection until its request timeout (#267).
+## Compare builds or hosts
 
-Same bench binary for both transports (only `RESTREAM_HLS_PUT_FABRIC`
-differs), 8 Mbit/s, settle 45 s, 30 s window, interleaved rounds,
-2026-10-05:
+For a build comparison, run interleaved A/B rounds on the same host and
+keep the fixture, bitrate, CPU sets, peer topology, window, settle time,
+repeat count, allocator policy and kernel settings fixed. An A/A control
+helps distinguish measurement noise from a code effect.
 
-| Rung | Transport | Delivered | p50 lag | p99 lag | CPU avg |
-|---|---|---|---|---|---|
-| HTTPS×600 (3 rounds) | Reqwest (`RESTREAM_HLS_PUT_FABRIC=0`) | 600 ×3 | 251–318 ms | 1.06–1.34 s | 62.7–64.4% |
-| HTTPS×600 (3 rounds) | Egress-fabric shards, kernel TLS | 600 ×3 | 90–101 ms | 0.18–0.24 s | 56.1–68.1% |
-| HTTP×1000 (2 rounds) | Reqwest (`RESTREAM_HLS_PUT_FABRIC=0`) | 1000 ×2 | 150–176 ms | 0.68–0.74 s | 48.9–51.2% |
-| HTTP×1000 (2 rounds) | Egress-fabric shards | 1000 ×2 | 36–47 ms | 0.19–0.24 s | 53.2–54.9% |
+For a host comparison, use the same revision and release-build procedure.
+Record CPU model/count, NUMA placement, OS/kernel, virtualization, memory,
+limits, receiver topology and jitter. Compare CPU per delivered output at
+equal rungs, not only the final passing rung. Two hosts that pass a capped
+ladder have not proved equal maximum capacity.
 
-Over HTTPS the shard path now matches Reqwest on CPU (paired differences
-+3.6, −6.6, +0.9 points) with about a fifth of its p99 lag; over HTTP it costs
-about 4 points more with about a third of the lag. HTTPS×1000 saturates this
-6-CPU host for both transports (the sink decrypts 8 Gbit/s on three CPUs), so
-the HTTPS comparison is at 600. Not measured: rungs above 1000 and a real
-network, where the loopback receive work charged to the sender disappears for
-both. On these results the shard path became the default;
-`RESTREAM_HLS_PUT_FABRIC=0` selects Reqwest.
-
-## Reference results
-
-Reference: 6-CPU AMD EPYC KVM VPS (1 NUMA node), kernel 6.8, commit
-`1a2e7e12`, release binaries, `cargo xtask capacity-ramp` defaults
-(Restream on CPUs 0–2, harness on 3–5, product-default shards, SRT sink
-threads and peer count 3, 30 s windows, 3 repeats per rung; ladders capped at
-1000). CPU is % of one core; Restream's budget is 300%. Artifacts:
-`.local/artifacts/capacity-ramp/20260927T055241Z/`.
-
-| protocol | capacity | rung | passed | rx delivered min | rx ratio min | CPU avg | CPU peak | RSS MB |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| RTMP | **≥ 1000** (cap) | 100 | 3/3 | 100 | 0.971 | 32.6% | 64.9% | 110 |
-| | | 250 | 3/3 | 250 | 0.959 | 82.0% | 130.5% | 133 |
-| | | 500 | 3/3 | 500 | 0.964 | 99.5% | 172.5% | 178 |
-| | | 1000 | 3/3 | 1000 | 0.964 | 155.8% | 210.2% | 253 |
-| RTMPS | **≥ 1000** (cap) | 100 | 3/3 | 100 | 0.970 | 38.7% | 64.4% | 105 |
-| | | 250 | 3/3 | 250 | 0.963 | 111.2% | 192.2% | 139 |
-| | | 500 | 3/3 | 500 | 0.964 | 157.5% | 251.1% | 185 |
-| | | 1000 | 3/3 | 1000 | 0.962 | 236.2% | 280.0% | 258 |
-| SRT | **50** | 50 | 3/3 | 50 | 0.989 | 155.2% | 193.4% | 128 |
-| | | 100 | 2/3 | 57 | 0.905 | 190.4% | 251.3% | 166 |
-| | | 150 | 1/3 | 81 | 0.000 | 216.4% | 262.8% | 209 |
-| | | 200 | 0/3 | 31 | 0.000 | 239.8% | 273.9% | 300 |
-| HLS PUT | **≥ 1000** (cap) | 50 | 3/3 | 50 | 1.000 | 23.0% | 45.0% | 139 |
-| | | 100 | 3/3 | 100 | 1.000 | 32.4% | 80.0% | 143 |
-| | | 250 | 3/3 | 250 | 1.000 | 52.5% | 98.1% | 180 |
-| | | 500 | 3/3 | 500 | 1.000 | 76.8% | 118.0% | 252 |
-| | | 1000 | 3/3 | 1000 | 1.000 | 117.8% | 165.8% | 383 |
-
-HLS PUT ratio is the share of due segments received. Segment lag behind the
-first output: p99 0.7–0.9 s at 500 outputs and 1.1–1.9 s at 1000 (worst
-single segment 2.7 s, inside the 3 s budget), so ~1000 is near HLS's limit
-on these cores.
-
-Per output, roughly: RTMP ~0.13%, RTMPS ~0.22%, HLS PUT ~0.10%, SRT ~2.9% of
-a core (SRT at distinct-enough destinations; see the sink-port note in
-[Run it](#run-it)). Past its limit SRT degrades for many destinations at
-once rather than a few. SRT's per-output cost is srt-rs per-packet protocol
-work.
-Every CPU figure includes the harness's per-second health and telemetry
-polling ([runtime crossings](runtime-crossings.md) O2).
-
-Earlier ramps (bench profile at `6616fa85`; release at `b4159089` and
-`43b68dc0`, uncapped ladders) are superseded. They also showed that
-`RTMP×4000` failed on the command-admission bug fixed in `85a6699f`, and that
-single-port SRT sinks understated SRT CPU by about a third.
-
-**Host jitter.** `cargo xtask host-jitter`, which the ramp runs on every
-Restream CPU before starting (`provenance.json` `host_jitter`, summary header),
-spins on a monotonic clock and counts gaps over 5 ms. On the reference VPS an
-idle pinned CPU loses 0.6–3% of wall time in gaps up to ~120 ms with zero
-reported steal: the hypervisor descheduling the vCPU. Every Restream thread on
-that CPU loses the same time, so compare hosts with jitter in view.
-
-**Comparing runs.** On this shared KVM VPS the same binary's CPU at the same
-rung moved by ~30% between sessions (RTMPS×500: 124% in the baseline ramp,
-158% in a later session for both baseline and current). Compare builds only
-with interleaved A/B runs in one session; treat cross-session capacity
-tables as indicative. The baseline numbers above used the bench profile;
-evidence committed from now on uses release binaries
-(`cargo xtask build-release`).
-
-## Prompt for running on another machine
-
-Give this to an agent (or follow it by hand) on the target machine:
-
-```text
-Goal: measure Restream egress capacity (RTMP, RTMPS, SRT and HLS PUT fan-out
-from one 8 Mbit/s ingest) on this machine with the repository's reproducible script,
-and report results comparable to the reference host in docs/capacity-ramp.md.
-
-1. Clone https://github.com/krsna1729/restream and check out the agreed
-   commit: 6549358b (the measured ramp code of 1a2e7e12 plus a CI build fix).
-   Do not modify tracked files. If you must change
-   anything to get it running, stop and report the exact change and reason.
-2. Set up the toolchain: scripts/dev/bootstrap.sh (Debian/Ubuntu) then
-   scripts/dev/prepare.sh. Record the OS, kernel (uname -a), `lscpu`,
-   `lscpu -e`, `free -g`, and whether the host is bare metal or a VM
-   (`systemd-detect-virt`).
-3. Host prep: sudo modprobe tls; sudo sysctl -w net.core.somaxconn=4096
-   net.core.rmem_max=26214400 net.core.wmem_max=26214400; ensure
-   `ulimit -n` can reach 65536. Make sure nothing else runs media (no
-   restream, mediamtx or ffmpeg processes) and the host is otherwise idle.
-4. Read docs/capacity-ramp.md fully, then choose the CPU split:
-   - More than one NUMA node: CAPACITY_RESTREAM_CPUS = all CPUs of node 0,
-     CAPACITY_HARNESS_CPUS = all CPUs of node 1.
-   - One node: leave the defaults (half and half).
-5. Run A (product defaults; ladders stop at 1000 outputs per protocol):
-     cargo xtask capacity-ramp
-   Compare hosts by CPU per output at equal rungs, not only by capacity:
-   a protocol that passes 1000 on both hosts is capped, not equal.
-   Run B: same ladders plus CAPACITY_EGRESS_SHARDS=<number of Restream CPUs>.
-   Run C (malloc arena qualification; Restream's arena cap of 2 is
-   provisional): with Run A's shard setting, repeat each protocol at two
-   representative rungs (the highest rung that passed in Run A and half of
-   it), plus CAPACITY_PROTOCOLS=transcode at its default ladder, once per
-   CAPACITY_MALLOC_ARENA_MAX in: default, 2, 4, 8. Report CPU, RSS and
-   delivery for every combination; the startup log line
-   `restream.malloc.arenas` in each rung's restream log records what was
-   applied.
-   During the highest passing and first failing rung of each protocol,
-   sample `top -b -n 3 -d 5` to record Restream vs test_harness CPU. If the
-   test_harness process is at its CPU budget, the receiver is the limit:
-   rerun that protocol with CAPACITY_PEER_COUNT=4 and say so.
-6. Report, for each run: the full summary.md, provenance.json, the per
-   protocol capacity, CPU per output at 1000 RTMP / 1000 RTMPS / 1000 HLS
-   PUT / 100 SRT outputs (or the closest passing rung), HLS segment lag
-   p99/max (each rung's resource-sweep-results.json `delivery.hls`), how SRT
-   failed at its limit
-   (graceful vs collapse), any harness failures with the last 50 lines of the
-   rung's harness.log, and the top samples from step 5. Do not summarize
-   away failed repeats.
-```
+Store reproducible measurements and caveats in the change's commit
+message. This guide defines the method; it is not a historical scoreboard.
