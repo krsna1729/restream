@@ -17,7 +17,6 @@ items).
 - [Q-031 one capacity allocator](#q-031-architecture-opus-derive-every-thread-count-from-one-capacity-allocator)
 - [Q-033 host-level shard pool](#q-033-architecture-opus-run-egress-shards-from-one-host-level-pool-instead-of-per-feed-groups)
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
-- [Q-036 enforced runtime truth table](#q-036-docs-sonnet-make-runtime-crossings-an-enforced-truth-table)
 - [Q-047 MoQ egress](#q-047-protocol-opus-moq-egress)
 - [Q-049 silent SRT leaves](#q-049-resilience-opus-find-why-connected-srt-leaves-sent-nothing-under-host-overload)
 - [Q-053 external FFmpeg process topology](#q-053-architecture-sonnet-external-ffmpeg-process-topology-per-rendition)
@@ -238,17 +237,6 @@ items).
   Still open: HLS PUT, sink and pipeline fabrics have no admission; the
   cold prior prices this host at 1.4–1.9× its measured per-output cost
   until a healthy window measures it (Q-025).
-
-### Q-036 [docs] [sonnet] Make runtime-crossings an enforced truth table
-- Goal: `docs/runtime-crossings.md` is the one statement of which thread
-  owns each crossing, and CI rejects docs that contradict it.
-- Files: `docs/runtime-crossings.md`, `scripts/check/docs.mjs`.
-- Gates: `node scripts/check/docs.mjs` fails on a seeded contradiction (for
-  example the removed RTMP owner → Tokio media handoff with a 64 MiB permit).
-- Context: a stale WI8 table (since deleted with `srt-compio-roadmap.md`)
-  once led design work to a wrong runtime model.
-- Status: open (Filed: 2026-10-04 by claude, from the runtime-consistency
-  review).
 
 ### Q-047 [protocol] [opus] MoQ egress
 - Goal: subscribers receive a live pipeline over MoQ: IETF MOQT with the
