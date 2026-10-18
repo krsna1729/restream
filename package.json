@@ -20,7 +20,7 @@
     "fast-check": "^4.10.2",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
-    "vite": "^8.3.2"
+    "vite": "^8.3.4"
   },
   "dependencies": {
     "@moq/watch": "^0.6.3",
