@@ -42,6 +42,7 @@ pub mod hls_pull;
 pub mod ingest_auth;
 pub mod input_gate;
 pub mod metadata;
+pub(crate) mod moq;
 #[forbid(unsafe_code)]
 pub mod mpegts;
 pub mod packet;

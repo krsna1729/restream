@@ -112,13 +112,17 @@ fn h265_nal_type(nalu: &[u8]) -> Option<u8> {
     }
 }
 
-struct HevcProfileTierLevel {
-    profile_space: u8,
-    tier_flag: bool,
-    profile_idc: u8,
-    profile_compatibility_flags: u32,
-    constraint_indicator_flags: u64,
-    level_idc: u8,
+pub(crate) struct HevcProfileTierLevel {
+    pub(crate) profile_space: u8,
+    pub(crate) tier_flag: bool,
+    pub(crate) profile_idc: u8,
+    pub(crate) profile_compatibility_flags: u32,
+    /// The 48 general constraint indicator flags, in the low 48 bits.
+    pub(crate) constraint_indicator_flags: u64,
+    pub(crate) level_idc: u8,
+    /// The picture size after the conformance window.
+    pub(crate) width: u32,
+    pub(crate) height: u32,
     max_sub_layers_minus1: u8,
     temporal_id_nested: bool,
     chroma_format_idc: u8,
@@ -126,7 +130,9 @@ struct HevcProfileTierLevel {
     bit_depth_chroma_minus8: u8,
 }
 
-fn parse_hevc_profile_tier_level(sps: &[u8]) -> Option<HevcProfileTierLevel> {
+/// The general profile/tier/level and format fields of an H.265 SPS NAL
+/// unit (with its two-byte header).
+pub(crate) fn parse_hevc_profile_tier_level(sps: &[u8]) -> Option<HevcProfileTierLevel> {
     // Two NAL header bytes, then at least one byte of SPS.
     let payload = sps.get(2..).filter(|payload| !payload.is_empty())?;
     let rbsp = rbsp(payload);
@@ -150,14 +156,26 @@ fn parse_hevc_profile_tier_level(sps: &[u8]) -> Option<HevcProfileTierLevel> {
     if chroma_format_idc == 3 {
         let _separate_colour_plane_flag = reader.read_bits(1)?;
     }
-    let _pic_width_in_luma_samples = reader.read_ue()?;
-    let _pic_height_in_luma_samples = reader.read_ue()?;
+    let pic_width = reader.read_ue()?;
+    let pic_height = reader.read_ue()?;
+    let (mut crop_x, mut crop_y) = (0u32, 0u32);
     if reader.read_bits(1)? == 1 {
-        let _conf_win_left_offset = reader.read_ue()?;
-        let _conf_win_right_offset = reader.read_ue()?;
-        let _conf_win_top_offset = reader.read_ue()?;
-        let _conf_win_bottom_offset = reader.read_ue()?;
+        let left = reader.read_ue()?;
+        let right = reader.read_ue()?;
+        let top = reader.read_ue()?;
+        let bottom = reader.read_ue()?;
+        crop_x = left.saturating_add(right);
+        crop_y = top.saturating_add(bottom);
     }
+    // Window offsets count chroma samples (H.265 7.4.3.2.1).
+    let sub_width = if matches!(chroma_format_idc, 1 | 2) {
+        2
+    } else {
+        1
+    };
+    let sub_height = if chroma_format_idc == 1 { 2 } else { 1 };
+    let width = pic_width.saturating_sub(crop_x.saturating_mul(sub_width));
+    let height = pic_height.saturating_sub(crop_y.saturating_mul(sub_height));
     let bit_depth_luma_minus8 = u8::try_from(reader.read_ue()?).ok()?;
     let bit_depth_chroma_minus8 = u8::try_from(reader.read_ue()?).ok()?;
     if bit_depth_luma_minus8 > 7 || bit_depth_chroma_minus8 > 7 {
@@ -171,6 +189,8 @@ fn parse_hevc_profile_tier_level(sps: &[u8]) -> Option<HevcProfileTierLevel> {
         profile_compatibility_flags,
         constraint_indicator_flags,
         level_idc,
+        width,
+        height,
         max_sub_layers_minus1,
         temporal_id_nested,
         chroma_format_idc,
