@@ -503,7 +503,9 @@ items).
   0 for 15 days): a thread that only spins on the two clocks saw 29 gaps
   over 1 ms in an idle minute (worst 9.3 ms), each charged to it as thread
   CPU. Thread CPU on this VPS therefore includes hypervisor descheduling,
-  and a poll's multi-millisecond CPU is not evidence of work.
+  so a poll's multi-millisecond CPU is not by itself evidence of work
+  [inference: the system share can also be real kernel work such as socket
+  I/O or futex wakes, which these runs do not exclude].
 - Decision: no allocator or kernel setting; the tail is left to host
   qualification. What would close the item is the same five runs on a host
   that reports steal (or bare metal), or a poll cost measured in guest

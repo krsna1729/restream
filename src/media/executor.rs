@@ -757,7 +757,8 @@ mod tests {
         let (class, service) = (PollTiming::default(), PollTiming::default());
         poll_timed([&class, &service], true, async {
             spin_cpu(Duration::from_millis(5));
-            // Fresh anonymous pages fault in on first touch.
+            // Fresh anonymous pages fault in on first touch; how many depends
+            // on glibc reuse and THP, so only the charging is asserted.
             let pages = vec![1u8; 4 << 20];
             std::hint::black_box(&pages);
         })
@@ -768,7 +769,7 @@ mod tests {
         assert_eq!(stats.max_cpu_us, stats.cpu_us);
         assert_eq!((stats.polls_over_cpu_1ms, stats.polls_over_cpu_4ms), (1, 1));
         let usage = stats.usage.clone().expect("usage switched on");
-        assert!(usage.all.minor_faults >= 512, "{usage:?}");
+        assert!(usage.all.minor_faults >= 1, "{usage:?}");
         assert_eq!(usage.over_cpu_1ms, usage.all, "the one poll is a slow one");
         assert_eq!(stats, service.read(true));
         assert!(class.read(false).usage.is_none(), "usage off is omitted");
