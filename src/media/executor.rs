@@ -757,10 +757,25 @@ mod tests {
         let (class, service) = (PollTiming::default(), PollTiming::default());
         poll_timed([&class, &service], true, async {
             spin_cpu(Duration::from_millis(5));
-            // Fresh anonymous pages fault in on first touch; how many depends
-            // on glibc reuse and THP, so only the charging is asserted.
-            let pages = vec![1u8; 4 << 20];
-            std::hint::black_box(&pages);
+            // A fresh private mapping faults on first touch whatever glibc's
+            // arena holds; MADV_NOHUGEPAGE keeps it one fault per page.
+            const LEN: usize = 64 * 4096;
+            // SAFETY: an anonymous private mapping owned by this block,
+            // checked, written within bounds, then unmapped.
+            unsafe {
+                let region = libc::mmap(
+                    std::ptr::null_mut(),
+                    LEN,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                    -1,
+                    0,
+                );
+                assert_ne!(region, libc::MAP_FAILED);
+                libc::madvise(region, LEN, libc::MADV_NOHUGEPAGE);
+                std::ptr::write_bytes(region.cast::<u8>(), 1, LEN);
+                libc::munmap(region, LEN);
+            }
         })
         .await;
         let stats = class.read(true);
@@ -769,7 +784,7 @@ mod tests {
         assert_eq!(stats.max_cpu_us, stats.cpu_us);
         assert_eq!((stats.polls_over_cpu_1ms, stats.polls_over_cpu_4ms), (1, 1));
         let usage = stats.usage.clone().expect("usage switched on");
-        assert!(usage.all.minor_faults >= 1, "{usage:?}");
+        assert!(usage.all.minor_faults >= 64, "{usage:?}");
         assert_eq!(usage.over_cpu_1ms, usage.all, "the one poll is a slow one");
         assert_eq!(stats, service.read(true));
         assert!(class.read(false).usage.is_none(), "usage off is omitted");
