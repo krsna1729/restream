@@ -509,8 +509,8 @@ async fn verify_operation_by_id(state: &AppState, operation_id: &str) -> axum::r
         .agent_execution
         .complete_verify(operation_id, verification)
     {
-        Some(record) => Json(crate::agent_execution::public_record(&record)).into_response(),
-        None => operation_store_error(crate::agent_execution::OperationStoreError::NotFound),
+        Ok(record) => Json(crate::agent_execution::public_record(&record)).into_response(),
+        Err(err) => operation_store_error(err),
     }
 }
 
@@ -806,6 +806,11 @@ fn operation_store_error(
             StatusCode::CONFLICT,
             "alreadyTerminal",
             "Operation has already reached a terminal state",
+        ),
+        OperationStoreError::NotApplied => (
+            StatusCode::CONFLICT,
+            "notApplied",
+            "Operation must be applied before verify",
         ),
     };
     (
