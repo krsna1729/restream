@@ -60,9 +60,12 @@ pub(crate) struct SrtFabricEgressConnectSpec {
     stream_id: String,
     passphrase: Option<String>,
     key_length: Option<srt_proto::crypto::KeyLength>,
-    /// `latency=` (TSBPD delay proposed in the handshake); `None` keeps the
-    /// transport default.
+    /// The last usable `latency=` (TSBPD delay proposed in the handshake);
+    /// `None` keeps the transport default.
     latency: Option<Duration>,
+    /// The first `latency=` value that could not be used (stored before the
+    /// API checked it); it was ignored, and the leaf warns about it.
+    ignored_latency: Option<String>,
     bond_type: GroupType,
     /// This output's own connect attempt duration
     /// (`LeafPolicy.connect_timeout`). It becomes the request-local
@@ -78,6 +81,7 @@ impl SrtFabricEgressConnectSpec {
         let mut passphrase = None;
         let mut key_length = None;
         let mut latency = None;
+        let mut ignored_latency = None;
         let mut bond_type = GroupType::Backup;
         let mut peers = vec![host.to_string()];
         for (key, value) in query_pairs(query) {
@@ -90,7 +94,12 @@ impl SrtFabricEgressConnectSpec {
                         .ok()
                         .and_then(srt_proto::crypto::KeyLength::from_len)
                 }
-                "latency" => latency = parse_latency(value).ok(),
+                "latency" => match parse_latency(value) {
+                    Ok(delay) => latency = Some(delay),
+                    Err(_) => {
+                        ignored_latency.get_or_insert_with(|| value.to_string());
+                    }
+                },
                 "bond" => peers.extend(value.split(',').map(str::to_string)),
                 "type" => match value.to_ascii_lowercase().as_str() {
                     "broadcast" => bond_type = GroupType::Broadcast,
@@ -106,6 +115,7 @@ impl SrtFabricEgressConnectSpec {
             passphrase,
             key_length,
             latency,
+            ignored_latency,
             bond_type,
             connect_timeout: connect_timeout.max(Duration::from_millis(1)),
         }
@@ -113,6 +123,11 @@ impl SrtFabricEgressConnectSpec {
 
     pub(crate) fn peer_hosts(&self) -> &[String] {
         &self.peer_hosts
+    }
+
+    /// The first stored `latency=` value this spec ignored as unusable.
+    pub(crate) fn ignored_latency(&self) -> Option<&str> {
+        self.ignored_latency.as_deref()
     }
 
     fn session(&self) -> SessionConfig {
@@ -474,6 +489,32 @@ mod tests {
         assert_eq!(
             request_latencies("srt://127.0.0.1:9000?latency=200000", &["127.0.0.1:9000"]),
             [SessionConfig::default().latency()]
+        );
+    }
+
+    /// A stored unusable `latency=` is ignored: it never clobbers a usable
+    /// one in either order, and the spec names it for the leaf's warning.
+    #[test]
+    fn an_unusable_stored_latency_is_ignored_and_reported() {
+        let peer = &["127.0.0.1:9000"];
+        for url in [
+            "srt://127.0.0.1:9000?latency=300&latency=200000",
+            "srt://127.0.0.1:9000?latency=fast&latency=300",
+        ] {
+            assert_eq!(
+                request_latencies(url, peer),
+                [Duration::from_millis(300)],
+                "{url}"
+            );
+        }
+        let spec = |url| SrtFabricEgressConnectSpec::from_url(url, TIMEOUT);
+        assert_eq!(
+            spec("srt://127.0.0.1:9000?latency=200000&latency=fast").ignored_latency(),
+            Some("200000")
+        );
+        assert_eq!(
+            spec("srt://127.0.0.1:9000?latency=300").ignored_latency(),
+            None
         );
     }
 }

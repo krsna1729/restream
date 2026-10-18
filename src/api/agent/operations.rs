@@ -15,6 +15,7 @@ use super::super::{
     outputs::{
         CUSTOM_OUTPUT_ENCODING_ERROR, MONITORING_URL_SCHEME_ERROR, OUTPUT_URL_SCHEME_ERROR,
         is_supported_monitoring_url, is_supported_output_url, normalize_monitoring_url,
+        validate_output_url_for_config,
     },
     state::{MAX_NAME_LEN, MAX_OUTPUT_CONFIG_LEN, MAX_URL_LEN, to_hex},
 };
@@ -26,10 +27,7 @@ use super::{agent_health_snapshot, pipeline_input_is_on, queries::build_agent_pl
 use crate::{
     alerts,
     application::services::agent_service::{AgentOutputMutation, AgentOutputMutationOutcome},
-    domain::{
-        output_spec::{OutputConfig, ProtocolCapabilities},
-        state::DesiredOutputState,
-    },
+    domain::{output_spec::OutputConfig, state::DesiredOutputState},
 };
 
 #[cfg(feature = "agent-execution")]
@@ -472,9 +470,7 @@ fn validate_output_fields(
     if !is_supported_output_url(url) {
         return Err(OUTPUT_URL_SCHEME_ERROR.to_string());
     }
-    config
-        .validate_capabilities(ProtocolCapabilities::from_output(url, config))
-        .map_err(|error| error.message().to_string())?;
+    validate_output_url_for_config(url, config)?;
     if let Some(monitoring_url) = monitoring_url
         && !is_supported_monitoring_url(monitoring_url)
     {
@@ -845,5 +841,23 @@ mod tests {
             error,
             "Output video codec is not supported by the selected protocol mode"
         );
+    }
+
+    /// Agent-executed outputs face the same per-scheme URL checks as the
+    /// HTTP API: what the egress leaf cannot use is refused up front.
+    #[cfg(feature = "agent-execution")]
+    #[test]
+    fn agent_execution_refuses_output_urls_the_leaf_cannot_use() {
+        let config = OutputConfig::source();
+        let validate = |url| validate_output_fields("Agent output", url, None, &config, "stopped");
+        validate("srt://example.com:9000?streamid=k&latency=200").expect("200 ms SRT latency");
+        let error = validate("srt://example.com:9000?latency=200000")
+            .expect_err("FFmpeg's microsecond latency is refused");
+        assert!(error.contains("20-8000 milliseconds"), "{error}");
+        assert_eq!(
+            validate("rtmp://example.com/live").expect_err("no stream key"),
+            crate::api::outputs::RTMP_OUTPUT_URL_ERROR
+        );
+        validate("moqt://relay.example/live?insecure=maybe").expect_err("unusable MoQ URL");
     }
 }

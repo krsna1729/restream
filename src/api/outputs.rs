@@ -334,6 +334,36 @@ fn validate_output_payload_fields(
     Ok(output_config)
 }
 
+/// What the egress leaf for `url`'s scheme can actually use, checked for
+/// every output mutation (HTTP and agent execution) so a URL is refused
+/// here rather than failing on every connect attempt. The message is the
+/// 400 body.
+pub(super) fn validate_output_url_for_config(
+    url: &str,
+    output_config: &OutputConfig,
+) -> Result<(), String> {
+    let scheme = OutputUrlScheme::from_url(url);
+    // The leaf connects only to `app/stream-key`.
+    if scheme.is_rtmp_family() && crate::media::rtmp::parse_rtmp_url(url).is_none() {
+        return Err(RTMP_OUTPUT_URL_ERROR.to_string());
+    }
+    if scheme == OutputUrlScheme::Moqt {
+        crate::media::moq::egress::parse_moq_url(url)
+            .map_err(|error| error.message().to_string())?;
+    }
+    if scheme == OutputUrlScheme::Srt {
+        crate::media::srt::validate_srt_egress_url(url)?;
+    }
+    if matches!(output_config.protocol, OutputProtocolConfig::Rtmp { .. })
+        && !scheme.is_rtmp_family()
+    {
+        return Err(OUTPUT_PROTOCOL_CONFIG_ERROR.to_string());
+    }
+    output_config
+        .validate_capabilities(ProtocolCapabilities::from_output(url, output_config))
+        .map_err(|error| error.message().to_string())
+}
+
 fn validate_output_transport(
     payload: &OutputPayload,
     output_config: OutputConfig,
@@ -343,32 +373,8 @@ fn validate_output_transport(
     let Some(url) = normalize_output_url(&payload.url) else {
         return Err(Box::new(bad_request(OUTPUT_URL_PARSE_ERROR)));
     };
-    let scheme = OutputUrlScheme::from_url(&url);
-    // The leaf connects only to `app/stream-key`; reject what it cannot use
-    // here rather than let the output fail on every attempt.
-    if scheme.is_rtmp_family() && crate::media::rtmp::parse_rtmp_url(&url).is_none() {
-        return Err(Box::new(bad_request(RTMP_OUTPUT_URL_ERROR)));
-    }
-    if scheme == OutputUrlScheme::Moqt
-        && let Err(error) = crate::media::moq::egress::parse_moq_url(&url)
-    {
-        return Err(Box::new(bad_request(error.message())));
-    }
-    if scheme == OutputUrlScheme::Srt
-        && let Err(error) = crate::media::srt::validate_srt_egress_url(&url)
-    {
-        return Err(Box::new(bad_request(error)));
-    }
-    if matches!(output_config.protocol, OutputProtocolConfig::Rtmp { .. })
-        && !scheme.is_rtmp_family()
-    {
-        return Err(Box::new(bad_request(OUTPUT_PROTOCOL_CONFIG_ERROR)));
-    }
-    if let Err(error) =
-        output_config.validate_capabilities(ProtocolCapabilities::from_output(&url, &output_config))
-    {
-        return Err(Box::new(bad_request(error.message())));
-    }
+    validate_output_url_for_config(&url, &output_config)
+        .map_err(|error| Box::new(bad_request(error)))?;
     let monitoring_url = normalize_monitoring_url(payload.monitoring_url.as_deref())
         .map_err(|error| Box::new(bad_request(error)))?;
 

@@ -125,7 +125,11 @@ items).
   and the Compio Owner (69.7-74.6 MB over four runs), with a late-window plateau
   in each (candidate ~197 MB, baseline ~184 MB). No Compio-specific retry-memory
   regression, so the threshold was deliberately left unchanged; this debt
-  predates the cutover. Evidence is in git history
+  predates the cutover. New runs in #374 passed at +7.6 MiB (bench) and
+  +4.7 MiB (debug), and the scenario now gates CI's concurrency contract and
+  the nightly release shards. These passes do not attribute the previous
+  ~70 MB growth; attribution remains open and the threshold is unchanged.
+  Earlier evidence is in git history
   (`test/harness/baselines/srt-compio-owner-final/`, removed with the ledgers). Filed: 2026-09-20 by claude.
 
 ### Q-029 [performance] [sonnet] Close the payload-cache delivery watch item
