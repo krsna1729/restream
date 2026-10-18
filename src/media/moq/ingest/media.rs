@@ -13,6 +13,14 @@
 //! fragments and convert through the HLS-push fMP4 demux ([`super::cmaf`]),
 //! which gives real decode times.
 
+#![deny(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
+
 use std::fmt;
 use std::ops::ControlFlow;
 
@@ -120,7 +128,7 @@ impl TrackSet {
             rejected,
         } = catalog;
         let mut set = Self {
-            tracks: Vec::with_capacity(1 + audio.len().min(MAX_AUDIO_TRACKS)),
+            tracks: Vec::with_capacity(audio.len().min(MAX_AUDIO_TRACKS).saturating_add(1)),
             rejected,
         };
         if let Some((name, config)) = video {
@@ -134,7 +142,7 @@ impl TrackSet {
                 continue;
             }
             if set.take(IngestTrack::audio(name, config, audio_tracks)) {
-                audio_tracks += 1;
+                audio_tracks = audio_tracks.saturating_add(1);
             }
         }
         set
@@ -304,7 +312,8 @@ impl IngestTrack {
                 let header = adts
                     .adts_header(payload.len())
                     .ok_or(ConvertError::AudioFrameTooLarge(payload.len()))?;
-                let mut adts_frame = BytesMut::with_capacity(header.len() + payload.len());
+                let mut adts_frame =
+                    BytesMut::with_capacity(header.len().saturating_add(payload.len()));
                 adts_frame.put_slice(&header);
                 adts_frame.put_slice(&payload);
                 out.push(MediaPacket {
@@ -363,7 +372,11 @@ impl VideoTrack {
             (VideoFraming::AnnexB, None) => payload.clone(),
             (framing, inject) => {
                 let mut out = BytesMut::with_capacity(
-                    payload.len() + payload.len() / 64 + 4 + inject.map_or(0, Bytes::len),
+                    payload
+                        .len()
+                        .saturating_add(payload.len() / 64)
+                        .saturating_add(4)
+                        .saturating_add(inject.map_or(0, Bytes::len)),
                 );
                 if let Some(sets) = inject {
                     out.put_slice(sets);

@@ -7,6 +7,14 @@
 //! payload. Video groups are GOPs, audio groups about a second; the session
 //! profile picks the grouping, not this module.
 
+#![deny(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
+
 use std::fmt;
 use std::ops::ControlFlow;
 use std::time::Duration;
@@ -183,7 +191,7 @@ fn h265_type(nalu: &[u8]) -> Option<u8> {
 /// SPS and PPS as Annex-B. Truncation, or a record without an SPS, is `None`.
 fn hvcc_config(record: &[u8]) -> Option<(Bytes, u8)> {
     let (header, mut rest) = record.split_first_chunk::<22>()?;
-    let size = (header[21] & 0x03) + 1;
+    let size = (header[21] & 0x03).saturating_add(1);
     let (&arrays, tail) = rest.split_first()?;
     rest = tail;
     let mut sets = Vec::new();

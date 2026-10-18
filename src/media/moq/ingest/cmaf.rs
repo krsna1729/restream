@@ -3,6 +3,14 @@
 //! fMP4 demux ([`Fmp4Demux`]), so real decode times, composition offsets,
 //! Annex-B video and ADTS audio come out as they do for HLS push.
 
+#![deny(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
+
 use bytes::Bytes;
 
 use crate::media::ingest_publisher::fmp4::Fmp4Demux;
