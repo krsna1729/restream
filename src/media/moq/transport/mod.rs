@@ -1,13 +1,15 @@
-//! The Compio QUIC transport moq-net's lite driver runs over.
+//! The Compio QUIC transport moq-net's drivers run over.
 //!
 //! [`MoqSession`] implements `web_transport_trait::poll` (0.4) over one
-//! compio-quic connection, either native QUIC (the ALPN names the moq-lite
-//! version) or one WebTransport session over HTTP/3 (ALPN `h3`; the CONNECT
-//! subprotocol names the version). Every type here is `!Send` and lives on the
-//! Compio thread that owns the connection: [`accept`] / [`connect`] build a
-//! session, moq-net's `Server::accept_request_lite` / `Client::connect_lite`
-//! run the MoQ handshake on it, and [`run_driver`] drives the resulting moq-net
-//! driver with Compio timers.
+//! compio-quic connection, either native QUIC (the ALPN names the MoQ
+//! version: moq-lite or an IETF MOQT draft) or one WebTransport session over
+//! HTTP/3 (ALPN `h3`; the CONNECT subprotocol names the version). Every type
+//! here is `!Send` and lives on the Compio thread that owns the connection:
+//! [`accept`] / [`connect`] build a session, moq-net's
+//! `Server::accept_request` / `Client::connect` run the MoQ handshake on it
+//! (the vendored `unsend` patch admits this `!Send` transport for the IETF
+//! drafts too), and [`run_driver`] drives the resulting moq-net driver with
+//! Compio timers.
 
 mod driver;
 mod session;
@@ -30,25 +32,26 @@ pub(crate) use session::MoqSession;
 
 use crate::media::srt::AddressFamily;
 
-/// The moq-lite versions Restream speaks, most preferred first: a native
-/// client offers them as ALPNs, a WebTransport client as subprotocols. They
-/// are moq-net's `ALPNS` minus the legacy `moql` SETUP negotiation, which
-/// moq-net's `!Send` (lite-only) entry points refuse.
-pub(crate) const CLIENT_ALPNS: &[&str] =
-    &["moq-lite-06", "moq-lite-05", "moq-lite-04", "moq-lite-03"];
+/// Every MoQ version Restream speaks, most preferred first: moq-net's
+/// `ALPNS` (moq-lite, the legacy `moql` SETUP negotiation, IETF MOQT drafts
+/// 14-22). A native client offers them as ALPNs, a WebTransport client as
+/// subprotocols.
+pub(crate) const MOQ_ALPNS: &[&str] = moq_net::ALPNS;
 
 /// HTTP/3, under which a browser opens a WebTransport session.
 const H3_ALPN: &str = "h3";
 
-/// Every ALPN a MoQ listener offers: the native moq-lite versions and `h3`.
-/// Build the listener's TLS configuration with these (`tls::server_config`).
-pub(crate) const SERVER_ALPNS: &[&str] = &[
-    "moq-lite-06",
-    "moq-lite-05",
-    "moq-lite-04",
-    "moq-lite-03",
-    H3_ALPN,
-];
+/// Every ALPN a MoQ listener offers: [`MOQ_ALPNS`] and `h3`. Build the
+/// listener's TLS configuration with these (`tls::server_config`).
+pub(crate) const SERVER_ALPNS: [&str; MOQ_ALPNS.len() + 1] = {
+    let mut alpns = [H3_ALPN; MOQ_ALPNS.len() + 1];
+    let mut index = 0;
+    while index < MOQ_ALPNS.len() {
+        alpns[index] = MOQ_ALPNS[index];
+        index += 1;
+    }
+    alpns
+};
 
 /// Upper bound on [`accept`] and [`connect`]: the QUIC handshake plus, for
 /// WebTransport, the HTTP/3 SETTINGS and CONNECT exchange. A peer that stalls
@@ -58,7 +61,7 @@ pub(crate) const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// How an accepted session reached us.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TransportMode {
-    /// Native QUIC; the ALPN named the moq-lite version.
+    /// Native QUIC; the ALPN named the MoQ version.
     Native,
     /// A WebTransport session over HTTP/3 (browsers).
     WebTransport,
@@ -68,8 +71,8 @@ pub(crate) enum TransportMode {
 pub(crate) struct Accepted {
     pub session: MoqSession,
     pub mode: TransportMode,
-    /// The WebTransport CONNECT `:path`; empty for native QUIC, where
-    /// moq-lite carries the path in its own SETUP.
+    /// The WebTransport CONNECT `:path`; empty for native QUIC, where the
+    /// MoQ SETUP carries the path.
     pub path: String,
     /// The CONNECT query string (without `?`), if any; `None` for native QUIC.
     pub query: Option<String>,
@@ -159,7 +162,7 @@ pub(crate) fn client_endpoint(family: AddressFamily) -> impl Future<Output = io:
 
 /// Completes an incoming connection: the QUIC handshake, then, when the ALPN
 /// is `h3`, the HTTP/3 SETTINGS exchange and the WebTransport CONNECT (the
-/// subprotocol picks the moq-lite version). Bounded by [`HANDSHAKE_TIMEOUT`];
+/// subprotocol picks the MoQ version). Bounded by [`HANDSHAKE_TIMEOUT`];
 /// a connection without a MoQ ALPN is closed.
 pub(crate) async fn accept(incoming: Incoming) -> Result<Accepted, TransportError> {
     compio::time::timeout(HANDSHAKE_TIMEOUT, accept_connection(incoming))
@@ -173,7 +176,7 @@ async fn accept_connection(incoming: Incoming) -> Result<Accepted, TransportErro
     if alpn.as_deref() == Some(H3_ALPN.as_bytes()) {
         return webtransport::accept(conn).await;
     }
-    let protocol = lite_protocol(&conn, alpn.as_deref())?;
+    let protocol = moq_protocol(&conn, alpn.as_deref())?;
     Ok(Accepted {
         session: MoqSession::new(conn, protocol, None),
         mode: TransportMode::Native,
@@ -182,8 +185,8 @@ async fn accept_connection(incoming: Incoming) -> Result<Accepted, TransportErro
     })
 }
 
-/// Dials `remote` over native QUIC offering [`CLIENT_ALPNS`] (`tls` must
-/// carry them). Bounded by [`HANDSHAKE_TIMEOUT`].
+/// Dials `remote` over native QUIC offering the MoQ ALPNs `tls` carries
+/// (all or some of [`MOQ_ALPNS`]). Bounded by [`HANDSHAKE_TIMEOUT`].
 pub(crate) async fn connect(
     endpoint: &Endpoint,
     remote: SocketAddr,
@@ -198,7 +201,7 @@ pub(crate) async fn connect(
         .map_err(|_| handshake_timeout())?
         .map_err(TransportError::Connection)?;
     let alpn = negotiated_alpn(&mut conn)?;
-    let protocol = lite_protocol(&conn, alpn.as_deref())?;
+    let protocol = moq_protocol(&conn, alpn.as_deref())?;
     Ok(MoqSession::new(conn, protocol, None))
 }
 
@@ -209,10 +212,10 @@ fn negotiated_alpn(conn: &mut Connection) -> Result<Option<Vec<u8>>, TransportEr
         .protocol)
 }
 
-/// The moq-lite version `alpn` names; otherwise the connection is closed.
-fn lite_protocol(conn: &Connection, alpn: Option<&[u8]>) -> Result<&'static str, TransportError> {
+/// The MoQ version `alpn` names; otherwise the connection is closed.
+fn moq_protocol(conn: &Connection, alpn: Option<&[u8]>) -> Result<&'static str, TransportError> {
     alpn.and_then(|alpn| {
-        CLIENT_ALPNS
+        MOQ_ALPNS
             .iter()
             .copied()
             .find(|known| known.as_bytes() == alpn)

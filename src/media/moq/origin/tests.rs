@@ -183,7 +183,7 @@ fn a_viewer_with_a_token_plays_the_pipeline_over_loopback_quic() {
         let server = origin.clone();
         compio::runtime::spawn(async move {
             let handshake = moq_net::Server::new()
-                .accept_request_lite(Instant::now(), accepted.session.clone())
+                .accept_request(Instant::now(), accepted.session.clone())
                 .await
                 .unwrap();
             let grant = server
@@ -198,7 +198,7 @@ fn a_viewer_with_a_token_plays_the_pipeline_over_loopback_quic() {
         let (_session, driver) = moq_net::Client::new()
             .with_subscriber(viewer.clone())
             .with_path(format!("/?token={token}"))
-            .connect_lite(Instant::now(), client)
+            .connect(Instant::now(), client)
             .await
             .unwrap();
         compio::runtime::spawn(transport::run_driver(driver)).detach();

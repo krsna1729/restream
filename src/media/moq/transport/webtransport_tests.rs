@@ -5,7 +5,7 @@ use moq_net::transport::poll::Session as _;
 use web_transport_trait::poll::Session as _;
 
 use super::session_tests::{
-    dropped_stream_is_reset, exchange_streams, last_drop_closes, moq_lite_round_trip,
+    dropped_stream_is_reset, exchange_streams, last_drop_closes, moq_round_trip,
     peer_close_is_observed,
 };
 use super::test_support::{LOOPBACK_SERVER_NAME, Loopback, loopback_client_tls, run};
@@ -17,7 +17,7 @@ use super::*;
 const URL: &str = "https://localhost/live/key?token=abc";
 
 async fn pair(loopback: &Loopback) -> (MoqSession, MoqSession) {
-    let (client, accepted) = loopback.webtransport(URL, CLIENT_ALPNS).await;
+    let (client, accepted) = loopback.webtransport(URL, MOQ_ALPNS).await;
     (
         client.expect("WebTransport connect"),
         accepted.expect("WebTransport accept").session,
@@ -64,7 +64,18 @@ fn webtransport_moq_lite_session_round_trips_a_frame() {
     run(async {
         let loopback = Loopback::new().await;
         let (client, server) = pair(&loopback).await;
-        moq_lite_round_trip(client, server).await;
+        moq_round_trip(client, server).await;
+    });
+}
+
+#[test]
+fn webtransport_ietf_session_round_trips_a_frame() {
+    run(async {
+        let loopback = Loopback::new().await;
+        let (client, accepted) = loopback.webtransport(URL, &["moqt-19"]).await;
+        let (client, accepted) = (client.unwrap(), accepted.unwrap());
+        assert_eq!(accepted.session.protocol(), Some("moqt-19"));
+        moq_round_trip(client, accepted.session).await;
     });
 }
 

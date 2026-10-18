@@ -346,7 +346,7 @@ fn a_loopback_publisher_reaches_the_ring_and_shutdown_releases_it() {
         // SETUP, which `publish` does: run both sides together.
         let server = async {
             let handshake = moq_net::Server::new()
-                .accept_request_lite(Instant::now(), accepted.session.clone())
+                .accept_request(Instant::now(), accepted.session.clone())
                 .await
                 .unwrap();
             publish(
@@ -362,7 +362,7 @@ fn a_loopback_publisher_reaches_the_ring_and_shutdown_releases_it() {
         let publisher = async {
             let (session, driver) = moq_net::Client::new()
                 .with_publisher(&origin)
-                .connect_lite(Instant::now(), client)
+                .connect(Instant::now(), client)
                 .await
                 .unwrap();
             compio::runtime::spawn(transport::run_driver(driver)).detach();

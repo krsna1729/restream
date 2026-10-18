@@ -5,7 +5,8 @@
 //! - Handshake (server): open our control stream with SETTINGS (WebTransport
 //!   enabled), accept the CONNECT stream, read its HEADERS frame byte-exactly
 //!   (anything after it on that stream is capsules) and answer 200 with the
-//!   first moq-lite version the client offers as a subprotocol.
+//!   most preferred MoQ version (moq-lite or IETF MOQT) the client offers as
+//!   a subprotocol.
 //! - Streams: a WebTransport uni stream starts `0x54, session id`, a bi stream
 //!   `0x41, session id` (both QUIC varints). Peer HTTP/3 control and QPACK
 //!   streams are held open unread; a wrong session id is stopped with
@@ -41,7 +42,7 @@ use web_transport_proto::{Capsule, CapsuleError, ConnectRequest, ConnectResponse
 use super::session::{
     CloseCell, MoqSession, connection_error, publish_close, read_error, write_error,
 };
-use super::{Accepted, CLIENT_ALPNS, TransportError, TransportMode};
+use super::{Accepted, MOQ_ALPNS, TransportError, TransportMode};
 
 /// HTTP/3 uni stream types (RFC 9114 §6.2, RFC 9204 §4.2) and the
 /// WebTransport stream signals.
@@ -637,7 +638,7 @@ pub(super) async fn accept(conn: Connection) -> Result<Accepted, TransportError>
             ));
         }
     };
-    let Some(protocol) = CLIENT_ALPNS
+    let Some(protocol) = MOQ_ALPNS
         .iter()
         .copied()
         .find(|known| request.protocols.iter().any(|offered| offered == known))
@@ -647,7 +648,7 @@ pub(super) async fn accept(conn: Connection) -> Result<Accepted, TransportError>
             send,
             StatusCode::BAD_REQUEST,
             H3_REQUEST_REJECTED,
-            "WebTransport CONNECT offers no supported moq-lite subprotocol".to_owned(),
+            "WebTransport CONNECT offers no supported MoQ subprotocol".to_owned(),
         ));
     };
     let mut response = Vec::new();
@@ -729,14 +730,9 @@ pub(super) async fn connect(
     let protocol = response
         .protocol
         .as_deref()
-        .and_then(|selected| {
-            CLIENT_ALPNS
-                .iter()
-                .copied()
-                .find(|known| *known == selected)
-        })
+        .and_then(|selected| MOQ_ALPNS.iter().copied().find(|known| *known == selected))
         .ok_or_else(|| {
-            TransportError::Handshake("server selected no moq-lite subprotocol".to_owned())
+            TransportError::Handshake("server selected no MoQ subprotocol".to_owned())
         })?;
     let session_id = u64::from(send.id());
     let session = WtSession::new(session_id, control, send, held, held_types);

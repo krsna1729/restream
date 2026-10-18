@@ -20,10 +20,11 @@ fn origin(hop: u64) -> moq_net::origin::Producer {
     producer
 }
 
-/// moq-net's lite handshake over `client`/`server` (`connect_lite` /
-/// `accept_request_lite`), then one frame published on the client and read
-/// back through the server's subscription.
-pub(super) async fn moq_lite_round_trip(client: MoqSession, server: MoqSession) {
+/// moq-net's handshake over `client`/`server` (`Client::connect` /
+/// `Server::accept_request`, whatever version the ALPN names), then one
+/// frame published on the client and read back through the server's
+/// subscription.
+pub(super) async fn moq_round_trip(client: MoqSession, server: MoqSession) {
     let publisher = origin(1);
     let broadcast = publisher.create_broadcast("room").unwrap();
     let track = broadcast.create_track("video", None).unwrap();
@@ -34,18 +35,18 @@ pub(super) async fn moq_lite_round_trip(client: MoqSession, server: MoqSession) 
         let (session, driver) = Client::new()
             .with_publisher(publisher.consume())
             .with_path("live/key")
-            .connect_lite(Instant::now(), client)
+            .connect(Instant::now(), client)
             .await
-            .expect("connect_lite");
+            .expect("connect");
         compio::runtime::spawn(run_driver(driver)).detach();
         session
     };
     let answer = async {
         let handshake = Server::new()
             .with_subscriber(subscriber.clone())
-            .accept_request_lite(Instant::now(), server)
+            .accept_request(Instant::now(), server)
             .await
-            .expect("accept_request_lite");
+            .expect("accept_request");
         assert_eq!(handshake.path(), "live/key");
         let (session, driver) = handshake.ok().await.expect("handshake ok");
         compio::runtime::spawn(run_driver(driver)).detach();
@@ -155,10 +156,9 @@ pub(super) async fn last_drop_closes(mut client: MoqSession, server: MoqSession)
 }
 
 #[test]
-fn the_lite_alpns_are_moq_nets_without_legacy_negotiation() {
-    assert_eq!(CLIENT_ALPNS, &moq_net::ALPNS[..4]);
-    assert_eq!(&SERVER_ALPNS[..4], CLIENT_ALPNS);
-    assert_eq!(SERVER_ALPNS[4], "h3");
+fn the_listener_offers_every_moq_version_and_h3() {
+    assert_eq!(&SERVER_ALPNS[..MOQ_ALPNS.len()], MOQ_ALPNS);
+    assert_eq!(SERVER_ALPNS.last(), Some(&"h3"));
 }
 
 #[test]
@@ -173,8 +173,24 @@ fn native_moq_lite_session_round_trips_a_frame() {
         );
         assert_eq!(client.protocol(), Some("moq-lite-06"));
         assert_eq!(accepted.session.protocol(), Some("moq-lite-06"));
-        moq_lite_round_trip(client, accepted.session).await;
+        moq_round_trip(client, accepted.session).await;
     });
+}
+
+/// The IETF drafts run over the `!Send` transport through the vendored
+/// `unsend` patch: draft-19 (SETUP on uni streams) and draft-16 (the legacy
+/// bidi SETUP exchange).
+#[test]
+fn native_ietf_sessions_round_trip_a_frame() {
+    for alpn in ["moqt-19", "moqt-16"] {
+        run(async {
+            let loopback = Loopback::new().await;
+            let (client, accepted) = loopback.native_offering(&[alpn]).await;
+            assert_eq!(client.protocol(), Some(alpn));
+            assert_eq!(accepted.session.protocol(), Some(alpn));
+            moq_round_trip(client, accepted.session).await;
+        });
+    }
 }
 
 #[test]
