@@ -293,3 +293,180 @@ fn progress_checks_require_movement_since_the_baseline() {
     let stalled = json!({"videoCount": 45, "audioCount": 45, "mediaProgressMs": 20_000});
     assert!(!delivered_progress_ok(&baseline_sink, &stalled));
 }
+
+#[test]
+fn pull_sessions_add_a_source_and_their_own_pipelines() {
+    let pulls = HlsPushOptions::from_args(&args(&["--pull-sessions", "4", "--poll-usage"]))
+        .expect("pull arm parses");
+    assert_eq!(pulls.pull_sessions, 4);
+    assert!(pulls.poll_usage);
+    assert_eq!(pulls.total_publishers(), 3, "2 base + the pull source");
+    assert_eq!(pulls.total_pipelines(), 7, "plus one pipeline per pull");
+
+    let base = HlsPushOptions::from_args(&[]).expect("defaults parse");
+    assert!(!base.poll_usage, "per-poll getrusage is opt-in");
+    assert_eq!(base.total_pipelines(), 2, "no pull, no pull source");
+
+    assert!(HlsPushOptions::from_args(&args(&["--poll-usage=1"])).is_err());
+    assert!(
+        HlsPushOptions::from_args(&args(&["--base-publishers", "0", "--pull-sessions", "2"]))
+            .is_err(),
+        "pulls alone are not a base arm"
+    );
+    assert!(
+        HlsPushOptions::from_args(&args(&["--pull-sessions", "62"])).is_err(),
+        "2 base + source + 62 pulls is over the 64-pipeline cap"
+    );
+    assert!(HlsPushOptions::from_args(&args(&["--pull-sessions", "61"])).is_ok());
+}
+
+#[test]
+fn host_memory_counters_parse_and_subtract() {
+    let vmstat = "nr_free_pages 100\ncompact_stall 7\nallocstall_normal 3\n\
+                  allocstall_movable 5\nthp_fault_alloc 0\npgmajfault 9\ncompact_fail 2\nbroken\n";
+    let kept = host_memory::parse_counters(vmstat, host_memory::vmstat_key_kept);
+    assert_eq!(
+        kept.keys().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "allocstall_movable",
+            "allocstall_normal",
+            "compact_stall",
+            "pgmajfault",
+            "thp_fault_alloc"
+        ]
+    );
+    let later = host_memory::parse_counters(
+        "compact_stall 10\nallocstall_normal 3\nallocstall_movable 4\npgmajfault 12\nthp_fault_alloc 1\nallocstall_dma 2\n",
+        host_memory::vmstat_key_kept,
+    );
+    let deltas = host_memory::counter_deltas(&kept, &later);
+    assert_eq!(deltas["compact_stall"], 3);
+    assert_eq!(deltas["allocstall_normal"], 0);
+    assert_eq!(
+        deltas["allocstall_movable"], 0,
+        "a counter that went back reads 0"
+    );
+    assert_eq!(
+        deltas["allocstall_dma"], 2,
+        "a counter absent before counts from 0"
+    );
+    assert_eq!(deltas["pgmajfault"], 3);
+
+    let events = host_memory::parse_counters("low 0\nhigh 2\nmax 1\noom 0\n", |_| true);
+    assert_eq!(events.len(), 4);
+    assert_eq!(
+        host_memory::cgroup_v2_path("0::/user.slice/session-3.scope\n").as_deref(),
+        Some("/user.slice/session-3.scope")
+    );
+    assert_eq!(host_memory::cgroup_v2_path("1:name=systemd:/x\n"), None);
+    assert_eq!(
+        host_memory::thp_mode("always [madvise] never\n").as_deref(),
+        Some("madvise")
+    );
+    assert_eq!(host_memory::thp_mode("always madvise never"), None);
+}
+
+fn executor(classes: Value, services: Value) -> Value {
+    json!({"classes": classes, "services": services})
+}
+
+/// The Q-074 gate is counted in the window and per HLS session: a mutation
+/// that reports lifetime counts (no subtraction) or divides by the window
+/// in seconds rather than minutes, or forgets the session count, fails here.
+#[test]
+fn class_windows_subtract_the_start_and_rate_slow_polls_per_session_minute() {
+    let start = executor(
+        json!([
+            {"class": "hlsIngest", "active": 8, "polls": 1000, "busyUs": 90_000, "cpuUs": 80_000,
+             "maxCpuUs": 2_000, "maxPollUs": 2_500,
+             "pollsOverCpu1Ms": 4, "pollsOverCpu4Ms": 1, "pollsOverCpu16Ms": 0,
+             "usage": {"all": {"userUs": 50_000, "sysUs": 30_000, "minorFaults": 700, "majorFaults": 0},
+                       "overCpu1Ms": {"userUs": 2_000, "sysUs": 3_000, "minorFaults": 300, "majorFaults": 0}}},
+            {"class": "recording", "active": 0, "polls": 5, "busyUs": 10, "cpuUs": 9,
+             "maxCpuUs": 3, "maxPollUs": 4,
+             "pollsOverCpu1Ms": 0, "pollsOverCpu4Ms": 0, "pollsOverCpu16Ms": 0}
+        ]),
+        json!([]),
+    );
+    let end = executor(
+        json!([
+            {"class": "hlsIngest", "active": 8, "polls": 5000, "busyUs": 450_000, "cpuUs": 400_000,
+             "maxCpuUs": 9_000, "maxPollUs": 9_500,
+             "pollsOverCpu1Ms": 28, "pollsOverCpu4Ms": 9, "pollsOverCpu16Ms": 0,
+             "usage": {"all": {"userUs": 250_000, "sysUs": 150_000, "minorFaults": 9_700, "majorFaults": 1},
+                       "overCpu1Ms": {"userUs": 12_000, "sysUs": 23_000, "minorFaults": 4_300, "majorFaults": 0}}},
+            {"class": "recording", "active": 0, "polls": 5, "busyUs": 10, "cpuUs": 9,
+             "maxCpuUs": 3, "maxPollUs": 4,
+             "pollsOverCpu1Ms": 0, "pollsOverCpu4Ms": 0, "pollsOverCpu16Ms": 0}
+        ]),
+        json!([]),
+    );
+    let windows = executor_class_windows(&start, &end, 120.0);
+    assert_eq!(windows.len(), 1, "a class that did not poll is left out");
+    let hls = &windows[0];
+    assert_eq!(hls["class"], "hlsIngest");
+    assert_eq!(hls["polls"], 4000);
+    assert_eq!(hls["cpuUs"], 320_000);
+    assert_eq!(hls["cpuUsPerPoll"], 80.0);
+    assert_eq!(hls["pollsOverCpu4Ms"], 8);
+    assert_eq!(hls["maxCpuUs"], 9_000, "the maximum stays the lifetime one");
+    // 8 polls over 4 ms in 2 minutes across 8 sessions: 0.5 per minute each.
+    assert_eq!(hls["perMinutePerSession"]["over4Ms"], 0.5);
+    assert_eq!(hls["perMinutePerSession"]["over1Ms"], 1.5);
+    assert_eq!(hls["perMinutePerSession"]["over16Ms"], 0.0);
+    assert_eq!(hls["usage"]["all"]["sysUs"], 120_000);
+    assert_eq!(hls["usage"]["overCpu1Ms"]["minorFaults"], 4_000);
+    assert_eq!(hls["usage"]["all"]["majorFaults"], 1);
+
+    let without_usage = executor(
+        json!([{"class": "hlsIngest", "active": 0, "polls": 3, "cpuUs": 30}]),
+        json!([]),
+    );
+    let rows = executor_class_windows(&Value::Null, &without_usage, 60.0);
+    assert!(rows[0].get("usage").is_none(), "no usage, no usage block");
+    assert!(
+        rows[0]["perMinutePerSession"]["over4Ms"].is_null(),
+        "no session to divide by"
+    );
+}
+
+/// A pipeline's executor demand is the sum over its own services, matched by
+/// `serviceId`: a service that started inside the window counts from zero,
+/// and another pipeline's services are not charged to it.
+#[test]
+fn pipeline_window_sums_its_own_services_by_service_id() {
+    let service = |id: u64, pipeline: &str, polls: u64, cpu: u64, max: u64, over4: u64| {
+        json!({"serviceId": id, "class": "hlsFmp4", "pipelineId": pipeline, "stage": "s",
+               "polls": polls, "busyUs": cpu, "cpuUs": cpu, "maxCpuUs": max, "maxPollUs": max,
+               "pollsOverCpu1Ms": over4, "pollsOverCpu4Ms": over4, "pollsOverCpu16Ms": 0})
+    };
+    let start = executor(
+        json!([]),
+        json!([
+            service(1, "p1", 100, 1_000, 50, 0),
+            service(3, "p2", 10, 10, 5, 0)
+        ]),
+    );
+    let end = executor(
+        json!([]),
+        json!([
+            service(1, "p1", 300, 5_000, 60, 1),
+            service(2, "p1", 100, 1_000, 70, 0),
+            service(3, "p2", 900, 9_000, 9_999, 3),
+        ]),
+    );
+    let p1 = pipeline_poll_window(&start, &end, "p1");
+    assert_eq!(p1["services"], 2);
+    assert_eq!(
+        p1["polls"], 300,
+        "200 from service 1, 100 from new service 2"
+    );
+    assert_eq!(p1["cpuUs"], 5_000);
+    assert_eq!(p1["cpuUsPerPoll"], 16.7);
+    assert_eq!(p1["maxCpuUs"], 70);
+    assert_eq!(p1["pollsOverCpu4Ms"], 1);
+    assert_eq!(p1["classes"], json!(["hlsFmp4"]));
+    let none = pipeline_poll_window(&start, &end, "p3");
+    assert_eq!(none["polls"], 0);
+    assert!(none["cpuUsPerPoll"].is_null());
+}

@@ -80,12 +80,18 @@ pub(crate) struct HlsPushOptions {
     pub(crate) base_publishers: usize,
     /// Extra HLS push publishers: 0 is the baseline, >0 the treatment arm.
     pub(crate) hls_publishers: usize,
+    /// HLS pull sessions: >0 adds one RTMP `pull-source` pipeline and this
+    /// many pipelines pulling its preview.
+    pub(crate) pull_sessions: usize,
     pub(crate) segment_type: HlsSegmentType,
     pub(crate) method: HlsMethod,
     /// Rated window, in seconds, measured after every input has published.
     pub(crate) duration_secs: u64,
     /// `-hls_time`: the HLS arm's target segment duration.
     pub(crate) segment_secs: u64,
+    /// Start Restream with `RESTREAM_MEDIA_POLL_USAGE=1`, so the executor
+    /// rows carry per-poll user/system time and page faults.
+    pub(crate) poll_usage: bool,
 }
 
 impl Default for HlsPushOptions {
@@ -93,16 +99,19 @@ impl Default for HlsPushOptions {
         Self {
             base_publishers: 2,
             hls_publishers: 0,
+            pull_sessions: 0,
             segment_type: HlsSegmentType::Ts,
             method: HlsMethod::Put,
             duration_secs: 12,
             segment_secs: 2,
+            poll_usage: false,
         }
     }
 }
 
 pub(crate) const USAGE: &str = "hls-push-duty [--base-publishers N] [--hls-publishers N] \
-[--segment-type ts|fmp4] [--method put|post] [--duration-secs N] [--segment-secs N]";
+[--pull-sessions N] [--segment-type ts|fmp4] [--method put|post] [--duration-secs N] \
+[--segment-secs N] [--poll-usage]";
 
 impl HlsPushOptions {
     pub(crate) fn from_args(args: &[String]) -> Result<Self, String> {
@@ -129,12 +138,16 @@ impl HlsPushOptions {
                 "--hls-publishers" => {
                     options.hls_publishers = parse_usize(&value(&mut index)?, name)?
                 }
+                "--pull-sessions" => {
+                    options.pull_sessions = parse_usize(&value(&mut index)?, name)?
+                }
                 "--segment-type" => {
                     options.segment_type = HlsSegmentType::parse(&value(&mut index)?)?
                 }
                 "--method" => options.method = HlsMethod::parse(&value(&mut index)?)?,
                 "--duration-secs" => options.duration_secs = parse_u64(&value(&mut index)?, name)?,
                 "--segment-secs" => options.segment_secs = parse_u64(&value(&mut index)?, name)?,
+                "--poll-usage" if inline.is_none() => options.poll_usage = true,
                 other => {
                     return Err(format!(
                         "unknown hls-push-duty option {other:?}; usage: {USAGE}"
@@ -147,8 +160,14 @@ impl HlsPushOptions {
         Ok(options)
     }
 
+    /// Publishers this mode starts: base, HLS push, and the pull source.
     pub(crate) fn total_publishers(&self) -> usize {
-        self.base_publishers + self.hls_publishers
+        self.base_publishers + self.hls_publishers + usize::from(self.pull_sessions > 0)
+    }
+
+    /// Pipelines, each with its own sink: every publisher's plus the pulls.
+    pub(crate) fn total_pipelines(&self) -> usize {
+        self.total_publishers() + self.pull_sessions
     }
 
     pub(crate) fn window(&self) -> Duration {
@@ -156,17 +175,17 @@ impl HlsPushOptions {
     }
 
     fn validate(&self) -> Result<(), String> {
-        if self.total_publishers() == 0 {
+        if self.base_publishers + self.hls_publishers == 0 {
             return Err(
                 "hls-push-duty needs at least one publisher (--base-publishers or \
                  --hls-publishers)"
                     .to_string(),
             );
         }
-        if self.total_publishers() > MAX_PUBLISHERS {
+        if self.total_pipelines() > MAX_PUBLISHERS {
             return Err(format!(
-                "hls-push-duty supports at most {MAX_PUBLISHERS} publishers (got {})",
-                self.total_publishers()
+                "hls-push-duty supports at most {MAX_PUBLISHERS} pipelines (got {})",
+                self.total_pipelines()
             ));
         }
         if self.segment_secs == 0 || self.segment_secs > MAX_SEGMENT_SECS {
