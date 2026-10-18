@@ -813,6 +813,12 @@ async fn audio_router_learns_video_parameter_sets_from_live_packets() {
         "router should start without cached parameter sets when the upstream ring does not have them yet"
     );
 
+    // The producer contract: the upstream producer records the in-band
+    // parameter sets it publishes.
+    source_ring.set_video_parameter_sets(vec![
+        0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x40, 0x28, 0x02, 0xDD, 0x80, 0x00,
+        0x00, 0x00, 0x01, 0x68, 0xCE, 0x38, 0x80,
+    ]);
     source_ring.push(MediaPacket {
         media_type: MediaType::Video,
         track_index: 0,
@@ -898,4 +904,78 @@ async fn audio_router_copies_late_upstream_parameter_sets_without_inband_headers
 
     cancel.cancel();
     let _ = handle.await;
+}
+
+/// A reader of the router's output ring sees each video packet with the
+/// configuration the source published it with, also when the source changes
+/// it in the middle of one burst.
+#[tokio::test]
+async fn audio_router_copies_a_configuration_change_inside_one_burst() {
+    use crate::domain::stage::{StageKey, StageKind};
+    use crate::media::engine::MediaEngine;
+
+    const SPS: &[u8] = &[0, 0, 0, 1, 0x67, 0x42, 0, 0x1e, 0xf4, 0x05, 1, 0xec, 0x80];
+    const PPS_A: &[u8] = &[0, 0, 0, 1, 0x68, 0xce, 0x06, 0xe2];
+    const PPS_B: &[u8] = &[0, 0, 0, 1, 0x68, 0xce, 0x3c, 0x80];
+    const IDR: &[u8] = &[0, 0, 0, 1, 0x65, 0x88];
+    const P_SLICE: &[u8] = &[0, 0, 0, 1, 0x41, 0x9a];
+    let source_ring = Arc::new(RingBuffer::new(16));
+    let out_ring = Arc::new(RingBuffer::new(16));
+    let cancel = CancellationToken::new();
+    let handle = tokio::spawn(start_audio_router(
+        "pipe-video-config-burst".to_string(),
+        AudioRouting::SelectTracks { tracks: vec![0] },
+        source_ring.clone(),
+        out_ring.clone(),
+        Arc::new(MediaEngine::new()),
+        cancel.clone(),
+        StageKey::new(
+            "pipe-video-config-burst",
+            StageKind::audio_route("atrack:0", StageKind::source()),
+        ),
+    ));
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+
+    let video = |dts, is_keyframe, parts: &[&[u8]]| MediaPacket {
+        media_type: MediaType::Video,
+        track_index: 0,
+        pts: dts,
+        dts,
+        is_keyframe,
+        format: PayloadFormat::Raw,
+        payload: bytes::Bytes::from(parts.concat()),
+    };
+    // One publication (one write-index store), so the router pulls all four
+    // in one burst; the third packet starts configuration B.
+    source_ring.push_drained_batch_recording_config(&mut vec![
+        video(0, true, &[SPS, PPS_A, IDR]),
+        video(40, false, &[P_SLICE]),
+        video(80, true, &[SPS, PPS_B, IDR]),
+        video(120, false, &[P_SLICE]),
+    ]);
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+    while out_ring.get_write_idx() < 4 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "router did not forward"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    cancel.cancel();
+    let _ = handle.await;
+
+    let configs: Vec<Vec<u8>> = (0..4)
+        .map(|sequence| {
+            out_ring
+                .track_config_at(sequence, MediaType::Video, 0)
+                .expect("retained")
+                .expect("configured")
+                .bytes
+                .to_vec()
+        })
+        .collect();
+    let a = [SPS, PPS_A].concat();
+    let b = [SPS, PPS_B].concat();
+    assert_eq!(configs, [a.clone(), a, b.clone(), b]);
 }

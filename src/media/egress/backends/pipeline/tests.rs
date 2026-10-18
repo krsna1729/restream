@@ -2,7 +2,7 @@ use super::*;
 use crate::media::egress::backend::{Readiness, WaitCondition};
 use crate::media::egress::journal::{FeedEpoch, RingFeed};
 use crate::media::input_gate::InputPacketGate;
-use crate::media::packet::{MediaType, PayloadFormat};
+use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
 use bytes::Bytes;
 use std::sync::atomic::AtomicI64;
 use std::time::Duration;
@@ -98,4 +98,52 @@ fn pipeline_engine_reports_needs_when_the_feed_is_empty() {
         progress,
         EngineProgress::Needs(WaitCondition::Feed)
     ));
+}
+
+/// A reader of the target ring sees each unit with the configuration the
+/// source published it with, also when the change falls inside a later read
+/// that does not start at sequence 0.
+#[test]
+fn pipeline_engine_copies_the_source_configuration_at_its_unit() {
+    const CONFIG_A: &[u8] = &[0, 0, 0, 1, 0x67, 0x0a];
+    const CONFIG_B: &[u8] = &[0, 0, 0, 1, 0x67, 0x0b];
+    let source_ring = Arc::new(RingBuffer::new(8));
+    source_ring.set_video_parameter_sets(CONFIG_A.to_vec());
+    source_ring.push((*packet(10, true)).clone());
+    source_ring.push((*packet(20, false)).clone());
+    let feed = RingFeed::new(source_ring.clone(), Arc::new(FeedEpoch::new()));
+    let target_ring = Arc::new(RingBuffer::new(8));
+    let mut transport = transport(target_ring.clone());
+    let mut engine = PipelineEngine::<RingFeed>::default();
+    let mut cursor = FeedCursor::new(feed.epoch(), 0);
+    engine.advance(
+        &mut transport,
+        Readiness::WRITABLE,
+        &feed,
+        &mut cursor,
+        budget(),
+    );
+
+    source_ring.push((*packet(30, false)).clone());
+    source_ring.set_video_parameter_sets(CONFIG_B.to_vec());
+    source_ring.push((*packet(40, true)).clone());
+    engine.advance(
+        &mut transport,
+        Readiness::WRITABLE,
+        &feed,
+        &mut cursor,
+        budget(),
+    );
+
+    let configs: Vec<Vec<u8>> = (0..target_ring.get_write_idx())
+        .map(|sequence| {
+            target_ring
+                .track_config_at(sequence, MediaType::Video, 0)
+                .expect("retained")
+                .expect("configured")
+                .bytes
+                .to_vec()
+        })
+        .collect();
+    assert_eq!(configs, [CONFIG_A, CONFIG_A, CONFIG_A, CONFIG_B]);
 }

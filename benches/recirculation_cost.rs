@@ -94,12 +94,19 @@ fn bench_recirculation_vs_rtmp_wire_encode(c: &mut Criterion) {
             &payload_bytes,
             |b, &payload_bytes| {
                 let packets = make_packets(32, payload_bytes);
+                let source_ring = RingBuffer::new(64);
                 let target_ring = RingBuffer::new(64);
                 let registration = registration();
                 b.iter_batched(
                     RecirculationInputPublisher::default,
                     |mut publisher| {
-                        let outcome = publisher.publish(&packets, &target_ring, &registration);
+                        let outcome = publisher.publish(
+                            &source_ring,
+                            0,
+                            &packets,
+                            &target_ring,
+                            &registration,
+                        );
                         black_box(outcome);
                     },
                     BatchSize::SmallInput,
@@ -132,6 +139,7 @@ fn bench_recirculation_vs_rtmp_wire_encode(c: &mut Criterion) {
             &payload_bytes,
             |b, &payload_bytes| {
                 let packets = make_packets(32, payload_bytes);
+                let source_ring = RingBuffer::new(64);
                 let target_ring = RingBuffer::new(64);
                 let registration = registration();
                 b.iter_batched(
@@ -151,7 +159,13 @@ fn bench_recirculation_vs_rtmp_wire_encode(c: &mut Criterion) {
                         for (index, packet) in packets.iter().enumerate() {
                             rtmp_encode_one(&mut serializer, &packet.payload, index as u32 * 33);
                         }
-                        let outcome = publisher.publish(&packets, &target_ring, &registration);
+                        let outcome = publisher.publish(
+                            &source_ring,
+                            0,
+                            &packets,
+                            &target_ring,
+                            &registration,
+                        );
                         black_box(outcome);
                     },
                     BatchSize::SmallInput,

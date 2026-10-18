@@ -7,7 +7,9 @@ use crate::media::engine::IngestRegistration;
 use crate::media::engine::{EgressRegistration, MediaEngine};
 use crate::media::input_gate::{InputForwardState, InputPacketBoundary, InputTimestampMapper};
 use crate::media::packet::{MediaPacket, MediaType};
-use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
+use crate::media::ring_buffer::{
+    MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer, VideoConfigFollower,
+};
 use crate::media::standby_gop::StandbyGopCache;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -20,11 +22,19 @@ pub struct RecirculationPublishOutcome {
 pub struct RecirculationInputPublisher {
     timestamp_mapper: InputTimestampMapper,
     standby_gop: StandbyGopCache,
+    video_config: VideoConfigFollower,
+    /// Reused publication batch, split where the source's configuration
+    /// changes.
+    pending: Vec<MediaPacket>,
 }
 
 impl RecirculationInputPublisher {
+    /// Republish `units`, read from `source` starting at `first_sequence`,
+    /// into `ring`.
     pub fn publish(
         &mut self,
+        source: &RingBuffer,
+        first_sequence: usize,
         units: &[Arc<MediaPacket>],
         ring: &RingBuffer,
         registration: &IngestRegistration,
@@ -34,12 +44,14 @@ impl RecirculationInputPublisher {
         }
 
         let mut packets = units.iter().map(|packet| (**packet).clone()).collect();
-        self.forward_packets(&mut packets, ring, registration)
+        self.forward_packets(&mut packets, source, first_sequence, ring, registration)
     }
 
     fn forward_packets(
         &mut self,
         packets: &mut Vec<MediaPacket>,
+        source: &RingBuffer,
+        first_sequence: usize,
         ring: &RingBuffer,
         registration: &IngestRegistration,
     ) -> RecirculationPublishOutcome {
@@ -51,12 +63,13 @@ impl RecirculationInputPublisher {
         } else {
             InputPacketBoundary::Other
         };
-        let lease = if registration.gate.state() == InputForwardState::Active {
+        let last_sequence = first_sequence + packets.len() - 1;
+        let (lease, sequenced) = if registration.gate.state() == InputForwardState::Active {
             let Some(lease) = registration.gate.try_enter(boundary) else {
                 packets.clear();
                 return RecirculationPublishOutcome::default();
             };
-            lease
+            (lease, true)
         } else {
             for packet in packets.drain(..) {
                 self.standby_gop.push(packet);
@@ -70,7 +83,7 @@ impl RecirculationInputPublisher {
                 return RecirculationPublishOutcome::default();
             };
             *packets = self.standby_gop.take_replay();
-            lease
+            (lease, false)
         };
 
         for (index, packet) in packets.iter_mut().enumerate() {
@@ -84,7 +97,20 @@ impl RecirculationInputPublisher {
             InputTimestampMapper::record_forwarded(last, &registration.last_forwarded_dts);
         }
         let bytes = packets.iter().map(|packet| packet.payload.len()).sum();
-        let units = ring.push_drained_batch_capped(packets);
+        let units = packets.len();
+        if !sequenced {
+            // The replay is the source's newest GOP: its latest configuration.
+            self.video_config
+                .follow(source, last_sequence, ring, &mut self.pending);
+        }
+        for (index, packet) in packets.drain(..).enumerate() {
+            if sequenced && packet.media_type == MediaType::Video {
+                self.video_config
+                    .follow(source, first_sequence + index, ring, &mut self.pending);
+            }
+            self.pending.push(packet);
+        }
+        ring.push_drained_batch_capped(&mut self.pending);
         drop(lease);
 
         RecirculationPublishOutcome { units, bytes }
@@ -180,11 +206,15 @@ async fn drive_recirculation_until_blocked(driver: RecirculationDriver<'_>) {
             ReadBudget::new(MEDIA_PULL_BURST_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES),
         ) {
             FeedRead::Units { units, next_cursor } => {
+                let first_sequence = driver.cursor.next_sequence as usize;
                 *driver.cursor = next_cursor;
-                let outcome =
-                    driver
-                        .publisher
-                        .publish(&units, driver.target_ring, driver.input_registration);
+                let outcome = driver.publisher.publish(
+                    &driver.feed.current_ring(),
+                    first_sequence,
+                    &units,
+                    driver.target_ring,
+                    driver.input_registration,
+                );
                 if outcome.units == 0 {
                     continue;
                 }
@@ -282,7 +312,13 @@ mod tests {
             Bytes::from(vec![0x21, 0x22, 0x23, 0x24]),
         );
 
-        let outcome = publisher.publish(&[video.clone(), audio.clone()], &ring, &registration);
+        let outcome = publisher.publish(
+            &RingBuffer::new(1),
+            0,
+            &[video.clone(), audio.clone()],
+            &ring,
+            &registration,
+        );
 
         assert_eq!(outcome, RecirculationPublishOutcome { units: 2, bytes: 8 });
         assert_eq!(registration.last_forwarded_dts.load(Ordering::Acquire), 12);
@@ -296,6 +332,39 @@ mod tests {
         assert_eq!(second.payload.len(), audio.payload.len());
     }
 
+    /// The target ring announces the source's configuration from the packet
+    /// where the source changed it, not from the start of the batch.
+    #[test]
+    fn recirculation_publisher_copies_the_source_configuration_at_its_packet() {
+        let source = RingBuffer::new(16);
+        source.push(MediaPacket::clone(&packet(MediaType::Video, 0, false)));
+        source.set_video_parameter_sets(vec![0, 0, 0, 1, 0x67, 0x42]);
+        source.push(MediaPacket::clone(&packet(MediaType::Video, 40, true)));
+        let units: Vec<_> = (0..2)
+            .map(|sequence| source.read_at(sequence).unwrap())
+            .collect();
+        let ring = RingBuffer::new(16);
+        let registration = registration(Arc::new(InputPacketGate::active()), i64::MIN);
+
+        let outcome = RecirculationInputPublisher::default().publish(
+            &source,
+            0,
+            &units,
+            &ring,
+            &registration,
+        );
+
+        assert_eq!(outcome.units, 2);
+        let generations: Vec<u32> = (0..2)
+            .map(|sequence| ring.frame_unit(sequence).unwrap().config_generation)
+            .collect();
+        assert_eq!(generations, [0, 1]);
+        assert_eq!(
+            ring.video_parameter_sets(),
+            Some(vec![0, 0, 0, 1, 0x67, 0x42])
+        );
+    }
+
     #[test]
     fn recirculation_publisher_keeps_target_ring_bounded_when_reader_lags() {
         let ring = RingBuffer::new(2);
@@ -303,6 +372,8 @@ mod tests {
         let mut publisher = RecirculationInputPublisher::default();
 
         let outcome = publisher.publish(
+            &RingBuffer::new(1),
+            0,
             &[
                 packet(MediaType::Video, 10, true),
                 packet(MediaType::Audio, 20, false),
@@ -334,6 +405,8 @@ mod tests {
         let mut publisher = RecirculationInputPublisher::default();
 
         let standby = publisher.publish(
+            &RingBuffer::new(1),
+            0,
             &[
                 packet(MediaType::Video, 10, true),
                 packet(MediaType::Video, 20, false),
@@ -342,8 +415,13 @@ mod tests {
             &registration,
         );
         gate.arm_for_promotion();
-        let promoted =
-            publisher.publish(&[packet(MediaType::Audio, 30, false)], &ring, &registration);
+        let promoted = publisher.publish(
+            &RingBuffer::new(1),
+            0,
+            &[packet(MediaType::Audio, 30, false)],
+            &ring,
+            &registration,
+        );
 
         assert_eq!(standby, RecirculationPublishOutcome::default());
         assert_eq!(

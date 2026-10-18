@@ -52,6 +52,18 @@
 //! forwards into a pipeline ring. HTTP promotion persists the choice and calls
 //! the engine directly; it does not wait for the reconciler. Monotonic
 //! `write_idx` orders slots for readers; it does not prove a unique producer.
+//!
+//! # Frame units
+//!
+//! Every slot also records a [`FrameUnit`]: the configuration generation of
+//! the packet's track at publication (see [`frame_units`]).
+//! [`RingBuffer::frame_unit`] and [`RingBuffer::track_config_at`] answer by
+//! sequence in O(1) without a lock; the unit word is tagged with its
+//! sequence, so a sequence the producer has overwritten (even mid-batch,
+//! before the write index moves) reads as not retained. Publication never
+//! parses payloads: each producer
+//! records configurations it already has, right before the packet that
+//! carries them.
 
 use arc_swap::{ArcSwap, ArcSwapOption};
 use std::sync::Arc;
@@ -65,7 +77,13 @@ use tracing::debug;
 /// import these types from `media::packet`.
 pub use super::packet::{MediaPacket, MediaType, PayloadFormat};
 
+mod frame_units;
 mod reader;
+use frame_units::TrackConfigs;
+pub use frame_units::{
+    CONFIG_HISTORY, CONFIG_TRACKS_PER_TYPE, FrameUnit, NotRetained, TrackConfig,
+    VideoConfigFollower,
+};
 pub use reader::{Reader, ReaderInfo, ReaderSnapshot};
 
 pub const DEFAULT_RING_CAPACITY: usize = 1024;
@@ -95,6 +113,8 @@ pub fn default_transcoder_ring_capacity() -> usize {
 pub struct RingSlot {
     data: ArcSwapOption<MediaPacket>,
     published_at_us: AtomicU64,
+    /// Packed [`FrameUnit`] of the packet in `data`; 0 before the first write.
+    unit: AtomicU64,
 }
 
 #[repr(align(64))]
@@ -209,11 +229,10 @@ pub struct RingBuffer {
     /// `"h264"`, `"hevc"`, or empty string (= infer from ingest metadata).
     /// All packets in a ring share one codec — this avoids per-packet tagging.
     pub codec_hint: std::sync::OnceLock<String>,
-    /// Raw Annex B parameter sets captured at ingest so late-joining live
-    /// stages can seed H.264/H.265 decoders before the next keyframe arrives.
-    /// Stored behind ArcSwapOption so a later complete set can replace an
-    /// earlier partial cache on live ingest reconnects or delayed header arrival.
-    pub video_parameter_sets: ArcSwapOption<Vec<u8>>,
+    /// Per-track codec configurations with generations (video: raw Annex B
+    /// parameter sets, so late-joining stages can seed decoders before the
+    /// next keyframe). Written by the producer only.
+    track_configs: TrackConfigs,
     /// Audio tracks metadata of packets in this ring.
     /// Stored behind ArcSwapOption so it can be updated when a publisher reconnects
     /// with a different track configuration (OnceLock would silently ignore updates).
@@ -243,6 +262,7 @@ impl RingBuffer {
             slots.push(RingSlot {
                 data: ArcSwapOption::empty(),
                 published_at_us: AtomicU64::new(0),
+                unit: AtomicU64::new(0),
             });
         }
         debug!(capacity, "ring buffer created");
@@ -263,7 +283,7 @@ impl RingBuffer {
             notify: Arc::new(tokio::sync::Notify::new()),
             readers: std::sync::Mutex::new(Vec::new()),
             codec_hint: std::sync::OnceLock::new(),
-            video_parameter_sets: ArcSwapOption::empty(),
+            track_configs: TrackConfigs::new(),
             audio_tracks: ArcSwapOption::empty(),
             estimated_pkt_rate: std::sync::atomic::AtomicU32::new(0),
             end_of_stream: AtomicBool::new(false),
@@ -311,7 +331,9 @@ impl RingBuffer {
     /// also need a real preroll window; otherwise `fast_forward()` has no
     /// keyframe to target and starts them at the live edge. This copies only the
     /// still-readable tail (`capacity - 1` packets) into the matching indices of
-    /// the grown ring without advancing the write cursor.
+    /// the grown ring without advancing the write cursor, together with their
+    /// frame units and the track configurations, so sequence lookups and
+    /// generations continue across the resize.
     pub fn seed_readable_tail_from(&self, old_ring: &RingBuffer) -> usize {
         let old_write_idx = old_ring.get_write_idx();
         let tail_capacity = self
@@ -327,10 +349,14 @@ impl RingBuffer {
                 continue;
             };
             let slot_idx = idx % self.capacity;
+            let unit = old_ring.slots[idx % old_ring.capacity]
+                .unit
+                .load(Ordering::Acquire);
             self.slots[slot_idx]
                 .published_at_us
                 .store(self.elapsed_us().max(1), Ordering::Release);
             self.slots[slot_idx].data.store(Some(packet.clone()));
+            self.slots[slot_idx].unit.store(unit, Ordering::Release);
             if packet.media_type == MediaType::Video && packet.is_keyframe {
                 last_keyframe_idx = idx;
             }
@@ -342,6 +368,7 @@ impl RingBuffer {
                 .val
                 .store(last_keyframe_idx, Ordering::Release);
         }
+        self.track_configs.copy_from(&old_ring.track_configs);
         self.write_idx.val.store(old_write_idx, Ordering::Release);
         copied
     }
@@ -421,21 +448,101 @@ impl RingBuffer {
         self.codec_hint.get().map(|s| s.as_str()).unwrap_or("")
     }
 
-    pub fn set_video_parameter_sets(&self, parameter_sets: Vec<u8>) {
-        let bytes = parameter_sets.len();
-        if bytes == 0 {
-            return;
+    /// Record `bytes` as the configuration of one track. Same bytes keep the
+    /// track's generation, changed bytes start the next one; packets
+    /// published afterwards carry it. Producer only. Returns the generation
+    /// (0 for a track index outside the table).
+    pub fn set_track_config(&self, media_type: MediaType, track_index: u32, bytes: Vec<u8>) -> u32 {
+        if bytes.is_empty() {
+            return self.track_configs.generation(media_type, track_index);
         }
-        self.video_parameter_sets
-            .store(Some(std::sync::Arc::new(parameter_sets)));
-        debug!(bytes, "ring video parameter sets cached");
+        self.track_configs.set(media_type, track_index, bytes)
     }
 
-    /// Returns a snapshot clone of the current parameter-set cache.
+    /// The current configuration of one track, if any was recorded.
+    pub fn track_config(
+        &self,
+        media_type: MediaType,
+        track_index: u32,
+    ) -> Option<Arc<TrackConfig>> {
+        self.track_configs.current(media_type, track_index)
+    }
+
+    /// Record raw Annex B parameter sets as the video track's configuration.
+    pub fn set_video_parameter_sets(&self, parameter_sets: Vec<u8>) {
+        self.set_track_config(MediaType::Video, 0, parameter_sets);
+    }
+
+    /// The video track's current configuration with its generation.
+    pub fn video_config(&self) -> Option<Arc<TrackConfig>> {
+        self.track_config(MediaType::Video, 0)
+    }
+
+    /// Returns a snapshot copy of the video track's current parameter sets.
     pub fn video_parameter_sets(&self) -> Option<Vec<u8>> {
-        self.video_parameter_sets
-            .load_full()
-            .map(|arc| (*arc).clone())
+        self.video_config().map(|config| config.bytes.to_vec())
+    }
+
+    /// The frame unit recorded for the packet published at `sequence`, or
+    /// `None` when it is not published yet or no longer retained (the same
+    /// window as `Reader::pull`).
+    pub fn frame_unit(&self, sequence: usize) -> Option<FrameUnit> {
+        let write_idx = self.write_idx.val.load(Ordering::Acquire);
+        if sequence >= write_idx || write_idx - sequence >= self.capacity {
+            return None;
+        }
+        // A publication overwrites the slot before it stores its write index
+        // (a batch, several slots before), so a re-check of the write index
+        // cannot see the overwrite; the word's sequence tag does.
+        FrameUnit::unpack(
+            self.slots[sequence % self.capacity]
+                .unit
+                .load(Ordering::Acquire),
+            sequence,
+        )
+    }
+
+    /// The configuration that applies to the packet published at `sequence`,
+    /// whose track is `media_type`/`track_index`: `Ok(None)` when its
+    /// producer had recorded none, `Err(NotRetained)` when the packet or its
+    /// configuration generation is no longer retained.
+    pub fn track_config_at(
+        &self,
+        sequence: usize,
+        media_type: MediaType,
+        track_index: u32,
+    ) -> Result<Option<Arc<TrackConfig>>, NotRetained> {
+        let unit = self.frame_unit(sequence).ok_or(NotRetained)?;
+        if unit.config_generation == 0 {
+            return Ok(None);
+        }
+        self.track_configs
+            .get(media_type, track_index, unit.config_generation)
+            .map(Some)
+            .ok_or(NotRetained)
+    }
+
+    /// The unit word of the packet being published at `sequence`. Producer
+    /// only.
+    #[inline]
+    fn next_frame_unit(&self, packet: &MediaPacket, sequence: usize) -> u64 {
+        FrameUnit {
+            config_generation: self
+                .track_configs
+                .generation(packet.media_type, packet.track_index),
+        }
+        .pack(sequence)
+    }
+
+    /// Record the complete in-band parameter sets a Raw video packet carries
+    /// as its track's configuration.
+    fn record_in_band_config(&self, packet: &MediaPacket) {
+        if packet.media_type == MediaType::Video
+            && packet.format == PayloadFormat::Raw
+            && let Some(parameter_sets) = super::codec::annexb_parameter_sets(&packet.payload)
+        {
+            self.set_track_config(MediaType::Video, packet.track_index, parameter_sets);
+        }
     }
 
     /// Set (or update) the audio track metadata for this ring.
@@ -465,9 +572,11 @@ impl RingBuffer {
         let is_keyframe = packet.media_type == MediaType::Video && packet.is_keyframe;
         let payload_bytes = packet.payload.len() as u64;
 
+        let unit = self.next_frame_unit(&packet, idx);
         self.slots[slot_idx]
             .published_at_us
             .store(self.elapsed_us().max(1), Ordering::Release);
+        self.slots[slot_idx].unit.store(unit, Ordering::Release);
         self.slots[slot_idx].data.store(Some(Arc::new(packet)));
 
         if is_keyframe {
@@ -499,9 +608,11 @@ impl RingBuffer {
             let is_keyframe = packet.media_type == MediaType::Video && packet.is_keyframe;
             payload_bytes += packet.payload.len() as u64;
 
+            let unit = self.next_frame_unit(&packet, idx);
             self.slots[slot_idx]
                 .published_at_us
                 .store(self.elapsed_us().max(1), Ordering::Release);
+            self.slots[slot_idx].unit.store(unit, Ordering::Release);
             self.slots[slot_idx].data.store(Some(Arc::new(packet)));
             if is_keyframe {
                 self.last_keyframe_idx.val.store(idx, Ordering::Release);
@@ -527,6 +638,38 @@ impl RingBuffer {
         let mut drained = packets.drain(..);
         loop {
             let published = self.push_batch(drained.by_ref().take(MEDIA_PRODUCER_BATCH_PACKETS));
+            if published == 0 {
+                break;
+            }
+            total += published;
+        }
+        total
+    }
+
+    /// [`Self::push_batch`] for a producer whose Raw video carries its
+    /// parameter sets in band and that would scan them anyway (SRT ingest):
+    /// each packet's complete sets become its track's configuration just
+    /// before that packet is stamped, so a new generation starts exactly at
+    /// the packet carrying it and earlier packets keep the previous one.
+    pub fn push_batch_recording_config<I>(&self, packets: I) -> usize
+    where
+        I: IntoIterator<Item = MediaPacket>,
+    {
+        self.push_batch(
+            packets
+                .into_iter()
+                .inspect(|packet| self.record_in_band_config(packet)),
+        )
+    }
+
+    /// [`Self::push_drained_batch_capped`] recording in-band configurations
+    /// as [`Self::push_batch_recording_config`] does.
+    pub fn push_drained_batch_recording_config(&self, packets: &mut Vec<MediaPacket>) -> usize {
+        let mut total = 0usize;
+        let mut drained = packets.drain(..);
+        loop {
+            let published = self
+                .push_batch_recording_config(drained.by_ref().take(MEDIA_PRODUCER_BATCH_PACKETS));
             if published == 0 {
                 break;
             }

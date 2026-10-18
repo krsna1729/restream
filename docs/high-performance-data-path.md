@@ -38,6 +38,13 @@ single-producer, multi-consumer fan-out, while `TsChunkRing` shares packaged
 MPEG-TS chunks across SRT destinations. `MemoryQueue` bridges async producers
 to blocking native or file I/O without an unbounded channel.
 
+Per-frame metadata stays out of `MediaPacket` (pinned at 56 bytes): each ring
+slot carries one atomic word with the packet's track configuration
+generation, written by the producer with the slot and read by sequence without
+a lock ([frame units](media-pipeline.md#frame-units)). Publication pays one
+relaxed load and one release store per packet and never parses payloads;
+configuration bytes are compared and stored only when a producer records them.
+
 ## Hot-path contracts
 
 Packet loops must avoid work whose cost grows invisibly with packet rate:

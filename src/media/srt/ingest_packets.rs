@@ -15,8 +15,7 @@ pub(super) fn forward_ingest_packets(
     keyframe_times: Option<&Arc<Mutex<Vec<i64>>>>,
 ) {
     if let Some(preview_ring) = registration.preview_ring.load_full() {
-        update_parameter_sets(&preview_ring, packets);
-        preview_ring.push_batch(packets.iter().cloned());
+        preview_ring.push_batch_recording_config(packets.iter().cloned());
     }
 
     let first_keyframe = packets
@@ -56,26 +55,14 @@ pub(super) fn forward_ingest_packets(
             &registration.last_forwarded_dts,
         );
     }
-    update_parameter_sets(ring, packets);
     if let Some(keyframe_times) = keyframe_times {
         record_keyframes(keyframe_times, packets);
     }
     if let Some(last) = packets.iter().max_by_key(|packet| packet.dts) {
         InputTimestampMapper::record_forwarded(last, &registration.last_forwarded_dts);
     }
-    ring.push_drained_batch_capped(packets);
+    ring.push_drained_batch_recording_config(packets);
     drop(lease);
-}
-
-fn update_parameter_sets(ring: &RingBuffer, packets: &[MediaPacket]) {
-    for packet in packets {
-        if packet.media_type == MediaType::Video
-            && let Some(parameter_sets) =
-                crate::media::codec::annexb_parameter_sets(&packet.payload)
-        {
-            ring.set_video_parameter_sets(parameter_sets);
-        }
-    }
 }
 
 fn record_keyframes(keyframe_times: &Arc<Mutex<Vec<i64>>>, packets: &[MediaPacket]) {
@@ -173,5 +160,47 @@ mod tests {
             1_016
         );
         assert!(!standby_gop.is_replay_ready());
+    }
+
+    /// SRT ingest records the in-band parameter sets it publishes, on the
+    /// pipeline ring and the preview ring, from the packet carrying them.
+    #[test]
+    fn forwarded_packets_record_their_in_band_configuration() {
+        let registration = registration(Arc::new(InputPacketGate::active()), i64::MIN);
+        let preview = Arc::new(RingBuffer::new(16));
+        registration.preview_ring.store(Some(preview.clone()));
+        let ring = RingBuffer::new(16);
+        let sets: &[u8] = &[
+            0, 0, 0, 1, 0x67, 0x42, 0, 0x1e, 0xf4, 0x05, 1, 0xec, 0x80, 0, 0, 0, 1, 0x68, 0xce,
+            0x06, 0xe2,
+        ];
+        let mut packets = vec![
+            packet(MediaType::Video, 100, false),
+            MediaPacket {
+                payload: Bytes::from([sets, &[0, 0, 0, 1, 0x65, 0x88]].concat()),
+                ..packet(MediaType::Video, 110, true)
+            },
+        ];
+
+        forward_ingest_packets(
+            &mut packets,
+            &ring,
+            &registration,
+            &mut InputTimestampMapper::default(),
+            &mut StandbyGopCache::default(),
+            None,
+        );
+
+        for ring in [&ring, &*preview] {
+            assert_eq!(
+                ring.frame_unit(0).map(|unit| unit.config_generation),
+                Some(0)
+            );
+            assert_eq!(
+                ring.frame_unit(1).map(|unit| unit.config_generation),
+                Some(1)
+            );
+            assert_eq!(ring.video_parameter_sets(), Some(sets.to_vec()));
+        }
     }
 }

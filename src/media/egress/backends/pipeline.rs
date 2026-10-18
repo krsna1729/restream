@@ -14,10 +14,10 @@ use crate::media::egress::backend::{
     CloseReason, EngineProgress, ProtocolEngine, Readiness, RecoveryCapability, WaitCondition,
 };
 use crate::media::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
+use crate::media::egress::journal::RingFeed;
 use crate::media::egress::policy::WorkBudget;
 use crate::media::engine::IngestRegistration;
 
-use crate::media::packet::MediaPacket;
 use crate::media::recirculation::RecirculationInputPublisher;
 use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, RingBuffer};
 
@@ -60,18 +60,15 @@ impl<F> Default for PipelineEngine<F> {
     }
 }
 
-impl<F> ProtocolEngine for PipelineEngine<F>
-where
-    F: EgressFeed<Unit = Arc<MediaPacket>>,
-{
-    type Feed = F;
+impl ProtocolEngine for PipelineEngine<RingFeed> {
+    type Feed = RingFeed;
     type Transport = PipelineTransport;
 
     fn advance(
         &mut self,
         transport: &mut PipelineTransport,
         _readiness: Readiness,
-        feed: &F,
+        feed: &RingFeed,
         cursor: &mut FeedCursor,
         budget: WorkBudget,
     ) -> EngineProgress {
@@ -81,8 +78,11 @@ where
         );
         match feed.read_from(*cursor, read_budget) {
             FeedRead::Units { units, next_cursor } => {
+                let first_sequence = cursor.next_sequence as usize;
                 *cursor = next_cursor;
                 let outcome = transport.publisher.publish(
+                    &feed.current_ring(),
+                    first_sequence,
                     &units,
                     &transport.target_ring,
                     &transport.input_registration,
