@@ -10,6 +10,7 @@ use crate::media::egress::command::{EgressCommand, OutputId, ShardId};
 use crate::media::egress::journal::WakeGate;
 use crate::media::egress::metrics::ShardMetrics;
 use crate::media::egress::timer::TimerWheel;
+use crate::media::timing::thread_cpu_ns;
 
 mod group;
 pub use group::{
@@ -814,23 +815,6 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
         snapshot.last_progress_at = self.metrics.collected_at;
         snapshot.metrics = self.metrics.clone();
     }
-}
-
-/// CPU time the calling thread has consumed. Zero if the clock is unavailable.
-fn thread_cpu_ns() -> u64 {
-    let mut ts = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    // SAFETY: `ts` is a valid out-pointer for the call; the clock id is a
-    // constant supported on Linux.
-    let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) };
-    if rc != 0 {
-        return 0;
-    }
-    (ts.tv_sec.max(0) as u64)
-        .saturating_mul(1_000_000_000)
-        .saturating_add(ts.tv_nsec.max(0) as u64)
 }
 
 impl EgressShardCommandEffect {

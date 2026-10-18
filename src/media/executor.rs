@@ -8,9 +8,10 @@
 
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Instant;
 
+use crate::media::timing::{ThreadUsage, thread_cpu_ns, thread_usage};
 use crate::sync::lock;
 
 use serde::Serialize;
@@ -67,33 +68,110 @@ impl MediaService {
     }
 }
 
+/// Polls are counted above these thread-CPU times: 1, 4 and 16 ms.
+const CPU_THRESHOLDS_NS: [u64; 3] = [1_000_000, 4_000_000, 16_000_000];
+
+/// One poll's cost: its wall time, the polling thread's own CPU time, and its
+/// resource usage when per-poll usage is switched on.
+struct PollSample {
+    wall_ns: u64,
+    cpu_ns: u64,
+    usage: Option<ThreadUsage>,
+}
+
 /// Poll counters. `busy_ns` is wall time spent inside the services' `poll`
 /// calls, not service lifetime: services run for the life of their pipeline
 /// and are parked on rings, timers and pipes almost all of that time. Wall
 /// time includes hypervisor vCPU descheduling inside a poll, which a VM guest
 /// may not report as steal; `max_poll_ns` exposes such stalls (one 20–120 ms
-/// poll among ~µs polls), so read `busy` next to it.
+/// poll among ~µs polls), so read `busy` next to it. `cpu_ns` is the polling
+/// thread's own CPU time inside the same polls, which a descheduled vCPU
+/// does not advance: a long poll with matching CPU time was executing.
 #[derive(Default)]
 struct PollTiming {
     polls: AtomicU64,
     busy_ns: AtomicU64,
     max_poll_ns: AtomicU64,
+    cpu_ns: AtomicU64,
+    max_cpu_ns: AtomicU64,
+    /// Polls above each of `CPU_THRESHOLDS_NS`.
+    cpu_over: [AtomicU64; 3],
+    /// Every poll's resource usage, when switched on.
+    usage: UsageCounters,
+    /// The same over the polls above the first CPU threshold, which is
+    /// where the multi-millisecond tail lives.
+    slow_usage: UsageCounters,
 }
 
 impl PollTiming {
-    fn record(&self, elapsed_ns: u64) {
+    fn record(&self, sample: &PollSample) {
         self.polls.fetch_add(1, Ordering::Relaxed);
-        self.busy_ns.fetch_add(elapsed_ns, Ordering::Relaxed);
-        self.max_poll_ns.fetch_max(elapsed_ns, Ordering::Relaxed);
+        self.busy_ns.fetch_add(sample.wall_ns, Ordering::Relaxed);
+        self.max_poll_ns
+            .fetch_max(sample.wall_ns, Ordering::Relaxed);
+        self.cpu_ns.fetch_add(sample.cpu_ns, Ordering::Relaxed);
+        self.max_cpu_ns.fetch_max(sample.cpu_ns, Ordering::Relaxed);
+        for (count, threshold) in self.cpu_over.iter().zip(CPU_THRESHOLDS_NS) {
+            if sample.cpu_ns > threshold {
+                count.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        if let Some(usage) = sample.usage {
+            self.usage.add(usage);
+            if sample.cpu_ns > CPU_THRESHOLDS_NS[0] {
+                self.slow_usage.add(usage);
+            }
+        }
     }
 
-    /// `(polls, busy_us, max_poll_us)`.
-    fn read(&self) -> (u64, u64, u64) {
-        (
-            self.polls.load(Ordering::Relaxed),
-            self.busy_ns.load(Ordering::Relaxed) / 1000,
-            self.max_poll_ns.load(Ordering::Relaxed) / 1000,
-        )
+    /// The counters in microseconds; `usage` only when it is switched on.
+    fn read(&self, usage: bool) -> PollStats {
+        let [over_1ms, over_4ms, over_16ms] = self
+            .cpu_over
+            .each_ref()
+            .map(|count| count.load(Ordering::Relaxed));
+        PollStats {
+            polls: self.polls.load(Ordering::Relaxed),
+            busy_us: self.busy_ns.load(Ordering::Relaxed) / 1000,
+            max_poll_us: self.max_poll_ns.load(Ordering::Relaxed) / 1000,
+            cpu_us: self.cpu_ns.load(Ordering::Relaxed) / 1000,
+            max_cpu_us: self.max_cpu_ns.load(Ordering::Relaxed) / 1000,
+            polls_over_cpu_1ms: over_1ms,
+            polls_over_cpu_4ms: over_4ms,
+            polls_over_cpu_16ms: over_16ms,
+            usage: usage.then(|| PollUsage {
+                all: self.usage.read(),
+                over_cpu_1ms: self.slow_usage.read(),
+            }),
+        }
+    }
+}
+
+#[derive(Default)]
+struct UsageCounters {
+    user_us: AtomicU64,
+    sys_us: AtomicU64,
+    minor_faults: AtomicU64,
+    major_faults: AtomicU64,
+}
+
+impl UsageCounters {
+    fn add(&self, usage: ThreadUsage) {
+        self.user_us.fetch_add(usage.user_us, Ordering::Relaxed);
+        self.sys_us.fetch_add(usage.sys_us, Ordering::Relaxed);
+        self.minor_faults
+            .fetch_add(usage.minor_faults, Ordering::Relaxed);
+        self.major_faults
+            .fetch_add(usage.major_faults, Ordering::Relaxed);
+    }
+
+    fn read(&self) -> ThreadUsage {
+        ThreadUsage {
+            user_us: self.user_us.load(Ordering::Relaxed),
+            sys_us: self.sys_us.load(Ordering::Relaxed),
+            minor_faults: self.minor_faults.load(Ordering::Relaxed),
+            major_faults: self.major_faults.load(Ordering::Relaxed),
+        }
     }
 }
 
@@ -166,6 +244,7 @@ impl MediaExecutorMetrics {
         configured_workers: usize,
         runtime: Option<&Runtime>,
         with_services: bool,
+        poll_usage: bool,
     ) -> MediaExecutorSnapshot {
         let samples = self.queue_latency_samples.load(Ordering::Relaxed);
         let sum_us = self.queue_latency_us_sum.load(Ordering::Relaxed);
@@ -173,30 +252,22 @@ impl MediaExecutorMetrics {
             .iter()
             .map(|&class| {
                 let metrics = self.class(class);
-                let (polls, busy_us, max_poll_us) = metrics.timing.read();
                 ClassSnapshot {
                     class,
                     active: metrics.active.load(Ordering::Relaxed),
-                    polls,
-                    busy_us,
-                    max_poll_us,
+                    timing: metrics.timing.read(poll_usage),
                 }
             })
             .collect();
         let services = with_services.then(|| {
             lock(&self.services)
                 .iter()
-                .map(|running| {
-                    let (polls, busy_us, max_poll_us) = running.timing.read();
-                    ServiceSnapshot {
-                        service_id: running.id,
-                        class: running.service.class,
-                        pipeline_id: running.service.pipeline_id.clone(),
-                        stage: running.service.stage.clone(),
-                        polls,
-                        busy_us,
-                        max_poll_us,
-                    }
+                .map(|running| ServiceSnapshot {
+                    service_id: running.id,
+                    class: running.service.class,
+                    pipeline_id: running.service.pipeline_id.clone(),
+                    stage: running.service.stage.clone(),
+                    timing: running.timing.read(poll_usage),
                 })
                 .collect()
         });
@@ -235,17 +306,47 @@ fn metrics() -> &'static MediaExecutorMetrics {
     METRICS.get_or_init(MediaExecutorMetrics::default)
 }
 
-/// Cumulative per-class counters. Utilization over a window is
-/// `Δbusy_us / (Δwall_us × configured_workers)`; demand per wake is
-/// `Δbusy_us / Δpolls`.
+/// Cumulative poll counters of a class or a service. Utilization over a
+/// window is `Δbusy_us / (Δwall_us × configured_workers)`; demand per wake is
+/// `Δbusy_us / Δpolls`, and CPU per poll `Δcpu_us / Δpolls`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PollStats {
+    pub polls: u64,
+    /// Wall time inside polls.
+    pub busy_us: u64,
+    pub max_poll_us: u64,
+    /// The polling threads' own CPU time inside polls.
+    pub cpu_us: u64,
+    pub max_cpu_us: u64,
+    #[serde(rename = "pollsOverCpu1Ms")]
+    pub polls_over_cpu_1ms: u64,
+    #[serde(rename = "pollsOverCpu4Ms")]
+    pub polls_over_cpu_4ms: u64,
+    #[serde(rename = "pollsOverCpu16Ms")]
+    pub polls_over_cpu_16ms: u64,
+    /// Present only with `RESTREAM_MEDIA_POLL_USAGE` switched on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<PollUsage>,
+}
+
+/// `getrusage(RUSAGE_THREAD)` deltas summed over polls: every poll, and only
+/// the polls above 1 ms of thread CPU.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PollUsage {
+    pub all: ThreadUsage,
+    #[serde(rename = "overCpu1Ms")]
+    pub over_cpu_1ms: ThreadUsage,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ClassSnapshot {
     pub class: MediaServiceClass,
     pub active: u64,
-    pub polls: u64,
-    pub busy_us: u64,
-    pub max_poll_us: u64,
+    #[serde(flatten)]
+    pub timing: PollStats,
 }
 
 /// Cumulative counters of one running service, from its first poll.
@@ -259,9 +360,8 @@ pub(crate) struct ServiceSnapshot {
     pub class: MediaServiceClass,
     pub pipeline_id: String,
     pub stage: String,
-    pub polls: u64,
-    pub busy_us: u64,
-    pub max_poll_us: u64,
+    #[serde(flatten)]
+    pub timing: PollStats,
 }
 
 /// Cumulative per-worker counters from the Tokio runtime.
@@ -297,13 +397,22 @@ pub(crate) struct MediaExecutorSnapshot {
 /// running service (its pipeline and stage), for attribution.
 pub(crate) fn snapshot(services: bool) -> MediaExecutorSnapshot {
     let runtime = RUNTIME.get().and_then(|runtime| runtime.as_ref().ok());
-    metrics().snapshot(configured_workers(), runtime, services)
+    metrics().snapshot(configured_workers(), runtime, services, poll_usage())
 }
 
 /// Returns the worker thread count configured for restream-media.
 pub(crate) fn configured_workers() -> usize {
     crate::config::media_executor_workers_env()
         .unwrap_or_else(|| crate::capacity::HostCapacity::get().media_workers())
+}
+
+/// Whether each poll also reads `getrusage(RUSAGE_THREAD)`
+/// (`RESTREAM_MEDIA_POLL_USAGE`), read once. A diagnostic: two more
+/// syscalls per poll for the user/system split and page faults.
+static POLL_USAGE: LazyLock<bool> = LazyLock::new(crate::config::media_poll_usage_env);
+
+fn poll_usage() -> bool {
+    *POLL_USAGE
 }
 
 fn runtime() -> Result<&'static Runtime, String> {
@@ -321,17 +430,27 @@ fn runtime() -> Result<&'static Runtime, String> {
         .map_err(Clone::clone)
 }
 
-/// Drive `future`, adding the wall time of each of its `poll` calls to its
-/// class and to its own service. Two clock reads per poll; services poll once
-/// per wake or yielded burst, never per packet.
-async fn poll_timed<F: Future>(timings: [&PollTiming; 2], future: F) -> F::Output {
+/// Drive `future`, adding the wall time and the polling thread's CPU time of
+/// each of its `poll` calls to its class and to its own service. Two
+/// monotonic and two thread-CPU clock reads per poll (two `getrusage` more
+/// with `usage`); services poll once per wake or yielded burst, never per
+/// packet.
+async fn poll_timed<F: Future>(timings: [&PollTiming; 2], usage: bool, future: F) -> F::Output {
     let mut future = std::pin::pin!(future);
     std::future::poll_fn(|cx| {
+        let usage_before = usage.then(thread_usage);
         let started = Instant::now();
+        let cpu_started = thread_cpu_ns();
         let poll = future.as_mut().poll(cx);
-        let elapsed = started.elapsed().as_nanos() as u64;
+        let cpu_ns = thread_cpu_ns().saturating_sub(cpu_started);
+        let wall_ns = started.elapsed().as_nanos() as u64;
+        let sample = PollSample {
+            wall_ns,
+            cpu_ns,
+            usage: usage_before.map(|before| thread_usage().since(before)),
+        };
         for timing in timings {
-            timing.record(elapsed);
+            timing.record(&sample);
         }
         poll
     })
@@ -405,7 +524,7 @@ where
         metrics().record_start(&service, queue_latency_us);
         guard.started = true;
         let timings = [&metrics().class(class).timing, &service.timing];
-        let output = poll_timed(timings, future).await;
+        let output = poll_timed(timings, poll_usage(), future).await;
         metrics().record_completion(class);
         guard.disarm();
         output
@@ -595,6 +714,7 @@ mod tests {
         let (parked, parked_service) = (PollTiming::default(), PollTiming::default());
         poll_timed(
             [&parked, &parked_service],
+            false,
             tokio::time::sleep(Duration::from_millis(60)),
         )
         .await;
@@ -603,20 +723,118 @@ mod tests {
             parked.busy_ns.load(Ordering::Relaxed) < 30_000_000,
             "a service parked on a timer is not busy"
         );
-        assert_eq!(parked.read(), parked_service.read());
+        assert_eq!(parked.read(false), parked_service.read(false));
 
         let (blocking, blocking_service) = (PollTiming::default(), PollTiming::default());
-        poll_timed([&blocking, &blocking_service], async {
+        poll_timed([&blocking, &blocking_service], false, async {
             std::thread::sleep(Duration::from_millis(20));
         })
         .await;
-        assert_eq!(blocking.polls.load(Ordering::Relaxed), 1);
-        assert!(blocking.busy_ns.load(Ordering::Relaxed) >= 20_000_000);
-        assert_eq!(
-            blocking.max_poll_ns.load(Ordering::Relaxed),
-            blocking.busy_ns.load(Ordering::Relaxed)
+        let stats = blocking.read(false);
+        assert_eq!(stats.polls, 1);
+        assert!(stats.busy_us >= 20_000);
+        assert_eq!(stats.max_poll_us, stats.busy_us);
+        assert!(
+            stats.max_cpu_us < 4_000,
+            "a thread asleep inside a poll spends wall time, not CPU: {stats:?}"
         );
-        assert_eq!(blocking.read(), blocking_service.read());
+        assert_eq!(stats.polls_over_cpu_4ms, 0);
+        assert_eq!(stats, blocking_service.read(false));
+    }
+
+    /// Spin the calling thread until it has spent `cpu` of its own CPU time.
+    fn spin_cpu(cpu: Duration) {
+        let until = thread_cpu_ns() + cpu.as_nanos() as u64;
+        while thread_cpu_ns() < until {
+            std::hint::spin_loop();
+        }
+    }
+
+    #[tokio::test]
+    async fn poll_timed_charges_the_polling_threads_cpu_and_its_page_faults() {
+        let (class, service) = (PollTiming::default(), PollTiming::default());
+        poll_timed([&class, &service], true, async {
+            spin_cpu(Duration::from_millis(5));
+            // Fresh anonymous pages fault in on first touch.
+            let pages = vec![1u8; 4 << 20];
+            std::hint::black_box(&pages);
+        })
+        .await;
+        let stats = class.read(true);
+        assert_eq!(stats.polls, 1);
+        assert!(stats.cpu_us >= 5_000, "{stats:?}");
+        assert_eq!(stats.max_cpu_us, stats.cpu_us);
+        assert_eq!((stats.polls_over_cpu_1ms, stats.polls_over_cpu_4ms), (1, 1));
+        let usage = stats.usage.clone().expect("usage switched on");
+        assert!(usage.all.minor_faults >= 512, "{usage:?}");
+        assert_eq!(usage.over_cpu_1ms, usage.all, "the one poll is a slow one");
+        assert_eq!(stats, service.read(true));
+        assert!(class.read(false).usage.is_none(), "usage off is omitted");
+    }
+
+    fn sample(cpu_ns: u64, minor_faults: u64) -> PollSample {
+        PollSample {
+            wall_ns: cpu_ns + 1_000,
+            cpu_ns,
+            usage: Some(ThreadUsage {
+                user_us: cpu_ns / 2_000,
+                sys_us: cpu_ns / 2_000,
+                minor_faults,
+                major_faults: 0,
+            }),
+        }
+    }
+
+    #[test]
+    fn polls_are_counted_strictly_above_each_cpu_threshold() {
+        let timing = PollTiming::default();
+        for cpu_ns in [
+            1_000_000, 1_000_001, 4_000_000, 4_000_001, 16_000_000, 16_000_001,
+        ] {
+            timing.record(&sample(cpu_ns, 1));
+        }
+        timing.record(&sample(10_000, 1));
+        let stats = timing.read(true);
+        assert_eq!(stats.polls, 7);
+        assert_eq!(
+            (
+                stats.polls_over_cpu_1ms,
+                stats.polls_over_cpu_4ms,
+                stats.polls_over_cpu_16ms
+            ),
+            (5, 3, 1)
+        );
+        assert_eq!(stats.max_cpu_us, 16_000);
+        assert_eq!(stats.cpu_us, 42_010);
+        assert_eq!(stats.max_poll_us, 16_001);
+        let usage = stats.usage.expect("usage read");
+        assert_eq!(usage.all.minor_faults, 7);
+        assert_eq!(
+            usage.over_cpu_1ms.minor_faults, 5,
+            "only polls above 1 ms of CPU are the slow ones"
+        );
+        assert_eq!(usage.over_cpu_1ms.user_us, 20_500);
+    }
+
+    #[test]
+    fn poll_stats_serialize_with_the_documented_names() {
+        let timing = PollTiming::default();
+        timing.record(&sample(5_000_000, 3));
+        let row = serde_json::to_value(ClassSnapshot {
+            class: MediaServiceClass::HlsIngest,
+            active: 1,
+            timing: timing.read(true),
+        })
+        .unwrap();
+        assert_eq!(row["class"], "hlsIngest");
+        assert_eq!(row["maxCpuUs"], 5_000);
+        assert_eq!(row["pollsOverCpu1Ms"], 1);
+        assert_eq!(row["pollsOverCpu4Ms"], 1);
+        assert_eq!(row["pollsOverCpu16Ms"], 0);
+        assert_eq!(row["usage"]["overCpu1Ms"]["minorFaults"], 3);
+        assert_eq!(row["usage"]["all"]["sysUs"], 2_500);
+        let without = serde_json::to_value(timing.read(false)).unwrap();
+        assert!(without.get("usage").is_none());
     }
 
     fn labelled(pipeline_id: &str, stage: &str) -> MediaService {
@@ -684,9 +902,9 @@ mod tests {
         );
         assert_eq!(busy_row.stage, "q035-busy:video");
         assert_eq!(idle_row.stage, "recording");
-        assert!(busy_row.busy_us >= 20_000, "{busy_row:?}");
+        assert!(busy_row.timing.busy_us >= 20_000, "{busy_row:?}");
         assert!(
-            idle_row.busy_us < 20_000,
+            idle_row.timing.busy_us < 20_000,
             "the sibling's busy time is not charged here: {idle_row:?}"
         );
 

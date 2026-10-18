@@ -472,6 +472,12 @@ pub fn media_executor_workers_env() -> Option<usize> {
     env_optional_positive_usize("RESTREAM_MEDIA_WORKERS").map(|v| v.clamp(1, 64))
 }
 
+/// Per-poll `getrusage` in the media executor metrics
+/// (`RESTREAM_MEDIA_POLL_USAGE`); a diagnostic, off unless set truthy.
+pub fn media_poll_usage_env() -> bool {
+    env_bool("RESTREAM_MEDIA_POLL_USAGE").unwrap_or(false)
+}
+
 pub(crate) fn env_optional_positive_usize(name: &str) -> Option<usize> {
     env_var(name)
         .and_then(|value| value.parse().ok())
