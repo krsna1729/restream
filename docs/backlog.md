@@ -32,6 +32,7 @@ items).
 - [Q-094 sideband media events](#q-094-protocol-opus-first-class-sideband-media-events)
 - [Q-095 stream inspector](#q-095-observability-sonnet-stream-inspector-gop-health-skew-and-scte)
 - [Q-096 GRO and arrival timestamps](#q-096-performance-sonnet-gro-and-arrival-timestamps-in-the-reference-srt-path)
+- [Q-097 MediaMTX MoQ dialect interoperability](#q-097-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -220,11 +221,6 @@ items).
 - Goal: the MoQ egress and origin also speak IETF MOQT draft-18 with the MSF
   catalog and LOC objects, Cloudflare's draft-16 (token in the URL path) and
   the MediaMTX v1.21.2 subset, beside the moq-lite-06 + hang profile.
-- Sources: the moq-lite profile in `src/media/moq/` (PR #371): egress shard
-  backend, origin, Compio QUIC/WebTransport transport. The draft-18 control
-  and object parsers are written and parked out of tree. MediaMTX reads
-  frame groups; hang keeps GOP groups, so the group policy becomes per
-  profile.
 - Gates: interop with moxygen, MediaMTX and Cloudflare's relay as
   subscribers (one harness mode); fuzz targets for the control and object
   parsers.
@@ -603,3 +599,54 @@ items).
   datagrams with identical arrival stamps; a bench of per-datagram cost
   with and without GRO.
 - Status: open (Filed: 2026-10-20 by claude, from the srtrust comparison).
+
+### Q-097 [protocol] [opus] Align MediaMTX MoQ dialect with IETF interop
+- Goal: unmodified upstream MediaMTX interoperates with Restream's IETF
+  MSF/LOC profile in both directions; this is separate from Q-047/Q-070.
+- Files: `src/bin/test_harness/moq_relay_interop/`, the pinned upstream
+  MediaMTX release and its protocol implementation; no proprietary fork.
+- Gates: real egress and forwarded-ingest read-back with H.264/AAC,
+  monotonic timestamps and frame counts; retain lite/browser and
+  `moq-dev-interop --ietf` coverage, then enable the MediaMTX CI gate.
+- Status: open (Filed: 2026-10-18, recovered phase-2 source/spec audit).
+- MediaMTX v1.21.2 is a separate dialect blocker, not evidence that IETF
+  support is missing from moq-net. Keep `moq-relay-interop` diagnostic-only;
+  `moq-dev-interop --ietf` is the moq-relay 0.17.7 draft-19 gate. Do not
+  introduce a proprietary MediaMTX profile/fork to make the gate green.
+  Pinned source/spec evidence:
+  - Namespace discovery: MediaMTX's
+    [`controlmessage.Read`](https://github.com/bluenviron/mediamtx/blob/v1.21.2/internal/protocols/moq/controlmessage/message.go#L40-L63)
+    has no PUBLISH_NAMESPACE dispatch. MOQT-19
+    [§3.3 and §10.15](https://www.ietf.org/archive/id/draft-ietf-moq-transport-19.html#section-10.15)
+    define it as a request-stream opener, type `0x6`; the recovered
+    Restream→MediaMTX attempt failed with `unknown message type: 0x6`.
+  - Setup progress: MediaMTX's
+    [`performSetup`](https://github.com/bluenviron/mediamtx/blob/v1.21.2/internal/protocols/moq/client.go#L75-L126)
+    waits for the server's SETUP before sending its own for drafts 17–19.
+    The recovered MediaMTX→Restream attempt stalled because moq-net's
+    server waits for the client's SETUP. MOQT-19
+    [§3.3](https://www.ietf.org/archive/id/draft-ietf-moq-transport-19.html#section-3.3)
+    permits either peer to send first; do not misreport a client-first
+    requirement. Closing the control stream after SETUP also conflicts
+    with that section's control-stream lifetime requirement.
+  - Media representation: the pinned
+    [`session.go`](https://github.com/bluenviron/mediamtx/blob/v1.21.2/internal/servers/moq/session.go#L538-L564)
+    sends one codec frame per group, raw codec payload and a public
+    timestamp `0x06` in source codec ticks without a TIMESCALE.
+    [LOC-04 §2.2–2.3.1.2](https://www.ietf.org/archive/id/draft-ietf-moq-loc-04.html#section-2.3.1.1)
+    uses timestamp `0x10` and timescale `0x08` (absent timescale means
+    microseconds since Unix epoch). This is not the LOC framing consumed
+    by moq-loc 0.2.24. [MSF-00 §4.1](https://www.ietf.org/archive/id/draft-ietf-moq-msf-00.html#section-4.1)
+    requires a GOP's samples in one group, not a new group per frame.
+  - Catalog/codec subset: the pinned
+    [`catalog.Track`](https://github.com/bluenviron/mediamtx/blob/v1.21.2/internal/protocols/moq/catalog/catalog.go)
+    emits `channels`/`clockrate`; MSF-00
+    [§5.1.27, §5.1.31–32](https://www.ietf.org/archive/id/draft-ietf-moq-msf-00.html#section-5.1.32)
+    specifies `timescale`, `samplerate` and `channelConfig` (`samplerate`
+    itself is not a mismatch). Its
+    [`ToStream`](https://github.com/bluenviron/mediamtx/blob/v1.21.2/internal/protocols/moq/to_stream.go#L103-L125)
+    accepts `avc3`/`hev1`, not Restream's `avc1`/`hvc1`; LOC-04
+    [§2.1.1–2](https://www.ietf.org/archive/id/draft-ietf-moq-loc-04.html#section-2.1.2)
+    describes both forms. Revisit against an unmodified upstream release
+    with these contracts aligned; then require both directions and media
+    read-back before re-enabling the MediaMTX gate.

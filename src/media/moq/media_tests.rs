@@ -49,7 +49,7 @@ fn fixture_parameter_sets(path: std::path::PathBuf) -> Vec<u8> {
 }
 
 #[test]
-fn legacy_prefix_matches_hang_at_every_width() {
+fn loc_frames_are_moq_locs_and_frame_the_payload_in_place() {
     for us in [
         0,
         63,
@@ -60,32 +60,81 @@ fn legacy_prefix_matches_hang_at_every_width() {
         1 << 30,
         (1 << 62) - 1,
     ] {
-        let payload = Bytes::from_static(b"frame");
-        let mut ours = BytesMut::new();
-        write_legacy_prefix(us, &mut ours).unwrap();
-        assert_eq!(ours.len(), legacy_prefix_len(us), "{us}");
-        ours.extend_from_slice(&payload);
+        let payload = b"frame";
+        let buffer = LocBuffer::from_payload(payload);
+        let at = buffer.payload().as_ptr();
+        let ours = buffer.into_frame(us).unwrap();
+        assert_eq!(ours, moq_loc::encode(us, payload).unwrap(), "{us}");
+        assert_eq!(
+            ours[ours.len() - payload.len()..].as_ptr(),
+            at,
+            "{us}: the payload was not moved"
+        );
+        let (timestamp, decoded) = parse_loc_frame(ours).unwrap();
+        assert_eq!(timestamp, us);
+        assert_eq!(decoded.as_ref(), payload);
+        assert_eq!(decoded.as_ptr(), at, "LOC decode must only slice the input");
+    }
+    assert_eq!(
+        LocBuffer::from_payload(b"x").into_frame(1 << 62),
+        Err(MediaError::TimestampTooLarge)
+    );
+}
 
-        let frame = Frame {
-            timestamp: Timestamp::from_micros(us).unwrap(),
-            payload: payload.clone(),
-        };
-        let mut theirs = BytesMut::new();
-        frame.encode(&mut theirs).unwrap();
-        assert_eq!(ours, theirs, "{us}");
-
-        assert_eq!(parse_legacy_frame(ours.freeze()), Ok((us, payload)));
+#[test]
+fn loc_frames_honour_a_timescale_and_need_a_timestamp() {
+    // Timescale 90 000 (0x08), then Timestamp 90 000 (0x10, delta 8): 1 s.
+    let mut frame = vec![
+        10, 0x08, 0x80, 0x01, 0x5F, 0x90, 0x08, 0x80, 0x01, 0x5F, 0x90,
+    ];
+    frame.extend_from_slice(b"au");
+    assert_eq!(
+        parse_loc_frame(Bytes::from(frame)),
+        Ok((1_000_000, Bytes::from_static(b"au")))
+    );
+    // Only a timescale; then a block longer than the frame.
+    for frame in [&[2, 0x08, 0x01, b'a'][..], &[5, 0x10, 0x01]] {
+        assert!(parse_loc_frame(Bytes::copy_from_slice(frame)).is_err());
     }
 }
 
 #[test]
-fn legacy_timestamps_are_bounded() {
-    let mut out = BytesMut::from(&b"x"[..]);
+fn loc_frames_reject_zero_timescale_and_timestamp_scaling_overflow() {
+    let scaled = |scale: u64, timestamp: u64| {
+        let mut properties = BytesMut::new();
+        for value in [0x08, scale, 0x08, timestamp] {
+            VarInt::from_u64(value).unwrap().encode_quic(&mut properties).unwrap();
+        }
+        let mut frame = BytesMut::new();
+        VarInt::from_u64(properties.len() as u64).unwrap().encode_quic(&mut frame).unwrap();
+        frame.extend_from_slice(&properties);
+        frame.extend_from_slice(b"au");
+        frame.freeze()
+    };
+    assert!(parse_loc_frame(scaled(0, 1)).is_err());
     assert_eq!(
-        write_legacy_prefix(1 << 62, &mut out),
-        Err(MediaError::TimestampTooLarge)
+        parse_loc_frame(scaled(1, (1 << 62) - 1)),
+        Err(WireError::Invalid("LOC timestamp out of range")),
     );
-    assert_eq!(&out[..], b"x");
+    assert_eq!(
+        parse_loc_frame(scaled(90_000, 90_045)),
+        Ok((1_000_500, Bytes::from_static(b"au"))),
+    );
+}
+
+#[test]
+fn legacy_frames_split_without_a_copy() {
+    let mut ours = BytesMut::new();
+    Frame {
+        timestamp: Timestamp::from_micros(16_384).unwrap(),
+        payload: Bytes::from_static(b"frame"),
+    }
+    .encode(&mut ours)
+    .unwrap();
+    assert_eq!(
+        parse_legacy_frame(ours.freeze()),
+        Ok((16_384, Bytes::from_static(b"frame")))
+    );
     // A two-byte varint cut after its first byte, and an empty frame.
     for frame in [&[0x40][..], &[]] {
         assert_eq!(
@@ -177,14 +226,34 @@ fn a_published_catalog_reads_back() {
         .to_vec()
         .unwrap();
     let text = std::str::from_utf8(&json).unwrap();
-    // WebCodecs field names; the record is hex, not base64.
+    // WebCodecs field names; the record is hex, not base64. Every track is
+    // LOC, whatever container the configurations were read from.
     assert!(text.contains(r#""codec":"mp4a.40.2""#), "{text}");
     assert!(text.contains(r#""description":"1190""#), "{text}");
     assert!(text.contains(r#""numberOfChannels":2"#), "{text}");
 
     let tracks = from_hang_catalog(&hang::Catalog::from_slice(&json).unwrap());
-    assert_eq!(tracks.video, Some((VIDEO_TRACK.to_string(), video)));
-    assert_eq!(tracks.audio, vec![(AUDIO_TRACK.to_string(), audio)]);
+    let loc = TrackContainer::Loc;
+    assert_eq!(
+        tracks.video,
+        Some((
+            VIDEO_TRACK.to_string(),
+            VideoConfig {
+                container: loc.clone(),
+                ..video
+            }
+        ))
+    );
+    assert_eq!(
+        tracks.audio,
+        vec![(
+            AUDIO_TRACK.to_string(),
+            AudioConfig {
+                container: loc,
+                ..audio
+            }
+        )]
+    );
     assert!(tracks.rejected.is_empty());
 }
 
@@ -205,8 +274,9 @@ fn unsupported_renditions_are_reported() {
     }"#;
     let tracks = from_hang_catalog(&hang::Catalog::from_slice(json).unwrap());
     let (name, video) = tracks.video.expect("the best supported rendition");
-    assert_eq!(name, "c");
+    assert_eq!(name, "b");
     assert_eq!(video.codec, VideoCodec::H264);
+    assert_eq!(video.container, TrackContainer::Loc);
     assert_eq!(video.description, None, "avc3: parameter sets in band");
     assert_eq!(
         tracks.audio,
@@ -228,7 +298,7 @@ fn unsupported_renditions_are_reported() {
         .map(|(name, _)| name.as_str())
         .collect();
     rejected.sort_unstable();
-    assert_eq!(rejected, ["a", "b", "d", "x"]);
+    assert_eq!(rejected, ["a", "c", "d", "x"]);
 }
 
 #[test]

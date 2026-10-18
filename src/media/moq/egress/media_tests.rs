@@ -5,7 +5,7 @@ use crate::media::codec::{
     build_aac_sequence_header, build_avcc_sequence_header, build_hevc_enhanced_rtmp_sequence_header,
 };
 use crate::media::moq::egress::startup::{MoqAudioStartup, MoqVideoStartup};
-use crate::media::moq::media::{TrackContainer, parse_legacy_frame};
+use crate::media::moq::media::TrackContainer;
 use crate::media::mpegts::TsDemuxer;
 
 /// Baseline 3.0 SPS (640x480) and a PPS, Annex-B.
@@ -77,7 +77,7 @@ fn convert(
     converter: &mut MediaConverter,
     packet: &MediaPacket,
     config: Option<&TrackConfig>,
-) -> Vec<HangFrame> {
+) -> Vec<MediaFrame> {
     let mut out = Vec::new();
     converter.convert(packet, config, &mut out).unwrap();
     out
@@ -122,10 +122,6 @@ fn a_raw_keyframe_takes_its_ring_config_out_of_band_and_publishes_a_catalog() {
     assert_eq!(frames.len(), 1);
     assert!(frames[0].keyframe);
     assert_eq!(frames[0].pts_us, 40_000);
-    assert_eq!(
-        parse_legacy_frame(frames[0].data.clone()),
-        Ok((40_000, Bytes::from(length_prefixed(4, &[IDR]))))
-    );
     assert_eq!(frames[0].payload(), Bytes::from(length_prefixed(4, &[IDR])));
     assert_eq!(converter.catalog_version(), 1);
     let expected = VideoConfig::from_parameter_sets(VideoCodec::H264, PARAMETER_SETS).unwrap();

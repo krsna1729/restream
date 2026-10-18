@@ -53,6 +53,7 @@ struct Session {
     tls: InteropTls,
     ports: DevPorts,
     relay: DevRelay,
+    ingest_relay: DevRelay,
     restream: Child,
     api: RampApi,
     sink: Option<GeneralizedSinkServer>,
@@ -69,7 +70,11 @@ pub(crate) async fn run_moq_dev_interop(options: DevOptions) -> Result<Value, St
     let started = Instant::now();
     let work_dir = std::env::var_os("WORK_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(".local/artifacts/moq-dev-interop"));
+        .unwrap_or_else(|| PathBuf::from(if options.ietf {
+            ".local/artifacts/moq-dev-interop-ietf"
+        } else {
+            ".local/artifacts/moq-dev-interop"
+        }));
     std::fs::create_dir_all(&work_dir).map_err(|error| error.to_string())?;
     let work_dir = absolute_path(&work_dir)?;
 
@@ -91,6 +96,7 @@ pub(crate) async fn run_moq_dev_interop(options: DevOptions) -> Result<Value, St
             "fixture": fixture.display().to_string(),
             "inputFps": input_fps,
             "browsers": options.browsers,
+            "alpn": options.alpn(),
             "ports": {"http": ports.http, "rtmp": ports.rtmp, "sink": sink_port},
             "devPorts": dev_ports.to_json(),
         })
@@ -141,6 +147,12 @@ pub(crate) async fn run_moq_dev_interop(options: DevOptions) -> Result<Value, St
         }
     };
 
+    let ingest_relay = DevRelay::new(
+        relay_bin,
+        dev_ports.ingest_relay,
+        &tls,
+        work_dir.join("moq-relay-ingest.log"),
+    );
     let mut session = Session {
         options,
         work_dir: work_dir.clone(),
@@ -151,6 +163,7 @@ pub(crate) async fn run_moq_dev_interop(options: DevOptions) -> Result<Value, St
         tls,
         ports: dev_ports,
         relay,
+        ingest_relay,
         restream,
         api,
         sink: None,
@@ -176,7 +189,7 @@ pub(crate) async fn run_moq_dev_interop(options: DevOptions) -> Result<Value, St
     let report = json!({
         "passed": passed,
         "mode": MODE,
-        "wireProfile": "moq-lite-06 + hang (moq-net 0.3.15), interop-pinned to moq-cli 0.14.7 / moq-relay 0.17.7",
+        "wireProfile": if options.ietf { "moqt-19 + MSF/LOC" } else { "moq-lite-06 + hang" },
         "environment": {
             "moq": moq.display().to_string(),
             "moqVersion": MOQ_CLI.version,
@@ -261,8 +274,9 @@ impl Session {
         self.sink =
             Some(start_generalized_sink_server(self.sink_port, self.sink_metrics.clone()).await?);
         let moq_url = format!(
-            "moqt://127.0.0.1:{}/?broadcast={EGRESS_BROADCAST}&ca={}",
+            "moqt://127.0.0.1:{}/?broadcast={EGRESS_BROADCAST}&version={}&ca={}",
             self.ports.relay,
+            self.options.alpn(),
             self.tls.ca_pem.display()
         );
         let moq_output = self.add_output(&pipeline, "moq-relay", &moq_url).await?;
@@ -282,7 +296,7 @@ impl Session {
 
         let catalog = self
             .relay
-            .wait_broadcast(EGRESS_BROADCAST, RELAY_PUBLISH_TIMEOUT)
+            .wait_broadcast(EGRESS_BROADCAST, RELAY_PUBLISH_TIMEOUT, self.options.ietf)
             .await;
         let served = catalog.is_ok();
         self.checks.record(
@@ -290,7 +304,7 @@ impl Session {
             served,
             catalog.unwrap_or_else(|error| json!({"error": error})),
         );
-        self.record_relay_sessions("egressRelayLite06", 1);
+        self.record_relay_sessions("egressRelayVersion", 1);
         if !served {
             self.record_output_status("egressMoqOutput", &pipeline, &moq_output)
                 .await;
@@ -354,6 +368,7 @@ impl Session {
             url,
             ca: &self.tls.ca_pem,
             broadcast,
+            version: self.options.version(),
         };
         match attempt_export(&self.moq, &target, &out, REFUSAL_WATCH_SECS).await {
             Ok(refusal) => self.checks.record(id, refusal.refused(), refusal.to_json()),
@@ -478,7 +493,7 @@ impl Session {
         let republished = match restart {
             Ok(()) => {
                 self.relay
-                    .wait_broadcast(EGRESS_BROADCAST, RECONNECT_BUDGET)
+                    .wait_broadcast(EGRESS_BROADCAST, RECONNECT_BUDGET, self.options.ietf)
                     .await
             }
             Err(error) => Err(error),
@@ -493,7 +508,9 @@ impl Session {
                 "error": republished.as_ref().err(),
             }),
         );
-        self.record_relay_sessions("isolationRelayLite06", 2);
+        // Browsers/exports have dialled this relay life; only Restream has
+        // dialled the new life yet, so this remains a publisher-only verdict.
+        self.record_relay_sessions("isolationRelayVersion", 2);
         tokio::time::sleep(POST_RECONNECT_HOLD).await;
         sampler_stop.cancel();
         let samples = sampler.await.unwrap_or_default();
@@ -544,8 +561,8 @@ impl Session {
         Ok(())
     }
 
-    /// moq-dev's TS publisher → Restream's MoQ listener → pipeline → RTMP
-    /// output into an FFmpeg listener, read back with the same checks.
+    /// Publisher → Restream ingest → RTMP read-back. IETF uses a dedicated
+    /// real relay forwarding LOC from a separate source pipeline.
     async fn ingest_phase(&mut self) -> Result<(), String> {
         let pipeline =
             create_resource_pipeline(&self.api, "moq-dev-ingest", INGEST_STREAM_KEY).await?;
@@ -566,22 +583,31 @@ impl Session {
         self.add_output(&pipeline, "rtmp-readback", &return_url)
             .await?;
 
-        let broadcast = format!("live/{INGEST_STREAM_KEY}.hang");
-        let url = self.listener_url();
-        let target = CliTarget {
-            url: &url,
-            ca: &self.tls.ca_pem,
-            broadcast: &broadcast,
+        let broadcast = if self.options.ietf {
+            format!("live/{INGEST_STREAM_KEY}.msf")
+        } else {
+            format!("live/{INGEST_STREAM_KEY}.hang")
         };
-        let publisher = spawn_ts_import(
-            &self.ffmpeg,
-            &self.moq,
-            &self.fixture,
-            &target,
-            &self.work_dir,
-            "ingest-publisher",
-        )?;
-        self.children.extend(publisher);
+        if self.options.ietf {
+            self.start_ietf_ingest_source(&broadcast).await?;
+        } else {
+            let url = self.listener_url();
+            let target = CliTarget {
+                url: &url,
+                ca: &self.tls.ca_pem,
+                broadcast: &broadcast,
+                version: LITE_VERSION,
+            };
+            let publisher = spawn_ts_import(
+                &self.ffmpeg,
+                &self.moq,
+                &self.fixture,
+                &target,
+                &self.work_dir,
+                "ingest-publisher",
+            )?;
+            self.children.extend(publisher);
+        }
 
         let live = async {
             wait_for_api_input_live(&self.api, &pipeline, INPUT_TIMEOUT).await?;
@@ -614,6 +640,23 @@ impl Session {
         if live.is_err() {
             return Err("the MoQ ingest never went live".to_string());
         }
+        if self.options.ietf {
+            let log = std::fs::read_to_string(self.ingest_relay.log_path()).unwrap_or_default();
+            let (ok, sessions) = sessions_on_version(&relay_sessions(&log), 1, IETF_VERSION);
+            self.checks.record(
+                "ingestRelayVersion",
+                ok,
+                json!({"expectedAlpn": "moqt-19", "sessions": sessions}),
+            );
+            // The relay offers exactly one version on its outbound cluster
+            // dial; media admitted by Restream proves that dial completed.
+            self.report.insert("ingestRelayForward".to_string(), json!({
+                "url": format!("{}{INGEST_STREAM_KEY}", self.listener_url()),
+                "version": IETF_VERSION,
+                "broadcast": broadcast,
+                "log": self.ingest_relay.log_path(),
+            }));
+        }
 
         // The listener exits once it has written SHORT_CAPTURE_SECS of media.
         let finished = match self.children.get_mut(listener_index) {
@@ -635,6 +678,40 @@ impl Session {
         Ok(())
     }
 
+    async fn start_ietf_ingest_source(&mut self, broadcast: &str) -> Result<(), String> {
+        self.ingest_relay.forward_to(
+            format!("{}{INGEST_STREAM_KEY}", self.listener_url()),
+            &self.tls.ca_pem,
+        );
+        self.ingest_relay.start().await?;
+        let key = "sk-moq-ietf-source";
+        let source = create_resource_pipeline(&self.api, "moq-ietf-source", key).await?;
+        let output = format!(
+            "moqt://127.0.0.1:{}/?broadcast={broadcast}&version=moqt-19&ca={}",
+            self.ports.ingest_relay,
+            self.tls.ca_pem.display(),
+        );
+        self.add_output(&source, "ietf-ingest-source", &output).await?;
+        let publish_url = format!("rtmp://127.0.0.1:{}/live/{key}", self.restream_rtmp);
+        self.spawn_ffmpeg(
+            "ietf-ingest-source",
+            &crate::hls_push_duty::run::rtmp_publisher_args(&self.fixture, &publish_url),
+        )?;
+        let catalog = self.ingest_relay
+            .wait_broadcast(broadcast, RELAY_PUBLISH_TIMEOUT, true)
+            .await;
+        let served = catalog.is_ok();
+        self.checks.record(
+            "ingestRelayMsfLocCatalog",
+            served,
+            catalog.unwrap_or_else(|error| json!({"error": error})),
+        );
+        if !served {
+            return Err("the ingest relay never served the MSF/LOC source".to_string());
+        }
+        Ok(())
+    }
+
     /// `moq export ts` from `url`/`broadcast` for `secs`, then the FFprobe
     /// read-back checks over what it delivered.
     async fn record_export(
@@ -650,6 +727,7 @@ impl Session {
             url,
             ca: &self.tls.ca_pem,
             broadcast,
+            version: self.options.version(),
         };
         let probe = match capture_export(&self.moq, &target, &capture, secs).await {
             Ok(_) => self.probe_capture(&capture, secs).await,
@@ -670,17 +748,16 @@ impl Session {
         .await
     }
 
-    /// Every session in relay life `life` (1 before the kill, 2 after) must
-    /// have negotiated moq-lite-06. Called as soon as the relay serves the
-    /// egress broadcast, before any harness subscriber dials that life, so
-    /// the sessions it judges are Restream's egress.
+    /// Before harness subscribers dial a relay life, all sessions must
+    /// negotiate the selected version. Browser lite sessions from the old
+    /// life do not contaminate the post-restart IETF verdict.
     fn record_relay_sessions(&mut self, id: &str, life: u32) {
         let log = std::fs::read_to_string(self.relay.log_path()).unwrap_or_default();
-        let (ok, sessions) = sessions_on_lite(&relay_sessions(&log), life);
+        let (ok, sessions) = sessions_on_version(&relay_sessions(&log), life, self.options.version());
         self.checks.record(
             id,
             ok,
-            json!({"expected": LITE_VERSION, "relayLife": life, "sessions": sessions}),
+            json!({"expected": self.options.version(), "expectedAlpn": self.options.alpn(), "relayLife": life, "sessions": sessions}),
         );
     }
 
@@ -739,5 +816,6 @@ impl Session {
         }
         stop_child(&mut self.restream).await;
         self.relay.kill().await;
+        self.ingest_relay.kill().await;
     }
 }

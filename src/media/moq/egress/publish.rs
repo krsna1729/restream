@@ -1,75 +1,140 @@
-//! A hang broadcast fed from a ring, shared by the egress leaf (published
-//! to a relay) and the origin (served to direct subscribers).
+//! A MoQ broadcast fed from a ring, shared by the egress leaf (published to
+//! a relay) and the origin (served to direct subscribers).
 //!
-//! The broadcast carries `catalog.json` and the `video`/`audio` tracks.
-//! Video groups are GOPs (a keyframe opens one; frames before the first
-//! keyframe are dropped), audio groups about one second. Media tracks have
-//! `max_age` zero, so a subscriber skips a group as soon as the next one
-//! starts: a late one joins at the current GOP and a slow one skips whole
-//! old groups instead of falling behind. What the origin keeps is bounded
-//! by its [`CacheBudget`] (about two GOPs; moq-net always keeps the newest
-//! group). Frames are written as one chunk each, so every subscriber shares
-//! the same `Bytes`.
+//! moq-mux does the protocol work: its catalog producer publishes the hang
+//! `catalog.json` (+ `catalog.json.z`) and the MSF `catalog` from one
+//! catalog, and a `container::Producer` per media track manages groups:
+//! video groups are GOPs (a keyframe opens one; frames before the first
+//! keyframe are dropped), audio groups about one second. Every frame is
+//! LOC, framed in place ([`LocBuffer::into_frame`]) and written as one
+//! chunk, so every subscriber shares the same `Bytes`.
+//!
+//! Media tracks have `max_age` zero, so a subscriber skips a group as soon
+//! as the next one starts: a late one joins at the current GOP and a slow
+//! one skips whole old groups instead of falling behind. What the origin
+//! keeps is bounded by its [`CacheBudget`] (about two GOPs; moq-net always
+//! keeps the newest group).
+//!
+//! A track never rewinds behind a closed group's live edge (presentation
+//! reordering inside a GOP is preserved). When the ring's timestamps do,
+//! both tracks publish a discontinuity and share one timeline offset.
 
 use std::sync::Arc;
+use std::task::Poll;
 use std::time::Duration;
 
-use bytes::Bytes;
 use hang::catalog::PRIORITY;
-use moq_net::{Timestamp, broadcast, group, origin, track};
+use moq_mux::container::{self, Frame, Kind, loc};
+use moq_net::{Timestamp, broadcast, group, origin};
 
 use crate::media::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use crate::media::egress::journal::RingFeed;
 use crate::media::moq::budget::CacheBudget;
-use crate::media::moq::media::{AUDIO_TRACK, TrackKind, VIDEO_TRACK};
+use crate::media::moq::media::{AUDIO_TRACK, LocBuffer, TrackKind, VIDEO_TRACK, parse_loc_frame};
 use crate::media::packet::{MediaPacket, MediaType};
 
-use super::media::{HangFrame, MediaConverter};
+use super::media::{MediaConverter, MediaFrame};
 
 /// Audio group length.
 const AUDIO_GROUP_US: u64 = 1_000_000;
 
-/// One media track and its open group.
-struct TrackWriter {
-    track: track::Producer,
-    group: Option<group::Producer>,
-    group_start_us: u64,
-}
+/// The LOC container for frames framed in place: a framed frame goes out
+/// as it is, one shared `Bytes`; the producer's own empty end-of-GOP and
+/// discontinuity markers are framed by moq-mux's LOC writer.
+struct Framed(loc::Wire);
 
-impl TrackWriter {
-    fn new(track: track::Producer) -> Self {
-        Self {
-            track,
-            group: None,
-            group_start_us: 0,
-        }
-    }
+impl container::Container for Framed {
+    type Error = moq_mux::Error;
 
-    /// Close the open group and open the next one at `pts_us`.
-    fn next_group(&mut self, pts_us: u64) -> Result<(), moq_net::Error> {
-        if let Some(group) = self.group.take() {
-            group.finish()?;
+    fn write(&self, group: &mut group::Producer, frames: &[Frame]) -> Result<(), Self::Error> {
+        for frame in frames {
+            if frame.payload.is_empty() {
+                self.0.write(group, std::slice::from_ref(frame))?;
+            } else {
+                group.write_frame(frame.timestamp, frame.payload.clone())?;
+            }
         }
-        self.group_start_us = pts_us;
-        self.group = Some(self.track.append_group()?);
         Ok(())
     }
 
-    /// Close the open group and end the track (repeating is a no-op).
-    fn finish(&mut self) {
-        if let Some(group) = self.group.take() {
-            let _ = group.finish();
-        }
-        let _ = self.track.finish();
+    fn poll_read(
+        &self,
+        group: &mut group::Consumer,
+        waiter: &kio::Waiter,
+    ) -> Poll<Result<Option<Vec<Frame>>, Self::Error>> {
+        self.0.poll_read(group, waiter)
+    }
+
+    fn end(&self, frame: &Frame) -> Option<Timestamp> {
+        self.0.end(frame)
+    }
+
+    fn kind(&self) -> Kind {
+        self.0.kind()
+    }
+
+    fn finish_group(
+        &self,
+        group: &mut group::Producer,
+        end: Option<Timestamp>,
+    ) -> Result<(), Self::Error> {
+        self.0.finish_group(group, end)
     }
 }
 
-/// The moq-net side of one hang broadcast.
+type MediaTrack = container::Producer<Framed>;
+
+/// Why a frame was not written.
+enum Refused {
+    /// Below what the track already presented.
+    Rewind,
+    /// The broadcast is closed or broken.
+    Fatal(String),
+}
+
+/// The broadcast timeline: ring timestamps plus `offset_us`, which grows
+/// each time the ring's go back.
+#[derive(Debug, Default)]
+struct Timeline {
+    offset_us: u64,
+    /// Per track (video, audio): the furthest timestamp written, and the
+    /// step that reached it.
+    last: [Option<u64>; 2],
+    step: [u64; 2],
+}
+
+impl Timeline {
+    fn wrote(&mut self, track: usize, us: u64) {
+        match self.last[track] {
+            Some(last) if us <= last => {}
+            last => {
+                if let Some(last) = last {
+                    self.step[track] = us - last;
+                }
+                self.last[track] = Some(us);
+            }
+        }
+    }
+
+    /// Just past what either track presented: its furthest timestamp plus
+    /// one more step.
+    fn end(&self) -> u64 {
+        (0..2)
+            .filter_map(|track| self.last[track].map(|last| last.saturating_add(self.step[track])))
+            .max()
+            .unwrap_or(0)
+    }
+}
+
+/// The moq-net side of one broadcast.
 pub(crate) struct HangBroadcast {
     broadcast: broadcast::Producer,
-    catalog: track::Producer,
-    video: Option<TrackWriter>,
-    audio: Option<TrackWriter>,
+    catalog: moq_mux::catalog::Producer,
+    video: Option<MediaTrack>,
+    audio: Option<MediaTrack>,
+    /// Where the open audio group started, on the broadcast timeline.
+    audio_group_us: u64,
+    timeline: Timeline,
     budget: CacheBudget,
 }
 
@@ -83,24 +148,21 @@ impl HangBroadcast {
         video: bool,
         audio: bool,
     ) -> Result<Self, moq_net::Error> {
-        let broadcast = origin.create_broadcast(name)?;
-        let catalog = broadcast.create_track(
-            hang::Catalog::DEFAULT_NAME,
-            hang::Catalog::default_track_info(),
-        )?;
-        let media = |name: &str, priority: u8| {
+        let mut broadcast = origin.create_broadcast(name)?;
+        let catalog = moq_mux::catalog::Producer::new(&mut broadcast, Default::default())?;
+        let media = |name: &str, priority: u8, kind: Kind| {
             broadcast
                 .create_track(
                     name,
                     hang::container::track_info(priority).with_max_age(Duration::ZERO),
                 )
-                .map(TrackWriter::new)
+                .map(|track| container::Producer::new(track, Framed(loc::Wire(kind))))
         };
         let video = video
-            .then(|| media(VIDEO_TRACK, PRIORITY.video))
+            .then(|| media(VIDEO_TRACK, PRIORITY.video, Kind::Video))
             .transpose()?;
         let audio = audio
-            .then(|| media(AUDIO_TRACK, PRIORITY.audio))
+            .then(|| media(AUDIO_TRACK, PRIORITY.audio, Kind::Audio))
             .transpose()?;
         broadcast.announce(Default::default())?;
         Ok(Self {
@@ -108,74 +170,130 @@ impl HangBroadcast {
             catalog,
             video,
             audio,
+            audio_group_us: 0,
+            timeline: Timeline::default(),
             budget,
         })
     }
 
-    /// Publish `catalog` as the catalog track's next group.
+    /// Publish `catalog` on both catalog tracks (hang and MSF).
     pub(crate) fn publish_catalog(&mut self, catalog: &hang::Catalog) -> Result<(), String> {
-        let json = catalog.to_json().map_err(|error| error.to_string())?;
-        let mut group = self
-            .catalog
-            .append_group()
-            .map_err(|error| error.to_string())?;
-        group
-            .write_frame(Timestamp::now(), Bytes::from(json))
-            .and_then(|()| group.finish())
+        // The whole catalog, so no wall-clock mapping is advertised: ring
+        // timestamps are media time.
+        self.catalog
+            .mutate(|published| *published = catalog.clone())
             .map_err(|error| error.to_string())
     }
 
     /// Write one frame, opening a group where the profile starts one.
-    /// Returns whether it was written (video before its first keyframe is
-    /// not).
-    pub(crate) fn write(&mut self, frame: HangFrame) -> Result<bool, String> {
-        let timestamp = Timestamp::from_micros(frame.pts_us).map_err(|error| error.to_string())?;
-        let (writer, budget_track) = match frame.track {
-            TrackKind::Video => (self.video.as_mut(), 0),
-            TrackKind::Audio => (self.audio.as_mut(), 1),
+    /// Returns whether it was written (video before its first keyframe, or
+    /// after a discontinuity until the next one, is not).
+    pub(crate) fn write(&mut self, frame: MediaFrame) -> Result<bool, String> {
+        let has_track = match frame.track {
+            TrackKind::Video => self.video.is_some(),
+            TrackKind::Audio => self.audio.is_some(),
         };
-        let Some(writer) = writer else {
+        if !has_track {
             return Ok(false);
-        };
-        let open = writer.group.is_some();
-        let next_group = match frame.track {
-            TrackKind::Video if frame.keyframe => true,
-            TrackKind::Video => false,
-            // A timestamp jump backwards (a new ingest session) also starts
-            // a group.
+        }
+        let us = frame.pts_us.saturating_add(self.timeline.offset_us);
+        let framed = frame
+            .data
+            .into_frame(us)
+            .map_err(|error| error.to_string())?;
+        match self.write_framed(frame.track, frame.keyframe, us, framed.clone()) {
+            Err(Refused::Rewind) => {}
+            Err(Refused::Fatal(reason)) => return Err(reason),
+            Ok(written) => return Ok(written),
+        }
+        // The ring went back: a discontinuity on both tracks, then resume
+        // just past what either presented. Copies this one frame to frame
+        // it again.
+        self.discontinuity()?;
+        let resume = self.timeline.end();
+        self.timeline.offset_us = resume.saturating_sub(frame.pts_us);
+        let (_, payload) = parse_loc_frame(framed).map_err(|error| error.to_string())?;
+        let framed = LocBuffer::from_payload(&payload)
+            .into_frame(resume)
+            .map_err(|error| error.to_string())?;
+        match self.write_framed(frame.track, frame.keyframe, resume, framed) {
+            Ok(written) => Ok(written),
+            Err(Refused::Rewind) => Ok(false),
+            Err(Refused::Fatal(reason)) => Err(reason),
+        }
+    }
+
+    fn write_framed(
+        &mut self,
+        track: TrackKind,
+        keyframe: bool,
+        us: u64,
+        framed: bytes::Bytes,
+    ) -> Result<bool, Refused> {
+        let timestamp =
+            Timestamp::from_micros(us).map_err(|error| Refused::Fatal(error.to_string()))?;
+        let len = framed.len();
+        let (producer, index, keyframe) = match track {
+            TrackKind::Video => (self.video.as_mut(), 0, keyframe),
             TrackKind::Audio => {
-                !open
-                    || frame.pts_us < writer.group_start_us
-                    || frame.pts_us - writer.group_start_us >= AUDIO_GROUP_US
+                let producer = self.audio.as_mut();
+                let start = self.audio_group_us;
+                let next = producer
+                    .as_ref()
+                    .is_some_and(|producer| producer.needs_keyframe())
+                    || us < start
+                    || us - start >= AUDIO_GROUP_US;
+                (producer, 1, next)
             }
         };
-        if next_group {
-            writer
-                .next_group(frame.pts_us)
-                .map_err(|error| error.to_string())?;
-            self.budget.group(budget_track);
-        }
-        // No open group: video before its first keyframe.
-        let Some(group) = writer.group.as_mut() else {
+        let Some(producer) = producer else {
             return Ok(false);
         };
-        let len = frame.data.len();
-        group
-            .write_frame(timestamp, frame.data)
-            .map_err(|error| error.to_string())?;
-        self.budget.frame(budget_track, len);
+        let written = producer.write(Frame {
+            timestamp,
+            payload: framed,
+            keyframe,
+            duration: None,
+        });
+        match written {
+            Ok(()) => {}
+            Err(moq_mux::Error::MissingKeyframe(_)) => return Ok(false),
+            Err(moq_mux::Error::TimestampRewind(_)) => return Err(Refused::Rewind),
+            Err(error) => return Err(Refused::Fatal(error.to_string())),
+        }
+        if keyframe {
+            self.budget.group(index);
+            if index == 1 {
+                self.audio_group_us = us;
+            }
+        }
+        self.budget.frame(index, len);
+        self.timeline.wrote(index, us);
         Ok(true)
+    }
+
+    /// Close every track's group with a discontinuity marker.
+    fn discontinuity(&mut self) -> Result<(), String> {
+        for (index, producer) in [(0, self.video.as_mut()), (1, self.audio.as_mut())] {
+            if let Some(producer) = producer {
+                producer
+                    .discontinuity()
+                    .map_err(|error| error.to_string())?;
+                self.budget.group(index);
+            }
+        }
+        Ok(())
     }
 
     /// End every track and close the broadcast: a clean end for every
     /// subscriber. Repeating is a no-op; dropping does it too, so a cancelled
     /// pump still ends its subscribers cleanly.
     pub(crate) fn finish(&mut self) {
-        for writer in [self.video.as_mut(), self.audio.as_mut()]
+        for producer in [self.video.as_mut(), self.audio.as_mut()]
             .into_iter()
             .flatten()
         {
-            writer.finish();
+            let _ = producer.finish();
         }
         let _ = self.catalog.finish();
         self.broadcast.close();
@@ -191,7 +309,7 @@ impl Drop for HangBroadcast {
 /// What one [`RingPublisher::pump`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Pump {
-    /// Units consumed (some may have produced no frame) and frame bytes
+    /// Units consumed (some may have produced no frame) and payload bytes
     /// written.
     Sent { bytes: usize, units: usize },
     /// Nothing new in the feed.
@@ -209,7 +327,7 @@ pub(crate) struct RingPublisher {
     /// The converter catalog version last published.
     published: Option<u64>,
     units: Vec<Arc<MediaPacket>>,
-    frames: Vec<HangFrame>,
+    frames: Vec<MediaFrame>,
     skipped: u64,
 }
 
@@ -321,7 +439,7 @@ impl RingPublisher {
             if self.published.is_none() {
                 continue;
             }
-            let len = frame.data.len();
+            let len = frame.data.payload().len();
             if self.broadcast.write(frame).map_err(Pump::Failed)? {
                 bytes += len;
             }

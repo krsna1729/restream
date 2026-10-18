@@ -80,17 +80,21 @@ async fn session_protocol(engine: &MediaEngine) -> Option<(String, Option<String
 }
 
 #[test]
-fn the_stream_key_is_the_last_broadcast_segment_without_hang_suffix() {
+fn the_stream_key_is_the_last_broadcast_segment_without_catalog_suffix() {
     assert_eq!(stream_key_from_path("/live"), Some("live"));
     assert_eq!(stream_key_from_path("live/"), Some("live"));
     assert_eq!(stream_key_from_path("//key?token=abc"), Some("key"));
     assert_eq!(stream_key_from_path("tenant/live/key.hang"), Some("key"));
+    assert_eq!(stream_key_from_path("tenant/live/key.msf"), Some("key"));
+    assert_eq!(stream_key_from_path("key.msf?token=abc"), Some("key"));
     assert_eq!(stream_key_from_path("a/b"), Some("b"));
     assert_eq!(stream_key_from_path(".hang"), None);
+    assert_eq!(stream_key_from_path(".msf"), None);
     assert_eq!(stream_key_from_path(""), None);
     assert_eq!(stream_key_from_path("/?x=1"), None);
     let longest = "k".repeat(MAX_STREAM_KEY_BYTES);
     assert_eq!(stream_key_from_path(&longest), Some(longest.as_str()));
+    assert_eq!(stream_key_from_path(&format!("{longest}.msf")), Some(longest.as_str()));
     assert_eq!(stream_key_from_path(&format!("{longest}k")), None);
 }
 

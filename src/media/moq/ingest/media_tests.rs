@@ -1,4 +1,4 @@
-//! Catalog → track selection and legacy frame → packet conversion.
+//! Catalog → track selection and LOC / legacy frame → packet conversion.
 
 // Test code may index, unwrap and do plain arithmetic; the parent module's
 // deny lints guard the parser, not its tests.
@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::media::codec::{MAX_ADTS_PAYLOAD, build_adts_header_for};
-use crate::media::moq::media::{from_hang_catalog, write_legacy_prefix};
+use crate::media::moq::media::{LocBuffer, from_hang_catalog};
 
 const SPS: &[u8] = &[0x67, 0x42, 0x00, 0x1e, 0xf4, 0x05, 0x01, 0xec, 0x80];
 const PPS: &[u8] = &[0x68, 0xce, 0x06, 0xe2];
@@ -54,10 +54,15 @@ fn avcc() -> Bytes {
     Bytes::from(record)
 }
 
+/// A hang legacy frame, as hang writes it.
 fn legacy(us: u64, payload: &[u8]) -> Bytes {
     let mut frame = BytesMut::new();
-    write_legacy_prefix(us, &mut frame).unwrap();
-    frame.put_slice(payload);
+    hang::container::Frame {
+        timestamp: hang::container::Timestamp::from_micros(us).unwrap(),
+        payload: Bytes::copy_from_slice(payload),
+    }
+    .encode(&mut frame)
+    .unwrap();
     frame.freeze()
 }
 
@@ -95,6 +100,67 @@ fn convert(set: &mut TrackSet, frame: Bytes) -> Result<MediaPacket, ConvertError
     set.track_mut(0).unwrap().push(frame, &mut out)?;
     assert_eq!(out.len(), 1);
     Ok(out.remove(0))
+}
+
+#[test]
+fn loc_frames_convert_like_legacy_ones_and_markers_are_skipped() {
+    let loc = |us: u64, payload: &[u8]| LocBuffer::from_payload(payload).into_frame(us).unwrap();
+    let mut set = video_set(VideoConfig {
+        container: TrackContainer::Loc,
+        ..video_config(VideoCodec::H264, None)
+    });
+    let packet = convert(&mut set, loc(40_000, &annexb(&[SPS, PPS, IDR]))).unwrap();
+    assert_eq!((packet.pts, packet.is_keyframe), (40, true));
+    assert_eq!(&packet.payload[..], &annexb(&[SPS, PPS, IDR])[..]);
+    // The end-of-GOP marker moq-mux writes: a timestamp, no payload.
+    let mut out = Vec::new();
+    set.track_mut(0)
+        .unwrap()
+        .push(loc(73_000, &[]), &mut out)
+        .unwrap();
+    assert!(out.is_empty(), "a marker is no packet");
+    // A legacy frame on a LOC track is malformed.
+    assert!(convert(&mut set, legacy(80_000, &annexb(&[IDR]))).is_err());
+}
+
+#[test]
+fn loc_annexb_conversion_preserves_payload_ownership_and_timescale() {
+    for (codec, nalu) in [
+        (VideoCodec::H264, P_SLICE),
+        (VideoCodec::H265, &[1 << 1, 1, 0xd0][..]),
+    ] {
+        let mut set = video_set(VideoConfig {
+            container: TrackContainer::Loc,
+            ..video_config(codec, None)
+        });
+        let payload = annexb(&[nalu]);
+        // Timescale 90 kHz, timestamp 90 kHz = one second.
+        let mut wire = BytesMut::from(&[
+            10, 0x08, 0x80, 0x01, 0x5f, 0x90, 0x08, 0x80, 0x01, 0x5f, 0x90,
+        ][..]);
+        wire.extend_from_slice(&payload);
+        let wire = wire.freeze();
+        let at = wire[11..].as_ptr();
+        let packet = convert(&mut set, wire).unwrap();
+        assert_eq!((packet.pts, packet.dts), (1_000, 1_000));
+        assert_eq!(packet.payload.as_ref(), payload.as_slice());
+        assert_eq!(packet.payload.as_ptr(), at, "Annex-B LOC remains a shared slice");
+        for malformed in [
+            &[0][..], // No timestamp.
+            &[5, 0x10, 1][..], // Truncated property block.
+            &[4, 0x08, 0, 0x08, 1][..], // Zero timescale.
+        ] {
+            assert!(matches!(
+                convert(&mut set, Bytes::copy_from_slice(malformed)),
+                Err(ConvertError::Frame(_)),
+            ));
+        }
+        let packet = convert(
+            &mut set,
+            LocBuffer::from_payload(&payload).into_frame(1_001_000).unwrap(),
+        ).unwrap();
+        assert_eq!((packet.pts, packet.dts), (1_001, 1_001), "bad frames do not advance time");
+    }
 }
 
 #[test]

@@ -1,5 +1,5 @@
-//! `moq-dev-interop`: Restream's MoQ egress, origin and ingest against the
-//! moq.dev tools, the phase-1 profile (moq-lite-06 + hang).
+//! `moq-dev-interop`: Restream's MoQ egress, origin and ingest against
+//! moq.dev tools: moq-lite-06 + hang by default, MOQT draft-19 + MSF/LOC with `--ietf`.
 //!
 //! The peers are the moq.dev release binaries built from the commit of
 //! `moq-net` 0.3.15, which Restream's MoQ code is pinned to: `moq` (moq-cli
@@ -8,8 +8,8 @@
 //! SHA256s checked. Each run generates its own CA and ECDSA P-256 leaf
 //! (13 days, SANs `localhost` and `127.0.0.1`); the relay and Restream's MoQ
 //! listener both serve the leaf, the CLI trusts the CA, browsers pin the
-//! leaf's SHA-256 through `serverCertificateHashes`. Every CLI session offers
-//! moq-lite-06 only and the relay log must show it negotiated.
+//! leaf's SHA-256 through `serverCertificateHashes`. CLI sessions offer only
+//! the selected version; browser sessions continue to exercise moq-lite-06.
 //!
 //! Phases, each on the real delivery path:
 //!
@@ -17,7 +17,7 @@
 //!    feeds one pipeline with a `moqt://` output to moq-relay (`broadcast=`
 //!    names the announced path, `ca=` the CA) and an RTMP sibling to the
 //!    harness's in-process sink. The relay must announce the broadcast with an
-//!    H.264 + AAC hang catalog; `moq export ts` reads it back for at least
+//!    H.264 + AAC catalog (MSF/LOC with `--ietf`); `moq export ts` reads it back for at least
 //!    20 s and FFprobe checks both codecs, monotonic timestamps and a video
 //!    frame count within 5 % of the input frame rate.
 //! 2. **Origin.** The harness mints a subscribe token through the API and
@@ -28,7 +28,7 @@
 //!    origin and the relay with `@moq/watch` (`test/e2e/moq/`), and the
 //!    origin must refuse the page without its token.
 //! 4. **Isolation.** Ten seconds later the relay is killed (SIGKILL) and
-//!    restarted. The MoQ output must publish again on moq-lite-06, and the
+//!    restarted. The MoQ output must publish again on the pinned version, and the
 //!    RTMP sibling must keep delivering: no video gap above one second and
 //!    no reconnect.
 //! 5. **Ingest.** moq-dev's TS publisher recipe (`ffmpeg … | moq import ts`)
@@ -36,11 +36,14 @@
 //!    pipeline must report a `moq` session with video and audio, and its
 //!    RTMP output, received by an FFmpeg RTMP listener, passes the FFprobe
 //!    checks.
+//!    With `--ietf`, a separate source pipeline publishes MSF/LOC to a
+//!    dedicated moq-relay, whose cluster dial forwards the broadcast into
+//!    Restream on moqt-19. No export/re-import bridge bypasses the relay.
 //!
 //! ```text
 //! scripts/dev/moq/fetch-moq-dev.sh
 //! npm ci --prefix test/e2e/moq && npx --prefix test/e2e/moq playwright install chromium firefox
-//! scripts/harness/run.sh moq-dev-interop -- --no-netns [--browsers]
+//! scripts/harness/run.sh moq-dev-interop -- --no-netns [--ietf] [--browsers]
 //! ```
 
 #[path = "moq_dev_interop/checks.rs"]
@@ -63,13 +66,15 @@ use crate::moq_relay_interop::{
     planned_harness_ports, round3, sample_sibling,
 };
 
-const USAGE: &str = "usage: moq-dev-interop [--no-netns] [--browsers]";
+const USAGE: &str = "usage: moq-dev-interop [--no-netns] [--ietf] [--browsers]";
 
 /// What the command line asks for beyond the harness's own `--no-netns`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct DevOptions {
     /// Run the Playwright browser specs while the endpoints are live.
     pub(crate) browsers: bool,
+    /// Pin native sessions to moqt-19 and exercise MSF/LOC through the relay.
+    pub(crate) ietf: bool,
 }
 
 impl DevOptions {
@@ -78,6 +83,7 @@ impl DevOptions {
         for arg in strip_netns_opt(args) {
             match arg.as_str() {
                 "--browsers" => options.browsers = true,
+                "--ietf" => options.ietf = true,
                 other => {
                     return Err(format!(
                         "moq-dev-interop: unknown option {other:?}; {USAGE}"
@@ -86,6 +92,14 @@ impl DevOptions {
             }
         }
         Ok(options)
+    }
+
+    pub(crate) fn version(self) -> &'static str {
+        if self.ietf { IETF_VERSION } else { LITE_VERSION }
+    }
+
+    pub(crate) fn alpn(self) -> &'static str {
+        if self.ietf { "moqt-19" } else { LITE_VERSION }
     }
 }
 

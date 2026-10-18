@@ -1,5 +1,5 @@
-//! Ring packets → hang frames for the moq-lite profile, the shared media
-//! model of [`crate::media::moq::media`]:
+//! Ring packets → MoQ frames, the shared media model of
+//! [`crate::media::moq::media`]:
 //!
 //! - Video: one access unit per frame, 4-byte NAL lengths, parameter sets
 //!   out of band (the catalog `description`, an avcC/hvcC record). A `Raw`
@@ -9,19 +9,17 @@
 //! - Audio: one raw AAC access unit per frame (ADTS or FLV header removed).
 //!   A `Raw` payload holding several ADTS frames becomes several frames,
 //!   1024 samples apart.
-//! - Each frame is the hang legacy container, written contiguously (varint
-//!   µs PTS, then the payload) so moq-net keeps the allocation and every
-//!   subscriber shares it.
+//! - Each payload is copied once, into a [`LocBuffer`] that keeps room for
+//!   the LOC header: the publisher writes it there once the timestamp is
+//!   final, so moq-net keeps one allocation per frame and every subscriber
+//!   shares it.
 //!
 //! A configuration change bumps [`MediaConverter::catalog_version`]; the
 //! publisher republishes the catalog before the next frame.
 
-use bytes::{BufMut, Bytes, BytesMut};
-
 use crate::media::codec::{adts_frame_ranges, annexb_parameter_sets, avcc_to_annexb, strip_adts};
 use crate::media::moq::media::{
-    AudioConfig, MediaError, TrackKind, VideoCodec, VideoConfig, annexb_to_length_prefixed,
-    hang_catalog, legacy_prefix_len, write_legacy_prefix,
+    AudioConfig, LocBuffer, MediaError, TrackKind, VideoCodec, VideoConfig, hang_catalog,
 };
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
 use crate::media::ring_buffer::TrackConfig;
@@ -39,22 +37,21 @@ const EX_SEQUENCE_START: u8 = 0;
 const EX_CODED_FRAMES: u8 = 1;
 const EX_CODED_FRAMES_X: u8 = 3;
 
-/// One hang frame: the legacy container (varint µs PTS + payload) in one
-/// buffer.
+/// One converted frame: its payload in a [`LocBuffer`], at the timestamp
+/// the ring gave it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct HangFrame {
+pub(crate) struct MediaFrame {
     pub(crate) track: TrackKind,
     pub(crate) keyframe: bool,
     pub(crate) pts_us: u64,
-    pub(crate) data: Bytes,
+    pub(crate) data: LocBuffer,
 }
 
-impl HangFrame {
-    /// The codec payload after the timestamp prefix.
+impl MediaFrame {
+    /// The codec payload.
     #[cfg(test)]
-    pub(crate) fn payload(&self) -> Bytes {
-        self.data
-            .slice(legacy_prefix_len(self.pts_us).min(self.data.len())..)
+    pub(crate) fn payload(&self) -> bytes::Bytes {
+        bytes::Bytes::copy_from_slice(self.data.payload())
     }
 }
 
@@ -66,7 +63,6 @@ pub(crate) enum ConvertError {
     UnsupportedFlvAudio(u8),
     /// An FLV tag too short to carry its header.
     TruncatedFlv,
-    Media(MediaError),
 }
 
 impl std::fmt::Display for ConvertError {
@@ -80,14 +76,7 @@ impl std::fmt::Display for ConvertError {
             }
             Self::UnsupportedFlvAudio(tag) => write!(f, "FLV audio tag 0x{tag:02x} is not AAC"),
             Self::TruncatedFlv => f.write_str("FLV tag shorter than its header"),
-            Self::Media(error) => error.fmt(f),
         }
-    }
-}
-
-impl From<MediaError> for ConvertError {
-    fn from(error: MediaError) -> Self {
-        Self::Media(error)
     }
 }
 
@@ -184,7 +173,7 @@ impl MediaConverter {
         &mut self,
         packet: &MediaPacket,
         video_config: Option<&TrackConfig>,
-        out: &mut Vec<HangFrame>,
+        out: &mut Vec<MediaFrame>,
     ) -> Result<(), ConvertError> {
         match packet.media_type {
             MediaType::Video if packet.track_index == 0 => match self.video_codec {
@@ -231,7 +220,7 @@ impl MediaConverter {
         codec: VideoCodec,
         packet: &MediaPacket,
         ring_config: Option<&TrackConfig>,
-        out: &mut Vec<HangFrame>,
+        out: &mut Vec<MediaFrame>,
     ) -> Result<(), ConvertError> {
         match ring_config {
             Some(config) if config.generation != self.video_generation => {
@@ -251,16 +240,14 @@ impl MediaConverter {
             }
             None => {}
         }
-        let pts_us = pts_us(packet.pts);
-        let mut data = frame_buffer(pts_us, packet.payload.len())?;
-        let prefix = data.len();
-        annexb_to_length_prefixed(codec, &packet.payload, &mut data);
-        if data.len() > prefix {
-            out.push(HangFrame {
+        let mut data = LocBuffer::with_capacity(packet.payload.len());
+        data.put_length_prefixed(codec, &packet.payload);
+        if !data.payload().is_empty() {
+            out.push(MediaFrame {
                 track: TrackKind::Video,
                 keyframe: packet.is_keyframe,
-                pts_us,
-                data: data.freeze(),
+                pts_us: pts_us(packet.pts),
+                data,
             });
         }
         Ok(())
@@ -270,7 +257,7 @@ impl MediaConverter {
         &mut self,
         codec: VideoCodec,
         packet: &MediaPacket,
-        out: &mut Vec<HangFrame>,
+        out: &mut Vec<MediaFrame>,
     ) -> Result<(), ConvertError> {
         let payload = &packet.payload;
         let &[tag, packet_type, ..] = payload.as_ref() else {
@@ -323,19 +310,19 @@ impl MediaConverter {
                 Ok(())
             }
             1 if !body.is_empty() => {
-                let pts_us = pts_us(packet.pts);
-                let mut data = frame_buffer(pts_us, body.len())?;
-                if self.flv_nalu_length_size == 4 {
-                    data.put_slice(body);
+                let data = if self.flv_nalu_length_size == 4 {
+                    LocBuffer::from_payload(body)
                 } else {
                     let annexb = avcc_to_annexb(body, self.flv_nalu_length_size);
-                    annexb_to_length_prefixed(codec, &annexb, &mut data);
-                }
-                out.push(HangFrame {
+                    let mut data = LocBuffer::with_capacity(annexb.len());
+                    data.put_length_prefixed(codec, &annexb);
+                    data
+                };
+                out.push(MediaFrame {
                     track: TrackKind::Video,
                     keyframe,
-                    pts_us,
-                    data: data.freeze(),
+                    pts_us: pts_us(packet.pts),
+                    data,
                 });
                 Ok(())
             }
@@ -348,7 +335,7 @@ impl MediaConverter {
         &mut self,
         track: AudioTrack,
         packet: &MediaPacket,
-        out: &mut Vec<HangFrame>,
+        out: &mut Vec<MediaFrame>,
     ) -> Result<(), ConvertError> {
         let pts_us = pts_us(packet.pts);
         let payload = &packet.payload;
@@ -370,7 +357,7 @@ impl MediaConverter {
                             self.catalog_version += 1;
                         }
                     }
-                    1 if !body.is_empty() => out.push(audio_frame(pts_us, body)?),
+                    1 if !body.is_empty() => out.push(audio_frame(pts_us, body)),
                     _ => {}
                 }
                 Ok(())
@@ -379,7 +366,7 @@ impl MediaConverter {
                 let mut ranges = adts_frame_ranges(payload).peekable();
                 if ranges.peek().is_none() {
                     if !payload.is_empty() {
-                        out.push(audio_frame(pts_us, payload)?);
+                        out.push(audio_frame(pts_us, payload));
                     }
                     return Ok(());
                 }
@@ -390,7 +377,7 @@ impl MediaConverter {
                     }
                     let offset_us =
                         index * AAC_FRAME_SAMPLES * 1_000_000 / u64::from(track.sample_rate.max(1));
-                    out.push(audio_frame(pts_us.saturating_add(offset_us), raw)?);
+                    out.push(audio_frame(pts_us.saturating_add(offset_us), raw));
                 }
                 Ok(())
             }
@@ -403,22 +390,13 @@ fn pts_us(pts_ms: i64) -> u64 {
     u64::try_from(pts_ms).unwrap_or(0).saturating_mul(1000)
 }
 
-/// A frame buffer holding the timestamp prefix, with room for `payload`.
-fn frame_buffer(pts_us: u64, payload: usize) -> Result<BytesMut, MediaError> {
-    let mut data = BytesMut::with_capacity(legacy_prefix_len(pts_us) + payload);
-    write_legacy_prefix(pts_us, &mut data)?;
-    Ok(data)
-}
-
-fn audio_frame(pts_us: u64, payload: &[u8]) -> Result<HangFrame, MediaError> {
-    let mut data = frame_buffer(pts_us, payload.len())?;
-    data.put_slice(payload);
-    Ok(HangFrame {
+fn audio_frame(pts_us: u64, payload: &[u8]) -> MediaFrame {
+    MediaFrame {
         track: TrackKind::Audio,
         keyframe: true,
         pts_us,
-        data: data.freeze(),
-    })
+        data: LocBuffer::from_payload(payload),
+    }
 }
 
 #[cfg(test)]

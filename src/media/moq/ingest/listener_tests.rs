@@ -3,18 +3,16 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 
 use super::*;
 use crate::domain::ingest_security::IngestSecurityConfig;
 use crate::media::ingest_auth::{
     AuthenticatedPipeline, PipelineAccessError, PipelineAccessFuture, PipelineAccessMode,
 };
-use crate::media::moq::egress::media::HangFrame;
+use crate::media::moq::egress::media::MediaFrame;
 use crate::media::moq::egress::publish::HangBroadcast;
-use crate::media::moq::media::{
-    AudioConfig, TrackContainer, TrackKind, hang_catalog, write_legacy_prefix,
-};
+use crate::media::moq::media::{AudioConfig, LocBuffer, TrackContainer, TrackKind, hang_catalog};
 use crate::media::moq::transport::test_support::{
     LOOPBACK_CERT, LOOPBACK_SERVER_NAME, loopback_client_tls, run,
 };
@@ -110,14 +108,11 @@ fn publish_until(addr: SocketAddr, done: Arc<AtomicBool>) {
         compio::runtime::spawn(transport::run_driver(driver)).detach();
         let mut pts_us = 0;
         while !done.load(Ordering::Acquire) {
-            let mut data = BytesMut::new();
-            write_legacy_prefix(pts_us, &mut data).unwrap();
-            data.put_slice(&[0x21, 0x10, 0x05]);
-            let frame = HangFrame {
+            let frame = MediaFrame {
                 track: TrackKind::Audio,
                 keyframe: false,
                 pts_us,
-                data: data.freeze(),
+                data: LocBuffer::from_payload(&[0x21, 0x10, 0x05]),
             };
             broadcast.write(frame).unwrap();
             pts_us += 21_333;

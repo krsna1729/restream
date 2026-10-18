@@ -3,7 +3,7 @@ use std::time::Instant;
 use bytes::Bytes;
 
 use super::*;
-use crate::media::moq::media::{VIDEO_TRACK, parse_legacy_frame};
+use crate::media::moq::media::{VIDEO_TRACK, parse_loc_frame};
 use crate::media::moq::transport::test_support::{Loopback, run};
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
 
@@ -236,7 +236,7 @@ fn a_viewer_with_a_token_plays_the_pipeline_over_loopback_quic() {
         let mut idr = (IDR.len() as u32).to_be_bytes().to_vec();
         idr.extend_from_slice(IDR);
         assert_eq!(
-            parse_legacy_frame(frame.payload),
+            parse_loc_frame(frame.payload),
             Ok((40_000, Bytes::from(idr)))
         );
         assert_eq!(origin.viewers("pipe-o"), 1);

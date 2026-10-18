@@ -1,17 +1,18 @@
-//! MoQ ingest media: the tracks a publisher's hang catalog offers, as the
+//! MoQ ingest media: the tracks a publisher's catalog offers, as the
 //! pipeline takes them, and each frame as the packet a TS input carries.
 //!
 //! The catalog maps through the shared model
 //! ([`crate::media::moq::media::from_hang_catalog`]): at most one video
 //! track (ring track 0) and every AAC track (ring indices in catalog order,
-//! at most [`MAX_AUDIO_TRACKS`]). A legacy frame is a varint microsecond
-//! presentation time and the codec payload. Video becomes Annex B with the
-//! last parameter sets ahead of a keyframe that lacks them; AAC gets the
-//! ADTS header TS ingest carries; times become milliseconds. hang carries no
-//! decode time, so a track derives one that never goes back from the
-//! catalog's `jitter` (its reorder bound). CMAF tracks carry `moof`+`mdat`
-//! fragments and convert through the HLS-push fMP4 demux ([`super::cmaf`]),
-//! which gives real decode times.
+//! at most [`MAX_AUDIO_TRACKS`]). A LOC or legacy frame is a timestamp and
+//! the codec payload; an empty payload is an end-of-group or discontinuity
+//! marker and is skipped. Video becomes Annex B with the last parameter
+//! sets ahead of a keyframe that lacks them; AAC gets the ADTS header TS
+//! ingest carries; times become milliseconds. Neither carries a decode
+//! time, so a track derives one that never goes back from the catalog's
+//! `jitter` (its reorder bound). CMAF tracks carry `moof`+`mdat` fragments
+//! and convert through the HLS-push fMP4 demux ([`super::cmaf`]), which
+//! gives real decode times.
 
 #![deny(
     clippy::indexing_slicing,
@@ -33,14 +34,32 @@ use crate::media::metadata::{AudioMeta, VideoMeta};
 use crate::media::moq::WireError;
 use crate::media::moq::media::{
     AudioConfig, CatalogTracks, TrackContainer, TrackKind, VideoCodec, VideoConfig,
-    parse_legacy_frame,
+    parse_legacy_frame, parse_loc_frame,
 };
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
 
 /// AAC tracks one publisher may feed; further ones are refused.
 pub(crate) const MAX_AUDIO_TRACKS: usize = 8;
 
-/// How a legacy video track frames its NAL units.
+/// How a LOC or legacy frame carries its timestamp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Timestamped {
+    Legacy,
+    Loc,
+}
+
+impl Timestamped {
+    /// The frame's µs timestamp and payload (no copy).
+    fn split(self, frame: Bytes) -> Result<(u64, Bytes), ConvertError> {
+        match self {
+            Self::Legacy => parse_legacy_frame(frame),
+            Self::Loc => parse_loc_frame(frame),
+        }
+        .map_err(ConvertError::Frame)
+    }
+}
+
+/// How a video track frames its NAL units.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VideoFraming {
     /// Behind big-endian lengths of 1..=4 bytes, as the catalog's avcC /
@@ -54,7 +73,7 @@ enum VideoFraming {
 /// to its malformed-frame bound.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ConvertError {
-    /// The legacy container's timestamp prefix is truncated.
+    /// The frame's timestamp or LOC properties are malformed.
     Frame(WireError),
     MalformedVideo(&'static str),
     /// A raw AAC frame longer than ADTS can describe.
@@ -74,10 +93,11 @@ impl fmt::Display for ConvertError {
     }
 }
 
-/// A legacy video track's conversion state.
+/// A LOC or legacy video track's conversion state.
 #[derive(Debug)]
 struct VideoTrack {
     config: VideoConfig,
+    timestamped: Timestamped,
     framing: VideoFraming,
     /// The last Annex-B parameter sets seen (record or keyframe).
     parameter_sets: Option<Bytes>,
@@ -93,7 +113,10 @@ struct VideoTrack {
 #[derive(Debug)]
 enum TrackState {
     Video(Box<VideoTrack>),
-    Aac(AdtsConfig),
+    Aac {
+        adts: AdtsConfig,
+        timestamped: Timestamped,
+    },
     Cmaf {
         demux: Box<CmafTrack>,
         /// The catalog's audio description, for an init without one.
@@ -206,7 +229,12 @@ impl IngestTrack {
                 },
                 Err(rejection) => return Err((name, rejection.message().to_string())),
             },
-            TrackContainer::Legacy => {
+            TrackContainer::Legacy | TrackContainer::Loc => {
+                let timestamped = if config.container == TrackContainer::Loc {
+                    Timestamped::Loc
+                } else {
+                    Timestamped::Legacy
+                };
                 let (framing, parameter_sets) = match config.description {
                     None => (VideoFraming::AnnexB, None),
                     Some(_) => match config.parameter_sets() {
@@ -224,6 +252,7 @@ impl IngestTrack {
                     .map(|sets| video_meta(&config, sets));
                 TrackState::Video(Box::new(VideoTrack {
                     config,
+                    timestamped,
                     framing,
                     parameter_sets,
                     meta,
@@ -260,9 +289,14 @@ impl IngestTrack {
                 },
                 Err(rejection) => return Err((name, rejection.message().to_string())),
             },
-            TrackContainer::Legacy => {
+            TrackContainer::Legacy | TrackContainer::Loc => {
+                let timestamped = if config.container == TrackContainer::Loc {
+                    Timestamped::Loc
+                } else {
+                    Timestamped::Legacy
+                };
                 match aac_config(config.asc.as_deref(), config.sample_rate, config.channels) {
-                    Ok(adts) => TrackState::Aac(adts),
+                    Ok(adts) => TrackState::Aac { adts, timestamped },
                     Err(reason) => return Err((name, reason)),
                 }
             }
@@ -276,7 +310,8 @@ impl IngestTrack {
     }
 
     /// One frame of this track, appended to `out` as ring packets: one for a
-    /// legacy frame, a fragment's samples in decode order for CMAF.
+    /// LOC or legacy frame (none for an empty one, a marker), a fragment's
+    /// samples in decode order for CMAF.
     pub(crate) fn push(
         &mut self,
         frame: Bytes,
@@ -288,7 +323,10 @@ impl IngestTrack {
                 .fragment(&frame, out)
                 .map_err(|rejection| ConvertError::Fragment(rejection.message().to_string())),
             TrackState::Video(video) => {
-                let (pts, payload) = parse_legacy_frame(frame).map_err(ConvertError::Frame)?;
+                let (pts, payload) = video.timestamped.split(frame)?;
+                if payload.is_empty() {
+                    return Ok(());
+                }
                 let (keyframe, payload) = video.payload(&payload)?;
                 let dts = derived_dts(
                     pts,
@@ -307,8 +345,11 @@ impl IngestTrack {
                 });
                 Ok(())
             }
-            TrackState::Aac(adts) => {
-                let (pts, payload) = parse_legacy_frame(frame).map_err(ConvertError::Frame)?;
+            TrackState::Aac { adts, timestamped } => {
+                let (pts, payload) = timestamped.split(frame)?;
+                if payload.is_empty() {
+                    return Ok(());
+                }
                 let header = adts
                     .adts_header(payload.len())
                     .ok_or(ConvertError::AudioFrameTooLarge(payload.len()))?;
@@ -334,13 +375,13 @@ impl IngestTrack {
         match &self.state {
             TrackState::Video(video) => video.meta.clone(),
             TrackState::Cmaf { demux, .. } => demux.video_meta(),
-            TrackState::Aac(_) => None,
+            TrackState::Aac { .. } => None,
         }
     }
 
     fn audio_meta(&self) -> Option<AudioMeta> {
         match &self.state {
-            TrackState::Aac(adts) => Some(AudioMeta {
+            TrackState::Aac { adts, .. } => Some(AudioMeta {
                 codec: "aac".to_string(),
                 sample_rate: adts.sample_rate(),
                 channels: adts.channels(),

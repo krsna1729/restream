@@ -115,17 +115,54 @@ fn relay_sessions_join_accept_and_negotiation_lines_per_relay_life() {
 fn a_relay_life_passes_only_when_every_session_negotiated_lite_06() {
     let log = format!("{RELAY_START_MARKER}1\n{LIFE_ONE}{RELAY_START_MARKER}2\n");
     let sessions = relay_sessions(&log);
-    assert!(sessions_on_lite(&sessions, 1).0);
+    assert!(sessions_on_version(&sessions, 1, LITE_VERSION).0);
     // A life nobody connected to proves nothing.
-    assert!(!sessions_on_lite(&sessions, 2).0);
+    assert!(!sessions_on_version(&sessions, 2, LITE_VERSION).0);
 
     let mut older = sessions.clone();
     older[1].version = Some("moq-lite-02".to_string());
-    assert!(!sessions_on_lite(&older, 1).0);
+    assert!(!sessions_on_version(&older, 1, LITE_VERSION).0);
     // Accepted but never negotiated (the handshake died) is not a pass.
     let mut unfinished = sessions;
     unfinished[0].version = None;
-    assert!(!sessions_on_lite(&unfinished, 1).0);
+    assert!(!sessions_on_version(&unfinished, 1, LITE_VERSION).0);
+}
+
+#[test]
+fn ietf_catalog_requires_loc_and_both_decoder_configurations() {
+    let catalog = json!({
+        "version": 1,
+        "tracks": [
+            {"name": "video", "role": "video", "packaging": "loc",
+             "codec": "avc1.640028", "initData": "AWQAKP/h"},
+            {"name": "audio", "role": "audio", "packaging": "loc",
+             "codec": "mp4a.40.2", "samplerate": 48000,
+             "channelConfig": "2", "initData": "EZA="}
+        ]
+    });
+    assert!(profile_catalog_failures(&catalog, true).is_empty());
+    for (field, value) in [
+        ("packaging", json!("legacy")),
+        ("initData", json!("not base64")),
+        ("samplerate", json!(0)),
+        ("channelConfig", json!("")),
+    ] {
+        let mut invalid = catalog.clone();
+        invalid["tracks"][1][field] = value;
+        assert!(!profile_catalog_failures(&invalid, true).is_empty(), "{field}");
+    }
+    let mut no_video = catalog.clone();
+    no_video["tracks"][0]["role"] = json!("audio");
+    assert!(!profile_catalog_failures(&no_video, true).is_empty());
+    assert!(!profile_catalog_failures(&moq_cli_catalog(), true).is_empty());
+}
+
+#[test]
+fn ietf_sessions_reject_lite_fallback_and_accept_the_cli_draft_name() {
+    let log = format!("{RELAY_START_MARKER}1\n{LIFE_ONE}");
+    assert!(!sessions_on_version(&relay_sessions(&log), 1, IETF_VERSION).0);
+    let ietf = log.replace(LITE_VERSION, IETF_VERSION);
+    assert!(sessions_on_version(&relay_sessions(&ietf), 1, IETF_VERSION).0);
 }
 
 /// A Playwright JSON report in the shape `--reporter=json` writes: a file
@@ -301,6 +338,7 @@ fn the_cli_offers_only_lite_06_over_quic_and_puts_the_stage_last() {
         url: "https://localhost:4443/",
         ca: &ca,
         broadcast: "live/sk.hang",
+        version: LITE_VERSION,
     };
     assert_eq!(
         target.args(EXPORT_TS),
@@ -329,13 +367,32 @@ fn the_cli_offers_only_lite_06_over_quic_and_puts_the_stage_last() {
 }
 
 #[test]
+fn ietf_cli_pins_draft_nineteen_and_reads_msf_without_hang_fallback() {
+    let ca = PathBuf::from("/tmp/run/tls/ca.pem");
+    let target = CliTarget {
+        url: "https://127.0.0.1:4443/",
+        ca: &ca,
+        broadcast: "live/egress.hang",
+        version: IETF_VERSION,
+    };
+    let args = target.args(EXPORT_TS);
+    assert!(args.windows(2).any(|pair| pair == ["--connect-version", IETF_VERSION]));
+    assert!(args.windows(2).any(|pair| pair == ["--catalog-format", "msf"]));
+    assert!(!args.iter().any(|arg| arg == LITE_VERSION || arg == "hang"));
+}
+
+#[test]
 fn options_accept_browsers_and_the_netns_opt_out_only() {
     let args = |list: &[&str]| list.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
-    assert_eq!(DevOptions::parse(&[]), Ok(DevOptions { browsers: false }));
+    assert_eq!(DevOptions::parse(&[]), Ok(DevOptions { browsers: false, ietf: false }));
     assert_eq!(
         DevOptions::parse(&args(&["--no-netns", "--browsers"])),
-        Ok(DevOptions { browsers: true })
+        Ok(DevOptions { browsers: true, ietf: false })
     );
+    let ietf = DevOptions::parse(&args(&["--ietf", "--browsers"])).unwrap();
+    assert!(ietf.ietf && ietf.browsers);
+    assert_eq!(ietf.alpn(), "moqt-19");
+    assert_eq!(ietf.version(), IETF_VERSION);
     assert!(DevOptions::parse(&args(&["--browser"])).is_err());
 }
 

@@ -1,15 +1,16 @@
-//! One MoQ publisher session on the listener thread (moq-lite + hang).
+//! One MoQ publisher session on the listener thread (moq-lite or IETF).
 //!
 //! The session accepts the publisher's announcements into a private origin,
 //! takes the first announced broadcast, names the stream key from its path
-//! ([`stream_key`]), asks Tokio to admit it, reads `catalog.json`, subscribes
-//! to the tracks Restream can carry ([`TrackSet`]) and feeds every frame
+//! ([`stream_key`]), asks Tokio to admit it, reads either the hang or MSF
+//! catalog, subscribes to the tracks Restream can carry ([`TrackSet`]) and feeds every frame
 //! through [`Ingest`] into the pipeline ring. Peer input never panics: a
 //! fault ends the session with a [`SessionEnd`] whose reason reaches the
 //! logs and the input's disconnect record, and whose error the peer sees in
 //! the close.
 
 use std::cell::{Cell, RefCell};
+use std::fmt::Display;
 use std::net::SocketAddr;
 use std::panic::AssertUnwindSafe;
 use std::pin::pin;
@@ -17,7 +18,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use futures_util::StreamExt;
+use futures_util::{FutureExt, StreamExt};
 use futures_util::stream::FuturesUnordered;
 use moq_net::Error;
 use tokio_util::sync::CancellationToken;
@@ -93,9 +94,9 @@ impl SessionEnd {
 
 /// The stream key a publisher names: the last segment of the connection
 /// path (query dropped) when it has one, else the last segment of the
-/// announced broadcast path (`.hang` dropped). So `https://host/<key>` works
-/// whatever the broadcast is called, and `https://host/` works with broadcast
-/// `<key>` or `<scope>/<key>.hang`.
+/// announced broadcast path (`.hang` / `.msf` dropped). So `https://host/<key>`
+/// works whatever the broadcast is called, and `https://host/` works with
+/// broadcast `<key>`, `<scope>/<key>.hang` or `<scope>/<key>.msf`.
 pub(crate) fn stream_key(connection_path: &str, broadcast: &str) -> Option<String> {
     stream_key_from_path(connection_path)
         .or_else(|| stream_key_from_path(broadcast))
@@ -331,17 +332,7 @@ async fn ingest<L: Lifecycle + Clone>(
         Ok(Err(error)) => return SessionEnd::moq("broadcast", error),
         Ok(Ok(broadcast)) => broadcast,
     };
-    let catalog = match first_catalog(
-        async {
-            hang::Catalog::<()>::subscribe(&broadcast)
-                .await?
-                .next()
-                .await
-        },
-        limits.catalog_timeout,
-    )
-    .await
-    {
+    let catalog = match first_catalog(read_catalog(&broadcast), limits.catalog_timeout).await {
         Ok(catalog) => catalog,
         Err(end) => return end,
     };
@@ -375,6 +366,7 @@ async fn ingest<L: Lifecycle + Clone>(
                 slot,
                 budget,
                 &last_frame,
+                limits.max_frame_bytes,
             )),
             Err(error) => return SessionEnd::moq(&format!("subscribe to track {name:?}"), error),
         }
@@ -392,31 +384,66 @@ async fn ingest<L: Lifecycle + Clone>(
     }
 }
 
-/// The publisher's first `catalog.json`, as `read` yields it within
-/// `timeout`. hang parses it from peer bytes, so this is the session's panic
-/// boundary for that parser (hang 0.21.16 sliced a non-ASCII H.264 codec
-/// string off a char boundary): a panic ends the session as a protocol
-/// violation, like a catalog hang refuses, and the caller releases the input
-/// with that reason.
-async fn first_catalog(
-    read: impl Future<Output = hang::Result<Option<hang::Catalog>>>,
+/// Race the two catalog profiles on this session's owner, without spawning.
+/// A missing profile may fall back; malformed input fails promptly instead
+/// of waiting for an absent alternate profile until the catalog timeout.
+async fn read_catalog(
+    broadcast: &moq_net::broadcast::Consumer,
+) -> moq_mux::Result<Option<hang::Catalog>> {
+    let hang = async {
+        Ok(hang::Catalog::<()>::subscribe(broadcast).await?.next().await?)
+    };
+    let msf = async {
+        let track = broadcast
+            .track(moq_msf::DEFAULT_NAME)?
+            .subscribe(hang::Catalog::default_subscription())
+            .await?;
+        // Upstream does not spawn. The moq-net model caps catalog frames at
+        // MAX_CACHE_BYTES; this consumer also checks the rendition bound.
+        moq_mux::catalog::msf::Consumer::<()>::new(track).next().await
+    };
+    let mut hang = pin!(hang);
+    let mut msf = pin!(msf);
+    tokio::select! {
+        result = &mut hang => {
+            if missing_catalog(&result) { msf.await } else { result }
+        },
+        result = &mut msf => {
+            if missing_catalog(&result) { hang.await } else { result }
+        },
+    }
+}
+
+fn missing_catalog(result: &moq_mux::Result<Option<hang::Catalog>>) -> bool {
+    match result {
+        Ok(None) => true,
+        Err(moq_mux::Error::Moq(error) | moq_mux::Error::Hang(hang::Error::Moq(error))) => {
+            matches!(error, Error::NotFound | Error::Unroutable | Error::Unsupported)
+        }
+        _ => false,
+    }
+}
+
+/// Contain dependency parser panics at the catalog boundary, not the whole
+/// listener: a bad catalog closes just this admitted publisher.
+async fn first_catalog<E: Display>(
+    read: impl Future<Output = Result<Option<hang::Catalog>, E>>,
     timeout: Duration,
 ) -> Result<hang::Catalog, SessionEnd> {
-    let read = futures_util::FutureExt::catch_unwind(AssertUnwindSafe(read));
-    match compio::time::timeout(timeout, read).await {
-        Err(_) => Err(SessionEnd::new(Error::Timeout, "no catalog.json arrived")),
+    match compio::time::timeout(timeout, AssertUnwindSafe(read).catch_unwind()).await {
+        Err(_) => Err(SessionEnd::new(Error::Timeout, "no hang or MSF catalog arrived")),
         Ok(Err(payload)) => {
             let panic = crate::panic_boundary::record_contained(payload.as_ref());
             Err(SessionEnd::new(
                 Error::ProtocolViolation,
-                format!("catalog.json: the parser panicked: {panic}"),
+                format!("catalog.json/MSF catalog: the parser panicked: {panic}"),
             ))
         }
         Ok(Ok(Err(error))) => Err(SessionEnd::new(
             Error::ProtocolViolation,
-            format!("catalog.json: {error}"),
+            format!("catalog.json/MSF catalog: {error}"),
         )),
-        Ok(Ok(Ok(None))) => Err(SessionEnd::new(Error::Closed, "catalog.json ended empty")),
+        Ok(Ok(Ok(None))) => Err(SessionEnd::new(Error::Closed, "the catalogs ended empty")),
         Ok(Ok(Ok(Some(catalog)))) => Ok(catalog),
     }
 }
@@ -442,6 +469,7 @@ async fn pump<L: Lifecycle>(
     slot: &RefCell<Option<Ingest<L>>>,
     budget: &RefCell<CacheBudget>,
     last_frame: &Cell<Instant>,
+    max_frame_bytes: usize,
 ) -> Option<SessionEnd> {
     loop {
         let mut group = match track.next_group().await {
@@ -453,20 +481,26 @@ async fn pump<L: Lifecycle>(
             Err(error) => return Some(SessionEnd::moq("track", error)),
         };
         loop {
-            let frame = match group.read_frame().await {
+            let frame = match bounded_frame(&mut group, max_frame_bytes).await {
                 Ok(Some(frame)) => frame,
                 Ok(None) => break,
+                Err(Error::FrameTooLarge) => {
+                    return Some(SessionEnd::new(
+                        Error::FrameTooLarge,
+                        format!("a frame exceeds the {max_frame_bytes}-byte bound"),
+                    ));
+                }
                 Err(error) => {
                     debug!(%error, "MoQ group ended early");
                     break;
                 }
             };
             last_frame.set(Instant::now());
-            budget.borrow_mut().frame(index, frame.payload.len());
+            budget.borrow_mut().frame(index, frame.len());
             let step = slot
                 .borrow_mut()
                 .as_mut()
-                .map(|ingest| ingest.frame(index, frame.payload));
+                .map(|ingest| ingest.frame(index, frame));
             match step {
                 None => return Some(SessionEnd::new(Error::Cancel, "the session was released")),
                 Some(Err(end)) => return Some(end),
@@ -477,6 +511,20 @@ async fn pump<L: Lifecycle>(
             }
         }
     }
+}
+
+/// Reject the declared size before joining a chunked frame into a buffer.
+async fn bounded_frame(
+    group: &mut moq_net::group::Consumer,
+    max_frame_bytes: usize,
+) -> Result<Option<Bytes>, Error> {
+    let Some(mut frame) = group.next_frame().await? else {
+        return Ok(None);
+    };
+    if frame.size > max_frame_bytes as u64 {
+        return Err(Error::FrameTooLarge);
+    }
+    frame.read_all().await.map(Some)
 }
 
 async fn idle_watch(last_frame: &Cell<Instant>, idle: Duration) -> SessionEnd {

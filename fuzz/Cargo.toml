@@ -21,6 +21,7 @@ members = ["."]
 [patch.crates-io]
 hang = { path = "../vendor/hang" }
 rml_rtmp = { path = "../vendor/rml_rtmp" }
+moq-net = { path = "../vendor/moq-net" }
 
 [[bin]]
 name = "flv_video_tag"

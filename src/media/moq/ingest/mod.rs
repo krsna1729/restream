@@ -76,7 +76,7 @@ impl Rejection {
 }
 
 /// The stream key an announced broadcast path names: its last segment
-/// (query dropped), without moq.dev's `.hang` suffix. The full path stays
+/// (query dropped), without moq.dev's `.hang` or `.msf` suffix. The full path stays
 /// with the profile (relays scope sessions and tokens by it). `None` when
 /// empty or longer than [`MAX_STREAM_KEY_BYTES`].
 pub(crate) fn stream_key_from_path(path: &str) -> Option<&str> {
@@ -86,7 +86,10 @@ pub(crate) fn stream_key_from_path(path: &str) -> Option<&str> {
         .rsplit('/')
         .next()
         .unwrap_or_default();
-    let key = last.strip_suffix(".hang").unwrap_or(last);
+    let key = last
+        .strip_suffix(".hang")
+        .or_else(|| last.strip_suffix(".msf"))
+        .unwrap_or(last);
     (!key.is_empty() && key.len() <= MAX_STREAM_KEY_BYTES).then_some(key)
 }
 

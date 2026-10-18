@@ -1,11 +1,14 @@
-//! The shared MoQ media model and its hang mapping (moq-lite profile).
+//! The shared MoQ media model and its hang mapping.
 //!
 //! Frames carry one access unit: H.264/H.265 as 4-byte length-prefixed NAL
 //! units with parameter sets out of band (the catalog `description`, an
-//! avcC/hvcC record), AAC as one raw access unit. On a hang track a frame is
-//! the legacy container: a QUIC varint microsecond timestamp, then the
-//! payload. Video groups are GOPs, audio groups about a second; the session
-//! profile picks the grouping, not this module.
+//! avcC/hvcC record), AAC as one raw access unit. Restream publishes every
+//! track as LOC (draft-ietf-moq-loc: a property block with the µs
+//! timestamp, then the payload), which both catalogs (hang `catalog.json`,
+//! MSF `catalog`) describe; it reads LOC, hang's legacy container (a QUIC
+//! varint µs timestamp, then the payload) and CMAF. Video groups are GOPs,
+//! audio groups about a second; the publisher picks the grouping, not this
+//! module.
 
 #![deny(
     clippy::indexing_slicing,
@@ -19,7 +22,7 @@ use std::fmt;
 use std::ops::ControlFlow;
 use std::time::Duration;
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use hang::catalog::{
     AAC, AudioCodec as HangAudioCodec, AudioConfig as HangAudioConfig, Container, H264, H265,
     VideoCodec as HangVideoCodec, VideoConfig as HangVideoConfig,
@@ -61,6 +64,8 @@ pub(crate) enum TrackContainer {
     /// QUIC varint µs timestamp, then the codec payload.
     #[default]
     Legacy,
+    /// LOC: a property block carrying the timestamp, then the payload.
+    Loc,
     /// Each frame a `moof`+`mdat` fragment; `init` is `ftyp`+`moov`.
     Cmaf { init: Bytes },
 }
@@ -215,7 +220,7 @@ fn hvcc_config(record: &[u8]) -> Option<(Bytes, u8)> {
 
 /// Append Annex-B access unit `au` with 4-byte NAL lengths, without access
 /// unit delimiters and parameter sets (those travel in the catalog).
-pub(crate) fn annexb_to_length_prefixed(codec: VideoCodec, au: &[u8], out: &mut BytesMut) {
+fn annexb_to_length_prefixed(codec: VideoCodec, au: &[u8], out: &mut BytesMut) {
     out.reserve(au.len());
     let _ = for_each_annexb_nalu(au, |nalu| {
         let out_of_band = match codec {
@@ -272,14 +277,8 @@ fn hang_video_codec(config: &VideoConfig) -> Result<HangVideoCodec, MediaError> 
     }
 }
 
-fn hang_container(container: &TrackContainer) -> Container {
-    match container {
-        TrackContainer::Legacy => Container::Legacy,
-        TrackContainer::Cmaf { init } => Container::Cmaf { init: init.clone() },
-    }
-}
-
-/// The catalog Restream publishes: [`VIDEO_TRACK`] and [`AUDIO_TRACK`].
+/// The catalog Restream publishes: [`VIDEO_TRACK`] and [`AUDIO_TRACK`],
+/// both LOC (whatever container the configurations were read from).
 pub(crate) fn hang_catalog(
     video: Option<&VideoConfig>,
     audio: Option<&AudioConfig>,
@@ -293,7 +292,7 @@ pub(crate) fn hang_catalog(
         config.coded_height = video.coded_height;
         config.framerate = video.framerate;
         config.jitter = video.jitter;
-        config.container = hang_container(&video.container);
+        config.container = Container::Loc;
         catalog
             .video
             .insert(VIDEO_TRACK, config)
@@ -309,7 +308,7 @@ pub(crate) fn hang_catalog(
             .map_or(2, |b| b >> 3);
         let mut config = HangAudioConfig::new(AAC { profile }, audio.sample_rate, audio.channels);
         config.description = audio.asc.clone();
-        config.container = hang_container(&audio.container);
+        config.container = Container::Loc;
         catalog
             .audio
             .insert(AUDIO_TRACK, config)
@@ -322,7 +321,7 @@ fn track_container(container: &Container) -> Result<TrackContainer, String> {
     match container {
         Container::Legacy => Ok(TrackContainer::Legacy),
         Container::Cmaf { init } => Ok(TrackContainer::Cmaf { init: init.clone() }),
-        Container::Loc => Err("the loc container is not supported".to_string()),
+        Container::Loc => Ok(TrackContainer::Loc),
         Container::Unknown(unknown) => Err(format!(
             "unknown container {:?}",
             unknown.kind().unwrap_or_default()
@@ -395,9 +394,19 @@ pub(crate) fn from_hang_catalog(catalog: &hang::Catalog) -> CatalogTracks {
     tracks
 }
 
-/// The encoded size of a legacy timestamp prefix (a QUIC varint).
-pub(crate) fn legacy_prefix_len(us: u64) -> usize {
-    match us {
+/// The LOC Timestamp property id (draft-ietf-moq-loc-04 §2.3.1.1). Written
+/// in µs without a Timescale property (§2.3.1.2), as `moq_loc::encode`
+/// does; the catalogs say the track is µs.
+const LOC_TIMESTAMP: u64 = 0x10;
+
+/// Spare bytes a [`LocBuffer`] keeps ahead of its payload for the LOC
+/// header: the property-block length (one byte: the block is at most 9),
+/// the Timestamp property id (one byte) and its value (a varint, at most 8).
+pub(crate) const LOC_HEADROOM: usize = 10;
+
+/// The encoded size of a QUIC varint.
+fn varint_len(value: u64) -> usize {
+    match value {
         0..0x40 => 1,
         0x40..0x4000 => 2,
         0x4000..0x4000_0000 => 4,
@@ -405,13 +414,52 @@ pub(crate) fn legacy_prefix_len(us: u64) -> usize {
     }
 }
 
-/// Append the legacy container's timestamp prefix; the payload follows it
-/// in the same frame.
-pub(crate) fn write_legacy_prefix(us: u64, out: &mut BytesMut) -> Result<(), MediaError> {
-    let value = VarInt::from_u64(us).ok_or(MediaError::TimestampTooLarge)?;
-    value
-        .encode_quic(out)
-        .map_err(|_| MediaError::TimestampTooLarge)
+/// A frame being built: [`LOC_HEADROOM`] spare bytes, then the payload,
+/// so the header can be written in front of it once the timestamp is
+/// final ([`Self::into_frame`]) and the frame stays one buffer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LocBuffer(BytesMut);
+
+impl LocBuffer {
+    pub(crate) fn with_capacity(payload: usize) -> Self {
+        let mut buffer = BytesMut::with_capacity(LOC_HEADROOM + payload);
+        buffer.put_bytes(0, LOC_HEADROOM);
+        Self(buffer)
+    }
+
+    /// A buffer holding `payload` (one copy).
+    pub(crate) fn from_payload(payload: &[u8]) -> Self {
+        let mut buffer = Self::with_capacity(payload.len());
+        buffer.0.put_slice(payload);
+        buffer
+    }
+
+    /// Append Annex-B access unit `au` to the payload with 4-byte NAL
+    /// lengths ([`annexb_to_length_prefixed`]).
+    pub(crate) fn put_length_prefixed(&mut self, codec: VideoCodec, au: &[u8]) {
+        annexb_to_length_prefixed(codec, au, &mut self.0);
+    }
+
+    pub(crate) fn payload(&self) -> &[u8] {
+        &self.0[LOC_HEADROOM..]
+    }
+
+    /// The LOC frame at `timestamp_us`: the header `moq_loc::encode` writes,
+    /// put into the headroom, and the payload, without copying it.
+    pub(crate) fn into_frame(mut self, timestamp_us: u64) -> Result<Bytes, MediaError> {
+        let value = VarInt::from_u64(timestamp_us).ok_or(MediaError::TimestampTooLarge)?;
+        let block = 1 + varint_len(timestamp_us);
+        let start = LOC_HEADROOM - 1 - block;
+        let mut header = &mut self.0[start..LOC_HEADROOM];
+        // Both below 0x40: one-byte varints.
+        header.put_u8(block as u8);
+        header.put_u8(LOC_TIMESTAMP as u8);
+        value
+            .encode_quic(&mut header)
+            .map_err(|_| MediaError::TimestampTooLarge)?;
+        self.0.advance(start);
+        Ok(self.0.freeze())
+    }
 }
 
 /// Split a legacy frame into its µs timestamp and payload (no copy).
@@ -419,6 +467,21 @@ pub(crate) fn parse_legacy_frame(mut frame: Bytes) -> Result<(u64, Bytes), WireE
     let timestamp = VarInt::decode_quic(&mut frame)
         .map_err(|_| WireError::Invalid("truncated legacy frame timestamp"))?;
     Ok((timestamp.into_inner(), frame))
+}
+
+/// Split a LOC frame into its µs timestamp (a per-frame timescale
+/// honoured) and payload (no copy).
+pub(crate) fn parse_loc_frame(frame: Bytes) -> Result<(u64, Bytes), WireError> {
+    let frame = moq_loc::decode(frame).map_err(|error| match error {
+        moq_loc::Error::MissingTimestamp => WireError::Invalid("LOC frame without a timestamp"),
+        _ => WireError::Invalid("malformed LOC properties"),
+    })?;
+    let us = match frame.timescale {
+        None | Some(1_000_000) => frame.timestamp,
+        Some(scale) => u64::try_from(u128::from(frame.timestamp) * 1_000_000 / u128::from(scale))
+            .map_err(|_| WireError::Invalid("LOC timestamp out of range"))?,
+    };
+    Ok((us, frame.payload))
 }
 
 #[cfg(test)]
