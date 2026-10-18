@@ -1,8 +1,9 @@
 # High-performance data path
 
-This document records the stable performance contract for packet and byte
-movement. Measurements belong in the commit that makes the change; benchmark
-code and production source own executable detail.
+This page is the performance contract for moving packets and bytes. It says
+what a hot path must not do, how each buffer is bounded, what is shared, and
+how to measure a change. Benchmark code and production source own the
+executable detail; measured numbers belong in the commit that changes them.
 
 ## Contents
 
@@ -16,162 +17,185 @@ code and production source own executable detail.
 
 ## Data-path shape
 
+The diagram shows one packet from socket to destination.
+
 ```mermaid
 flowchart LR
     Socket["Protocol socket"] --> Parse["Protocol or container parse"]
     Parse --> Choice{"Selected input?"}
-    Choice -->|"yes"| Gate["Atomic writer gate"]
-    Choice -->|"no"| Cache["Bounded latest compressed GOP"]
+    Choice -->|"yes"| Gate["InputPacketGate"]
+    Choice -->|"no"| Cache["StandbyGopCache"]
     Cache -->|"promotion replay"| Gate
     Gate --> Source[("Source RingBuffer")]
-    Source --> Direct["Direct destination"]
-    Source --> Stage["Shared transform"]
+    Source --> Stage["Shared stage (FFmpeg child, audio router)"]
     Stage --> Output[("Output RingBuffer")]
-    Output --> Package["Destination packaging"]
-    Source --> Package
-    Package --> Queue["Bounded byte transport when blocking I/O is required"]
-    Queue --> Sink["Socket, child process, or file"]
+    Source --> Mux["Shared TS muxer"]
+    Output --> Mux
+    Mux --> Ts[("TsChunkRing")]
+    Source --> Shards["Egress shards"]
+    Output --> Shards
+    Ts --> Shards
+    Source --> Queue["MemoryQueue"]
+    Queue --> File["Recording file"]
 ```
 
-Encoded payloads move as reference-counted bytes. Packet rings provide
-single-producer, multi-consumer fan-out, while `TsChunkRing` shares packaged
-MPEG-TS chunks across SRT destinations. `MemoryQueue` bridges async producers
-to blocking native or file I/O without an unbounded channel.
+- Encoded payloads move as reference-counted `Bytes`. A `RingBuffer` is
+  single-producer, multi-consumer; each reader has its own cursor.
+- `TsChunkRing` shares packaged MPEG-TS chunks across SRT destinations.
+- Egress shards read rings directly by cursor
+  ([Egress architecture](egress-architecture.md)).
+- `MemoryQueue` (`src/media/avio.rs`) is the bounded byte queue between a
+  media producer and blocking native or file I/O.
 
-Per-frame metadata stays out of `MediaPacket` (pinned at 56 bytes): each ring
-slot carries one atomic word with the packet's track configuration
-generation, written by the producer with the slot and read by sequence without
-a lock ([frame units](media-pipeline.md#frame-units)). Publication pays one
-relaxed load and one release store per packet and never parses payloads;
-configuration bytes are compared and stored only when a producer records them.
+`MediaPacket` is pinned at 56 bytes by a size assertion in
+`src/media/packet.rs`. Per-frame metadata stays out of it. Each ring slot
+carries one atomic word with the packet's track configuration generation,
+written by the producer with the slot and read by sequence without a lock
+([frame units](media-pipeline.md#frame-units)). Publication costs one relaxed
+load and one release store per packet and never parses payloads.
+Configuration bytes are compared and stored only when a producer records
+them.
 
 ## Hot-path contracts
 
-Packet loops must avoid work whose cost grows invisibly with packet rate:
+A packet loop must not do work whose cost grows unseen with packet rate:
 
-- no per-packet logging, serialization, or metrics-label construction;
-- no avoidable payload copy or fresh allocation when ownership can move;
+- no per-packet logging, serialization or metrics-label construction;
+- no payload copy or fresh allocation when ownership can move;
 - no shared global lock or async channel send in the normal ring path;
 - no blocking syscall on a Tokio worker;
 - no diagnostic reader that changes production fan-out behavior;
 - no loss of PTS/DTS or payload-format distinctions for convenience.
 
-Reusable buffers are allocated outside loops and cleared for reuse. Prefer
-`Bytes`/`BytesMut` ownership transfer and burst APIs where the consumer already
-supports batches. Optimizations must preserve protocol correctness and bounded
-shutdown behavior.
+Allocate reusable buffers outside the loop and clear them for reuse. Prefer
+`Bytes`/`BytesMut` ownership transfer and burst APIs where the consumer
+already takes batches. An optimization must keep protocol correctness and
+bounded shutdown.
+
+The egress hot path adds its own rules: a leaf visit is bounded by
+`WorkBudget`, a parked leaf costs nothing until a wake or readiness event,
+and a feed publication sends at most one wake per shard
+([Commands and wakes](egress-architecture.md#commands-and-wakes)).
 
 ## Bounded transport
 
-The application bounds packet rings, MPEG-TS chunk rings, standby GOP caches,
-async/native queues, socket admission, sender admission, and child-process
-admission. Configurable defaults and environment parsing live in
-`src/config.rs`; fixed structural limits live with their owning module. Each
-structure owns its overflow or backpressure policy.
+Every queue between contexts has an explicit bound. Configurable defaults
+and environment parsing live in `src/config.rs` and `src/config/`; fixed
+structural limits live with the module that owns the structure. Each
+structure owns its overflow or backpressure policy, and they differ on
+purpose:
 
-Different structures deliberately react differently under pressure:
-
-- a lagging packet-ring reader may recover at a recent keyframe;
-- a connected RTMP/SRT standby retains one compressed GOP and invalidates it
-  entirely when its byte or packet bound is crossed;
-- an MPEG-TS chunk reader detects overwrite and advances according to its
-  container boundary;
-- a `MemoryQueue` blocks or wakes its producer/consumer through its explicit
-  cancellation contract;
-- connection and child-process semaphores reject or defer new work instead of
-  allowing unbounded resource growth.
+| Structure | Under pressure |
+|---|---|
+| `RingBuffer` reader | Falls behind, then recovers at a recent keyframe |
+| `StandbyGopCache` | Keeps one GOP; clears it entirely past 16 MiB or 2048 packets (defaults) |
+| `TsChunkRing` reader | Detects overwrite and advances to a container boundary |
+| Egress leaf cursor | Overrun resynchronizes at the latest sync point; the feed never grows |
+| `MemoryQueue` | Blocks or wakes producer and consumer through its cancellation contract |
+| Connection and child-process admission | Rejects or defers new work |
 
 Do not copy capacities or derived seconds-of-buffer estimates into planning
-documents. They change with configuration and packetization; runtime telemetry
-is the correct evidence for a specific deployment.
+documents. They change with configuration and packetization. Runtime
+telemetry is the evidence for a given deployment.
 
 ## Sharing and isolation
 
-Expensive work is shared by typed stage identity. Destination-specific state
-stays outside the shared stage:
+Expensive work is shared by typed stage identity. State that belongs to one
+destination stays outside the shared stage.
 
 | Shared | Per destination |
 |---|---|
-| Video/audio transform output ring | Protocol connection and retry state |
-| SRT MPEG-TS packaging shard | Per-destination socket queue |
-| Source packet ring | Independent reader position and lag counters |
+| Source packet ring | Reader cursor and lag counters |
+| Transform output ring (FFmpeg child, audio router) | Protocol connection and retry state |
+| SRT MPEG-TS muxer and `TsChunkRing` | Owner caller and send state |
+| Raw→FLV conversion cache per egress shard | RTMP chunking, acknowledgement and TLS state |
 | HLS pipeline store | Request authorization and response transfer |
 
-Under the [egress fabric](egress-architecture.md), RTMP,
-RTMPS, and SRT egress share a small, CPU-derived and output-count-scaled pool
-of shard OS threads across many destinations. RTMP/RTMPS active socket I/O is
-completion-driven on one Compio/io_uring runtime per shard; bounded rotating
-`PollFd` scans are limited to pending connects. SRT uses the shard-local
-Compio `Owner` model.
+Egress for RTMP, RTMPS, SRT, HLS PUT, MoQ, sink and pipeline outputs runs on
+the egress fabric. Each feed has a small pool of shard OS threads that
+starts at one and grows with measured load, up to `clamp(CPUs, 2, 8)`. One
+shard serves many destinations. Active socket I/O is completion-driven on
+one Compio io_uring runtime per shard; SRT uses the shard-local Compio
+`Owner`.
 
-Sharing must not couple destination failure domains. A stalled or failed
-destination can lose its own buffered data or restart without stopping the
-publisher or another destination.
+Sharing must not couple failure domains. A stalled or failed destination can
+lose its own buffered data or restart. It must not stop the publisher or
+another destination.
 
-Multi-input standby caching is intentionally outside shared transforms. It adds
-socket/demux work plus reference-counted compressed payload retention, but no
-standby decode, encode, transform ring, output packaging, or continuously
-generated HLS. With four configured inputs, the default worst case is three
-standby cache bounds in addition to the selected pipeline.
+Multi-input standby caching is deliberately outside shared transforms. A
+standby input adds socket and demux work plus reference-counted compressed
+payload retention. It adds no decode, encode, transform ring, packaging or
+HLS. With N configured inputs, the worst case is N − 1 standby cache bounds
+in addition to the selected pipeline.
 
 ## Native and child-process boundaries
 
-Tokio owns control/application work. The migrated container services no longer
-schedule on the Tokio control runtime (WI11). Ingest media runs to completion on
-the Compio ingress owners: SRT TS demux and RTMP FLV parsing, sequence-header
-caching, timestamp mapping, standby GOP, gate, and publication. Shared SRT TS
-muxing (`TsChunkRing`), HLS segmenting (MPEG-TS and fMP4), recording muxing,
-and external file-ingest demux run on the dedicated media executor pool
-(`restream-media`).
-Lightweight audio-router stages and diagnostic direct RTMP play scheduling
-remain control-runtime tasks; this migration does not move those paths.
-Compio/io_uring owns production RTMP, RTMPS, and SRT transport sockets and
-connection protocol state. Calls that may block are isolated on guarded OS
-threads. Codec-heavy transforms launch an FFmpeg child and move its pipes on
-dedicated threads.
+| Work | Context |
+|---|---|
+| API, database, control and lifecycle | Tokio CONTROL |
+| RTMP and SRT ingest: parse or demux, sequence headers, timestamps, standby GOP, gate, publish | Compio ingress owners |
+| MoQ ingest and local origin | `moq-ingest` Compio thread |
+| Shared SRT TS muxing, audio routers, HLS segmenting (TS and fMP4), recording feed, file-ingest demux, HLS push and pull assembly | Media executor (`restream-media`) |
+| RTMP, RTMPS, SRT, HLS PUT and MoQ egress sockets and connection state | Egress shards (Compio io_uring) |
+| Codec work | FFmpeg child; `restream-ffin` and `restream-ffout` move its pipes |
+| Blocking calls (DNS, file writes) | Guarded OS threads or blocking pools |
 
-The process boundary has a process-start cost and pipe traffic, but isolates
-codec failure and avoids blocking the async scheduler.
+Diagnostic direct RTMP play still reads the ring on CONTROL. The HLS PUT
+fallback uploader (Reqwest) also runs on CONTROL. Every crossing between
+these contexts is listed with its bound in
+[Runtime crossings](runtime-crossings.md).
 
-One child runs per live unique FFmpeg-backed stage, and every destination shares
-it: the child count follows a pipeline's FFmpeg-backed stages — renditions per
-codec variant, codec edges, heavy audio routes, the HEVC preview bridge — not
-its destination count (measured child cost and CPU:
-[resource-sweep.md](resource-sweep.md#per-rendition-ffmpeg-child-cost-2026-10-15)).
-Merging several renditions into one child would put every merged destination in
-one codec failure domain, which "Sharing and isolation" forbids; it needs an
-explicit failure-isolation gate and an owner decision.
+The process boundary costs a process start and pipe traffic. In return it
+isolates codec failure and keeps blocking work off the async schedulers.
+
+One FFmpeg child runs per live unique FFmpeg-backed stage, and every
+destination shares it. The child count follows a pipeline's FFmpeg-backed
+stages (renditions per codec variant, codec edges, heavy audio routes, the
+HEVC preview bridge), not its destination count. Measured child cost:
+[resource-sweep.md](resource-sweep.md#per-rendition-ffmpeg-child-cost-2026-10-15).
+Merging several renditions into one child would put every merged destination
+in one codec failure domain, which "Sharing and isolation" forbids. It needs
+an explicit failure-isolation gate and an owner decision.
 
 ## Measurement workflow
 
-The benchmark targets declared in `Cargo.toml` and implemented under `benches/`
-are the executable inventory. Live protocol modes are owned by the harness.
+The `[[bench]]` targets in `Cargo.toml` and their code under `benches/` are
+the benchmark inventory. Hot-path examples: `ring_buffer`, `ingest_handoff`,
+`input_gate`, `egress_visit`, `rtmp_serializer`, `codec_conversions`,
+`avio_throughput`, `stage_feeder`. Live protocol modes belong to the harness
+(`scripts/harness/run.sh`).
+
 For a hot-path change:
 
-1. Select the benchmark or live mode that exercises the changed owner.
-2. Record a clean baseline with the same build profile, fixture, and host
-   constraints intended for the comparison.
+1. Pick the benchmark or live mode that exercises the changed owner.
+2. Record a clean baseline with the same build profile, fixture and host
+   constraints as the comparison.
 3. Make one bounded change.
 4. Run the focused correctness gate before trusting a speed result.
-5. Repeat the same measurement and record variance, throughput, latency, and
-   resource effects relevant to the hypothesis.
-6. Record the before/after numbers, host and command in the commit message.
+5. Repeat the measurement. Record variance, throughput, latency and the
+   resource effects that bear on the hypothesis.
+6. Put the before and after numbers, host and command in the commit message.
 
-Use `cargo xtask build-bench` when a measurement mode requires the canonical
+```sh
+cargo bench --bench egress_visit
+cargo xtask build-bench
+```
+
+Use `cargo xtask build-bench` when a measurement mode needs the canonical
 `target/bench/` binaries. Do not infer production capacity from loopback
 throughput alone.
 
 ## Change review
 
-A performance change is ready only when it answers all of these questions:
+A performance change is ready only when it answers all of these:
 
 - Which production owner and workload does the measurement represent?
-- Did protocol and lifecycle proof remain at least as strong?
-- Is any added allocation, lock, copy, task hop, thread, process, or syscall
-  visible in the design?
-- Are memory and queue effects bounded under slow-consumer conditions?
-- Does the result distinguish a directional signal from a proven deployment
+- Is protocol and lifecycle proof at least as strong as before?
+- Is every added allocation, lock, copy, task hop, thread, process or
+  syscall visible in the design?
+- Are memory and queue effects bounded when a consumer is slow?
+- Does the result separate a directional signal from a proven deployment
   recommendation?
 
-Architecture ownership is summarized in [Architecture](architecture.md), and
-test/gate selection is maintained in [Testing](testing.md).
+Architecture ownership is in [Architecture](architecture.md). Test and gate
+selection is in [Testing](testing.md).

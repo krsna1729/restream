@@ -1,81 +1,75 @@
 # FFmpeg version configuration
 
-This reference explains which files own native FFmpeg selection and how to
-change the pin without creating a second build recipe.
+Restream links FFmpeg n8.1.2 statically through the `ffmpeg-next` 9.0
+binding. Some features also run an external `ffmpeg` executable chosen at
+runtime. This page names the files that own each choice and how to change
+the pin.
 
 ## Contents
 
-- [Sources of truth](#sources-of-truth)
+- [Current pins](#current-pins)
 - [Build the pinned version](#build-the-pinned-version)
 - [Update the version](#update-the-version)
-- [Runtime executable override](#runtime-executable-override)
+- [Runtime executable](#runtime-executable)
 - [Troubleshooting](#troubleshooting)
 
-## Sources of truth
+## Current pins
 
-Two checked-in inputs must remain compatible:
+| Input | Value | Owner |
+|---|---|---|
+| FFmpeg tag | `n8.1.2` | `RESTREAM_LOCK_FFMPEG_VERSION` in [native-inputs.lock](../scripts/build/native/native-inputs.lock) |
+| FFmpeg commit | `38b88335f99e76ed89ff3c93f877fdefce736c13` | `RESTREAM_LOCK_FFMPEG_COMMIT` in the same lock |
+| Builder default | `FFMPEG_VERSION=n8.1.2` | [scripts/build/native-deps.sh](../scripts/build/native-deps.sh) |
+| Rust binding | `ffmpeg-next = "9.0"` (`codec`, `filter`, `format`, `software-resampling`, `software-scaling`) | [Cargo.toml](../Cargo.toml) |
 
-- [scripts/build/native/native-inputs.lock](../scripts/build/native/native-inputs.lock)
-  owns the immutable FFmpeg tag and resolved upstream commit used by the native
-  build;
-- [Cargo.toml](../Cargo.toml) owns the `ffmpeg-next` Rust binding family.
-
-[scripts/build/native-deps.sh](../scripts/build/native-deps.sh) owns download,
-configuration, compilation, and capability verification of the static FFmpeg
-libraries linked into Restream. It rejects a version override that disagrees
-with the committed lock. Do not copy its flags, dependency list, or output-copy
-steps into this document.
+The lock also pins x264 and x265 by commit. The lock is the source of truth;
+this table must match it.
 
 ## Build the pinned version
-
-Run the canonical native builder through the resource limiter:
 
 ```sh
 scripts/build/native-deps.sh
 ```
 
-The script reuses a valid native prefix and explains how to request a rebuild
-when one is needed. Application build entrypoints consume the generated
-environment; callers should not reconstruct it with manual `pkg-config`,
-compiler, or copy commands.
+The script clones the locked tag, builds static libraries into
+`.local/build/static/prefix/`, and writes the environment that
+`scripts/build/app-static.sh` and other build entry points source. It
+refuses an `FFMPEG_VERSION` that differs from the lock. Do not rebuild the
+environment by hand with `pkg-config` or copy commands.
 
 ## Update the version
 
-A native-version change should be one reviewed change set:
+Make one reviewed change:
 
-1. Update the FFmpeg tag and resolved commit in
-   `scripts/build/native/native-inputs.lock`.
-2. Update the default consumed by `scripts/build/native-deps.sh` in the same
-   change.
-3. Change the `ffmpeg-next` dependency only when the selected FFmpeg release
-   crosses binding families or requires an API adjustment.
-4. Rebuild through the canonical native builder and run the media and release
-   gates appropriate to the changed codecs, filters, protocols, and artifact
-   surface.
+1. Update `RESTREAM_LOCK_FFMPEG_VERSION` and `RESTREAM_LOCK_FFMPEG_COMMIT`
+   in `scripts/build/native/native-inputs.lock`.
+2. Update the `FFMPEG_VERSION` default in `scripts/build/native-deps.sh`.
+3. Change `ffmpeg-next` in `Cargo.toml` only when the new FFmpeg crosses a
+   binding family or needs an API change.
+4. Rebuild with `scripts/build/native-deps.sh` and run the media and release
+   gates for the changed codecs, filters, protocols and artifacts.
+5. Update [Current pins](#current-pins).
 
-The lock file, not this page, answers “which version is current.” This avoids a
-version table becoming stale whenever the pin moves.
+## Runtime executable
 
-## Runtime executable override
+External transforms, subprocess file ingest and recording remux run an
+`ffmpeg` executable that is not part of the build. `src/ffmpeg_binary.rs`
+resolves it in this order: `FFMPEG_BIN_PATH` (config, then environment),
+the copy installed by `restream ffmpeg-fetch` (a BtbN FFmpeg 8.1 static GPL
+build, checked by SHA-256), then `ffmpeg` on `PATH`. See
+[Configuration](configuration.md) for the user contract.
 
-External transforms, subprocess file ingest, and recording remux run an
-FFmpeg executable that is not part of the build: a system `ffmpeg`, the copy
-installed by `restream ffmpeg-fetch`, or `FFMPEG_BIN_PATH`. Its user-facing
-contract belongs in [Configuration](configuration.md).
-
-The linked FFmpeg libraries (media-file analysis and the version report) are
-selected at build time and cannot be changed with the runtime executable
-override.
+The linked libraries (media-file analysis and the version report) are fixed
+at build time. `FFMPEG_BIN_PATH` does not change them.
 
 ## Troubleshooting
 
-- If native setup rejects a version, compare the requested value with
-  `scripts/build/native/native-inputs.lock`; an unreviewed override is
-  intentionally unsupported.
-- If no FFmpeg executable is found at startup, install the distribution's
-  `ffmpeg` package or run `restream ffmpeg-fetch`.
-- If Rust compilation fails after a version update, check the
-  `ffmpeg-next` family in `Cargo.toml` and the compiler output before
-  changing features.
-- If runtime transcoding fails, verify the resolved executable and use
+- Native setup rejects a version: compare it with
+  `scripts/build/native/native-inputs.lock`. Unreviewed overrides are
+  refused on purpose.
+- No `ffmpeg` executable at startup: install the distribution's `ffmpeg`
+  package or run `restream ffmpeg-fetch`.
+- Rust build fails after an update: check the `ffmpeg-next` version in
+  `Cargo.toml` and the compiler output before changing features.
+- Runtime transcoding fails: check which executable was resolved, then use
   [Observability](observability.md) for stage and subprocess diagnostics.

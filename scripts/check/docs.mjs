@@ -142,10 +142,10 @@ for (const filename of files) {
       fenceLanguage = fenceLanguage === null ? fence[1].toLowerCase() : null;
       if (
         fenceLanguage === "mermaid" &&
-        !/^flowchart (?:LR|TD)$/.test(lines[index + 1] ?? "")
+        !/^(?:flowchart (?:LR|TD)|sequenceDiagram|stateDiagram-v2)$/.test(lines[index + 1] ?? "")
       ) {
         errors.push(
-          `${relative}:${lineNumber}: Mermaid diagrams must start with flowchart LR or flowchart TD`,
+          `${relative}:${lineNumber}: Mermaid diagrams must start with flowchart LR, flowchart TD, sequenceDiagram or stateDiagram-v2`,
         );
       }
       return;

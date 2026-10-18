@@ -1,671 +1,621 @@
-# Observability and Diagnostics
+# Observability
 
-The Rust runtime exposes JSON diagnostics directly from process state and SSE
-for live log/event feeds.
-It does not expose a Prometheus text endpoint, proxy Grafana, or poll a sidecar.
+Restream reports health, metrics, alerts and logs as authenticated JSON and SSE
+built from in-process state. There is no Prometheus text endpoint, no bundled
+Grafana and no metrics sidecar.
 
 ## Contents
 
 - [Endpoints](#endpoints)
-- [/api/v1/engine/health field derivation](#apiv1enginehealth-field-derivation)
+- [Where signals come from](#where-signals-come-from)
+- [Engine health](#engine-health)
+- [System metrics](#system-metrics)
+- [Telemetry, state and history](#telemetry-state-and-history)
 - [Diagnostic checks](#diagnostic-checks)
-- [Known instrumentation gaps](#known-instrumentation-gaps)
-- [Future instrumentation](#future-instrumentation)
-- [Prometheus and Grafana](#prometheus-and-grafana)
+- [Alerts](#alerts)
 - [Logging](#logging)
+- [Known gaps](#known-gaps)
 
 ## Endpoints
 
-| Surface | Authentication | Purpose |
-|---|---|---|
-| `GET /healthz` | None | Process liveness: `{ "status": "ok" }` |
-| `GET /api/v1/engine/health` | Session | Pipeline input/output state, transport quality, recording state, SRT listener pressure |
-| `GET /api/v1/engine/resource-map` | Session | Runtime or pipeline-scoped resource attribution: CPU/RSS/thread summary plus measured/derived resource nodes; defaults to grouped top-N for large fleets |
-| `GET /metrics/system` | Session | Host CPU/memory/disk/network plus restream engine self metrics, child FFmpeg CPU/RSS, observe-only service-center capacity, and RTMPS/kTLS state (JSON, not Prometheus) |
-| `GET /api/v1/capacity/scenario` | Session | Observe-only projection of adding outputs/stages, priced on the same capacity priors as `/metrics/system` |
-| `GET /api/v1/engine` | Session | Restream build/toolchain, linked native-library versions, SBOM summary, and System information: OS, kernel, memory, CPU topology/features, and virtualization context |
-| `GET /api/v1/engine/sbom` | Session | CycloneDX 1.5 runtime SBOM for resolved Rust crates and linked native libraries |
-| `GET /api/v1/pipelines/:id/probe` | Session | Active input codec, dimensions, audio tracks, bitrate, and GOP summary |
-| `GET /api/v1/pipelines/:id/graph` | Session | Processing stages, buffers, and output connections |
-| `POST /api/v1/pipelines/:id/diagnostics/run` | Session | Protocol-aware batch diagnostic report |
-| `GET /api/v1/overview` | Session | Engine-wide operator summary: pipeline counts, alert rollup, SRT listener |
-| `GET /api/v1/alerts` | Session | Aggregate alerts across all pipelines with `firstSeen`/`lastSeen` tracking |
-| `GET /api/v1/fleet/history` | Session | Fleet headroom, delivering share and degraded outputs by layer, sampled every 5 s and kept 24 h; `?since=` |
-| `GET /api/v1/events` | Session | Lifecycle event log (ingest, stage, egress transitions) |
-| `GET /api/v1/logs` | Session | Process log query: level, module, pipeline, time range, event class filters |
-| `GET /api/v1/logs/stream` | Session | SSE live tail with Last-Event-ID resumption and 20 s heartbeat |
-| `GET /api/v1/pipelines/:id/summary` | Session | Operator pipeline view: source, outputs, alerts |
-| `GET /api/v1/pipelines/:id/alerts` | Session | Per-pipeline alert list |
-| `GET /api/v1/engine/telemetry` | Session | Engineer: all ingests, stages, egresses, transcoder buffers |
-| `GET /api/v1/measure` | Session | Measurement: fixed-shape counts, payload byte sums and delivery totals |
-| `GET /api/v1/pipelines/:id/telemetry` | Session | Engineer: pipeline-scoped ingest, ring, stages, egresses |
-| `GET /api/v1/stages/:key/telemetry` | Session | Engineer: single-stage throughput and pipe metrics |
+Every route below except `/healthz` needs a dashboard session. The
+[API reference](api-reference.md) owns request and response detail.
 
-See [API Reference](api-reference.md) for request/response details.
+| Route | Purpose |
+|---|---|
+| `GET /healthz` | Liveness only: always `{ "status": "ok" }`, no session |
+| `GET /api/v1/engine/health` | Pipeline input/output state, transport quality, recording, listeners, fabric shards; `?view=summary` for a smaller shape |
+| `GET /api/v1/dashboard/runtime` | Health and system metrics in one response (`health_view`, `metrics_view`, `pipeline_id`) |
+| `GET /metrics/system` | Host and process resources, capacity, media executor, egress shards, TLS counters (JSON); `?view=summary` |
+| `GET /api/v1/engine/resource-map` | CPU/RSS/thread attribution per resource node; grouped top-N by default |
+| `GET /api/v1/capacity/scenario` | Observe-only projection of added outputs or stages on the capacity priors |
+| `GET /api/v1/engine` | Build, toolchain, native libraries, SBOM summary, OS/CPU/virtualization |
+| `GET /api/v1/engine/sbom` | CycloneDX 1.5 runtime SBOM |
+| `GET /api/v1/engine/telemetry` | All ingests, inputs, stages, egresses, transcoder buffers, memory accounting |
+| `GET /api/v1/pipelines/:id/telemetry` | One pipeline's ingest, source ring, stages, egresses and delivery |
+| `GET /api/v1/stages/:key/telemetry` | One stage's throughput and pipe metrics |
+| `GET /api/v1/measure` | Fixed-shape counts, payload byte sums and delivery totals |
+| `GET /api/v1/overview` | Pipeline counts, failed outputs, alert counts, SRT listener |
+| `GET /api/v1/state`, `GET /api/v1/state/stream` | Runtime-state projection; the stream sends `snapshot` and `delta` SSE events |
+| `GET /api/v1/fleet/history` | Fleet headroom, delivering share and degraded outputs by layer; `?since=`, `?until=` |
+| `GET /api/v1/events` | Recent lifecycle events; `?pipeline_id=`, `?limit=` |
+| `GET /api/v1/alerts` | Alerts across all pipelines with `firstSeen`/`lastSeen`; `?since=` adds resolved alerts |
+| `GET /api/v1/pipelines/:id/alerts` | One pipeline's alerts |
+| `GET /api/v1/pipelines/:id/summary` | Operator card view: source, outputs, alerts, graph counts |
+| `GET /api/v1/pipelines/:id/inputs` | Every configured input with its runtime state |
+| `GET /api/v1/pipelines/:id/probe` | Active input codec, dimensions, audio tracks, bitrate, GOP |
+| `GET /api/v1/pipelines/:id/graph` | Runtime graph plus desired graphs |
+| `GET /api/v1/pipelines/:id/diagnostics/context` | Health, graphs, alerts, recent events and logs for one pipeline |
+| `POST /api/v1/pipelines/:id/diagnostics/run` | Protocol-aware diagnostic batch |
+| `GET /api/v1/logs`, `GET /api/v1/logs/stream` | Process-log query and SSE live tail |
 
-## `/api/v1/engine/health` field derivation
+`/metrics/system` appears in `PUBLIC_ROUTE_PATHS` in `src/api/router.rs`, but
+its handler still requires a session (`metrics_system_handler`).
 
-`GET /api/v1/engine/health` is built on demand from native `MediaEngine` state and per-pipeline
-recording settings in SQLite.
+## Where signals come from
+
+Health and alerts are computed on request from the `MediaEngine` registries.
+Producers only update counters and registries; no background task builds a
+health document.
+
+```mermaid
+flowchart LR
+    Srt["SRT ingress Owner thread"] --> Listener["listener_stats.ingress_owner"]
+    Rtmp["RTMP ingest (tcp_stats)"] --> Ingests["ingests.active / recent"]
+    Srt --> Ingests
+    Ring["RingBuffer reader snapshots"] --> Ingests
+    Shards["egress fabric shard threads"] --> Egresses["egresses.active / recent"]
+    Reconciler["egress reconciler"] --> Retry["egresses.retry"]
+    Stages["StageMetrics / stage runtime"] --> StageSnap["stage runtime snapshots"]
+    Listener --> View["health_snapshot_view"]
+    Ingests --> View
+    Egresses --> View
+    Retry --> View
+    StageSnap --> View
+    View --> Health["/api/v1/engine/health"]
+    View --> Derive["derive_alerts"]
+    Derive --> Tracker["AlertTracker"]
+    Tracker --> Alerts["/api/v1/alerts and pipeline alerts"]
+    Derive --> Overview["/api/v1/overview"]
+```
+
+Metrics, runtime state, events and fleet history come from shared samplers,
+the event log and two Tokio tasks started in
+`src/infrastructure/bootstrap/mod.rs`.
+
+```mermaid
+flowchart LR
+    Host["HOST_SAMPLER (sampled_system)"] --> Sys["build_system_metrics_snapshot"]
+    Exec["restream-media executor"] --> Sys
+    Cap["capacity_snapshot"] --> Sys
+    ShardStatus["egress_fabric_shard_statuses"] --> Sys
+    Tls["RTMPS / HLS PUT TLS counters"] --> Sys
+    Sys --> Metrics["/metrics/system"]
+    Engine["MediaEngine events"] --> EventLog["EventLog (1000 events)"]
+    EventLog --> Events["/api/v1/events"]
+    Engine --> Projector["run_projector"]
+    Projector --> Hub["StateHub"]
+    Hub --> State["/api/v1/state and /state/stream"]
+    Hub --> Sampler["run_fleet_sampler (5 s)"]
+    Cap --> Sampler
+    Sampler --> Fleet["FleetHistory (24 h)"]
+    Fleet --> FleetApi["/api/v1/fleet/history"]
+```
+
+## Engine health
+
+`GET /api/v1/engine/health` is built on demand by
+`api_runtime_views::health_snapshot_view` (`src/api_runtime_views/status.rs`)
+from `MediaEngine` state and per-pipeline recording settings in SQLite. The
+full view is serialized straight from its typed form; `?view=summary` returns
+only `status`, `pipelines`, `runtimeLimits` and `hostSettings`.
 
 ### Top-level shape
 
-```json
-{
-  "generatedAt": "2026-06-20T12:00:00Z",
-  "status": "ready",
-  "pipelines": {},
-  "srtListener": {
-    "bondingAvailable": false,
-    "ingressOwner": {
-      "faulted": false,
-      "managedRx": true,
-      "owners": 1,
-      "serviceVisits": 0,
-      "rxPackets": 0,
-      "txPackets": 0,
-      "peers": 0
-    }
-  }
-}
-```
+| Field | Meaning |
+|---|---|
+| `generatedAt` | Snapshot time (RFC 3339) |
+| `status` | Always `ready` when the handler returns |
+| `pipelines` | One entry per pipeline: `input`, `outputs`, `recording`, `hlsPreview` |
+| `stages` | Stage runtime snapshots keyed `pipelineId:stageKind` |
+| `runtimeLimits.nofile` | Configured and actual open-file limits, `satisfied` |
+| `hostSettings` | Sampled host tuning rows (cached 15 s) |
+| `rtmpListener` | `acceptErrors`, `fdExhaustionErrors`, `restarts`, `ingressOwners` |
+| `srtListener` | `bondingAvailable`, `restarts`, `ingressOwner` counters |
+| `egressFabricShards` | Per-shard state, progress age, command depth, resyncs |
+| `containedPanics` | Panics contained at a per-entity boundary since start |
+| `tuning.outputMaxRetries` | Restart budget the alert rules compare against |
 
-`srtListener.ingressOwner` is published by the SRT ingress Owner threads and is
-low-cardinality by construction (no peer or StreamID labels). With several
-Owners (`RESTREAM_SRT_INGRESS_OWNERS`) every counter and gauge is the sum over
-the Owners and every high-water mark is the largest one; a stopped Owner
-withdraws its gauges, so `owners` counts the Owners running now. The sample shows a
-subset; the full set is service visits/actions/maintenance actions and budget
-exhaustion, TX capacity/in-flight/high-water/exhaustions/packets/completions/
-failures, RX packets/bytes/ring depth/ring drops/buffer exhaustion/truncation, peers, admission
-policy telemetry, command and event bridge depth high-water, event-bridge-full
-visits, dropped telemetry samples, deferred read sends, stale commands,
-overload disconnects and send failures.
-
-`rxBufferExhaustions` counts transient managed provided-buffer pressure reports
-(`ENOBUFS` / `ResourceBusy`). It does not establish packet loss, increment
-`rxRingDropped`, or fault the Owner. `rxRingDropped` counts actual completion-ring
-discards; `rxTruncated` counts oversized datagrams discarded without parsing.
-These are local receive-path counters, not wire-loss or kernel socket-drop totals.
-The same fields are exposed for each SRT egress Owner under `egressFabricShards`.
-
-SRT ingest media runs to completion on the Owner thread, so the Owner also
-reports it: `mediaPayloads` (payloads demuxed and published), `mediaWorkUs`
-(cumulative time in the receive-and-publish pass), `mediaPassMaxUs` (longest
-single pass), `mediaSlowPasses5ms` / `mediaSlowPasses20ms` (passes over 5 and
-20 ms; each delays that Owner's protocol service), `mediaUnattachedDropped`
-(payloads dropped past the bound held while Tokio admits a peer) and
-`mediaProbeHoldOverflows` (a probe hold that reached its byte budget, per
-publisher 4 MiB or Owner-wide 64 MiB, or its 2 s timeout: held packets were
-published to the current ring and holding stopped) and `mediaProbeAckMaxUs`
-(longest wait for Tokio to answer a stream probe). Pre-admission media is
-bounded in bytes too: 2.5 MB per peer and 32 MiB Owner-wide, where a full
-Owner-wide cap evicts from the largest queue so a new publisher keeps its
-first payloads. The event bridge carries session
-lifecycle only (connect, stream probe, disconnect), so `eventBridgeFullVisits`
-should stay at zero.
-
-`status` is currently always `ready` when the handler returns.
+The health view applies the ingest disconnect grace
+(`RESTREAM_INGEST_DISCONNECT_GRACE_MS`). Alerts, overview and pipeline-scoped
+views use a grace of zero, so they show current state at once.
 
 ### Input status
 
-| Condition | `input.status` |
-|---|---|
-| `MediaEngine` reports an active ingest for the pipeline | `on` |
-| No active ingest is registered | `off` |
-
-The Rust implementation does not emit `warning` or `error` for input state.
-
-Active input fields:
+`input.status` is `on` while `MediaEngine` has an active ingest for the
+pipeline and `off` otherwise. It is never `warning` or `error`.
 
 | Field | Source |
 |---|---|
 | `publishStartedAt` | Current UTC time minus the ingest's monotonic uptime |
 | `bytesReceived` | Ingest `AtomicU64` counter |
-| `bitrateKbps` | Average bytes received over total ingest uptime |
-| `video` | RTMP FLV parser or SRT native TsDemuxer metadata |
-| `audio` | Primary audio metadata |
-| `audioTracks` | Full active audio track list, including PID/language/title when available |
-| `publisher.protocol` | `rtmp`, `srt`, or `file` |
-| `publisher.remoteAddr` | Accepted peer address when available |
-| `publisher.quality` | Protocol-specific live transport snapshot |
+| `bitrateKbps` | Average bytes received over the ingest's uptime |
+| `video`, `audio`, `audioTracks` | RTMP FLV parser or native TS demuxer metadata |
+| `publisher.protocol` | Ingest protocol: `rtmp`, `srt`, `hls` or `file` |
+| `publisher.remoteAddr` | Accepted peer address when known |
+| `publisher.quality` | Protocol-specific transport snapshot (below) |
+| `bytesSent` | Sum of the pipeline's active egress byte counters |
+| `readers`, `readerMetrics` | Live source-ring readers; per reader lag slots, overflow count, unread packet age, indexes, burst sizes |
+| `unexpectedReaders.count` | Always `0`; a placeholder |
 
-The pipeline-level health input is the currently selected forwarding session.
-For all configured sessions, `GET /api/v1/pipelines/:id/inputs` exposes a
-per-input runtime object with connection state, `forwardingState`, protocol,
-uptime, bytes received, media metadata, remote address, and quality. The
-forwarding states are `standby`, `awaitingKeyframe`, and `active`. A standby's
-bytes and preview can progress while pipeline-level output counters remain
-driven only by the selected input. `awaitingKeyframe` also covers the brief
-period between arming a connected standby and its ingest task consuming the
-next packet that triggers cached-GOP replay. Cache byte/packet occupancy is not
-currently exposed as telemetry.
-
-`bytesSent` is derived from active egress counters. `readers` is the count of
-live source-ring readers, and `readerMetrics` exposes each reader's lag slots,
-overflow count, unread packet age, read/write indexes, and burst-size stats.
-`unexpectedReaders.count` remains a placeholder.
-
-### RTMP publisher quality
-
-On Linux, the accepted socket is queried with `TCP_INFO` and `SO_MEMINFO` about
-every two seconds. Fields include RTT, receive RTT, bytes received,
-last-receive age, receive space/window, out-of-order packets, receive-buffer
-occupancy, and a rate derived from consecutive byte samples.
-
-The first rate sample is unavailable (no prior counter exists). On unsupported
-hosts or collection failure, `tcpStatsUnavailableReason` explains the absence.
-
-### SRT publisher quality
-
-The ingress Owner thread samples `srt-rs` receiver statistics about once per
-second and stamps each sample with its own observation time. Samples reach Tokio
-over a separate bounded, lossy telemetry bridge (a full bridge drops the sample
-and counts it in `ingressOwner.telemetryDropped`; it never delays protocol
-service). Per-second rates are computed between two consecutive Owner
-observations; a duplicate observation is ignored and a counter that moved
-backwards yields no rate rather than zero. Cumulative loss/drop/retransmit/
-undecrypt counters are retained for context; alerting should use the per-second
-delta fields so a recovered connection can return to healthy.
-
-The snapshot includes receive-buffer occupancy in packets, but no in-flight
-count (the ingest receiver does not report one). `mbpsReceiveRate` is the
-Owner's smoothed wire receive rate for a direct publisher and the LOGICAL
-payload rate (one copy of each delivered payload, from successive samples) for a
-bond. For bonded publishers it additionally reports:
+Disconnect and flap fields:
 
 | Field | Meaning |
 |---|---|
-| `srtBonded` | Whether srt-rs admitted this publisher as a bonded group |
-| `srtGroupMemberCount` | Total member tuples currently reported |
-| `srtGroupConnectedMembers` | Members in a connected state (active, standby, or unstable) |
-| `srtGroupActiveMembers` | Members carrying the active backup-group path |
+| `disconnectGraceActive` | The last disconnect is still inside the grace window |
+| `disconnectGraceRemainingMs` | Time left in that window; `null` without grace |
+| `recentDisconnectCount` | Disconnects inside the 30 s flap window (`INGEST_FLAP_WINDOW_MS`) |
+| `flapping` | `true` at two or more disconnects inside that window |
+
+Pipeline health shows the selected forwarding input only.
+`GET /api/v1/pipelines/:id/inputs` reports every configured input with
+`forwardingState` `standby`, `awaitingKeyframe` or `active`. A standby input's
+bytes and preview can advance while output counters follow the selected input.
+Standby GOP cache occupancy is not exposed.
+
+### RTMP publisher quality
+
+On Linux, `src/media/tcp_stats.rs` reads `TCP_INFO` and `SO_MEMINFO` from the
+accepted socket about every two seconds. Fields cover RTT, receive RTT, bytes
+received, last-receive age, receive space and window, out-of-order packets,
+receive-buffer occupancy, the congestion-control algorithm, and a rate from
+consecutive byte samples. The first rate sample is empty. When collection is
+unsupported or fails, `tcpStatsUnavailableReason` says why.
+
+### SRT publisher quality
+
+The SRT ingress Owner thread samples `srt-rs` receiver statistics about once
+per second. Samples reach Tokio over a bounded, lossy telemetry bridge; a full
+bridge drops the sample and counts it in `ingressOwner.telemetryDropped`.
+
+- Per-second rates come from two consecutive Owner observations. A duplicate
+  observation is ignored; a counter that went backwards gives no rate.
+- Cumulative loss, drop, retransmit and undecryptable counters stay for
+  context. Alert on the per-second fields so a recovered link turns healthy.
+- Receive-buffer occupancy is `srtRecvBufPackets` /
+  `srtRecvBufCapacityPackets`, plus exact `srtRecvBufPayloadBytes`. Capacity is
+  a packet limit, so there is no byte-capacity field.
+- `mbpsReceiveRate` is the wire receive rate for a direct publisher and the
+  logical payload rate (one copy per delivered payload) for a bond.
+
+Bonded publishers add:
+
+| Field | Meaning |
+|---|---|
+| `srtBonded` | `srt-rs` admitted the publisher as a bonded group |
+| `srtGroupMemberCount` | Member tuples reported |
+| `srtGroupConnectedMembers` | Members active, standby or unstable |
+| `srtGroupActiveMembers` | Members on the active backup path |
 | `srtGroupBrokenMembers` | Members reported broken |
-| `srtGroupWireReceiverPacketsLost` | Receiver-side missing sequence numbers summed over all legs (wire) |
-| `srtGroupWirePacketsUndecryptable` | Decryption rejections summed over all legs (wire) |
+| `srtGroupWireReceiverPacketsLost` | Missing sequence numbers summed over legs |
+| `srtGroupWirePacketsUndecryptable` | Decryption rejections summed over legs |
 
-A bond's leg-level degradation is reported only through the explicit `wire`
-fields: one degraded leg does not mean the deduplicated logical stream lost
-data, so the ordinary `packetsReceivedLoss`/`Drop`/`Retrans`/`Undecrypt` fields
-are not set for a bond. The member-count and wire fields are omitted for
-ordinary single-link publishers.
-
-`srt-rs` retains the last receiver statistics of every leg it has seen,
-including legs that never completed a handshake and legs that failed, so a
-bond's instantaneous RTT, jitter, latency span and receive-buffer occupancy
-(`msRtt`, `msReceiveBuf`, `srtRecvBufPackets` and friends) are computed from
-connected legs only — an unstable leg still counts, because upstream defines it
-as a connected link the group excludes from delivery under backpressure, while a
-broken leg's stale full buffer must never be the "fullest leg" the
-`_recv_buffer_saturated` alert reads. The cumulative `wire` counters remain
-summed over every leg. A bond with no connected leg reports no new quality
-sample rather than describing the dead legs' last-known state.
+For a bond the ordinary loss/drop/retransmit/undecrypt fields are not set:
+one degraded leg does not mean the deduplicated stream lost data. RTT,
+jitter, latency span and buffer occupancy use connected legs only (an unstable
+leg counts; a broken leg does not). The `wire` counters sum every leg. A bond
+with no connected leg reports no new sample.
 
 ### Output status
 
-Active native egresses appear in `pipelines[id].outputs`:
-
-- `register_egress()` stores active egress state in the engine's grouped egress
-  registry with an explicit `pipeline_id`;
-- `health_snapshot()` includes entries whose `ActiveEgress.pipeline_id`
-  matches the pipeline being rendered.
+`pipelines[id].outputs` lists active egresses (matched on
+`ActiveEgress.pipeline_id`) and the most recent outcome of outputs that have
+ended, so a failure and its error stay visible after cleanup.
 
 | Field | Source |
 |---|---|
-| `status` | `ActiveEgress.status` (normally `running`) |
-| `protocol` | URL-derived protocol (`rtmp`, `srt`, `hls`, or `unknown`) |
-| `phase` | Current sender lifecycle phase such as `starting`, `connecting`, `handshaking`, `publishing`, `sending`, `uploading`, or `failed` |
-| `targetAddr` | Resolved peer address when known, without credentials |
-| `totalSize` | Atomic bytes-sent counter |
-| `bytesOut` | Same atomic bytes-sent counter, named for v1 telemetry consistency |
-| `bitrateKbps` | Byte delta divided by elapsed sample time; cached between samples |
-| `startedAt` | Egress registration timestamp |
-| `lastProgressAt` | Last successful protocol send or HLS PUT completion |
-| `lastProgressAgeMs` | Age of the last successful send/upload sample |
-| `lastError`, `lastErrorAt`, `failurePhase` | Last structured sender failure. These fields are preserved in recent output status after teardown so cleanup does not erase the cause. |
-| `recentFailureCount` | Number of recent egress failures still inside the short downstream flap window. Carries forward onto the recovered active attempt so operators can see repeated sink churn even after the output is running again. |
-| `flapping` | `true` when repeated downstream failures happened inside that flap window, even if the output has already recovered and resumed sending. |
-| `retrying`, `retryAttempts`, `retryBackoffMs`, `nextRetryAt`, `retryRemainingMs` | Present while reconciler backoff is actively delaying the next automatic egress start. During this window the output `status` is promoted to `retrying` even though the preserved runtime phase remains `failed`. |
-| `quality` | Egress transport quality. RTMP/RTMPS expose sender-side `TCP_INFO`/`SO_MEMINFO`; SRT exposes sender-side `srt-rs` logical-caller statistics (RTT, send rate from the local wire byte delta, sent loss/drop, send-buffer backlog). |
-| `endedAt`, `endedAgeMs` | Present on recent output snapshots after unregister/cleanup so operators can tell when the last classified egress state ended |
-| `fabric`, `shardId` | `true` and the owning shard index for every network egress output — the egress fabric runtime is now the only egress path |
-| `resyncCount` | Total feed resynchronizations for this leaf a leaf that falls behind its retained feed window resyncs to the latest sync point in place rather than closing |
-| `feedLagUnits` | Feed units this leaf's cursor is currently behind the feed head; updated once per second by the shard's stall sweep for every live leaf, not just ones about to be force-closed |
-| `backpressureReason` | `null` when idle/healthy, `"backpressured"` when send-path bytes are queued but within the no-progress deadline, `"stalled"` when that deadline has passed (the same classification the stall sweep uses to decide force-close), `"shard_saturated"` (SRT) when the deadline has passed while at least four, and at least a quarter, of the shard's outputs are backpressured or stalled: the output is kept connected instead of force-closed, because reconnecting it into the same saturated Owner only adds load |
+| `status` | `running`, `stalled` (no progress for 10 s, `EGRESS_PROGRESS_STALE_MS`), `stopped` (no ingest), `failed`, or `retrying` while reconciler backoff runs |
+| `rawStatus`, `phase` | Stored egress status and sender phase (`starting`, `connecting`, `handshaking`, `publishing`, `sending`, `uploading`, `failed`, ...) |
+| `protocol` | From the URL: `rtmp`, `srt`, `hls`, `moq`, `sink`, `pipeline` or `unknown` |
+| `targetAddr` | Resolved peer address, no credentials |
+| `totalSize`, `bytesOut` | The same bytes-sent counter |
+| `bitrateKbps` | Byte delta over a sample window longer than 0.5 s; cached between samples |
+| `startedAt`, `uptimeSecs` | Registration time and age |
+| `lastProgressAt`, `lastProgressAgeMs` | Last successful send or HLS PUT |
+| `lastError`, `lastErrorAt`, `failurePhase` | Last structured sender failure; kept after teardown |
+| `recentFailureCount`, `flapping` | Failures inside the 30 s flap window (`EGRESS_FLAP_WINDOW_MS`); `flapping` at two or more, also after recovery |
+| `retrying`, `retryAttempts`, `retryBackoffMs`, `nextRetryAt`, `retryRemainingMs` | Present while the reconciler delays the next start |
+| `endedAt`, `endedAgeMs` | On recent (ended) outputs |
+| `blockedBy` | Snapshot of the upstream stage the output waits on |
+| `fabric`, `fabricFeed`, `shardId` | Egress fabric feed and owning shard |
+| `resyncCount` | Times this leaf fell behind the retained feed window and resynced to the latest sync point |
+| `feedLagUnits` | Feed units behind the head, updated by the shard's 1 s stall sweep |
+| `backpressureReason` | `null`, `backpressured` (bytes queued within the no-progress deadline), `stalled` (deadline passed), or `shard_saturated` (SRT: deadline passed while at least four, and at least a quarter, of the shard's outputs are backpressured; the output stays connected) |
+| `quality` | Sender transport quality (below) |
+| `metrics` | The output's `StageMetrics` counters |
 
-Stopped configured outputs are still defined by `/api/v1/settings`, but
-`/api/v1/engine/health` now also preserves the most recent classified output
-state after cleanup. That means the dashboard can keep showing `failed` or
-`stopped` plus the last error instead of collapsing immediately to `off`.
-When a desired-running output is still inside destination retry backoff, the
-same preserved snapshot also shows when the next retry is due instead of
-looking like a static terminal failure.
+Sender quality:
 
-Recovered outputs now retain a short-lived instability signal too. After two
-recent downstream failures, the active output returns to `status=running` once
-bytes flow again, but `recentFailureCount` and `flapping=true` stay visible for
-the flap window so dashboards can distinguish "healthy again" from "healthy but
-still churning against the destination."
+- **RTMP/RTMPS**: `TCP_INFO`/`SO_MEMINFO` on the sending socket: RTT, bytes
+  sent/acked/retransmitted, unacked/lost/retransmitted packets, congestion
+  state and window, not-sent bytes, pacing and delivery rate, send-buffer
+  limited time, RTO counters, socket memory, congestion-control algorithm.
+- **SRT**: `srt-rs` caller statistics: RTT, sent loss/drop, send-buffer
+  backlog. `mbpsSendRate` is the interval delta of the caller's own wire bytes
+  (`total_srt_bytes_sent`, or summed `wire_srt_bytes_sent` for a bond), sampled
+  in the ~1 Hz stall sweep. A first sample, a counter reset or a missing
+  sender direction reads `null`, not zero. A bond has no aggregate drop counter.
+- **HLS PUT**: upload progress for segment and playlist PUTs.
 
-Input lifecycle snapshots also expose transient upstream grace explicitly:
+These are sender-side signals. They do not prove a platform accepted or played
+the stream.
 
-| Field | Source |
-|---|---|
-| `disconnectGraceActive` | `true` only while the most recent ingest disconnect is still inside `RESTREAM_INGEST_DISCONNECT_GRACE_MS` |
-| `disconnectGraceRemainingMs` | Remaining milliseconds before that grace window expires; `null` when no grace is active |
-| `recentDisconnectCount` | Number of ingest disconnects still inside the short flap window. Resets to `0` once that window expires. |
-| `flapping` | `true` when repeated ingest disconnects happened inside the flap window, even if the publisher is currently back online. |
+HLS PUT failure handling (`src/media/hls/upload.rs`, `upload_policy.rs`):
 
-These fields let the dashboard distinguish "publisher briefly dropped, keep
-watching" from a genuinely idle pipeline, instead of inferring grace only from
-the combination of `status=off` plus recent disconnect metadata. They also let
-the UI surface "publisher is flapping" separately from a one-off transient
-drop or a fully healthy live input.
-
-The egress bitrate updates only after a sample window longer than 0.5 seconds
-and only when the byte counter advances.
-
-RTMP egress phases cover URL parsing, TCP/TLS connect, RTMP handshake,
-application connect, publish acceptance, and packet send. SRT egress phases
-cover resolve, connect, sender-capacity rejection, and Owner send failures.
-RTMP ingest and RTMP/RTMPS egress quality include the kernel TCP congestion
-control algorithm. RTMP/RTMPS egress quality also includes sender-side RTT,
-bytes sent/acked/retrans, unacked/lost/retrans packet counts,
-congestion/window state, not-sent bytes, pacing and delivery rate,
-send-buffer limitation time, RTO counters, and send-side socket memory.
-
-SRT egress quality comes from `srt-rs` logical-caller statistics: RTT, sent
-loss/drop totals and the sender-buffer backlog. `mbpsSendRate` is the interval
-delta of the caller's own wire sender bytes — a direct caller's
-`total_srt_bytes_sent`, a bond's summed `wire_srt_bytes_sent` — sampled at the
-shard's ~1 Hz stall sweep, never the peer's advertised receive rate from ACK
-feedback. A first sample, a counter reset, or an absent sender direction
-reports `null` rather than zero, and `msRtt`/`packetsSentDrop` stay `null` until
-the transport reports them (a bond has no aggregate sender TLPKTDROP counter,
-so its drop value is never a fabricated zero).
-HLS PUT egress reports upload progress for segment and playlist PUTs. These
-signals are local sender evidence; they do not prove that a third-party platform
-accepted or played the stream unless a readback/verification probe is also run.
-HLS PUT requests are also bounded by an internal timeout (5 s). A 5xx, 408,
-425 or 429 response, a timeout or a connection failure surfaces a structured
-`upload_segment` or `upload_playlist` error and retries with exponential
-backoff (200 ms doubling to 5 s, shown in the retry state). A segment still
-failing one segment duration after its first send is dropped
-(`upload_segment_dropped`) and the next playlist starts after it; the playlist
-itself is retried without limit. At most five segments wait for upload; a
-destination accepting them more slowly than live drops the oldest waiting one
-("upload backlog over 5 segments"). After any failure the output uses fresh
-connections for 90 s, so it does not return to the failed node's pooled
-connection. Any other 4xx (400, 401, 403, 404, 405, ...)
-means the target rejected the output: the uploader stops without retrying the
-request and records the status, and the output then follows the normal output
-retry policy.
-
-### Egress kTLS telemetry
-
-Both summary and full `GET /metrics/system` responses include an `rtmps`
-object (RTMPS outputs) and an `hlsPutTls` object (HTTPS HLS PUT outputs on the
-egress fabric, the default transport), with the same fields. Their process-lifetime counters are `connections`, negotiated `tls12`
-and `tls13`, `ktlsRequested`, `ktlsAttempts`, `ktlsSuccess`,
-`ktlsUnsupported`, `ktlsError`, and `userspaceTlsConnections`.
-`ktlsCapabilities` reports cached current-host support probes for TLS 1.2/1.3
-AES-128/256-GCM.
-
-`ktlsRequested` records intent, not successful offload. `ktlsSuccess` records a
-completed kernel handoff; `ktlsUnsupported` records an unsupported negotiated
-suite/capability and `ktlsError` a handoff setup failure. There is no
-userspace-TLS fallback. `userspaceTlsConnections` counts connections dropped
-after the TLS handshake but before kTLS handoff; it is diagnostic evidence of
-an interrupted setup, not an alternate operating mode.
-
-### Egress telemetry parity status
-
-This list describes the current, verified state. The `StageMetrics` output
-counters and both quality rows were silently unreachable for every
-fabric-owned output for a time after the egress fabric migration — the
-fabric never called the code that populates them — before being found by
-an explicit audit and fixed.
-
-Implemented egress parity:
-
-- protocol classification and resolved target address where available
-- sender lifecycle phase and structured failure phase/error
-- last successful send/upload timestamp and progress age
-- per-output bytes, bitrate, and StageMetrics output counters
-- RTMP/RTMPS sender-side TCP quality
-- per-destination delivery ratio and per-feed Jain fairness
-- SRT sender-side `srt-rs` quality and bonded egress member state
-- graph, health, v1 telemetry, diagnostics, and alert surfacing for failed or
-  stale active egresses
-- process-lifetime egress failure events through `GET /api/v1/events`
-
-Remaining egress parity gaps:
-- post-egress media metadata, GOP cadence, and timestamp validation
-- optional loopback/readback probe evidence for RTMP/SRT outputs
-
-Post-egress validation should be modeled as readback evidence, not inferred from
-sender counters. For RTMP/SRT, this means optionally routing an egress to a
-readable loopback sink or destination-provided playback endpoint, running
-`ffprobe`/native probes on that read side, and attaching an evidence object such
-as:
-
-```json
-{
-  "outputId": "out-rtmp",
-  "source": "loopback",
-  "protocol": "rtmp",
-  "validatedAt": "...",
-  "video": { "codec": "h264", "width": 1920, "height": 1080, "fps": 30.0 },
-  "audio": [{ "codec": "aac", "sampleRate": 48000, "channels": 2 }],
-  "gop": { "avgMs": 2000, "maxMs": 2200 },
-  "timestamps": { "monotonicDts": true, "maxGapMs": 40 },
-  "result": "pass"
-}
-```
+- Each request has a 5 s timeout.
+- 5xx, 408, 425, 429, timeouts and connection failures raise
+  `upload_segment` or `upload_playlist` errors and back off from 200 ms,
+  doubling to 5 s.
+- A segment still failing one segment duration (at least 1 s) after its first
+  send is dropped (`upload_segment_dropped`); playlists retry without limit.
+- At most five segments wait for upload. A slower destination drops the oldest
+  ("upload backlog over 5 segments").
+- After a failure the output avoids pooled connections for 90 s.
+- Any other 4xx stops the uploader; the output then follows the normal
+  output retry policy.
 
 ### Per-destination delivery
 
-Each fabric output's `quality` carries `deliveredBps`, `offeredBps`, and
-`deliveryRatio`, computed by its shard thread over a 5 s window (sampled in
-the 1 s stall sweep, off the media path):
+Each fabric output's `quality` carries `deliveredBps`, `offeredBps` and
+`deliveryRatio`, computed by its shard over a 5 s window
+(`DELIVERY_WINDOW`, `src/media/egress/delivery.rs`) in the 1 s stall sweep.
 
-- **offered**: bytes the output's feed published (the ring's
-  `published_bytes` counter: a relaxed single-producer add).
-- **delivered, RTMP/RTMPS**: TCP `tcpi_bytes_acked` delta — wire bytes the
-  peer acknowledged, so a healthy output reads slightly above 1.0 (chunk
-  headers).
-- **delivered, SRT**: srt-rs `SenderStats::total_bytes_acked`, the payload
-  the peer's cumulative ACK retired (sender-dropped packets excluded). This is an **upper bound** on what the receiver got: a receiver
-  that drops late packets itself (its TLPKTDROP) still ACKs past the gap, so
-  the sender counts those packets as delivered. Cross-check with a receiver
-  when it matters. Bonded outputs report `null` (no aggregate buffer view).
-- The window starts only once media flows (RTMP: after publish acceptance),
-  so handshake bytes and the startup burst do not inflate the first window.
+- **Offered**: bytes the output's feed published (the ring's
+  `published_bytes` counter).
+- **Delivered, RTMP/RTMPS**: the `tcpi_bytes_acked` delta. Chunk headers make
+  a healthy ratio slightly above 1.0.
+- **Delivered, SRT**: `srt-rs` `total_bytes_acked`. This is an upper bound: a
+  receiver that drops late packets still ACKs past the gap. Bonded outputs
+  report `null`.
+- The window starts when media flows (RTMP: after publish acceptance).
 
-`GET /api/v1/pipelines/:pipelineId/telemetry` folds these per feed (outputs
-reading the same terminal stage) into `delivery`: `rated`, `delivered` (outputs
-at or above the 0.95 floor), `ratioMin`, and Jain's fairness index `jain` over
-delivered rates. The resource-sweep harness measures the same ratio at the
-receivers and records both, so a disagreement between them is itself a
-finding.
+`GET /api/v1/pipelines/:id/telemetry` folds these per feed into `delivery`:
+`rated`, `delivered` (outputs at or above the 0.95 `DELIVERY_FLOOR`),
+`ratioMin`, and Jain's fairness index `jain` over delivered rates.
+`/api/v1/measure` sums them in `delivery` (`destinations`, `rated`,
+`delivered`, `ratioMin`, `jainMin`).
 
 ### Recording state
 
-```json
-{
-  "recording": {
-    "enabled": true,
-    "active": true
-  }
-}
-```
-
-- `enabled` comes from SQLite key `recording_enabled:<pipelineId>`.
-- `active` reflects a live recording cancellation token.
+`recording.enabled` is SQLite key `recording_enabled:<pipelineId>`.
+`recording.active` is `true` while a recording cancellation token is live.
 
 ### SRT listener state
 
-The SRT listener is one `srt-rs` Compio `Owner` on its own owner thread (see
-[media pipeline](media-pipeline.md#srt-ingress-owner)). `bondingAvailable` is
-true while that listener is running with bonded-input support; the live listener
-counters are `srtListener.ingressOwner`, published by the owner thread. These are
-listener-wide values, not per-pipeline.
+The SRT listener is one `srt-rs` Compio Owner on its own thread (see
+[media pipeline](media-pipeline.md#srt-ingress-owner)). `srtListener` values
+are listener-wide, not per pipeline.
 
-Per-publisher SRT receive quality (`publisher.quality`) is sampled by the Owner
-thread from `srt-rs` receiver statistics about once per second and folded into
-the ingest snapshot: RTT, receive rate, negotiated latency, latency-buffer span,
-loss/drop/retransmission/undecryptable totals and per-second rates, and receive
-buffer occupancy as `srtRecvBufPackets` / `srtRecvBufCapacityPackets` (plus exact
-`srtRecvBufPayloadBytes`). Buffer capacity is a packet limit, so no byte-capacity
-or "available bytes" field exists. The `srt_recv_buffer_saturated` alert and the
-Publisher Transport diagnostic read these fields.
+`srtListener.ingressOwner` is published by the ingress Owner threads and has no
+peer or StreamID labels. With several Owners (`RESTREAM_SRT_INGRESS_OWNERS`)
+counters and gauges are sums and high-water marks are maxima; a stopped Owner
+withdraws its gauges, so `owners` counts running Owners. The full set:
 
-Use `ingressOwner.rxRingDropped`, `rxTruncated` and `rxRingDepth` for receive-path
-loss and pressure, and `txFailed`, `txExhaustions` and `faulted` for the transmit
-path and Owner health.
+- service visits, actions, maintenance actions, budget exhaustion;
+- TX capacity, in flight, high water, exhaustions, packets, completions,
+  failures;
+- RX packets, bytes, ring depth, ring drops, buffer exhaustion, truncation;
+- peers, admission policy telemetry, command and event bridge depth high
+  water, event-bridge-full visits, dropped telemetry samples, deferred read
+  sends, stale commands, overload disconnects, send failures.
 
-Per-shard SRT Owner counters are also published in `/metrics/system`
-`egressShards[].srtOwners[]`. Alongside `txPackets` they carry `txClass`, the
-`DatagramClass` breakdown of exactly those submissions (`dataFirst`,
-`dataRetransmit`, `ack`, `ackack`, `nak`, `keepalive`, `handshake`,
-`dropRequest`, `keyMaterial`, `shutdown`, `otherControl`). DATA pps,
-retransmission rate and protocol-control pps are read from that breakdown; a
-`txClass.total()` that does not equal `txPackets` would mean the breakdown is
-incomplete.
+How to read the receive path:
 
-`txBatchedSends`, `txCoalescedDatagrams` and `txGsoFallbacks` are the Owner's
-UDP GSO counters: sends that carried more than one datagram, datagrams that
-joined an already staged send (one submission saved each), and times the path
-rejected GSO and coalescing was switched off. Only consecutive datagrams to
-the same destination address coalesce, so many outputs to one server coalesce
-far more than the same outputs to distinct servers.
+- `rxRingDropped` counts real completion-ring discards; `rxTruncated` counts
+  oversized datagrams dropped unparsed.
+- `rxBufferExhaustions` counts transient provided-buffer pressure (`ENOBUFS` /
+  `ResourceBusy`). It is not packet loss and does not fault the Owner.
+- These are local receive-path counters, not wire loss or kernel drops.
+- Use `txFailed`, `txExhaustions` and `faulted` for the transmit path and
+  Owner health.
 
-## Diagnostic checks
+SRT ingest media runs on the Owner thread, so the Owner also reports it:
 
-`GET /metrics/system` also includes an observe-only `capacity` object. It
-projects measured ingest bitrate/packet rate, active fanout, stage count, and
-egress shard count onto calibrated service centers; it does not reject or
-defer work. `hottestCenter` identifies the largest projected utilization, and
-the per-center `*Util` fields are ratios (`1.0` means fully occupied). `flow`
-is the Flow Doctor view of the hottest observed shard, including queue growth,
-deadline slack, errors, and retransmit amplification.
+| Field | Meaning |
+|---|---|
+| `mediaPayloads` | Payloads demuxed and published |
+| `mediaWorkUs`, `mediaPassMaxUs` | Total and longest receive-and-publish pass |
+| `mediaSlowPasses5ms`, `mediaSlowPasses20ms` | Passes over 5 and 20 ms; each delays protocol service |
+| `mediaUnattachedDropped` | Payloads dropped while Tokio admits a peer (bound 2.5 MB per peer, 32 MiB per Owner; a full Owner cap evicts from the largest queue) |
+| `mediaProbeHoldOverflows` | Probe holds that hit 4 MiB per publisher, 64 MiB per Owner, or 2 s; held packets go to the current ring |
+| `mediaProbeAckMaxUs` | Longest wait for Tokio to answer a stream probe |
 
-```json
-{
-  "capacity": {
-    "ingressPps": 1200,
-    "mediaBps": 2400000,
-    "egressPps": 3600,
-    "hottestShardUtil": 0.0048,
-    "nicUtil": 0.0007,
-    "memoryUtil": 0.0008,
-    "ffmpegUtil": 0,
-    "diskUtil": 0,
-    "activeLeaves": 3,
-    "uniqueStages": 0,
-    "hottestCenter": "egress",
-    "projectedUtilization": 0.0048,
-    "flow": {
-      "center": "egress",
-      "utilization": 0.0048,
-      "queue": 0,
-      "backlogSlope": 0,
-      "deadlineSlackMs": 1000,
-      "delayMs": 0,
-      "errors": 0,
-      "amplification": 1,
-      "status": "healthy"
-    },
-    "flowMeasured": true,
-    "observeOnly": true
-  }
-}
-```
+The event bridge carries session lifecycle only (connect, probe,
+disconnect), so `eventBridgeFullVisits` should stay at zero. The same Owner
+fields appear per SRT egress Owner under `egressFabricShards`.
 
-The same response includes `ioUring`, a cached host capability probe for Linux
-io_uring features (`pollAdd`, fixed-file operations, multishot receive, `sendZc`,
-and related kernel features). It reports kernel capability, not a separate RTMP
-transport selection. `available: false` means the host denied or lacks
-io_uring; it does not change control-plane behavior.
+## System metrics
 
-The JSON diagnostic run (`POST /api/v1/pipelines/:id/diagnostics/run`) is
-protocol-aware and infers the protocol from the active ingest; the request has
-no body. Checks are a short, ordered batch; SSE should return only if genuinely progressive multi-second
-probes are added again. A client disconnect suppresses stale browser results,
-but the owned server batch runs to completion while retaining its per-pipeline
-permit so blocking file analysis cannot overlap a retry.
+`GET /metrics/system` (`src/api/telemetry/system.rs`) is JSON, not
+Prometheus. Host CPU and memory come from one shared `HOST_SAMPLER`
+(`src/system_sampling.rs`) refreshed per request: host CPU usage is the delta
+since the previous call, and only Restream and its child processes are
+refreshed. Network rates come from two interface reads 250 ms apart.
 
-RTMP and SRT ingests run these checks:
-
-| # | Check | Notes |
+| Field | Full view | Summary view |
 |---|---|---|
-| 1 | Engine Status | Ingest/egress state, uptime, bytes, source ring, max reader lag, total overflows, and max unread packet age |
-| 2 | Stream Info | Codec and track metadata |
-| 3 | GOP Analysis | Keyframe interval; uses media PTS when available |
-| 4 | Publisher Transport | RTMP `TCP_INFO`/`SO_MEMINFO` or SRT `srt-rs` receiver statistics. For a bonded SRT publisher the bond identity and explicit wire degradation counters are reported instead of the ordinary logical loss/drop/retransmit/undecrypt counters, which are unknown for a bond |
-| 5 | Ring Buffer Health | Buffer state plus per-reader lag slots, overflow counters, and unread packet age |
-| 6 | Active Outputs | Output state and bytes; egresses associated via `ActiveEgress.pipeline_id` |
-| 7 | System Resources | CPU, RAM, disk |
-| 8 | Network Bandwidth | Host-wide interface rates (not pipeline-specific latency) |
-| 9 | SRT Listener Owner | SRT-only: bonding availability, Owner fault, receive mode, peers, RX/TX counters, ring drops/truncation, admission counters and dropped publisher-telemetry samples (listener-wide, from the Compio Owner) |
+| `cpu` | `usagePercent`, `cores`, `load1` | `usagePercent` |
+| `memory` | total/used/free bytes, `usedPercent` | `usedPercent` |
+| `disk`, `mediaDisk` | System root and media directory usage | `disk.usedPercent` |
+| `network` | External interface rates, per-interface list, ignored interfaces | `downloadKbps`, `uploadKbps` |
+| `engine` | Restream and child FFmpeg CPU and memory (`restreamCpuPercent`, `externalFfmpegCpuPercent`, `restreamMemoryBytes`, `externalFfmpegCount`, ...) | same |
+| `capacity` | Observe-only capacity projection | same |
+| `hostCapacity` | CPU count and sized thread classes | same |
+| `mediaExecutor` | Class, worker and per-service rows | class and worker rows |
+| `egressShards` | Fabric shard status, including `srtOwners[]` | same |
+| `ioUring` | Cached io_uring capability probe | same |
+| `rtmps`, `hlsPutTls` | TLS and kTLS counters | same |
 
-File ingests run a file-specific set instead:
+`egressShards[].state` is `healthy`, `stalled`, `stopped` or `panicked`. This
+route marks a shard stalled after 5 s without progress; the health view and
+alerts use 10 s (`SHARD_STALL_AFTER`).
 
-| # | Check | Notes |
-|---|---|---|
-| 1 | Engine Status | Same core ingest / ring / output summary as other protocols |
-| 2 | File Source | Source filename/path/existence, size, modified time, loop/start offset, live-optimized settings, codec/fps/duration, and sparse-GOP warnings |
-| 3 | Stream Info | Runtime demux metadata from the active file ingest |
-| 4 | GOP Analysis | Observed runtime keyframe cadence after ingest starts |
-| 5 | File Ingest Runtime | Ingest uptime, bytes injected, ingest ID, registry state, and subprocess registration state |
-| 6 | Ring Buffer Health | Same reader lag / overflow view as other protocols |
-| 7 | Preview & Recording | HLS preview store / segmenter state plus active recording state |
-| 8 | Active Outputs | Output state and bytes |
-| 9 | System Resources | CPU, RAM, disk |
+### Capacity (`capacity`)
 
-The SRT Listener Owner check reports actual ring discards, truncation and Owner
-faults as issues. Buffer exhaustion is informational, not a packet-loss alarm.
+`capacity` projects measured ingest bitrate and packet rate, active fanout,
+stage count and egress shard count onto calibrated service centers. It does
+not reject or defer work (`observeOnly: true`).
 
-The active ingest selects the RTMP, SRT, or file check set. Returns `404`
-without an active ingest.
+- `ingressPps`, `mediaBps`, `egressPps`, `activeLeaves`, `uniqueStages`:
+  measured load.
+- `hottestShardUtil`, `nicUtil`, `memoryUtil`, `ffmpegUtil`, `diskUtil`:
+  per-center utilization ratios (`1.0` is fully used).
+- `hottestCenter`, `projectedUtilization`: the largest projected center.
+- `flow` (`flowMeasured`): the hottest observed shard's queue, backlog slope,
+  deadline slack, delay, errors, retransmit amplification and `status`.
 
 ### Host capacity (`hostCapacity`)
 
-Both summary and full `GET /metrics/system` responses include `hostCapacity`:
-`cpus`, the CPU count every sizing law uses (affinity mask and root cgroup
-`cpu.max`, read once at boot), and the threads each execution class holds now:
-`controlWorkers` (Tokio), `mediaWorkers`, `rtmpIngressOwners`,
-`srtIngressOwners`, `egressShards` (running, all pools), and their sum
-`sizedThreads`. That sum covers only these sized classes, not the process:
-the blocking pool, resolver, recording and FFmpeg pipe threads are outside
-it. `sizedThreads` above `cpus` is not overload: an idle thread costs no CPU.
-MEDIA CPU time per class is in `mediaExecutor`; the resource sweep measures
-every thread group (`threadCpuPct`).
+`cpus` is the CPU count every sizing law uses (affinity mask and root cgroup
+`cpu.max`, read once at boot). The thread counts are `controlWorkers` (Tokio),
+`mediaWorkers`, `rtmpIngressOwners`, `srtIngressOwners`, `egressShards`, and
+their sum `sizedThreads`. The blocking pool, resolver, recording and FFmpeg
+pipe threads are not included. `sizedThreads` above `cpus` is not overload: an
+idle thread uses no CPU.
 
 ### Media executor (`mediaExecutor`)
 
-Both summary and full `GET /metrics/system` responses include `mediaExecutor`,
-the `restream-media` pool that runs shared SRT TS muxing, HLS packaging,
-recording preparation, audio routing and file-ingest demux. All counters are
-cumulative; compute rates from two snapshots.
+`mediaExecutor` describes the `restream-media` pool that runs shared SRT TS
+muxing, HLS packaging, recording preparation, audio routing and file-ingest
+demux. All counters are cumulative; take rates from two snapshots.
 
-- `classes[]`: per service class, `active` services, `polls` and `busyUs`
-  (wall time spent inside the services' `poll` calls, not service lifetime) and
-  `maxPollUs` (longest single poll). Window utilization is
+- `classes[]`: per service class, `active` services, `polls`, `busyUs` (wall
+  time inside `poll` calls) and `maxPollUs`. Utilization is
   `Δ busyUs / (Δ wall µs × configuredWorkers)`; demand per wake is
   `Δ busyUs / Δ polls`.
-- Beside the wall time, each row carries the polling thread's own CPU time
-  inside the same polls (`CLOCK_THREAD_CPUTIME_ID`, read around every poll):
-  `cpuUs`, `maxCpuUs` (the most CPU one poll spent), and
-  `pollsOverCpu1Ms`, `pollsOverCpu4Ms`, `pollsOverCpu16Ms` (polls strictly
-  above 1, 4 and 16 ms of thread CPU). CPU per poll is `Δ cpuUs / Δ polls`.
-  Thread CPU excludes time the guest scheduler gave other threads (a poll
-  preempted inside the VM), so a long poll whose CPU stays small waited for a
-  CPU.
-- `usage` (only with `RESTREAM_MEDIA_POLL_USAGE=1`, a diagnostic that adds
-  two `getrusage(RUSAGE_THREAD)` calls per poll): `all` sums every poll's
-  `userUs`, `sysUs`, `minorFaults` and `majorFaults`; `overCpu1Ms` sums the
-  same over the polls above 1 ms of thread CPU, which is where a
-  multi-millisecond tail shows whether the time went to user space (glibc,
-  the service) or to the kernel (page faults, reclaim, compaction). The
-  kernel apportions user and system time from tick samples, so the split is
-  meaningful over many polls, not for one; fault counts are exact.
-- `workers[]`: per Tokio worker `busyUs` and `parks`, plus
-  `globalQueueDepth`. These are empty/zero until the first media service starts
-  the runtime.
-- `queueLatency*`: spawn-to-first-poll delay of newly started services only.
-- `services[]` (full view only, so the summary stays fixed-size): one row per
-  running service with its `serviceId`, `class`, `pipelineId` and `stage`
-  (stage key, file ingest id, or `recording`), and the same poll, CPU and
-  `usage` counters as the class rows. This answers which feed and stage used
-  the pool: per-feed demand over a window is the sum of `Δ busyUs` (or
-  `Δ cpuUs`) over its rows. Subtract only
-  rows with the same `serviceId`: a restarted service (a new file-ingest
-  attempt) gets a new id and counts from zero, and a run being replaced can
-  be listed beside its successor with the same labels. A row starts at the
-  service's first poll and leaves when the service ends.
+- Thread CPU inside the same polls (`CLOCK_THREAD_CPUTIME_ID`): `cpuUs`,
+  `maxCpuUs`, and `pollsOverCpu1Ms`, `pollsOverCpu4Ms`, `pollsOverCpu16Ms`.
+  A long poll with small CPU time waited for a CPU.
+- `usage` (only with `RESTREAM_MEDIA_POLL_USAGE=1`; adds two
+  `getrusage(RUSAGE_THREAD)` calls per poll): `all` sums `userUs`, `sysUs`,
+  `minorFaults` and `majorFaults`; `overCpu1Ms` sums them over polls above
+  1 ms of CPU. The user/system split is tick-sampled, so read it over many
+  polls; fault counts are exact.
+- `workers[]`: per worker `busyUs` and `parks`, plus `globalQueueDepth`. Empty
+  until the first media service starts.
+- `queueLatency*`: spawn-to-first-poll delay of new services.
+- `services[]` (full view only): one row per running service with
+  `serviceId`, `class`, `pipelineId`, `stage` and the same counters. Subtract
+  only rows with the same `serviceId`: a restarted service gets a new id.
 
-`busyUs` is wall time. On a VM the hypervisor can deschedule a vCPU inside a
-poll without the guest reporting steal (measured 20–128 ms gaps on the capacity
-host), so busy time inflates on such hosts — and so does thread CPU: a guest
-that does not account steal charges the lost time to whichever thread was
-running. On the 6-vCPU reference VPS a thread that only spins on the two
-clocks saw 29 gaps over 1 ms in one idle-host minute (worst 9.3 ms), each
-charged to it as thread CPU. A `maxPollUs` or `maxCpuUs` in the
-milliseconds against microsecond-scale polls can therefore be a host stall
-rather than work; compare with the capacity ramp's host jitter probe before
-sizing `RESTREAM_MEDIA_WORKERS` or reading it as service cost.
+On a VM the hypervisor can deschedule a vCPU inside a poll without reporting
+steal. That time shows up as `busyUs` and as thread CPU. A millisecond
+`maxPollUs` or `maxCpuUs` against microsecond polls can be a host stall, not
+work. Check host jitter before you size `RESTREAM_MEDIA_WORKERS` from it.
 
-## Known instrumentation gaps
+### I/O and TLS capability
 
-These should be fixed before adding new timing work:
+`ioUring` is a cached probe of kernel io_uring features (`pollAdd`, accept,
+multishot receive, `sendZc`, `napi`, `deploymentTier`, ...).
+`available: false` means the host lacks or denies io_uring.
 
-- `RingBuffer::fill_and_capacity()` reports source-ring occupancy from the
-  slowest live reader and caps it at capacity. Per-reader snapshots expose live
-  lag and unread packet age.
-- `MemoryQueue::stats()` exposes current depth, capacity, high-water bytes,
-  blocked write count, blocked write time, and closed state. These counters
-  still need to be surfaced in higher-level graph/API snapshots where useful.
-- HLS and recording share the TS packet feeder.
-  Diagnostics must still avoid implying those mux paths are healthy merely
-  because their task/token is active.
+`rtmps` (RTMPS outputs) and `hlsPutTls` (HTTPS HLS PUT outputs) have the same
+process-lifetime counters: `connections`, `tls12`, `tls13`, `ktlsRequested`,
+`ktlsAttempts`, `ktlsSuccess`, `ktlsUnsupported`, `ktlsError`,
+`userspaceTlsConnections`, and `ktlsCapabilities` for TLS 1.2/1.3
+AES-128/256-GCM.
 
-## Future instrumentation
+- `ktlsRequested` is intent; `ktlsSuccess` is a completed kernel handoff.
+- `ktlsUnsupported` is an unsupported negotiated suite; `ktlsError` is a
+  handoff failure.
+- There is no userspace-TLS fallback. `userspaceTlsConnections` counts
+  connections dropped after the handshake but before kTLS handoff.
 
-Packet-residency and end-to-end lineage timing are not part of the current API
-contract. If added, they must preserve these boundaries:
+### SRT Owner datagram counters
 
-- no per-packet allocation, logging, serialization, or shared global lock;
-- application residence time remains separate from media PTS/DTS;
-- timing begins and ends only where the same packet identity survives;
-- transcoders terminate source-packet lineage because they create new packets;
-- task-local fixed-size aggregates publish compact snapshots at the existing
-  health/diagnostic interval;
-- every instrumentation change includes a before/after hot-path benchmark.
+`egressShards[].srtOwners[]` carries per-shard SRT Owner counters. `txClass`
+splits `txPackets` by `DatagramClass`: `dataFirst`, `dataRetransmit`, `ack`,
+`ackack`, `nak`, `keepalive`, `handshake`, `dropRequest`, `keyMaterial`,
+`shutdown`, `otherControl`. Their total must equal `txPackets`.
 
-Useful future analyses include queue residence, direct-ingest-to-egress
-latency, timestamp discontinuities, GOP stability, A/V interleaving, and
-publisher stalls. Decode-only properties should continue to use explicit
-readback evidence unless decoded frames already exist in the production path.
+`txBatchedSends`, `txCoalescedDatagrams` and `txGsoFallbacks` are UDP GSO
+counters: sends carrying more than one datagram, datagrams joined to a staged
+send, and times GSO was rejected and coalescing switched off. Only consecutive
+datagrams to the same address coalesce.
 
-This section records constraints, not an implementation sequence. Concrete
-work belongs in the [backlog](backlog.md) with a named proof and performance
-gate.
+## Telemetry, state and history
 
-## Prometheus and Grafana
+- **Engine and pipeline telemetry**: `/api/v1/engine/telemetry` returns
+  `ingests`, `inputs`, `stages`, `egresses`, `activeTranscoderBuffers` and
+  `memoryAccounting`. The pipeline route returns `ingest`, `sourceRing`,
+  `stages`, `egresses` and `delivery`. The stage route returns one stage row
+  or `404`.
+- **Measure**: `/api/v1/measure` returns fixed-shape totals for capacity
+  sampling: `pipelines`, `ingests`, `egresses`, `stages`,
+  `activeTranscoderBuffers`, `ingestBytesReceived`, retained and per-ring
+  payload bytes, and `delivery`.
+- **Overview**: `/api/v1/overview` derives `totalPipelines`,
+  `activePipelines`, `degradedPipelines` (pipelines with an alert),
+  `failedOutputs` (non-`running` outputs of live pipelines),
+  `alertCount.critical` / `.warning`, and `srtListener`.
+- **Runtime state**: `StateHub` holds the projection under an
+  `epoch.revision`. Lifecycle events, successful mutating requests and the
+  reconciler's retries-exhausted write mark it changed. `run_projector`
+  rebuilds on change, and once per reconcile interval while a stream client
+  is connected. With no client, reads refresh on demand and reuse a
+  projection younger than 500 ms (`ON_DEMAND_REUSE`). The stream sends
+  `snapshot` or `delta` events with `id: <epoch>.<revision>`, keeps 256
+  deltas for `?since=` / `Last-Event-ID` resumption, resyncs with a snapshot
+  when the gap is too old or the client lags, and sends a heartbeat every
+  20 s.
+- **Events**: `EventLog` (`src/events.rs`) keeps the last 1000 lifecycle
+  events in memory (`limit` defaults to 100). Types are `ingest.connected`,
+  `ingest.disconnected`, `ingest.probed`, `stage.registered`,
+  `stage.waitingForCapacity`, `stage.backendSpawned`, `stage.firstInput`,
+  `stage.firstOutput`, `stage.failed`, `stage.stopped`, `egress.started`,
+  `egress.stopped`, `egress.failed`. Each event is also persisted to the log
+  history.
+- **Fleet history**: `run_fleet_sampler` takes a sample every 5 s whether or
+  not anyone watches and keeps 24 h (`FLEET_HISTORY_SPAN`). Each sample has
+  `atMs`, `headroomPercent` (100 minus projected utilization, floored at 0),
+  `deliveringPercent` (wanted outputs that are converged and flowing; `null`
+  when none is wanted) and `degraded` counts by layer (`ingest`, `feed`,
+  `shard`, `destination`). The response adds `completeFromMs`, `intervalMs`
+  and `newestMs`. A restart forgets history.
 
-Restream does not expose a Prometheus text endpoint or bundle Grafana. Current
-metrics are authenticated JSON snapshots, principally `/metrics/system` and
-the engine/pipeline telemetry routes above.
+## Diagnostic checks
 
-If a Prometheus adapter is added, it should derive bounded snapshots from those
-current owners without labels, allocation, or collection work on packet loops.
+`POST /api/v1/pipelines/:id/diagnostics/run` takes no body. It picks the check
+set from the active ingest protocol and returns `404` without an active
+ingest. One run per pipeline holds a permit (`429` while one is running); a
+client disconnect does not stop the server batch, so blocking file analysis
+cannot overlap a retry.
+
+RTMP, SRT and HLS ingests:
+
+| # | Check | Notes |
+|---|---|---|
+| 1 | Engine Status | Ingest/egress state, uptime, bytes, source ring, max reader lag, overflows, max unread packet age |
+| 2 | Stream Info | Codec and track metadata |
+| 3 | GOP Analysis | Keyframe interval; media PTS when available |
+| 4 | Publisher Transport | RTMP `TCP_INFO`/`SO_MEMINFO` or SRT receiver statistics; bonded SRT reports bond identity and wire counters instead of logical loss counters |
+| 5 | Ring Buffer Health | Per-reader lag slots, overflows, unread packet age |
+| 6 | Active Outputs | Output state and bytes |
+| 7 | System Resources | CPU, RAM, disk |
+| 8 | Network Bandwidth | Host-wide interface rates |
+| 9 | SRT Listener Owner | SRT only: bonding, Owner fault, receive mode, peers, RX/TX, ring drops, truncation, admission, dropped telemetry samples |
+
+File ingests:
+
+| # | Check | Notes |
+|---|---|---|
+| 1 | Engine Status | Same core summary |
+| 2 | File Source | Path, existence, size, mtime, loop/start offset, live-optimized settings, codec/fps/duration, sparse-GOP warnings |
+| 3 | Stream Info | Runtime demux metadata |
+| 4 | GOP Analysis | Observed keyframe cadence |
+| 5 | File Ingest Runtime | Uptime, bytes injected, ingest id, registry and subprocess state |
+| 6 | Ring Buffer Health | Same reader view |
+| 7 | Preview & Recording | HLS preview and recording state |
+| 8 | Active Outputs | Output state and bytes |
+| 9 | System Resources | CPU, RAM, disk |
+
+The SRT Listener Owner check reports ring discards, truncation and Owner
+faults as issues. Buffer exhaustion is informational.
+
+## Alerts
+
+`derive_alerts` (`src/alerts.rs`, `src/alerts/output.rs`) is a pure function
+of a health snapshot. It returns alerts sorted critical first, then by
+pipeline and id. `AlertTracker` (`src/alerts/tracker.rs`) adds `firstSeen`
+and `lastSeen`.
+
+| Route | Snapshot | Tracking |
+|---|---|---|
+| `GET /api/v1/alerts` | All pipelines, no grace | Opens and resolves alerts; `?since=<RFC 3339>` adds `resolved` and `resolvedCompleteFrom` |
+| `GET /api/v1/pipelines/:id/alerts` | One pipeline, no grace | Resolves only that pipeline's alerts |
+| `GET /api/v1/pipelines/:id/summary` | Summary view | Stamps already-open alerts only |
+| `GET /api/v1/overview` | All pipelines, no grace | Counts only |
+
+The tracker keeps 256 resolved conditions. A restart forgets them.
+
+Each alert has `id` (stable per condition and entity), `severity`
+(`critical` or `warning`), `scope` (`engine`, `pipeline`, `stage`, `output`),
+optional `pipelineId` / `stageId` / `outputId`, `title`, `cause`, `evidence`
+(each `{ signal, confidence }`, where confidence is `measured` or `derived`),
+`recommendedAction`, `generatedAt`, and for output alerts `diagnosis`.
+
+### Engine alerts
+
+| Id | Severity | Fires when |
+|---|---|---|
+| `engine:runtime:nofile_limit_too_low` | warning | `runtimeLimits.nofile.satisfied` is `false` |
+| `engine:rtmp_listener:fd_exhaustion` | critical | `rtmpListener.fdExhaustionErrors > 0` |
+| `engine:egress_fabric:<proto>:<feed>:<shard>:panicked` | critical | Shard `state = panicked` |
+| `…:stalled` | warning | Shard made no progress for 10 s |
+| `…:stopped` | warning | Shard stopped while outputs are still assigned |
+| `…:command_overload` | warning | `commandDepth / commandCapacity ≥ 80%` |
+| `…:repeated_resync` | warning | Shard `resyncCount ≥ 5` |
+
+### Pipeline and stage alerts
+
+| Id | Severity | Fires when |
+|---|---|---|
+| `pipeline:<id>:no_publisher` | critical | `input.status = off` |
+| `pipeline:<id>:input:srt_recv_buffer_saturated` | warning ≥ 80%, critical ≥ 95% | `srtRecvBufPackets / srtRecvBufCapacityPackets` |
+| `pipeline:<id>:stage:<reader>:lag` | warning | Reader `lagSlots > 256` |
+| `pipeline:<id>:stage:<reader>:overflow` | warning | Reader `overflowCount > 0` |
+| `pipeline:<id>:stage:<kind>:failed` | warning | Stage phase `failed` |
+| `pipeline:<id>:stage:<kind>:no_output` | warning | Phase `runningNoOutputYet`, input seen, no output yet |
+| `pipeline:<id>:stage:<kind>:waiting_for_keyframe` | warning | `hls` or `preview:*` stage in `waitingForKeyframe` |
+| `pipeline:<id>:stage:<kind>:capacity_exhausted` | warning | Phase `waitingForCapacity` or `capacityWaitMs ≥ 5000` |
+
+### Output alerts
+
+Each output is reduced to `OutputSignals` and diagnosed once
+(`src/application/diagnosis.rs`). The cause picks at most one alert, with id
+`pipeline:<id>:output:<output>:<code>`. All are warnings.
+
+| Code | Cause |
+|---|---|
+| `blocked_by_stage` | The upstream stage is not producing |
+| `egress_capacity_refused` | Admission refused: the feed's least-loaded shard is at its load ceiling |
+| `retry_admission_saturation` | Retrying with `retryAttempts ≥ 80%` of `outputMaxRetries` (`RESTREAM_OUTPUT_MAX_RETRIES`) |
+| `failed_phase` | The destination rejected the output and `phase = failed` |
+| `not_running` | The destination rejected the output in another phase |
+| `send_path_stalled` | `backpressureReason = stalled` |
+| `stale_progress` | Bytes sent, then `lastProgressAgeMs ≥ 10000` |
+
+No output alert is raised when the cause is upstream or transient: no
+publisher (the pipeline alert covers it), a panicked, stalled or stopped shard
+(the shard alert counts `affectedOutputs`), an exhausted retry budget, or
+backpressure within the deadline. Output alerts list the layers ruled out as
+derived evidence.
 
 ## Logging
 
-Restream uses `tracing` for process logs and lifecycle events. A callsite emits
-one structured event; the logging subsystem writes it to the console, an
-optional daily JSON file, and SQLite-backed history. Persisted rows are then
-broadcast to authenticated SSE clients.
+Restream uses `tracing` for process logs and lifecycle events. One callsite
+emits one structured event. The subscriber writes it to the console, an
+optional daily JSON file, and SQLite history. Committed history rows are then
+broadcast to SSE clients.
 
-This guide owns the runtime design, level policy, and callsite rules. The
-[API reference](api-reference.md#process-logs) owns request and response
-details, while [configuration](configuration.md) owns environment variables
-and defaults.
+[Configuration](configuration.md) owns the environment variables and the
+[API reference](api-reference.md#process-logs) owns the log API contract.
 
 ### Data flow
+
+The three subscriber layers in `src/logging.rs` and the SSE handoff:
 
 ```mermaid
 flowchart TD
     Callsite["tracing callsite"]
-    Console["console layer"]
-    File["non-blocking file layer"]
-    Db["non-blocking database layer"]
+    Console["fmt layer (SplitWriter)"]
+    File["JSON file layer (non_blocking)"]
+    Db["DbLayer"]
     Streams["stdout / stderr"]
     Daily["restream.log.YYYY-MM-DD"]
-    Channel["bounded channel"]
-    Commit["batched SQLite commit"]
-    Broadcast["broadcast persisted row"]
+    Channel["mpsc channel (4096)"]
+    Commit["batched app_logs commit"]
+    Broadcast["broadcast channel (256)"]
     Sse["/api/v1/logs/stream"]
 
     Callsite --> Console --> Streams
@@ -673,76 +623,56 @@ flowchart TD
     Callsite --> Db --> Channel --> Commit --> Broadcast --> Sse
 ```
 
-There are three subscriber layers. SSE is not a fourth tracing layer: the
-background database task broadcasts rows only after their transaction commits,
-so reconnect cursors always refer to durable positive IDs.
+SSE is not a fourth layer. The drain task broadcasts rows only after their
+transaction commits, so every stream ID is a durable database ID.
 
-`Cargo.toml` enables `tracing`'s `max_level_debug` feature, so `trace!`
-callsites are compiled out. `RUST_LOG`, defaulting to `info`, filters the
-console and file layers. SQLite history independently retains all compiled
-`error`, `warn`, and `info` events.
+### Level filtering
+
+- `Cargo.toml` enables `tracing`'s `max_level_debug`, so `trace!` is compiled
+  out.
+- `RUST_LOG` (default `info`) filters the console and file layers.
+- SQLite history keeps every compiled `error`, `warn` and `info` event,
+  independent of `RUST_LOG`.
 
 ### Level policy
 
 | Level | Use it for |
 |---|---|
-| `error` | A system fault stopped a task or delivery path and requires operator attention: database failure, panic, unrecoverable allocation/setup failure, or a crashed media worker. |
-| `warn` | A recoverable or client-caused condition: rejected authentication, malformed input, destination refusal followed by retry, transient network failure, or enforced resource limit. |
-| `info` | An operator-visible lifecycle transition: server readiness, ingest connect/disconnect, output start/stop/retry, recording transition, or codec discovery. |
-| `debug` | Investigation detail about internal mechanisms, reconciliation, registry changes, or setup that would obscure normal lifecycle events. |
+| `error` | A system fault stopped a task or delivery path and needs an operator: database failure, panic, unrecoverable setup failure, crashed media worker |
+| `warn` | A recoverable or client-caused condition: rejected auth, malformed input, destination refusal followed by retry, transient network failure, enforced limit |
+| `info` | An operator-visible lifecycle transition: server ready, ingest connect/disconnect, output start/stop/retry, recording transition, codec discovery |
+| `debug` | Internal detail: reconciliation, registry changes, setup |
 
-Two questions usually settle the level:
+Two questions usually decide:
 
 1. Did the system lose the ability to deliver this task or stream? Use
-   `error`; otherwise prefer `warn` for a condition it can reject or recover.
-2. Would an operator need the event to reconstruct the lifecycle? Use `info`;
-   otherwise use `debug`.
+   `error`. If it can reject or recover, use `warn`.
+2. Does an operator need the event to rebuild the lifecycle? Use `info`.
+   Otherwise use `debug`.
 
-Do not promote destination failures to `error` merely because they are
-important to one output. If the reconciler will retry a remote refusal, it is a
-recoverable `warn`; emit `error` when the local delivery task itself cannot
-continue safely.
+A remote refusal the reconciler will retry is `warn`, not `error`. Use
+`error` when the local delivery task cannot continue safely.
 
-### Sinks and persistence
+### Sinks
 
-#### Console
-
-`error` and `warn` go to stderr. `info` and `debug` go to stdout. Both use the
-standard text formatter with module targets; ANSI color follows the configured
-`no_color` setting.
-
-#### Daily file
-
-The file layer writes JSON through `tracing_appender::non_blocking`. It rolls
-daily under `RESTREAM_LOG_DIR` using names such as
-`restream.log.2026-07-14`. The default directory is `.restream/logs/`; an empty
-value disables this sink. `LoggingHandles` retains the writer guard for the
-process lifetime so buffered events flush during shutdown.
-
-`RESTREAM_LOG_RETENTION_DAYS` applies to SQLite history cleanup, not deletion
-of rolled files. File retention belongs to the host or container log policy.
-
-#### SQLite history and SSE handoff
-
-The database layer accepts `error`, `warn`, and `info` events. Its callsite path
-uses `try_send` into a bounded channel with capacity 4096 and never waits for
-SQLite. If the channel is full, the event is dropped rather than applying
-backpressure to application work.
-
-The background task collects at most 64 rows or waits 100 ms, then commits the
-batch to `app_logs`. Only committed rows are broadcast. The broadcast channel
-holds 256 rows; a lagged SSE receiver is closed so the client can reconnect and
-backfill from its last durable event ID.
-
-SQLite history retains `RESTREAM_LOG_RETENTION_DAYS` days, defaulting to seven.
-The reconciler performs cleanup periodically.
+- **Console**: `error` and `warn` go to stderr; `info` and `debug` go to
+  stdout. Text format with module targets; ANSI color follows `no_color`.
+- **Daily file**: JSON through `tracing_appender::non_blocking`, rolled daily
+  as `restream.log.<date>` under `RESTREAM_LOG_DIR` (default
+  `.restream/logs`; empty disables it). `LoggingHandles` keeps the writer
+  guard for the process lifetime so buffered events flush at shutdown.
+  Restream does not delete rolled files; use host log rotation.
+- **SQLite history**: `DbLayer` uses `try_send` into a 4096-entry channel and
+  never waits; when full, the event is dropped. The drain task commits up to
+  64 rows or every 100 ms to `app_logs`, then broadcasts them on a 256-row
+  channel. The reconciler deletes rows older than
+  `RESTREAM_LOG_RETENTION_DAYS` (default 7).
 
 ### Pipeline and output context
 
-Long-lived work should carry `pipeline_id` and, when applicable, `output_id`.
-Callsites may provide those fields directly or inherit them from an enclosing
-span. For spawned async work, instrument the future so the context crosses the
-task boundary:
+Long-lived work carries `pipeline_id` and, where it applies, `output_id`,
+directly or from an enclosing span. Instrument spawned futures so the context
+crosses the task boundary:
 
 ```rust
 let span = tracing::info_span!(
@@ -754,65 +684,69 @@ let span = tracing::info_span!(
 tokio::spawn(run_output().instrument(span));
 ```
 
-Lifecycle events also provide stable `event_class` and `event_type` fields.
-The dashboard uses those fields to group history without parsing human-readable
-messages.
+Lifecycle events also set `event_class` and `event_type`. The dashboard groups
+history by those fields, not by message text.
 
-### Query and live-tail API
+### Query and live tail
 
-Both endpoints require an authenticated session:
-
-- `GET /api/v1/logs` returns persisted rows and supports level, time, target,
-  scope, pipeline, output, event-class, message-prefix, cursor, ordering, and
-  limit filters.
-- `GET /api/v1/logs/stream` returns `event: log` SSE frames, supports the core
-  scope filters, and sends a heartbeat every 20 seconds.
-
-The stream resumes from the `Last-Event-ID` header or `last_event_id` query
-parameter. Backfill reads SQLite in ascending ID order before switching to the
-live broadcast. If the receiver falls behind, the server closes the stream;
-browser reconnection resumes from the last delivered durable ID.
-
-See the [process-log API reference](api-reference.md#process-logs) for the
-complete filter and response contract.
+- `GET /api/v1/logs` returns stored rows. Filters: `level`, `since`, `until`,
+  `target`, `scope`, `pipeline_id`, `output_id`, `event_class`, `prefix`,
+  `after_id`, `order`, `limit` (default 200).
+- `GET /api/v1/logs/stream` sends `event: log` SSE frames with the row ID as
+  `id`. It takes the scope filters, resumes from the `Last-Event-ID` header or
+  `last_event_id` query, backfills from SQLite in ascending ID order, then
+  switches to the live broadcast. Heartbeat every 20 s. A lagging receiver is
+  closed so the browser reconnects from its last durable ID.
 
 ### Callsite rules
 
-- Use structured fields instead of embedding identifiers in message text.
-- Keep messages stable and human-readable; use `event_type` for machine-facing
-  lifecycle classification.
-- Do not add `[module]` prefixes. The tracing target already identifies the
-  source module.
-- Never log inside packet-level push, pull, read, mux, demux, or send loops.
-- Control operations such as stage creation, reader registration, resize, or
-  teardown may log at `debug` or `info` according to operator value.
-- Passing tests should not emit expected warnings, panic text, or media-tool
-  chatter. Suppress expected noise at the test helper.
-- Keep point-in-time callsite inventories in dated evidence, not this guide.
-
-For a level audit, enumerate current callsites from `src/`, apply the policy
-above, fix mismatches with scoped tests, and update this document only when the
-policy or an invariant changes.
+- Put identifiers in structured fields, not in message text.
+- Keep messages stable and readable; use `event_type` for machine
+  classification.
+- Do not add `[module]` prefixes; the target names the module.
+- Never log inside packet-level push, pull, read, mux, demux or send loops.
+- Control operations (stage creation, reader registration, resize, teardown)
+  may log at `debug` or `info`.
+- Passing tests must not print expected warnings, panic text or media-tool
+  output. Suppress expected noise in the test helper.
 
 ### Implementation map
 
-| Concern | Source of truth |
+| Concern | Source |
 |---|---|
-| Subscriber layers, span inheritance, batching, post-commit broadcast | `src/logging.rs` |
-| Shared log DTOs and filters | `src/logging/types.rs` |
+| Subscriber layers, span inheritance, batching, broadcast | `src/logging.rs` |
+| Log DTOs and filters | `src/logging/types.rs` |
 | SQLite schema | `src/db/schema.rs` |
-| Persistence and filtering queries | `src/db/log_repo.rs` |
-| HTTP query and SSE behavior | `src/api/logs.rs` |
-| Route registration | `src/api/router.rs` |
-| Runtime defaults | `src/config.rs` and [configuration](configuration.md) |
+| Storage and filter queries | `src/db/log_repo.rs` |
+| HTTP query and SSE | `src/api/logs.rs` |
+| Routes | `src/api/router.rs` |
+| Defaults | `src/config.rs`, [configuration](configuration.md) |
 
 ### Invariants
 
 - No `println!` or `eprintln!` in `src/`; crate lints enforce this.
-- No logging in packet-level loops in `ring_buffer.rs` or `avio.rs`.
-- Subscriber callsites never block on SQLite or SSE consumers.
-- SSE publishes only rows that committed successfully and therefore have a
-  stable database ID.
-- The file writer guard outlives all application tasks that may emit logs.
-- Async work that needs pipeline/output inheritance uses `.instrument(span)`;
-  a temporary `span.enter()` guard must not be held across task boundaries.
+- No logging in packet loops in `ring_buffer.rs` or `avio.rs`.
+- Callsites never block on SQLite or SSE consumers.
+- SSE publishes only committed rows with a stable ID.
+- The file writer guard outlives every task that can log.
+- Async work that needs context uses `.instrument(span)`; never hold a
+  `span.enter()` guard across a task boundary.
+
+## Known gaps
+
+- Egress parity gaps: no post-egress media metadata, GOP cadence or timestamp
+  validation, and no loopback/readback probe for RTMP/SRT outputs. Sender
+  counters do not prove what a receiver got.
+- `RingBuffer::fill_and_capacity()` reports occupancy from the slowest live
+  reader, capped at capacity.
+- `MemoryQueue` (`src/media/avio.rs`) tracks high-water bytes and blocked
+  writes internally, but no API or graph snapshot exposes them.
+- HLS and recording share the TS packet feeder. An active task or token does
+  not prove those mux paths are healthy.
+- There is no packet-residency or end-to-end latency timing. Any future
+  instrumentation must avoid per-packet allocation, logging, serialization
+  and global locks; keep residence time separate from PTS/DTS; stop lineage at
+  transcoders; publish fixed-size aggregates at the existing snapshot cadence;
+  and come with a before/after hot-path benchmark.
+- A Prometheus adapter, if added, must read these same snapshots without
+  labels, allocation or collection work on packet loops.

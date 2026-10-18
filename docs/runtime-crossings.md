@@ -1,333 +1,157 @@
-# Runtime Crossings Audit
+# Runtime crossings
 
-Every place media or protocol work crosses between execution contexts
-(Compio/io_uring owners, Tokio, FFmpeg threads), with its mechanism, rate,
-bound, measured cost where available, and a verdict: **justified** (the
-crossing buys ownership, isolation or backpressure worth its cost),
-**fixed** (a cheaper form landed), or **measure** (plausibly material at
-scale; the WI8 instrument that decides it is named), or **interim** (bounded
-and safe, but continuous media work on the Tokio control runtime: boundedness
-proves safety, not that Tokio is the right steady-state executor; the work is
-moving to the owner that publishes the feed). Updated as crossings change.
+This page lists every place media or protocol work crosses between execution
+contexts: Tokio CONTROL, the Compio owners, the media executor, egress shards
+and FFmpeg threads. Each row gives the mechanism, rate, bound and a verdict.
+Row IDs are stable; source comments cite them.
 
-Execution contexts:
+Verdicts:
 
-```text
-Tokio CONTROL    API, DB, pipeline state, session lifecycle, HLS PUT uploads;
-                 still media: lightweight audio routers, diagnostic RTMP play
-Compio/io_uring  RTMP ingress owner (one) and SRT ingress Owner (one), each
-                 running its ingest media to completion (parse/demux, gate,
-                 timestamps, GOP, ring publish); direct SRT play on the SRT
-                 Owner; egress fabric shards (RTMP/RTMPS/SRT), woken
-                 directly by the publishing thread
-Media executors  fixed pool (`restream-media`): shared SRT TS muxing, HLS
-                 segmenting (TS and fMP4), recording feeder, external file demux
-                 and ring publication
-FFmpeg threads   transcoders: one stdin-writer thread and one stdout thread
-                 per external `ffmpeg` child
-Disk             blocking file writer threads
-```
+- **Justified**: the crossing buys ownership, isolation or backpressure that
+  is worth its cost.
+- **No media crossing**: media stays on one context; only lifecycle or
+  telemetry crosses.
+- **Open**: plausibly material at scale; the measurement reference that
+  decides it is named.
 
 ## Contents
 
+- [Execution contexts](#execution-contexts)
 - [Media crossings](#media-crossings)
+- [MoQ crossings](#moq-crossings)
 - [Control and wake crossings](#control-and-wake-crossings)
 - [Observability crossings](#observability-crossings)
-- [Open measurement items](#open-measurement-items)
+- [Measurement references](#measurement-references)
+
+## Execution contexts
+
+| Context | Threads | Runs |
+|---|---|---|
+| Tokio CONTROL | `restream-tokio` workers | API, DB, reconciler, pipeline and session lifecycle, HTTP HLS serving and push requests, Reqwest HLS PUT fallback, diagnostic RTMP play reader |
+| RTMP ingress | `restream-rtmp-compio-owner-N` (`RESTREAM_RTMP_INGRESS_OWNERS`, default 1) | RTMP parse and publish to completion; direct RTMP play sockets |
+| SRT ingress | `srt-in-PORT[-N]` (`RESTREAM_SRT_INGRESS_OWNERS`, default 1) | SRT receive, TS demux and publish to completion; direct SRT play |
+| MoQ ingest and origin | `moq-ingest` (one Compio runtime) | MoQ/QUIC and WebTransport sessions, CMAF demux, publish, local origin |
+| Media executor | `restream-media` (fixed pool, `RESTREAM_MEDIA_WORKERS`) | Shared SRT TS muxing, audio routers, HLS segmenting, recording feed, file ingest demux, HLS push/pull assembly |
+| Egress shards | `egress-shard-N` (one Compio runtime each) | RTMP/RTMPS, SRT, HLS PUT, MoQ, sink and pipeline leaves ([Egress architecture](egress-architecture.md)) |
+| Egress DNS | RTMP resolver worker, `srt-dns-res`, `hls-put-resolve`; MoQ uses Compio `spawn_blocking` | Blocking `getaddrinfo` |
+| FFmpeg | `restream-ffin`, `restream-ffout` per child | Child stdin writes and stdout demux |
+| Disk | Guarded writer threads | Recording file writes |
+
+The diagram shows where media enters a ring and how it leaves. Labels are row
+IDs.
+
+```mermaid
+flowchart LR
+    RtmpIn["restream-rtmp-compio-owner-N"] -->|C1| Ring[("RingBuffer")]
+    SrtIn["srt-in-PORT"] -->|C3| Ring
+    MoqIn["moq-ingest"] -->|MQ3| Ring
+    Media["restream-media"] -->|C11, C14| Ring
+    Ring -->|C4| Mux["SharedTsMux on restream-media"]
+    Mux --> Ts[("TsChunkRing")]
+    Ring -->|C8| Ff["restream-ffin / restream-ffout"]
+    Ff --> Ring
+    Ring -->|C9| Store[("HlsStore")]
+    Ring -->|C5, W1| Shards["egress-shard-N"]
+    Ts -->|W1| Shards
+    Store -->|C13| Shards
+    Control["Tokio CONTROL"] -->|W2| Shards
+    Shards -->|W3| Control
+```
+
+"Off Tokio" on this page means off CONTROL. The media executor is a separate
+Tokio runtime with a fixed worker count (`src/media/executor.rs`).
 
 ## Media crossings
 
-| # | Crossing | Mechanism | Rate (8 Mbit/s stream) | Bound | Verdict |
+| # | Crossing | Mechanism | Rate | Bound | Verdict |
 |---|---|---|---|---|---|
-| C1 | RTMP publish: RTMP ingress owner → ring | none per packet: the owner parses each message and runs the publisher's media (`RtmpPublisherMedia`: sequence-header cache, timestamp mapping, input gate, GOP cache, ring publish) inline; the control session receives only lifecycle commands and the one-time media probe (`RtmpControlCommand::MediaProbe`) | lifecycle per session | unchanged control channel, no media on it | **Fixed (WI11 step 2).** Interleaved release A/B vs 8d037400, RTMP ingest only, 2 reps, ~7.65 Mbit/s per pipeline in both: Restream CPU 26/41–48/72–73% → 17/25–31/53–54% at 16/32/64 publishers, Tokio 11/17–21/29–31% → 5/6–8/13–14% (API polling and control), RTMP owner thread 14/22–26/39–40% → 11/17–21/36–37% (the per-message channel send and cross-runtime wake cost more than the media work that replaced them). The 64 MiB media handoff semaphore is gone. |
-| C2 | Direct RTMP play: Tokio control session ↔ Compio ingress owner | `PlayNext` request + oneshot reply carrying ≤ 32 `Arc<MediaPacket>` | one round trip per burst; bursts can be a single packet at the live edge | one outstanding burst per player | **Fixed; no scaling work.** Direct play from ingest is a debug/diagnostic path, not a production fan-out path. Requirements: it works with a real player (ffplay/ffmpeg), and an attached player does not interfere with the hot path (with/without-player A/B). The per-burst `info!` log is gone, the burst `Vec` is recycled, and client commands are now read during playback. |
-| C3 | SRT publish: SRT ingress Owner → ring | none per packet: every received payload is demuxed, gated, timestamp-mapped, GOP-cached and published on the Owner thread (`ingress_media`); the Owner↔Tokio bridges carry session lifecycle only (connect/auth, the one-time stream probe, disconnect) | lifecycle events per session | unchanged bridges, no media on them | **Fixed (WI11 step 1).** Interleaved release A/B vs 763ba5d7, SRT ingest only, 2 reps: at 32 publishers Restream CPU 101–111% → 71–80%, Tokio 41–43% → 10–11% (API polling and control), SRT Owner thread 60–67% → 60–69%, bridge-full visits 1,458–1,540 → 0 per window, ingest ~7.8 Mbit/s per pipeline throughout. Owner media cost ~4–5 µs per payload. The 20–128 ms single-payload stalls (`mediaSlowPasses20ms`) are the VPS, not Restream: a per-phase timing build showed them landing in whatever phase was running (a no-op drain took 30 ms; the thread CPU clock jumped 40 ms across 1.5 µs of wall time), and an empty spin loop pinned to an idle Restream CPU lost 43 gaps over 5 ms in 30 s (worst 122 ms, ~3% of wall time) with zero reported steal: hypervisor descheduling of the vCPU. Also ruled out by interleaved A/B: allocator (glibc 2 or default arenas, mimalloc, jemalloc) and isolating the Owner thread on its own CPU. SRT latency and receive buffers absorb gaps of this size (ingest held ~7.9 Mbit/s). `cargo xtask host-jitter` measures it and the capacity ramp records it per Restream CPU. Next: Owner sharding for publishers per core. |
-| C4 | Ring → SRT egress: shared TS muxer | one task per unique (pipeline, preset) on the media executor pool (`restream-media`) reads the ring and writes `TsChunkRing`; shards read it | per packet, **once per feed** (not per output) | TS ring capacity | **Fixed (WI11 step 3b).** Muxing once per feed and sharing TS chunks keeps SRT mux cost O(feed). The media task waits for engine metadata, then packages bounded bursts and yields; it never runs on the control scheduler. |
-| C5 | Ring → RTMP/RTMPS egress | fabric shards read `RingFeed` directly (atomic cursor); Raw→FLV converted once per shard (`egress_payload_cache`) | no per-packet crossing, only wakes (W1) | ring capacity, per-leaf cursors | **Justified** (already the cheap form). |
-| C7 | Direct SRT play: SRT ingress Owner | the Owner pulls each reader's TS chunks and sends through the peer (window deferral and overload disconnect unchanged) | per TS chunk per player, on the Owner | per-peer deferral bound | **Fixed (WI11 step 1).** No Tokio in the path. Diagnostic only; `srt.policy` in the `direct-play` CI shard checks it plays (plain and encrypted reads decode cleanly). |
-| C8 | Ring → FFmpeg stage input and output | one dedicated stdin-writer thread pulls the source ring through `StageInputPump::into_queue_refill` (`StageInputRefill::refill`) and writes the child's stdin; one stdout thread demuxes into the output ring | none: no producer task or queue hop | pipe back-pressure | **Fixed (WI11).** No Tokio in the stage data path. The Tokio stage task only waits for cancellation or the stage ending, then cleans up. |
-| C9 | Ring → HLS segmenter | TS/fMP4 muxing, keyframe detection, and segment accumulation run on media workers; CONTROL owns lifecycle registration and observes executor failure | per packet, once per pipeline / rendition | packet bursts bounded; accumulator grows until a segment boundary; store limits retained segments | **Fixed (WI11 step 3b).** Dropping CONTROL requests cancellation but lets media flush its final segment. Cleanup and failure reporting are lifecycle-generation qualified. HTTP serving and snapshots remain on CONTROL. |
-| C10 | Ring → Recording feeder | `feed_recording` runs on the media executor pool (`restream-media`), pulling the ring and writing to `MemoryQueue` with a cooperative yield per burst; guarded OS thread owns disk writes | per packet, once per recording | AVIO queue capacity | **Fixed (WI11).** Continuous recording TS preparation offloaded from the Tokio control runtime. `MemoryQueue` is benchmarked by `avio_throughput`. |
-| C11 | External file ingest: child stdout → Ring | Child stdout pipe detached from the control reactor and pumped on the media executor pool (`restream-media`); `TsDemuxer`, continuous timestamps, input gate, and ring publish stay off Tokio | per stdout read burst | 64 KiB read buffer, ring capacity | **Fixed (WI11).** Continuous file demux and publication offloaded from the Tokio control runtime; timestamp continuity preserved across loop restarts. |
+| C1 | RTMP publish: ingress owner → ring | The owner parses each message and runs `RtmpPublisherMedia` inline: sequence-header cache, timestamp mapping, input gate, GOP cache, ring publish. The CONTROL session receives lifecycle commands, the one-time `RtmpControlCommand::MediaProbe` and quality reports | lifecycle per session | no media on the control channel | **No media crossing.** |
+| C2 | Direct RTMP play: CONTROL session ↔ ingress owner | `PlayNext` request; oneshot reply with ≤ 32 `Arc<MediaPacket>` (`MEDIA_PULL_BURST_PACKETS`) in a recycled `Vec` | one round trip per burst; a burst can be one packet at the live edge | one outstanding burst per player | **Justified.** Diagnostic path, not production fan-out. It must play with ffplay/ffmpeg and must not disturb the publish path. |
+| C3 | SRT publish: ingress Owner → ring | Each payload is demuxed, gated, timestamp-mapped, GOP-cached and published on the Owner thread (`src/media/srt/ingress_media.rs`). Owner↔CONTROL bridges carry connect/auth, the one-time probe, disconnect, and a lossy quality feed | lifecycle per session | no media on the bridges | **No media crossing.** Per-packet allocations on this thread contend on the allocator, so packet paths avoid them. |
+| C4 | Ring → SRT egress: shared TS muxer | `start_shared_ts_muxer` runs as `MediaServiceClass::SharedTsMux` on `restream-media`. It reads the ring in bounded bursts, writes `TsChunkRing` and yields. One muxer per `(pipeline, stage key)`; with `RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD` > 0 a feed's outputs split across up to `RESTREAM_SRT_EGRESS_MUXER_MAX_SHARDS` (64) muxers | per packet, once per muxer, not per output | TS ring capacity | **Justified.** Mux cost scales with feeds, not outputs. |
+| C5 | Ring → RTMP/RTMPS egress | Shards read `RingFeed` by cursor. Raw→FLV conversion is memoized per shard (`SharedRtmpPayloadCache`, 64 entries); a lagging output may reconvert after eviction | no per-packet crossing; wakes only (W1) | ring capacity; per-leaf cursor | **Justified.** |
+| C7 | Direct SRT play | The SRT ingress Owner refills each reader's `TsChunkReader` and sends through the peer; window pressure defers (≤ 32 per peer) or disconnects | per TS chunk per player | per-peer deferral bound | **No media crossing** on CONTROL. Diagnostic only; checked by the `direct-play` CI shard. |
+| C8 | Ring ↔ FFmpeg stage | `restream-ffin` pulls the source ring through `StageInputPump::into_queue_refill` (`StageInputRefill::refill`) and writes the child's stdin. `restream-ffout` demuxes stdout with `TsDemuxer` into the output ring | per packet | pipe backpressure | **No media crossing** on CONTROL. The CONTROL stage task only waits for cancel or end. |
+| C9 | Ring → HLS segmenter | TS and fMP4 segmenting run on `restream-media`. CONTROL registers the lifecycle and observes failure; dropping CONTROL cancels but lets media flush the last segment | per packet, once per pipeline or rendition | packet bursts; one open segment; store limits retained segments | **Justified.** HTTP serving stays on CONTROL. |
+| C10 | Ring → recording | `feed_recording` (`MediaServiceClass::Recording`) pulls the ring into a bounded `MemoryQueue`, yielding per burst; a guarded OS thread writes the file | per packet, once per recording | `MemoryQueue` capacity | **Justified.** Benchmarked by `benches/avio_throughput.rs`. |
+| C11 | External file ingest: child stdout → ring | The stdout pipe is detached from CONTROL and pumped as `MediaServiceClass::FileIngest`; `TsDemuxer`, timestamp continuity, gate and publish stay on `restream-media` | per read burst | 64 KiB read buffer; ring capacity | **No media crossing** on CONTROL. |
+| C12 | Source ring → audio router → output ring | `start_audio_router` runs as `MediaServiceClass::AudioRouter` on `restream-media` (`src/media/stage_runtime.rs`) | per audio packet | ring capacity | **No media crossing** on CONTROL. |
+| C13 | HLS store → HLS PUT egress | The segmenter publishes to `HlsStore`; a publication subscription wakes the HLS PUT shards directly (`engine_hls_egress_fabric.rs`). Fallback: the CONTROL Reqwest uploader (`src/media/hls/upload.rs`) when `RESTREAM_HLS_PUT_FABRIC` is off or HTTPS lacks kTLS | per segment and playlist | store retention; shard leaf capacity | **Justified.** |
+| C14 | HTTP HLS push ingest → ring | CONTROL accepts each PUT/POST and queues the object on a two-slot channel (`OBJECT_QUEUE`) to the session's `MediaServiceClass::HlsIngest` assembler on `restream-media`, which demuxes and publishes. Playlist parsing runs on `spawn_blocking` | per object | 2 queued objects per session; per-key upload slots | **Justified.** |
+| C15 | HLS pull ingest → ring | A CONTROL fetch task downloads playlists and segments; parsing runs on `spawn_blocking`; segments feed the same assembler path as C14 | per playlist and segment | as C14 | **Justified.** |
+| C16 | Pipeline recirculation: source ring → target ring | A pipeline shard reads `RingFeed` and calls `RecirculationInputPublisher::publish` into the target pipeline's ring, sharing `Arc<MediaPacket>` | per packet, on the shard | ring capacity; shard budgets | **Justified.** No serialization. |
+
+## MoQ crossings
+
+MoQ phase 1 uses moq-lite (`moq-net`) with the hang catalog over Compio QUIC
+(`src/media/moq/`). Ingest and the local origin share the `moq-ingest`
+thread. Relay output (`moqt://`) runs on egress shards. No MoQ media runs on
+CONTROL.
+
+| # | Crossing | Mechanism | Rate | Bound | Verdict |
+|---|---|---|---|---|---|
+| MQ1 | Listener start and stop | `listener::start` spawns `moq-ingest` with its own Compio runtime and reports readiness on a oneshot. Shutdown cancels a `CancellationToken`; the listener drains sessions for up to 1 s | once per process | — | **Justified.** |
+| MQ2 | Publisher admission and probe: `moq-ingest` → CONTROL → `moq-ingest` | `TokioLifecycle::admit` and `apply_probe` spawn CONTROL tasks and return `Admission` or a replacement ring on a oneshot; `finish` is fire-and-forget at disconnect | once per session; probe at most once | `RESTREAM_MOQ_MAX_CONNECTIONS` (64); probe hold 4 MiB / 2 s | **Justified.** |
+| MQ3 | MoQ track → ring | Track pumps run as futures inside the session on `moq-ingest`. `IngestTrack::push` converts hang frames or demuxes CMAF fragments; `PublisherMedia` gates, maps timestamps and publishes | per frame | 16 MiB per frame; CMAF init ≤ 1 MiB; ≤ 1 video and ≤ 8 AAC tracks | **No media crossing.** |
+| MQ4 | Origin attach: `moq-ingest` → CONTROL → `moq-ingest` | `Origin::attach` spawns a CONTROL lookup that returns the pipeline's ring and `MoqPublishStartup` | first viewer of a pipeline | `RESTREAM_MOQ_ORIGIN_MAX_VIEWERS` (64) | **Justified.** |
+| MQ5 | Ring → local origin | The ring's publication subscriber calls `ChannelWake::wake` on the producer thread (`flume::bounded(1)`, `try_send`). One Compio pump per served pipeline reads the ring and writes shared-`Bytes` hang frames to every viewer session | per publication, coalesced | 1 queued wake per pipeline; 64 units / ~1 MiB per pump batch | **Justified.** |
+| MQ6 | Output control: CONTROL → MoQ shard | `run_moq_fabric` installs a `MoqPublishStartup` in `SharedMoqStartupSource`, then dispatches `Add`; `Remove` at the end. Same command channel as W2 | per output attempt | W2 | **Justified.** |
+| MQ7 | Ring → MoQ relay egress | Feed wakes as W1. `MoqShardBackend` visits leaves; `MoqEngine` reads `RingFeed` and writes the broadcast. Each output has one Compio connection task on the shard runtime, linked by `LeafLink` | per bounded visit | `RESTREAM_EGRESS_VISIT_MAX_UNITS` and `_BYTES` per visit (the publisher does not check the time budget); one connection task per output | **No media crossing.** |
+| MQ8 | MoQ relay DNS | `compio::runtime::spawn_blocking` resolves a hostname; IP literals skip it | per connect | Compio blocking pool; no explicit timeout `[unverified bound]` | **Open.** No measurement yet. |
 
 ## Control and wake crossings
 
 | # | Crossing | Mechanism | Rate | Verdict |
 |---|---|---|---|---|
-| W1 | Feed wake: ring publish → egress shards | the producing thread calls the ring's publication subscribers after each publish, seal and end of stream; each fabric subscribes one waker per feed that sets every shard's `WakeGate` and `try_send`s `FeedWake` only on its clear-to-set transition (`subscribe_fabric_wakes`). The shard clears the gate before the backend checks heads; a full command channel preserves one atomic fallback hint for the active loop. A replacement ring shares the subscriber set, and dropping the subscription unsubscribes | per publish: two `ArcSwap` loads plus one gate swap per shard; ≤ 1 queued publication wake plus 1 fallback bit per shard | **Fixed (WI11 step 4; ordering/full-channel regressions from M9).** No Tokio task between publish and shard: the per-feed watcher task, its `Notify` round trip and its per-publish handle `Vec` clone are gone. The ring still knows nothing about egress (it calls an opaque `PublishWake`). Release A/B vs 7bccb734 (one ingest, 2 reps): RTMP×100 Restream CPU 44–49% → 37–38%, shards 23–28% → 18.5–19%, Tokio 11–12% → 9%. |
-| W2 | Egress commands: Tokio → shard | bounded flume (`RESTREAM_EGRESS_COMMAND_CAPACITY`, 1024) | control rate (add/remove/update) | **Justified.** |
-| W3 | Egress progress/quality: shard → Tokio/API | atomics for counters, `Mutex<PublisherQuality>` written once per second per leaf by the stall sweep | ≤ 1 Hz per leaf | **Justified.** |
-| W4 | SRT egress Owner events → shard → Tokio | bounded event queues drained per ready batch | connection lifecycle rate | **Justified.** |
-| W5 | Egress DNS resolution | resolver worker threads, bounded completion queue | per connect | **Justified** (blocking `getaddrinfo` off the owners). |
+| W1 | Feed wake: producer → egress shards | The producer calls the ring's `PublishSubscribers` after each publish batch, seal and end of stream. `subscribe_fabric_wakes` registers one `FabricWakers` per feed, which calls `FeedWakeHandle::deliver` per shard: a `WakeGate` swap, then `try_send(FeedWake)` only on clear-to-set. A full channel leaves one fallback bit. The shard clears the gate before reading heads | per publication: two `ArcSwap` loads plus one gate swap per shard; ≤ 1 queued wake + 1 fallback bit per shard | **Justified.** No watcher task between producer and shard. |
+| W2 | Egress commands: CONTROL → shard | Bounded flume channel per shard (`RESTREAM_EGRESS_COMMAND_CAPACITY`, default 1024); the manager checks free slots before sending | per add, update, remove | **Justified.** |
+| W3 | Egress progress and quality: shard → CONTROL/API | `EgressProgressSink`: relaxed atomics per visit; `Mutex<PublisherQuality>` and backpressure reason written by the stall sweep at most once per second per leaf; `terminated_unexpectedly` polled by `EgressTask` every 250 ms | ≤ 1 Hz per leaf for quality | **Justified.** |
+| W4 | SRT Owner events inside a shard | Owner event and failure queues drained per ready batch (`SrtOwners::drain_events`, ≤ 64 per pass). The Owner runs on the shard's own thread and runtime, so this is not a thread crossing; results reach CONTROL through W3 | connection and failure events | **No media crossing.** |
+| W5 | Egress DNS | RTMP: one resolver worker per shard, request and completion queues of 1024. SRT: lazy `srt-dns-res` worker per shard with bounded queues. HLS PUT: `hls-put-resolve`. MoQ: MQ8 | per connect | **Justified.** Blocking `getaddrinfo` stays off shard threads. |
 
 ## Observability crossings
 
-| # | Crossing | Finding | Verdict |
+| # | Crossing | Current state | Verdict |
 |---|---|---|---|
-| O1 | API telemetry → host/process sampling (`/metrics/system`, status, resource map, agent context) | Each request built a fresh `sysinfo::System::new_all()` and `refresh_all()`: every process on the host, with command lines, environments and per-thread task lists, on a Tokio worker. The capacity harness requests `/metrics/system` on every sampling tick and the dashboard polls it. In the RTMP×100 fan-out profile `restream-tokio` was 48.9% of Restream samples; 39.6% was axum request handling and 24.5% `build_system_metrics_snapshot` (22.4% `sysinfo::refresh_procs`). Media work on Tokio was small: the SRT ingest loop ~2% and TS demux < 1%. The host CPU% it reported was also wrong: `global_cpu_usage()` read from a just-created `System` has no previous sample to diff against. | **Fixed.** One long-lived sampler (`system_sampling::sampled_system`) refreshes host CPU usage (a real delta between calls), memory, and only Restream plus its children (`/proc/self/task/*/children`). Symbol-resolved release profiles, SRT → 100 RTMP outputs: `build_system_metrics_snapshot` 24.5% → 1.2% of Restream samples (`sysinfo::refresh_procs` 22.4% → gone). Interleaved A/B (5 reps, release binaries): Restream CPU median 49.1% → 40.1% (mean 49.6 → 37.9), delivery 100/100 throughout. The next Tokio item is the health snapshot at 9.5% of samples, which the harness also polls every second. |
-| O2 | API observation cost (health, telemetry) | Release profile RTMP×100 at 43b68dc0 (`symprof/now-rtmp100`, Restream ≈0.39 cores): API handling ~21% of Restream samples; health snapshot 7–10%, pipeline/engine telemetry ~5.5%, host sampling (sysinfo + `sample_host_settings`) ~2.5%. Inside the health snapshot, allocator calls are ~45% of its samples and `serde_json::Value` serialization ~36%; the per-output projection itself (`egress_runtime_json`) ~4%. The cost is building a `Value` tree per request and grows with output count; the capacity harness polls health and telemetry every second, so ramp CPU includes it. `sample_host_settings` rereads ~6 `/proc` and cgroup files per call (~1%). | **Partly fixed; the remaining cost is payload size.** #196 (typed serialization, host settings cache) measured per request (2026-10-01, release, 6-vCPU KVM guest, one pipeline with 500 live `sink://` outputs, Restream on CPUs 0–2, `restream-tokio` thread CPU minus interleaved idle windows, 3 windows × 2 interleaved reps per arm): `/api/v1/engine/health` 171 → 94 ms CPU (2.9 → 1.6 MB, −45%); `/metrics/system?view=summary` 78 → 5 ms (1.29 MB → 10 KB, −93%); `/api/v1/engine/telemetry` 70 → 65 ms and `/api/v1/pipelines/{id}/telemetry` 70 → 63 ms (1.56 MB each, unchanged within noise). Cost tracks bytes serialized (≈41–57 µs per KB, ≈3.2 KB per output per response). One sweep tick polls telemetry, health, summary, then health and pipeline telemetry again (`delivery::sample`): 560 → 320 ms of Tokio CPU per second at 500 outputs, i.e. ~32% of a core is still observation; payloads grow with output count (1000 outputs not measured). Sweep-level A/B (RTMP×100/×1000, SRT×50) could not resolve #196: the same binary's process CPU varied 18–27% (×100) and 88–130% (×1000) between reps. The API only reads what shards and leaves already publish and sends no shard commands, so it does not interrupt egress; it competes only with CONTROL work. Remaining candidates: per-output detail on request instead of in every response, and a compact view for the dashboard. The harness no longer polls health or telemetry per sample (Q-037): one fixed-shape `GET /api/v1/measure` replaces the engine telemetry, both health reads and the per-pipeline telemetry; `/metrics/system?view=summary` stays for the packet contract. Interleaved A/B before the change (2026-10-12, bench profile, RTMP×500, 5 runs per arm, 1 s vs 250 ms sampling): Restream CPU 55.4% vs 64.0% median, paired difference +1.7 points mean, +6.8 median, run-to-run spread 51–86%; polling cost is real but below run noise. Typed health views (2026-10-04, `benches/api_health.rs`, one pipeline with N fabric outputs, 3 interleaved rounds, medians): the full `/api/v1/engine/health` body is now serialized straight from typed views with no `Value` tree, 56.7 → 4.85 ms at 500 outputs (−91 %) and 6.52 → 0.80 ms at 50; in-process callers that still take a `Value` (alerts, agent, observability) 56.7 → 23.9 ms. JSON keys and values are unchanged (checked against the old builders over 640 input combinations). The summary view and telemetry endpoints still build a tree. |
+| O1 | API → host and process sampling (`/metrics/system`, status, resource map, agent context) | One long-lived sampler (`system_sampling::sampled_system`) refreshes host CPU (a real delta), memory, and only Restream and its children (`/proc/self/task/*/children`). If child lists cannot be read it refreshes all processes with minimal fields. Sampling runs on the requesting CONTROL worker | **Justified.** |
+| O2 | API observation cost (health, telemetry) | `/api/v1/engine/health` serializes typed views with no `Value` tree; `sample_host_settings` is cached for 15 s. Telemetry endpoints and the summary view still build `serde_json::Value` trees (`egress_runtime_json`), so their cost grows with output count. The capacity harness reads one fixed-shape `GET /api/v1/measure` per sample instead. The API reads what shards publish and sends no shard commands | **Open.** Remaining cost is payload size per output; `benches/api_health.rs` measures it. |
 
-## Open measurement items
+## Measurement references
 
-- **M1** RTMP publish handoff. Measured (2026-09-27, release, ingest only,
-  `ingest-growth-same` with `RESOURCE_SWEEP_INGEST_GROWTH_CONFIG=h264-rtmp`):
-  64 RTMP publishers at 8 Mbit/s held 7.5 Mbit/s each; per publisher the RTMP
-  ingress owner costs ~0.66% of a core and Tokio ~0.45% (API polling
-  included). Open: permit/queue wait p50/p99 is not instrumented.
-- **M2** (replaced) Direct play from ingest is a debug/diagnostic path. The
-  player check runs in CI (`direct-play` shard: ffprobe structure plus an
-  ffmpeg null-sink decode of SRT `read` and RTMP `play`); non-interference is
-  a with/without-player A/B when WI11 changes these paths. No scaling study.
-- **M3** SRT publish at N publishers. Measured (2026-09-27, release, ingest
-  only, Restream on 3 CPUs; window-only counter deltas from the harness's
-  `engine-health-*-start/end.json`): 8/16/24/32 publishers at 8 Mbit/s held
-  ~7.9 Mbit/s each, Restream 34/50–66/66–90/85–112% CPU. The Owner→Tokio
-  event bridge (256 shared) was full on a growing share of Owner passes:
-  74–100, 220–970, 590–1,140 and 1,330–2,030 `eventBridgeFullVisits` per
-  30 s window. Timing the `SrtServer::run` loop showed 1–5 passes per 5 s
-  over 20 ms (worst 86–215 ms), mostly waiting rather than on CPU
-  (`SrtServer::run` is ~0.7% of a core per publisher on CPU: TS demux 42%,
-  forwarding 21%). Ruled out by interleaved A/B: harness API polling rate
-  (1 s vs 5 s), running `SrtServer::run` on its own current-thread runtime
-  (steady state unchanged; it only helps while pipelines are being created),
-  and the malloc arena cap (2 vs glibc default). A 4096-slot bridge
-  (whole-run counters, growth included) had ~0 bridge-full visits but a
-  cumulative high-water of 4096, so it absorbs stalls without removing them;
-  the stall cause remains open. The harness cannot drive more than ~40 SRT
-  publishers on this host (libsrt publishers cost 6% of a harness core each).
-- **M4** Ingress owners. The SRT ingress Owner thread (`srt-in`) costs ~1.8%
-  of a core per 8 Mbit/s publisher (50–68% at 32), so one Owner saturates
-  near ~55 publishers: the first SRT ingest ceiling, before `SrtServer::run`
-  (~140 by its on-CPU cost). Moving demux off Tokio (WI11) does not lift it;
-  more Owners on the port (SO_REUSEPORT) would. The RTMP ingress owner is
-  ~0.66% per publisher (~150 per core).
-  **Measured with `RESTREAM_SRT_INGRESS_OWNERS=2`** (2026-10-04, release,
-  `ingest-growth-same` h264-srt ×32 at 8 Mbit/s, Restream on 4 vCPUs of a
-  6-vCPU KVM guest, 3 interleaved rounds): same delivery (~27k packets/s,
-  no ring drops, no bridge-full visits); the kernel's reuseport hash split
-  the 32 flows ~42/58. Per 20 s window `perf stat` gave the two Owners +2%
-  instructions and +10% cycles over one Owner, but +40% on-CPU time
-  (`srt-in` 50–58% → 68–82% by `/proc`): each Owner sees half the traffic,
-  so visits rise 36–55% with fewer packets each, and the extra park/wake
-  cycles cost time that is not guest cycles (effective clock 1.62 → 1.27 GHz;
-  steal reads 0; consistent with VM exits on timer arm and wake IPIs). Net on
-  this host: the hottest Owner drops from ~60% to ~49% at 32 publishers, so
-  K=2 lifts the per-Owner ceiling by ~20%, not 2×; the default stays 1. The
-  symbol mix is unchanged between K=1 and K=2 (no shared-state hotspot).
-- **M5** RTMP ingress owners, what is shared. Per-packet publish touches
-  only owner-local state (`RtmpPublisherMedia`, per-owner `ParserBudget`,
-  connection cap) plus the pipeline's own ring (`Arc::new(MediaPacket)` per
-  packet, `notify_waiters` and the publication wake per publish). Shared
-  across owners: the process allocator (glibc arenas default to 2, and a
-  packet is freed by whichever thread drops its last reference, owner or
-  reader), the single Tokio
-  control-session consumer (lifecycle, probe and 0.5 Hz quality only), the
-  engine registries (per-session setup only), the kernel (reuseport group,
-  loopback softirq, io_uring wakeups/IPIs; vCPU IPIs are expensive under
-  KVM). Measured at N ≤ 4 on 6 vCPUs: no contention signature (weak scaling
-  flat); losses are load dilution per owner and hash skew. Untested
-  candidates if a larger host shows inflation at fixed load per owner:
-  `MALLOC_ARENA_MAX` ≥ owners + shards, per-owner packet/buffer pools,
-  CPU-aligned connection steering (`SO_ATTACH_REUSEPORT_CBPF` on CPU id or
-  `SO_INCOMING_CPU`), and coalescing the per-publish `Notify`.
-- **M6** Media executor and SRT feed topology. One SRT feed at 4 Mbit/s with 4
-  and 16 outputs (2026-10-01, release, harness `media-executor-*-start/end.json`
-  window deltas): `sharedTsMux` ran ~27 polls/s for 146–174 ms of poll time per
-  15 s (≈1% of one worker), the other classes were idle, two of four workers
-  carried all of it, `globalQueueDepth` 0–1, and `maxPollUs` was 62 ms (a
-  lifetime maximum: a VM stall or startup, not shown to be work). The pool is
-  far from loaded at this size, so no sizing law follows from one feed; the
-  open question is many feeds plus HLS and recording. Per-feed egress
-  topology, measured (release, Restream pinned to 3 CPUs so `effective_cpus`
-  = 3, one RTMP-published pipeline with one SRT output to a local MediaMTX
-  per feed, 15 s settle): 1 / 4 / 8 feeds gave 17 / 32 / 50 threads and
-  76 / 165 / 280 MB RSS against 11–12 threads idle, i.e. each feed adds one
-  egress shard group of `clamp(effective_cpus, 2, 8)` threads
-  (`egress-shard-0..2`, one Compio runtime each) plus one `srt-dns-res`
-  thread, ≈ 4 threads and ≈ 28 MB (including the 12 MB source ring) per feed,
-  regardless of output count (`retain_srt_fabric_runtime`,
-  `SrtCpuParallel`). With all 6 CPUs that is 6 shard threads per feed: 8
-  feeds would run 48 shard threads on 6 CPUs.
-  Cost of the multiplication, same host and pinning, 8 SRT outputs of 4
-  Mbit/s (32 Mbit/s egress) to MediaMTX, process CPU over a 20 s window, 2
-  interleaved reps: 1 feed × 8 outputs 33–46%, 2 × 4 51–57%, 4 × 2 59–67%,
-  8 × 1 74–80% (context switches 2,000 → 6,000 per second, 20 → 51 threads,
-  80 → 285 MB). Of the 8 × 1 total, egress shards are 64–68%, versus 31–42%
-  for 1 × 8; the media pool adds 3–5% for eight muxers against 0.4%.
-  Forcing one shard per feed (`wi37-shard-bench`, `RESTREAM_WI37_SRT_SHARDS=1`,
-  interleaved against the default of 3): 8 × 1 77% → 70% (−9%), 1 × 8 43% →
-  28% (−35%), threads 51 → 35, RSS 285 → 211 MB. Two causes are
-  confounded in the topology and not separated: shard-thread overhead, and lost
-  send coalescing when fewer outputs share a shard (outputs sharing a
-  destination port share sends). Delivery was not checked per output in this
-  probe, so a single saturated shard could look cheaper than it is: one shard
-  ran 28% at 8 outputs, so it saturates near 25–30 outputs at this bitrate.
-  Delivery-checked follow-up (2026-10-02, release, one 4 Mbit/s feed, sink
-  receivers, 20 s windows): one shard delivered every output at 8–64 outputs
-  (ratio ≥ 0.97, Jain ≥ 0.999) at 19–51% shard busy, started losing outputs at
-  96 (92/96 delivered, 62% busy) and collapsed at 128 (0/128, 89% busy); two
-  shards delivered 96/96 and lost fairness at 128. **Adopted:** SRT and RTMP use
-  one service-demand law (`egress::sizing`): every feed starts with one shard;
-  before each new output the pool is sized from measured CPU per delivered bit
-  times the feed's bitrate at 50% target busy (cold prior 64 SRT / 128 RTMP
-  outputs per shard). Live outputs never move: growth serves new outputs only,
-  and shrink stops placing on the tail shard and stops its thread once its last
-  output leaves (60 healthy windows, 5-minute dwell, projected < 40% busy on one
-  shard fewer). A thread-cgroup run (CPU quota on shard 0, 48 → 88 → 8 SRT
-  outputs) confirmed no topology change under short or sustained pressure, a
-  shard added only for new outputs, the tail retired after the dwell, and every
-  surviving destination kept its original SRT connection with no failure,
-  retry or unexpected close. Cross-host qualification of the coefficient
-  (Q-025) remains open. Admission (Q-034): SRT and RTMP place each new output
-  on the least-loaded shard; an Add that would put that shard above 60% busy
-  after any growth it earns (the degradation began at 62%) is refused before
-  dispatch; the output reports `capacityRefused` at the shard layer and
-  retries on its restart backoff until its retry budget is spent. Admitted
-  outputs are never shed. A refused Add still counts toward growth, so it
-  may grow the pool (never past its ceiling); the new shard admits the next
-  output, and an empty one retires after the shrink dwell. Harness:
-  `srt.admission`.
-- **M7** Core segregation of CONTROL, MEDIA and HOT threads (Q-032).
-  Interleaved A/B (ABBAAB, 2026-10-14, bench build, 6 vCPUs, harness and
-  sink peers on CPUs 4-5, Restream on CPUs 0-3, 4 Mbit/s SRT-published feed,
-  30 s windows, `MSR_PEER=sink`). Shared (A): every thread on 0-3.
-  Segregated (B, `scripts/harness/restream-segregated.sh`): Tokio, SQLite
-  and the rest on 0, `restream-media` on 1, egress shards and ingress owners
-  on 2-3; both arms boot on 0-3, so every CPU-derived size is the same.
-  Run-queue wait is `/proc/<pid>/task/*/schedstat` (`threadRunQueuePct`,
-  % of one thread's wall time summed over the group's threads; `perf sched`
-  needs privileges this host does not grant). Both arms ran the srt-rs #157
-  build (arm B cannot connect SRT egress without it, below). Shard threads
-  were read 20 s after start.
+Each item gives the number a reader needs and where it came from. Full data
+is in the commit that recorded it.
 
-  | Workload | Arm | Process CPU % (runs) | Shard CPU % | Shards | Shard run-queue wait % | Delivered |
-  |---|---|---|---|---|---|---|
-  | SRT × 64 | A | 80.7, 68.9, 68.1 | 69, 58, 58 | 2, 2, 2 | 11.9, 8.0, 8.7 | 64/64 × 3 |
-  | SRT × 64 | B | 64.5, 63.1, 57.6 | 56, 55, 50 | 2, 2, 2 | 19.6, 18.6, 15.0 | 64/64 × 3 |
-  | RTMP × 100 | A | 12.6, 12.1, 16.5 | 5.7, 6.1, 8.4 | 2, 4, 4 | 0.1, 0.3, 0.5 | 100/100 × 3 |
-  | RTMP × 100 | B | 10.9, 10.1, 18.1 | 5.9, 5.3, 10.5 | 4, 4, 4 | 1.4, 1.2, 2.9 | 100/100 × 3 |
-
-  Segregation saved about 10% of process CPU at SRT × 64 (A's first run,
-  80.7%, ran hot; without it A averages 68.5% against B's 61.7%) and halved
-  Tokio's own CPU (1.3–1.7% → 0.6–0.9%; likely its workers no longer look
-  for work across four CPUs). But the hot threads, confined to two CPUs,
-  waited about twice as long to run, and at RTMP × 100 the CPU ranges of the
-  two arms overlap. Delivery was the same in both arms. **Decision:** keep
-  shared affinity. A fixed split takes CPUs from the egress shards exactly
-  when they need them, and the saving does not clear the run-to-run spread
-  at RTMP. The A/B found a real fault instead: srt-rs resolved
-  `WorkerCount::Auto` from the *calling thread's* affinity, so once threads
-  were pinned apart, every SRT egress caller after the first on a shard was
-  refused ("shared callers must use the same resolved transport settings",
-  0/64 delivered in three runs). srt-rs #157 reads the parallelism once per
-  process and uses explicit counts as given.
-- **M8** Many-feed egress topology (Q-033). 2026-10-14, bench build, Restream
-  on CPUs 0-3, harness and sink peers on 4-5, SRT-published 1.5 Mbit/s feeds,
-  20 s windows, 2 runs each. Matrix: `ingest-growth-same` with
-  `RESOURCE_SWEEP_INGEST_OUTPUTS=2` (every feed restreams 2 SRT outputs);
-  control: one feed with the same output counts (`egress-growth-source-srt`).
-
-  | Feeds × outputs | Process CPU % | Shard CPU % | Threads | RSS MB | Delivered |
-  |---|---|---|---|---|---|
-  | 1 × 2 | 21.3, 18.1 | 11.7, 10.0 | 16 | 59 | 2/2 |
-  | 4 × 2 | 44.2, 28.8 | 32.5, 21.8 | 23–24 | 95–100 | 8/8 |
-  | 8 × 2 | 64.7, 51.2 | 51.2, 40.8 | 32–35 | 160 | 16/16 |
-  | 16 × 2 | 107.8, 102.7 | 87.0, 84.0 | 51–52 | 291 | 32/32 |
-  | 1 × 32 (control) | 42.0, 37.8 | 34.7, 29.8 | 21–22 | 62–73 | 32/32 |
-
-  The same 48 Mbit/s over 32 connections costs 2.6× the shard CPU when it
-  comes from 16 feeds instead of one, with 2.4× the threads and about 4× the
-  RSS; the 16 ingest sessions and muxers add about 19% CPU on top (SRT
-  ingress Owner 15%, MEDIA 3.5%). That comparison also changes the feed
-  count, so it is not what a shared pool can recover: a pool still reads
-  and wakes for 16 feeds. From the control, an extra output costs about 0.7%
-  shard CPU, so a lone feed's own shard overhead at 1 × 2 is about 9.4%, and
-  each further feed adds about 5% shard CPU, 2.4 threads (one of them its
-  shard thread) and 15 MB (ingest buffers and the feed ring included). RTMP
-  outputs (same matrix, `rtmpSource`) were cheaper per feed (shard 11–12% at
-  16 × 2) but still added threads and RSS per feed (47–48 threads, 253–256
-  MB). Their median byte ratio was 0.951–0.965 of the ingest rate on every
-  rung (Jain ≥ 0.9997), close enough to the 0.95 floor that some outputs
-  grade under it; equal rates on every output point to container overhead
-  (MPEG-TS in, FLV out), not loss, though this run did not separate the two.
-  **Decision:** build a host-level shard pool (Q-033); its gate is the
-  per-feed shard cost, not the one-feed control.
-
-- **M9** Host SRT pool experiment (Q-033), 2026-10-14. **Rejected for
-  cutover: structural Owner failures no longer stay within one feed.**
-  Baseline `064a29b4`; dirty prototype preserved on the local experiment
-  branch at `d8c39b52` (not merged). Same M8 bench-profile workload, checked-in
-  H.264 1.5 Mbit/s fixture, `MSR_PEER=sink`, Restream on CPUs 0–3 and harness/
-  receivers on 4–5, 20-second samples, two serial runs per arm; no Cargo build
-  during samples. Many-feed counts 1/4/8/16 with two outputs per feed; control
-  one feed with 2/32 outputs. Every run's log contained zero `Compiling` lines.
-
-  | Feeds × outputs/feed | Arm | Process CPU % | Shard CPU % | Threads | RSS MiB | Delivered |
-  |---|---|---|---|---|---|---|
-  | 1 × 2 | base | 15.3, 19.0 | 8.5, 10.7 | 16, 17 | 59, 57 | 2/2, 2/2 |
-  | 1 × 2 | pool | 19.1, 12.6 | 10.1, 6.9 | 17, 17 | 54, 58 | 2/2, 2/2 |
-  | 4 × 2 | base | 42.6, 55.1 | 31.7, 42.1 | 23, 23 | 95, 92 | 8/8, 8/8 |
-  | 4 × 2 | pool | 27.5, 16.7 | 17.3, 8.6 | 19, 17 | 82, 80 | 8/8, 8/8 |
-  | 8 × 2 | base | 69.2, 91.1 | 55.2, 70.6 | 35, 36 | 156, 161 | 16/16, 16/16 |
-  | 8 × 2 | pool | 47.7, 30.6 | 31.4, 18.4 | 25, 21 | 127, 123 | 16/16, 16/16 |
-  | 16 × 2 | base | 110.4, 120.8 | 89.9, 96.4 | 52, 52 | 288, 291 | 32/32, 32/32 |
-  | 16 × 2 | pool | 55.6, 53.5 | 37.2, 29.5 | 28, 24 | 216, 210 | 32/32, 32/32 |
-  | 1 × 32 (control) | base | 55.3, 52.4 | 44.5, 43.9 | 26, 26 | 63, 79 | 32/32, 32/32 |
-  | 1 × 32 (control) | pool | 30.6, 53.9 | 25.5, 46.2 | 20, 24 | 62, 66 | 32/32, 32/32 |
-
-  Delivery is the harness's external receiver byte-rate gate (0.95 floor),
-  not a claim of packet-perfect delivery. Minimum destination ratio was
-  0.9566 in the pool arm; minimum Jain fairness was 0.9996. The many-feed
-  CPU/thread reduction is clear; the one-feed control is noisy. RSS still
-  grows with the retained ingest/feed state that pooling cannot remove.
-  The existing `egress_visit/yielding_engine` control benchmark measured
-  26.936 ns before and 31.497 ns in the prototype (overlapping confidence
-  intervals); its code is unchanged, and this synthetic visit does not
-  measure the pool scheduler or establish a pool hot-path regression.
-  After dropping pooling, the retained per-feed wake fix control measured
-  28.353 ns (interval 26.671–30.529 ns); Criterion detected no change. This
-  remains a visit control, not a benchmark of either wake-loss fix.
-
-  Proof results:
-  - Scoped pool lifecycle, mixed-rate admission, cross-feed payload/wake and
-    randomized placement/retirement tests passed; the shared wake models passed.
-  - A live three-feed, one-shard case froze one real MediaMTX destination for
-    20 seconds, then deleted that feed and watched another 10 seconds. All
-    four sibling receiver sessions kept their identities and advanced bytes
-    every five seconds, with no sibling retry, Owner fault or queue overflow.
-    RSS was 60,828→76,892 KiB during the freeze and peaked at 77,028 KiB after
-    teardown. This is a bounded watch, not an unbounded-time memory proof.
-  - The decisive counterexample used real SRT connections/delivery, then
-    injected the production `SrtShardBackend::fail_family(V4)` handler (not an
-    induced kernel failure). In the original per-feed backend control, only
-    the first output failed and the other continued delivering. In the
-    two-feed pool, both outputs' unexpected-termination flags were set. The
-    prototype acceptance probe
-    `host_pool_experiment_preserves_per_feed_owner_fault_isolation` failed.
-    Each pool shard shares an Owner across feeds; a structural Owner fault
-    therefore has a wider blast radius. [INFERENCE] A shard-thread failure
-    also spans the feeds assigned to it by ownership; no thread-failure run
-    was used to establish that extra risk.
-
-  **Decision:** keep per-feed production groups. Reduced CPU does not satisfy
-  the requested no-loss-of-isolation gate. A later pool design must preserve
-  the required failure domains or get an explicit change to that contract.
-  No RTMP/sink/pipeline pooling is inferred from this SRT experiment. Two
-  independent bugs found at the wake seam are fixed without changing topology:
-  clear the gate before the backend's head check, and keep one atomic fallback
-  hint when the command channel is full so the final publish is not stranded.
-  The fallback uses the existing gate's `AcqRel` swap convention and does not
-  clear an already queued wake's gate. It adds one bit, not another channel or
-  worker. Removing the queued wake's clear-before-check guard or disabling
-  the Full hint made the corresponding production-loop regression fail;
-  moving the retry model's head read before its swap-clear also failed.
-  The composed Full-plus-queued-wake regression also drives the production
-  loop: a new publication coalesces while the fallback is paused and the
-  queued wake later observes the final head. Adding a pending clear to the
-  fallback made that publication return `Full` instead of coalescing.
-  Final per-feed smoke, from a canonical bench rebuild with
-  `BENCH_BUILD=never`: `fault.srt-output-stall` passed. Frozen-destination RSS
-  grew 22,216 KiB (56,896→79,112 KiB), with retry and destination diagnosis
-  observed. The srt-rs receiver delivered 7,730 data events, remained connected
-  under backpressure, and both healthy siblings advanced. These are the
-  harness's bounded observation gates, not an unbounded-time memory proof.
+- **M1** RTMP ingress owner cost: about 0.66% of a core per 8 Mbit/s
+  publisher (release, ingest only, 64 publishers). Permit and queue wait
+  percentiles are not instrumented. Open.
+- **M2** Direct play (C2, C7) is diagnostic. CI's `direct-play` shard checks
+  structure with ffprobe and decodes SRT `read` and RTMP `play` to a null
+  sink. No scaling study.
+- **M3** SRT ingest at 8–32 publishers held ~7.9 Mbit/s each. The
+  Owner→CONTROL event bridge (`INGRESS_EVENT_CAPACITY` 256, plus
+  `PENDING_EVENTS_MAX` 1024 on the Owner) carries lifecycle only; media
+  never waits on it (C3). The harness drives at most ~40 SRT publishers on
+  the reference host.
+- **M4** SRT ingress Owner ceiling: about 1.8% of a core per 8 Mbit/s
+  publisher, so one Owner saturates near 55 publishers.
+  `RESTREAM_SRT_INGRESS_OWNERS=2` lifted the per-Owner ceiling about 20%, not
+  2×, on a 6-vCPU KVM guest; the default stays 1.
+- **M5** RTMP ingress owners share only the allocator, the CONTROL session
+  consumer, the engine registries and the kernel. At up to 4 owners on 6
+  vCPUs there was no contention signature. Candidates if a larger host shows
+  one: `MALLOC_ARENA_MAX`, per-owner pools, CPU-aligned reuseport steering.
+- **M6** Single-shard SRT capacity (one 4 Mbit/s feed, sink receivers,
+  delivery-checked): one shard delivered every output up to 64 at 19–51%
+  busy, lost outputs at 96 (62% busy) and collapsed at 128 (89% busy). This
+  sets the SRT cold prior (64 outputs per shard) and the 60% admission
+  ceiling in `src/media/egress/sizing.rs`. Cross-host qualification is
+  open.
+- **M7** Pinning CONTROL, MEDIA and hot threads to separate CPUs saved about
+  10% process CPU at SRT × 64 but doubled shard run-queue wait; at RTMP × 100
+  the ranges overlapped. Decision: keep shared affinity
+  (`scripts/harness/restream-segregated.sh` reproduces the split arm).
+- **M8** Many-feed cost (SRT, 1.5 Mbit/s feeds, 2 outputs each): each extra
+  feed adds about 5% shard CPU, 2.4 threads and 15 MB, against about 0.7%
+  shard CPU per extra output on one feed. A host-level shared SRT pool cut
+  that cost but let one structural Owner fault fail outputs of several
+  feeds, so production keeps one shard group per feed.

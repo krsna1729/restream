@@ -2,7 +2,7 @@
 
 Every page here describes Restream as it is now. History lives in git: a
 measured change records its numbers in its commit message, and a removed
-document is one `git log -- <path>` away.
+page is one `git log -- <path>` away.
 
 ## Contents
 
@@ -16,12 +16,14 @@ document is one `git log -- <path>` away.
 
 ## Start here
 
-1. [Project README](../README.md): setup, the daily loop, the codebase map.
-2. [Developer guide](development.md): prerequisites, scoped workflows,
-   worktrees for parallel agents.
-3. [Architecture](architecture.md): runtime and ownership boundaries,
-   dataplane invariants, layering rules.
-4. [Testing](testing.md): the narrowest proof gate for a change, proof maps,
+1. [Project README](../README.md): what Restream is, quick start, container
+   launch.
+2. [Developer guide](development.md): prerequisites, first build, daily
+   loop, worktrees, shared-host rules.
+3. [Architecture](architecture.md): the system at a glance, thread
+   placement, input selection, stages, recovery, dataplane invariants,
+   layering rules.
+4. [Testing](testing.md): the narrowest gate for a change, proof maps,
    regression artifacts.
 5. [Backlog](backlog.md): the one list of open work.
 
@@ -29,17 +31,19 @@ document is one `git log -- <path>` away.
 
 - [Configuration](configuration.md): environment variables, persisted
   settings, ports and paths.
-- [API reference](api-reference.md): HTTP contracts and examples.
+- [API reference](api-reference.md): HTTP routes, request and response
+  contracts, examples.
 - [Observability](observability.md): health, telemetry, alerts, diagnostics
   and logging.
 - [Agent plane](agent-plane-integration.md): agent-plane and MCP contracts.
 
 ## Change the system
 
-- [Media pipeline](media-pipeline.md): protocols, codecs and stages.
-- [Egress architecture](egress-architecture.md): the fabric's ownership and
-  concurrency contract.
-- [Runtime crossings](runtime-crossings.md): every Compio/Tokio/FFmpeg
+- [Media pipeline](media-pipeline.md): RTMP, SRT, HLS push and pull, MoQ,
+  codecs and stages.
+- [Egress architecture](egress-architecture.md): the egress fabric's
+  ownership and concurrency contract.
+- [Runtime crossings](runtime-crossings.md): every Compio, Tokio and FFmpeg
   crossing with its mechanism, rate, bound and verdict.
 - [High-performance data path](high-performance-data-path.md): hot-path
   invariants and how to measure them.
@@ -61,8 +65,11 @@ document is one `git log -- <path>` away.
 
 ## Release
 
-- [Release runbook](release-runbook.md), [release compliance](release-compliance.md)
-  and [source distribution](source-distribution.md).
+- [Release runbook](release-runbook.md): local checks, dry runs and gated tag
+  publishing.
+- [Release compliance](release-compliance.md) and
+  [source distribution](source-distribution.md): license and source
+  obligations of the shipped bytes.
 - [FFmpeg versions](ffmpeg-versions.md): native media dependency selection.
 - [Third-party components](../distribution/THIRD_PARTY_COMPONENTS.md) and the
   [Docker seccomp profile](../distribution/docker/README.md).
@@ -87,18 +94,22 @@ document is one `git log -- <path>` away.
 
 ## Documentation rules
 
-- Every multi-section page has a local `Contents` section (`SKILL.md` files
-  are exempt). One H1 title, sentence-case headings, `sh` for shell fences.
-- Use Mermaid for conceptual diagrams (`flowchart LR` for pipelines,
-  `flowchart TD` for layers and lifecycles), tables for comparisons, and
-  `text` fences only for literal output, syntax and file trees. No checked-in
-  SVG renderings.
+- Every multi-section page has a local `Contents` section that links every
+  H2 (`SKILL.md` files are exempt). One H1 title, sentence-case headings,
+  `sh` for shell fences.
+- Use Mermaid for diagrams: `flowchart LR` for pipelines, `flowchart TD` for
+  layers and lifecycles, `sequenceDiagram` for protocol exchanges and
+  `stateDiagram-v2` for state machines. Name real components in node labels,
+  keep each diagram small, and say in one sentence what it shows. Use `text`
+  fences only for literal output, syntax and file trees. No checked-in SVG
+  renderings or box-drawing diagrams.
 - Describe current behavior with current source paths and runnable commands.
   Do not keep dated evidence, ledgers or completed plans here; put evidence in
   the commit message of the change it justifies.
 - Let executable artifacts own executable detail: scripts own build and gate
   steps, manifests own versions, CLI help owns flags. Link to the entrypoint
   instead of copying it.
+- Link every page from this index.
 - When a source or command rename lands, update the owning page in the same
   change and run `node scripts/check/docs.mjs` (`cargo xtask gates` selects it
   for Markdown changes).
