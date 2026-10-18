@@ -34,6 +34,14 @@
 //!
 //! [`calibrate`] returns `true` if rdtsc is active; [`using_tsc`] re-queries the
 //! same cached result for diagnostic logging.
+//!
+//! # Thread CPU
+//!
+//! [`thread_cpu_ns`] reads the calling thread's own CPU clock
+//! (`CLOCK_THREAD_CPUTIME_ID`, one syscall, ~0.2 µs), the egress shards'
+//! utilization and the media executor's per-poll CPU. [`thread_usage`] reads
+//! `getrusage(RUSAGE_THREAD)` (~0.2 µs): the user/system split, which the
+//! kernel apportions from tick samples, and exact minor/major fault counts.
 
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -191,6 +199,67 @@ pub fn validate_cps(cps: f64, window_us: f64) -> Option<f64> {
         return None;
     }
     Some(cps)
+}
+
+/// CPU time the calling thread has consumed. Zero if the clock is unavailable.
+pub(crate) fn thread_cpu_ns() -> u64 {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `ts` is a valid out-pointer for the call; the clock id is a
+    // constant supported on Linux.
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) };
+    if rc != 0 {
+        return 0;
+    }
+    (ts.tv_sec.max(0) as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(ts.tv_nsec.max(0) as u64)
+}
+
+/// The calling thread's cumulative user and system CPU and page faults.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ThreadUsage {
+    pub user_us: u64,
+    pub sys_us: u64,
+    pub minor_faults: u64,
+    pub major_faults: u64,
+}
+
+impl ThreadUsage {
+    /// What the thread consumed since `earlier`, clamped at zero per field.
+    pub(crate) fn since(self, earlier: Self) -> Self {
+        Self {
+            user_us: self.user_us.saturating_sub(earlier.user_us),
+            sys_us: self.sys_us.saturating_sub(earlier.sys_us),
+            minor_faults: self.minor_faults.saturating_sub(earlier.minor_faults),
+            major_faults: self.major_faults.saturating_sub(earlier.major_faults),
+        }
+    }
+}
+
+/// `getrusage(RUSAGE_THREAD)` for the calling thread. All zero if the call
+/// fails.
+pub(crate) fn thread_usage() -> ThreadUsage {
+    // SAFETY: `rusage` is plain old data; all-zero is a valid value.
+    let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+    // SAFETY: `usage` is a valid out-pointer for the call.
+    if unsafe { libc::getrusage(libc::RUSAGE_THREAD, &mut usage) } != 0 {
+        return ThreadUsage::default();
+    }
+    let micros = |tv: libc::timeval| {
+        (tv.tv_sec.max(0) as u64)
+            .saturating_mul(1_000_000)
+            .saturating_add(tv.tv_usec.max(0) as u64)
+    };
+    ThreadUsage {
+        user_us: micros(usage.ru_utime),
+        sys_us: micros(usage.ru_stime),
+        minor_faults: usage.ru_minflt.max(0) as u64,
+        major_faults: usage.ru_majflt.max(0) as u64,
+    }
 }
 
 #[cfg(test)]

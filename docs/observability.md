@@ -554,15 +554,32 @@ cumulative; compute rates from two snapshots.
   `maxPollUs` (longest single poll). Window utilization is
   `Δ busyUs / (Δ wall µs × configuredWorkers)`; demand per wake is
   `Δ busyUs / Δ polls`.
+- Beside the wall time, each row carries the polling thread's own CPU time
+  inside the same polls (`CLOCK_THREAD_CPUTIME_ID`, read around every poll):
+  `cpuUs`, `maxCpuUs` (the most CPU one poll spent), and
+  `pollsOverCpu1Ms`, `pollsOverCpu4Ms`, `pollsOverCpu16Ms` (polls strictly
+  above 1, 4 and 16 ms of thread CPU). CPU per poll is `Δ cpuUs / Δ polls`. A
+  descheduled vCPU advances wall time but not thread CPU, so a long poll whose
+  CPU matches its wall time was executing, and one whose CPU stays small was
+  stalled outside it.
+- `usage` (only with `RESTREAM_MEDIA_POLL_USAGE=1`, a diagnostic that adds
+  two `getrusage(RUSAGE_THREAD)` calls per poll): `all` sums every poll's
+  `userUs`, `sysUs`, `minorFaults` and `majorFaults`; `overCpu1Ms` sums the
+  same over the polls above 1 ms of thread CPU, which is where a
+  multi-millisecond tail shows whether the time went to user space (glibc,
+  the service) or to the kernel (page faults, reclaim, compaction). The
+  kernel apportions user and system time from tick samples, so the split is
+  meaningful over many polls, not for one; fault counts are exact.
 - `workers[]`: per Tokio worker `busyUs` and `parks`, plus
   `globalQueueDepth`. These are empty/zero until the first media service starts
   the runtime.
 - `queueLatency*`: spawn-to-first-poll delay of newly started services only.
 - `services[]` (full view only, so the summary stays fixed-size): one row per
   running service with its `serviceId`, `class`, `pipelineId` and `stage`
-  (stage key, file ingest id, or `recording`), and the same `polls`, `busyUs`
-  and `maxPollUs`. This answers which feed and stage used the pool: per-feed
-  demand over a window is the sum of `Δ busyUs` over its rows. Subtract only
+  (stage key, file ingest id, or `recording`), and the same poll, CPU and
+  `usage` counters as the class rows. This answers which feed and stage used
+  the pool: per-feed demand over a window is the sum of `Δ busyUs` (or
+  `Δ cpuUs`) over its rows. Subtract only
   rows with the same `serviceId`: a restarted service (a new file-ingest
   attempt) gets a new id and counts from zero, and a run being replaced can
   be listed beside its successor with the same labels. A row starts at the
@@ -571,9 +588,10 @@ cumulative; compute rates from two snapshots.
 `busyUs` is wall time. On a VM the hypervisor can deschedule a vCPU inside a
 poll without the guest reporting steal (measured 20–128 ms gaps on the capacity
 host), so busy time inflates on such hosts. A `maxPollUs` in the tens of
-milliseconds against microsecond-scale polls indicates a stall rather than
-work; compare with the capacity ramp's host jitter probe before sizing
-`RESTREAM_MEDIA_WORKERS`.
+milliseconds against microsecond-scale polls is a stall rather than work when
+`maxCpuUs` stays small, and work (or CPU the kernel spent on the thread's
+behalf, such as page faults) when it does not; compare with the capacity
+ramp's host jitter probe before sizing `RESTREAM_MEDIA_WORKERS`.
 
 ## Known instrumentation gaps
 
