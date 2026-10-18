@@ -82,6 +82,18 @@ webpki-roots = "1.0"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "cookies"] }
 url = "2"
 percent-encoding = "2"
+# MoQ catalog `initData` (the AAC AudioSpecificConfig) is base64.
+base64 = "0.22"
+# MoQ phase 1 (moq-lite-06 + hang): the moq.dev lite driver and media
+# conventions, pinned; Restream supplies the Compio transport.
+moq-net = "=0.3.15"
+hang = "=0.21.16"
+# The poll transport traits moq-net 0.3.15 drives (`media::moq::transport`
+# implements them over compio-quic), its waiter primitive, and the HTTP/3 +
+# WebTransport framing for browser sessions; all pinned to moq-net's versions.
+web-transport-trait = "=0.4.0"
+kio = "=0.6.2"
+web-transport-proto = "=0.6.2"
 shiguredo_mp4 = "2026.5.0"
 # srt-rs main 9b20d51 (PR #171: the poll-path duplicate keeps close-on-exec, so
 # a Compio SRT Owner socket no longer leaks into every child process the engine
@@ -126,8 +138,10 @@ flume = { version = "0.12", default-features = false, features = ["async"] }
 # The SRT egress backend owns one Compio runtime per shard thread, so it
 # names the runtime type directly.
 # The substrate benchmark harness compares Compio UDP submission with a direct
-# io_uring baseline; production RTMP egress uses Compio TCP.
-compio = { version = "=0.19.2", default-features = false, features = ["runtime", "time", "net", "bytes"] }
+# io_uring baseline; production RTMP egress uses Compio TCP. MoQ (`quic`,
+# with rustls `ring` crypto) runs native QUIC on its own Compio threads;
+# `io-compat` gives its streams slice-based read/write.
+compio = { version = "=0.19.2", default-features = false, features = ["runtime", "time", "net", "bytes", "quic", "ring", "io-compat"] }
 io-uring = "0.7.15"
 tracing = { version = "0.1", features = ["max_level_debug"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
