@@ -458,7 +458,9 @@ milliseconds the sink received inside the rated window, and `mediaRatio`,
 media time over window time), `pipelines[].executor` (the pipeline's media
 executor services over the rated window: `polls`, `cpuUs`, `cpuUsPerPoll`,
 `busyUs`, the largest lifetime `maxCpuUs`, and `pollsOverCpu4Ms`; the
-RTMP-to-RTMP base pipelines run none and read zero), the raw `mediaExecutor`
+RTMP-to-RTMP base pipelines run none and read zero; a service that stopped
+inside the window is absent from the end snapshot, so its window polls count
+in the class rows but not here), the raw `mediaExecutor`
 snapshot (`queueLatencyMaxUs` and the per-class rows of
 [observability](observability.md#media-executor-mediaexecutor)), the raw
 `egressShards` list, `wallClockSecs`, `windowSecs`, and
