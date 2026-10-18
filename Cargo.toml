@@ -214,6 +214,10 @@ name = "codec_conversions"
 harness = false
 
 [[bench]]
+name = "moq_publish"
+harness = false
+
+[[bench]]
 name = "rtmp_serializer"
 harness = false
 
