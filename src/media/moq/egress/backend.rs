@@ -17,7 +17,6 @@ use std::time::Duration;
 use compio::driver::{DriverType, ProactorBuilder};
 use compio::runtime::{JoinHandle, Runtime, RuntimeBuilder};
 use futures_util::future::{Either, select};
-use moq_net::origin;
 
 use crate::media::egress::backend::{CloseReason, EngineProgress, ProtocolEngine, Readiness};
 use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
@@ -148,10 +147,10 @@ impl<C: MoqConnector> MoqShardBackend<C> {
             return refuse("no publish startup for the output");
         };
         let converter = MediaConverter::new(&startup);
-        let (origin, origin_driver) =
-            origin::Producer::new(origin::Config::new(moq_net::Hop::random()));
+        let (origin, origin_driver, budget) = crate::media::moq::budget::origin();
         let broadcast = match HangBroadcast::create(
             &origin,
+            budget,
             &startup.broadcast,
             converter.has_video(),
             converter.has_audio(),

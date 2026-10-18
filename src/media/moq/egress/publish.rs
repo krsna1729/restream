@@ -3,11 +3,13 @@
 //!
 //! The broadcast carries `catalog.json` and the `video`/`audio` tracks.
 //! Video groups are GOPs (a keyframe opens one; frames before the first
-//! keyframe are dropped), audio groups about one second. Media tracks keep
-//! no history past the current group (`max_age` zero: moq-net always keeps
-//! the newest group), so a late subscriber joins at the current GOP and a
-//! slow one skips whole old groups instead of falling behind. Frames are
-//! written as one chunk each, so every subscriber shares the same `Bytes`.
+//! keyframe are dropped), audio groups about one second. Media tracks have
+//! `max_age` zero, so a subscriber skips a group as soon as the next one
+//! starts: a late one joins at the current GOP and a slow one skips whole
+//! old groups instead of falling behind. What the origin keeps is bounded
+//! by its [`CacheBudget`] (about two GOPs; moq-net always keeps the newest
+//! group). Frames are written as one chunk each, so every subscriber shares
+//! the same `Bytes`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,6 +20,7 @@ use moq_net::{Timestamp, broadcast, group, origin, track};
 
 use crate::media::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use crate::media::egress::journal::RingFeed;
+use crate::media::moq::budget::CacheBudget;
 use crate::media::moq::media::{AUDIO_TRACK, TrackKind, VIDEO_TRACK};
 use crate::media::packet::{MediaPacket, MediaType};
 
@@ -67,13 +70,15 @@ pub(crate) struct HangBroadcast {
     catalog: track::Producer,
     video: Option<TrackWriter>,
     audio: Option<TrackWriter>,
+    budget: CacheBudget,
 }
 
 impl HangBroadcast {
     /// Create and announce broadcast `name` under `origin`, with the tracks
-    /// asked for.
+    /// asked for. `budget` is `origin`'s ([`crate::media::moq::budget::origin`]).
     pub(crate) fn create(
         origin: &origin::Producer,
+        budget: CacheBudget,
         name: &str,
         video: bool,
         audio: bool,
@@ -103,6 +108,7 @@ impl HangBroadcast {
             catalog,
             video,
             audio,
+            budget,
         })
     }
 
@@ -124,9 +130,9 @@ impl HangBroadcast {
     /// not).
     pub(crate) fn write(&mut self, frame: HangFrame) -> Result<bool, String> {
         let timestamp = Timestamp::from_micros(frame.pts_us).map_err(|error| error.to_string())?;
-        let writer = match frame.track {
-            TrackKind::Video => self.video.as_mut(),
-            TrackKind::Audio => self.audio.as_mut(),
+        let (writer, budget_track) = match frame.track {
+            TrackKind::Video => (self.video.as_mut(), 0),
+            TrackKind::Audio => (self.audio.as_mut(), 1),
         };
         let Some(writer) = writer else {
             return Ok(false);
@@ -147,14 +153,17 @@ impl HangBroadcast {
             writer
                 .next_group(frame.pts_us)
                 .map_err(|error| error.to_string())?;
+            self.budget.group(budget_track);
         }
         // No open group: video before its first keyframe.
         let Some(group) = writer.group.as_mut() else {
             return Ok(false);
         };
+        let len = frame.data.len();
         group
             .write_frame(timestamp, frame.data)
             .map_err(|error| error.to_string())?;
+        self.budget.frame(budget_track, len);
         Ok(true)
     }
 

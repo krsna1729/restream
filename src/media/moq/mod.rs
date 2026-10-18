@@ -13,6 +13,7 @@ use std::fmt;
 
 #[doc(hidden)]
 pub mod bench_entry;
+pub(crate) mod budget;
 pub(crate) mod egress;
 #[cfg(fuzzing)]
 #[doc(hidden)]

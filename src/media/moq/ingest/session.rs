@@ -26,6 +26,7 @@ use tracing::{debug, info};
 use super::media::{MoqProbe, TrackSet};
 use super::publisher::PublisherMedia;
 use super::{Admission, Lifecycle, PublisherSession, Rejection, stream_key_from_path};
+use crate::media::moq::budget::{self, CacheBudget};
 use crate::media::moq::media::from_hang_catalog;
 use crate::media::moq::transport;
 use crate::media::packet::MediaPacket;
@@ -242,7 +243,8 @@ const CLOSE_FLUSH: Duration = Duration::from_millis(500);
 
 /// Run one publisher session to its end: complete the paused handshake with
 /// a private origin for its announcements, then ingest the first announced
-/// broadcast. Returns why it ended; the peer has been told.
+/// broadcast. Returns why it ended; the peer has been told. The origin's
+/// cache is budgeted like a published broadcast's ([`budget`]).
 pub(crate) async fn publish<L, S>(
     lifecycle: &L,
     peer: SocketAddr,
@@ -255,8 +257,8 @@ where
     L: Lifecycle + Clone,
     S: moq_net::transport::poll::Session,
 {
-    let (origin, origin_driver) =
-        moq_net::origin::Producer::new(moq_net::origin::Config::default());
+    let (origin, origin_driver, budget) = budget::origin();
+    let budget = RefCell::new(budget);
     let (session, driver) = match handshake.with_subscriber(origin.clone()).ok().await {
         Ok(started) => started,
         Err(error) => return SessionEnd::moq("MoQ handshake failed", error),
@@ -273,7 +275,7 @@ where
             SessionEnd::moq("MoQ session closed", error)
         }
         error = &mut origin_driver => SessionEnd::moq("MoQ origin stopped", error),
-        end = ingest(lifecycle, peer, connection_path, &origin, &slot, limits) => end,
+        end = ingest(lifecycle, peer, connection_path, &origin, &slot, &budget, limits) => end,
     };
     if let Some(ingest) = slot.take() {
         ingest.finish(end.reason.clone());
@@ -292,6 +294,7 @@ async fn ingest<L: Lifecycle + Clone>(
     connection_path: &str,
     origin: &moq_net::origin::Producer,
     slot: &RefCell<Option<Ingest<L>>>,
+    budget: &RefCell<CacheBudget>,
     limits: SessionLimits,
 ) -> SessionEnd {
     let consumer = origin.consume();
@@ -370,6 +373,7 @@ async fn ingest<L: Lifecycle + Clone>(
                 subscriber.ordered(),
                 lifecycle,
                 slot,
+                budget,
                 &last_frame,
             )),
             Err(error) => return SessionEnd::moq(&format!("subscribe to track {name:?}"), error),
@@ -436,11 +440,15 @@ async fn pump<L: Lifecycle>(
     mut track: moq_net::track::Ordered,
     lifecycle: &L,
     slot: &RefCell<Option<Ingest<L>>>,
+    budget: &RefCell<CacheBudget>,
     last_frame: &Cell<Instant>,
 ) -> Option<SessionEnd> {
     loop {
         let mut group = match track.next_group().await {
-            Ok(Some(group)) => group,
+            Ok(Some(group)) => {
+                budget.borrow_mut().group(index);
+                group
+            }
             Ok(None) => return None,
             Err(error) => return Some(SessionEnd::moq("track", error)),
         };
@@ -454,6 +462,7 @@ async fn pump<L: Lifecycle>(
                 }
             };
             last_frame.set(Instant::now());
+            budget.borrow_mut().frame(index, frame.payload.len());
             let step = slot
                 .borrow_mut()
                 .as_mut()

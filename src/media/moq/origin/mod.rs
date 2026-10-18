@@ -12,8 +12,9 @@
 //! own moq-net origin, fed from the pipeline's source ring by one local
 //! pump task: the ring producer's publication wake reaches it over a
 //! one-slot channel, so it reads each unit once whatever the audience.
-//! moq-net fans the frames out as shared `Bytes`, and tracks keep only the
-//! current group. The broadcast stops with its last viewer.
+//! moq-net fans the frames out as shared `Bytes`, and the origin keeps
+//! about two GOPs ([`super::budget`]). The broadcast stops with its last
+//! viewer.
 
 pub(crate) mod token;
 
@@ -347,9 +348,10 @@ fn start(
     if !converter.has_video() && !converter.has_audio() {
         return Err("the pipeline has no media yet".to_string());
     }
-    let (origin, driver) = origin::Producer::new(origin::Config::new(moq_net::Hop::random()));
+    let (origin, driver, budget) = super::budget::origin();
     let broadcast = HangBroadcast::create(
         &origin,
+        budget,
         pipeline_id,
         converter.has_video(),
         converter.has_audio(),
