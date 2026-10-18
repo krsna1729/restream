@@ -69,7 +69,9 @@ pub async fn get_pipeline_by_stream_key(
     .await
 }
 
-pub async fn list_pipelines(pool: &SqlitePool) -> Result<Vec<PipelineRecord>, sqlx::Error> {
+pub async fn list_pipelines(
+    pool: impl sqlx::SqliteExecutor<'_>,
+) -> Result<Vec<PipelineRecord>, sqlx::Error> {
     sqlx::query_as::<_, PipelineRecord>(
         "SELECT p.id, p.name, i.stream_key, p.input_source, p.srt_ingest_policy
          FROM pipelines p

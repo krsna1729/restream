@@ -71,7 +71,7 @@ async fn fetch_output_optional(
 }
 
 async fn fetch_output_all(
-    pool: &SqlitePool,
+    pool: impl sqlx::SqliteExecutor<'_>,
     query: &str,
     binds: &[&str],
 ) -> Result<Vec<OutputRecord>, sqlx::Error> {
@@ -130,7 +130,9 @@ pub async fn get_output(
     .await
 }
 
-pub async fn list_outputs(pool: &SqlitePool) -> Result<Vec<OutputRecord>, sqlx::Error> {
+pub async fn list_outputs(
+    pool: impl sqlx::SqliteExecutor<'_>,
+) -> Result<Vec<OutputRecord>, sqlx::Error> {
     fetch_output_all(
         pool,
         "SELECT id, pipeline_id, name, url, monitoring_url, desired_state, retries_exhausted, config FROM outputs",

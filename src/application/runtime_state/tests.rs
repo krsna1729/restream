@@ -438,9 +438,19 @@ async fn projection_reports_standby_recording_bonding_and_the_output_stage() {
 
 /// The projector rebuilds only while a stream client is connected: on a
 /// marked change and every interval. With no client, changes cost nothing.
+/// One write is one delta: the rows of a rebuild come from one snapshot of
+/// the production (file, WAL) database, so a pipeline created between two of
+/// its reads never shows its input before itself.
 #[tokio::test]
 async fn the_projector_rebuilds_only_while_a_client_listens() {
-    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let dir = std::env::temp_dir().join(format!(
+        "restream-projector-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let url = format!("sqlite:{}?mode=rwc", dir.join("restream.db").display());
+    let pool = crate::db::create_pool(&url).await.unwrap();
     crate::db::setup_database_schema(&pool).await.unwrap();
     let engine = std::sync::Arc::new(MediaEngine::new());
     let hub = std::sync::Arc::new(StateHub::new(ports()));
@@ -491,6 +501,8 @@ async fn the_projector_rebuilds_only_while_a_client_listens() {
     assert_eq!(revision_after(hub.clone()).await, 2, "the last client left");
     stop.cancel();
     projector.await.unwrap();
+    pool.close().await;
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The reuse decision at its edges: inside the window with no new mark,

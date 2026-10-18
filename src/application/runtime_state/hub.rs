@@ -211,14 +211,26 @@ impl StateHub {
         // Read before the rows: a change marked during the rebuild is newer
         // than this projection and must not be taken as covered by it.
         let changes = self.changes.load(Ordering::Acquire);
-        let pipelines = match crate::db::list_pipelines(pool).await {
+        // One read transaction: every row comes from the same database
+        // snapshot (WAL), so a write committed between two reads cannot tear
+        // the projection (an input whose pipeline is not in it yet) and cost
+        // a second delta for one change. It only reads, and it ends before
+        // the engine is read.
+        let mut snapshot = match pool.begin().await {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                tracing::warn!(err = %error, "DB error opening a read for runtime state");
+                return;
+            }
+        };
+        let pipelines = match crate::db::list_pipelines(&mut *snapshot).await {
             Ok(rows) => rows,
             Err(error) => {
                 tracing::warn!(err = %error, "DB error reading pipelines for runtime state");
                 return;
             }
         };
-        let outputs = match crate::db::list_outputs(pool).await {
+        let outputs = match crate::db::list_outputs(&mut *snapshot).await {
             Ok(rows) => rows
                 .into_iter()
                 .map(crate::application::outputs::from_record)
@@ -228,20 +240,21 @@ impl StateHub {
                 return;
             }
         };
-        let inputs = match crate::db::list_all_pipeline_inputs(pool).await {
+        let inputs = match crate::db::list_all_pipeline_inputs(&mut *snapshot).await {
             Ok(rows) => rows,
             Err(error) => {
                 tracing::warn!(err = %error, "DB error reading inputs for runtime state");
                 return;
             }
         };
-        let host = match crate::db::get_ingest_host(pool).await {
+        let host = match crate::db::get_ingest_host(&mut *snapshot).await {
             Ok(host) => crate::application::services::ingest_host_or_default(host),
             Err(error) => {
                 tracing::warn!(err = %error, "DB error reading the ingest host for runtime state");
                 return;
             }
         };
+        drop(snapshot);
         let endpoints = IngestEndpoints {
             host,
             ports: self.ports,

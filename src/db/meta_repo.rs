@@ -1,6 +1,9 @@
 use sqlx::{Row, SqlitePool};
 
-pub async fn get_meta(pool: &SqlitePool, key: &str) -> Result<Option<String>, sqlx::Error> {
+pub async fn get_meta(
+    pool: impl sqlx::SqliteExecutor<'_>,
+    key: &str,
+) -> Result<Option<String>, sqlx::Error> {
     let row = sqlx::query("SELECT value FROM meta WHERE key = ?")
         .bind(key)
         .fetch_optional(pool)
@@ -20,7 +23,9 @@ pub async fn set_meta(pool: &SqlitePool, key: &str, value: &str) -> Result<Strin
     Ok(value.to_string())
 }
 
-pub async fn get_ingest_host(pool: &SqlitePool) -> Result<Option<String>, sqlx::Error> {
+pub async fn get_ingest_host(
+    pool: impl sqlx::SqliteExecutor<'_>,
+) -> Result<Option<String>, sqlx::Error> {
     get_meta(pool, "ingest_host").await
 }
 
