@@ -79,6 +79,37 @@ flowchart TD
     SR -->|"any format · 720p"| TIN
 ```
 
+### Frame units
+
+Every ring slot records, beside its `MediaPacket`, the configuration
+generation of the packet's track. A reader asks by ring sequence
+(`RingBuffer::frame_unit`, `RingBuffer::track_config_at`) in O(1) without a
+lock; a sequence the producer has overwritten reads as not retained.
+
+Track configurations are codec configuration bytes per `(media type, track
+index)`; the video track holds raw Annex B parameter sets
+(`video_parameter_sets`). A generation starts only when a track's bytes change,
+and the last four generations of a track stay resolvable, so a lagging reader
+still gets the bytes its packet was published with.
+
+Publication (`push`, `push_batch`) never parses payloads. Each producer
+records a configuration right before the packet that carries it, from what it
+already parses: RTMP ingest its `avcC`, the transcoder normalizer the sets it
+assembled, and SRT ingest and the segment publisher their one in-band scan
+(`push_drained_batch_recording_config` records each Raw video packet's sets
+just before stamping it, so earlier packets of a batch keep the previous
+generation). The audio router and recirculation republish another ring's
+video and copy its configuration at the packet where its generation changed
+(`VideoConfigFollower`). A resized ring takes over the units and
+configurations of the readable tail.
+
+RTMP egress announces a Raw video keyframe's configuration when its
+generation differs from the last one that output sent (the startup header
+counts), so a repeated in-band header sends nothing and any parameter-set
+change, including a PPS-only one, sends a new sequence header before the
+keyframe. A keyframe that was overwritten while it waited in the leaf's
+pending burst resynchronizes the leaf like a feed overrun.
+
 ## Multi-input selection
 
 A pipeline supports one primary and up to three backup input records. Each

@@ -56,8 +56,8 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 
 use crate::media::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
-use crate::media::packet::MediaPacket;
-use crate::media::ring_buffer::RingBuffer;
+use crate::media::packet::{MediaPacket, MediaType};
+use crate::media::ring_buffer::{NotRetained, RingBuffer, TrackConfig};
 use crate::media::ts_chunk_ring::TsChunkRing;
 
 fn oldest_retained_sequence(ring: &RingBuffer) -> u64 {
@@ -337,6 +337,20 @@ impl RingFeed {
     /// wake subscriptions.
     pub fn publication_ring(&self) -> Arc<RingBuffer> {
         self.current_ring()
+    }
+
+    /// The track configuration that applies to the unit at `sequence`, read
+    /// from the ring the feed currently follows
+    /// ([`RingBuffer::track_config_at`]).
+    pub fn track_config_at(
+        &self,
+        sequence: u64,
+        media_type: MediaType,
+        track_index: u32,
+    ) -> Result<Option<Arc<TrackConfig>>, NotRetained> {
+        let sequence = usize::try_from(sequence).map_err(|_| NotRetained)?;
+        self.current_ring()
+            .track_config_at(sequence, media_type, track_index)
     }
 }
 

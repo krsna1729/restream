@@ -1,12 +1,9 @@
-use bytes::Bytes;
 use rml_rtmp::chunk_io::ChunkSerializer;
 use rml_rtmp::messages::RtmpMessage;
 use rml_rtmp::rml_amf0::Amf0Value;
 use rml_rtmp::sessions::ClientSessionConfig;
 use rml_rtmp::time::RtmpTimestamp;
 use std::collections::HashMap;
-
-use crate::media::codec;
 
 pub(super) fn enhanced_rtmp_connect_packet(
     config: &ClientSessionConfig,
@@ -64,17 +61,9 @@ pub(super) fn enhanced_rtmp_connect_packet(
         .map_err(|error| format!("failed to serialize enhanced RTMP connect: {error:?}"))
 }
 
-pub(super) fn cache_hevc_parameter_sets(payload: &[u8], cache: &mut Vec<u8>) {
-    let Some(parameter_sets) = codec::annexb_parameter_sets(payload) else {
-        return;
-    };
-    if codec::build_hevc_enhanced_rtmp_sequence_header(&parameter_sets).is_some() {
-        *cache = parameter_sets;
-    }
-}
-
 #[cfg(test)]
 pub(super) fn raw_packet_starts_with_hevc_parameter_set(payload: &[u8]) -> bool {
+    use crate::media::codec;
     let Some(first_nalu) = codec::split_annexb_nalus(payload).first().copied() else {
         return false;
     };
@@ -82,15 +71,4 @@ pub(super) fn raw_packet_starts_with_hevc_parameter_set(payload: &[u8]) -> bool 
         .first()
         .is_some_and(|byte| matches!((byte >> 1) & 0x3F, 32..=34))
         && codec::build_hevc_enhanced_rtmp_sequence_header(payload).is_some()
-}
-
-pub(super) fn hevc_sequence_header_for_keyframe(
-    payload: &[u8],
-    parameter_sets_cache: &[u8],
-) -> Option<(Bytes, Option<Vec<u8>>)> {
-    let sequence_header = codec::build_hevc_enhanced_rtmp_sequence_header(payload)
-        .or_else(|| codec::build_hevc_enhanced_rtmp_sequence_header(parameter_sets_cache))?;
-    let config = codec::annexb_parameter_sets(payload)
-        .or_else(|| codec::annexb_parameter_sets(parameter_sets_cache));
-    Some((sequence_header, config))
 }

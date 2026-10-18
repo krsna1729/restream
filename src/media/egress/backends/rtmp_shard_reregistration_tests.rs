@@ -127,6 +127,9 @@ fn feed_wake_enqueues_the_leaf_without_any_poller_call() {
         0, 0, 0, 1, 0x67, 0x42, 0, 0x1e, 0xf4, 0x05, 1, 0xec, 0x80, 0, 0, 0, 1, 0x68, 0xce, 0x06,
         0xe2, 0, 0, 0, 1, 0x65, 0x88,
     ]);
+    // The producer contract: in-band parameter sets are recorded by the
+    // producer that publishes them.
+    ring.set_video_parameter_sets(payload[..21].to_vec());
     ring.push(crate::media::packet::MediaPacket {
         media_type: crate::media::packet::MediaType::Video,
         format: crate::media::packet::PayloadFormat::Raw,

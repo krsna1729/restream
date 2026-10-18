@@ -13,31 +13,31 @@ use crate::media::codec;
 use crate::media::metadata::AudioMeta;
 use crate::media::ring_buffer::RingBuffer;
 
-use super::enhanced::hevc_sequence_header_for_keyframe;
 use super::flv::{FlvVideoPacketKind, classify_flv_video_packet};
 
-pub(super) fn cache_h264_parameter_sets(payload: &[u8], cache: &mut Vec<u8>) {
-    let Some(parameter_sets) = codec::annexb_parameter_sets(payload) else {
-        return;
-    };
-    if h264_sps_nalu(&parameter_sets).is_some() {
-        *cache = parameter_sets;
+/// The FLV video sequence header for raw Annex B parameter sets.
+pub(super) fn video_sequence_header(
+    enhanced_hevc_video: bool,
+    parameter_sets: &[u8],
+) -> Option<Bytes> {
+    if enhanced_hevc_video {
+        codec::build_hevc_enhanced_rtmp_sequence_header(parameter_sets)
+    } else {
+        codec::build_avcc_sequence_header(parameter_sets)
     }
 }
 
+/// The startup video sequence header and the ring configuration generation
+/// it was built from (0 when it is the ingest-cached header).
 pub(crate) fn startup_video_sequence_header(
     ring_buffer: &RingBuffer,
     ingest_sequence_header: Option<Bytes>,
     enhanced_hevc_video: bool,
-) -> Option<Bytes> {
-    if let Some(parameter_sets) = ring_buffer.video_parameter_sets()
-        && let Some(sequence_header) = if enhanced_hevc_video {
-            codec::build_hevc_enhanced_rtmp_sequence_header(&parameter_sets)
-        } else {
-            codec::build_avcc_sequence_header(&parameter_sets)
-        }
+) -> Option<(Bytes, u32)> {
+    if let Some(config) = ring_buffer.video_config()
+        && let Some(sequence_header) = video_sequence_header(enhanced_hevc_video, &config.bytes)
     {
-        return Some(sequence_header);
+        return Some((sequence_header, config.generation));
     }
 
     if enhanced_hevc_video {
@@ -54,7 +54,7 @@ pub(crate) fn startup_video_sequence_header(
         return None;
     }
 
-    ingest_sequence_header
+    ingest_sequence_header.map(|header| (header, 0))
 }
 
 pub(super) fn rtmp_output_waits_for_video(ring_buffer: &RingBuffer) -> bool {
@@ -97,41 +97,6 @@ pub(crate) fn resolve_deferred_audio_sequence_header(
                 .then(|| codec::build_aac_sequence_header(track.sample_rate, track.channels))
         })
     })
-}
-
-pub(crate) fn h264_sps_nalu(payload: &[u8]) -> Option<Vec<u8>> {
-    let mut sps = None;
-    let _ = codec::for_each_annexb_nalu(payload, |nalu| {
-        if matches!(nalu, [header, ..] if header & 0x1F == 7) {
-            sps = Some(nalu.to_vec());
-            std::ops::ControlFlow::Break(())
-        } else {
-            std::ops::ControlFlow::Continue(())
-        }
-    });
-    sps
-}
-
-pub(super) fn h264_sequence_header_for_keyframe(
-    payload: &[u8],
-    parameter_sets_cache: &[u8],
-) -> Option<(Bytes, Option<Vec<u8>>)> {
-    let sequence_header = codec::build_avcc_sequence_header(payload)
-        .or_else(|| codec::build_avcc_sequence_header(parameter_sets_cache))?;
-    let sps = h264_sps_nalu(payload).or_else(|| h264_sps_nalu(parameter_sets_cache));
-    Some((sequence_header, sps))
-}
-
-pub(super) fn video_sequence_header_for_keyframe(
-    enhanced_hevc_video: bool,
-    payload: &[u8],
-    parameter_sets_cache: &[u8],
-) -> Option<(Bytes, Option<Vec<u8>>)> {
-    if enhanced_hevc_video {
-        hevc_sequence_header_for_keyframe(payload, parameter_sets_cache)
-    } else {
-        h264_sequence_header_for_keyframe(payload, parameter_sets_cache)
-    }
 }
 
 pub(crate) fn validate_rtmp_output_audio_packet_track(track_index: u32) -> Result<(), String> {

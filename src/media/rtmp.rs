@@ -61,7 +61,7 @@ pub(crate) use egress_metadata::{
     validate_rtmp_output_audio_tracks,
 };
 pub(crate) use egress_packets::{
-    h264_sps_nalu, resolve_deferred_audio_sequence_header, should_defer_audio_until_video_ready,
+    resolve_deferred_audio_sequence_header, should_defer_audio_until_video_ready,
     should_send_startup_audio_sequence_header, startup_video_sequence_header,
     validate_rtmp_output_audio_packet_track,
 };
@@ -96,10 +96,7 @@ use crate::media::security::IngestSecurityService;
 #[cfg(test)]
 use egress_metadata::RTMP_METADATA_VIDEO_CODEC_ID_HEVC;
 #[cfg(test)]
-use egress_packets::{
-    cache_h264_parameter_sets, h264_sequence_header_for_keyframe, rtmp_output_waits_for_video,
-    rtmp_video_packet_can_be_dropped,
-};
+use egress_packets::{rtmp_output_waits_for_video, rtmp_video_packet_can_be_dropped};
 #[cfg(test)]
 use enhanced::{enhanced_rtmp_connect_packet, raw_packet_starts_with_hevc_parameter_set};
 #[cfg(test)]
