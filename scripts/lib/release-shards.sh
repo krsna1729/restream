@@ -40,6 +40,7 @@ branch-matrix
 fault.resilience
 fault.egress-retry
 fault.output-stall
+fault.srt-output-stall
 msr-smoke
 resource-sweep.source
 resource-sweep.transcode
@@ -72,7 +73,7 @@ restream_release_shard_timeout() {
         smoke|direct-play|branch-matrix|msr-smoke)
             echo 10m
             ;;
-        mixed.*.bf0|mixed.*.bf2|fault.resilience|fault.egress-retry|fault.output-stall|ramp-family)
+        mixed.*.bf0|mixed.*.bf2|fault.resilience|fault.egress-retry|fault.output-stall|fault.srt-output-stall|ramp-family)
             echo 30m
             ;;
         srt-crypto-matrix|resource-sweep.*)
@@ -131,7 +132,7 @@ restream_release_shard_plan() {
         resource-sweep.hevc)
             printf 'resource\tresource.egress-growth-hevc-bridge\n'
             ;;
-        ramp-family|srt-crypto-matrix|branch-matrix|fault.resilience|fault.egress-retry|fault.output-stall)
+        ramp-family|srt-crypto-matrix|branch-matrix|fault.resilience|fault.egress-retry|fault.output-stall|fault.srt-output-stall)
             printf 'mode\t%s\n' "$shard"
             ;;
         msr-smoke)

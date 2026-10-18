@@ -265,6 +265,7 @@ jobs:
             .local/artifacts/concurrency-contract/
             .local/artifacts/concurrency-fault-egress-retry/
             .local/artifacts/concurrency-fault-output-stall/
+            .local/artifacts/concurrency-fault-srt-output-stall/
             .local/artifacts/concurrency-recovery/
           if-no-files-found: ignore
           retention-days: 7
