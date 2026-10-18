@@ -470,3 +470,20 @@ fn pipeline_window_sums_its_own_services_by_service_id() {
     assert_eq!(none["polls"], 0);
     assert!(none["cpuUsPerPoll"].is_null());
 }
+
+/// The pull arm's comparison is the base outputs' delivery inside the
+/// window, so it subtracts the baseline: lifetime totals would credit a
+/// stalled window with its readiness media.
+#[test]
+fn window_delivery_counts_only_media_inside_the_window() {
+    let baseline = json!({"videoCount": 100, "audioCount": 80, "mediaProgressMs": 4_000});
+    let end = json!({"videoCount": 3_700, "audioCount": 2_900, "mediaProgressMs": 64_000});
+    let window = window_delivery(&baseline, &end, 60.0);
+    assert_eq!(window["video"], 3_600);
+    assert_eq!(window["audio"], 2_820);
+    assert_eq!(window["mediaProgressMs"], 60_000);
+    assert_eq!(window["mediaRatio"], 1.0);
+    let stalled = window_delivery(&end, &end, 60.0);
+    assert_eq!(stalled["mediaRatio"], 0.0);
+    assert!(window_delivery(&baseline, &end, 0.0)["mediaRatio"].is_null());
+}

@@ -85,8 +85,10 @@ struct PollSample {
 /// time includes hypervisor vCPU descheduling inside a poll, which a VM guest
 /// may not report as steal; `max_poll_ns` exposes such stalls (one 20–120 ms
 /// poll among ~µs polls), so read `busy` next to it. `cpu_ns` is the polling
-/// thread's own CPU time inside the same polls, which a descheduled vCPU
-/// does not advance: a long poll with matching CPU time was executing.
+/// thread's own CPU time inside the same polls: it excludes time the guest
+/// scheduler gave other threads, but not vCPU time the hypervisor took that
+/// the guest does not account as steal (the guest charges that to whatever
+/// thread was running).
 #[derive(Default)]
 struct PollTiming {
     polls: AtomicU64,
