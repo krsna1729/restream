@@ -180,7 +180,7 @@ pub async fn list_pipeline_inputs(
 /// Every input of every pipeline, each pipeline's in the order
 /// [`list_pipeline_inputs`] lists them.
 pub async fn list_all_pipeline_inputs(
-    pool: &SqlitePool,
+    pool: impl sqlx::SqliteExecutor<'_>,
 ) -> Result<Vec<PipelineInput>, sqlx::Error> {
     let query = format!(
         "SELECT {SELECT_FIELDS} FROM pipeline_inputs
