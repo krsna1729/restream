@@ -131,6 +131,7 @@ impl Reconciler {
                 }
                 self.engine.resize_srt_fabrics().await;
                 self.engine.resize_rtmp_fabrics().await;
+                self.engine.resize_moq_fabrics().await;
                 if self.reconcile_recordings(tick).await {
                     self.sweep_idle_hls().await;
                     self.engine.reap_file_ingests().await;

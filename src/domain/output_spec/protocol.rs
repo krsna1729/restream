@@ -10,6 +10,8 @@ pub enum EgressProtocol {
     Hls,
     Sink,
     Pipeline,
+    /// Media over QUIC, pushed to a relay (`moqt://`).
+    Moq,
     Unknown,
 }
 
@@ -23,6 +25,7 @@ pub enum OutputUrlScheme {
     Pipeline,
     Http,
     Https,
+    Moqt,
     Unknown,
 }
 
@@ -41,6 +44,7 @@ impl OutputUrlScheme {
             Some("pipeline") => Self::Pipeline,
             Some("http") => Self::Http,
             Some("https") => Self::Https,
+            Some("moqt") => Self::Moqt,
             _ => Self::Unknown,
         }
     }
@@ -69,6 +73,7 @@ impl OutputUrlScheme {
             Self::Sink => EgressProtocol::Sink,
             Self::Pipeline => EgressProtocol::Pipeline,
             Self::Unknown => EgressProtocol::Unknown,
+            Self::Moqt => EgressProtocol::Moq,
         }
     }
 }
@@ -89,6 +94,7 @@ impl EgressProtocol {
             Self::Hls => "hls",
             Self::Sink => "sink",
             Self::Pipeline => "pipeline",
+            Self::Moq => "moq",
             Self::Unknown => "unknown",
         }
     }
@@ -114,6 +120,7 @@ impl RecirculationTarget {
             | OutputUrlScheme::Sink
             | OutputUrlScheme::Http
             | OutputUrlScheme::Https
+            | OutputUrlScheme::Moqt
             | OutputUrlScheme::Unknown => {
                 return Err(RecirculationTargetParseError::UnsupportedScheme);
             }

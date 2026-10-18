@@ -26,6 +26,10 @@ use crate::secret_display::redact_url;
 
 use super::FailureTracker;
 
+#[path = "egress_moq.rs"]
+mod egress_moq;
+pub(super) use egress_moq::{MoqFabricTask, prepare_moq_fabric_task};
+
 #[derive(Clone)]
 pub(super) struct SrtFabricTask {
     pub(super) feed_id: FeedId,
@@ -114,6 +118,7 @@ pub(super) struct EgressTask {
     pub(super) sink_fabric: Option<SinkFabricTask>,
     pub(super) pipeline_fabric: Option<PipelineFabricTask>,
     pub(super) hls_put_fabric: Option<HlsPutFabricTask>,
+    pub(super) moq_fabric: Option<MoqFabricTask>,
 }
 
 impl EgressTask {
@@ -257,6 +262,11 @@ impl EgressTask {
                                     .await;
                             }
                         }
+                    }
+                }
+                OutputUrlScheme::Moqt => {
+                    if let Some(fabric) = self.moq_fabric.as_ref().cloned() {
+                        self.run_moq_fabric(fabric).await;
                     }
                 }
                 OutputUrlScheme::Unknown => {}

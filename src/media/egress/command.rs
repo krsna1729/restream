@@ -94,6 +94,8 @@ pub enum ProtocolSpec {
         target_pipeline_id: String,
         target_input_id: String,
     },
+    /// MoQ publish to a relay over QUIC; `url` is the `moqt://` output URL.
+    Moq { url: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -246,7 +248,8 @@ mod tests {
             ProtocolSpec::Rtmp { .. }
             | ProtocolSpec::Srt { .. }
             | ProtocolSpec::Sink
-            | ProtocolSpec::HlsPut { .. } => {
+            | ProtocolSpec::HlsPut { .. }
+            | ProtocolSpec::Moq { .. } => {
                 panic!("pipeline protocol spec should keep recirculation target identity")
             }
         }

@@ -145,5 +145,46 @@ where
     })
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum MoqFabricShardGroupError {
+    Backend(String),
+    Group(EgressShardGroupError),
+}
+
+/// Spawn the MoQ shard group. Each shard's backend -- its Compio runtime and
+/// its lazily created QUIC client endpoints -- is built by the factory on
+/// that shard's own OS thread; a runtime that cannot be built surfaces as
+/// `MoqFabricShardGroupError::Backend` and no shard is left running.
+pub(crate) fn spawn_moq_fabric_shard_group<F>(
+    shard_count: NonZeroU32,
+    shard_config: EgressShardConfig,
+    budget: WorkBudgetConfig,
+    startup_source: crate::media::moq::egress::SharedMoqStartupSource,
+    mut feed_for: F,
+) -> Result<EgressShardGroup, MoqFabricShardGroupError>
+where
+    F: FnMut(ShardId) -> RingFeed,
+{
+    let drain_timeout = shard_config.drain_timeout();
+    let leaf_capacity = shard_config.leaf_capacity().get();
+    EgressShardGroup::try_spawn_with(shard_count, shard_config, |shard_id| {
+        let feed = feed_for(shard_id);
+        let startup_source = startup_source.clone();
+        move || {
+            crate::media::moq::egress::moq_shard_backend(
+                feed,
+                budget,
+                startup_source,
+                drain_timeout,
+                leaf_capacity,
+            )
+        }
+    })
+    .map_err(|error| match error {
+        EgressShardGroupSpawnError::Backend(error) => MoqFabricShardGroupError::Backend(error),
+        EgressShardGroupSpawnError::Group(error) => MoqFabricShardGroupError::Group(error),
+    })
+}
+
 #[cfg(test)]
 mod tests;

@@ -155,6 +155,29 @@ impl RtmpFabricRegistry {
     }
 }
 
+/// MoQ fabric runtimes, one per feed — RTMP's shape: a shared startup
+/// source the bootstrap path writes before `Add`, one wake subscription and
+/// one dedicated reader (for shards grown later) per runtime.
+pub(crate) struct MoqFabricRegistry {
+    pub(crate) runtimes: HashMap<FeedId, EgressFabricRuntime>,
+    pub(crate) active_outputs: HashMap<FeedId, u64>,
+    pub(crate) startup_sources: HashMap<FeedId, crate::media::moq::egress::SharedMoqStartupSource>,
+    pub(crate) feed_wakes: HashMap<FeedId, FeedWakeSubscription>,
+    pub(crate) feeds: HashMap<FeedId, crate::media::egress::journal::RingFeed>,
+}
+
+impl MoqFabricRegistry {
+    fn new() -> Self {
+        Self {
+            runtimes: HashMap::new(),
+            active_outputs: HashMap::new(),
+            startup_sources: HashMap::new(),
+            feed_wakes: HashMap::new(),
+            feeds: HashMap::new(),
+        }
+    }
+}
+
 pub(crate) struct SinkFabricRegistry {
     pub(crate) runtimes: HashMap<FeedId, EgressFabricRuntime>,
     pub(crate) active_outputs: HashMap<FeedId, u64>,
@@ -223,6 +246,7 @@ pub struct FabricRegistry {
     pub(crate) sink: TokioMutex<SinkFabricRegistry>,
     pub(crate) pipeline: TokioMutex<PipelineFabricRegistry>,
     pub(crate) hls_put: TokioMutex<HlsPutFabricRegistry>,
+    pub(crate) moq: TokioMutex<MoqFabricRegistry>,
 }
 
 impl Default for FabricRegistry {
@@ -239,6 +263,7 @@ impl FabricRegistry {
             sink: TokioMutex::new(SinkFabricRegistry::new()),
             pipeline: TokioMutex::new(PipelineFabricRegistry::new()),
             hls_put: TokioMutex::new(HlsPutFabricRegistry::default()),
+            moq: TokioMutex::new(MoqFabricRegistry::new()),
         }
     }
 }

@@ -400,7 +400,8 @@ mod tests {
             crate::media::egress::ProtocolSpec::Rtmp { .. }
             | crate::media::egress::ProtocolSpec::Sink
             | crate::media::egress::ProtocolSpec::HlsPut { .. }
-            | crate::media::egress::ProtocolSpec::Pipeline { .. } => {
+            | crate::media::egress::ProtocolSpec::Pipeline { .. }
+            | crate::media::egress::ProtocolSpec::Moq { .. } => {
                 panic!("SRT fabric spec must carry the SRT protocol")
             }
         }
@@ -431,7 +432,8 @@ mod tests {
             crate::media::egress::ProtocolSpec::Rtmp { .. }
             | crate::media::egress::ProtocolSpec::Srt { .. }
             | crate::media::egress::ProtocolSpec::HlsPut { .. }
-            | crate::media::egress::ProtocolSpec::Sink => {
+            | crate::media::egress::ProtocolSpec::Sink
+            | crate::media::egress::ProtocolSpec::Moq { .. } => {
                 panic!("recirculation spec must carry the pipeline protocol")
             }
         }

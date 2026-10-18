@@ -184,5 +184,6 @@ impl MediaEngine {
         self.shutdown_all_sink_fabric_runtimes().await;
         self.shutdown_all_pipeline_fabric_runtimes().await;
         self.shutdown_all_hls_put_fabric_runtimes().await;
+        self.shutdown_all_moq_fabric_runtimes().await;
     }
 }

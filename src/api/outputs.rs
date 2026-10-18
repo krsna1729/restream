@@ -54,7 +54,7 @@ pub fn is_supported_output_url(url: &str) -> bool {
     OutputUrlScheme::from_url(url).is_supported_output()
 }
 
-pub const OUTPUT_URL_SCHEME_ERROR: &str = "Invalid URL scheme. Supported schemes are rtmp://, rtmps://, srt://, hls://, sink://, pipeline://, http://, and https://";
+pub const OUTPUT_URL_SCHEME_ERROR: &str = "Invalid URL scheme. Supported schemes are rtmp://, rtmps://, srt://, hls://, sink://, pipeline://, http://, https://, and moqt://";
 pub const MONITORING_URL_SCHEME_ERROR: &str =
     "Invalid monitoring URL scheme. Supported schemes are http://, https://, and srt://";
 pub const OUTPUT_URL_PARSE_ERROR: &str = "Output URL must be a valid absolute URL with a host";
@@ -348,6 +348,11 @@ fn validate_output_transport(
     // here rather than let the output fail on every attempt.
     if scheme.is_rtmp_family() && crate::media::rtmp::parse_rtmp_url(&url).is_none() {
         return Err(Box::new(bad_request(RTMP_OUTPUT_URL_ERROR)));
+    }
+    if scheme == OutputUrlScheme::Moqt
+        && let Err(error) = crate::media::moq::egress::parse_moq_url(&url)
+    {
+        return Err(Box::new(bad_request(error.message())));
     }
     if matches!(output_config.protocol, OutputProtocolConfig::Rtmp { .. })
         && !scheme.is_rtmp_family()
@@ -778,6 +783,43 @@ mod tests {
             .expect("pipeline recirculation is a supported output URL");
 
         assert_eq!(validated.url, "pipeline://pipe-b/input-1");
+    }
+
+    #[test]
+    fn validate_output_payload_accepts_moqt_relay_urls_with_hevc() {
+        let payload = OutputPayload {
+            config: OutputConfig::source().with_video_codec(OutputVideoCodec::Hevc),
+            ..test_output_payload("MOQT://Relay.Example:8893/live?ca=%2Fetc%2Fca.pem")
+        };
+        let validated = validate_output_payload(&payload).expect("moqt is an output scheme");
+
+        assert_eq!(
+            validated.url,
+            "moqt://relay.example:8893/live?ca=%2Fetc%2Fca.pem"
+        );
+    }
+
+    #[test]
+    fn validate_output_payload_rejects_moqt_urls_the_leaf_cannot_use() {
+        for url in [
+            "moqt://relay.example/live?broadcast=",
+            "moqt://relay.example/live?insecure=maybe",
+            "moqt://user:secret@relay.example/live",
+        ] {
+            let response = validate_output_payload(&test_output_payload(url))
+                .expect_err("the MoQ leaf cannot publish to this URL");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{url}");
+        }
+        let payload = OutputPayload {
+            config: OutputConfig::source().with_rtmp_mode(RtmpOutputMode::Enhanced),
+            ..test_output_payload("moqt://relay.example/live")
+        };
+        assert_eq!(
+            validate_output_payload(&payload)
+                .expect_err("RTMP settings do not apply to MoQ")
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
     }
 
     #[test]

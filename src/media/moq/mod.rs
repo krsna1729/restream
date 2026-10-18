@@ -11,6 +11,7 @@
 
 use std::fmt;
 
+pub(crate) mod egress;
 pub(crate) mod media;
 pub(crate) mod tls;
 pub(crate) mod transport;
