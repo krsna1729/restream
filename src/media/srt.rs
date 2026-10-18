@@ -37,6 +37,7 @@ pub(crate) use egress_connect::{
     AddressFamily, SrtConnectKind, SrtConnectRequest, SrtFabricEgressConnectSpec,
 };
 pub(crate) use egress_stats::SrtSendBacklog;
+pub(crate) use ingress_media::ingest_packets::forward_ingest_packets;
 pub(crate) use knobs::{apply_optional_udp_buf, desired_udp_buf};
 pub(crate) use shared_muxer::start_shared_ts_muxer;
 pub(crate) use srt_egress_engine::{SrtEgressEngine, SrtSendResult};

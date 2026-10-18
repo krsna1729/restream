@@ -36,6 +36,8 @@ export interface IngestUrls {
   srt: string | null;
   /** HLS push playlist URL; inputs carry it, pipelines do not. */
   hls?: string | null;
+  /** MoQ publish URL; inputs carry it while the MoQ ingest listener is on. */
+  moq?: string | null;
 }
 
 export interface PipelineInputRuntime {

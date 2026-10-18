@@ -39,6 +39,7 @@ const SCOPE_LABELS: Record<string, string> = {
   "srt-publish": "SRT publish",
   "srt-read": "SRT read",
   "hls-publish": "HLS publish",
+  "moq-publish": "MoQ publish",
 };
 
 export function scopeLabel(scope: string): string {

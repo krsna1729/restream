@@ -25,6 +25,10 @@ pub struct IngestUrls {
     /// HLS push (`-f hls -method PUT|POST`): the playlist URL; the segments
     /// go next to it.
     pub hls: String,
+    /// MoQ publish (`https://`: WebTransport or QUIC, moq.dev convention): the
+    /// last path segment is the stream key. `None`
+    /// while the MoQ ingest listener is off.
+    pub moq: Option<String>,
 }
 
 /// The host and listener ports an input's publish URLs name.
@@ -42,6 +46,7 @@ impl IngestEndpoints {
                 rtmp: format!("rtmp://{host}:{}/live/{key}", ports.rtmp),
                 srt: format!("srt://{host}:{}?streamid=publish:{key}", ports.srt),
                 hls: format!("http://{host}:{}/ingest/hls/{key}/index.m3u8", ports.http),
+                moq: ports.moq.map(|port| format!("https://{host}:{port}/{key}")),
             }),
             PipelineInputSourceKind::HlsPull => None,
         }

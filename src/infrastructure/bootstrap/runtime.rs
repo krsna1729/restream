@@ -94,6 +94,14 @@ impl RuntimeTasks {
             rtmp_restarts,
         );
 
+        crate::media::moq::ingest::listener::launch(
+            &config.moq_ingest,
+            pipeline_access.clone(),
+            engine.clone(),
+            security.clone(),
+        )
+        .await;
+
         let srt_restarts = Arc::clone(&engine.runtime.listener_stats.restarts);
         let srt_server = Arc::new(crate::media::srt::SrtServer::new(
             pipeline_access,

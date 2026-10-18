@@ -6,7 +6,11 @@ use crate::media::packet::{MediaPacket, MediaType};
 use crate::media::ring_buffer::RingBuffer;
 use crate::media::standby_gop::StandbyGopCache;
 
-pub(super) fn forward_ingest_packets(
+/// Publish one batch of an input's packets the way every Owner-thread ingest
+/// does after its container: preview first, then the input gate (standby GOP
+/// cache and promotion replay), timestamp mapping and the ring push that
+/// records in-band configuration. Shared by SRT and MoQ ingest.
+pub(crate) fn forward_ingest_packets(
     packets: &mut Vec<MediaPacket>,
     ring: &RingBuffer,
     registration: &IngestRegistration,

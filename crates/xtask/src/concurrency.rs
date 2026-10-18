@@ -16,6 +16,7 @@ const LOOM_TARGETS: &[&str] = &[
     "avio_loom",
     "egress_feed_wake_loom",
     "input_selection_loom",
+    "moq_origin_loom",
     "ring_frame_unit_loom",
     "ring_migration_loom",
     "ts_chunk_ring_loom",

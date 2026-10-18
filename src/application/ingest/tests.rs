@@ -437,6 +437,7 @@ async fn pipeline_access_authenticator_refuses_pushes_to_a_pull_input() {
         (PipelineAccessMode::RtmpPublish, "10.0.0.11"),
         (PipelineAccessMode::SrtPublish, "10.0.0.12"),
         (PipelineAccessMode::HlsPublish, "10.0.0.13"),
+        (PipelineAccessMode::MoqPublish, "10.0.0.15"),
     ];
     for (mode, ip) in pushes {
         let result = auth.authenticate(mode, "live", ip).await;
@@ -512,6 +513,36 @@ async fn pipeline_access_authenticator_checks_hls_publish_keys_under_their_own_s
 
     let accepted = auth
         .authenticate(PipelineAccessMode::HlsPublish, "live", ip)
+        .await
+        .unwrap();
+    assert_eq!(accepted.id, "pipeline-1");
+    assert!(
+        security.snapshots().is_empty(),
+        "an accepted key clears the client's failures"
+    );
+}
+
+#[tokio::test]
+async fn pipeline_access_authenticator_checks_moq_publish_keys_under_their_own_scope() {
+    let lookup = Arc::new(FakePipelineStore::success("live"));
+    let security = Arc::new(IngestSecurityService::new(test_security_config()));
+    let auth = PipelineStoreIngestAuthenticator::new(lookup.clone(), lookup, security.clone());
+    let ip = "10.0.0.7";
+
+    let rejected = auth
+        .authenticate(PipelineAccessMode::MoqPublish, "missing", ip)
+        .await;
+    assert!(matches!(
+        rejected,
+        Err(PipelineAccessError::InvalidStreamKey)
+    ));
+    let snapshots = security.snapshots();
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].scope, "moq-publish");
+    assert_eq!(snapshots[0].failure_count, 1);
+
+    let accepted = auth
+        .authenticate(PipelineAccessMode::MoqPublish, "live", ip)
         .await
         .unwrap();
     assert_eq!(accepted.id, "pipeline-1");

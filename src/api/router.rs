@@ -62,8 +62,9 @@ use super::pipeline_observability::{
     v1_pipeline_summary_handler,
 };
 use super::pipelines::{
-    pipeline_detail_handler, pipeline_probe_handler, pipelines_delete_handler,
-    pipelines_get_handler, pipelines_post_handler, pipelines_update_handler,
+    pipeline_detail_handler, pipeline_moq_token_handler, pipeline_probe_handler,
+    pipelines_delete_handler, pipelines_get_handler, pipelines_post_handler,
+    pipelines_update_handler,
 };
 use super::settings::{config_get_handler, config_patch_handler};
 use super::state::AppState;
@@ -131,6 +132,7 @@ pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
     "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/stop",
     "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/status",
     "/api/v1/pipelines/{pipeline_id}/probe",
+    "/api/v1/pipelines/{pipeline_id}/moq-token",
     "/api/v1/pipelines/{pipeline_id}/graph",
     "/api/v1/pipelines/{pipeline_id}/alerts",
     "/api/v1/logs",
@@ -361,6 +363,10 @@ fn create_app_router() -> Router<Arc<AppState>> {
         .route(
             "/api/v1/pipelines/{pipeline_id}/probe",
             get(pipeline_probe_handler),
+        )
+        .route(
+            "/api/v1/pipelines/{pipeline_id}/moq-token",
+            post(pipeline_moq_token_handler),
         )
         .route(
             "/api/v1/pipelines/{pipeline_id}/graph",

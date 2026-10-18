@@ -490,6 +490,54 @@ fn rtmps_extra_trust_roots_pem_path_defaults_to_none_and_can_be_overridden() {
 }
 
 #[test]
+fn moq_ingest_is_off_by_default_and_its_port_follows_the_listen_address() {
+    with_env_overlay(
+        &[],
+        &[
+            "RESTREAM_MOQ_INGEST_LISTEN",
+            "RESTREAM_MOQ_TLS_CERT",
+            "RESTREAM_MOQ_TLS_KEY",
+        ],
+        || {
+            let config = AppConfig::from_env();
+            assert_eq!(config.moq_ingest, super::MoqIngestSetting::Off);
+            assert_eq!(config.ports.moq, None);
+        },
+    );
+    with_env_vars(
+        &[
+            ("RESTREAM_MOQ_INGEST_LISTEN", "0.0.0.0:4443"),
+            ("RESTREAM_MOQ_TLS_CERT", "/tls/cert.pem"),
+            ("RESTREAM_MOQ_TLS_KEY", "/tls/key.pem"),
+            ("RESTREAM_MOQ_MAX_CONNECTIONS", "16"),
+            ("RESTREAM_MOQ_ORIGIN_MAX_VIEWERS", "8"),
+        ],
+        || {
+            let config = AppConfig::from_env();
+            let moq = config.moq_ingest.config().expect("listener configured");
+            assert_eq!(moq.listen.port(), 4443);
+            assert_eq!(moq.tls_cert_path, "/tls/cert.pem");
+            assert_eq!(moq.max_connections, 16);
+            assert_eq!(moq.origin_max_viewers, 8);
+            assert_eq!(config.ports.moq, Some(4443));
+            assert_eq!(config.effective_summary()["ports"]["moq"], 4443);
+        },
+    );
+    with_env_overlay(
+        &[("RESTREAM_MOQ_INGEST_LISTEN", "0.0.0.0:4443")],
+        &["RESTREAM_MOQ_TLS_CERT", "RESTREAM_MOQ_TLS_KEY"],
+        || {
+            let config = AppConfig::from_env();
+            assert!(matches!(
+                config.moq_ingest,
+                super::MoqIngestSetting::Invalid(_)
+            ));
+            assert_eq!(config.ports.moq, None);
+        },
+    );
+}
+
+#[test]
 fn effective_summary_covers_runtime_knobs_without_secret_values() {
     let config = AppConfig {
         srt_passphrase: Some("super-secret".to_string()),

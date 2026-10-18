@@ -297,3 +297,34 @@ async fn the_graph_is_the_running_structure_without_counters() {
     let moving = project_rows(&engine, &pipelines, &outputs).await;
     assert_eq!(moving.graphs, live.graphs, "counters are not graph state");
 }
+
+/// A keyed input advertises a MoQ publish URL only while the MoQ ingest
+/// listener is configured; the other URLs do not depend on it.
+#[tokio::test]
+async fn a_keyed_input_names_its_moq_url_only_while_moq_ingest_is_on() {
+    async fn urls(
+        pool: &sqlx::SqlitePool,
+        engine: &MediaEngine,
+        ports: crate::config::ServerPorts,
+    ) -> IngestUrls {
+        let hub = StateHub::new(ports);
+        hub.refresh(pool, engine).await;
+        hub.snapshot().await.inputs[0].ingest_urls.clone().unwrap()
+    }
+    let pool = database().await;
+    let engine = MediaEngine::new();
+    crate::db::create_pipeline(&pool, "pipe", "P", "key-main", None, None)
+        .await
+        .unwrap();
+
+    let off = urls(&pool, &engine, ports()).await;
+    assert_eq!(off.moq, None);
+
+    let moq_ports = crate::config::ServerPorts {
+        moq: Some(4443),
+        ..ports()
+    };
+    let on = urls(&pool, &engine, moq_ports).await;
+    assert_eq!(on.moq.as_deref(), Some("https://localhost:4443/key-main"));
+    assert_eq!((on.rtmp, on.srt, on.hls), (off.rtmp, off.srt, off.hls));
+}

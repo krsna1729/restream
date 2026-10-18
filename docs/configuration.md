@@ -24,6 +24,7 @@ in SQLite.
 | Dashboard/API listener | `127.0.0.1:3030` | `RESTREAM_HTTP_BIND_ADDR`, `RESTREAM_HTTP_PORT` |
 | RTMP listener | `0.0.0.0:1935` | `RESTREAM_RTMP_PORT` |
 | SRT listener | `0.0.0.0:10080` | `RESTREAM_SRT_PORT` |
+| MoQ ingest listener (Media over QUIC publishers, UDP; one ingest Owner thread with its own Compio runtime) | Off | `RESTREAM_MOQ_INGEST_LISTEN` (an `IP:port` such as `0.0.0.0:4443`; unset or blank leaves MoQ off and nothing MoQ runs). When set, `RESTREAM_MOQ_TLS_CERT` and `RESTREAM_MOQ_TLS_KEY` must name the PEM certificate chain and private key the QUIC endpoint presents; a missing file setting, an unparseable address or port `0` is logged at startup (`restream.moq.ingest.config_invalid`) and the listener stays off. `RESTREAM_MOQ_MAX_CONNECTIONS` caps concurrent handshakes and publishers (default `64`, clamped `1..=4096`); an admitted viewer leaves that count, so an audience cannot lock publishers out. `RESTREAM_MOQ_ORIGIN_MAX_VIEWERS` caps concurrent direct viewers the listener serves as a MoQ origin, across every pipeline (default `64`, clamped `1..=4096`; see [MoQ origin](media-pipeline.md#moq-origin)). See [MoQ ingest](media-pipeline.md#moq-ingest) |
 | Tokio scheduler workers | Derived from the effective CPU mask/quota | `RESTREAM_TOKIO_WORKER_THREADS` |
 | glibc malloc arenas | **Provisional** `2` (set at startup with `mallopt`, return value checked; the effective setting is logged as `restream.malloc.arenas` and shown as `runtime.malloc.arena_max` in host settings). Measured on one 6-CPU host only: −34 to −47 MB RSS at 50 SRT / 500 RTMP outputs, frozen-SRT-destination surge 66–72 MB → 30–47 MB, no measurable CPU change. Arenas reduce allocator lock contention, so qualify per host (`docs/capacity-ramp.md`) before treating 2 as final | `RESTREAM_MALLOC_ARENA_MAX` (`default` = glibc policy, or a positive count); an operator `MALLOC_ARENA_MAX` takes precedence and is applied by glibc |
 | Tokio blocking-thread ceiling | `512` | `RESTREAM_TOKIO_MAX_BLOCKING_THREADS` |
@@ -251,11 +252,25 @@ rtmp://<ingestHost>:1935/live/<streamKey>
 srt://<ingestHost>:10080?streamid=publish:<streamKey>
 ```
 
-HLS push ingest (MPEG-TS) uses the dashboard HTTP port; it is not among the
-generated `ingestUrls`. See [HLS push ingest](media-pipeline.md#hls-push-ingest):
+HLS push ingest (MPEG-TS) uses the dashboard HTTP port; it is not among a
+pipeline's generated `ingestUrls` (a keyed input's `ingestUrls` carries it as
+`hls`). See [HLS push ingest](media-pipeline.md#hls-push-ingest):
 
 ```text
 http://<ingestHost>:<httpPort>/ingest/hls/<streamKey>/<playlist>.m3u8
+```
+
+MoQ ingest uses the MoQ listener's UDP port and exists only while
+`RESTREAM_MOQ_INGEST_LISTEN` is set. A keyed input's `ingestUrls.moq` names
+it (`null` while MoQ is off). The URL's last path segment is the stream key,
+whatever the publisher names its broadcast; a publisher that connects to
+`https://<ingestHost>:<moqPort>/` may instead name its broadcast
+`<streamKey>` (or `<scope>/<streamKey>.hang`). moq.dev clients pick
+WebTransport or native QUIC from an `https://` URL, and the listener accepts
+both. See [MoQ ingest](media-pipeline.md#moq-ingest):
+
+```text
+https://<ingestHost>:<moqPort>/<streamKey>
 ```
 
 Pipelines may supply an explicit stream key, or omit it and let the API generate

@@ -100,19 +100,30 @@ impl PipelineAccessAuthenticator for PipelineStoreIngestAuthenticator {
                 )
                 .await
                 .map_err(pipeline_access_error)?,
+                PipelineAccessMode::MoqPublish => authenticate_stream_key_for_scope(
+                    self.pipeline_lookup.as_ref(),
+                    &self.security,
+                    stream_key,
+                    client_ip,
+                    RateLimitScope::MoqPublish,
+                    true,
+                )
+                .await
+                .map_err(pipeline_access_error)?,
             };
 
             // A pull input has no listener of its own: it never accepts a
             // push, so its key resolves only for reads. Publishing to it
             // would otherwise race the pull task for the input's session.
             //
-            // Exhaustive on purpose: a new publish mode (a MoQ publish, say)
-            // must decide this question at compile time rather than inherit
-            // "not a publish" from a wildcard arm.
+            // Exhaustive on purpose: a new publish mode must decide this
+            // question at compile time rather than inherit "not a publish"
+            // from a wildcard arm.
             let pushing = match mode {
                 PipelineAccessMode::RtmpPublish
                 | PipelineAccessMode::SrtPublish
-                | PipelineAccessMode::HlsPublish => true,
+                | PipelineAccessMode::HlsPublish
+                | PipelineAccessMode::MoqPublish => true,
                 PipelineAccessMode::RtmpPlay | PipelineAccessMode::SrtRead => false,
             };
             let input = self

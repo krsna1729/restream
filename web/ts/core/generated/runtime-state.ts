@@ -93,7 +93,13 @@ export type IngestUrls = { rtmp: string, srt: string,
  * HLS push (`-f hls -method PUT|POST`): the playlist URL; the segments
  * go next to it.
  */
-hls: string, };
+hls: string, 
+/**
+ * MoQ publish (`https://`: WebTransport or QUIC, moq.dev convention): the
+ * last path segment is the stream key. `None`
+ * while the MoQ ingest listener is off.
+ */
+moq: string | null, };
 
 export type PipelineInputRole = "primary" | "backup";
 
@@ -161,7 +167,7 @@ export type Cause = { "code": "noPublisher" } | { "code": "stageNotProducing", s
 
 export type DesiredOutputState = "running" | "stopped";
 
-export type EgressProtocol = "rtmp" | "srt" | "hls" | "sink" | "pipeline" | "unknown";
+export type EgressProtocol = "rtmp" | "srt" | "hls" | "sink" | "pipeline" | "moq" | "unknown";
 
 export type EgressPhase = "starting" | "waitingUpstream" | "connecting" | "sending" | "discarding" | "segmenting" | "uploading" | "retrying" | "failed" | "stopped";
 
