@@ -164,7 +164,7 @@ impl MediaEngine {
             runtimes, feeds, ..
         } = &mut *registry;
         for (id, runtime) in runtimes {
-            if runtime.observation_due()
+            if (runtime.observation_due() || runtime.has_panicked_shard())
                 && let Some(feed) = feeds.get(id)
             {
                 self.rescale_srt_fabric(

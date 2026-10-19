@@ -241,42 +241,8 @@ sequenceDiagram
 
 ## Leaf lifecycle
 
-`LeafLifecycle` and `apply_event` (`lifecycle.rs`) define the legal states and
-transitions. The diagram is that transition table.
-
-```mermaid
-stateDiagram-v2
-    [*] --> Created
-    Created --> Connecting: Resolved
-    Resolving --> Connecting: Resolved
-    Resolving --> RetryWait: ResolveFailed
-    Connecting --> Handshaking: Connected
-    Connecting --> RetryWait: ConnectFailed
-    Handshaking --> Active: HandshakeComplete
-    Handshaking --> RetryWait: HandshakeFailed, PeerClosed, Failure
-    Active --> Backpressured: WouldBlock
-    Backpressured --> Active: Writable
-    Active --> Resynchronizing: FeedOverrun
-    Backpressured --> Resynchronizing: FeedOverrun
-    Active --> RetryWait: PeerClosed, Failure
-    Backpressured --> RetryWait: PeerClosed, Failure
-    Resynchronizing --> Connecting: SyncPointFound
-    Resynchronizing --> RetryWait: Failure
-    RetryWait --> Resolving: RetryTimerExpired
-    Created --> Closing: RemoveRequested
-    Active --> Closing: RemoveRequested
-    RetryWait --> Closing: RemoveRequested
-    Closing --> Stopped: CleanupComplete
-    Stopped --> [*]
-```
-
-Every non-terminal state also accepts `RemoveRequested` → `Closing` (only
-three such edges are drawn). `Stopped` accepts nothing. The unit tests in
-`lifecycle.rs` check every legal edge and reject every other pair.
-
-Production backends do not drive this machine. `LeafCommon::lifecycle` stays
-`Created`; `apply_event` is called only from tests. Each backend tracks its
-own phase:
+Each backend tracks its real connection phase; the fabric does not impose
+a second lifecycle state machine or retry timer:
 
 | Backend | Phase type |
 |---|---|
@@ -369,10 +335,9 @@ Retries are not a shard concern. `EgressTask` sees the flag within 250 ms,
 records the error, sends `Remove` and returns. `EgressTask::run` then applies
 the shared output backoff (`RESTREAM_OUTPUT_RETRY_BASE_MS` 5 s,
 `RESTREAM_OUTPUT_RETRY_MAX_MS` 300 s, `RESTREAM_OUTPUT_MAX_RETRIES` 10) and
-the reconciler starts a new attempt with a new generation. `RetryPolicy` and
-`RetryState` in `policy.rs` are not used by production backends. The one
-shard-level retry is HLS PUT, which retries a failed request on a
-`ScheduleTimer` and reports it through `UploadStatus`.
+the reconciler starts a new attempt with a new generation. HLS PUT may
+retry an individual failed request on a `ScheduleTimer` and reports it
+through `UploadStatus`; this does not add another output-reconnect policy.
 
 ## Shard sizing and placement
 
@@ -421,9 +386,22 @@ Shards share no mutable leaf state and take no process-wide lock on the hot
 path. Cross-shard contact is feed reads, wake gates, the command channel and
 the snapshot mutex written once per loop iteration.
 
-`EgressSupervisor::recover_panicked_shards` (`supervisor.rs`) can replace a
-panicked shard and replay its desired outputs. Production code does not call
-it yet; a panicked shard stays down and raises an alert.
+The shard thread catches panics and publishes a panicked snapshot;
+commands to that dead instance fail. The next fabric resize check:
+
+1. Releases that shard's desired outputs and marks only their shared
+   progress sinks unexpectedly terminated.
+2. Excludes the dead shard from placement until a replacement starts.
+3. Constructs the backend on its new shard thread and refreshes feed wake
+   handles.
+4. Lets affected `EgressTask`s retry through the ordinary backoff path.
+
+Reconciliation invokes recovery for every fabric kind, including fixed
+pools and quiet sink, pipeline and HLS PUT feeds. Failed replacement
+construction is reported and retried on the next check. Healthy siblings
+are unchanged. There is no desired-output replay or socket migration.
+A stalled but live shard is reported, not replaced: it still owns resources
+that cannot safely be taken by another thread.
 
 ## Transport backends
 

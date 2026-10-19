@@ -138,6 +138,23 @@ impl MediaEngine {
         Ok(outcome)
     }
 
+    /// HLS PUT pools rescale only around commands, so the reconciler calls
+    /// this to replace a panicked shard and release its outputs to retry
+    /// (see `EgressFabricRuntime::rescale`) on an otherwise quiet feed.
+    pub(crate) async fn recover_hls_put_fabrics(&self) {
+        let mut registry = self.fabric.hls_put.lock().await;
+        let crate::media::engine_registries::HlsPutFabricRegistry {
+            runtimes, shared, ..
+        } = &mut *registry;
+        for (id, runtime) in runtimes {
+            if runtime.has_panicked_shard()
+                && let Some(shared) = shared.get(id)
+            {
+                self.rescale_hls_put_fabric(id, runtime, shared.clone(), ResizeReason::Remove);
+            }
+        }
+    }
+
     fn rescale_hls_put_fabric(
         &self,
         feed_id: &FeedId,

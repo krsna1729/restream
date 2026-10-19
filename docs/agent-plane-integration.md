@@ -157,9 +157,10 @@ stateDiagram-v2
     verificationFailed --> verified: verify again
 ```
 
-`complete_verify` does not check the current status. Verify on any stored
-operation overwrites its status with `verified` or `verificationFailed`.
-The diagram shows only the intended path from `applied`.
+`complete_verify` checks status while holding the operation store's lock.
+Only `applied`, `verified` and `verificationFailed` can become `verified`
+or `verificationFailed`. Other states are refused without changing the
+record.
 
 ### Invariants
 

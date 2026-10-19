@@ -185,6 +185,10 @@ impl EgressShardBackend for SinkShardBackend {
     fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {
         match command {
             EgressCommand::Add(spec) | EgressCommand::Update(spec) => {
+                #[cfg(test)]
+                if spec.id.as_str().starts_with(INJECTED_SHARD_PANIC_OUTPUT) {
+                    std::panic::resume_unwind(Box::new("injected sink shard panic"));
+                }
                 if matches!(spec.protocol, ProtocolSpec::Sink) {
                     self.add_leaf(spec);
                 }
@@ -212,6 +216,10 @@ impl EgressShardBackend for SinkShardBackend {
         self.output_leaves.clear();
     }
 }
+
+/// Adding an output whose id starts with this panics the whole shard thread.
+#[cfg(test)]
+pub(crate) const INJECTED_SHARD_PANIC_OUTPUT: &str = "restream-test-injected-shard-panic";
 
 #[cfg(test)]
 mod tests;

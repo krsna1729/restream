@@ -122,9 +122,9 @@ When you touch concurrency-sensitive code:
 3. Update the live harness if visible teardown or recovery changed.
 4. Update the API docs if status semantics changed.
 
-If no new proof is needed, say in the commit message which existing proof
-covers the change. Run the real gate; a "fast" local loop that skips it lets
-models rot.
+If no new proof is needed, name the existing coverage in the commit
+message. Run the targeted new or changed proof locally; CI runs the
+mandatory gates. A test filter that selects no tests fails the step.
 
 ## Mandatory surfaces
 
@@ -148,14 +148,13 @@ equal or stronger replacement in the same change. Names marked *gate* run in
 | SRT ingress Owner (`src/media/srt/ingress_*`, *gate* via `media::srt::ingress_live_tests`, `ingress_bridge_tests`, `ingress_admission`) | `read_play_sends_through_the_owner_and_target_deletion_disconnects`, `asynchronous_rejection_disconnects_the_owner_peer`, `fragmented_publisher_panic_retires_tail_without_stalling_an_existing_sibling`, `owner_stamps_receive_quality_and_stops_sampling_retired_peers`, `publisher_receive_quality_reaches_the_ingest_snapshot`, `one_ingress_owner_thread_serves_many_peers`, `owner_and_runtime_are_not_send`, `two_owners_share_the_port_and_each_session_command_reaches_its_owner` |
 | RTMP listener (`src/media/rtmp/listener.rs`, *gate*) | `compio_rtmp_listener_shutdown_joins_acceptor_and_session_workers`, `media::rtmp::listener::tests` |
 | Egress feed wakes | `feed_wake_delivers_media_after_idle_when_factory_start_is_delayed` (`rtmp_shard_tests.rs`), `fabric_feed_wakes_follow_ring_growth_rescale_and_stop_on_drop` (`egress/runtime.rs`), and in `egress/shard/tests/feed_wake.rs`: `publication_after_a_wake_head_check_rearms_the_shared_shard_gate`, `a_full_command_queue_cannot_strand_a_feeds_final_publication`, `full_fallback_preserves_an_already_queued_publication_wake` (all *gate*) |
+| Egress shard recovery (*gate*: `lib-egress-resize`, `lib-egress-panic-recovery`) | `a_panicked_shard_is_replaced_and_its_retried_outputs_are_delivered`, `placement_skips_a_dead_shard_until_its_replacement_starts`, `every_fabric_recovers_panics_without_adaptive_observation`, `reconciler_recovery_replaces_a_panicked_sink_shard`, `a_retried_output_delivers_again_after_its_shard_panics` |
 | SRT stream id (*gate*) | `media::srt_stream_id::tests` |
 | TS chunk ring | `live_reader_starts_after_existing_chunks` |
 | Harness (`src/bin/test_harness.rs`) | `kill_and_wait_child_terminates_spawned_process` (*gate*), and the live modes above |
 
 ## Open gaps
 
-- The `lib-egress-leaf-live-start` step filters on `fresh_leaf_first_visit`,
-  which no test matches now, so the step runs nothing.
 - More model-checked coverage for lifecycle registries beyond the stage
   families.
 - Property tests for lifecycle permutations where loom does not fit.

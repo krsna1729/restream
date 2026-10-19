@@ -703,7 +703,9 @@ fn run_accepting_server_peer_reporting_video_after_idle(
     let mut buf = [0u8; 4096];
     let remaining;
     loop {
-        let n = stream.read(&mut buf).expect("server handshake read");
+        let Ok(n) = stream.read(&mut buf) else {
+            return;
+        };
         if n == 0 {
             return;
         }
@@ -779,7 +781,9 @@ fn run_accepting_server_peer_reporting_video_after_idle(
             }
         }
 
-        let n = stream.read(&mut buf).expect("server session read");
+        let Ok(n) = stream.read(&mut buf) else {
+            return;
+        };
         if n == 0 {
             return;
         }
@@ -895,10 +899,13 @@ async fn feed_wake_delivers_media_after_idle_when_factory_start_is_delayed() {
 
 #[path = "rtmp_shard_backpressure_tests.rs"]
 mod backpressure_tests;
+
 #[path = "rtmp_shard_drain_tests.rs"]
 mod drain_tests;
 #[path = "rtmp_shard_media_tick_tests.rs"]
 mod media_tick_tests;
+#[path = "rtmp_shard_panic_tests.rs"]
+mod panic_tests;
 #[path = "rtmp_shard_reregistration_tests.rs"]
 mod reregistration_tests;
 #[path = "rtmp_shard_wake_tests.rs"]

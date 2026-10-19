@@ -208,7 +208,7 @@ impl MediaEngine {
             ..
         } = &mut *registry;
         for (id, runtime) in runtimes {
-            if !runtime.observation_due() {
+            if !runtime.observation_due() && !runtime.has_panicked_shard() {
                 continue;
             }
             if let (Some(feed), Some(startup), Some(tls)) = (

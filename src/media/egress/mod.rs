@@ -20,7 +20,7 @@
 //!   metrics.rs      — ShardMetrics, LeafMetrics, FeedMetrics
 //!   manager.rs      — desired output assignment and command admission
 //!   shard.rs        — fixed shard threads, supervision snapshots, wake budgets
-//!   supervisor.rs   — panic recovery orchestration across manager and shards
+//!   runtime.rs      — one feed's manager and shards: sizing, panic recovery
 //!   test_driver.rs  — FakeFeed, FakeEngine, FakePoller (cfg(test) / test-only)
 //! ```
 
@@ -45,7 +45,6 @@ pub(crate) mod runtime;
 pub mod scheduler;
 pub mod shard;
 pub(crate) mod sizing;
-pub mod supervisor;
 pub mod timer;
 pub(crate) mod tls;
 pub mod visit;
@@ -72,9 +71,5 @@ pub use shard::{
     EgressShardBackend, EgressShardCommandEffect, EgressShardConfig, EgressShardConfigError,
     EgressShardGroup, EgressShardGroupError, EgressShardHandle, EgressShardHealth,
     EgressShardHeartbeat, EgressShardIdleWake, EgressShardSendError, EgressShardSnapshot,
-};
-pub use supervisor::{
-    EgressShardRecovery, EgressSupervisor, EgressSupervisorConfig, EgressSupervisorError,
-    EgressSupervisorRecovery,
 };
 pub use visit::{EngineVisit, EngineVisitOutcome, EngineVisitResult};

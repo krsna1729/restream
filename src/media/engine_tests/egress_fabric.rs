@@ -106,6 +106,139 @@ fn output_spec(id: &str, feed: &FeedId) -> OutputSpec {
     }
 }
 
+/// Exercise every production recovery entry point with a one-shard ceiling.
+/// Periodic observation is still in its cooldown: panic recovery must not
+/// depend on pool growth, a later sample, or another output command.
+#[tokio::test]
+async fn every_fabric_recovers_panics_without_adaptive_observation() {
+    use crate::media::egress::journal::RingFeed;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct PanicBackend;
+    impl EgressShardBackend for PanicBackend {
+        fn on_command(&mut self, _: EgressCommand) -> EgressShardCommandEffect {
+            crate::test_support::with_expected_panic_suppressed(|| panic!("scripted shard panic"))
+        }
+    }
+
+    let engine = MediaEngine::new();
+    let id = FeedId::new("fixed-pool-recovery");
+    let feed = RingFeed::new(
+        Arc::new(crate::media::ring_buffer::RingBuffer::new(8)),
+        Arc::new(FeedEpoch::new()),
+    );
+    let ts_ring = TsChunkRing::new(8, CancellationToken::new());
+    let ts_feed = TsFeed::new(&ts_ring, Arc::new(FeedEpoch::new()));
+    let store = Arc::new(crate::media::hls::HlsStore::new());
+    engine
+        .retain_srt_fabric_runtime(id.clone(), &ts_feed, &ts_ring.ring)
+        .await
+        .unwrap();
+    engine
+        .retain_rtmp_fabric_runtime(id.clone(), &feed)
+        .await
+        .unwrap();
+    engine
+        .retain_moq_fabric_runtime(id.clone(), &feed)
+        .await
+        .unwrap();
+    engine
+        .retain_sink_fabric_runtime(id.clone(), &feed)
+        .await
+        .unwrap();
+    engine
+        .retain_pipeline_fabric_runtime(id.clone(), &feed)
+        .await
+        .unwrap();
+    engine
+        .retain_hls_put_fabric_runtime(id.clone(), &store)
+        .await
+        .unwrap();
+
+    macro_rules! recover {
+        ($registry:ident, $recover:ident) => {{
+            let ended = Arc::new(AtomicBool::new(false));
+            let mut spec = output_spec(stringify!($registry), &id);
+            spec.progress.terminated_unexpectedly = Some(ended.clone());
+            let group =
+                EgressShardGroup::spawn(NonZeroU32::MIN, shard_config(), vec![PanicBackend])
+                    .unwrap();
+            let mut failed =
+                EgressFabricRuntime::new(EgressManagerConfig::new(1, 16).unwrap(), group)
+                    .unwrap()
+                    .adaptive(1);
+            failed
+                .rescale(
+                    crate::config::EgressShardProfile::OutputCount,
+                    crate::capacity::HostCapacity { cpus: 1 },
+                    crate::media::egress::runtime::ResizeReason::Observe,
+                    shard_config(),
+                    |_| || Ok::<_, String>(PanicBackend),
+                )
+                .unwrap();
+            assert!(!failed.observation_due());
+            failed.dispatch(EgressCommand::Add(spec)).unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !failed.has_panicked_shard() {
+                assert!(std::time::Instant::now() < deadline);
+                tokio::task::yield_now().await;
+            }
+            let old = engine
+                .fabric
+                .$registry
+                .lock()
+                .await
+                .runtimes
+                .insert(id.clone(), failed)
+                .unwrap();
+            old.shutdown();
+            let before = test_health_snapshot(&engine, &[], &HashMap::new()).await;
+            assert!(
+                crate::alerts::derive_alerts(&before)
+                    .iter()
+                    .any(|alert| alert.id.ends_with(":panicked")),
+                "{} panic must alert",
+                stringify!($registry)
+            );
+            engine.$recover().await;
+            let registry = engine.fabric.$registry.lock().await;
+            let recovered = &registry.runtimes[&id];
+            assert!(
+                ended.load(Ordering::Acquire),
+                "{} must release its outputs",
+                stringify!($registry)
+            );
+            assert!(
+                recovered
+                    .snapshots()
+                    .iter()
+                    .all(|s| !s.panicked && !s.stopped)
+            );
+            drop(registry);
+            let after = test_health_snapshot(&engine, &[], &HashMap::new()).await;
+            assert!(
+                !crate::alerts::derive_alerts(&after)
+                    .iter()
+                    .any(|alert| alert.id.ends_with(":panicked")),
+                "{} recovery must clear its alert",
+                stringify!($registry)
+            );
+        }};
+    }
+    recover!(srt, resize_srt_fabrics);
+    recover!(rtmp, resize_rtmp_fabrics);
+    recover!(moq, resize_moq_fabrics);
+    recover!(sink, recover_sink_fabrics);
+    recover!(pipeline, recover_pipeline_fabrics);
+    recover!(hls_put, recover_hls_put_fabrics);
+    engine.release_srt_fabric_runtime(&id).await;
+    engine.release_rtmp_fabric_runtime(&id).await;
+    engine.release_moq_fabric_runtime(&id).await;
+    engine.release_sink_fabric_runtime(&id).await;
+    engine.release_pipeline_fabric_runtime(&id).await;
+    engine.release_hls_put_fabric_runtime(&id).await;
+}
+
 #[tokio::test]
 async fn srt_fabric_registry_dispatches_to_feed_runtime() {
     let engine = MediaEngine::new();
@@ -382,6 +515,99 @@ async fn sink_fabric_registry_dispatches_add_and_the_shard_discards_published_un
     }
     assert_eq!(bytes_sent.load(Ordering::Relaxed), 5);
 
+    engine.release_sink_fabric_runtime(&feed_id).await;
+}
+
+/// Sink pools rescale only around commands; the reconciler's
+/// `recover_sink_fabrics` must still replace a panicked shard on a quiet
+/// feed, end the outputs it held for their application tasks, and run the
+/// retried output on the replacement.
+#[tokio::test]
+async fn reconciler_recovery_replaces_a_panicked_sink_shard() {
+    use crate::media::egress::backends::sink_shard::INJECTED_SHARD_PANIC_OUTPUT;
+    use crate::media::egress::journal::RingFeed;
+    use crate::media::egress::leaf::EgressProgressSink;
+    use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    let engine = MediaEngine::new();
+    let feed_id = FeedId::new("feed-engine-sink-recover");
+    let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(8));
+    let feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
+    engine
+        .retain_sink_fabric_runtime(feed_id.clone(), &feed)
+        .await
+        .unwrap();
+    let ended = Arc::new(AtomicBool::new(false));
+    let bytes_sent = Arc::new(AtomicU64::new(0));
+    let mut spec = output_spec("out-sink-recover", &feed_id);
+    spec.progress = EgressProgressSink {
+        bytes_sent: Some(bytes_sent.clone()),
+        terminated_unexpectedly: Some(ended.clone()),
+        ..Default::default()
+    };
+    engine
+        .dispatch_sink_fabric_command(&feed_id, EgressCommand::Add(spec.clone()))
+        .await
+        .unwrap();
+    engine
+        .dispatch_sink_fabric_command(
+            &feed_id,
+            EgressCommand::Add(output_spec(INJECTED_SHARD_PANIC_OUTPUT, &feed_id)),
+        )
+        .await
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !engine
+        .sink_fabric_runtime_snapshots(&feed_id)
+        .await
+        .unwrap()
+        .iter()
+        .any(|snapshot| snapshot.panicked)
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the shard never panicked"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    engine.recover_sink_fabrics().await;
+    assert!(
+        ended.load(Ordering::Acquire),
+        "the output's task must see it end, or it never retries"
+    );
+    assert!(
+        engine
+            .sink_fabric_runtime_snapshots(&feed_id)
+            .await
+            .unwrap()
+            .iter()
+            .all(|snapshot| !snapshot.panicked && !snapshot.stopped)
+    );
+
+    // The application task's retry runs on the replacement.
+    spec.generation = 2;
+    engine
+        .dispatch_sink_fabric_command(&feed_id, EgressCommand::Add(spec))
+        .await
+        .unwrap();
+    ring.push(MediaPacket {
+        media_type: MediaType::Video,
+        format: PayloadFormat::Raw,
+        is_keyframe: true,
+        track_index: 0,
+        pts: 0,
+        dts: 0,
+        payload: bytes::Bytes::from_static(b"abcde"),
+    });
+    while bytes_sent.load(Ordering::Relaxed) == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the retried output never ran on the replacement"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     engine.release_sink_fabric_runtime(&feed_id).await;
 }
 
