@@ -72,23 +72,6 @@ items).
 - Status: open (Filed: 2026-10-02 by claude; investigated 2026-10-03). Blocks
   SRT capacity evidence on this host at the 4/2 CPU split.
 
-### Q-028 [testing] [sonnet] Local live-harness flakes on a loaded 6-vCPU VPS
-- Goal: decide whether the local failures below are real defects or host
-  load, so a local live run is either trustworthy or explicitly ignored.
-- Files: `test/harness/` scenarios `mixed.live.srt.*` and
-  `srt-crypto-matrix`; `src/bin/test_harness/` signal validation.
-- Gates: the same modes pass in CI's master push transport matrix (they do
-  today); a local rerun on an idle host either passes or reproduces with a
-  named cause.
-- Context (2026-10-03, base `b118d1e` and the srt-rs repin alike, load
-  average 13–20 on 6 vCPUs): `mixed.live.srt.h264.a2.bf2` failed 3 of 3 on
-  base with too few video/audio markers, audio PTS gaps of 85–128 ms (vCPU
-  stalls on this VPS reach 128 ms) and one missing audio rendition;
-  `srt-crypto-matrix` failed 1 of 3 on base with `error sending request` to
-  the API (`/auth/login`, `/engine/telemetry`). Correctness gates now run in
-  PR CI (AGENTS.md); this item only covers whether local runs can be trusted.
-- Status: open (Filed: 2026-10-03 by claude).
-
 ### Q-025 [performance] [opus] Re-qualify the SRT shard law after transport convergence
 - Goal: settle `EgressShardProfile::SrtCpuParallel` and
   `srt_egress_connect_concurrency` against the final Compio Owner and transport
