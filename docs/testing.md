@@ -391,6 +391,10 @@ runs it.
   RTMPS delivery, sink loss
   reaching `retrying`, and SIGTERM shutdown with `restream.shutdown.completed`
   within 5 s.
+  `fault.egress-retry` reads effective retry/backoff and reconciliation
+  tuning from the product startup log before testing the retry budget.
+  Misspelled or ignored overrides fail instead of silently exercising
+  production defaults.
 - Nightly: file and live matrices, crypto, bitrate sweeps, ramps, resource
   sweeps and fault modes. Artifacts upload on every result.
 - Artifact retention: pull-request shards 3 days and `master` shards 7 days,

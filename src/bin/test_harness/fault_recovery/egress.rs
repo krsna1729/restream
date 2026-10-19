@@ -739,13 +739,22 @@ pub(crate) async fn fault_egress_retry() -> Result<Value, String> {
 
     stop_child(&mut child).await;
 
-    let retry_limit_env = [
-        ("RESTREAM_OUTPUT_MAX_RETRIES", "2".to_string()),
-        ("RESTREAM_OUTPUT_RETRY_BASE_MS", "200".to_string()),
-        ("RESTREAM_OUTPUT_RETRY_MAX_MS", "400".to_string()),
-        ("RESTREAM_RECONCILER_INTERVAL_MS", "100".to_string()),
-        ("RESTREAM_SRT_CONNECT_TIMEOUT_MS", "500".to_string()),
+    // (environment variable, effective-summary tuning key, value)
+    let retry_limit_tuning = [
+        ("RESTREAM_OUTPUT_MAX_RETRIES", "outputMaxRetries", 2),
+        ("RESTREAM_OUTPUT_RETRY_BASE_MS", "outputRetryBaseMs", 200),
+        ("RESTREAM_OUTPUT_RETRY_MAX_MS", "outputRetryMaxMs", 400),
+        (
+            "RESTREAM_RECONCILE_INTERVAL_MS",
+            "reconcilerIntervalMs",
+            100,
+        ),
     ];
+    let mut retry_limit_env: Vec<(&str, String)> = retry_limit_tuning
+        .iter()
+        .map(|(name, _, value)| (*name, value.to_string()))
+        .collect();
+    retry_limit_env.push(("RESTREAM_SRT_CONNECT_TIMEOUT_MS", "500".to_string()));
     let mut retry_limit_child = start_restream_child_with_env(
         &restream_bin,
         &ports,
@@ -754,6 +763,7 @@ pub(crate) async fn fault_egress_retry() -> Result<Value, String> {
         &retry_limit_env,
     )
     .await?;
+    verify_effective_tuning(&retry_limit_log_path, &retry_limit_tuning)?;
     let retry_limit_api = login_api(&ports).await?;
     let mut retry_limit_results = Vec::new();
     for case in retry_budget_cases() {
@@ -789,6 +799,34 @@ pub(crate) async fn fault_egress_retry() -> Result<Value, String> {
     }
     Ok(result)
 }
+
+/// Reject silently ignored tuning overrides using the product's effective config.
+pub(super) fn verify_effective_tuning(
+    log_path: &Path,
+    expected: &[(&str, &str, u64)],
+) -> Result<(), String> {
+    let log = std::fs::read_to_string(log_path).map_err(|e| e.to_string())?;
+    let marker = "\"tuning\":";
+    let start = log
+        .find(marker)
+        .ok_or("restream logged no effective tuning")?
+        + marker.len();
+    let tuning = serde_json::Deserializer::from_str(&log[start..])
+        .into_iter::<Value>()
+        .next()
+        .ok_or("restream logged an empty effective tuning")?
+        .map_err(|e| format!("unparsable effective tuning: {e}"))?;
+    for (name, key, value) in expected {
+        if tuning[*key] != *value {
+            return Err(format!(
+                "{name}={value} did not take: effective {key} is {}",
+                tuning[*key]
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) async fn fault_output_stall() -> Result<Value, String> {
     let work_dir = artifact_path("fault.output-stall");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
