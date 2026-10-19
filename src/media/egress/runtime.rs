@@ -259,8 +259,8 @@ impl EgressFabricRuntime {
     /// by the caller via the returned `Err`) rather than panicking or silently
     /// continuing with fewer shards than `touched` would suggest. Shards that
     /// grew before the failure stay, so the next `Add`/`Remove` can retry.
-    /// A failed replacement likewise ends the call and is retried by the
-    /// next one.
+    /// Replacement failures do not prevent other dead shards recovering;
+    /// failed replacements retry on the next call, with the first error returned.
     ///
     /// Returns the shard ids touched (replaced, grown or shut down) on
     /// success, for logging.
@@ -280,22 +280,33 @@ impl EgressFabricRuntime {
     {
         let mut touched = Vec::new();
         let mut grow_error = None;
-        for shard_id in self.group.panicked_shards() {
+        let panicked = self.group.panicked_shards();
+        // Isolate every dead shard before any fallible replacement. An
+        // unavailable backend on one shard must not strand another's outputs
+        // or leave that other dead shard eligible for placement.
+        for &shard_id in &panicked {
             let released = self.manager.forget_shard(shard_id);
             tracing::warn!(shard_id = ?shard_id, outputs = released.len(),
                 "egress shard panicked; replacing it and retrying its outputs");
             for spec in &released {
                 spec.progress.mark_terminated_unexpectedly();
             }
-            if let Err(error) =
-                self.group
-                    .replace_with(shard_id, shard_config, factory_for(shard_id))
+        }
+        for shard_id in panicked {
+            match self
+                .group
+                .replace_with(shard_id, shard_config, factory_for(shard_id))
             {
-                grow_error = Some(error);
-                break;
+                Ok(()) => {
+                    self.manager.revive_shard(shard_id);
+                    touched.push(shard_id);
+                }
+                Err(error) => {
+                    // Keep the first error for the caller, but give every
+                    // other failed shard its own chance to recover.
+                    grow_error.get_or_insert(error);
+                }
             }
-            self.manager.revive_shard(shard_id);
-            touched.push(shard_id);
         }
         let now = Instant::now();
         let placement = self.manager.placement_count().get();

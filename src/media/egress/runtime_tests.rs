@@ -271,13 +271,19 @@ fn panicking_runtime(probes: &[Probe; 2]) -> EgressFabricRuntime {
 /// An output that rendezvous places on `shard` of two, with its own
 /// termination flag, as the application task holds it.
 fn output_on(shard: u32, prefix: &str) -> (OutputSpec, Arc<std::sync::atomic::AtomicBool>) {
+    output_on_pool(shard, NonZeroU32::new(2).unwrap(), prefix)
+}
+
+fn output_on_pool(
+    shard: u32,
+    shards: NonZeroU32,
+    prefix: &str,
+) -> (OutputSpec, Arc<std::sync::atomic::AtomicBool>) {
     let mut spec = (0..)
         .map(|index| output_spec(&format!("{prefix}-{index}")))
         .find(|spec| {
-            crate::media::egress::manager::assign_output_to_shard(
-                &spec.id,
-                NonZeroU32::new(2).unwrap(),
-            ) == ShardId::new(shard)
+            crate::media::egress::manager::assign_output_to_shard(&spec.id, shards)
+                == ShardId::new(shard)
         })
         .unwrap();
     let ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -435,6 +441,129 @@ fn placement_skips_a_dead_shard_until_its_replacement_starts() {
     );
     replacement.wait_for_commands(1);
     assert_eq!(replacement.state().commands, [format!("add:{}", placed.id)]);
+    runtime.shutdown();
+}
+
+#[test]
+fn all_panicked_shards_are_isolated_before_any_replacement_can_fail() {
+    let count = NonZeroU32::new(3).unwrap();
+    let probes = [Probe::default(), Probe::default(), Probe::default()];
+    let backends = probes
+        .iter()
+        .enumerate()
+        .map(|(index, probe)| PanicOnAdd {
+            panics: index < 2,
+            backend: ProbeBackend {
+                probe: probe.clone(),
+            },
+        })
+        .collect::<Vec<_>>();
+    let mut runtime = EgressFabricRuntime::new(
+        manager_config(3).unwrap(),
+        EgressShardGroup::spawn(count, shard_config(), backends).unwrap(),
+    )
+    .unwrap()
+    .adaptive(3);
+    let (lost_zero, zero_ended) = output_on_pool(0, count, "lost-zero");
+    let (lost_one, one_ended) = output_on_pool(1, count, "lost-one");
+    let (kept, kept_ended) = output_on_pool(2, count, "kept");
+    for output in [&lost_zero, &lost_one, &kept] {
+        runtime
+            .dispatch(EgressCommand::Add(output.clone()))
+            .unwrap();
+    }
+    for probe in &probes {
+        probe.wait_for_commands(1);
+    }
+    for shard in 0..2 {
+        runtime
+            .dispatch(EgressCommand::Add(output_on_pool(shard, count, "boom").0))
+            .unwrap();
+    }
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !runtime.snapshots()[..2]
+        .iter()
+        .all(|snapshot| snapshot.panicked)
+    {
+        assert!(Instant::now() < deadline, "both shards must panic");
+        std::thread::yield_now();
+    }
+
+    let replacement = Probe::default();
+    let mut diverted = Vec::new();
+    for recover_one in [false, true] {
+        let mut attempts = Vec::new();
+        let result = runtime.rescale(
+            crate::config::EgressShardProfile::OutputCount,
+            crate::capacity::HostCapacity { cpus: 3 },
+            ResizeReason::Remove,
+            shard_config(),
+            |shard| {
+                assert!(
+                    ended(&zero_ended) && ended(&one_ended),
+                    "all affected tasks must be signaled before trying any replacement"
+                );
+                attempts.push(shard);
+                let replacement = replacement.clone();
+                move || {
+                    if shard == ShardId::new(0) {
+                        Err("shard zero unavailable")
+                    } else if !recover_one {
+                        Err("shard one unavailable")
+                    } else {
+                        Ok(ProbeBackend { probe: replacement })
+                    }
+                }
+            },
+        );
+        assert_eq!(result, Err("shard zero unavailable"));
+        assert_eq!(attempts, [ShardId::new(0), ShardId::new(1)]);
+        assert!(runtime.manager.desired_output(&lost_zero.id).is_none());
+        assert!(runtime.manager.desired_output(&lost_one.id).is_none());
+        assert!(!ended(&kept_ended), "the healthy sibling must keep running");
+        assert_eq!(
+            runtime.manager.desired_output(&kept.id).unwrap().shard_id(),
+            ShardId::new(2)
+        );
+        let snapshots = runtime.snapshots();
+        assert!(snapshots[0].panicked);
+        assert_eq!(snapshots[1].panicked, !recover_one);
+        assert!(!snapshots[2].panicked && !snapshots[2].stopped);
+
+        if !recover_one {
+            // Both dead shards remain excluded even though replacement zero
+            // failed first. New outputs hashing to either must reach shard 2.
+            for shard in 0..2 {
+                let spec = output_on_pool(shard, count, "diverted").0;
+                assert_eq!(
+                    runtime.dispatch(EgressCommand::Add(spec.clone())),
+                    Ok(ManagerCommandOutcome::Enqueued {
+                        shard_id: ShardId::new(2)
+                    }),
+                );
+                diverted.push(format!("add:{}", spec.id));
+            }
+            probes[2].wait_for_commands(3);
+        }
+    }
+    // Failure zero must not suppress replacement one's success or disturb
+    // healthy outputs, and the retried output must reach that replacement.
+    let mut retry = lost_one.clone();
+    retry.generation += 1;
+    assert_eq!(
+        runtime.dispatch(EgressCommand::Add(retry)),
+        Ok(ManagerCommandOutcome::Enqueued {
+            shard_id: ShardId::new(1)
+        }),
+    );
+    replacement.wait_for_commands(1);
+    assert_eq!(
+        replacement.state().commands,
+        [format!("add:{}", lost_one.id)]
+    );
+    let mut expected = vec![format!("add:{}", kept.id)];
+    expected.extend(diverted);
+    assert_eq!(probes[2].state().commands, expected);
     runtime.shutdown();
 }
 
