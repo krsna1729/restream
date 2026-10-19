@@ -1150,10 +1150,14 @@ addStages, ratedBy, ingest, calibration, baseline, projected }`.
 - Both sides price one sample of the current workload on the calibration
   priors (`flowMeasured: false`), so they compare like with like.
   `projected.flow.status` is `healthy`, `saturated` or `overloaded`.
-- The model (`calibration.modelVersion` 3, `CAPACITY_MODEL_VERSION`) prices
+- The model (`calibration.modelVersion` 4, `CAPACITY_MODEL_VERSION`) prices
   each output with its own pipeline's ingest. RTMP/RTMPS cost the media
-  packet rate (TLS not priced); SRT costs twice that; HLS, sink and pipeline
-  outputs are priced as RTMP.
+  packet rate (TLS not priced); SRT costs twice that. HLS PUT costs 0.50,
+  sink 0.15 and pipeline 0.80 times that rate, from measured per-output
+  CPU on one host. Sink and pipeline outputs add no NIC bytes.
+  `hls://` outputs share the HLS price despite uploading nothing; the
+  pipeline target also contributes to ingress cost. These are conservative
+  observe-only priors, not admission rules.
 - Added outputs carry `pipeline_id`'s ingest, which must be live (else
   `422`), or else the highest-bitrate live ingest. `ratedBy` and `ingest`
   (`{ bps, pps }`) say which; both are `null` with no live ingest.
