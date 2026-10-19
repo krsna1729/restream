@@ -869,6 +869,8 @@ mod tests {
             crate::api::outputs::RTMP_OUTPUT_URL_ERROR
         );
         validate("moqt://relay.example/live?insecure=maybe").expect_err("unusable MoQ URL");
+    }
+
     #[cfg(feature = "agent-execution")]
     #[tokio::test]
     async fn applying_snapshot_cannot_be_verified_when_apply_completes_during_checks() {
