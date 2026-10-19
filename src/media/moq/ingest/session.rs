@@ -18,8 +18,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use futures_util::{FutureExt, StreamExt};
 use futures_util::stream::FuturesUnordered;
+use futures_util::{FutureExt, StreamExt};
 use moq_net::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
@@ -391,7 +391,10 @@ async fn read_catalog(
     broadcast: &moq_net::broadcast::Consumer,
 ) -> moq_mux::Result<Option<hang::Catalog>> {
     let hang = async {
-        Ok(hang::Catalog::<()>::subscribe(broadcast).await?.next().await?)
+        Ok(hang::Catalog::<()>::subscribe(broadcast)
+            .await?
+            .next()
+            .await?)
     };
     let msf = async {
         let track = broadcast
@@ -400,7 +403,9 @@ async fn read_catalog(
             .await?;
         // Upstream does not spawn. The moq-net model caps catalog frames at
         // MAX_CACHE_BYTES; this consumer also checks the rendition bound.
-        moq_mux::catalog::msf::Consumer::<()>::new(track).next().await
+        moq_mux::catalog::msf::Consumer::<()>::new(track)
+            .next()
+            .await
     };
     let mut hang = pin!(hang);
     let mut msf = pin!(msf);
@@ -418,7 +423,10 @@ fn missing_catalog(result: &moq_mux::Result<Option<hang::Catalog>>) -> bool {
     match result {
         Ok(None) => true,
         Err(moq_mux::Error::Moq(error) | moq_mux::Error::Hang(hang::Error::Moq(error))) => {
-            matches!(error, Error::NotFound | Error::Unroutable | Error::Unsupported)
+            matches!(
+                error,
+                Error::NotFound | Error::Unroutable | Error::Unsupported
+            )
         }
         _ => false,
     }
@@ -431,7 +439,10 @@ async fn first_catalog<E: Display>(
     timeout: Duration,
 ) -> Result<hang::Catalog, SessionEnd> {
     match compio::time::timeout(timeout, AssertUnwindSafe(read).catch_unwind()).await {
-        Err(_) => Err(SessionEnd::new(Error::Timeout, "no hang or MSF catalog arrived")),
+        Err(_) => Err(SessionEnd::new(
+            Error::Timeout,
+            "no hang or MSF catalog arrived",
+        )),
         Ok(Err(payload)) => {
             let panic = crate::panic_boundary::record_contained(payload.as_ref());
             Err(SessionEnd::new(

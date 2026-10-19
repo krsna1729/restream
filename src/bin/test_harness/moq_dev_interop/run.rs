@@ -70,11 +70,13 @@ pub(crate) async fn run_moq_dev_interop(options: DevOptions) -> Result<Value, St
     let started = Instant::now();
     let work_dir = std::env::var_os("WORK_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(if options.ietf {
-            ".local/artifacts/moq-dev-interop-ietf"
-        } else {
-            ".local/artifacts/moq-dev-interop"
-        }));
+        .unwrap_or_else(|| {
+            PathBuf::from(if options.ietf {
+                ".local/artifacts/moq-dev-interop-ietf"
+            } else {
+                ".local/artifacts/moq-dev-interop"
+            })
+        });
     std::fs::create_dir_all(&work_dir).map_err(|error| error.to_string())?;
     let work_dir = absolute_path(&work_dir)?;
 
@@ -650,12 +652,15 @@ impl Session {
             );
             // The relay offers exactly one version on its outbound cluster
             // dial; media admitted by Restream proves that dial completed.
-            self.report.insert("ingestRelayForward".to_string(), json!({
-                "url": format!("{}{INGEST_STREAM_KEY}", self.listener_url()),
-                "version": IETF_VERSION,
-                "broadcast": broadcast,
-                "log": self.ingest_relay.log_path(),
-            }));
+            self.report.insert(
+                "ingestRelayForward".to_string(),
+                json!({
+                    "url": format!("{}{INGEST_STREAM_KEY}", self.listener_url()),
+                    "version": IETF_VERSION,
+                    "broadcast": broadcast,
+                    "log": self.ingest_relay.log_path(),
+                }),
+            );
         }
 
         // The listener exits once it has written SHORT_CAPTURE_SECS of media.
@@ -691,13 +696,15 @@ impl Session {
             self.ports.ingest_relay,
             self.tls.ca_pem.display(),
         );
-        self.add_output(&source, "ietf-ingest-source", &output).await?;
+        self.add_output(&source, "ietf-ingest-source", &output)
+            .await?;
         let publish_url = format!("rtmp://127.0.0.1:{}/live/{key}", self.restream_rtmp);
         self.spawn_ffmpeg(
             "ietf-ingest-source",
             &crate::hls_push_duty::run::rtmp_publisher_args(&self.fixture, &publish_url),
         )?;
-        let catalog = self.ingest_relay
+        let catalog = self
+            .ingest_relay
             .wait_broadcast(broadcast, RELAY_PUBLISH_TIMEOUT, true)
             .await;
         let served = catalog.is_ok();
@@ -753,7 +760,8 @@ impl Session {
     /// life do not contaminate the post-restart IETF verdict.
     fn record_relay_sessions(&mut self, id: &str, life: u32) {
         let log = std::fs::read_to_string(self.relay.log_path()).unwrap_or_default();
-        let (ok, sessions) = sessions_on_version(&relay_sessions(&log), life, self.options.version());
+        let (ok, sessions) =
+            sessions_on_version(&relay_sessions(&log), life, self.options.version());
         self.checks.record(
             id,
             ok,

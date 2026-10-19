@@ -192,9 +192,16 @@ pub(crate) fn profile_catalog_failures(catalog: &Value, ietf: bool) -> Vec<Strin
             audio = true;
             if !init_ok
                 || track.samplerate.unwrap_or(0) == 0
-                || track.channel_config.as_deref().unwrap_or_default().is_empty()
+                || track
+                    .channel_config
+                    .as_deref()
+                    .unwrap_or_default()
+                    .is_empty()
             {
-                failures.push(format!("{}: AAC without init data/sample rate/channels", track.name));
+                failures.push(format!(
+                    "{}: AAC without init data/sample rate/channels",
+                    track.name
+                ));
             }
         }
     }
