@@ -1,84 +1,71 @@
 # Release compliance
 
-Restream combines Rust crates with native media libraries. Every distributed
-binary or container is a release artifact that needs provenance, vulnerability,
-license, source-availability, and startup evidence.
+Every distributed binary or container needs provenance, vulnerability,
+license, source-availability and startup evidence. Restream links Rust
+crates with native media libraries, so the native licenses matter. The
+scripts below enforce these properties; this page states them.
 
 ## Contents
 
 - [Required release properties](#required-release-properties)
-- [Executable evidence owner](#executable-evidence-owner)
-- [Native license basis](#native-license-basis)
+- [Evidence owners](#evidence-owners)
+- [Native licenses](#native-licenses)
 - [Application license](#application-license)
-- [Dependency Policy](#dependency-policy)
+- [Dependency policy](#dependency-policy)
 
 ## Required release properties
 
 A release must:
 
-- build from checked-in Rust, frontend, and native input locks;
-- preserve the exact source commit, build timestamp, native build identity, and
-  full-provenance runtime SBOM. The public identity field is
-  `restream.nativeBuildId`;
-- scan Rust dependencies and the SBOM under the repository's current policy;
-- prove the downloadable host binary starts outside the source tree and serves
-  its embedded frontend;
-- prove the container runtime artifact starts with its required runtime setup;
-- include the Restream license, required third-party notices and license texts,
-  and source-availability information;
-- preserve diagnostic tracing unless an explicit observability review approves
-  a compile-time restriction.
+- build from checked-in Rust, frontend and native input locks;
+- keep the source commit, build timestamp, native build identity
+  (`restream.nativeBuildId`) and full-provenance runtime SBOM;
+- scan Rust dependencies and the SBOM under the current policy;
+- prove the host binary starts outside the source tree and serves its
+  embedded frontend;
+- prove the container starts with its required runtime setup;
+- include the Restream license, third-party notices, license texts and
+  source-availability information;
+- keep diagnostic tracing. A `tracing/release_max_level_*` compile-time cap
+  needs an explicit observability review.
 
-These are properties of the produced bytes, not a hand-maintained command
-checklist.
+## Evidence owners
 
-## Executable evidence owner
+| Owner | Owns |
+|---|---|
+| [scripts/check/release-evidence.sh](../scripts/check/release-evidence.sh) | Scanners (`cargo audit`, `cargo deny check advisories licenses bans sources`, `grype`, `trivy`), artifact inspection, startup proofs, failure policy |
+| [scripts/release/package-binaries.sh](../scripts/release/package-binaries.sh) | Supported executables, archive names, bundle contents |
+| [scripts/build/emit-sbom.sh](../scripts/build/emit-sbom.sh) | Runtime SBOM |
 
-[scripts/check/release-evidence.sh](../scripts/check/release-evidence.sh) owns
-the exact scanners, artifact inspection, startup proofs, and failure policy.
-[scripts/release/package-binaries.sh](../scripts/release/package-binaries.sh)
-owns the supported executable set, archive names, and bundle contents.
+Run them through the [release runbook](release-runbook.md). Changing a
+scanner, asset or smoke test is a script and CI change, not a docs change.
+SBOMs and packages are build outputs; do not commit them.
 
-Release operators should invoke those owners through the
-[release runbook](release-runbook.md). Do not copy their tool list, internal
-sequence, asset inventory, or smoke-test URLs into compliance prose; changing
-those is an executable-policy change and must happen in the scripts and CI.
+## Native licenses
 
-The enforced dependency-policy entry points are `cargo audit` and
-`cargo deny check advisories licenses bans sources`. They are named here as
-release requirements; arguments, installation, and orchestration remain owned
-by the evidence script. Release builds must also preserve diagnostic events;
-introducing a `tracing/release_max_level_*` compile-time cap requires an
-explicit observability review.
+The runtime SBOM lists the native libraries in the shipped binary. Depending
+on the build, that includes FFmpeg, x264, x265, SRT, Mbed TLS, SQLite,
+compiler runtimes, glibc and the Rust standard library. Native input pins
+live in `scripts/build/native/native-inputs.lock`.
 
-Generated SBOMs and packaged artifacts remain build outputs. They are not
-checked into the source tree merely to document a release.
+An SBOM is inventory and scanner input. It does not replace license texts,
+attribution, copyright notices or source-availability obligations.
 
-## Native license basis
-
-The runtime SBOM inventories native libraries linked into the shipped binary.
-Depending on the selected build, that can include FFmpeg components, x264,
-x265, SRT, Mbed TLS, SQLite, compiler runtimes, glibc, and the Rust standard
-library. The immutable native input pins are owned by
-`scripts/build/native/native-inputs.lock`.
-
-An SBOM is scanner and inventory input; it does not replace license texts,
-attribution, copyright notices, or source-availability obligations.
-
-x264 and x265 are reported as `GPL-2.0-or-later`. FFmpeg's effective license
-depends on its native configuration. Before external distribution, confirm that
-the exact build and distribution terms satisfy all GPL, LGPL, MPL, and
-compiler-runtime obligations, or use a reviewed compatible build.
+x264 and x265 are `GPL-2.0-or-later`. FFmpeg's effective license depends on
+its configuration. Before external distribution, confirm that the exact
+build meets all GPL, LGPL, MPL and compiler-runtime obligations, or use a
+reviewed compatible build. See
+[Source distribution](source-distribution.md#binary-and-container-distributions).
 
 ## Application license
 
-Restream is MIT-licensed. That application license does not replace the
-obligations of native components linked into or distributed with the runtime.
-The checked-in [third-party component manifest](../distribution/THIRD_PARTY_COMPONENTS.md)
+Restream is MIT-licensed. That does not replace the obligations of native
+components. The
+[third-party component manifest](../distribution/THIRD_PARTY_COMPONENTS.md)
 is the notice-chain entry point.
 
-## Dependency Policy
+## Dependency policy
 
-`deny.toml` owns Cargo source, advisory, license, ban, and duplicate-family
-policy. Temporary exceptions must remain documented beside that policy and
-should be removed when the upstream dependency graph converges.
+`deny.toml` owns Cargo source, advisory, license, ban and duplicate-family
+policy. Document temporary exceptions beside that policy and remove them
+when the upstream graph converges.

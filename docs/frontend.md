@@ -1,33 +1,75 @@
 # Frontend
 
-The dashboard's design system, route contract and visual baseline. Source
-lives in `web/ts/` and `web/styles/input.css`; `public/js/` is generated.
-The target operator experience is the
+The dashboard is one React page: the control room. This page covers its
+design system, how it is built, how it reads data, what each workspace
+shows, and how previews play. Source lives in `web/ts/` and
+`web/styles/input.css`; `public/` is generated and not committed. The target
+operator experience is the
 [control-room mockup](design/control-room-mockup.html) (illustrative data).
 
 ## Contents
 
-- [1. Atmosphere & Identity](#1-atmosphere--identity)
-- [2. Color](#2-color)
-- [3. Typography](#3-typography)
-- [4. Spacing & Layout](#4-spacing--layout)
-- [5. Components](#5-components)
-- [6. Motion & Interaction](#6-motion--interaction)
-- [7. Depth & Surface](#7-depth--surface)
-- [8. Accessibility Constraints & Accepted Debt](#8-accessibility-constraints--accepted-debt)
-- [Control Room](#control-room)
+- [Build](#build)
+- [Design system](#design-system)
+- [Components](#components)
+- [Shell and routing](#shell-and-routing)
+- [Data flow](#data-flow)
+- [Workspaces](#workspaces)
+- [Managing pipelines](#managing-pipelines)
+- [Logs and diagnostics](#logs-and-diagnostics)
+- [Previews](#previews)
+- [Proof](#proof)
 
-## 1. Atmosphere & Identity
+## Build
 
-Restream is a compact broadcast operations console. It should feel quiet,
-precise, and immediately scannable under time pressure. Its signature is
-status-led density: restrained surfaces, clear state color, and media that
-appears only when an operator asks for it.
+`npm run build:frontend` builds everything into `public/`. The engine embeds
+`public/` at compile time (`RustEmbed` in `src/api/static_assets.rs`) and,
+in development, serves files from disk first.
 
-## 2. Color
+The diagram shows the steps of `build:frontend` in `package.json`.
 
-The console uses DaisyUI's `dim` theme. Components use semantic Tailwind and
-DaisyUI tokens rather than fixed palette values.
+```mermaid
+flowchart LR
+  pages["web/pages/*.html, web/assets/*"] --> prep["scripts/dev/frontend/prepare-assets.mjs"]
+  hls["node_modules/hls.js"] --> prep
+  prep --> pub["public/ (html, logo, js/lib/hls.min.js)"]
+  ts["web/ts/**/*.ts(x)"] --> tsc["tsc -p tsconfig.json (type-check only)"]
+  tsc --> vite["vite build (vite.config.ts)"]
+  vite --> js["public/js/ (one file per module, deps in vendor/)"]
+  css["web/styles/input.css"] --> tw["tailwindcss + daisyui"]
+  tw --> out["public/output.css"]
+  pub --> embed["RustEmbed in src/api/static_assets.rs"]
+  js --> embed
+  out --> embed
+```
+
+- `prepare-assets.mjs` clears the old output, copies `index.html`,
+  `login.html`, `base-path.js`, `login.js` and `logo.png`, and copies
+  `hls.min.js` without its source-map comment.
+- `vite.config.ts` makes every module under `web/ts` an entry and uses
+  `preserveModules`, so `public/js` mirrors `web/ts`. The dashboard loads
+  its views lazily, and tests import single shipped modules. Dependencies go
+  to `public/js/vendor/`, because Node treats files under `node_modules` as
+  CommonJS.
+- `scripts/release/prepare-build-tree.sh` checks that the key outputs exist
+  before a release build (`public/index.html`, `public/output.css`,
+  `public/js/control-room/main.js`, `public/js/lib/hls.min.js`, and others).
+
+```sh
+npm ci
+npm run build:frontend
+```
+
+## Design system
+
+Restream is a compact broadcast operations console. It must feel quiet,
+precise and easy to scan under time pressure. Status drives the look:
+restrained surfaces, clear state color, and media only when an operator asks.
+
+### Color
+
+The console uses DaisyUI's `dim` theme (`web/styles/input.css`). Components
+use semantic Tailwind and DaisyUI tokens, not fixed palette values.
 
 | Role | Token | Usage |
 |---|---|---|
@@ -38,390 +80,443 @@ DaisyUI tokens rather than fixed palette values.
 | Secondary text | `base-content/70` | Supporting information |
 | Border | `base-content/10` | Panel and row separation |
 | Primary action | `primary` | Create and submit actions |
-| Operational action | `accent` | Start, select, preview, and promote |
+| Operational action | `accent` | Start, select, preview and promote |
 | Healthy | `success` | Connected and forwarding |
 | Attention | `warning` | Recovering and awaiting media |
 | Failure | `error` | Failed and destructive actions |
 | Information | `info` | Neutral runtime notices |
 
-Status color always carries meaning. Decorative color and gradients are not
-part of the console language.
+Status color always carries meaning. Do not use decorative color or
+gradients.
 
-## 3. Typography
+### Typography
 
-The primary stack is Aptos, Segoe UI Variable, Segoe UI, IBM Plex Sans,
-Helvetica Neue, Arial, and sans-serif. The monospace stack is Cascadia Mono,
-Cascadia Code, JetBrains Mono, SFMono-Regular, Consolas, Liberation Mono, and
-monospace.
+- Sans stack: Aptos, Segoe UI Variable, Segoe UI, IBM Plex Sans, Helvetica
+  Neue, Arial, sans-serif.
+- Mono stack: Cascadia Mono, Cascadia Code, JetBrains Mono, SFMono-Regular,
+  Consolas, Liberation Mono, monospace.
 
 | Level | Size | Weight | Usage |
 |---|---|---|---|
 | Page title | 18px | 600 | Workspace title |
 | Section title | 16px | 600 | Panel heading |
-| Item title | 14px | 600 | Input, output, or monitor name |
+| Item title | 14px | 600 | Input, output or monitor name |
 | Body | 15px | 400 | Default console text |
 | Supporting | 14px | 400 | Descriptions |
-| Metadata | 12px | 400-600 | Runtime and protocol details |
+| Metadata | 12px | 400–600 | Runtime and protocol details |
 | Compact label | 11px | 600 | Uppercase field labels |
 
-Letter spacing is zero except the existing compact uppercase labels, which use
-the theme's `tracking-wide` utility.
+Letter spacing is zero, except compact uppercase labels, which use
+`tracking-wide`.
 
-## 4. Spacing & Layout
+### Spacing and layout
 
-Spacing follows Tailwind's 4px base unit. Standard panel padding is 16px,
-compact row padding is 8-12px, and section gaps are 12-16px. Content is limited
-to `max-w-7xl`.
+- Spacing uses Tailwind's 4px unit. Panel padding is 16px, compact rows
+  8–12px, section gaps 12–16px. Content width is `max-w-7xl`.
+- The document owns scroll. Monitor cards use a responsive grid and fixed
+  16:9 media frames.
+- At 375px, controls and rows reflow to one column with no horizontal page
+  scroll. Stream keys and URLs scroll or wrap inside their own field.
 
-The workspace owns document scroll. Monitor cards use a responsive intrinsic
-grid and fixed 16:9 media frames. At 375px, controls and rows reflow to one
-column without horizontal page scrolling. Stream keys and URLs may scroll or
-wrap within their own bounded field.
+### Motion and depth
 
-## 5. Components
+- Use DaisyUI's hover, active and focus behavior. State transitions are
+  100–200ms transform or opacity changes. Loading media may use the spinner.
+  Respect `prefers-reduced-motion`; add no decorative motion.
+- Separate surfaces with borders and tone: sections `base-200`, rows
+  `base-100`, borders `base-content/10`. Shadows only on popovers and menus.
+  Card radius is at most 8px.
 
-### Dashboard Section
-- **Structure**: semantic section, optional header, full-width content.
-- **Variants**: standard, table, compact.
-- **States**: loading, empty, populated, error.
-- **Accessibility**: labelled by its heading.
-- **Layout**: stack; document is the scroll owner.
+### Accessibility
 
-### Operational Row
-- **Structure**: title and state, metadata, command cluster.
-- **Variants**: selected, standby, disabled, disconnected.
-- **States**: default, hover, focus, busy, error.
-- **Accessibility**: full command labels include the affected input or output.
-- **Layout**: wrapping cluster that becomes a vertical stack on narrow widths.
+The target is WCAG 2.2 AA: 4.5:1 body text, 3:1 large text, visible focus,
+full keyboard reach, semantic buttons and labels, and no color-only status.
+Touch targets are at least 36px on compact surfaces. There is no open
+accessibility debt.
 
-### Status Badge
-- **Structure**: short state label and optional detail.
-- **Variants**: healthy, attention, failure, neutral.
-- **States**: static; color is never the only state indicator.
-- **Accessibility**: readable text at WCAG AA contrast.
+## Components
 
-### Monitor Card
-- **Structure**: input/output title, state, actions, 16:9 media frame.
-- **Variants**: input, pipeline program, output monitor, empty.
-- **States**: idle, loading, playing, offline, error.
-- **Accessibility**: media controls are keyboard reachable; buttons identify
-  their monitor.
-- **Motion**: state feedback only.
-- **Layout**: frame inside an intrinsic grid; no nested card.
+| Component | Structure | Variants | States | Accessibility |
+|---|---|---|---|---|
+| Dashboard section | Section, optional header, full-width content | Standard, table, compact | Loading, empty, populated, error | Labelled by its heading |
+| Operational row | Title and state, metadata, command cluster | Selected, standby, disabled, disconnected | Default, hover, focus, busy, error | Command labels name the affected input or output |
+| Status badge | Short state label, optional detail | Healthy, attention, failure, neutral | Static | Text at AA contrast; color is never the only signal |
+| Monitor card | Title, state, actions, 16:9 frame | Input, program, output monitor, empty | Idle, loading, playing, offline, error | Media controls keyboard-reachable; buttons name their monitor |
+| Input manager | Compact input rows plus an add command | Selected primary, selected backup, standby, disabled | Loading, empty, busy, error, maximum reached | Labels, keys, URLs and actions reachable by keyboard and screen reader |
 
-### Input Manager
-- **Structure**: compact input rows plus an add command.
-- **Variants**: selected primary, selected backup, standby, disabled.
-- **States**: loading, empty, busy, error, maximum reached.
-- **Accessibility**: labels, stream keys, URLs, and actions remain available to
-  keyboard and screen-reader users.
-- **Layout**: stack of rows with wrapping command clusters.
+Command clusters wrap and become a vertical stack on narrow widths. Monitor
+cards sit in a grid; do not nest cards.
 
-## 6. Motion & Interaction
-
-Interactions use existing DaisyUI hover, active, and focus behavior. State
-transitions use 100-200ms transform or opacity changes only. Loading media may
-use the existing spinner. `prefers-reduced-motion` is respected by the
-framework and no decorative motion is added.
-
-## 7. Depth & Surface
-
-The strategy is borders plus tonal shifts. Sections use `base-200`, rows use
-`base-100`, and `base-content/10` borders provide separation. Shadows are
-reserved for popovers and menus. Cards use at most an 8px radius.
-
-## 8. Accessibility Constraints & Accepted Debt
-
-The target is WCAG 2.2 AA: 4.5:1 body text contrast, 3:1 large text contrast,
-visible focus, full keyboard reachability, semantic buttons and labels, and
-no color-only status. Touch targets remain at least 36px in compact operator
-surfaces.
-
-None open.
-
-## Control Room
+## Shell and routing
 
 `/` is the dashboard: one React root (`web/ts/control-room/main.tsx`) in
-`web/pages/index.html`, mounting a TanStack Router (`router.tsx`). The engine
-serves the same page for unknown top-level paths, so the place is read from
-the query whatever path the page was served from (`/index.html?w=operate`
-included: the router matches its root route there) and a link from there
-canonicalises to `/`. A nested unknown path (`/a/b?w=inspect`) is redirected
-to the shell's directory by a relative `../` per level with the query kept,
-since the page's asset URLs are relative (so it can sit under a proxy prefix)
-and would not load from a nested path.
+`web/pages/index.html`, mounting a TanStack Router (`router.tsx`).
 
-- Data: one store (`web/ts/control-room/store.ts`) for what is pushed or
-  sampled for the whole page, plus TanStack Query for the per-view polls
-  (`polled.tsx`). The store follows the
-  revisioned runtime state stream (`/api/v1/state/stream`) and samples engine
-  telemetry and host metrics every 2 s while a view is subscribed. Views
-  read it through `useLive`; they hold no copy. Rates come from two
-  successive telemetry samples of one ingest session or output (`rates.ts`);
-  a counter that went down, or a failover to another input, has no rate.
-  The header shows the stream's connection (`live · rev N` or
-  `reconnecting`; a steady system sends no deltas, so the time since the
-  last change says nothing) and the age of the oldest sampled source.
-- Location: `?w=<workspace>` and, for a pipeline view, `&p=<pipeline id>`
-  (`web/ts/control-room/route.ts` holds the pure rules; `router.tsx` wires
-  them to TanStack Router, which owns history and link clicks); an absent or
-  unknown workspace opens Fleet, and the pipeline is kept across workspaces.
-  Links (`PlaceLink`) are real `href`s, and a plain click navigates in place.
-  Other query parameters are kept, after `w` and `p`; a repeated parameter
-  keeps its first value.
-- Errors: the page renders the `#error-alert`/`#error-msg` and
-  `#saving-badge` elements that `core/api.ts` reports into, so a failed
-  mutation is shown, not only logged.
-- Workspaces ship on live data only. Fleet: delivery counts, then degraded
-  outputs grouped by cause (an upstream cause, with its stage or shard,
-  covers every output it stalls; destination causes stay per output) and
-  ranked by outputs affected, upstream first on a tie; wanted outputs that
-  neither deliver nor carry a diagnosis count as starting, never as
-  healthy. Headroom from `/metrics/system`: measured host use; egress flow
-  only when shards measured it (`flowMeasured`); and, labeled as such, the
-  capacity model's projection onto service centers from calibration priors
-  (observe-only until Q-031 measures the coefficients). Fleet also shows the
-  shared work (`uniqueStages` serving `activeLeaves`, from the capacity
-  snapshot), the open-alert count with its age (the same `aggregate-alerts`
-  query Incidents lists), a history of headroom (100 less the projected
-  utilization: the calibration priors, raised to the deepest egress shard's
-  measured queue when shards run), delivery and degraded outputs by
-  layer (`LiveSnapshot.history`: one `fleet-history.ts` sample per store
-  sample, kept for 15 min of this page session; Incidents reads the
-  engine's own history instead; a source with nothing to say is a gap, not a
-  zero), and a
-  worst-first table of at most 10 pipelines that shares its rows with
-  Pipelines (`pipeline-table.tsx`) and links to it for the rest. Pipelines: the
-  inventory (attention first, then size), searchable by name or id and
-  filterable by the same health rule as Fleet's count, with outputs by
-  protocol; above it, all from the runtime state (`pipelines-model.ts`), the
-  fleet-wide protocol mix, the shared stages (running outputs grouped by the
-  `stage` they read, largest group first), and the operational cards (needs
-  attention, warm standby, bonded SRT, recording) that narrow the table.
-  Operate (one pipeline): the source deck from the runtime state's
-  `inputs` (RTT from the telemetry sample's `inputs`) with Promote and each
-  input's preview; the media path (`operate-graph.tsx`) in four views: Graph
-  (the state's `graphs` entry with the telemetry's counters attached,
-  `state-views.ts`, laid out by longest path, each shared stage drawn
-  once with its consumer count and destinations folded per upstream stage
-  and protocol; egress nodes join outputs on their `outputId`), Destinations
-  (the same groups as a table), Timeline (the pipeline's kept lifecycle
-  events, newest first) and Preview (the program). Selecting a group opens
-  its inspector (`operate-group-model.ts`): delivering count, worst delivery
-  ratio, worst feed lag and resyncs from the engine telemetry; the fabric
-  shards its running outputs are placed on (`fabricFeed`, `shardId`), with
-  state, command queue and progress age from the live store's 2 s
-  `/metrics/system` sample (`egressShards`); and each diagnosed
-  output's layer, cause and ruled-out layers. Then the
-  destination matrix from the state stream (feed lag from the running egress,
-  rate from the telemetry rates) with Start/Stop, degraded first and capped
-  at 200 rendered rows, with the hidden count (and how many of them need
-  attention) and a "show all" button for the rest. Inputs and graph come
-  from the state stream, so an input change shows without a poll; their
-  counters come from the store's 2 s telemetry sample, whose age the panels
-  show (amber once older than 2.5 samples). Inspect (one pipeline): the
-  resource map, polled every 2 s (process measurements, not state)
-  (`/engine/resource-map?pipeline_id=…&view=detail&top_n=200`), nodes under
-  pressure first, then by memory held, each with its confidence (measured,
-  derived, estimated, unmeasured), a detail panel and the count of nodes the
-  server left out. The detail panel shows the node's metric cards (graph
-  consumers on the pipeline map, measured CPU with the FFmpeg child PID,
-  input packet rate and work per packet since the node started; a number the
-  node lacks is left out, not shown as zero) and the engine's bottleneck
-  judgement. "Global resource map" switches to the runtime scope (no
-  `pipeline_id`); there the graph is not the map's, so no consumer card. Then
-  the source ring (fill and retained payload) from the
-  graph and the telemetry's `sourceRings`; the egress shards this pipeline's outputs run on (the server scopes
-  them by feed and shard); and the map's attribution legend. Monitor (one
-  pipeline): ingest and egress rate, the share of wanted outputs delivering,
-  the worst feed lag, ring fill and the slowest of its shards' progress age,
-  sampled every 2 s on one clock and kept in the page for the last 15
-  minutes (the engine keeps no history). A stale or missing source, a state
-  stream that is not live, or a truncated map is a gap in its line, never a
-  zero or a frozen value. The degraded-output count is a signal too: each
-  rise from 0 the page saw is an incident onset, marked as a cursor on every
-  line and listed by time (a pipeline already degraded at page load has no
-  onset in view). Pause shows the window as it was while sampling goes on;
-  Compare, while paused, overlays the live window dashed on the same scale.
-  Below (`monitor-path.ts`): the selected input's transport (what its
-  protocol reports, from the telemetry sample's `inputs`; an unreported metric is
-  left out, not 0), the shared media path from the processing graph (source
-  ring fill, worst reader lag, each stage with its packet rate and the
-  wanted outputs reading it, reader overflows), and the destination outlier:
-  the wanted output with the lowest delivery ratio under the engine's 0.95
-  floor, against the median of its peers on the same stage and protocol. The
-  mockup's blocked AVIO writes are not shown: that queue was deleted in #327.
-  Operate, Inspect and Monitor share one pipeline
-  header and picker (`pipeline-scope.tsx`). Incidents (fleet): every open
-  alert (`/alerts`), critical first, then the widest scope, then the oldest;
-  the selected one's lifecycle events (`/events`) from a minute before it
-  opened; and its evidence packet: what failed (the diagnosis layer and
-  cause), what did not (the layers ruled out), each evidence line marked
-  `measured` or `derived` by the engine, and the recommended action. The
-  resolved list is the engine's (`/alerts?since=`, a 15m/1h/6h/24h window),
-  with a note when the window reaches past the engine's kept history.
-  A correlation chart draws the engine's fleet history
-  (`/fleet/history?since=&until=`, sampled every 5 s and kept 24 h, read
-  from a minute before the incident opened to a minute after it closed,
-  then only new samples, no longer than the engine keeps them; a resolved
-  incident's span stops loading once complete) as delivering,
-  headroom and degraded lines with cursors at the incident's open and
-  close, with a note when the kept history starts after that minute; "Export
-  evidence" downloads the alert, packet, timeline and those samples as one
-  JSON file, built in the browser. Capacity (fleet): the
-  `/metrics/system` capacity snapshot (load per service center, labelled
-  calibration priors, observe-only), the Flow Doctor (measured from the
-  busiest shard, or projected when none runs) and a scenario form whose
-  baseline and projection both come from `/capacity/scenario`, priced on the
-  priors from one workload sample: the page computes no capacity number. The
-  scenario picks the added outputs' pipeline (whose ingest they carry; the
-  highest-bitrate live one by default), protocol and encoding (new renditions
-  are shared stages); Changes prices its added outputs by protocol, on its
-  own pipeline's ingest when that is live, and the calibration table shows each limit and whether it
-  is configured or a prior; "draft it in Changes" leads to a planned change's
-  topology diff. A
-  timeline says when the engine's event log no longer reaches back to a
-  minute before the incident opened.
+- The place is in the query: `?w=<workspace>` and, for a pipeline view,
+  `&p=<pipeline id>`. `route.ts` holds the pure rules; `router.tsx` wires
+  them to TanStack Router, which owns history and link clicks.
+- An absent or unknown workspace opens Fleet. The pipeline is kept across
+  workspaces. Other query parameters are kept after `w` and `p`; a repeated
+  parameter keeps its first value.
+- Links (`PlaceLink`) are real `href`s; a plain click navigates in place.
+- The engine serves the same page for unknown top-level paths, so the place
+  is read from the query on any path (`/index.html?w=operate` included). A
+  link from there canonicalises to `/`.
+- A nested unknown path (`/a/b?w=inspect`) redirects to the shell's
+  directory with a relative `../` per level, keeping the query. Asset URLs
+  are relative so the page can sit under a proxy prefix.
+- Errors: the page renders `#error-alert`, `#error-msg` and `#saving-badge`,
+  which `core/api.ts` reports into, so a failed mutation is shown.
 
-Media (fleet): the media directory (`/media`) split into recordings and
-source files, newest first, with search over every stored name; the selected
-file's stored forms, its probe (`/media/{file}/analysis`, run once on select)
-and whether it can feed a live pipeline as it is (the engine's sparse-GOP
-judgement against its live GOP target; with fewer than two keyframes the
-engine measures no spacing, so none, or one in a file longer than the
-target, needs Live Optimized); upload, rename and a confirmed
-delete (refused while a pipeline ingests the file); and the media disk from
-`/metrics/system`. A file a recording session wrote shows its timeline from
-the persisted session the media list already joins (`recordings` table)
-and the remux conversion state: the start; at stop only the `converting`
-state is written, so its time is the stop; the session's `endedAt` is when
-the browser MP4 was written, not the stop; a failed remux is one failure
-with the `.ts` kept; a step with no recorded time shows none. A row is
-selected by session id, so it stays selected when its `.ts` becomes the
-`.mp4`; a rename breaks the session join (by stored path), so a renamed
-recording keeps its file but loses its timeline. "Use as source" opens
-the new-pipeline form with the file as a looping file source, Live
-Optimized when the probe says the GOP needs it, and goes to the new
-pipeline's Operate view. System (fleet, `/engine/health` every 10 s): the host
-checks (a warning first), kernel io_uring and TLS capability, the execution
-classes (running media workers of those configured, RTMP and SRT ingress
-owners, egress fabric shards and FFmpeg children as the engine reports them;
-Tokio workers as configured), the SRT ingress owners' counters with every
-non-zero one that means lost or late work since the engine started, and the
-build, native libraries and SBOM from `/engine`. Settings (fleet): reads
-`/settings` once (it also lists every pipeline and output, so it is never
-polled); each card saves only its own part (general names, SRT ingest with
-the 10–79 byte passphrase rule, transcode profiles with the built-ins kept,
-failed-attempt limits, the dashboard password) and says when the engine
-stored it. The failed-attempts list is polled; forgetting one client sends
-its own scope key, and forgetting all sends no scope (the engine rejects any
-other scope with 400). Log out is on the password card. Changes (fleet,
-the [agent plane](api-reference.md#agent-plane)): one pipeline, one or more
-destination changes (add, change, start, stop, remove) and a reason. Preview
-asks the engine to judge them (`/agent/plans`, which mutates nothing) and is
-shown only while the form still matches what was judged; a valid preview
-creates an operation from that same request, which the operator approves
-(as this dashboard session, with an audited reason: confirmation, not a
-second person's sign-off), applies and verifies. A valid preview also shows
-the impact: the plan's topology diff (outputs wanted running by stage and
-protocol, before and after, marking a stage the change starts and an add
-that reuses a stage) and, when the change adds outputs or stages, the
-capacity scenario (`/capacity/scenario`) for those additions, before and
-after on the calibration priors (removals are counted, not credited). The
-engine's four fixed gates decide "verified" (desired state, the outputs it
-started are running, no new critical alert on the changed pipelines since the
-apply, and the change did not push the host past its safe utilization); the per-change checks are
-listed under them, and the alert delta and active graph nodes are shown as
-observations. The operation card's convergence timeline merges the audit
-events and each output change the apply made, in time order from creation,
-and ends with where the changed outputs stand in the live state. Verification checks one moment, so a failed one
-can run again (a just-started destination needs seconds to connect). A
-refused apply answers 400 with the failed record; the page reads the record
-back and shows the reason, and warns that earlier changes may already be
-applied. The tab keeps the operation id in `sessionStorage` and reads the
-operation back after a reload; operations live in engine memory only, so
-after a restart (404 `operationNotFound`) the page starts over.
+## Data flow
 
-Managing pipelines (`operate-manage.tsx`, `pipeline-form.tsx`,
-`output-form.tsx`, rules in `manage-model.ts`): Pipelines has New pipeline,
-and the new pipeline's Operate opens once the engine stored it. Operate
-reads `/settings` once and again after each edit, and adds the pipeline
-controls: Record (armed until a source arrives; the summary's `enabled` and
-`active`), play or stop a configured file source (whether it runs is polled
-from `/pipelines/{id}/file-ingest`: a file can end or fail), a confirmed
-delete, and the settings form (name, a free stream key on create, "Issue a
-new stream key" on edit, locked while any destination runs as in the classic
-editor, live or file source with its ingest options, and the per-pipeline SRT
-ingest override). An edit re-sends the source only when it changed, because
-re-sending a file source restarts its ingest. The source deck adds backup
-inputs with their publish URLs, and enables, disables or deletes them; the
-primary and the selected input offer neither, as the engine refuses both. An
-input's source is either a stream key (live push over RTMP, SRT or HLS) or a
-remote HLS URL the engine pulls, with a rendition rule (highest or lowest
-bandwidth) and one credential choice: none, a bearer token, a pasted cookie
-string, a username and password, or custom headers. A signed URL needs no
-credential (its token is in the URL) and origin cookies are carried
-automatically, so `none` is the usual choice; a stored secret is written once
-and shown only as state, never as a value, and a save that does not touch it
-leaves it in place.
-The destination matrix adds, edits and deletes destinations: a preset server
-plus key or a full URL, SRT as fields, the RTMP flavour from the preset (or
-chosen for a custom server), video passthrough or a profile (stored custom
-video settings are kept unless replaced), and audio routing with notes from
-the destination's caps: what is dropped or downmixed, and which tracks or
-channels exceed its limits. The caps are advice (the engine does not
-enforce them), so they never stop a save. The source's tracks come from
-`/pipelines/{id}/probe` when someone publishes; the pickers always include a
-stored track or channel.
+The diagram shows where views get their data.
 
-Logs (`logs.tsx`, rules in `diagnose-model.ts`): the newest 200 persisted
-rows (`/logs`) for everything, engine-wide rows only, one pipeline (with its
-destinations' rows) or one destination, from a lowest level, optionally
-lifecycle events only; then every matching row live from `/logs/stream`,
-which resumes after the newest row read, so no row is lost or shown twice.
-History and stream use one filter set. The page keeps 500 rows, newest
-first; Pause live closes the stream and keeps the rows shown, and Resume
-reopens it after the newest row shown, so it delivers what the pause missed.
-A failed history read says so and offers Read again. Inspect adds Diagnostics: the engine's
-checks on the pipeline's live input (`POST /pipelines/{id}/diagnostics/run`)
-on request, each with its result, issues, help and output, and the run
-downloads as a `restream.diagnostics.v1` report.
+```mermaid
+flowchart LR
+  stream["/api/v1/state/stream"] --> store["store.ts"]
+  telem["engine telemetry (2 s)"] --> store
+  sys["/metrics/system (2 s)"] --> store
+  store --> live["useLive"]
+  store --> rates["rates.ts"]
+  store --> hist["fleet-history.ts"]
+  polls["per-view polls"] --> polled["polled.tsx (TanStack Query)"]
+  live --> views["workspace views"]
+  rates --> views
+  hist --> views
+  polled --> views
+```
 
-Previews (`preview.tsx`): the media path's Preview view plays the program
-(`/hls/{pipeline}/master.m3u8`) and the source deck each connected input (its `previewUrl`)
-muted through hls.js, only when asked, because a preview makes the engine
-segment that stream. The engine answers 404 until the first segment exists,
-so the player retries 404s for up to 15 s (Safari's own player does not
-retry, so the page polls the playlist first). A stream whose buffered media
-has not grown for 20 s is stalled: a stopped source raises no player error,
-its playlist only stops growing. The preview then stops and offers Retry; a
-wait for data reads "buffering", never "live". A 401 goes to the login page.
-The program preview has an HLS | MoQ switch (`operate-graph.tsx`), HLS by
-default and kept in `localStorage` (`restream.previewTransport`); MoQ is
-offered only where the browser has WebTransport and WebCodecs. The MoQ
-preview (`moq-preview.tsx`) mints a viewer grant
-(`POST /pipelines/{id}/moq-token`), loads `@moq/watch` on demand and
-subscribes straight to the engine's [MoQ origin](media-pipeline.md#moq-origin)
-over WebTransport, painting a canvas. It connects with normal certificate
-checks first and pins the grant's `certificateSha256` only if they fail. It
-reads "live (MoQ)" once a frame decodes and fails with a reason when MoQ is
-off (409), the session ends, or no frame decodes within 15 s. Input previews
-stay HLS: the origin serves pipeline broadcasts.
-More than one audio track adds a track picker. Inspect's detail for a
-selected stage adds its pipe counters (`/stages/{key}/telemetry`), which the
-resource map leaves out, and says so when the engine no longer has the stage.
+- `store.ts` holds what is pushed or sampled for the whole page. It follows
+  the revisioned runtime state stream and samples engine telemetry and host
+  metrics every 2 s while a view is subscribed. Views read it through
+  `useLive` and hold no copy.
+- Per-view polls use TanStack Query (`polled.tsx`).
+- Rates come from two successive telemetry samples of one ingest session or
+  output (`rates.ts`). A counter that went down, or a failover to another
+  input, has no rate.
+- The header shows the stream state (`live · rev N` or `reconnecting`) and
+  the age of the oldest sampled source. A steady system sends no deltas, so
+  time since the last change means nothing.
+- Panels show the age of their sample and turn amber once it is older than
+  2.5 samples. A stale or missing source is a gap, never a zero or a frozen
+  value.
 
-Proof: `test/frontend/control-room-fleet.test.mjs`,
-`test/frontend/control-room-fleet-history.test.mjs`,
-`test/frontend/control-room-monitor.test.mjs`,
-`test/frontend/control-room-media.test.mjs`,
-`test/frontend/control-room-operate.test.mjs`,
-`test/frontend/control-room-inspect.test.mjs`,
-`test/frontend/control-room-incidents.test.mjs`,
-`test/frontend/control-room-system.test.mjs`,
-`test/frontend/control-room-settings.test.mjs`,
-`test/frontend/control-room-changes.test.mjs`,
-`test/frontend/control-room-manage.test.mjs`,
-`test/frontend/control-room-diagnose.test.mjs`,
-`test/frontend/frontend-runtime-state-stream.test.mjs` (stream liveness) and
-`test/frontend/control-room.spec.ts` (against a running engine).
+## Workspaces
+
+Every workspace shows live data only.
+
+### Fleet
+
+- Delivery counts. Degraded outputs grouped by cause: an upstream cause
+  (with stage or shard) covers every output it stalls; destination causes
+  stay per output. Ranked by outputs affected, upstream first on a tie.
+  Wanted outputs that neither deliver nor carry a diagnosis count as
+  starting, never healthy.
+- Headroom from `/metrics/system`: measured host use; egress flow only when
+  shards measured it (`flowMeasured`); and, labelled as such, the capacity
+  model's projection from calibration priors (observe-only).
+- Shared work (`uniqueStages` serving `activeLeaves`, from the capacity
+  snapshot) and the open-alert count with its age (the `aggregate-alerts`
+  query that Incidents uses).
+- History of headroom (100 less projected utilization, raised to the
+  deepest egress shard's measured queue when shards run), delivery, and
+  degraded outputs by layer. Source: `LiveSnapshot.history`, one
+  `fleet-history.ts` sample per store sample, kept 15 min for this page
+  session.
+- A worst-first table of at most 10 pipelines, sharing rows with Pipelines
+  (`pipeline-table.tsx`) and linking there for the rest.
+
+### Pipelines
+
+- The inventory, attention first, then size. Search by name or id; filter
+  by the same health rule as Fleet; outputs by protocol.
+- Above it, from runtime state (`pipelines-model.ts`): fleet protocol mix,
+  shared stages (running outputs grouped by `stage`, largest first), and
+  cards (needs attention, warm standby, bonded SRT, recording) that narrow
+  the table.
+
+### Operate (one pipeline)
+
+- Source deck from the state's `inputs` (RTT from the telemetry `inputs`),
+  with Promote and each input's preview.
+- Media path (`operate-graph.tsx`) in four views:
+  - Graph: the state's `graphs` entry with telemetry counters attached
+    (`state-views.ts`), laid out by longest path. Each shared stage is drawn
+    once with its consumer count; destinations fold per upstream stage and
+    protocol; egress nodes join outputs on `outputId`.
+  - Destinations: the same groups as a table.
+  - Timeline: the pipeline's kept lifecycle events, newest first.
+  - Preview: the program (see [Previews](#previews)).
+- Selecting a group opens its inspector (`operate-group-model.ts`):
+  delivering count, worst delivery ratio, worst feed lag and resyncs; the
+  fabric shards its outputs run on (`fabricFeed`, `shardId`) with state,
+  command queue and progress age from `/metrics/system` (`egressShards`);
+  and each diagnosed output's layer, cause and ruled-out layers.
+- Destination matrix from the state stream (feed lag from the running
+  egress, rate from telemetry) with Start/Stop. Degraded first, capped at
+  200 rows, with the hidden count, how many of them need attention, and
+  "show all".
+
+### Inspect (one pipeline)
+
+- Resource map polled every 2 s
+  (`/engine/resource-map?pipeline_id=…&view=detail&top_n=200`). Nodes under
+  pressure first, then by memory. Each node has a confidence (measured,
+  derived, estimated, unmeasured). The count of nodes the server left out is
+  shown.
+- Detail panel: metric cards (graph consumers, measured CPU with the FFmpeg
+  child PID, input packet rate, work per packet) and the engine's bottleneck
+  judgement. A missing number is left out, not shown as zero. A selected
+  stage adds its pipe counters (`/stages/{key}/telemetry`) and says when the
+  engine no longer has the stage.
+- "Global resource map" drops `pipeline_id`; there is no consumer card then.
+- Source ring fill and retained payload (`sourceRings`), the egress shards
+  this pipeline uses, and the attribution legend.
+- Diagnostics: see [Logs and diagnostics](#logs-and-diagnostics).
+
+### Monitor (one pipeline)
+
+- Ingest and egress rate, share of wanted outputs delivering, worst feed
+  lag, ring fill, and the slowest shard progress age. Sampled every 2 s on
+  one clock and kept in the page for 15 min (the engine keeps no history).
+- A non-live stream, stale source or truncated map is a gap in the line.
+- Each rise of the degraded count from 0 is an incident onset, marked on
+  every line and listed by time. A pipeline degraded at page load has no
+  onset in view.
+- Pause freezes the window while sampling goes on. Compare, while paused,
+  overlays the live window dashed on the same scale.
+- Below (`monitor-path.ts`): the selected input's transport metrics (only
+  what its protocol reports), the shared media path (ring fill, worst
+  reader lag, each stage's packet rate and readers, reader overflows), and
+  the destination outlier: the wanted output with the lowest delivery ratio
+  under the engine's 0.95 floor, against the median of its peers on the
+  same stage and protocol.
+
+Operate, Inspect and Monitor share one header and picker
+(`pipeline-scope.tsx`).
+
+### Incidents
+
+- Every open alert (`/alerts`): critical first, then widest scope, then
+  oldest. The selected alert's events (`/events`) from a minute before it
+  opened, and its evidence packet: diagnosis layer and cause, layers ruled
+  out, evidence lines marked `measured` or `derived`, and the action.
+- Resolved list from `/alerts?since=` (15m/1h/6h/24h), with a note when the
+  window passes the engine's kept history.
+- Correlation chart from `/fleet/history?since=&until=` (engine samples
+  every 5 s, keeps 24 h): from a minute before open to a minute after
+  close, then only new samples. Lines: delivering, headroom, degraded, with
+  cursors at open and close. Notes say when kept history or the event log
+  starts after that minute.
+- "Export evidence" downloads alert, packet, timeline and samples as one
+  JSON file built in the browser.
+
+### Capacity
+
+- The `/metrics/system` capacity snapshot (load per service center,
+  labelled calibration priors, observe-only).
+- Flow Doctor: measured from the busiest shard, or projected when none runs.
+- Scenario form: baseline and projection both come from
+  `/capacity/scenario`; the page computes no capacity number. Pick the
+  pipeline (highest-bitrate live one by default), protocol and encoding
+  (new renditions are shared stages). The calibration table shows each
+  limit and whether it is configured or a prior. "Draft it in Changes" opens
+  a planned change.
+
+### Media
+
+- Media directory (`/media`) split into recordings and source files, newest
+  first, with search.
+- Selected file: stored forms, probe (`/media/{file}/analysis`, once on
+  select), and whether it can feed a live pipeline as is. The engine judges
+  sparse GOPs against its live GOP target; with fewer than two keyframes it
+  measures no spacing, so a long file needs Live Optimized.
+- Upload, rename, and confirmed delete (refused while a pipeline ingests
+  the file). Media disk from `/metrics/system`.
+- A recording shows its timeline from the persisted session (`recordings`
+  table) and the remux state: start; `converting` at stop; `endedAt` when
+  the browser MP4 was written; a failed remux keeps the `.ts`. Rows are
+  selected by session id, so selection survives `.ts` → `.mp4`. A rename
+  breaks the join (by stored path) and loses the timeline.
+- "Use as source" opens the new-pipeline form with a looping file source
+  (Live Optimized when needed) and goes to its Operate view.
+
+### System
+
+`/engine/health` every 10 s: host checks (warnings first), io_uring and TLS
+capability, execution classes (media workers, RTMP and SRT ingress owners,
+egress shards, FFmpeg children, configured Tokio workers), SRT ingress
+counters with every non-zero loss or lateness count, and build, native
+libraries and SBOM from `/engine`.
+
+### Settings
+
+Reads `/settings` once (it lists every pipeline and output, so it is never
+polled). Each card saves only its part: general names, SRT ingest (10–79
+byte passphrase), transcode profiles (built-ins kept), failed-attempt
+limits, dashboard password. The failed-attempts list is polled; forgetting
+one client sends its scope key, forgetting all sends no scope (other scopes
+get 400). Log out is on the password card.
+
+### Changes
+
+Uses the [agent plane](api-reference.md#agent-plane): one pipeline, one or
+more destination changes (add, change, start, stop, remove) and a reason.
+
+1. Preview asks `/agent/plans` to judge (nothing mutates). It shows only
+   while the form matches what was judged.
+2. A valid preview shows impact: the topology diff (outputs by stage and
+   protocol, before and after) and, for additions, `/capacity/scenario`
+   before and after (removals are counted, not credited).
+3. A valid preview creates an operation. The operator approves it (as this
+   session, with an audited reason), applies and verifies.
+4. "Verified" is the engine's four gates: desired state; started outputs
+   running; no new critical alert on the changed pipelines since apply; host
+   still under safe utilization. Per-change checks, alert delta and active
+   graph nodes are listed under them.
+5. Verification checks one moment, so it can run again.
+
+A refused apply returns 400 with the failed record; the page shows the
+reason and warns that earlier changes may be applied. The convergence
+timeline merges audit events and output changes in time order. The tab
+keeps the operation id in `sessionStorage`; operations live in engine
+memory, so after a restart (404 `operationNotFound`) the page starts over.
+
+## Managing pipelines
+
+Files: `operate-manage.tsx`, `pipeline-form.tsx`, `output-form.tsx`, rules
+in `manage-model.ts`.
+
+- Pipelines has New pipeline; its Operate view opens once stored.
+- Operate reads `/settings` once and after each edit, and adds: Record
+  (armed until a source arrives; `enabled` and `active`), play/stop of a
+  file source (polled from `/pipelines/{id}/file-ingest`), confirmed delete,
+  and the settings form (name, stream key, "Issue a new stream key" locked
+  while any destination runs, live or file source, per-pipeline SRT ingest
+  override).
+- An edit re-sends the source only when it changed, because re-sending a
+  file source restarts its ingest.
+- The source deck adds backup inputs with publish URLs, and enables,
+  disables or deletes them. The primary and the selected input offer
+  neither; the engine refuses both.
+- An input is a stream key (RTMP, SRT or HLS push) or a remote HLS URL the
+  engine pulls, with a rendition rule (highest or lowest bandwidth) and one
+  credential: none, bearer token, cookie string, username and password, or
+  custom headers. Signed URLs need none. A stored secret is shown only as
+  state, and a save that does not touch it keeps it.
+- The destination matrix adds, edits and deletes destinations: preset
+  server plus key or a full URL, SRT fields, RTMP flavour, passthrough or a
+  profile, and audio routing. Notes from the destination's caps say what is
+  dropped or downmixed. Caps are advice; they never block a save. Tracks
+  come from `/pipelines/{id}/probe`; pickers always include a stored track.
+
+## Logs and diagnostics
+
+Logs (`logs.tsx`, rules in `diagnose-model.ts`):
+
+- Reads the newest 200 rows (`/logs`), then streams matches from
+  `/logs/stream`, resuming after the newest row, so no row is lost or
+  doubled. One filter set: scope (all, engine-wide, pipeline, destination),
+  lowest level, lifecycle-only.
+- Keeps 500 rows, newest first. Pause closes the stream; Resume reopens it
+  after the newest row shown. A failed read offers Read again.
+
+Inspect's Diagnostics runs `POST /pipelines/{id}/diagnostics/run` on
+request and downloads the result as a `restream.diagnostics.v1` report.
+
+## Previews
+
+Previews play only when asked, because a preview makes the engine produce
+media for it.
+
+### HLS
+
+`preview.tsx` plays the program (`/hls/{pipeline}/master.m3u8`) and each
+connected input (its `previewUrl`) muted through hls.js.
+
+- The engine answers 404 until the first segment exists, so the player
+  retries 404s for up to 15 s. Safari's native player does not retry, so the
+  page polls the playlist first.
+- Buffered media that has not grown for 20 s is a stall (a stopped source
+  raises no player error). The preview stops and offers Retry. Waiting reads
+  "buffering", never "live". A 401 goes to the login page.
+- More than one audio track adds a track picker.
+- Input previews are always HLS: the MoQ origin serves pipeline broadcasts.
+
+### Program transport switch
+
+`ProgramPreview` in `operate-graph.tsx` shows an HLS | MoQ radio group. The
+diagram shows how it picks the player.
+
+```mermaid
+flowchart TD
+  start["ProgramPreview mounts"] --> read["read localStorage restream.previewTransport"]
+  read --> isMoq{"value is moq?"}
+  isMoq -- "no, or storage blocked" --> hlsPick["chosen = hls"]
+  isMoq -- yes --> moqPick["chosen = moq"]
+  hlsPick --> sup{"moqPreviewSupported(): WebTransport and VideoDecoder?"}
+  moqPick --> sup
+  sup -- no --> hls["Preview (hls.js); MoQ button disabled"]
+  sup -- yes --> which{"chosen"}
+  which -- hls --> hls
+  which -- moq --> moq["MoqPreview"]
+```
+
+- HLS is the default. A click stores the choice in `localStorage`; if
+  storage is blocked, the choice lasts this visit.
+- MoQ needs WebTransport and WebCodecs (`VideoDecoder`). Otherwise the MoQ
+  button is disabled with a tooltip.
+
+### MoQ
+
+`MoqPreview` (`moq-preview.tsx`) plays the program straight from the
+engine's [MoQ origin](media-pipeline.md#moq-origin) on a canvas, muted. The
+diagram shows one attempt.
+
+```mermaid
+sequenceDiagram
+  participant UI as MoqPreview
+  participant API as Engine API
+  participant W as @moq/watch
+  participant O as MoQ origin
+  UI->>API: POST /api/v1/pipelines/{id}/moq-token
+  API-->>UI: MoqPreviewGrant (url, broadcast, certificateSha256) or 409
+  UI->>W: import("@moq/watch") on demand
+  W->>O: WebTransport connect, normal certificate checks
+  alt connect fails and certificateSha256 is set
+    W->>O: connect again with serverCertificateHashes (sha-256 pin)
+  end
+  W->>O: subscribe to grant.broadcast (announced: false)
+  O-->>W: frames
+  W-->>UI: first decoded frame: "live (MoQ)"
+```
+
+- `mintMoqPreview` (`core/api.ts`) returns no grant on 409 (MoQ listener
+  off) or 404 (pipeline gone). The preview then fails with "MoQ is off on
+  this engine".
+- `@moq/watch` loads only when the operator starts the preview.
+- Pinning is the fallback, not the first try: browsers accept a pinned
+  certificate only if it is valid for at most 14 days, which fits the
+  engine's short-lived self-signed certificate. WebSocket fallback is off.
+- States: starting, playing ("live (MoQ)"), buffering (decoder stalled),
+  failed. It fails with a reason when the session closes or no frame
+  decodes within 15 s (`FIRST_FRAME_MS`). Retry starts a new attempt.
+
+## Proof
+
+Node tests in `test/frontend/`: `control-room-fleet`,
+`control-room-fleet-history`, `control-room-pipelines`,
+`control-room-operate`, `control-room-operate-group`,
+`control-room-state-views`, `control-room-input`, `control-room-inspect`,
+`control-room-monitor`, `control-room-incidents`, `control-room-media`,
+`control-room-system`, `control-room-settings`, `control-room-changes`,
+`control-room-manage`, `control-room-diagnose` (each `.test.mjs`), and
+`frontend-runtime-state-stream.test.mjs` (stream liveness).
+`test/frontend/control-room.spec.ts` runs Playwright against a running
+engine.
+
+```sh
+npm run test:frontend
+npm run test:e2e
+```

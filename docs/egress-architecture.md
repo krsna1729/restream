@@ -1,1148 +1,605 @@
 # Egress architecture
 
-This document is the normative ownership and concurrency contract for
-Restream's high-fan-out egress path (RTMP, RTMPS, SRT, and future live egress
-protocols). The fabric has shipped.
+Every live output runs as a leaf on the egress fabric (`src/media/egress/`).
+A leaf is one output's protocol state. A shard is an OS thread that owns many
+leaves and visits them under a finite budget. Each prepared feed gets its own
+small pool of shards. No output owns a thread, a Tokio media task or a private
+media queue.
 
-The central decision is to use one protocol-neutral egress fabric for
-ownership, scheduling, lifecycle, backpressure, retries, observability, and
-failure isolation, while retaining protocol-specialized preparation, wire
-state, and readiness mechanisms.
+This page is the ownership and concurrency contract for that fabric. Protocol
+wire details live in [Media pipeline](media-pipeline.md); every runtime
+handoff is listed in [Runtime crossings](runtime-crossings.md).
 
 ## Contents
 
-- [Goals](#goals)
-- [Non-goals](#non-goals)
-- [Architectural decision](#architectural-decision)
-- [Shipped constraints](#shipped-constraints)
-- [Layer model](#layer-model)
-- [Data-path topology](#data-path-topology)
-- [Shared preparation graph](#shared-preparation-graph)
-- [Feed and journal contract](#feed-and-journal-contract)
-- [Egress manager](#egress-manager)
-- [Shard ownership](#shard-ownership)
-- [Leaf ownership](#leaf-ownership)
-- [Protocol engine boundary](#protocol-engine-boundary)
-- [Readiness backends](#readiness-backends)
-- [Lifecycle](#lifecycle)
-- [Scheduling and fairness](#scheduling-and-fairness)
-- [Backpressure and slow destinations](#backpressure-and-slow-destinations)
-- [Dead destinations and retries](#dead-destinations-and-retries)
+- [Outputs on the fabric](#outputs-on-the-fabric)
+- [Ownership](#ownership)
+- [Feeds and cursors](#feeds-and-cursors)
+- [Shard loop](#shard-loop)
+- [Commands and wakes](#commands-and-wakes)
+- [Leaf lifecycle](#leaf-lifecycle)
+- [Protocol engine contract](#protocol-engine-contract)
+- [Backpressure, stalls and retries](#backpressure-stalls-and-retries)
+- [Shard sizing and placement](#shard-sizing-and-placement)
 - [Failure containment](#failure-containment)
-- [Shard assignment and scaling](#shard-assignment-and-scaling)
-- [Command and wakeup model](#command-and-wakeup-model)
-- [Memory and copying model](#memory-and-copying-model)
-- [Observability](#observability)
+- [Transport backends](#transport-backends)
 - [Configuration](#configuration)
-- [Correctness invariants](#correctness-invariants)
-- [Performance invariants](#performance-invariants)
-- [History and tradeoffs](#history-and-tradeoffs)
-- [Decision summary](#decision-summary)
+- [Observability](#observability)
+- [Invariants and proofs](#invariants-and-proofs)
 
-## Goals
+## Outputs on the fabric
 
-The architecture must:
+`EgressTask::run` (`src/infrastructure/bootstrap/egress_task.rs`) picks the
+path by URL scheme. Each fabric output becomes an `OutputSpec` with one
+`ProtocolSpec` variant (`src/media/egress/command.rs`).
 
-- support at least 1,000 active egress leaves without one application thread
-  or one independent media backlog per destination;
-- keep the application topology the same for RTMP, RTMPS, SRT, and future
-  protocols;
-- prevent a small number of slow, dead, or malicious destinations from
-  materially degrading healthy neighbors on the same shard;
-- prevent a failed or overloaded shard from interrupting other shards;
-- preserve shared transforms and shared packaging when outputs are compatible;
-- keep publication from a pipeline or transform stage non-blocking with respect
-  to network egress;
-- bound memory by shared-feed retention and small per-leaf state, not by
-  destination count multiplied by stall duration;
-- preserve protocol correctness, including RTMP session state, TLS state, SRT
-  message semantics, timestamps, codec configuration, and synchronization;
-- expose enough progress and fairness telemetry to prove isolation under live
-  load;
-- allow the smallest proven number of egress threads rather than requiring one
-  thread per visible CPU.
+| Scheme | `ProtocolSpec` | Shard backend | Feed | Transport |
+|---|---|---|---|---|
+| `rtmp://`, `rtmps://` | `Rtmp` | `RtmpShardBackend` | `RingFeed` | Compio TCP; RTMPS via Rustls then kTLS |
+| `srt://` | `Srt` | `SrtShardBackend` | `TsFeed` | `srt-rs` Compio `Owner` per address family |
+| `http://`, `https://` HLS PUT | `HlsPut` | `HlsPutShardBackend` | `HlsStore` | Compio TCP; HTTPS needs kTLS |
+| `moqt://` | `Moq` | `MoqShardBackend` | `RingFeed` | Compio QUIC (`src/media/moq/egress/`) |
+| `sink://` | `Sink` | `SinkShardBackend` | `RingFeed` | none: discards after accounting |
+| `pipeline://` | `Pipeline` | `PipelineShardBackend` | `RingFeed` | in-process publish to another pipeline |
 
-## Non-goals
+HLS PUT has one exception. It uses the fabric only when
+`RESTREAM_HLS_PUT_FABRIC` is on (default) and, for HTTPS, when kernel TLS is
+available. Otherwise the output uses the Tokio Reqwest uploader
+(`src/media/hls/upload.rs`).
 
-This design does not:
+## Ownership
 
-- make RTMP and SRT wire operations identical;
-- force Compio TCP readiness and SRT's Compio Owner activity into one physical
-  polling API;
-- move the API, database, reconciler, ingest, recording, or codec execution onto
-  an egress thread-per-core runtime;
-- guarantee hard isolation from a native library call that violates its
-  non-blocking contract; process isolation would be required for that guarantee;
-- introduce dynamic third-party protocol plugins;
-- migrate live socket state between shards during normal operation;
-- create a universal packet representation for every container and protocol;
-- replace the existing shared stage graph or `MediaPacket` contracts.
-
-## Architectural decision
-
-Restream will use a protocol-neutral egress fabric with protocol-specialized
-preparation feeds, engines, and protocol-native transport backends.
+The diagram shows who owns what, from the Tokio output task down to one leaf.
 
 ```mermaid
 flowchart TD
-    Control["Control plane and reconciler"] --> Manager["Egress manager"]
-    Pipeline["Pipeline and shared transform stages"] --> Preparation["Shared preparation graph"]
-    Preparation --> Feed["Bounded immutable feed"]
-    Manager --> ShardGroup["Protocol-native shard group"]
-    Feed --> ShardGroup
-    ShardGroup --> Shard["Fixed egress shard"]
-    Shard --> Leaf["Protocol-neutral leaf shell"]
-    Leaf --> Engine["Protocol engine"]
-    Engine --> Transport["Protocol-native transport backend"]
+    Task["EgressTask (Tokio, one per output attempt)"] --> Registry["MediaEngine fabric registry (engine_*_egress_fabric.rs)"]
+    Registry --> Runtime["EgressFabricRuntime (one per feed)"]
+    Runtime --> Manager["EgressManager"]
+    Runtime --> Group["EgressShardGroup"]
+    Runtime --> Sizer["ShardSizer"]
+    Group --> Handle["EgressShardHandle"]
+    Handle -->|"bounded flume channel"| Thread["egress-shard-N thread: EgressShardRuntime"]
+    Thread --> Backend["EgressShardBackend"]
+    Backend --> Arena["LeafArena"]
+    Arena --> Leaf["Leaf: LeafCommon + protocol engine"]
+    Feed[("RingFeed / TsFeed / HlsStore")] --> Backend
 ```
 
-The stable boundary is policy versus mechanism:
-
-| Protocol-neutral fabric owns | Protocol-specific code owns |
-|---|---|
-| Output assignment and supervision | Handshake bytes and state |
-| Leaf lifecycle | Wire serialization |
-| Work budgets and fairness | Protocol acknowledgements and control messages |
-| Feed cursors and overrun policy | Protocol-specific transport mechanics and progress |
-| Backpressure and stall policy | Partial-write or message-send semantics |
-| Retry delay and admission control | Protocol error classification |
-| Shutdown and removal | Socket options and transport setup |
-| Progress, lag, and health metrics | Protocol synchronization capabilities |
-
-Protocol implementations must not create their own long-lived application
-threads, destination tasks, media queues, retry loops, or lifecycle policy.
-
-## Shipped constraints
-
-Properties the fabric must keep preserving:
-
-- encoded packets are shared through bounded `RingBuffer` instances;
-- expensive transforms are shared by typed stage identity;
-- compatible SRT outputs share MPEG-TS preparation through `TsChunkRing`;
-- RTMP/RTMPS and SRT leaves share fabric lifecycle, backpressure, and retry
-  policy while retaining protocol-specialized engines and transport backends;
-- slow ring readers can recover after bounded overflow;
-- Tokio worker count and egress shard count are independent,
-  measurement-driven knobs (separate sweeps). SRT keeps a CPU-derived shard
-  ceiling as an Owner-parallelism budget (each shard runs its own Compio
-  runtime and family Owners) rather than scaling shards purely with output
-  count.
-
-Legacy per-destination RTMP tasks and per-destination SRT sender threads are
-gone.
-
-## Layer model
-
-The layering is:
-
-```mermaid
-flowchart TD
-    Desired["Desired output configuration"] --> Application["Application workflow"]
-    Application --> Manager["Egress manager and supervisor"]
-    Manager --> Fabric["Egress fabric"]
-    Fabric --> Engine["Protocol engine"]
-    Engine --> Adapter["Transport and readiness adapter"]
-    Media["Shared media stages"] --> Preparation["Shared protocol preparation"]
-    Preparation --> Fabric
-```
-
-### Control plane
-
-The API, database, and reconciler own desired configuration and orchestration.
-They issue idempotent add, update, remove, drain, and shutdown commands. They do
-not send media or manage socket readiness.
-
-### Shared media and preparation
-
-The media layer owns packet transforms and reusable protocol preparation.
-Expensive work is keyed and shared before the destination edge.
-
-### Egress fabric
-
-The fabric owns all protocol-independent behavior required to move prepared
-media to independent destinations fairly and safely.
-
-### Protocol engine
-
-An engine owns connection-local protocol state. It advances only when given
-readiness, feed data, and a finite work budget.
-
-### Transport adapter
-
-The adapter maps a native readiness mechanism into the fabric's readiness
-vocabulary. It does not own retries, backpressure policy, or leaf lifecycle.
-
-## Data-path topology
-
-Every live output follows the same logical path:
-
-```mermaid
-flowchart LR
-    Source["Source or transformed packet ring"] --> Prepare["Shared preparation stage"]
-    Prepare --> Journal[("Bounded feed journal")]
-    Journal --> ShardA["Egress shard A"]
-    Journal --> ShardB["Egress shard B"]
-    ShardA --> LeafA1["Leaf"]
-    ShardA --> LeafA2["Leaf"]
-    ShardB --> LeafB1["Leaf"]
-    LeafA1 --> ProtocolA["Protocol engine"]
-    LeafA2 --> ProtocolB["Protocol engine"]
-    LeafB1 --> ProtocolC["Protocol engine"]
-```
-
-There is no protocol-specific bypass around the manager, shard scheduler,
-common lifecycle, or backpressure policy.
-
-Each RTMP/RTMPS shard owns one Compio/io_uring runtime, its TCP streams,
-protocol state, and bounded completion workers. Established sockets use
-one-shot RX/TX operations; only pending connects use `PollFd` readiness. SRT
-shards run one Compio runtime on the shard thread with at most one
-`srt_transport::compio::Owner` per address family (IPv4, IPv6), each owning one
-shared caller UDP socket.
-
-## Shared preparation graph
-
-Preparation is separate from destination scheduling because the most valuable
-work is often reusable.
-
-```mermaid
-flowchart LR
-    Canonical["Canonical encoded media"] --> RtmpFeed["RTMP-compatible media feed"]
-    Canonical --> TsMux["Shared MPEG-TS muxer"]
-    TsMux --> SrtFeed["SRT transport-chunk feed"]
-    Canonical --> SinkFeed["Sink validation feed"]
-    Canonical --> RecirculateFeed["In-process recirculation feed"]
-    Canonical --> Future["Future shared preparation"]
-```
-
-A preparation key must include every property that changes reusable output,
-including selected tracks, codec state, container settings, and any transport
-payload policy that affects bytes. Destinations with different keys must not
-share a prepared feed.
-
-RTMP leaves consume encoded audio and video units. Each leaf still owns RTMP
-chunking, acknowledgement, connection, and optional TLS state.
-
-SRT leaves consume immutable MPEG-TS messages produced once for compatible
-outputs. Each leaf still owns SRT connection and protocol state in the
-`srt-rs` stack (congestion, retransmission, encryption). The shard's family
-`Owner` owns one shared caller UDP socket, one bounded caller pool and the
-logical callers; a leaf holds only its `LogicalCallerId`. A bonded output is
-one leaf and one logical caller whose legs must share one address family.
-
-Sink leaves consume prepared media and discard it after accounting progress.
-They have no transport readiness adapter, but they still run through the same
-manager, shard scheduler, lifecycle, feed cursor, limits, status, and
-observability paths. Useful cases include capacity and soak tests without
-external receivers, validating feed wake/cursor behavior, measuring preparation
-cost separately from network cost, deliberate black-hole outputs for staging
-pipelines, and operator diagnostics where the question is whether media reaches
-egress at all.
-
-Pipeline or recirculation leaves connect one pipeline's prepared output to
-another pipeline's input in the same process. They must not serialize through a
-network protocol or a byte queue when the source and destination can share
-immutable media ownership. The adapter for this backend is a topology bridge:
-it translates feed units into the target pipeline's ingress contract and
-publishes wakeups, but retry, backpressure, lifecycle, and loop prevention stay
-with the common control plane and fabric.
-
-Preparation feeds must not perform destination-specific retries or retain data
-for a single slow output.
-
-## Feed and journal contract
-
-The fabric consumes a bounded, sequence-addressed, immutable feed. The stable
-contract is behavior, not one universal media enum.
-
-```rust
-pub trait EgressFeed {
-    type Unit: Clone;
-
-    fn head_sequence(&self) -> u64;
-    fn oldest_sequence(&self) -> u64;
-    fn read_from(&self, cursor: FeedCursor, budget: ReadBudget) -> FeedRead<Self::Unit>;
-    fn latest_sync_point(&self) -> Option<FeedCursor>;
-    fn sync_point_at_or_after(&self, sequence: u64) -> Option<FeedCursor>;
-}
-```
-
-A feed unit must be immutable and cheap to reference, normally through `Bytes`
-or `Arc`. A feed is bounded by both bytes and media age where meaningful.
-
-A leaf cursor contains only position and epoch information:
-
-```rust
-pub struct FeedCursor {
-    pub epoch: u64,
-    pub next_sequence: u64,
-}
-```
-
-Cursors do not pin retained entries. If a cursor falls behind
-`oldest_sequence`, the feed reports overrun. The leaf then follows the common
-resynchronization policy instead of forcing the feed to grow.
-
-A leaf has no feed handle at construction, so its cursor starts as a
-placeholder and is anchored on the leaf's first visit — and again when a
-protocol reports handshake completion, since handshake states never read the
-feed. Both the initial anchor and every resynchronization target the same live
-start position: the latest retained sync point, or the feed head when no sync
-point is retained. Never `oldest_sequence`, which is the largest backward jump
-the feed allows and leaves the leaf a full retention window behind live.
-
-Feed epochs change when a discontinuity invalidates old cursors, such as a
-source replacement or preparation-stage restart. An epoch mismatch is handled
-as a resynchronization event.
-
-Publication must never wait for a network destination or egress command queue.
-The feed itself is the source of truth; notifications are only hints that new
-work may exist.
-
-## Egress manager
-
-`EgressManager` is the application-facing capability for live output lifecycle.
-It owns:
-
-- shard-group creation and shutdown;
-- stable output-to-shard assignment;
-- command routing;
-- shard health supervision;
-- reconnect admission shared across shards;
-- output snapshots for API and reconciliation.
-
-The manager does not own packet hot loops or connection-local protocol state.
-
-Representative commands are:
-
-```rust
-pub enum EgressCommand {
-    Add(OutputSpec),
-    Update(OutputSpec),
-    Remove(OutputId),
-    DrainShard(ShardId),
-    Shutdown,
-}
-```
-
-Commands are idempotent by output identity and configuration generation. A
-stale update must not resurrect or overwrite a newer output generation.
-
-## Shard ownership
-
-A shard is a long-lived OS thread with exclusive ownership of its mutable hot
-state:
-
-```rust
-pub struct EgressShard<B: EgressBackend> {
-    backend: B,
-    leaves: slab::Slab<Leaf<B::Leaf>>,
-    ready: std::collections::VecDeque<LeafKey>,
-    timers: TimerWheel<LeafKey>,
-    commands: BoundedCommandReceiver,
-    feeds: FeedSubscriptions,
-    metrics: ShardMetrics,
-}
-```
-
-A shard owns:
-
-- its protocol-specific network backend (RTMP/RTMPS: one Compio/io_uring
-  runtime, shared Compio TCP streams, bounded RX/TX workers and event queues;
-  pending connects alone use `PollFd`; SRT: one Compio runtime and at most two
-  family `Owner`s, built on the shard thread);
-- all leaf protocol and transport state assigned to it;
-- its ready queue and scheduling flags;
-- connect, handshake, progress, and retry timers;
-- local counters and metric aggregation;
-- its bounded control inbox;
-- feed subscriptions and coalesced wake state.
-
-No hot-path global mutex is required for leaf scheduling or socket state.
-Mutable leaf state does not migrate between threads during normal operation.
-
-The backend is built, driven and dropped on the shard's own OS thread.
-`EgressShardBackend` is therefore not `Send`; only the factory passed to
-`EgressShardHandle::spawn_with` (or `try_spawn_with` for fallible construction
-such as an `io_uring` poller) crosses the thread boundary, and it must be
-`Send`. This is what lets a backend own thread-affine runtime state — a
-per-thread Compio runtime, an `Rc`-based owner — without
-`Arc<Mutex<Runtime>>` or `unsafe impl Send`. `EgressShardHandle::spawn` and
-`EgressShardGroup::spawn` remain as conveniences for already-built `Send`
-backends (tests); production groups use the factory forms.
-
-The RTMP/RTMPS completion backend performs bounded work in this order:
-
-1. process a limited batch of high-priority control commands;
-2. process a bounded batch of generation-tagged completion events and make a
-   rotating, per-call-budgeted scan of pending-connect `PollFd`s;
-3. process expired timers;
-4. schedule leaves whose feeds advanced;
-5. service ready leaves under per-leaf and per-loop budgets;
-6. publish aggregated metrics when due;
-7. when idle, wait for control activity, active-I/O completions, pending-connect
-   readiness, or the next relevant deadline (the earlier of the next
-   application timer and shard idle bound).
-
-Established leaves never enter the PollFd set. One-shot RX workers pause after a
-bounded read until the shard consumes the completion; TX workers queue at most
-one bounded chunk in flight and wait when their bounded event channel is full.
-This applies backpressure instead of scanning active connections or draining a
-completion source to quiescence.
-
-Control processing itself is budgeted so a large update burst cannot starve
-media progress.
-
-The command channel is a bounded `flume` channel (exact capacity, `try_send`
-reports `Full` or `Closed`, FIFO), chosen because its receiver supports both
-blocking and Future-based receive. The idle wait is a backend hook,
-`EgressShardBackend::wait_idle(commands, max_wait)`, returning one of
-`Command`, `BackendActivity`, `Timeout` or `Disconnected`. `max_wait` is the
-shard's own bound, the earliest of the idle wait, the next application timer
-and, once `Shutdown` has started a drain, the drain deadline. A `Command` wake
-goes through the same `process_command` path as one found by `try_recv`;
-`BackendActivity` schedules one ordinary ready visit under the shared budget.
-RTMP/RTMPS and SRT waiters enter their shard-local Compio runtime to wait for
-commands and transport activity together. Sink and pipeline backends use the
-default command-channel waiter.
-
-## Leaf ownership
-
-Every output has one protocol-neutral leaf shell and one specialized protocol
-state value.
-
-```rust
-pub struct Leaf<P> {
-    pub common: LeafCommon,
-    pub protocol: P,
-}
-
-pub struct LeafCommon {
-    pub output_id: OutputId,
-    pub generation: u64,
-    pub feed: FeedId,
-    pub cursor: FeedCursor,
-    pub lifecycle: LeafLifecycle,
-    pub pending_bytes: usize,
-    pub scheduling: SchedulingState,
-    pub deadlines: LeafDeadlines,
-    pub retry: RetryState,
-    pub progress: ProgressState,
-    pub limits: LeafLimits,
-}
-```
-
-A leaf may retain:
-
-- connection-local protocol and socket state;
-- one partially written wire unit, or a small explicitly bounded set required
-  by the protocol;
-- a feed cursor;
-- bounded handshake and control output;
-- timers, counters, and health state.
-
-A leaf must not retain an arbitrary media backlog, spawn a private retry task,
-or block the shard thread.
-
-## Protocol engine boundary
-
-The protocol boundary is progress-oriented. The engine receives readiness,
-access to an appropriate prepared feed, and a finite budget. It returns why it
-stopped.
-
-```rust
-pub trait ProtocolEngine {
-    type Feed: EgressFeed;
-    type Transport;
-
-    fn advance(
-        &mut self,
-        transport: &mut Self::Transport,
-        readiness: Readiness,
-        feed: &Self::Feed,
-        cursor: &mut FeedCursor,
-        budget: WorkBudget,
-    ) -> EngineProgress;
-
-    fn close(&mut self, transport: &mut Self::Transport, reason: CloseReason);
-    fn recovery_capability(&self) -> RecoveryCapability;
-}
-```
-
-`advance` must:
-
-- never block;
-- obey byte, unit, and CPU-time budgets;
-- stop immediately when the transport would block;
-- preserve any partial wire state required to resume correctly;
-- report actual forward progress;
-- avoid sleeping, spawning work, or implementing its own retry delay;
-- avoid holding a shared feed or registry lock while performing I/O.
-
-Representative results are:
-
-```rust
-pub enum EngineProgress {
-    Progress { bytes: usize, units: usize, wants: Interest },
-    Needs(Interest),
-    HandshakeComplete,
-    FeedOverrun,
-    PeerClosed,
-    Failed(ProtocolFailure),
-    Yield,
-}
-```
-
-A static enum or generic backend is preferred over boxed dynamic dispatch in
-the per-packet hot loop. Dynamic dispatch may still be used in manager and
-factory code where it is not performance-sensitive.
-
-## Readiness backends
-
-This section describes the current RTMP/RTMPS completion transport; the
-`Readiness` values consumed by the protocol engine are coalesced completion
-flags, not population-wide readiness results. SRT uses its Compio `Owner`.
-
-### TCP and TLS backend
-
-Each established RTMP leaf shares one Compio TCP stream between the RX and TX
-workers. The workers use bounded 4 KiB chunks, connection-local receive/send
-queues, and one bounded generation-tagged completion channel. A leaf's read and
-write completion flags are ORed before its next protocol visit, so simultaneous
-one-shot completions cannot suppress the other direction. Shutdown aborts and
-joins both workers before connection state is dropped.
-
-Each peer is started with a single nonblocking `connect(2)` call. Immediate
-success activates the Compio stream directly; `EINPROGRESS` is the only state
-registered with `PollFd`, and its duplicate descriptor is removed when the
-connection activates. A rotating scan visits at most the configured connect
-budget per poll, including while established completions are arriving. Active
-connections are not registered or discovered by a population-wide readiness
-scan. Established RTMP data I/O has no synchronous `send`/`recv` fast path;
-Compio completion workers own it. Egress requires a working Compio/io_uring
-runtime and fails shard construction explicitly if it is unavailable.
-
-RTMPS uses Rustls for the handshake, then requires Linux kTLS for application
-records. Unsupported negotiated suites, missing kTLS capability, or handoff
-errors fail the output; there is no silent userspace-TLS fallback. Ancillary
-receive staging preserves TLS record-type association for kTLS.
-
-Nominal transport-adapter bound per established RTMP/RTMPS leaf
-(`compio_tcp/stream.rs`):
-
-| Buffer | Bound |
-|---|---:|
-| queued RX (`TRANSPORT_BUFFER_CAPACITY`) | 4 KiB |
-| receive-worker buffer (`IO_CHUNK`) | 4 KiB |
-| TX staging, staged plus in flight (`TRANSMIT_BUFFER_CAPACITY`) | 64 KiB |
-| TX segment list (≤ 257 `Bytes` handles) and copied-run capacity | ~12 KiB |
-| **worst case** | **~84 KiB** |
-
-At the default upper topology of 8 shards × 4,096 leaf slots (32,768 active
-leaves) that is about **2.6 GiB** of adapter state before allocator overhead,
-not the ~512 MiB this section quoted before 64 KiB TX batching. Configured
-shard/leaf overrides scale it. Media payload in TX staging is mostly shared
-`Bytes` slices of the feed (zero-copy since `40ebacde`), so the private
-per-leaf copy is usually the headers/control run, far below 64 KiB, but the
-bound is what capacity planning must assume. It excludes protocol-engine,
-TLS, task and event state and kernel socket buffers; the application
-pending-byte ceiling is a separate bound.
-
-Measured, for calibration: in the capacity ramp (`docs/capacity-ramp.md`,
-8 Mbit/s outputs) Restream RSS grew from 184 MB at 250 RTMP outputs to 295 MB
-at 1,000, about **150 KB per output** of total process growth (all Restream
-state, not only the adapter). WI8's memory model should start from these
-figures.
-
-The kTLS read path preserves TLS record types: TLS 1.3 session tickets are
-discarded after the buffered Rustls handoff, so RTMPS session resumption is not
-used; a TLS 1.3 KeyUpdate fails the output closed. Supporting KeyUpdate requires
-the Rustls unbuffered `KernelConnection` handoff.
-
-A pending RTMP write retains shared payload ownership where possible and
-tracks independent offsets for headers and payloads. Each writable visit is
-bounded and stops on `WouldBlock`. RTMPS plaintext accepted by TLS and
-encrypted output retained by the connection remain subject to per-leaf memory
-limits.
-
-### SRT backend
-
-SRT egress runs on `srt-rs`'s Compio `Owner`. Topology per shard:
-
-```text
-shard OS thread
-  └── one Compio runtime (production profile, io_uring; built on this thread)
-        ├── IPv4 Owner  (lazy; one caller UDP socket, caller pool, fixed TX pool)
-        ├── IPv6 Owner  (lazy; likewise)
-        └── SRT leaves: OutputId/generation, feed cursor, family, LogicalCallerId
-```
-
-- **One runtime, at most two Owners.** There is never a runtime, task, socket
-  or Owner per output. Many direct and bonded callers share one Owner's socket;
-  TX lanes and the receive consumer are the Owner's fixed substrate.
-- **Connect admission is the Owner's caller pool.** `Owner::connect` /
-  `connect_bonded` return `Admitted`, `Queued` or `Full`. A queued request is
-  correlated by `(family, PoolRequestId)` to its output and generation; the
-  pool event that later admits it is attached only if that output and
-  generation are still current, otherwise the stale caller is retired. There is
-  no Restream-side connect semaphore or backlog. DNS resolution stays
-  off-thread and bounded, before the Owner is involved. The Owner is a resource
-  governor: `set_caller_pool_capacity` bounds in-flight handshakes, while each
-  output's `LeafPolicy.connect_timeout` (`RESTREAM_SRT_CONNECT_TIMEOUT_MS`)
-  rides on that output's own `CallerConfig` as its attempt deadline. The pool
-  starts the clock at admission, so queue wait never consumes it, and no
-  Restream-side timer exists to defeat that.
-- **Bonded outputs** are one leaf and one logical caller; all legs must resolve
-  to one address family (a mixed-family bond fails the output explicitly) and
-  carry one identical request deadline. Backup/Broadcast selection and per-leg
-  state belong to `srt-rs`. Endpoints are never rejected for differing hosts;
-  the handshake's remote group identity decides. A `PeerGroupCollision` (typed
-  `CallerGroupFault`: logical caller, leg peer, member, expected/actual group
-  id) is drained in the normal bounded event pass -- after the pool `Admitted`
-  events of that pass, so a queued request is installed before its collision is
-  applied -- and fails exactly that output (session-local, never an Owner fault);
-  an ordinary leg failure keeps the sibling legs.
-- **Scheduling.** A ready batch services each existing Owner once under a
-  finite `OwnerServiceBudget` (upstream defaults, independent of pool capacity
-  and fan-out: `max_actions` bounds protocol TX and `max_maintenance_actions`
-  bounds pool/lifecycle maintenance on separate axes), drains bounded Owner
-  event queues, moves queued
-  candidates to the ready queue, and then visits leaves one per `on_ready`.
-  Payload submission (`send_shared`) only enqueues into protocol state and never
-  services an Owner. Backpressured or still-connecting leaves park; Owner
-  activity re-examines a bounded rotating slice of them, so a network wake does
-  bounded work and nothing spins. Each batch first does one non-blocking
-  driver poll (`Runtime::block_on` returns without touching the driver once its
-  future is ready), so a shard that never idles still reaps TX completions and
-  receives datagrams; without it all TX slots stay in flight and leaves starve
-  (regression test `a_shard_that_never_parks_still_reaps_tx_completions`).
-- **Waiting.** The backend overrides `wait_idle` to park inside its Compio
-  runtime, awaiting the command channel, each Owner's network/completion
-  activity and the earliest of the generic bound and each Owner's protocol
-  deadline. SRT protocol timers (ACK/NAK, keepalive, pacing, retransmission,
-  handshake) stay inside the Owner; Restream's timer wheel keeps only product
-  and lifecycle timers.
-- **Faults.** A peer-local or transient TX failure is attributed to one caller
-  (and leg) and never faults anything else. A structural Owner fault retires the
-  leaves on that family and closes it for the life of the shard: the recorded
-  fault keeps admission refused and the last metrics row visible, so the fault
-  cannot disappear from telemetry. Its Owner is then torn down: a quiescent
-  `shutdown_and_drain` drops it, which releases the retained caller windows a
-  faulted Owner can no longer reclaim, and a teardown that misses its bound
-  keeps the Owner so later service visits keep driving the runtime and retry a
-  short bounded attempt on a doubling (10 ms to 250 ms) spacing until
-  quiescence. The sibling family keeps running throughout.
-- **Shutdown.** Leaves flush inside the shard drain window minus a small
-  reserve; each instantiated Owner is then torn down with
-  `shutdown_and_drain`, proving no send in flight, a whole TX pool, joined lanes
-  and no receive consumer, or reporting the miss in shard metrics.
-- **Observability.** `ShardMetrics.srt_owners[family]` carries low-cardinality
-  Owner gauges/counters (TX pool capacity/free/high-water/exhaustions, in-flight,
-  caller-pool in-flight/queued/expired/failed/cancelled, receive mode and ring
-  depth/drops/truncation, service visits and budget exhaustions, cumulative
-  protocol `service_actions` and `maintenance_actions`, peer-group collisions,
-  fault state);
-  the shard also records whether its runtime is io_uring and whether the managed
-  receive substrate exists. The receive mode is `ManagedPreferred`: a host
-  without provided-buffer rings runs the readiness receiver, and that is
-  visible in `OwnerRxMode` and these metrics rather than silently claimed.
-
-**Runtime states and deployment requirements.** Three states are distinct and
-must not be confused:
-
-| State | What the runtime observed | Result |
+| Owner | Owns | Must not |
 |---|---|---|
-| A. io_uring unavailable or denied | the forced io_uring Compio runtime cannot be built (e.g. a container seccomp profile denies `io_uring_setup`, `EPERM`/`ENOSYS`) | the SRT shard fails closed: `SrtFabricShardGroupError::Backend` ("SRT egress Compio runtime failed to build: ..."), no shard is left running, no fallback driver/runtime/backend exists |
-| B. io_uring works, no managed substrate | provided-buffer ring registration failed (or multishot is unsupported) | `ManagedPreferred` selects `OwnerRxMode::RawReadiness`; a valid receive mode of the same Compio Owner, not a second backend |
-| C. full substrate | io_uring + provided-buffer ring + `recvmsg` multishot | `OwnerRxMode::ManagedMultishot` |
+| `EgressTask` (Tokio) | One output attempt: `Add`, wait, `Remove`, retry bookkeeping | Touch media or sockets |
+| `EgressFabricRuntime` | One feed's manager, shard group, sizer and wake handles | Run on a shard thread |
+| `EgressManager` | Desired outputs, output-to-shard placement, generation checks | Move a live output |
+| `EgressShardRuntime` | Command batch, ready backlog, `TimerWheel`, drain deadline, snapshot | Know protocol state |
+| `EgressShardBackend` | Leaves, `ReadyQueue`, transport runtime, stall sweep | Leave its shard thread |
+| `LeafCommon` | Cursor, generation, limits, progress, `EgressProgressSink` | Hold a media backlog |
 
-RawReadiness does not make io_uring optional. SRT egress always requires a
-kernel and container syscall policy that permit the forced io_uring runtime
-(for Docker: the shipped profile, `distribution/docker/README.md`); managed
-multishot receive additionally requires `IORING_REGISTER_PBUF_RING` and
-`recvmsg` multishot; RawReadiness needs neither. Capability is read from the
-live runtime, never inferred from a kernel version. Startup logs one
-`srt egress shard runtime ready` line per shard (`driver`, `io_uring`,
-`managed_rx` substrate, `substrate_diagnosis`) and one
-`srt egress owner attached` line per address family when its Owner selects a
-receive mode (`rx_mode`, `substrate`, `substrate_diagnosis`), so a RawReadiness
-fallback and its reason are always visible; `substrate_diagnosis` separates a
-policy denial (`buffer-ring-denied-by-policy`, `EPERM`/`EACCES`) from an
-unsupported kernel feature (`buffer-ring-unsupported-by-kernel`, `EINVAL`). At
-shard shutdown one `srt egress owner final counters` line per family records the
-cumulative service, RX/TX and TX-pool counters.
+The backend is built, used and dropped on its shard thread.
+`EgressShardBackend` is not `Send`. Only the factory passed to
+`EgressShardHandle::spawn_with` or `try_spawn_with` crosses threads. This lets
+a backend own a per-thread Compio runtime and `Rc` state without locks.
+`EgressShardHandle::spawn` (for already-built `Send` backends) is for tests.
 
-SRT sender-buffer limits remain part of the leaf's total buffering policy;
-moving buffering into the protocol stack does not make it free or unbounded.
-`RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY` sets each Owner's caller-pool
-`max_in_flight` (its queue holds as many again); it is capacity only.
+Leaves live in a fixed-capacity `LeafArena` (`leaf_arena.rs`). A `LeafKey`
+names a slot and its epoch. Removing a leaf bumps the epoch, so a stale queue
+entry, readiness event or I/O completion no longer resolves.
 
-### Direction: Compio as the network I/O substrate
+## Feeds and cursors
 
-Shard ownership, bounded scheduling, work budgets and the protocol-neutral
-leaf contract stay normative. RTMP ingress and RTMP/RTMPS egress use Compio TCP
-ownership. Established RTMP egress sockets are completion-driven; bounded
-rotating Compio `PollFd` scans cover pending connects only. SRT egress and
-ingress use the same Compio substrate with protocol `Owner`s.
+The fabric reads a bounded, sequence-addressed, immutable feed through the
+`EgressFeed` trait (`feed.rs`). Adaptors wrap existing rings
+(`journal.rs`):
 
-The former RTMP `IoUringTcpPoller` production path and epoll fallback are
-removed; test-only standard-TCP and epoll adapters remain behind `cfg(test)`.
+- `RingFeed` wraps a `RingBuffer`; units are `Arc<MediaPacket>`.
+- `TsFeed` wraps the ring inside a `TsChunkRing`; units are `Bytes`.
 
-### Future backends
+| Method | Contract |
+|---|---|
+| `head_sequence`, `oldest_sequence` | Retained window; a cursor below `oldest_sequence` is overrun |
+| `read_from` / `read_from_into` | Non-blocking; bounded by `ReadBudget` (default 64 units, 512 KiB) |
+| `latest_sync_point`, `sync_point_at_or_after` | Positions a protocol can start from, such as a keyframe |
+| `epoch` | Bumped by `FeedEpoch::advance` on a discontinuity |
 
-A future protocol either reuses an existing readiness family or adds a new
-backend. It must still use the same manager, shard loop, leaf shell, lifecycle,
-backpressure, retry, and observability contracts.
+A `FeedCursor` holds only `epoch` and `next_sequence`. It does not pin
+entries. A slow leaf cannot make the feed grow.
 
-The sink backend is the simplest non-network backend: it is always ready and
-exists to exercise the fabric, feed, policy, and observability path without an
-external transport. It must not be special-cased around admission, scheduling,
-or status publication.
+A leaf starts with a placeholder cursor. On its first visit, `visit_leaf`
+(`visit.rs`) primes it with `live_start_cursor`: the latest retained sync
+point, or the head when none is retained. `HandshakeComplete` re-anchors the
+cursor the same way, because handshake states never read the feed. The
+start is never `oldest_sequence`; that would put the leaf a full retention
+window behind live.
 
-The recirculation backend is a non-network transport adapter between pipelines.
-It should be in-process and cheap, preferably sharing immutable feed units or
-reference-counted buffers end to end. It must not create a hidden pipeline
-engine, private media backlog, or recursive bypass around the application
-topology graph.
+On `FeedOverrun` the leaf resynchronizes in place. The cursor moves to
+`live_start_cursor`, the overrun is counted, and the connection stays up.
+`FeedRead::EpochMismatch` reports a cursor from an old epoch.
 
-## Lifecycle
+## Shard loop
 
-All protocols use one lifecycle:
+`EgressShardRuntime::run` (`shard.rs`) drives one backend. The diagram shows
+one loop iteration.
 
 ```mermaid
 flowchart TD
-    Created --> Resolving
-    Resolving --> Connecting
-    Connecting --> Handshaking
-    Handshaking --> Active
-    Active --> Backpressured
-    Backpressured --> Active
-    Active --> Resynchronizing
-    Backpressured --> Resynchronizing
-    Resynchronizing --> Connecting
-    Resolving --> RetryWait
-    Connecting --> RetryWait
-    Handshaking --> RetryWait
-    Active --> RetryWait
-    Backpressured --> RetryWait
-    RetryWait --> Resolving
-    Created --> Closing
-    Resolving --> Closing
-    Connecting --> Closing
-    Handshaking --> Closing
-    Active --> Closing
-    Backpressured --> Closing
-    Resynchronizing --> Closing
-    RetryWait --> Closing
-    Closing --> Stopped
+    Start(["loop iteration"]) --> Cmd["process_command_batch (≤ command_batch_budget)"]
+    Cmd --> Ready["process_ready_batch (≤ readiness_batch_budget on_ready calls)"]
+    Ready --> Timers["process_timer_batch (≤ timer_batch_budget)"]
+    Timers --> Idle{"all three empty?"}
+    Idle -->|"yes"| Wait["backend.wait_idle(commands, idle_wait_bound)"]
+    Wait --> Poll["ready and timer batches, then one idle on_ready"]
+    Idle -->|"no"| Fallback
+    Poll --> Fallback["WakeGate::take_full_delivery → FeedWake"]
+    Fallback --> Tick["backend.on_media_tick"]
+    Tick --> Record["record_iteration → EgressShardSnapshot"]
+    Record --> Start
 ```
 
-The fabric owns transitions and deadlines. A protocol engine reports events;
-it does not choose an independent lifecycle.
+- `idle_wait_bound` is the earliest of `RESTREAM_EGRESS_IDLE_WAIT_MS`, the
+  next `TimerWheel` deadline and, while draining, the drain deadline.
+- `wait_idle` returns `Command`, `BackendActivity`, `Timeout` or
+  `Disconnected` (`EgressShardIdleWake`). The default waits on the command
+  channel. RTMP, SRT, HLS PUT and MoQ backends override it to wait inside
+  their Compio runtime for commands and I/O together.
+- `BackendActivity` schedules one ordinary `on_ready` under the shared
+  budget. It is not a command.
+- The idle `on_ready` gives a quiet shard one real I/O poll per idle cycle,
+  so a leaf waiting on a handshake byte is not stranded.
+- `on_media_tick` runs every iteration. Backends use it for DNS completions,
+  connect sweeps and the once-per-second stall sweep.
+- `record_iteration` copies `ShardMetrics` into the shared snapshot. Thread
+  CPU time is sampled about once per second.
 
-Each output configuration has a monotonically increasing generation. Events,
-timers, and readiness records from an old generation are ignored after update
-or removal.
+The ready backlog is a fixed-capacity `VecDeque` sized
+`command_channel_capacity + readiness_batch_budget`. Excess `ScheduleReady`
+requests are counted in `ready_overflows`, not queued. A full `TimerWheel`
+counts `queue_overflows`.
 
-## Scheduling and fairness
+Inside a backend, `ReadyQueue` (`scheduler.rs`) holds each `LeafKey` at most
+once and pops in FIFO order. A leaf that wants more work goes to the tail, so
+one fast destination cannot hold the head.
 
-A leaf becomes runnable only when it can make useful progress:
+## Commands and wakes
 
-- its transport has required readiness;
-- its handshake or control state has work;
-- its feed contains readable units;
-- its retry or other lifecycle timer expired;
-- a control command changed its state.
+Control commands and media wakes share the bounded command channel but have
+different rules.
 
-Each leaf has a `scheduled` bit. Multiple events coalesce into one ready-queue
-entry.
+| Command | Sender | Meaning |
+|---|---|---|
+| `Add(OutputSpec)` / `Update(OutputSpec)` | manager | Start or replace a leaf for this generation |
+| `Remove(OutputId)` | manager | Close gracefully: flush, then close |
+| `Abandon(OutputId)` | manager | Close without the end marker (no HLS `EXT-X-ENDLIST`) |
+| `FeedWake` | feed producer | The feed may have new data |
+| `DrainShard(ShardId)` | manager | Close every leaf on that shard |
+| `Shutdown` | manager / group | Start the drain window, then stop |
 
-The scheduler uses bounded round robin or deficit round robin. One visit ends
-when the first configured budget is exhausted:
+The command path runs on Tokio and never waits for a shard.
 
-- maximum media or protocol units;
-- maximum bytes;
-- maximum CPU time;
-- transport would block;
-- no useful work remains.
+```mermaid
+sequenceDiagram
+    participant Task as EgressTask (Tokio)
+    participant Engine as MediaEngine registry
+    participant Runtime as EgressFabricRuntime
+    participant Manager as EgressManager
+    participant Shard as egress-shard-N
+    Task->>Engine: retain_*_fabric_runtime(feed)
+    Task->>Engine: dispatch_*_fabric_command(Add)
+    Engine->>Runtime: rescale(Add), then admit_add
+    Runtime->>Manager: dispatch_command(Add)
+    Manager->>Manager: generation check, free_slots check
+    Manager->>Shard: try_send(Add)
+    Shard->>Shard: backend.on_command(Add)
+    Task->>Task: poll terminated_unexpectedly every 250 ms
+    Task->>Engine: dispatch_*_fabric_command(Remove)
+```
 
-A leaf that remains runnable is appended to the tail. A blocked leaf is removed
-until the needed readiness or timer event occurs. A continuously writable
-high-bitrate destination therefore cannot remain at the head of the queue.
+`EgressManager` rules (`manager.rs`):
 
-The shard also has a loop-wide budget so a readiness storm cannot delay command
-processing, timers, and metric publication indefinitely.
+- A spec with a lower generation is `IgnoredStale`. The same generation is
+  `AlreadyCurrent`. Each output attempt uses its registration `attempt_id` as
+  the generation.
+- The manager checks the shard's free command slots before it clones the
+  spec. A full channel returns `CommandChannelFull`; the output records the
+  error and its retry runs.
+- A draining shard refuses new specs with `ShardDraining`.
+- `Shutdown` is sent to every shard only if every channel has room.
 
-## Backpressure and slow destinations
+Feed wakes skip the manager. The sequence shows one publication.
 
-The defining rule is:
+```mermaid
+sequenceDiagram
+    participant Producer as Feed producer thread
+    participant Wakers as FabricWakers
+    participant Gate as WakeGate (per shard)
+    participant Shard as EgressShardRuntime
+    participant Backend as EgressShardBackend
+    Producer->>Wakers: PublishSubscribers wake (publish, seal, end)
+    Wakers->>Gate: FeedWakeHandle::deliver → notify()
+    alt clear-to-set
+        Gate->>Shard: try_send(FeedWake)
+        Note over Gate,Shard: Full → record_full_delivery (one retry bit)
+    else already set
+        Note over Gate: coalesced, nothing sent
+    end
+    Shard->>Gate: take() before any head check
+    Shard->>Backend: on_command(FeedWake)
+    Shard->>Backend: on_ready under the ready budget
+```
 
-> A slow leaf stops being runnable; it does not create more work or more backlog.
+- `subscribe_fabric_wakes` (`runtime.rs`) registers one `FabricWakers` per
+  feed on the ring's `PublishSubscribers`. No watcher task sits between the
+  producer and the shards. One wake is sent at subscribe time.
+- Per shard, at most one `FeedWake` is queued, plus one fallback bit when the
+  channel was full. The loop services the fallback bit without a later
+  publication. Neither path allocates per publish.
+- The shard clears the gate before the backend reads any head. A publication
+  after that read arms a new wake instead of being lost.
+- `rescale` stores a new handle list in the shared `ArcSwap`, so shards that
+  grow later get wakes from feeds subscribed earlier.
+- A closed shard is not woken. Dropping the `FeedWakeSubscription`
+  unsubscribes.
 
-When a send would block:
+## Leaf lifecycle
 
-1. retain only the current bounded pending wire state;
-2. record the required writable interest;
-3. mark the leaf backpressured;
-4. remove it from the ready queue;
-5. resume only after readiness or a progress deadline.
+`LeafLifecycle` and `apply_event` (`lifecycle.rs`) define the legal states and
+transitions. The diagram is that transition table.
 
-Every leaf has strict limits covering:
+```mermaid
+stateDiagram-v2
+    [*] --> Created
+    Created --> Connecting: Resolved
+    Resolving --> Connecting: Resolved
+    Resolving --> RetryWait: ResolveFailed
+    Connecting --> Handshaking: Connected
+    Connecting --> RetryWait: ConnectFailed
+    Handshaking --> Active: HandshakeComplete
+    Handshaking --> RetryWait: HandshakeFailed, PeerClosed, Failure
+    Active --> Backpressured: WouldBlock
+    Backpressured --> Active: Writable
+    Active --> Resynchronizing: FeedOverrun
+    Backpressured --> Resynchronizing: FeedOverrun
+    Active --> RetryWait: PeerClosed, Failure
+    Backpressured --> RetryWait: PeerClosed, Failure
+    Resynchronizing --> Connecting: SyncPointFound
+    Resynchronizing --> RetryWait: Failure
+    RetryWait --> Resolving: RetryTimerExpired
+    Created --> Closing: RemoveRequested
+    Active --> Closing: RemoveRequested
+    RetryWait --> Closing: RemoveRequested
+    Closing --> Stopped: CleanupComplete
+    Stopped --> [*]
+```
 
-- pending application bytes;
-- protocol-internal buffered bytes where observable or configurable;
-- lag behind the feed head;
-- queued media duration;
-- time without successful forward progress;
-- handshake control output.
+Every non-terminal state also accepts `RemoveRequested` → `Closing` (only
+three such edges are drawn). `Stopped` accepts nothing. The unit tests in
+`lifecycle.rs` check every legal edge and reject every other pair.
 
-The first exceeded limit triggers recovery. Limits are enforced, not advisory.
-A write larger than the remaining budget is split, rejected, or retained as one
-explicitly accounted pending unit; it must not silently exceed capacity.
+Production backends do not drive this machine. `LeafCommon::lifecycle` stays
+`Created`; `apply_event` is called only from tests. Each backend tracks its
+own phase:
 
-A leaf never prevents feed reclamation. If it falls behind the journal's
-oldest sequence or crosses its lag limit, the fabric marks it for
-resynchronization.
+| Backend | Phase type |
+|---|---|
+| RTMP/RTMPS | `pending_connects` → `connecting` → `RtmpFabricState::{Handshaking, Negotiating, Publishing}`; `draining_since` while closing |
+| SRT | `PendingStage::{Resolving, …}` until the Owner admits the caller, then an `SrtFabricLeaf` |
+| HLS PUT | `Conn::{Idle, Resolving, …}` per request connection |
+| MoQ | `LeafLink` state shared with the leaf's Compio connection task |
+| Sink, pipeline | Always ready; no connect phase |
 
-The default resynchronization policy is reconnect at the latest valid sync
-point:
+The output-level lifecycle that operators see is driven by `EgressTask`, not
+by a shard state:
 
-1. stop consuming stale media;
-2. close the connection;
-3. clear bounded pending wire state;
-4. advance the cursor to a safe synchronization point;
-5. pass through retry admission if required;
-6. reconnect and send protocol initialization and codec configuration;
-7. resume media.
+```mermaid
+stateDiagram-v2
+    [*] --> Dispatched: Add enqueued
+    Dispatched --> Sending: phase Sending
+    Dispatched --> Failed: dispatch error or capacityRefused
+    Sending --> Stopped: cancel_token (Remove sent)
+    Sending --> Failed: terminated_unexpectedly or stage ended
+    Failed --> Backoff: retries < RESTREAM_OUTPUT_MAX_RETRIES
+    Failed --> [*]: retries exhausted
+    Backoff --> Dispatched: next attempt (new generation)
+    Stopped --> [*]
+```
 
-A protocol may advertise a proven in-place recovery capability, but the common
-policy remains authoritative and reconnect recovery remains the safe default.
+## Protocol engine contract
 
-## Dead destinations and retries
+A protocol engine implements `ProtocolEngine` (`backend.rs`). It owns
+connection-local state and advances once per visit.
 
-Socket writability alone is not proof of destination health. A leaf tracks:
+```rust
+fn advance(
+    &mut self,
+    transport: &mut Self::Transport,
+    readiness: Readiness,
+    feed: &Self::Feed,
+    cursor: &mut FeedCursor,
+    budget: WorkBudget,
+) -> EngineProgress;
+```
 
-- last successful application-byte progress;
-- last protocol-level progress;
-- connection and handshake deadlines;
-- time continuously backpressured;
-- feed lag and overrun count;
-- peer closure and transport errors.
+An engine must not block, spawn threads or tasks, sleep, implement its own
+retry delay, or hold a shared feed or registry lock during I/O. It must stop
+when the transport would block and keep any partial wire state it needs to
+resume. `WorkBudget` (`policy.rs`) ends a visit when units, bytes or the time
+deadline run out; a visit always gets at least one unit.
 
-A leaf that exceeds its no-progress deadline is closed and enters `RetryWait`.
-While waiting, it owns no media backlog, no active writable interest, and no
-ready-queue entry. It consumes only bounded state and one timer entry.
+`visit_leaf` maps the result to a scheduler decision:
 
-Retries use capped exponential backoff with jitter. Reconnection work is
-protected by:
+| `EngineProgress` | Effect on the leaf | `VisitDecision` |
+|---|---|---|
+| `Progress { bytes, units, wait }` | Records progress; publishes to `EgressProgressSink` | `Continue` |
+| `Needs(wait)` | Parks until `wait` is satisfied | `Suspend` |
+| `HandshakeComplete` | Re-anchors the cursor at the live start | `Continue` |
+| `FeedOverrun` | Resynchronizes the cursor in place; counts it | `Continue` |
+| `Yield` | Budget spent; requeue at the tail | `Continue` |
+| `PeerClosed`, `Failed(_)` | Logged; the backend closes the leaf | `Close` |
 
-- a process-wide token bucket;
-- a per-shard concurrent connect and handshake limit;
-- optional per-host or per-destination-class limits if live evidence requires
-  them.
+`WaitCondition` says what a parked leaf waits for: `Feed`, `Io(Interest)` or
+`FeedOrIo(Interest)`. Only `Feed` and `FeedOrIo` leaves are re-queued by a
+`FeedWake`. `RecoveryCapability` lets an engine advertise
+`InPlaceResync`; the default is `ReconnectOnly`.
 
-For SRT, each family Owner's bounded caller pool
-(`RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY` as its `max_in_flight`, with an
-equal queue) is the per-shard concurrent-connect limit for both the initial
-mass-`Add` path and reconnects; the process-wide and per-host refinements
-remain open, as does equivalent admission control for RTMP.
+`visit_leaf` also rejects a stale generation (`StaleGeneration`) and catches a
+panic inside `advance`. A panic becomes `Failed` with reason `engine_panic`,
+so only that output fails.
 
-These controls prevent a large dead-destination set from causing DNS, TCP, TLS,
-or SRT handshake storms.
+## Backpressure, stalls and retries
+
+The rule is: a slow leaf stops being runnable; it does not add work or
+backlog.
+
+- A leaf retains at most its pending wire state. `LeafLimits`, built from
+  `LeafPolicy::default()`, bounds pending application bytes (256 KiB), feed
+  lag (300 units) and time without progress (15 s).
+- RTMP and SRT backends run a stall sweep at most once per second.
+  `classify_stall` returns `Idle`, `Backpressured` or `Stalled` from pending
+  bytes, progress age and lag. The lag ceiling applies to SRT only; RTMP
+  passes 0 because a lagging TCP leaf catches up by reading.
+- The sweep also writes feed lag, `backpressureReason` and protocol quality
+  (`TCP_INFO` for RTMP, `srt-rs` statistics for SRT) into the output status.
+- A `Stalled` leaf, a peer close or a failure closes the leaf. The backend
+  sets `terminated_unexpectedly` and removes it. An explicit `Remove` never
+  sets that flag.
+- `Remove`, `DrainShard` and `Shutdown` drain first. RTMP and SRT leaves with
+  queued bytes stay visited until the bytes flush or
+  `RESTREAM_EGRESS_DRAIN_TIMEOUT_MS` (default 3 s) passes.
+
+Retries are not a shard concern. `EgressTask` sees the flag within 250 ms,
+records the error, sends `Remove` and returns. `EgressTask::run` then applies
+the shared output backoff (`RESTREAM_OUTPUT_RETRY_BASE_MS` 5 s,
+`RESTREAM_OUTPUT_RETRY_MAX_MS` 300 s, `RESTREAM_OUTPUT_MAX_RETRIES` 10) and
+the reconciler starts a new attempt with a new generation. `RetryPolicy` and
+`RetryState` in `policy.rs` are not used by production backends. The one
+shard-level retry is HLS PUT, which retries a failed request on a
+`ScheduleTimer` and reports it through `UploadStatus`.
+
+## Shard sizing and placement
+
+Each feed has its own `EgressFabricRuntime` and shard group. A feed's pool
+starts with one shard.
+
+- **Placement.** RTMP, SRT, HLS PUT and MoQ use
+  `PlacementPolicy::LeastLoaded`: the placement shard with the fewest live
+  outputs, ties broken by rendezvous score. Sink and pipeline use
+  `Rendezvous` (`assign_output_to_shard`). A live output never moves.
+- **Growth.** Before an `Add`, `rescale` asks `ShardSizer` (`sizing.rs`) for
+  the shard count that keeps projected busy time at 50%. Demand is measured
+  CPU time per delivered bit times the feed's bitrate. Before the first
+  healthy measurement it uses a cold prior: 128 outputs per shard
+  (`EgressShardProfile::OutputCount`) or 64 for SRT
+  (`SrtOutputCount`) at 4.8 Mbit/s. New shards serve only new outputs.
+- **Admission.** `admit_add` refuses an `Add` if the chosen shard would run
+  above 60% busy (`ADMIT_CEILING`). The output reports
+  `capacityRefused` and retries on its backoff. Admitted outputs are never
+  shed.
+- **Shrink.** On each reconciler tick, `resize_*_fabrics` (`Observe`) runs
+  for RTMP, SRT and MoQ; a runtime observes at most every 5 s. After 60
+  healthy low-load windows, a 5-minute dwell, and projected load under 40%
+  on one shard fewer, new outputs stop going to the tail shard. Its thread
+  stops once its last output leaves.
+- **Ceiling.** The pool never exceeds `clamp(effective CPUs, 2, 8)` or
+  `RESTREAM_EGRESS_SHARDS`, whichever is lower.
+- Sink and pipeline pools are not adaptive: one shard per 128 outputs, same
+  ceiling.
+
+The SRT prior and the 60% ceiling come from a delivery-checked single-shard
+test (see [Runtime crossings](runtime-crossings.md#measurement-references),
+M6).
 
 ## Failure containment
 
-### Same-shard isolation
+| Failure | Blast radius | Mechanism |
+|---|---|---|
+| Engine panic | One output | `catch_unwind` in `visit_leaf`; output closes and retries |
+| Slow or dead destination | One output | Budgets, parking, `LeafLimits`, stall sweep |
+| Stale event after removal | None | `LeafKey` epoch; generation check in `visit_leaf` |
+| Shard panic outside a visit | Outputs on that shard | `EgressShardSnapshot::panicked`; health `Panicked`; critical alert |
+| Native call that blocks | Outputs on that shard | Not contained; other shards and feeds keep running |
 
-A normal slow or dead leaf cannot block healthy neighbors because:
+Shards share no mutable leaf state and take no process-wide lock on the hot
+path. Cross-shard contact is feed reads, wake gates, the command channel and
+the snapshot mutex written once per loop iteration.
 
-- all transport operations are non-blocking;
-- work per visit is finite;
-- a blocked leaf is not polled again without a useful event;
-- private buffering and feed lag are bounded;
-- retries are timer-driven and admission-controlled;
-- scheduling entries are deduplicated.
+`EgressSupervisor::recover_panicked_shards` (`supervisor.rs`) can replace a
+panicked shard and replay its desired outputs. Production code does not call
+it yet; a panicked shard stays down and raises an alert.
 
-The expected cost of a stalled leaf is bounded bookkeeping, not proportional
-CPU or memory growth.
+## Transport backends
 
-### Cross-shard isolation
+### RTMP and RTMPS
 
-Each shard owns an independent thread, protocol-specific readiness backend,
-ready queue, timer structure, command inbox, and mutable leaf registry.
-Hot-path operations do not acquire a process-wide leaf lock.
+- Each shard owns one Compio io_uring runtime in `CompioTcpPoller`. Shard
+  construction fails if io_uring is unavailable.
+- DNS runs on the backend's resolver worker (`ResolvingRtmpShardBackend`),
+  never on the shard thread.
+- Each peer starts with one non-blocking `connect(2)`. Only `EINPROGRESS`
+  sockets are registered with `PollFd`. A rotating scan visits at most half
+  of `RESTREAM_EGRESS_TCP_POLLER_MAX_EVENTS` pending connects per poll.
+- Established sockets never enter the `PollFd` set. One receive worker and one
+  transmit worker per connection use one-shot Compio operations and send
+  generation-tagged completions. Read and write flags are ORed before the
+  next visit.
+- RTMPS uses Rustls for the handshake, then requires kTLS. An unsupported
+  suite or missing kTLS fails the output; there is no userspace fallback. TLS
+  1.3 session tickets are discarded, so session resumption is not used. A TLS
+  1.3 KeyUpdate fails the output.
+- Raw-to-FLV payload conversion is memoized per shard
+  (`SharedRtmpPayloadCache`), so outputs on one shard share converted
+  `Bytes`.
 
-Shared feeds are immutable and bounded. Cross-shard interaction is limited to
-feed sequence observation, coalesced wakeups, configuration snapshots, and
-periodic metrics publication.
+Per-leaf transport buffers (`compio_tcp/stream.rs`):
 
-### Shard failure
+| Buffer | Bound |
+|---|---:|
+| Queued RX (`TRANSPORT_BUFFER_CAPACITY`) | 4 KiB |
+| Receive buffer (`IO_CHUNK`) | 4 KiB |
+| TX staged plus in flight (`TRANSMIT_BUFFER_CAPACITY`) | 64 KiB |
+| Copied-run buffer (`COPIED_RUN_CAPACITY`) | 4 KiB |
 
-A supervisor monitors shard heartbeat and loop progress. If a shard panics or
-stops responding:
+Media payload in TX staging is mostly shared `Bytes` from the feed; the
+private copy is usually headers and control messages. Capacity planning must
+still assume the full bound per leaf. It excludes engine, TLS and kernel
+socket buffers.
 
-1. mark only that shard unhealthy;
-2. stop routing commands to the failed instance;
-3. start a replacement shard;
-4. recreate desired leaves from control-plane configuration;
-5. reconnect affected outputs from a valid sync point.
+### SRT
 
-Other shards continue. Live socket state is not migrated after failure.
-Reconnection is the recovery boundary.
+- Each shard runs one Compio runtime on its thread and at most one
+  `srt_transport::compio::Owner` per address family. Each Owner owns one
+  caller UDP socket, a caller pool and a fixed TX pool. No output has its own
+  runtime, task, socket or Owner.
+- DNS runs on the shard's `srt-dns-res` worker.
+- `Owner::connect` and `connect_bonded` return `Admitted`, `Queued` or `Full`.
+  The caller pool (`RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY`, default 64,
+  with an equal queue) bounds in-flight handshakes. Each output's
+  `connect_timeout` (`RESTREAM_SRT_CONNECT_TIMEOUT_MS`, default 10 s) starts
+  at pool admission. A late admission for an old generation is retired.
+- A bonded output is one leaf and one logical caller. All legs must resolve
+  to one address family. A `PeerGroupCollision` fails only that output.
+- A ready batch services each Owner once under `OwnerServiceBudget`, drains
+  bounded Owner event queues, then visits leaves. Each batch starts with one
+  non-blocking driver poll, so a shard that never idles still reaps TX
+  completions (`a_shard_that_never_parks_still_reaps_tx_completions`).
+- SRT protocol timers stay inside the Owner. `wait_idle` parks in the Compio
+  runtime until a command, Owner activity or the earliest Owner deadline.
+- A peer or transient TX failure affects one caller. A structural Owner fault
+  retires that family's leaves and keeps admission closed for the shard's
+  life; the other family keeps running.
 
-A non-blocking contract violation inside native code can still stall its owning
-shard. Multiple shards limit the blast radius, and driver-call duration metrics
-make such violations visible. If a native dependency is proven capable of
-unbounded hangs, process isolation must be evaluated separately.
+The SRT shard needs a working io_uring runtime. Receive mode is chosen per
+Owner under `RxModePolicy::ManagedPreferred`:
 
-## Shard assignment and scaling
+| Runtime state | Result |
+|---|---|
+| io_uring denied or unavailable | Shard fails: `SrtFabricShardGroupError::Backend`; no fallback runtime |
+| io_uring works, no provided-buffer ring or multishot | `OwnerRxMode::RawReadiness` |
+| io_uring, provided-buffer ring and `recvmsg` multishot | `OwnerRxMode::ManagedMultishot` |
 
-Outputs are assigned stably using weighted rendezvous hashing or another stable
-hash with load weighting. Assignment inputs may include:
+Startup logs `srt egress shard runtime ready` per shard and
+`srt egress owner attached` per family, with `substrate_diagnosis`
+(`buffer-ring-denied-by-policy` for `EPERM`/`EACCES`,
+`buffer-ring-unsupported-by-kernel` for `EINVAL`). Shutdown logs
+`srt egress owner final counters`. Docker needs the shipped seccomp profile
+([distribution/docker/README.md](../distribution/docker/README.md)).
 
-- estimated bitrate and packet rate;
-- plain RTMP versus RTMPS;
-- SRT encryption and latency settings;
-- current leaf count and observed shard service delay;
-- current connect and handshake load.
+### HLS PUT, MoQ, sink and pipeline
 
-Outputs from one pipeline should be distributed across shards rather than
-co-located by pipeline identity. Each shard subscribes to the necessary shared
-feed.
-
-Live connections are not migrated solely to rebalance load. Reassignment occurs
-on output creation, reconnect, explicit shard drain, or a configuration change
-that already requires reconnect.
-
-The manager places a new output with one of two policies
-(`PlacementPolicy`). RTMP and SRT use rendezvous hashing over the placement
-shards, a pure function of output id and shard count that harness proofs use
-to predict co-location. HLS PUT uses least-loaded placement (fewest live
-outputs, rendezvous score breaks ties): the pool starts at one shard and grows
-while outputs arrive, and rendezvous would leave the first shard with every
-output placed before the growth (shard CPU split 51/27/11% at 400 HTTPS
-outputs under rendezvous; 25/25/24% at 600 under least-loaded).
-
-Shard count is independent of Tokio worker count. Production begins with a
-small fixed count and is selected by measurement. One shard is supported for
-proof and constrained deployments, but multiple shards are the normal failure
-containment boundary.
-
-The goal is not one shard per visible core. The goal is the smallest shard count
-that meets throughput, tail-latency, reconnect-storm, and isolation targets with
-headroom.
-
-## Command and wakeup model
-
-Control commands and media notifications have different semantics.
-
-High-priority bounded commands include add, update, remove, drain, and shutdown.
-A control-plane sender must not block indefinitely; overload is surfaced as an
-operator-visible error and reconciliation retries the desired state.
-
-Media notifications are coalesced hints. Each shard's `WakeGate` permits
-at most one queued publication wake. The shard clears the gate **before**
-the backend checks feed heads; a publication after that check re-arms a
-new wake rather than coalescing into a check that already happened.
-
-```rust
-if !subscription.wake_pending.swap(true, Ordering::AcqRel) {
-    subscription.wake_shard();
-}
-```
-
-The feed remains authoritative when notifications coalesce. If the command
-channel is full, one atomic fallback bit per shard preserves the hint for
-the active loop, so a final publication needs no later publish to retry it.
-The fallback bit is cleared before the backend checks heads. A full channel
-already keeps the shard active; if its queue drains before the bit is set,
-the configured bounded idle wait brings it back to the loop. A closed shard
-is not woken. Neither the queued nor fallback path allocates per publish.
-
-Control commands must not share a queue whose capacity can be consumed by one
-notification per media packet.
-
-## Memory and copying model
-
-The target memory complexity is:
-
-```text
-O(shared retained feeds + leaves + bounded pending wire units)
-```
-
-It must not become:
-
-```text
-O(leaves × retained media window)
-```
-
-The fabric therefore uses:
-
-- immutable `Bytes` or `Arc` feed units;
-- sequence cursors rather than copied per-leaf media queues;
-- one current pending wire unit or a small protocol-required bound;
-- shared MPEG-TS chunks for compatible SRT outputs;
-- reusable connection-local protocol buffers only when ownership remains clear;
-- local metric counters flushed periodically instead of shared atomics on every
-  packet where practical.
-
-RTMP wire headers and session state remain destination-specific. The design
-must not introduce another payload copy merely to coalesce writes; prior
-repository measurements found that strategy regressive.
-
-SRT leaves must not copy shared TS data into a byte-oriented `MemoryQueue` and
-then into a sender buffer. They retain immutable transport-message references
-until accepted by the `srt-rs` sender path.
-
-## Observability
-
-Metrics must make fairness and isolation falsifiable.
-
-### Per shard
-
-- active leaves by lifecycle and protocol;
-- ready-queue depth and high-water mark;
-- control-command queue depth;
-- useful and empty feed wakes;
-- loop iterations and loop latency percentiles;
-- scheduler service delay percentiles;
-- bytes and units processed per loop;
-- connect and handshake concurrency;
-- timer count and retry rate;
-- driver-call duration and budget violations;
-- heartbeat age;
-- CPU time where available.
-
-### Per leaf
-
-- lifecycle and assigned shard;
-- connected duration;
-- last byte and protocol progress age;
-- feed lag in units, bytes where estimable, and media time;
-- pending application bytes;
-- partial-write and would-block counts;
-- writable-wake-to-progress latency;
-- retry attempt and next retry time;
-- resynchronization and overrun counts;
-- close or failure reason;
-- bytes and media units sent.
-
-### Per feed
-
-- head and oldest sequence;
-- retained bytes and media duration;
-- publication rate;
-- subscriber shard count;
-- coalesced wake count;
-- overrun count;
-- latest synchronization-point age.
-
-Metrics publication must be aggregated and rate-limited so observability does
-not recreate per-packet cross-thread contention.
+- **HLS PUT** reads segments and playlists from the pipeline's `HlsStore`.
+  It uses the same `CompioTcpPoller` as RTMP and issues HTTP/1.1 requests
+  (`http1.rs`). Failed requests retry on a shard timer; a rejection such as
+  401 ends the output without retry.
+- **MoQ** opens one Compio QUIC connection task per output on the shard's
+  runtime. The engine reads the `RingFeed` and writes the hang catalog and
+  media tracks. See [Runtime crossings](runtime-crossings.md#moq-crossings).
+- **Sink** discards units after recording progress. It exercises the same
+  manager, scheduler, cursor and status paths without a network.
+- **Pipeline** publishes units into another pipeline's input in the same
+  process through `RecirculationInputPublisher`. It shares
+  `Arc<MediaPacket>`; nothing is serialized.
 
 ## Configuration
 
-Configuration should expose policy without exposing internal implementation
-accidents.
+Parsed in `EgressFabricConfig::from_env` (`src/config.rs`). Values are
+clamped; `validate` logs warnings for risky combinations but never stops
+startup.
 
-Recommended settings include:
+| Variable | Default | Range | Controls |
+|---|---|---|---|
+| `RESTREAM_EGRESS_SHARDS` | `clamp(CPUs, 2, 8)` | 1–1024 | Shard ceiling per feed |
+| `RESTREAM_EGRESS_COMMAND_CAPACITY` | 1024 | 1–65 536 | Command channel per shard |
+| `RESTREAM_EGRESS_COMMAND_BATCH` | 32 | 1–4096 | Commands per loop |
+| `RESTREAM_EGRESS_READY_BATCH` | 64 | 1–4096 | `on_ready` calls per loop |
+| `RESTREAM_EGRESS_TIMER_BATCH` | 64 | 1–4096 | Timers per loop |
+| `RESTREAM_EGRESS_MAX_LEAVES_PER_SHARD` | 4096 | 1–1 000 000 | `LeafArena` and `TimerWheel` capacity |
+| `RESTREAM_EGRESS_IDLE_WAIT_MS` | 25 | 1–1000 | Longest idle park |
+| `RESTREAM_EGRESS_TCP_POLLER_MAX_EVENTS` | 1024 | 1–65 536 | Compio TCP ready capacity |
+| `RESTREAM_EGRESS_VISIT_MAX_UNITS` | 32 | 1–4096 | `WorkBudget` units |
+| `RESTREAM_EGRESS_VISIT_MAX_BYTES` | 256 KiB | 188 B–16 MiB | `WorkBudget` bytes |
+| `RESTREAM_EGRESS_VISIT_MAX_US` | 2000 | 1–1 000 000 | `WorkBudget` time |
+| `RESTREAM_EGRESS_MAX_PENDING_BYTES` | 256 KiB | 1 B–16 MiB | Startup warning and config summary only; leaf limits use `LeafPolicy::default()` |
+| `RESTREAM_EGRESS_DRAIN_TIMEOUT_MS` | 3000 | 1–60 000 | Drain window on remove and shutdown |
+| `RESTREAM_HLS_PUT_FABRIC` | on | bool | HLS PUT on the fabric |
 
-- `RESTREAM_EGRESS_SHARDS`;
-- per-leaf maximum pending application bytes;
-- maximum feed lag duration;
-- no-progress timeout;
-- connect and handshake timeouts;
-- retry minimum, maximum, multiplier, and jitter;
-- process and per-shard connect concurrency;
-- per-visit byte, unit, and CPU-time budgets;
-- shard loop budget;
-- shared feed byte and duration retention;
-- protocol-specific native buffer ceilings.
+`validate` warns when pending bytes are below visit bytes, shards exceed four
+times the CPU count, the drain timeout is under 50 ms, or the command batch
+exceeds the command capacity. SRT-specific settings are in
+[Configuration](configuration.md).
 
-Defaults must derive from measured workload and effective resources. Invalid
-zero, overflow, or contradictory values fail validation at startup.
+## Observability
 
-Operational configuration should describe outcomes such as lag, progress, and
-concurrency limits. Internal queue and thread counts should not become durable
-public API unless operators need them.
+Each shard publishes an `EgressShardSnapshot` once per loop iteration.
+`EgressFabricRuntime::heartbeat` turns it into `EgressShardHeartbeat`, and
+`MediaEngine::egress_fabric_shard_statuses`
+(`engine_egress_fabric_diagnostics.rs`) merges every protocol's shards.
 
-## Correctness invariants
+| Consumer | Source |
+|---|---|
+| `GET /metrics/system` | `src/api/telemetry/system.rs` |
+| Status and resource map | `src/api_runtime_views/status.rs`, `resource_map.rs` |
+| Runtime state, capacity | `src/application/runtime_state/`, `src/capacity.rs` |
 
-The implementation must continuously preserve these properties:
+Heartbeat health is `Healthy`, `Stalled` (no loop progress for
+`SHARD_STALL_AFTER`, 10 s), `Stopped` or `Panicked`. Fields include loop
+iterations, command depth and capacity, ready depth and high-water mark,
+ready visits, budget exhaustions, feed resyncs, TX/RX counters, completion
+counters and, for SRT, per-family Owner metrics.
 
-1. One output generation owns at most one active leaf.
-2. Removed or superseded generations cannot be revived by stale events.
-3. Media publication never waits for a destination or egress command queue.
-4. A leaf cursor cannot retain feed entries beyond configured feed bounds.
-5. Every application and native buffer has an explicit finite limit.
-6. No protocol engine call blocks or performs unbounded work.
-7. No leaf is present more than once in a shard ready queue.
-8. A would-block result removes the leaf from active scheduling until a useful
-   event occurs.
-9. Service budgets apply equally to every protocol.
-10. Retry waiting consumes no active media backlog or send-loop CPU.
-11. A feed epoch change invalidates stale cursors deterministically.
-12. Recovery resumes only at a protocol-valid synchronization point.
-13. A leaf failure cannot mutate another leaf's protocol state.
-14. A shard failure does not terminate or corrupt another shard.
-15. Shutdown closes transport state and releases feed subscriptions exactly
-    once.
+Alerts (`src/alerts.rs`), keyed
+`engine:egress_fabric:{protocol}:{feed}:{shard}:…`:
 
-## Performance invariants
+| Alert | Severity | Condition |
+|---|---|---|
+| `panicked` | Critical | Shard thread panicked |
+| `stalled` | Warning | Shard state `stalled` |
+| `stopped` | Warning | Shard stopped with outputs assigned |
+| `command_overload` | Warning | Command depth ≥ 80% of capacity |
+| `repeated_resync` | Warning | `resyncCount` ≥ 5 |
 
-Performance acceptance is based on behavior under load, not socket count alone:
+Per output, the shard writes through `EgressProgressSink` with relaxed
+atomics: bytes and units sent, last progress time, resync count, feed lag,
+backpressure reason, quality and the termination flag.
 
-- application egress thread count is fixed as leaf count increases;
-- memory remains bounded during indefinite destination stalls;
-- healthy same-shard leaves retain bounded service latency when a small number
-  of neighbors are blocked;
-- cross-shard service latency does not materially change when another shard has
-  dead destinations or reconnect churn;
-- retry-waiting leaves do not consume continuous CPU;
-- one feed publication creates at most one outstanding wake per interested
-  shard, not one runnable task per destination;
-- bytes copied per destination are limited to unavoidable protocol and native
-  transport work;
-- scheduler overhead remains below measured protocol serialization and send
-  work at target scale;
-- scaling shard count is monotonic only until the workload is satisfied;
-  additional shards are rejected if they increase CPU without improving tail
-  behavior.
+## Invariants and proofs
 
-Concrete workload thresholds used to prove these invariants live with the
-harness.
+1. Each leaf is in its backend's `ReadyQueue` at most once
+   (`scheduler.rs` Kani proofs).
+2. A removed leaf's key never resolves again (`leaf_arena.rs` Kani proofs).
+3. A visit never takes more than its unit or byte limit (`policy.rs` Kani
+   proofs).
+4. A stale generation cannot mutate a leaf (`visit_leaf`); the manager
+   ignores stale and duplicate specs.
+5. A publication after the shard reads heads is never lost
+   (`tests/egress_feed_wake_loom.rs`, `shard/tests/feed_wake.rs`).
+6. An engine panic fails only its output
+   (`panicking_leaf_fails_alone_and_its_shard_keeps_serving_the_others`).
+7. A blocked leaf does not starve a ready one on the same shard
+   (`shard/tests/leaf_isolation.rs`).
+8. Publication never waits for a shard; a full channel leaves one fallback
+   bit, not a blocked producer.
+9. A cursor never pins feed entries; overrun moves the leaf to the live
+   start.
+10. A live output never changes shard; resizing affects new outputs only.
+11. Backends are built, used and dropped on their shard thread (`!Send`).
 
-## History and tradeoffs
-
-The fabric is shipped; the migration narrative is in git history.
-Control-plane identity, persisted outputs, API contracts, stage keys, and
-`MediaPacket` behavior stayed stable through that change.
-
-Retained tradeoffs of the fabric itself:
-
-- one lifecycle and failure policy, fixed application thread count, and
-  bounded memory under slow consumers;
-- more explicit partial-I/O (RTMP/TLS Compio completions, with pending-connect
-  `PollFd` scans, plus SRT Owner-driven leaves), and scheduler/timer obligations
-  versus one independent async task per destination at tiny scale;
-- prefer narrow abstractions proven by RTMP and SRT over a framework for
-  hypothetical protocols; do not hide wire semantics behind a vague transport
-  trait or treat average throughput as proof of tail fairness.
-
-## Decision summary
-
-Restream's egress architecture is:
-
-- shared, keyed preparation before the destination edge;
-- immutable bounded feeds with non-pinning sequence cursors;
-- a protocol-neutral manager, supervisor, lifecycle, scheduler, backpressure
-  policy, retry policy, and metrics model;
-- a small fixed set of egress shards with exclusive mutable ownership;
-- protocol-specialized engines and native readiness backends;
-- non-blocking, budgeted progress for every leaf;
-- no application thread, independent media queue, or retry task per output;
-- reconnect-at-sync-point as the default recovery boundary;
-- measurement-driven shard count rather than universal thread-per-core sizing.
-
-This is the durable layering boundary: common policy and ownership above,
-protocol mechanism below.
+The visit cost has a micro-benchmark, `benches/egress_visit.rs`. Proof
+selection is described in [Concurrency proofing](concurrency-proofing.md).

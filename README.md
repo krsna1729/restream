@@ -6,123 +6,53 @@
 [![Security](https://github.com/krsna1729/restream/actions/workflows/sbom-security.yml/badge.svg?branch=master&event=schedule)](https://github.com/krsna1729/restream/actions/workflows/sbom-security.yml?query=branch%3Amaster+event%3Aschedule)
 [![Harness Image](https://github.com/krsna1729/restream/actions/workflows/ci-harness-runtime-image.yml/badge.svg?branch=master&event=push)](https://github.com/krsna1729/restream/actions/workflows/ci-harness-runtime-image.yml?query=branch%3Amaster+event%3Apush)
 
-Restream is a Rust live-stream routing service. One process owns the dashboard,
-API, SQLite state, RTMP/SRT ingest, RTMP/SRT egress, HLS preview, recording,
-and the media-stage orchestration around transcoding.
-
-This README is intentionally short. It should get a new developer from clone to
-useful context without making them read the whole system on day one.
+Restream is a live-stream router in one Rust process. It takes a stream in
+over RTMP, SRT, HLS (push or pull), MoQ or a media file, and sends it out to
+many RTMP/RTMPS, SRT, HLS and MoQ destinations. It can transcode on the way,
+switch between backup inputs, record, and preview in the browser. A dashboard,
+an HTTP API and SQLite state come in the same binary.
 
 ## Contents
 
-- [Start here](#start-here)
-- [Develop from source](#develop-from-source)
-- [Daily loop](#daily-loop)
-- [Codebase map](#codebase-map)
-- [Runtime and live-harness containers](#runtime-and-live-harness-containers)
-- [Read next](#read-next)
-- [Expectations](#expectations)
+- [Quick start](#quick-start)
+- [Run the container](#run-the-container)
+- [Build from source](#build-from-source)
+- [Where to read next](#where-to-read-next)
 
-## Start here
+## Quick start
 
-With the Linux x86_64 `restream` executable from a GitHub release in the
-current directory, start it directly:
+Download the Linux x86_64 release from GitHub and run it:
 
 ```sh
 RESTREAM_INITIAL_ADMIN_PASSWORD=change-me ./restream
 ```
 
-Choose a strong initial password outside local evaluation. Then open
-`http://localhost:3030`; stop the process with `Ctrl+C`. Runtime state is
-created under `.restream/` in the current directory.
+Open `http://localhost:3030` and sign in with that password. Stop with
+`Ctrl+C`.
 
-The release also provides the project license, third-party notices and license
-texts, and an SBOM. Release automation builds and certifies the downloadable
-bytes; `scripts/build/app-static.sh` is a separate engineering tool and is not
-the source of the archive.
+| Port | Use |
+|---|---|
+| 3030 (TCP) | Dashboard, API, HLS push ingest; binds `127.0.0.1` unless `RESTREAM_HTTP_BIND_ADDR` is set |
+| 1935 (TCP) | RTMP ingest and play |
+| 10080 (UDP) | SRT ingest and read |
 
-Default ports:
+- Use a strong password outside local tests. Without
+  `RESTREAM_INITIAL_ADMIN_PASSWORD`, Restream generates one and writes it to
+  `.restream/data/restream-initial-admin-password.txt` (owner-only).
+- State lives under `.restream/` in the working directory: `data/` (SQLite
+  and the password file), `media/`, `logs/`, and `runtime/ffmpeg/` (FFmpeg
+  fetched by `restream ffmpeg-fetch`).
+- MoQ ingest is off until `RESTREAM_MOQ_INGEST_LISTEN` is set. See
+  [Configuration](docs/configuration.md).
 
-- `3030` for the dashboard and API
-- `1935` for RTMP ingest/play
-- `10080` for SRT ingest/read
+The release also carries the license, third-party notices and an SBOM. The
+[release runbook](docs/release-runbook.md) owns how releases are built.
 
-The dashboard/API binds to `127.0.0.1` by default. Override that with
-`RESTREAM_HTTP_BIND_ADDR` when you intentionally want to expose it on another
-interface.
+## Run the container
 
-When `RESTREAM_INITIAL_ADMIN_PASSWORD` is unset, Restream generates a
-high-entropy initial password and writes it next to the SQLite database as
-`restream-initial-admin-password.txt` with owner-only permissions.
-
-Release operators should follow the [release runbook](docs/release-runbook.md),
-which owns local due diligence, GitHub dry-runs, and gated tag publishing.
-
-## Develop from source
-
-On a fresh Debian or Ubuntu development host, install the repository toolchain
-once:
-
-```sh
-scripts/dev/bootstrap.sh
-```
-
-Then prepare generated inputs, build the development binary, and run that
-binary directly:
-
-```sh
-scripts/dev/prepare.sh
-scripts/build/app-native.sh
-RESTREAM_INITIAL_ADMIN_PASSWORD=change-me target/debug/restream
-```
-
-`bootstrap.sh` owns host packages, Rust, Node, frontend dependencies, MediaMTX,
-and the pinned native prefix. `prepare.sh` assumes that host setup already
-exists; it refreshes the native prefix and generated frontend assets for the
-checkout. See the [developer guide](docs/development.md) for other Linux
-distributions and scoped workflows.
-
-## Daily loop
-
-Most backend work stays in this loop:
-
-```sh
-./scripts/build/app-native.sh
-cargo test
-cargo clippy
-cargo fmt --all
-```
-
-If you edit frontend assets:
-
-```sh
-npm run build:frontend
-npm run test:frontend
-npx playwright test   # against a running app; or npm run test:e2e
-```
-
-Use `npm run test:frontend:coverage` for the Node-side TypeScript coverage
-report.
-
-## Codebase map
-
-- `src/api/` and `src/lib.rs`: routes, handlers, app startup, and runtime wiring
-- `src/media/`: ingest, egress, mux/demux, ring buffers, HLS, transcoding
-- `src/domain/`: persisted models and business logic
-- `src/planner/`: pipeline planning/orchestration helpers
-- `web/`: authored dashboard pages, assets, styles, and TypeScript
-- `public/`: generated browser output; never edit it directly
-- `test/fixtures/`, `test/native/`, `test/frontend/`, `test/harness/`: committed media, native probes, frontend tests, and live-harness support
-- `tests/`: Rust integration tests
-- `scripts/build/`, `scripts/check/`, `scripts/dev/`, `scripts/harness/`: builds, gates, setup, and live validation
-
-## Runtime and live-harness containers
-
-The Dockerfile rebuilds native dependencies and frontend output from the same
-committed scripts used locally in a clean build container, then produces a
-distroless runtime image with the generated binary, release metadata, the
-owned runtime paths, and an FFmpeg executable for subprocess stages. The media
-stack stays linked from the repo-managed static native prefix.
+Restream's RTMP and SRT transports and its egress fabric need `io_uring`.
+Docker's default seccomp profile (Docker 25 and later) blocks it, and the
+process does not start. The shipped profile is part of the launch command:
 
 ```sh
 docker build \
@@ -132,71 +62,45 @@ docker build \
 docker run --rm \
   --security-opt seccomp=distribution/docker/restream-seccomp.json \
   -e RESTREAM_INITIAL_ADMIN_PASSWORD=change-me \
-  -p 3030:3030 \
-  -p 1935:1935 \
-  -p 10080:10080/udp \
+  -p 3030:3030 -p 1935:1935 -p 10080:10080/udp \
   restream:container
 ```
 
-`--security-opt seccomp=...` is part of the supported launch contract, not an
-optional hardening flag. Restream's RTMP and SRT ingress and its SRT egress all
-run on `io_uring`, which Docker's default seccomp profile (Docker 25 and newer)
-denies, so under the default profile the process does not even finish starting.
-The shipped profile is Docker's own default plus exactly the three `io_uring`
-syscalls Restream uses; it needs no `--privileged` and no added capabilities.
-A running `/healthz` alone does not prove SRT egress works; see
-[`distribution/docker/README.md`](distribution/docker/README.md) for what it
-allows and why, the release-asset copy, and the requirements.
+- The image is distroless and runs as UID 1000. It binds the HTTP port on
+  `0.0.0.0`.
+- Mount one volume at `/.restream` to keep state across runs.
+- The two build arguments are required: `.git/` is not in the build context,
+  and the build fails without provenance.
 
-The provenance arguments are required because `.git/` is intentionally absent
-from the Docker context. They are embedded in both the binary and OCI labels;
-the build fails instead of publishing placeholder provenance when either is
-missing. License and source information is available inside the runtime image
-at `/usr/share/doc/restream/distribution/`.
+[`distribution/docker/README.md`](distribution/docker/README.md) explains the
+seccomp profile. The [developer guide](docs/development.md#containers)
+covers the live-harness image.
 
-Bare Restream and the container use the same owned layout under `.restream/`:
-`data/restream.db` (including WAL/SHM sidecars and the initial-password file),
-`media/`, `logs/`, and `runtime/ffmpeg/`. A container can run with no mounts
-for an ephemeral session; mount one volume at `/.restream` to persist all
-state. `RESTREAM_LOG_DIR` overrides the default `.restream/logs` directory;
-stdout/stderr and SQLite-backed log history remain enabled as well.
+## Build from source
 
-For the complete live protocol harness, build the explicit `harness` target.
-It contains the bench-profile `restream` and `test_harness` binaries, pinned
-MediaMTX, FFmpeg/ffprobe, and committed fixtures without carrying a compiler or
-source checkout:
+On Debian or Ubuntu:
 
 ```sh
-docker build \
-  --build-arg RESTREAM_BUILD_GIT_COMMIT="$(git rev-parse HEAD)" \
-  --build-arg RESTREAM_BUILD_TIMESTAMP="$(git show -s --format=%cI HEAD)" \
-  --target harness -t restream:harness .
-docker run --rm --network host \
-  --security-opt seccomp=distribution/docker/restream-seccomp.json \
-  restream:harness mixed.live.srt.h264.a1.bf0 --no-netns
+scripts/dev/bootstrap.sh
+scripts/dev/prepare.sh
+scripts/build/app-native.sh
+RESTREAM_INITIAL_ADMIN_PASSWORD=change-me target/debug/restream
 ```
 
-Use `--network host` for harness modes that open loopback publishers and sinks;
-the harness binary is the target's entry point, so modes and harness flags are
-passed directly. The harness image runs the same `io_uring`-based Restream, so
-it needs the same seccomp profile. The normal production image needs only its
-documented TCP/UDP ports plus that profile. The `runtime-ubuntu` target remains available as a compatibility
-fallback, but the default image is `runtime`/distroless.
+The [developer guide](docs/development.md) explains each step, the daily loop
+and parallel worktrees.
 
-## Read next
+## Where to read next
 
-- [Documentation Guide](docs/README.md): reading paths and the complete documentation index
-- [Developer Guide](docs/development.md): setup, inner loop, tests, benchmarks, static build
-- [Architecture](docs/architecture.md): runtime shape and major moving parts
-- [Configuration](docs/configuration.md): env vars, ports, paths, persisted settings
-- [API Reference](docs/api-reference.md): route-level behavior
-- [Testing](docs/testing.md): verification strategy and live test entry points
-- [Observability](docs/observability.md): health, diagnostics, telemetry
-- [Backlog](docs/backlog.md): the one list of open engineering work
-
-## Expectations
-
-The repository includes deep reference docs because the runtime is doing real
-media work, but you do not need all of them to start contributing. Begin with
-the developer guide and architecture doc, then pull in the more specific docs
-only when your change touches those areas.
+| Page | Read it for |
+|---|---|
+| [Documentation index](docs/README.md) | Every page, grouped by task |
+| [Architecture](docs/architecture.md) | What runs where: data plane, control plane, threads, layers |
+| [Developer guide](docs/development.md) | Setup, daily loop, worktrees |
+| [Media pipeline](docs/media-pipeline.md) | Protocols, codecs and stages |
+| [Configuration](docs/configuration.md) | Environment variables, ports, paths |
+| [API reference](docs/api-reference.md) | HTTP routes |
+| [Testing](docs/testing.md) | Which gate proves which change |
+| [Observability](docs/observability.md) | Health, telemetry, alerts, logs |
+| [Backlog](docs/backlog.md) | Open engineering work |
+| [AGENTS.md](AGENTS.md) | Rules for coding agents |

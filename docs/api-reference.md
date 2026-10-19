@@ -1,181 +1,278 @@
-# Restream API Reference
+# Restream API reference
 
-Base URL: `http://localhost:3030`
-
-JSON uses camelCase. Unless noted otherwise, routes require the `session` cookie
-returned by login.
+Every HTTP route the dashboard server registers in `src/api/router.rs`,
+grouped by resource. Base URL: `http://localhost:3030` (the HTTP port is
+`RESTREAM_HTTP_PORT`, see [Configuration](configuration.md)).
 
 ## Contents
 
-- [Request Limits](#request-limits)
+- [Conventions](#conventions)
+- [Route map](#route-map)
 - [Authentication](#authentication)
-- [Configuration and Discovery](#configuration-and-discovery)
+- [Configuration and discovery](#configuration-and-discovery)
 - [Pipelines](#pipelines)
 - [Outputs](#outputs)
-- [Process Logs](#process-logs)
-- [Output Status](#output-status)
-- [Probe, Graph, and Diagnostics](#probe-graph-and-diagnostics)
-- [Agent Plane](#agent-plane)
+- [Process logs](#process-logs)
+- [Probe, graph, and diagnostics](#probe-graph-and-diagnostics)
+- [Agent plane](#agent-plane)
 - [Recording](#recording)
-- [File Ingest](#file-ingest)
-- [Media Files](#media-files)
-- [Custom Encoding](#custom-encoding)
-- [Runtime State](#runtime-state)
-- [Health and Status](#health-and-status)
-- [HLS Pull](#hls-pull)
-- [HLS Push Ingest](#hls-push-ingest)
-- [Operator v1 Endpoints](#operator-v1-endpoints)
-- [Engineer v1 Endpoints](#engineer-v1-endpoints)
+- [File ingest](#file-ingest)
+- [Media files](#media-files)
+- [Custom encoding](#custom-encoding)
+- [Runtime state](#runtime-state)
+- [Health and status](#health-and-status)
+- [Operator views](#operator-views)
+- [Telemetry](#telemetry)
+- [HLS pull](#hls-pull)
+- [HLS push ingest](#hls-push-ingest)
+- [Static pages](#static-pages)
 
-## Request Limits
+## Conventions
 
-| Limit | Value |
-|---|---|
-| Maximum request body | 4 MiB |
-| `name` / `serverName` / `label` fields | 256 bytes |
-| `url` / output URL fields | 2048 bytes |
-| output `config` JSON | 512 bytes |
-| `streamKey` | 256 bytes |
-| `ffmpegArgs` (custom encoding) | 4096 bytes |
-| `password` | 1024 bytes |
+- JSON bodies and responses use camelCase. The one exception is
+  `GET /api/v1/monitoring/youtube-status`, which answers in snake_case.
+- Path parameters are written `:name` here; the router writes `{name}`.
+- Every `/api/*`, `/hls/*` and `/media/*` route needs the `session` cookie
+  from login, except `POST /api/v1/auth/login`. Each handler checks the cookie
+  itself (`require_authenticated` in `src/api/state.rs`); there is no
+  router-level gate. A missing or expired session gets `401`.
+- There is no bearer-token or API-key auth on this server: only the cookie.
+- An unknown `/api/*` path gets a JSON `404`
+  (`{"error": "API route not found", "path", "status": 404}`).
+- Every response carries `X-Content-Type-Options: nosniff` and
+  `X-Frame-Options: SAMEORIGIN` unless the handler set them.
+- Only the static documents are gzip-compressed. JSON APIs and media are not.
+- A successful request with any method other than `GET`, `HEAD` or `OPTIONS`
+  wakes the reconciler and marks the runtime state changed
+  (`wake_reconciler_after_mutation`). HLS push uploads do not.
 
-Requests exceeding the body limit receive `413 Payload Too Large`. Fields
-exceeding the per-field limits receive `400 Bad Request` with a descriptive
-message.
+Request limits:
+
+| Limit | Value | Source |
+|---|---|---|
+| Request body (default) | 4 MiB, else `413` | `DEFAULT_API_BODY_LIMIT_BYTES` |
+| `POST /api/v1/agent/operations` body | 256 KiB | `AGENT_OPERATION_BODY_LIMIT_BYTES` |
+| `POST /api/v1/media/upload` body | 8 GiB | `MAX_MEDIA_UPLOAD_BYTES` |
+| `name`, `label`, `filename` fields | 256 bytes | `MAX_NAME_LEN` |
+| `url`, `sourceUrl`, `monitoringUrl` | 2048 bytes | `MAX_URL_LEN` |
+| Output `config` JSON | 512 bytes | `MAX_OUTPUT_CONFIG_LEN` |
+| `streamKey` | 256 bytes | `MAX_STREAM_KEY_LEN` |
+| `password` fields | 1024 bytes | `MAX_PASSWORD_LEN` |
+| File-ingest `startTime` | 64 bytes | `src/api/file_ingest.rs` |
+
+A field over its limit gets `400` with
+`{"error": "<field> exceeds maximum length of <n> bytes"}`.
+
+## Route map
+
+How the router is built: one listener serves the session-gated app router and
+the HLS push ingest router side by side.
+
+```mermaid
+flowchart TD
+    serve["http_server::serve<br/>(half-close only for /ingest/hls/)"] --> app["create_router"]
+    serve --> ingest["create_hls_ingest_router"]
+    app --> layers["apply_standard_layers<br/>4 MiB body limit + security headers"]
+    app --> wake["wake_reconciler_after_mutation"]
+    layers --> staticDocs["create_compressed_static_router<br/>/login, /output.css, SPA fallback"]
+    layers --> api["/api/v1/* JSON handlers"]
+    layers --> hls["create_hls_router<br/>/hls/*"]
+    layers --> media["/media/:filename"]
+    layers --> notfound["/api/* → api_not_found_handler"]
+    ingest --> push["hls_ingest_handler<br/>own body bounds, stream-key auth"]
+```
+
+| Group | Routes | Section |
+|---|---|---|
+| Auth and security | `/api/v1/auth/*`, `/api/v1/security/rate-limits*` | [Authentication](#authentication) |
+| Settings and discovery | `/api/v1/settings`, `/stream-keys`, `/audio-caps`, `/monitoring/youtube-status` | [Configuration and discovery](#configuration-and-discovery) |
+| Pipelines and inputs | `/api/v1/pipelines`, `…/inputs*` | [Pipelines](#pipelines) |
+| Outputs | `…/outputs*` | [Outputs](#outputs) |
+| Logs | `/api/v1/logs`, `/api/v1/logs/stream` | [Process logs](#process-logs) |
+| Probe, graph, diagnostics, MoQ token | `…/probe`, `…/graph`, `…/diagnostics/*`, `…/moq-token` | [Probe, graph, and diagnostics](#probe-graph-and-diagnostics) |
+| Agent plane | `/api/v1/agent/*` | [Agent plane](#agent-plane) |
+| Recording | `…/recording/start`, `…/recording/stop` | [Recording](#recording) |
+| File ingest | `…/file-ingest`, `/api/v1/ingests*` | [File ingest](#file-ingest) |
+| Media library | `/api/v1/media*`, `/media/:filename` | [Media files](#media-files) |
+| Custom encoding | `/api/v1/encodings/custom` | [Custom encoding](#custom-encoding) |
+| Runtime state | `/api/v1/state`, `/state/stream`, `/fleet/history` | [Runtime state](#runtime-state) |
+| Health and host | `/healthz`, `/metrics/system`, `/api/v1/engine*`, `/dashboard/runtime`, `/capacity/scenario` | [Health and status](#health-and-status) |
+| Operator views | `/overview`, `/alerts`, `/events`, `…/summary`, `…/alerts`, `/engine/resource-map` | [Operator views](#operator-views) |
+| Telemetry | `/measure`, `/engine/telemetry`, `…/telemetry`, `/stages/:stageKey/telemetry` | [Telemetry](#telemetry) |
+| HLS pull | `/hls/*` | [HLS pull](#hls-pull) |
+| HLS push | `/ingest/hls/:streamKey/*path` | [HLS push ingest](#hls-push-ingest) |
+| Static | `/login`, `/logo.png`, `/output.css`, redirects, SPA fallback | [Static pages](#static-pages) |
 
 ## Authentication
 
 | Method | Route | Purpose |
 |---|---|---|
-| `POST` | `/api/auth/login` | Create a persisted session from `{ "password": "..." }` |
-| `POST` | `/api/auth/logout` | Delete the current session |
-| `POST` | `/api/auth/change-password` | Change the password from `{ "currentPassword", "newPassword" }` (at least 12 bytes); every other session is revoked, the current one stays |
+| `POST` | `/api/v1/auth/login` | Check `{ "password" }`, create a session, set the cookie |
+| `POST` | `/api/v1/auth/logout` | Delete the current session and clear the cookie |
+| `POST` | `/api/v1/auth/change-password` | Change the password from `{ "currentPassword", "newPassword" }` |
+| `POST` | `/api/v1/auth/dismiss-password-change` | Hide the bootstrap "change the password" reminder |
+| `GET` | `/api/v1/security/rate-limits` | List tracked failure counters and bans |
+| `POST` | `/api/v1/security/rate-limits/reset` | Clear counters, optionally by `scope` and `ip` |
 
-Static pages/assets are served without an auth gate; protected API handlers
-enforce the cookie themselves. `/healthz` and `/audio-caps` are public.
-HLS pull routes require the dashboard session cookie. HLS push ingest routes
-are authorized by the stream key in their path instead.
+How a session is created and then checked on each request:
 
-All responses include `X-Content-Type-Options: nosniff` and
-`X-Frame-Options: SAMEORIGIN` security headers. These are applied globally by
-a `SetResponseHeaderLayer` on the main router.
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant L as login_post_handler
+    participant S as AppState
+    participant DB as auth_service (SQLite)
+    B->>L: POST /api/v1/auth/login {password}
+    L->>S: login_ban_remaining(dashboard-login, ip)
+    alt client banned
+        L-->>B: 429 "Try again in N seconds"
+    end
+    L->>DB: get_password_hash
+    L->>L: verify_password (scrypt, spawn_blocking)
+    alt wrong password
+        L->>S: record_security_failure
+        L-->>B: 401 Incorrect password
+    end
+    L->>DB: create_session(sha256(token))
+    L->>S: add_session_hash
+    L-->>B: 200 {ok:true} + Set-Cookie session=token
+    B->>S: later request with Cookie: session=token
+    S->>S: is_authenticated: hash in memory set?
+    S->>DB: get_session_created_at
+    alt missing or older than 30 days
+        S-->>B: 401 Unauthorized
+    else valid
+        S-->>B: handler runs
+    end
+```
 
-## Configuration and Discovery
+- The cookie is `session=<64 hex>; HttpOnly; Path=/; SameSite=Strict;
+  Max-Age=2592000`, plus `; Secure` when `RESTREAM_SECURE_SESSION_COOKIES` is
+  true. The server stores only the SHA-256 of the token.
+- A session lives 30 days from creation (`SESSION_MAX_AGE_SECONDS`). Expired
+  rows are pruned by the reconciler's housekeeping.
+- Failed logins count under the `dashboard-login` rate-limit scope. The
+  limits are the `ingestSecurity` settings (failure limit, window, ban).
+- Change password: the new password must be at least 12 bytes
+  (`MIN_DASHBOARD_PASSWORD_LEN`), else `400`. A wrong current password gets
+  `403`. On success every other session is revoked; the caller's stays, and
+  the bootstrap reminder is dismissed.
+- Logout, change password and dismiss return `{ "ok": true }`.
 
-The canonical authenticated settings surface is `/api/v1/settings`.
+Rate limits: `GET` returns
+`{ "attempts": [{ "scope", "ip", "failureCount", "banned", "banRemainingMs" }] }`.
+`POST …/reset` takes `{ "scope"?, "ip"? }` and returns
+`{ "ok": true, "removed": n }`; an unknown scope is `400`. Scopes
+(`RateLimitScope` in `src/media/security.rs`): `dashboard-login`,
+`rtmp-publish`, `srt-publish`, `srt-read`, `hls-publish`, `moq-publish`.
+
+## Configuration and discovery
+
+| Method | Route | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/settings` | Settings plus pipelines, outputs and jobs |
+| `PATCH` | `/api/v1/settings` | Update any supplied setting |
+| `GET` | `/api/v1/stream-keys` | Selected stream key and RTMP/SRT URLs per pipeline |
+| `GET` | `/api/v1/audio-caps` | Platform/protocol audio capability matrix |
+| `GET` | `/api/v1/monitoring/youtube-status` | Fetch a YouTube watch page and report its live flags |
 
 ### `GET /api/v1/settings`
 
-Returns SQLite-backed settings plus configured pipelines, outputs, and jobs.
-Query params:
-
 | Param | Default | Notes |
-| --- | --- | --- |
-| `jobs` | `all` | `latest` returns only the newest job per `(pipelineId, outputId)` pair for consumers that need a slimmed job list. |
-| `view` | `full` | `dashboard` trims admin-only settings fields (`ingestSecurity`, `recordingSettings`, `srtIngest`) and omits job rows from the dashboard runtime fetch while keeping editor/runtime fields such as `ingestHost`, `transcodeProfiles`, pipelines, and outputs. Settings mode upgrades itself back to `full` on entry. |
+|---|---|---|
+| `jobs` | all | `latest` keeps only the newest job per output |
+| `view` | full | `dashboard` drops `ingestSecurity`, `recordingSettings`, `srtIngest` and all jobs |
 
 ```json
 {
   "serverName": "Name",
   "ingestHost": "stream.example.com",
-  "ingestSecurity": {
-    "failureLimit": 10,
-    "failureWindowMs": 60000,
-    "banMs": 600000,
-    "trackedIpLimit": 10000
-  },
-  "recordingSettings": {
-    "retainSourceTs": false
-  },
+  "dashboardPasswordChangeRecommended": false,
+  "transcodeProfiles": {},
+  "ingestSecurity": { "failureLimit": 10, "failureWindowMs": 60000, "banMs": 600000, "trackedIpLimit": 10000 },
+  "recordingSettings": { "retainSourceTs": false },
+  "srtIngest": { "mode": "plaintext", "pbkeylen": 16, "latencyMs": 250 },
   "pipelines": [],
   "outputs": [],
   "jobs": []
 }
 ```
 
-Each pipeline in this response includes the selected input's RTMP and SRT
-ingest URLs. Use the pipeline-input endpoint to enumerate every configured
-input and its credential.
+Each pipeline carries its selected input's RTMP and SRT ingest URLs. Use
+`GET /api/v1/pipelines/:pipelineId/inputs` for every input.
 
 ### `PATCH /api/v1/settings`
 
-Updates any supplied setting:
+Accepted fields: `serverName`, `ingestHost`, `ingestSecurity`,
+`recordingSettings`, `srtIngest`, `transcodeProfiles`. Unknown fields are
+ignored. The response is the refreshed settings (the six fields above).
 
-```json
-{
-  "serverName": "India Restream",
-  "ingestHost": "stream.example.com",
-  "ingestSecurity": {
-    "failureLimit": 10,
-    "failureWindowMs": 60000,
-    "banMs": 600000,
-    "trackedIpLimit": 10000
-  },
-  "recordingSettings": {
-    "retainSourceTs": false
-  }
-}
-```
-
-An empty `serverName` returns `400`.
-
-When `transcodeProfiles` are included in `PATCH /api/v1/settings`, each profile
-is validated before saving:
-
-- `preset` must be one of: `ultrafast`, `superfast`, `veryfast`, `faster`, `fast`, `medium`, `slow`, `slower`, `veryslow`, `placebo`
-- `tune` must be empty or one of: `film`, `animation`, `grain`, `stillimage`, `psnr`, `ssim`, `fastdecode`, `zerolatency`
-- `crf` must be in `0..=51`
-
-Invalid values return `400 Bad Request` with a descriptive error.
+| Field | Rule (else `400`) |
+|---|---|
+| `serverName` | Not blank |
+| `ingestSecurity.*` | Each of `failureLimit`, `failureWindowMs`, `banMs`, `trackedIpLimit` ≥ 1 |
+| `srtIngest.mode` | `plaintext` or `encrypted`; `encrypted` needs a 10–79 byte `passphrase` |
+| `srtIngest.pbkeylen` | 16, 24 or 32 (default 16) |
+| `srtIngest.latencyMs` | 20–8000 (default 250) |
+| `transcodeProfiles.*.preset` | `ultrafast` … `placebo` (the ten x264 presets) |
+| `transcodeProfiles.*.tune` | Empty or `film`, `animation`, `grain`, `stillimage`, `psnr`, `ssim`, `fastdecode`, `zerolatency` |
+| `transcodeProfiles.*.crf` | 0–51 |
 
 ### `GET /api/v1/stream-keys`
-
-Returns the selected stream key and native ingest URLs for each configured
-pipeline. Use `GET /api/v1/pipelines/:pipelineId/inputs` when a client needs
-all primary and backup credentials:
 
 ```json
 [
   {
-    "key": "stream-key",
+    "key": "sk_…",
     "label": "Stream 1",
     "ingestUrls": {
-      "rtmp": "rtmp://stream.example.com:1935/live/stream-key",
-      "srt": "srt://stream.example.com:10080?streamid=publish:stream-key"
+      "rtmp": "rtmp://stream.example.com:1935/live/sk_…",
+      "srt": "srt://stream.example.com:10080?streamid=publish:sk_…"
     }
   }
 ]
 ```
 
-Input credentials are managed through the pipeline-input routes. Stream keys
-remain opaque random values with an `sk_` prefix; they do not encode pipeline,
-input, role, or protocol information.
+Generated stream keys are `sk_` plus 64 random hex characters. They encode
+no pipeline, input, role or protocol.
 
-### `GET /audio-caps`
+### `GET /api/v1/audio-caps`
 
-Returns the frontend's platform/protocol audio capability matrix.
+Returns `{ "caps": { "<platform>:<protocol>": { "codecs", "maxChannels",
+"maxTracks" } }, "platformLabels": { … } }` for `facebook`, `generic`,
+`vdocipher` and `youtube` over `hls`, `rtmp`, `rtmps` and `srt`
+(`audio_caps_handler` in `src/api/auth.rs`).
+
+### `GET /api/v1/monitoring/youtube-status`
+
+Query `url` (a YouTube watch, share or live URL; at most 2048 bytes). The
+server fetches the canonical watch page (5 s timeout, 512 KiB cap) and returns
+`{ "canonical_watch_url", "live_now", "live_content", "upcoming", "title" }`.
+A non-YouTube URL is `400`; a failed or oversized fetch is `502`.
 
 ## Pipelines
 
 | Method | Route | Purpose |
 |---|---|---|
-| `GET` | `/api/v1/pipelines` | List pipelines |
-| `POST` | `/api/v1/pipelines` | Create a pipeline |
-| `PATCH` | `/api/v1/pipelines/:id` | Replace editable pipeline fields |
+| `GET` | `/api/v1/pipelines` | List pipelines: `{ "pipelines": [...] }` |
+| `POST` | `/api/v1/pipelines` | Create a pipeline (`201`) |
+| `GET` | `/api/v1/pipelines/:id` | One pipeline plus its outputs: `{ "pipeline", "outputs" }` |
+| `PATCH` | `/api/v1/pipelines/:id` | Update a pipeline |
 | `DELETE` | `/api/v1/pipelines/:id` | Delete a pipeline |
-| `GET` | `/api/v1/pipelines/:pipelineId/inputs` | List configured inputs and runtime state |
-| `POST` | `/api/v1/pipelines/:pipelineId/inputs` | Add a backup or HLS pull input |
-| `PATCH` | `/api/v1/pipelines/:pipelineId/inputs/:inputId` | Rename, enable/disable, or reconfigure an input's source |
+| `GET` | `/api/v1/pipelines/:pipelineId/inputs` | List inputs with runtime state |
+| `POST` | `/api/v1/pipelines/:pipelineId/inputs` | Add a backup or HLS pull input (`201`) |
+| `PATCH` | `/api/v1/pipelines/:pipelineId/inputs/:inputId` | Rename, enable/disable or reconfigure an input |
 | `DELETE` | `/api/v1/pipelines/:pipelineId/inputs/:inputId` | Delete an unselected backup input |
 | `POST` | `/api/v1/pipelines/:pipelineId/inputs/:inputId/promote` | Select and promote an input |
 
-Create/update body:
+Create and update body:
 
 ```json
 {
   "name": "Main Feed",
-  "streamKey": "stream-key",
+  "streamKey": "sk_…",
   "inputSource": null,
+  "srtIngestPolicy": { "mode": "inherit", "latencyMs": 400 },
   "fileIngest": {
     "filename": "recording-1.ts",
     "loopFlag": true,
@@ -186,61 +283,48 @@ Create/update body:
 }
 ```
 
-`name` is required for both create and update because the current update handler
-uses the same payload type. If `streamKey` is omitted on create, an opaque
-random primary-input key is generated. On update, an omitted `streamKey` keeps
-the current key, and an empty or blank one issues a new random key.
+- `name` is required on create and update (one payload type) and must not
+  be blank.
+- `streamKey`: omitted on create, a random key is generated. On update,
+  omitted keeps the key and an empty or blank value issues a new one. A key
+  another input already uses is `409`.
+- `inputSource` is operator metadata only; it pulls nothing.
+- `srtIngestPolicy`: per-pipeline SRT ingest policy. `mode` is `inherit`
+  (use the global `srtIngest`), `plaintext` or `encrypted` (10–79 byte
+  `passphrase`, `pbkeylen` 16/24/32). `latencyMs` 20–8000 overrides the
+  global latency.
+- `inputSource` and `fileIngest`: omitted keeps the stored value, `null`
+  clears it. A `fileIngest` object creates or replaces the pipeline's file
+  source in the same request. Clearing or replacing it stops only the file
+  publisher; a live RTMP/SRT publisher on another input keeps its session.
 
-`inputSource` is persisted for operator metadata only; it does not pull remote
-media or transform the active native ingest path.
+Create (`201`) and update return `{ "message", "pipeline" }`; `pipeline`
+includes the normalized `fileIngest` state. Delete returns
+`{ "message": "Pipeline <id> deleted" }` or `404`.
 
-On update, an omitted `inputSource` or `fileIngest` keeps the stored value and
-`null` clears it. When `fileIngest` is present, pipeline create/update persists
-or replaces the pipeline's file-ingest config in the same mutation response;
-send `"fileIngest": null` to clear the configured file source as part of the
-same pipeline edit instead of issuing a follow-up `/file-ingest` request.
-Clearing or replacing the file source (and stopping or deleting a file
-ingest) stops only the file publisher: a live RTMP/SRT publisher on another
-input of the pipeline keeps its session.
-
-Create and update responses include a normalized `pipeline` object plus the
-mutation message so clients can patch dashboard pipeline state locally without
-an immediate follow-up settings fetch. That response now also includes the
-normalized `fileIngest` state so the editor can avoid a separate read or write
-round-trip when a pipeline switches between publisher and file-source modes.
-Pipeline deletes intentionally return a simple acknowledgement because the
-client can remove the matching pipeline, outputs, jobs, and cached health rows
-locally.
-
-Deletion cancels configured output tasks, the active ingest, and any
-file-ingest FFmpeg subprocesses whose `streamKey` matches the pipeline's
-stream key before removing the pipeline row. Shared transcoder, HLS, and
-recording cleanup still follows their existing task lifecycle.
+Delete removes the row first (outputs and inputs cascade), then wakes the
+reconciler. The reconciler stops the pipeline's egresses, ingest sessions,
+file-ingest children, stages and HLS runtime. A recirculation output that
+still targets the deleted pipeline recreates that runtime on each attempt and
+each pass removes it again, so the output retries until its retries are
+exhausted.
 
 ### Pipeline inputs
 
-A pipeline starts with one primary input and accepts up to four configured
-inputs. Additional inputs are explicit backup rows, each with its own opaque
-stream key and RTMP/SRT URL. Exactly one enabled input is selected. Role records
-how the input was created; promoting a backup changes selection without
-rewriting its role.
+A pipeline starts with one primary input and holds at most four
+(`MAX_PIPELINE_INPUTS`; a fifth is `409`). Each backup has its own stream key
+and URLs. Exactly one enabled input is selected. `role` records how the input
+was created; promoting a backup changes selection, not role.
 
-An input's `kind` is `keyed` (the default: it waits for an external publisher)
-or `hlsPull`. A `hlsPull` input has no ingest listener; the engine fetches a
-remote live HLS origin instead. Its response carries `sourceUrl` and a
-`variantRule` of `highestBandwidth` (default) or `lowestBandwidth`, which picks
-the rendition from the origin's master playlist: the highest or lowest
-`BANDWIDTH` among the variants whose `CODECS` the ingest publishes (H.264 or
-HEVC video, AAC-LC audio), and among all variants when none declares such a
-set.
+`kind` is `keyed` (default: waits for a publisher) or `hlsPull` (the engine
+fetches a remote live HLS origin; no listener). A pull input has `sourceUrl`
+and a `variantRule` of `highestBandwidth` (default) or `lowestBandwidth`. The
+rule picks the master-playlist variant with the highest or lowest `BANDWIDTH`
+among those whose `CODECS` the ingest publishes (H.264 or HEVC video, AAC-LC
+audio), or among all variants when none declares such a set.
 
-Keyed create body:
-
-```json
-{ "label": "Venue encoder B" }
-```
-
-HLS pull create body:
+Keyed create: `{ "label": "Venue encoder B" }`. Patch:
+`{ "label": "Venue encoder B", "enabled": true }`. HLS pull create:
 
 ```json
 {
@@ -252,131 +336,105 @@ HLS pull create body:
 }
 ```
 
-Patch body:
+Validation:
 
-```json
-{ "label": "Venue encoder B", "enabled": true }
-```
+- `hlsPull` needs an absolute `http`/`https` `sourceUrl` of at most 2048
+  bytes, without a `user:password@` part.
+- `keyed` must not carry `sourceUrl` or `auth`.
+- An unknown `kind`, `variantRule` or `auth.kind` is `400`, not defaulted.
+- An empty `label` is `400`.
 
-An `hlsPull` input requires an absolute `http` or `https` `sourceUrl` no longer
-than 2048 bytes. A `keyed` input must not carry `sourceUrl` or `auth`. An
-unknown `kind`, `variantRule`, or `auth.kind` is rejected rather than defaulted.
+Changing an input's `kind` ends the session the old kind held (a keyed
+input's pusher is disconnected; a pull input's puller stops), so the new kind
+starts clean instead of being refused as `PublisherActive`.
 
 #### Pull credentials
 
-A remote origin behind a token or cookie needs an `auth` entry; everything in
-it is write-only, stored and used but **never** returned:
+`auth` is one tagged object. Its secrets are stored and used but never
+returned.
 
-- **Signed URL** — the token is already in the URL, so no `auth` entry is
-  needed.
-- **Signed cookies** — the fetcher carries the origin's cookie jar
-  automatically, so no `auth` entry is needed.
-- **Username and password** — `{ "kind": "basic", "username": "…",
-  "password": "…" }`. Sent as Basic auth; an origin that answers `401` with a
-  `WWW-Authenticate: Digest` challenge is answered with HTTP Digest
-  (RFC 7616: `MD5`, `MD5-sess`, `SHA-256`, `SHA-256-sess`, `qop=auth` or
-  none) from then on, as FFmpeg's HTTP client does. A `stale=true` challenge
-  is answered once more with the new nonce. A Digest challenge offering only
-  `auth-int`, `userhash` or another algorithm ends the pull with that reason.
-  The first request still carries Basic, so use `https` for an origin that
-  must not see the password in clear.
-- **Bearer token** — `{ "kind": "bearer", "token": "…" }`.
-- **Cookies** — `{ "kind": "cookies", "cookies": "…" }`, sent as one `Cookie`
-  header. This is the choice for an origin that hands the player a signed
-  cookie (CloudFront's `CloudFront-Policy` / `-Signature` / `-Key-Pair-Id`
-  triple, for instance): paste the whole string rather than typing a header
-  row. An origin that *sets* its own cookies needs nothing here — the jar
-  carries them.
-- **Custom headers** — `{ "kind": "headers", "headers": [ { "name": "…",
-  "value": "…" } ] }`, for referer or `X-*` tokens.
+| `auth.kind` | Payload | Limits |
+|---|---|---|
+| `none` | none (clears the credential) | must carry no payload |
+| `bearer` | `token` | 1–4096 bytes |
+| `cookies` | `cookies`, sent as one `Cookie` header | 1–4096 bytes, one line |
+| `basic` | `username`, `password` | 1–256 and 1–4096 bytes |
+| `headers` | `headers: [{ "name", "value" }]` | ≤ 8 entries; names ≤ 64, values ≤ 1024 bytes |
 
-`auth` is one tagged object. `bearer.token` is 1 to 4096 bytes; `cookies` is
-1 to 4096 bytes; `basic` `username` is 1 to 256 bytes and `password` 1 to
-4096 bytes; `headers` accepts at most 8 entries with names of at most 64
-bytes and values of at most 1024 bytes. Every one of these values must be a
-valid HTTP header value, which is the rule the fetcher's client applies: no
-CR, LF or NUL, and no other control or non-ASCII byte either. `headers` names
-must also be valid header names (`Host`, `Content-Length`,
-`Transfer-Encoding` and `Connection` are refused because they belong to the
-connection the fetcher opens), and a cookie string must be one line.
-A value this API accepts is one the puller can send; a value it refuses would
-otherwise be stored and then fail the pull on every attempt.
-`{ "kind": "none" }` clears the credential and must carry no payload.
+- Every value must be a valid HTTP header value: no CR, LF, NUL, other
+  control byte or non-ASCII byte. Header names must be valid, and `Host`,
+  `Content-Length`, `Transfer-Encoding` and `Connection` are refused.
+- `basic` is sent as Basic first. If the origin answers `401` with a
+  `WWW-Authenticate: Digest` challenge, the puller answers with HTTP Digest
+  (`MD5`, `MD5-sess`, `SHA-256`, `SHA-256-sess`; `qop=auth` or none) from then
+  on, and once more on `stale=true`. A challenge offering only `auth-int`,
+  `userhash` or another algorithm ends the pull with that reason
+  (`src/media/hls_pull/digest.rs`). Use `https` if the origin must not see
+  the password in the first request.
+- A signed URL or cookies the origin sets itself need no `auth`: the URL
+  carries the token and the fetcher keeps a cookie jar.
+- On patch, absent `auth` keeps the credential, `none` clears it, any other
+  variant replaces it. Disabling a pull input keeps `sourceUrl` and `auth`.
 
-On patch, an absent `auth` keeps the stored credential, so a request that does
-not mention it never clears it; `{ "kind": "none" }` clears it, and any other
-variant replaces it wholesale. Responses expose only `authKind`
-(`none`, `bearer`, `cookies`, `basic`, or `headers`) and `authUsername` — a
-username is not a secret, but a token, cookie string, password, or header
-value never is. Disabling a pull input keeps its stored `sourceUrl` and
-`auth`; `enabled` alone starts or stops its puller.
+`sourceUrl` is configuration and is returned in full, query included, so a
+signed URL's token is visible to any authenticated reader. Use an `auth` kind
+for anything that must stay write-only.
 
-Changing an input's `kind` ends the ingest session the old kind held: a keyed
-input's session belongs to a live push, and a pull input's to its puller, so a
-change disconnects the pusher (its encoder's connection is cancelled) and the
-new kind starts from a clean session. Without that, the new kind is refused as
-`PublisherActive` and backs off until the old publisher leaves on its own.
+#### Input responses
 
-`sourceUrl` is configuration, so a response returns it in full, query
-included: it is the value the operator typed and must be able to review. A
-signed URL's query is therefore visible to any authenticated reader. Use a
-credential choice (`bearer`, `cookies`, `headers`, or `basic`) for anything
-that must stay write-only, and note that a userinfo component
-(`https://user:password@…`) is refused in `sourceUrl` for that reason.
+Each input has `id`, `label`, `streamKey`, `role`, `kind`, `sourceUrl`,
+`variantRule`, `authKind`, `authUsername`, `enabled`, `selected`,
+`ingestUrls`, `previewUrl` and `runtime`. A keyed input has
+`sourceUrl: null`, `variantRule: "highestBandwidth"` and `authKind: "none"`.
 
-List and mutation responses expose each input's `id`, `label`, `streamKey`,
-`role`, `kind`, `sourceUrl`, `variantRule`, `authKind`, `authUsername`,
-`enabled`, `selected`, `ingestUrls`, `previewUrl`, and `runtime`. A keyed
-input's `ingestUrls` holds its `rtmp` and `srt` URLs and its `hls` push
-playlist URL (`http://HOST:PORT/ingest/hls/KEY/index.m3u8`, with the ingest
-host and the HTTP port: it assumes the listener is reached directly, so behind
-a TLS proxy or a path prefix the encoder needs the proxy's scheme, host and
-prefix instead), and `moq`: `moqt://HOST:PORT/KEY` with the MoQ ingest
-listener's UDP port while `RESTREAM_MOQ_INGEST_LISTEN` is set, else `null`
-(MoQ publishes authenticate the key under the `moq-publish` rate-limit
-scope); a pull input accepts no pushes, so its `ingestUrls` is
-`null`. `sourceUrl`, `variantRule`, `authKind`, and `authUsername` are always
-present (a keyed input has `sourceUrl: null`, `variantRule:
-"highestBandwidth"`, and `authKind: "none"`).
-Runtime includes `connected`, `forwardingState`, protocol, uptime, bytes,
-remote address, media metadata, and transport quality. A connected unselected
-input reports `forwardingState: "standby"`; a promoted input may briefly report
-`"awaitingKeyframe"` before becoming `"active"`.
+`ingestUrls` (`IngestUrls` in `src/application/runtime_state/inputs.rs`) is
+`null` for a pull input. For a keyed input:
 
-Promotion persists the selection and returns the normalized input plus
-`connected`, which is whether the target had a live session at request time.
-The request wakes the reconciler, which applies the switch first in its next
-pass (after any pass already running, and at most one reconcile interval
-after the previous pass): when the target is connected, the
-current writer is demoted and drained before the target replays its latest
-complete compressed GOP on its next packet arrival. If no complete GOP is
-cached, it waits for its next video keyframe. Promotion of an idle configured
-input changes selection and returns `connected: false`; its next publisher
-session becomes the selected source.
+| Field | Value |
+|---|---|
+| `rtmp` | `rtmp://HOST:RTMP_PORT/live/KEY` |
+| `srt` | `srt://HOST:SRT_PORT?streamid=publish:KEY` |
+| `hls` | `http://HOST:HTTP_PORT/ingest/hls/KEY/index.m3u8` |
+| `moq` | `https://HOST:MOQ_PORT/KEY` while `RESTREAM_MOQ_INGEST_LISTEN` is set, else `null` |
 
-Deleting an output or a pipeline removes the row and returns; the reconciler
-then stops the output's egress, or the pipeline's egresses, ingest sessions,
-file ingests, stages and HLS runtime. A recirculation output that still
-targets a deleted pipeline recreates that target's runtime on each attempt;
-every pass removes it again, so the output retries until its retries are
-exhausted.
+`HOST` is the `ingestHost` setting. The `hls` URL assumes the listener is
+reached directly; behind a TLS proxy or path prefix, use the proxy's scheme,
+host and prefix. MoQ publishes authenticate the key under the `moq-publish`
+rate-limit scope. `previewUrl` is `/hls/inputs/:inputId/master.m3u8`.
+
+`runtime` holds `connected`, `forwardingState`, protocol, uptime, bytes,
+remote address, media metadata and transport quality. A connected unselected
+input reports `forwardingState: "standby"`; a promoted one may report
+`"awaitingKeyframe"` briefly before `"active"`.
+
+#### Promotion
+
+Promotion persists the selection and returns the input plus `connected`
+(whether the target had a live session at request time). The reconciler
+applies the switch first in its next output pass. If the target is
+connected, the current writer is demoted and drained, then the target replays
+its latest complete compressed GOP on its next packet, or waits for its next
+keyframe if no complete GOP is cached. Promoting an idle input returns
+`connected: false`; its next publisher becomes the source.
 
 ## Outputs
 
 | Method | Route | Purpose |
 |---|---|---|
-| `POST` | `/api/v1/pipelines/:pipelineId/outputs` | Create an output |
+| `POST` | `/api/v1/pipelines/:pipelineId/outputs` | Create an output, stopped (`201`) |
 | `PATCH` | `/api/v1/pipelines/:pipelineId/outputs/:outputId` | Update an output |
 | `DELETE` | `/api/v1/pipelines/:pipelineId/outputs/:outputId` | Delete an output |
 | `POST` | `/api/v1/pipelines/:pipelineId/outputs/:outputId/start` | Set `desiredState=running` |
 | `POST` | `/api/v1/pipelines/:pipelineId/outputs/:outputId/stop` | Set `desiredState=stopped` |
+| `GET` | `/api/v1/pipelines/:pipelineId/outputs/:outputId/status` | Live or last egress status |
 
-Create/update body:
+Create and update body (unknown fields are `400`):
 
 ```json
 {
   "name": "Primary CDN",
   "url": "rtmp://destination.example/live/key",
+  "monitoringUrl": "https://www.youtube.com/watch?v=…",
   "config": {
     "video": { "mode": "preset", "preset": "1080p", "codec": "auto" },
     "audio": { "mode": "selectTracks", "tracks": [0] },
@@ -385,320 +443,281 @@ Create/update body:
 }
 ```
 
-`config` is the output contract. Legacy top-level `encoding` is not accepted on
-create/update. Output responses return the same typed object, and the runtime
-derives any internal stage labels from it server-side.
+- Create and update return `{ "message", "output" }`; start and stop return
+  `{ "message", "desiredState", "output" }`; delete returns
+  `{ "message": "Output deleted" }` or `404`.
+- Updating the URL or `config` of an output that wants to run
+  (`desiredState: running`, retries not exhausted) is `409`. Stop it first,
+  or edit it once its retries are exhausted.
+- `monitoringUrl` is optional (`http`, `https` or `srt`); blank means none.
+- `config.video.mode`: `source` or `preset` (built-in presets);
+  `video.codec`: `auto`, `h264`, `h265`. `custom` is `400`: custom FFmpeg
+  arguments are not applied.
+- `config.audio.mode`: `all`, `selectTracks`, `downmix` or `remap`.
+- `config.protocol` `{ "type": "rtmp", "mode": "legacy" | "enhanced" }` is
+  valid only for `rtmp://`/`rtmps://` URLs; omitted means legacy. Enhanced
+  RTMP advertises `avc1`, `hvc1` and `mp4a` and sends HEVC as Enhanced FLV
+  `hvc1`. Legacy RTMP converts HEVC to H.264 and resolves `codec: auto` to
+  H.264.
+- Explicit H.265 is `400` for legacy RTMP and HLS outputs. Enhanced RTMP,
+  SRT and MoQ carry H.264 and H.265; sink and pipeline outputs follow the
+  source. A preset with `codec: auto` encodes H.264 for legacy RTMP, HLS and
+  MoQ (`ProtocolCapabilities` in `src/domain/output_spec/config.rs`).
+- A `pipeline://` output must use source video and passthrough audio; its
+  target and cycle freedom are checked before it is saved.
 
-The reconciler starts and stops native egress tasks from
-`desiredState`, which is only the operator's intent (`running` or
-`stopped`). When an output exhausts its restart budget
-(`RESTREAM_OUTPUT_MAX_RETRIES`), `desiredState` stays `running` and
-`retriesExhausted` becomes `true`: the reconciler stops restarting it, its URL
-and config can be edited, and the next start or stop clears the flag.
+URL schemes (`OutputUrlScheme` in `src/domain/output_spec/protocol.rs`); any
+other scheme is `400`:
 
-Create, update, start, and stop responses include a normalized `output` object
-plus the mutation message so clients can patch local output config state without
-an immediate follow-up settings fetch.
+| Scheme | Egress | `protocol` label |
+|---|---|---|
+| `rtmp://` | RTMP; URL must be `rtmp://host[:port]/app/stream-key` | `rtmp` |
+| `rtmps://` | RTMP over TLS; same URL rule | `rtmp` |
+| `srt://` | SRT, MPEG-TS | `srt` |
+| `hls://` | Local in-memory HLS segmenter | `hls` |
+| `http://`, `https://` | HLS HTTP PUT upload | `hls` |
+| `moqt://` | MoQ publish to a relay (moq-lite) | `moq` |
+| `sink://` | Fabric sink: counts and discards media | `sink` |
+| `pipeline://` | In-process recirculation into another pipeline's input | `pipeline` |
 
-Output config accepts `source`, built-in video presets, `video.codec`
-(`auto`, `h264`, `h265`), and typed audio-routing shapes (`all`,
-`selectTracks`, `downmix`, `remap`). `custom` output video mode is rejected
-with `400 Bad Request` because custom FFmpeg arguments are persisted for future
-use but are not applied by the runtime yet.
+- RTMP keys: when the query holds a `/`, the key is what follows the last
+  `/` and the app keeps the query
+  (`rtmp://host/live2?backup=1/stream-key`). An RTMP output stored without a
+  key fails at every start until its retries are exhausted.
+- `moqt://host[:port][/path][?broadcast=&ca=&insecure=]` (`parse_moq_url` in
+  `src/media/moq/egress/url.rs`): the port defaults to 443. `broadcast` names
+  the broadcast (default: the pipeline id), `ca` names a PEM file of extra
+  trusted CAs, `insecure=1|true|0|false` skips certificate checks. Other
+  query pairs (for example `?jwt=`) go to the relay in the session path. A
+  user name or password in the URL, an empty `broadcast` or `ca`, or another
+  `insecure` value is `400`.
+- HTTP/HTTPS HLS upload shares one local segmenter per pipeline. Each output
+  starts at the newest segment, PUTs each new segment, then PUTs a playlist
+  of the last three acknowledged segments (media sequence from 0 per
+  attempt). On stop it PUTs a final playlist ending in `#EXT-X-ENDLIST`.
+  The rules follow the YouTube HLS ingestion guide and the Akamai MSL HTTP
+  ingest requirements (`src/media/hls/upload_policy.rs` module doc).
 
-For RTMP and RTMPS outputs, `config.protocol` may be
-`{ "type": "rtmp", "mode": "legacy" | "enhanced" }` and defaults to legacy
-RTMP when omitted. Enhanced RTMP advertises `avc1`, `hvc1`, and `mp4a`
-capabilities during connect; H.264 outputs continue using AVC payloads, while
-HEVC outputs use the Enhanced FLV `hvc1` packet format. Legacy RTMP converts
-HEVC source video to H.264 before publish and resolves preset `codec:auto` to
-H.264. Explicit H.265 is rejected for legacy RTMP and HLS outputs; Enhanced
-RTMP and SRT support H.264 and H.265.
+### Output lifecycle
 
-Deleting a running output cancels and unregisters its active egress before the
-database row is removed.
+`desiredState` is only intent (`running` or `stopped`). The reconciler turns
+it into egress tasks. How a create and start become a running egress, and how
+a failing one retries:
 
-URL behavior:
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant H as outputs handlers
+    participant DB as SQLite outputs
+    participant R as Reconciler::output_pass
+    participant E as EgressReconciler
+    participant T as EgressTask
+    C->>H: POST …/outputs
+    H->>DB: create_output (desired stopped)
+    H-->>C: 201 {message, output}
+    C->>H: POST …/outputs/:id/start
+    H->>DB: request_start (desired running, retries_exhausted = 0)
+    H-->>C: 200 {desiredState: running}
+    Note over H,R: wake_reconciler_after_mutation → ReconcileRequests::wake
+    R->>E: reconcile(outputs)
+    E->>E: decide_output_start_action
+    alt no ingest / probe pending
+        E-->>R: skip (probe pending re-checks next interval)
+    else StartNow
+        E->>T: start → tokio::spawn(EgressTask::run)
+    end
+    T-->>E: attempt fails: last_failed = (now, retries)
+    Note over T,R: the egress ending emits EgressStopped, which wakes a pass
+    R->>E: reconcile(outputs)
+    alt retries below RESTREAM_OUTPUT_MAX_RETRIES
+        E-->>R: WaitRetry → wake_at(backoff end)
+        R->>E: reconcile at deadline → StartNow
+    else retries spent
+        E->>DB: mark_output_retries_exhausted
+    end
+```
 
-| URL prefix | Egress |
-|---|---|
-| `rtmp://` | RTMP |
-| `rtmps://` | RTMPS with TLS before the RTMP handshake |
-| `srt://` | SRT/MPEG-TS |
-| `hls://` | Local in-memory HLS segmenter |
-| `sink://` | Fabric sink output that discards media after egress accounting |
-| `pipeline://` | In-process pipeline recirculation; candidate topology and target input are validated before the output starts |
-| `http://` | HLS HTTP PUT upload |
-| `https://` | HLS HTTP PUT upload |
+- Output passes run when woken and as a backstop every 10 reconcile
+  intervals. Wakes: a successful mutating request; the engine events
+  `IngestConnected`, `IngestDisconnected` (again when its grace ends),
+  `IngestProbed` and `EgressStopped` (`request_pass_for_event`); and retry
+  deadlines. Passes are at least one interval apart
+  (`RESTREAM_RECONCILE_INTERVAL_MS`, default 1000 ms).
+- An attempt that made progress before failing resets its count to 1
+  (`next_output_retry_count`).
+- Retries exhausted: `desiredState` stays `running` and `retriesExhausted`
+  becomes `true`. Restarts stop; the URL and config can be edited; the next
+  start or stop clears the flag.
+- Stop sets `desiredState: stopped`; the next pass unregisters the egress.
+  Losing the ingest also stops a running egress; it starts again when an
+  ingest returns.
+- Delete removes the row; the next pass stops the egress.
+- The dashboard updates start/stop buttons optimistically and lets the next
+  runtime refresh confirm.
 
-Any other prefix is rejected during validation with a `400 Bad Request`.
-An `rtmp://` or `rtmps://` URL must name an app and a stream key
-(`rtmp://host[:port]/app/stream-key`); one without is rejected with `400`.
-When the query holds a `/`, the key is what follows the last `/` and the app
-keeps the query (YouTube backup: `rtmp://host/live2?backup=1/stream-key`).
-An output saved earlier without a stream key now fails at start and retries
-until `retriesExhausted`; any edit to it returns `400` until the URL is fixed.
-Pipeline recirculation URLs are parsed and checked for cycles and target-input
-ownership before the output can start.
-HTTP/HTTPS HLS upload uses one shared local segmenter per pipeline. Each output
-starts at the newest segment, PUTs each new segment, then PUTs a playlist of the
-last three acknowledged segments (media sequence from 0 per output attempt),
-and on stop PUTs a final playlist ending in `#EXT-X-ENDLIST`. The rules follow
-the YouTube HLS ingestion guide and Akamai MSL HTTP ingest requirements; see
-[observability](observability.md) for how failures are reported.
+### `GET /api/v1/pipelines/:pipelineId/outputs/:outputId/status`
 
-## Process Logs
+Live egress status while the egress runs. After it ends, the last classified
+snapshot stays: `status`, `phase`, `lastError`, `failurePhase`, `endedAt` and
+retry fields (`retrying`, `nextRetryAt`). `recentFailureCount` counts
+failures inside the flap window, and `flapping` turns `true` after repeated
+failures even if the output is running again. Returns `404`
+`{"error": "output not active"}` when there is no active or recent state.
+
+## Process logs
 
 | Method | Route | Response |
 |---|---|---|
 | `GET` | `/api/v1/logs` | `{ logs, total, hasMore }` |
-| `GET` | `/api/v1/logs/stream` | SSE stream (`event: log` frames) |
+| `GET` | `/api/v1/logs/stream` | SSE stream of `event: log` frames |
 
-All process log entries are stored in the `app_logs` SQLite table and served
-through these two endpoints. The frontend history UI calls `/api/v1/logs` with
-`pipeline_id`/`output_id` filters instead of relying on the pipeline-scoped
-history endpoints.
+Both read the `app_logs` SQLite table (`src/api/logs.rs`). Field semantics
+and the logging pipeline are in [Observability](observability.md#logging).
 
 ### `GET /api/v1/logs`
-
-Query parameters:
 
 | Parameter | Default | Description |
 |---|---|---|
 | `level` | `info` | Minimum level: `error`, `warn`, `info`, `debug` |
-| `since` | — | RFC3339 lower bound (inclusive) |
-| `until` | — | RFC3339 upper bound (exclusive) |
-| `target` | — | Module prefix filter (`restream::media::srt`) |
-| `pipeline_id` | — | Restrict to a single pipeline |
-| `output_id` | — | Restrict to a single output (requires `pipeline_id`) |
-| `event_class` | — | `lifecycle` to return only lifecycle transition events |
-| `prefix` | — | Comma-separated message prefix filter (`stderr,exit`) |
-| `limit` | `200` | 1–1000 |
-| `order` | `desc` | `asc` or `desc` on `ts` for ordinary list snapshots |
+| `since` | — | RFC 3339 lower bound (inclusive) |
+| `until` | — | RFC 3339 upper bound (exclusive) |
+| `target` | — | Module prefix (`restream::media::srt`) |
+| `scope` | — | `restream` (no pipeline/output), `pipeline` (pipeline, no output) or `output` |
+| `pipeline_id` | — | One pipeline |
+| `output_id` | — | One output (with `pipeline_id`) |
+| `event_class` | — | `lifecycle` returns only lifecycle events |
+| `prefix` | — | Comma-separated message prefixes (`stderr,exit`) |
+| `after_id` | — | Rows with a larger id, ordered by id ascending |
+| `limit` | `200` | Clamped to 1–1000 |
+| `order` | `desc` | `asc` or `desc` on `ts` |
 
-Each log entry in the response includes `id`, `ts`, `level`, `target`,
-`message`, `fields` (JSON), `pipelineId`, `outputId`, `eventType`.
-Lifecycle-aware clients also receive `eventClass` (for example, `lifecycle`).
+Each entry has `id`, `ts`, `level`, `target`, `message`, `fields` (JSON),
+`pipelineId`, `outputId`, `eventType` and `eventClass`.
 
 ### `GET /api/v1/logs/stream`
 
-SSE live tail. Accepts the same core filter parameters as `GET /api/v1/logs`,
-plus `include_restream=true` when a `pipeline_id` subscription should also
-receive restream-wide process lifecycle events on the same stream.
-On connect, the handler backfills entries newer than the `Last-Event-ID`
-header (or `?last_event_id=`) from the database, then streams new entries
-from the broadcast channel. Live entries are broadcast only after persistence,
-so their positive SSE IDs are stable and reconnect backfill preserves
-`eventType` and `eventClass`. Reconnect backfill pages are ordered by ascending
-persisted ID to match the resume cursor and continue until the gap is closed
-rather than truncating after one page. A `": ping"` comment is sent every 20 seconds.
-Lagging receivers are closed; the browser reconnects automatically using
-`Last-Event-ID`.
-The dashboard overview activity rail uses an initial `GET /api/v1/logs` snapshot
-plus this SSE endpoint filtered with `scope=restream` for live restream-wide
-activity updates. Overview also reuses that same restream-scoped stream to
-wake `/api/v1/dashboard/runtime` summary refreshes on lifecycle events, avoiding a second
-lifecycle-only SSE connection in that mode.
-Pipeline, inspect, control-room, and publisher-health runtime surfaces
-subscribe to this SSE endpoint with `event_class=lifecycle` so they refresh
-immediately on process lifecycle transitions instead of waiting for the next
-periodic poll.
-Focused pipeline and inspect views now add `pipeline_id=<selected>` plus
-`include_restream=true` on that lifecycle SSE feed so the browser receives only
-the selected pipeline's lifecycle events alongside restream-wide process
-transitions, instead of every sibling pipeline event.
-Settings and media also keep a narrower restream-scoped `event_class=lifecycle`
-feed open so the global Rust-process indicator can react to
-shutdown/fault/ready events without waking the heavier runtime health polls in
-those modes. Their successful `/metrics/system` refreshes also mark the Rust
-process as reachable immediately instead of leaving the indicator on
-"Connecting" until the next lifecycle event.
-The output-history and pipeline-history "Live" views use the same SSE endpoint
-with `pipeline_id`, `output_id`, and `event_class` filters plus `Last-Event-ID`
-resume cursors instead of periodic history re-polls.
-Status mode reuses its own `scope=restream` stream over the initial snapshot so
-restream process activity can update live without repeated log GETs or a second
-lifecycle-only SSE connection.
-Hidden dashboard tabs now close these SSE feeds and resume from the last seen
-event id when visible again, falling back to slower snapshot polling only while
-the tab is backgrounded.
+- Takes `level`, `target`, `scope`, `pipeline_id`, `output_id`,
+  `event_class` and `prefix`, plus `include_restream=true`: with a
+  `pipeline_id` and no `output_id`, also deliver restream-wide events (no
+  pipeline, no output).
+- On connect it backfills rows newer than `Last-Event-ID` (or
+  `?last_event_id=`) from SQLite in id order, page by page (200 rows) until
+  the gap is closed, then streams live rows from the broadcast channel.
+- Live rows are broadcast after they are stored, so their SSE ids are stable
+  database ids.
+- A `: ping` comment is sent every 20 s. A lagging receiver is closed; the
+  browser reconnects with `Last-Event-ID`.
 
-## Output Status
+## Probe, graph, and diagnostics
 
-Dashboard output start/stop controls update their button/card state
-optimistically as soon as the API request is accepted, then let the next
-runtime refresh confirm the actual engine state. That keeps control feedback
-immediate without requiring a dedicated per-output poller.
-
-### `GET /api/v1/pipelines/:pipelineId/outputs/:outputId/status`
-
-Returns live egress telemetry for a single output. While active, this is the
-current runtime state. After teardown/cleanup, the endpoint preserves the most
-recent classified output snapshot, including `status`, `phase`, `lastError`,
-`failurePhase`, `endedAt`, and active retry-backoff fields such as
-`retrying`/`nextRetryAt`, so failure cleanup does not erase operator context.
-Returns `404` only when the output has no active or recent runtime state.
-
-Recovered outputs also expose short-lived downstream instability signals:
-`recentFailureCount` tracks recent egress failures still inside the flap
-window, and `flapping` becomes `true` after repeated sink failures even if the
-output is currently back to `status=running`.
-
-`GET /api/v1/engine/health` carries the complementary ingest-side instability
-signal. In addition to `disconnectGraceActive` / `disconnectGraceRemainingMs`,
-the input snapshot now includes `recentDisconnectCount` and `flapping` so
-clients can distinguish a single recent drop from repeated reconnect churn.
-
-## Probe, Graph, and Diagnostics
+| Method | Route | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/pipelines/:pipelineId/probe` | Active ingest metadata |
+| `GET` | `/api/v1/pipelines/:pipelineId/graph` | Runtime and desired processing graph |
+| `GET` | `/api/v1/pipelines/:pipelineId/diagnostics/context` | One troubleshooting bundle |
+| `POST` | `/api/v1/pipelines/:pipelineId/diagnostics/run` | Run the active diagnostic checks |
+| `POST` | `/api/v1/pipelines/:pipelineId/moq-token` | Mint a MoQ viewer token |
 
 ### `GET /api/v1/pipelines/:pipelineId/probe`
 
-Returns active native ingest metadata, bitrate, GOP observations, and ingest
-identity. Video and audio metadata include MPEG-TS `pid`, `language`, and
-`title` when the source descriptors provide them. `audioTracks` lists every
-active audio track; `audio` remains the primary/first track for older clients.
-Returns `404` without an active ingest.
+Active ingest metadata: bitrate, GOP observations, ingest identity, `video`,
+`audio` and `audioTracks` (every active audio track; `audio` is the first).
+Track metadata includes MPEG-TS `pid`, `language` and `title` when the
+source descriptors carry them. `404` without an active ingest.
 
 ### `GET /api/v1/pipelines/:pipelineId/graph`
 
-Returns the current processing DAG: ingest, source ring, transcoder stages,
-egresses, HLS, and recording nodes where present. Every `egress` node carries
-`outputId`, whether or not its egress runs; its `details` are present only
-while one runs.
+The runtime processing graph (`nodes`, `edges`: ingest, demux, source ring,
+stages, egresses, HLS, recording) plus `desiredGraph`, `desiredOutputGraphs`
+(the planner's view for the live ingest codec) and `runtimeGraph` (the same
+nodes and edges). `404` for an unknown pipeline.
 
-The source ring node's `details.readers` lists the readers registered on the
-ring (HLS segmenters, recordings, RTMP playback clients, and stage inputs such
-as transcoders and the SRT TS muxer) with their lag and overflow counts.
-Outputs that run on egress-fabric shards (network, sink and pipeline
-outputs) read the ring in place without registering, so a pipeline whose
-only consumers are such outputs shows `readers: []`; HLS and HLS PUT outputs
-appear through their segmenter. Their edges in the graph show what they
-read; their progress is per output (`flow` in `GET /api/v1/state`, `egresses`
-in pipeline telemetry). The same holds for `sourceRing.readers` in pipeline
-telemetry, so a ring-overflow sum over it does not cover fabric outputs.
+- Every `egress` node has `outputId`; its `details` exist only while the
+  egress runs.
+- The source ring node's `details.readers` lists readers registered on the
+  ring (HLS segmenters, recordings, RTMP playback, transcoder and SRT TS muxer
+  inputs) with lag and overflow counts. Fabric outputs read the ring in place
+  without registering, so a pipeline whose only consumers are fabric outputs
+  shows `readers: []`. HLS and HLS PUT outputs appear through their
+  segmenter. Per-output progress is `flow` in `GET /api/v1/state` and
+  `egresses` in pipeline telemetry.
+
+### `GET /api/v1/pipelines/:pipelineId/diagnostics/context`
+
+Returns `{ generatedAt, pipelineId, health, graph: { desired,
+desiredOutputs, runtime }, alerts, recentEvents, recentLogs,
+backendStderrTail }`: the immediate health snapshot, the pipeline's alerts,
+the last 100 events and log rows, and the last 20 FFmpeg stderr rows. It runs
+no active probes. `404` for an unknown pipeline.
 
 ### `POST /api/v1/pipelines/:pipelineId/diagnostics/run`
 
-Returns one JSON report with `protocol`, `totalDurationMs`, and ordered `checks`.
-The server infers the protocol from the active ingest; the POST has no request
-body. Returns `404` without an active ingest and `429` when another run is
-active for the pipeline.
-
-RTMP and SRT inputs run the transport-oriented checks documented in
-[Observability](observability.md). File inputs switch to file-aware checks:
-source-file presence and analysis, file-ingest runtime state, and preview /
-recording readiness.
+No body. Returns one report with `protocol`, `totalDurationMs` and ordered
+`checks`. The check set follows the active ingest protocol; see
+[Observability](observability.md#diagnostic-checks). `404` without an active
+ingest, `429` while another run for the pipeline is in progress. Unauthorized
+callers get a JSON `401`.
 
 ### `POST /api/v1/pipelines/:pipelineId/moq-token`
 
 Mints a viewer token for the pipeline's broadcast on the
-[MoQ origin](media-pipeline.md#moq-origin). The POST has no request body.
-Returns `{token, url, broadcast, expiresAt, certificateSha256}`: `url` is the
-MoQ listener's WebTransport address (`https://HOST:PORT/?token=…`),
-`broadcast` is the pipeline id, and `expiresAt` (RFC 3339) is when the token
-stops admitting new sessions, 60 seconds after minting; a session already
-admitted keeps playing. `certificateSha256` is the hex SHA-256 of the
-listener's leaf certificate as read at startup (`null` if unreadable); a
-browser pins it (WebTransport `serverCertificateHashes`) only when normal
-certificate checks fail, which works for a self-signed certificate valid for
-at most 14 days. A token admits only its own pipeline and is signed with a key
-generated at process start, so a restart invalidates outstanding tokens.
-Returns `404` for an unknown pipeline and `409` when the MoQ listener is off.
+[MoQ origin](media-pipeline.md#moq-origin). No body. Returns
+`{ token, url, broadcast, expiresAt, certificateSha256 }`:
 
-## Agent Plane
+- `url`: the MoQ listener's WebTransport address,
+  `https://HOST:MOQ_PORT/?token=…`.
+- `broadcast`: the pipeline id.
+- `expiresAt` (RFC 3339): 60 s after minting. The token admits new sessions
+  until then; an admitted session keeps playing.
+- `certificateSha256`: hex SHA-256 of the listener's leaf certificate, read
+  at startup (`null` if unreadable). A browser pins it
+  (`serverCertificateHashes`) when normal certificate checks fail.
 
-The agent read/planning plane (`agent-plane`) and its approval-gated execution
-(`agent-execution`) are Cargo features in the default build; they back the
-control room's Change Studio and the MCP sidecar. A build with
-`--no-default-features` compiles them out and returns `404` from
-`/api/v1/agent/*` routes with `compiledIn: false`.
+A token admits only its own pipeline. The signing key is generated at process
+start, so a restart invalidates outstanding tokens. `404` for an unknown
+pipeline, `409` when the MoQ listener is off.
 
-The read/planning routes are authenticated, read-only, and do not mutate
-pipeline, output, or runtime state.
+## Agent plane
 
-The agent capability route catalog intentionally lists only agent-plane routes.
-Core operator APIs may expose raw operator data such as target URLs; agents
-should use `/api/v1/agent/context` and investigation responses for redacted
-state.
+The agent read/planning plane (`agent-plane`) and approval-gated execution
+(`agent-execution`) are Cargo features; the default build has both
+(`default = ["agent-execution"]`, which enables `agent-plane`). Without a
+feature, its routes answer an authenticated `404`
+`{"error", "feature", "compiledIn": false}`. The flow, operation states,
+approval rules and verification gates are in
+[Agent plane integration](agent-plane-integration.md).
 
 | Method | Route | Purpose |
 |---|---|---|
-| `GET` | `/api/v1/agent/capabilities` | Discover compiled-in read and planning tools |
-| `GET` | `/api/v1/agent/context` | Return one redacted read-only state bundle for agent reasoning |
-| `POST` | `/api/v1/agent/investigations` | Bundle health, graph, telemetry, alerts, and events for investigation workflows |
-| `POST` | `/api/v1/agent/plans` | Convert intent plus structured proposed changes into a draft plan |
-| `POST` | `/api/v1/agent/plans/validate` | Return only validation results for a draft plan |
-| `POST` | `/api/v1/agent/graph-diff-preview` | Return graph/impact preview for a draft plan |
+| `GET` | `/api/v1/agent/capabilities` | Compiled-in tools and route catalog |
+| `GET` | `/api/v1/agent/context` | One redacted read-only state bundle |
+| `POST` | `/api/v1/agent/investigations` | Health, graph, telemetry, alerts and events for an investigation |
+| `POST` | `/api/v1/agent/plans` | Draft plan from intent plus proposed changes |
+| `POST` | `/api/v1/agent/plans/validate` | Only the validation result of a draft plan |
+| `POST` | `/api/v1/agent/graph-diff-preview` | Graph and impact preview of a draft plan |
+| `POST` | `/api/v1/agent/operations` | Create an operation (256 KiB body limit) |
+| `GET` | `/api/v1/agent/operations/:operationId` | Status, audit log, progress, results |
+| `POST` | `/api/v1/agent/operations/:operationId/approve` | Record approval |
+| `POST` | `/api/v1/agent/operations/:operationId/apply` | Apply an approved operation |
+| `POST` | `/api/v1/agent/operations/:operationId/verify` | Verify an applied operation |
+| `POST` | `/api/v1/agent/verify` | Verify by body `{ "operationId": "op_…" }` |
 
-With `agent-execution` (default), the API also exposes
-approval-gated operation routes. These routes are still authenticated, and
-operation responses are redacted before they are returned.
+The read and planning routes mutate nothing. The capability catalog lists only
+agent routes; agents should read state through `context` and investigations,
+which redact it. Raw stream keys and output URLs never appear there: they
+become SHA-256 fingerprints plus scheme/host summaries.
 
-Approval is a confirmation step, not separation of duties: the dashboard has
-one principal, so the same session (or an MCP sidecar given its cookie or
-bearer token) can create, approve and apply an operation. The record keeps
-the authenticated approver (`approval.approvedBy`, always the dashboard
-session) apart from the request's unverified `approvedBy`
-(`approval.claimedBy`). The engine keeps at most 1024 operations in memory
-(finished ones are dropped first, an applying one last; all are lost on
-restart), and creating one accepts a body of at most 256 KiB.
+Context includes:
 
-| Method | Route | Purpose |
-|---|---|---|
-| `POST` | `/api/v1/agent/operations` | Create an operation object from an intent, structured changes, and optional idempotency key |
-| `GET` | `/api/v1/agent/operations/:operation_id` | Read operation status, audit log, progress, execution result, and verification result |
-| `POST` | `/api/v1/agent/operations/:operation_id/approve` | Record explicit approval before mutation is allowed |
-| `POST` | `/api/v1/agent/operations/:operation_id/apply` | Apply approved output add/update/remove/start/stop changes through the core DB/runtime primitives |
-| `POST` | `/api/v1/agent/operations/:operation_id/verify` | Judge the applied change against four fixed gates; report graph convergence and the alert delta |
-| `POST` | `/api/v1/agent/verify` | Verify by body: `{ "operationId": "op_..." }` |
-
-Without `agent-execution`, these operation routes return an authenticated `404`
-with `feature: "agent-execution"` and `compiledIn: false`. With it, an unknown
-operation id (operations live in memory, so a restart or the 1024-record limit
-forgets them) answers every operation route with `404`
-`{"code": "operationNotFound", "error": "Operation not found"}`. A refused
-apply answers `400` with the failed operation record: its `executionResult` is
-`{"success": false, "error": "..."}`, and changes before the refused one stay
-applied.
-
-A plan's `graphPreview.topology` is the request pipeline's topology before
-and after the change: outputs that want running (desired `running`, retries
-not exhausted) grouped by the stage each one reads and its protocol
-(`before`/`after` rows of `{stage, protocol, outputs}`), with the stages the
-change starts (`addedStages`) and those no output reads afterwards
-(`retiredStages`). It is planned with the same planner as the reconciler,
-for the live ingest's video codec (`ingestCodec`, `null` without a live
-ingest: no codec bridge is planned). Changes for another pipeline are outside
-it; a request without `pipelineId` has `topology: null`.
-
-Verification (`verificationResult`) is decided by four fixed `gates`, each
-`{gate, passed, detail}`; the operation is `verified` only when all pass:
-
-| Gate | Passes when |
-|---|---|
-| `desiredState` | every requested change reached its state (the per-change `checks`) |
-| `outputsRunning` | every output the change set running is running (outputs it did not touch are not judged; a change that starts nothing passes) |
-| `newCriticalAlerts` | no critical alert on the changed pipelines is open that was not open as the apply started (`preApplyCriticalAlertIds`; by id, so one clearing does not hide a new one; other pipelines and engine-wide alerts are not judged) |
-| `capacityState` | the change did not take the hottest service center on the calibration priors from below the safe utilization (0.8) to at or above it (`preApplyProjectedUtilization` against now; a host already past it passes, so a change that sheds load can verify) |
-
-`graphConvergence` and `incidentDelta` (all alerts) are reported, not judged.
-
-Context responses include:
-
-- route and lightweight schema metadata for agent clients
-- build/runtime status, OS basics, native-library versions, and feature flags
-- redacted pipelines, outputs, ingests, jobs, transcode profiles, and settings
-- current desired-vs-actual summaries for inputs, outputs, recording, and HLS
-- health, resource maps, engine telemetry, per-pipeline telemetry, processing
-  graphs, alerts, and recent lifecycle events
-- media inventory, storage summary, dependency summaries, and passive
-  diagnostics findings plus active diagnostics route metadata
-- redaction metadata describing which fields were removed
-
-Raw stream keys and output URLs are never returned by this endpoint. They are
-replaced with stable SHA-256 fingerprints plus URL scheme/host summaries.
-The context endpoint does not open active diagnostics probes; agents can use the
-advertised diagnostics run route when an explicit active report is needed.
+- route and schema metadata for agent clients;
+- build and runtime status, OS basics, native-library versions, features;
+- redacted pipelines, outputs, ingests, jobs, transcode profiles, settings;
+- desired-vs-actual summaries for inputs, outputs, recording and HLS;
+- health, resource map, engine and pipeline telemetry, graphs, alerts,
+  recent lifecycle events;
+- media inventory, storage summary, dependency summaries, passive
+  diagnostics findings and the active diagnostics route;
+- redaction metadata naming the removed fields.
 
 Plan request:
 
@@ -720,6 +739,10 @@ Plan request:
 }
 ```
 
+Plan responses include `planId`, validation errors and warnings, a static
+graph preview (`graphPreview.topology`, `null` without `pipelineId`), impact
+notes and `executionEnabled` (`true` only with `agent-execution`).
+
 Operation create request:
 
 ```json
@@ -737,10 +760,7 @@ Operation create request:
       "kind": "addOutput",
       "name": "Primary CDN",
       "url": "rtmp://cdn.example/live/key",
-      "config": {
-        "video": { "mode": "source" },
-        "audio": { "mode": "all" }
-      },
+      "config": { "video": { "mode": "source" }, "audio": { "mode": "all" } },
       "desiredState": "stopped"
     }
   ]
@@ -748,152 +768,160 @@ Operation create request:
 ```
 
 Operation records include `operationId`, `status`, `approval`, `request`,
-`plan`, `proposedPlanHash`, `incidentId`, `incidentLinks`, `affectedObjects`,
-`stateTransitions`,
-`progressSnapshots`, `auditLog`, `executionResult`, and `verificationResult`.
-`apply` is rejected until approval is recorded.
+`plan`, `proposedPlanHash`, `incidentId`, `incidentLinks`,
+`affectedObjects`, `stateTransitions`, `progressSnapshots`, `auditLog`,
+`executionResult` and `verificationResult`. Responses are redacted.
 
-Plan responses include `planId`, validation errors/warnings, static graph
-preview, and impact notes. `executionEnabled` is `true` only when
-`agent-execution` is compiled in.
-
-The current run contains nine checks; see [Observability](observability.md).
+- Apply before approval is refused. Approval is a confirmation step, not
+  separation of duties: one dashboard principal can create, approve and
+  apply. `approval.approvedBy` is the authenticated session;
+  `approval.claimedBy` is the request's unverified `approvedBy`.
+- Operations live in memory: at most 1024, lost on restart. An unknown id
+  answers every operation route with `404`
+  `{"code": "operationNotFound", "error": "Operation not found"}`.
+- A refused apply is `400` with the failed record; `executionResult` is
+  `{"success": false, "error"}`, and changes before the refused one stay
+  applied.
+- `verificationResult` has four `gates` (`desiredState`, `outputsRunning`,
+  `newCriticalAlerts`, `capacityState`), each `{ gate, passed, detail }`,
+  plus `checks`, `graphConvergence` and `incidentDelta` (reported, not
+  judged). See
+  [verification gates](agent-plane-integration.md#verification-gates).
 
 ## Recording
 
 | Method | Route | Purpose |
 |---|---|---|
-| `POST` | `/api/v1/pipelines/:pipelineId/recording/start` | Persist enabled state and start immediately if ingest is active |
+| `POST` | `/api/v1/pipelines/:pipelineId/recording/start` | Persist enabled and start now if an ingest is live |
 | `POST` | `/api/v1/pipelines/:pipelineId/recording/stop` | Disable and cancel recording |
 
-Response:
+Both return `{ "enabled": bool, "active": bool }`.
 
-```json
-{ "enabled": true, "active": true }
-```
+- The recorder writes raw MPEG-TS into the media directory
+  (`RingBuffer → TsMuxer → MemoryQueue → file writer`, `src/media/recording`).
+- A recording shorter than 5 s is deleted (`MIN_DURATION_SECS`).
+- A recording of 5 s or more is remuxed by FFmpeg into a sibling `.mp4`. The
+  media library prefers the `.mp4` for playback, keeps the `.ts` for download
+  while it exists, and reports `conversionStatus` (`converting`, `ready`,
+  `failed`).
+- `recordingSettings.retainSourceTs`: `false` (default) deletes the `.ts`
+  after a successful remux; `true` keeps both. A failed remux always keeps
+  the `.ts`.
 
-The recording path writes raw MPEG-TS files in `media/`, and files whose task
-lifetime is shorter than five seconds are deleted as transient artifacts. The
-recording feeder uses the shared TS packet feeder before writing to the
-MemoryQueue-backed file writer.
+## File ingest
 
-When a recording stops successfully and is at least five seconds long, the
-runtime starts a one-off FFmpeg remux from the source `.ts` into a sibling
-`.mp4`. The media library prefers the `.mp4` for browser playback, keeps the
-original `.ts` available for download while it exists, and surfaces
-`conversionStatus` as `converting`, `ready`, or `failed`.
+A file ingest plays a media-library file into a pipeline through an FFmpeg
+subprocess (binary resolution: `FFMPEG_BIN_PATH`, see
+[Configuration](configuration.md)). There are two route families.
 
-The deployment-wide setting `recordingSettings.retainSourceTs` controls whether
-the original `.ts` is kept after a successful remux:
-
-- `false` (default): delete the source `.ts` only after the `.mp4` is created successfully
-- `true`: keep both files
-
-Failed remuxes keep the source `.ts` regardless of this setting.
-
-## File Ingest
+Per pipeline:
 
 | Method | Route | Purpose |
 |---|---|---|
-| `GET` | `/api/v1/ingests` | List configured file ingests |
+| `GET` | `/api/v1/pipelines/:pipelineId/file-ingest` | The pipeline's file source and whether it runs |
+| `PUT` | `/api/v1/pipelines/:pipelineId/file-ingest` | Create or replace it |
+| `DELETE` | `/api/v1/pipelines/:pipelineId/file-ingest` | Clear it: `{ "deleted": true }` |
+
+`PUT` body (`loopFlag` also accepts `loop`):
+
+```json
+{ "filename": "clip.mp4", "loopFlag": true, "startTime": "00:00:05", "liveOptimized": true, "targetGopSeconds": 2 }
+```
+
+By stream key:
+
+| Method | Route | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/ingests` | List file ingests |
 | `POST` | `/api/v1/ingests` | Create |
 | `PUT` | `/api/v1/ingests/:id` | Update |
-| `DELETE` | `/api/v1/ingests/:id` | Delete |
-| `POST` | `/api/v1/ingests/:id/start` | Start file ingest via the configured backend |
-| `POST` | `/api/v1/ingests/:id/stop` | Stop the active ingest task/process |
-
-Create/update body:
+| `DELETE` | `/api/v1/ingests/:id` | Delete (stops it if running) |
+| `POST` | `/api/v1/ingests/:id/start` | Start |
+| `POST` | `/api/v1/ingests/:id/stop` | Stop |
 
 ```json
-{
-  "filename": "example.mp4",
-  "streamKey": "stream-key",
-  "loop": true,
-  "startTime": "00:00:05",
-  "liveOptimized": true,
-  "targetGopSeconds": 2
-}
+{ "filename": "example.mp4", "streamKey": "sk_…", "loop": true, "startTime": "00:00:05", "liveOptimized": true, "targetGopSeconds": 2 }
 ```
 
-Start returns `400` if `media/<filename>` does not exist, `400` if no pipeline
-matches the configured stream key, and `409` if that ingest ID already has a
-running file ingest or the target pipeline already has another active
-publisher.
+Responses carry `id`, `filename`, `streamKey`, `loop`, `startTime`,
+`liveOptimized`, `targetGopSeconds` and `running`.
 
-File ingest runs an FFmpeg subprocess (see `FFMPEG_BIN_PATH` in
-[Configuration](configuration.md)). The
-application service owns its argument construction; the API contract is the
-requested loop, start-time, and optimization behavior rather than a copied
-process command.
+- `filename` must be a relative path under the media directory: not blank,
+  not absolute, no `.` or `..` components (else `400`).
+- `loop` and `liveOptimized` default to `false`; `targetGopSeconds` defaults
+  to 2 and is at least 1.
+- Start errors: `400` when the media file is missing or no pipeline has the
+  stream key; `409` when that ingest already runs or the pipeline already has
+  an active publisher; `404` for an unknown ingest.
+- `liveOptimized: true` re-encodes to H.264 (`libx264`) and AAC with a
+  keyframe every `targetGopSeconds` and scene-cut GOP drift disabled.
+- Stop and delete kill the child and reap it.
 
-When `liveOptimized=true`, it re-encodes toward a live-friendly GOP cadence:
-
-- video: H.264 (`libx264`)
-- audio: AAC
-- forced keyframes every `targetGopSeconds`
-- scene-cut GOP drift disabled
-
-Deleting an ingest definition terminates the running ingest regardless of backend.
-Both stop and delete kill the child and call `wait()` to reap it immediately so
-no zombie processes remain.
-
-## Media Files
+## Media files
 
 | Method | Route | Purpose |
 |---|---|---|
-| `GET` | `/api/v1/media` | List supported media files in `.restream/media/` by default |
-| `POST` | `/api/v1/media/upload` | Upload one `.ts`, `.mkv`, `.mp4`, or `.mov` media-library file (multipart field `file`, max 8 GiB) |
-| `GET` | `/api/v1/media/:filename/analysis` | Return source-file codec / duration / GOP analysis |
-| `PATCH` | `/api/v1/media/:filename` | Rename a media file without changing its extension |
-| `DELETE` | `/api/v1/media/:filename` | Delete an unreferenced file under `media/` |
+| `GET` | `/api/v1/media` | List library files: `{ "files": [...] }` |
+| `POST` | `/api/v1/media/upload` | Upload one file (multipart field `file`) |
+| `GET` | `/api/v1/media/:filename/analysis` | Codec, duration and GOP analysis |
+| `PATCH` | `/api/v1/media/:filename` | Rename from `{ "newName" }` |
+| `DELETE` | `/api/v1/media/:filename` | Delete an unreferenced file |
+| `GET`, `HEAD` | `/media/:filename` | Download or stream a file, with byte ranges |
 
-Deletion returns `409` when a configured file ingest references the filename.
-Deletion canonicalizes both the `media/` root and the requested target path.
-Requests that resolve outside `media/` (path traversal) return `400`.
-Missing files return `404`.
+- Supported extensions: `.ts`, `.mkv`, `.mp4`, `.mov`. The media directory
+  defaults to `.restream/media/` (`RESTREAM_MEDIA_DIR`).
+- Upload: exactly one `file` field with a plain supported filename, at most
+  8 GiB (`413` above). An existing name is `409`. Success returns
+  `{ "uploaded": true, "name", "size" }`. The file is published with a
+  create-only hard link, so a concurrent upload cannot replace it.
+- Rename keeps the extension (`400` otherwise; `409` if taken). Renaming a
+  recording `.ts` also renames its converted `.mp4` and conversion-state
+  file, and updates file ingests that referenced the old name.
+- Delete is `409` while a file ingest references the file, `404` for a
+  missing file and `400` for a path that resolves outside the media
+  directory.
+- `/media/:filename` answers one `Range: bytes=` span with `206`
+  (`Accept-Ranges: bytes`); an unsatisfiable or multi-range header is `416`.
+- Recording entries may carry `sourceName`/`sourceSize`,
+  `convertedName`/`convertedSize`, `playName`, `conversionStatus`,
+  `conversionError` and `conversionUpdatedAt`. After a successful remux,
+  `playName` is the `.mp4` and `sourceName` the `.ts`.
 
-`GET /api/v1/media` returns entries for `.ts`, `.mkv`, `.mp4`, and `.mov`
-files. Recording-backed entries may include:
+## Custom encoding
 
-- `sourceName` / `sourceSize`
-- `convertedName` / `convertedSize`
-- `playName`
-- `conversionStatus`
-- `conversionError`
-- `conversionUpdatedAt`
-
-For recordings with a successful `.mp4` remux, `playName` points at the `.mp4`
-while `sourceName` still refers to the original recording `.ts`.
-
-Renaming keeps the file extension fixed. For recording source `.ts` files, the
-server also renames any sibling converted `.mp4` and conversion-state JSON, and
-updates configured file-ingest rows that referenced the old filename.
-
-## Custom Encoding
-
-| Method | Route | Purpose |
+| Method | Route | Response |
 |---|---|---|
-| `GET` | `/api/v1/encodings/custom` | Return `{ "ffmpegArgs": "..." }` |
-| `PUT` | `/api/v1/encodings/custom` | Persist `{ "ffmpegArgs": "..." }` |
+| `GET` | `/api/v1/encodings/custom` | `410 Gone` |
+| `PUT` | `/api/v1/encodings/custom` | `410 Gone` (body `{ "ffmpegArgs" }` is read and dropped) |
 
-The value is configuration-only today. The native transcoder does not interpret
-the stored FFmpeg argument string.
+Both answer `{"error": "Custom encoding is not available yet; choose source
+or a preset encoding"}` after authentication (`src/api/file_ingest.rs`).
 
-## Runtime State
+## Runtime state
 
-One typed, revisioned view of every pipeline and output
-(`application::runtime_state`). The TypeScript contract is generated from
-the Rust types into `web/ts/core/generated/runtime-state.ts`. A unit test
-fails when the file is stale; regenerate it with
-`cargo test --lib runtime_state::tests::write_generated -- --ignored`.
+One typed, revisioned view of every pipeline, output, input and graph
+(`application::runtime_state`). The TypeScript contract is generated from the
+Rust types into `web/ts/core/generated/runtime-state.ts`; a unit test fails
+when it is stale. Regenerate it with:
+
+```sh
+cargo test --lib runtime_state::tests::write_generated -- --ignored
+```
+
 `web/ts/core/state-stream.ts` is the client.
+
+| Method | Route | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/state` | The current projection |
+| `GET` | `/api/v1/state/stream` | SSE snapshot plus deltas |
+| `GET` | `/api/v1/fleet/history` | 24 h of 5 s fleet samples |
 
 ### `GET /api/v1/state`
 
-Returns the projection, rebuilt first unless the last rebuild completed less
-than 500 ms ago and no engine lifecycle event, mutating request or reconciler
-write (retries exhausted) has happened since (a client polling in a loop
-costs at most one rebuild per 500 ms):
+Returns the projection. It is rebuilt first unless the last rebuild is under
+500 ms old (`ON_DEMAND_REUSE`) and nothing was marked changed since (engine
+lifecycle event, mutating request, or a reconciler write such as retries
+exhausted).
 
 ```json
 {
@@ -910,150 +938,117 @@ costs at most one rebuild per 500 ms):
   "outputs": [
     {
       "id": "...", "pipelineId": "...", "name": "...",
-      "protocol": "rtmp",
-      "shard": 0,
-      "stage": "pipe:video:720p",
-      "desired": "running",
-      "actual": "sending",
-      "convergence": "converged",
-      "flow": "flowing",
-      "backpressure": null,
-      "retry": null,
-      "evidence": null,
-      "diagnosis": null
+      "protocol": "rtmp", "shard": 0, "stage": "pipe:video:720p",
+      "desired": "running", "actual": "sending",
+      "convergence": "converged", "flow": "flowing",
+      "backpressure": null, "retry": null, "evidence": null, "diagnosis": null
     }
-  ]
+  ],
+  "inputs": [],
+  "graphs": []
 }
 ```
 
-- `ingest.bonded`: the selected ingest is an SRT group (bonded) connection.
-- `standbyInputs`: connected inputs held in warm standby (connected, not
-  selected). A configured file source running beside the live input counts.
-- `recording`: a recording file is being written.
-- `protocol`: from the URL scheme: `rtmp` (also `rtmps`), `srt`, `hls`,
-  `sink`, `pipeline` or `unknown`.
-- `shard`: the egress shard carrying the running attempt; `null` off the
-  fabric or when none runs.
-- `stage`: the last stage the running attempt reads (`<pipeline>:<kind>`);
-  outputs with the same `stage` share its work. `null` when none runs.
-- `desired`: the operator's intent (`running`, `stopped`).
-- `epoch`: identifies the server run (see the stream below).
-- `actual`: the phase of the running egress attempt, or `null` when none
-  runs.
-- `convergence`: one of the following.
-  - `converged`: delivering, or stopped as asked.
-  - `starting`: an attempt is starting, or the next reconcile pass starts one.
-  - `waitingForIngest`: no live ingest.
-  - `retrying`: waiting out a backoff; `retry` holds `attempts` and
-    `nextAttemptAtMs`.
-  - `retriesExhausted`: the restart budget is spent.
-  - `stopping`: desired `stopped`, but the egress is still ending.
-- `flow`: `flowing`, `stalled` (no progress past the stall threshold) or
-  `idle`.
-- `evidence`: the latest failure (`error`, `phase`, `atMs`) of the running
-  attempt, or else of the last one.
-- `diagnosis`: why a desired-running output is degraded, or `null`
-  (`application::diagnosis`). The output's media path has four layers,
-  upstream first: `ingest`, `feed` (the shared stages), `shard` (the
-  egress fabric shard, for fabric outputs) and `destination` (network and
-  remote end). The first unhealthy layer is `layer`; the healthy layers
-  checked before it are `ruledOut`. `cause.code` is one of the following.
-  - `ingest`: `noPublisher`.
-  - `feed`: `stageNotProducing` (`stage`, `phase`).
-  - `shard`: `shardPanicked`, `shardStalled`, `shardStopped` (`shard`);
-    `capacityRefused` (`error`): admission refused the output because the
-    least-loaded shard of the feed's egress pool would pass its load
-    ceiling (failure phase `egress_capacity`); restarts retry it until the
-    retry budget is spent.
-  - `destination`: `retriesExhausted`, `retryBudgetNearlySpent`
-    (`attempts`, `max`; at 80% of the budget), `rejected` (`phase`,
-    `error`), `backpressured` (`stalled`), `noProgress`.
+Pipelines:
 
-  Output alerts and the agent context (`desiredVsActual`) read the same
+- `ingest.bonded`: the selected ingest is an SRT group connection.
+- `standbyInputs`: connected, unselected inputs (a file source running beside
+  the live input counts).
+- `recording`: a recording file is being written.
+
+Outputs:
+
+- `protocol`: `rtmp` (also `rtmps`), `srt`, `hls` (also `http`/`https`),
+  `moq`, `sink`, `pipeline` or `unknown`.
+- `shard`: the egress shard of the running attempt; `null` off the fabric or
+  when none runs.
+- `stage`: the last stage the running attempt reads (`<pipeline>:<kind>`);
+  outputs with the same `stage` share its work.
+- `desired`: `running` or `stopped`. `actual`: the running attempt's phase,
+  or `null`.
+- `convergence`: `converged` (delivering, or stopped as asked), `starting`,
+  `waitingForIngest`, `retrying` (`retry` holds `attempts` and
+  `nextAttemptAtMs`), `retriesExhausted` or `stopping`.
+- `flow`: `flowing`, `stalled` (no progress past the stall threshold) or
+  `idle`. A delivering output that stalls stays `converged`: a stall is a
+  flow problem, not a desired/actual mismatch.
+- `evidence`: the latest failure (`error`, `phase`, `atMs`) of the running
+  attempt, else of the last one.
+- `diagnosis` (`application::diagnosis`): why a desired-running output is
+  degraded, or `null`. The media path has four layers, upstream first:
+  `ingest`, `feed` (shared stages), `shard` (fabric shard) and `destination`.
+  `layer` is the first unhealthy one; `ruledOut` lists the healthy layers
+  checked before it. `cause.code`:
+  - `ingest`: `noPublisher`;
+  - `feed`: `stageNotProducing` (`stage`, `phase`);
+  - `shard`: `shardPanicked`, `shardStalled`, `shardStopped` (`shard`), and
+    `capacityRefused` (`error`): admission refused the output because the
+    least-loaded shard of the feed's pool would pass its load ceiling
+    (failure phase `egress_capacity`);
+  - `destination`: `retriesExhausted`, `retryBudgetNearlySpent` (`attempts`,
+    `max`; at 80% of the budget), `rejected` (`phase`, `error`),
+    `backpressured` (`stalled`), `noProgress`.
+
+  Output alerts and the agent context's `desiredVsActual` read the same
   diagnosis.
 
-- `inputs`: every pipeline input. The stored fields are those of
-  `GET /api/v1/pipelines/{id}/inputs` (`id`, `pipelineId`, `label`,
-  `streamKey`, `role`, `enabled`, `selected`, `kind`, `sourceUrl`,
-  `variantRule`, `authKind`, `authUsername`, `ingestUrls`, `previewUrl`;
-  credentials stay write-only), plus `position` (the input's place in that
-  list: the primary first, then backups by age). `runtime` holds the
-  session's state only: `connected`, `forwardingState` (`standby`,
-  `awaitingKeyframe`, `active`), `protocol`, `remoteAddr`, `video` (`codec`,
-  `width`, `height`) and `audio` (`codec`, `sampleRate`, `channels`).
-  Uptime, bytes and transport quality advance on every read, so they are
-  not state: `GET /api/v1/engine/telemetry` carries them per session in
-  `inputs` (`inputId`, `uptimeSecs`, `bytesReceived`, `quality`).
-- `graphs`: one processing graph per pipeline, the structure of
-  `GET /api/v1/pipelines/{id}/graph` without its `details` and `metrics`:
-  nodes (`id`, `type`, `label`, `active`, `stageKey`, `outputId`,
-  `metricsStage`) and edges (`from`, `to`, `label`). `metricsStage` names
-  the node's row in the telemetry's `stages`; ingest and demux counters are
-  in its `ingests`, the source ring's fill and reader lag in
-  `memoryAccounting.sourceRings`, an egress node's in `egresses`.
+Inputs and graphs:
 
-The revision rises by 1 for each change in the projection. It restarts at 0
-when the process restarts.
+- `inputs`: every input with the stored fields of
+  `GET /api/v1/pipelines/:id/inputs` plus `position` (primary first, then
+  backups by age). `runtime` holds only state: `connected`,
+  `forwardingState`, `protocol`, `remoteAddr`, `video` (`codec`, `width`,
+  `height`) and `audio` (`codec`, `sampleRate`, `channels`). Uptime, bytes
+  and quality change on every read, so they are in
+  `GET /api/v1/engine/telemetry` `inputs` instead.
+- `graphs`: one graph per pipeline, the structure of
+  `GET /api/v1/pipelines/:id/graph` without `details` and `metrics`: nodes
+  (`id`, `type`, `label`, `active`, `stageKey`, `outputId`, `metricsStage`)
+  and edges (`from`, `to`, `label`). `metricsStage` names the node's row in
+  telemetry `stages`.
+
+`revision` rises by 1 per change and restarts at 0 with the process;
+`epoch` identifies the server run.
 
 ### `GET /api/v1/state/stream`
 
-Server-sent events. Each event's `id:` is `<epoch>.<revision>`. The epoch
-identifies the server run, so a resume token from an earlier run never
-matches.
+Server-sent events. Each event id is `<epoch>.<revision>`.
 
-- `event: snapshot`: a whole state, as returned by `GET /api/v1/state`.
-- `event: delta`: what changed since the previous revision (it carries
-  `epoch` too), with
-  `pipelines`, `outputs`, `inputs` and `graphs` (whole entities to insert
-  or replace) and `removedPipelines`, `removedOutputs`, `removedInputs` and
+- `event: snapshot`: a whole state, as `GET /api/v1/state` returns it.
+- `event: delta`: changes since the previous revision, with `epoch`,
+  `pipelines`, `outputs`, `inputs`, `graphs` (whole entities to insert or
+  replace) and `removedPipelines`, `removedOutputs`, `removedInputs`,
   `removedGraphs` (ids; a graph's id is its pipeline id).
-- `event: heartbeat` (data `{}`): every 20 seconds. A steady system sends no
-  deltas; the dashboard client treats a connection that sends no event for
-  50 seconds (two and a half heartbeats) as dead and reconnects with `since`.
+- `event: heartbeat` (data `{}`): every 20 s. The dashboard client treats 50
+  s of silence as a dead connection and reconnects.
 
-A new connection starts with a snapshot. To resume, send the last event id
-as `?since=<epoch>.<revision>` or `Last-Event-ID`. The server then replays
-the deltas after that revision, if they are among the last 256. Otherwise,
-and when the epoch belongs to another server run, it sends a snapshot. If a client falls behind the
-live stream, it also receives a fresh snapshot. A client that receives a
-delta that does not follow its revision, or one with another epoch, has
-missed events: it reconnects with `since` set to its last applied token.
+A new connection starts with a snapshot. To resume, send the last id as
+`?since=<epoch>.<revision>` or `Last-Event-ID`. The server replays the deltas
+after it if they are among the last 256 (`DELTA_HISTORY`); otherwise, or for
+another epoch, or when the client falls behind, it sends a snapshot. A client
+that gets a delta that does not follow its revision, or with another epoch,
+reconnects with `since`.
 
 The projection is rebuilt only while a stream client is connected: every
-reconcile interval, and soon after an engine lifecycle event or a successful
-mutating request, at most once per interval. An event storm (a destination
-outage) therefore costs at most one projection per interval. With no client
-connected, the projector rebuilds nothing; `GET /api/v1/state`, a new
-stream connection and the fleet-history sampler (every 5 s, see
-`GET /api/v1/fleet/history`) rebuild on demand, reusing a projection
-younger than 500 ms when nothing was marked changed since. Rebuilds run one
-at a time. The resource map (`GET /api/v1/engine/resource-map`) is
-process measurement, not state, and is not projected.
-
-A delivering output that stops making progress reports `flow: stalled` and
-stays `convergence: converged`: the stall is a flow problem, not a
-mismatch between desired and actual.
+reconcile interval, and soon after a lifecycle event or mutating request, at
+most once per interval. With no client connected, only `GET /api/v1/state`, a
+new stream connection and the fleet-history sampler rebuild it, reusing a
+projection younger than 500 ms when nothing changed. Rebuilds run one at a
+time. The resource map is process measurement and is not projected.
 
 ### `GET /api/v1/fleet/history`
 
-The fleet's signals, sampled by the server every 5 s whether or not a client
-watches, and kept for 24 hours (at most 17 280 samples; the oldest goes
-first). `?since=<RFC 3339>` returns the samples taken at or after it and
-`?until=<RFC 3339>` those taken at or before it (both inclusive, each
-optional); a malformed `since` or `until` is `400` (after authentication).
-The server's clock stepping back does not reorder the history: a sample is
-stamped at least 1 ms after the one before it, so `since` one past the last
-sample held never skips one.
+Fleet signals sampled every 5 s whether or not anyone watches, kept 24 h (at
+most 17 280 samples, oldest dropped first; `src/application/fleet_history.rs`).
+`?since=` and `?until=` (RFC 3339, inclusive, optional) bound the window; a
+malformed value is `400` after authentication. A sample is stamped at least 1
+ms after the previous one, so a clock step back does not reorder history.
 
 ```json
 {
   "samples": [
-    {
-      "atMs": 1792152000000,
-      "headroomPercent": 74.5,
-      "deliveringPercent": 50.0,
-      "degraded": { "ingest": 1, "feed": 0, "shard": 0, "destination": 0 }
-    }
+    { "atMs": 1792152000000, "headroomPercent": 74.5, "deliveringPercent": 50.0,
+      "degraded": { "ingest": 1, "feed": 0, "shard": 0, "destination": 0 } }
   ],
   "completeFromMs": 1792151000000,
   "intervalMs": 5000,
@@ -1061,617 +1056,150 @@ sample held never skips one.
 }
 ```
 
-- `headroomPercent`: 100 less the capacity snapshot's projected
-  utilization, floored at 0.
-- `deliveringPercent`: wanted outputs that are converged and flowing;
-  `null` when none is wanted.
+- `headroomPercent`: 100 minus the capacity projection's utilization,
+  floored at 0.
+- `deliveringPercent`: wanted outputs that are converged and flowing; `null`
+  when none is wanted.
 - `degraded`: wanted outputs with a diagnosis, by `diagnosis.layer`.
-- `completeFromMs`: the history is complete only after this instant (the
-  server's start, or the latest dropped sample): a window starting at or
-  before it may be missing samples.
-- `newestMs`: the newest sample kept, whatever `until` (`null` before the
-  first). Once it is at or past a window's `until`, that window is final:
-  every sample in it has been taken, by the server's clock.
+- `completeFromMs`: history is complete only after this instant (server
+  start or the latest dropped sample).
+- `newestMs`: the newest sample kept (`null` before the first). Once it is at
+  or past a window's `until`, that window is final.
 
-## Health and Status
+## Health and status
+
+| Method | Route | Purpose |
+|---|---|---|
+| `GET` | `/healthz` | Liveness, no session: `{ "status": "ok" }` |
+| `GET` | `/api/v1/engine/health` | Engine health snapshot |
+| `GET` | `/api/v1/dashboard/runtime` | Health plus host metrics in one call |
+| `GET` | `/metrics/system` | Host and engine metrics (JSON, not Prometheus) |
+| `GET` | `/api/v1/capacity/scenario` | Observe-only capacity projection of a change |
+| `GET` | `/api/v1/engine` | Build, toolchain, native library and OS info |
+| `GET` | `/api/v1/engine/sbom` | CycloneDX 1.5 SBOM |
+
+`/metrics/system` is listed in `PUBLIC_ROUTE_PATHS`, but its handler requires
+a session. Field derivation for all of these is in
+[Observability](observability.md).
+
+### `GET /api/v1/engine/health`
+
+`view=summary` returns `{ status, pipelines, runtimeLimits, hostSettings }`
+with compact per-pipeline health (status, bitrate, uptime, recording,
+reconnect and grace flags). The default full view (`EngineHealthView`)
+returns:
+
+| Field | Content |
+|---|---|
+| `generatedAt`, `status` | Snapshot time and engine status |
+| `pipelines.<id>.input` | Ingest status, bytes, bitrate, media, `publisher` (protocol, remote address, `quality`), `disconnectGraceActive`/`disconnectGraceRemainingMs`, `recentDisconnectCount`, `flapping` |
+| `pipelines.<id>.outputs.<id>` | Egress status, phase, errors, retry state |
+| `pipelines.<id>.recording` | `{ enabled, active }` |
+| `stages` | Stage runtime by key |
+| `runtimeLimits.nofile` | `configured`, `soft`, `hard`, `satisfied` |
+| `hostSettings` | Rows `{ key, label, current, required, unit, status, detail }` (nofile, socket buffer ceilings, Tokio threads, CPU parallelism, cpuset, cgroup quota) |
+| `rtmpListener` | `acceptErrors`, `fdExhaustionErrors`, `restarts`, `ingressOwners` |
+| `srtListener` | `bondingAvailable`, `restarts`, `ingressOwner` counters |
+| `egressFabricShards` | One row per live shard: `protocol`, `feedId`, `shardIndex`, `state`, loop and command-queue counters |
+| `containedPanics` | Panics contained at a per-entity boundary since start |
+| `tuning.outputMaxRetries` | `RESTREAM_OUTPUT_MAX_RETRIES` |
+
+- `egressFabricShards` covers all six fabric registries: `srt`, `rtmp`,
+  `sink`, `pipeline`, `hls-put` and `moq`
+  (`src/media/engine_egress_fabric_diagnostics.rs`). It is empty when no
+  output runs. `state` is `healthy`, `stalled`, `stopped` or `panicked`.
+- `rxBufferExhaustions` (SRT ingress and egress Owners) counts transient
+  managed-buffer pressure. It is not a loss count; `rxRingDropped` and
+  `rxTruncated` are.
 
 ### `GET /api/v1/dashboard/runtime`
 
-Authenticated dashboard-optimized runtime snapshot. Returns `health` and
-`metrics` together so lifecycle-triggered dashboard refreshes can re-sync in a
-single round trip instead of fetching `/api/v1/engine/health` and
-`/metrics/system` separately.
-
-Query params:
+Returns `{ health, metrics }` so a dashboard refresh costs one round trip.
 
 | Param | Default | Notes |
-| --- | --- | --- |
-| `health_view` | `full` | `summary` trims pipeline/output runtime detail for overview wakes and lighter dashboard refreshes. |
-| `metrics_view` | `full` | `summary` trims the host metrics payload to aggregate percentages/rates while preserving `engine` totals. |
-| `pipeline_id` | — | Optional selected-pipeline focus. With `health_view=summary`, the response keeps summary health for every pipeline while upgrading the selected pipeline entry to the full detail shape. With `health_view=full`, it scopes the response down to the selected pipeline. |
-
-```json
-{
-  "health": {
-    "status": "ready",
-    "pipelines": {}
-  },
-  "metrics": {
-    "generatedAt": "2026-06-30T00:00:00Z",
-    "cpu": { "usagePercent": 12 },
-    "memory": { "usedPercent": 20 },
-    "disk": { "usedPercent": 40 },
-    "network": {
-      "downloadKbps": 1,
-      "uploadKbps": 2
-    },
-    "engine": {
-      "cpuPercent": 3,
-      "totalMemoryBytes": 1234,
-      "cpuSampleReady": true
-    }
-  }
-}
-```
-
-The dashboard currently uses:
-
-- `health_view=summary&metrics_view=full` on the first overview load so static
-  disk/interface metadata can be cached client-side
-- `health_view=summary&metrics_view=summary` for steady-state overview wakes and
-  SSE-triggered refreshes
-- `health_view=summary&pipeline_id=<selected>` for selected-pipeline detail
-  paths so the dashboard keeps summary liveness for every pipeline while
-  returning full runtime detail for the active pipeline in the same snapshot;
-  focused pipeline and inspect modes pair that with
-  `/api/v1/logs/stream?pipeline_id=<selected>&event_class=lifecycle&include_restream=true`
-  so selected-pipeline and restream-wide lifecycle events wake the immediate
-  refresh path while unrelated pipelines stay off the wire
-- `health_view=full` without `pipeline_id` for publisher-health paths that need
-  the full runtime view across pipelines
-- lifecycle-SSE-driven output start/stop convergence in pipeline/control modes,
-  with a short runtime-refresh fallback when no lifecycle wakeup arrives
-- lifecycle-SSE-driven file-ingest start/stop convergence when the pipeline
-  dashboard stream is already open, with direct runtime-refresh fallback
-  otherwise
-- direct local recording-state patching from `POST /recording/start|stop`
-  mutation responses, because recording enable/active state is not carried by
-  the lifecycle SSE feed
-- standalone `/metrics/system` fetches only in modes that do not need runtime
-  health in the same refresh
-
-### `GET /api/v1/engine/health`
-
-Authenticated native state snapshot:
-
-Query params:
-
-| Param | Default | Notes |
-| --- | --- | --- |
-| `view` | `full` | `summary` returns compact pipeline health. |
-
-```json
-{
-  "generatedAt": "2026-06-20T12:00:00Z",
-  "status": "ready",
-  "pipelines": {
-    "pipeline_id": {
-      "input": {
-        "status": "on",
-        "publishStartedAt": "2026-06-20T11:59:00Z",
-        "bytesReceived": 12000000,
-        "bitrateKbps": 1600,
-        "video": {},
-        "audio": {},
-        "publisher": {
-          "protocol": "srt",
-          "remoteAddr": "203.0.113.10:50000",
-          "quality": {
-            "srtBonded": true,
-            "srtGroupMemberCount": 2,
-            "srtGroupConnectedMembers": 2,
-            "srtGroupActiveMembers": 1,
-            "srtGroupBrokenMembers": 0,
-            "srtGroupWireReceiverPacketsLost": 0,
-            "srtGroupWirePacketsUndecryptable": 0
-          }
-        }
-      },
-      "outputs": {
-        "output_id": {
-          "status": "failed",
-          "phase": "failed",
-          "lastError": "connection reset by peer",
-          "failurePhase": "send",
-          "endedAt": "2026-06-20T12:00:05Z",
-          "endedAgeMs": 250
-        }
-      },
-      "recording": { "enabled": false, "active": false }
-    }
-  },
-  "srtListener": {
-    "bondingAvailable": false,
-    "restarts": 0,
-    "ingressOwner": {
-      "faulted": false,
-      "managedRx": true,
-      "owners": 1,
-      "serviceVisits": 0,
-      "rxPackets": 0,
-      "rxRingDropped": 0,
-      "rxBufferExhaustions": 0,
-      "rxTruncated": 0,
-      "txPackets": 0,
-      "peers": 0
-    }
-  },
-  "rtmpListener": {
-    "acceptErrors": 0,
-    "fdExhaustionErrors": 0,
-    "restarts": 0,
-    "ingressOwners": 1
-  },
-  "containedPanics": 0,
-  "runtimeLimits": {
-    "nofile": {
-      "configured": 65536,
-      "soft": 65536,
-      "hard": 65536,
-      "satisfied": true
-    }
-  },
-  "hostSettings": [
-    {
-      "key": "runtime.nofile",
-      "label": "Open file descriptors",
-      "current": 65536,
-      "required": 65536,
-      "unit": "fds",
-      "status": "ok",
-      "detail": "hard limit 65536"
-    },
-    {
-      "key": "net.core.rmem_max",
-      "label": "Kernel receive buffer ceiling",
-      "current": 26214400,
-      "required": 26214400,
-      "unit": "bytes",
-      "status": "ok",
-      "detail": "needed for SRT UDP receive buffers"
-    },
-    {
-      "key": "net.core.wmem_max",
-      "label": "Kernel send buffer ceiling",
-      "current": 8388608,
-      "required": 8388608,
-      "unit": "bytes",
-      "status": "ok",
-      "detail": "needed for SRT UDP send buffers"
-    },
-    {
-      "key": "runtime.tokio.worker_threads",
-      "label": "Tokio async workers",
-      "current": 2,
-      "required": null,
-      "unit": "threads",
-      "status": "ok",
-      "detail": "async scheduler worker count; too many workers increased migrations and cache misses in MSR profiling"
-    },
-    {
-      "key": "runtime.tokio.max_blocking_threads",
-      "label": "Tokio blocking thread cap",
-      "current": 512,
-      "required": null,
-      "unit": "threads",
-      "status": "ok",
-      "detail": "upper bound for spawn_blocking work such as DNS resolution and blocking child-process waits; protects ramp-up latency without unbounded idle thread footprint"
-    },
-    {
-      "key": "runtime.cpu.available_parallelism",
-      "label": "Available CPU parallelism",
-      "current": 6,
-      "required": null,
-      "unit": "cpus",
-      "status": "ok",
-      "detail": "basis for default Tokio worker sizing before workload-specific tuning"
-    },
-    {
-      "key": "runtime.cpu.allowed_list",
-      "label": "Allowed CPU mask",
-      "current": "0-5",
-      "required": null,
-      "unit": "cpuset",
-      "status": "ok",
-      "detail": "process scheduler affinity (6 CPUs); container cpusets can make this smaller than the host"
-    },
-    {
-      "key": "runtime.cpu.cgroup_max",
-      "label": "Cgroup CPU quota",
-      "current": "max 100000",
-      "required": null,
-      "unit": "quota",
-      "status": "ok",
-      "detail": "no cgroup CPU quota; scheduling is cpuset/host limited"
-    }
-  ],
-  "egressFabricShards": [
-    {
-      "protocol": "rtmp",
-      "feedId": "pipe1:video:720p",
-      "shardIndex": 1,
-      "state": "healthy",
-      "loopIterations": 48213,
-      "mediaTicks": 9021,
-      "progressAgeMs": 12,
-      "commandDepth": 0,
-      "commandCapacity": 1024
-    }
-  ],
-  "tuning": {
-    "outputMaxRetries": 10
-  }
-}
-```
-
-`egressFabricShards` lists every live egress fabric shard across all four
-protocol registries (SRT, RTMP, sink, pipeline recirculation) — empty
-when no output is running (the egress fabric is the only egress path).
-`state` is one of `healthy`,
-`stalled`, `stopped`, or `panicked`; `/api/v1/alerts` derives Warning
-alerts for `stalled` shards and shards whose `commandDepth` is at or
-above 80% of `commandCapacity`, and a Critical alert for `panicked`
-shards. `tuning.outputMaxRetries` mirrors `RESTREAM_OUTPUT_MAX_RETRIES`;
-`/api/v1/alerts` derives a Warning for any output whose `retryAttempts`
-(under `pipelines.<id>.outputs.<id>`) has reached 80% of that ceiling.
-
-`srtListener.ingressOwner.rxBufferExhaustions` and each SRT egress Owner's
-`rxBufferExhaustions` count transient managed-buffer pressure, separately from
-actual completion discards (`rxRingDropped`) and oversized datagrams
-(`rxTruncated`). Buffer pressure alone is neither a loss count nor an Owner fault.
-
-See [Observability](observability.md) for field derivation, publisher quality,
-and diagnostic check details.
-
-### `GET /healthz`
-
-Public liveness response:
-
-```json
-{ "status": "ok" }
-```
+|---|---|---|
+| `health_view` | full | `summary` trims pipeline and output detail |
+| `metrics_view` | full | `summary` trims host metrics to aggregate percentages and rates |
+| `pipeline_id` | — | With summary health: every pipeline in summary, this one in full. With full health: only this pipeline. |
 
 ### `GET /metrics/system`
 
-Authenticated JSON containing host CPU, host memory, disk, host-wide network
-rates, and an `engine` object for restream self metrics. `engine.cpuPercent`
-and `engine.totalMemoryBytes` include the restream process plus child FFmpeg
-processes launched by restream; `restream*` and `externalFfmpeg*` fields provide
-the breakdown. This is not Prometheus text format.
-Query params:
+`view=summary` trims disk and network detail. Top-level keys
+(`build_system_metrics_snapshot`): `generatedAt`, `cpu`, `memory`, `engine`,
+`capacity`, `hostCapacity`, `mediaExecutor`, `egressShards`, `ioUring`,
+`rtmps`, `hlsPutTls`, `disk`, `network`, and `mediaDisk` in the full view.
 
-| Param | Default | Notes |
-| --- | --- | --- |
-| `view` | `full` | `summary` trims steady-state dashboard polls down to aggregate percentages/rates plus engine totals. The first dashboard load still uses `full` so static disk/interface metadata can be cached client-side. |
-
-This route remains the generic host-metrics surface. The dashboard now prefers
-`/api/v1/dashboard/runtime` whenever it also needs engine health in the same
-refresh.
-
-Every response includes an observe-only `capacity` object with measured
-`ingressPps`, `mediaBps`, and fanout `egressPps`, plus calibrated service-center
-utilization (`hottestShardUtil`, `nicUtil`, `memoryUtil`, `ffmpegUtil`, and
-`diskUtil`). `hottestCenter` and `projectedUtilization` identify the projected
-bottleneck. `flow` is the Flow Doctor view of the hottest observed shard when
-`flowMeasured` is `true` (egress shards are running); otherwise it is the
-projection's hottest center priced from the calibration priors.
-`activeLeaves`, `uniqueStages`, and `observeOnly` provide context.
-The capacity model is diagnostic only and does not make admission decisions.
-The response also includes a cached `ioUring` capability object from startup;
-`available: false` records a host without usable io_uring support.
+- `engine.cpuPercent` and `engine.totalMemoryBytes` include restream plus its
+  FFmpeg children; `restream*` and `externalFfmpeg*` fields split them.
+- `capacity` is observe-only: measured `ingressPps`, `mediaBps`, fanout
+  `egressPps`, service-center utilizations, `hottestCenter`,
+  `projectedUtilization`, and `flow` (measured when `flowMeasured` is true,
+  else priced from calibration priors). It admits nothing.
+- `ioUring` is a capability probe cached at startup.
 
 ### `GET /api/v1/capacity/scenario`
 
-Authenticated, observe-only projection of a topology change. Query:
-`add_rtmp`, `add_rtmps`, `add_srt` (the added outputs by how they send)
-and `add_stages` (non-negative integers, default `0`), and `pipeline_id`
-(optional). A malformed query is `400`, after authentication. The response
-is `{ addOutputs: { rtmp, rtmps, srt }, addStages, ratedBy, ingest,
-calibration, baseline, projected }`. Both sides price one sample of
-the current workload on the calibration priors: `baseline` as it is,
-`projected` with the added outputs and shared stages. Neither carries a
-measured flow (`flowMeasured` is `false`), so they compare like with like;
-the measured flow of running shards is in `/metrics/system`'s `capacity`,
-which a scenario does not change. `projected.flow.status` (`healthy`,
-`saturated`, `overloaded`) is the model's judgement of the projected hottest
-center. It decides and admits nothing.
+Query: `add_rtmp`, `add_rtmps`, `add_srt`, `add_stages` (non-negative
+integers, default 0) and optional `pipeline_id`. A malformed query is `400`
+after authentication. Returns `{ addOutputs: { rtmp, rtmps, srt },
+addStages, ratedBy, ingest, calibration, baseline, projected }`.
 
-The model (`calibration.modelVersion` 3) prices each output with its own
-pipeline's ingest, not the sum of all ingests: egress work and NIC bytes
-are the sum over outputs of their pipeline's rate. An RTMP or RTMPS output
-costs its pipeline's media packet rate (RTMPS's TLS cost is not priced). An
-SRT output costs twice that: the egress shard sizing priors fit 128 RTMP or
-64 SRT outputs on one shard (the SRT figure measured at 4.8 Mbit/s), and the
-capacity model takes its SRT weight from the same priors. HLS, sink and
-pipeline outputs are priced as RTMP. The added outputs
-carry `pipeline_id`'s ingest, which must be live (else `422`: its rate is
-unknown), or else the highest-bitrate live ingest; `ratedBy` and `ingest`
-(`{ bps, pps }`) say which. With no live ingest, `ratedBy` is `null` and
-they carry nothing. A new rendition is one more shared stage (`add_stages`).
-
-`calibration` is what both sides were priced on: `limits` (the six
-service-center ceilings), `sources` (each limit `configured` through
-`RESTREAM_CAPACITY_*` or a `prior` scaled to `priorCpus`; an unparseable or
-non-positive value is the prior) and `safeUtilization`.
+- Both sides price one sample of the current workload on the calibration
+  priors (`flowMeasured: false`), so they compare like with like.
+  `projected.flow.status` is `healthy`, `saturated` or `overloaded`.
+- The model (`calibration.modelVersion` 3, `CAPACITY_MODEL_VERSION`) prices
+  each output with its own pipeline's ingest. RTMP/RTMPS cost the media
+  packet rate (TLS not priced); SRT costs twice that; HLS, sink and pipeline
+  outputs are priced as RTMP.
+- Added outputs carry `pipeline_id`'s ingest, which must be live (else
+  `422`), or else the highest-bitrate live ingest. `ratedBy` and `ingest`
+  (`{ bps, pps }`) say which; both are `null` with no live ingest.
+- `calibration` holds `limits` (six service-center ceilings), `sources`
+  (each `configured` via `RESTREAM_CAPACITY_*` or a `prior` scaled to
+  `priorCpus`) and `safeUtilization`.
 
 ### `GET /api/v1/engine`
 
-Authenticated build/runtime information:
-
 ```json
 {
-  "restream": {
-    "version": "0.1.0",
-    "commit": "abc558b",
-    "nativeBuildId": "..."
-  },
-  "toolchain": {
-    "rustc": "1.96.0",
-    "target": "x86_64-unknown-linux-gnu",
-    "llvm": "22.1.2",
-    "gccRuntime": "13.3.0"
-  },
-  "nativeLibraries": {
-    "ffmpeg": {
-      "version": "8.1.2",
-      "configuration": "... --enable-x86asm ...",
-      "license": "GPL version 2 or later",
-      "x86Assembly": true
-    },
-    "srt": {
-      "version": "srt-rs",
-      "buildVersion": "srt-rs",
-      "license": "Apache-2.0",
-      "bondingAvailable": true
-    },
-    "sqlite": { "version": "3.x", "sourceId": "...", "license": "blessing" },
-    "x264": {
-      "version": "0.164.x",
-      "license": "GPL-2.0-or-later",
-      "versionSource": "linked pkg-config metadata at build time"
-    },
-    "x265": {
-      "version": "3.x",
-      "license": "GPL-2.0-or-later",
-      "versionSource": "linked pkg-config metadata at build time"
-    }
-  },
-  "sbom": {
-    "format": "CycloneDX",
-    "specVersion": "1.5",
-    "endpoint": "/api/v1/engine/sbom",
-    "componentCount": 100,
-    "rustComponentCount": 85,
-    "nativeComponentCount": 16,
-    "nativeComponents": ["libavcodec", "..."],
-    "licensesIncluded": true
-  },
-  "os": {
-    "platform": "linux",
-    "arch": "x86_64",
-    "hostname": "host",
-    "kernelVersion": "6.x",
-    "uptime": 12345,
-    "totalMem": 17179869184,
-    "cpu": {
-      "modelName": "13th Gen Intel(R) Core(TM) i9-13900H",
-      "logicalCpus": 20,
-      "physicalCores": 10,
-      "threadsPerCore": 2.0,
-      "virtualization": "VT-x",
-      "hypervisorDetected": true,
-      "hypervisorVendor": "Microsoft",
-      "flags": ["sse4_1", "sse4_2", "avx", "avx2", "fma", "aes", "vmx", "hypervisor"]
-    }
-  }
+  "restream": { "version": "0.1.0", "commit": "abc558b", "nativeBuildId": "..." },
+  "toolchain": { "rustc": "...", "target": "x86_64-unknown-linux-gnu", "llvm": "...", "gccRuntime": "..." },
+  "nativeLibraries": { "ffmpeg": {}, "srt": {}, "sqlite": {}, "x264": {}, "x265": {} },
+  "sbom": { "format": "CycloneDX", "specVersion": "1.5", "endpoint": "/api/v1/engine/sbom" },
+  "os": { "platform": "linux", "arch": "x86_64", "cpu": { "modelName": "...", "logicalCpus": 20, "flags": [] } }
 }
 ```
 
-For native libraries that expose both `version` and `buildVersion`, `version` is
-queried from the library loaded by the running process and `buildVersion` is the
-version resolved by the build script at compile time. They should normally
-match; a mismatch is a packaging/linking diagnostic.
-
-Native versions are obtained from the running libraries where they expose a
-runtime API. x264 and x265 have no public runtime version call, so their exact
-linked pkg-config versions are embedded at build time and labeled accordingly.
-
-The `os.cpu` object is intentionally a production-debug subset rather than an
-`lscpu` clone. It identifies the CPU model, core/thread topology, virtualization
-context, and acceleration features that can explain codec throughput, WSL/cloud
-behavior, and native-library performance differences.
+- Native versions come from the loaded library where it has a runtime API.
+  Where a library reports both `version` (runtime) and `buildVersion` (build
+  script), a mismatch is a packaging or linking problem. x264 and x265 have
+  no runtime version call, so their pkg-config versions are embedded at
+  build time and labeled so.
+- `os.cpu` is a debugging subset: model, core/thread topology,
+  virtualization and the acceleration flags that explain codec throughput.
 
 ### `GET /api/v1/engine/sbom`
 
-Authenticated CycloneDX 1.5 JSON software bill of materials. The response uses
-content type `application/vnd.cyclonedx+json; version=1.5` and contains:
+Content type `application/vnd.cyclonedx+json; version=1.5`. Contains the
+Restream component and build identity; every resolved normal Rust crate from
+the locked dependency graph (version, package URL, source, license); the
+FFmpeg libraries, the srt-rs core and Tokio transport, SQLite, x264, x265,
+glibc where it applies, Rust std, libstdc++ and libgcc; and SPDX license
+expressions or `NOASSERTION`. Development and benchmark dependencies are not
+included.
 
-- the Restream application component and build identity;
-- every resolved normal/runtime Rust crate from Cargo's locked dependency
-  graph, including version, Cargo package URL, source, and declared license;
-- FFmpeg component libraries, the srt-rs protocol core and Tokio transport,
-  SQLite, x264, x265, glibc when applicable, Rust's standard library,
-  libstdc++, and libgcc;
-- runtime-reported versions where an API exists, with explicit provenance for
-  build-resolved versions;
-- SPDX license expressions or `NOASSERTION` when upstream metadata does not
-  declare a license.
-
-The SBOM describes software present in the running artifact. It intentionally
-does not include development-only or benchmark dependencies.
-
-## HLS Pull
+## Operator views
 
 | Method | Route | Purpose |
 |---|---|---|
-| `GET` | `/hls/:pipelineId` | Playlist alias |
-| `GET` | `/hls/:pipelineId/index.m3u8` | Primary media playlist |
-| `GET` | `/hls/:pipelineId/master.m3u8` | Master playlist with alternate audio |
-| `GET` | `/hls/:pipelineId/seg<N>.m4s` | Video media segment alias |
-| `GET` | `/hls/:pipelineId/video/index.m3u8` | Video-only media playlist |
-| `GET` | `/hls/:pipelineId/video/init.mp4` | Video init segment |
-| `GET` | `/hls/:pipelineId/video/seg<N>.m4s` | Video media segment |
-| `GET` | `/hls/:pipelineId/audio/:trackIndex/index.m3u8` | Audio-only media playlist |
-| `GET` | `/hls/:pipelineId/audio/:trackIndex/init.mp4` | Audio init segment |
-| `GET` | `/hls/:pipelineId/audio/:trackIndex/seg<N>.m4s` | Audio media segment |
-| `GET` | `/hls/inputs/:inputId/master.m3u8` | Input-scoped master playlist |
-| `GET` | `/hls/inputs/:inputId/video/index.m3u8` | Input-scoped video playlist |
-| `GET` | `/hls/inputs/:inputId/video/init.mp4` | Input-scoped video init segment |
-| `GET` | `/hls/inputs/:inputId/video/seg<N>.m4s` | Input-scoped video media segment |
-| `GET` | `/hls/inputs/:inputId/audio/:trackIndex/index.m3u8` | Input-scoped audio playlist |
-| `GET` | `/hls/inputs/:inputId/audio/:trackIndex/init.mp4` | Input-scoped audio init segment |
-| `GET` | `/hls/inputs/:inputId/audio/:trackIndex/seg<N>.m4s` | Input-scoped audio media segment |
-
-Responses:
-
-- playlist: `application/vnd.apple.mpegurl`
-- video segment / init: `video/mp4`
-- audio segment / init: `audio/mp4`
-- `404`: no active store, no completed segments, or evicted segment
-- `400`: invalid segment filename
-
-These routes require the dashboard session cookie. Input-scoped stores are
-created for connected inputs independently of selection, allowing an operator
-to inspect a warm standby without forwarding it into pipeline outputs.
-
-All HLS routes respond with `Access-Control-Allow-Origin: *` and allow `GET`,
-`OPTIONS`, `Content-Type`, and `Range` so browser-based players on other
-origins can pull segments and playlists without CORS preflight errors.
-
-## HLS Push Ingest
-
-| Method | Route | Purpose |
-|---|---|---|
-| `PUT`, `POST` | `/ingest/hls/:streamKey/*path` | Upload a `.m3u8` playlist, an MPEG-TS `.ts` segment, or an fMP4 `.mp4`/`.m4s` object |
-| `DELETE` | `/ingest/hls/:streamKey/*path` | Accepted and ignored (FFmpeg `delete_segments`) |
-
-The stream key is checked first, before any body byte is read, under the
-`hls-publish` rate-limit scope. These routes take no session cookie, and the
-4 MiB API body limit does not apply to them; their own limits do.
-
-| Status | Meaning |
-|---|---|
-| `200` | The playlist was applied, the segment completed a listed sequence, or the object was a duplicate or belonged to another variant |
-| `202` | The segment is held until a playlist lists it |
-| `400` | The object path is invalid, the playlist does not parse, or the fMP4 object does not parse (no `moof` + `mdat` fragment, no `tfdt` in a `traf`, an explicit `tfhd` base offset, a truncated object) |
-| `403` | Wrong key, disabled input, or banned client |
-| `405` | Any other method (`Allow: PUT, POST, DELETE`) |
-| `408` | The request body sent nothing for 10 s, took longer than max(4 × target duration, 40 s), or the key's 2 upload slots stayed busy for 10 s |
-| `409` | Another publisher (RTMP, SRT, file) holds the input |
-| `413` | Over the limit: playlist 1 MiB, segment 64 MiB, fMP4 init 4 MiB |
-| `415` | Neither `.m3u8`, `.ts` nor `.mp4`/`.m4s`; a stream that mixes MPEG-TS and fMP4 objects; an fMP4 segment under a playlist that names no `EXT-X-MAP`; or an fMP4 init whose codec is neither H.264, HEVC nor AAC |
-| `503` | The 512 MiB HLS ingest buffer is full (FFmpeg never reads this: the segment is lost), or the session ended with the object queued (all `Retry-After: 1`); or the key lookup or session is unavailable |
-
-fMP4 ingest is H.264 or HEVC video and AAC-LC audio, and it names its init segment
-through the playlist's `EXT-X-MAP` URI rather than by file extension. That
-init is remembered per stream key, so an encoder that uploads it once keeps
-publishing after its session ends; a refused init upload voids that memory
-(encoders never read a refusal); a segment that fails to demux is dropped
-and the session continues.
-
-Ordering, sessions and per-key bounds are described in
-[HLS push ingest](media-pipeline.md#hls-push-ingest).
-
-## Operator v1 Endpoints
-
-All `/api/v1` routes require the session cookie.
-
-### `GET /api/v1/engine`
-
-Authenticated canonical engine/runtime status envelope for the frontend control
-plane.
-
-### `GET /api/v1/engine/health`
-
-Authenticated engine health snapshot. Returns the same pipeline/ingest/output
-health model documented above on the v1 authenticated control-plane surface.
-
-Query params:
-
-| Param | Default | Notes |
-| --- | --- | --- |
-| `view` | `full` | `summary` trims steady-state overview/control polls down to per-pipeline status, bitrate, uptime, recording state, and reconnect/grace flags. Pipeline, inspect, and publisher-quality flows continue using `full`. |
-
-Summary response shape:
-
-```json
-{
-  "status": "ready",
-  "pipelines": {
-    "pipeline_id": {
-      "input": {
-        "status": "on",
-        "publishStartedAt": "2026-06-20T11:59:00Z",
-        "probeReady": true,
-        "probeStatus": "ready",
-        "probePendingMs": null,
-        "bytesReceived": 12000000,
-        "bytesSent": 24000000,
-        "readers": 2,
-        "bitrateKbps": 1600,
-        "publisher": {
-          "protocol": "srt",
-          "remoteAddr": "203.0.113.10:50000"
-        },
-        "disconnectGraceActive": false,
-        "disconnectGraceRemainingMs": null
-      },
-      "outputs": {
-        "output_id": {
-          "status": "running",
-          "uptimeSecs": 42.5,
-          "totalSize": 16000000,
-          "bitrateKbps": 1500,
-          "retrying": false
-        }
-      },
-      "recording": { "enabled": false, "active": false }
-    }
-  },
-  "runtimeLimits": {
-    "nofile": {
-      "configured": 65536,
-      "soft": 65536,
-      "hard": 65536,
-      "satisfied": true
-    }
-  },
-  "hostSettings": [
-    {
-      "key": "runtime.nofile",
-      "label": "Open file descriptors",
-      "current": 65536,
-      "required": 65536,
-      "unit": "fds",
-      "status": "ok",
-      "detail": "hard limit 65536"
-    },
-    {
-      "key": "runtime.cpu.allowed_list",
-      "label": "Allowed CPU mask",
-      "current": "0-5",
-      "required": null,
-      "unit": "cpuset",
-      "status": "ok",
-      "detail": "process scheduler affinity (6 CPUs); container cpusets can make this smaller than the host"
-    }
-  ]
-}
-```
+| `GET` | `/api/v1/overview` | Pipeline counts, alert counts, SRT listener |
+| `GET` | `/api/v1/alerts` | Alerts across all pipelines, optional resolved history |
+| `GET` | `/api/v1/events` | Lifecycle event log |
+| `GET` | `/api/v1/pipelines/:pipelineId/summary` | One pipeline's operator summary |
+| `GET` | `/api/v1/pipelines/:pipelineId/alerts` | One pipeline's alerts |
+| `GET` | `/api/v1/engine/resource-map` | Resource attribution |
 
 ### `GET /api/v1/overview`
-
-Engine-wide operator summary: pipeline counts, alert rollup, and listener state.
 
 ```json
 {
@@ -1681,191 +1209,102 @@ Engine-wide operator summary: pipeline counts, alert rollup, and listener state.
   "degradedPipelines": 0,
   "failedOutputs": 0,
   "alertCount": { "critical": 0, "warning": 1 },
-  "srtListener": { ... }
+  "srtListener": {}
 }
 ```
 
+`degradedPipelines` counts pipelines with any alert; `failedOutputs` counts
+outputs not `running` on live pipelines.
+
 ### `GET /api/v1/alerts`
-
-Aggregate alerts across all pipelines. Each alert carries `id`, `severity`,
-`scope`, `evidence`, `recommendedAction`, `firstSeen`, and `lastSeen` fields.
-Sorted Critical-first. `firstSeen` is stamped on first observation;
-`lastSeen` updates on every subsequent observation. Each `evidence` entry is
-`{ "signal", "confidence" }`: `measured` is a reading the engine took
-(a counter, a phase, a ratio of two readings at one instant), `derived` a
-conclusion its rules drew from readings (the outputs a shard affects, the
-layers a diagnosis ruled out).
-
-An alert no longer observed leaves `alerts` and enters `resolved`
-(newest first) as `{ "alert", "resolvedAt" }`: the alert as last observed,
-and the first read that no longer listed it, so the condition ended between
-`alert.lastSeen` and `resolvedAt`. Alerts are observed when this route or a
-pipeline's alerts are read, so `resolvedAt` is no finer than the reads. The
-engine keeps the last 256 resolved alerts, in memory (a restart forgets
-them). History is opt-in: `resolved` is present only with query param
-`since` (RFC 3339), and holds those resolved at or after it; a value that
-is not RFC 3339 is `400` (after authentication). `resolvedCompleteFrom`
-says after when the kept history is complete (the engine's start, or the
-latest evicted entry's close): a `since` at or before it may be missing
-some. Each condition keeps one entry, at its latest closing, so a flapping
-alert does not evict the others. A pipeline summary read only stamps
-alerts already open: it lacks the stage, reader and fabric inputs, so it can
-neither tell that an alert ended nor be trusted to open one. Engine-level alerts include RTMP listener
-file-descriptor exhaustion, and a runtime nofile limit below the configured
-target.
-
-Output alerts come from the output's diagnosis (see Runtime State) and
-carry it as `diagnosis`, with a `ruled out: ...` evidence line. One cause
-raises one alert. An output whose cause is its pipeline's ingest has no
-alert of its own (the pipeline's `no_publisher` alert covers it). An output
-whose cause is its fabric shard has none either: the shard's engine alert
-(`panicked`, `stalled`, or `stopped` while outputs remain on it) counts it
-as `affectedOutputs`.
 
 ```json
 {
   "generatedAt": "...",
-  "alerts": [ { "id": "...", "severity": "Warning", "evidence": [ { "signal": "lagSlots = 900", "confidence": "measured" } ], ... } ],
-  "resolved": [ { "alert": { "id": "...", ... }, "resolvedAt": "..." } ],
+  "alerts": [ { "id": "...", "severity": "Warning", "evidence": [ { "signal": "lagSlots = 900", "confidence": "measured" } ] } ],
+  "resolved": [ { "alert": { "id": "..." }, "resolvedAt": "..." } ],
   "resolvedCompleteFrom": "..."
 }
 ```
 
+- Alerts carry `id`, `severity`, `scope`, `evidence`, `recommendedAction`,
+  `firstSeen` and `lastSeen`, sorted critical first. Evidence confidence is
+  `measured` (a reading) or `derived` (a rule's conclusion).
+- History is opt-in: `resolved` and `resolvedCompleteFrom` appear only with
+  `?since=` (RFC 3339; anything else is `400` after authentication). An alert
+  enters `resolved` on the first read that no longer lists it, so
+  `resolvedAt` is only as fine as the reads.
+- The last 256 resolved alerts are kept in memory (`RESOLVED_CAP`), one entry
+  per condition at its latest closing.
+- The alert catalogue (ids, thresholds, which causes raise no output alert)
+  is in [Observability](observability.md#alerts).
+
+`GET /api/v1/pipelines/:pipelineId/alerts` returns `{ generatedAt, alerts }`
+with the same alert shape. A pipeline summary read only stamps alerts that
+are already open: it lacks stage, reader and fabric inputs, so it neither
+opens nor resolves any.
+
 ### `GET /api/v1/events`
 
-Lifecycle event log. Query params: `pipeline_id` (optional filter),
-`limit` (default 100, max 1000).
-
-```json
-{
-  "generatedAt": "...",
-  "events": [ { "seq": 1, "kind": "IngestConnected", "pipelineId": "...", "timestamp": "..." } ]
-}
-```
+`pipeline_id` (optional) and `limit` (default 100, max 1000; the log keeps
+the last 1000 events, `MAX_EVENTS`). Returns
+`{ generatedAt, count, events: [{ seq, kind, pipelineId, timestamp, … }] }`.
 
 ### `GET /api/v1/pipelines/:pipelineId/summary`
 
-Operator-focused pipeline view: source state, output rollup, recording,
-HLS preview, alerts. Returns 404 for unknown pipeline IDs.
-
-### `GET /api/v1/pipelines`
-
-Authenticated pipeline list with ingest URLs and configured pipeline metadata.
-
-### `GET /api/v1/pipelines/:pipelineId`
-
-Authenticated pipeline detail endpoint. Returns one pipeline plus its
-configured outputs. Returns 404 for unknown pipeline IDs.
-
-### `GET /api/v1/pipelines/:pipelineId/alerts`
-
-Alerts for a single pipeline. Same alert shape as the aggregate endpoint.
+Operator summary: `input`, `source` (`status`, `bitrateKbps`, `protocol`,
+`readers`), output rollup, graph node and edge counts, recording, HLS
+preview and alerts. `404` for an unknown pipeline.
 
 ### `GET /api/v1/engine/resource-map`
 
-Authenticated resource attribution snapshot for Inspect and agent workflows.
-Without query params it returns `scope.kind = "runtime"` for the whole restream
-runtime. With `pipeline_id=<id>` it returns `scope.kind = "pipeline"` and filters
-stage/output nodes to that pipeline.
+Without `pipeline_id`, `scope.kind` is `runtime`; with it, `pipeline`, and
+stage and output nodes are filtered to that pipeline.
 
-Query parameters:
+| Param | Default | Notes |
+|---|---|---|
+| `view` | `grouped` | `summary`: counters only. `grouped`: outputs collapsed by kind, protocol and execution. `detail`: top nodes plus, at runtime scope, `memoryAccounting`. Unknown values fall back to `grouped`. |
+| `top_n` | 25 | Clamped to 1–200 |
 
-- `view=grouped|summary|detail`: defaults to `grouped`. `summary` returns only
-  summary counters and no nodes. `grouped` collapses high-cardinality resources
-  such as outputs by kind/protocol/execution. `detail` returns top individual
-  nodes and, at runtime scope only, the runtime-wide memory-accounting payload
-  (`memoryAccounting`); a pipeline-scoped map returns `memoryAccounting: null`.
-- `top_n=<n>`: caps returned nodes, default `25`, maximum `200`.
+- The summary holds measured process and child fields (CPU, RSS, threads,
+  fds, FFmpeg children, SRT sender permits) and fabric shard counters
+  (`fabricShardThreadCount`, `fabricShardStalledCount`,
+  `fabricShardPanickedCount`). Process fields, `retainedPayloadBytes` and
+  `activeTranscoderBuffers` are runtime-wide at either scope.
+- Node `execution` is `tokio_task`, `os_thread`, `shard_thread`,
+  `child_process`, `shared` or `process`. A fabric egress node is
+  `shard_thread` with `threads.appOwned: 0`; an egress off the fabric is
+  `tokio_task`. Output nodes report `memory: null`.
+- `egress_shard` nodes (`feedId`, `shardIndex`, `state`) are every live shard
+  at runtime scope, and the shards this pipeline's outputs are placed on at
+  pipeline scope. They hold no attributed memory (`confidence: unmeasured`)
+  and are cut first when nodes exceed `top_n`.
+- Memory confidence: `measured` (process RSS, child RSS, thread/fd counts),
+  `derived` (ring payload stats, stage counters), `estimated` (unassigned
+  overheads), `unmeasured` (egress shards).
+- Some nodes carry `judgement` `{ verdict, center, utilization, measured,
+  reason }`. A shard is `limiting` when not `healthy`, at 80% or more of its
+  command queue, or without progress for 1 s; else `clear`. A fabric egress
+  node takes its shard's judgement. FFmpeg stages and the source ring take
+  their shared pool's utilization: `limiting` at 100%, `pressured` at the
+  safe utilization (80%), else `clear`.
+- `limits` has `totalNodeCount`, `returnedNodeCount`, `truncatedNodeCount`
+  and `maxTopN`.
 
-The summary contains measured process and child-process fields such as CPU,
-RSS, thread count, file descriptor count, child FFmpeg count, and active SRT
-sender thread permits, plus egress-fabric shard counters
-(`fabricShardThreadCount`, `fabricShardStalledCount`,
-`fabricShardPanickedCount`) over the shards the response lists. The process
-fields and `retainedPayloadBytes` and `activeTranscoderBuffers` are runtime-wide
-at either scope; the node list, the shard counters and the ingest, stage and
-egress counts follow the scope. Nodes include
-execution ownership (`tokio_task`, `os_thread`, `shard_thread`,
-`child_process`, `shared`, or `process`) plus memory attribution with a
-confidence marker. An egress output node's `execution` is always
-`shard_thread` (not `os_thread`/`tokio_task`) — every network egress output
-is fabric-owned, running on a shared shard thread it doesn't exclusively
-own, so `threads.appOwned` is `0` for it. Responses include `egress_shard`
-nodes (`feedId`, `shardIndex`, `state`: `healthy`, `stalled`, `stopped`, or
-`panicked`; see `egressFabricShards` under `/api/v1/engine/health` above for
-the same underlying data): global scope lists every live fabric shard;
-pipeline scope lists the shards this pipeline's running outputs are placed
-on, matched on feed and shard index (every feed numbers its shards from 0,
-and a shard thread serves only its feed). A shard node holds no attributed
-memory (`confidence: unmeasured`), so with more nodes than `top_n` it is among
-the first cut; read `limits.truncatedNodeCount`. An output node reports
-`memory: null` and no hotspots: it holds no queue of its own and reads its
-feed's ring in place; a group of outputs reports `memory: null` too. The
-memory attribution confidence marker is one of:
+## Telemetry
 
-- `measured`: process RSS, child FFmpeg RSS, process thread/fd counts
-- `derived`: ring payload stats, stage counters
-- `estimated`: overheads that are intentionally not assigned to exact nodes
-- `unmeasured`: egress shards, which hold memory this view does not measure
-
-Some nodes carry `judgement`: whether the node limits the pipeline.
-
-- An `egress_shard` node is judged on its own command queue, progress age
-  and state, through the flow diagnosis the engine applies to its deepest
-  shard: `limiting` when it is not `healthy`, when its queue is at 80% of its
-  bound or more, or when it has not progressed for 1 s; otherwise `clear`.
-  A shard has no `pressured` tier: its 80% queue mark is already the
-  diagnosis's saturation point.
-- A fabric `egress` node takes the judgement of the shard it is placed on
-  (`fabricFeed`, `shardId`), so a stalled sibling shard does not touch it.
-  An output off the fabric has none.
-- A child-process stage or group (`ffmpeg`) and the source ring (`memory`)
-  draw on a pool every pipeline shares, and take its utilization against
-  the calibrated limit: `limiting` at 100% or more, `pressured` at the
-  model's safe utilization (80%) or more, otherwise `clear`.
-
-Each judgement carries `verdict`, `center`, `utilization` (the shard's queue
-against its bound, or the pool's utilization), `measured` (`true` for a
-shard's own measurement, `false` for the calibration priors) and a
-plain-language `reason`. Other nodes have no `judgement`.
-
-Responses include `limits.totalNodeCount`, `limits.returnedNodeCount`, and
-`limits.truncatedNodeCount` so large fleets can show that the view is grouped or
-capped. Agent context uses summary mode by default; investigation responses use
-grouped mode unless a future explicit drill-down tool asks for detail.
-
-### `GET /api/v1/pipelines/:pipelineId/graph`
-
-Authenticated pipeline graph endpoint. Returns 404 for unknown pipeline IDs.
-
-### `POST /api/v1/pipelines/:pipelineId/diagnostics/run`
-
-Authenticated JSON endpoint returning a complete, ordered diagnostics report.
-
-### `GET /api/v1/settings`
-
-Authenticated settings/configuration read endpoint.
-Supports `?jobs=latest` for consumers that only need the newest job per output,
-and `?view=dashboard` for the slim dashboard config shape used by runtime
-overview/control flows.
-
-### `PATCH /api/v1/settings`
-
-Authenticated settings/configuration update endpoint. A `backendPolicy`
-object from older dashboards is accepted and ignored: every FFmpeg stage runs
-as an external process.
-
-## Engineer v1 Endpoints
-
-All engineer endpoints require the session cookie.
+| Method | Route | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/measure` | Fixed-size counters for capacity measurement |
+| `GET` | `/api/v1/engine/telemetry` | Every ingest, input, stage and egress |
+| `GET` | `/api/v1/pipelines/:pipelineId/telemetry` | One pipeline's ingest, ring, stages, egresses, delivery |
+| `GET` | `/api/v1/stages/:stageKey/telemetry` | One stage by key (`404` if inactive) |
 
 ### `GET /api/v1/measure`
 
-Fixed-shape counters for capacity measurement: the response size does not
-grow with output count. Byte fields are sums over every ring or queue of that
-kind; `delivery` folds every pipeline's per-feed delivery rows (as in
-pipeline telemetry), with `ratioMin` and `jainMin` `null` until an output has
-a delivery sample.
+The response size does not grow with output count. Byte fields sum every ring
+or queue of their kind; `delivery` folds every pipeline's per-feed rows, with
+`ratioMin` and `jainMin` `null` until an output has a delivery sample.
 
 ```json
 {
@@ -1873,95 +1312,133 @@ a delivery sample.
   "activeTranscoderBuffers": 0, "ingestBytesReceived": 123456789,
   "retainedPayloadBytes": 4194304, "sourceRingPayloadBytes": 4194304,
   "transcoderRingPayloadBytes": 0, "tsMuxerRingPayloadBytes": 0,
-  "delivery": { "destinations": 500, "rated": 500, "delivered": 500,
-                "ratioMin": 0.97, "jainMin": 0.9999 }
+  "delivery": { "destinations": 500, "rated": 500, "delivered": 500, "ratioMin": 0.97, "jainMin": 0.9999 }
 }
 ```
 
 ### `GET /api/v1/engine/telemetry`
 
-Engine-wide telemetry: all active ingests, processing stages with throughput
-counters, egresses, and transcoder buffer count.
+Returns `{ generatedAt, ingests, inputs, stages, egresses,
+activeTranscoderBuffers, memoryAccounting }`.
 
-```json
-{
-  "generatedAt": "...",
-  "ingests": [
-    { "pipelineId": "...", "protocol": "rtmp", "uptimeSecs": 42.5, "bytesReceived": 12345678, "metrics": { ... } }
-  ],
-  "stages": [
-    { "stageKey": "pipe1:video:720p", "pipelineId": "pipe1", "kind": "video:720p", "metrics": { "packetsIn": 100, "packetsOut": 100, "bytesIn": 50000, "bytesOut": 30000, "processingUs": 1200 }, "pipeMetrics": { ... } }
-  ],
-  "egresses": [
-    {
-      "outputId": "...",
-      "pipelineId": "...",
-      "protocol": "rtmp",
-      "targetUrl": "rtmp://...",
-      "targetAddr": "203.0.113.10:1935",
-      "status": "running",
-      "phase": "sending",
-      "uptimeSecs": 42.0,
-      "bytesOut": 9876543,
-      "lastProgressAt": "...",
-      "lastProgressAgeMs": 250,
-      "lastError": null,
-      "lastErrorAt": null,
-      "failurePhase": null,
-      "fabric": true,
-      "fabricFeed": "rtmp:pipe-1:source",
-      "shardId": 1,
-      "quality": {
-        "tcpCongestionAlgorithm": "cubic",
-        "tcpRttMs": 12.4,
-        "tcpSendRateMbps": 4.8,
-        "tcpNotsentBytes": 0,
-        "tcpSndCwnd": 10,
-        "tcpTotalRetrans": 0,
-        "mbpsSendRate": null,
-        "srtBonded": null
-      },
-      "metrics": { ... }
-    }
-  ],
-  "activeTranscoderBuffers": 2
-}
-```
+- `ingests[]`: `pipelineId`, `protocol`, `uptimeSecs`, `bytesReceived`,
+  `metrics`.
+- `inputs[]`: per session `inputId`, `uptimeSecs`, `bytesReceived`,
+  `quality`.
+- `stages[]`: `stageKey`, `pipelineId`, `kind`, `metrics` (`packetsIn`,
+  `packetsOut`, `bytesIn`, `bytesOut`, `processingUs`), `pipeMetrics`.
+- `egresses[]`: `outputId`, `pipelineId`, `protocol`, `targetUrl`,
+  `targetAddr`, `status`, `phase`, `uptimeSecs`, `bytesOut`,
+  `lastProgressAt`, `lastProgressAgeMs`, `lastError`, `lastErrorAt`,
+  `failurePhase`, `fabric`, `fabricFeed`, `shardId`, `quality` (TCP or SRT
+  sender stats), `metrics`.
 
 ### `GET /api/v1/pipelines/:pipelineId/telemetry`
 
-Pipeline-scoped telemetry: ingest, source ring buffer, processing stages,
-and egresses for a single pipeline.
+Returns `{ generatedAt, pipelineId, ingest, sourceRing, stages, egresses,
+delivery }`. `sourceRing` has `fill`, `capacity`, `fillPercent`,
+`estimatedPktRatePerSec`, `bufferDepthSecs`, `payloadStats` and `readers`
+(`name`, `lagSlots`, `overflowCount`, `packetAgeMs`). Fabric outputs are not
+ring readers, so a reader overflow sum does not cover them.
 
-```json
-{
-  "generatedAt": "...",
-  "pipelineId": "...",
-  "ingest": { "protocol": "srt", "uptimeSecs": 10.0, "bytesReceived": 500000, "metrics": { ... } },
-  "sourceRing": { "fill": 42, "capacity": 8192, "readers": [ { "name": "...", "lagSlots": 5, "overflowCount": 0, "packetAgeMs": 120 } ] },
-  "stages": [ { "kind": "video:720p", "metrics": { ... } } ],
-  "egresses": [ { "outputId": "...", "uptimeSecs": 10.0, "bytesOut": 400000 } ],
-  "delivery": [ { "feed": "pipe1:source", "destinations": 3, "rated": 3, "delivered": 3, "floor": 0.95, "ratioMin": 0.998, "jain": 0.9999 } ]
-}
-```
-
-`delivery` groups outputs by the stage they read and reports how many met the
-delivery floor and how evenly they were served; see
-[Observability](observability.md#per-destination-delivery).
+`delivery` has one row per feed: outputs that read the same stage over the
+same protocol. Each row says how many outputs met the 0.95 delivery floor and
+how evenly they were served (Jain's index)
+(`{ feed, protocol, destinations, rated, delivered, floor, ratioMin, jain }`);
+see [Observability](observability.md#per-destination-delivery).
 
 ### `GET /api/v1/stages/:stageKey/telemetry`
 
-Single-stage telemetry by stage key (e.g. `pipe1:video:720p`). Returns raw
-throughput counters and subprocess pipe metrics (if present). Returns 404
-if the stage is not currently active.
+One stage by key (for example `pipe1:video:720p`): `generatedAt`,
+`stageKey`, `pipelineId`, `kind`, `metrics` and `pipeMetrics` (subprocess
+pipe counters, or `null`).
 
-```json
-{
-  "generatedAt": "...",
-  "stageKey": "pipe1:video:720p",
-  "pipelineId": "pipe1",
-  "kind": "video:720p",
-  "metrics": { "packetsIn": 100, "packetsOut": 100, "bytesIn": 50000, "bytesOut": 30000, "processingUs": 1200 },
-  "pipeMetrics": null
-}
-```
+## HLS pull
+
+All routes are `GET` and need the session cookie (`require_hls_access`).
+
+| Route | Purpose |
+|---|---|
+| `/hls/:pipelineId`, `/hls/:pipelineId/index.m3u8` | Primary media playlist |
+| `/hls/:pipelineId/master.m3u8` | Master playlist with alternate audio |
+| `/hls/:pipelineId/:segment` | Video segment alias |
+| `/hls/:pipelineId/video/index.m3u8` | Video media playlist |
+| `/hls/:pipelineId/video/init.mp4` | Video init segment |
+| `/hls/:pipelineId/video/:segment` | Video segment |
+| `/hls/:pipelineId/audio/:trackIndex/index.m3u8` | Audio media playlist |
+| `/hls/:pipelineId/audio/:trackIndex/init.mp4` | Audio init segment |
+| `/hls/:pipelineId/audio/:trackIndex/:segment` | Audio segment |
+| `/hls/inputs/:inputId/master.m3u8` | Input-scoped master playlist |
+| `/hls/inputs/:inputId/video/index.m3u8` | Input-scoped video playlist |
+| `/hls/inputs/:inputId/video/init.mp4` | Input-scoped video init |
+| `/hls/inputs/:inputId/video/:segment` | Input-scoped video segment |
+| `/hls/inputs/:inputId/audio/:trackIndex/index.m3u8` | Input-scoped audio playlist |
+| `/hls/inputs/:inputId/audio/:trackIndex/init.mp4` | Input-scoped audio init |
+| `/hls/inputs/:inputId/audio/:trackIndex/:segment` | Input-scoped audio segment |
+
+- Content types: playlists `application/vnd.apple.mpegurl`, video
+  `video/mp4`, audio `audio/mp4`.
+- Errors are JSON `{ error, status, code }`: `404` with `hlsNoStream`,
+  `hlsNoSegments` (plus `blockedBy { stage, phase }` when a video stage
+  blocks it), `hlsAudioTrackNotFound`, `hlsSegmentNotFound` or
+  `hlsInitSegmentNotFound`; `400` with `hlsInvalidSegmentName`.
+- Input-scoped stores exist for connected inputs whether or not they are
+  selected, so an operator can watch a warm standby without forwarding it.
+- No CORS headers are sent, so a browser player on another origin cannot
+  fetch these routes.
+
+## HLS push ingest
+
+| Method | Route | Purpose |
+|---|---|---|
+| `PUT`, `POST` | `/ingest/hls/:streamKey/*path` | Upload a `.m3u8` playlist, an MPEG-TS `.ts` segment or an fMP4 `.mp4`/`.m4s` object |
+| `DELETE` | `/ingest/hls/:streamKey/*path` | Accepted and ignored (FFmpeg `delete_segments`) |
+
+The stream key is the credential. It is checked before any body byte is read,
+under the `hls-publish` rate-limit scope; no session cookie is used. These
+routes sit in `create_hls_ingest_router`, outside the 4 MiB API limit and the
+reconciler wake; their own limits apply (`HlsIngestLimits` in
+`src/media/hls_ingest.rs`).
+
+| Status | Meaning |
+|---|---|
+| `200` | Playlist applied, segment completed a listed sequence, or a duplicate or other-variant object |
+| `202` | Segment held until a playlist lists it |
+| `400` | Invalid object path, unparseable playlist, or unparseable fMP4 (no `moof` + `mdat`, no `tfdt` in a `traf`, an explicit `tfhd` base offset, truncated) |
+| `403` | Wrong key, disabled input, banned client, or the key no longer authorizes the input |
+| `405` | Any other method (`Allow: PUT, POST, DELETE`) |
+| `408` | No body bytes for 10 s, body slower than max(4 × target duration, 40 s), or both upload slots of the key busy for 10 s |
+| `409` | Another publisher (RTMP, SRT, file) holds the input |
+| `413` | Over the limit: playlist 1 MiB, segment 64 MiB, fMP4 init 4 MiB |
+| `415` | Not `.m3u8`, `.ts`, `.mp4` or `.m4s`; a stream mixing MPEG-TS and fMP4; an fMP4 segment under a playlist without `EXT-X-MAP`; or an init whose codec is not H.264, HEVC or AAC |
+| `503` | The 512 MiB ingest buffer is full or the session ended with the object queued (both `Retry-After: 1`), or the key lookup or session is unavailable |
+
+- fMP4 ingest carries H.264 or HEVC video and AAC-LC audio. The init segment
+  is named by the playlist's `EXT-X-MAP` URI, not by extension.
+- The init is remembered per stream key, so an encoder that uploads it once
+  keeps publishing after its session ends. A refused init upload voids that
+  memory. A segment that fails to demux is dropped and the session continues.
+- Connections whose first request line targets `/ingest/hls/` are served with
+  HTTP half-close, so encoders that close right after the body still deliver
+  it (`src/api/http_server.rs`).
+
+Ordering, sessions and per-key bounds:
+[HLS push ingest](media-pipeline.md#hls-push-ingest).
+
+## Static pages
+
+| Method | Route | Behavior |
+|---|---|---|
+| `GET` | `/login` | Login page; a valid session is redirected to `./` |
+| `GET` | `/login.html` | Redirect to `login` |
+| `GET` | `/settings.html` | Redirect to `./?w=settings` |
+| `GET` | `/status.html` | Redirect to `./?w=system` |
+| `GET` | `/logo.png`, `/output.css` | Embedded assets |
+| `GET` | any other path | SPA fallback: an asset path serves the asset (an `.html` asset needs a session); any other path needs a session (else redirect to `login`) and serves `index.html` |
+
+- Assets are embedded from `public/` (debug builds read `public/` from disk
+  first). Responses carry a content-hash `ETag`; `If-None-Match` gets `304`.
+- `.html`, `.js` and `.css` are `Cache-Control: no-cache`; other assets
+  `public, max-age=3600`.
+- A nested shell path (`a/b`) is redirected by relative `../` steps, query
+  kept, so the shell works under a proxy path prefix.

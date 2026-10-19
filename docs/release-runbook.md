@@ -1,11 +1,12 @@
 # Release runbook
 
-This runbook defines the human release sequence. Scripts own the gates,
-artifact inventory, shard composition, timeouts, packaging layout, and
-publication mechanics; this page does not repeat their internals.
+A release is three scripts run in order: local due diligence, a GitHub
+dry-run, then tag-and-publish. The scripts own the gates, artifact list,
+shards, timeouts and packaging; this page gives the sequence.
 
 ## Contents
 
+- [Release flow](#release-flow)
 - [Preflight](#preflight)
 - [Run local due diligence](#run-local-due-diligence)
 - [Dispatch the GitHub dry-run](#dispatch-the-github-dry-run)
@@ -13,69 +14,84 @@ publication mechanics; this page does not repeat their internals.
 - [Verify publication](#verify-publication)
 - [Handle a failed publish](#handle-a-failed-publish)
 
+## Release flow
+
+The diagram shows the scripts and the `.github/workflows/release.yml` jobs
+from a clean branch to published artifacts.
+
+```mermaid
+flowchart TD
+  ldd["scripts/release/local-due-diligence.sh vX.Y.Z"] --> push["git push release branch"]
+  push --> dry["scripts/release/dispatch-dry-run.sh"]
+  dry --> wf["release.yml (workflow_dispatch): package-build, full-live-harness, package-evidence, certify"]
+  wf --> ok{"dry-run succeeded for HEAD?"}
+  ok -- no --> fix["fix, push, dispatch again"]
+  fix --> dry
+  ok -- yes --> tag["scripts/release/tag-and-publish.sh vX.Y.Z run-id"]
+  tag --> tagwf["release.yml (tag v*): same jobs plus publish"]
+  tagwf --> gh["GitHub Release assets"]
+  tagwf --> img["scripts/release/publish-image.sh: GHCR vX.Y.Z and latest"]
+```
+
 ## Preflight
 
-Use a clean checkout of the release branch and push its current commit before
-dispatching remote certification. Confirm GitHub CLI authentication and Docker
-availability.
-
-The canonical scripts check their own required tools and inputs. Use their
-`--help` output when setup fails rather than maintaining a separate package,
-scanner, artifact, shard, or timeout list here.
-
-Branch workflow dispatches are non-publishing. Only a version tag starts the
-publishing path.
+- Use a clean checkout of the release branch and push its commit.
+- Confirm `gh` authentication and Docker.
+- Each script checks its own tools; run it with `--help` when setup fails.
+- Branch dispatches never publish. Only a `v*` tag starts publishing.
 
 ## Run local due diligence
 
-Run the local wrapper with the intended version:
+[scripts/release/local-due-diligence.sh](../scripts/release/local-due-diligence.sh)
+runs, in order:
+
+1. format, frontend, API contract, test hygiene and fixture discipline;
+2. the full live harness suite, unless `--skip-harness` is given;
+3. packaging of every supported Linux binary;
+4. release evidence, packaged-frontend smoke and container runtime smoke.
+
+The evidence step needs `cargo-audit`, `cargo-deny`, `grype`, `trivy` and
+Docker.
 
 ```sh
 scripts/release/local-due-diligence.sh <vX.Y.Z>
 ```
 
-The wrapper is the owner of the local gate sequence. It prepares a clean build
-tree, runs current correctness and hygiene gates, exercises the live harness,
-packages supported binaries, and certifies the produced artifacts. Inspect the
-script output for the exact failing owner instead of rerunning a copied
-subsequence from this guide.
-
-If the same commit already has complete live-harness evidence and only the
-packaging/evidence pass must be repeated, the wrapper exposes an explicit
-`--skip-harness` option. Record why it is safe to use.
+Use `--skip-harness` only when the same commit already has complete
+live-harness evidence; record why. When a step fails, read the script output
+for the failing owner instead of rerunning a copied subsequence.
 
 ## Dispatch the GitHub dry-run
 
-Start the non-publishing Release workflow for the pushed branch:
+[scripts/release/dispatch-dry-run.sh](../scripts/release/dispatch-dry-run.sh)
+starts the non-publishing Release workflow for the current branch or a given
+ref. It certifies the exact pushed SHA without creating a GitHub Release or
+pushing images.
 
 ```sh
-scripts/release/dispatch-dry-run.sh <release-branch>
+scripts/release/dispatch-dry-run.sh [ref]
 ```
 
-The script reports the workflow run and exact head SHA. Keep its run ID. If the
-branch changes, dispatch a new dry-run; a run for an older SHA cannot authorize
-publication.
-
-The workflow and release-shard scripts own matrix composition, concurrency,
-runtime-image selection, setup retries, and timeouts. Inspect them or their
-generated output when a job fails; do not copy those values into this runbook.
+Keep the run ID it reports. If the branch moves, dispatch again: a run for
+an older SHA cannot authorize publication. The workflow and
+`scripts/lib/release-shards.sh` own matrix, runtime image, retries and
+timeouts.
 
 ## Publish the certified commit
 
-After the dry-run succeeds, publish from the unchanged clean checkout:
+[scripts/release/tag-and-publish.sh](../scripts/release/tag-and-publish.sh)
+runs from the unchanged clean checkout:
 
 ```sh
 scripts/release/tag-and-publish.sh <vX.Y.Z> <successful-dry-run-id>
 ```
 
-The script verifies the workflow identity, event type, required jobs, result,
-head SHA, and tag state before it pushes anything. Do not recreate those checks
-manually or bypass them with a direct tag push.
+It checks the run's workflow, event, jobs, status, conclusion and head SHA
+against `HEAD`, and the tag state, before it pushes the tag. Do not bypass it
+with a direct tag push. The tag starts the publishing workflow: GitHub
+Release assets plus GHCR `<tag>` and `latest` images.
 
 ## Verify publication
-
-Confirm the publishing workflow completed, then inspect the GitHub Release and
-registry tags:
 
 ```sh
 gh release view <vX.Y.Z> --json tagName,targetCommitish,assets,url
@@ -83,19 +99,19 @@ docker manifest inspect ghcr.io/krsna1729/restream:<vX.Y.Z>
 docker manifest inspect ghcr.io/krsna1729/restream:latest
 ```
 
-The current artifact names and contents are owned by
-`scripts/release/package-binaries.sh`, and the required evidence is owned by
-`scripts/check/release-evidence.sh`. Validate the actual release output
-against those owners rather than against a list copied into this page.
-
-See [Release compliance](release-compliance.md) for the legal and provenance
-properties the packaged bytes must retain.
+Check the assets against their owners:
+[scripts/release/package-binaries.sh](../scripts/release/package-binaries.sh)
+(names and contents) and
+[scripts/check/release-evidence.sh](../scripts/check/release-evidence.sh)
+(evidence). See [Release compliance](release-compliance.md) for the legal
+and provenance properties.
 
 ## Handle a failed publish
 
-If publishing fails before a public GitHub Release exists, inspect the failed
-run and decide whether the unpublished tag should be removed. If a public
-release exists, do not overwrite it; fix forward with a new version.
+- No public GitHub Release yet: inspect the failed run and decide whether to
+  remove the unpublished tag.
+- A public release exists: do not overwrite it. Fix forward with a new
+  version.
 
-Tag deletion is an exceptional, externally visible action. Confirm the release
-state and repository policy before removing either a local or remote tag.
+Tag deletion is visible to everyone. Confirm the release state and
+repository policy before you delete a local or remote tag.

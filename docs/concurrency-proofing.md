@@ -1,304 +1,162 @@
-# Concurrency Proofing
+# Concurrency proofing
 
-This repo has several correctness-sensitive boundaries:
-
-- Tokio task ↔ OS thread handoff
-- Wait/notify or cancel/wake synchronization
-- Shared stage registry create/reuse/cancel/recreate paths
-- Live teardown/recovery behavior across sockets, child processes, and ring readers
-- Status retention after cleanup so operators can see what failed
-
-The goal is not just "tests exist". The goal is that each boundary has the
-right kind of proof for the failure mode it can exhibit.
+Each concurrency-sensitive boundary needs the kind of proof that catches its
+failure mode. This page says which proof catches which bug, how to run the
+gates, and which tests are mandatory. The boundary inventory is the
+[stage boundary proof map](testing.md#stage-boundary-proof-map); the wider
+strategy is the [assurance roadmap](assurance-roadmap.md).
 
 ## Contents
 
-- [Proof Ladder](#proof-ladder)
-- [Which Proof To Add](#which-proof-to-add)
-- [Gate Commands](#gate-commands)
-- [Required Update Discipline](#required-update-discipline)
-- [Common Failure Patterns](#common-failure-patterns)
-- [Current Mandatory Surfaces](#current-mandatory-surfaces)
-- [Next Gaps](#next-gaps)
+- [Which proof catches which bug](#which-proof-catches-which-bug)
+- [Loom models](#loom-models)
+- [Live fault modes](#live-fault-modes)
+- [Gate commands](#gate-commands)
+- [Update discipline](#update-discipline)
+- [Mandatory surfaces](#mandatory-surfaces)
+- [Open gaps](#open-gaps)
 
-## Proof Ladder
+## Which proof catches which bug
 
-Use the narrowest proof that can actually catch the bug:
+Use the narrowest proof that can catch the bug.
 
-1. Unit/regression tests
-   - Use for API-visible state, lifecycle transitions, idempotence, and
-     recreate-after-cancel behavior.
-   - Example: recent ingest/egress status surviving unregister.
-
-2. Loom model checks
-   - Use for wait/cancel, close/wake, seal/migrate, and get-or-create registry
-     races where scheduling order matters more than payload content.
-   - Current loom targets:
-     - `avio_loom`
-     - `egress_feed_wake_loom` (queued coalescing, independent heads and the
-       full-channel retry bit; both arming and taking the retry bit use
-       `AcqRel` swaps, and the consumer clears it before observing the head)
-     - `ring_frame_unit_loom` (a frame-unit read by sequence never returns
-       the unit of a sequence that lapped it, including a batch that
-       overwrote the slot before moving the write index)
-     - `ring_migration_loom`
-     - `input_selection_loom`
-     - `moq_origin_loom` (the MoQ origin's viewer cap never admits past its
-       maximum and every release frees its slot; the ring-to-pump wake over a
-       one-slot channel loses no publication)
-     - `ts_chunk_ring_loom`
-     - `ts_muxer_stage_loom`
-     - `transcoder_stage_loom`
-
-3. Property tests
-   - Use when ordering, permutations, or randomized lifecycle sequences matter.
-   - Good fit for ring invariants, packet ordering, or lifecycle state machines.
-
-4. Live harness chaos tests
-   - Use when the behavior crosses real sockets, child processes, FFmpeg, or
-     OS-thread boundaries.
-   - Current live contract slices: `fault.resilience`, `fault.egress-retry`,
-     `fault.output-stall`, and `recovery`.
-     `fault.egress-retry` proves RTMP and SRT dead sinks surface `retrying`
-     first and then settle to `failed` once the configured retry budget is
-     exhausted.
-     `fault.output-stall` proves a connected RTMP sink that stops draining media
-     surfaces `stalled` in both output status and health instead of looking
-     healthy or failing immediately.
-     `fault.srt-output-stall` proves the SRT equivalents: bounded RSS while
-     retrying against a frozen receiver, and — against the harness's direct
-     Tokio/srt-rs listener (`src/bin/test_harness/srt_raw_sink.rs`) — a real
-     handshake plus delivered data events while healthy siblings keep
-     progressing. srt-rs does not currently expose a native-libsrt-style
-     application-unread receive-buffer hook, so the live test does not claim
-     that unsupported backpressure shape.
-     `recovery` also covers hung HLS PUT destinations timing out, surfacing
-     retry/error state, recovering after the sink restarts, rapid same-pipeline
-     SRT publisher replacement races, repeated RTMP and SRT downstream sink
-     flaps surfacing as recovered-but-unstable output health, and a transcoder
-     stage whose FFmpeg is killed mid-stream: its RTMP output ends the attempt,
-     retries, and delivers again from a new stage process.
-
-5. Benchmarks
-   - Use only for hot-path or end-to-end performance-sensitive changes.
-   - Do not mix measurement claims into correctness-only gates.
-
-## Which Proof To Add
-
-Add loom when a change introduces any of:
-
-- Wait-for-data + cancellation
-- Notify/condvar wakeups
-- Lock-free atomic state transitions
-- Shared registry create/reuse/remove races
-- Shutdown sequencing where "sleep forever" is a possible failure mode
-
-Add a harness test when a change affects any of:
-
-- Destination disconnect/reconnect
-- Ingest disconnect/reconnect
-- Child process teardown
-- Shared stage survival across transient upstream loss
-- Runtime status after cleanup or restart
-
-Add API/frontend contract coverage when:
-
-- Status fields are added, removed, renamed, or change semantics
-- Cleanup now preserves or clears more runtime context
-- Frontend badges or summaries depend on a new backend state
-
-## Gate Commands
-
-Fast proof gate for local loops:
-
-```sh
-cargo xtask concurrency fast
+```mermaid
+flowchart TD
+    bug["Concurrency-sensitive change"] --> q1{"Scheduling order matters?"}
+    q1 -- "yes, tiny primitive" --> loom["Loom model (tests/*_loom.rs)"]
+    q1 -- no --> q2{"Many orders or sequences?"}
+    q2 -- yes --> prop["proptest"]
+    q2 -- no --> q3{"Crosses sockets, children, FFmpeg?"}
+    q3 -- yes --> live["Live fault mode (test_harness)"]
+    q3 -- no --> unit["Unit or regression test"]
 ```
 
-Full contract gate:
+The diagram shows how to pick the proof for a change.
+
+| Bug | Example | Proof |
+|---|---|---|
+| Lost wake: a task blocks forever after cancel or close | AVIO reader waits after the writer closed | Loom |
+| Lost publication on a full channel | a feed's last publication stranded behind a full command queue | Loom plus controlled-race unit test |
+| Cancelled-stage reuse: registry returns a dead shared stage | transcoder stage replaced while a reader registers | Loom (`*_stage_loom`) |
+| Stale completion clobbers a replacement | old ingest disconnect poisons the new attempt | unit test (`stale_*_cannot_*`) |
+| Ordering lost across a permutation | ring migration drops or duplicates a packet | proptest |
+| Teardown erases diagnosis | cleanup drops the last structured error | API/unit test on retained status |
+| Child, socket or thread leak on teardown | FFmpeg left running after a pipeline stops | live mode plus the contract gate's survivor check |
+| Sink failure misreported | dead sink never reaches `failed` | live `fault.egress-retry` |
+| Parallel test path: a `#[cfg(test)]` copy of production code drifts | tests pass while production bookkeeping is unexercised | delete the copy; test the production function |
+
+If deleting a line of production code breaks no test, that line has no
+proof. Benchmarks are not correctness proofs; keep measurement out of these
+gates.
+
+## Loom models
+
+The gates run every model in `LOOM_TARGETS`
+(`crates/xtask/src/concurrency.rs`). Each is `tests/<target>.rs`, built with
+`--cfg loom` on the test crate only.
+
+| Model | Proves |
+|---|---|
+| `avio_loom` | close, wake and backpressure on the blocking AVIO queue |
+| `egress_feed_wake_loom` | queued wakes coalesce, heads are independent, the full-channel retry bit is never lost (`AcqRel` swaps; the consumer clears it before reading the head) |
+| `input_selection_loom` | multi-input gate selection |
+| `moq_origin_loom` | the MoQ origin viewer cap never admits past its maximum and every release frees a slot; the ring-to-pump wake over a one-slot channel loses no publication |
+| `ring_frame_unit_loom` | a frame-unit read never returns the unit of a sequence that lapped it |
+| `ring_migration_loom` | seal and migrate of a ring with live readers |
+| `ts_chunk_ring_loom` | TS chunk ring wait and cancel |
+| `ts_muxer_stage_loom` | TS muxer stage create, reuse and replacement races |
+| `transcoder_stage_loom` | transcoder stage replacement, concurrent creators, cleanup and reader registration |
+
+Build and run one model the way the gate does:
 
 ```sh
-cargo xtask concurrency contract
+cargo rustc --test avio_loom --message-format=json-render-diagnostics -- --cfg loom
+# then run the test executable named in the last compiler-artifact message:
+target/debug/deps/avio_loom-<hash> --nocapture
 ```
 
-The fast gate runs the loom targets, focused API tests, and harness unit tests.
-For multi-input promotion it also runs the sequential gate property model and
-the bounded standby-GOP property test.
-The full gate also builds the binaries and runs the live `fault.resilience`,
-`fault.egress-retry`, `fault.output-stall`, and `recovery` harness modes.
-`fault.egress-retry` owns the retry-budget exhaustion contract for RTMP and SRT
-dead sinks.
-`fault.resilience` includes RTMP and SRT connected-standby promotions with a
-10-second publisher GOP and a five-second progress deadline, proving cached
-replay rather than eventual next-keyframe recovery.
-`fault.resilience` also verifies real RTMP-input to RTMPS-egress media, sink
-loss entering `retrying`, then bounded SIGTERM shutdown with the completion
-event present.
-`fault.output-stall` owns the stalled-output contract for connected-but-not-
-draining RTMP sinks. `recovery` is the focused reconnect/grace/retry contract
-so we can target that behavior directly without depending on the broader
-teardown bucket.
-The full gate records a runtime-process baseline first, then asserts that the
-run leaves no new `restream`, `mediamtx`, `ffmpeg`, `ffprobe`, or
-`test_harness` survivors behind.
+`cargo xtask concurrency fast` does both steps for every model. Add a loom
+model only for a new cross-thread primitive (a wake, a snapshot swap, a
+shutdown signal, a get-or-create registry). Loom across the dataplane means
+the ownership model was broken.
 
-The maintained proof inventory is the
-[stage boundary proof map](testing.md#stage-boundary-proof-map). It names the current
-boundary, invariant, enforcing proof, and remaining gap without copying gate
-internals into this guide.
+## Live fault modes
 
-Both gates also carry explicit property/stress coverage for lifecycle
-permutations and thread-hop wakeups, rather than relying on the general
-workspace test job to catch those indirectly.
+| Mode | Proves | Gate |
+|---|---|---|
+| `fault.resilience` | RTMP and SRT standby promotion with a 10 s GOP and progress within 5 s (cached replay); RTMP → RTMPS delivery; sink loss reaches `retrying`; SIGTERM shutdown with the completion event | `contract`, `master-transport-shards` |
+| `fault.egress-retry` | RTMP and SRT dead sinks show `retrying`, then `failed` when the retry budget runs out | `contract` |
+| `fault.output-stall` | a connected RTMP sink that stops draining shows `stalled` in output status and health | `contract` |
+| `recovery` | hung HLS PUT destinations time out and recover; rapid SRT publisher replacement; repeated RTMP/SRT sink flaps show as recovered but unstable; a killed transcoder FFmpeg is retried from a new stage process | `contract` |
+| `fault.srt-output-stall` | bounded RSS while retrying a frozen SRT receiver; against `src/bin/test_harness/srt_raw_sink.rs`, a real handshake and data while siblings progress; the retired output stops and two sibling receivers keep advancing | manual only; no CI job runs it |
 
-## Required Update Discipline
+srt-rs exposes no hook for an application-unread receive buffer, so
+`fault.srt-output-stall` does not claim that backpressure shape.
 
-When touching concurrency-sensitive code:
+## Gate commands
 
-1. Add or update the narrowest proof test that can catch the bug.
-2. Extend a gate script if the new proof is supposed to be mandatory.
-3. Update the live harness if operator-visible teardown/recovery behavior changed.
-4. Update API/docs if status semantics changed.
+```sh
+cargo xtask concurrency fast       # CI: concurrency-fast, every run
+cargo xtask concurrency contract   # CI: concurrency-contract, master only
+```
 
-If a change is concurrency-sensitive and does **not** need a loom/proptest or
-harness addition, the PR or commit message should say why the existing proof
-surface already covers it.
+| Step | `fast` | `contract` |
+|---|---|---|
+| Process-lifecycle guard over `src/bin/test_harness.rs` (every spawn armed for kill-and-wait) | — | yes |
+| All loom models | yes | yes |
+| `COMMON_TESTS`: focused API, db, lib, proptest and transcoder tests | yes | yes |
+| `FAST_ONLY_TESTS`: RTMP feed-wake, two SRT ingress Owners, health view, `test_harness` unit tests | yes | — |
+| Build `restream` and `test_harness`, run the four `CONTRACT_MODES` | — | yes |
+| No new `restream`, `mediamtx`, `ffmpeg`, `ffprobe` or `test_harness` process survives a mode | — | yes |
 
-## Common Failure Patterns
+`contract` logs each step to `.local/artifacts/concurrency-contract-logs/`
+and prints a log only on failure. `CONCURRENCY_HARNESS_ARGS` passes extra
+harness flags (CI sets `--no-netns`).
 
-- Silent wake loss: task/thread blocks forever after cancel or close.
-- Cancelled-stage reuse: registry returns a dead shared stage instead of a new one.
-- Teardown erases diagnosis: runtime cleanup drops the last structured error.
-- Harness drift: the live test still expects outdated cleanup behavior after runtime
-  semantics intentionally improved.
-- Parallel test path: a `#[cfg(test)]` sibling re-implements the production
-  function so a fake can be injected, then drifts from it — the tests pass while
-  the production bookkeeping they appear to cover goes unexercised. If deleting a
-  line of production code breaks no test, that line has no proof behind it.
-- "Fast" local validation skips the actual proof gate, so model checks rot.
+## Update discipline
 
-## Current Mandatory Surfaces
+When you touch concurrency-sensitive code:
 
-- `cargo xtask concurrency fast`
-- `cargo xtask concurrency contract`
-- `tests/api.rs`
-  - `health_endpoint_exposes_probe_and_egress_fault_fields`
-  - `health_endpoint_surfaces_repeated_transient_disconnects_as_flapping`
-  - `recovered_output_surfaces_flapping_after_repeated_sink_failures`
-  - `output_status_and_health_preserve_recent_egress_failure_after_unregister`
-- `tests/output_status_contract.rs`
-  - `active_output_status_matches_health_runtime_fields`
-  - `stalled_output_status_matches_health_runtime_fields`
-- `tests/ring_migration.rs`
-  - `prop_no_loss_no_gap_no_duplication`
-  - `prop_multi_reader_migration_preserves_each_reader_order`
-- `src/media/engine.rs`
-  - `stale_ingest_unregister_cannot_clobber_replacement_attempt`
-  - `stale_ingest_disconnect_cannot_poison_replacement_attempt`
-  - `stale_egress_unregister_cannot_clobber_replacement_attempt`
-  - `stale_egress_error_cannot_poison_replacement_attempt`
-  - `stale_egress_queue_removal_cannot_drop_replacement_queue`
-  - `build_recent_ingest_outcome_resets_flap_streak_outside_window`
-  - `prop_ingest_lifecycle_preserves_health_invariants`
-  - `build_recent_egress_outcome_resets_flap_streak_outside_window`
-  - `health_snapshot_surfaces_flapping_after_repeated_reconnects`
-  - `health_snapshot_surfaces_flapping_after_repeated_egress_recoveries`
-  - `output_status_surfaces_retry_backoff_after_failure`
-  - `prop_egress_lifecycle_preserves_runtime_and_health_invariants`
-- `src/media/egress/visit.rs`
-  - `first_visit_primes_the_cursor_to_the_latest_sync_point`
-  - `first_visit_primes_to_the_live_edge_without_a_sync_point`
-  - `first_visit_primes_the_cursor_epoch_from_the_feed`
-  - `fresh_leaf_first_visit_starts_at_the_retained_keyframe_not_sequence_zero`
-  - `fresh_leaf_first_visit_starts_at_the_live_edge_when_no_keyframe_is_retained`
-- `src/media/egress/backends/srt/owner_set.rs` (the shard's Compio runtime and
-  its at-most-two family `Owner`s; thread affinity is a `!Send` type plus a
-  debug home-thread assertion)
-  - `runtime_and_owners_live_and_die_on_the_shard_thread`
-  - `many_ipv4_outputs_share_one_owner_and_one_caller_socket`
-  - `ipv4_and_ipv6_outputs_coexist_on_two_family_owners`
-  - `mixed_family_bond_is_rejected_without_partial_admission`
-- SRT egress scheduling and admission
-  (`src/media/egress/backends/srt/tests/`)
-  - `stale_queued_admission_never_attaches_to_a_replacement_generation`
-  - `late_dns_for_an_old_generation_is_ignored`
-  - `one_ready_batch_is_one_owner_service_pass`
-  - `a_wake_examines_a_bounded_slice_of_parked_leaves`
-  - `command_wakes_a_parked_compio_wait_promptly`
-  - `owner_protocol_deadline_bounds_the_park`
-  - `shutdown_under_active_tx_reaches_owner_quiescence`
-- `src/media/avio.rs`
-  - close/wake/backpressure loom coverage in `tests/avio_loom.rs`
-  - `media::avio::tests`
-  - `write_batch_round_trips_random_chunks`
-- `tests/transcoder.rs`
-  - `internal_scale_stage_chunked_remux_input_preserves_video_timestamp_order`
-  - `prop_source_stage_chunked_input_preserves_per_stream_dts_order`
-  - `replacement_video_stage_preserves_codec_hint_and_audio_tracks`
-- `src/media/external_transcoder.rs`
-  - `external_output_stream_idx_routes_known_tracks_without_aliasing`
-  - `proptest_external_output_dts_routing_preserves_per_stream_monotonicity`
-  - `external_720p_stage_emits_live_packets_for_h264_marker_fixture`
-  - `external_1080p_stage_remuxes_marker_fixture_with_monotone_dts`
-- `src/media/hls/`
-  - `hls_segment_boundaries_preserve_non_decreasing_dts_per_stream`
-- `src/media/srt/ingress_owner.rs`, `ingress_owner_payload.rs`, `ingress_bridge.rs`,
-  `ingress_admission.rs`, `ingress_quality.rs`, `ingress_live_tests.rs`,
-  `ingress_bridge_tests.rs`
-  (the SRT ingress owner thread: one Compio runtime, one listener `Owner`,
-  bounded `LogicalPeerId` command/event bridges)
-  - `read_play_sends_through_the_owner_and_target_deletion_disconnects`
-  - `asynchronous_rejection_disconnects_the_owner_peer`
-  - `fragmented_publisher_panic_retires_tail_without_stalling_an_existing_sibling`
-    (a 5.14 MiB fragmented message over real UDP, a pre-existing healthy publisher,
-    one shared ingress Owner, and cancellation of the unconsumed tail; 2 s SRT
-    playout allows the message's fragments to arrive before Live late-drop)
-  - `event_bridge_saturation_never_loses_accepted_media`
-  - `command_bridge_saturation_never_loses_reader_fragments`
-  - `owner_samples_receive_quality_and_forgets_retired_peers`
-  - `publisher_receive_quality_reaches_the_ingest_snapshot`
-  - `one_ingress_thread_serves_many_peers_and_tokio_has_no_peer_table`
-  - `owner_and_runtime_are_not_send`
-  - `media::srt::ingress_admission::tests`
-  The existing `lib-srt-ingress-owner` namespace step in
-  `crates/xtask/src/concurrency.rs` includes the new lifecycle regression; no
-  duplicate test step is needed. `fault.srt-output-stall` also requires the
-  retired output to become observably stopped, then takes fresh counters from
-  two independent sibling SRT receivers and requires both to advance.
-- `src/media/rtmp/listener.rs`
-  - `compio_rtmp_listener_shutdown_joins_acceptor_and_session_workers`
-    (cancellation drops accepted bridges and joins every registered listener
-    and session worker thread)
-- `src/media/egress/backends/rtmp_shard_tests.rs`
-  - `feed_wake_delivers_media_after_idle_when_factory_start_is_delayed` (production
-    Compio shard group + feed-wake subscription + real RTMP peer; a later FLV
-    frame arrives after the leaf sends its initial frame and parks)
-- `src/media/egress/runtime.rs`
-  - `fabric_feed_wakes_follow_ring_growth_rescale_and_stop_on_drop` (wakes
-    are delivered from the publishing thread, follow a replacement ring,
-    reach a shard added by rescale, and stop when the subscription drops)
-- `src/media/egress/shard/tests/feed_wake.rs`
-  - `publication_after_a_wake_head_check_rearms_the_shared_shard_gate`
-  - `a_full_command_queue_cannot_strand_a_feeds_final_publication`
-  - `full_fallback_preserves_an_already_queued_publication_wake`
-    (controlled races drive the production shard loop against real feed heads)
-- `src/media/srt_stream_id.rs`
-  - `media::srt_stream_id::tests` (stream-key normalization and mode parsing)
-- `src/media/ts_chunk_ring.rs`
-  - `live_reader_starts_after_existing_chunks`
-- `src/bin/test_harness.rs`
-  - `kill_and_wait_child_terminates_spawned_process`
-  - `fault.egress-retry`
-  - `fault.output-stall`
-  - `fault.srt-output-stall`
-  - `fault.resilience`
-  - `recovery`
+1. Add or update the narrowest proof that catches the bug.
+2. Add it to `crates/xtask/src/concurrency.rs` if it must be mandatory.
+3. Update the live harness if visible teardown or recovery changed.
+4. Update the API docs if status semantics changed.
 
-## Next Gaps
+If no new proof is needed, say in the commit message which existing proof
+covers the change. Run the real gate; a "fast" local loop that skips it lets
+models rot.
 
-The proof surface is stronger, but the full objective is still larger than the
-current gate set. Remaining high-value areas include:
+## Mandatory surfaces
 
-- More model-checked coverage for lifecycle registries beyond the TS muxer seam
-- Property tests for lifecycle permutations where loom is not the right tool
-- More live chaos cases for slow-sink isolation and any remaining repeated downstream flap scenarios beyond the current RTMP/SRT coverage
+These tests guard the boundaries above. Weaken or remove one only with an
+equal or stronger replacement in the same change. Names marked *gate* run in
+`cargo xtask concurrency fast` and `contract`.
+
+| Area | Tests |
+|---|---|
+| API status retention (`tests/api.rs`, *gate*) | `health_endpoint_exposes_probe_and_egress_fault_fields`, `health_endpoint_surfaces_repeated_transient_disconnects_as_flapping`, `recovered_output_surfaces_flapping_after_repeated_sink_failures`, `output_status_and_health_preserve_recent_egress_failure_after_unregister` |
+| Output status contract (`tests/output_status_contract.rs`, *gate*) | `active_output_status_matches_health_runtime_fields`, `stalled_output_status_matches_health_runtime_fields` |
+| Ring migration (`tests/ring_migration.rs`, *gate*) | `prop_no_loss_no_gap_no_duplication`, `prop_multi_reader_migration_preserves_each_reader_order` |
+| Engine attempts (`src/media/engine.rs`, *gate*) | `stale_ingest_unregister_cannot_clobber_replacement_attempt`, `stale_ingest_disconnect_cannot_poison_replacement_attempt`, `stale_egress_unregister_cannot_clobber_replacement_attempt`, `stale_egress_error_cannot_poison_replacement_attempt`, `stale_egress_queue_removal_cannot_drop_replacement_queue` |
+| Engine health (*gate*) | `build_recent_ingest_outcome_resets_flap_streak_outside_window`, `prop_ingest_lifecycle_preserves_health_invariants`, `build_recent_egress_outcome_resets_flap_streak_outside_window`, `health_snapshot_surfaces_flapping_after_repeated_reconnects`, `health_snapshot_surfaces_flapping_after_repeated_egress_recoveries`, `output_status_surfaces_retry_backoff_after_failure`, `prop_egress_lifecycle_preserves_runtime_and_health_invariants` |
+| Egress cursor priming (`src/media/egress/visit_tests.rs`, *gate*) | `first_visit_primes_the_cursor_to_the_latest_sync_point`, `first_visit_primes_to_the_live_edge_without_a_sync_point`, `first_visit_primes_the_cursor_epoch_from_the_feed` |
+| SRT egress Owners (`src/media/egress/backends/srt/owner_set.rs`) | `runtime_and_owners_live_and_die_on_the_shard_thread`, `many_ipv4_outputs_share_one_owner_and_one_caller_socket`, `ipv4_and_ipv6_outputs_coexist_on_two_family_owners`, `mixed_family_bond_is_rejected_without_partial_admission` |
+| SRT egress scheduling (`src/media/egress/backends/srt/tests/`) | `stale_queued_admission_never_attaches_to_a_replacement_generation`, `late_dns_for_an_old_generation_is_ignored`, `one_ready_batch_is_one_owner_service_pass`, `a_wake_examines_a_bounded_slice_of_parked_leaves`, `command_wakes_a_parked_compio_wait_promptly`, `owner_protocol_deadline_bounds_the_park`, `shutdown_under_active_tx_reaches_owner_quiescence` |
+| AVIO (`src/media/avio.rs`, *gate*) | `avio_loom`, `media::avio::tests`, `write_batch_round_trips_random_chunks` |
+| Transcoder (*gate*) | `replacement_video_stage_preserves_codec_hint_and_audio_tracks` (`tests/transcoder.rs`); `external_output_stream_idx_routes_known_tracks_without_aliasing`, `proptest_external_output_dts_routing_preserves_per_stream_monotonicity`, `external_720p_stage_emits_live_packets_for_h264_marker_fixture`, `external_1080p_stage_remuxes_marker_fixture_with_monotone_dts` |
+| HLS (*gate*) | `hls_segment_boundaries_preserve_non_decreasing_dts_per_stream` |
+| SRT ingress Owner (`src/media/srt/ingress_*`, *gate* via `media::srt::ingress_live_tests`, `ingress_bridge_tests`, `ingress_admission`) | `read_play_sends_through_the_owner_and_target_deletion_disconnects`, `asynchronous_rejection_disconnects_the_owner_peer`, `fragmented_publisher_panic_retires_tail_without_stalling_an_existing_sibling`, `owner_stamps_receive_quality_and_stops_sampling_retired_peers`, `publisher_receive_quality_reaches_the_ingest_snapshot`, `one_ingress_owner_thread_serves_many_peers`, `owner_and_runtime_are_not_send`, `two_owners_share_the_port_and_each_session_command_reaches_its_owner` |
+| RTMP listener (`src/media/rtmp/listener.rs`, *gate*) | `compio_rtmp_listener_shutdown_joins_acceptor_and_session_workers`, `media::rtmp::listener::tests` |
+| Egress feed wakes | `feed_wake_delivers_media_after_idle_when_factory_start_is_delayed` (`rtmp_shard_tests.rs`), `fabric_feed_wakes_follow_ring_growth_rescale_and_stop_on_drop` (`egress/runtime.rs`), and in `egress/shard/tests/feed_wake.rs`: `publication_after_a_wake_head_check_rearms_the_shared_shard_gate`, `a_full_command_queue_cannot_strand_a_feeds_final_publication`, `full_fallback_preserves_an_already_queued_publication_wake` (all *gate*) |
+| SRT stream id (*gate*) | `media::srt_stream_id::tests` |
+| TS chunk ring | `live_reader_starts_after_existing_chunks` |
+| Harness (`src/bin/test_harness.rs`) | `kill_and_wait_child_terminates_spawned_process` (*gate*), and the live modes above |
+
+## Open gaps
+
+- The `lib-egress-leaf-live-start` step filters on `fresh_leaf_first_visit`,
+  which no test matches now, so the step runs nothing.
+- More model-checked coverage for lifecycle registries beyond the stage
+  families.
+- Property tests for lifecycle permutations where loom does not fit.
+- More live slow-sink isolation and repeated downstream flap cases.

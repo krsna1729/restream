@@ -89,7 +89,6 @@ fn apply_routing_select_tracks_filters_and_reindexes() {
 
 /// Verify that stage keys for different video presets with the same audio
 /// routing produce different cache keys, preventing cross-contamination.
-/// See docs/media-pipeline.md "Audio Stage Cache Concern".
 #[test]
 fn stage_keys_isolate_video_presets() {
     use crate::planner::EncodingStagePlan;
