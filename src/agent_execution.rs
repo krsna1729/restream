@@ -102,6 +102,19 @@ pub enum OperationStoreError {
     NotApplied,
 }
 
+impl OperationStatus {
+    pub(crate) fn require_applied(self) -> Result<(), OperationStoreError> {
+        match self {
+            Self::Invalid => Err(OperationStoreError::Invalid),
+            Self::AwaitingApproval | Self::Approved | Self::Failed => {
+                Err(OperationStoreError::NotApplied)
+            }
+            Self::Applying => Err(OperationStoreError::AlreadyApplying),
+            Self::Applied | Self::Verified | Self::VerificationFailed => Ok(()),
+        }
+    }
+}
+
 #[derive(Default)]
 struct AgentExecutionState {
     records: HashMap<String, OperationRecord>,
@@ -346,16 +359,7 @@ impl AgentExecutionStore {
             .records
             .get_mut(operation_id)
             .ok_or(OperationStoreError::NotFound)?;
-        match record.status {
-            OperationStatus::Invalid => return Err(OperationStoreError::Invalid),
-            OperationStatus::AwaitingApproval
-            | OperationStatus::Approved
-            | OperationStatus::Failed => return Err(OperationStoreError::NotApplied),
-            OperationStatus::Applying => return Err(OperationStoreError::AlreadyApplying),
-            OperationStatus::Applied
-            | OperationStatus::Verified
-            | OperationStatus::VerificationFailed => {}
-        }
+        record.status.require_applied()?;
 
         let ts = now();
         record.status = if verification_result["success"].as_bool().unwrap_or(false) {

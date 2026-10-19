@@ -86,6 +86,7 @@ const COMMON_TESTS: &[(&str, &[&str])] = &[
     ("lib-egress-sizing", &["test", "media::egress::sizing", "--lib"]),
     ("lib-egress-resize", &["test", "media::egress::runtime", "--lib"]),
     ("lib-egress-panic-recovery", &["test", "--lib", "--", "every_fabric_recovers_panics_without_adaptive_observation", "a_retried_output_delivers_again_after_its_shard_panics", "reconciler_recovery_replaces_a_panicked_sink_shard"]),
+    ("lib-agent-verify-apply-race", &["test", "applying_snapshot_cannot_be_verified_when_apply_completes_during_checks", "--lib"]),
     ("lib-egress-feed-wake-races", &["test", "shard::tests::feed_wake", "--lib"]),
     ("lib-media-control-isolation", &["test", "while_control_thread_is_blocked", "--lib"]),
     ("lib-media-file-ingest", &["test", "media::external_file_ingest::tests", "--lib"]),
