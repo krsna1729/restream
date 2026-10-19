@@ -94,7 +94,10 @@ fn the_stream_key_is_the_last_broadcast_segment_without_catalog_suffix() {
     assert_eq!(stream_key_from_path("/?x=1"), None);
     let longest = "k".repeat(MAX_STREAM_KEY_BYTES);
     assert_eq!(stream_key_from_path(&longest), Some(longest.as_str()));
-    assert_eq!(stream_key_from_path(&format!("{longest}.msf")), Some(longest.as_str()));
+    assert_eq!(
+        stream_key_from_path(&format!("{longest}.msf")),
+        Some(longest.as_str())
+    );
     assert_eq!(stream_key_from_path(&format!("{longest}k")), None);
 }
 

@@ -131,7 +131,7 @@ const NON_ASCII_CODEC_CATALOG: &str = r#"{"video":{"renditions":{"video":{"codec
 fn publish_raw_catalog(addr: SocketAddr, catalog: &'static str) {
     run(async move {
         let endpoint = transport::client_endpoint(AddressFamily::V4).await.unwrap();
-        let tls = loopback_client_tls(transport::CLIENT_ALPNS);
+        let tls = loopback_client_tls(transport::MOQ_ALPNS);
         let session = transport::connect(&endpoint, addr, LOOPBACK_SERVER_NAME, tls)
             .await
             .unwrap();

@@ -394,18 +394,22 @@ pub(crate) fn from_hang_catalog(catalog: &hang::Catalog) -> CatalogTracks {
     tracks
 }
 
-/// The LOC Timestamp property id (draft-ietf-moq-loc-04 §2.3.1.1). Written
-/// in µs without a Timescale property (§2.3.1.2), as `moq_loc::encode`
-/// does; the catalogs say the track is µs.
+/// LOC-04 §2.3.1.1–2: an explicit Timescale denotes application media
+/// time; omitting it would advertise Unix wall time, not ring timestamps.
+const LOC_TIMESCALE: u64 = 0x08;
 const LOC_TIMESTAMP: u64 = 0x10;
+const LOC_MEDIA_SCALE: u32 = 1_000_000;
+/// `LOC_TIMESTAMP - LOC_TIMESCALE` as the one-byte property-id delta.
+const LOC_TIMESTAMP_DELTA: u8 = LOC_TIMESTAMP.wrapping_sub(LOC_TIMESCALE) as u8;
 
-/// Spare bytes a [`LocBuffer`] keeps ahead of its payload for the LOC
-/// header: the property-block length (one byte: the block is at most 9),
-/// the Timestamp property id (one byte) and its value (a varint, at most 8).
-pub(crate) const LOC_HEADROOM: usize = 10;
+/// One-byte property-block length, Timescale id/value, Timestamp id delta,
+/// and the largest timestamp. The block stays below 64 bytes, so its length
+/// and both property ids each fit in one byte (15 bytes total).
+pub(crate) const LOC_HEADROOM: usize =
+    1 + 1 + varint_len(LOC_MEDIA_SCALE as u64) + 1 + varint_len(VarInt::MAX.into_inner());
 
 /// The encoded size of a QUIC varint.
-fn varint_len(value: u64) -> usize {
+const fn varint_len(value: u64) -> usize {
     match value {
         0..0x40 => 1,
         0x40..0x4000 => 2,
@@ -422,7 +426,9 @@ pub(crate) struct LocBuffer(BytesMut);
 
 impl LocBuffer {
     pub(crate) fn with_capacity(payload: usize) -> Self {
-        let mut buffer = BytesMut::with_capacity(LOC_HEADROOM + payload);
+        // The headroom is a small constant; a saturating sum only bounds the
+        // reservation and never changes the bytes written.
+        let mut buffer = BytesMut::with_capacity(LOC_HEADROOM.saturating_add(payload));
         buffer.put_bytes(0, LOC_HEADROOM);
         Self(buffer)
     }
@@ -441,22 +447,39 @@ impl LocBuffer {
     }
 
     pub(crate) fn payload(&self) -> &[u8] {
-        &self.0[LOC_HEADROOM..]
+        self.0.get(LOC_HEADROOM..).unwrap_or_default()
     }
 
-    /// The LOC frame at `timestamp_us`: the header `moq_loc::encode` writes,
-    /// put into the headroom, and the payload, without copying it.
+    /// A LOC media-time frame, with an explicit µs Timescale, framed in the
+    /// reserved headroom without moving or copying the payload.
     pub(crate) fn into_frame(mut self, timestamp_us: u64) -> Result<Bytes, MediaError> {
         let value = VarInt::from_u64(timestamp_us).ok_or(MediaError::TimestampTooLarge)?;
-        let block = 1 + varint_len(timestamp_us);
-        let start = LOC_HEADROOM - 1 - block;
-        let mut header = &mut self.0[start..LOC_HEADROOM];
-        // Both below 0x40: one-byte varints.
-        header.put_u8(block as u8);
-        header.put_u8(LOC_TIMESTAMP as u8);
-        value
-            .encode_quic(&mut header)
-            .map_err(|_| MediaError::TimestampTooLarge)?;
+        let block = 1usize
+            .checked_add(varint_len(u64::from(LOC_MEDIA_SCALE)))
+            .and_then(|size| size.checked_add(1))
+            .and_then(|size| size.checked_add(varint_len(timestamp_us)))
+            .ok_or(MediaError::TimestampTooLarge)?;
+        let start = LOC_HEADROOM
+            .checked_sub(1)
+            .and_then(|headroom| headroom.checked_sub(block))
+            .ok_or(MediaError::TimestampTooLarge)?;
+        {
+            let Some(slice) = self.0.get_mut(start..LOC_HEADROOM) else {
+                return Err(MediaError::TimestampTooLarge);
+            };
+            let mut header = slice;
+            // The block and property-id deltas are all one-byte varints.
+            header.put_u8(u8::try_from(block).map_err(|_| MediaError::TimestampTooLarge)?);
+            header.put_u8(LOC_TIMESCALE as u8);
+            VarInt::from_u32(LOC_MEDIA_SCALE)
+                .encode_quic(&mut header)
+                .map_err(|_| MediaError::TimestampTooLarge)?;
+            // Property-id delta: Timestamp id (0x10) minus Timescale id (0x08).
+            header.put_u8(LOC_TIMESTAMP_DELTA);
+            value
+                .encode_quic(&mut header)
+                .map_err(|_| MediaError::TimestampTooLarge)?;
+        }
         self.0.advance(start);
         Ok(self.0.freeze())
     }
@@ -478,8 +501,13 @@ pub(crate) fn parse_loc_frame(frame: Bytes) -> Result<(u64, Bytes), WireError> {
     })?;
     let us = match frame.timescale {
         None | Some(1_000_000) => frame.timestamp,
-        Some(scale) => u64::try_from(u128::from(frame.timestamp) * 1_000_000 / u128::from(scale))
-            .map_err(|_| WireError::Invalid("LOC timestamp out of range"))?,
+        Some(scale) => {
+            let scaled = u128::from(frame.timestamp)
+                .checked_mul(1_000_000)
+                .and_then(|micros| micros.checked_div(u128::from(scale)))
+                .ok_or(WireError::Invalid("LOC timestamp out of range"))?;
+            u64::try_from(scaled).map_err(|_| WireError::Invalid("LOC timestamp out of range"))?
+        }
     };
     Ok((us, frame.payload))
 }

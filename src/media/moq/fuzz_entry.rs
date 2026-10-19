@@ -2,10 +2,10 @@
 //! `--cfg fuzzing`). Each runs a production MoQ parser on untrusted bytes
 //! the way a session feeds it; the parsers stay private to `media::moq`.
 
-use bytes::Bytes;
-use futures_util::FutureExt;
 use super::ingest::media::TrackSet;
 use super::media::from_hang_catalog;
+use bytes::Bytes;
+use futures_util::FutureExt;
 
 /// A publisher's hang or MSF catalog and LOC / legacy / CMAF frames,
 /// through the same upstream catalog consumers and production conversion
@@ -22,7 +22,8 @@ pub fn ingest(catalog: &[u8], frames: &[u8]) {
     // finished catalog publication, just as the network model supplies it.
     // Everything is ready synchronously; no runtime or spawned task is needed.
     let broadcast = moq_net::broadcast::Info::new().produce();
-    let Ok(track) = broadcast.create_track(moq_msf::DEFAULT_NAME, hang::Catalog::default_track_info())
+    let Ok(track) =
+        broadcast.create_track(moq_msf::DEFAULT_NAME, hang::Catalog::default_track_info())
     else {
         return;
     };

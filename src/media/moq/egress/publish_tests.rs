@@ -56,6 +56,11 @@ async fn read(group: &mut group::Consumer, count: usize) -> Vec<u64> {
 /// The next frame of `group`, a LOC end marker: its timestamp.
 async fn marker(group: &mut group::Consumer) -> u64 {
     let frame = group.read_frame().await.unwrap().expect("a marker");
+    assert_eq!(
+        moq_loc::decode(frame.payload.clone()).unwrap().timescale,
+        Some(1_000_000),
+        "duration markers use the same media epoch as access units"
+    );
     let (us, payload) = parse_loc_frame(frame.payload).unwrap();
     assert!(payload.is_empty(), "a marker is empty");
     us

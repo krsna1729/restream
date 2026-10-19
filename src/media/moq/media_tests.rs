@@ -64,7 +64,10 @@ fn loc_frames_are_moq_locs_and_frame_the_payload_in_place() {
         let buffer = LocBuffer::from_payload(payload);
         let at = buffer.payload().as_ptr();
         let ours = buffer.into_frame(us).unwrap();
-        assert_eq!(ours, moq_loc::encode(us, payload).unwrap(), "{us}");
+        let decoded = moq_loc::decode(ours.clone()).unwrap();
+        assert_eq!(decoded.timescale, Some(1_000_000), "media time, not Unix time");
+        assert_eq!(decoded.timestamp, us);
+        assert_eq!(decoded.payload.as_ref(), payload);
         assert_eq!(
             ours[ours.len() - payload.len()..].as_ptr(),
             at,
@@ -103,10 +106,16 @@ fn loc_frames_reject_zero_timescale_and_timestamp_scaling_overflow() {
     let scaled = |scale: u64, timestamp: u64| {
         let mut properties = BytesMut::new();
         for value in [0x08, scale, 0x08, timestamp] {
-            VarInt::from_u64(value).unwrap().encode_quic(&mut properties).unwrap();
+            VarInt::from_u64(value)
+                .unwrap()
+                .encode_quic(&mut properties)
+                .unwrap();
         }
         let mut frame = BytesMut::new();
-        VarInt::from_u64(properties.len() as u64).unwrap().encode_quic(&mut frame).unwrap();
+        VarInt::from_u64(properties.len() as u64)
+            .unwrap()
+            .encode_quic(&mut frame)
+            .unwrap();
         frame.extend_from_slice(&properties);
         frame.extend_from_slice(b"au");
         frame.freeze()

@@ -96,7 +96,11 @@ impl DevPorts {
                 &mut reserved,
             ),
             page: env_or_allocated_port("MOQ_DEV_INTEROP_PAGE", 5180, &mut reserved),
-            ingest_relay: env_or_allocated_port("MOQ_DEV_INTEROP_INGEST_RELAY", 4445, &mut reserved),
+            ingest_relay: env_or_allocated_port(
+                "MOQ_DEV_INTEROP_INGEST_RELAY",
+                4445,
+                &mut reserved,
+            ),
         }
     }
 
@@ -156,7 +160,8 @@ impl DevRelay {
         let _ = writeln!(log, "{RELAY_START_MARKER}{}", self.starts);
         let stderr = log.try_clone().map_err(|error| error.to_string())?;
         let listen = format!("127.0.0.1:{}", self.port);
-        let mut command = command_with_optional_cgroup(&self.bin, &format!("moq-relay-{}", self.port));
+        let mut command =
+            command_with_optional_cgroup(&self.bin, &format!("moq-relay-{}", self.port));
         if let Some((url, ca)) = &self.forward {
             command
                 .args(["--cluster-connect", url, "--connect-version", IETF_VERSION])
@@ -164,7 +169,8 @@ impl DevRelay {
                 .arg(ca)
                 .arg("--connect-websocket-enabled=false");
         }
-        let child = command.args(["--log-level", "info", "--listen", &listen])
+        let child = command
+            .args(["--log-level", "info", "--listen", &listen])
             .arg("--listen-tls-cert")
             .arg(&self.tls.0)
             .arg("--listen-tls-key")

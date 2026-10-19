@@ -149,7 +149,10 @@ fn ietf_catalog_requires_loc_and_both_decoder_configurations() {
     ] {
         let mut invalid = catalog.clone();
         invalid["tracks"][1][field] = value;
-        assert!(!profile_catalog_failures(&invalid, true).is_empty(), "{field}");
+        assert!(
+            !profile_catalog_failures(&invalid, true).is_empty(),
+            "{field}"
+        );
     }
     let mut no_video = catalog.clone();
     no_video["tracks"][0]["role"] = json!("audio");
@@ -376,18 +379,33 @@ fn ietf_cli_pins_draft_nineteen_and_reads_msf_without_hang_fallback() {
         version: IETF_VERSION,
     };
     let args = target.args(EXPORT_TS);
-    assert!(args.windows(2).any(|pair| pair == ["--connect-version", IETF_VERSION]));
-    assert!(args.windows(2).any(|pair| pair == ["--catalog-format", "msf"]));
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--connect-version", IETF_VERSION])
+    );
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--catalog-format", "msf"])
+    );
     assert!(!args.iter().any(|arg| arg == LITE_VERSION || arg == "hang"));
 }
 
 #[test]
 fn options_accept_browsers_and_the_netns_opt_out_only() {
     let args = |list: &[&str]| list.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
-    assert_eq!(DevOptions::parse(&[]), Ok(DevOptions { browsers: false, ietf: false }));
+    assert_eq!(
+        DevOptions::parse(&[]),
+        Ok(DevOptions {
+            browsers: false,
+            ietf: false
+        })
+    );
     assert_eq!(
         DevOptions::parse(&args(&["--no-netns", "--browsers"])),
-        Ok(DevOptions { browsers: true, ietf: false })
+        Ok(DevOptions {
+            browsers: true,
+            ietf: false
+        })
     );
     let ietf = DevOptions::parse(&args(&["--ietf", "--browsers"])).unwrap();
     assert!(ietf.ietf && ietf.browsers);

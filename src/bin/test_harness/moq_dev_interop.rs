@@ -95,7 +95,11 @@ impl DevOptions {
     }
 
     pub(crate) fn version(self) -> &'static str {
-        if self.ietf { IETF_VERSION } else { LITE_VERSION }
+        if self.ietf {
+            IETF_VERSION
+        } else {
+            LITE_VERSION
+        }
     }
 
     pub(crate) fn alpn(self) -> &'static str {

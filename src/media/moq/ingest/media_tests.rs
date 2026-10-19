@@ -135,19 +135,25 @@ fn loc_annexb_conversion_preserves_payload_ownership_and_timescale() {
         });
         let payload = annexb(&[nalu]);
         // Timescale 90 kHz, timestamp 90 kHz = one second.
-        let mut wire = BytesMut::from(&[
-            10, 0x08, 0x80, 0x01, 0x5f, 0x90, 0x08, 0x80, 0x01, 0x5f, 0x90,
-        ][..]);
+        let mut wire = BytesMut::from(
+            &[
+                10, 0x08, 0x80, 0x01, 0x5f, 0x90, 0x08, 0x80, 0x01, 0x5f, 0x90,
+            ][..],
+        );
         wire.extend_from_slice(&payload);
         let wire = wire.freeze();
         let at = wire[11..].as_ptr();
         let packet = convert(&mut set, wire).unwrap();
         assert_eq!((packet.pts, packet.dts), (1_000, 1_000));
         assert_eq!(packet.payload.as_ref(), payload.as_slice());
-        assert_eq!(packet.payload.as_ptr(), at, "Annex-B LOC remains a shared slice");
+        assert_eq!(
+            packet.payload.as_ptr(),
+            at,
+            "Annex-B LOC remains a shared slice"
+        );
         for malformed in [
-            &[0][..], // No timestamp.
-            &[5, 0x10, 1][..], // Truncated property block.
+            &[0][..],                   // No timestamp.
+            &[5, 0x10, 1][..],          // Truncated property block.
             &[4, 0x08, 0, 0x08, 1][..], // Zero timescale.
         ] {
             assert!(matches!(
@@ -157,9 +163,16 @@ fn loc_annexb_conversion_preserves_payload_ownership_and_timescale() {
         }
         let packet = convert(
             &mut set,
-            LocBuffer::from_payload(&payload).into_frame(1_001_000).unwrap(),
-        ).unwrap();
-        assert_eq!((packet.pts, packet.dts), (1_001, 1_001), "bad frames do not advance time");
+            LocBuffer::from_payload(&payload)
+                .into_frame(1_001_000)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            (packet.pts, packet.dts),
+            (1_001, 1_001),
+            "bad frames do not advance time"
+        );
     }
 }
 

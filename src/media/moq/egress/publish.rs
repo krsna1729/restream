@@ -38,9 +38,9 @@ use super::media::{MediaConverter, MediaFrame};
 /// Audio group length.
 const AUDIO_GROUP_US: u64 = 1_000_000;
 
-/// The LOC container for frames framed in place: a framed frame goes out
-/// as it is, one shared `Bytes`; the producer's own empty end-of-GOP and
-/// discontinuity markers are framed by moq-mux's LOC writer.
+/// Frames prepared in converter headroom, including an explicit LOC media
+/// Timescale. Only the upstream producer's empty markers need framing here;
+/// `loc::Wire` omits Timescale, which would instead mean Unix wall time.
 struct Framed(loc::Wire);
 
 impl container::Container for Framed {
@@ -49,7 +49,11 @@ impl container::Container for Framed {
     fn write(&self, group: &mut group::Producer, frames: &[Frame]) -> Result<(), Self::Error> {
         for frame in frames {
             if frame.payload.is_empty() {
-                self.0.write(group, std::slice::from_ref(frame))?;
+                let timestamp = frame.timestamp.convert(moq_net::Timescale::MICRO)?;
+                let marker = LocBuffer::from_payload(&[])
+                    .into_frame(timestamp.value())
+                    .map_err(|_| moq_mux::Error::TimestampOverflow(moq_net::TimeOverflow))?;
+                group.write_frame(frame.timestamp, marker)?;
             } else {
                 group.write_frame(frame.timestamp, frame.payload.clone())?;
             }
@@ -78,7 +82,22 @@ impl container::Container for Framed {
         group: &mut group::Producer,
         end: Option<Timestamp>,
     ) -> Result<(), Self::Error> {
-        self.0.finish_group(group, end)
+        // Keep moq-mux's video duration-marker contract, but route its
+        // marker through the same explicit media-time framing as media.
+        if self.kind() == Kind::Video
+            && let Some(timestamp) = end
+        {
+            self.write(
+                group,
+                &[Frame {
+                    timestamp,
+                    payload: bytes::Bytes::new(),
+                    keyframe: false,
+                    duration: None,
+                }],
+            )?;
+        }
+        Ok(())
     }
 }
 
