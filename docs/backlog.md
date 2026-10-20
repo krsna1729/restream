@@ -12,7 +12,6 @@ items).
 - [Q-027 harness SRT sink drops at SRT×100](#q-027-performance-opus-stop-the-harness-srt-sink-dropping-datagrams-at-srt100-kernel-700-38)
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
 - [Q-026 frozen-SRT-destination RSS gate](#q-026-resilience-opus-attribute-and-recalibrate-the-frozen-srt-destination-rss-gate)
-- [Q-029 payload-cache delivery watch](#q-029-performance-sonnet-close-the-payload-cache-delivery-watch-item)
 - [Q-031 one capacity allocator](#q-031-architecture-opus-derive-every-thread-count-from-one-capacity-allocator)
 - [Q-033 host-level shard pool](#q-033-architecture-opus-run-egress-shards-from-one-host-level-pool-instead-of-per-feed-groups)
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
@@ -119,20 +118,6 @@ items).
   ~70 MB growth; attribution remains open and the threshold is unchanged.
   Earlier evidence is in git history
   (`test/harness/baselines/srt-compio-owner-final/`, removed with the ledgers). Filed: 2026-09-20 by claude.
-
-### Q-029 [performance] [sonnet] Close the payload-cache delivery watch item
-- Goal: show whether the egress payload cache (E0) widens the worst-destination
-  delivery ratio, or close the watch item.
-- Files: `src/media/rtmp/egress_payload_cache.rs`.
-- Gates: `cargo xtask capacity-ramp` RTMP at 100 outputs, cache build against
-  `702bc3df`, interleaved, at least 10 repeats; record delivery (worst
-  destination ratio, Jain) next to CPU.
-- Context: SRT H.264 → 100 RTMP outputs, 10 interleaved repeats: CPU median
-  48.2 % → 44.0 %, RSS 209 → 189 MiB. 9/10 runs had every destination ≥ 0.95
-  against 10/10 for the baseline; the one dip (86/100) was uniform (Jain
-  0.99978) and coincided with a host preemption burst. The worst-destination
-  ratio spread was wider with the cache (0.892–0.994 vs 0.970–0.980).
-- Status: open (filed from the media copy audit, removed 2026-10-04).
 
 ### Q-031 [architecture] [opus] Derive every thread count from one capacity allocator
 - Goal: thread counts follow measured service demand (λ × D at a target
