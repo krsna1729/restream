@@ -117,9 +117,9 @@ Where Restream applies these today:
   (`src/media/egress/manager.rs`) reads the bounded channel instead of a
   shadow counter.
 
-Keep as they are: `LeafLifecycle` (one enum, one transition table), and
-every test of external behavior (RTMP serialization, libsrt interop,
-slow-peer isolation, Compio wakeups, kTLS handoff, capacity).
+Keep tests of external behavior: RTMP serialization, libsrt interop,
+slow-peer isolation, Compio wakeups, kTLS handoff and delivered capacity.
+Model only state machines that production actually uses.
 
 Practice:
 

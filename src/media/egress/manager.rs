@@ -76,6 +76,9 @@ pub struct EgressManager {
     /// `desired`.
     shard_outputs: Vec<u32>,
     draining_shards: Vec<bool>,
+    /// Shards whose thread died and has not been replaced yet: placement
+    /// skips them (`forget_shard` sets, `revive_shard` clears).
+    dead_shards: Vec<bool>,
     /// Shards that accept NEW outputs (`<= config.shard_count`). Shards above
     /// it only drain: a live output is never moved, so resizing cannot
     /// reconnect a destination.
@@ -90,6 +93,7 @@ impl EgressManager {
             desired: HashMap::new(),
             shard_outputs: vec![0; config.shard_count.get() as usize],
             draining_shards: vec![false; config.shard_count.get() as usize],
+            dead_shards: vec![false; config.shard_count.get() as usize],
             placement: config.shard_count,
             shutting_down: false,
         }
@@ -99,24 +103,50 @@ impl EgressManager {
         self.config
     }
 
+    /// The placement shard a NEW output goes to, skipping dead shards. When
+    /// every placement shard is dead it uses a live shard outside the
+    /// placement range: a shrink leaves healthy tail shards serving existing
+    /// outputs, and refusing their capacity would fail every retry. When no
+    /// shard is live it places as if none were, so the dispatch fails on the
+    /// closed channel instead of going nowhere.
     pub fn assign_output(&self, output_id: &OutputId) -> ShardId {
+        let bytes = output_id.as_str().as_bytes();
+        let shards = self.config.shard_count.get();
+        let placement = self.placement.get();
+        self.pick_shard(bytes, 0..placement, true)
+            .or_else(|| self.pick_shard(bytes, placement..shards, true))
+            .or_else(|| self.pick_shard(bytes, 0..placement, false))
+            .map_or(ShardId::new(0), ShardId::new)
+    }
+
+    /// Applies the placement policy to one candidate range.
+    fn pick_shard(
+        &self,
+        bytes: &[u8],
+        range: std::ops::Range<u32>,
+        only_live: bool,
+    ) -> Option<u32> {
+        let candidates =
+            range.filter(|shard_index| !only_live || !self.shard_is_dead(*shard_index));
         match self.config.placement_policy {
-            PlacementPolicy::Rendezvous => assign_output_to_shard(output_id, self.placement),
-            PlacementPolicy::LeastLoaded => {
-                let bytes = output_id.as_str().as_bytes();
-                (0..self.placement.get())
-                    .min_by_key(|&shard_index| {
-                        (
-                            self.shard_outputs
-                                .get(shard_index as usize)
-                                .copied()
-                                .unwrap_or(0),
-                            std::cmp::Reverse(stable_output_hash_pair(bytes, shard_index)),
-                        )
-                    })
-                    .map_or(ShardId::new(0), ShardId::new)
-            }
+            PlacementPolicy::Rendezvous => rendezvous(bytes, candidates),
+            PlacementPolicy::LeastLoaded => candidates.min_by_key(|&shard_index| {
+                (
+                    self.shard_outputs
+                        .get(shard_index as usize)
+                        .copied()
+                        .unwrap_or(0),
+                    std::cmp::Reverse(stable_output_hash_pair(bytes, shard_index)),
+                )
+            }),
         }
+    }
+
+    fn shard_is_dead(&self, shard_index: u32) -> bool {
+        self.dead_shards
+            .get(shard_index as usize)
+            .copied()
+            .unwrap_or(false)
     }
 
     pub fn assign_spec(&self, spec: &OutputSpec) -> ShardId {
@@ -157,28 +187,28 @@ impl EgressManager {
         }
     }
 
-    pub fn dispatch_recreate_shard<S: CommandSink>(
-        &mut self,
-        shard_id: ShardId,
-        sink: &S,
-    ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<S::Error>> {
-        if self.shutting_down {
-            return Ok(ManagerCommandOutcome::AlreadyShuttingDown);
+    /// Forget every output placed on `shard_id`, whose thread has died, and
+    /// return their specs; placement skips the shard until `revive_shard`.
+    /// Nothing is sent: the shard's receiver is gone.
+    pub(crate) fn forget_shard(&mut self, shard_id: ShardId) -> Vec<OutputSpec> {
+        let index = shard_id.index() as usize;
+        if let Some(dead) = self.dead_shards.get_mut(index) {
+            *dead = true;
         }
-        let mut specs = self
-            .specs_for_shard(shard_id)
-            .map_err(EgressManagerDispatchError::Command)?;
-        specs.sort_by(|left, right| left.id.cmp(&right.id));
-        self.check_command_slots(shard_id, specs.len(), sink)
-            .map_err(EgressManagerDispatchError::Command)?;
-        for spec in specs {
-            sink.send(shard_id, EgressCommand::Add(spec))
-                .map_err(|source| EgressManagerDispatchError::Dispatch { shard_id, source })?;
+        if let Some(count) = self.shard_outputs.get_mut(index) {
+            *count = 0;
         }
-        Ok(ManagerCommandOutcome::Replayed {
-            shard_id,
-            output_count: self.desired_count_for_shard(shard_id),
-        })
+        self.desired
+            .extract_if(|_, desired| desired.shard_id == shard_id)
+            .map(|(_, desired)| desired.spec)
+            .collect()
+    }
+
+    /// `shard_id` runs on a new thread again: place new outputs on it.
+    pub(crate) fn revive_shard(&mut self, shard_id: ShardId) {
+        if let Some(dead) = self.dead_shards.get_mut(shard_id.index() as usize) {
+            *dead = false;
+        }
     }
 
     fn dispatch_spec<S: CommandSink>(
@@ -317,21 +347,6 @@ impl EgressManager {
         Ok(())
     }
 
-    fn specs_for_shard(
-        &self,
-        shard_id: ShardId,
-    ) -> Result<Vec<OutputSpec>, EgressManagerCommandError> {
-        if shard_id.index() >= self.config.shard_count.get() {
-            return Err(EgressManagerCommandError::UnknownShard { shard_id });
-        }
-        Ok(self
-            .desired
-            .values()
-            .filter(|desired| desired.shard_id == shard_id)
-            .map(|desired| desired.spec.clone())
-            .collect())
-    }
-
     pub(crate) fn desired_count_for_shard(&self, shard_id: ShardId) -> usize {
         self.shard_outputs
             .get(shard_id.index() as usize)
@@ -355,6 +370,7 @@ impl EgressManager {
         let shards = shards.max(self.config.shard_count);
         self.config.shard_count = shards;
         self.draining_shards.resize(shards.get() as usize, false);
+        self.dead_shards.resize(shards.get() as usize, false);
         self.shard_outputs.resize(shards.get() as usize, 0);
         self.placement = shards;
     }
@@ -378,6 +394,7 @@ impl EgressManager {
         }
         self.config.shard_count = NonZeroU32::new(tail - 1).expect("tail > 1");
         self.draining_shards.truncate((tail - 1) as usize);
+        self.dead_shards.truncate((tail - 1) as usize);
         self.shard_outputs.truncate((tail - 1) as usize);
         true
     }
@@ -444,10 +461,6 @@ pub enum ManagerCommandOutcome {
     /// The command is not routed through manager assignment (feed wakes are
     /// delivered per shard by the feed watcher).
     Ignored,
-    Replayed {
-        shard_id: ShardId,
-        output_count: usize,
-    },
 }
 
 impl ManagerCommandOutcome {
@@ -482,11 +495,13 @@ pub enum EgressManagerDispatchError<E> {
 /// (see `HostCapacity::egress_shards_per_pool`, capped at 8), so this stays a cheap
 /// `O(shard_count)` scan.
 pub fn assign_output_to_shard(output_id: &OutputId, shard_count: NonZeroU32) -> ShardId {
-    let bytes = output_id.as_str().as_bytes();
-    (0..shard_count.get())
-        .max_by_key(|&shard_index| stable_output_hash_pair(bytes, shard_index))
-        .map(ShardId::new)
-        .unwrap_or_else(|| ShardId::new(0))
+    rendezvous(output_id.as_str().as_bytes(), 0..shard_count.get())
+        .map_or(ShardId::new(0), ShardId::new)
+}
+
+/// The highest-scoring of `shards` for `bytes` (see `assign_output_to_shard`).
+fn rendezvous(bytes: &[u8], shards: impl Iterator<Item = u32>) -> Option<u32> {
+    shards.max_by_key(|&shard_index| stable_output_hash_pair(bytes, shard_index))
 }
 
 fn stable_output_hash(bytes: &[u8]) -> u64 {

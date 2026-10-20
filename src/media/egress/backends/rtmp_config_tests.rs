@@ -149,8 +149,7 @@ fn leaf_announces_each_ring_configuration_at_its_keyframe() {
     ]);
     let feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
     let mut engine =
-        RtmpFabricEngine::new_client(test_parts(), 4096, false, RtmpPublishStartup::default())
-            .unwrap();
+        RtmpFabricEngine::new_client(test_parts(), 4096, RtmpPublishStartup::default()).unwrap();
     let mut cursor = FeedCursor::new(0, 0);
     let mut received = Vec::new();
     advance_until_videos(
@@ -199,7 +198,7 @@ fn leaf_does_not_repeat_the_startup_configuration() {
         ..RtmpPublishStartup::default()
     };
     let feed = RingFeed::new(ring, Arc::new(FeedEpoch::new()));
-    let mut engine = RtmpFabricEngine::new_client(test_parts(), 4096, false, startup).unwrap();
+    let mut engine = RtmpFabricEngine::new_client(test_parts(), 4096, startup).unwrap();
     let mut cursor = FeedCursor::new(0, 0);
     let mut received = Vec::new();
     advance_until_videos(
@@ -232,8 +231,7 @@ fn leaf_resyncs_when_a_pending_keyframe_was_overwritten() {
     let ring = Arc::new(RingBuffer::new(8));
     let feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
     let mut engine =
-        RtmpFabricEngine::new_client(test_parts(), 4096, false, RtmpPublishStartup::default())
-            .unwrap();
+        RtmpFabricEngine::new_client(test_parts(), 4096, RtmpPublishStartup::default()).unwrap();
     let mut cursor = FeedCursor::new(0, 0);
     drive_to(
         &mut engine,

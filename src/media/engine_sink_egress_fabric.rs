@@ -109,6 +109,23 @@ impl MediaEngine {
         Ok(outcome)
     }
 
+    /// Sink pools rescale only around commands, so the reconciler calls this
+    /// to replace a panicked shard and release its outputs to retry (see
+    /// `EgressFabricRuntime::rescale`) on an otherwise quiet feed.
+    pub(crate) async fn recover_sink_fabrics(&self) {
+        let mut registry = self.fabric.sink.lock().await;
+        let crate::media::engine_registries::SinkFabricRegistry {
+            runtimes, feeds, ..
+        } = &mut *registry;
+        for (id, runtime) in runtimes {
+            if runtime.has_panicked_shard()
+                && let Some(feed) = feeds.get(id)
+            {
+                self.rescale_sink_fabric(id, runtime, feed.clone_reader());
+            }
+        }
+    }
+
     fn rescale_sink_fabric(
         &self,
         feed_id: &FeedId,

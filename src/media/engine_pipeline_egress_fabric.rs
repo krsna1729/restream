@@ -143,6 +143,26 @@ impl MediaEngine {
         Ok(outcome)
     }
 
+    /// Pipeline pools rescale only around commands, so the reconciler calls
+    /// this to replace a panicked shard and release its outputs to retry
+    /// (see `EgressFabricRuntime::rescale`) on an otherwise quiet feed.
+    pub(crate) async fn recover_pipeline_fabrics(&self) {
+        let mut registry = self.fabric.pipeline.lock().await;
+        let crate::media::engine_registries::PipelineFabricRegistry {
+            runtimes,
+            feeds,
+            target_sources,
+            ..
+        } = &mut *registry;
+        for (id, runtime) in runtimes {
+            if runtime.has_panicked_shard()
+                && let (Some(feed), Some(targets)) = (feeds.get(id), target_sources.get(id))
+            {
+                self.rescale_pipeline_fabric(id, runtime, (feed.clone_reader(), targets.clone()));
+            }
+        }
+    }
+
     fn rescale_pipeline_fabric(
         &self,
         feed_id: &FeedId,

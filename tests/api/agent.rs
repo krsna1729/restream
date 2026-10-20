@@ -654,6 +654,22 @@ async fn agent_operation_lifecycle_is_approval_gated_redacted_and_verified() {
     let conflict = body_json(apply_before_approval).await;
     assert_eq!(conflict["code"], "approvalRequired");
 
+    // Nothing has been applied, so there is nothing to verify; a verify must
+    // neither pass nor end the operation before its approval.
+    let verify_before_apply = |app: axum::Router| {
+        let cookie = cookie.clone();
+        let path = format!("/api/v1/agent/operations/{operation_id}/verify");
+        async move {
+            let response = app
+                .oneshot(auth_req("POST", &path, &cookie, None))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CONFLICT);
+            assert_eq!(body_json(response).await["code"], "notApplied");
+        }
+    };
+    verify_before_apply(app.clone()).await;
+
     let approved = app
         .clone()
         .oneshot(auth_req(
@@ -674,6 +690,7 @@ async fn agent_operation_lifecycle_is_approval_gated_redacted_and_verified() {
     let approved_body = body_json(approved).await;
     assert_eq!(approved_body["status"], "approved");
     assert_eq!(approved_body["approval"]["approvedBy"], "dashboard-session");
+    verify_before_apply(app.clone()).await;
 
     let applied = app
         .clone()

@@ -479,17 +479,21 @@ fn run_shard_thread<B: EgressShardBackend>(
     snapshot: Arc<Mutex<EgressShardSnapshot>>,
     wake_gate: Arc<WakeGate>,
 ) {
-    let result = panic::catch_unwind(AssertUnwindSafe(|| {
-        // Construction, use and drop of the backend all stay inside this
-        // closure, i.e. on the shard thread.
-        let Some(mut backend) = init() else {
+    // Construction, use and drop of the backend all stay on the shard
+    // thread. The backend outlives the unwind, and is dropped after it, in
+    // its own boundary: its drop joins Compio tasks, and compio-executor
+    // aborts the whole process when a task is polled while the thread is
+    // panicking.
+    let mut backend = None;
+    let ran = panic::catch_unwind(AssertUnwindSafe(|| {
+        let Some(backend) = init().map(|init| backend.insert(init)) else {
             return;
         };
         let mut runtime = EgressShardRuntime {
             shard_id,
             config,
             receiver,
-            backend: &mut backend,
+            backend,
             ready_backlog: VecDeque::with_capacity(
                 config
                     .command_channel_capacity()
@@ -506,8 +510,9 @@ fn run_shard_thread<B: EgressShardBackend>(
         };
         runtime.run();
     }));
+    let dropped = panic::catch_unwind(AssertUnwindSafe(|| drop(backend)));
     let mut snapshot = crate::sync::lock(&snapshot);
-    if result.is_err() {
+    if ran.is_err() || dropped.is_err() {
         snapshot.panicked = true;
     }
     snapshot.stopped = true;

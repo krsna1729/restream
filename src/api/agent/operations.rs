@@ -504,13 +504,18 @@ async fn verify_operation_by_id(state: &AppState, operation_id: &str) -> axum::r
             return operation_store_error(crate::agent_execution::OperationStoreError::NotFound);
         }
     };
+    // The checks must use an already-applied snapshot, not an in-flight
+    // record whose apply might finish while verification awaits I/O.
+    if let Err(err) = record.status.require_applied() {
+        return operation_store_error(err);
+    }
     let verification = verify_operation(state, &record).await;
     match state
         .agent_execution
         .complete_verify(operation_id, verification)
     {
-        Some(record) => Json(crate::agent_execution::public_record(&record)).into_response(),
-        None => operation_store_error(crate::agent_execution::OperationStoreError::NotFound),
+        Ok(record) => Json(crate::agent_execution::public_record(&record)).into_response(),
+        Err(err) => operation_store_error(err),
     }
 }
 
@@ -807,6 +812,11 @@ fn operation_store_error(
             "alreadyTerminal",
             "Operation has already reached a terminal state",
         ),
+        OperationStoreError::NotApplied => (
+            StatusCode::CONFLICT,
+            "notApplied",
+            "Operation must be applied before verify",
+        ),
     };
     (
         status,
@@ -859,5 +869,119 @@ mod tests {
             crate::api::outputs::RTMP_OUTPUT_URL_ERROR
         );
         validate("moqt://relay.example/live?insecure=maybe").expect_err("unusable MoQ URL");
+    }
+
+    #[cfg(feature = "agent-execution")]
+    #[tokio::test]
+    async fn applying_snapshot_cannot_be_verified_when_apply_completes_during_checks() {
+        use super::*;
+        use crate::agent_execution::{ApplyBaseline, OperationStatus};
+        use std::task::Poll;
+
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        crate::db::setup_database_schema(&pool).await.unwrap();
+        crate::db::create_pipeline(
+            &pool,
+            "verify-race",
+            "verify race",
+            "verify-race",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let (logs, _) = tokio::sync::broadcast::channel(8);
+        let state = AppState::test_new(
+            crate::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
+            pool.clone(),
+            Arc::new(crate::media::security::IngestSecurityService::new(
+                crate::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG,
+            )),
+            Arc::new(crate::media::srt::SrtIngestPolicyStore::new(
+                crate::domain::srt_ingest::SrtGlobalIngestConfig::default(),
+                &[],
+            )),
+            Default::default(),
+            Arc::new(crate::media::engine::MediaEngine::new()),
+            logs,
+        );
+        let request: crate::agent_core::OperationCreateRequest =
+            serde_json::from_value(serde_json::json!({
+                "intent": "Create a stopped output",
+                "pipelineId": "verify-race",
+                "proposedChanges": [{
+                    "kind": "addOutput", "name": "generated",
+                    "url": "rtmp://example/live/generated",
+                    "config": {"video": {"mode": "source"}, "audio": {"mode": "all"}},
+                    "desiredState": "stopped"
+                }]
+            }))
+            .unwrap();
+        let plan = build_agent_plan(&state, request.plan_request()).await;
+        let created = state.agent_execution.create(request, plan).unwrap();
+        let id = created.operation["operationId"].as_str().unwrap();
+        state
+            .agent_execution
+            .approve(
+                id,
+                crate::agent_core::ApprovalRequest {
+                    approved_by: "test".into(),
+                    reason: None,
+                },
+            )
+            .unwrap();
+        let applying = state
+            .agent_execution
+            .start_apply(id, ApplyBaseline::default())
+            .unwrap();
+        assert_eq!(applying.status, OperationStatus::Applying);
+        assert!(applying.execution_result.is_none());
+
+        // Occupy the only DB connection: if verification reaches its first
+        // catalog read, polling captures the Applying snapshot and parks
+        // there. Complete apply (including generated IDs) before releasing
+        // that read. No scheduler timing or sleep decides the interleaving.
+        let connection = pool.acquire().await.unwrap();
+        let mut verify = std::pin::pin!(verify_operation_by_id(&state, id));
+        let first_poll = futures_util::poll!(verify.as_mut());
+        state
+            .agent_execution
+            .complete_apply(
+                id,
+                Vec::new(),
+                Vec::new(),
+                serde_json::json!({"success": true, "changeResults": [{
+                    "kind": "addOutput", "pipelineId": "verify-race", "outputId": "generated-output"
+                }]}),
+            )
+            .unwrap();
+        drop(connection);
+        let response = match first_poll {
+            Poll::Ready(response) => response,
+            Poll::Pending => verify.await,
+        };
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["code"], "alreadyApplying");
+        let applied = state.agent_execution.get(id).unwrap();
+        assert_eq!(applied.status, OperationStatus::Applied);
+        assert!(applied.verification_result.is_none());
+        assert_eq!(
+            applied.execution_result.unwrap()["changeResults"][0]["outputId"],
+            "generated-output"
+        );
+        assert!(
+            !applied
+                .audit_log
+                .iter()
+                .any(|event| event["kind"] == "verified")
+        );
     }
 }

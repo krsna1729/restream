@@ -168,35 +168,44 @@ impl EgressShardGroup {
             .collect()
     }
 
-    pub fn replace_panicked<B, F, G>(
+    /// Shards whose thread panicked (a stalled shard is not among them).
+    pub fn panicked_shards(&self) -> Vec<ShardId> {
+        self.handles
+            .iter()
+            .map(EgressShardHandle::snapshot)
+            .filter(|snapshot| snapshot.panicked)
+            .map(|snapshot| snapshot.shard_id)
+            .collect()
+    }
+
+    /// Give `shard_id` a new thread whose backend `factory` builds on it,
+    /// then join the old thread. A construction error, or an unknown
+    /// shard, leaves the group unchanged.
+    pub fn replace_with<B, E, F>(
         &mut self,
+        shard_id: ShardId,
         config: EgressShardConfig,
-        mut factory_for: G,
-    ) -> Vec<ShardId>
+        factory: F,
+    ) -> Result<(), E>
     where
         B: EgressShardBackend,
-        F: FnOnce() -> B + Send + 'static,
-        G: FnMut(ShardId) -> F,
+        E: Send + 'static,
+        F: FnOnce() -> Result<B, E> + Send + 'static,
     {
-        let mut replaced = Vec::new();
-        for handle in &mut self.handles {
-            let snapshot = handle.snapshot();
-            if !snapshot.panicked {
-                continue;
-            }
-            let shard_id = snapshot.shard_id;
-            let replacement =
-                EgressShardHandle::spawn_with(shard_id, config, factory_for(shard_id));
-            let old = std::mem::replace(handle, replacement);
-            let _ = old.shutdown_and_join();
-            replaced.push(shard_id);
-        }
-        replaced
+        let Some(handle) = usize::try_from(shard_id.index())
+            .ok()
+            .and_then(|index| self.handles.get_mut(index))
+        else {
+            return Ok(());
+        };
+        let replacement = EgressShardHandle::try_spawn_with(shard_id, config, factory)?;
+        let _ = std::mem::replace(handle, replacement).shutdown_and_join();
+        Ok(())
     }
 
     /// Add one shard at the next index, building its backend on the new
     /// shard thread with `factory`. Used for output-count-driven scale-out
-    /// (`EgressFabricRuntime::rescale`) — mirrors `replace_panicked`'s spawn
+    /// (`EgressFabricRuntime::rescale`) — mirrors `replace_with`'s spawn
     /// shape, but appends a new handle instead of replacing one in place.
     /// A construction error leaves the group unchanged.
     pub fn grow_with<B, E, F>(

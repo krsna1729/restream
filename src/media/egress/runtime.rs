@@ -227,6 +227,11 @@ impl EgressFabricRuntime {
         self.manager.dispatch_command(command, &self.group)
     }
 
+    /// A shard thread panicked and waits for `rescale` to replace it.
+    pub(crate) fn has_panicked_shard(&self) -> bool {
+        !self.group.panicked_shards().is_empty()
+    }
+
     /// Shared handle list for feed publication subscriptions (see the field
     /// doc on `wake_handles`); `rescale` keeps it current.
     pub(crate) fn feed_wake_handles(&self) -> Arc<ArcSwap<Vec<FeedWakeHandle>>> {
@@ -239,15 +244,26 @@ impl EgressFabricRuntime {
     /// thread once it holds no output. A destination never reconnects because
     /// of a resize.
     ///
+    /// First, a shard whose thread panicked gets a new thread, and the
+    /// outputs it held are released as unexpectedly terminated (their
+    /// progress sinks are shared with the application, so this is visible
+    /// without the dead thread): each application task then retries its
+    /// output through the ordinary backoff, onto a live shard. Until its
+    /// replacement starts, placement skips the dead shard. Every Add rescales
+    /// before it is placed, so a new output never lands on a dead shard
+    /// while a live one exists.
+    ///
     /// `factory_for(shard_id)` builds each new backend on its shard thread.
     /// The RTMP Compio poller and SRT Compio runtime/Owners can both fail to
     /// initialize; a failed grow attempt stops growing for this call (logged
     /// by the caller via the returned `Err`) rather than panicking or silently
     /// continuing with fewer shards than `touched` would suggest. Shards that
     /// grew before the failure stay, so the next `Add`/`Remove` can retry.
+    /// Replacement failures do not prevent other dead shards recovering;
+    /// failed replacements retry on the next call, with the first error returned.
     ///
-    /// Returns the shard ids touched (grown or shut down) on success, for
-    /// logging.
+    /// Returns the shard ids touched (replaced, grown or shut down) on
+    /// success, for logging.
     pub(crate) fn rescale<B, E, F, G>(
         &mut self,
         profile: crate::config::EgressShardProfile,
@@ -262,6 +278,36 @@ impl EgressFabricRuntime {
         F: FnOnce() -> Result<B, E> + Send + 'static,
         G: FnMut(ShardId) -> F,
     {
+        let mut touched = Vec::new();
+        let mut grow_error = None;
+        let panicked = self.group.panicked_shards();
+        // Isolate every dead shard before any fallible replacement. An
+        // unavailable backend on one shard must not strand another's outputs
+        // or leave that other dead shard eligible for placement.
+        for &shard_id in &panicked {
+            let released = self.manager.forget_shard(shard_id);
+            tracing::warn!(shard_id = ?shard_id, outputs = released.len(),
+                "egress shard panicked; replacing it and retrying its outputs");
+            for spec in &released {
+                spec.progress.mark_terminated_unexpectedly();
+            }
+        }
+        for shard_id in panicked {
+            match self
+                .group
+                .replace_with(shard_id, shard_config, factory_for(shard_id))
+            {
+                Ok(()) => {
+                    self.manager.revive_shard(shard_id);
+                    touched.push(shard_id);
+                }
+                Err(error) => {
+                    // Keep the first error for the caller, but give every
+                    // other failed shard its own chance to recover.
+                    grow_error.get_or_insert(error);
+                }
+            }
+        }
         let now = Instant::now();
         let placement = self.manager.placement_count().get();
         let outputs =
@@ -285,9 +331,7 @@ impl EgressFabricRuntime {
         }
         .max(1) as usize;
 
-        let mut touched = Vec::new();
-        let mut grow_error = None;
-        while self.group.shard_count() < target {
+        while grow_error.is_none() && self.group.shard_count() < target {
             let shard_id =
                 ShardId::new(u32::try_from(self.group.shard_count()).unwrap_or(u32::MAX));
             match self.group.grow_with(shard_config, factory_for(shard_id)) {
@@ -327,11 +371,11 @@ impl EgressFabricRuntime {
             self.last_observation = None;
         }
         if !touched.is_empty() {
-            // Grown/shut-down shards changed the group's real handle set;
-            // publish the new list every feed subscription reads through
-            // (see the `wake_handles` field doc) -- including on a partial
-            // failure below, since whatever grew before the failure is
-            // still real and needs a wake path.
+            // Replaced/grown/shut-down shards changed the group's real
+            // handle set; publish the new list every feed subscription reads
+            // through (see the `wake_handles` field doc) -- including on a
+            // partial failure below, since whatever changed before the
+            // failure is still real and needs a wake path.
             self.wake_handles
                 .store(Arc::new(self.group.feed_wake_handles()));
         }
@@ -439,499 +483,5 @@ pub(crate) fn subscribe_fabric_wakes(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::media::egress::feed::EgressFeed;
-    use std::num::NonZeroU32;
-    use std::sync::{Arc, Condvar, Mutex};
-    use std::time::Duration;
-
-    use crate::media::egress::command::{
-        EgressCommand, FeedId, OutputId, OutputSpec, ProtocolSpec, ShardId,
-    };
-    use crate::media::egress::manager::{EgressManagerConfigError, ManagerCommandOutcome};
-    use crate::media::egress::policy::LeafPolicy;
-    use crate::media::egress::shard::{
-        EgressShardBackend, EgressShardCommandEffect, EgressShardConfig,
-    };
-
-    #[derive(Debug, Default)]
-    struct ProbeState {
-        commands: Vec<String>,
-        shutdowns: u64,
-        feed_wake_commands: u64,
-        feed_wakes_completed: u64,
-    }
-
-    #[derive(Clone, Debug, Default)]
-    pub(super) struct Probe {
-        inner: Arc<(Mutex<ProbeState>, Condvar)>,
-    }
-
-    impl Probe {
-        fn wait_for_commands(&self, target: usize) {
-            let (lock, condvar) = &*self.inner;
-            let state = lock.lock().unwrap();
-            let result = condvar
-                .wait_timeout_while(state, Duration::from_secs(2), |state| {
-                    state.commands.len() < target
-                })
-                .unwrap();
-            assert!(result.0.commands.len() >= target);
-        }
-
-        fn wait_for_completed_feed_wakes(&self, target: u64) {
-            let (lock, condvar) = &*self.inner;
-            let state = lock.lock().unwrap();
-            let result = condvar
-                .wait_timeout_while(state, Duration::from_secs(2), |state| {
-                    state.feed_wakes_completed < target
-                })
-                .unwrap();
-            assert!(
-                result.0.feed_wakes_completed >= target,
-                "expected {target} completed feed wakes, got {}",
-                result.0.feed_wakes_completed
-            );
-        }
-
-        fn state(&self) -> ProbeState {
-            let state = self.inner.0.lock().unwrap();
-            ProbeState {
-                commands: state.commands.clone(),
-                shutdowns: state.shutdowns,
-                feed_wake_commands: state.feed_wake_commands,
-                feed_wakes_completed: state.feed_wakes_completed,
-            }
-        }
-    }
-    #[derive(Debug)]
-    struct ProbeBackend {
-        probe: Probe,
-    }
-
-    impl EgressShardBackend for ProbeBackend {
-        fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {
-            let is_feed_wake = matches!(&command, EgressCommand::FeedWake);
-            let label = match command {
-                EgressCommand::Add(spec) => format!("add:{}", spec.id),
-                EgressCommand::Update(spec) => format!("update:{}", spec.id),
-                EgressCommand::Remove(output_id) => format!("remove:{output_id}"),
-                EgressCommand::Abandon(output_id) => format!("abandon:{output_id}"),
-                EgressCommand::FeedWake => "feed-wake".to_string(),
-                EgressCommand::DrainShard(shard_id) => format!("drain:{shard_id}"),
-                EgressCommand::Shutdown => "shutdown".to_string(),
-            };
-            let (lock, condvar) = &*self.probe.inner;
-            let mut state = lock.lock().unwrap();
-            state.commands.push(label);
-            if is_feed_wake {
-                state.feed_wake_commands = state.feed_wake_commands.saturating_add(1);
-            }
-            condvar.notify_all();
-            EgressShardCommandEffect::Continue
-        }
-
-        fn on_media_tick(&mut self) -> EgressShardCommandEffect {
-            let (lock, condvar) = &*self.probe.inner;
-            let mut state = lock.lock().unwrap();
-            state.feed_wakes_completed = state.feed_wake_commands;
-            condvar.notify_all();
-            EgressShardCommandEffect::Continue
-        }
-
-        fn on_shutdown(&mut self) {
-            let (lock, condvar) = &*self.probe.inner;
-            let mut state = lock.lock().unwrap();
-            state.shutdowns = state.shutdowns.saturating_add(1);
-            condvar.notify_all();
-        }
-    }
-
-    fn shard_config() -> EgressShardConfig {
-        EgressShardConfig::new(16, 4, 4, 4, Duration::from_millis(1)).unwrap()
-    }
-
-    fn manager_config(shards: u32) -> Result<EgressManagerConfig, EgressManagerConfigError> {
-        EgressManagerConfig::new(shards, 16)
-    }
-
-    pub(super) fn group(shards: u32, probes: &[Probe]) -> EgressShardGroup {
-        let backends = probes
-            .iter()
-            .cloned()
-            .map(|probe| ProbeBackend { probe })
-            .collect::<Vec<_>>();
-        EgressShardGroup::spawn(NonZeroU32::new(shards).unwrap(), shard_config(), backends).unwrap()
-    }
-
-    pub(super) fn output_spec(id: &str) -> OutputSpec {
-        OutputSpec {
-            id: OutputId::new(id),
-            generation: 1,
-            feed: FeedId::new("feed-1"),
-            protocol: ProtocolSpec::Sink,
-            policy: LeafPolicy::default(),
-            progress: Default::default(),
-        }
-    }
-
-    #[test]
-    fn runtime_dispatches_commands_to_owned_shard_group() {
-        let probe = Probe::default();
-        let mut runtime = EgressFabricRuntime::new(
-            manager_config(1).unwrap(),
-            group(1, std::slice::from_ref(&probe)),
-        )
-        .unwrap();
-
-        let outcome = runtime.dispatch(EgressCommand::Add(output_spec("out-1")));
-
-        assert_eq!(
-            outcome,
-            Ok(ManagerCommandOutcome::Enqueued {
-                shard_id: ShardId::new(0)
-            })
-        );
-        probe.wait_for_commands(1);
-        assert_eq!(probe.state().commands, vec!["add:out-1"]);
-        let snapshots = runtime.shutdown();
-        assert_eq!(snapshots.len(), 1);
-        assert_eq!(probe.state().shutdowns, 1);
-    }
-
-    #[test]
-    fn command_admission_tracks_the_real_queue_not_lifetime_dispatches() {
-        // Regression: the manager's per-shard command depth was incremented
-        // on every dispatch and never released in production, so a feed that
-        // sent more than `command_channel_capacity` commands over its life
-        // (4000 outputs on 3 shards, or ordinary add/remove churn) got
-        // `CommandChannelFull` forever although every shard queue was empty.
-        let probe = Probe::default();
-        let mut runtime = EgressFabricRuntime::new(
-            manager_config(1).unwrap(),
-            group(1, std::slice::from_ref(&probe)),
-        )
-        .unwrap();
-
-        let dispatches = 16 * 4;
-        for index in 0..dispatches {
-            let outcome =
-                runtime.dispatch(EgressCommand::Add(output_spec(&format!("out-{index}"))));
-            assert_eq!(
-                outcome,
-                Ok(ManagerCommandOutcome::Enqueued {
-                    shard_id: ShardId::new(0)
-                }),
-                "dispatch {index} of {dispatches}"
-            );
-            probe.wait_for_commands(index + 1);
-        }
-        runtime.shutdown();
-    }
-
-    #[test]
-    fn runtime_rejects_group_with_wrong_shard_count() {
-        let probes = vec![Probe::default(), Probe::default()];
-        let result = EgressFabricRuntime::new(manager_config(1).unwrap(), group(2, &probes));
-
-        assert!(matches!(
-            result,
-            Err(EgressFabricRuntimeError::ShardCountMismatch {
-                expected: 1,
-                actual: 2
-            })
-        ));
-    }
-
-    // -----------------------------------------------------------------
-    // Dynamic shard scaling: rescale
-    // -----------------------------------------------------------------
-
-    #[test]
-    fn rescale_is_a_noop_when_the_target_is_unchanged() {
-        let probe = Probe::default();
-        let mut runtime = EgressFabricRuntime::new(
-            manager_config(1).unwrap(),
-            group(1, std::slice::from_ref(&probe)),
-        )
-        .unwrap();
-
-        // Zero outputs on a 1-CPU host: target is 1 either way.
-        let touched = runtime
-            .rescale(
-                crate::config::EgressShardProfile::OutputCount,
-                crate::capacity::HostCapacity { cpus: 1 },
-                crate::media::egress::runtime::ResizeReason::Remove,
-                shard_config(),
-                |_| || -> Result<ProbeBackend, String> { unreachable!("must not grow") },
-            )
-            .unwrap();
-
-        assert!(touched.is_empty());
-        assert_eq!(runtime.snapshots().len(), 1);
-        runtime.shutdown();
-    }
-
-    #[test]
-    fn pending_add_is_sized_before_placement_without_counting_replacements_twice() {
-        let config = EgressShardConfig::new(1024, 4, 4, 4, Duration::from_millis(1)).unwrap();
-        let probe = Probe::default();
-        let mut runtime = EgressFabricRuntime::new(
-            EgressManagerConfig::new(1, 1024).unwrap(),
-            EgressShardGroup::spawn(
-                NonZeroU32::new(1).unwrap(),
-                config,
-                vec![ProbeBackend {
-                    probe: probe.clone(),
-                }],
-            )
-            .unwrap(),
-        )
-        .unwrap()
-        .adaptive(2);
-        for i in 0..64 {
-            runtime
-                .dispatch(EgressCommand::Add(output_spec(&format!("out-{i}"))))
-                .unwrap();
-        }
-        probe.wait_for_commands(64);
-        let pending = EgressCommand::Add(output_spec("pending"));
-        let reason = runtime.reason_for(&pending);
-        let touched = runtime
-            .rescale(
-                crate::config::EgressShardProfile::SrtOutputCount,
-                crate::capacity::HostCapacity { cpus: 2 },
-                reason,
-                config,
-                |_| {
-                    let probe = Probe::default();
-                    move || Ok::<_, String>(ProbeBackend { probe })
-                },
-            )
-            .unwrap();
-        assert_eq!(
-            touched,
-            vec![ShardId::new(1)],
-            "65th output must see the final pool before connecting"
-        );
-        runtime.dispatch(pending).unwrap();
-        assert_eq!(runtime.manager.output_count(), 65);
-        assert!(matches!(
-            runtime.reason_for(&EgressCommand::Add(output_spec("pending"))),
-            ResizeReason::Remove
-        ));
-        assert!(
-            probe
-                .state()
-                .commands
-                .iter()
-                .all(|command| !command.starts_with("remove:")),
-            "growing for the pending output must not reconnect the 64 live outputs"
-        );
-        runtime.shutdown();
-    }
-
-    pub(super) fn roomy_runtime(probes: &[Probe]) -> (EgressFabricRuntime, EgressShardConfig) {
-        let config = EgressShardConfig::new(1024, 4, 4, 4, Duration::from_millis(1)).unwrap();
-        let count = NonZeroU32::new(probes.len() as u32).unwrap();
-        let backends = probes
-            .iter()
-            .cloned()
-            .map(|probe| ProbeBackend { probe })
-            .collect::<Vec<_>>();
-        let runtime = EgressFabricRuntime::new(
-            EgressManagerConfig::new(count.get(), 1024).unwrap(),
-            EgressShardGroup::spawn(count, config, backends).unwrap(),
-        )
-        .unwrap();
-        (runtime, config)
-    }
-
-    fn no_remove(probe: &Probe) -> bool {
-        probe
-            .state()
-            .commands
-            .iter()
-            .all(|command| !command.starts_with("remove:"))
-    }
-
-    #[test]
-    fn growing_the_pool_never_reconnects_a_live_output() {
-        let old_probe = Probe::default();
-        let (mut runtime, config) = roomy_runtime(std::slice::from_ref(&old_probe));
-        for i in 0..200 {
-            runtime
-                .dispatch(EgressCommand::Add(output_spec(&format!("old-{i}"))))
-                .unwrap();
-        }
-        old_probe.wait_for_commands(200);
-
-        let new_probe = Probe::default();
-        let touched = runtime
-            .rescale(
-                crate::config::EgressShardProfile::OutputCount,
-                crate::capacity::HostCapacity { cpus: 2 },
-                ResizeReason::Remove,
-                config,
-                |_| {
-                    let probe = new_probe.clone();
-                    move || Ok::<_, String>(ProbeBackend { probe })
-                },
-            )
-            .unwrap();
-
-        assert_eq!(touched, vec![ShardId::new(1)]);
-        assert_eq!(runtime.snapshots().len(), 2);
-        for i in 0..200 {
-            let live = runtime
-                .manager
-                .desired_output(&OutputId::new(format!("old-{i}")))
-                .unwrap();
-            assert_eq!(live.shard_id(), ShardId::new(0), "old-{i} stayed put");
-        }
-        assert!(no_remove(&old_probe));
-        assert_eq!(
-            old_probe.state().commands.len(),
-            200,
-            "no replayed Add either"
-        );
-
-        for i in 0..100 {
-            runtime
-                .dispatch(EgressCommand::Add(output_spec(&format!("new-{i}"))))
-                .unwrap();
-        }
-        new_probe.wait_for_commands(1);
-        assert!(
-            new_probe
-                .state()
-                .commands
-                .iter()
-                .all(|command| command.starts_with("add:new-")),
-            "only new outputs reach the new shard"
-        );
-        assert!(no_remove(&old_probe) && no_remove(&new_probe));
-        runtime.shutdown();
-    }
-
-    #[test]
-    fn shrinking_waits_for_the_tail_to_empty_and_never_reconnects_live_outputs() {
-        let probes = [Probe::default(), Probe::default()];
-        let (mut runtime, config) = roomy_runtime(&probes);
-        for i in 0..40 {
-            runtime
-                .dispatch(EgressCommand::Add(output_spec(&format!("out-{i}"))))
-                .unwrap();
-        }
-        let on_tail: Vec<OutputId> = (0..40)
-            .map(|i| OutputId::new(format!("out-{i}")))
-            .filter(|id| runtime.manager.desired_output(id).unwrap().shard_id() == ShardId::new(1))
-            .collect();
-        assert!(!on_tail.is_empty());
-        probes[0].wait_for_commands(40 - on_tail.len());
-        probes[1].wait_for_commands(on_tail.len());
-
-        let shrink = |runtime: &mut EgressFabricRuntime| {
-            runtime
-                .rescale(
-                    crate::config::EgressShardProfile::OutputCount,
-                    crate::capacity::HostCapacity { cpus: 2 },
-                    ResizeReason::Remove,
-                    config,
-                    |_| || -> Result<ProbeBackend, String> { unreachable!("must not grow") },
-                )
-                .unwrap()
-        };
-        assert!(
-            shrink(&mut runtime).is_empty(),
-            "live outputs keep the tail running"
-        );
-        assert_eq!(runtime.snapshots().len(), 2);
-        assert!(no_remove(&probes[0]) && no_remove(&probes[1]));
-
-        for i in 0..20 {
-            runtime
-                .dispatch(EgressCommand::Add(output_spec(&format!("later-{i}"))))
-                .unwrap();
-            let shard = runtime
-                .manager
-                .desired_output(&OutputId::new(format!("later-{i}")))
-                .unwrap()
-                .shard_id();
-            assert_eq!(
-                shard,
-                ShardId::new(0),
-                "a retiring shard takes no new output"
-            );
-        }
-        for id in &on_tail {
-            runtime.dispatch(EgressCommand::Remove(id.clone())).unwrap();
-        }
-        assert_eq!(shrink(&mut runtime), vec![ShardId::new(1)]);
-        assert_eq!(runtime.snapshots().len(), 1);
-        runtime.shutdown();
-    }
-
-    #[test]
-    fn fabric_feed_wakes_follow_ring_growth_rescale_and_stop_on_drop() {
-        use crate::media::egress::journal::{FeedEpoch, RingFeed};
-        use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
-        use crate::media::ring_buffer::RingBuffer;
-
-        let packet = |timestamp| MediaPacket {
-            media_type: MediaType::Video,
-            format: PayloadFormat::Raw,
-            is_keyframe: true,
-            track_index: 0,
-            pts: timestamp,
-            dts: timestamp,
-            payload: bytes::Bytes::new(),
-        };
-        let old_ring = Arc::new(RingBuffer::new(4));
-        let feed = RingFeed::new(old_ring.clone(), Arc::new(FeedEpoch::new()));
-        let probes = [Probe::default(), Probe::default()];
-        let group = group(2, &probes);
-        let handles = Arc::new(ArcSwap::from_pointee(vec![
-            group.feed_wake_handles()[0].clone(),
-        ]));
-        let subscription = subscribe_fabric_wakes(
-            "test",
-            FeedId::new("feed-1"),
-            feed.publication_ring().publication_subscribers(),
-            handles.clone(),
-        );
-
-        // One wake on subscribe, then one per publication, delivered on the
-        // publishing thread.
-        probes[0].wait_for_completed_feed_wakes(1);
-        old_ring.push(packet(0));
-        probes[0].wait_for_completed_feed_wakes(2);
-
-        // Sealing wakes; the replacement ring inherits the subscription.
-        let new_ring = Arc::new(RingBuffer::new_continuing(8, old_ring.get_write_idx()));
-        new_ring.seed_readable_tail_from(&old_ring);
-        old_ring.seal_and_forward(new_ring.clone());
-        probes[0].wait_for_completed_feed_wakes(3);
-        new_ring.push(packet(33));
-        probes[0].wait_for_completed_feed_wakes(4);
-        assert_eq!(feed.head_sequence(), 2);
-
-        // A shard added to the shared list (as `rescale` does) is woken by
-        // the existing subscription.
-        handles.store(Arc::new(group.feed_wake_handles()));
-        new_ring.push(packet(66));
-        probes[0].wait_for_completed_feed_wakes(5);
-        probes[1].wait_for_completed_feed_wakes(1);
-
-        // Dropping the subscription stops wakes: the gates are clear, so a
-        // wake would be sent if anything were still subscribed.
-        drop(subscription);
-        assert!(new_ring.publication_subscribers().is_empty());
-        new_ring.push(packet(99));
-        std::thread::sleep(Duration::from_millis(50));
-        assert_eq!(probes[0].state().feed_wake_commands, 5);
-        assert_eq!(probes[1].state().feed_wake_commands, 1);
-        group.shutdown_and_join();
-    }
-}
+#[path = "runtime_tests.rs"]
+mod tests;

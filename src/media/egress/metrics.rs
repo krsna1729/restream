@@ -11,7 +11,6 @@
 use std::time::{Duration, Instant};
 
 use crate::media::egress::command::ShardId;
-use crate::media::egress::lifecycle::LeafLifecycle;
 
 // ---------------------------------------------------------------------------
 // SRT family Owner observability
@@ -332,8 +331,6 @@ impl ShardMetrics {
 /// to avoid cardinality explosion.
 #[derive(Debug, Clone, Default)]
 pub struct LeafMetrics {
-    pub lifecycle: Option<LeafLifecycle>,
-
     /// Age of last byte progress in milliseconds.
     pub byte_progress_age_ms: Option<u64>,
     /// Age of last protocol progress in milliseconds.

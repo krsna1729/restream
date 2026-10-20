@@ -99,6 +99,20 @@ pub enum OperationStoreError {
     RequiresApproval,
     AlreadyApplying,
     AlreadyTerminal,
+    NotApplied,
+}
+
+impl OperationStatus {
+    pub(crate) fn require_applied(self) -> Result<(), OperationStoreError> {
+        match self {
+            Self::Invalid => Err(OperationStoreError::Invalid),
+            Self::AwaitingApproval | Self::Approved | Self::Failed => {
+                Err(OperationStoreError::NotApplied)
+            }
+            Self::Applying => Err(OperationStoreError::AlreadyApplying),
+            Self::Applied | Self::Verified | Self::VerificationFailed => Ok(()),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -333,25 +347,35 @@ impl AgentExecutionStore {
         })
     }
 
+    /// Record a post-change verification. Only an applied operation has
+    /// changes to verify; a verified one may be judged again.
     pub fn complete_verify(
         &self,
         operation_id: &str,
         verification_result: Value,
-    ) -> Option<OperationRecord> {
-        self.update(operation_id, |record, ts| {
-            record.status = if verification_result["success"].as_bool().unwrap_or(false) {
-                OperationStatus::Verified
-            } else {
-                OperationStatus::VerificationFailed
-            };
-            record.verification_result = Some(verification_result);
-            record.audit_log.push(audit_event(
-                "verified",
-                &ts,
-                "operation post-change verification completed",
-                serde_json::json!({"result": record.verification_result}),
-            ));
-        })
+    ) -> Result<OperationRecord, OperationStoreError> {
+        let mut state = lock_or_recover(&self.state);
+        let record = state
+            .records
+            .get_mut(operation_id)
+            .ok_or(OperationStoreError::NotFound)?;
+        record.status.require_applied()?;
+
+        let ts = now();
+        record.status = if verification_result["success"].as_bool().unwrap_or(false) {
+            OperationStatus::Verified
+        } else {
+            OperationStatus::VerificationFailed
+        };
+        record.verification_result = Some(verification_result);
+        record.updated_at = ts.clone();
+        record.audit_log.push(audit_event(
+            "verified",
+            &ts,
+            "operation post-change verification completed",
+            serde_json::json!({"result": record.verification_result}),
+        ));
+        Ok(record.clone())
     }
 
     fn update(

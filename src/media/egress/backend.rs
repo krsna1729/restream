@@ -173,7 +173,7 @@ pub struct ProtocolFailure {
 
 /// The outcome of one `ProtocolEngine::advance` call.
 ///
-/// The shard maps this to a lifecycle event and updates the leaf accordingly.
+/// The shard updates the leaf accordingly.
 #[derive(Debug)]
 pub enum EngineProgress {
     /// Forward progress was made.

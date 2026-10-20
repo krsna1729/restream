@@ -24,6 +24,7 @@ pub struct PreparedRtmpFabricFeed {
 
 #[derive(Debug, Clone)]
 pub struct RtmpFabricStartup {
+    pub enhanced_rtmp: bool,
     pub enhanced_hevc_video: bool,
     pub output_audio_track: Option<AudioMeta>,
     pub publish_metadata: Option<StreamMetadata>,
@@ -39,6 +40,7 @@ pub struct RtmpFabricStartup {
 impl From<RtmpFabricStartup> for crate::media::egress::backends::rtmp::RtmpPublishStartup {
     fn from(startup: RtmpFabricStartup) -> Self {
         Self {
+            enhanced_rtmp: startup.enhanced_rtmp,
             enhanced_hevc_video: startup.enhanced_hevc_video,
             output_audio_track: startup.output_audio_track,
             publish_metadata: startup.publish_metadata,
@@ -72,7 +74,8 @@ pub async fn prepare_rtmp_fabric_startup(
         resolved_output_audio_tracks(engine, &output.pipeline_id, &prepared.ring).await;
     validate_rtmp_output_audio_tracks(&output_audio_tracks)?;
     let output_audio_track = output_audio_tracks.into_iter().next();
-    let enhanced_hevc_video = output.config.rtmp_mode().is_enhanced()
+    let enhanced_rtmp = output.config.rtmp_mode().is_enhanced();
+    let enhanced_hevc_video = enhanced_rtmp
         && output_ring_video_codec_kind(engine, &output.pipeline_id, &prepared.ring)
             .await
             .is_hevc();
@@ -100,6 +103,7 @@ pub async fn prepare_rtmp_fabric_startup(
         .flatten();
 
     Ok(RtmpFabricStartup {
+        enhanced_rtmp,
         enhanced_hevc_video,
         publish_metadata: rtmp_publish_metadata(
             engine,
@@ -139,7 +143,7 @@ mod tests {
     use super::*;
 
     use crate::application::egress::prepare_output_ring;
-    use crate::domain::output_spec::OutputConfig;
+    use crate::domain::output_spec::{OutputConfig, RtmpOutputMode};
     use crate::domain::state::DesiredOutputState;
     use crate::media::egress::EgressFeed;
     use crate::media::engine::MediaEngine;
@@ -225,6 +229,7 @@ mod tests {
             .await
             .expect("empty RTMP startup must remain valid");
 
+        assert!(!startup.enhanced_rtmp);
         assert!(!startup.enhanced_hevc_video);
         assert_eq!(startup.startup_video_generation, 0);
         assert!(startup.publish_metadata.is_none());
@@ -272,5 +277,23 @@ mod tests {
         assert!(startup.startup_audio_sequence_header.is_some());
         assert!(startup.deferred_audio_sequence_header.is_none());
         assert!(startup.defer_audio_until_video_ready);
+    }
+
+    /// Enhanced mode advertises E-RTMP on connect for any codec; only HEVC
+    /// video switches to FourCC packets.
+    #[tokio::test]
+    async fn enhanced_rtmp_startup_advertises_e_rtmp_for_h264_video() {
+        let engine = Arc::new(MediaEngine::new());
+        let mut output = test_output("pipe-rtmp-startup-enhanced", "rtmp://example/live/key");
+        output.config = OutputConfig::source().with_rtmp_mode(RtmpOutputMode::Enhanced);
+        let prepared = prepare_output_ring(&engine, &output).await;
+        prepared.ring.set_codec_hint("h264");
+
+        let startup = prepare_rtmp_fabric_startup(&engine, &output, &prepared)
+            .await
+            .expect("enhanced RTMP startup must remain valid");
+
+        assert!(startup.enhanced_rtmp);
+        assert!(!startup.enhanced_hevc_video);
     }
 }

@@ -196,7 +196,6 @@ where
         let engine = match RtmpFabricEngine::new_client(
             connecting.parts,
             self.chunk_size,
-            false,
             publish_startup,
         ) {
             Ok(mut engine) => {

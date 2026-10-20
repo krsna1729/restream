@@ -713,6 +713,58 @@ fn retiring_a_shard_stops_new_placement_and_waits_for_its_last_output() {
 }
 
 #[test]
+fn a_dead_placement_prefix_places_new_outputs_on_a_live_tail_shard() {
+    let mut manager = manager(2);
+    let live: Vec<(String, ShardId)> = (0..60)
+        .map(|i| (format!("live-{i}"), add(&mut manager, &format!("live-{i}"))))
+        .collect();
+    assert!(
+        live.iter().any(|(_, shard)| shard.index() == 0),
+        "shard 0 holds live outputs before it dies"
+    );
+    let occupied_tail: Vec<&String> = live
+        .iter()
+        .filter(|(_, shard)| shard.index() == 1)
+        .map(|(id, _)| id)
+        .collect();
+    assert!(
+        !occupied_tail.is_empty(),
+        "a shrink leaves live outputs on the tail"
+    );
+
+    manager.set_placement(NonZeroU32::new(1).unwrap());
+    let forgotten = manager.forget_shard(ShardId::new(0));
+    assert!(!forgotten.is_empty(), "shard 0 was the dead prefix");
+
+    for i in 0..40 {
+        let id = format!("after-{i}");
+        assert_eq!(
+            manager.assign_output(&OutputId::new(&id)).index(),
+            1,
+            "placement must not keep choosing the dead prefix while the tail is live"
+        );
+        assert_eq!(add(&mut manager, &id).index(), 1);
+    }
+    for id in occupied_tail {
+        assert_eq!(
+            manager
+                .desired_output(&OutputId::new(id))
+                .unwrap()
+                .shard_id(),
+            ShardId::new(1),
+            "existing tail outputs stay on their shard"
+        );
+    }
+
+    manager.forget_shard(ShardId::new(1));
+    assert_eq!(
+        manager.assign_output(&OutputId::new("after-0")).index(),
+        0,
+        "with no live shard left, placement falls back so dispatch fails closed"
+    );
+}
+
+#[test]
 fn output_count_reflects_live_desired_outputs() {
     let mut manager = manager(2);
     assert_eq!(manager.output_count(), 0);

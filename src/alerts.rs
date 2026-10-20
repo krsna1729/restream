@@ -530,11 +530,11 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                     Severity::Critical,
                     Scope::Engine,
                     format!("Egress fabric shard panicked ({shard_label})"),
-                    "The shard's OS thread panicked and every output assigned to it lost its connection until the supervisor replaces the shard.",
+                    "The shard's OS thread panicked and every output assigned to it lost its connection. The fabric replaces the shard at its next resize check and those outputs retry with their usual backoff.",
                     vec![Evidence::measured(format!(
                         "state = panicked ({shard_label})"
                     ))],
-                    "Check logs for the panic message and stack trace at the time this shard stopped; outputs on this shard will reconnect once the supervisor replaces it.",
+                    "Check logs for the panic message and stack trace at the time this shard stopped; a shard that keeps panicking points at a backend bug, not the destinations.",
                     &generated_at,
                 );
                 alert.evidence.extend(affected_evidence);
