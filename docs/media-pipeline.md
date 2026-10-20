@@ -923,7 +923,7 @@ The diagram shows a dashboard preview subscribing to a pipeline.
 |---|---|
 | Listener | TLS 1.3 with `RESTREAM_MOQ_TLS_CERT` and `RESTREAM_MOQ_TLS_KEY`; no client certificates; at most 64 incoming unidirectional streams per connection |
 | Browser viewer | normal WebPKI validation; on failure, `serverCertificateHashes` with the SHA-256 of the leaf certificate DER (`certificateSha256`, `null` if unreadable). Browsers accept a pinned certificate only when it is valid for at most 14 days |
-| `moqt://` egress | TLS 1.3 with bundled web roots plus the `ca=` PEM file; `insecure=1` skips chain and name checks but still verifies handshake signatures |
+| `moqt://` egress | TLS 1.3 with bundled web roots plus `ca=` PEM files confined to operator-set `RESTREAM_MOQ_CA_DIR`; `insecure=1` skips chain and name checks but still verifies handshake signatures |
 
 Restream does not generate a certificate (`src/media/moq/tls.rs`).
 
@@ -955,8 +955,10 @@ The diagram shows one MoQ output from its ring to the relay.
   while an unknown value is rejected.
 - **Thread.** Each output is a leaf on a MoQ fabric shard (`egress-shard-N`); its
   Compio runtime owns the connection and the session
-  (`src/media/engine_moq_egress_fabric.rs`). Startup metadata and the `ca`
-  file are prepared on Tokio.
+  (`src/media/engine_moq_egress_fabric.rs`). Startup metadata is prepared on
+  Tokio; CA canonicalization, confinement checks and reads use its blocking
+  pool. Custom CA reads require `RESTREAM_MOQ_CA_DIR`; absolute paths, `..`
+  components and symlink escapes are refused (see [configuration](configuration.md#moq)).
 - **Media.** Video (H.264 or H.265) and the first AAC track. The startup
   snapshot gives the catalog its `avcC` or `hvcC` record and AAC config. Raw
   video drops in-band parameter sets and gets 4-byte NAL lengths; FLV video is

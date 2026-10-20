@@ -123,6 +123,14 @@ pub(crate) async fn run_moq_dev_interop(options: DevOptions) -> Result<Value, St
         ),
         (MOQ_TLS_CERT_ENV, tls.leaf_pem.display().to_string()),
         (MOQ_TLS_KEY_ENV, tls.leaf_key.display().to_string()),
+        (
+            "RESTREAM_MOQ_CA_DIR",
+            tls.ca_pem
+                .parent()
+                .expect("CA directory")
+                .display()
+                .to_string(),
+        ),
         // The outage is seconds long; the production 5 s base backoff would
         // only stretch the reconnect check, not change what it proves.
         ("RESTREAM_OUTPUT_RETRY_BASE_MS", "1000".to_string()),
@@ -280,10 +288,9 @@ impl Session {
         self.sink =
             Some(start_generalized_sink_server(self.sink_port, self.sink_metrics.clone()).await?);
         let moq_url = format!(
-            "moqt://127.0.0.1:{}/?broadcast={EGRESS_BROADCAST}&version={}&ca={}",
+            "moqt://127.0.0.1:{}/?broadcast={EGRESS_BROADCAST}&version={}&ca=ca.pem",
             self.ports.relay,
             self.options.alpn(),
-            self.tls.ca_pem.display()
         );
         let moq_output = self.add_output(&pipeline, "moq-relay", &moq_url).await?;
         let sibling_url = format!("rtmp://127.0.0.1:{}/live/moq-sibling", self.sink_port);
@@ -701,9 +708,8 @@ impl Session {
         let key = "sk-moq-ietf-source";
         let source = create_resource_pipeline(&self.api, "moq-ietf-source", key).await?;
         let output = format!(
-            "moqt://127.0.0.1:{}/?broadcast={broadcast}&version=moqt-19&ca={}",
+            "moqt://127.0.0.1:{}/?broadcast={broadcast}&version=moqt-19&ca=ca.pem",
             self.ports.ingest_relay,
-            self.tls.ca_pem.display(),
         );
         self.add_output(&source, "ietf-ingest-source", &output)
             .await?;

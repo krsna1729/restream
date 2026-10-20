@@ -77,8 +77,9 @@ impl InteropTls {
         std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
         let dir = absolute_path(dir)?;
         let path = |name: &str| dir.join(name);
+        std::fs::create_dir_all(dir.join("ca")).map_err(|error| error.to_string())?;
         let arg = |name: &str| path(name).display().to_string();
-        let (ca_key, ca_pem) = (arg("ca.key"), arg("ca.pem"));
+        let (ca_key, ca_pem) = (arg("ca.key"), arg("ca/ca.pem"));
         let (leaf_key, leaf_csr) = (arg("leaf.key"), arg("leaf.csr"));
         let (leaf_pem, leaf_ext) = (arg("leaf.pem"), arg("leaf.ext"));
         std::fs::write(&leaf_ext, LEAF_EXTENSIONS).map_err(|error| error.to_string())?;
@@ -152,7 +153,7 @@ impl InteropTls {
         let leaf = CertificateDer::from_pem_file(path("leaf.pem"))
             .map_err(|error| format!("read generated leaf certificate: {error}"))?;
         Ok(Self {
-            ca_pem: path("ca.pem"),
+            ca_pem: path("ca/ca.pem"),
             leaf_pem: path("leaf.pem"),
             leaf_key: path("leaf.key"),
             leaf_sha256: certificate_sha256_hex(leaf.as_ref()),
@@ -458,7 +459,7 @@ impl Relay {
         format!(
             "moqt://127.0.0.1:{}/{path}?ca={}",
             self.ports.moq_quic,
-            ca.display()
+            ca.file_name().expect("CA file name").to_string_lossy()
         )
     }
 }

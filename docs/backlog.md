@@ -25,7 +25,6 @@ items).
 - [Q-087 separate-rendition timeline breaks](#q-087-protocol-sonnet-align-separate-renditions-on-timeline-breaks-not-on-raw-proximity)
 - [Q-088 MoQ egress cost](#q-088-performance-sonnet-price-moq-egress-from-a-measured-cost)
 - [Q-089 MoQ origin track-set changes](#q-089-protocol-sonnet-the-moq-origin-follows-a-track-set-change-while-served)
-- [Q-090 MoQ `ca=` path confinement](#q-090-security-sonnet-confine-moq-egress-ca-files-to-a-configured-directory)
 - [Q-091 SRT Backup replays the lost prefix](#q-091-protocol-opus-srt-backup-failover-replays-the-lost-prefix)
 - [Q-092 no descendants of a dropped dependency](#q-092-resilience-opus-never-emit-descendants-of-a-dropped-dependency-bearing-unit)
 - [Q-093 headless MoQ subscriber](#q-093-testing-sonnet-headless-moq-subscriber-for-impairment-and-capacity-gates)
@@ -494,15 +493,6 @@ items).
 - Gates: an origin test that switches a ring from audio-only to audio and
   video while a viewer is attached, and the viewer then receives video.
 - Status: open (Filed: 2026-10-18 by claude, from the #371 review).
-
-### Q-090 [security] [sonnet] Confine MoQ egress CA files to a configured directory
-- Goal: `moqt://…?ca=<file>` reads only PEM files under an operator-set
-  directory, so an authenticated dashboard user cannot make the engine read
-  any path it can read.
-- Sources: `src/media/moq/egress/url.rs`, the egress TLS trust-root setting.
-- Gates: a URL test refusing a path outside the directory, including `..`
-  and symlink escapes.
-- Status: open (Filed: 2026-10-18 by claude, from the #371 review NIT).
 
 ### Q-091 [protocol] [opus] SRT Backup failover replays the lost prefix
 

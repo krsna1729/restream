@@ -5,11 +5,12 @@
 //! come from the URL. Four query keys belong to Restream and never reach
 //! the relay: `broadcast` (the broadcast name announced under that scope;
 //! the pipeline id when absent), `ca` (a PEM file of extra trusted CA
-//! certificates, for a relay with a private CA), `insecure` (skip
-//! certificate verification) and `version` (offer only this MoQ ALPN, e.g.
-//! `moqt-19` or `moq-lite-06`; by default every version moq-net speaks is
-//! offered and the relay picks). Every other query pair stays in the path
-//! sent to the relay, in its original encoding (e.g. `?jwt=`).
+//! certificates, named relative to `RESTREAM_MOQ_CA_DIR`, for a relay with a
+//! private CA), `insecure` (skip certificate verification) and `version`
+//! (offer only this MoQ ALPN, e.g. `moqt-19` or `moq-lite-06`; by default
+//! every version moq-net speaks is offered and the relay picks). Every other
+//! query pair stays in the path sent to the relay, in its original encoding
+//! (e.g. `?jwt=`).
 
 use percent_encoding::percent_decode_str;
 

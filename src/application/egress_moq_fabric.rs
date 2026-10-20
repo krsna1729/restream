@@ -2,6 +2,8 @@
 //! its feed, its `OutputSpec`, and the publish-startup snapshot the shard
 //! reads (tracks, decoder configurations, broadcast name, relay trust).
 
+use std::ffi::OsString;
+use std::path::{Component, Path};
 use std::sync::Arc;
 
 use crate::application::egress::PreparedOutput;
@@ -44,6 +46,48 @@ pub(crate) fn moq_fabric_output_spec(
     }
 }
 
+/// All path resolution and reads stay on the blocking pool. The directory
+/// and its contents must be writable only by the operator, not API users.
+async fn load_moq_ca_file(
+    ca_file: Option<String>,
+    ca_dir: Option<OsString>,
+) -> Result<Option<Vec<u8>>, String> {
+    let Some(ca_file) = ca_file else {
+        return Ok(None);
+    };
+    tokio::task::spawn_blocking(move || {
+        let root = ca_dir
+            .filter(|root| !root.is_empty())
+            .ok_or("MoQ output ca file requires operator setting RESTREAM_MOQ_CA_DIR")?;
+        let path = Path::new(&ca_file);
+        // RootDir and Prefix are unreachable after the absolute check on
+        // Unix; naming them keeps confinement independent of the platform.
+        if path.is_absolute()
+            || path.components().any(|part| {
+                matches!(
+                    part,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            })
+        {
+            return Err("MoQ output ca file must be relative to RESTREAM_MOQ_CA_DIR without `..`");
+        }
+        let root =
+            std::fs::canonicalize(root).map_err(|_| "MoQ output CA directory is unavailable")?;
+        let path = std::fs::canonicalize(root.join(path))
+            .map_err(|_| "MoQ output ca file is unavailable in the configured CA directory")?;
+        if !path.starts_with(&root) {
+            return Err("MoQ output ca file resolves outside the configured CA directory");
+        }
+        std::fs::read(path)
+            .map(Some)
+            .map_err(|_| "MoQ output ca file is unreadable in the configured CA directory")
+    })
+    .await
+    .map_err(|_| "MoQ output CA loading task failed".to_string())?
+    .map_err(str::to_string)
+}
+
 /// The publish startup for one output: the output ring's tracks and
 /// configurations, the broadcast name (`?broadcast=`, else the pipeline id)
 /// and the `ca` file. Fails for a URL the leaf cannot use or an unreadable
@@ -55,14 +99,8 @@ pub(crate) async fn prepare_moq_fabric_startup(
     prepared: &PreparedOutput,
 ) -> Result<MoqPublishStartup, String> {
     let url = parse_moq_url(&output.url).map_err(|error| error.message().to_string())?;
-    let extra_ca_pem = match url.ca_file.as_deref() {
-        Some(path) => Some(
-            tokio::fs::read(path)
-                .await
-                .map_err(|error| format!("MoQ output ca file {path} is unreadable: {error}"))?,
-        ),
-        None => None,
-    };
+    let ca_dir = engine.config.moq_ca_dir.clone().map(OsString::from);
+    let extra_ca_pem = load_moq_ca_file(url.ca_file, ca_dir).await?;
     let media = publish_startup(engine, &output.pipeline_id, &prepared.ring).await;
     Ok(MoqPublishStartup {
         broadcast: url.broadcast.unwrap_or_else(|| output.pipeline_id.clone()),

@@ -816,13 +816,13 @@ mod tests {
     fn validate_output_payload_accepts_moqt_relay_urls_with_hevc() {
         let payload = OutputPayload {
             config: OutputConfig::source().with_video_codec(OutputVideoCodec::Hevc),
-            ..test_output_payload("MOQT://Relay.Example:8893/live?ca=%2Fetc%2Fca.pem")
+            ..test_output_payload("MOQT://Relay.Example:8893/live?ca=trust%2Fca.pem")
         };
         let validated = validate_output_payload(&payload).expect("moqt is an output scheme");
 
         assert_eq!(
             validated.url,
-            "moqt://relay.example:8893/live?ca=%2Fetc%2Fca.pem"
+            "moqt://relay.example:8893/live?ca=trust%2Fca.pem"
         );
     }
 

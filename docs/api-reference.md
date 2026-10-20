@@ -520,6 +520,12 @@ other scheme is `400`:
   other query pairs (for example `?jwt=`) remain in the relay session path.
   Userinfo, an empty `broadcast` or `ca`, an invalid `insecure` value or
   an unknown `version` is `400`.
+  A `ca` file must be relative to the operator's `RESTREAM_MOQ_CA_DIR`
+  (for example `ca=relay.pem`); absolute paths, `..` components and symlinks
+  escaping that directory fail output startup. Unset/empty configuration
+  denies all `ca` reads, even with `insecure=1`. These filesystem-policy
+  failures appear as bounded output-start errors, never file contents or
+  OS path errors. Without `ca`, normal public trust roots are unchanged.
 - HTTP/HTTPS HLS upload shares one local segmenter per pipeline. Each output
   starts at the newest segment, PUTs each new segment, then PUTs a playlist
   of the last three acknowledged segments (media sequence from 0 per
