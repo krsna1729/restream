@@ -80,7 +80,11 @@ sourceUrl: string | null, variantRule: VariantRule,
  * Auth is write-only: the variant and (for basic) the username are safe
  * to show, but no token, password or header value ever is.
  */
-authKind: "none" | "bearer" | "cookies" | "basic" | "headers", authUsername: string | null, ingestUrls: IngestUrls | null, previewUrl: string, runtime: InputRuntimeState, };
+authKind: "none" | "bearer" | "cookies" | "basic" | "headers", authUsername: string | null, 
+/**
+ * HLS push credentials are write-only, independently of pull auth.
+ */
+pushAuthKind: "none" | "basic", pushAuthUsername: string | null, ingestUrls: IngestUrls | null, previewUrl: string, runtime: InputRuntimeState, };
 
 export type InputRuntimeState = { connected: boolean, forwardingState: InputForwardState | null, protocol: string | null, remoteAddr: string | null, video: VideoDescriptor | null, audio: AudioDescriptor | null, };
 

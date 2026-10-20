@@ -16,19 +16,21 @@ import {
   VARIANT_RULES,
   authFields,
   chooseAuthKind,
+  choosePushAuthKind,
   inputDraft,
   inputFields,
   inputProblem,
   inputWrite,
   replaceAuth,
+  replacePushAuth,
+  storedPushAuthNote,
   storedAuthNote,
 } from "./input-model.js";
 import type { InputDraft } from "./input-model.js";
 import { SettingsForm } from "./settings-form.js";
 
-/** Create a pipeline input (`stored` null) or change one: its label, whether it
- * waits for a publisher or pulls a remote HLS URL, and — for a pull input only
- * — the rendition and the credential it presents to that origin. */
+/** Create or edit an input, including write-only pull-origin or HLS publisher
+ * credentials. Stored secrets are represented only by their reported state. */
 export function InputForm(props: {
   pipelineId: string;
   stored: PipelineInput | null;
@@ -111,6 +113,54 @@ export function InputForm(props: {
               Preview
             </a>
           </p>
+        </div>
+      )}
+      {draft.kind === "keyed" && (
+        <div className="space-y-2">
+          <label className="form-control">
+            <span className="label-text">HLS push authentication</span>
+            <select
+              className="select select-sm select-bordered"
+              value={draft.pushAuthKind}
+              onChange={(event) =>
+                setDraft(choosePushAuthKind(draft, event.target.value as "none" | "basic"))
+              }
+            >
+              <option value="none">None</option>
+              <option value="basic">Basic (username and password)</option>
+            </select>
+          </label>
+          <p className="text-xs opacity-70">
+            Protects HLS publishing only, not RTMP, SRT, or playback. Send credentials
+            separately using the publisher's HTTP Basic auth settings; publish URLs stay unchanged.
+          </p>
+          {draft.keepPushAuth && storedPushAuthNote(current) && (
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span role="status">{storedPushAuthNote(current)}</span>
+              <button type="button" className="btn btn-xs btn-outline"
+                aria-label="Replace HLS push credentials"
+                onClick={() => setDraft(replacePushAuth(draft))}>Replace</button>
+              <button type="button" className="btn btn-xs btn-ghost"
+                aria-label="Clear HLS push credentials"
+                onClick={() => setDraft(choosePushAuthKind(draft, "none"))}>Clear</button>
+            </div>
+          )}
+          {!draft.keepPushAuth && draft.pushAuthKind === "basic" && (
+            <>
+              <label className="form-control">
+                <span className="label-text">HLS push username</span>
+                <input className="input input-sm input-bordered" autoComplete="off"
+                  value={draft.pushUsername}
+                  onChange={(event) => set({ pushUsername: event.target.value })} />
+              </label>
+              <label className="form-control">
+                <span className="label-text">HLS push password</span>
+                <input type="password" className="input input-sm input-bordered"
+                  autoComplete="new-password" value={draft.pushPassword}
+                  onChange={(event) => set({ pushPassword: event.target.value })} />
+              </label>
+            </>
+          )}
         </div>
       )}
       {fields.includes("sourceUrl") && (

@@ -9,7 +9,8 @@ use axum::{
 use serde::Deserialize;
 
 use crate::domain::pipeline_input::{
-    HeaderPair, PipelineInput, PipelineInputSource, PipelineInputSourceKind, PullAuth, VariantRule,
+    HeaderPair, PipelineInput, PipelineInputSource, PipelineInputSourceKind, PullAuth, PushAuth,
+    VariantRule,
 };
 
 use super::error::ApiError;
@@ -46,6 +47,8 @@ pub struct CreateInputPayload {
     variant_rule: Option<String>,
     #[serde(default)]
     auth: Option<AuthPayload>,
+    #[serde(default)]
+    push_auth: Option<AuthPayload>,
 }
 
 #[derive(Deserialize)]
@@ -61,6 +64,8 @@ pub struct UpdateInputPayload {
     variant_rule: Option<String>,
     #[serde(default)]
     auth: Option<AuthPayload>,
+    #[serde(default)]
+    push_auth: Option<AuthPayload>,
 }
 
 /// The `auth` object on create/update: one tagged credential mechanism.
@@ -277,12 +282,40 @@ fn build_auth(payload: AuthPayload) -> Result<PullAuth, String> {
     }
 }
 
+/// Push passwords use the dashboard's salted scrypt storage, never plaintext.
+/// The shared bounded blocking lane keeps expensive KDF work off CONTROL.
+async fn build_push_auth(payload: AuthPayload) -> Result<PushAuth, Response> {
+    if !matches!(payload.kind.as_str(), "none" | "basic") {
+        return Err(bad_request("pushAuth kind must be none or basic"));
+    }
+    match build_auth(payload).map_err(bad_request)? {
+        PullAuth::None => Ok(PushAuth::None),
+        PullAuth::Basic { username, password } => {
+            let permit = super::hls_ingest::PUSH_AUTH_WORK
+                .try_acquire()
+                .map_err(|_| StatusCode::SERVICE_UNAVAILABLE.into_response())?;
+            let password_hash = tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                super::auth::hash_password(&password)
+            })
+            .await
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE.into_response())?;
+            Ok(PushAuth::Basic {
+                username,
+                password_hash,
+            })
+        }
+        _ => Err(bad_request("pushAuth kind must be none or basic")),
+    }
+}
+
 /// Assemble and validate the source half of an input mutation.
 fn build_source(
     kind: PipelineInputSourceKind,
     url: Option<String>,
     variant_rule: VariantRule,
     auth: PullAuth,
+    push_auth: PushAuth,
 ) -> Result<PipelineInputSource, String> {
     match kind {
         PipelineInputSourceKind::Keyed => {
@@ -292,9 +325,15 @@ fn build_source(
             if auth != PullAuth::None {
                 return Err("a keyed input cannot carry auth".to_string());
             }
-            Ok(PipelineInputSource::keyed())
+            Ok(PipelineInputSource {
+                push_auth,
+                ..PipelineInputSource::keyed()
+            })
         }
         PipelineInputSourceKind::HlsPull => {
+            if push_auth != PushAuth::None {
+                return Err("a hlsPull input cannot carry pushAuth".to_string());
+            }
             let url = url.ok_or_else(|| "a hlsPull input requires sourceUrl".to_string())?;
             if let Some(message) = validate_source_url(&url) {
                 return Err(message);
@@ -304,6 +343,7 @@ fn build_source(
                 url: Some(url),
                 variant_rule,
                 auth,
+                push_auth,
             })
         }
     }
@@ -366,6 +406,8 @@ async fn input_json(state: &AppState, input: &PipelineInput, host: &str) -> serd
         // safe to echo, but no token, password or header value ever is.
         "authKind": input.source_auth.kind_str(),
         "authUsername": input.source_auth.username(),
+        "pushAuthKind": input.push_auth.kind_str(),
+        "pushAuthUsername": input.push_auth.username(),
         "ingestUrls": endpoints.urls(input),
         "previewUrl": crate::application::runtime_state::inputs::input_preview_url(&input.id),
         "runtime": runtime,
@@ -449,7 +491,14 @@ pub async fn pipeline_inputs_post_handler(
         },
         None => PullAuth::None,
     };
-    let source = match build_source(kind, payload.source_url, variant_rule, auth) {
+    let push_auth = match payload.push_auth {
+        Some(auth) => match build_push_auth(auth).await {
+            Ok(auth) => auth,
+            Err(response) => return response,
+        },
+        None => PushAuth::None,
+    };
+    let source = match build_source(kind, payload.source_url, variant_rule, auth, push_auth) {
         Ok(source) => source,
         Err(message) => return bad_request(message),
     };
@@ -530,7 +579,14 @@ pub async fn pipeline_input_patch_handler(
             payload.source_url.or_else(|| current.source_url.clone())
         }
     };
-    let source = match build_source(kind, url, variant_rule, auth) {
+    let push_auth = match payload.push_auth {
+        Some(auth) => match build_push_auth(auth).await {
+            Ok(auth) => auth,
+            Err(response) => return response,
+        },
+        None => current.push_auth.clone(),
+    };
+    let source = match build_source(kind, url, variant_rule, auth, push_auth) {
         Ok(source) => source,
         Err(message) => return bad_request(message),
     };

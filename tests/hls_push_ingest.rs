@@ -48,6 +48,24 @@ impl PipelineAccessAuthenticator for OneKey {
     }
 }
 
+impl restream::application::ingest::PipelineInputLookup for OneKey {
+    fn get_by_stream_key<'a>(
+        &'a self,
+        stream_key: &'a str,
+    ) -> restream::application::ingest::PipelineInputLookupFuture<'a> {
+        Box::pin(async move {
+            Ok((stream_key == STREAM_KEY).then(|| {
+                restream::domain::pipeline_input::PipelineInput {
+                    id: INPUT_ID.to_string(),
+                    pipeline_id: PIPELINE_ID.to_string(),
+                    enabled: true,
+                    ..restream::domain::pipeline_input::PipelineInput::keyed_default()
+                }
+            }))
+        })
+    }
+}
+
 struct Server {
     engine: Arc<MediaEngine>,
     address: SocketAddr,
@@ -62,7 +80,7 @@ async fn serve() -> Server {
         Arc::new(IngestSecurityService::new(IngestSecurityConfig::default())),
         HlsIngestLimits::default(),
     );
-    let app = restream::api::create_hls_ingest_router(ingest.clone());
+    let app = restream::api::create_hls_ingest_router(ingest.clone(), Arc::new(OneKey));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     tokio::spawn(restream::api::http_server::serve(listener, app));

@@ -62,6 +62,7 @@ async fn pull_inputs_follow_their_rows_across_passes() {
         url: Some(url),
         variant_rule: crate::domain::pipeline_input::VariantRule::HighestBandwidth,
         auth: crate::domain::pipeline_input::PullAuth::None,
+        push_auth: crate::domain::pipeline_input::PushAuth::None,
     };
     let first_url = format!("http://{origin}/master.m3u8");
     crate::db::create_pipeline_input(

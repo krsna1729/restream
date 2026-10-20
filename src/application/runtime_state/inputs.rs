@@ -84,6 +84,10 @@ pub struct InputState {
     )]
     pub auth_kind: String,
     pub auth_username: Option<String>,
+    /// HLS push credentials are write-only, independently of pull auth.
+    #[cfg_attr(test, ts(type = "\"none\" | \"basic\""))]
+    pub push_auth_kind: String,
+    pub push_auth_username: Option<String>,
     pub ingest_urls: Option<IngestUrls>,
     pub preview_url: String,
     pub runtime: InputRuntimeState,
@@ -176,6 +180,8 @@ pub(super) async fn project_inputs(
                 variant_rule: input.variant_rule,
                 auth_kind: input.source_auth.kind_str().to_string(),
                 auth_username: input.source_auth.username().map(str::to_string),
+                push_auth_kind: input.push_auth.kind_str().to_string(),
+                push_auth_username: input.push_auth.username().map(str::to_string),
                 ingest_urls: endpoints.urls(input),
                 preview_url: input_preview_url(&input.id),
                 runtime: sessions.get(&input.id).cloned().unwrap_or_default(),
@@ -184,4 +190,41 @@ pub(super) async fn project_inputs(
             (input.id.clone(), state)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::pipeline_input::PushAuth;
+
+    #[tokio::test]
+    async fn push_auth_runtime_exposes_state_not_credentials_or_urls() {
+        let engine = MediaEngine::new();
+        let input = PipelineInput {
+            id: "input".to_string(),
+            pipeline_id: "pipeline".to_string(),
+            stream_key: "key".to_string(),
+            push_auth: PushAuth::Basic {
+                username: "encoder".to_string(),
+                password_hash: "secret-derived-password-hash".to_string(),
+            },
+            ..PipelineInput::keyed_default()
+        };
+        let endpoints = IngestEndpoints {
+            host: "localhost".to_string(),
+            ports: crate::AppConfig::default().ports,
+        };
+        let state = project_inputs(&engine, &[input], &endpoints).await;
+        assert_eq!(state["input"].push_auth_kind, "basic");
+        assert_eq!(
+            state["input"].push_auth_username.as_deref(),
+            Some("encoder")
+        );
+        let serialized = serde_json::to_string(&state).unwrap();
+        assert!(!serialized.contains("secret-derived-password-hash"));
+        assert!(!serialized.contains("password"));
+        let urls = serde_json::to_string(&state["input"].ingest_urls).unwrap();
+        assert!(!urls.contains("encoder"));
+        assert!(!urls.contains('@'));
+    }
 }

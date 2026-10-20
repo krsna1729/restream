@@ -81,6 +81,7 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
             source_url TEXT,
             variant_rule TEXT NOT NULL DEFAULT 'highest_bandwidth' CHECK(variant_rule IN ('highest_bandwidth', 'lowest_bandwidth')),
             source_auth TEXT CHECK(source_auth IS NULL OR (json_valid(source_auth) AND json_extract(source_auth, '$.kind') IN ('none', 'bearer', 'cookies', 'basic', 'headers'))),
+            push_auth TEXT CHECK(push_auth IS NULL OR (json_valid(push_auth) AND json_extract(push_auth, '$.kind') IN ('none', 'basic'))),
             FOREIGN KEY(pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE
         );",
     )
@@ -108,6 +109,14 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
         "pipeline_inputs",
         "source_auth",
         "TEXT CHECK(source_auth IS NULL OR (json_valid(source_auth) AND json_extract(source_auth, '$.kind') IN ('none', 'bearer', 'cookies', 'basic', 'headers')))",
+    )
+    .await?;
+    // Existing keyed inputs keep their unauthenticated behavior until configured.
+    super::migrations::ensure_column_exists(
+        pool,
+        "pipeline_inputs",
+        "push_auth",
+        "TEXT CHECK(push_auth IS NULL OR (json_valid(push_auth) AND json_extract(push_auth, '$.kind') IN ('none', 'basic')))",
     )
     .await?;
     sqlx::query(

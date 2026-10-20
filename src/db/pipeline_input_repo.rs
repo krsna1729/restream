@@ -1,6 +1,6 @@
 use crate::domain::pipeline_input::{
     PipelineInput, PipelineInputRole, PipelineInputSource, PipelineInputSourceKind, PullAuth,
-    VariantRule,
+    PushAuth, VariantRule,
 };
 use sqlx::{FromRow, SqlitePool};
 use tracing::warn;
@@ -18,6 +18,7 @@ struct PipelineInputRow {
     source_url: Option<String>,
     variant_rule: String,
     source_auth: Option<String>,
+    push_auth: Option<String>,
 }
 
 impl TryFrom<PipelineInputRow> for PipelineInput {
@@ -43,18 +44,58 @@ impl TryFrom<PipelineInputRow> for PipelineInput {
             source_url: row.source_url,
             variant_rule,
             source_auth: deserialize_auth(row.source_auth.as_deref(), &input_id),
+            push_auth: deserialize_push_auth(row.push_auth.as_deref())?,
         })
     }
 }
 
 const SELECT_FIELDS: &str = "id, pipeline_id, label, stream_key, role, enabled, selected, \
-     source_kind, source_url, variant_rule, source_auth";
+     source_kind, source_url, variant_rule, source_auth, push_auth";
 
 /// Serialize the pull auth for the `source_auth` column; `None` for no auth.
 fn serialize_auth(auth: &PullAuth) -> Option<String> {
     match auth {
         PullAuth::None => None,
         _ => serde_json::to_string(auth).ok(),
+    }
+}
+
+fn serialize_push_auth(auth: &PushAuth) -> Result<Option<String>, sqlx::Error> {
+    match auth {
+        PushAuth::None => Ok(None),
+        PushAuth::Basic { .. } => serde_json::to_string(auth)
+            .map(Some)
+            .map_err(|_| sqlx::Error::Protocol("cannot serialize pipeline input push auth".into())),
+    }
+}
+
+/// Only SQL NULL means unset. Corrupt configured state must never permit a push.
+fn deserialize_push_auth(raw: Option<&str>) -> Result<PushAuth, sqlx::Error> {
+    const INVALID: &str = "invalid stored pipeline input push auth";
+    let Some(raw) = raw else {
+        return Ok(PushAuth::None);
+    };
+    // The column CHECK constrains JSON and `kind`, not a variant's fields, so
+    // validate the exact shape here: a stored `none` with a stray hash, or a
+    // basic row missing a field, must fail closed instead of becoming no auth.
+    let value: serde_json::Value =
+        serde_json::from_str(raw).map_err(|_| sqlx::Error::Protocol(INVALID.into()))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| sqlx::Error::Protocol(INVALID.into()))?;
+    match object.get("kind").and_then(serde_json::Value::as_str) {
+        Some("none") if object.len() == 1 => Ok(PushAuth::None),
+        Some("basic") if object.len() == 3 => {
+            let auth: PushAuth =
+                serde_json::from_value(value).map_err(|_| sqlx::Error::Protocol(INVALID.into()))?;
+            if matches!(&auth, PushAuth::Basic { username, password_hash }
+                if username.is_empty() || password_hash.is_empty())
+            {
+                return Err(sqlx::Error::Protocol(INVALID.into()));
+            }
+            Ok(auth)
+        }
+        _ => Err(sqlx::Error::Protocol(INVALID.into())),
     }
 }
 
@@ -203,8 +244,8 @@ pub async fn create_pipeline_input(
     sqlx::query(
         "INSERT INTO pipeline_inputs
          (id, pipeline_id, label, stream_key, role, enabled, selected,
-          source_kind, source_url, variant_rule, source_auth)
-         VALUES (?, ?, ?, ?, 'backup', 1, 0, ?, ?, ?, ?)",
+          source_kind, source_url, variant_rule, source_auth, push_auth)
+         VALUES (?, ?, ?, ?, 'backup', 1, 0, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(pipeline_id)
@@ -214,6 +255,7 @@ pub async fn create_pipeline_input(
     .bind(source.url.as_deref())
     .bind(source.variant_rule.as_str())
     .bind(serialize_auth(&source.auth))
+    .bind(serialize_push_auth(&source.push_auth)?)
     .execute(pool)
     .await?;
     get_pipeline_input(pool, pipeline_id, id)
@@ -317,7 +359,7 @@ pub async fn update_pipeline_input(
     let result = sqlx::query(
         "UPDATE pipeline_inputs
          SET label = ?, enabled = ?, source_kind = ?, source_url = ?,
-             variant_rule = ?, source_auth = ?
+             variant_rule = ?, source_auth = ?, push_auth = ?
          WHERE pipeline_id = ? AND id = ?",
     )
     .bind(label)
@@ -326,6 +368,7 @@ pub async fn update_pipeline_input(
     .bind(source.url.as_deref())
     .bind(source.variant_rule.as_str())
     .bind(serialize_auth(&source.auth))
+    .bind(serialize_push_auth(&source.push_auth)?)
     .bind(pipeline_id)
     .bind(input_id)
     .execute(pool)

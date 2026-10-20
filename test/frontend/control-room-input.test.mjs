@@ -11,12 +11,15 @@ const {
   AUTH_NONE_NOTE,
   authFields,
   chooseAuthKind,
+  choosePushAuthKind,
   inputDraft,
   inputFields,
   inputProblem,
   inputSourceLines,
   inputWrite,
   replaceAuth,
+  replacePushAuth,
+  storedPushAuthNote,
   storedAuthNote,
 } = await loadCompiledFrontendModule("control-room/input-model.js");
 
@@ -39,6 +42,8 @@ function input(overrides = {}) {
     variantRule: "highestBandwidth",
     authKind: "none",
     authUsername: null,
+    pushAuthKind: "none",
+    pushAuthUsername: null,
     ingestUrls: { rtmp: RTMP, srt: SRT, hls: HLS },
     previewUrl: "/hls/inputs/in-1/master.m3u8",
     runtime: {
@@ -314,4 +319,56 @@ test("what the engine would refuse is caught before submit", () => {
   // A keyed input needs neither URL nor credential, but still a label.
   assert.equal(inputProblem({ ...origin, kind: "keyed", sourceUrl: "" }), null);
   assert.equal(inputProblem({ ...origin, sourceUrl: ORIGIN, label: "   " }), "An input needs a label.");
+});
+
+test("HLS push credentials preserve, replace, clear, and clear on source switch", async () => {
+  const stored = input({ pushAuthKind: "basic", pushAuthUsername: "publisher" });
+  const draft = inputDraft(stored);
+  assert.equal(draft.pushUsername, "");
+  assert.equal(draft.pushPassword, "");
+  assert.equal(draft.keepPushAuth, true);
+  assert.match(storedPushAuthNote(stored), /publisher/);
+  assert.equal(storedPushAuthNote(input()), null);
+  assert.ok(!("pushAuth" in inputWrite(draft, stored)));
+  assert.equal(inputProblem(draft), null);
+  assert.deepEqual(inputWrite(choosePushAuthKind(draft, "none"), stored).pushAuth, { kind: "none" });
+  const replacement = { ...replacePushAuth(draft), pushUsername: "next", pushPassword: "secret" };
+  assert.equal(inputProblem(replacement), null);
+  assert.deepEqual(inputWrite(replacement, stored).pushAuth, {
+    kind: "basic", username: "next", password: "secret",
+  });
+  const pulling = { ...replacement, kind: "hlsPull", sourceUrl: ORIGIN };
+  assert.deepEqual(inputWrite(pulling, stored).pushAuth, { kind: "none" });
+  assert.ok(!("pushAuth" in inputWrite({ ...pulling, pushAuthKind: "basic" }, pull())));
+  const backup = { ...stored, role: "backup" };
+  assert.deepEqual(inputSourceLines(backup), [RTMP, SRT, HLS]);
+  installFakeDom();
+  const requests = [];
+  globalThis.fetch = async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return new Response(JSON.stringify({ input: stored }), {
+      status: 200, headers: { "content-type": "application/json" },
+    });
+  };
+  const api = await loadCompiledFrontendModule("core/api.js");
+  await api.updatePipelineInput("pipe-1", stored.id, inputWrite(draft, stored));
+  await api.updatePipelineInput("pipe-1", stored.id, inputWrite(replacement, stored));
+  assert.ok(!("pushAuth" in requests[0]));
+  assert.deepEqual(requests[1].pushAuth, { kind: "basic", username: "next", password: "secret" });
+});
+
+test("HLS push Basic replacements enforce UTF-8 byte limits without trimming secrets", () => {
+  const base = {
+    ...choosePushAuthKind(inputDraft(input()), "basic"),
+    pushUsername: "publisher", pushPassword: "secret",
+  };
+  assert.match(inputProblem({ ...base, pushUsername: "" }), /username/);
+  assert.match(inputProblem({ ...base, pushUsername: "a:b" }), /colon/);
+  assert.match(inputProblem({ ...base, pushUsername: "é".repeat(129) }), /256 bytes/);
+  assert.match(inputProblem({ ...base, pushPassword: "" }), /password/);
+  assert.match(inputProblem({ ...base, pushPassword: "é".repeat(2049) }), /4096 bytes/);
+  assert.equal(inputProblem({ ...base, pushUsername: "é".repeat(128), pushPassword: "é".repeat(2048) }), null);
+  assert.deepEqual(inputWrite({ ...base, pushUsername: " user ", pushPassword: " pass " }, input()).pushAuth,
+    { kind: "basic", username: " user ", password: " pass " });
+  assert.ok(!("pushAuth" in inputWrite(inputDraft(null), null)));
 });

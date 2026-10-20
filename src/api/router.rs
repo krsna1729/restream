@@ -550,12 +550,15 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 /// The HLS push ingest surface. Kept out of `create_router`'s body limit and
 /// reconciler wake: it enforces its own body bounds, and a segment upload is
 /// not a mutation the reconciler must converge.
-pub fn create_hls_ingest_router(ingest: Arc<crate::media::hls_ingest::HlsIngest>) -> Router {
+pub fn create_hls_ingest_router(
+    ingest: Arc<crate::media::hls_ingest::HlsIngest>,
+    inputs: Arc<dyn crate::application::ingest::PipelineInputLookup>,
+) -> Router {
     apply_security_headers(Router::new().route(
         "/ingest/hls/{stream_key}/{*path}",
         any(super::hls_ingest::hls_ingest_handler),
     ))
-    .with_state(ingest)
+    .with_state(super::hls_ingest::HlsIngestState { ingest, inputs })
 }
 
 /// Every persisted change reaches the reconciler (Q-040): it runs an output

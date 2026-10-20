@@ -55,12 +55,14 @@ pub struct PipelineInput {
     /// How the input authenticates to its origin. A credential: stored and
     /// used, never returned by the API. [`PullAuth::None`] when unset.
     pub source_auth: PullAuth,
+    /// Inbound HLS push authentication. Only the salted hash is stored.
+    pub push_auth: PushAuth,
 }
 
 impl fmt::Debug for PipelineInput {
     /// `source_url` is itself a credential when the origin signs its URLs, and
     /// `stream_key` authenticates a push, so both print as a fixed marker;
-    /// `source_auth` redacts itself.
+    /// `source_auth` and `push_auth` redact themselves.
     ///
     /// The domain prints the marker rather than a partly-redacted URL on
     /// purpose. Redacting a URL means deciding which part of it is the
@@ -82,6 +84,7 @@ impl fmt::Debug for PipelineInput {
             .field("source_url", &self.source_url.as_ref().map(|_| REDACTED))
             .field("variant_rule", &self.variant_rule)
             .field("source_auth", &self.source_auth)
+            .field("push_auth", &self.push_auth)
             .finish()
     }
 }
@@ -103,6 +106,7 @@ impl PipelineInput {
             source_url: None,
             variant_rule: VariantRule::default(),
             source_auth: PullAuth::None,
+            push_auth: PushAuth::None,
         }
     }
 }
@@ -309,16 +313,60 @@ impl PullAuth {
     }
 }
 
+/// How an external HLS publisher authenticates to a keyed input.
+///
+/// This is stored credential state, never an API response or a plaintext password.
+#[derive(Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum PushAuth {
+    #[default]
+    None,
+    Basic {
+        username: String,
+        password_hash: String,
+    },
+}
+
+impl fmt::Debug for PushAuth {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => formatter.write_str("None"),
+            Self::Basic { username, .. } => formatter
+                .debug_struct("Basic")
+                .field("username", username)
+                .field("password_hash", &REDACTED)
+                .finish(),
+        }
+    }
+}
+
+impl PushAuth {
+    pub const fn kind_str(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Basic { .. } => "basic",
+        }
+    }
+
+    pub fn username(&self) -> Option<&str> {
+        match self {
+            Self::None => None,
+            Self::Basic { username, .. } => Some(username),
+        }
+    }
+}
+
 /// The source half of a pipeline input as supplied on create or update.
 ///
 /// This is the write-side view; the read model carries the same facts as flat
-/// fields on [`PipelineInput`]. `auth` defaults to [`PullAuth::None`].
+/// fields on [`PipelineInput`]. Both credential fields default to no auth.
 #[derive(Clone, PartialEq, Eq, Default)]
 pub struct PipelineInputSource {
     pub kind: PipelineInputSourceKind,
     pub url: Option<String>,
     pub variant_rule: VariantRule,
     pub auth: PullAuth,
+    pub push_auth: PushAuth,
 }
 
 impl fmt::Debug for PipelineInputSource {
@@ -331,6 +379,7 @@ impl fmt::Debug for PipelineInputSource {
             .field("url", &self.url.as_ref().map(|_| REDACTED))
             .field("variant_rule", &self.variant_rule)
             .field("auth", &self.auth)
+            .field("push_auth", &self.push_auth)
             .finish()
     }
 }
@@ -345,6 +394,36 @@ impl PipelineInputSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn push_auth_debug_redacts_stored_hash_everywhere() {
+        let secret = "salt:secret-derived-password-hash";
+        let auth = PushAuth::Basic {
+            username: "publisher".to_string(),
+            password_hash: secret.to_string(),
+        };
+        assert_eq!(auth.kind_str(), "basic");
+        assert_eq!(auth.username(), Some("publisher"));
+        let input = PipelineInput {
+            push_auth: auth.clone(),
+            ..PipelineInput::keyed_default()
+        };
+        let source = PipelineInputSource {
+            push_auth: auth.clone(),
+            ..PipelineInputSource::keyed()
+        };
+        for printed in [
+            format!("{auth:?}"),
+            format!("{input:?}"),
+            format!("{source:?}"),
+        ] {
+            assert!(!printed.contains(secret));
+            assert!(printed.contains("<redacted>"));
+            assert!(printed.contains("publisher"));
+        }
+        assert_eq!(PushAuth::default().kind_str(), "none");
+        assert_eq!(PushAuth::default().username(), None);
+    }
 
     /// A credential must never reach a log line. These types are printed
     /// through the input row, the write spec and the pull source, so a
@@ -410,6 +489,7 @@ mod tests {
             )),
             variant_rule: VariantRule::HighestBandwidth,
             source_auth: auths[0].clone(),
+            push_auth: PushAuth::None,
         };
         let printed = format!("{input:?}");
         assert!(
@@ -446,6 +526,7 @@ mod tests {
             )),
             variant_rule: VariantRule::HighestBandwidth,
             auth: auths[1].clone(),
+            push_auth: PushAuth::None,
         };
         let printed = format!("{source:?}");
         assert!(
