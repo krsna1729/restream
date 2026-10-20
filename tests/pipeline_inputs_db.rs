@@ -1,7 +1,8 @@
 #![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 use restream::db;
 use restream::domain::pipeline_input::{
-    PipelineInputRole, PipelineInputSource, PipelineInputSourceKind, PullAuth, VariantRule,
+    PipelineInputRole, PipelineInputSource, PipelineInputSourceKind, PullAuth, PushAuth,
+    VariantRule,
 };
 use sqlx::SqlitePool;
 
@@ -158,6 +159,7 @@ async fn keyed_inputs_carry_no_pull_source() {
         assert_eq!(input.source_url, None);
         assert_eq!(input.variant_rule, VariantRule::HighestBandwidth);
         assert_eq!(input.source_auth, PullAuth::None);
+        assert_eq!(input.push_auth, PushAuth::None);
     }
 }
 
@@ -184,6 +186,7 @@ async fn pull_input_round_trips_every_source_field() {
                     value: "shh".to_string(),
                 }],
             },
+            push_auth: PushAuth::None,
         },
     )
     .await
@@ -225,6 +228,7 @@ async fn pull_input_round_trips_every_source_field() {
                 username: "operator".to_string(),
                 password: "hunter2".to_string(),
             },
+            push_auth: PushAuth::None,
         },
     )
     .await
@@ -373,4 +377,136 @@ async fn a_row_whose_auth_does_not_parse_does_not_fail_the_list() {
     // still has its keyed input to admit with.
     assert_eq!(other.len(), 1, "and it still carries that pipeline's input");
     assert_eq!(other[0].stream_key, "other-key");
+}
+
+#[tokio::test]
+async fn push_auth_persists_replaces_and_clears() {
+    let pool = schema_pool().await;
+    db::create_pipeline(&pool, "p1", "Main", "primary-key", None, None)
+        .await
+        .expect("pipeline create");
+    let mut source = PipelineInputSource {
+        push_auth: PushAuth::Basic {
+            username: "publisher".to_string(),
+            password_hash: "salt:first-derived-hash".to_string(),
+        },
+        ..PipelineInputSource::keyed()
+    };
+    let created = db::create_pipeline_input(&pool, "push", "p1", "Publisher", "push-key", &source)
+        .await
+        .expect("authenticated input");
+    assert_eq!(created.push_auth, source.push_auth);
+    let reloaded = db::get_pipeline_input_by_stream_key(&pool, "push-key")
+        .await
+        .expect("lookup")
+        .expect("input");
+    assert_eq!(reloaded.push_auth, source.push_auth);
+    let stored: String =
+        sqlx::query_scalar("SELECT push_auth FROM pipeline_inputs WHERE id = 'push'")
+            .fetch_one(&pool)
+            .await
+            .expect("stored auth");
+    let stored: serde_json::Value = serde_json::from_str(&stored).expect("stored JSON");
+    assert_eq!(stored["kind"], "basic");
+    assert_eq!(stored["password_hash"], "salt:first-derived-hash");
+    assert!(stored.get("password").is_none());
+
+    source.push_auth = PushAuth::Basic {
+        username: "replacement".to_string(),
+        password_hash: "other-salt:replacement-derived-hash".to_string(),
+    };
+    let updated = db::update_pipeline_input(&pool, "p1", "push", "Publisher", true, &source)
+        .await
+        .expect("replace auth")
+        .expect("input");
+    assert_eq!(updated.push_auth, source.push_auth);
+    assert_eq!(
+        db::get_pipeline_input(&pool, "p1", "push")
+            .await
+            .expect("reload replacement")
+            .expect("input")
+            .push_auth,
+        source.push_auth
+    );
+
+    let cleared = db::update_pipeline_input(
+        &pool,
+        "p1",
+        "push",
+        "Publisher",
+        true,
+        &PipelineInputSource::keyed(),
+    )
+    .await
+    .expect("clear auth")
+    .expect("input");
+    assert_eq!(cleared.push_auth, PushAuth::None);
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT push_auth FROM pipeline_inputs WHERE id = 'push'")
+            .fetch_one(&pool)
+            .await
+            .expect("cleared state");
+    assert_eq!(stored, None);
+}
+
+#[tokio::test]
+async fn push_auth_migration_defaults_existing_inputs_to_none() {
+    let pool = schema_pool().await;
+    db::create_pipeline(&pool, "p1", "Main", "primary-key", None, None)
+        .await
+        .expect("pipeline create");
+    // Recreate the pre-push-auth schema while retaining its existing input.
+    sqlx::query("ALTER TABLE pipeline_inputs DROP COLUMN push_auth")
+        .execute(&pool)
+        .await
+        .expect("pre-push-auth schema");
+    db::setup_database_schema(&pool).await.expect("migration");
+    let migrated = db::get_pipeline_input_by_stream_key(&pool, "primary-key")
+        .await
+        .expect("migrated lookup")
+        .expect("existing input");
+    assert_eq!(migrated.push_auth, PushAuth::None);
+    db::setup_database_schema(&pool)
+        .await
+        .expect("idempotent migration");
+}
+
+#[tokio::test]
+async fn corrupt_push_auth_rejects_lookup_without_exposing_credentials() {
+    let pool = schema_pool().await;
+    db::create_pipeline(&pool, "p1", "Main", "primary-key", None, None)
+        .await
+        .expect("pipeline create");
+    // These values pass the JSON/kind constraint but cannot represent auth.
+    for malformed in [
+        r#"{"kind":"basic","username":"publisher"}"#,
+        r#"{"kind":"basic","username":"publisher","password_hash":42}"#,
+        r#"{"kind":"basic","username":"publisher","password_hash":""}"#,
+        r#"{"kind":"basic","username":"","password_hash":"secret-hash"}"#,
+        r#"{"kind":"none","password_hash":"secret-hash"}"#,
+        r#"{}"#,
+        r#"null"#,
+    ] {
+        sqlx::query("UPDATE pipeline_inputs SET push_auth = ? WHERE stream_key = 'primary-key'")
+            .bind(malformed)
+            .execute(&pool)
+            .await
+            .expect("inject corrupt state");
+        let error = db::get_pipeline_input_by_stream_key(&pool, "primary-key")
+            .await
+            .expect_err("corrupt auth must reject keyed lookup");
+        assert!(matches!(error, sqlx::Error::Protocol(_)));
+        assert!(!format!("{error:?}").contains("secret-hash"));
+        assert!(
+            db::get_pipeline_input(&pool, "p1", "input_primary_p1")
+                .await
+                .is_err()
+        );
+        assert!(
+            db::list_pipeline_inputs(&pool, "p1")
+                .await
+                .expect("invalid row is omitted from list")
+                .is_empty()
+        );
+    }
 }

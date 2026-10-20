@@ -590,9 +590,14 @@ Sources: `src/api/hls_ingest.rs`, `src/media/hls_ingest/`,
   fixes the container; a later object of the other container gets `415`.
   To copy ADTS AAC into fMP4, add `-bsf:a aac_adtstoasc`; the harness does
   this (`src/bin/test_harness/hls_push_duty/options.rs`).
-- **Key.** The stream key is the credential. It is checked like an RTMP or SRT
-  key, under the `hls-publish` rate-limit scope, before the body is read. The
-  route is outside the dashboard session check.
+- **Authorization.** The stream key is checked like an RTMP or SRT key,
+  under the `hls-publish` rate-limit scope. A keyed input may additionally
+  require HTTP Basic via write-only `pushAuth` configuration. Every PUT,
+  POST and DELETE checks both before reading any body byte; missing or wrong
+  Basic credentials receive `401`. Salted password verification uses a
+  bounded blocking lane, never a Tokio worker or media Owner; saturation
+  returns `503`. Generated URLs never contain these credentials. The route
+  is outside the dashboard session check. Use HTTPS through a TLS proxy.
 - **Session.** The first accepted object registers an `hls` input attempt. It
   ends on `EXT-X-ENDLIST` after the last listed segment, after
   max(3 × target duration, 10 s) without an object, or when the input goes

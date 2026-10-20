@@ -1,8 +1,8 @@
 //! HTTP surface of HLS push ingest: `PUT`/`POST /ingest/hls/{key}/{*path}`.
 //!
-//! The stream key is the credential: it is resolved before any body byte is
-//! read. The handler only reads the bounded body and hands the object to the
-//! key's session; it never demuxes.
+//! The stream key and optional per-input Basic credential are resolved before
+//! any body byte is read, including DELETE requests. The handler only reads
+//! the bounded body and hands the object to the key's session; it never demuxes.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -12,21 +12,99 @@ use axum::body::Body;
 use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use futures_util::StreamExt;
+
+use crate::application::ingest::PipelineInputLookup;
+use crate::domain::pipeline_input::PushAuth;
+
+/// Bound queued/running password KDFs as well as their memory consumption.
+/// A permit lives in the blocking closure even if its HTTP request is dropped.
+pub(super) static PUSH_AUTH_WORK: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+const MAX_BASIC_BYTES: usize = 256 + 1 + 4096;
+const MAX_BASIC_HEADER: usize = 6 + MAX_BASIC_BYTES.div_ceil(3) * 4;
+
+#[derive(Clone)]
+pub(super) struct HlsIngestState {
+    pub ingest: Arc<HlsIngest>,
+    pub inputs: Arc<dyn PipelineInputLookup>,
+}
+
+fn unauthorized() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        [(
+            header::WWW_AUTHENTICATE,
+            HeaderValue::from_static("Basic realm=\"HLS push\", charset=\"UTF-8\""),
+        )],
+        "HLS push credentials required",
+    )
+        .into_response()
+}
+
+async fn require_push_auth(auth: PushAuth, headers: &HeaderMap) -> Result<(), Response> {
+    let PushAuth::Basic {
+        username,
+        password_hash,
+    } = auth
+    else {
+        return Ok(());
+    };
+    let mut values = headers.get_all(header::AUTHORIZATION).iter();
+    let Some(value) = values.next() else {
+        return Err(unauthorized());
+    };
+    if values.next().is_some() || value.as_bytes().len() > MAX_BASIC_HEADER {
+        return Err(unauthorized());
+    }
+    let Some((scheme, encoded)) = value.to_str().ok().and_then(|value| value.split_once(' '))
+    else {
+        return Err(unauthorized());
+    };
+    if !scheme.eq_ignore_ascii_case("basic") {
+        return Err(unauthorized());
+    }
+    let decoded = STANDARD.decode(encoded).map_err(|_| unauthorized())?;
+    if decoded.len() > MAX_BASIC_BYTES {
+        return Err(unauthorized());
+    }
+    let Some((candidate_user, password)) = std::str::from_utf8(&decoded)
+        .ok()
+        .and_then(|value| value.split_once(':'))
+    else {
+        return Err(unauthorized());
+    };
+    if candidate_user != username || password.is_empty() || password.len() > 4096 {
+        return Err(unauthorized());
+    }
+    let password = password.to_owned();
+    let permit = PUSH_AUTH_WORK
+        .try_acquire()
+        .map_err(|_| retry_later("credential verification busy"))?;
+    let valid = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        super::auth::verify_password(&password, &password_hash)
+    })
+    .await
+    .unwrap_or(false);
+    if valid { Ok(()) } else { Err(unauthorized()) }
+}
 
 use crate::media::hls_ingest::playlist::normalize_path;
 use crate::media::hls_ingest::{
     AuthorizeError, BodyError, DispatchError, DispatchOrigin, HlsIngest, ObjectKind, ObjectOutcome,
 };
 
-pub async fn hls_ingest_handler(
-    State(ingest): State<Arc<HlsIngest>>,
+pub(super) async fn hls_ingest_handler(
+    State(state): State<HlsIngestState>,
     Path((stream_key, path)): Path<(String, String)>,
     connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
     method: Method,
     headers: HeaderMap,
     body: Body,
 ) -> Response {
+    let ingest = state.ingest;
     let stores = match method {
         Method::PUT | Method::POST => true,
         Method::DELETE => false,
@@ -49,6 +127,24 @@ pub async fn hls_ingest_handler(
             return (StatusCode::SERVICE_UNAVAILABLE, "stream key lookup failed").into_response();
         }
     };
+    // Reuse the persisted input lookup rather than a credential cache: updates
+    // and clears apply to the very next object, even in an existing session.
+    let auth = match state.inputs.get_by_stream_key(&stream_key).await {
+        Ok(Some(input))
+            if input.id == pipeline.input_id
+                && input.pipeline_id == pipeline.id
+                && input.enabled
+                && input.source_kind
+                    == crate::domain::pipeline_input::PipelineInputSourceKind::Keyed =>
+        {
+            input.push_auth
+        }
+        Ok(_) => return StatusCode::FORBIDDEN.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if let Err(response) = require_push_auth(auth, &headers).await {
+        return response;
+    }
     if !stores {
         // FFmpeg's `delete_segments` removes old segments; nothing is kept
         // after publishing, so there is nothing to delete.

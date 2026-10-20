@@ -80,6 +80,9 @@ export interface PipelineInput {
   authKind: PullAuthKind;
   /** A basic username is not a secret; every other credential field is. */
   authUsername: string | null;
+  /** Optional inbound HLS Basic auth; the password/hash is never returned. */
+  pushAuthKind: "none" | "basic";
+  pushAuthUsername: string | null;
   /** null for a pull input: it accepts no pushes. */
   ingestUrls: IngestUrls | null;
   previewUrl: string;

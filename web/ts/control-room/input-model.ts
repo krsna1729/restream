@@ -12,6 +12,7 @@
 import type {
   PipelineInputWrite,
   PullAuthPayload,
+  PushAuthPayload,
   PullHeaderPair,
 } from "../core/api-types.js";
 import type {
@@ -86,6 +87,10 @@ export interface InputDraft {
   readonly username: string;
   readonly password: string;
   readonly headers: readonly PullHeaderPair[];
+  readonly pushAuthKind: "none" | "basic";
+  readonly keepPushAuth: boolean;
+  readonly pushUsername: string;
+  readonly pushPassword: string;
 }
 
 /** What the editor starts with. A stored credential is never read back, so the
@@ -104,6 +109,10 @@ export function inputDraft(stored: PipelineInput | null): InputDraft {
     username: "",
     password: "",
     headers: [{ name: "", value: "" }],
+    pushAuthKind: stored?.pushAuthKind ?? "none",
+    keepPushAuth: true,
+    pushUsername: "",
+    pushPassword: "",
   };
 }
 
@@ -144,6 +153,20 @@ export function chooseAuthKind(draft: InputDraft, kind: PullAuthKind): InputDraf
  * fresh one of the same mechanism. */
 export function replaceAuth(draft: InputDraft): InputDraft {
   return { ...draft, keepAuth: false };
+}
+
+export function choosePushAuthKind(draft: InputDraft, kind: "none" | "basic"): InputDraft {
+  return { ...draft, pushAuthKind: kind, keepPushAuth: false };
+}
+
+export function replacePushAuth(draft: InputDraft): InputDraft {
+  return { ...draft, keepPushAuth: false };
+}
+
+export function storedPushAuthNote(stored: PipelineInput | null): string | null {
+  return stored?.pushAuthKind === "basic"
+    ? `HLS push credentials stored${stored.pushAuthUsername ? ` for ${stored.pushAuthUsername}` : ""}`
+    : null;
 }
 
 /** What the editor says about the credential already stored, or null when
@@ -212,7 +235,17 @@ export function inputSourceLines(input: PipelineInput): string[] {
 /** Why the engine would refuse this input, or null. */
 export function inputProblem(draft: InputDraft): string | null {
   if (!draft.label.trim()) return "An input needs a label.";
-  if (draft.kind !== "hlsPull") return null;
+  if (draft.kind === "keyed") {
+    if (draft.keepPushAuth || draft.pushAuthKind === "none") return null;
+    if (!draft.pushUsername) return "HLS push Basic auth needs a username.";
+    if (draft.pushUsername.includes(":")) return "HLS push username cannot contain a colon.";
+    if (new TextEncoder().encode(draft.pushUsername).length > 256)
+      return "HLS push username must be at most 256 bytes.";
+    if (!draft.pushPassword) return "HLS push Basic auth needs a password.";
+    if (new TextEncoder().encode(draft.pushPassword).length > 4096)
+      return "HLS push password must be at most 4096 bytes.";
+    return null;
+  }
   const url = draft.sourceUrl.trim();
   if (!url) return "A pull input needs the HLS source URL.";
   if (!isHttpUrl(url)) return "The HLS source URL must be an absolute http or https URL.";
@@ -266,6 +299,15 @@ function authWrite(draft: InputDraft, stored: PipelineInput | null): PullAuthPay
   }
 }
 
+function pushAuthWrite(draft: InputDraft, stored: PipelineInput | null): PushAuthPayload | null {
+  if (draft.kind !== "keyed")
+    return stored?.pushAuthKind === "basic" ? { kind: "none" } : null;
+  if (draft.keepPushAuth) return null;
+  return draft.pushAuthKind === "none"
+    ? { kind: "none" }
+    : { kind: "basic", username: draft.pushUsername, password: draft.pushPassword };
+}
+
 /** The create body (`stored` null) or the update body. An edit that leaves the
  * stored credential alone carries no `auth` field, so the engine keeps a
  * secret no endpoint ever returns. */
@@ -278,5 +320,8 @@ export function inputWrite(draft: InputDraft, stored: PipelineInput | null): Pip
     variantRule: draft.variantRule,
   };
   const auth = authWrite(draft, stored);
-  return auth === null ? body : { ...body, auth };
+  const pushAuth = pushAuthWrite(draft, stored);
+  if (auth !== null) body.auth = auth;
+  if (pushAuth !== null) body.pushAuth = pushAuth;
+  return body;
 }

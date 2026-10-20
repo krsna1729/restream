@@ -343,6 +343,7 @@ Validation:
 - `keyed` must not carry `sourceUrl` or `auth`.
 - An unknown `kind`, `variantRule` or `auth.kind` is `400`, not defaulted.
 - An empty `label` is `400`.
+- `hlsPull` must not carry `pushAuth` other than `{"kind":"none"}`.
 
 Changing an input's `kind` ends the session the old kind held (a keyed
 input's pusher is disconnected; a pull input's puller stops), so the new kind
@@ -380,10 +381,33 @@ returned.
 signed URL's token is visible to any authenticated reader. Use an `auth` kind
 for anything that must stay write-only.
 
+#### HLS push credentials
+
+Keyed inputs may add `pushAuth: {"kind":"basic","username":"encoder",
+"password":"…"}` on create or patch. The username is 1–256 UTF-8 bytes,
+without a colon; the password is 1–4096 UTF-8 bytes. Passwords are stored
+only as salted scrypt hashes, never returned or added to generated URLs.
+On patch, omitted `pushAuth` preserves the credential, `{"kind":"none"}`
+clears it, and `basic` replaces both fields. Explicitly clear a stored push
+credential when changing the source kind to `hlsPull`.
+
+The encoder must send HTTP Basic authorization on every PUT, POST and
+DELETE, in addition to the stream key. Missing, malformed or wrong
+credentials receive `401` with a Basic challenge before the handler reads
+any body byte. No configured credential preserves key-only behavior.
+Credential checks run on a bounded blocking lane; saturation returns `503`
+with `Retry-After: 1`. Configuration writes can also return `503` while that
+lane is busy. Changes apply to the next object, including existing sessions.
+Use HTTPS through a TLS proxy: Basic auth is not encrypted on plain HTTP.
+Encoders supporting URL userinfo may use
+`https://USER:PASSWORD@HOST/ingest/hls/KEY/index.m3u8`, with credentials
+percent-encoded as needed; do not paste that URL into logs or shared fields.
+
 #### Input responses
 
 Each input has `id`, `label`, `streamKey`, `role`, `kind`, `sourceUrl`,
-`variantRule`, `authKind`, `authUsername`, `enabled`, `selected`,
+`variantRule`, `authKind`, `authUsername`, `pushAuthKind`, `pushAuthUsername`,
+`enabled`, `selected`,
 `ingestUrls`, `previewUrl` and `runtime`. A keyed input has
 `sourceUrl: null`, `variantRule: "highestBandwidth"` and `authKind: "none"`.
 

@@ -126,10 +126,12 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
     label: "Encoder B",
     kind: "keyed",
     sourceUrl: null,
+    pushAuth: { kind: "basic", username: "encoder", password: "push-secret" },
   });
   await api.updatePipelineInput("pipe /1", "input /1", {
     label: "Encoder C",
     enabled: false,
+    pushAuth: { kind: "none" },
   });
   await api.updatePipelineInput("pipe /1", "input /1", {
     label: "Origin",
@@ -218,10 +220,12 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
     label: "Encoder B",
     kind: "keyed",
     sourceUrl: null,
+    pushAuth: { kind: "basic", username: "encoder", password: "push-secret" },
   });
   assert.deepEqual(requests[6].body, {
     label: "Encoder C",
     enabled: false,
+    pushAuth: { kind: "none" },
   });
   assert.deepEqual(requests[7].body, {
     label: "Origin",

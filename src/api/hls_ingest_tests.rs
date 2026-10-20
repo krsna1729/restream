@@ -9,21 +9,45 @@ use bytes::Bytes;
 use futures_util::StreamExt as _;
 use reqwest::StatusCode;
 
+use crate::application::ingest::{PipelineInputLookup, PipelineInputLookupFuture};
+use crate::domain::pipeline_input::{PipelineInput, PushAuth};
 use crate::media::engine::MediaEngine;
 use crate::media::hls_ingest::test_support::{
     INPUT_ID, PIPELINE_ID, STREAM_KEY, fmp4_video_objects, test_ingest,
 };
 use crate::media::hls_ingest::{HlsIngest, HlsIngestLimits};
 
+struct Inputs(std::sync::RwLock<PushAuth>);
+
+impl PipelineInputLookup for Inputs {
+    fn get_by_stream_key<'a>(&'a self, key: &'a str) -> PipelineInputLookupFuture<'a> {
+        Box::pin(async move {
+            Ok((key == STREAM_KEY).then(|| PipelineInput {
+                id: INPUT_ID.to_string(),
+                pipeline_id: PIPELINE_ID.to_string(),
+                enabled: true,
+                push_auth: self.0.read().unwrap().clone(),
+                ..PipelineInput::keyed_default()
+            }))
+        })
+    }
+}
+
 struct Server {
     engine: Arc<MediaEngine>,
     base: String,
     _ingest: Arc<HlsIngest>,
+    inputs: Arc<Inputs>,
 }
 
 async fn serve(limits: HlsIngestLimits) -> Server {
+    serve_with_auth(limits, PushAuth::None).await
+}
+
+async fn serve_with_auth(limits: HlsIngestLimits, auth: PushAuth) -> Server {
     let (engine, ingest) = test_ingest(limits);
-    let app = crate::api::create_hls_ingest_router(ingest.clone());
+    let inputs = Arc::new(Inputs(std::sync::RwLock::new(auth)));
+    let app = crate::api::create_hls_ingest_router(ingest.clone(), inputs.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     tokio::spawn(crate::api::http_server::serve(listener, app));
@@ -31,6 +55,7 @@ async fn serve(limits: HlsIngestLimits) -> Server {
         engine,
         base: format!("http://{address}/ingest/hls"),
         _ingest: ingest,
+        inputs,
     }
 }
 
@@ -97,6 +122,166 @@ async fn a_wrong_key_is_refused_before_any_body_byte_is_read() {
         .unwrap();
     assert_eq!(delete.status(), StatusCode::FORBIDDEN);
     assert!(!server.engine.input_has_session(PIPELINE_ID, INPUT_ID).await);
+}
+
+async fn basic_auth(password: &str) -> PushAuth {
+    let password = password.to_string();
+    PushAuth::Basic {
+        username: "encoder".to_string(),
+        password_hash: tokio::task::spawn_blocking(move || {
+            super::super::auth::hash_password(&password)
+        })
+        .await
+        .unwrap(),
+    }
+}
+
+#[tokio::test]
+async fn hls_push_basic_rejects_before_polling_body_including_delete() {
+    use axum::body::Body;
+    use axum::http::{Method, Request};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tower::ServiceExt;
+
+    let (engine, ingest) = test_ingest(HlsIngestLimits::default());
+    let inputs = Arc::new(Inputs(std::sync::RwLock::new(basic_auth("secret").await)));
+    let app = crate::api::create_hls_ingest_router(ingest, inputs);
+    for method in [Method::PUT, Method::POST, Method::DELETE] {
+        for authorization in [
+            None,
+            Some("Basic ZW5jb2Rlcjp3cm9uZw=="),
+            Some("Bearer secret"),
+            Some("Basic !!!!"),
+            Some("Basic ZW5jb2Rlcg=="),
+        ] {
+            let polls = Arc::new(AtomicUsize::new(0));
+            let observed = polls.clone();
+            let body = Body::from_stream(futures_util::stream::poll_fn(move |_| {
+                observed.fetch_add(1, Ordering::Relaxed);
+                std::task::Poll::Ready(Some(Ok::<_, std::io::Error>(Bytes::from_static(
+                    b"must not read",
+                ))))
+            }));
+            let mut request = Request::builder()
+                .method(method.clone())
+                .uri(format!("/ingest/hls/{STREAM_KEY}/index0.ts"));
+            if let Some(value) = authorization {
+                request = request.header("authorization", value);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(body).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert!(response.headers().contains_key("www-authenticate"));
+            assert_eq!(
+                polls.load(Ordering::Relaxed),
+                0,
+                "{method}: unauthorized body polled"
+            );
+        }
+    }
+    assert!(!engine.input_has_session(PIPELINE_ID, INPUT_ID).await);
+}
+
+#[tokio::test]
+async fn hls_push_basic_real_http_accepts_and_observes_replace_clear() {
+    let server = serve_with_auth(HlsIngestLimits::default(), basic_auth("secret").await).await;
+    let client = reqwest::Client::new();
+    for method in [
+        reqwest::Method::PUT,
+        reqwest::Method::POST,
+        reqwest::Method::DELETE,
+    ] {
+        for password in [None, Some("wrong"), Some("secret")] {
+            let mut request = client.request(method.clone(), url(&server, STREAM_KEY, "index0.ts"));
+            if let Some(password) = password {
+                request = request.basic_auth("encoder", Some(password));
+            }
+            let response = request.body(vec![0x47u8; 188]).send().await.unwrap();
+            let expected = if password == Some("secret") {
+                if method == reqwest::Method::DELETE {
+                    StatusCode::OK
+                } else {
+                    StatusCode::ACCEPTED
+                }
+            } else {
+                StatusCode::UNAUTHORIZED
+            };
+            assert_eq!(response.status(), expected, "{method} {password:?}");
+        }
+    }
+    let replacement = basic_auth("replacement").await;
+    *server.inputs.0.write().unwrap() = replacement;
+    assert_eq!(
+        client
+            .delete(url(&server, STREAM_KEY, "index0.ts"))
+            .basic_auth("encoder", Some("secret"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        client
+            .delete(url(&server, STREAM_KEY, "index0.ts"))
+            .basic_auth("encoder", Some("replacement"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    *server.inputs.0.write().unwrap() = PushAuth::None;
+    assert_eq!(
+        client
+            .delete(url(&server, STREAM_KEY, "index0.ts"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    server.engine.cancel_pipeline_input(INPUT_ID).await;
+}
+
+#[tokio::test]
+async fn hls_push_basic_bounds_headers_and_refuses_ambiguous_authorization() {
+    use axum::http::{HeaderMap, HeaderValue};
+    let auth = basic_auth("secret").await;
+    let oversized = format!("Basic {}", "A".repeat(super::MAX_BASIC_HEADER));
+    let mut headers = HeaderMap::new();
+    headers.insert("authorization", HeaderValue::from_str(&oversized).unwrap());
+    assert_eq!(
+        super::require_push_auth(auth.clone(), &headers)
+            .await
+            .unwrap_err()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    headers.insert(
+        "authorization",
+        HeaderValue::from_static("Basic ZW5jb2RlcjpzZWNyZXQ="),
+    );
+    headers.append(
+        "authorization",
+        HeaderValue::from_static("Basic ZW5jb2RlcjpzZWNyZXQ="),
+    );
+    assert_eq!(
+        super::require_push_auth(auth, &headers)
+            .await
+            .unwrap_err()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert!(
+        super::require_push_auth(PushAuth::None, &headers)
+            .await
+            .is_ok(),
+        "unconfigured auth preserves key-only behavior"
+    );
 }
 
 #[tokio::test]

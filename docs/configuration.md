@@ -387,6 +387,13 @@ generated `ingestUrls`; a keyed input's `ingestUrls.hls` carries it. See
 http://<ingestHost>:<httpPort>/ingest/hls/<streamKey>/<playlist>.m3u8
 ```
 
+Each keyed input can optionally require HLS push Basic credentials in the
+input form (`pushAuth` in the input API). They are additional to the stream
+key, do not affect RTMP/SRT, and are never inserted into generated URLs.
+The password is write-only: leave the stored credential unchanged, replace
+it, or explicitly clear it. Use HTTPS through a TLS proxy when sending Basic
+credentials. See [HLS push credentials](api-reference.md#hls-push-credentials).
+
 MoQ ingest uses the MoQ UDP port and exists only while
 `RESTREAM_MOQ_INGEST_LISTEN` is set. A keyed input's `ingestUrls.moq` names
 it (`null` while MoQ is off). The last path segment is the stream key. A

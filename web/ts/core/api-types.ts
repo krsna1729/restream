@@ -625,6 +625,11 @@ export type PullAuthPayload =
   | { kind: "basic"; username: string; password: string }
   | { kind: "headers"; headers: PullHeaderPair[] };
 
+/** HLS publisher credentials, write-only; omission preserves stored auth. */
+export type PushAuthPayload =
+  | { kind: "none" }
+  | { kind: "basic"; username: string; password: string };
+
 /** The body of a pipeline input create. */
 export interface PipelineInputWrite {
   label: string;
@@ -633,6 +638,7 @@ export interface PipelineInputWrite {
   sourceUrl?: string | null;
   variantRule?: VariantRule;
   auth?: PullAuthPayload;
+  pushAuth?: PushAuthPayload;
 }
 
 /** The body of a pipeline input update. An omitted `auth` keeps the stored

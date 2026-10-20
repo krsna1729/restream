@@ -416,6 +416,7 @@ impl PipelineInputLookup for PullInputLookup {
                 source_url: Some("http://origin.example/master.m3u8".to_string()),
                 variant_rule: crate::domain::pipeline_input::VariantRule::HighestBandwidth,
                 source_auth: crate::domain::pipeline_input::PullAuth::None,
+                push_auth: crate::domain::pipeline_input::PushAuth::None,
             }))
         })
     }

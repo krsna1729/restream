@@ -405,6 +405,15 @@ in `manage-model.ts`.
   credential: none, bearer token, cookie string, username and password, or
   custom headers. Signed URLs need none. A stored secret is shown only as
   state, and a save that does not touch it keeps it.
+- Keyed inputs offer **HLS push authentication**: None or Basic. Stored
+  credentials show only the username and Replace/Clear actions, never a
+  password or hash. Untouched saves omit `pushAuth`; Clear sends explicit
+  `none`; Replace requires a new username (no colon, at most 256 UTF-8 bytes)
+  and nonempty password (at most 4096 UTF-8 bytes). Publish URLs stay
+  credential-free: configure HTTP Basic auth separately in the publisher.
+  This protects HLS publishing only, not other ingest protocols or playback.
+  Switching to HLS pull explicitly clears stored push auth; switching back
+  to keyed explicitly clears stored pull-origin credentials.
 - The destination matrix adds, edits and deletes destinations: preset
   server plus key or a full URL, SRT fields, RTMP flavour, passthrough or a
   profile, and audio routing. Notes from the destination's caps say what is

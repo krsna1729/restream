@@ -740,3 +740,140 @@ async fn changing_an_inputs_source_kind_ends_the_session_the_old_kind_held() {
     );
     drop(registration);
 }
+
+#[tokio::test]
+async fn push_auth_api_is_write_only_preserved_replaced_and_cleared() {
+    use restream::domain::pipeline_input::PushAuth;
+    let (app, pool, cookie) = authenticated_app().await;
+    let pipeline_id = create_pipeline(&app, &cookie).await;
+    let (status, body) = post_input(&app, &cookie, &pipeline_id,
+        r#"{"label":"Protected encoder","pushAuth":{"kind":"basic","username":"encoder","password":"push-secret"}}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert!(!body.contains("push-secret"));
+    assert!(!body.contains("password"));
+    let value = parse(&body);
+    let input = &value["input"];
+    assert_eq!(input["pushAuthKind"], "basic");
+    assert_eq!(input["pushAuthUsername"], "encoder");
+    assert!(!input["ingestUrls"].to_string().contains("encoder"));
+    let input_id = input["id"].as_str().unwrap();
+    let original = db::get_pipeline_input(&pool, &pipeline_id, input_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let PushAuth::Basic {
+        password_hash: original_hash,
+        ..
+    } = original.push_auth.clone()
+    else {
+        panic!("basic auth saved");
+    };
+    assert_ne!(original_hash, "push-secret");
+    assert!(!body.contains(&original_hash));
+    assert!(!format!("{original:?}").contains("push-secret"));
+
+    let (status, body) = patch_input(
+        &app,
+        &cookie,
+        &pipeline_id,
+        input_id,
+        r#"{"label":"Renamed encoder"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let preserved = db::get_pipeline_input(&pool, &pipeline_id, input_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(preserved.push_auth, PushAuth::Basic { password_hash, .. } if password_hash == original_hash)
+    );
+
+    let (status, body) = patch_input(
+        &app,
+        &cookie,
+        &pipeline_id,
+        input_id,
+        r#"{"pushAuth":{"kind":"basic","username":"replacement","password":"replacement-secret"}}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!body.contains("replacement-secret"));
+    assert!(!body.contains("password"));
+    assert_eq!(parse(&body)["input"]["pushAuthUsername"], "replacement");
+    let replacement = db::get_pipeline_input(&pool, &pipeline_id, input_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let PushAuth::Basic { password_hash, .. } = replacement.push_auth.clone() else {
+        panic!("replacement saved");
+    };
+    assert_ne!(password_hash, original_hash);
+    assert!(!format!("{replacement:?}").contains(&password_hash));
+
+    let (_, list) = request_body(
+        &app,
+        "GET",
+        &format!("/api/v1/pipelines/{pipeline_id}/inputs"),
+        &cookie,
+        None,
+    )
+    .await;
+    assert!(!list.contains("replacement-secret"));
+    assert!(!list.contains(&password_hash));
+    assert!(!list.contains("password"));
+    let (status, body) = patch_input(
+        &app,
+        &cookie,
+        &pipeline_id,
+        input_id,
+        r#"{"pushAuth":{"kind":"none"}}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(parse(&body)["input"]["pushAuthKind"], "none");
+    assert_eq!(
+        parse(&body)["input"]["pushAuthUsername"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        db::get_pipeline_input(&pool, &pipeline_id, input_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .push_auth,
+        PushAuth::None
+    );
+}
+
+#[tokio::test]
+async fn push_auth_api_validates_create_and_update() {
+    let (app, _, cookie) = authenticated_app().await;
+    let pipeline_id = create_pipeline(&app, &cookie).await;
+    let (_, body) = post_input(&app, &cookie, &pipeline_id, r#"{"label":"Encoder"}"#).await;
+    let value = parse(&body);
+    let input_id = value["input"]["id"].as_str().unwrap();
+    for auth in [
+        serde_json::json!({"kind":"bearer","token":"secret"}),
+        serde_json::json!({"kind":"none","password":"secret"}),
+        serde_json::json!({"kind":"basic","username":"encoder"}),
+        serde_json::json!({"kind":"basic","password":"secret"}),
+        serde_json::json!({"kind":"basic","username":"","password":"secret"}),
+        serde_json::json!({"kind":"basic","username":"a:b","password":"secret"}),
+        serde_json::json!({"kind":"basic","username":"a".repeat(257),"password":"secret"}),
+        serde_json::json!({"kind":"basic","username":"encoder","password":""}),
+        serde_json::json!({"kind":"basic","username":"encoder","password":"x".repeat(4097)}),
+    ] {
+        let payload = serde_json::json!({"label":"Rejected","pushAuth":auth}).to_string();
+        for (status, body) in [
+            post_input(&app, &cookie, &pipeline_id, &payload).await,
+            patch_input(&app, &cookie, &pipeline_id, input_id, &payload).await,
+        ] {
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert!(!body.contains("secret"));
+        }
+    }
+    let (status, body) = patch_input(&app, &cookie, &pipeline_id, input_id,
+        r#"{"kind":"hlsPull","sourceUrl":"https://origin.example/index.m3u8","pushAuth":{"kind":"basic","username":"encoder","password":"secret"}}"#).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}

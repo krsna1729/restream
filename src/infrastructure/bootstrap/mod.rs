@@ -168,7 +168,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
     let ingest_authenticator = Arc::new(
         crate::application::ingest::PipelineStoreIngestAuthenticator::new(
             pipeline_lookup,
-            Arc::new(pipeline_input_store),
+            Arc::new(pipeline_input_store.clone()),
             security.clone(),
         ),
     );
@@ -255,6 +255,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
         pipeline_access: ingest_authenticator,
         srt_ingest_policy_store,
         hls_ingest,
+        hls_inputs: Arc::new(pipeline_input_store),
     })
     .await;
     let shutdown = shutdown::spawn_signal_watcher();
