@@ -29,6 +29,12 @@ items).
 - [Q-088 MoQ egress cost](#q-088-performance-sonnet-price-moq-egress-from-a-measured-cost)
 - [Q-089 MoQ origin track-set changes](#q-089-protocol-sonnet-the-moq-origin-follows-a-track-set-change-while-served)
 - [Q-090 MoQ `ca=` path confinement](#q-090-security-sonnet-confine-moq-egress-ca-files-to-a-configured-directory)
+- [Q-091 SRT Backup replays the lost prefix](#q-091-protocol-opus-srt-backup-failover-replays-the-lost-prefix)
+- [Q-092 no descendants of a dropped dependency](#q-092-resilience-opus-never-emit-descendants-of-a-dropped-dependency-bearing-unit)
+- [Q-093 headless MoQ subscriber](#q-093-testing-sonnet-headless-moq-subscriber-for-impairment-and-capacity-gates)
+- [Q-094 sideband media events](#q-094-protocol-opus-first-class-sideband-media-events)
+- [Q-095 stream inspector](#q-095-observability-sonnet-stream-inspector-gop-health-skew-and-scte)
+- [Q-096 GRO and arrival timestamps](#q-096-performance-sonnet-gro-and-arrival-timestamps-in-the-reference-srt-path)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -568,3 +574,99 @@ items).
 - Gates: a URL test refusing a path outside the directory, including `..`
   and symlink escapes.
 - Status: open (Filed: 2026-10-18 by claude, from the #371 review NIT).
+
+### Q-091 [protocol] [opus] SRT Backup failover replays the lost prefix
+
+- Goal: when the active sender in an SRT Backup group disappears after the
+  group advanced its sequence, the promoted standby replays the group's
+  recent send history before new payload, so the packets the receiver
+  missed are not skipped forever.
+- Why: srt-rs marks the active unstable/broken, promotes the
+  highest-weight standby and aligns it to `group.next_send_sequence`; it
+  keeps no group-level recent-send history, so the interval the active
+  issued but the receiver never got has no physical sender. srtgo models
+  failover with `ActiveFresh`/`ActiveStable` states, a stability threshold
+  of `max(T_min, 2*SRTT + 4*RTTVar)` and a replay of retained history on
+  promotion; Robotweax independently treats failover as more than
+  switching the next sequence.
+- Change (srt-rs, then bump the pinned rev in `Cargo.toml`): retain a
+  bounded recent-send window per group, qualify standby stability with
+  the RTT-relative threshold, and replay the prefix on promotion; refuse
+  promotion when the window cannot cover the gap instead of skipping it.
+- Gates: differential cases against srtgo's state model for prefix loss,
+  RTT-relative stability and repeated failures; a harness mode that kills
+  the active SRT output mid-stream and checks receiver continuity.
+- Status: open (Filed: 2026-10-20 by claude, from the srt-rs/srtgo/srtrust
+  comparison).
+
+### Q-092 [resilience] [opus] Never emit descendants of a dropped dependency-bearing unit
+
+- Goal: every fanout boundary that drops a video unit under pressure also
+  suppresses later units that depend on it, until the next keyframe.
+- Why: Prism's MoQ viewer queues mark the current GOP damaged and drop
+  later delta frames; Restream's boundaries (ring overrun, MoQ group
+  eviction, WebTransport pressure, HLS discontinuity, recirculation, RTMP
+  congestion) each handle this differently or not at all. An undecodable
+  descendant costs bandwidth and shows artifacts.
+- Change: one damaged-until-keyframe rule per boundary that can see
+  keyframe boundaries; where it cannot, document the fallback and test it.
+- Gates: a test per boundary that drops one unit and asserts no later
+  dependent unit is emitted before the keyframe; a mutation that removes
+  the suppression fails it.
+- Status: open (Filed: 2026-10-20 by claude, from the Prism comparison).
+
+### Q-093 [testing] [sonnet] Headless MoQ subscriber for impairment and capacity gates
+
+- Goal: a non-browser subscriber reports startup delay, frame and keyframe
+  delivery, audio delivery and A/V skew through an impaired network, beside
+  the browser E2E.
+- Why: Chromium E2E is slow and nondeterministic for impairment;
+  `moq-dev-interop --browsers` proves the product, not the protocol under
+  loss.
+- Change: extend the `moq-dev-interop` subscriber entry (or a small binary
+  over moq-net/hang) to print those counts as JSON and drive one harness
+  mode under netem.
+- Gates: a harness mode with 2 % loss and 200 ms delay that still reports
+  keyframes and audio; the browser E2E stays unchanged.
+- Status: open (Filed: 2026-10-20 by claude, from the Prism comparison).
+
+### Q-094 [protocol] [opus] First-class sideband media events
+
+- Goal: captions (CEA-608/708), SCTE-35 and SMPTE timecode survive ingest,
+  stages and egress as typed events with the same retention and timestamps
+  as media.
+- Why: Prism carries these from MPEG-TS to the browser; Restream smuggles
+  metadata or drops it, so a spliced or captioned source loses meaning.
+- Change: a media-event model shared by ring retention and each egress
+  writer, rather than per-path metadata.
+- Gates: an ingest fixture with captions and an SCTE-35 splice reaches the
+  HLS output and the MoQ catalog; a ring-overrun test keeps events aligned
+  with the retained media.
+- Status: open (Filed: 2026-10-20 by claude, from the Prism comparison).
+
+### Q-095 [observability] [sonnet] Stream inspector: GOP health, skew and SCTE
+
+- Goal: one view per live pipeline shows GOP health, A/V skew, source
+  timecode, SCTE timeline, decoder state and transport state.
+- Why: current telemetry is resource-focused; Prism demonstrates the
+  media-facing half of observability. This is the human-facing side of the
+  telemetry work behind Q-071.
+- Gates: a frontend test for a pipeline that loses keyframes shows the
+  damaged state; every value comes from the API, not client guessing.
+- Status: open (Filed: 2026-10-20 by claude, from the Prism comparison).
+
+### Q-096 [performance] [sonnet] GRO and arrival timestamps in the reference SRT path
+
+- Goal: the non-Compio reference path accepts GRO-coalesced datagrams and
+  records socket arrival time before queueing, so scheduler backlog does
+  not distort inter-arrival facts.
+- Why: srtrust exposes `poll_recv_gro` and stamps arrival at the socket;
+  Restream's GSO send exists, but the receive reference path and the
+  arrival-time discipline are neither documented nor proven.
+- Change (srt-rs): a portable UDP-offload abstraction for the reference
+  path; split coalesced receives into logical datagrams with the original
+  arrival stamp before protocol processing.
+- Gates: a unit test that a coalesced receive splits into logical
+  datagrams with identical arrival stamps; a bench of per-datagram cost
+  with and without GRO.
+- Status: open (Filed: 2026-10-20 by claude, from the srtrust comparison).
