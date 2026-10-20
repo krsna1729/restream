@@ -210,6 +210,12 @@ async fn hls_push_basic_real_http_accepts_and_observes_replace_clear() {
                 StatusCode::UNAUTHORIZED
             };
             assert_eq!(response.status(), expected, "{method} {password:?}");
+            if expected == StatusCode::ACCEPTED {
+                assert!(
+                    server.engine.input_has_session(PIPELINE_ID, INPUT_ID).await,
+                    "{method}: an authenticated upload reached the ingest session"
+                );
+            }
         }
     }
     let replacement = basic_auth("replacement").await;
@@ -244,6 +250,18 @@ async fn hls_push_basic_real_http_accepts_and_observes_replace_clear() {
             .status(),
         StatusCode::OK
     );
+    // Clearing the credential restores key-only push, body and all.
+    assert_eq!(
+        client
+            .put(url(&server, STREAM_KEY, "index0.ts"))
+            .body(vec![0x47u8; 188])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::ACCEPTED
+    );
+    assert!(server.engine.input_has_session(PIPELINE_ID, INPUT_ID).await);
     server.engine.cancel_pipeline_input(INPUT_ID).await;
 }
 
