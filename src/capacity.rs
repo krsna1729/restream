@@ -10,11 +10,13 @@ use serde::Serialize;
 
 use crate::media::engine::MediaEngine;
 
-/// The projection's formula. 3: an SRT output costs what the egress shard
-/// sizing priors say, relative to RTMP (2: SRT priced as 1316-byte
-/// datagrams against a ceiling never calibrated in them; 1: every output
-/// carried the sum of all ingests, protocol-blind).
-pub const CAPACITY_MODEL_VERSION: u32 = 3;
+/// The projection's formula. 4: HLS PUT, sink and pipeline outputs cost
+/// their measured share of an RTMP output, and sink and pipeline outputs
+/// send nothing to the NIC (3: every output that was not SRT was priced as
+/// RTMP; 2: SRT priced as 1316-byte datagrams against a ceiling never
+/// calibrated in them; 1: every output carried the sum of all ingests,
+/// protocol-blind).
+pub const CAPACITY_MODEL_VERSION: u32 = 4;
 
 /// One pipeline's ingest, as sampled.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
@@ -27,7 +29,8 @@ pub struct IngestRate {
 /// How an output sends its pipeline's media, for egress pricing.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum OutputProtocol {
-    /// RTMP and every other output: one write per media packet.
+    /// RTMP and any output without its own price: one write per media
+    /// packet.
     #[default]
     Rtmp,
     /// RTMP over TLS: priced as RTMP. The TLS cost is not priced.
@@ -38,6 +41,12 @@ pub enum OutputProtocol {
     /// RTMP — a recorded prior, not a measurement (backlog: measure MoQ
     /// egress cost per output and replace this prior).
     Moq,
+    /// HLS PUT: segment uploads, not a per-packet stream.
+    Hls,
+    /// `sink://`: discarded in process.
+    Sink,
+    /// `pipeline://`: republished into another pipeline's ring in process.
+    Pipeline,
 }
 
 impl OutputProtocol {
@@ -46,6 +55,9 @@ impl OutputProtocol {
             "srt" => Self::Srt,
             "rtmps" => Self::Rtmps,
             "moq" => Self::Moq,
+            "hls" => Self::Hls,
+            "sink" => Self::Sink,
+            "pipeline" => Self::Pipeline,
             _ => Self::Rtmp,
         }
     }
@@ -57,6 +69,17 @@ impl OutputProtocol {
     /// 4.8 Mbit/s on the reference host, RTMP's the default sizing), so the
     /// two models agree. It scales with packet rate, not bitrate: an SRT
     /// output well above 4.8 Mbit/s may cost more than priced.
+    ///
+    /// HLS PUT, sink and pipeline outputs cost their measured Restream CPU
+    /// per added output relative to RTMP's: the median of five paired
+    /// repeats, rounded up to 0.05 (H.264 4 Mbit/s source, 20 → 120
+    /// outputs). Two independent campaigns on the reference host gave
+    /// medians HLS 0.47–0.50, sink 0.15, pipeline 0.68–0.78; single repeats
+    /// spread far wider (HLS 0.34–0.84, sink 0.10–0.19, pipeline 0.59–0.95),
+    /// so these are priors from one host, not constants. An `hls://` output
+    /// keeps a segmenter and uploads nothing, so the HLS price overstates
+    /// it; a pipeline output's target is also an ingest, so its republish
+    /// may be counted twice. Both err high.
     pub fn egress_work_pps(self, ingest: IngestRate) -> f64 {
         use crate::config::EgressShardProfile;
         match self {
@@ -66,7 +89,15 @@ impl OutputProtocol {
                 ingest.pps * f64::from(EgressShardProfile::OutputCount.outputs_per_shard())
                     / f64::from(EgressShardProfile::SrtOutputCount.outputs_per_shard())
             }
+            Self::Hls => ingest.pps * 0.50,
+            Self::Sink => ingest.pps * 0.15,
+            Self::Pipeline => ingest.pps * 0.80,
         }
+    }
+
+    /// Whether the output's bytes leave through the NIC.
+    fn uses_network(self) -> bool {
+        !matches!(self, Self::Sink | Self::Pipeline)
     }
 }
 
@@ -104,9 +135,14 @@ impl Workload {
     /// `count` more outputs of `ingest`, sent over `protocol`.
     pub fn with_outputs(self, count: u32, ingest: IngestRate, protocol: OutputProtocol) -> Self {
         let count_f = f64::from(count);
+        let network_bps = if protocol.uses_network() {
+            ingest.bps
+        } else {
+            0.0
+        };
         Self {
             outputs: self.outputs.saturating_add(count),
-            fanout_bps: self.fanout_bps + count_f * ingest.bps,
+            fanout_bps: self.fanout_bps + count_f * network_bps,
             fanout_pps: self.fanout_pps + count_f * protocol.egress_work_pps(ingest),
             ..self
         }
@@ -729,6 +765,40 @@ mod tests {
         let ingest = rate(6_000_000.0, 100.0);
         assert_eq!(OutputProtocol::of_egress("moq"), OutputProtocol::Moq);
         assert_eq!(OutputProtocol::Moq.egress_work_pps(ingest), 100.0);
+    }
+
+    /// Each kind's projected egress work (rounded to 1e-9) and NIC load for
+    /// one output of a 6 Mb/s, 100 pps ingest.
+    fn priced(protocol: &str) -> (f64, f64) {
+        let workload = Workload::default().with_outputs(
+            1,
+            rate(6_000_000.0, 100.0),
+            OutputProtocol::of_egress(protocol),
+        );
+        (
+            (workload.fanout_pps * 1e9).round() / 1e9,
+            workload.fanout_bps,
+        )
+    }
+
+    #[test]
+    fn an_hls_output_costs_its_measured_share_and_uses_the_nic() {
+        assert_eq!(priced("hls"), (50.0, 6_000_000.0));
+    }
+
+    #[test]
+    fn a_sink_output_costs_its_measured_share_and_sends_nothing() {
+        assert_eq!(priced("sink"), (15.0, 0.0));
+    }
+
+    #[test]
+    fn a_pipeline_output_costs_its_measured_share_and_sends_nothing() {
+        assert_eq!(priced("pipeline"), (80.0, 0.0));
+    }
+
+    #[test]
+    fn an_rtmp_output_keeps_the_full_price_and_the_nic() {
+        assert_eq!(priced("rtmp"), (100.0, 6_000_000.0));
     }
 
     #[test]

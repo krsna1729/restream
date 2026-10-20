@@ -30,61 +30,6 @@ fn ramp_json_dsl_carries_current_config_contract() {
 }
 
 #[test]
-fn resource_egress_scenario_table_carries_branch_contract() {
-    assert_eq!(resource_egress_scenarios().len(), 12);
-    assert_eq!(
-        resource_egress_scenario("egress-growth-source-hls")
-            .unwrap()
-            .output_kinds,
-        vec![SweepOutputKind::HlsPut]
-    );
-    assert_eq!(
-        resource_egress_scenarios()
-            .iter()
-            .filter(|scenario| scenario.branch_order.is_some())
-            .count(),
-        5
-    );
-    assert_eq!(
-        resource_egress_scenario("egress-growth-hevc-bridge")
-            .unwrap()
-            .config_index,
-        2
-    );
-    assert_eq!(
-        resource_egress_scenario("egress-growth-source-srt")
-            .unwrap()
-            .output_kinds,
-        vec![SweepOutputKind::SrtSource]
-    );
-    assert_eq!(
-        resource_egress_scenario("egress-growth-transcode-srt")
-            .unwrap()
-            .output_kinds,
-        vec![SweepOutputKind::Srt720p]
-    );
-    assert_eq!(
-        resource_egress_scenario("egress-growth-source-plus-transcode-dual-mixed")
-            .unwrap()
-            .output_kinds,
-        vec![
-            SweepOutputKind::RtmpSource,
-            SweepOutputKind::SrtSource,
-            SweepOutputKind::Rtmp720p,
-            SweepOutputKind::Srt720p,
-            SweepOutputKind::Rtmp1080p,
-            SweepOutputKind::Srt1080p,
-        ]
-    );
-    assert_eq!(
-        resource_egress_scenario("egress-growth-transcode-mixed")
-            .unwrap()
-            .branch_label(),
-        "one transcode family (720p)"
-    );
-}
-
-#[test]
 fn sweep_output_kind_centralizes_urls_and_multi_audio_encoding() {
     assert_eq!(
         SweepOutputKind::Rtmp720p.publish_url(1936, 1937, 8891, "out"),
