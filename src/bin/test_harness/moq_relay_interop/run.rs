@@ -161,6 +161,14 @@ pub(crate) async fn run_moq_relay_interop() -> Result<Value, String> {
         ),
         (MOQ_TLS_CERT_ENV, tls.leaf_pem.display().to_string()),
         (MOQ_TLS_KEY_ENV, tls.leaf_key.display().to_string()),
+        (
+            "RESTREAM_MOQ_CA_DIR",
+            tls.ca_pem
+                .parent()
+                .expect("CA directory")
+                .display()
+                .to_string(),
+        ),
         // The outage is seconds long; the production 5 s base backoff would
         // only stretch the reconnect check, not change what it proves.
         ("RESTREAM_OUTPUT_RETRY_BASE_MS", "1000".to_string()),

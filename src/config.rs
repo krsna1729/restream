@@ -8,7 +8,9 @@ use crate::capacity::{CapacityLimits, HostCapacity, LimitSource, LimitSources};
 use crate::media::egress::policy::WorkBudgetConfig;
 use crate::media::egress::shard::EgressShardConfig;
 
+mod env;
 mod moq;
+use env::{env_present, env_u32, env_u64, env_usize, env_var};
 pub use moq::{MoqIngestConfig, MoqIngestSetting};
 
 /// Default location for media-library files relative to the process working directory.
@@ -378,43 +380,10 @@ pub struct AppConfig {
     pub initial_admin_password: Option<String>,
     pub secure_session_cookies: bool,
     pub rtmps_extra_trust_roots_pem_path: Option<String>,
+    /// Operator directory that confines `moqt://…?ca=` reads
+    /// (`RESTREAM_MOQ_CA_DIR`). `None` denies custom CA reads.
+    pub moq_ca_dir: Option<String>,
     pub moq_ingest: MoqIngestSetting,
-}
-
-/// Every configuration read of the environment goes through here (tests
-/// overlay it per thread instead of mutating the process environment).
-fn env_var(name: &str) -> Option<String> {
-    #[cfg(test)]
-    if let Some(value) = configuration_behavior_tests::env_override(name) {
-        return value;
-    }
-    std::env::var(name).ok()
-}
-
-fn env_present(name: &str) -> bool {
-    #[cfg(test)]
-    if let Some(value) = configuration_behavior_tests::env_override(name) {
-        return value.is_some();
-    }
-    std::env::var_os(name).is_some()
-}
-
-fn env_u64(name: &str, default: u64) -> u64 {
-    env_var(name)
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
-}
-
-fn env_u32(name: &str, default: u32) -> u32 {
-    env_var(name)
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
-}
-
-fn env_usize(name: &str, default: usize) -> usize {
-    env_var(name)
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
 }
 
 /// A positive limit from `name`, and whether the operator set it; else the
@@ -707,6 +676,7 @@ impl Default for AppConfig {
             initial_admin_password: None,
             secure_session_cookies: false,
             rtmps_extra_trust_roots_pem_path: None,
+            moq_ca_dir: None,
             moq_ingest: MoqIngestSetting::Off,
         }
     }
@@ -815,6 +785,7 @@ impl AppConfig {
         let initial_admin_password = env_var("RESTREAM_INITIAL_ADMIN_PASSWORD");
         let secure_session_cookies = env_bool("RESTREAM_SECURE_SESSION_COOKIES").unwrap_or(false);
         let rtmps_extra_trust_roots_pem_path = env_var("RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM");
+        let moq_ca_dir = env_var("RESTREAM_MOQ_CA_DIR").filter(|value| !value.is_empty());
 
         // Calculate external_ffmpeg_permits:
         let permits = if let Some(value) = env_var("RESTREAM_EXTERNAL_FFMPEG_PERMITS")
@@ -887,6 +858,7 @@ impl AppConfig {
             initial_admin_password,
             secure_session_cookies,
             rtmps_extra_trust_roots_pem_path,
+            moq_ca_dir,
             moq_ingest,
         }
     }

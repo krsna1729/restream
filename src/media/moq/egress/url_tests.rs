@@ -45,10 +45,10 @@ fn ipv6_host_loses_its_brackets() {
 #[test]
 fn restream_query_keys_are_taken_out_of_the_relay_path() {
     let url = parse_moq_url(
-        "moqt://relay.example:8893/live?token=a%2Fb&ca=%2Fetc%2Frelay%20ca.pem&insecure=1&broadcast=team%2Fshow&x=1",
+        "moqt://relay.example:8893/live?token=a%2Fb&ca=trust%2Frelay%20ca.pem&insecure=1&broadcast=team%2Fshow&x=1",
     )
     .unwrap();
-    assert_eq!(url.ca_file.as_deref(), Some("/etc/relay ca.pem"));
+    assert_eq!(url.ca_file.as_deref(), Some("trust/relay ca.pem"));
     assert!(url.insecure);
     assert_eq!(url.broadcast.as_deref(), Some("team/show"));
     // Relay pairs keep their original encoding and order.

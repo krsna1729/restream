@@ -154,6 +154,7 @@ MoQ ingest is off unless `RESTREAM_MOQ_INGEST_LISTEN` is set. Source:
 | `RESTREAM_MOQ_TLS_KEY` | unset | PEM file path | Private key; required when listening |
 | `RESTREAM_MOQ_MAX_CONNECTIONS` | `64` | `1..=4096` | Concurrent handshakes plus publishers. An admitted viewer leaves this count |
 | `RESTREAM_MOQ_ORIGIN_MAX_VIEWERS` | `64` | `1..=4096` | Concurrent direct viewers across all pipelines |
+| `RESTREAM_MOQ_CA_DIR` | unset (custom CA reads denied) | Operator-controlled directory | Permits MoQ output `ca=` files relative to this directory; independent of the ingest listener |
 
 An unparseable address, port `0`, or a missing certificate or key gives
 `MoqIngestSetting::Invalid`. Startup logs it and the listener stays off; the
@@ -167,6 +168,20 @@ selects a dialect. An output URL may pin one supported ALPN:
 `version`, `broadcast`, `ca` and `insecure` are Restream-only query keys and
 are removed from the session path sent to the relay. Without `version`,
 offer every supported MoQ ALPN; an unknown value is rejected.
+
+For a relay with a private CA, put its public CA PEM in a dedicated directory,
+set `RESTREAM_MOQ_CA_DIR=/etc/restream/moq-ca`, and use
+`moqt://relay.example/live?ca=relay.pem`. Only the operator may write the
+directory, its ancestors, or its contents; do not expose it as an upload or
+media-library directory, and keep private keys and other secrets elsewhere.
+Absolute `ca` paths and `..` components are rejected. Symlinks that resolve
+outside the canonical directory are rejected before the file is read. Path
+resolution and reads run on the blocking pool, not Tokio workers or Compio
+owners. Missing/empty configuration denies custom CA reads, including with
+`insecure=1`; there is no arbitrary-path fallback. A rejected or unreadable CA
+fails the output start with a bounded reason, without returning file contents
+or OS path errors. Without `ca=`, the bundled public roots remain in use;
+`insecure=1` still skips chain/name checks but verifies handshake signatures.
 
 ### Outputs and reconciler
 

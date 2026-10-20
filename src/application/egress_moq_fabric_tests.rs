@@ -169,32 +169,142 @@ fn a_fresh_transformed_ring_waits_for_its_own_parameter_sets() {
     assert!(startup_video(VideoCodecKind::Unknown, None, &source, None).is_none());
 }
 
-#[tokio::test]
-async fn startup_reads_the_ca_file_and_rejects_a_missing_one() {
-    let engine = Arc::new(MediaEngine::new());
-    let path = std::env::temp_dir().join(format!("moq-ca-{}.pem", std::process::id()));
-    std::fs::write(&path, b"-----BEGIN CERTIFICATE-----\n").unwrap();
-    let output = test_output(
-        "pipe-moq-ca",
-        &format!("moqt://relay.example/live?ca={}", path.display()),
-    );
-    let prepared = prepare_output_ring(&engine, &output).await;
-
-    let startup = prepare_moq_fabric_startup(&engine, &output, &prepared)
-        .await
-        .unwrap();
+#[test]
+fn moq_ca_directory_confines_url_paths() {
+    let dir = ca_test_directory("boundary");
+    let root = dir.join("roots");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("relay.pem"), b"allowed CA").unwrap();
+    std::fs::write(dir.join("secret.pem"), b"secret content must not escape").unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let load = |url: &str, root: Option<&Path>| {
+        let parsed = parse_moq_url(url).unwrap();
+        runtime.block_on(load_moq_ca_file(
+            parsed.ca_file,
+            root.map(|root| root.as_os_str().to_owned()),
+        ))
+    };
     assert_eq!(
-        startup.extra_ca_pem.as_deref(),
-        Some(&b"-----BEGIN CERTIFICATE-----\n"[..])
+        load("moqt://relay/live?ca=relay.pem", Some(&root)).unwrap(),
+        Some(b"allowed CA".to_vec())
     );
+    for ca in [
+        "../secret.pem".to_string(),
+        "%2e%2e%2fsecret.pem".to_string(),
+        "sub/../relay.pem".to_string(),
+        dir.join("secret.pem").display().to_string(),
+        root.join("relay.pem").display().to_string(),
+    ] {
+        let error = load(&format!("moqt://relay/live?ca={ca}"), Some(&root)).unwrap_err();
+        assert!(error.contains("relative"), "{error}");
+        assert!(!error.contains("secret content"), "{error}");
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(dir.join("secret.pem"), root.join("escape.pem")).unwrap();
+        std::os::unix::fs::symlink(&dir, root.join("escape-dir")).unwrap();
+        for ca in ["escape.pem", "escape-dir/secret.pem"] {
+            let error = load(&format!("moqt://relay/live?ca={ca}"), Some(&root)).unwrap_err();
+            assert!(error.contains("outside"), "{error}");
+        }
+    }
+    for root in [None, Some(Path::new(""))] {
+        let error = load("moqt://relay/live?ca=relay.pem&insecure=1", root).unwrap_err();
+        assert!(error.contains("RESTREAM_MOQ_CA_DIR"), "{error}");
+        assert_eq!(load("moqt://relay/live", root).unwrap(), None);
+    }
+    let error = load("moqt://relay/live?ca=missing.pem", Some(&root)).unwrap_err();
+    assert_eq!(
+        error,
+        "MoQ output ca file is unavailable in the configured CA directory"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
 
-    std::fs::remove_file(&path).unwrap();
+fn ca_test_directory(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("restream-moq-ca-{name}-{}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn moq_ca_directory_trusted_tls_runtime_smoke() {
+    use crate::media::moq::tls;
+    use crate::media::moq::transport;
+    use crate::media::moq::transport::test_support::{
+        LOOPBACK_CERT, LOOPBACK_SERVER_NAME, Loopback, run,
+    };
+
+    let dir = ca_test_directory("tls");
+    std::fs::write(dir.join("relay.pem"), &LOOPBACK_CERT.0).unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let pem = runtime
+        .block_on(load_moq_ca_file(
+            parse_moq_url("moqt://localhost/live?ca=relay.pem")
+                .unwrap()
+                .ca_file,
+            Some(dir.as_os_str().to_owned()),
+        ))
+        .unwrap()
+        .unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+    run(async move {
+        let pair = Loopback::new().await;
+        // A real QUIC/TLS handshake must trust only the explicitly loaded
+        // private CA (no insecure override).
+        let alpns = &["moq-lite-06"];
+        let tls = tls::client_config(alpns, Some(&pem), false).unwrap();
+        let (client, server) = futures_util::future::join(
+            transport::connect(&pair.client, pair.addr, LOOPBACK_SERVER_NAME, tls),
+            pair.accept(),
+        )
+        .await;
+        let _client = client.unwrap_or_else(|error| panic!("trusted TLS client: {error}"));
+        let _server = server.unwrap_or_else(|error| panic!("trusted TLS server: {error}"));
+        // No CA still builds with the normal public trust store, and the
+        // existing explicit insecure flag still bypasses chain parsing.
+        assert!(tls::client_config(alpns, None, false).is_ok());
+        assert!(tls::client_config(alpns, Some(b"not a CA"), true).is_ok());
+        assert!(tls::client_config(alpns, Some(b"not a CA"), false).is_err());
+    });
+}
+
+#[tokio::test]
+async fn startup_reads_the_ca_only_from_the_configured_directory() {
+    let dir = ca_test_directory("startup");
+    std::fs::write(dir.join("relay.pem"), b"configured CA").unwrap();
+    let output = test_output("pipe-ca-startup", "moqt://relay.example/live?ca=relay.pem");
+
+    let mut engine = MediaEngine::new();
+    engine.config = Arc::new(crate::AppConfig {
+        moq_ca_dir: None,
+        ..Default::default()
+    });
+    let engine = Arc::new(engine);
+    let prepared = prepare_output_ring(&engine, &output).await;
     let error = prepare_moq_fabric_startup(&engine, &output, &prepared)
         .await
         .unwrap_err();
-    assert!(error.contains("ca file"), "{error}");
+    assert!(error.contains("RESTREAM_MOQ_CA_DIR"), "{error}");
 
+    let mut engine = MediaEngine::new();
+    engine.config = Arc::new(crate::AppConfig {
+        moq_ca_dir: Some(dir.display().to_string()),
+        ..Default::default()
+    });
+    let engine = Arc::new(engine);
+    let startup = prepare_moq_fabric_startup(&engine, &output, &prepared)
+        .await
+        .unwrap();
+    assert_eq!(startup.extra_ca_pem.as_deref(), Some(&b"configured CA"[..]));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn startup_rejects_an_invalid_moq_url() {
+    let engine = Arc::new(MediaEngine::new());
     let invalid = test_output("pipe-moq-ca", "moqt://relay.example/live?broadcast=");
+    let prepared = prepare_output_ring(&engine, &invalid).await;
     assert!(
         prepare_moq_fabric_startup(&engine, &invalid, &prepared)
             .await
