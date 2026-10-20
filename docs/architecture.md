@@ -63,7 +63,7 @@ flowchart LR
 | SRT | UDP listener, default port 10080 | MPEG-TS |
 | HLS push | `PUT`/`POST` under `/ingest/hls/{stream_key}/` on the HTTP port | MPEG-TS or fMP4 segments |
 | HLS pull | Restream fetches a remote live playlist | MPEG-TS or fMP4 segments |
-| MoQ | QUIC or WebTransport listener; off unless `RESTREAM_MOQ_INGEST_LISTEN` is set | moq-lite + hang catalog |
+| MoQ | QUIC or WebTransport listener; off unless `RESTREAM_MOQ_INGEST_LISTEN` is set | moq-lite or IETF MOQT; hang/MSF catalogs, LOC/legacy/CMAF media |
 | File | FFmpeg child reads a media-library file | MPEG-TS on a pipe |
 
 Outputs are `ProtocolSpec` values (`src/media/egress/command.rs`): `Rtmp`
@@ -71,8 +71,10 @@ Outputs are `ProtocolSpec` values (`src/media/egress/command.rs`): `Rtmp`
 tests) and `Pipeline` (publish into another pipeline's input). Recording and
 HLS preview also read the rings; they are not fabric outputs. The MoQ origin
 serves pipelines to direct subscribers from the MoQ ingest thread
-(`media::moq::origin`). MoQ on this branch is phase 1: moq-lite with the hang
-catalog.
+(`media::moq::origin`). `moq-net` drives moq-lite and IETF MOQT sessions on
+the existing `!Send` owner. `moq-mux` supplies dual hang/MSF catalogs and
+write-through grouping; published LOC frames share one allocation across
+subscribers and broadcast cache byte budgets follow recent group sizes.
 
 The control plane decides what runs. It never carries media packets.
 

@@ -213,8 +213,8 @@ jobs:
           system_deps_profile: browser
           native_prefix: 'true'
           rust_cache: 'true'
-      - name: Install Chromium for app E2E
-        run: npx playwright install --with-deps chromium
+      - name: Install Chromium and Firefox for app E2E
+        run: npx playwright install --with-deps chromium firefox
       - name: Run isolated app E2E
         run: npm run test:e2e
 

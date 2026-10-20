@@ -105,3 +105,20 @@ for version in '1' '"draft-01"'; do
     } > "$out/seed-msf-$version-$codec"
   done
 done
+
+# Shared draft-01 initialization resolves before upstream AAC conversion.
+# The 65-track input crosses MAX_TRACKS without a large corpus allocation.
+for track_count in 2 65; do
+  tracks=''
+  for ((index = 0; index < track_count; index++)); do
+    if [[ -n "$tracks" ]]; then tracks+=','; fi
+    tracks+="{\"name\":\"audio-$index\",\"packaging\":\"loc\",\"role\":\"audio\",\"codec\":\"mp4a.40.2\",\"initRef\":\"aac\"}"
+  done
+  catalog="{\"version\":\"draft-01\",\"initDataList\":[{\"id\":\"aac\",\"type\":\"inline\",\"data\":\"EZA=\"}],\"tracks\":[$tracks]}"
+  catalog_len=${#catalog}
+  { printf "\\x$(printf '%02x' $((catalog_len >> 8)))\\x$(printf '%02x' $((catalog_len & 255)))"
+    printf '%s' "$catalog"
+    printf '\x00\x00\x05\x02\x10\x00\x21\x10'
+    printf '\x01\x00\x05\x02\x10\x00\x21\x10'
+  } > "$out/seed-msf-shared-init-$track_count"
+done

@@ -105,7 +105,7 @@ Each calls production code. Private parsers are reached through
 | `http_response` | HLS PUT destination response, split into reads | `http1::ResponseReader` (result must not depend on read splits) |
 | `hls_playlist` | HLS push ingest m3u8 body; first byte picks the path depth | `hls_ingest::playlist::parse` |
 | `fmp4_ingest` | HLS push ingest fMP4: 2-byte init length, init segment, then one media segment in 4 KiB chunks | `fmp4::boxes`, `Fmp4Demux::check_init`, `apply_init`, media segment demux |
-| `moq_ingest` | MoQ ingest: 2-byte catalog length, hang `catalog.json`, then frames | `from_hang_catalog`, `TrackSet::new`, `IngestTrack::push` (legacy timestamps, NAL units, AAC, CMAF fragments) |
+| `moq_ingest` | MoQ ingest: 2-byte catalog length, hang/MSF catalog, then frames | upstream MSF consumer, `from_hang_catalog`, `TrackSet::new`, `IngestTrack::push` (LOC/legacy timestamps, NAL units, AAC, CMAF fragments) |
 
 ```sh
 cd fuzz
@@ -325,9 +325,9 @@ snapshot (see
 
 ### MoQ interop
 
-`moq-dev-interop` proves the phase-1 profile (moq-lite-06 with the hang
-catalog, `moq-net` 0.3.15) against moq.dev tools from commit `e2c5b505`:
-`moq` (moq-cli 0.14.7) and `moq-relay` 0.17.7.
+`moq-dev-interop` proves moq-lite-06 with hang by default, and explicit
+MOQT draft-19 with MSF/LOC under `--ietf`, using `moq-net` 0.3.15 and the
+tools from commit `e2c5b505`: `moq` (moq-cli 0.14.7), `moq-relay` 0.17.7.
 `scripts/dev/moq/fetch-moq-dev.sh` downloads them, checks the SHA256 and
 installs `.local/bin/moq-0.14.7` and `.local/bin/moq-relay-0.17.7`. The mode
 refuses another `--version`. `MOQ_DEV_INTEROP_MOQ_BIN` and
@@ -336,6 +336,7 @@ refuses another `--version`. `MOQ_DEV_INTEROP_MOQ_BIN` and
 ```sh
 scripts/dev/moq/fetch-moq-dev.sh
 scripts/harness/run.sh moq-dev-interop -- --no-netns
+scripts/harness/run.sh moq-dev-interop -- --no-netns --ietf
 (cd test/e2e/moq && npm ci && npx playwright install chromium firefox)
 scripts/harness/run.sh moq-dev-interop -- --no-netns --browsers
 ```
@@ -350,16 +351,20 @@ pactl load-module module-null-sink sink_name=moq_null && pactl set-default-sink 
 
 Each run makes a CA and an ECDSA P-256 leaf with `openssl`. Restream's MoQ
 listener (`RESTREAM_MOQ_INGEST_LISTEN`, `RESTREAM_MOQ_TLS_CERT`,
-`RESTREAM_MOQ_TLS_KEY`) serves ingest and the origin. Every `moq` session
-offers only `moq-lite-06` over QUIC.
+`RESTREAM_MOQ_TLS_KEY`) serves ingest and the origin. Restream output URLs
+pin `version=moq-lite-06` or `version=moqt-19`; CLI/log spelling for the latter
+is `moq-transport-19`. Every CLI dial offers only the selected version over
+QUIC; IETF exports select MSF without hang fallback. Both catalogs advertise
+the same LOC media.
 
 | Phase | Path | Key checks |
 |---|---|---|
-| Egress | RTMP publish → pipeline → `moqt://…/?broadcast=live/egress.hang` → moq-relay, plus an RTMP sibling | `egressRelayCatalog`, `egressRelayLite06`, `egressReadBack` (`moq export ts`, ≥ 20 s, H.264 + AAC, monotone PTS) |
+| Egress | RTMP publish → pipeline → `moqt://…/?broadcast=live/egress.hang&version=<alpn>` → moq-relay, plus an RTMP sibling | `egressRelayCatalog` (MSF/LOC under `--ietf`), `egressRelayVersion`, `egressReadBack` (`moq export ts`, ≥ 20 s, H.264 + AAC, monotone PTS) |
 | Origin | `POST /api/v1/pipelines/<id>/moq-token`, then `moq export ts` from Restream's listener | `originReadBack`, `originRefusesNoToken`, `originRefusesBadToken` |
 | Browsers (`--browsers`) | Playwright Chromium and Firefox play origin and relay with `@moq/watch` | `browser-<chromium\|firefox>-<origin\|relay>`, `browser-<…>-origin-no-token` |
-| Isolation | moq-relay SIGKILLed, restarted 3 s later | `isolationMoqReconnected` (≤ 60 s), `isolationRelayLite06`, `isolationSiblingUninterrupted`, `isolationReadBackAfterReconnect` |
+| Isolation | moq-relay SIGKILLed, restarted 3 s later | `isolationMoqReconnected` (≤ 60 s), `isolationRelayVersion`, `isolationSiblingUninterrupted`, `isolationReadBackAfterReconnect` |
 | Ingest | `ffmpeg … -f mpegts - \| moq … import ts` into Restream → RTMP output to an FFmpeg server | `ingestMoqSession`, `ingestReadBack` |
+| IETF ingest (`--ietf`) | RTMP-fed source pipeline → draft-19 MSF/LOC output → dedicated moq-relay → draft-19-only `--cluster-connect` into Restream ingest → RTMP read-back | `ingestRelayMsfLocCatalog`, `ingestRelayVersion`, `ingestMoqSession`, `ingestReadBack` (≥ 8 s). No CLI export/re-import media bridge; port override `MOQ_DEV_INTEROP_INGEST_RELAY` |
 
 The browser specs live in their own package, `test/e2e/moq/` (`@moq/watch`
 0.6.3, `@playwright/test` 1.63.0, Vite 8.3.2, `*.moq.ts`), so the frontend
@@ -371,14 +376,28 @@ the spec page (`npx vite --config vite.config.ts --port 5180` in
 `test/e2e/moq`), forward it to a Mac over SSH, and record the Safari version
 and result in the pull request.
 
-`.local/artifacts/moq-dev-interop/` holds `report.json`, relay sessions,
-logs, `moq export` captures with FFprobe JSON, and `browser/` (Playwright
-report, traces, screenshots). CI uploads it from the `moq-interop` job.
+The actual control-room preview is a separate application E2E:
+`test/frontend/control-room.spec.ts`, test `program preview over MoQ`.
+Root Playwright projects `chromium` and `firefox-moq` run it (Firefox is
+scoped to this test). It checks decoded canvas content and persisted
+transport selection. After building frontend assets and `target/debug/restream`:
 
-`moq-relay-interop` also exists in the harness: it targets MediaMTX v1.21.2
-(`scripts/dev/moq/fetch-mediamtx.sh`, `MOQ_INTEROP_MEDIAMTX_BIN`) and a MOQT
-draft profile that this branch's MoQ code does not speak. No CI job or suite
-runs it.
+```sh
+RESTREAM_E2E_SKIP_BUILD=1 scripts/harness/frontend-e2e.sh --grep 'program preview over MoQ'
+```
+
+`.local/artifacts/moq-dev-interop/` (or `moq-dev-interop-ietf/`) holds
+`report.json`, relay sessions, logs, CLI captures with FFprobe JSON, and
+`browser/` (Playwright report, traces, screenshots). CI's `moq-interop` job
+runs lite/browser and IETF modes using the same pinned tools and uploads both.
+
+`moq-relay-interop` targets unmodified MediaMTX v1.21.2
+(`scripts/dev/moq/fetch-mediamtx.sh`, `MOQ_INTEROP_MEDIAMTX_BIN`).
+It is diagnostic-only, not run by CI or suites: the SETUP, namespace and
+LOC/MSF dialect mismatches are source/spec-evidenced in
+[Q-091](backlog.md#q-091-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop).
+Use `moq-dev-interop --ietf` for the supported IETF gate; do not fork a
+MediaMTX-specific profile.
 
 ### Transport CI tiers
 

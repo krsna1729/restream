@@ -309,10 +309,13 @@ fn malformed_frames_are_refused_and_leave_track_state_alone() {
         convert(&mut record, legacy(0, &truncated)),
         Err(ConvertError::MalformedVideo(_))
     ));
-    assert!(matches!(
-        convert(&mut record, legacy(0, &[])),
-        Err(ConvertError::MalformedVideo(_))
-    ));
+    let mut out = Vec::new();
+    record
+        .track_mut(0)
+        .unwrap()
+        .push(legacy(0, &[]), &mut out)
+        .unwrap();
+    assert!(out.is_empty(), "an empty legacy frame is an end marker");
     assert!(set.probe().is_none(), "a refused keyframe sets no metadata");
 }
 

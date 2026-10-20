@@ -294,6 +294,7 @@ panic = "unwind"
 # Vendored with small hardening patches (see vendor/<crate>/RESTREAM_PATCHES.md).
 [patch.crates-io]
 hang = { path = "vendor/hang" }
+moq-msf = { path = "vendor/moq-msf" }
 rml_rtmp = { path = "vendor/rml_rtmp" }
 # moq-net 0.3.15 plus the `unsend` feature (see vendor/moq-net/PATCH.md).
 moq-net = { path = "vendor/moq-net" }

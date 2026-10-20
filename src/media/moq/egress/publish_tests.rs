@@ -167,15 +167,37 @@ fn a_rewind_moves_both_tracks_on_by_one_offset() {
             broadcast.write(frame(TrackKind::Audio, true, 21_000)),
             Ok(true)
         );
-        // The old GOP ends one frame after its last; the audio group ends
-        // at the discontinuity instead of taking the next frame.
-        assert_eq!(marker(&mut gop).await, 10_066_000);
-        assert!(gop.read_frame().await.unwrap().is_none());
-        assert!(sound.read_frame().await.unwrap().is_none());
+        // A bounded cache may evict closed groups while the discontinuity
+        // and resumed groups are written; only the new live edge is retained.
         // Both resume just past the furthest point presented (video, one
         // step on), shifted alike: still 21 ms apart.
         assert_eq!(next_media(&mut video).await, 10_066_000);
         assert_eq!(next_media(&mut audio).await, 10_087_000);
+    });
+}
+
+#[test]
+fn discontinuity_markers_on_both_tracks_keep_the_media_timescale() {
+    run(async {
+        let (_origin, mut broadcast) = broadcast("b", true, true);
+        let mut video = subscribe(&broadcast, VIDEO_TRACK).await;
+        let mut audio = subscribe(&broadcast, AUDIO_TRACK).await;
+        broadcast
+            .write(frame(TrackKind::Video, true, 1_000_000))
+            .unwrap();
+        broadcast
+            .write(frame(TrackKind::Audio, true, 1_000_000))
+            .unwrap();
+        for track in [&mut video, &mut audio] {
+            let mut group = track.recv_group().await.unwrap().unwrap();
+            assert_eq!(read(&mut group, 1).await, [1_000_000]);
+        }
+        broadcast.discontinuity().unwrap();
+        for track in [&mut video, &mut audio] {
+            let mut group = track.recv_group().await.unwrap().unwrap();
+            assert_eq!(marker(&mut group).await, 1_000_000);
+            assert!(group.read_frame().await.unwrap().is_none());
+        }
     });
 }
 

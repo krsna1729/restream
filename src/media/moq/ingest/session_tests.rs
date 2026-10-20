@@ -331,76 +331,87 @@ fn a_loopback_publisher_reaches_the_ring_and_shutdown_releases_it() {
     use crate::media::moq::media::{LocBuffer, TrackKind, hang_catalog};
     use crate::media::moq::transport::test_support::{Loopback, run};
 
-    run(async {
-        let loopback = Loopback::new().await;
-        let (client, accepted) = loopback.native().await;
-        let (origin, origin_driver, budget) = crate::media::moq::budget::origin();
-        let mut broadcast =
-            HangBroadcast::create(&origin, budget, "tenant/moq-key.hang", false, true).unwrap();
-        let audio = AudioConfig {
-            sample_rate: 48_000,
-            channels: 2,
-            asc: Some(Bytes::from_static(&[0x11, 0x90])),
-            container: TrackContainer::Legacy,
-        };
-        broadcast
-            .publish_catalog(&hang_catalog(None, Some(&audio)).unwrap())
-            .unwrap();
-        compio::runtime::spawn(transport::run_driver(origin_driver)).detach();
-        let ring = Arc::new(RingBuffer::new(64));
-        let recorder = Recorder {
-            ring: Some(ring.clone()),
-            ..Recorder::default()
-        };
-        let shutdown = CancellationToken::new();
-        let peer: SocketAddr = "198.51.100.9:4443".parse().unwrap();
-        // The client's connect completes only once the server answers its
-        // SETUP, which `publish` does: run both sides together.
-        let server = async {
-            let handshake = moq_net::Server::new()
-                .accept_request(Instant::now(), accepted.session.clone())
-                .await
-                .unwrap();
-            publish(
-                &recorder,
-                peer,
-                &accepted.path,
-                handshake,
-                SessionLimits::default(),
-                &shutdown,
-            )
-            .await
-        };
-        let publisher = async {
-            let (session, driver) = moq_net::Client::new()
-                .with_publisher(&origin)
-                .connect(Instant::now(), client)
-                .await
-                .unwrap();
-            compio::runtime::spawn(transport::run_driver(driver)).detach();
-            let mut pts_us = 0;
-            while ring.get_write_idx() < 5 {
-                let frame = MediaFrame {
-                    track: TrackKind::Audio,
-                    keyframe: false,
-                    pts_us,
-                    data: LocBuffer::from_payload(&[0x21, 0x10, 0x05]),
+    // The publish/connect futures are large in a debug build; the default
+    // 2 MiB test stack overflows. Run this case on a thread with room.
+    std::thread::Builder::new()
+        .name("moq-loopback-publisher".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            run(async {
+                let loopback = Loopback::new().await;
+                let (client, accepted) = loopback.native().await;
+                let (origin, origin_driver, budget) = crate::media::moq::budget::origin();
+                let mut broadcast =
+                    HangBroadcast::create(&origin, budget, "tenant/moq-key.hang", false, true)
+                        .unwrap();
+                let audio = AudioConfig {
+                    sample_rate: 48_000,
+                    channels: 2,
+                    asc: Some(Bytes::from_static(&[0x11, 0x90])),
+                    container: TrackContainer::Legacy,
                 };
-                broadcast.write(frame).unwrap();
-                pts_us += 21_333;
-                compio::time::sleep(Duration::from_millis(10)).await;
-            }
-            shutdown.cancel();
-            session
-        };
-        let (end, _session) = futures_util::future::join(server, publisher).await;
-        assert!(matches!(end.error, Error::Cancel), "{end:?}");
-        assert_eq!(*recorder.admitted.borrow(), ["moq-key"]);
-        assert_eq!(*recorder.finished.borrow(), ["Restream is shutting down"]);
-        let first = ring.read_at(0).expect("published packet");
-        assert_eq!((first.track_index, first.is_keyframe), (0, false));
-        assert_eq!(&first.payload[7..], &[0x21, 0x10, 0x05], "ADTS-wrapped AAC");
-    });
+                broadcast
+                    .publish_catalog(&hang_catalog(None, Some(&audio)).unwrap())
+                    .unwrap();
+                compio::runtime::spawn(transport::run_driver(origin_driver)).detach();
+                let ring = Arc::new(RingBuffer::new(64));
+                let recorder = Recorder {
+                    ring: Some(ring.clone()),
+                    ..Recorder::default()
+                };
+                let shutdown = CancellationToken::new();
+                let peer: SocketAddr = "198.51.100.9:4443".parse().unwrap();
+                // The client's connect completes only once the server answers its
+                // SETUP, which `publish` does: run both sides together.
+                let server = async {
+                    let handshake = moq_net::Server::new()
+                        .accept_request(Instant::now(), accepted.session.clone())
+                        .await
+                        .unwrap();
+                    publish(
+                        &recorder,
+                        peer,
+                        &accepted.path,
+                        handshake,
+                        SessionLimits::default(),
+                        &shutdown,
+                    )
+                    .await
+                };
+                let publisher = async {
+                    let (session, driver) = moq_net::Client::new()
+                        .with_publisher(&origin)
+                        .connect(Instant::now(), client)
+                        .await
+                        .unwrap();
+                    compio::runtime::spawn(transport::run_driver(driver)).detach();
+                    let mut pts_us = 0;
+                    while ring.get_write_idx() < 5 {
+                        let frame = MediaFrame {
+                            track: TrackKind::Audio,
+                            keyframe: false,
+                            pts_us,
+                            data: LocBuffer::from_payload(&[0x21, 0x10, 0x05]),
+                        };
+                        broadcast.write(frame).unwrap();
+                        pts_us += 21_333;
+                        compio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    shutdown.cancel();
+                    session
+                };
+                let (end, _session) = futures_util::future::join(server, publisher).await;
+                assert!(matches!(end.error, Error::Cancel), "{end:?}");
+                assert_eq!(*recorder.admitted.borrow(), ["moq-key"]);
+                assert_eq!(*recorder.finished.borrow(), ["Restream is shutting down"]);
+                let first = ring.read_at(0).expect("published packet");
+                assert_eq!((first.track_index, first.is_keyframe), (0, false));
+                assert_eq!(&first.payload[7..], &[0x21, 0x10, 0x05], "ADTS-wrapped AAC");
+            });
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[test]
@@ -432,7 +443,7 @@ fn a_panicking_catalog_parser_ends_the_session_as_a_protocol_violation() {
     assert!(matches!(end.error, Error::ProtocolViolation), "{end:?}");
     assert_eq!(
         end.reason,
-        "catalog.json: the parser panicked: end byte index 2 is not a char boundary"
+        "catalog.json/MSF catalog: the parser panicked: end byte index 2 is not a char boundary"
     );
 }
 
@@ -467,9 +478,12 @@ fn msf_only_catalog_maps_loc_h264_h265_and_aac_into_the_ring() {
                 )
                 .unwrap();
             group.finish().unwrap();
-            let catalog = first_catalog(read_catalog(&broadcast.consume()), Duration::from_secs(1))
-                .await
-                .expect("MSF-only publisher must not wait for catalog.json");
+            let catalog = first_catalog(
+                read_catalog(&broadcast.consume(), None),
+                Duration::from_secs(1),
+            )
+            .await
+            .expect("MSF-only publisher must not wait for catalog.json");
             let tracks = from_hang_catalog(&catalog);
             assert_eq!(
                 tracks.video.as_ref().unwrap().1.container,
@@ -543,7 +557,7 @@ fn a_missing_catalog_profile_falls_back_but_malformed_input_does_not() {
             .unwrap();
         group.finish().unwrap();
         let consumer = broadcast.consume();
-        let result = first_catalog(read_catalog(&consumer), Duration::from_secs(1))
+        let result = first_catalog(read_catalog(&consumer, None), Duration::from_secs(1))
             .now_or_never()
             .expect("malformed hang must not wait on an absent MSF track");
         assert!(matches!(
@@ -554,10 +568,185 @@ fn a_missing_catalog_profile_falls_back_but_malformed_input_does_not() {
 }
 
 #[test]
+fn a_suffix_preference_waits_for_its_catalog_instead_of_parsing_a_malformed_alternate() {
+    crate::media::moq::transport::test_support::run(async {
+        for (name, preferred_name, alternate_name, json) in [
+            (
+                "live/moq-key.msf",
+                moq_msf::DEFAULT_NAME,
+                hang::Catalog::DEFAULT_NAME,
+                r#"{"version":"draft-01","tracks":[]}"#,
+            ),
+            (
+                "live/moq-key.hang",
+                hang::Catalog::DEFAULT_NAME,
+                moq_msf::DEFAULT_NAME,
+                "{}",
+            ),
+        ] {
+            let broadcast = moq_net::broadcast::Info::new().produce();
+            let preferred = broadcast
+                .create_track(preferred_name, hang::Catalog::default_track_info())
+                .unwrap();
+            let alternate = broadcast
+                .create_track(alternate_name, hang::Catalog::default_track_info())
+                .unwrap();
+            let mut group = alternate.append_group().unwrap();
+            group
+                .write_frame(moq_net::Timestamp::ZERO, Bytes::from_static(b"{"))
+                .unwrap();
+            group.finish().unwrap();
+            let consumer = broadcast.consume();
+            let mut read = pin!(first_catalog(
+                read_catalog(&consumer, CatalogFormat::detect(name)),
+                Duration::from_secs(1),
+            ));
+            assert!(
+                read.as_mut().now_or_never().is_none(),
+                "{name} must wait for the preferred catalog, not parse its ready alternate",
+            );
+            let mut group = preferred.append_group().unwrap();
+            group
+                .write_frame(
+                    moq_net::Timestamp::ZERO,
+                    Bytes::from_static(json.as_bytes()),
+                )
+                .unwrap();
+            group.finish().unwrap();
+            read.await.expect("the announced profile wins");
+        }
+    });
+}
+
+#[test]
+fn a_suffix_preference_falls_back_only_when_its_catalog_is_missing() {
+    crate::media::moq::transport::test_support::run(async {
+        for (name, preferred_name, alternate_name, json) in [
+            (
+                "moq-key.msf",
+                moq_msf::DEFAULT_NAME,
+                hang::Catalog::DEFAULT_NAME,
+                "{}",
+            ),
+            (
+                "moq-key.hang",
+                hang::Catalog::DEFAULT_NAME,
+                moq_msf::DEFAULT_NAME,
+                r#"{"version":"draft-01","tracks":[]}"#,
+            ),
+        ] {
+            for malformed in [false, true] {
+                let broadcast = moq_net::broadcast::Info::new().produce();
+                let alternate = broadcast
+                    .create_track(alternate_name, hang::Catalog::default_track_info())
+                    .unwrap();
+                let mut group = alternate.append_group().unwrap();
+                group
+                    .write_frame(
+                        moq_net::Timestamp::ZERO,
+                        Bytes::from_static(json.as_bytes()),
+                    )
+                    .unwrap();
+                group.finish().unwrap();
+                let preferred = malformed.then(|| {
+                    let track = broadcast
+                        .create_track(preferred_name, hang::Catalog::default_track_info())
+                        .unwrap();
+                    let mut group = track.append_group().unwrap();
+                    group
+                        .write_frame(moq_net::Timestamp::ZERO, Bytes::from_static(b"{"))
+                        .unwrap();
+                    group.finish().unwrap();
+                    track
+                });
+                let consumer = broadcast.consume();
+                let result = first_catalog(
+                    read_catalog(&consumer, CatalogFormat::detect(name)),
+                    Duration::from_secs(1),
+                )
+                .now_or_never()
+                .expect("missing or malformed preferred catalogs resolve promptly");
+                if preferred.is_some() {
+                    assert!(
+                        matches!(result.unwrap_err().error, Error::ProtocolViolation),
+                        "{name} must not hide malformed preferred input behind its valid alternate",
+                    );
+                } else {
+                    result.expect("a missing preferred profile falls back");
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn bounded_draft01_shared_init_references_reach_the_ring() {
+    use crate::media::moq::media::LocBuffer;
+
+    crate::media::moq::transport::test_support::run(async {
+        let json = br#"{
+            "version":"draft-01",
+            "initDataList":[{"id":"aac","type":"inline","data":"EZA="}],
+            "tracks":[
+                {"name":"audio-a","packaging":"loc","role":"audio","codec":"mp4a.40.2","initRef":"aac"},
+                {"name":"audio-b","packaging":"loc","role":"audio","codec":"mp4a.40.2","initRef":"aac"}
+            ]
+        }"#;
+        assert!(json.len() < moq_msf::MAX_CATALOG_BYTES);
+        let broadcast = moq_net::broadcast::Info::new().produce();
+        let track = broadcast
+            .create_track(moq_msf::DEFAULT_NAME, hang::Catalog::default_track_info())
+            .unwrap();
+        let mut group = track.append_group().unwrap();
+        group
+            .write_frame(moq_net::Timestamp::ZERO, Bytes::from_static(json))
+            .unwrap();
+        group.finish().unwrap();
+        let catalog = first_catalog(
+            read_catalog(&broadcast.consume(), Some(CatalogFormat::Msf)),
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        let tracks = from_hang_catalog(&catalog);
+        assert_eq!(tracks.audio.len(), 2);
+        for (_, audio) in &tracks.audio {
+            assert_eq!((audio.sample_rate, audio.channels), (48_000, 2));
+            assert_eq!(audio.container, TrackContainer::Loc);
+        }
+        let ring = Arc::new(RingBuffer::new(16));
+        let (mut ingest, _) = ingest(&ring, SessionLimits::default());
+        assert_eq!(
+            ingest.set_tracks(TrackSet::new(tracks)).unwrap(),
+            ["audio-a", "audio-b"],
+        );
+        ingest.ready_probe().expect("shared ASC supplies the probe");
+        ingest.probe_applied(None);
+        for index in 0..2 {
+            ingest
+                .frame(
+                    index,
+                    LocBuffer::from_payload(&[0x21, 0x10])
+                        .into_frame(2_000_000 + index as u64 * 21_000)
+                        .unwrap(),
+                )
+                .unwrap();
+            let packet = ring
+                .read_at(index)
+                .expect("shared-init AAC entered the ring");
+            assert_eq!(packet.pts, 2_000 + index as i64 * 21);
+            assert_eq!(&packet.payload[7..], &[0x21, 0x10]);
+        }
+    });
+}
+
+#[test]
 fn an_oversized_declared_frame_is_rejected_before_waiting_for_payload() {
     crate::media::moq::transport::test_support::run(async {
         let broadcast = moq_net::broadcast::Info::new().produce();
-        let track = broadcast.create_track("audio", moq_net::track::Info::default()).unwrap();
+        let track = broadcast
+            .create_track("audio", moq_net::track::Info::default())
+            .unwrap();
         let mut subscriber = track
             .subscribe(None::<moq_net::track::Subscription>)
             .ordered();
@@ -585,80 +774,103 @@ fn an_oversized_declared_frame_is_rejected_before_waiting_for_payload() {
 }
 
 #[test]
-fn an_ietf_msf_only_publisher_reaches_the_ring() {
+fn an_ietf_msf_preferred_publisher_reaches_the_ring() {
     use crate::media::moq::media::LocBuffer;
     use crate::media::moq::transport::test_support::{Loopback, run};
 
-    run(async {
-        let loopback = Loopback::new().await;
-        let (client, accepted) = loopback.native_offering(&["moqt-16"]).await;
-        let (origin, driver, _budget) = crate::media::moq::budget::origin();
-        let broadcast = origin.create_broadcast("tenant/moq-key.msf").unwrap();
-        let catalog = broadcast
-            .create_track(moq_msf::DEFAULT_NAME, hang::Catalog::default_track_info())
-            .unwrap();
-        let mut audio_config = moq_msf::Track::new("audio", moq_msf::Packaging::Loc);
-        audio_config.role = Some(moq_msf::Role::Audio);
-        audio_config.codec = Some("mp4a.40.2".to_string());
-        audio_config.init_data = Some("EZA=".to_string());
-        let json = moq_msf::Catalog::<()>::new(vec![audio_config]).to_json().unwrap();
-        let mut catalog_group = catalog.append_group().unwrap();
-        catalog_group
-            .write_frame(moq_net::Timestamp::ZERO, Bytes::from(json))
-            .unwrap();
-        catalog_group.finish().unwrap();
-        let audio = broadcast.create_track("audio", moq_net::track::Info::default()).unwrap();
-        broadcast.announce(Default::default()).unwrap();
-        compio::runtime::spawn(transport::run_driver(driver)).detach();
-        let ring = Arc::new(RingBuffer::new(64));
-        let recorder = Recorder {
-            ring: Some(ring.clone()),
-            ..Recorder::default()
-        };
-        let shutdown = CancellationToken::new();
-        let server = async {
-            let handshake = moq_net::Server::new()
-                .accept_request(Instant::now(), accepted.session.clone())
-                .await
-                .unwrap();
-            publish(
-                &recorder,
-                "198.51.100.9:4443".parse().unwrap(),
-                &accepted.path,
-                handshake,
-                SessionLimits::default(),
-                &shutdown,
-            )
-            .await
-        };
-        let publisher = async {
-            let (session, driver) = moq_net::Client::new()
-                .with_publisher(&origin)
-                .connect(Instant::now(), client)
-                .await
-                .unwrap();
-            compio::runtime::spawn(transport::run_driver(driver)).detach();
-            let mut group = audio.append_group().unwrap();
-            let mut timestamp = 0;
-            while ring.get_write_idx() < 3 {
-                group
-                    .write_frame(
-                        moq_net::Timestamp::ZERO,
-                        LocBuffer::from_payload(&[0x21, 0x10])
-                            .into_frame(timestamp)
-                            .unwrap(),
+    std::thread::Builder::new()
+        .name("moq-ietf-publisher".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            run(async {
+                let loopback = Loopback::new().await;
+                let (client, accepted) = loopback.native_offering(&["moqt-19"]).await;
+                let (origin, driver, _budget) = crate::media::moq::budget::origin();
+                let broadcast = origin.create_broadcast("tenant/moq-key.msf").unwrap();
+                let alternate = broadcast
+                    .create_track(
+                        hang::Catalog::DEFAULT_NAME,
+                        hang::Catalog::default_track_info(),
                     )
                     .unwrap();
-                timestamp += 21_333;
-                compio::time::sleep(Duration::from_millis(10)).await;
-            }
-            shutdown.cancel();
-            session
-        };
-        let (end, _session) = futures_util::future::join(server, publisher).await;
-        assert!(matches!(end.error, Error::Cancel), "{end:?}");
-        assert_eq!(*recorder.admitted.borrow(), ["moq-key"]);
-        assert_eq!(*recorder.finished.borrow(), ["Restream is shutting down"]);
-        assert_eq!(&ring.read_at(0).unwrap().payload[7..], &[0x21, 0x10]);
-    });
+                let mut alternate_group = alternate.append_group().unwrap();
+                alternate_group
+                    .write_frame(moq_net::Timestamp::ZERO, Bytes::from_static(b"{"))
+                    .unwrap();
+                alternate_group.finish().unwrap();
+                let catalog = broadcast
+                    .create_track(moq_msf::DEFAULT_NAME, hang::Catalog::default_track_info())
+                    .unwrap();
+                let mut audio_config = moq_msf::Track::new("audio", moq_msf::Packaging::Loc);
+                audio_config.role = Some(moq_msf::Role::Audio);
+                audio_config.codec = Some("mp4a.40.2".to_string());
+                audio_config.init_data = Some("EZA=".to_string());
+                let json = moq_msf::Catalog::<()>::new(vec![audio_config])
+                    .to_json()
+                    .unwrap();
+                let mut catalog_group = catalog.append_group().unwrap();
+                catalog_group
+                    .write_frame(moq_net::Timestamp::ZERO, Bytes::from(json))
+                    .unwrap();
+                catalog_group.finish().unwrap();
+                let audio = broadcast
+                    .create_track("audio", moq_net::track::Info::default())
+                    .unwrap();
+                broadcast.announce(Default::default()).unwrap();
+                compio::runtime::spawn(transport::run_driver(driver)).detach();
+                let ring = Arc::new(RingBuffer::new(64));
+                let recorder = Recorder {
+                    ring: Some(ring.clone()),
+                    ..Recorder::default()
+                };
+                let shutdown = CancellationToken::new();
+                let server = async {
+                    let handshake = moq_net::Server::new()
+                        .accept_request(Instant::now(), accepted.session.clone())
+                        .await
+                        .unwrap();
+                    publish(
+                        &recorder,
+                        "198.51.100.9:4443".parse().unwrap(),
+                        &accepted.path,
+                        handshake,
+                        SessionLimits::default(),
+                        &shutdown,
+                    )
+                    .await
+                };
+                let publisher = async {
+                    let (session, driver) = moq_net::Client::new()
+                        .with_publisher(&origin)
+                        .connect(Instant::now(), client)
+                        .await
+                        .unwrap();
+                    compio::runtime::spawn(transport::run_driver(driver)).detach();
+                    let mut group = audio.append_group().unwrap();
+                    let mut timestamp = 0;
+                    while ring.get_write_idx() < 3 {
+                        group
+                            .write_frame(
+                                moq_net::Timestamp::ZERO,
+                                LocBuffer::from_payload(&[0x21, 0x10])
+                                    .into_frame(timestamp)
+                                    .unwrap(),
+                            )
+                            .unwrap();
+                        timestamp += 21_333;
+                        compio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    shutdown.cancel();
+                    session
+                };
+                let (end, _session) = futures_util::future::join(server, publisher).await;
+                assert!(matches!(end.error, Error::Cancel), "{end:?}");
+                assert_eq!(*recorder.admitted.borrow(), ["moq-key"]);
+                assert_eq!(*recorder.finished.borrow(), ["Restream is shutting down"]);
+                assert_eq!(&ring.read_at(0).unwrap().payload[7..], &[0x21, 0x10]);
+            });
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }

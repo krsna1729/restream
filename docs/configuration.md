@@ -159,6 +159,15 @@ An unparseable address, port `0`, or a missing certificate or key gives
 `MoqIngestSetting::Invalid`. Startup logs it and the listener stays off; the
 engine still runs. See [MoQ ingest](media-pipeline.md#moq-ingest).
 
+The listener negotiates moq-lite and IETF MOQT drafts 14–22, natively or as
+WebTransport subprotocols. Published media is LOC with hang and MSF catalogs;
+ingest also accepts legacy hang and CMAF. No additional environment setting
+selects a dialect. An output URL may pin one supported ALPN:
+`moqt://relay:4443/?broadcast=live/program.msf&version=moqt-19`.
+`version`, `broadcast`, `ca` and `insecure` are Restream-only query keys and
+are removed from the session path sent to the relay. Without `version`,
+offer every supported MoQ ALPN; an unknown value is rejected.
+
 ### Outputs and reconciler
 
 | Variable | Default | Clamp | Effect |

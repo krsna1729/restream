@@ -22,6 +22,10 @@ const SHORT_MIN_SPAN_SECS: f64 = 8.0;
 const SHORT_CAPTURE_SECS: u64 = 11;
 /// A refused subscription must end within this window, without media.
 const REFUSAL_WATCH_SECS: u64 = 10;
+/// IETF has no subscriber role in SETUP: a no-token viewer enters publisher
+/// admission and reaches its 10 s announcement timeout after setup (also
+/// bounded to 10 s). Leave another 10 s for startup and closing the CLI.
+const IETF_REFUSAL_WATCH_SECS: u64 = 30;
 /// The isolation phase lets the stream run this long before the kill.
 const OUTAGE_AFTER: Duration = Duration::from_secs(10);
 /// The relay stays down this long before the restart.
@@ -150,7 +154,7 @@ pub(crate) async fn run_moq_dev_interop(options: DevOptions) -> Result<Value, St
     };
 
     let ingest_relay = DevRelay::new(
-        relay_bin,
+        relay_bin.clone(),
         dev_ports.ingest_relay,
         &tls,
         work_dir.join("moq-relay-ingest.log"),
@@ -362,8 +366,8 @@ impl Session {
         }
     }
 
-    /// One `moq export` that `url` must refuse: the session ends within
-    /// [`REFUSAL_WATCH_SECS`] without media; the CLI's reason is recorded.
+    /// One `moq export` that `url` must refuse without media, allowing the
+    /// profile's admission/close bounds; the CLI's reason is recorded.
     async fn record_refusal(&mut self, id: &str, url: &str, broadcast: &str) {
         let out = self.work_dir.join(format!("{id}.ts"));
         let target = CliTarget {
@@ -372,7 +376,12 @@ impl Session {
             broadcast,
             version: self.options.version(),
         };
-        match attempt_export(&self.moq, &target, &out, REFUSAL_WATCH_SECS).await {
+        let timeout = if self.options.ietf {
+            IETF_REFUSAL_WATCH_SECS
+        } else {
+            REFUSAL_WATCH_SECS
+        };
+        match attempt_export(&self.moq, &target, &out, timeout).await {
             Ok(refusal) => self.checks.record(id, refusal.refused(), refusal.to_json()),
             Err(error) => self.checks.record(id, false, json!({"error": error})),
         }
