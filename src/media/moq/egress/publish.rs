@@ -195,6 +195,13 @@ impl HangBroadcast {
         })
     }
 
+    /// A handle to the broadcast as published, for tests that read a
+    /// generation's catalog and media without a network viewer.
+    #[cfg(test)]
+    pub(crate) fn producer(&self) -> broadcast::Producer {
+        self.broadcast.clone()
+    }
+
     /// Publish `catalog` on both catalog tracks (hang and MSF).
     pub(crate) fn publish_catalog(&mut self, catalog: &hang::Catalog) -> Result<(), String> {
         // The whole catalog, so no wall-clock mapping is advertised: ring

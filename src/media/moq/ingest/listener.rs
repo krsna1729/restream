@@ -167,7 +167,7 @@ fn run_thread(
         let engine = server.engine().clone();
         let listener = Rc::new(Listener {
             lifecycle: TokioLifecycle::new(tokio.clone(), server),
-            origin: Origin::new(engine, tokio, config.origin_max_viewers),
+            origin: Origin::new(engine, config.origin_max_viewers),
             limits: SessionLimits::default(),
             shutdown,
             active: Cell::new(0),

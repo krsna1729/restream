@@ -65,7 +65,7 @@
 //! records configurations it already has, right before the packet that
 //! carries them.
 
-use arc_swap::{ArcSwap, ArcSwapOption};
+use arc_swap::ArcSwapOption;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
@@ -79,12 +79,15 @@ pub use super::packet::{MediaPacket, MediaType, PayloadFormat};
 
 mod frame_units;
 mod reader;
+mod subscribers;
+
 use frame_units::TrackConfigs;
 pub use frame_units::{
     CONFIG_HISTORY, CONFIG_TRACKS_PER_TYPE, FrameUnit, NotRetained, TrackConfig,
     VideoConfigFollower,
 };
 pub use reader::{Reader, ReaderInfo, ReaderSnapshot};
+pub use subscribers::{PublishSubscribers, PublishWake};
 
 pub const DEFAULT_RING_CAPACITY: usize = 1024;
 
@@ -149,71 +152,6 @@ pub struct PayloadStats {
     pub max_payload_bytes: usize,
 }
 
-/// Woken by a ring's producer right after each publication, and when the ring
-/// is sealed or ends. Egress fabric shards subscribe with their coalescing
-/// wake gates, so a publication reaches them from the producing thread with no
-/// watcher task in between (WI11). Implementations must be cheap and must not
-/// block: they run on the producer's hot path.
-pub trait PublishWake: Send + Sync {
-    fn wake(&self);
-}
-
-/// A ring's publication subscribers. A replacement ring shares its
-/// predecessor's set (`seal_and_forward`), so wakes follow the feed.
-pub struct PublishSubscribers {
-    list: ArcSwap<Vec<Arc<dyn PublishWake>>>,
-}
-
-impl PublishSubscribers {
-    pub(crate) fn new() -> Self {
-        Self {
-            list: ArcSwap::from_pointee(Vec::new()),
-        }
-    }
-
-    /// Add `subscriber`; idempotent per `Arc`. Control-plane only (copies
-    /// the list).
-    pub fn subscribe(&self, subscriber: Arc<dyn PublishWake>) {
-        self.list.rcu(|list| {
-            let mut list = Vec::clone(list);
-            if !list
-                .iter()
-                .any(|existing| std::ptr::addr_eq(Arc::as_ptr(existing), Arc::as_ptr(&subscriber)))
-            {
-                list.push(subscriber.clone());
-            }
-            list
-        });
-    }
-
-    pub fn unsubscribe(&self, subscriber: &Arc<dyn PublishWake>) {
-        self.list.rcu(|list| {
-            list.iter()
-                .filter(|existing| {
-                    !std::ptr::addr_eq(Arc::as_ptr(existing), Arc::as_ptr(subscriber))
-                })
-                .cloned()
-                .collect::<Vec<_>>()
-        });
-    }
-
-    /// One `ArcSwap` load and one call per subscriber; no allocation.
-    #[inline]
-    pub(crate) fn wake_all(&self) {
-        for subscriber in self.list.load().iter() {
-            subscriber.wake();
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.list.load().len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
 pub struct RingBuffer {
     slots: Vec<RingSlot>,
     write_idx: AlignedAtomicUsize,
@@ -252,7 +190,11 @@ pub struct RingBuffer {
     /// Woken by the producer after each publication (see [`PublishWake`]).
     /// Created on first subscription, so a ring nobody subscribes to pays
     /// one atomic load per publication.
-    publish_subscribers: std::sync::OnceLock<Arc<PublishSubscribers>>,
+    pub publish_subscribers: std::sync::OnceLock<Arc<PublishSubscribers>>,
+    /// Woken by the producer only when track metadata (codec hint, track
+    /// configuration, audio tracks) changes. Created on first subscription,
+    /// so a ring nobody watches pays no wake work for metadata changes.
+    metadata_subscribers: std::sync::OnceLock<Arc<PublishSubscribers>>,
 }
 
 impl RingBuffer {
@@ -289,6 +231,7 @@ impl RingBuffer {
             end_of_stream: AtomicBool::new(false),
             next: ArcSwapOption::empty(),
             publish_subscribers: std::sync::OnceLock::new(),
+            metadata_subscribers: std::sync::OnceLock::new(),
         }
     }
 
@@ -302,11 +245,30 @@ impl RingBuffer {
         )
     }
 
+    /// The metadata subscribers of this ring and of every ring that replaces
+    /// it: woken only when the codec hint, a track configuration or the audio
+    /// tracks change, not on every publication.
+    pub fn metadata_subscribers(&self) -> Arc<PublishSubscribers> {
+        Arc::clone(
+            self.metadata_subscribers
+                .get_or_init(|| Arc::new(PublishSubscribers::new())),
+        )
+    }
+
     /// One atomic load without subscribers; with them, one `ArcSwap` load and
     /// one call per subscriber. No allocation.
     #[inline]
     fn wake_publication_subscribers(&self) {
         if let Some(subscribers) = self.publish_subscribers.get() {
+            subscribers.wake_all();
+        }
+    }
+
+    /// Metadata-only wake: no publication subscriber runs, so an origin
+    /// watcher sees codec/track changes without polling every packet.
+    #[inline]
+    fn wake_metadata_subscribers(&self) {
+        if let Some(subscribers) = self.metadata_subscribers.get() {
             subscribers.wake_all();
         }
     }
@@ -386,16 +348,21 @@ impl RingBuffer {
         let _ = new_ring
             .publish_subscribers
             .set(self.publication_subscribers());
+        if let Some(metadata) = self.metadata_subscribers.get() {
+            let _ = new_ring.metadata_subscribers.set(Arc::clone(metadata));
+        }
         self.next.store(Some(new_ring));
         // Wake all readers blocked on this ring so they can discover `next`.
         self.notify.notify_waiters();
         self.wake_publication_subscribers();
+        self.wake_metadata_subscribers();
     }
 
     pub fn mark_end_of_stream(&self) {
         self.end_of_stream.store(true, Ordering::Release);
         self.notify.notify_waiters();
         self.wake_publication_subscribers();
+        self.wake_metadata_subscribers();
     }
 
     pub fn is_end_of_stream(&self) -> bool {
@@ -440,6 +407,7 @@ impl RingBuffer {
     pub fn set_codec_hint(&self, codec: &str) {
         if self.codec_hint.set(codec.to_string()).is_ok() {
             debug!(codec, "ring codec hint set");
+            self.wake_metadata_subscribers();
         }
     }
 
@@ -456,7 +424,12 @@ impl RingBuffer {
         if bytes.is_empty() {
             return self.track_configs.generation(media_type, track_index);
         }
-        self.track_configs.set(media_type, track_index, bytes)
+        let previous = self.track_configs.generation(media_type, track_index);
+        let generation = self.track_configs.set(media_type, track_index, bytes);
+        if generation != previous {
+            self.wake_metadata_subscribers();
+        }
+        generation
     }
 
     /// The current configuration of one track, if any was recorded.
@@ -557,6 +530,15 @@ impl RingBuffer {
             self.audio_tracks.store(Some(std::sync::Arc::new(tracks)));
             debug!(count, "ring audio tracks set");
         }
+        self.wake_metadata_subscribers();
+    }
+
+    /// The audio track metadata handle without copying it, for watchers that
+    /// only compare identity (a change installs a new `Arc`).
+    pub(crate) fn audio_tracks_snapshot(
+        &self,
+    ) -> Option<std::sync::Arc<Vec<crate::media::metadata::AudioMeta>>> {
+        self.audio_tracks.load_full()
     }
 
     /// Returns a snapshot clone of the audio track metadata, or `None` if not yet known.

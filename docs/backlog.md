@@ -22,7 +22,7 @@ items).
 - [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
 - [Q-087 separate-rendition timeline breaks](#q-087-protocol-sonnet-align-separate-renditions-on-timeline-breaks-not-on-raw-proximity)
-- [Q-089 MoQ origin track-set changes](#q-089-protocol-sonnet-the-moq-origin-follows-a-track-set-change-while-served)
+
 - [Q-091 SRT Backup replays the lost prefix](#q-091-protocol-opus-srt-backup-failover-replays-the-lost-prefix)
 - [Q-092 no descendants of a dropped dependency](#q-092-resilience-opus-never-emit-descendants-of-a-dropped-dependency-bearing-unit)
 - [Q-094 sideband media events](#q-094-protocol-opus-first-class-sideband-media-events)
@@ -456,18 +456,7 @@ items).
   audio again.
 - Status: open (Filed: 2026-10-18 by claude, from the #364 review NITs).
 
-### Q-089 [protocol] [sonnet] The MoQ origin follows a track-set change while served
-- Goal: a pipeline whose media gains or loses video or audio while viewers
-  watch it over MoQ republishes its broadcast with the new track set, so
-  current viewers do not keep the stale one. A served broadcast's track set
-  is fixed when its first viewer starts it (`origin::start`); a pipeline
-  with no media is refused (#371).
-- Contract: a `Served` generation per pipeline, so viewers of a replaced
-  broadcast detach from their own generation, and the replacement closes the
-  old broadcast.
-- Gates: an origin test that switches a ring from audio-only to audio and
-  video while a viewer is attached, and the viewer then receives video.
-- Status: open (Filed: 2026-10-18 by claude, from the #371 review).
+
 
 ### Q-091 [protocol] [opus] SRT Backup failover replays the lost prefix
 

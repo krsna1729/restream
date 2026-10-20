@@ -903,11 +903,26 @@ The diagram shows a dashboard preview subscribing to a pipeline.
   unauthorized. When `RESTREAM_MOQ_ORIGIN_MAX_VIEWERS` viewers are playing,
   the next gets application error 1. An admitted viewer leaves the connection
   count.
-- **Serving.** The first viewer of a pipeline starts one broadcast, named by
-  the pipeline id. A pump task on the listener thread reads the ring in
-  batches (64 units or 1 MiB) and sleeps until the ring publishes. Viewers of
-  one pipeline share it; the last to leave stops it. A pipeline with no
-  usable media is refused as not found.
+- **Serving.** The first viewer of a pipeline starts a served generation: one
+  broadcast, named by the pipeline id. A pump task on the listener thread
+  reads the ring in batches (64 units or 1 MiB) and sleeps until the ring
+  publishes. Viewers of one pipeline share it; the last viewer to leave stops
+  a generation that was started for viewers. A pipeline with no usable media
+  is refused as not found.
+- **Generations.** A generation's track set is fixed. A watcher on the
+  listener runtime re-resolves the pipeline's track set (video/audio presence
+  and the codec configuration identity the catalog describes) when the ring's
+  track metadata changes and on an absolute one-second deadline that
+  publications cannot push back. Presence is taken from the active ingest, or
+  from its disconnect record, while codec configuration identity comes from
+  the retained ring/catalog, so a publisher that drops a track or disconnects
+  is noticed even though its hint, parameter sets and audio metadata remain in
+  the ring. When the set differs, the origin publishes a fresh broadcast as
+  the next generation, installs it and closes the old one, ending its viewers.
+  Viewers never move between generations; new viewers join the current one, a
+  replacement with no viewers stays current until the next replacement or
+  teardown, and a pipeline that lost all media is refused with its served
+  generation closed.
 - **Media.** The same conversion as MoQ egress: video plus the first AAC
   track.
 - **Browser.** `MoqPreview` (`web/ts/control-room/moq-preview.tsx`) needs

@@ -1,9 +1,10 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 
 use super::*;
-use crate::media::moq::media::{VIDEO_TRACK, parse_loc_frame};
+use crate::media::metadata::{AudioMeta, VideoMeta};
+use crate::media::moq::media::{AUDIO_TRACK, VIDEO_TRACK, parse_loc_frame};
 use crate::media::moq::transport::test_support::{Loopback, run};
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
 
@@ -16,7 +17,7 @@ fn origin(max_viewers: usize) -> (Rc<Origin>, Arc<MediaEngine>, tokio::runtime::
         .build()
         .unwrap();
     let engine = Arc::new(MediaEngine::new());
-    let origin = Origin::new(engine.clone(), tokio.handle().clone(), max_viewers);
+    let origin = Origin::new(engine.clone(), max_viewers);
     (origin, engine, tokio)
 }
 
@@ -241,5 +242,586 @@ fn a_viewer_with_a_token_plays_the_pipeline_over_loopback_quic() {
         );
         assert_eq!(origin.viewers("pipe-o"), 1);
         assert_eq!(origin.slots_in_use(), 1);
+    });
+}
+
+#[test]
+fn a_track_set_change_replaces_the_served_generation() {
+    let (origin, engine, tokio) = origin(8);
+    let ring = tokio.block_on(engine.get_or_create_pipeline("pipe-gen"));
+    ring.set_audio_tracks(vec![AudioMeta {
+        codec: "aac".to_string(),
+        sample_rate: 48_000,
+        channels: 2,
+        track_index: 0,
+        ..AudioMeta::default()
+    }]);
+
+    run(async {
+        let loopback = Loopback::new().await;
+
+        // Generation 1: audio only. The packet follows the subscription so
+        // the pump publishes the catalog and the audio group.
+        let (token, _) = mint_token("pipe-gen");
+        let (client, accepted) = loopback.native().await;
+        let server = origin.clone();
+        compio::runtime::spawn(async move {
+            let handshake = moq_net::Server::new()
+                .accept_request(Instant::now(), accepted.session.clone())
+                .await
+                .unwrap();
+            let grant = server
+                .admit(&accepted, request_token(&accepted, handshake.path()))
+                .unwrap();
+            server.serve(grant, handshake).await;
+        })
+        .detach();
+
+        let (viewer, driver) = origin::Producer::new(origin::Config::new(moq_net::Hop::random()));
+        compio::runtime::spawn(transport::run_driver(driver)).detach();
+        let (_session, driver) = moq_net::Client::new()
+            .with_subscriber(viewer.clone())
+            .with_path(format!("/?token={token}"))
+            .connect(Instant::now(), client)
+            .await
+            .unwrap();
+        compio::runtime::spawn(transport::run_driver(driver)).detach();
+
+        let consumer = viewer.consume();
+        consumer.routed("pipe-gen").await.unwrap();
+        let first_broadcast = consumer.request_broadcast("pipe-gen").await.unwrap();
+        let mut first_catalog = first_broadcast
+            .track("catalog.json")
+            .unwrap()
+            .subscribe(None)
+            .await
+            .unwrap();
+
+        let first = origin
+            .served
+            .borrow()
+            .get("pipe-gen")
+            .cloned()
+            .expect("generation 1");
+        assert_eq!(first.generation, 1);
+        assert_eq!(first.viewers.get(), 1);
+
+        ring.push(MediaPacket {
+            media_type: MediaType::Audio,
+            track_index: 0,
+            pts: 0,
+            dts: 0,
+            is_keyframe: false,
+            format: PayloadFormat::Raw,
+            payload: Bytes::from_static(&[0x11, 0x22, 0x33, 0x44]),
+        });
+        let mut group = first_catalog.recv_group().await.unwrap().unwrap();
+        let frame = group.read_frame().await.unwrap().unwrap();
+        let catalog: hang::Catalog = hang::Catalog::from_slice(&frame.payload).unwrap();
+        assert!(
+            catalog.video.renditions.is_empty(),
+            "generation 1 has no video"
+        );
+        assert!(
+            catalog.audio.renditions.contains_key(AUDIO_TRACK),
+            "generation 1 carries audio"
+        );
+        drop(first_catalog);
+
+        // The ring gains video while generation 1 is still served.
+        ring.set_codec_hint("h264");
+        ring.set_video_parameter_sets(PARAMETER_SETS.to_vec());
+        ring.push(MediaPacket {
+            media_type: MediaType::Video,
+            track_index: 0,
+            pts: 40,
+            dts: 40,
+            is_keyframe: true,
+            format: PayloadFormat::Raw,
+            payload: Bytes::from([PARAMETER_SETS, &[0, 0, 0, 1], IDR].concat()),
+        });
+
+        // A new viewer attaches: the origin resolves the new track set,
+        // starts generation 2 and closes generation 1.
+        let (token, _) = mint_token("pipe-gen");
+        let (client, accepted) = loopback.native().await;
+        let server = origin.clone();
+        compio::runtime::spawn(async move {
+            let handshake = moq_net::Server::new()
+                .accept_request(Instant::now(), accepted.session.clone())
+                .await
+                .unwrap();
+            let grant = server
+                .admit(&accepted, request_token(&accepted, handshake.path()))
+                .unwrap();
+            server.serve(grant, handshake).await;
+        })
+        .detach();
+
+        let (viewer, driver) = origin::Producer::new(origin::Config::new(moq_net::Hop::random()));
+        compio::runtime::spawn(transport::run_driver(driver)).detach();
+        let (_session, driver) = moq_net::Client::new()
+            .with_subscriber(viewer.clone())
+            .with_path(format!("/?token={token}"))
+            .connect(Instant::now(), client)
+            .await
+            .unwrap();
+        compio::runtime::spawn(transport::run_driver(driver)).detach();
+
+        let consumer = viewer.consume();
+        consumer.routed("pipe-gen").await.unwrap();
+        let second_broadcast = consumer.request_broadcast("pipe-gen").await.unwrap();
+
+        assert_eq!(origin.served_generation("pipe-gen"), Some(2));
+        assert!(first.is_closed(), "generation 1 is closed");
+        for _ in 0..200 {
+            if first.viewers.get() == 0 {
+                break;
+            }
+            compio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(first.viewers.get(), 0, "generation 1's viewer detached");
+        assert_eq!(
+            origin.viewers("pipe-gen"),
+            1,
+            "only the new viewer is served"
+        );
+
+        let mut second_catalog = second_broadcast
+            .track("catalog.json")
+            .unwrap()
+            .subscribe(None)
+            .await
+            .unwrap();
+        let mut group = second_catalog.recv_group().await.unwrap().unwrap();
+        let frame = group.read_frame().await.unwrap().unwrap();
+        let catalog: hang::Catalog = hang::Catalog::from_slice(&frame.payload).unwrap();
+        assert!(
+            catalog.video.renditions.contains_key(VIDEO_TRACK),
+            "generation 2 publishes video"
+        );
+        assert!(
+            catalog.audio.renditions.contains_key(AUDIO_TRACK),
+            "generation 2 keeps audio"
+        );
+
+        let mut video = second_broadcast
+            .track(VIDEO_TRACK)
+            .unwrap()
+            .subscribe(None)
+            .await
+            .unwrap();
+        let mut gop = video.recv_group().await.unwrap().unwrap();
+        let frame = gop.read_frame().await.unwrap().unwrap();
+        let mut idr = (IDR.len() as u32).to_be_bytes().to_vec();
+        idr.extend_from_slice(IDR);
+        assert_eq!(
+            parse_loc_frame(frame.payload),
+            Ok((40_000, Bytes::from(idr)))
+        );
+    });
+}
+
+#[test]
+fn a_track_set_change_replaces_the_generation_without_an_attach() {
+    let (origin, engine, tokio) = origin(8);
+    let ring = tokio.block_on(engine.get_or_create_pipeline("pipe-watch"));
+    ring.set_audio_tracks(vec![AudioMeta {
+        codec: "aac".to_string(),
+        sample_rate: 48_000,
+        channels: 2,
+        track_index: 0,
+        ..AudioMeta::default()
+    }]);
+
+    run(async {
+        let loopback = Loopback::new().await;
+
+        // One viewer starts generation 1 (audio only).
+        let (token, _) = mint_token("pipe-watch");
+        let (client, accepted) = loopback.native().await;
+        let server = origin.clone();
+        compio::runtime::spawn(async move {
+            let handshake = moq_net::Server::new()
+                .accept_request(Instant::now(), accepted.session.clone())
+                .await
+                .unwrap();
+            let grant = server
+                .admit(&accepted, request_token(&accepted, handshake.path()))
+                .unwrap();
+            server.serve(grant, handshake).await;
+        })
+        .detach();
+
+        let (viewer, driver) = origin::Producer::new(origin::Config::new(moq_net::Hop::random()));
+        compio::runtime::spawn(transport::run_driver(driver)).detach();
+        let (_session, driver) = moq_net::Client::new()
+            .with_subscriber(viewer.clone())
+            .with_path(format!("/?token={token}"))
+            .connect(Instant::now(), client)
+            .await
+            .unwrap();
+        compio::runtime::spawn(transport::run_driver(driver)).detach();
+
+        let consumer = viewer.consume();
+        consumer.routed("pipe-watch").await.unwrap();
+        let broadcast = consumer.request_broadcast("pipe-watch").await.unwrap();
+        let mut catalog = broadcast
+            .track("catalog.json")
+            .unwrap()
+            .subscribe(None)
+            .await
+            .unwrap();
+
+        let first = origin
+            .served
+            .borrow()
+            .get("pipe-watch")
+            .cloned()
+            .expect("generation 1");
+        assert_eq!(first.generation, 1);
+        assert_eq!(first.viewers.get(), 1);
+
+        ring.push(MediaPacket {
+            media_type: MediaType::Audio,
+            track_index: 0,
+            pts: 0,
+            dts: 0,
+            is_keyframe: false,
+            format: PayloadFormat::Raw,
+            payload: Bytes::from_static(&[0x11, 0x22, 0x33, 0x44]),
+        });
+        let mut group = catalog.recv_group().await.unwrap().unwrap();
+        let frame = group.read_frame().await.unwrap().unwrap();
+        let catalog: hang::Catalog = hang::Catalog::from_slice(&frame.payload).unwrap();
+        assert!(
+            catalog.video.renditions.is_empty(),
+            "generation 1 has no video"
+        );
+        drop(catalog);
+
+        // The ring gains video. No viewer attaches; the watcher must replace
+        // the generation on the ring's own metadata events.
+        ring.set_video_parameter_sets(PARAMETER_SETS.to_vec());
+        ring.set_codec_hint("h264");
+        ring.push(MediaPacket {
+            media_type: MediaType::Video,
+            track_index: 0,
+            pts: 40,
+            dts: 40,
+            is_keyframe: true,
+            format: PayloadFormat::Raw,
+            payload: Bytes::from([PARAMETER_SETS, &[0, 0, 0, 1], IDR].concat()),
+        });
+
+        let mut second = None;
+        for _ in 0..500 {
+            if let Some(current) = origin.served.borrow().get("pipe-watch").cloned()
+                && current.generation == 2
+            {
+                second = Some(current);
+                break;
+            }
+            compio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let second = second.expect("generation 2 replaced generation 1 without an attach");
+        assert!(first.is_closed(), "generation 1 is closed");
+        for _ in 0..200 {
+            if first.viewers.get() == 0 {
+                break;
+            }
+            compio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(first.viewers.get(), 0, "generation 1's viewer detached");
+        assert_eq!(
+            origin.viewers("pipe-watch"),
+            0,
+            "the replacement has no viewers until one attaches"
+        );
+
+        // Read the replacement's own catalog and media, with no viewer.
+        let mut catalog = second
+            .probe
+            .consume()
+            .track("catalog.json")
+            .unwrap()
+            .subscribe(None)
+            .await
+            .unwrap();
+        let mut group = catalog.recv_group().await.unwrap().unwrap();
+        let frame = group.read_frame().await.unwrap().unwrap();
+        let catalog: hang::Catalog = hang::Catalog::from_slice(&frame.payload).unwrap();
+        assert!(
+            catalog.video.renditions.contains_key(VIDEO_TRACK),
+            "generation 2 publishes video"
+        );
+        assert!(
+            catalog.audio.renditions.contains_key(AUDIO_TRACK),
+            "generation 2 keeps audio"
+        );
+
+        let mut video = second
+            .probe
+            .consume()
+            .track(VIDEO_TRACK)
+            .unwrap()
+            .subscribe(None)
+            .await
+            .unwrap();
+        let mut gop = video.recv_group().await.unwrap().unwrap();
+        let frame = gop.read_frame().await.unwrap().unwrap();
+        let mut idr = (IDR.len() as u32).to_be_bytes().to_vec();
+        idr.extend_from_slice(IDR);
+        assert_eq!(
+            parse_loc_frame(frame.payload),
+            Ok((40_000, Bytes::from(idr)))
+        );
+    });
+}
+
+fn test_audio_meta() -> AudioMeta {
+    AudioMeta {
+        codec: "aac".to_string(),
+        sample_rate: 48_000,
+        channels: 2,
+        track_index: 0,
+        ..AudioMeta::default()
+    }
+}
+
+/// Register a live ingest for the pipeline with the requested track presence,
+/// exactly as an elected input reports its probe.
+async fn register_live_ingest(
+    engine: &MediaEngine,
+    pipeline_id: &str,
+    stream_key: &str,
+    video: bool,
+    audio: bool,
+) {
+    let registration = engine
+        .try_register_pipeline_input_attempt(pipeline_id, stream_key, stream_key, "rtmp", true)
+        .await
+        .expect("an ingest slot");
+    let video_meta = video.then(|| VideoMeta {
+        codec: "h264".to_string(),
+        width: 640,
+        height: 360,
+        fps: 30.0,
+        ..VideoMeta::default()
+    });
+    let audio_meta = audio.then(test_audio_meta);
+    engine
+        .update_ingest_session_meta(pipeline_id, &registration, video_meta, audio_meta, None)
+        .await;
+    if audio {
+        engine
+            .update_ingest_session_audio_tracks(pipeline_id, &registration, vec![test_audio_meta()])
+            .await;
+    }
+    engine.select_pipeline_input(pipeline_id, stream_key).await;
+}
+
+/// A viewer on the current generation, with its session kept alive by the
+/// returned handle.
+async fn attach_viewer(
+    origin: &Rc<Origin>,
+    loopback: &Loopback,
+    pipeline_id: &str,
+) -> (moq_net::broadcast::Consumer, moq_net::Session) {
+    let (token, _) = mint_token(pipeline_id);
+    let (client, accepted) = loopback.native().await;
+    let server = origin.clone();
+    compio::runtime::spawn(async move {
+        let handshake = moq_net::Server::new()
+            .accept_request(Instant::now(), accepted.session.clone())
+            .await
+            .unwrap();
+        let grant = server
+            .admit(&accepted, request_token(&accepted, handshake.path()))
+            .unwrap();
+        server.serve(grant, handshake).await;
+    })
+    .detach();
+
+    let (viewer, driver) = origin::Producer::new(origin::Config::new(moq_net::Hop::random()));
+    compio::runtime::spawn(transport::run_driver(driver)).detach();
+    let (session, driver) = moq_net::Client::new()
+        .with_subscriber(viewer.clone())
+        .with_path(format!("/?token={token}"))
+        .connect(Instant::now(), client)
+        .await
+        .unwrap();
+    compio::runtime::spawn(transport::run_driver(driver)).detach();
+
+    let consumer = viewer.consume();
+    consumer.routed(pipeline_id).await.unwrap();
+    let broadcast = consumer.request_broadcast(pipeline_id).await.unwrap();
+    (broadcast, session)
+}
+
+fn push_audio(ring: &crate::media::ring_buffer::RingBuffer, pts: i64) {
+    ring.push(MediaPacket {
+        media_type: MediaType::Audio,
+        track_index: 0,
+        pts,
+        dts: pts,
+        is_keyframe: false,
+        format: PayloadFormat::Raw,
+        payload: Bytes::from_static(&[0x11, 0x22, 0x33, 0x44]),
+    });
+}
+
+fn push_video_keyframe(ring: &crate::media::ring_buffer::RingBuffer) {
+    ring.push(MediaPacket {
+        media_type: MediaType::Video,
+        track_index: 0,
+        pts: 40,
+        dts: 40,
+        is_keyframe: true,
+        format: PayloadFormat::Raw,
+        payload: Bytes::from([PARAMETER_SETS, &[0, 0, 0, 1], IDR].concat()),
+    });
+}
+
+#[test]
+fn losing_video_closes_the_served_generation_without_an_attach() {
+    let (origin, engine, tokio) = origin(8);
+    let ring = tokio.block_on(engine.get_or_create_pipeline("pipe-vloss"));
+    ring.set_video_parameter_sets(PARAMETER_SETS.to_vec());
+    tokio.block_on(register_live_ingest(
+        &engine,
+        "pipe-vloss",
+        "key",
+        true,
+        true,
+    ));
+
+    run(async {
+        push_audio(&ring, 0);
+        push_video_keyframe(&ring);
+        let loopback = Loopback::new().await;
+        let (broadcast, _session) = attach_viewer(&origin, &loopback, "pipe-vloss").await;
+        let mut catalog = broadcast
+            .track("catalog.json")
+            .unwrap()
+            .subscribe(None)
+            .await
+            .unwrap();
+        let mut group = catalog.recv_group().await.unwrap().unwrap();
+        let frame = group.read_frame().await.unwrap().unwrap();
+        let catalog: hang::Catalog = hang::Catalog::from_slice(&frame.payload).unwrap();
+        assert!(catalog.video.renditions.contains_key(VIDEO_TRACK));
+        assert!(catalog.audio.renditions.contains_key(AUDIO_TRACK));
+
+        let first = origin
+            .served
+            .borrow()
+            .get("pipe-vloss")
+            .cloned()
+            .expect("generation 1");
+        assert_eq!(first.generation, 1);
+        assert_eq!(first.viewers.get(), 1);
+
+        // The publisher reconnects on another input carrying only audio while
+        // key1 is still active, so there is no no-media window. The ring still
+        // holds the codec hint, the recorded parameter sets and the audio
+        // metadata from key1.
+        register_live_ingest(&engine, "pipe-vloss", "key2", false, true).await;
+
+        let mut second = None;
+        for _ in 0..500 {
+            if let Some(current) = origin.served.borrow().get("pipe-vloss").cloned()
+                && current.generation == 2
+            {
+                second = Some(current);
+                break;
+            }
+            compio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let second = second.expect("audio-only generation replaced the video one");
+        assert!(first.is_closed(), "the video generation is closed");
+        for _ in 0..200 {
+            if first.viewers.get() == 0 {
+                break;
+            }
+            compio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(first.viewers.get(), 0, "its viewer detached");
+
+        let mut catalog = second
+            .probe
+            .consume()
+            .track("catalog.json")
+            .unwrap()
+            .subscribe(None)
+            .await
+            .unwrap();
+        let mut group = catalog.recv_group().await.unwrap().unwrap();
+        let frame = group.read_frame().await.unwrap().unwrap();
+        let catalog: hang::Catalog = hang::Catalog::from_slice(&frame.payload).unwrap();
+        assert!(
+            catalog.video.renditions.is_empty(),
+            "the replacement has no video track"
+        );
+        assert!(catalog.audio.renditions.contains_key(AUDIO_TRACK));
+    });
+}
+
+#[test]
+fn continuous_publication_does_not_starve_a_media_loss() {
+    let (origin, engine, tokio) = origin(8);
+    let ring = tokio.block_on(engine.get_or_create_pipeline("pipe-loss"));
+    ring.set_video_parameter_sets(PARAMETER_SETS.to_vec());
+    tokio.block_on(register_live_ingest(
+        &engine,
+        "pipe-loss",
+        "key",
+        true,
+        true,
+    ));
+
+    run(async {
+        push_audio(&ring, 0);
+        push_video_keyframe(&ring);
+        let loopback = Loopback::new().await;
+        let (broadcast, _session) = attach_viewer(&origin, &loopback, "pipe-loss").await;
+        let mut catalog = broadcast
+            .track("catalog.json")
+            .unwrap()
+            .subscribe(None)
+            .await
+            .unwrap();
+        assert!(catalog.recv_group().await.unwrap().is_some());
+
+        let first = origin
+            .served
+            .borrow()
+            .get("pipe-loss")
+            .cloned()
+            .expect("generation 1");
+        assert_eq!(first.generation, 1);
+        assert_eq!(first.viewers.get(), 1);
+
+        // The publisher disconnects. The ring keeps its codec hint, recorded
+        // parameter sets and audio metadata, and keeps publishing audio.
+        engine.unregister_ingest("pipe-loss").await;
+
+        let mut closed = false;
+        for pts in 1..=500 {
+            push_audio(&ring, pts);
+            if origin.served_generation("pipe-loss").is_none() && first.viewers.get() == 0 {
+                closed = true;
+                break;
+            }
+            compio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            closed,
+            "the absolute track-set deadline must fire under continuous publication"
+        );
+        assert_eq!(origin.served_generation("pipe-loss"), None);
+        assert!(first.is_closed(), "the stale generation is closed");
+        assert_eq!(first.viewers.get(), 0, "its viewer detached");
+        assert_eq!(origin.viewers("pipe-loss"), 0);
     });
 }
