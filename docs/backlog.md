@@ -18,7 +18,6 @@ items).
 - [Q-047 MoQ egress: IETF MOQT profiles](#q-047-protocol-opus-moq-egress-ietf-moqt-profiles)
 - [Q-049 silent SRT leaves](#q-049-resilience-opus-find-why-connected-srt-leaves-sent-nothing-under-host-overload)
 - [Q-066 SRT ingress test port race](#q-066-testing-sonnet-srt-multi-owner-test-port-can-join-a-foreign-reuseport-group)
-- [Q-067 optional Basic auth for HLS push](#q-067-protocol-opus-optional-basic-auth-for-hls-push)
 - [Q-070 MoQ ingest: IETF MOQT profiles](#q-070-protocol-opus-moq-ingest-ietf-moqt-profiles)
 - [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
@@ -287,21 +286,6 @@ items).
 - Gates: none until it flakes.
 - Status: open (Filed: 2026-10-16 by claude).
 
-### Q-067 [protocol] [opus] Optional Basic auth for HLS push
-- Goal: an encoder that must authenticate with a username and password (as
-  `http://user:pass@host/ingest/hls/KEY/index.m3u8`) can push, on top of the
-  stream key.
-- Why: HLS push authorizes by the stream key in the path alone
-  (`src/api/hls_ingest.rs`). A per-input push credential is new stored state:
-  a write-only field on the input (as pull `source_auth` is), its API
-  validation and redaction, and the input form.
-- Gates: an upload with the configured credentials is accepted and one
-  without (or with wrong ones) is refused with `401` before any body byte is
-  read; an input with no credential behaves as today.
-- Status: open (Filed: 2026-10-16 by claude, user request; TS and HEVC/H.264
-  fMP4 push, `ingestUrls.hls`, panic isolation and the PUT/POST harness gate
-  are done).
-
 ### Q-070 [protocol] [opus] MoQ ingest: IETF MOQT profiles
 - Goal: an IETF MOQT draft-18 publisher (MSF catalog, LOC objects) feeds a
   pipeline input through the existing MoQ listener, as moq-lite + hang
@@ -344,7 +328,7 @@ items).
   normal-path run (bytes and timing); a test that an ineligible pipeline
   (a stage, or a non-HLS output) falls back with the reason recorded.
 - Status: open (Filed: 2026-10-16 by claude, user question on passthrough;
-  after Q-067/Q-068).
+  after the HLS push and pull ingest work).
 
 ### Q-074 [performance] [opus] A rare multi-millisecond HLS ingest poll is bounded whatever its cause
 - Goal: a `hlsIngest` poll on the MEDIA executor never spends multiple
