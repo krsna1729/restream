@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use futures_util::stream::FuturesUnordered;
 use futures_util::{FutureExt, StreamExt};
+use moq_mux::catalog::CatalogFormat;
 use moq_net::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
@@ -322,6 +323,7 @@ async fn ingest<L: Lifecycle + Clone>(
     };
     *slot.borrow_mut() = Some(Ingest::new(lifecycle.clone(), admission, limits));
 
+    let preference = CatalogFormat::detect(broadcast.as_str());
     let broadcast = match compio::time::timeout(
         limits.catalog_timeout,
         consumer.routed_broadcast(broadcast.as_str()),
@@ -332,10 +334,11 @@ async fn ingest<L: Lifecycle + Clone>(
         Ok(Err(error)) => return SessionEnd::moq("broadcast", error),
         Ok(Ok(broadcast)) => broadcast,
     };
-    let catalog = match first_catalog(read_catalog(&broadcast), limits.catalog_timeout).await {
-        Ok(catalog) => catalog,
-        Err(end) => return end,
-    };
+    let catalog =
+        match first_catalog(read_catalog(&broadcast, preference), limits.catalog_timeout).await {
+            Ok(catalog) => catalog,
+            Err(end) => return end,
+        };
     let tracks = TrackSet::new(from_hang_catalog(&catalog));
     let (names, probe) = {
         let mut slot = slot.borrow_mut();
@@ -384,11 +387,12 @@ async fn ingest<L: Lifecycle + Clone>(
     }
 }
 
-/// Race the two catalog profiles on this session's owner, without spawning.
-/// A missing profile may fall back; malformed input fails promptly instead
-/// of waiting for an absent alternate profile until the catalog timeout.
+/// Honor an announced profile before trying its alternate; only unnamed
+/// broadcasts race. A missing profile may fall back, but malformed input
+/// fails promptly. All catalog work stays on this session's owner.
 async fn read_catalog(
     broadcast: &moq_net::broadcast::Consumer,
+    preference: Option<CatalogFormat>,
 ) -> moq_mux::Result<Option<hang::Catalog>> {
     let hang = async {
         Ok(hang::Catalog::<()>::subscribe(broadcast)
@@ -407,15 +411,29 @@ async fn read_catalog(
             .next()
             .await
     };
-    let mut hang = pin!(hang);
-    let mut msf = pin!(msf);
-    tokio::select! {
-        result = &mut hang => {
-            if missing_catalog(&result) { msf.await } else { result }
-        },
-        result = &mut msf => {
-            if missing_catalog(&result) { hang.await } else { result }
-        },
+    // An unnamed broadcast is a hang publisher (Restream's own convention);
+    // decide by profile, never by which catalog happens to arrive first, so a
+    // malformed catalog always fails the same way and a valid one is not lost
+    // to a scheduling race.
+    match preference.unwrap_or(CatalogFormat::Hang) {
+        CatalogFormat::Msf => {
+            let result = msf.await;
+            if missing_catalog(&result) {
+                hang.await
+            } else {
+                result
+            }
+        }
+        // `detect` only ever returns Hang or Msf; HangZ is an explicit opt-in
+        // that this ingest does not take, so it reads the plain track.
+        _ => {
+            let result = hang.await;
+            if missing_catalog(&result) {
+                msf.await
+            } else {
+                result
+            }
+        }
     }
 }
 

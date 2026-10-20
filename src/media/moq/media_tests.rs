@@ -65,7 +65,11 @@ fn loc_frames_are_moq_locs_and_frame_the_payload_in_place() {
         let at = buffer.payload().as_ptr();
         let ours = buffer.into_frame(us).unwrap();
         let decoded = moq_loc::decode(ours.clone()).unwrap();
-        assert_eq!(decoded.timescale, Some(1_000_000), "media time, not Unix time");
+        assert_eq!(
+            decoded.timescale,
+            Some(1_000_000),
+            "media time, not Unix time"
+        );
         assert_eq!(decoded.timestamp, us);
         assert_eq!(decoded.payload.as_ref(), payload);
         assert_eq!(

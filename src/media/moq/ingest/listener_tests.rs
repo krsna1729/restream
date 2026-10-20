@@ -126,9 +126,8 @@ fn publish_until(addr: SocketAddr, done: Arc<AtomicBool>) {
 /// off a char boundary (found by the `moq_ingest` fuzz target).
 const NON_ASCII_CODEC_CATALOG: &str = r#"{"video":{"renditions":{"video":{"codec":"avc1.4Ψ01e","codedWidth":64,"codedHeight":36,"container":{"kind":"legacy"}}}}}"#;
 
-/// Publish key `moq-key` with `catalog` as its raw `catalog.json`, until the
-/// listener closes the session.
-fn publish_raw_catalog(addr: SocketAddr, catalog: &'static str) {
+/// Publish a raw catalog until the listener closes the publisher session.
+fn publish_raw_catalog(addr: SocketAddr, broadcast_name: &str, catalog_name: &str, catalog: Bytes) {
     run(async move {
         let endpoint = transport::client_endpoint(AddressFamily::V4).await.unwrap();
         let tls = loopback_client_tls(transport::MOQ_ALPNS);
@@ -138,25 +137,19 @@ fn publish_raw_catalog(addr: SocketAddr, catalog: &'static str) {
         let (origin, origin_driver) =
             moq_net::origin::Producer::new(moq_net::origin::Config::default());
         compio::runtime::spawn(transport::run_driver(origin_driver)).detach();
-        let broadcast = origin.create_broadcast("moq-key").unwrap();
+        let broadcast = origin.create_broadcast(broadcast_name).unwrap();
         let track = broadcast
-            .create_track(
-                hang::Catalog::DEFAULT_NAME,
-                hang::Catalog::default_track_info(),
-            )
+            .create_track(catalog_name, hang::Catalog::default_track_info())
             .unwrap();
         let mut group = track.append_group().unwrap();
         group
-            .write_frame(
-                moq_net::Timestamp::now(),
-                Bytes::from_static(catalog.as_bytes()),
-            )
+            .write_frame(moq_net::Timestamp::now(), catalog)
             .unwrap();
         group.finish().unwrap();
         broadcast.announce(Default::default()).unwrap();
         let (session, driver) = moq_net::Client::new()
             .with_publisher(&origin)
-            .connect_lite(Instant::now(), session)
+            .connect(Instant::now(), session)
             .await
             .unwrap();
         compio::runtime::spawn(transport::run_driver(driver)).detach();
@@ -344,12 +337,19 @@ async fn a_publisher_feeds_a_moq_input_and_shutdown_joins_the_thread() {
 /// publisher. Before the fix hang panicked on this catalog: Compio's task
 /// boundary dropped the session, so the input was released as "the MoQ
 /// ingest listener stopped".
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_catalog_hang_cannot_parse_ends_only_that_publisher() {
-    let (engine, addr) = listen(4, "bad-catalog").await;
-    tokio::task::spawn_blocking(move || publish_raw_catalog(addr, NON_ASCII_CODEC_CATALOG))
-        .await
-        .unwrap();
+async fn assert_catalog_rejection_releases_only_its_publisher(
+    name: &str,
+    broadcast_name: &'static str,
+    catalog_name: &'static str,
+    catalog: Bytes,
+    expected_reason: &str,
+) {
+    let (engine, addr) = listen(4, name).await;
+    tokio::task::spawn_blocking(move || {
+        publish_raw_catalog(addr, broadcast_name, catalog_name, catalog)
+    })
+    .await
+    .unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let reason = loop {
         if input_bytes(&engine).await.is_none()
@@ -363,12 +363,7 @@ async fn a_catalog_hang_cannot_parse_ends_only_that_publisher() {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
-    // hang refuses the codec string (the vendored patch), not the session's
-    // panic boundary.
-    assert_eq!(
-        reason,
-        "catalog.json: json error: json: video.renditions.video.codec: invalid codec"
-    );
+    assert_eq!(reason, expected_reason);
 
     // The listener thread still serves the next publisher.
     let done = Arc::new(AtomicBool::new(false));
@@ -390,4 +385,51 @@ async fn a_catalog_hang_cannot_parse_ends_only_that_publisher() {
     done.store(true, Ordering::Release);
     publisher.await.unwrap();
     engine.shutdown_listeners();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_catalog_hang_cannot_parse_ends_only_that_publisher() {
+    assert_catalog_rejection_releases_only_its_publisher(
+        "bad-catalog",
+        "moq-key",
+        hang::Catalog::DEFAULT_NAME,
+        Bytes::from_static(NON_ASCII_CODEC_CATALOG.as_bytes()),
+        "catalog.json/MSF catalog: hang: json error: json: video.renditions.video.codec: invalid codec",
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_oversized_shared_init_msf_catalog_ends_only_that_publisher() {
+    let init_size = moq_msf::MAX_CATALOG_BYTES / moq_msf::MAX_TRACKS + 1;
+    let tracks: Vec<_> = (0..moq_msf::MAX_TRACKS)
+        .map(|index| {
+            serde_json::json!({
+                "name": format!("audio-{index}"),
+                "packaging": "loc",
+                "role": "audio",
+                "codec": "mp4a.40.2",
+                "initRef": "shared",
+            })
+        })
+        .collect();
+    let catalog = serde_json::to_vec(&serde_json::json!({
+        "version": "draft-01",
+        "initDataList": [{"id": "shared", "type": "inline", "data": "X".repeat(init_size)}],
+        "tracks": tracks,
+    }))
+    .unwrap();
+    assert!(catalog.len() < moq_msf::MAX_CATALOG_BYTES);
+    assert!(init_size * moq_msf::MAX_TRACKS > moq_msf::MAX_CATALOG_BYTES);
+    // The transport sees only ~0.5 MiB. The upstream parser must reject the
+    // >32 MiB resolved total before cloning initRef payloads or converting
+    // AAC: without that guard this would fail later as malformed init data.
+    assert_catalog_rejection_releases_only_its_publisher(
+        "oversized-shared-init",
+        "moq-key.msf",
+        moq_msf::DEFAULT_NAME,
+        Bytes::from(catalog),
+        "catalog.json/MSF catalog: msf: failed to parse MSF catalog frame",
+    )
+    .await;
 }

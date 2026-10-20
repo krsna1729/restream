@@ -500,7 +500,7 @@ other scheme is `400`:
 | `srt://` | SRT, MPEG-TS | `srt` |
 | `hls://` | Local in-memory HLS segmenter | `hls` |
 | `http://`, `https://` | HLS HTTP PUT upload | `hls` |
-| `moqt://` | MoQ publish to a relay (moq-lite) | `moq` |
+| `moqt://` | MoQ publish to a relay (moq-lite or IETF MOQT) | `moq` |
 | `sink://` | Fabric sink: counts and discards media | `sink` |
 | `pipeline://` | In-process recirculation into another pipeline's input | `pipeline` |
 
@@ -511,13 +511,15 @@ other scheme is `400`:
 - SRT `latency` is the proposed TSBPD delay in milliseconds. Values outside
   `20..=8000` or non-integers are `400`; see
   [SRT egress URL parameters](configuration.md#recognized-srt-egress-url-parameters).
-- `moqt://host[:port][/path][?broadcast=&ca=&insecure=]` (`parse_moq_url` in
-  `src/media/moq/egress/url.rs`): the port defaults to 443. `broadcast` names
-  the broadcast (default: the pipeline id), `ca` names a PEM file of extra
-  trusted CAs, `insecure=1|true|0|false` skips certificate checks. Other
-  query pairs (for example `?jwt=`) go to the relay in the session path. A
-  user name or password in the URL, an empty `broadcast` or `ca`, or another
-  `insecure` value is `400`.
+- `moqt://host[:port][/path][?broadcast=&ca=&insecure=&version=]` (`parse_moq_url`
+  in `src/media/moq/egress/url.rs`): the port defaults to 443. `broadcast`
+  names the broadcast (default: pipeline id), `ca` names a PEM file of extra
+  trusted CAs, and `insecure=1|true|0|false` skips certificate checks.
+  `version=moqt-19` or another supported MoQ ALPN offers only that version;
+  omission offers every supported version. Those four keys stay local;
+  other query pairs (for example `?jwt=`) remain in the relay session path.
+  Userinfo, an empty `broadcast` or `ca`, an invalid `insecure` value or
+  an unknown `version` is `400`.
 - HTTP/HTTPS HLS upload shares one local segmenter per pipeline. Each output
   starts at the newest segment, PUTs each new segment, then PUTs a playlist
   of the last three acknowledged segments (media sequence from 0 per

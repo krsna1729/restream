@@ -2336,8 +2336,6 @@ dependencies = [
 [[package]]
 name = "moq-msf"
 version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8443a5aa0eab90c261afa45e565b2ff3863ec61c8f8beccb0779968427dc7914"
 dependencies = [
  "serde",
  "serde_json",
@@ -3287,6 +3285,7 @@ dependencies = [
  "md-5",
  "memchr",
  "moq-loc",
+ "moq-msf",
  "moq-mux",
  "moq-net",
  "percent-encoding",

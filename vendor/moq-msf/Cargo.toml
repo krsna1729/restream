@@ -1,0 +1,26 @@
+# Restream vendor package: official moq-msf 0.5.1 with bounded catalog parsing.
+# See RESTREAM_PATCHES.md for provenance and the local patch.
+[package]
+name = "moq-msf"
+version = "0.5.1"
+edition = "2024"
+rust-version = "1.91"
+authors = ["Luke Curley <kixelated@gmail.com>"]
+description = "MOQT Streaming Format (MSF) catalog types"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/moq-dev/moq"
+resolver = "2"
+build = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+
+[lib]
+name = "moq_msf"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_with = "3"

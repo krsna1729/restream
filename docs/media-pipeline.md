@@ -780,10 +780,11 @@ The diagram shows the preview path from the ring to the browser.
 
 ## MoQ
 
-MoQ uses moq-lite (`moq-lite-03` to `moq-lite-06`) with the hang media format:
-a `catalog.json` track plus one track per rendition. The crates are `moq-net`
-and `hang` on Compio QUIC (`Cargo.toml`). One listener serves both publishers
-(ingest) and viewers (origin).
+MoQ negotiates moq-lite (`moq-lite-03` to `moq-lite-06`) or IETF MOQT
+drafts 14–22 using `moq-net` on Compio QUIC. One listener serves publishers
+(ingest) and viewers (origin). `moq-mux` publishes both hang `catalog.json`
+(plus its compressed form) and MSF `catalog`; media tracks use LOC.
+The vendored `moq-net` `unsend` feature preserves the `!Send` transport owner.
 
 | Setting | Default | Notes |
 |---|---|---|
@@ -807,7 +808,7 @@ publisher, applies the probe and records the disconnect.
 ```mermaid
 flowchart LR
     Pub["publisher<br/>native QUIC or WebTransport"] --> Accept["transport::accept<br/>ALPN, CONNECT (moq-ingest)"]
-    Accept --> Setup["Server::accept_request_lite<br/>moq-lite SETUP"]
+    Accept --> Setup["Server::accept_request<br/>moq-lite or IETF SETUP"]
     Setup --> Route{"token or<br/>subscriber role?"}
     Route -->|yes| Origin["MoQ origin"]
     Route -->|no| Session["ingest session<br/>announce, catalog"]
@@ -820,36 +821,45 @@ flowchart LR
 
 The diagram shows a publisher connection from QUIC accept to the ring.
 
-- **Transport.** The ALPN picks the wire: `moq-lite-06` to `moq-lite-03` is
-  native QUIC; `h3` is WebTransport, whose CONNECT must offer a moq-lite
-  subprotocol (else HTTP `400` and close `0x10b`). A CONNECT that fails to
-  decode closes with `0x10e`. HTTP/3 frames and capsules are bounded to
-  64 KiB. The transport handshake and the moq-lite SETUP each have 10 s
-  (`src/media/moq/transport/`).
+- **Transport.** The ALPN picks the native QUIC wire: moq-lite or
+  `moqt-14` through `moqt-22`. `h3` is WebTransport, whose CONNECT must offer
+  a supported MoQ subprotocol (else HTTP `400` and close `0x10b`). A CONNECT
+  that fails to decode closes with `0x10e`. HTTP/3 frames and capsules are
+  bounded to 64 KiB. The transport handshake and SETUP each have 10 s
+  (`src/media/moq/transport/`). Library drivers run on the owner, not Tokio.
 - **Routing.** A connection with a non-empty `token` (CONNECT query or SETUP
   path query) or the subscriber role goes to the origin. Any other is a
   publisher.
 - **Stream key.** The last segment of the connection path, without the query.
   When the path is empty, the first announced broadcast names it (a trailing
-  `.hang` is removed). The key is checked under the `moq-publish` scope and
+  `.hang` or `.msf` is removed). The key is checked under the `moq-publish` scope and
   registers an input attempt as protocol `moq`. An unknown key or ban closes
   the session as unauthorized; a held input as duplicate.
+- **Catalogs.** A `.msf` broadcast prefers MSF, and `.hang` prefers hang;
+  other names race both subscriptions on the owner, without spawned tasks.
+  A missing profile falls back; malformed catalogs fail promptly. The
+  upstream MSF consumer maps to the shared hang model before selection.
+  Local `moq-msf` deserializer bounds apply before shared initialization data
+  expands: 32 MiB serialized input, 64 tracks/init entries and 32 MiB aggregate
+  resolved init strings. No second hand-written catalog parser is used.
 - **Tracks.** The first ranked H.264 or H.265 rendition becomes video; up to
   eight AAC renditions become audio tracks in catalog order. Others are logged
   as `restream.moq.ingest.track_rejected`. A catalog with no usable track ends
   the session. Only the first catalog is read; a publisher that changes
   renditions must reconnect.
-- **Frames.** A legacy frame is a QUIC varint µs timestamp and the payload.
-  Video becomes Raw Annex B with the last parameter sets added before a
-  keyframe that lacks them; AAC gets an ADTS header. hang carries only
-  presentation time, so DTS is derived using the catalog `jitter`. CMAF tracks
-  use the HLS fMP4 demuxer and keep real decode times.
+- **Frames.** LOC carries a property block and codec payload; upstream
+  `moq_loc::decode` slices without copying and honors per-frame Timescale.
+  Legacy hang timestamps and CMAF remain accepted. Empty duration or
+  discontinuity markers are skipped, not counted as malformed. Video becomes
+  Raw Annex B with missing keyframe parameter sets restored; AAC gets ADTS.
+  LOC/legacy carry presentation time, so DTS uses the catalog `jitter`;
+  CMAF uses the HLS fMP4 demuxer and retains real decode times.
 - **Publication.** The same path as SRT after demux: input gate, standby GOP,
   timestamp mapping, ring. Packets are held (4 MiB, 2 s) while the probe
   resizes the ring.
 - **Limits.** Each ends the session: no announcement, broadcast or catalog
   within 10 s each; no frame for 20 s; a frame over 16 MiB; 64 malformed
-  frames in a row (a single bad frame is dropped). A catalog that hang
+  frames in a row (a single bad frame is dropped). A catalog that hang/MSF
   refuses, or whose parser panics, ends the session as a protocol violation.
   Parser panics are counted as contained; the input is released with that
   reason (`src/media/moq/ingest/session.rs`).
@@ -859,7 +869,7 @@ The diagram shows a publisher connection from QUIC accept to the ring.
 ### MoQ origin
 
 The same listener serves a pipeline straight to viewers: the dashboard player
-over WebTransport, or a moq-lite client over native QUIC.
+over WebTransport, or a moq-lite/IETF client over native QUIC.
 
 ```mermaid
 sequenceDiagram
@@ -872,7 +882,7 @@ sequenceDiagram
     API-->>UI: token, url, broadcast, expiresAt, certificateSha256
     UI->>L: WebTransport CONNECT url?token=… (normal TLS checks)
     Note over UI,L: on failure, retry with serverCertificateHashes = certificateSha256
-    L->>L: moq-lite SETUP (accept_request_lite)
+    L->>L: MoQ SETUP (accept_request)
     L->>O: admit: verify token, take ViewerSlots slot
     O->>O: first viewer starts the broadcast pump
     R-->>O: RingPublisher reads batches, HangBroadcast writes groups
@@ -919,26 +929,30 @@ Restream does not generate a certificate (`src/media/moq/tls.rs`).
 
 ### MoQ egress
 
-A `moqt://` output publishes the pipeline to a moq-lite relay over native
-QUIC.
+A `moqt://` output publishes the pipeline to a moq-lite or IETF relay over
+native QUIC. The pinned IETF interop peer is moq-relay 0.17.7 on `moqt-19`;
+MediaMTX's incompatible dialect is tracked separately in
+[Q-091](backlog.md#q-091-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop).
 
 ```mermaid
 flowchart LR
     Ring[("output RingBuffer")] --> Backend["MoqShardBackend<br/>(egress-shard-N)"]
     Backend --> Engine["MoqEngine"]
-    Engine --> Convert["MediaConverter<br/>Raw or FLV to hang frames"]
-    Convert --> Publish["RingPublisher<br/>catalog on config change"]
-    Publish --> Broadcast["HangBroadcast<br/>GOP groups, newest only"]
-    Broadcast --> Link["spawn_link<br/>Client::connect_lite"]
-    Link --> Relay["moq-lite relay"]
+    Engine --> Convert["MediaConverter<br/>Raw or FLV to LOC payload buffers"]
+    Convert --> Publish["RingPublisher<br/>dual catalogs on config change"]
+    Publish --> Broadcast["HangBroadcast<br/>moq-mux GOP groups, budgeted cache"]
+    Broadcast --> Link["spawn_link<br/>Client::connect"]
+    Link --> Relay["moq-lite or IETF relay"]
 ```
 
 The diagram shows one MoQ output from its ring to the relay.
 
-- **URL.** `moqt://HOST[:PORT][/PATH][?broadcast=NAME&ca=FILE&insecure=1]`,
-  default port 443, no userinfo (`src/media/moq/egress/url.rs`). `PATH` and
-  every other query pair form the session path sent to the relay.
-  `broadcast` defaults to the pipeline id.
+- **URL.** `moqt://HOST[:PORT][/PATH][?broadcast=NAME&ca=FILE&insecure=1&version=moqt-19]`,
+  default port 443, no userinfo (`src/media/moq/egress/url.rs`). `broadcast`,
+  `ca`, `insecure` and `version` are Restream-only keys; other query pairs
+  remain in the relay session path. `broadcast` defaults to the pipeline id.
+  Without `version`, offer all supported MoQ ALPNs; a known ALPN pins one,
+  while an unknown value is rejected.
 - **Thread.** Each output is a leaf on a MoQ fabric shard (`egress-shard-N`); its
   Compio runtime owns the connection and the session
   (`src/media/engine_moq_egress_fabric.rs`). Startup metadata and the `ca`
@@ -946,12 +960,21 @@ The diagram shows one MoQ output from its ring to the relay.
 - **Media.** Video (H.264 or H.265) and the first AAC track. The startup
   snapshot gives the catalog its `avcC` or `hvcC` record and AAC config. Raw
   video drops in-band parameter sets and gets 4-byte NAL lengths; FLV video is
-  copied. Raw ADTS audio is split per AAC frame. A changed configuration
-  publishes a new `catalog.json` before the next frame. Video waits for its
-  first configuration and keyframe.
-- **Groups.** A video group is one GOP. An audio group spans about 1 s and
-  restarts when PTS goes below its start. Media tracks keep only the newest
-  group, so a slow relay skips old groups. A ring overrun resyncs the leaf.
+  copied once into converter headroom. Raw ADTS audio is split per AAC frame.
+  A configuration change publishes both catalogs before the next frame.
+  Video waits for its first configuration and keyframe.
+- **Framing.** Finalize the LOC header in place, including an explicit
+  1,000,000 Timescale for application media time (LOC-04 §2.3.1.1–2);
+  omitting it would mean Unix wall time. One `Bytes` allocation is shared
+  across subscribers. Empty markers follow the same media-time contract.
+- **Groups and retention.** `moq-mux::container::Producer` manages GOP video
+  groups and roughly 1 s audio groups, with buffer duration zero. A rewind
+  behind the closed-group live edge emits a discontinuity on both tracks
+  and advances one shared offset; B-frame reordering within a GOP is kept.
+  A ring overrun resyncs the leaf. `max_age(0)` makes slow subscribers skip
+  old groups; it does not free them. Every broadcast's byte budget follows
+  twice its tracks' last complete groups (about two GOPs); moq-net always
+  retains each live track's newest group.
 - **Failure.** A refused or failed connection or a relay close ends the output
   and the retry policy restarts it. A removed output finishes the broadcast,
   closes the session for a bounded time, then closes QUIC with code 0.
