@@ -104,20 +104,30 @@ impl EgressManager {
     }
 
     /// The placement shard a NEW output goes to, skipping dead shards. When
-    /// every placement shard is dead it places as if none were, so the
-    /// dispatch fails on the closed channel instead of going nowhere.
+    /// every placement shard is dead it uses a live shard outside the
+    /// placement range: a shrink leaves healthy tail shards serving existing
+    /// outputs, and refusing their capacity would fail every retry. When no
+    /// shard is live it places as if none were, so the dispatch fails on the
+    /// closed channel instead of going nowhere.
     pub fn assign_output(&self, output_id: &OutputId) -> ShardId {
         let bytes = output_id.as_str().as_bytes();
-        let live = |shard_index: &u32| {
-            !self
-                .dead_shards
-                .get(*shard_index as usize)
-                .copied()
-                .unwrap_or(false)
-        };
-        let any_live = (0..self.placement.get()).any(|shard_index| live(&shard_index));
+        let shards = self.config.shard_count.get();
+        let placement = self.placement.get();
+        self.pick_shard(bytes, 0..placement, true)
+            .or_else(|| self.pick_shard(bytes, placement..shards, true))
+            .or_else(|| self.pick_shard(bytes, 0..placement, false))
+            .map_or(ShardId::new(0), ShardId::new)
+    }
+
+    /// Applies the placement policy to one candidate range.
+    fn pick_shard(
+        &self,
+        bytes: &[u8],
+        range: std::ops::Range<u32>,
+        only_live: bool,
+    ) -> Option<u32> {
         let candidates =
-            (0..self.placement.get()).filter(|shard_index| !any_live || live(shard_index));
+            range.filter(|shard_index| !only_live || !self.shard_is_dead(*shard_index));
         match self.config.placement_policy {
             PlacementPolicy::Rendezvous => rendezvous(bytes, candidates),
             PlacementPolicy::LeastLoaded => candidates.min_by_key(|&shard_index| {
@@ -130,7 +140,13 @@ impl EgressManager {
                 )
             }),
         }
-        .map_or(ShardId::new(0), ShardId::new)
+    }
+
+    fn shard_is_dead(&self, shard_index: u32) -> bool {
+        self.dead_shards
+            .get(shard_index as usize)
+            .copied()
+            .unwrap_or(false)
     }
 
     pub fn assign_spec(&self, spec: &OutputSpec) -> ShardId {
