@@ -22,13 +22,13 @@ items).
 - [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
 - [Q-087 separate-rendition timeline breaks](#q-087-protocol-sonnet-align-separate-renditions-on-timeline-breaks-not-on-raw-proximity)
-- [Q-089 MoQ origin track-set changes](#q-089-protocol-sonnet-the-moq-origin-follows-a-track-set-change-while-served)
 - [Q-091 SRT Backup replays the lost prefix](#q-091-protocol-opus-srt-backup-failover-replays-the-lost-prefix)
 - [Q-092 no descendants of a dropped dependency](#q-092-resilience-opus-never-emit-descendants-of-a-dropped-dependency-bearing-unit)
 - [Q-094 sideband media events](#q-094-protocol-opus-first-class-sideband-media-events)
 - [Q-095 stream inspector](#q-095-observability-sonnet-stream-inspector-gop-health-skew-and-scte)
 - [Q-096 GRO and arrival timestamps](#q-096-performance-sonnet-gro-and-arrival-timestamps-in-the-reference-srt-path)
 - [Q-097 MediaMTX MoQ dialect interoperability](#q-097-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop)
+- [Q-098 same-session track removal](#q-098-protocol-sonnet-moq-origin-observes-same-session-track-removal)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -456,18 +456,7 @@ items).
   audio again.
 - Status: open (Filed: 2026-10-18 by claude, from the #364 review NITs).
 
-### Q-089 [protocol] [sonnet] The MoQ origin follows a track-set change while served
-- Goal: a pipeline whose media gains or loses video or audio while viewers
-  watch it over MoQ republishes its broadcast with the new track set, so
-  current viewers do not keep the stale one. A served broadcast's track set
-  is fixed when its first viewer starts it (`origin::start`); a pipeline
-  with no media is refused (#371).
-- Contract: a `Served` generation per pipeline, so viewers of a replaced
-  broadcast detach from their own generation, and the replacement closes the
-  old broadcast.
-- Gates: an origin test that switches a ring from audio-only to audio and
-  video while a viewer is attached, and the viewer then receives video.
-- Status: open (Filed: 2026-10-18 by claude, from the #371 review).
+
 
 ### Q-091 [protocol] [opus] SRT Backup failover replays the lost prefix
 
@@ -600,3 +589,26 @@ items).
     describes both forms. Revisit against an unmodified upstream release
     with these contracts aligned; then require both directions and media
     read-back before re-enabling the MediaMTX gate.
+
+### Q-098 [protocol] [sonnet] MoQ origin observes same-session track removal
+
+- Goal: while a broadcast is served, the MoQ origin notices a video or audio
+  track removed within one SRT or PMT-updated input session and replaces the
+  generation with the new track set instead of keeping the retained ring
+  configuration as if the track were still present.
+- Why: the origin takes per-track presence from the ring's current track set,
+  but that set only shrinks when the producer reports a smaller set. SRT
+  reports only its first probe and does not report a later track removal;
+  the MPEG-TS demux replaces its track set on a PMT update while the cached
+  ingest metadata can retain a removed track. A same-session removal
+  therefore leaves a stale video/audio rendition in the served catalog until
+  a reconnect or total loss. Documented as a limitation in the Q-089 change;
+  this item closes it.
+- Sources: `src/media/srt/ingress_media.rs:277-281` (first-probe-only track
+  report); `src/media/mpegts/demux.rs:589-597` (PMT replaces the demux track
+  set, cached ingest metadata can retain a removed track).
+- Gates: an origin/ingest test that removes a video track within one SRT
+  session and asserts the served generation is replaced and its catalog no
+  longer carries video, with no retained-configuration masking.
+- Status: open (Filed: 2026-10-21 by MoqOriginGen, from the Q-089
+  retained-configuration limitation).

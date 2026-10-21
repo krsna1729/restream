@@ -8,36 +8,53 @@
 //! completes the handshake publishing the pipeline's broadcast and drives
 //! the session until the viewer leaves.
 //!
-//! Each served pipeline has one broadcast (named by the pipeline id) on its
-//! own moq-net origin, fed from the pipeline's source ring by one local
-//! pump task: the ring producer's publication wake reaches it over a
-//! one-slot channel, so it reads each unit once whatever the audience.
-//! moq-net fans the frames out as shared `Bytes`, and the origin keeps
-//! about two GOPs ([`super::budget`]). The broadcast stops with its last
-//! viewer.
+//! Each served pipeline has one *generation*: a broadcast (named by the
+//! pipeline id) on its own moq-net origin, fed from the pipeline's source
+//! ring by one local pump task: the ring producer's publication wake reaches
+//! it over a one-slot channel, so it reads each unit once whatever the
+//! audience. moq-net fans the frames out as shared `Bytes`, and the origin
+//! keeps about two GOPs ([`super::budget`]).
+//!
+//! A generation's track set is fixed. A watcher on the listener runtime
+//! re-resolves the pipeline's current track set when the ring's track
+//! metadata changes and on an absolute one-second deadline (a publication-heavy
+//! stream cannot push it back). Track presence is the ring's current track set;
+//! the selected ingest and its disconnect record only detect total media loss.
+//! Codec configuration identity comes from the retained ring/catalog. When the
+//! set differs, the origin publishes a fresh broadcast as the next generation,
+//! closes the old generation (ending its viewers) and installs the new one as
+//! current. Viewers keep the generation they started on; a generation stops
+//! with its last viewer, while a replacement with no viewers stays current for
+//! the next viewer to join. A same-session per-track removal that leaves the
+//! ring's retained configuration in place is not detected (SRT reports only its
+//! first probe; PMT updates can retain removed tracks), so a served generation
+//! can keep a track the source stopped.
 
 pub(crate) mod token;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::pin::pin;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use futures_util::future::select;
+use futures_util::future::{Either, select};
 use moq_net::origin;
 use moq_net::server::Handshake;
+use tokio_util::sync::CancellationToken;
 
 use crate::media::egress::feed::ReadBudget;
 use crate::media::egress::journal::{FeedEpoch, RingFeed};
 use crate::media::engine::MediaEngine;
+use crate::media::metadata::AudioMeta;
 use crate::media::ring_buffer::{PublishSubscribers, PublishWake};
 
 use super::egress::media::MediaConverter;
 use super::egress::publish::{HangBroadcast, Pump, RingPublisher, live_start};
 use super::egress::{MoqPublishStartup, publish_startup};
+use super::media::VideoCodec;
 use super::transport::{self, Accepted};
 
 pub(crate) use token::TokenError;
@@ -47,6 +64,14 @@ const PUMP_BATCH_UNITS: usize = 64;
 const PUMP_BATCH_BYTES: usize = 1 << 20;
 /// Application close code (moq-net `App`) for a full origin.
 const ORIGIN_FULL_CODE: u16 = 1;
+/// How often a served generation re-resolves its pipeline's track set when
+/// nothing wakes it first. Ring metadata changes wake the watcher; a media
+/// loss that only the engine knows (a disconnect leaves no ring event) is
+/// found by this bounded check.
+const TRACK_SET_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+/// Let ring metadata updates that arrive together (codec hint, configuration,
+/// first packet) coalesce before one re-resolution.
+const TRACK_SET_SETTLE: Duration = Duration::from_millis(50);
 
 /// Why a viewer was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,32 +201,118 @@ impl OriginGrant {
     }
 }
 
-/// One served pipeline: its moq-net origin and the pump task.
+/// What a served broadcast publishes: the tracks present and the codec
+/// configuration identity the existing media model uses (a video record's
+/// description, an audio track's AudioSpecificConfig), so a change in any of
+/// them starts a new generation rather than mutating the served catalog's
+/// track list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TrackSet {
+    video: Option<VideoIdentity>,
+    audio: Option<AudioIdentity>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VideoIdentity {
+    codec: VideoCodec,
+    description: Option<bytes::Bytes>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AudioIdentity {
+    track_index: u32,
+    sample_rate: u32,
+    asc: Option<bytes::Bytes>,
+}
+
+impl TrackSet {
+    fn of(startup: &MoqPublishStartup) -> Self {
+        Self {
+            video: startup.video.as_ref().map(|video| VideoIdentity {
+                codec: video.codec,
+                description: video
+                    .config
+                    .as_ref()
+                    .and_then(|config| config.description.clone()),
+            }),
+            audio: startup.audio.as_ref().map(|audio| AudioIdentity {
+                track_index: audio.track_index,
+                sample_rate: audio.config.sample_rate,
+                asc: audio.config.asc.clone(),
+            }),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.video.is_none() && self.audio.is_none()
+    }
+}
+
+/// One served generation: a moq-net origin and the pump task that feed a
+/// broadcast with one fixed track set. A track-set change replaces it with a
+/// new generation; viewers stay on theirs and are closed with it.
 struct Served {
     origin: origin::Producer,
     viewers: Cell<usize>,
-    /// Pump + origin driver; dropping it stops the broadcast.
-    _task: compio::runtime::JoinHandle<()>,
+    generation: u64,
+    track_set: TrackSet,
+    /// Wakes every viewer of this generation when it closes.
+    closed: CancellationToken,
+    /// Pump + origin driver; taking it stops the broadcast.
+    task: RefCell<Option<compio::runtime::JoinHandle<()>>>,
+    /// A handle to the published broadcast so a test can read the catalog
+    /// and media of a generation with no attached viewer.
+    #[cfg(test)]
+    probe: moq_net::broadcast::Producer,
+}
+
+impl Served {
+    /// Close the generation: end every viewer session and drop the broadcast.
+    /// Idempotent, and also run when the last handle drops. The watcher exits
+    /// on `closed`.
+    fn close(&self) {
+        self.closed.cancel();
+        drop(self.task.borrow_mut().take());
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed.is_cancelled()
+            || self
+                .task
+                .borrow()
+                .as_ref()
+                .is_none_or(compio::runtime::JoinHandle::is_finished)
+    }
+}
+
+impl Drop for Served {
+    fn drop(&mut self) {
+        self.close();
+    }
 }
 
 pub(crate) struct Origin {
     engine: Arc<MediaEngine>,
-    tokio: tokio::runtime::Handle,
     slots: ViewerSlots,
+    /// The current generation of each served pipeline. A replaced generation
+    /// stays alive only through its viewers' `Rc`s, and closes with them.
     served: RefCell<HashMap<String, Rc<Served>>>,
+    /// Serializes attaches and track-set re-resolutions, whose pipeline
+    /// lookup yields: two racing viewers must not replace each other with
+    /// stale startup snapshots.
+    attach_lock: tokio::sync::Mutex<()>,
+    /// Generation numbers handed out, never reused.
+    generations: Cell<u64>,
 }
 
 impl Origin {
-    pub(crate) fn new(
-        engine: Arc<MediaEngine>,
-        tokio: tokio::runtime::Handle,
-        max_viewers: usize,
-    ) -> Rc<Self> {
+    pub(crate) fn new(engine: Arc<MediaEngine>, max_viewers: usize) -> Rc<Self> {
         Rc::new(Self {
             engine,
-            tokio,
             slots: ViewerSlots::new(max_viewers),
             served: RefCell::default(),
+            attach_lock: tokio::sync::Mutex::new(()),
+            generations: Cell::new(0),
         })
     }
 
@@ -246,68 +357,194 @@ impl Origin {
                 return;
             }
         };
-        // Detaches on every exit, including cancellation at shutdown.
+        // Detaches on every exit, including cancellation at shutdown, from
+        // this generation only.
         let _viewer = Viewer {
             origin: self.clone(),
             pipeline_id: pipeline_id.clone(),
+            served: served.clone(),
         };
-        let (_session, driver) = match handshake.with_publisher(&served.origin).ok().await {
+        let Some(accepted) = Self::await_handshake(
+            handshake.with_publisher(&served.origin).ok(),
+            &served.closed,
+        )
+        .await
+        else {
+            tracing::debug!(
+                pipeline_id = pipeline_id.as_str(),
+                generation = served.generation,
+                "MoQ viewer generation closed during the handshake"
+            );
+            drop(grant);
+            return;
+        };
+        let (_session, driver) = match accepted {
             Ok(accepted) => accepted,
             Err(error) => {
                 tracing::debug!(pipeline_id = pipeline_id.as_str(), %error, "MoQ viewer handshake failed");
                 return;
             }
         };
-        let error = transport::run_driver(driver).await;
+        // A replaced generation closes its viewers; a viewer leaving first
+        // is the ordinary end.
+        let error = {
+            let driver = pin!(transport::run_driver(driver));
+            let closed = pin!(served.closed.cancelled());
+            match select(driver, closed).await {
+                Either::Left((error, _)) => error,
+                Either::Right(((), _driver)) => {
+                    tracing::debug!(
+                        pipeline_id = pipeline_id.as_str(),
+                        generation = served.generation,
+                        "MoQ viewer generation closed"
+                    );
+                    drop(grant);
+                    return;
+                }
+            }
+        };
         tracing::debug!(pipeline_id = pipeline_id.as_str(), %error, "MoQ viewer left");
         drop(grant);
     }
 
-    /// The pipeline's served broadcast, started for its first viewer. A
-    /// pipeline the engine does not know (deleted after the token was
-    /// minted) is refused rather than given a new ring.
+    /// Complete the paused handshake, but abandon it when the generation
+    /// closes. A legacy SETUP write can stay blocked on flow control, so a
+    /// replacement must release the viewer and its admission slot without
+    /// waiting for `ok()` to finish.
+    async fn await_handshake<T>(
+        handshake: impl Future<Output = T>,
+        closed: &CancellationToken,
+    ) -> Option<T> {
+        let handshake = pin!(handshake);
+        let closed = pin!(closed.cancelled());
+        match select(handshake, closed).await {
+            Either::Left((value, _)) => Some(value),
+            Either::Right(((), _handshake)) => None,
+        }
+    }
+
+    /// The pipeline's served generation, attaching this viewer to it. Every
+    /// attach re-resolves the pipeline's track set; when it differs from the
+    /// current generation's, the origin starts a new generation with a fresh
+    /// broadcast and closes the old one. A pipeline the engine does not know
+    /// (deleted after the token was minted) is refused rather than given a
+    /// new ring.
     async fn attach(self: Rc<Self>, pipeline_id: &str) -> Result<Rc<Served>, String> {
-        if let Some(served) = self.attached(pipeline_id) {
-            return Ok(served);
-        }
-        let engine = self.engine.clone();
-        let id = pipeline_id.to_string();
-        let found = self
-            .tokio
-            .spawn(async move {
-                let ring = engine.ingests.pipelines.read().await.get(&id).cloned()?;
-                let startup = publish_startup(&engine, &id, &ring).await;
-                Some((ring, startup))
-            })
+        let _guard = self.attach_lock.lock().await;
+        let (ring, startup) = resolve_pipeline(&self.engine, pipeline_id)
             .await
-            .map_err(|error| format!("pipeline lookup failed: {error}"))?;
-        let (ring, startup) = found.ok_or("no such pipeline")?;
-        // Another viewer may have started it while this one waited.
-        if let Some(served) = self.attached(pipeline_id) {
-            return Ok(served);
+            .ok_or("no such pipeline")?;
+        let track_set = TrackSet::of(&startup);
+        let current = self.served.borrow().get(pipeline_id).cloned();
+        if track_set.is_empty() {
+            // The pipeline lost all media: refuse, and never keep the stale
+            // broadcast serving.
+            if let Some(old) = self.served.borrow_mut().remove(pipeline_id) {
+                old.close();
+            }
+            return Err("the pipeline has no media yet".to_string());
         }
-        let served = Rc::new(start(pipeline_id, ring, &startup)?);
-        self.served
+        if let Some(current) = current
+            && current.track_set == track_set
+            && !current.is_closed()
+        {
+            current.viewers.set(current.viewers.get() + 1);
+            return Ok(current);
+        }
+        self.install(pipeline_id, ring, &startup, track_set, 1)
+    }
+
+    /// Re-resolve a generation's track set after its ring or the pipeline's
+    /// media changed. A difference installs the next generation and closes
+    /// this one; losing every track closes it without a replacement.
+    async fn revalidate(self: Rc<Self>, pipeline_id: &str, generation: u64) {
+        let _guard = self.attach_lock.lock().await;
+        let Some(current) = self.served.borrow().get(pipeline_id).cloned() else {
+            return;
+        };
+        if current.generation != generation || current.is_closed() {
+            return;
+        }
+        let Some((ring, startup)) = resolve_pipeline(&self.engine, pipeline_id).await else {
+            // The pipeline was deleted while served.
+            if self.served.borrow_mut().remove(pipeline_id).is_some() {
+                current.close();
+            }
+            return;
+        };
+        let track_set = TrackSet::of(&startup);
+        if track_set.is_empty() {
+            if self.served.borrow_mut().remove(pipeline_id).is_some() {
+                current.close();
+                tracing::info!(
+                    pipeline_id,
+                    generation,
+                    "MoQ origin closed the generation: the pipeline lost all media"
+                );
+            }
+            return;
+        }
+        if track_set == current.track_set {
+            return;
+        }
+        match self.install(pipeline_id, ring, &startup, track_set, 0) {
+            Ok(served) => tracing::info!(
+                pipeline_id,
+                from = generation,
+                to = served.generation,
+                "MoQ origin replaced the served generation"
+            ),
+            Err(reason) => tracing::warn!(
+                pipeline_id,
+                generation,
+                %reason,
+                "MoQ origin could not replace the served generation"
+            ),
+        }
+    }
+
+    /// Publish `startup`'s broadcast as the next generation and install it as
+    /// current, closing the generation it replaces. `viewers` is the number
+    /// the caller already attaches (0 for a watcher-triggered replacement).
+    fn install(
+        self: &Rc<Self>,
+        pipeline_id: &str,
+        ring: Arc<crate::media::ring_buffer::RingBuffer>,
+        startup: &MoqPublishStartup,
+        track_set: TrackSet,
+        viewers: usize,
+    ) -> Result<Rc<Served>, String> {
+        let generation = self.generations.get() + 1;
+        let served = match start(
+            pipeline_id,
+            ring,
+            startup,
+            track_set,
+            generation,
+            viewers,
+            Rc::downgrade(self),
+        ) {
+            Ok(served) => Rc::new(served),
+            Err(reason) => {
+                // The old generation no longer matches the pipeline; never
+                // leave it served as if it did.
+                if let Some(old) = self.served.borrow_mut().remove(pipeline_id) {
+                    old.close();
+                }
+                return Err(reason);
+            }
+        };
+        self.generations.set(generation);
+        let replaced = self
+            .served
             .borrow_mut()
             .insert(pipeline_id.to_string(), served.clone());
-        Ok(served)
-    }
-
-    fn attached(&self, pipeline_id: &str) -> Option<Rc<Served>> {
-        let served = self.served.borrow().get(pipeline_id).cloned()?;
-        served.viewers.set(served.viewers.get() + 1);
-        Some(served)
-    }
-
-    fn detach(&self, pipeline_id: &str) {
-        let mut served = self.served.borrow_mut();
-        let last = served.get(pipeline_id).is_some_and(|served| {
-            served.viewers.set(served.viewers.get().saturating_sub(1));
-            served.viewers.get() == 0
-        });
-        if last {
-            served.remove(pipeline_id);
+        if let Some(replaced) = replaced {
+            // Viewers of the old generation detach from it and its broadcast
+            // closes; the new generation is current for the next attach.
+            replaced.close();
         }
+        Ok(served)
     }
 
     #[cfg(test)]
@@ -319,59 +556,268 @@ impl Origin {
     }
 
     #[cfg(test)]
+    pub(crate) fn served_generation(&self, pipeline_id: &str) -> Option<u64> {
+        self.served
+            .borrow()
+            .get(pipeline_id)
+            .map(|served| served.generation)
+    }
+
+    #[cfg(test)]
     pub(crate) fn slots_in_use(&self) -> usize {
         self.slots.in_use()
     }
 }
 
-/// A viewer attached to a served pipeline; detaches on drop.
+/// The pipeline's current ring and publish startup, read on the listener
+/// task; the engine's async state is runtime-agnostic and does not need a
+/// Tokio task. The selection lock is held across the read so startup and
+/// presence describe one selected input, never a mixture of two.
+///
+/// Per-track presence comes from the ring's current track set (what the
+/// broadcast serves, including a recirculation input whose engine metadata is
+/// empty). The selected-ingest state only answers total media loss: no active
+/// ingest but a session or disconnect record means nothing is feeding the
+/// ring, so no track survives. A same-session per-track removal that leaves
+/// the ring's retained configuration in place is a known limitation (see the
+/// media pipeline docs): SRT reports only its first probe, and PMT updates can
+/// retain removed tracks.
+async fn resolve_pipeline(
+    engine: &MediaEngine,
+    pipeline_id: &str,
+) -> Option<(
+    Arc<crate::media::ring_buffer::RingBuffer>,
+    MoqPublishStartup,
+)> {
+    let _selection = engine.ingests.selection_lock.lock().await;
+    let ring = engine
+        .ingests
+        .pipelines
+        .read()
+        .await
+        .get(pipeline_id)
+        .cloned()?;
+    let mut startup = publish_startup(engine, pipeline_id, &ring).await;
+    if total_media_loss(engine, pipeline_id).await {
+        startup.video = None;
+        startup.audio = None;
+    }
+    Some((ring, startup))
+}
+
+/// Whether the pipeline has no selected source at all: no active ingest, but
+/// a registered session or a disconnect record. `false` when an ingest is
+/// active (even unprobed, as a recirculation publisher) or when the pipeline
+/// never had one (a ring-only stage or a test).
+async fn total_media_loss(engine: &MediaEngine, pipeline_id: &str) -> bool {
+    if engine.ingests.active.read().await.contains_key(pipeline_id) {
+        return false;
+    }
+    let has_session = engine
+        .ingests
+        .sessions
+        .read()
+        .await
+        .values()
+        .any(|ingest| ingest.pipeline_id == pipeline_id);
+    let has_recent = engine.ingests.recent.read().await.contains_key(pipeline_id);
+    has_session || has_recent
+}
+
+/// A viewer attached to one served generation; detaches from it on drop.
 struct Viewer {
     origin: Rc<Origin>,
     pipeline_id: String,
+    served: Rc<Served>,
 }
 
 impl Drop for Viewer {
     fn drop(&mut self) {
-        self.origin.detach(&self.pipeline_id);
+        let remaining = self.served.viewers.get().saturating_sub(1);
+        self.served.viewers.set(remaining);
+        if remaining == 0 {
+            let mut served = self.origin.served.borrow_mut();
+            let current = served
+                .get(&self.pipeline_id)
+                .is_some_and(|current| Rc::ptr_eq(current, &self.served));
+            if current {
+                served.remove(&self.pipeline_id);
+            }
+        }
     }
 }
 
-/// Start serving `ring` as broadcast `pipeline_id`, with one viewer. A
-/// pipeline with no media yet is refused: its broadcast's track set is fixed
-/// while it is served, so a trackless one would never play.
+/// Start serving `ring` as broadcast `pipeline_id` with `track_set`, with
+/// `viewers` already attached (0 for a watcher-triggered replacement). A
+/// pipeline with no media yet is refused: its broadcast's track set is fixed,
+/// so a trackless one would never play.
 fn start(
     pipeline_id: &str,
     ring: Arc<crate::media::ring_buffer::RingBuffer>,
     startup: &MoqPublishStartup,
+    track_set: TrackSet,
+    generation: u64,
+    viewers: usize,
+    origin: Weak<Origin>,
 ) -> Result<Served, String> {
     let converter = MediaConverter::new(startup);
     if !converter.has_video() && !converter.has_audio() {
         return Err("the pipeline has no media yet".to_string());
     }
-    let (origin, driver, budget) = super::budget::origin();
+    let (origin_producer, driver, budget) = super::budget::origin();
     let broadcast = HangBroadcast::create(
-        &origin,
+        &origin_producer,
         budget,
         pipeline_id,
         converter.has_video(),
         converter.has_audio(),
     )
     .map_err(|error| format!("MoQ broadcast: {error}"))?;
+    #[cfg(test)]
+    let probe = broadcast.producer();
     let publisher = RingPublisher::new(converter, broadcast);
     let feed = RingFeed::new(ring, Arc::new(FeedEpoch::new()));
+    let monitor_feed = feed.clone_reader();
     let (wake_tx, wake_rx) = flume::bounded(1);
     let wake = Subscription::new(feed.publication_ring().publication_subscribers(), wake_tx);
+    let (monitor_tx, monitor_rx) = flume::bounded(1);
+    let monitor_wake =
+        Subscription::new(feed.publication_ring().metadata_subscribers(), monitor_tx);
+    let closed = CancellationToken::new();
     let task = compio::runtime::spawn(async move {
         let _wake = wake;
         let pump = pin!(pump(feed, publisher, wake_rx));
         let origin_run = pin!(transport::run_driver(driver));
         let _ = select(pump, origin_run).await;
     });
+    let monitor = compio::runtime::spawn({
+        let closed = closed.clone();
+        let pipeline_id = pipeline_id.to_string();
+        async move {
+            let _wake = monitor_wake;
+            watch_track_set(
+                origin,
+                pipeline_id,
+                generation,
+                monitor_feed,
+                monitor_rx,
+                closed,
+            )
+            .await;
+        }
+    });
+    // The watcher is cancelled by `closed`, never by dropping a handle: it
+    // may be the task that replaces or closes its own generation.
+    monitor.detach();
     Ok(Served {
-        origin,
-        viewers: Cell::new(1),
-        _task: task,
+        origin: origin_producer,
+        viewers: Cell::new(viewers),
+        generation,
+        track_set,
+        closed,
+        task: RefCell::new(Some(task)),
+        #[cfg(test)]
+        probe,
     })
+}
+
+/// What the ring currently advertises about its tracks. Comparing this on
+/// each wake keeps the watcher off the engine lookup for ordinary packet
+/// flow; the interval covers changes no ring metadata event reports.
+struct MediaShape {
+    codec_hint: String,
+    video_generation: u32,
+    audio: Option<Arc<Vec<AudioMeta>>>,
+}
+
+impl MediaShape {
+    fn capture(feed: &RingFeed) -> Self {
+        let ring = feed.current_ring();
+        Self {
+            codec_hint: ring.codec_hint_str().to_string(),
+            video_generation: ring.video_config().map_or(0, |config| config.generation),
+            audio: ring.audio_tracks_snapshot(),
+        }
+    }
+
+    fn matches(&self, feed: &RingFeed) -> bool {
+        let ring = feed.current_ring();
+        self.codec_hint == ring.codec_hint_str()
+            && self.video_generation == ring.video_config().map_or(0, |config| config.generation)
+            && match (&self.audio, &ring.audio_tracks_snapshot()) {
+                (None, None) => true,
+                (Some(mine), Some(theirs)) => Arc::ptr_eq(mine, theirs),
+                _ => false,
+            }
+    }
+}
+
+/// Watch a generation's track identity on the listener runtime. Ring
+/// metadata wakes and a bounded interval both end in the same re-resolution;
+/// the ring's own publications and metadata changes wake it, and the interval
+/// catches a media loss only the engine knows (for example a publisher
+/// disconnect that leaves the ring unchanged). Exits with the generation.
+async fn watch_track_set(
+    origin: Weak<Origin>,
+    pipeline_id: String,
+    generation: u64,
+    feed: RingFeed,
+    wake: flume::Receiver<()>,
+    closed: CancellationToken,
+) {
+    let mut shape = MediaShape::capture(&feed);
+    // Absolute, not idle: a publication-only stream never resets this, so a
+    // media loss the ring cannot see is still checked every interval.
+    let mut next_check = Instant::now() + TRACK_SET_CHECK_INTERVAL;
+    loop {
+        let periodic = {
+            let waited = async {
+                let wake = pin!(wake.recv_async());
+                let deadline = pin!(compio::time::sleep_until(next_check));
+                match select(wake, deadline).await {
+                    // A ring track metadata change.
+                    Either::Left((Ok(()), _)) => false,
+                    // The subscription is gone; fall back to the deadline.
+                    Either::Left((Err(_), _)) => {
+                        compio::time::sleep_until(next_check).await;
+                        true
+                    }
+                    Either::Right(((), _)) => true,
+                }
+            };
+            let waited = pin!(waited);
+            let cancelled = pin!(closed.cancelled());
+            match select(waited, cancelled).await {
+                Either::Left((periodic, _)) => periodic,
+                Either::Right(((), _)) => return,
+            }
+        };
+        if !periodic {
+            if shape.matches(&feed) {
+                continue;
+            }
+            // Codec hint, configuration and the first packet often arrive
+            // together: let them settle so one generation replaces one.
+            compio::time::sleep(TRACK_SET_SETTLE).await;
+            if closed.is_cancelled() {
+                return;
+            }
+            if shape.matches(&feed) {
+                continue;
+            }
+        }
+        shape = MediaShape::capture(&feed);
+        let Some(origin) = origin.upgrade() else {
+            return;
+        };
+        origin.revalidate(&pipeline_id, generation).await;
+        // This check was at least as fresh as the bound; start the next
+        // absolute window (metadata wakes cannot accumulate to starve it).
+        next_check = Instant::now() + TRACK_SET_CHECK_INTERVAL;
+        if closed.is_cancelled() {
+            return;
+        }
+    }
 }
 
 /// Feed the broadcast from the ring until the broadcast closes.

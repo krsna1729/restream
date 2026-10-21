@@ -903,11 +903,30 @@ The diagram shows a dashboard preview subscribing to a pipeline.
   unauthorized. When `RESTREAM_MOQ_ORIGIN_MAX_VIEWERS` viewers are playing,
   the next gets application error 1. An admitted viewer leaves the connection
   count.
-- **Serving.** The first viewer of a pipeline starts one broadcast, named by
-  the pipeline id. A pump task on the listener thread reads the ring in
-  batches (64 units or 1 MiB) and sleeps until the ring publishes. Viewers of
-  one pipeline share it; the last to leave stops it. A pipeline with no
-  usable media is refused as not found.
+- **Serving.** The first viewer of a pipeline starts a served generation: one
+  broadcast, named by the pipeline id. A pump task on the listener thread
+  reads the ring in batches (64 units or 1 MiB) and sleeps until the ring
+  publishes. Viewers of one pipeline share it; the last viewer to leave stops
+  a generation that was started for viewers. A pipeline with no usable media
+  is refused as not found.
+- **Generations.** A generation's track set is fixed. A watcher on the
+  listener runtime re-resolves the pipeline's track set (video/audio presence
+  and the codec configuration identity the catalog describes) when the ring's
+  track metadata changes and on an absolute one-second deadline that
+  publications cannot push back. Presence is the ring's current track set
+  (including tracks a pipeline-target backup forwards), so a promoted input
+  that reports no probe metadata does not look like media loss; the selected
+  ingest and its disconnect record only detect total media loss. Codec
+  configuration identity comes from the retained ring/catalog. When the set
+  differs, the origin publishes a fresh broadcast as the next generation,
+  installs it and closes the old one, ending its viewers. Viewers never move
+  between generations; new viewers join the current one, a replacement with no
+  viewers stays current until the next replacement or teardown, and a pipeline
+  that lost all media is refused with its served generation closed. A
+  same-session removal that leaves the ring's retained configuration in place
+  is not detected yet (Q-098): SRT reports only its first probe and PMT
+  updates can retain removed tracks, so a served generation can keep a track
+  the source stopped until a reconnect or total loss replaces it.
 - **Media.** The same conversion as MoQ egress: video plus the first AAC
   track.
 - **Browser.** `MoqPreview` (`web/ts/control-room/moq-preview.tsx`) needs
