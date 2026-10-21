@@ -8,9 +8,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{StepResult, run};
 
-const BINARIES: [&str; 2] = ["restream", "test_harness"];
+const BINARIES: [&str; 3] = ["restream", "test_harness", "moq_subscriber"];
 
-/// Bench-profile `restream` and `test_harness` in `target/bench/`, with a
+/// Bench-profile `restream`, `test_harness` and `moq_subscriber` in
+/// `target/bench/`, with a
 /// provenance stamp the packet-rate contract checks before it calls a rung
 /// baseline-eligible.
 pub(crate) fn build_bench() -> StepResult {
@@ -23,6 +24,8 @@ pub(crate) fn build_bench() -> StepResult {
         "restream",
         "--bin",
         "test_harness",
+        "--bin",
+        "moq_subscriber",
     ];
     if !features.is_empty() {
         args.extend(["--features", features.as_str()]);
@@ -51,6 +54,7 @@ pub(crate) fn build_bench() -> StepResult {
     println!("Bench-profile measurement binaries are ready:");
     println!("  target/bench/restream");
     println!("  target/bench/test_harness");
+    println!("  target/bench/moq_subscriber");
     println!();
     println!("Use scripts/harness/run.sh for measurement modes so bench binaries stay");
     println!("fresh and launches remain comparable.");
@@ -69,6 +73,8 @@ pub(crate) fn build_release() -> StepResult {
             "restream",
             "--bin",
             "test_harness",
+            "--bin",
+            "moq_subscriber",
         ],
         tmpdir_fallback(),
     )?;

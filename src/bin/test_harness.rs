@@ -74,6 +74,8 @@ mod mixed_runner;
 mod mode_specs;
 #[path = "test_harness/moq_dev_interop.rs"]
 mod moq_dev_interop;
+#[path = "test_harness/moq_impairment.rs"]
+mod moq_impairment;
 #[path = "test_harness/moq_relay_interop.rs"]
 mod moq_relay_interop;
 #[path = "test_harness/output_progress.rs"]
@@ -273,6 +275,7 @@ async fn run() -> Result<(), String> {
             "hls-push-duty" => hls_push_duty(&raw[1..]).await,
             "moq-relay-interop" => moq_relay_interop::moq_relay_interop(&raw[1..]).await,
             "moq-dev-interop" => moq_dev_interop::moq_dev_interop(&raw[1..]).await,
+            "moq-impairment" => moq_impairment::moq_impairment(&raw[1..]).await,
             "udp-drain" => udp_drain::udp_drain_mode().await,
             "substrate-pps" => substrate_pps::substrate_pps_mode().await,
             "msr" => msr().await,

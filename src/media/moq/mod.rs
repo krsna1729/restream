@@ -21,6 +21,8 @@ pub mod fuzz_entry;
 pub(crate) mod ingest;
 pub(crate) mod media;
 pub(crate) mod origin;
+#[doc(hidden)]
+pub mod subscribe_entry;
 pub(crate) mod tls;
 pub(crate) mod transport;
 

@@ -287,6 +287,7 @@ while Restream, MediaMTX or FFmpeg live processes run.
 | HLS, recording, file ingest | a scenario whose plan has that sink |
 | HLS push/pull ingest, executor isolation | `hls-push-duty` |
 | MoQ egress, origin, ingest, or the egress fabric | `moq-dev-interop` |
+| MoQ delivery under loss, startup and A/V skew | `moq-impairment` |
 | broad regression | a catalog suite, after the scoped mode passes |
 | performance or capacity | a measurement workflow, serial, bench profile |
 
@@ -390,6 +391,53 @@ RESTREAM_E2E_SKIP_BUILD=1 scripts/harness/frontend-e2e.sh --grep 'program previe
 `report.json`, relay sessions, logs, CLI captures with FFprobe JSON, and
 `browser/` (Playwright report, traces, screenshots). CI's `moq-interop` job
 runs lite/browser and IETF modes using the same pinned tools and uploads both.
+
+### MoQ impairment (`moq-impairment`)
+
+`moq-impairment` is the protocol-under-impairment evidence beside the browser
+E2E, which it does not replace. An RTMP publisher feeds one Restream pipeline
+whose `moqt://` output publishes `live/impairment.hang` to the pinned
+moq-relay 0.17.7. Once the relay serves the catalog, the mode puts a `netem`
+qdisc on loopback (2 % loss, 200 ms delay) with filters for the relay's UDP
+port in both directions, then runs the headless `moq_subscriber` over the
+production moq-net/hang path (native QUIC, hang catalog, the same
+`transport::connect` and `Client::connect` as the egress leaf and origin).
+The chosen path is the relay: it is the production `moqt://` egress and needs
+no origin token. `moq-dev-interop` still covers the Restream-direct origin
+path and the browser playback unchanged.
+
+```sh
+scripts/dev/moq/fetch-moq-dev.sh
+scripts/harness/run.sh moq-impairment
+```
+
+The mode requires the default private network namespace with
+`CAP_NET_ADMIN` for `tc`; `--no-netns` fails instead of silently skipping the
+impairment. `MOQ_IMPAIRMENT_SUBSCRIBER_BIN` overrides the subscriber path (it
+otherwise sits next to the harness binary).
+
+The subscriber prints one JSON object (also kept in the mode report):
+
+| Field | Meaning |
+|---|---|
+| `startupDelayMs` | catalog-ready publishing to the first delivered frame (either track) |
+| `videoFrames`, `keyframes`, `videoBytes` | delivered video groups/frames |
+| `audioFrames`, `audioBytes` | delivered audio frames and their payload bytes |
+| `p95AbsSkewUs`, `maxAbsSkewUs`, `skewSamples`, `skewMatchToleranceUs` | A/V arrival skew: the wall-clock gap between video and audio delivering the same media instant (matched within 25 ms), after a 2 s join warmup; the p95 is the gate, the max is evidence |
+| `connected`, `connectionMs`, `catalogMs`, `alpn`, `error` | transport/protocol context |
+
+It exits `0` after the watch window however few frames arrived, and `3` only
+for a connection or protocol failure, still printing the partial counts. The
+mode asserts `videoFrames > 0`, `keyframes > 0`, `audioFrames`/`audioBytes >
+0`, `p95AbsSkewUs <= 500 000` (500 ms) and `startupDelayMs <= 10 000` (10 s).
+The maximum skew is reported but not gated: with 2 % loss and a 200 ms RTT a
+retransmission can delay one track by most of a recovery interval, so the
+95th percentile is bounded at 500 ms while the maximum is only reported. Arrival skew pairs frames by
+media time, so a stalled frame produces no pair rather than an unbounded skew
+claim; the frame counts carry the delivery verdict. `.local/artifacts/moq-impairment/` holds `report.json`,
+`restream.log`, `moq-relay.log`, `publisher.log`, `subscriber.log` and the
+generated TLS material; the harness also writes
+`.local/artifacts/moq-impairment.json`.
 
 `moq-relay-interop` targets unmodified MediaMTX v1.21.2
 (`scripts/dev/moq/fetch-mediamtx.sh`, `MOQ_INTEROP_MEDIAMTX_BIN`).
