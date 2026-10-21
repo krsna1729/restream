@@ -43,7 +43,7 @@
 use super::super::resource_sweep::read_proc_status_kb_checked;
 use super::super::*;
 use super::egress::wait_for_outputs_live_and_progressing;
-use super::resilience::create_pipeline;
+use super::resilience::{create_pipeline, delete_pipeline_v1};
 
 /// Environmental scheduling contention for `fault.srt-output-stall`:
 /// `FAULT_CONTENTION_BURNER_THREADS=N` spawns N pure-spin threads for the
@@ -192,6 +192,41 @@ pub(crate) async fn fault_srt_output_stall() -> Result<Value, String> {
     Ok(payload)
 }
 
+const MAX_ACCEPTABLE_RSS_GROWTH_KB: u64 = 64 * 1024;
+
+/// Unavailable or zero RSS is not evidence that retry memory is bounded.
+fn frozen_rss_observation(before: Result<u64, String>, after: Result<u64, String>) -> Value {
+    let growth = match (&before, &after) {
+        (Ok(before), Ok(after)) if *before > 0 && *after > 0 => Some(after.saturating_sub(*before)),
+        _ => None,
+    };
+    json!({
+        "available": growth.is_some(),
+        "bounded": growth.is_some_and(|growth| growth <= MAX_ACCEPTABLE_RSS_GROWTH_KB),
+        "beforeKb": before.as_ref().ok(),
+        "afterKb": after.as_ref().ok(),
+        "growthKb": growth,
+        "limitKb": MAX_ACCEPTABLE_RSS_GROWTH_KB,
+        "beforeError": before.err(),
+        "afterError": after.err(),
+    })
+}
+
+fn frozen_phase(work_dir: &std::path::Path, phase: &str) -> Result<(), String> {
+    use std::io::Write;
+    let mut events = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(work_dir.join("frozen-phases.jsonl"))
+        .map_err(|e| e.to_string())?;
+    writeln!(
+        events,
+        "{}",
+        json!({"phase": phase, "t": chrono::Utc::now().timestamp_millis() as f64 / 1000.0})
+    )
+    .map_err(|e| e.to_string())
+}
+
 async fn srt_egress_bounded_rss_under_frozen_destination() -> Result<Value, String> {
     let work_dir = artifact_path("fault.srt-output-stall");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
@@ -268,16 +303,28 @@ async fn srt_egress_bounded_rss_under_frozen_destination() -> Result<Value, Stri
         );
     }
 
+    frozen_phase(&work_dir, "live-progress")?;
+    let receiver_progress = crate::mediamtx_probe::verify_mediamtx_path_health(
+        mtx_defaults.mtx_api,
+        &["fault-egress-srt-stall-sink".to_string()],
+        5,
+        timeout,
+    )
+    .await;
     let restream_pid = child.id();
-    let rss_before_stall_kb: u64 = restream_pid
-        .and_then(|pid| read_proc_status_kb_checked(pid, "VmRSS", &log_path).ok())
-        .unwrap_or(0);
+    let read_rss = || {
+        restream_pid
+            .ok_or_else(|| "restream child PID unavailable".to_string())
+            .and_then(|pid| read_proc_status_kb_checked(pid, "VmRSS", &log_path))
+    };
+    let rss_before_stall = read_rss();
 
     let stall_started = std::time::Instant::now();
     let mut sigstop_ok = false;
     if let Some(pid) = mediamtx_pid {
         sigstop_ok = signal_process(pid, libc::SIGSTOP).is_ok();
     }
+    frozen_phase(&work_dir, "sigstop")?;
 
     // Confirm the output actually entered the retry/failure cycle (not just
     // silently frozen) before measuring RSS across an extended window of
@@ -294,6 +341,14 @@ async fn srt_egress_bounded_rss_under_frozen_destination() -> Result<Value, Stri
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
+    frozen_phase(
+        &work_dir,
+        if entered_retry_cycle {
+            "retry-observed"
+        } else {
+            "retry-not-observed"
+        },
+    )?;
 
     // The runtime state names the frozen destination as the cause, with the
     // ingest and the feed (and the shard, while an attempt runs on it)
@@ -330,16 +385,8 @@ async fn srt_egress_bounded_rss_under_frozen_destination() -> Result<Value, Stri
     // test (no unbounded growth while an output keeps failing to connect)
     // is what a longer window would also show, just slower.
     tokio::time::sleep(Duration::from_secs(120)).await;
-    let rss_after_stall_kb: u64 = restream_pid
-        .and_then(|pid| read_proc_status_kb_checked(pid, "VmRSS", &log_path).ok())
-        .unwrap_or(0);
-    let rss_growth_kb = rss_after_stall_kb.saturating_sub(rss_before_stall_kb);
-    // Generous bound: a genuinely leaking retry loop would grow by many
-    // times this over the same window (new sockets, buffers, and retained
-    // feed state per failed attempt); a healthy retry-and-cleanup cycle
-    // should not.
-    const MAX_ACCEPTABLE_RSS_GROWTH_KB: u64 = 64 * 1024;
-    let rss_bounded = rss_before_stall_kb == 0 || rss_growth_kb <= MAX_ACCEPTABLE_RSS_GROWTH_KB;
+    let rss = frozen_rss_observation(rss_before_stall, read_rss());
+    let rss_bounded = rss["bounded"].as_bool().unwrap_or(false);
 
     let final_output = observe_final_output(&api, &pid, &oid).await;
     let (status_snapshot, health_snapshot) = (
@@ -347,23 +394,32 @@ async fn srt_egress_bounded_rss_under_frozen_destination() -> Result<Value, Stri
         final_output.health.clone(),
     );
 
-    let passed = sigstop_ok && entered_retry_cycle && rss_bounded && diagnosed_destination;
+    let passed = sigstop_ok
+        && entered_retry_cycle
+        && rss_bounded
+        && diagnosed_destination
+        && receiver_progress.is_ok();
 
     println!(
-        "[fault] SRT egress bounded RSS under frozen destination: {} (sigstopOk={} enteredRetryCycle={} diagnosedDestination={} bytesAtStallStart={} rssBeforeKb={} rssAfterKb={} rssGrowthKb={} elapsed={:.1}s)",
+        "[fault] SRT egress bounded RSS under frozen destination: {} (sigstopOk={} enteredRetryCycle={} diagnosedDestination={} bytesAtStallStart={} rss={} elapsed={:.1}s)",
         if passed { "PASS" } else { "FAIL" },
         sigstop_ok,
         entered_retry_cycle,
         diagnosed_destination,
         bytes_at_stall_start,
-        rss_before_stall_kb,
-        rss_after_stall_kb,
-        rss_growth_kb,
+        rss,
         stall_started.elapsed().as_secs_f64(),
     );
 
-    stop_mixed_outputs(&api, &pid, std::slice::from_ref(&oid)).await;
+    api.post_null(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"))
+        .await?;
+    wait_for_outputs_stopped(&api, &pid, std::slice::from_ref(&oid), timeout).await?;
+    frozen_phase(&work_dir, "output-stopped")?;
+    tokio::time::sleep(Duration::from_secs(3)).await;
     stop_child(&mut pub_child).await;
+    delete_pipeline_v1(&api, &pid).await?;
+    frozen_phase(&work_dir, "pipeline-deleted")?;
+    tokio::time::sleep(Duration::from_secs(3)).await;
     if let Some(pid) = mediamtx_pid {
         let _ = signal_process(pid, libc::SIGCONT);
     }
@@ -378,9 +434,13 @@ async fn srt_egress_bounded_rss_under_frozen_destination() -> Result<Value, Stri
         "diagnosedDestination": diagnosed_destination,
         "diagnosis": diagnosis,
         "bytesAtStallStart": bytes_at_stall_start,
-        "rssBeforeStallKb": rss_before_stall_kb,
-        "rssAfterStallKb": rss_after_stall_kb,
-        "rssGrowthKb": rss_growth_kb,
+        "receiverProgress": receiver_progress.as_ref().ok().map(|health|
+            crate::mediamtx_probe::mediamtx_path_health_json("frozen", "before-sigstop", health)),
+        "receiverProgressError": receiver_progress.err(),
+        "rssBeforeStallKb": rss["beforeKb"],
+        "rssAfterStallKb": rss["afterKb"],
+        "rssGrowthKb": rss["growthKb"],
+        "rssMeasurement": rss,
         "status": status_snapshot,
         "healthOutput": health_snapshot,
     }))
@@ -691,4 +751,40 @@ async fn srt_egress_srt_rs_receiver_delivery() -> Result<Value, String> {
         "status": final_output.status.clone().unwrap_or(Value::Null),
         "healthOutput": final_output.health.clone(),
     }))
+}
+
+#[cfg(test)]
+mod frozen_rss_tests {
+    use super::*;
+
+    #[test]
+    fn frozen_rss_requires_two_valid_samples() {
+        for (before, after) in [
+            (Err("unreadable before".into()), Ok(100)),
+            (Ok(100), Err("unreadable after".into())),
+            (Ok(0), Ok(100)),
+            (Ok(100), Ok(0)),
+        ] {
+            let observation = frozen_rss_observation(before, after);
+            assert_eq!(observation["available"], false, "{observation}");
+            assert_eq!(observation["bounded"], false, "{observation}");
+            assert!(observation["growthKb"].is_null(), "{observation}");
+        }
+        let unavailable = frozen_rss_observation(Err("permission denied".into()), Ok(100));
+        assert_eq!(unavailable["beforeError"], "permission denied");
+        assert!(unavailable["beforeKb"].is_null());
+    }
+
+    #[test]
+    fn frozen_rss_preserves_the_64_mib_boundary() {
+        for (after, bounded) in [
+            (99, true),
+            (100 + MAX_ACCEPTABLE_RSS_GROWTH_KB, true),
+            (101 + MAX_ACCEPTABLE_RSS_GROWTH_KB, false),
+        ] {
+            let observation = frozen_rss_observation(Ok(100), Ok(after));
+            assert_eq!(observation["available"], true);
+            assert_eq!(observation["bounded"], bounded);
+        }
+    }
 }

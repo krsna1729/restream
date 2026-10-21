@@ -57,5 +57,29 @@ class Gates(unittest.TestCase):
         self.assertFalse(res["gates"]["steady_window_captured"])
 
 
+class FrozenSampling(unittest.TestCase):
+    def test_missing_or_zero_rss_is_not_a_valid_measurement(self):
+        self.assertTrue(qual.frozen_sample_errors([], False))
+        for proc in ({}, {"rss_kb": 0}):
+            self.assertTrue(qual.frozen_sample_errors([{"t": 1, "proc": proc}], False))
+        self.assertFalse(qual.frozen_sample_errors([{"t": 1, "proc": {"rss_kb": 123}}], False))
+
+    def test_requested_attribution_cannot_silently_lose_evidence(self):
+        sample = {"t": 1, "proc": {"rss_kb": 123}}
+        self.assertTrue(qual.frozen_sample_errors([sample], True))
+        sample["attribution"] = {key: {} for key in
+                                ("smaps", "smaps_rollup", "threads", "socket_fds", "udp", "udp6", "telemetry")}
+        self.assertTrue(qual.frozen_sample_errors([sample], True))
+        sample["attribution"] = {
+            "smaps": "Rss: 123 kB", "smaps_rollup": "Rss: 123 kB",
+            "threads": {"1": "restream"}, "socket_fds": {},
+            "udp": "header", "udp6": "header",
+            "telemetry": {"memoryAccounting": {"retainedPayloadBytes": 0}},
+        }
+        self.assertFalse(qual.frozen_sample_errors([sample], True))
+        sample["attribution"]["smaps_error"] = "permission denied"
+        self.assertTrue(qual.frozen_sample_errors([sample], True))
+
+
 if __name__ == "__main__":
     unittest.main()

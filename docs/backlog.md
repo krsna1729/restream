@@ -112,6 +112,20 @@ items).
   ~70 MB growth; attribution remains open and the threshold is unchanged.
   Earlier evidence is in git history
   (`test/harness/baselines/srt-compio-owner-final/`, removed with the ledgers). Filed: 2026-09-20 by claude.
+  The frozen summaries at `20a49036` retain only coarse RSS/thread/FD series;
+  the local per-second archives add PSS and Owner counters, but neither has
+  allocator live/free accounting, smaps, retained-ring payload or stop/delete
+  snapshots. The summaries' gate endpoint fields are null
+  because the driver read `rssBeforeKb`/`rssAfterKb` instead of the harness's
+  `rssBeforeStallKb`/`rssAfterStallKb`. The harness now fails closed on either
+  unreadable/zero RSS endpoint and the driver preserves the correct fields;
+  an opt-in attribution census records lifecycle-aligned evidence. The new
+  release/heaptrack/mallinfo2 campaign separates current ring warmup, requested
+  heap and allocator-free arenas, but does not reproduce the old growth.
+  Closing this item still requires explaining that growth with historical
+  allocation stacks/live-vs-free data and feed/transport ownership snapshots,
+  or reproducing that shape with those inputs; a smaller current pass does
+  not supply them. Keep the 64 MiB gate unchanged.
 
 ### Q-031 [architecture] [opus] Derive every thread count from one capacity allocator
 - Goal: thread counts follow measured service demand (λ × D at a target

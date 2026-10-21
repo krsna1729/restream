@@ -69,12 +69,13 @@ def cmd_env(args):
 
 # ----------------------------------------------------------------- sampler
 class Sampler(threading.Thread):
-    def __init__(self, work_dir, out_path, interval=1.0):
+    def __init__(self, work_dir, out_path, interval=1.0, attribution=False):
         super().__init__(daemon=True)
         self.interval = interval
         self.work_dir, self.out_path, self.stop = Path(work_dir), Path(out_path), threading.Event()
         self.port = self.pid = None
         self.cookie = None
+        self.attribution = attribution
 
     def http(self, path, post=None):
         req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=post, method="POST" if post else "GET")
@@ -130,6 +131,33 @@ class Sampler(threading.Thread):
             "cpu_jiffies": int(stat[11]) + int(stat[12]),
         }
 
+    def attribution_facts(self):
+        """Read-only census; missing evidence stays explicit, never becomes zero."""
+        base = Path(f"/proc/{self.pid}")
+        facts = {}
+        for name in ("smaps_rollup", "smaps"):
+            try:
+                facts[name] = (base / name).read_text()
+            except OSError as exc:
+                facts[name + "_error"] = str(exc)
+        try:
+            facts["threads"] = {
+                p.name: (p / "comm").read_text().strip() for p in (base / "task").iterdir()
+            }
+            facts["socket_fds"] = {
+                p.name: os.readlink(p) for p in (base / "fd").iterdir()
+                if os.readlink(p).startswith("socket:")
+            }
+            facts["udp"] = (base / "net/udp").read_text()
+            facts["udp6"] = (base / "net/udp6").read_text()
+        except OSError as exc:
+            facts["census_error"] = str(exc)
+        try:
+            facts["telemetry"] = self.http("/api/v1/engine/telemetry")
+        except Exception as exc:
+            facts["telemetry_error"] = str(exc)
+        return facts
+
     def run(self):
         while not self.stop.is_set() and not self.discover():
             time.sleep(0.25)
@@ -139,6 +167,8 @@ class Sampler(threading.Thread):
                 rec = {"t": t0}
                 try:
                     rec["proc"] = self.proc()
+                    if self.attribution:
+                        rec["attribution"] = self.attribution_facts()
                     sysm = self.http("/metrics/system")
                     rec["shards"] = [s for s in sysm.get("egressShards", []) if s.get("protocol") == "srt"]
                     health = self.http("/api/v1/engine/health")
@@ -554,6 +584,30 @@ def cmd_slow(args):
 
 
 # ------------------------------------------------------------------ frozen
+def frozen_sample_errors(samples, attribution):
+    errors = []
+    if not samples:
+        errors.append("no process samples captured")
+    for sample in samples:
+        if "error" in sample:
+            errors.append({"t": sample["t"], "error": sample["error"]})
+        if not sample.get("proc", {}).get("rss_kb", 0) > 0:
+            errors.append({"t": sample["t"], "error": "RSS unavailable or zero"})
+        if attribution:
+            facts = sample.get("attribution", {})
+            required = ("smaps", "smaps_rollup", "threads", "socket_fds", "udp", "udp6", "telemetry")
+            missing = [key for key in required if key not in facts]
+            failures = {k: v for k, v in facts.items() if k.endswith("_error")}
+            if "memoryAccounting" not in facts.get("telemetry", {}):
+                failures["telemetry"] = "retained-ring accounting unavailable"
+            for key in ("smaps", "smaps_rollup", "threads", "udp", "udp6"):
+                if key in facts and not facts[key]:
+                    failures[key] = "empty evidence"
+            if missing or failures:
+                errors.append({"t": sample["t"], "missing": missing, "errors": failures})
+    return errors
+
+
 def cmd_frozen(args):
     """fault.srt-output-stall (SIGSTOPped MediaMTX destination) with an RSS time series."""
     out = Path(args.out)
@@ -562,18 +616,26 @@ def cmd_frozen(args):
         print("ABORT: stray processes", file=sys.stderr)
         sys.exit(3)
     work = ROOT / ".local/artifacts/srt-final" / args.tag
-    subprocess.run(["rm", "-rf", str(work)])
+    if work.exists():
+        raise RuntimeError(f"refusing to overwrite existing campaign: {work}")
     work.mkdir(parents=True)
-    real = ROOT / (".local/worktrees/wi2-before/target/bench/restream" if args.variant == "baseline" else "target/bench/restream")
-    env = dict(os.environ, RESTREAM_BIN=str(real), BENCH_BUILD="never", WORK_DIR=str(work))
+    real = Path(args.restream_bin).resolve() if args.restream_bin else ROOT / "target/qual-release/restream"
+    harness = Path(args.harness_bin).resolve() if args.harness_bin else ROOT / "target/qual-release/test_harness"
+    env = dict(os.environ, RESTREAM_BIN=str(real), HARNESS_BIN=str(harness),
+               BENCH_BUILD="never", WORK_DIR=str(work))
     sdir = work / "fault.srt-output-stall"
     sdir.mkdir(parents=True)
-    sampler = Sampler(sdir, work / "samples.jsonl")
+    sampler = Sampler(sdir, work / "samples.jsonl", attribution=args.attribution)
     sampler.log_name = "restream-frozen-destination.log"
     sampler.start()
-    p = subprocess.run([str(ROOT / "scripts/harness/run.sh"), "fault.srt-output-stall", "--", "--no-netns"],
-                       env=env, cwd=ROOT, capture_output=True, text=True, timeout=900)
-    sampler.stop.set(); sampler.join(timeout=5)
+    try:
+        p = subprocess.run([str(ROOT / "scripts/harness/run.sh"), "fault.srt-output-stall", "--", "--no-netns"],
+                           env=env, cwd=ROOT, capture_output=True, text=True, timeout=900)
+        (work / "harness.stdout").write_text(p.stdout)
+        (work / "harness.stderr").write_text(p.stderr)
+    finally:
+        sampler.stop.set()
+        sampler.join(timeout=15)
     samples = load_samples(work / "samples.jsonl") if (work / "samples.jsonl").exists() else []
     series = [(round(x["t"] - samples[0]["t"]), x["proc"]["rss_kb"] // 1024, x["proc"]["threads"], x["proc"]["fds"])
               for x in samples if x.get("proc")]
@@ -587,13 +649,22 @@ def cmd_frozen(args):
         return statistics.median(seg) if seg else None
     res = {"variant": args.variant, "tag": args.tag, "harness_exit": p.returncode,
            "gate_rssGrowthKb": frozen.get("rssGrowthKb"), "gate_limit_kb": 64 * 1024,
-           "gate_rssBeforeKb": frozen.get("rssBeforeKb"), "gate_rssAfterKb": frozen.get("rssAfterKb"),
+           "gate_rssBeforeKb": frozen.get("rssBeforeStallKb"), "gate_rssAfterKb": frozen.get("rssAfterStallKb"),
            "enteredRetryCycle": frozen.get("enteredRetryCycle"), "sigstopOk": frozen.get("sigstopOk"),
            "rss_mb_median_by_fifth": [med_of(i / 5, (i + 1) / 5) for i in range(5)],
            "rss_mb_max": max(rss) if rss else None, "threads_max": max((r[2] for r in series), default=None),
            "fds_max": max((r[3] for r in series), default=None), "rss_series_mb_every_10s": series[::10]}
+    res["rss_measurement"] = frozen.get("rssMeasurement")
+    res["sample_count"] = len(samples)
+    res["sample_errors"] = frozen_sample_errors(samples, args.attribution)
+    res["phases"] = load_samples(sdir / "frozen-phases.jsonl") if (sdir / "frozen-phases.jsonl").exists() else []
+    res["attribution_requested"] = args.attribution
+    res["binaries"] = {"restream": str(real), "harness": str(harness)}
+    res["processes_after"] = stray_processes()
     (out / f"{args.tag}.json").write_text(json.dumps(res, indent=2) + "\n")
     print(json.dumps({k: v for k, v in res.items() if k != "rss_series_mb_every_10s"}, indent=1))
+    if p.returncode or not series or res["sample_errors"] or res["processes_after"]:
+        sys.exit(1)
 
 
 def main():
@@ -614,6 +685,9 @@ def main():
     w.add_argument("--exact-owner", action="store_true")
     z = sub.add_parser("frozen"); z.add_argument("--out", required=True); z.add_argument("--tag", required=True)
     z.add_argument("--variant", choices=["baseline", "candidate"], required=True)
+    z.add_argument("--restream-bin"); z.add_argument("--harness-bin")
+    z.add_argument("--attribution", action="store_true",
+                   help="sample smaps, thread/socket census and retained feed/transport telemetry")
     s = sub.add_parser("summarize"); s.add_argument("--out", required=True)
     args = ap.parse_args()
     {"env": cmd_env, "fanout": cmd_fanout, "burst": cmd_burst, "slow": cmd_slow, "frozen": cmd_frozen, "summarize": cmd_summarize}[args.cmd](args)

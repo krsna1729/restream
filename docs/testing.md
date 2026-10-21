@@ -541,6 +541,29 @@ troubleshooting control, never a deployment setting.
 (fanout points, connect bursts, `srt.slow-peer`, frozen destination) and
 derives gates; `scripts/harness/test_srt_final_qual.py` tests it.
 
+For a frozen-destination attribution campaign, build with
+`cargo xtask build-release`, then run (under the host measurement lock):
+
+```sh
+flock -x /tmp/restream-host.lock python3 scripts/harness/srt_final_qual.py frozen \
+  --variant candidate --tag frozen-attribution --out .local/artifacts/srt-attribution \
+  --attribution
+```
+
+The frozen driver defaults to `target/qual-release/{restream,test_harness}`;
+`--restream-bin` and `--harness-bin` permit explicit binaries (including an
+exec-style allocation-profiler launcher that preserves the child PID). Each
+tag must be new. The campaign saves raw smaps/rollup, thread names, socket FD
+inodes and UDP tables, existing retained-ring and SRT Owner telemetry, harness
+stdout/stderr, and wall-clock phase markers through live progress, SIGSTOP,
+retry, output stop and pipeline deletion. Receiver-side MediaMTX byte growth
+is required before freezing. Missing/zero gate RSS is unavailable and fails;
+the artifact includes both read errors and nullable values, never a zero
+substitute. Missing attribution or process samples fail the driver as well.
+RSS/smaps and ring payload alone cannot separate live heap from allocator
+retention; pair them with an allocation profiler before making that claim.
+The 64 MiB growth limit remains unchanged pending historical attribution.
+
 - `srt.slow-peer` pauses application delivery on one `RawSrtSink` receiver
   while protocol timers keep running. Healthy siblings must keep progressing.
   `SLOW_PEER_EXACT_OWNER=1` also requires one shared IPv4 Owner.
