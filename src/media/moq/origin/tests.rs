@@ -684,90 +684,6 @@ fn push_video_keyframe(ring: &crate::media::ring_buffer::RingBuffer) {
 }
 
 #[test]
-fn losing_video_closes_the_served_generation_without_an_attach() {
-    let (origin, engine, tokio) = origin(8);
-    let ring = tokio.block_on(engine.get_or_create_pipeline("pipe-vloss"));
-    ring.set_video_parameter_sets(PARAMETER_SETS.to_vec());
-    tokio.block_on(register_live_ingest(
-        &engine,
-        "pipe-vloss",
-        "key",
-        true,
-        true,
-    ));
-
-    run(async {
-        push_audio(&ring, 0);
-        push_video_keyframe(&ring);
-        let loopback = Loopback::new().await;
-        let (broadcast, _session) = attach_viewer(&origin, &loopback, "pipe-vloss").await;
-        let mut catalog = broadcast
-            .track("catalog.json")
-            .unwrap()
-            .subscribe(None)
-            .await
-            .unwrap();
-        let mut group = catalog.recv_group().await.unwrap().unwrap();
-        let frame = group.read_frame().await.unwrap().unwrap();
-        let catalog: hang::Catalog = hang::Catalog::from_slice(&frame.payload).unwrap();
-        assert!(catalog.video.renditions.contains_key(VIDEO_TRACK));
-        assert!(catalog.audio.renditions.contains_key(AUDIO_TRACK));
-
-        let first = origin
-            .served
-            .borrow()
-            .get("pipe-vloss")
-            .cloned()
-            .expect("generation 1");
-        assert_eq!(first.generation, 1);
-        assert_eq!(first.viewers.get(), 1);
-
-        // The publisher reconnects on another input carrying only audio while
-        // key1 is still active, so there is no no-media window. The ring still
-        // holds the codec hint, the recorded parameter sets and the audio
-        // metadata from key1.
-        register_live_ingest(&engine, "pipe-vloss", "key2", false, true).await;
-
-        let mut second = None;
-        for _ in 0..500 {
-            if let Some(current) = origin.served.borrow().get("pipe-vloss").cloned()
-                && current.generation == 2
-            {
-                second = Some(current);
-                break;
-            }
-            compio::time::sleep(Duration::from_millis(10)).await;
-        }
-        let second = second.expect("audio-only generation replaced the video one");
-        assert!(first.is_closed(), "the video generation is closed");
-        for _ in 0..200 {
-            if first.viewers.get() == 0 {
-                break;
-            }
-            compio::time::sleep(Duration::from_millis(5)).await;
-        }
-        assert_eq!(first.viewers.get(), 0, "its viewer detached");
-
-        let mut catalog = second
-            .probe
-            .consume()
-            .track("catalog.json")
-            .unwrap()
-            .subscribe(None)
-            .await
-            .unwrap();
-        let mut group = catalog.recv_group().await.unwrap().unwrap();
-        let frame = group.read_frame().await.unwrap().unwrap();
-        let catalog: hang::Catalog = hang::Catalog::from_slice(&frame.payload).unwrap();
-        assert!(
-            catalog.video.renditions.is_empty(),
-            "the replacement has no video track"
-        );
-        assert!(catalog.audio.renditions.contains_key(AUDIO_TRACK));
-    });
-}
-
-#[test]
 fn continuous_publication_does_not_starve_a_media_loss() {
     let (origin, engine, tokio) = origin(8);
     let ring = tokio.block_on(engine.get_or_create_pipeline("pipe-loss"));
@@ -809,6 +725,11 @@ fn continuous_publication_does_not_starve_a_media_loss() {
         let mut closed = false;
         for pts in 1..=500 {
             push_audio(&ring, pts);
+            // Publication-only stimuli must not postpone the idle deadline:
+            // an end-of-stream mark wakes subscribers without changing the
+            // ring's track set, and the watcher only resets its deadline on a
+            // track-set change.
+            ring.mark_end_of_stream();
             if origin.served_generation("pipe-loss").is_none() && first.viewers.get() == 0 {
                 closed = true;
                 break;
@@ -825,3 +746,5 @@ fn continuous_publication_does_not_starve_a_media_loss() {
         assert_eq!(origin.viewers("pipe-loss"), 0);
     });
 }
+
+include!("tests/generations.rs");

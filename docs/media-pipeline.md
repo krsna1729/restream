@@ -913,16 +913,19 @@ The diagram shows a dashboard preview subscribing to a pipeline.
   listener runtime re-resolves the pipeline's track set (video/audio presence
   and the codec configuration identity the catalog describes) when the ring's
   track metadata changes and on an absolute one-second deadline that
-  publications cannot push back. Presence is taken from the active ingest, or
-  from its disconnect record, while codec configuration identity comes from
-  the retained ring/catalog, so a publisher that drops a track or disconnects
-  is noticed even though its hint, parameter sets and audio metadata remain in
-  the ring. When the set differs, the origin publishes a fresh broadcast as
-  the next generation, installs it and closes the old one, ending its viewers.
-  Viewers never move between generations; new viewers join the current one, a
-  replacement with no viewers stays current until the next replacement or
-  teardown, and a pipeline that lost all media is refused with its served
-  generation closed.
+  publications cannot push back. Presence is the ring's current track set
+  (including tracks a pipeline-target backup forwards), so a promoted input
+  that reports no probe metadata does not look like media loss; the selected
+  ingest and its disconnect record only detect total media loss. Codec
+  configuration identity comes from the retained ring/catalog. When the set
+  differs, the origin publishes a fresh broadcast as the next generation,
+  installs it and closes the old one, ending its viewers. Viewers never move
+  between generations; new viewers join the current one, a replacement with no
+  viewers stays current until the next replacement or teardown, and a pipeline
+  that lost all media is refused with its served generation closed. A
+  same-session removal that leaves the ring's retained configuration in place
+  is not detected: SRT reports only its first probe and PMT updates can retain
+  removed tracks, so a served generation can keep a track the source stopped.
 - **Media.** The same conversion as MoQ egress: video plus the first AAC
   track.
 - **Browser.** `MoqPreview` (`web/ts/control-room/moq-preview.tsx`) needs

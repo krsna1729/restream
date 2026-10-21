@@ -18,14 +18,17 @@
 //! A generation's track set is fixed. A watcher on the listener runtime
 //! re-resolves the pipeline's current track set when the ring's track
 //! metadata changes and on an absolute one-second deadline (a publication-heavy
-//! stream cannot push it back). Track presence comes from the active ingest,
-//! or its disconnect record, while codec configuration identity comes from the
-//! retained ring/catalog, so a stale hint or parameter set cannot keep a
-//! dropped track alive. When the set differs, the origin publishes a fresh
-//! broadcast as the next generation, closes the old generation (ending its
-//! viewers) and installs the new one as current. Viewers keep the generation
-//! they started on; a generation stops with its last viewer, while a
-//! replacement with no viewers stays current for the next viewer to join.
+//! stream cannot push it back). Track presence is the ring's current track set;
+//! the selected ingest and its disconnect record only detect total media loss.
+//! Codec configuration identity comes from the retained ring/catalog. When the
+//! set differs, the origin publishes a fresh broadcast as the next generation,
+//! closes the old generation (ending its viewers) and installs the new one as
+//! current. Viewers keep the generation they started on; a generation stops
+//! with its last viewer, while a replacement with no viewers stays current for
+//! the next viewer to join. A same-session per-track removal that leaves the
+//! ring's retained configuration in place is not detected (SRT reports only its
+//! first probe; PMT updates can retain removed tracks), so a served generation
+//! can keep a track the source stopped.
 
 pub(crate) mod token;
 
@@ -361,7 +364,21 @@ impl Origin {
             pipeline_id: pipeline_id.clone(),
             served: served.clone(),
         };
-        let (_session, driver) = match handshake.with_publisher(&served.origin).ok().await {
+        let Some(accepted) = Self::await_handshake(
+            handshake.with_publisher(&served.origin).ok(),
+            &served.closed,
+        )
+        .await
+        else {
+            tracing::debug!(
+                pipeline_id = pipeline_id.as_str(),
+                generation = served.generation,
+                "MoQ viewer generation closed during the handshake"
+            );
+            drop(grant);
+            return;
+        };
+        let (_session, driver) = match accepted {
             Ok(accepted) => accepted,
             Err(error) => {
                 tracing::debug!(pipeline_id = pipeline_id.as_str(), %error, "MoQ viewer handshake failed");
@@ -388,6 +405,22 @@ impl Origin {
         };
         tracing::debug!(pipeline_id = pipeline_id.as_str(), %error, "MoQ viewer left");
         drop(grant);
+    }
+
+    /// Complete the paused handshake, but abandon it when the generation
+    /// closes. A legacy SETUP write can stay blocked on flow control, so a
+    /// replacement must release the viewer and its admission slot without
+    /// waiting for `ok()` to finish.
+    async fn await_handshake<T>(
+        handshake: impl Future<Output = T>,
+        closed: &CancellationToken,
+    ) -> Option<T> {
+        let handshake = pin!(handshake);
+        let closed = pin!(closed.cancelled());
+        match select(handshake, closed).await {
+            Either::Left((value, _)) => Some(value),
+            Either::Right(((), _handshake)) => None,
+        }
     }
 
     /// The pipeline's served generation, attaching this viewer to it. Every
@@ -538,10 +571,17 @@ impl Origin {
 
 /// The pipeline's current ring and publish startup, read on the listener
 /// task; the engine's async state is runtime-agnostic and does not need a
-/// Tokio task. Retained decoder configuration (ring codec hint, recorded
-/// parameter sets, audio metadata) survives an ingest disconnect, so live
-/// presence masks it: a track the active ingest no longer carries is removed
-/// even while its configuration remains in the ring.
+/// Tokio task. The selection lock is held across the read so startup and
+/// presence describe one selected input, never a mixture of two.
+///
+/// Per-track presence comes from the ring's current track set (what the
+/// broadcast serves, including a recirculation input whose engine metadata is
+/// empty). The selected-ingest state only answers total media loss: no active
+/// ingest but a session or disconnect record means nothing is feeding the
+/// ring, so no track survives. A same-session per-track removal that leaves
+/// the ring's retained configuration in place is a known limitation (see the
+/// media pipeline docs): SRT reports only its first probe, and PMT updates can
+/// retain removed tracks.
 async fn resolve_pipeline(
     engine: &MediaEngine,
     pipeline_id: &str,
@@ -549,6 +589,7 @@ async fn resolve_pipeline(
     Arc<crate::media::ring_buffer::RingBuffer>,
     MoqPublishStartup,
 )> {
+    let _selection = engine.ingests.selection_lock.lock().await;
     let ring = engine
         .ingests
         .pipelines
@@ -557,31 +598,21 @@ async fn resolve_pipeline(
         .get(pipeline_id)
         .cloned()?;
     let mut startup = publish_startup(engine, pipeline_id, &ring).await;
-    if let Some((video, audio)) = live_presence(engine, pipeline_id).await {
-        if !video {
-            startup.video = None;
-        }
-        if !audio {
-            startup.audio = None;
-        }
+    if total_media_loss(engine, pipeline_id).await {
+        startup.video = None;
+        startup.audio = None;
     }
     Some((ring, startup))
 }
 
-/// The pipeline's live track presence from the engine's ingest state:
-/// `Some((video, audio))` when an ingest selected for the pipeline exists or
-/// one has disconnected, and `None` when the pipeline never had one (a
-/// ring-only stage or a test), where ring metadata is the only source.
-async fn live_presence(engine: &MediaEngine, pipeline_id: &str) -> Option<(bool, bool)> {
-    let active = engine.ingests.active.read().await.get(pipeline_id).cloned();
-    if let Some(ingest) = active {
-        let metadata = ingest.metadata();
-        let audio_tracks = crate::sync::lock(&ingest.audio_tracks);
-        let audio = !audio_tracks.is_empty() || metadata.audio.is_some();
-        return Some((metadata.video.is_some(), audio));
+/// Whether the pipeline has no selected source at all: no active ingest, but
+/// a registered session or a disconnect record. `false` when an ingest is
+/// active (even unprobed, as a recirculation publisher) or when the pipeline
+/// never had one (a ring-only stage or a test).
+async fn total_media_loss(engine: &MediaEngine, pipeline_id: &str) -> bool {
+    if engine.ingests.active.read().await.contains_key(pipeline_id) {
+        return false;
     }
-    // No selected ingest: a session on another input means media is not
-    // flowing, and a recent outcome means the selected ingest disconnected.
     let has_session = engine
         .ingests
         .sessions
@@ -590,7 +621,7 @@ async fn live_presence(engine: &MediaEngine, pipeline_id: &str) -> Option<(bool,
         .values()
         .any(|ingest| ingest.pipeline_id == pipeline_id);
     let has_recent = engine.ingests.recent.read().await.contains_key(pipeline_id);
-    (has_session || has_recent).then_some((false, false))
+    has_session || has_recent
 }
 
 /// A viewer attached to one served generation; detaches from it on drop.
