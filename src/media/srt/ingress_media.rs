@@ -153,7 +153,7 @@ struct PublisherSlot {
     probe_audio_layout: Vec<(u32, Option<u16>)>,
     held: VecDeque<Vec<MediaPacket>>,
     held_bytes: usize,
-    /// When the probe went to Tokio (for the hold timeout and ack latency).
+    /// First outstanding probe's send time: absolute hold timeout and ack latency.
     probe_sent_at: Option<Instant>,
 }
 
@@ -310,6 +310,8 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
         for group in &mut slot.held {
             group.retain(keep);
         }
+        // Empty batches still own Vec capacity; free them with their credits.
+        slot.held.retain(|group| !group.is_empty());
         slot.held_bytes = slot.held.iter().map(|group| group_bytes(group)).sum();
         *held_total -= previous_bytes - slot.held_bytes;
         slot.probe_audio_layout.clear();
@@ -320,8 +322,10 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
                 .map(|track| (track.track_index, track.pid)),
         );
         slot.probe_revision = slot.probe_revision.wrapping_add(1);
+        if !slot.probe_pending {
+            slot.probe_sent_at = Some(Instant::now());
+        }
         slot.probe_pending = true;
-        slot.probe_sent_at = Some(Instant::now());
         Some(probe)
     }
 

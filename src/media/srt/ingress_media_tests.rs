@@ -490,3 +490,69 @@ fn q098_reindexed_audio_does_not_replay_a_removed_pid_from_the_probe_hold() {
         "still-live video survives the topology update"
     );
 }
+
+#[test]
+fn q098_hold_empty_topology_releases_batch_allocations_with_their_credits() {
+    use super::super::ingress_test_support::{topology_chunks, topology_pmt};
+
+    let stats = SrtIngressOwnerStats::default();
+    let mut media = IngressMedia::<u64>::default();
+    media.attach_publisher(1, publisher(Arc::new(RingBuffer::new(4096))), &stats);
+    assert!(feed(&mut media, &topology_chunks(true, true, 0), &stats).is_some());
+    assert!(!media.publishers[&1].held.is_empty());
+    assert!(media.held_bytes > 0);
+    let update = media
+        .on_payload(1, topology_pmt(None, &[], 1), &stats)
+        .unwrap();
+    assert!(update.video.is_none() && update.audio_tracks.is_empty());
+    assert_eq!(media.held_bytes, 0);
+    assert_eq!(media.publishers[&1].held_bytes, 0);
+    assert!(
+        media.publishers[&1].held.is_empty(),
+        "credited empty batches must not retain packet Vec allocations"
+    );
+}
+
+#[test]
+fn q098_hold_topology_updates_keep_the_outstanding_absolute_deadline() {
+    use super::super::ingress_test_support::{topology_chunks, topology_pmt};
+
+    let stats = SrtIngressOwnerStats::default();
+    let limits = MediaLimits {
+        probe_hold_timeout: Duration::from_secs(30),
+        ..MediaLimits::default()
+    };
+    let mut media = IngressMedia::<u64>::with_limits(limits);
+    let ring = Arc::new(RingBuffer::new(4096));
+    media.attach_publisher(1, publisher(ring.clone()), &stats);
+    let first = feed(&mut media, &topology_chunks(true, true, 0), &stats).unwrap();
+    assert!(media.held_bytes > 0);
+    // Deterministically model an already-expired control response, without
+    // sleeping or adding a second clock/deadline implementation.
+    media.publishers.get_mut(&1).unwrap().probe_sent_at =
+        Some(Instant::now() - Duration::from_secs(60));
+    let update = media
+        .on_payload(
+            1,
+            topology_pmt(None, &[first.audio_tracks[0].pid.unwrap()], 1),
+            &stats,
+        )
+        .unwrap();
+    assert!(update.video.is_none());
+    assert!(
+        media.held_bytes > 0,
+        "still-live audio is held until the next drain"
+    );
+    let before = ring.get_write_idx();
+    assert!(feed(&mut media, &topology_chunks(false, true, 1), &stats).is_none());
+    assert_eq!(
+        media.held_bytes, 0,
+        "the original absolute deadline must release media"
+    );
+    assert!(!media.publishers[&1].probe_pending);
+    assert!(
+        ring.get_write_idx() > before,
+        "expired held audio was published"
+    );
+    assert!(stats.media_probe_hold_overflows.load(Ordering::Relaxed) > 0);
+}

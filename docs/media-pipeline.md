@@ -953,8 +953,10 @@ The diagram shows a dashboard preview subscribing to a pipeline.
   advertised after their decoder configuration is probed. Owner/control
   acknowledgements carry the ingest attempt and update revision; stale
   responses cannot redirect a replacement publisher or release a newer
-  topology hold. No per-packet control events or selected-input presence mask
-  are needed.
+  topology hold. An outstanding hold keeps its first probe's absolute timeout
+  across later changes; filtered empty batches free their packet-vector
+  allocations before payload credits are returned. No per-packet control
+  events or selected-input presence mask are needed.
 - **Media.** The same conversion as MoQ egress: video plus the first AAC
   track.
 - **Browser.** `MoqPreview` (`web/ts/control-room/moq-preview.tsx`) needs
