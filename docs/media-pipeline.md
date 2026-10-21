@@ -924,8 +924,9 @@ The diagram shows a dashboard preview subscribing to a pipeline.
   viewers stays current until the next replacement or teardown, and a pipeline
   that lost all media is refused with its served generation closed. A
   same-session removal that leaves the ring's retained configuration in place
-  is not detected: SRT reports only its first probe and PMT updates can retain
-  removed tracks, so a served generation can keep a track the source stopped.
+  is not detected yet (Q-098): SRT reports only its first probe and PMT
+  updates can retain removed tracks, so a served generation can keep a track
+  the source stopped until a reconnect or total loss replaces it.
 - **Media.** The same conversion as MoQ egress: video plus the first AAC
   track.
 - **Browser.** `MoqPreview` (`web/ts/control-room/moq-preview.tsx`) needs
