@@ -636,7 +636,12 @@ Sources: `src/api/hls_ingest.rs`, `src/media/hls_ingest/`,
   behind is published at once, up to one target duration. A session takes
   new objects only while less than two target durations of media, and at most
   128 MiB, wait to publish. A poll applies one object or publishes one
-  64 KiB chunk (`PUBLISH_CHUNK_BYTES`).
+  64 KiB chunk (`PUBLISH_CHUNK_BYTES`). The TS demuxer reuses its staging
+  allocation when joining a partial packet with the next chunk; it still
+  copies that join. This limits session dispatch to one unit, not the CPU
+  time of every operation inside it. In particular, fMP4 still decodes a
+  whole bounded `moof` and plans its samples when first reached; incremental
+  parsing/planning remains open in Q-074.
 - **Bad segment.** A segment that fails to demux is dropped and counted. The
   timeline re-anchors and publishing continues.
 - **Known limit.** An init lost on the wire under the same URI is invisible;

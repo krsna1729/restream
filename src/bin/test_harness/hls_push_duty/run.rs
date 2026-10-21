@@ -1,6 +1,7 @@
 //! `hls-push-duty` execution: build the two arms, drive a rated window, and
 //! emit the isolation result JSON.
 
+use super::host_probe::{HostProbe, HostProbeReport};
 use super::*;
 use crate::hls_pull_duty::metrics::{pull_delivered_ok, pull_published_ok};
 use crate::hls_pull_duty::run::{create_pull_input, promote_input, wait_for_preview_master};
@@ -8,6 +9,11 @@ use crate::hls_pull_duty::run::{create_pull_input, promote_input, wait_for_previ
 /// The pull source's preview must serve a master playlist before the pulls
 /// can start.
 const PREVIEW_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// Empirical mean-cost regression threshold for the measured TS workload
+/// on this host class (60-170 us observed). This is not a hard work budget;
+/// hardware, host stalls, and pending polls all affect the mean.
+const MAX_MEAN_POLL_CPU_US: f64 = 250.0;
 
 /// One pipeline under test: an ingest input plus one RTMP sink output.
 struct PipelineTask {
@@ -58,6 +64,8 @@ struct Window {
     secs: f64,
     executor_start: Value,
     memory_start: host_memory::HostMemorySample,
+    /// The host-stall probe's report, when `--host-probe` ran it.
+    host_probe: Option<HostProbeReport>,
 }
 
 pub(crate) async fn run_hls_push_duty(
@@ -161,12 +169,17 @@ impl Session {
         let baselines = self.snapshot_baselines().await;
         let executor_start = self.media_executor().await?;
         let memory_start = host_memory::capture(self.restream.id());
+        let probe = options
+            .host_probe
+            .then(|| HostProbe::start(Duration::from_millis(1), Duration::from_millis(4)))
+            .transpose()?;
         let window_started = Instant::now();
         tokio::time::sleep(options.window()).await;
         let window = Window {
             secs: window_started.elapsed().as_secs_f64(),
             executor_start,
             memory_start,
+            host_probe: probe.map(HostProbe::stop).transpose()?,
         };
         let report = self
             .sample(options, plan, started, args, &baselines, &window)
@@ -407,6 +420,8 @@ impl Session {
                     shard_lookup.get(&(protocol, index))
                 });
             let sink_summary = task.metrics.summary();
+            let executor =
+                pipeline_poll_window(&window.executor_start, &media_executor, &task.pipeline_id);
             let input = input_published_summary(&probe);
             let keyframe_count = gop_keyframe_count(&probe);
             let (baseline_probe, baseline_sink) = baselines
@@ -449,6 +464,11 @@ impl Session {
                     task.name
                 ));
             }
+            if task.kind == "hls"
+                && let Err(error) = check_mean_poll_cpu(&executor, MAX_MEAN_POLL_CPU_US)
+            {
+                failures.push(format!("{}: {error}", task.name));
+            }
             rows.push(json!({
                 "name": task.name,
                 "kind": task.kind,
@@ -467,7 +487,7 @@ impl Session {
                 },
                 "sink": sink_summary,
                 "windowDelivery": window_delivery(&baseline_sink, &sink_summary, window.secs),
-                "executor": pipeline_poll_window(&window.executor_start, &media_executor, &task.pipeline_id),
+                "executor": executor,
                 "egress": pipeline_egress_summary(egress, shard),
                 "checks": {
                     "inputPublished": published,
@@ -482,6 +502,7 @@ impl Session {
         let cpu_count = std::thread::available_parallelism()
             .map(std::num::NonZeroUsize::get)
             .unwrap_or(0);
+        let poll_cpu = executor_class_windows(&window.executor_start, &media_executor, window.secs);
         let report = json!({
             "passed": passed,
             "mode": "hls-push-duty",
@@ -494,6 +515,7 @@ impl Session {
                 "durationSecs": options.duration_secs,
                 "segmentSecs": options.segment_secs,
                 "pollUsage": options.poll_usage,
+                "hostProbe": options.host_probe,
                 "cliArgs": args,
             },
             "environment": {
@@ -505,7 +527,8 @@ impl Session {
             },
             "wallClockSecs": round2(started.elapsed().as_secs_f64()),
             "windowSecs": round2(window.secs),
-            "pollCpu": executor_class_windows(&window.executor_start, &media_executor, window.secs),
+            "pollCpu": poll_cpu,
+            "hostProbe": window.host_probe,
             "hostMemory": host_memory::host_memory_report(
                 &window.memory_start,
                 &memory_end,

@@ -305,7 +305,12 @@ fn pull_sessions_add_a_source_and_their_own_pipelines() {
 
     let base = HlsPushOptions::from_args(&[]).expect("defaults parse");
     assert!(!base.poll_usage, "per-poll getrusage is opt-in");
+    assert!(!base.host_probe, "the host stall probe is opt-in");
     assert_eq!(base.total_pipelines(), 2, "no pull, no pull source");
+
+    let probed = HlsPushOptions::from_args(&args(&["--host-probe"])).expect("probe arm parses");
+    assert!(probed.host_probe);
+    assert!(HlsPushOptions::from_args(&args(&["--host-probe=1"])).is_err());
 
     assert!(HlsPushOptions::from_args(&args(&["--poll-usage=1"])).is_err());
     assert!(
@@ -486,4 +491,53 @@ fn window_delivery_counts_only_media_inside_the_window() {
     let stalled = window_delivery(&end, &end, 60.0);
     assert_eq!(stalled["mediaRatio"], 0.0);
     assert!(window_delivery(&baseline, &end, 0.0)["mediaRatio"].is_null());
+}
+
+#[test]
+fn mean_cpu_gate_rejects_missing_empty_and_reset_measurements() {
+    let start = executor(json!([]), json!([]));
+    for rows in [
+        json!([]),
+        json!([{"serviceId": 1, "pipelineId": "p", "polls": 1}]),
+        json!([{"serviceId": 1, "pipelineId": "p", "cpuUs": 10}]),
+        json!([{"serviceId": 1, "pipelineId": "p", "polls": 0, "cpuUs": 0}]),
+    ] {
+        let end = executor(json!([]), rows);
+        let window = pipeline_poll_window(&start, &end, "p");
+        assert!(check_mean_poll_cpu(&window, 250.0).is_err(), "{window}");
+    }
+    let start = executor(
+        json!([]),
+        json!([
+            {"serviceId": 1, "pipelineId": "p", "polls": 20, "cpuUs": 1000}
+        ]),
+    );
+    let end = executor(
+        json!([]),
+        json!([
+            {"serviceId": 1, "pipelineId": "p", "polls": 30, "cpuUs": 100}
+        ]),
+    );
+    let window = pipeline_poll_window(&start, &end, "p");
+    assert!(check_mean_poll_cpu(&window, 250.0).is_err(), "{window}");
+    assert!(check_mean_poll_cpu(&pipeline_poll_window(&Value::Null, &end, "p"), 250.0).is_err());
+}
+
+#[test]
+fn mean_cpu_gate_checks_the_measured_threshold() {
+    let start = executor(json!([]), json!([]));
+    for (cpu, passes) in [(500, true), (501, false)] {
+        let end = executor(
+            json!([]),
+            json!([
+                {"serviceId": 1, "pipelineId": "p", "polls": 2, "cpuUs": cpu}
+            ]),
+        );
+        let window = pipeline_poll_window(&start, &end, "p");
+        assert_eq!(
+            check_mean_poll_cpu(&window, 250.0).is_ok(),
+            passes,
+            "{window}"
+        );
+    }
 }

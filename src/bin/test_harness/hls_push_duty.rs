@@ -39,6 +39,8 @@
 
 #[path = "hls_push_duty/host_memory.rs"]
 pub(super) mod host_memory;
+#[path = "hls_push_duty/host_probe.rs"]
+pub(super) mod host_probe;
 #[path = "hls_push_duty/metrics.rs"]
 pub(super) mod metrics;
 #[path = "hls_push_duty/options.rs"]

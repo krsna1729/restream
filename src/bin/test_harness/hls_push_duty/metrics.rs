@@ -153,8 +153,8 @@ fn per_poll(total: u64, polls: u64) -> Value {
 
 /// One executor row (a class or a service) over the window: each counter is
 /// `end − start` (a row absent at the start counts from zero), `cpuUsPerPoll`
-/// is the window's CPU per poll, and `maxCpuUs`/`maxPollUs` stay the
-/// lifetime maxima the engine reports. `usage` is the window's per-poll
+/// is the window's CPU per poll, and `maxCpuUs`/`maxPollUs`/`cpuP99Us` stay
+/// the lifetime values the engine reports. `usage` is the window's per-poll
 /// `getrusage` sum when the engine reports it.
 fn poll_row_window(start: Option<&Value>, end: &Value) -> serde_json::Map<String, Value> {
     let moved = |name: &str| counter(Some(end), name).saturating_sub(counter(start, name));
@@ -166,7 +166,7 @@ fn poll_row_window(start: Option<&Value>, end: &Value) -> serde_json::Map<String
         "cpuUsPerPoll".to_string(),
         per_poll(moved("cpuUs"), moved("polls")),
     );
-    for name in ["maxCpuUs", "maxPollUs"] {
+    for name in ["maxCpuUs", "maxPollUs", "cpuP99Us"] {
         row.insert(name.to_string(), json!(counter(Some(end), name)));
     }
     if let Some(usage) = end.get("usage") {
@@ -242,19 +242,37 @@ pub(crate) fn executor_class_windows(start: &Value, end: &Value, window_secs: f6
 pub(crate) fn pipeline_poll_window(start: &Value, end: &Value, pipeline_id: &str) -> Value {
     let mut totals: BTreeMap<&str, u64> = BTreeMap::new();
     let mut max_cpu_us = 0;
+    let mut p99_cpu_us = 0;
     let mut classes: Vec<Value> = Vec::new();
     let mut services = 0;
+    let mut valid = start.get("services").is_some_and(Value::is_array)
+        && end.get("services").is_some_and(Value::is_array);
     for end_row in rows(end, "services")
         .filter(|row| row.get("pipelineId").and_then(Value::as_str) == Some(pipeline_id))
     {
         let id = end_row.get("serviceId");
         let start_row = rows(start, "services").find(|row| row.get("serviceId") == id);
+        valid &= end_row.get("serviceId").and_then(Value::as_u64).is_some();
+        for name in ["polls", "cpuUs"] {
+            valid &= end_row
+                .get(name)
+                .and_then(Value::as_u64)
+                .is_some_and(|after| {
+                    start_row.is_none_or(|before| {
+                        before
+                            .get(name)
+                            .and_then(Value::as_u64)
+                            .is_some_and(|before| after >= before)
+                    })
+                });
+        }
         let window = poll_row_window(start_row, end_row);
         for name in POLL_COUNTERS {
             *totals.entry(name).or_default() +=
                 window.get(name).and_then(Value::as_u64).unwrap_or(0);
         }
         max_cpu_us = max_cpu_us.max(counter(Some(end_row), "maxCpuUs"));
+        p99_cpu_us = p99_cpu_us.max(counter(Some(end_row), "cpuP99Us"));
         if let Some(class) = end_row.get("class")
             && !classes.contains(class)
         {
@@ -265,12 +283,33 @@ pub(crate) fn pipeline_poll_window(start: &Value, end: &Value, pipeline_id: &str
     let total = |name: &str| totals.get(name).copied().unwrap_or(0);
     json!({
         "services": services,
+        "measurementValid": valid && services > 0 && total("polls") > 0,
         "classes": classes,
         "polls": total("polls"),
         "cpuUs": total("cpuUs"),
         "cpuUsPerPoll": per_poll(total("cpuUs"), total("polls")),
         "busyUs": total("busyUs"),
         "maxCpuUs": max_cpu_us,
+        "cpuP99Us": p99_cpu_us,
         "pollsOverCpu4Ms": total("pollsOverCpu4Ms"),
     })
+}
+
+/// An empirical regression threshold for this workload, not a per-poll
+/// work bound: timing depends on hardware, and pending polls dilute means.
+pub(crate) fn check_mean_poll_cpu(window: &Value, limit_us: f64) -> Result<(), String> {
+    if window.get("measurementValid").and_then(Value::as_bool) != Some(true) {
+        return Err("missing, reset, or empty executor poll measurement".to_string());
+    }
+    let mean = window
+        .get("cpuUsPerPoll")
+        .and_then(Value::as_f64)
+        .filter(|mean| mean.is_finite())
+        .ok_or_else(|| "missing executor mean poll CPU measurement".to_string())?;
+    if mean > limit_us {
+        return Err(format!(
+            "mean poll CPU {mean} us exceeds the empirical {limit_us} us regression threshold"
+        ));
+    }
+    Ok(())
 }
