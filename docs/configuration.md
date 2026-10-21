@@ -298,6 +298,15 @@ from CPU count.
 | `RESTREAM_CAPACITY_FFMPEG_STAGES` | FFmpeg stages |
 | `RESTREAM_CAPACITY_DISK_BPS` | Disk bits/s |
 
+The projection prices each output from its protocol. RTMP and RTMPS cost
+the media packet rate, SRT twice that, and a `moqt://` output 6.95 times
+that from measured Restream CPU per added output (each output is its own
+MoQ publisher session, measured with a continuously subscribed receiver
+per broadcast; the relay's and subscribers' own CPU is a separate process
+and is not priced). HLS PUT, sink and pipeline outputs cost their measured
+shares; sink and pipeline outputs add no NIC bytes. The values are
+observe-only priors from one reference host, not admission rules.
+
 ## SQLite-backed settings
 
 `GET /api/v1/settings` returns current values and `PATCH /api/v1/settings`

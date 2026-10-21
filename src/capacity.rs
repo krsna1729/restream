@@ -10,13 +10,14 @@ use serde::Serialize;
 
 use crate::media::engine::MediaEngine;
 
-/// The projection's formula. 4: HLS PUT, sink and pipeline outputs cost
-/// their measured share of an RTMP output, and sink and pipeline outputs
-/// send nothing to the NIC (3: every output that was not SRT was priced as
-/// RTMP; 2: SRT priced as 1316-byte datagrams against a ceiling never
-/// calibrated in them; 1: every output carried the sum of all ingests,
-/// protocol-blind).
-pub const CAPACITY_MODEL_VERSION: u32 = 4;
+/// The projection's formula. 5: MoQ outputs cost their measured share of
+/// an RTMP output instead of the RTMP prior (4: HLS PUT, sink and pipeline
+/// outputs cost their measured share of an RTMP output, and sink and
+/// pipeline outputs send nothing to the NIC; 3: every output that was not
+/// SRT was priced as RTMP; 2: SRT priced as 1316-byte datagrams against a
+/// ceiling never calibrated in them; 1: every output carried the sum of all
+/// ingests, protocol-blind).
+pub const CAPACITY_MODEL_VERSION: u32 = 5;
 
 /// One pipeline's ingest, as sampled.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
@@ -37,9 +38,8 @@ pub enum OutputProtocol {
     Rtmps,
     /// Priced by the SRT shard sizing prior.
     Srt,
-    /// MoQ (`moqt://`): one QUIC stream write per media object, priced as
-    /// RTMP — a recorded prior, not a measurement (backlog: measure MoQ
-    /// egress cost per output and replace this prior).
+    /// MoQ (`moqt://`): one publisher session and one QUIC stream write per
+    /// media object, priced from its measured per-output cost.
     Moq,
     /// HLS PUT: segment uploads, not a per-packet stream.
     Hls,
@@ -80,11 +80,21 @@ impl OutputProtocol {
     /// keeps a segmenter and uploads nothing, so the HLS price overstates
     /// it; a pipeline output's target is also an ingest, so its republish
     /// may be counted twice. Both err high.
+    ///
+    /// MoQ costs 6.95 RTMP outputs: the median of three paired repeats
+    /// (6.834, 6.921, 7.275), rounded up to 0.05, measured as Restream CPU
+    /// per added output from 20 to 120 outputs of a 4.7 Mbit/s H.264 source
+    /// (Q-088). Every output is its own publisher session with a
+    /// continuously subscribed receiver through the whole window, so the
+    /// price includes its QUIC/TLS connection and per-object stream writes.
+    /// The local moq-relay and the subscribers are separate processes; their
+    /// CPU is not in the share. Like the other measured shares this is a
+    /// prior from one host.
     pub fn egress_work_pps(self, ingest: IngestRate) -> f64 {
         use crate::config::EgressShardProfile;
         match self {
-            // Prior: one write per media packet, like RTMP (see `Moq`).
-            Self::Rtmp | Self::Rtmps | Self::Moq => ingest.pps,
+            Self::Rtmp | Self::Rtmps => ingest.pps,
+            Self::Moq => ingest.pps * 6.95,
             Self::Srt => {
                 ingest.pps * f64::from(EgressShardProfile::OutputCount.outputs_per_shard())
                     / f64::from(EgressShardProfile::SrtOutputCount.outputs_per_shard())
@@ -761,10 +771,15 @@ mod tests {
     }
 
     #[test]
-    fn a_moq_output_is_named_and_priced_by_the_rtmp_prior() {
-        let ingest = rate(6_000_000.0, 100.0);
+    fn a_moq_output_costs_its_measured_share() {
         assert_eq!(OutputProtocol::of_egress("moq"), OutputProtocol::Moq);
-        assert_eq!(OutputProtocol::Moq.egress_work_pps(ingest), 100.0);
+        assert_eq!(priced("moq").0, 695.0);
+    }
+
+    #[test]
+    fn a_moq_output_uses_the_nic() {
+        assert!(OutputProtocol::Moq.uses_network());
+        assert_eq!(priced("moq").1, 6_000_000.0);
     }
 
     /// Each kind's projected egress work (rounded to 1e-9) and NIC load for

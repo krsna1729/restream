@@ -22,7 +22,6 @@ items).
 - [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
 - [Q-087 separate-rendition timeline breaks](#q-087-protocol-sonnet-align-separate-renditions-on-timeline-breaks-not-on-raw-proximity)
-- [Q-088 MoQ egress cost](#q-088-performance-sonnet-price-moq-egress-from-a-measured-cost)
 - [Q-089 MoQ origin track-set changes](#q-089-protocol-sonnet-the-moq-origin-follows-a-track-set-change-while-served)
 - [Q-091 SRT Backup replays the lost prefix](#q-091-protocol-opus-srt-backup-failover-replays-the-lost-prefix)
 - [Q-092 no descendants of a dropped dependency](#q-092-resilience-opus-never-emit-descendants-of-a-dropped-dependency-bearing-unit)
@@ -224,7 +223,8 @@ items).
   parsers.
 - Status: open; phase 1 (moq-lite-06 + hang, loom model for the origin
   hand-off) landed in #371 with no regression on the unchanged shared
-  egress and ring benches (A/A); the MoQ egress cost itself is Q-088
+  egress and ring benches (A/A); capacity model v5 prices the MoQ egress
+  leaf from a measured per-output cost
   (Filed: 2026-10-05 by claude, from the architecture reviews).
 
 ### Q-049 [resilience] [opus] Find why connected SRT leaves sent nothing under host overload
@@ -456,14 +456,6 @@ items).
   passes; a pull test whose audio playlist recovers after abandonment pulls
   audio again.
 - Status: open (Filed: 2026-10-18 by claude, from the #364 review NITs).
-
-### Q-088 [performance] [sonnet] Price MoQ egress from a measured cost
-- Goal: capacity planning prices a `moqt://` output from its measured cost
-  per output instead of the RTMP prior (`OutputProtocol::Moq` in
-  `src/capacity.rs`).
-- Gates: a capacity ramp of MoQ outputs against moq-relay on an idle host
-  (`cargo xtask build-release`), CPU and memory per output beside RTMP's.
-- Status: open (Filed: 2026-10-18 by claude, from the #371 review).
 
 ### Q-089 [protocol] [sonnet] The MoQ origin follows a track-set change while served
 - Goal: a pipeline whose media gains or loses video or audio while viewers
