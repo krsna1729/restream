@@ -183,14 +183,15 @@ impl MediaCounters {
         push_recent(&mut self.recent_audio, timestamp_us, now);
     }
 
-    /// The stored samples' 95th percentile (0 without samples).
+    /// The stored samples' 95th percentile (0 without samples), nearest-rank
+    /// like the harness's other percentile (`ceil(0.95*n)-1`).
     fn p95(&self) -> u64 {
         if self.samples.is_empty() {
             return 0;
         }
         let mut values: Vec<u64> = self.samples.iter().copied().collect();
         values.sort_unstable();
-        let index = (values.len() * 95 / 100).min(values.len() - 1);
+        let index = (values.len() * 95).div_ceil(100).clamp(1, values.len()) - 1;
         values[index]
     }
 
@@ -292,17 +293,50 @@ impl SubscriberOutcome {
     }
 }
 
+/// Why [`run`] could not produce a report. [`Self::Config`] is a rejected
+/// invocation (URL, ALPN, CA path or PEM) and belongs with the usage exit;
+/// [`Self::Runtime`] means the report machinery itself could not start.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SubscriberError {
+    Config(String),
+    Runtime(String),
+}
+
+impl std::fmt::Display for SubscriberError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Config(message) => write!(f, "configuration: {message}"),
+            Self::Runtime(message) => write!(f, "runtime: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for SubscriberError {}
+
 /// Connect, resolve `broadcast`, count both media tracks for `watch`, and
-/// return the report. `Err` is reserved for an unusable configuration (an
-/// unreadable CA, a malformed URL); connection and protocol failures are
-/// reported with the counts gathered so far.
-pub fn run(config: SubscriberConfig) -> Result<SubscriberOutcome, String> {
-    parse_target(&config.url)?;
-    let ca = std::fs::read(&config.ca_pem)
-        .map_err(|error| format!("read CA {}: {error}", config.ca_pem.display()))?;
-    let runtime = compio::runtime::Runtime::new()
-        .map_err(|error| format!("create compio runtime for the MoQ subscriber: {error}"))?;
-    runtime.block_on(run_async(config, ca))
+/// return the report. A rejected configuration returns [`SubscriberError::Config`]
+/// before any network work; connection and protocol failures set
+/// `report.error` and keep the counts gathered so far.
+pub fn run(config: SubscriberConfig) -> Result<SubscriberOutcome, SubscriberError> {
+    parse_target(&config.url).map_err(SubscriberError::Config)?;
+    if !moq_net::ALPNS.contains(&config.alpn.as_str()) {
+        return Err(SubscriberError::Config(format!(
+            "unsupported ALPN {:?}; expected one of {}",
+            config.alpn,
+            moq_net::ALPNS.join(", ")
+        )));
+    }
+    let ca = std::fs::read(&config.ca_pem).map_err(|error| {
+        SubscriberError::Config(format!("read CA {}: {error}", config.ca_pem.display()))
+    })?;
+    let tls = tls::client_config(&[config.alpn.as_str()], Some(&ca), false)
+        .map_err(SubscriberError::Config)?;
+    let runtime = compio::runtime::Runtime::new().map_err(|error| {
+        SubscriberError::Runtime(format!(
+            "create compio runtime for the MoQ subscriber: {error}"
+        ))
+    })?;
+    runtime.block_on(run_async(config, tls))
 }
 
 /// Parse `url` into (remote address, setup path).
@@ -352,21 +386,12 @@ enum TrackEnd {
 #[derive(Default)]
 struct Observation {
     counters: MediaCounters,
-    first_video: Option<SystemTime>,
-    first_audio: Option<SystemTime>,
     first_media: Option<SystemTime>,
 }
 
 impl Observation {
-    fn note_media(&mut self, kind: Kind, at: SystemTime) {
-        match kind {
-            Kind::Video if self.first_video.is_none() => self.first_video = Some(at),
-            Kind::Audio if self.first_audio.is_none() => self.first_audio = Some(at),
-            _ => {}
-        }
-        if self.first_media.is_none() {
-            self.first_media = Some(at);
-        }
+    fn note_media(&mut self, at: SystemTime) {
+        self.first_media.get_or_insert(at);
     }
 }
 
@@ -393,7 +418,7 @@ async fn read_track(
                         ),
                         _ => observation.counters.observe_audio(timestamp_us, bytes, now),
                     }
-                    observation.note_media(kind, SystemTime::now());
+                    observation.note_media(SystemTime::now());
                 }
                 Ok(None) => return TrackEnd::Ended,
                 Err(error) => return TrackEnd::Failed(error.to_string()),
@@ -406,8 +431,11 @@ async fn read_track(
     }
 }
 
-async fn run_async(config: SubscriberConfig, ca: Vec<u8>) -> Result<SubscriberOutcome, String> {
-    let (remote, setup_path) = parse_target(&config.url)?;
+async fn run_async(
+    config: SubscriberConfig,
+    tls: compio::quic::ClientConfig,
+) -> Result<SubscriberOutcome, SubscriberError> {
+    let (remote, setup_path) = parse_target(&config.url).map_err(SubscriberError::Config)?;
     let started = Instant::now();
     let mut report = SubscriberReport {
         url: config.url.clone(),
@@ -418,8 +446,6 @@ async fn run_async(config: SubscriberConfig, ca: Vec<u8>) -> Result<SubscriberOu
         ..SubscriberReport::default()
     };
     let connect = async {
-        let tls = tls::client_config(&[config.alpn.as_str()], Some(&ca), false)
-            .map_err(|error| format!("MoQ client TLS: {error}"))?;
         let endpoint = transport::client_endpoint(AddressFamily::V4)
             .await
             .map_err(|error| format!("MoQ client endpoint: {error}"))?;
@@ -720,6 +746,17 @@ mod tests {
     }
 
     #[test]
+    fn p95_uses_nearest_rank_at_twenty_samples() {
+        let mut counters = MediaCounters::with_warmup(Duration::ZERO);
+        for _ in 0..19 {
+            counters.samples.push_back(10_000);
+        }
+        counters.samples.push_back(900_000);
+        // ceil(0.95 * 20) - 1 = 18: the 19th smallest, not the maximum.
+        assert_eq!(counters.p95(), 10_000);
+    }
+
+    #[test]
     fn target_parsing_keeps_the_setup_path_and_query() {
         let (remote, path) = parse_target("https://127.0.0.1:4443/?token=abc").expect("target");
         assert_eq!(remote, SocketAddr::from(([127, 0, 0, 1], 4443)));
@@ -727,6 +764,43 @@ mod tests {
         let (_, path) = parse_target("https://127.0.0.1:4443").expect("target");
         assert_eq!(path, "/");
         assert!(parse_target("http://127.0.0.1:4443/").is_err());
+    }
+
+    fn subscriber_config() -> SubscriberConfig {
+        SubscriberConfig {
+            url: "https://127.0.0.1:4443/".into(),
+            ca_pem: PathBuf::from("/nonexistent/ca.pem"),
+            broadcast: "live/x.hang".into(),
+            alpn: "moq-lite-06".into(),
+            server_name: "localhost".into(),
+            watch: Duration::from_secs(1),
+            connect_timeout: Duration::from_secs(1),
+            catalog_timeout: Duration::from_secs(1),
+            publish_ready_unix_ms: 0,
+        }
+    }
+
+    #[test]
+    fn rejected_invocations_are_configuration_errors_before_connecting() {
+        let mut bad_url = subscriber_config();
+        bad_url.url = "http://127.0.0.1:4443/".into();
+        assert!(matches!(run(bad_url), Err(SubscriberError::Config(_))));
+
+        let mut bad_alpn = subscriber_config();
+        bad_alpn.alpn = "not-a-moq-alpn".into();
+        assert!(matches!(run(bad_alpn), Err(SubscriberError::Config(_))));
+
+        let missing_ca = subscriber_config();
+        assert!(matches!(run(missing_ca), Err(SubscriberError::Config(_))));
+
+        let ca =
+            std::env::temp_dir().join(format!("moq-subscriber-bad-ca-{}.pem", std::process::id()));
+        std::fs::write(&ca, b"not a certificate").expect("write test CA");
+        let mut bad_pem = subscriber_config();
+        bad_pem.ca_pem = ca.clone();
+        let rejected = run(bad_pem);
+        let _ = std::fs::remove_file(&ca);
+        assert!(matches!(rejected, Err(SubscriberError::Config(_))));
     }
 
     #[test]

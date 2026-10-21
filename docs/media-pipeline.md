@@ -992,15 +992,16 @@ hang catalog and both media tracks through `moq-mux`'s LOC consumer, and
 prints startup delay (catalog-ready to first media), video frames/keyframes,
 audio frames/bytes and A/V arrival skew. Skew is the wall-clock gap between
 the two tracks delivering the same media instant (frames matched within
-25 ms), taken after a 2 s join warmup. It exits non-zero only for a
-connection or protocol failure; low counts stay in the report for the caller
-to judge.
+25 ms), taken after a 2 s join warmup. It exits 2 for a rejected invocation
+and 3 only for a runtime, connection or protocol failure; low counts stay in
+the report for the caller to judge.
 
 The `moq-impairment` harness mode drives that subscriber through the relay
-path under a loopback `netem` qdisc (2 % loss, 200 ms delay, relay QUIC port
-only) and asserts frames, keyframes, audio and a 500 ms p95 arrival-skew
-bound (the maximum is reported, not gated). The browser E2E remains the
-product proof; this mode is the protocol evidence under loss. See [testing](testing.md#moq-impairment-moq-impairment).
+path under a loopback `netem` qdisc (2 % loss and 200 ms delay each way,
+about 400 ms RTT, relay QUIC port only) and asserts frames, keyframes, audio
+and an empirical 500 ms p95 arrival-skew bound (the maximum is reported, not
+gated). It is manual evidence, not a CI job; the browser E2E remains the
+product proof. See [testing](testing.md#moq-impairment-moq-impairment).
 
 ## Recirculation and sink outputs
 

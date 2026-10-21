@@ -15,9 +15,13 @@
 //!   frame counts, not an arrival-skew claim.
 //!
 //! The browser E2E (`moq-dev-interop --browsers`) is unchanged; this is the
-//! protocol-under-impairment evidence beside it. The mode needs the default
+//! manual protocol-under-impairment evidence beside it, not a CI job. The
+//! mode needs the default
 //! private network namespace with CAP_NET_ADMIN (`--no-netns` cannot apply
-//! tc and fails loudly).
+//! tc and fails loudly). SIGINT/SIGTERM/SIGHUP trigger a bounded teardown;
+//! SIGKILL cannot be caught and may orphan children (no parent-death signal
+//! is set, because the relay and Restream are launched by shared harness
+//! helpers).
 //!
 //! ```text
 //! scripts/dev/moq/fetch-moq-dev.sh
@@ -198,29 +202,24 @@ impl NetemGuard {
     fn apply(udp_port: u16) -> Result<Self, String> {
         // Start from a clean root qdisc whatever an earlier failed run left.
         let _ = tc(&["qdisc", "del", "dev", "lo", "root"]);
-        let mut commands = Vec::new();
-        for step in netem_steps(udp_port) {
-            let borrowed: Vec<&str> = step.iter().map(String::as_str).collect();
-            match tc(&borrowed) {
-                Ok(stdout) => commands.push(json!({"argv": step, "stdout": stdout})),
-                // The guard removes whatever the failed recipe left behind.
-                Err(error) => {
-                    let guard = Self {
-                        commands,
-                        show: String::new(),
-                        active: true,
-                    };
-                    drop(guard);
-                    return Err(error);
-                }
-            }
-        }
-        let show = tc(&["-s", "qdisc", "show", "dev", "lo"])?;
-        Ok(Self {
-            commands,
-            show,
+        let mut steps = netem_steps(udp_port).into_iter();
+        let root = steps.next().ok_or("empty netem recipe")?;
+        let borrowed: Vec<&str> = root.iter().map(String::as_str).collect();
+        let stdout = tc(&borrowed)?;
+        // The root qdisc exists from here on: every later error unwinds
+        // through this guard's Drop, which deletes the whole tree.
+        let mut guard = Self {
+            commands: vec![json!({"argv": root, "stdout": stdout})],
+            show: String::new(),
             active: true,
-        })
+        };
+        for step in steps {
+            let borrowed: Vec<&str> = step.iter().map(String::as_str).collect();
+            let stdout = tc(&borrowed)?;
+            guard.commands.push(json!({"argv": step, "stdout": stdout}));
+        }
+        guard.show = tc(&["-s", "qdisc", "show", "dev", "lo"])?;
+        Ok(guard)
     }
 }
 
@@ -230,6 +229,29 @@ impl Drop for NetemGuard {
             let _ = tc(&["qdisc", "del", "dev", "lo", "root"]);
             self.active = false;
         }
+    }
+}
+
+/// Capped teardown after a termination signal: every child gets its own
+/// 5 s kill/wait bound, so this leaves headroom for four of them plus the
+/// qdisc removal.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The first catchable termination signal. SIGKILL cannot be handled; the
+/// mode's cleanup runs on the normal path, on errors, and here.
+async fn termination_signal() -> &'static str {
+    use tokio::signal::unix::{SignalKind, signal};
+    let (Ok(mut interrupt), Ok(mut terminate), Ok(mut hangup)) = (
+        signal(SignalKind::interrupt()),
+        signal(SignalKind::terminate()),
+        signal(SignalKind::hangup()),
+    ) else {
+        return std::future::pending().await;
+    };
+    tokio::select! {
+        _ = interrupt.recv() => "SIGINT",
+        _ = terminate.recv() => "SIGTERM",
+        _ = hangup.recv() => "SIGHUP",
     }
 }
 
@@ -528,14 +550,24 @@ pub(crate) async fn moq_impairment(args: &[String]) -> Result<Value, String> {
         checks: Vec::new(),
         failures: Vec::new(),
     };
-    let outcome = session.execute().await;
-    session.shutdown().await;
-
-    let passed = outcome.is_ok() && session.failures.is_empty();
+    let outcome = tokio::select! {
+        outcome = session.execute() => outcome,
+        signal = termination_signal() => Err(format!("{MODE} received {signal}")),
+    };
     let mut failures = session.failures.clone();
+    if tokio::time::timeout(SHUTDOWN_TIMEOUT, session.shutdown())
+        .await
+        .is_err()
+    {
+        failures.push(format!(
+            "shutdown exceeded {} s",
+            SHUTDOWN_TIMEOUT.as_secs()
+        ));
+    }
     if let Err(error) = &outcome {
         failures.push(format!("aborted: {error}"));
     }
+    let passed = outcome.is_ok() && failures.is_empty();
     let report = json!({
         "passed": passed,
         "mode": MODE,

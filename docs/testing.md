@@ -395,10 +395,12 @@ runs lite/browser and IETF modes using the same pinned tools and uploads both.
 ### MoQ impairment (`moq-impairment`)
 
 `moq-impairment` is the protocol-under-impairment evidence beside the browser
-E2E, which it does not replace. An RTMP publisher feeds one Restream pipeline
-whose `moqt://` output publishes `live/impairment.hang` to the pinned
-moq-relay 0.17.7. Once the relay serves the catalog, the mode puts a `netem`
-qdisc on loopback (2 % loss, 200 ms delay) with filters for the relay's UDP
+E2E, which it does not replace. It is **manual evidence, not a CI job**: no
+workflow runs it, and the browser E2E remains the product proof. An RTMP
+publisher feeds one Restream pipeline whose `moqt://` output publishes
+`live/impairment.hang` to the pinned moq-relay 0.17.7. Once the relay serves
+the catalog, the mode puts a `netem` qdisc on loopback (2 % loss and 200 ms
+delay in each direction, about 400 ms RTT) with filters for the relay's UDP
 port in both directions, then runs the headless `moq_subscriber` over the
 production moq-net/hang path (native QUIC, hang catalog, the same
 `transport::connect` and `Client::connect` as the egress leaf and origin).
@@ -414,7 +416,10 @@ scripts/harness/run.sh moq-impairment
 The mode requires the default private network namespace with
 `CAP_NET_ADMIN` for `tc`; `--no-netns` fails instead of silently skipping the
 impairment. `MOQ_IMPAIRMENT_SUBSCRIBER_BIN` overrides the subscriber path (it
-otherwise sits next to the harness binary).
+otherwise sits next to the harness binary). SIGINT/SIGTERM/SIGHUP route
+through a bounded 30 s teardown that kills the relay, Restream, publisher and
+subscriber, removes the `tc` tree and lets the private namespace go away;
+SIGKILL of the harness cannot be handled and can still orphan children.
 
 The subscriber prints one JSON object (also kept in the mode report):
 
@@ -426,17 +431,21 @@ The subscriber prints one JSON object (also kept in the mode report):
 | `p95AbsSkewUs`, `maxAbsSkewUs`, `skewSamples`, `skewMatchToleranceUs` | A/V arrival skew: the wall-clock gap between video and audio delivering the same media instant (matched within 25 ms), after a 2 s join warmup; the p95 is the gate, the max is evidence |
 | `connected`, `connectionMs`, `catalogMs`, `alpn`, `error` | transport/protocol context |
 
-It exits `0` after the watch window however few frames arrived, and `3` only
-for a connection or protocol failure, still printing the partial counts. The
-mode asserts `videoFrames > 0`, `keyframes > 0`, `audioFrames`/`audioBytes >
-0`, `p95AbsSkewUs <= 500 000` (500 ms) and `startupDelayMs <= 10 000` (10 s).
-The maximum skew is reported but not gated: with 2 % loss and a 200 ms RTT a
-retransmission can delay one track by most of a recovery interval, so the
-95th percentile is bounded at 500 ms while the maximum is only reported. Arrival skew pairs frames by
-media time, so a stalled frame produces no pair rather than an unbounded skew
-claim; the frame counts carry the delivery verdict. `.local/artifacts/moq-impairment/` holds `report.json`,
-`restream.log`, `moq-relay.log`, `publisher.log`, `subscriber.log` and the
-generated TLS material; the harness also writes
+It exits `0` after the watch window however few frames arrived, `2` for a
+rejected invocation (arguments, URL, ALPN, CA path or CA PEM) before
+connecting, and `3` for a runtime, connection or protocol failure, still
+printing the partial counts. The mode asserts `videoFrames > 0`,
+`keyframes > 0`, `audioFrames`/`audioBytes > 0`, `p95AbsSkewUs <= 500 000`
+(500 ms) and `startupDelayMs <= 10 000` (10 s). The 500 ms p95 bound is
+empirical for this impairment profile, not a sustained-delivery guarantee:
+with 2 % loss and 200 ms delay each way a retransmission can delay one
+track by most of a recovery interval, so the maximum skew is reported but
+not gated. Arrival skew pairs frames by media time, so a stalled frame
+produces no pair rather than an unbounded skew claim; the frame counts carry
+the delivery verdict. The subscriber prints its JSON even on a runtime
+failure, so partial counts survive. `.local/artifacts/moq-impairment/` holds
+`report.json`, `restream.log`, `moq-relay.log`, `publisher.log`,
+`subscriber.log` and the generated TLS material; the harness also writes
 `.local/artifacts/moq-impairment.json`.
 
 `moq-relay-interop` targets unmodified MediaMTX v1.21.2
