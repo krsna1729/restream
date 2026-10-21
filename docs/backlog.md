@@ -28,6 +28,8 @@ items).
 - [Q-096 GRO and arrival timestamps](#q-096-performance-sonnet-gro-and-arrival-timestamps-in-the-reference-srt-path)
 - [Q-097 MediaMTX MoQ dialect interoperability](#q-097-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop)
 - [Q-098 same-session track removal](#q-098-protocol-sonnet-moq-origin-observes-same-session-track-removal)
+- [Q-099 Grype GitHub Code Scanning error](#q-099-security-sonnet-fix-the-grype-github-code-scanning-error)
+- [Q-100 eight GitHub vulnerability alerts](#q-100-security-opus-triage-and-remediate-the-eight-github-reported-vulnerabilities)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -517,3 +519,31 @@ items).
   longer carries video, with no retained-configuration masking.
 - Status: open (Filed: 2026-10-21 by MoqOriginGen, from the Q-089
   retained-configuration limitation).
+
+### Q-099 [security] [sonnet] Fix the Grype GitHub Code Scanning error
+- Goal: resolve the user-reported Grype error in GitHub Code Scanning;
+  scanner execution, report generation and SARIF upload must succeed, and
+  scanner failures must not masquerade as a clean result.
+- Sources: GitHub Code Scanning and Actions logs,
+  `.github/workflows/sbom-security.yml`,
+  `.github/actions/security-tools/action.yml`.
+- Gates: identify the failing analysis/run and its actual error; apply the
+  scoped correction; run the affected workflow and verify a valid Grype
+  analysis reaches GitHub Code Scanning without the reported error.
+- Status: open (Filed: 2026-10-21 by assistant, user report).
+
+### Q-100 [security] [opus] Triage and remediate the eight GitHub-reported vulnerabilities
+- Goal: account for and remediate the eight vulnerabilities reported by
+  GitHub, prioritizing severity and reachable exposure rather than merely
+  clearing the alert count.
+- Sources: the repository's GitHub Security alerts and advisory details,
+  dependency manifests/lockfiles, and existing dependency-update PRs.
+- Gates: record each reported alert's identifier, affected dependency,
+  dependency path, severity and available fix; apply scoped remediation
+  with relevant checks; verify alerts resolve after the corrected default
+  branch is analyzed. Any remaining alert needs a concrete blocker or
+  evidence-backed disposition; do not suppress alerts to make a scan green.
+- Constraints: preserve the existing instruction not to touch or merge
+  Dependabot PRs; flag any remediation needing that authorization separately.
+- Status: open (Filed: 2026-10-21 by assistant, user report of eight alerts;
+  this records the reported count, not a completed triage).
