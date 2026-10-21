@@ -1,5 +1,5 @@
 //! Tokio session lifecycle for srt-rs ingress: admission, publisher and reader
-//! registration, the one-time stream probe, disconnect bookkeeping, receive
+//! registration, stream probes/topology updates, disconnect bookkeeping, receive
 //! quality and deletion checks. Media never passes through here: it runs to
 //! completion on the ingress Owner thread (`ingress_media`).
 
@@ -247,15 +247,22 @@ impl SrtServer {
             }
             SrtIngressEvent::Probe {
                 logical_peer,
+                identity,
                 probe,
             } => {
                 let ring = match sessions.get(&logical_peer) {
-                    Some(Session::Publish(publisher)) => self.apply_probe(publisher, probe).await,
+                    Some(Session::Publish(publisher)) => {
+                        self.apply_probe(publisher, identity, probe).await
+                    }
                     _ => None,
                 };
                 // Always answer: the Owner holds the publisher's packets until
                 // it hears back.
-                ingress.command(IngressCommand::ProbeApplied { logical_peer, ring });
+                ingress.command(IngressCommand::ProbeApplied {
+                    logical_peer,
+                    identity,
+                    ring,
+                });
             }
             SrtIngressEvent::Disconnected {
                 peer,
@@ -414,7 +421,6 @@ impl SrtServer {
             first_media_ms,
             ingest_metrics,
             last_progress_ms,
-            probe_sent: false,
         });
         let session = PublisherSession {
             pipeline_id: pipeline.id,
@@ -425,58 +431,27 @@ impl SrtServer {
         Ok((session, media))
     }
 
-    /// Apply a publisher's first stream probe to its ingest session, and adapt
-    /// the pipeline ring when this input is selected. Returns the replacement
-    /// ring for the Owner.
-    ///
-    /// The video/audio metadata is written last, after the audio tracks, the
-    /// track selection and the ring resize: it opens an output's start gate
-    /// (`MediaEngine::ingest_tracks_ready`), so an output attaches to the
-    /// resized ring rather than migrating to it mid-read, and the codec hint
-    /// lands on the ring the pipeline keeps.
+    /// Apply an authoritative container snapshot and adapt the selected ring.
+    /// The engine serializes the attempt/selection check and complete metadata
+    /// replacement with selection and origin resolution. Resize precedes the
+    /// metadata that opens the output start gate.
     pub(super) async fn apply_probe(
         &self,
         publisher: &PublisherSession,
+        identity: super::ingress_media::ProbeIdentity,
         probe: DemuxProbe,
     ) -> Option<Arc<RingBuffer>> {
-        let video_fps = probe.video.as_ref().map(|video| video.fps).unwrap_or(30.0);
-        let audio_track_count = probe.audio_tracks.len();
-        let first_audio = probe.audio_tracks.first().cloned();
-        let selected_video_track_index = probe.video.as_ref().map(|_| 0);
-        self.engine
-            .update_ingest_session_video_track_selection(
-                &publisher.registration,
-                probe.video_track_count,
-                selected_video_track_index,
-            )
-            .await;
-        if !probe.audio_tracks.is_empty() {
-            self.engine
-                .update_ingest_session_audio_tracks(
-                    &publisher.pipeline_id,
-                    &publisher.registration,
-                    probe.audio_tracks,
-                )
-                .await;
+        if publisher.registration.attempt_id != identity.attempt_id {
+            return None;
         }
-        let ring = if self
+        let ring = self
             .engine
-            .is_ingest_session_selected(&publisher.pipeline_id, &publisher.registration)
-            .await
-        {
-            self.engine
-                .adapt_pipeline_ring(&publisher.pipeline_id, video_fps, audio_track_count)
-                .await
-        } else {
-            None
-        };
-        self.engine
-            .update_ingest_session_meta(
-                &publisher.pipeline_id,
+            .replace_ingest_session_tracks(
                 &publisher.registration,
                 probe.video,
-                first_audio,
-                None,
+                probe.audio_tracks,
+                probe.video_track_count,
+                probe.video_sequence_header,
             )
             .await;
         self.engine

@@ -99,5 +99,10 @@ use wire::{
 };
 
 #[cfg(test)]
+pub(crate) fn test_crc32_mpeg2(data: &[u8]) -> u32 {
+    wire::crc32_mpeg2(data)
+}
+
+#[cfg(test)]
 #[path = "mpegts_tests.rs"]
 mod tests;

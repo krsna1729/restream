@@ -73,9 +73,14 @@ async fn owner_runs_publisher_media_to_completion_without_losing_payloads() {
                 };
                 assert!(handle.try_send(command).is_ok());
             }
-            Ok(Some(SrtIngressEvent::Probe { logical_peer, .. })) => {
+            Ok(Some(SrtIngressEvent::Probe {
+                logical_peer,
+                identity,
+                ..
+            })) => {
                 let command = IngressCommand::ProbeApplied {
                     logical_peer,
+                    identity,
                     ring: None,
                 };
                 assert!(handle.try_send(command).is_ok());
@@ -184,9 +189,14 @@ async fn two_owners_share_the_port_and_each_session_command_reaches_its_owner() 
                 };
                 assert!(handle.try_send(command).is_ok());
             }
-            Ok(Some(SrtIngressEvent::Probe { logical_peer, .. })) => {
+            Ok(Some(SrtIngressEvent::Probe {
+                logical_peer,
+                identity,
+                ..
+            })) => {
                 let command = IngressCommand::ProbeApplied {
                     logical_peer,
+                    identity,
                     ring: None,
                 };
                 assert!(handle.try_send(command).is_ok());
@@ -261,7 +271,6 @@ fn test_publisher_media(
         first_media_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         ingest_metrics: Arc::new(crate::media::stage_metrics::StageMetrics::new()),
         last_progress_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        probe_sent: false,
     });
     (media, bytes_received)
 }

@@ -27,7 +27,6 @@ items).
 - [Q-095 stream inspector](#q-095-observability-sonnet-stream-inspector-gop-health-skew-and-scte)
 - [Q-096 GRO and arrival timestamps](#q-096-performance-sonnet-gro-and-arrival-timestamps-in-the-reference-srt-path)
 - [Q-097 MediaMTX MoQ dialect interoperability](#q-097-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop)
-- [Q-098 same-session track removal](#q-098-protocol-sonnet-moq-origin-observes-same-session-track-removal)
 
 ### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
@@ -510,25 +509,3 @@ items).
     with these contracts aligned; then require both directions and media
     read-back before re-enabling the MediaMTX gate.
 
-### Q-098 [protocol] [sonnet] MoQ origin observes same-session track removal
-
-- Goal: while a broadcast is served, the MoQ origin notices a video or audio
-  track removed within one SRT or PMT-updated input session and replaces the
-  generation with the new track set instead of keeping the retained ring
-  configuration as if the track were still present.
-- Why: the origin takes per-track presence from the ring's current track set,
-  but that set only shrinks when the producer reports a smaller set. SRT
-  reports only its first probe and does not report a later track removal;
-  the MPEG-TS demux replaces its track set on a PMT update while the cached
-  ingest metadata can retain a removed track. A same-session removal
-  therefore leaves a stale video/audio rendition in the served catalog until
-  a reconnect or total loss. Documented as a limitation in the Q-089 change;
-  this item closes it.
-- Sources: `src/media/srt/ingress_media.rs:277-281` (first-probe-only track
-  report); `src/media/mpegts/demux.rs:589-597` (PMT replaces the demux track
-  set, cached ingest metadata can retain a removed track).
-- Gates: an origin/ingest test that removes a video track within one SRT
-  session and asserts the served generation is replaced and its catalog no
-  longer carries video, with no retained-configuration masking.
-- Status: open (Filed: 2026-10-21 by MoqOriginGen, from the Q-089
-  retained-configuration limitation).

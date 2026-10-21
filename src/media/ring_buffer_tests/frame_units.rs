@@ -69,6 +69,57 @@ fn configuration_generation_changes_only_with_the_bytes_and_per_track() {
 }
 
 #[test]
+fn q098_track_removal_clears_current_config_but_not_historical_frame_identity() {
+    let ring = RingBuffer::new(8);
+    ring.set_codec_hint("h264");
+    ring.set_video_parameter_sets(vec![1, 2, 3]);
+    ring.push(packet(MediaType::Video, 0, true, &[0]));
+    let before = ring.video_config().unwrap();
+    ring.remove_video_track();
+    assert!(ring.codec_hint_str().is_empty());
+    assert!(ring.video_config().is_none());
+    assert_eq!(
+        ring.track_config_at(0, MediaType::Video, 0),
+        Ok(Some(before.clone()))
+    );
+
+    ring.set_codec_hint("hevc");
+    ring.set_video_parameter_sets(vec![1, 2, 3]);
+    assert_eq!(ring.codec_hint_str(), "hevc");
+    assert_ne!(ring.video_config().unwrap().generation, before.generation);
+    ring.set_codec_hint("h264");
+    assert_eq!(
+        ring.codec_hint_str(),
+        "h264",
+        "codec can change on reappearance"
+    );
+
+    ring.set_track_config(MediaType::Audio, 0, vec![4, 5]);
+    ring.set_audio_tracks(Vec::new());
+    assert!(ring.track_config(MediaType::Audio, 0).is_none());
+
+    let other = RingBuffer::new(8);
+    other.set_codec_hint("av1");
+    assert_eq!(
+        other.codec_hint_str(),
+        "av1",
+        "other producers keep their hint"
+    );
+    other.remove_video_track();
+    assert!(other.codec_hint_str().is_empty());
+    other.set_codec_hint("h264");
+    assert_eq!(other.codec_hint_str(), "h264");
+
+    let alias = RingBuffer::new(8);
+    alias.set_codec_hint("h265");
+    assert_eq!(
+        alias.codec_hint_str(),
+        "h265",
+        "initial hint identity is preserved"
+    );
+}
+
+#[test]
 fn packets_carry_their_own_tracks_generation() {
     let ring = RingBuffer::new(8);
     ring.push(packet(MediaType::Video, 0, false, &[0]));

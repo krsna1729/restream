@@ -944,11 +944,17 @@ The diagram shows a dashboard preview subscribing to a pipeline.
   installs it and closes the old one, ending its viewers. Viewers never move
   between generations; new viewers join the current one, a replacement with no
   viewers stays current until the next replacement or teardown, and a pipeline
-  that lost all media is refused with its served generation closed. A
-  same-session removal that leaves the ring's retained configuration in place
-  is not detected yet (Q-098): SRT reports only its first probe and PMT
-  updates can retain removed tracks, so a served generation can keep a track
-  the source stopped until a reconnect or total loss replaces it.
+  that lost all media is refused with its served generation closed. SRT PMT
+  topology changes replace the ingest/ring track snapshot within the same
+  session, clearing absent tracks and their current decoder configuration
+  while preserving retained track configuration. Held audio from a changed
+  PID/index layout is discarded rather than replayed under the wrong track;
+  a still-live video's standby GOP is preserved. Reappearing tracks are
+  advertised after their decoder configuration is probed. Owner/control
+  acknowledgements carry the ingest attempt and update revision; stale
+  responses cannot redirect a replacement publisher or release a newer
+  topology hold. No per-packet control events or selected-input presence mask
+  are needed.
 - **Media.** The same conversion as MoQ egress: video plus the first AAC
   track.
 - **Browser.** `MoqPreview` (`web/ts/control-room/moq-preview.tsx`) needs

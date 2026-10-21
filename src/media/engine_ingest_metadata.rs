@@ -124,6 +124,67 @@ impl MediaEngine {
         }
     }
 
+    /// Replace an authoritative container track snapshot, rather than merge
+    /// optional probe fields. Selection, registration replacement and origin
+    /// resolution share this lock: an old attempt can neither clear a new
+    /// session's metadata nor resize/change its selected ring.
+    pub(crate) async fn replace_ingest_session_tracks(
+        &self,
+        registration: &IngestRegistration,
+        video: Option<VideoMeta>,
+        audio_tracks: Vec<AudioMeta>,
+        video_track_count: usize,
+        video_sequence_header: Option<bytes::Bytes>,
+    ) -> Option<Arc<crate::media::ring_buffer::RingBuffer>> {
+        let _selection = self.ingests.selection_lock.lock().await;
+        let ingest = self.current_ingest_session(registration).await?;
+        if registration.cancel_token.is_cancelled() {
+            return None;
+        }
+        let selected = self
+            .is_ingest_session_selected(&ingest.pipeline_id, registration)
+            .await;
+        let replacement = if selected {
+            self.adapt_pipeline_ring(
+                &ingest.pipeline_id,
+                video.as_ref().map_or(0.0, |video| video.fps),
+                audio_tracks.len(),
+            )
+            .await
+        } else {
+            None
+        };
+        {
+            let mut metadata = crate::sync::write(&ingest.metadata);
+            metadata.video = video.clone();
+            metadata.audio = audio_tracks.first().cloned();
+            metadata.video_track_count = video_track_count;
+            metadata.selected_video_track_index = video.as_ref().map(|_| 0);
+            metadata.tracks_authoritative = true;
+        }
+        *crate::sync::lock(&ingest.audio_tracks) = Arc::new(audio_tracks.clone());
+        *crate::sync::lock(&ingest.video_sequence_header) = video_sequence_header;
+        if audio_tracks.is_empty() {
+            *crate::sync::lock(&ingest.audio_sequence_header) = None;
+        }
+        let update_ring = |ring: &crate::media::ring_buffer::RingBuffer| {
+            if let Some(video) = &video {
+                ring.set_codec_hint(&video.codec);
+            } else {
+                ring.remove_video_track();
+            }
+            ring.set_audio_tracks(audio_tracks.clone());
+        };
+        if let Some(preview) = registration.preview_ring.load_full() {
+            update_ring(&preview);
+        }
+        if selected && let Some(ring) = self.ingests.pipelines.read().await.get(&ingest.pipeline_id)
+        {
+            update_ring(ring);
+        }
+        replacement
+    }
+
     /// Report that a session's probe has been recorded in full: its video
     /// and audio metadata, audio tracks, selection and sequence headers.
     ///

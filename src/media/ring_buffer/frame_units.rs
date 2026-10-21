@@ -151,6 +151,17 @@ impl TrackConfigs {
         next
     }
 
+    /// Remove the current configuration without reusing its generation when
+    /// the track returns. Historical packets keep resolving their own bytes.
+    pub(super) fn clear(&self, media_type: MediaType, track_index: u32) {
+        let Some(slot) = self.slot(media_type, track_index) else {
+            return;
+        };
+        if slot.current.swap(None).is_some() {
+            slot.generation.fetch_add(1, Ordering::Release);
+        }
+    }
+
     /// The configuration of `generation`, if the track still retains it.
     pub(super) fn get(
         &self,

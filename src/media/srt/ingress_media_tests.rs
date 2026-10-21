@@ -36,7 +36,6 @@ fn publisher(ring: Arc<RingBuffer>) -> Box<SrtPublisherMedia> {
         first_media_ms: Arc::new(AtomicU64::new(0)),
         ingest_metrics: Arc::new(StageMetrics::new()),
         last_progress_ms: Arc::new(AtomicU64::new(0)),
-        probe_sent: false,
     })
 }
 
@@ -102,7 +101,7 @@ fn media_received_before_admission_is_replayed_on_attach() {
         probe.is_some(),
         "the replayed media completed a stream probe"
     );
-    media.probe_applied(1, None, &stats);
+    media.probe_applied(1, media.probe_identity(1).unwrap(), None, &stats);
     let _ = feed(&mut media, &chunks[300..], &stats);
     assert!(
         ring.get_write_idx() > 0,
@@ -202,7 +201,12 @@ fn the_first_probe_boundary_and_ring_migration_are_ordered() {
     let new_ring = Arc::new(RingBuffer::new_continuing(8192, at_probe));
     let seeded = new_ring.seed_readable_tail_from(&old_ring);
     assert_eq!(seeded, at_probe, "the whole published tail migrates");
-    media.probe_applied(1, Some(new_ring.clone()), &stats);
+    media.probe_applied(
+        1,
+        media.probe_identity(1).unwrap(),
+        Some(new_ring.clone()),
+        &stats,
+    );
 
     assert_eq!(
         old_ring.get_write_idx(),
@@ -272,7 +276,7 @@ fn concurrent_stalled_probes_stay_inside_their_byte_budgets() {
     }
     // A late answer still lands cleanly.
     for peer in 0..4 {
-        media.probe_applied(peer, None, &stats);
+        media.probe_applied(peer, media.probe_identity(peer).unwrap(), None, &stats);
     }
     assert_eq!(media.held_bytes, 0);
 }
@@ -357,7 +361,7 @@ fn discarding_a_panicked_peer_returns_only_its_held_bytes() {
 
     assert_eq!(media.held_bytes, two_held);
     let before = ring_two.get_write_idx();
-    media.probe_applied(2, None, &stats);
+    media.probe_applied(2, media.probe_identity(2).unwrap(), None, &stats);
     assert!(
         ring_two.get_write_idx() > before,
         "peer 2's held media flows"
@@ -388,4 +392,101 @@ fn a_replay_that_unwinds_leaves_no_bytes_charged() {
     assert_eq!(media.held_bytes, 0);
     assert_eq!(media.unattached_bytes, 0);
     assert!(media.publisher_peers().is_empty());
+}
+
+#[test]
+fn q098_stale_probe_ack_cannot_release_or_redirect_a_newer_topology_or_session() {
+    use super::super::ingress_test_support::topology_chunks;
+
+    let stats = SrtIngressOwnerStats::default();
+    let ring = Arc::new(RingBuffer::new(4096));
+    let wrong_ring = Arc::new(RingBuffer::new(4096));
+    let mut media = IngressMedia::<u64>::default();
+    media.attach_publisher(1, publisher(ring.clone()), &stats);
+    assert!(feed(&mut media, &topology_chunks(true, true, 0), &stats).is_some());
+    let first = media.probe_identity(1).unwrap();
+    let removed = feed(&mut media, &topology_chunks(false, true, 1), &stats).unwrap();
+    assert!(removed.video.is_none());
+    let current = media.probe_identity(1).unwrap();
+    assert_ne!(current, first);
+    assert!(media.held_bytes > 0);
+
+    media.probe_applied(1, first, Some(wrong_ring.clone()), &stats);
+    assert!(Arc::ptr_eq(&media.publishers[&1].media.ring_buffer, &ring));
+    assert!(media.publishers[&1].probe_pending);
+    assert!(media.held_bytes > 0);
+    media.probe_applied(1, current, None, &stats);
+    assert_eq!(media.held_bytes, 0);
+
+    // Reuse the addressable peer slot, but never its ingest attempt identity.
+    let mut replacement = publisher(ring.clone());
+    replacement.registration.attempt_id = 2;
+    media.attach_publisher(1, replacement, &stats);
+    assert!(feed(&mut media, &topology_chunks(true, true, 0), &stats).is_some());
+    let replacement = media.probe_identity(1).unwrap();
+    assert_eq!(replacement.revision, first.revision);
+    media.probe_applied(1, first, Some(wrong_ring), &stats);
+    assert!(Arc::ptr_eq(&media.publishers[&1].media.ring_buffer, &ring));
+    assert!(media.publishers[&1].probe_pending);
+    media.probe_applied(1, replacement, None, &stats);
+    assert_eq!(media.held_bytes, 0);
+}
+
+#[test]
+fn q098_reindexed_audio_does_not_replay_a_removed_pid_from_the_probe_hold() {
+    use super::super::ingress_test_support::topology_pmt;
+
+    let fixture = crate::test_fixtures::av_marker_transport_fixture("h264", true).unwrap();
+    let fixture = std::fs::read(fixture).unwrap();
+    let chunks: Vec<_> = fixture
+        .chunks(CHUNK)
+        .take(400)
+        .map(Bytes::copy_from_slice)
+        .collect();
+    let stats = SrtIngressOwnerStats::default();
+    let ring = Arc::new(RingBuffer::new(4096));
+    let mut media = IngressMedia::<u64>::default();
+    media.attach_publisher(1, publisher(ring), &stats);
+    let first = feed(&mut media, &chunks, &stats).unwrap();
+    assert_eq!(first.audio_tracks.len(), 2);
+    assert!(
+        media.publishers[&1]
+            .held
+            .iter()
+            .flatten()
+            .any(|packet| { packet.media_type == MediaType::Audio && packet.track_index == 0 })
+    );
+    assert!(
+        media.publishers[&1]
+            .held
+            .iter()
+            .flatten()
+            .any(|packet| { packet.media_type == MediaType::Video })
+    );
+
+    let pmt = topology_pmt(
+        first.video.unwrap().pid,
+        &[first.audio_tracks[1].pid.unwrap()],
+        1,
+    );
+    let update = media.on_payload(1, pmt, &stats).unwrap();
+    assert_eq!(update.audio_tracks.len(), 1);
+    assert_eq!(update.audio_tracks[0].track_index, 0);
+    assert_eq!(update.audio_tracks[0].pid, first.audio_tracks[1].pid);
+    assert!(
+        media.publishers[&1]
+            .held
+            .iter()
+            .flatten()
+            .all(|packet| { packet.media_type != MediaType::Audio }),
+        "old index 0 packets must not masquerade as the retained PID"
+    );
+    assert!(
+        media.publishers[&1]
+            .held
+            .iter()
+            .flatten()
+            .any(|packet| { packet.media_type == MediaType::Video }),
+        "still-live video survives the topology update"
+    );
 }

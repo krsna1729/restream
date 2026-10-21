@@ -276,3 +276,121 @@ fn a_closed_generation_abandons_a_pending_handshake_and_frees_the_slot() {
         "the cancelled handshake released its slot"
     );
 }
+
+/// Full production composition: a native SRT caller holds ONE connection
+/// while its PMT changes; the ingress Owner/control seam updates the ring,
+/// and the real QUIC origin closes the already-attached viewer's generation.
+#[test]
+fn q098_same_session_srt_pmt_changes_replace_live_origin_generations() {
+    use crate::media::srt::ingress_test_support::TopologyPublisher;
+
+    const PIPELINE: &str = "pipeline-topology";
+    let tokio = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let publisher = tokio.block_on(TopologyPublisher::start());
+    let engine = publisher.engine.clone();
+    let origin = Origin::new(engine.clone(), 8);
+    publisher.send(true, true, 0);
+
+    run(async {
+        compio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if engine
+                    .with_active_ingest(PIPELINE, |ingest| {
+                        let metadata = ingest.metadata();
+                        metadata.video.is_some() && metadata.audio.is_some()
+                    })
+                    .await
+                    == Some(true)
+                {
+                    break;
+                }
+                compio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("initial SRT A/V probe");
+        let attempt = engine
+            .with_active_ingest(PIPELINE, |ingest| ingest.attempt_id)
+            .await
+            .unwrap();
+        let loopback = Loopback::new().await;
+        let (broadcast, _session) = attach_viewer(&origin, &loopback, PIPELINE).await;
+        let first = wait_for_generation(&origin, PIPELINE, 1).await;
+        let mut remote_catalog = broadcast
+            .track("catalog.json")
+            .unwrap()
+            .subscribe(None)
+            .await
+            .unwrap();
+        let mut group = remote_catalog.recv_group().await.unwrap().unwrap();
+        let frame = group.read_frame().await.unwrap().unwrap();
+        let catalog: hang::Catalog = hang::Catalog::from_slice(&frame.payload).unwrap();
+        assert!(!catalog.video.renditions.is_empty());
+        assert!(!catalog.audio.renditions.is_empty());
+
+        publisher.send(false, true, 1);
+        // No viewer attach drives this revalidation.
+        let second = wait_for_generation(&origin, PIPELINE, 2).await;
+        assert!(first.is_closed());
+        wait_for_no_viewers(&first).await;
+        assert_eq!(origin.viewers(PIPELINE), 0);
+        let catalog = q098_published_catalog(&second).await;
+        assert!(catalog.video.renditions.is_empty());
+        assert!(!catalog.audio.renditions.is_empty());
+        let ring = engine.ingests.pipelines.read().await[PIPELINE].clone();
+        assert!(ring.codec_hint_str().is_empty());
+        assert!(ring.video_config().is_none(), "removed decoder config");
+        assert!(ring.audio_tracks().is_some(), "still-live audio retained");
+
+        // Reappearance and the opposite removal cross the same seam, still
+        // without reconnecting or requiring a viewer to trigger replacement.
+        publisher.send(true, true, 2);
+        let third = wait_for_generation(&origin, PIPELINE, 3).await;
+        assert!(second.is_closed());
+        let catalog = q098_published_catalog(&third).await;
+        assert!(!catalog.video.renditions.is_empty());
+        assert!(!catalog.audio.renditions.is_empty());
+
+        publisher.send(true, false, 3);
+        let fourth = wait_for_generation(&origin, PIPELINE, 4).await;
+        assert!(third.is_closed());
+        let catalog = q098_published_catalog(&fourth).await;
+        assert!(!catalog.video.renditions.is_empty());
+        assert!(catalog.audio.renditions.is_empty());
+        let metadata = engine
+            .with_active_ingest(PIPELINE, |ingest| {
+                assert_eq!(ingest.attempt_id, attempt, "same SRT session");
+                ingest.metadata()
+            })
+            .await
+            .unwrap();
+        assert!(metadata.audio.is_none());
+        assert!(metadata.video.is_some());
+        assert!(ring.audio_tracks().is_none());
+        assert!(ring.video_config().is_some());
+        assert!(!engine.listener_stats_handle().ingress_owner.snapshot().faulted);
+    });
+    tokio.block_on(publisher.stop());
+}
+
+async fn q098_published_catalog(served: &Served) -> hang::Catalog {
+    compio::time::timeout(Duration::from_secs(3), async {
+        let mut track = served
+            .probe
+            .consume()
+            .track("catalog.json")
+            .unwrap()
+            .subscribe(None)
+            .await
+            .unwrap();
+        let mut group = track.recv_group().await.unwrap().unwrap();
+        let frame = group.read_frame().await.unwrap().unwrap();
+        hang::Catalog::from_slice(&frame.payload).unwrap()
+    })
+    .await
+    .expect("the new origin generation publishes its catalog")
+}

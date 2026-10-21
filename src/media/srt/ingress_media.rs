@@ -6,8 +6,8 @@
 //!
 //! Tokio keeps session lifecycle: it authenticates a `Connected` peer, builds
 //! its [`SrtPublisherMedia`] (engine registration) and attaches it with a
-//! command; it applies the one-time stream probe; it does the ingest
-//! bookkeeping on `Disconnected`, after the Owner has flushed the media.
+//! command; it applies initial probes and later container topology updates;
+//! it does ingest bookkeeping on `Disconnected`, after the Owner flushes media.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::Ordering;
@@ -40,9 +40,9 @@ pub(crate) struct MediaLimits {
     /// gives up its oldest, so a newly arriving peer always gets room.
     pub(crate) unattached_peer_bytes: usize,
     pub(crate) unattached_total_bytes: usize,
-    /// Packets decoded after a publisher's first stream probe are held until
-    /// Tokio answers (the ring may be replaced): per publisher, Owner-wide and
-    /// for at most `probe_hold_timeout`.
+    /// Packets decoded after a publisher's probe or topology update are held
+    /// until Tokio answers (the ring may be replaced): per publisher, Owner-wide
+    /// and for at most `probe_hold_timeout`.
     pub(crate) probe_hold_peer_bytes: usize,
     pub(crate) probe_hold_total_bytes: usize,
     pub(crate) probe_hold_timeout: Duration,
@@ -74,7 +74,6 @@ pub(crate) struct SrtPublisherMedia {
     pub(super) first_media_ms: Arc<std::sync::atomic::AtomicU64>,
     pub(super) ingest_metrics: Arc<crate::media::stage_metrics::StageMetrics>,
     pub(super) last_progress_ms: Arc<std::sync::atomic::AtomicU64>,
-    pub(super) probe_sent: bool,
 }
 
 impl SrtPublisherMedia {
@@ -149,11 +148,21 @@ impl SrtReaderMedia {
 struct PublisherSlot {
     media: Box<SrtPublisherMedia>,
     /// Waiting for Tokio to apply the probe; drained groups are held in order.
+    probe_revision: u64,
     probe_pending: bool,
+    probe_audio_layout: Vec<(u32, Option<u16>)>,
     held: VecDeque<Vec<MediaPacket>>,
     held_bytes: usize,
     /// When the probe went to Tokio (for the hold timeout and ack latency).
     probe_sent_at: Option<Instant>,
+}
+
+/// Identifies a container update within exactly one ingest attempt. A late
+/// control response must not release a newer hold or redirect a replacement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ProbeIdentity {
+    pub(crate) attempt_id: u64,
+    pub(crate) revision: u64,
 }
 
 #[derive(Default)]
@@ -197,7 +206,7 @@ fn group_bytes(packets: &[MediaPacket]) -> usize {
 }
 
 impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
-    /// One received payload. Returns the publisher's first stream probe, which
+    /// One received payload. Returns a stream probe or topology update, which
     /// Tokio must apply ([`Self::probe_applied`]) before held packets flow.
     pub(crate) fn on_payload(
         &mut self,
@@ -218,8 +227,8 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
 
     /// Demux one payload and publish (or hold) what it completes.
     ///
-    /// The packets completed by the payload that yields the first stream
-    /// probe are published to the current ring; only later ones are held.
+    /// Packets completed by the payload yielding a probe or topology update
+    /// reach the current ring; only later ones are held.
     /// A hold ends when Tokio answers ([`Self::probe_applied`]) or, as an
     /// explicit overflow outcome, when it would exceed the publisher's or the
     /// Owner's byte budget or outlive `probe_hold_timeout`: held packets are
@@ -274,11 +283,43 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
         );
         media.ingest_metrics.record_in(len);
         media.last_progress_ms.store(now_ms, Ordering::Relaxed);
-        if media.probe_sent {
-            return None;
-        }
         let probe = media.demuxer.take_probe()?;
-        media.probe_sent = true;
+        // A PMT may reassign audio indices (old PID/index 1 becomes index 0).
+        // Buffered packets carry indices, not PIDs, so discard old held audio
+        // at that boundary rather than relabel a removed PID as a survivor.
+        // This is metadata-update work only; the retained video GOP survives.
+        let audio_layout_changed = slot.probe_revision != 0
+            && !slot.probe_audio_layout.iter().copied().eq(probe
+                .audio_tracks
+                .iter()
+                .map(|track| (track.track_index, track.pid)));
+        // A slow control response can leave packets from an older topology
+        // held here. Never replay those removed tracks into the updated ring.
+        let keep = |packet: &MediaPacket| match packet.media_type {
+            crate::media::packet::MediaType::Video => probe.video.is_some(),
+            crate::media::packet::MediaType::Audio => {
+                !audio_layout_changed
+                    && probe
+                        .audio_tracks
+                        .iter()
+                        .any(|track| track.track_index == packet.track_index)
+            }
+        };
+        media.standby_gop.retain(keep);
+        let previous_bytes = slot.held_bytes;
+        for group in &mut slot.held {
+            group.retain(keep);
+        }
+        slot.held_bytes = slot.held.iter().map(|group| group_bytes(group)).sum();
+        *held_total -= previous_bytes - slot.held_bytes;
+        slot.probe_audio_layout.clear();
+        slot.probe_audio_layout.extend(
+            probe
+                .audio_tracks
+                .iter()
+                .map(|track| (track.track_index, track.pid)),
+        );
+        slot.probe_revision = slot.probe_revision.wrapping_add(1);
         slot.probe_pending = true;
         slot.probe_sent_at = Some(Instant::now());
         Some(probe)
@@ -355,6 +396,8 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
             .insert_entry(PublisherSlot {
                 media,
                 probe_pending: false,
+                probe_revision: 0,
+                probe_audio_layout: Vec::new(),
                 held: VecDeque::new(),
                 held_bytes: 0,
                 probe_sent_at: None,
@@ -380,17 +423,31 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
         self.readers.insert(peer, reader);
     }
 
+    pub(crate) fn probe_identity(&self, peer: K) -> Option<ProbeIdentity> {
+        let slot = self.publishers.get(&peer)?;
+        Some(ProbeIdentity {
+            attempt_id: slot.media.registration.attempt_id,
+            revision: slot.probe_revision,
+        })
+    }
+
     /// Tokio applied the stream probe; `ring` replaces the publisher's ring.
     /// Held packets flow in their original order.
     pub(crate) fn probe_applied(
         &mut self,
         peer: K,
+        identity: ProbeIdentity,
         ring: Option<Arc<RingBuffer>>,
         stats: &SrtIngressOwnerStats,
     ) {
         let Some(slot) = self.publishers.get_mut(&peer) else {
             return;
         };
+        if identity.attempt_id != slot.media.registration.attempt_id
+            || identity.revision != slot.probe_revision
+        {
+            return;
+        }
         if let Some(sent_at) = slot.probe_sent_at.take() {
             let waited = u64::try_from(sent_at.elapsed().as_micros()).unwrap_or(u64::MAX);
             stats

@@ -73,6 +73,16 @@ impl StandbyGopCache {
         self.payload_bytes
     }
 
+    /// Invalidate packets removed by an authoritative container track update,
+    /// while keeping the still-live video's promotion GOP.
+    pub(crate) fn retain(&mut self, mut keep: impl FnMut(&MediaPacket) -> bool) {
+        self.packets.retain(|packet| keep(packet));
+        self.payload_bytes = self.packets.iter().map(|packet| packet.payload.len()).sum();
+        if !self.is_replay_ready() {
+            self.clear();
+        }
+    }
+
     pub fn clear(&mut self) {
         self.packets.clear();
         self.payload_bytes = 0;

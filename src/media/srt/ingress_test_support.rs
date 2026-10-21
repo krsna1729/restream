@@ -588,3 +588,130 @@ pub(super) fn run_fragmented_publisher(
     }
     report
 }
+
+/// A single real SRT connection, controlled by the origin composition test.
+/// The channel is only a fixture driver; production payloads still traverse
+/// the native caller, UDP, ingress Owner and Tokio probe application.
+pub(crate) struct TopologyPublisher {
+    pub(crate) engine: Arc<MediaEngine>,
+    batches: flume::Sender<Vec<Bytes>>,
+    caller: tokio::task::JoinHandle<CallerReport>,
+    server: TestServer,
+}
+
+impl TopologyPublisher {
+    pub(crate) async fn start() -> Self {
+        let server = TestServer::start(&["topology"], vec![plain("topology")]).await;
+        let remote = server.remote;
+        let (batches, receive) = flume::unbounded::<Vec<Bytes>>();
+        let caller = tokio::task::spawn_blocking(move || {
+            let mut pending = std::collections::VecDeque::new();
+            run_caller(
+                direct(remote, "#!::r=topology,m=publish", None),
+                Duration::from_secs(30),
+                move |ctx| {
+                    if let Ok(batch) = receive.try_recv() {
+                        pending.extend(batch);
+                    }
+                    while ctx.connected() && pending.front().is_some_and(|chunk| ctx.send(chunk)) {
+                        pending.pop_front();
+                    }
+                    receive.is_disconnected() && pending.is_empty()
+                },
+            )
+        });
+        Self {
+            engine: server.engine.clone(),
+            batches,
+            caller,
+            server,
+        }
+    }
+
+    pub(crate) fn send(&self, video: bool, audio: bool, version: u8) {
+        self.batches
+            .send(topology_chunks(video, audio, version))
+            .expect("the SRT fixture caller is alive");
+    }
+
+    pub(crate) async fn stop(self) {
+        drop(self.batches);
+        let report = self.caller.await.expect("SRT caller thread");
+        self.server.stop().await;
+        assert!(report.connected && !report.disconnected, "{report:?}");
+    }
+}
+
+/// Mutate only the checked-in fixture's PMTs and discard the removed PID.
+/// All surviving elementary bytes, timestamps and decoder config are real
+/// fixture bytes; no media parser or probe application is emulated here.
+pub(super) fn topology_chunks(video: bool, audio: bool, version: u8) -> Vec<Bytes> {
+    let fixture = ts_chunks(600);
+    let mut probe = crate::media::mpegts::TsDemuxer::new();
+    for chunk in &fixture {
+        probe.feed(chunk);
+    }
+    probe.flush();
+    let probe = probe.take_probe().expect("fixture A/V probe");
+    let video_pid = probe.video.unwrap().pid.unwrap();
+    let audio_pid = probe.audio_tracks[0].pid.unwrap();
+    let pmt = topology_pmt(
+        video.then_some(video_pid),
+        if audio {
+            std::slice::from_ref(&audio_pid)
+        } else {
+            &[]
+        },
+        version,
+    );
+    let mut output = Vec::new();
+    for packet in fixture.iter().flat_map(|chunk| chunk.chunks_exact(188)) {
+        let pid = (u16::from(packet[1] & 31) << 8) | u16::from(packet[2]);
+        if (pid == video_pid && !video) || (pid == audio_pid && !audio) {
+            continue;
+        }
+        if pid == 0x1000 {
+            assert_eq!(&packet[..5], &[0x47, 0x50, 0, packet[3], 0]);
+            let mut pmt = pmt.to_vec();
+            pmt[3] = packet[3];
+            output.extend_from_slice(&pmt);
+        } else {
+            output.extend_from_slice(packet);
+        }
+    }
+    output.chunks(CHUNK).map(Bytes::copy_from_slice).collect()
+}
+
+pub(super) fn topology_pmt(video_pid: Option<u16>, audio_pids: &[u16], version: u8) -> Bytes {
+    let pcr_pid = video_pid
+        .or_else(|| audio_pids.first().copied())
+        .unwrap_or(0x1FFF);
+    let mut section = vec![
+        0x02,
+        0xB0,
+        0,
+        0,
+        1,
+        0xC1 | ((version & 31) << 1),
+        0,
+        0,
+        0xE0 | (pcr_pid >> 8) as u8,
+        pcr_pid as u8,
+        0xF0,
+        0,
+    ];
+    for (kind, pid) in video_pid
+        .into_iter()
+        .map(|pid| (0x1B, pid))
+        .chain(audio_pids.iter().map(|pid| (0x0F, *pid)))
+    {
+        section.extend_from_slice(&[kind, 0xE0 | (pid >> 8) as u8, pid as u8, 0xF0, 0]);
+    }
+    section[2] = (section.len() + 1) as u8;
+    let crc = crate::media::mpegts::test_crc32_mpeg2(&section);
+    section.extend_from_slice(&crc.to_be_bytes());
+    let mut pmt = [0xFF; 188];
+    pmt[..5].copy_from_slice(&[0x47, 0x50, 0, 0x10, 0]);
+    pmt[5..5 + section.len()].copy_from_slice(&section);
+    Bytes::copy_from_slice(&pmt)
+}

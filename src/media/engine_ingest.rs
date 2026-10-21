@@ -207,8 +207,10 @@ impl MediaEngine {
                 if let Some(ring) = self.ingests.pipelines.read().await.get(pipeline_id) {
                     if let Some(video) = metadata.video {
                         ring.set_codec_hint(&video.codec);
+                    } else if metadata.tracks_authoritative {
+                        ring.remove_video_track();
                     }
-                    if !audio_tracks.is_empty() {
+                    if !audio_tracks.is_empty() || metadata.tracks_authoritative {
                         ring.set_audio_tracks(audio_tracks.as_ref().clone());
                     }
                 }

@@ -206,8 +206,9 @@ async fn read_play_sends_through_the_owner_and_target_deletion_disconnects() {
         let _ = media.attach_publisher(0, publisher_media, &stats);
         for chunk in ts_chunks(5000) {
             if let Some(probe) = media.on_payload(0, chunk, &stats) {
-                let ring = feeder_server.apply_probe(&session, probe).await;
-                media.probe_applied(0, ring, &stats);
+                let identity = media.probe_identity(0).unwrap();
+                let ring = feeder_server.apply_probe(&session, identity, probe).await;
+                media.probe_applied(0, identity, ring, &stats);
             }
             tokio::time::sleep(Duration::from_millis(3)).await;
         }
@@ -479,5 +480,79 @@ async fn fragmented_publisher_panic_retires_tail_without_stalling_an_existing_si
         "the fault and sibling must share one ingress Owner"
     );
     assert!(!stats.faulted, "{stats:?}");
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn q098_stale_control_probe_cannot_modify_a_replacement_publisher() {
+    use super::ingress_media::IngressMedia;
+    use crate::media::snapshots::SrtIngressOwnerStats;
+
+    const PIPELINE: &str = "pipeline-probe-identity";
+    let server = TestServer::start(&["probe-identity"], vec![plain("probe-identity")]).await;
+    let authenticated = || AuthenticatedPipeline {
+        id: PIPELINE.to_string(),
+        input_id: "input-probe-identity".to_string(),
+        selected: true,
+    };
+    let start = || {
+        server.server.start_publisher(
+            SocketAddr::from(([127, 0, 0, 1], 9)),
+            authenticated(),
+            "probe-identity".to_string(),
+        )
+    };
+    let stats = SrtIngressOwnerStats::default();
+    let (old_session, old_media) = start().await.unwrap();
+    let mut media = IngressMedia::<u64>::default();
+    media.attach_publisher(1, old_media, &stats);
+    let mut old_probe = None;
+    for chunk in topology_chunks(false, true, 0) {
+        if let Some(probe) = media.on_payload(1, chunk, &stats) {
+            old_probe = Some(probe);
+        }
+    }
+    let old_identity = media.probe_identity(1).unwrap();
+    server.server.finish_publisher(old_session).await;
+    media.discard(1);
+
+    let (replacement, replacement_media) = start().await.unwrap();
+    media.attach_publisher(2, replacement_media, &stats);
+    let mut replacement_probe = None;
+    for chunk in topology_chunks(true, true, 0) {
+        if let Some(probe) = media.on_payload(2, chunk, &stats) {
+            replacement_probe = Some(probe);
+        }
+    }
+    let identity = media.probe_identity(2).unwrap();
+    assert_ne!(identity.attempt_id, old_identity.attempt_id);
+    let ring = server
+        .server
+        .apply_probe(&replacement, identity, replacement_probe.unwrap())
+        .await;
+    media.probe_applied(2, identity, ring, &stats);
+    let before = server.engine.ingests.pipelines.read().await[PIPELINE].clone();
+    assert_eq!(before.codec_hint_str(), "h264");
+
+    assert!(
+        server
+            .server
+            .apply_probe(&replacement, old_identity, old_probe.unwrap())
+            .await
+            .is_none()
+    );
+    assert_eq!(
+        before.codec_hint_str(),
+        "h264",
+        "stale control cannot remove video"
+    );
+    assert_eq!(
+        server
+            .engine
+            .with_active_ingest(PIPELINE, |ingest| ingest.metadata().video.is_some())
+            .await,
+        Some(true),
+    );
+    server.server.finish_publisher(replacement).await;
     server.stop().await;
 }

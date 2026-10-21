@@ -57,7 +57,8 @@ impl MediaEngine {
         let new_rb = Arc::new(RingBuffer::new_continuing(needed, old_write_idx));
         let seeded_packets = new_rb.seed_readable_tail_from(&old_rb);
         new_rb.set_estimated_pkt_rate(pkt_rate);
-        if let Some(hint) = old_rb.codec_hint.get() {
+        let hint = old_rb.codec_hint_str();
+        if !hint.is_empty() {
             new_rb.set_codec_hint(hint);
         }
         if let Some(audio_tracks) = old_rb.audio_tracks() {

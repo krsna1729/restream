@@ -5,7 +5,7 @@
 //!
 //! The listener is one Owner thread, or K when `RESTREAM_SRT_INGRESS_OWNERS`
 //! asks for a `SO_REUSEPORT` group (one srt-rs `owner_plans` entry each). The
-//! bridges carry session lifecycle only (admission, the one-time stream probe,
+//! bridges carry session lifecycle only (admission, stream probe/topology updates,
 //! disconnect). Media runs to completion on the Owner that holds the session
 //! (`ingress_media`); nothing per packet crosses any bridge.
 
@@ -62,6 +62,7 @@ pub(crate) enum IngressCommand {
     /// Tokio applied the publisher's stream probe; `ring` replaces its ring.
     ProbeApplied {
         logical_peer: IngressPeer,
+        identity: super::ingress_media::ProbeIdentity,
         ring: Option<Arc<RingBuffer>>,
     },
     /// Begin an orderly protocol disconnect of one peer. The owner retires the
@@ -92,10 +93,11 @@ pub(crate) enum SrtIngressEvent {
         logical_peer: IngressPeer,
         stream_id: String,
     },
-    /// A publisher's first stream probe. Its packets are held on the Owner
-    /// until Tokio answers with [`IngressCommand::ProbeApplied`].
+    /// A publisher's stream probe or authoritative container topology update.
+    /// Its packets are held until Tokio answers with [`IngressCommand::ProbeApplied`].
     Probe {
         logical_peer: IngressPeer,
+        identity: super::ingress_media::ProbeIdentity,
         probe: DemuxProbe,
     },
     /// Terminal. The Owner has already flushed the publisher's media.
