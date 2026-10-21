@@ -1,6 +1,6 @@
 use super::*;
 
-fn make_pat_ts_pkt() -> Vec<u8> {
+pub(super) fn make_pat_ts_pkt() -> Vec<u8> {
     let mut pkt = vec![0xFFu8; 188];
     pkt[0] = 0x47;
     pkt[1] = 0x40; // PUSI, PID=0x0000
@@ -31,7 +31,7 @@ fn make_pat_ts_pkt() -> Vec<u8> {
 
 /// Build a 188-byte TS PMT packet at PID 0x1000 with the given version and
 /// stream list. Each stream is `(stream_type, elementary_pid)`.
-fn make_pmt_ts_pkt(version: u8, streams: &[(u8, u16)]) -> Vec<u8> {
+pub(super) fn make_pmt_ts_pkt(version: u8, streams: &[(u8, u16)]) -> Vec<u8> {
     let streams = streams
         .iter()
         .map(|&(kind, pid)| (kind, pid, &[][..]))
@@ -39,7 +39,10 @@ fn make_pmt_ts_pkt(version: u8, streams: &[(u8, u16)]) -> Vec<u8> {
     make_pmt_ts_pkt_with_descriptors(version, &streams)
 }
 
-fn make_pmt_ts_pkt_with_descriptors(version: u8, streams: &[(u8, u16, &[u8])]) -> Vec<u8> {
+pub(super) fn make_pmt_ts_pkt_with_descriptors(
+    version: u8,
+    streams: &[(u8, u16, &[u8])],
+) -> Vec<u8> {
     let mut pkt = vec![0xFFu8; 188];
     pkt[0] = 0x47;
     pkt[1] = 0x50; // PUSI, PID high (0x1000)
@@ -82,7 +85,7 @@ fn rewrite_pmt_crc(pkt: &mut [u8]) {
     pkt[crc_start..crc_start + 4].copy_from_slice(&crc.to_be_bytes());
 }
 
-fn fixture_probe_demux(two_audio: bool) -> (TsDemuxer, DemuxProbe, Vec<u8>) {
+pub(super) fn fixture_probe_demux(two_audio: bool) -> (TsDemuxer, DemuxProbe, Vec<u8>) {
     let fixture = if two_audio {
         crate::test_fixtures::av_marker_transport_fixture("h264", true)
     } else {
@@ -108,19 +111,25 @@ fn feed_fixture_pid(demuxer: &mut TsDemuxer, ts: &[u8], pid: u16) {
 }
 
 fn feed_fixture_pid_as(demuxer: &mut TsDemuxer, ts: &[u8], pid: u16, target_pid: u16) {
+    demuxer.feed(&fixture_pid_packets_as(ts, pid, target_pid));
+    demuxer.flush();
+}
+
+pub(super) fn fixture_pid_packets_as(ts: &[u8], pid: u16, target_pid: u16) -> Vec<u8> {
+    let mut packets = Vec::new();
     for packet in ts.chunks_exact(TS_PACKET_SIZE) {
         let packet_pid = (u16::from(packet[1] & 0x1F) << 8) | u16::from(packet[2]);
         if packet_pid == pid {
             let mut packet: [u8; TS_PACKET_SIZE] = packet.try_into().expect("whole TS packet");
             packet[1] = (packet[1] & 0xE0) | ((target_pid >> 8) as u8 & 0x1F);
             packet[2] = target_pid as u8;
-            demuxer.feed(&packet);
+            packets.extend_from_slice(&packet);
         }
     }
-    demuxer.flush();
+    packets
 }
 
-fn next_pmt_version(demuxer: &TsDemuxer) -> u8 {
+pub(super) fn next_pmt_version(demuxer: &TsDemuxer) -> u8 {
     demuxer.pmt_version.wrapping_add(1) & 0x1F
 }
 
@@ -557,9 +566,11 @@ fn malformed_pmt_does_not_consume_version_or_replace_stream_map() {
     let mut oversized_program_info = valid_v1.clone();
     oversized_program_info[15] = 0xFF;
     oversized_program_info[16] = 0xFF;
+    rewrite_pmt_crc(&mut oversized_program_info);
     let mut oversized_es_info = valid_v1.clone();
     oversized_es_info[20] = 0xFF;
     oversized_es_info[21] = 0xFF;
+    rewrite_pmt_crc(&mut oversized_es_info);
 
     for (case, malformed) in [
         ("program_info_length", oversized_program_info),
@@ -650,65 +661,47 @@ fn feed_remainder_capped_on_corrupt_stream() {
 // producing a glitch until the next IDR.  After the fix, PES buffers for PIDs
 // that survive into the new PMT are carried over.
 #[test]
-fn pmt_version_change_preserves_pes_for_unchanged_pid() {
-    // Build a minimal TS PES packet for PID 0x100 that starts a new PES unit
-    // (PUSI=1) but does NOT complete it (no second packet with the next PES
-    // start, so the frame stays in the accumulator).
-    fn make_pes_ts_pkt(pid: u16, pusi: bool, payload: &[u8]) -> Vec<u8> {
-        let mut pkt = vec![0xFFu8; 188];
-        pkt[0] = 0x47;
-        pkt[1] = if pusi { 0x40 } else { 0x00 } | ((pid >> 8) as u8 & 0x1F);
-        pkt[2] = (pid & 0xFF) as u8;
-        pkt[3] = 0x10; // payload_unit_start = pusi flag handled above; CC=0
-        // When PUSI, prepend a minimal PES header: start code + stream_id +
-        // length(0=unbounded) + flags + header_data_length(0)
-        let pes_header: &[u8] = if pusi {
-            &[0x00, 0x00, 0x01, 0xE0, 0x00, 0x00, 0x80, 0x00, 0x00]
-        } else {
-            &[]
-        };
-        let data_offset = 4usize;
-        let total = pes_header.len() + payload.len();
-        pkt[data_offset..data_offset + total.min(184)]
-            .iter_mut()
-            .zip(pes_header.iter().chain(payload.iter()))
-            .for_each(|(d, &s)| *d = s);
-        pkt
-    }
-
-    let mut data: Vec<u8> = Vec::new();
-    data.extend_from_slice(&make_pat_ts_pkt());
-    // PMT v0: H.264 video at PID 0x100
-    data.extend_from_slice(&make_pmt_ts_pkt(0, &[(0x1B, 0x100u16)]));
-    // PES start for PID 0x100 — frame not yet complete
-    data.extend_from_slice(&make_pes_ts_pkt(0x100, true, &[0xDE, 0xAD]));
-
+fn q098_review_pmt_version_change_preserves_pes_for_unchanged_pid() {
+    let pid = 0x100;
+    let payload = [0, 0, 1, 0x65, 0xDE, 0xAD, 0xBE, 0xEF];
+    let complete = valid_video_pes_packet(pid, 3, 90_000, &payload);
+    // Exactly half of this bounded PES's payload, with no stuffing in the PES.
+    let prefix = &complete[4..4 + 14 + 4];
+    let start = build_ts_packet(pid, true, 3, 3, &vec![0; 183 - prefix.len()], prefix);
     let mut demuxer = TsDemuxer::new();
-    demuxer.feed(&data);
+    demuxer.feed(&make_pat_ts_pkt());
+    demuxer.feed(&make_pmt_ts_pkt(0, &[(0x1B, pid)]));
+    demuxer.feed(&start);
+    assert_eq!(demuxer.streams[0].pes.buf, payload[..4]);
+    let allocation = demuxer.streams[0].pes.buf.as_ptr();
+    demuxer.take_topology_changes();
 
-    // Verify the PES buffer has data
-    assert_eq!(demuxer.streams.len(), 1);
-    let buf_before = demuxer.streams[0].pes.buf.clone();
-    assert!(
-        !buf_before.is_empty(),
-        "PES buf must have partial frame data"
-    );
-
-    // Now the broadcaster sends a PMT version change for the same PID
-    // (e.g., only the language descriptor changed).
-    let v1_pkt = make_pmt_ts_pkt(1, &[(0x1B, 0x100u16)]);
-    demuxer.feed(&v1_pkt);
-
-    assert_eq!(
-        demuxer.streams.len(),
-        1,
-        "stream map should still have 1 stream"
-    );
+    // Adding audio changes the layout and really rebuilds the stream map.
+    demuxer.feed(&make_pmt_ts_pkt(1, &[(0x1B, pid), (0x0F, 0x101)]));
+    assert_eq!(demuxer.streams.len(), 2);
     assert_eq!(demuxer.pmt_version, 1);
-    assert_eq!(
-        demuxer.streams[0].pes.buf, buf_before,
-        "in-flight PES buffer must be preserved after PMT version change for same PID"
-    );
+    assert_eq!(demuxer.streams[0].pes.buf, payload[..4]);
+    assert_eq!(demuxer.streams[0].pes.buf.as_ptr(), allocation);
+    assert_eq!(demuxer.streams[0].continuity, 3);
+    let changes = demuxer.take_topology_changes();
+    assert!(changes.audio);
+    assert!(!changes.video);
+    assert!(demuxer.take_probe().is_none(), "initial audio is unprobed");
+
+    let suffix = &payload[4..];
+    demuxer.feed(&build_ts_packet(
+        pid,
+        false,
+        3,
+        4,
+        &vec![0; 183 - suffix.len()],
+        suffix,
+    ));
+    let packets = demuxer.drain();
+    assert_eq!(packets.len(), 1, "retained PES completes after the rebuild");
+    assert_eq!(packets[0].payload.as_ref(), payload);
+    assert_eq!(packets[0].pts, 1000);
+    assert_eq!(packets[0].dts, 1000);
 }
 
 #[test]

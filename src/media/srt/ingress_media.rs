@@ -19,7 +19,7 @@ use srt_transport::advanced::admission::LogicalPeerId;
 
 use crate::media::engine::{IngestRegistration, MediaEngine};
 use crate::media::input_gate::InputTimestampMapper;
-use crate::media::mpegts::{DemuxProbe, TsDemuxer};
+use crate::media::mpegts::{DemuxProbe, TopologyChanges, TsDemuxer};
 use crate::media::packet::MediaPacket;
 use crate::media::ring_buffer::RingBuffer;
 use crate::media::snapshots::SrtIngressOwnerStats;
@@ -80,7 +80,7 @@ impl SrtPublisherMedia {
     fn forward(&mut self, packets: &mut Vec<MediaPacket>, keyframes: bool) {
         ingest_packets::forward_ingest_packets(
             packets,
-            &self.ring_buffer,
+            &mut self.ring_buffer,
             &self.registration,
             &mut self.timestamp_mapper,
             &mut self.standby_gop,
@@ -150,7 +150,6 @@ struct PublisherSlot {
     /// Waiting for Tokio to apply the probe; drained groups are held in order.
     probe_revision: u64,
     probe_pending: bool,
-    probe_audio_layout: Vec<(u32, Option<u16>)>,
     held: VecDeque<Vec<MediaPacket>>,
     held_bytes: usize,
     /// First outstanding probe's send time: absolute hold timeout and ack latency.
@@ -248,6 +247,12 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
             std::panic::resume_unwind(Box::new("injected SRT media panic"));
         }
         slot.media.demuxer.feed(payload.as_ref());
+        // Consume every accepted PMT identity change, even if later PMTs in
+        // this same feed restore the original layout or no probe is complete.
+        let changes = slot.media.demuxer.take_topology_changes();
+        if changes.audio || changes.video {
+            Self::invalidate_buffered(slot, changes, held_total);
+        }
         if slot.media.demuxer.drain_into(&mut slot.media.packets) > 0 {
             if !slot.probe_pending {
                 slot.media.forward_drained();
@@ -284,26 +289,14 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
         media.ingest_metrics.record_in(len);
         media.last_progress_ms.store(now_ms, Ordering::Relaxed);
         let probe = media.demuxer.take_probe()?;
-        // A PMT may reassign audio indices (old PID/index 1 becomes index 0).
-        // Buffered packets carry indices, not PIDs, so discard old held audio
-        // at that boundary rather than relabel a removed PID as a survivor.
-        // This is metadata-update work only; the retained video GOP survives.
-        let audio_layout_changed = slot.probe_revision != 0
-            && !slot.probe_audio_layout.iter().copied().eq(probe
-                .audio_tracks
-                .iter()
-                .map(|track| (track.track_index, track.pid)));
         // A slow control response can leave packets from an older topology
         // held here. Never replay those removed tracks into the updated ring.
         let keep = |packet: &MediaPacket| match packet.media_type {
             crate::media::packet::MediaType::Video => probe.video.is_some(),
-            crate::media::packet::MediaType::Audio => {
-                !audio_layout_changed
-                    && probe
-                        .audio_tracks
-                        .iter()
-                        .any(|track| track.track_index == packet.track_index)
-            }
+            crate::media::packet::MediaType::Audio => probe
+                .audio_tracks
+                .iter()
+                .any(|track| track.track_index == packet.track_index),
         };
         media.standby_gop.retain(keep);
         let previous_bytes = slot.held_bytes;
@@ -314,13 +307,6 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
         slot.held.retain(|group| !group.is_empty());
         slot.held_bytes = slot.held.iter().map(|group| group_bytes(group)).sum();
         *held_total -= previous_bytes - slot.held_bytes;
-        slot.probe_audio_layout.clear();
-        slot.probe_audio_layout.extend(
-            probe
-                .audio_tracks
-                .iter()
-                .map(|track| (track.track_index, track.pid)),
-        );
         slot.probe_revision = slot.probe_revision.wrapping_add(1);
         if !slot.probe_pending {
             slot.probe_sent_at = Some(Instant::now());
@@ -329,9 +315,33 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
         Some(probe)
     }
 
+    fn invalidate_buffered(
+        slot: &mut PublisherSlot,
+        changes: TopologyChanges,
+        held_total: &mut usize,
+    ) {
+        let keep = |packet: &MediaPacket| match packet.media_type {
+            crate::media::packet::MediaType::Audio => !changes.audio,
+            crate::media::packet::MediaType::Video => !changes.video,
+        };
+        slot.media.standby_gop.retain(keep);
+        let previous = slot.held_bytes;
+        for group in &mut slot.held {
+            group.retain(keep);
+        }
+        slot.held.retain(|group| !group.is_empty());
+        slot.held_bytes = slot.held.iter().map(|group| group_bytes(group)).sum();
+        *held_total -= previous - slot.held_bytes;
+    }
+
     /// Publish every held group to the current ring, in order, and stop
     /// holding.
     fn release_held(slot: &mut PublisherSlot, held_total: &mut usize) {
+        // A superseded revision may already have sealed the source ring.
+        // Overflow and detach must also flush into its current successor.
+        while let Some(next) = slot.media.ring_buffer.next.load_full() {
+            slot.media.ring_buffer = next;
+        }
         slot.probe_pending = false;
         while let Some(mut group) = slot.held.pop_front() {
             slot.media.forward(&mut group, true);
@@ -401,7 +411,6 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
                 media,
                 probe_pending: false,
                 probe_revision: 0,
-                probe_audio_layout: Vec::new(),
                 held: VecDeque::new(),
                 held_bytes: 0,
                 probe_sent_at: None,

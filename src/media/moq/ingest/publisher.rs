@@ -164,7 +164,7 @@ impl PublisherMedia {
         }
         crate::media::srt::forward_ingest_packets(
             &mut self.batch,
-            &self.ring,
+            &mut self.ring,
             &self.registration,
             &mut self.timestamp_mapper,
             &mut self.standby_gop,

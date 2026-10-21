@@ -139,13 +139,21 @@ pub(super) struct TestServer {
 
 impl TestServer {
     pub(super) async fn start(auth_keys: &[&str], entries: Vec<SrtIngestPolicyEntry>) -> Self {
+        Self::start_with_engine(auth_keys, entries, Arc::new(MediaEngine::new())).await
+    }
+
+    pub(super) async fn start_with_engine(
+        auth_keys: &[&str],
+        entries: Vec<SrtIngestPolicyEntry>,
+        engine: Arc<MediaEngine>,
+    ) -> Self {
         // `free_port` releases its probe socket before the server binds, so a
         // parallel test can take the port in between. A listener that exits
         // early is retried on a fresh port; `SrtServer::run` logs its own start
         // error, so the panic below only reports that the attempts ran out.
         let mut last_error = None;
         for _ in 0..3 {
-            let engine = Arc::new(MediaEngine::new());
+            let engine = engine.clone();
             let store = Arc::new(SrtIngestPolicyStore::new(
                 SrtGlobalIngestConfig::default(),
                 &entries,
@@ -683,7 +691,16 @@ pub(super) fn topology_chunks(video: bool, audio: bool, version: u8) -> Vec<Byte
 }
 
 pub(super) fn topology_pmt(video_pid: Option<u16>, audio_pids: &[u16], version: u8) -> Bytes {
-    let pcr_pid = video_pid
+    topology_pmt_typed(video_pid.map(|pid| (0x1B, pid)), audio_pids, version)
+}
+
+pub(super) fn topology_pmt_typed(
+    video: Option<(u8, u16)>,
+    audio_pids: &[u16],
+    version: u8,
+) -> Bytes {
+    let pcr_pid = video
+        .map(|(_, pid)| pid)
         .or_else(|| audio_pids.first().copied())
         .unwrap_or(0x1FFF);
     let mut section = vec![
@@ -700,9 +717,8 @@ pub(super) fn topology_pmt(video_pid: Option<u16>, audio_pids: &[u16], version: 
         0xF0,
         0,
     ];
-    for (kind, pid) in video_pid
+    for (kind, pid) in video
         .into_iter()
-        .map(|pid| (0x1B, pid))
         .chain(audio_pids.iter().map(|pid| (0x0F, *pid)))
     {
         section.extend_from_slice(&[kind, 0xE0 | (pid >> 8) as u8, pid as u8, 0xF0, 0]);

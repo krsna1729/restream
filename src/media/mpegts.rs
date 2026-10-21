@@ -12,6 +12,7 @@ mod mpegts_probe;
 mod mux;
 mod wire;
 
+pub(crate) use demux::TopologyChanges;
 pub use demux::{DemuxProbe, TsDemuxer};
 pub use mux::{MuxStreamConfig, PacketMeta, TsMuxer, TsSegmentView, TsServiceMetadata};
 

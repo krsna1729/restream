@@ -556,3 +556,125 @@ async fn q098_stale_control_probe_cannot_modify_a_replacement_publisher() {
     server.server.finish_publisher(replacement).await;
     server.stop().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn q098_review_superseded_resize_ack_keeps_current_ring_through_deselection() {
+    use super::ingress_media::IngressMedia;
+    use crate::media::engine::MediaEngine;
+    use crate::media::metadata::VideoMeta;
+    use crate::media::snapshots::SrtIngressOwnerStats;
+    use std::sync::Arc;
+
+    const PIPELINE: &str = "pipeline-review-handoff";
+    let engine = Arc::new(MediaEngine::new_with_config(Arc::new(crate::AppConfig {
+        ring_capacity: 8,
+        ring_headroom_secs: 5.0,
+        ..Default::default()
+    })));
+    let server = TestServer::start_with_engine(
+        &["review-handoff"],
+        vec![plain("review-handoff")],
+        engine.clone(),
+    )
+    .await;
+    let (session, source) = server
+        .server
+        .start_publisher(
+            SocketAddr::from(([127, 0, 0, 1], 9)),
+            AuthenticatedPipeline {
+                id: PIPELINE.into(),
+                input_id: "primary".into(),
+                selected: true,
+            },
+            "review-handoff".into(),
+        )
+        .await
+        .unwrap();
+    let original = engine.ingests.pipelines.read().await[PIPELINE].clone();
+    let stats = SrtIngressOwnerStats::default();
+    let mut media = IngressMedia::<u64>::default();
+    media.attach_publisher(1, source, &stats);
+    let mut first = None;
+    for chunk in topology_chunks(true, true, 0) {
+        if let Some(probe) = media.on_payload(1, chunk, &stats) {
+            first = Some(probe);
+        }
+    }
+    let first_identity = media.probe_identity(1).unwrap();
+    let first_handoff = server
+        .server
+        .apply_probe(&session, first_identity, first.unwrap())
+        .await;
+    let replacement = engine.ingests.pipelines.read().await[PIPELINE].clone();
+    assert!(
+        !Arc::ptr_eq(&original, &replacement),
+        "the first probe must resize"
+    );
+    let mut second = None;
+    for chunk in topology_chunks(false, true, 1) {
+        if let Some(probe) = media.on_payload(1, chunk, &stats) {
+            second = Some(probe);
+        }
+    }
+    let second = second.unwrap();
+    let second_identity = media.probe_identity(1).unwrap();
+    let second_handoff = server
+        .server
+        .apply_probe(&session, second_identity, second.clone())
+        .await;
+    assert!(
+        Arc::ptr_eq(second_handoff.as_ref().unwrap(), &replacement),
+        "a no-resize response must still carry the current shared ring"
+    );
+    let old_write = original.get_write_idx();
+    let new_write = replacement.get_write_idx();
+    media.probe_applied(1, first_identity, first_handoff, &stats);
+    assert_eq!(
+        replacement.get_write_idx(),
+        new_write,
+        "superseded ack cannot release held media"
+    );
+    media.probe_applied(1, second_identity, second_handoff, &stats);
+    assert_eq!(original.get_write_idx(), old_write);
+    assert!(
+        replacement.get_write_idx() > new_write,
+        "held audio reaches readers' current ring"
+    );
+
+    let backup = engine
+        .try_register_pipeline_input_attempt(PIPELINE, "backup", "backup-key", "srt", false)
+        .await
+        .unwrap();
+    assert!(engine.select_pipeline_input(PIPELINE, "backup").await);
+    engine
+        .replace_ingest_session_tracks(
+            &backup,
+            Some(VideoMeta {
+                codec: "h264".into(),
+                fps: 600.0,
+                ..Default::default()
+            }),
+            Vec::new(),
+            1,
+            None,
+        )
+        .await;
+    let current = engine.ingests.pipelines.read().await[PIPELINE].clone();
+    assert!(!Arc::ptr_eq(&replacement, &current));
+    let standby_handoff = server
+        .server
+        .apply_probe(&session, second_identity, second)
+        .await;
+    assert!(
+        Arc::ptr_eq(standby_handoff.as_ref().unwrap(), &current),
+        "a deselected session must not retain a retired producer ring"
+    );
+    assert_eq!(
+        current.codec_hint_str(),
+        "h264",
+        "standby metadata cannot alter the selected source"
+    );
+    media.probe_applied(1, second_identity, standby_handoff, &stats);
+    server.server.finish_publisher(session).await;
+    server.stop().await;
+}

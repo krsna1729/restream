@@ -23,7 +23,7 @@ use super::mpegts_probe::{
     audio_meta_complete, h264_is_keyframe, h265_is_keyframe, probe_audio, probe_video,
     video_meta_complete,
 };
-use super::wire::{PAT_PID, TS_PACKET_SIZE, TS_SYNC_BYTE, parse_timestamp, ts_to_ms};
+use super::wire::{PAT_PID, TS_PACKET_SIZE, TS_SYNC_BYTE, crc32_mpeg2, parse_timestamp, ts_to_ms};
 use crate::media::metadata::{AudioMeta, VideoMeta};
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
 
@@ -148,6 +148,23 @@ pub struct DemuxProbe {
     pub audio_tracks: Vec<AudioMeta>,
 }
 
+/// Media identities invalidated by any accepted PMT since the last take,
+/// even when coalesced tables restore the original layout before probing.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct TopologyChanges {
+    pub(crate) audio: bool,
+    pub(crate) video: bool,
+}
+
+impl TopologyChanges {
+    fn mark(&mut self, kind: StreamKind) {
+        match kind.media_type() {
+            MediaType::Audio => self.audio = true,
+            MediaType::Video => self.video = true,
+        }
+    }
+}
+
 /// Decoded configurations survive PMT changes only while their PID and codec
 /// kind remain live. Keeping these avoids retaining entire probe PES payloads.
 #[derive(Debug)]
@@ -243,6 +260,7 @@ pub struct TsDemuxer {
     probed: bool,
     initial_probe_done: bool,
     probe_result: Option<DemuxProbe>,
+    topology_changes: TopologyChanges,
     pub(super) remainder: Vec<u8>,
     /// Staging for feeds that join a partial packet with a new chunk.
     /// Retains the largest joined feed allocation until this demuxer is
@@ -276,6 +294,7 @@ impl TsDemuxer {
             probed: false,
             initial_probe_done: false,
             probe_result: None,
+            topology_changes: TopologyChanges::default(),
             remainder: Vec::new(),
             scratch: Vec::new(),
             output: Vec::with_capacity(16),
@@ -369,6 +388,12 @@ impl TsDemuxer {
     /// configuration. Results replace, rather than extend, the previous set.
     pub fn take_probe(&mut self) -> Option<DemuxProbe> {
         self.probe_result.take()
+    }
+
+    /// Take boundary invalidations before draining packets or using a probe.
+    /// These do not depend on configuration completeness or the final layout.
+    pub(crate) fn take_topology_changes(&mut self) -> TopologyChanges {
+        std::mem::take(&mut self.topology_changes)
     }
 
     /// Whether PMT has been parsed and streams are known.
@@ -642,7 +667,10 @@ impl TsDemuxer {
 
         // PMTs have one section. A future table must not consume its version
         // or disturb the active topology/configuration.
-        if version_byte & 1 == 0 || !matches!(data.get(6..8), Some([0, 0])) {
+        if crc32_mpeg2(data) != 0
+            || version_byte & 1 == 0
+            || !matches!(data.get(6..8), Some([0, 0]))
+        {
             self.pmt_buf.clear();
             self.pmt_expected = 0;
             return;
@@ -668,6 +696,7 @@ impl TsDemuxer {
         self.video_track_count = 0;
         let mut removed_config = false;
         let mut retained_metadata_changed = false;
+        let mut changes = TopologyChanges::default();
         let mut has_video = false;
         // `pmt_stream_loop_bounds` validated that these entries tile the loop.
         let mut entries = data.get(loop_start..loop_end).unwrap_or_default();
@@ -704,17 +733,25 @@ impl TsDemuxer {
                 // ADTS framing, or decoded configuration.
                 let (pes, continuity, probe) = match old_streams.remove(&es_pid) {
                     Some((old, probe)) if old.kind == kind => {
+                        if old.track_index != track_index {
+                            changes.mark(kind);
+                        }
                         retained_metadata_changed |= probe.is_some()
                             && (old.track_index != track_index
                                 || old.language != descriptors.language
                                 || old.title != descriptors.title);
                         (old.pes, old.continuity, probe)
                     }
-                    Some((_, probe)) => {
+                    Some((old, probe)) => {
+                        changes.mark(old.kind);
+                        changes.mark(kind);
                         removed_config |= probe.is_some();
                         (PesAccumulator::new(), CC_UNSET, None)
                     }
-                    None => (PesAccumulator::new(), CC_UNSET, None),
+                    None => {
+                        changes.mark(kind);
+                        (PesAccumulator::new(), CC_UNSET, None)
+                    }
                 };
                 let stream_idx = self.streams.len();
                 self.streams.push(StreamInfo {
@@ -736,15 +773,28 @@ impl TsDemuxer {
             }
         }
 
-        removed_config |= old_streams.values().any(|(_, probe)| probe.is_some());
+        for (old, probe) in old_streams.values() {
+            changes.mark(old.kind);
+            removed_config |= probe.is_some();
+        }
+        // Completed packets carry indexes, not PIDs. Discard affected media
+        // while this boundary's old identities are still known; a later PMT
+        // in this feed must not relabel them under a restored final layout.
+        if changes.audio || changes.video {
+            self.output.retain(|packet| match packet.media_type {
+                MediaType::Audio => !changes.audio,
+                MediaType::Video => !changes.video,
+            });
+            self.topology_changes.audio |= changes.audio;
+            self.topology_changes.video |= changes.video;
+        }
         self.probed = self.stream_probes.iter().all(Option::is_some);
         self.pmt_buf.clear();
         self.pmt_expected = 0;
         // Preserve initial promotion's completeness requirement. Once promoted,
         // removals/index/descriptor changes must not wait for an added track's
         // PES. Its decoded configuration will publish a later full snapshot.
-        if (self.probed && !self.streams.is_empty())
-            || (self.initial_probe_done && (removed_config || retained_metadata_changed))
+        if self.probed || (self.initial_probe_done && (removed_config || retained_metadata_changed))
         {
             self.publish_probe();
         }

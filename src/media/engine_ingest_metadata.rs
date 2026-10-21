@@ -144,16 +144,14 @@ impl MediaEngine {
         let selected = self
             .is_ingest_session_selected(&ingest.pipeline_id, registration)
             .await;
-        let replacement = if selected {
+        if selected {
             self.adapt_pipeline_ring(
                 &ingest.pipeline_id,
                 video.as_ref().map_or(0.0, |video| video.fps),
                 audio_tracks.len(),
             )
-            .await
-        } else {
-            None
-        };
+            .await;
+        }
         {
             let mut metadata = crate::sync::write(&ingest.metadata);
             metadata.video = video.clone();
@@ -178,11 +176,20 @@ impl MediaEngine {
         if let Some(preview) = registration.preview_ring.load_full() {
             update_ring(&preview);
         }
-        if selected && let Some(ring) = self.ingests.pipelines.read().await.get(&ingest.pipeline_id)
-        {
+        // A superseding snapshot may not resize again, and the source may
+        // have been deselected. Its next accepted ack must still hand off to
+        // the current shared ring, not strand its Owner on a sealed ancestor.
+        let ring = self
+            .ingests
+            .pipelines
+            .read()
+            .await
+            .get(&ingest.pipeline_id)
+            .cloned();
+        if selected && let Some(ring) = &ring {
             update_ring(ring);
         }
-        replacement
+        ring
     }
 
     /// Report that a session's probe has been recorded in full: its video

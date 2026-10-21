@@ -394,3 +394,50 @@ async fn q098_published_catalog(served: &Served) -> hang::Catalog {
     .await
     .expect("the new origin generation publishes its catalog")
 }
+
+#[test]
+fn q098_review_initial_empty_srt_pmt_clears_retained_ring_and_closes_origin() {
+    use crate::media::srt::ingress_test_support::TopologyPublisher;
+
+    const PIPELINE: &str = "pipeline-topology";
+    let tokio = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2).enable_all().build().unwrap();
+    let publisher = tokio.block_on(TopologyPublisher::start());
+    let engine = publisher.engine.clone();
+    let origin = Origin::new(engine.clone(), 8);
+    run(async {
+        compio::time::timeout(Duration::from_secs(5), async {
+            while engine.with_active_ingest(PIPELINE, |_| ()).await.is_none() {
+                compio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.expect("native SRT session admitted before its first PMT");
+        let ring = engine.ingests.pipelines.read().await[PIPELINE].clone();
+        // Model the output retained from the previous session. An admitted,
+        // not-yet-probed source must not be confused with authoritative empty.
+        ring.set_codec_hint("h264");
+        ring.set_video_parameter_sets(PARAMETER_SETS.to_vec());
+        push_video_keyframe(&ring);
+        let loopback = Loopback::new().await;
+        let (broadcast, _session) = attach_viewer(&origin, &loopback, PIPELINE).await;
+        let first = wait_for_generation(&origin, PIPELINE, 1).await;
+        let mut catalog = broadcast.track("catalog.json").unwrap().subscribe(None).await.unwrap();
+        let mut group = catalog.recv_group().await.unwrap().unwrap();
+        assert!(group.read_frame().await.unwrap().is_some(), "real QUIC catalog received");
+        publisher.send(false, false, 0);
+        compio::time::timeout(Duration::from_secs(5), async {
+            while !first.is_closed() {
+                compio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.expect("an initial empty PMT closes the old generation without a later attach");
+        wait_for_no_viewers(&first).await;
+        assert_eq!(origin.viewers(PIPELINE), 0);
+        assert!(ring.codec_hint_str().is_empty());
+        assert!(ring.video_config().is_none());
+        assert!(ring.audio_tracks().is_none());
+        assert_eq!(engine.with_active_ingest(PIPELINE, |ingest| {
+            let metadata = ingest.metadata();
+            metadata.tracks_authoritative && metadata.video.is_none() && metadata.audio.is_none()
+        }).await, Some(true));
+    });
+    tokio.block_on(publisher.stop());
+}

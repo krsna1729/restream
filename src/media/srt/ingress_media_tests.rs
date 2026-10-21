@@ -556,3 +556,87 @@ fn q098_hold_topology_updates_keep_the_outstanding_absolute_deadline() {
     );
     assert!(stats.media_probe_hold_overflows.load(Ordering::Relaxed) > 0);
 }
+
+#[test]
+fn q098_review_coalesced_video_replacement_invalidates_held_media_and_standby_gop() {
+    use super::super::ingress_test_support::topology_pmt_typed;
+    use crate::media::mpegts::TsMuxer;
+
+    for (codec, new_pid) in [("h264", 0x120), ("hevc", 0x100), ("hevc", 0x120)] {
+        let stats = SrtIngressOwnerStats::default();
+        let mut media = IngressMedia::<u64>::default();
+        let mut source = publisher(Arc::new(RingBuffer::new(4096)));
+        source.registration.gate = Arc::new(InputPacketGate::standby());
+        media.attach_publisher(1, source, &stats);
+        let first = feed(&mut media, &ts_chunks(600), &stats).unwrap();
+        assert!(media.publishers[&1].media.standby_gop.is_replay_ready());
+        assert!(
+            media.publishers[&1]
+                .held
+                .iter()
+                .flatten()
+                .any(|p| p.media_type == MediaType::Video)
+        );
+        let fixture = if codec == "h264" {
+            crate::test_fixtures::canonical_h264_ts_fixture().unwrap()
+        } else {
+            crate::test_fixtures::canonical_h265_ts_fixture().unwrap()
+        };
+        let mut demux = TsDemuxer::new();
+        demux.feed(&std::fs::read(fixture).unwrap());
+        demux.flush();
+        let video = demux.take_probe().unwrap().video.unwrap();
+        let mut packets = Vec::new();
+        demux.drain_into(&mut packets);
+        let sets = packets
+            .iter()
+            .filter(|p| p.media_type == MediaType::Video)
+            .find_map(|p| crate::media::codec::annexb_parameter_sets(&p.payload))
+            .unwrap();
+        let kind = if codec == "hevc" { 0x24 } else { 0x1B };
+        let mut batch = topology_pmt_typed(
+            Some((kind, new_pid)),
+            &[first.audio_tracks[0].pid.unwrap()],
+            1,
+        )
+        .to_vec();
+        let mut mux = TsMuxer::new(Some(&video), &[]);
+        // Two short, real configuration PESs: the second start completes the
+        // first in the same receive that changes the PMT, without an IDR.
+        for dts in [1000, 1040] {
+            for packet in mux
+                .mux_packet(MediaType::Video, 0, dts, dts, false, &sets)
+                .chunks_exact(188)
+            {
+                let pid = (u16::from(packet[1] & 31) << 8) | u16::from(packet[2]);
+                if pid == 0x100 {
+                    let mut packet = packet.to_vec();
+                    packet[1] = (packet[1] & 0xE0) | ((new_pid >> 8) as u8 & 31);
+                    packet[2] = new_pid as u8;
+                    batch.extend_from_slice(&packet);
+                }
+            }
+        }
+        assert!(batch.len() <= CHUNK);
+        let latest = media.on_payload(1, Bytes::from(batch), &stats).unwrap();
+        assert_eq!(latest.video.unwrap().pid, Some(new_pid));
+        let slot = &media.publishers[&1];
+        assert!(
+            !slot.media.standby_gop.is_replay_ready(),
+            "{codec}/{new_pid}"
+        );
+        let held_video: Vec<_> = slot
+            .held
+            .iter()
+            .flatten()
+            .filter(|p| p.media_type == MediaType::Video)
+            .collect();
+        assert!(!held_video.is_empty(), "fresh replacement packets survive");
+        assert!(
+            held_video
+                .iter()
+                .all(|p| p.payload.as_ref() == sets.as_slice()),
+            "removed video identity must never be replayed as its replacement"
+        );
+    }
+}
