@@ -90,15 +90,24 @@ pub(super) struct Init {
     pub(super) payload: Payload,
 }
 
+/// Why a release re-anchors; the publisher decides whose offset it may adopt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Reanchor {
+    None,
+    /// The same clock (a variant switch, a changed `EXT-X-MAP` init).
+    Clock,
+    /// A break every rendition crosses (`EXT-X-DISCONTINUITY`, new epoch).
+    Timeline(u64),
+}
+
 pub(super) struct Release {
     /// The followed rendition this segment belongs to (see `MAX_RENDITIONS`):
     /// each has its own demuxer.
     pub(super) rendition: usize,
     pub(super) sequence: u64,
     pub(super) epoch: u64,
-    /// The bytes start an unrelated stream (EXT-X-DISCONTINUITY, a new
-    /// epoch, a variant switch, or a changed `EXT-X-MAP` init).
-    pub(super) discontinuity: bool,
+    /// Whether the bytes re-anchor this rendition's timestamps, and why.
+    pub(super) reanchor: Reanchor,
     /// The playlist's `EXTINF` for this segment.
     pub(super) duration: Duration,
     /// The `EXT-X-MAP` init to apply before this segment.
@@ -234,7 +243,10 @@ struct Track {
     latest_listing: HashMap<String, u64>,
     next_seq: Option<u64>,
     epoch: u64,
-    discontinuity_pending: bool,
+    /// A new epoch counted but not yet carried by a release.
+    timeline_pending: Option<u64>,
+    clock_pending: bool,
+    generation: u64,
     ended: bool,
     /// The maps the playlist names, newest last (bounded).
     maps: Vec<MapState>,
@@ -261,7 +273,9 @@ impl Track {
             latest_listing: HashMap::new(),
             next_seq: None,
             epoch: 0,
-            discontinuity_pending: false,
+            timeline_pending: None,
+            clock_pending: false,
+            generation: 0,
             ended: false,
             maps: Vec::new(),
             current_map: None,
@@ -289,13 +303,37 @@ impl Track {
         self.latest_listing.clear();
         self.next_seq = None;
         self.ended = false;
-        self.discontinuity_pending = true;
+        self.clock_pending = true;
         // The new playlist names its own `EXT-X-MAP`, and its first fMP4
         // segment arrives before that playlist: the old map says nothing
         // about it.
         self.maps.clear();
         self.current_map = None;
         self.playlist_seen = false;
+    }
+
+    fn next_generation(&mut self) -> u64 {
+        self.generation = self.generation.saturating_add(1);
+        self.generation
+    }
+
+    /// A skipped segment still crosses its break: carry the generation on.
+    fn skip_discontinuity(&mut self, discontinuity: bool) {
+        if discontinuity && self.timeline_pending.is_none() {
+            self.timeline_pending = Some(self.next_generation());
+        }
+    }
+
+    /// A pending epoch or the segment's own discontinuity starts a
+    /// generation; a pending switch or replaced init keeps the clock.
+    fn take_reanchor(&mut self, discontinuity: bool, replaces_init: bool) -> Reanchor {
+        let pending = self.timeline_pending.take();
+        let clock = std::mem::take(&mut self.clock_pending) || replaces_init;
+        match pending.or_else(|| discontinuity.then(|| self.next_generation())) {
+            Some(generation) => Reanchor::Timeline(generation),
+            None if clock => Reanchor::Clock,
+            None => Reanchor::None,
+        }
     }
 
     /// The playlist is now another rendition, demuxed by another demuxer that
@@ -447,7 +485,8 @@ impl Track {
             self.next_seq = Some(first);
             self.epoch = self.epoch.saturating_add(1);
             pool.counters.epochs = pool.counters.epochs.saturating_add(1);
-            self.discontinuity_pending = true;
+            self.timeline_pending = Some(self.next_generation());
+            self.clock_pending = false;
             self.ended = false;
         }
         if self.next_seq.is_none() {
@@ -532,6 +571,7 @@ impl Track {
                 {
                     break;
                 }
+                self.skip_discontinuity(head.discontinuity);
                 self.listed.remove(&sequence);
                 pool.counters.skipped = pool.counters.skipped.saturating_add(1);
                 self.next_seq = sequence.checked_add(1);
@@ -543,20 +583,21 @@ impl Track {
             match listed.payload {
                 Some(payload) => {
                     let (init, replaces) = self.take_init(map_uri.as_deref());
+                    let reanchor = self.take_reanchor(listed.discontinuity, replaces);
                     out.push(Release {
                         rendition,
                         sequence,
                         epoch: self.epoch,
-                        discontinuity: listed.discontinuity
-                            || self.discontinuity_pending
-                            || replaces,
+                        reanchor,
                         duration: listed.duration,
                         init,
                         payload,
                     });
-                    self.discontinuity_pending = false;
                 }
-                None => pool.counters.skipped = pool.counters.skipped.saturating_add(1),
+                None => {
+                    self.skip_discontinuity(listed.discontinuity);
+                    pool.counters.skipped = pool.counters.skipped.saturating_add(1);
+                }
             }
             self.next_seq = sequence.checked_add(1);
         }

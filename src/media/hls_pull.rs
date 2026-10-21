@@ -256,6 +256,14 @@ impl From<FetchError> for PullError {
     }
 }
 
+/// What sent the pull back to the source URL for a fresh master resolution:
+/// only the video's trigger re-arms an abandoned audio rendition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Resolve {
+    Video,
+    Audio,
+}
+
 struct PullState {
     /// The URL the operator configured: where a master is resolved from, and
     /// where an expired variant URL goes back to.
@@ -277,9 +285,17 @@ struct PullState {
     /// The variant's separate audio rendition, when its audio is one.
     audio: Option<AudioFollow>,
     /// The audio rendition failed `MAX_ATTEMPTS` cycles in a row: this pull
-    /// stays video-only. (An audio 404 re-resolves the master, which would
-    /// otherwise follow the rendition again and again.)
+    /// stays video-only until the video itself resolves the master again
+    /// (`rearm_audio`). An audio 404 re-resolves the master too, but must not
+    /// re-arm the rendition, or the pull would follow it again and again.
     audio_abandoned: bool,
+    /// The video sent the pull back to its master while the audio rendition
+    /// was abandoned: the next master that resolves re-arms it, so a rendition
+    /// that recovers is followed again instead of staying off until the pull
+    /// restarts. Only the video's own trigger (an expired variant URL or a
+    /// failed retry burst) sets this; an audio 404 must not, or the rendition
+    /// would re-arm itself in a loop.
+    rearm_audio: bool,
     /// The last refusal reason logged, so a playlist whose every segment is
     /// refused logs one line rather than one per segment.
     last_refused: Option<String>,
@@ -357,6 +373,7 @@ async fn run(
         video: Follow::new(PULL_DIR, PLAYLIST_PATH),
         audio: None,
         audio_abandoned: false,
+        rearm_audio: false,
         last_refused: None,
         re_expired: false,
     };
@@ -445,7 +462,7 @@ async fn run(
                     // per-variant URL comes from. A source that never resolved
                     // a variant has nowhere to go back to, and `re_resolve`
                     // says nothing in that case.
-                    state.re_resolve("the retry burst failed six times");
+                    state.re_resolve("the retry burst failed six times", Resolve::Video);
                 }
                 if sleep_or_cancel(delay, &cancel).await {
                     break;
@@ -484,7 +501,10 @@ impl PullState {
             // that is renewed, so a media playlist that is gone sends the
             // pull back to it instead of retrying a dead URL forever.
             Err(error) if self.next_url != self.source_url && variant_expired(&error) => {
-                self.re_resolve("the variant playlist answered 401, 403 or 404");
+                self.re_resolve(
+                    "the variant playlist answered 401, 403 or 404",
+                    Resolve::Video,
+                );
                 return Err(PullError::Retry(error.to_string()));
             }
             Err(error) => return Err(error.into()),
@@ -498,6 +518,16 @@ impl PullState {
         {
             Prepared::Media(media, text) => (media, text),
             Prepared::Master(master) => {
+                // The video itself asked for this master: a rendition this
+                // pull gave up on gets one fresh retry burst.
+                if std::mem::take(&mut self.rearm_audio) {
+                    self.audio_abandoned = false;
+                    info!(
+                        pipeline = %self.pipeline.id,
+                        input = %self.pipeline.input_id,
+                        "HLS pull re-arms the abandoned audio rendition at the video's master resolution"
+                    );
+                }
                 let variant = choose_variant(&master, self.variant).ok_or_else(|| {
                     PullError::Fatal("HLS master playlist lists no variant".to_string())
                 })?;
@@ -623,7 +653,10 @@ impl PullState {
                 // A signed rendition URL expires like a variant's: the master
                 // hands out a fresh one.
                 Err(error) if variant_expired(&error) => {
-                    self.re_resolve("the audio rendition playlist answered 401, 403 or 404");
+                    self.re_resolve(
+                        "the audio rendition playlist answered 401, 403 or 404",
+                        Resolve::Audio,
+                    );
                     return Err(PullError::Retry(error.to_string()));
                 }
                 Err(error) => return Err(error.into()),
@@ -680,9 +713,18 @@ impl PullState {
 
     /// Go back to the source URL, so the master is resolved again and a fresh
     /// per-variant URL comes with it. `reason` says why the URL the pull was
-    /// following is gone. Says so once per expiry: a master that keeps handing
-    /// out the same dead URL is a slow poll, not a line every burst.
-    fn re_resolve(&mut self, reason: &'static str) {
+    /// following is gone, and `trigger` says whether the video or the audio
+    /// sent it back: a video trigger re-arms an abandoned audio rendition at
+    /// the master resolution that follows. Says so once per expiry: a master
+    /// that keeps handing out the same dead URL is a slow poll, not a line
+    /// every burst.
+    fn re_resolve(&mut self, reason: &'static str, trigger: Resolve) {
+        // Re-arm only when the video is the one going back to the master. An
+        // audio 404 re-resolves the master too, and re-arming there would
+        // follow the broken rendition again on every failure.
+        if trigger == Resolve::Video && self.audio_abandoned {
+            self.rearm_audio = true;
+        }
         if self.next_url == self.source_url {
             return;
         }

@@ -304,7 +304,11 @@ fn a_restarted_encoder_inside_the_idle_window_starts_a_new_epoch() {
     session.poll(t0, &mut out);
     assert_eq!(out.len(), 1, "the restarted index0.ts is released");
     assert_eq!((out[0].sequence, out[0].epoch), (0, 1));
-    assert!(out[0].discontinuity);
+    assert_eq!(
+        out[0].reanchor,
+        Reanchor::Timeline(1),
+        "a new epoch is a timeline break"
+    );
     assert_eq!(session.counters().epochs, 1);
     assert_eq!(session.counters().duplicates, 0);
 
@@ -314,7 +318,7 @@ fn a_restarted_encoder_inside_the_idle_window_starts_a_new_epoch() {
     out.clear();
     session.poll(t0, &mut out);
     assert_eq!(out.len(), 1);
-    assert!(!out[0].discontinuity);
+    assert_eq!(out[0].reanchor, Reanchor::None);
 }
 
 #[test]
@@ -357,7 +361,7 @@ fn released_with_init(
                 release.sequence,
                 text(&release.payload),
                 release.init.as_ref().map(|init| text(&init.payload)),
-                release.discontinuity,
+                !matches!(release.reanchor, Reanchor::None),
             )
         })
         .collect()

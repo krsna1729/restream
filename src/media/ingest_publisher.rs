@@ -42,6 +42,23 @@ use crate::media::stage_metrics::StageMetrics;
 /// Largest chunk a caller should hand to [`SegmentPublisher::publish`] at once.
 pub const PUBLISH_CHUNK_BYTES: usize = 64 * 1024;
 
+/// What a discontinuity mark means for a rendition's timeline.
+///
+/// The ordering pass classifies every mark before it releases the segment:
+/// a timeline break (`EXT-X-DISCONTINUITY`, a new epoch) is shared by every
+/// rendition and counted as a generation; a clock-keeping mark (a variant
+/// switch, a changed init) starts unrelated bytes on the same source clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscontinuityKind {
+    /// The source clock continues: another rendition whose raw time is nearby
+    /// lends its offset, so the pair stays aligned.
+    Clock,
+    /// The timeline broke at `generation`, which counts the breaks every
+    /// rendition crosses. Only a rendition that crossed that same generation
+    /// lends its offset, whatever the raw times.
+    Timeline { generation: u64 },
+}
+
 /// The container one ingest publishes, decided by its first object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Container {
@@ -427,17 +444,27 @@ impl SegmentPublisher {
     pub fn discard_failed_object(&mut self) {
         self.demux().discard_object();
         self.packets.clear();
-        self.continuity(self.current).mark_discontinuity();
+        // The next segment continues the clock this one meant to: a timeline
+        // break that was already marked stays pending (`Clock` never
+        // downgrades it), and otherwise a nearby rendition lends its offset.
+        self.continuity(self.current).mark_clock_discontinuity();
     }
 
-    /// The next bytes start an unrelated stream (HLS discontinuity or an
-    /// encoder restart): finish the current one and re-anchor its timestamps
-    /// right after the last forwarded ones. A container whose fragments are
-    /// anchored by their own `tfdt` keeps its init and needs no other reset.
-    pub fn discontinuity(&mut self, target: &PublishTarget) {
+    /// The next bytes start an unrelated stream. `kind` says whether the
+    /// break starts a timeline generation shared by every rendition or keeps
+    /// the source clock. Finish the current stream and re-anchor its
+    /// timestamps right after the last forwarded ones. A container whose
+    /// fragments are anchored by their own `tfdt` keeps its init and needs no
+    /// other reset.
+    pub fn reanchor(&mut self, target: &PublishTarget, kind: DiscontinuityKind) {
         self.flush_current(target);
         self.demux().discontinuity();
-        self.continuity(self.current).mark_discontinuity();
+        match kind {
+            DiscontinuityKind::Clock => self.continuity(self.current).mark_clock_discontinuity(),
+            DiscontinuityKind::Timeline { generation } => self
+                .continuity(self.current)
+                .mark_timeline_break(generation),
+        }
     }
 
     /// A rendition's timeline: each is re-anchored on its own discontinuities,
@@ -456,16 +483,20 @@ impl SegmentPublisher {
         }
     }
 
-    /// Settle a pending re-anchor of `rendition` before its next packet:
-    /// renditions share their source's clock, so one whose last raw time is
-    /// within the window of this packet's lends its offset and the two stay
-    /// aligned (the second rendition to cross a discontinuity, or a variant
-    /// switch onto the same clock). Otherwise the packet is anchored right
-    /// after the latest timestamp forwarded on any rendition.
+    /// Settle a pending re-anchor of `rendition` before its next packet. A
+    /// clock-keeping mark may take a same-generation rendition's offset
+    /// when its last raw time is within the window (a variant switch, an init
+    /// change). A timeline break may take it only from a rendition that
+    /// crossed the same generation, whatever the raw times: the old offset
+    /// would leave the break in the output as a gap. Otherwise the packet is
+    /// anchored right after the latest timestamp forwarded by any rendition.
     fn align_rebase(&mut self, rendition: usize) {
-        if !self.continuity_of(rendition).rebase_pending() {
+        let state = self.continuity_of(rendition);
+        if !state.rebase_pending() {
             return;
         }
+        let pending_generation = state.pending_generation();
+        let generation = pending_generation.unwrap_or_else(|| state.generation());
         let Some(first) = self.packets.first() else {
             return;
         };
@@ -474,15 +505,16 @@ impl SegmentPublisher {
         let mut aligned = None;
         let mut latest = None;
         for index in 0..self.renditions.len() {
-            let state = self.continuity_of(index);
-            latest = latest.max(state.latest_ms());
-            if index != rendition
-                && aligned.is_none()
-                && state
-                    .last_raw_ms()
-                    .is_some_and(|last| last.abs_diff(raw) <= window)
-            {
-                aligned = Some(state.offset_ms());
+            let other = self.continuity_of(index);
+            latest = latest.max(other.latest_ms());
+            if index == rendition || aligned.is_some() || other.generation() != generation {
+                continue;
+            }
+            let close = other
+                .last_raw_ms()
+                .is_some_and(|last| last.abs_diff(raw) <= window);
+            if pending_generation.is_some() || close {
+                aligned = Some(other.offset_ms());
             }
         }
         let offset = match (aligned, latest) {

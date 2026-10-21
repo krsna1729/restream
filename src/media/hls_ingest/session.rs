@@ -27,7 +27,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::ObjectOutcome;
 use super::ordering::{
-    Counters, Payload, PlaylistOutcome, Release, SegmentOutcome, Session, SessionLimits,
+    Counters, Payload, PlaylistOutcome, Reanchor, Release, SegmentOutcome, Session, SessionLimits,
 };
 use super::pacing::Pacer;
 use super::playlist;
@@ -35,8 +35,8 @@ use super::registry::{AppliedInit, AppliedInits};
 use crate::media::engine::{IngestRegistration, MediaEngine};
 use crate::media::ingest_publisher::fmp4::{Fmp4Demux, boxes};
 use crate::media::ingest_publisher::{
-    Container, IngestTimestamps, MediaRejection, PUBLISH_CHUNK_BYTES, PublishTarget,
-    SegmentPublisher,
+    Container, DiscontinuityKind, IngestTimestamps, MediaRejection, PUBLISH_CHUNK_BYTES,
+    PublishTarget, SegmentPublisher,
 };
 use crate::media::ring_buffer::RingBuffer;
 
@@ -294,10 +294,16 @@ async fn drive(
             );
         }
         for release in releases.drain(..) {
+            let (discontinuity, generation) = match release.reanchor {
+                Reanchor::None => (false, None),
+                Reanchor::Clock => (true, None),
+                Reanchor::Timeline(generation) => (true, Some(generation)),
+            };
             tracing::trace!(
                 sequence = release.sequence,
                 epoch = release.epoch,
-                discontinuity = release.discontinuity,
+                discontinuity,
+                generation = ?generation,
                 init = release.init.is_some(),
                 "hls ingest segment released"
             );
@@ -355,8 +361,13 @@ async fn publish_next_chunk(
         publisher.select_rendition(release.rendition, || {
             container.unwrap_or(Container::Ts).demux()
         });
-        if release.discontinuity {
-            publisher.discontinuity(target);
+        let mark = match release.reanchor {
+            Reanchor::None => None,
+            Reanchor::Clock => Some(DiscontinuityKind::Clock),
+            Reanchor::Timeline(generation) => Some(DiscontinuityKind::Timeline { generation }),
+        };
+        if let Some(mark) = mark {
+            publisher.reanchor(target, mark);
             pacer.reset();
         }
         if let Some(release_init) = &release.init {
