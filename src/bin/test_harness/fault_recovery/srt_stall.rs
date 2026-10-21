@@ -424,6 +424,8 @@ async fn srt_egress_bounded_rss_under_frozen_destination() -> Result<Value, Stri
         let _ = signal_process(pid, libc::SIGCONT);
     }
     stop_child(&mut mediamtx).await;
+    // The sampler may now observe this process disappearing without losing capture coverage.
+    frozen_phase(&work_dir, "capture-complete")?;
     stop_child(&mut child).await;
 
     Ok(json!({

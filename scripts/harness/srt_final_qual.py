@@ -11,7 +11,7 @@ Subcommands:
   fanout   --variant V --outputs N --rep R
   summarize                   aggregate every fanout run into summary.json/md
 """
-import argparse, json, os, re, statistics, subprocess, sys, threading, time, urllib.request, http.cookiejar
+import argparse, json, math, os, re, signal, statistics, subprocess, sys, threading, time, urllib.request, http.cookiejar
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -76,6 +76,15 @@ class Sampler(threading.Thread):
         self.port = self.pid = None
         self.cookie = None
         self.attribution = attribution
+        self.process_gone_at = self.finished_at = self.failure = None
+
+    def outcome(self, stop_requested_at):
+        return {"process_gone_at": self.process_gone_at, "finished_at": self.finished_at,
+                "failure": self.failure, "stop_requested_at": stop_requested_at,
+                "joined": not self.is_alive()}
+
+    def process_exists(self):
+        return Path(f"/proc/{self.pid}").exists()
 
     def http(self, path, post=None):
         req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=post, method="POST" if post else "GET")
@@ -159,6 +168,14 @@ class Sampler(threading.Thread):
         return facts
 
     def run(self):
+        try:
+            self.sample()
+        except Exception as exc:
+            self.failure = str(exc)
+        finally:
+            self.finished_at = time.time()
+
+    def sample(self):
         while not self.stop.is_set() and not self.discover():
             time.sleep(0.25)
         with self.out_path.open("w") as fh:
@@ -185,7 +202,8 @@ class Sampler(threading.Thread):
                     rec["outputs"] = outs
                 except Exception as exc:  # the process may be shutting down
                     rec["error"] = str(exc)
-                    if not Path(f"/proc/{self.pid}").exists():
+                    if not self.process_exists():
+                        self.process_gone_at = time.time()
                         break
                 fh.write(json.dumps(rec) + "\n")
                 fh.flush()
@@ -608,6 +626,150 @@ def frozen_sample_errors(samples, attribution):
     return errors
 
 
+FROZEN_TEST = "srt-egress-bounded-rss-under-frozen-destination"
+FROZEN_PHASES = ("live-progress", "sigstop", "retry-observed", "output-stopped",
+                 "pipeline-deleted", "capture-complete")
+
+
+def positive_kb(value):
+    return type(value) is int and value > 0
+
+
+def parse_frozen_report(report):
+    """Accept only the current harness artifact, never an exit code or legacy keys."""
+    errors = []
+    if not isinstance(report, dict):
+        report = {}
+    if report.get("loadError"):
+        errors.append(f"frozen artifact unavailable: {report['loadError']}")
+    if report.get("mode") != "fault.srt-output-stall" or report.get("passed") is not True:
+        errors.append("missing or failed fault.srt-output-stall report")
+    tests = report.get("tests")
+    tests = tests if isinstance(tests, list) else []
+    matches = [test for test in tests if isinstance(test, dict) and test.get("test") == FROZEN_TEST]
+    frozen = matches[0] if len(matches) == 1 else {}
+    if len(matches) != 1 or frozen.get("passed") is not True:
+        errors.append("missing, duplicate or failed named frozen subtest")
+    if frozen.get("sigstopOk") is not True or frozen.get("enteredRetryCycle") is not True:
+        errors.append("SIGSTOP and retry-cycle observations required")
+    measurement = frozen.get("rssMeasurement")
+    measurement = measurement if isinstance(measurement, dict) else {}
+    if measurement.get("available") is not True or measurement.get("bounded") is not True:
+        errors.append("frozen RSS measurement unavailable or unbounded")
+    before, after = frozen.get("rssBeforeStallKb"), frozen.get("rssAfterStallKb")
+    if (not positive_kb(before) or not positive_kb(after)
+            or not positive_kb(measurement.get("beforeKb")) or not positive_kb(measurement.get("afterKb"))):
+        errors.append("two positive rssBeforeStallKb/rssAfterStallKb endpoints required")
+    elif measurement.get("beforeKb") != before or measurement.get("afterKb") != after:
+        errors.append("RSS measurement endpoints disagree with the frozen subtest")
+    else:
+        growth = max(0, after - before)
+        if (type(measurement.get("growthKb")) is not int or type(frozen.get("rssGrowthKb")) is not int
+                or measurement.get("growthKb") != growth or frozen.get("rssGrowthKb") != growth
+                or measurement.get("limitKb") != 64 * 1024 or growth > 64 * 1024):
+            errors.append("RSS growth or fixed 64 MiB bound disagrees with endpoints")
+    if measurement.get("beforeError") is not None or measurement.get("afterError") is not None:
+        errors.append("RSS endpoint read errors present")
+    return {"report_errors": errors, "gate_rssBeforeKb": before, "gate_rssAfterKb": after,
+            "gate_rssGrowthKb": frozen.get("rssGrowthKb"), "gate_limit_kb": 64 * 1024,
+            "rss_measurement": measurement, "enteredRetryCycle": frozen.get("enteredRetryCycle"),
+            "sigstopOk": frozen.get("sigstopOk")}
+
+
+def finite_timestamp(value):
+    return type(value) in (int, float) and math.isfinite(value)
+
+
+def frozen_capture_errors(samples, phases, sampler, interval=1.0):
+    """Two sampling intervals is the maximum gap, including phase boundaries."""
+    errors = []
+    markers = {}
+    for name in FROZEN_PHASES:
+        found = [p.get("t") for p in phases if isinstance(p, dict) and p.get("phase") == name]
+        if len(found) != 1 or not finite_timestamp(found[0]):
+            errors.append(f"missing, duplicate or invalid phase: {name}")
+        else:
+            markers[name] = found[0]
+    if len(markers) != len(FROZEN_PHASES):
+        return errors
+    if [p.get("phase") for p in phases if isinstance(p, dict) and p.get("phase") in FROZEN_PHASES] != list(FROZEN_PHASES):
+        errors.append("frozen phase records are out of order")
+    ordered = [markers[name] for name in FROZEN_PHASES]
+    if any(a >= b for a, b in zip(ordered, ordered[1:])):
+        errors.append("frozen phases are not strictly ordered")
+    if markers["output-stopped"] - markers["retry-observed"] < 120:
+        errors.append("retry observation window shorter than 120 seconds")
+    times = [s.get("t") for s in samples if s.get("proc")]
+    if not times or any(not finite_timestamp(t) for t in times):
+        errors.append("no valid timestamped process samples")
+        return errors
+    if any(a >= b for a, b in zip(times, times[1:])):
+        errors.append("process sample timestamps are not strictly ordered")
+    max_gap = 2 * interval
+    for name, timestamp in markers.items():
+        if min(abs(t - timestamp) for t in times) > max_gap:
+            errors.append(f"no process sample within {max_gap:g}s of {name}")
+    if not any(markers["live-progress"] <= t < markers["sigstop"] for t in times):
+        errors.append("no live-progress process sample before SIGSTOP")
+    capture = [t for t in times if ordered[0] - max_gap <= t <= ordered[-1] + max_gap]
+    if any(b - a > max_gap for a, b in zip(capture, capture[1:])):
+        errors.append(f"process sampling gap exceeds {max_gap:g}s during capture")
+    end = markers["capture-complete"]
+    gone = sampler.get("process_gone_at")
+    if gone is not None and (not finite_timestamp(gone) or gone < end):
+        errors.append("sampled process disappeared before intentional capture completion")
+    finished, stopped = sampler.get("finished_at"), sampler.get("stop_requested_at")
+    if (sampler.get("joined") is not True or sampler.get("failure") is not None
+            or not finite_timestamp(finished) or not finite_timestamp(stopped)
+            or finished < end or stopped < end):
+        errors.append("sampler failed or stopped before capture completed")
+    return errors
+
+
+def summarize_frozen_run(report, samples, phases, sampler, attribution, harness_exit, processes_after):
+    result = parse_frozen_report(report)
+    # Errors from an expected process shutdown after this marker are not capture failures.
+    complete = [p.get("t") for p in phases if isinstance(p, dict) and p.get("phase") == "capture-complete"]
+    end = complete[0] if len(complete) == 1 and finite_timestamp(complete[0]) else float("inf")
+    capture = [s for s in samples if finite_timestamp(s.get("t")) and s["t"] <= end]
+    result.update(sample_count=len(samples), sample_errors=frozen_sample_errors(capture, attribution),
+                  coverage_errors=frozen_capture_errors(samples, phases, sampler),
+                  sampler=sampler, phases=phases, harness_exit=harness_exit, processes_after=processes_after)
+    result["passed"] = (harness_exit == 0 and not result["report_errors"]
+                        and not result["sample_errors"] and not result["coverage_errors"]
+                        and not processes_after)
+    return result
+
+
+def run_frozen_harness(command, env, timeout=900, terminate_timeout=5):
+    """Own a session so timing out the shell cannot leave its media children behind."""
+    with subprocess.Popen(command, env=env, cwd=ROOT, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, text=True, start_new_session=True) as process:
+        timed_out = False
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                stdout, stderr = process.communicate(timeout=terminate_timeout)
+            except subprocess.TimeoutExpired:
+                stdout = stderr = None
+            finally:
+                # Also retire descendants that closed the inherited pipes before exiting.
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if stdout is None:
+                stdout, stderr = process.communicate(timeout=terminate_timeout)
+        return {"returncode": process.returncode, "stdout": stdout, "stderr": stderr,
+                "timed_out": timed_out}
+
+
 def cmd_frozen(args):
     """fault.srt-output-stall (SIGSTOPped MediaMTX destination) with an RSS time series."""
     out = Path(args.out)
@@ -628,42 +790,49 @@ def cmd_frozen(args):
     sampler = Sampler(sdir, work / "samples.jsonl", attribution=args.attribution)
     sampler.log_name = "restream-frozen-destination.log"
     sampler.start()
+    run = {"returncode": None, "stdout": "", "stderr": "", "timed_out": False}
     try:
-        p = subprocess.run([str(ROOT / "scripts/harness/run.sh"), "fault.srt-output-stall", "--", "--no-netns"],
-                           env=env, cwd=ROOT, capture_output=True, text=True, timeout=900)
-        (work / "harness.stdout").write_text(p.stdout)
-        (work / "harness.stderr").write_text(p.stderr)
+        run = run_frozen_harness(
+            [str(ROOT / "scripts/harness/run.sh"), "fault.srt-output-stall", "--", "--no-netns"], env)
+    except (OSError, subprocess.SubprocessError) as exc:
+        run["stderr"] = str(exc)
     finally:
+        stop_requested_at = time.time()
         sampler.stop.set()
         sampler.join(timeout=15)
+        processes_after = stray_processes()
+    (work / "harness.stdout").write_text(run["stdout"])
+    (work / "harness.stderr").write_text(run["stderr"])
     samples = load_samples(work / "samples.jsonl") if (work / "samples.jsonl").exists() else []
     series = [(round(x["t"] - samples[0]["t"]), x["proc"]["rss_kb"] // 1024, x["proc"]["threads"], x["proc"]["fds"])
               for x in samples if x.get("proc")]
     art = sdir / "fault.srt-output-stall.json"
-    fault = json.loads(art.read_text()) if art.exists() else {}
-    frozen = next((t for t in fault.get("tests", []) if "rssGrowthKb" in t), {})
+    try:
+        fault = json.loads(art.read_text())
+    except (OSError, ValueError) as exc:
+        fault = {"loadError": str(exc)}
+    phases_path = sdir / "frozen-phases.jsonl"
+    phases = load_samples(phases_path) if phases_path.exists() else []
     rss = [r[1] for r in series]
     n = len(rss)
     def med_of(a, b):
         seg = rss[int(n * a):int(n * b)]
         return statistics.median(seg) if seg else None
-    res = {"variant": args.variant, "tag": args.tag, "harness_exit": p.returncode,
-           "gate_rssGrowthKb": frozen.get("rssGrowthKb"), "gate_limit_kb": 64 * 1024,
-           "gate_rssBeforeKb": frozen.get("rssBeforeStallKb"), "gate_rssAfterKb": frozen.get("rssAfterStallKb"),
-           "enteredRetryCycle": frozen.get("enteredRetryCycle"), "sigstopOk": frozen.get("sigstopOk"),
+    res = {"variant": args.variant, "tag": args.tag,
            "rss_mb_median_by_fifth": [med_of(i / 5, (i + 1) / 5) for i in range(5)],
            "rss_mb_max": max(rss) if rss else None, "threads_max": max((r[2] for r in series), default=None),
            "fds_max": max((r[3] for r in series), default=None), "rss_series_mb_every_10s": series[::10]}
-    res["rss_measurement"] = frozen.get("rssMeasurement")
-    res["sample_count"] = len(samples)
-    res["sample_errors"] = frozen_sample_errors(samples, args.attribution)
-    res["phases"] = load_samples(sdir / "frozen-phases.jsonl") if (sdir / "frozen-phases.jsonl").exists() else []
+    res.update(summarize_frozen_run(fault, samples, phases, sampler.outcome(stop_requested_at),
+                                    args.attribution, run["returncode"], processes_after))
+    res["harness_timed_out"] = run["timed_out"]
+    if run["timed_out"]:
+        res["passed"] = False
     res["attribution_requested"] = args.attribution
     res["binaries"] = {"restream": str(real), "harness": str(harness)}
-    res["processes_after"] = stray_processes()
+    res["processes_after"] = processes_after
     (out / f"{args.tag}.json").write_text(json.dumps(res, indent=2) + "\n")
     print(json.dumps({k: v for k, v in res.items() if k != "rss_series_mb_every_10s"}, indent=1))
-    if p.returncode or not series or res["sample_errors"] or res["processes_after"]:
+    if not res["passed"]:
         sys.exit(1)
 
 
@@ -684,7 +853,8 @@ def main():
     w.add_argument("--pin-cpus", default=""); w.add_argument("--control", action="store_true")
     w.add_argument("--exact-owner", action="store_true")
     z = sub.add_parser("frozen"); z.add_argument("--out", required=True); z.add_argument("--tag", required=True)
-    z.add_argument("--variant", choices=["baseline", "candidate"], required=True)
+    z.add_argument("--variant", choices=["baseline", "candidate"], required=True,
+                   help="report label only; binaries are selected by explicit paths or release defaults")
     z.add_argument("--restream-bin"); z.add_argument("--harness-bin")
     z.add_argument("--attribution", action="store_true",
                    help="sample smaps, thread/socket census and retained feed/transport telemetry")

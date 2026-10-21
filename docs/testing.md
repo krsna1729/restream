@@ -552,14 +552,27 @@ flock -x /tmp/restream-host.lock python3 scripts/harness/srt_final_qual.py froze
 
 The frozen driver defaults to `target/qual-release/{restream,test_harness}`;
 `--restream-bin` and `--harness-bin` permit explicit binaries (including an
-exec-style allocation-profiler launcher that preserves the child PID). Each
-tag must be new. The campaign saves raw smaps/rollup, thread names, socket FD
+exec-style allocation-profiler launcher that preserves the child PID).
+`--variant` is a report label only, not a binary selector. Each tag must be
+new. The campaign saves raw smaps/rollup, thread names, socket FD
 inodes and UDP tables, existing retained-ring and SRT Owner telemetry, harness
 stdout/stderr, and wall-clock phase markers through live progress, SIGSTOP,
-retry, output stop and pipeline deletion. Receiver-side MediaMTX byte growth
-is required before freezing. Missing/zero gate RSS is unavailable and fails;
-the artifact includes both read errors and nullable values, never a zero
-substitute. Missing attribution or process samples fail the driver as well.
+retry, output stop, pipeline deletion and intentional capture completion.
+Receiver-side MediaMTX byte growth is required before freezing. Missing/zero
+gate RSS is unavailable and fails; the artifact includes both read errors and
+nullable values, never a zero substitute. Exit zero alone is insufficient:
+the named frozen subtest must pass with available/bounded RSS, matching
+positive `rssBeforeStallKb`/`rssAfterStallKb` endpoints and the unchanged
+64 MiB limit. Missing reports and legacy endpoint keys are rejected.
+Missing attribution or process samples fail the driver as well. Ordered phase
+markers and samples must cover live progress before SIGSTOP and the full
+120-second retry observation, through `capture-complete` before intentional
+process shutdown. Phase proximity and consecutive capture gaps may not exceed
+two sampling intervals (2 seconds at the default 1 Hz). Late discovery,
+truncated sampling, sampler failure and observed process disappearance before
+capture completion fail; expected shutdown afterward does not. A timed-out
+harness runs in its own process group, which is terminated and then killed
+before sampler join and the final process census.
 RSS/smaps and ring payload alone cannot separate live heap from allocator
 retention; pair them with an allocation profiler before making that claim.
 The 64 MiB growth limit remains unchanged pending historical attribution.

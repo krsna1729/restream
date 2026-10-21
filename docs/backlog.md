@@ -118,8 +118,9 @@ items).
   snapshots. The summaries' gate endpoint fields are null
   because the driver read `rssBeforeKb`/`rssAfterKb` instead of the harness's
   `rssBeforeStallKb`/`rssAfterStallKb`. The harness now fails closed on either
-  unreadable/zero RSS endpoint and the driver preserves the correct fields;
-  an opt-in attribution census records lifecycle-aligned evidence. The new
+  unreadable/zero RSS endpoint and the driver requires the current named
+  report plus complete lifecycle sample coverage, not merely exit zero.
+  An opt-in attribution census records lifecycle-aligned evidence. The new
   release/heaptrack/mallinfo2 campaign separates current ring warmup, requested
   heap and allocator-free arenas, but does not reproduce the old growth.
   Closing this item still requires explaining that growth with historical
