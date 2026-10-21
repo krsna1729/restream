@@ -92,6 +92,9 @@ pub(crate) struct HlsPushOptions {
     /// Start Restream with `RESTREAM_MEDIA_POLL_USAGE=1`, so the executor
     /// rows carry per-poll user/system time and page faults.
     pub(crate) poll_usage: bool,
+    /// Run the host-stall probe beside the window and attribute a class's
+    /// poll-CPU maximum against it (`host_probe`).
+    pub(crate) host_probe: bool,
 }
 
 impl Default for HlsPushOptions {
@@ -105,13 +108,14 @@ impl Default for HlsPushOptions {
             duration_secs: 12,
             segment_secs: 2,
             poll_usage: false,
+            host_probe: false,
         }
     }
 }
 
 pub(crate) const USAGE: &str = "hls-push-duty [--base-publishers N] [--hls-publishers N] \
 [--pull-sessions N] [--segment-type ts|fmp4] [--method put|post] [--duration-secs N] \
-[--segment-secs N] [--poll-usage]";
+[--segment-secs N] [--poll-usage] [--host-probe]";
 
 impl HlsPushOptions {
     pub(crate) fn from_args(args: &[String]) -> Result<Self, String> {
@@ -148,6 +152,7 @@ impl HlsPushOptions {
                 "--duration-secs" => options.duration_secs = parse_u64(&value(&mut index)?, name)?,
                 "--segment-secs" => options.segment_secs = parse_u64(&value(&mut index)?, name)?,
                 "--poll-usage" if inline.is_none() => options.poll_usage = true,
+                "--host-probe" if inline.is_none() => options.host_probe = true,
                 other => {
                     return Err(format!(
                         "unknown hls-push-duty option {other:?}; usage: {USAGE}"

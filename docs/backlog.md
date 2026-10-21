@@ -330,102 +330,37 @@ items).
 
 ### Q-074 [performance] [opus] A rare multi-millisecond HLS ingest poll is bounded whatever its cause
 - Goal: a `hlsIngest` poll on the MEDIA executor never spends multiple
-  milliseconds of thread CPU, so one session's turn cannot hold a shared
-  worker whatever the stall's cause is.
-- Files: `src/media/executor.rs` (poll timing), `src/media/ingest_publisher.rs`
-  (the 64 KiB chunk publish), `src/media/mpegts/demux.rs`,
-  `src/media/ring_buffer.rs`, `src/malloc_tuning.rs`.
-- Sources: the `hls-push-duty` harness mode (release binaries, 2 RTMP base
-  publishers plus M HLS push sessions, 60 s, 6-vCPU shared host, one run per
-  arm), with the poll wrapper extended to time the polling thread's own CPU
-  (`CLOCK_THREAD_CPUTIME_ID`) beside the wall time and the session turn
-  instrumented per phase.
-- **A chunk-publish poll** costs ~170 µs of thread CPU (averaged over every
-  poll, including those that only apply an object or wait, ~84 µs): demux/feed
-  77 µs, ring publication 76 µs (2.8 packets per chunk; 16812 packets over
-  6034 calls), preview push 2 µs, input gate 1 µs, parameter sets and
-  keyframe bookkeeping 6 µs, continuity/timestamps 3 µs, and the probe's
-  engine hop 673 µs once per session (`apply_init` never ran: the arm pushes
-  MPEG-TS). The turn's other work is negligible: `session.poll` (the
-  due-release burst) ≤402 µs and its outbox drain ≤9 µs per turn, at most 2
-  releases in a turn (23 in 800 turns).
-- **The multi-millisecond poll is not per-unit work.** The same 64 KiB feed
-  costs 10 µs at best and 32069 µs at worst, and the same 2.8-packet ring
-  push 1 µs at best and 12077 µs at worst (54 of 6034 calls above 1 ms). The
-  polling thread's own CPU tracks the poll's wall time (maxCpuUs 51337 of
-  maxPollUs 52507 µs), so the thread is executing, not waiting on a lock and
-  not descheduled: host load was ~25 % of 6 vCPUs, steal 0 %,
-  `cpu.stat nr_throttled` 0, no D-state.
-  `MALLOC_TRIM_THRESHOLD_=-1` (with `MALLOC_MMAP_THRESHOLD_=16M`) cuts the
-  tail: one run each on the fixed build, M=8, class `maxPollUs` 15882 → 6022
-  µs and `maxCpuUs` 12443 → 8051 µs, with the per-service maxima 4.5–15.9 ms →
-  2.8–6.0 ms while per-poll CPU stayed 84 µs in both arms — the tuning cannot
-  change the work, only the stall. One run each, so a direction, not a gate.
-  What it does not separate is which layer stalls: glibc's own work (heap
-  trim, `munmap` of mmap-threshold chunks, arena locking) and the kernel's
-  memory management behind it (page faults on fresh pages — up to 1762 minor
-  faults in one demux call — THP compaction, memcg reclaim) both shrink
-  when glibc stops returning memory.
-- **The reported scaling does not reproduce.** Control re-runs of the
-  unmodified code (executor poll CPU clock only) gave `maxPollUs` 21985 µs at
-  M=4 and 23328 µs at M=8 with per-poll busy 110 → 139 µs, while the
-  per-session stall varied 12–52 ms across runs of either build: the 5259 µs
-  M=4 arm was a lucky run beside an unlucky M=8 one. `maxPollUs` alone is not
-  a gate; per-poll CPU time is.
-- Done in this change: the one path whose work per poll was unbounded by
-  design — the object branch applied every object the HTTP handlers queued
-  while the poll ran (2 in the measured run, 3 in the unit test with the
-  bound removed) — now yields after one object, so a poll never joins two
-  units (invariant in `docs/media-pipeline.md`, gate in
-  `src/media/hls_ingest/session_turn_tests.rs`). Within an fMP4 unit, the
-  top-level box walk stops at 4096 boxes, a `moof` is at most 256 KiB, a
-  segment declares at most 16384 samples, and a publish converts only the
-  samples its chunk released (gates in `boxes_tests.rs` and
-  `fmp4_tests.rs` under `src/media/ingest_publisher/`). Still per fragment,
-  not per chunk: `shiguredo_mp4`'s `handle_media_segment` decodes the whole
-  `moof` and the session plans its samples in the poll that first reaches
-  it, within those caps; a library-side incremental `trun` parse is the
-  remaining work for fMP4.
-- Steps 1–3 are done (2026-10-18): executor rows carry `cpuUs`, `maxCpuUs`
-  and `pollsOverCpu{1,4,16}Ms`, with `RESTREAM_MEDIA_POLL_USAGE=1` the
-  per-poll `getrusage` split (`docs/observability.md`), and `hls-push-duty`
-  reports the window per class and session plus `/proc/vmstat`, cgroup
-  `memory.events` and THP (`docs/testing.md`).
-- **Measured (release, M=8, 60 s, `--poll-usage`, 6-vCPU KVM VPS):** five
-  control runs at load-1m 1.38–1.46: class `maxCpuUs` 247781, 33407, 56333,
-  35231, 22511 µs; polls above 4 ms 2.38, 0.63, 1.37, 0.75, 0.13 per minute
-  per session; CPU per poll 67–119 µs. The gate fails in every run on
-  `maxCpuUs`, and in two of five on the rate.
-- **Not the kernel's memory management:** `compact_stall`, `allocstall_*`,
-  `thp_fault_alloc` and every `memory.events` counter moved 0 in all runs;
-  THP is `madvise`/`madvise` and glibc does not madvise its heap; polls above
-  1 ms took 0.2–4.0 minor faults each. **Not the allocator:** five strictly
-  interleaved A/B pairs (load-1m 1.23–1.49) with
-  `MALLOC_MMAP_THRESHOLD_=32 MiB` and `MALLOC_TRIM_THRESHOLD_=256 MiB`
-  (no trim, no per-chunk mmap): `maxCpuUs` 6172–109490 µs against
-  21764–91604, above-4 ms rate 0.88–9.75 against 0.88–6.38, peak RSS
-  297–306 against 296–311 MiB.
-- **The host:** 38–59 % of the polls' CPU is system time (48–65 % in the
-  polls above 1 ms), and this guest accounts no steal (`/proc/stat` steal
-  0 for 15 days): a thread that only spins on the two clocks saw 29 gaps
-  over 1 ms in an idle minute (worst 9.3 ms), each charged to it as thread
-  CPU. Thread CPU on this VPS therefore includes hypervisor descheduling,
-  so a poll's multi-millisecond CPU is not by itself evidence of work
-  [inference: the system share can also be real kernel work such as socket
-  I/O or futex wakes, which these runs do not exclude].
-- Decision: no allocator or kernel setting; the tail is left to host
-  qualification. What would close the item is the same five runs on a host
-  that reports steal (or bare metal), or a poll cost measured in guest
-  cycles (vPMU) rather than thread CPU — the gate as written cannot be met
-  on this VPS by any code change.
-- Gates: at M=8 over five runs on an otherwise idle 6-vCPU host, `hlsIngest`
-  polls above 4 ms of thread CPU stay under 1 per minute per session, and
-  the class `maxCpuUs` stays under 4 ms in every run. A wall-clock maximum
-  on a shared host is not a gate any code change can meet.
-- Status: open, blocked on a qualifying host (Filed: 2026-10-16 by claude,
-  from the HLS ingest isolation measurement; rewritten 2026-10-17 from the
-  attribution that measurement asked for; steps 1–3 measured 2026-10-18,
-  gate not met on the reference VPS).
+  milliseconds of thread CPU, so one session cannot hold a shared worker.
+- Files: `src/media/executor.rs`, `src/media/ingest_publisher.rs`,
+  `src/media/ingest_publisher/`, `src/media/hls_ingest/`,
+  `src/media/mpegts/demux.rs`, `src/media/ring_buffer.rs`,
+  `src/bin/test_harness/hls_push_duty/`.
+- Delivered: a session yields after applying one queued object or publishing
+  one 64 KiB chunk. TS partial-packet joins reuse a staging allocation.
+  Executor rows expose CPU totals, maxima and a bucketed p99; the harness
+  reports per-window service means and optional independent clock-gap
+  samples (`--host-probe`). Its 250 µs mean threshold is an empirical
+  regression check for the measured TS workload, not a per-poll bound.
+- Remaining work: `shiguredo_mp4::handle_media_segment` decodes the whole
+  `moof`, and sample planning runs in the poll first reaching that fragment.
+  Existing caps (4096 top-level boxes, 256 KiB `moof`, 16384 samples) bound
+  input size, not sub-millisecond CPU. Make parsing/planning incremental,
+  then verify both TS and fMP4 poll budgets.
+- Attribution limit: independent probe and application maxima cannot
+  establish the cause of a long poll, and the probe covers only the rated
+  window while executor maxima cover service lifetime. Recorded clock gaps
+  motivate host qualification but do not exclude application or kernel work.
+  Allocator A/B runs did not establish a repeatable tail improvement; no
+  allocator/kernel tuning change is justified. Measurements remain in the
+  relevant commits rather than a dated backlog ledger.
+- Gates: allocation-reuse and one-object-per-poll regressions; incremental
+  fMP4 parsing/planning regression; delivery-qualified release
+  `hls-push-duty -- --no-netns --hls-publishers 8 --duration-secs 60
+  --poll-usage --host-probe` on a qualified host over five runs, with
+  `hlsIngest` max CPU below 4 ms and fewer than one poll above 4 ms per
+  minute per session. A mean or p99 passing does not waive the maximum.
+- Status: open (Filed: 2026-10-16 by claude). Incremental fMP4 work and
+  host-qualified CPU-maximum evidence remain outstanding.
 
 
 ### Q-091 [protocol] [opus] SRT Backup failover replays the lost prefix

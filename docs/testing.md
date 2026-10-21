@@ -296,7 +296,12 @@ while Restream, MediaMTX or FFmpeg live processes run.
 `hls-push-duty` checks that HLS ingest does not degrade RTMP/SRT ingest and
 egress. One bench-profile Restream runs arms that differ only by the HLS
 addition. Every pipeline sends to its own in-process RTMP sink, which checks
-video, audio, a keyframe and monotonic DTS.
+video, audio, a keyframe and monotonic DTS. An HLS push pipeline also fails
+when its mean MEDIA poll CPU exceeds an empirical 250 µs regression
+threshold. This threshold was calibrated on the TS workload and host class
+in the change's commit evidence; it is not a portable per-poll work bound.
+Pending polls dilute the mean, and hardware speed and host stalls affect it.
+Missing, reset or empty executor measurements fail the check.
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -308,6 +313,7 @@ video, audio, a keyframe and monotonic DTS.
 | `--duration-secs N` | `12` | rated window after every input publishes |
 | `--segment-secs N` | `2` | `-hls_time` |
 | `--poll-usage` | off | sets `RESTREAM_MEDIA_POLL_USAGE=1` |
+| `--host-probe` | off | run the host-stall probe on 1 ms in 4 ms for the rated window |
 
 ```sh
 scripts/harness/run.sh hls-push-duty
@@ -322,7 +328,14 @@ scripts/harness/run.sh hls-push-duty -- --pull-sessions 4 --duration-secs 60
 snapshot (see
 [observability](observability.md#media-executor-mediaexecutor)),
 `egressShards`, `pollCpu` per executor class, `hostMemory` (vmstat, cgroup
-`memoryEvents`, THP modes) and `environment.cpuCount`.
+`memoryEvents`, THP modes) and `environment.cpuCount`. With `--host-probe`,
+`hostProbe` carries the probe thread's samples, gaps above 1 ms, maximum
+wall and thread-CPU gaps, and longest wake delay. These are contextual raw
+measurements, not evidence that any particular application poll was delayed
+by the host. Executor maxima/percentiles cover service lifetime, whereas the
+probe covers only the rated window. Its nominal 1 ms spin / 4 ms sleep cycle
+costs about 20% of one core and misses gaps outside spinning windows.
+Requested probe startup, clock or thread-join failures invalidate the run.
 
 ### MoQ interop
 

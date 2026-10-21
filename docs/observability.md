@@ -394,8 +394,13 @@ demux. All counters are cumulative; take rates from two snapshots.
   `Δ busyUs / (Δ wall µs × configuredWorkers)`; demand per wake is
   `Δ busyUs / Δ polls`.
 - Thread CPU inside the same polls (`CLOCK_THREAD_CPUTIME_ID`): `cpuUs`,
-  `maxCpuUs`, and `pollsOverCpu1Ms`, `pollsOverCpu4Ms`, `pollsOverCpu16Ms`.
-  A long poll with small CPU time waited for a CPU.
+  `maxCpuUs`, `cpuP99Us`, and `pollsOverCpu1Ms`, `pollsOverCpu4Ms`,
+  `pollsOverCpu16Ms`. A long poll with small CPU time waited for a CPU.
+  `cpuP99Us` is the lower bound of the power-of-two microsecond bucket that
+  holds the 99th percentile of the captured histogram. Its final bucket
+  starts at 8,388,608 µs with no upper bound. With fewer than 100 samples,
+  one outlier can determine p99. Neither means nor percentiles bound the
+  cost of an individual poll.
 - `usage` (only with `RESTREAM_MEDIA_POLL_USAGE=1`; adds two
   `getrusage(RUSAGE_THREAD)` calls per poll): `all` sums `userUs`, `sysUs`,
   `minorFaults` and `majorFaults`; `overCpu1Ms` sums them over polls above
@@ -408,10 +413,15 @@ demux. All counters are cumulative; take rates from two snapshots.
   `serviceId`, `class`, `pipelineId`, `stage` and the same counters. Subtract
   only rows with the same `serviceId`: a restarted service gets a new id.
 
-On a VM the hypervisor can deschedule a vCPU inside a poll without reporting
-steal. That time shows up as `busyUs` and as thread CPU. A millisecond
-`maxPollUs` or `maxCpuUs` against microsecond polls can be a host stall, not
-work. Check host jitter before you size `RESTREAM_MEDIA_WORKERS` from it.
+Virtualization and clock accounting can complicate timing interpretation.
+The harness's optional `hls-push-duty --host-probe` samples wall and thread-CPU
+clock gaps on an independent thread beside the rated window. Its raw
+`hostProbe` report provides context, not causal attribution: a probe gap and
+an application poll need not overlap or share a cause. Executor maxima and
+percentiles cover service lifetime; the probe covers only the rated window.
+Do not subtract independent maxima or declare a long poll harmless because
+the probe observed a larger gap. Use correlated profiling on a qualified
+host to distinguish application work, kernel work and scheduling delays.
 
 ### I/O and TLS capability
 

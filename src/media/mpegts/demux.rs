@@ -212,6 +212,10 @@ pub struct TsDemuxer {
     probed: bool,
     probe_result: Option<DemuxProbe>,
     pub(super) remainder: Vec<u8>,
+    /// Staging for feeds that join a partial packet with a new chunk.
+    /// Retains the largest joined feed allocation until this demuxer is
+    /// replaced or dropped; callers bound their input chunks.
+    scratch: Vec<u8>,
     output: Vec<MediaPacket>,
     audio_track_counter: u32,
     video_track_count: usize,
@@ -238,6 +242,7 @@ impl TsDemuxer {
             probed: false,
             probe_result: None,
             remainder: Vec::new(),
+            scratch: Vec::new(),
             output: Vec::with_capacity(16),
             audio_track_counter: 0,
             video_track_count: 0,
@@ -249,17 +254,26 @@ impl TsDemuxer {
     }
 
     /// Feed raw bytes (potentially multiple TS packets or partial ones).
+    ///
+    /// A chunk that continues a partial packet is joined with that tail in
+    /// `scratch`, whose allocation is reused across feeds: `remainder` must
+    /// stay the tail store, so `mem::take`ing it would allocate a fresh
+    /// chunk-sized buffer per feed on the MEDIA executor.
     pub fn feed(&mut self, data: &[u8]) {
         if self.remainder.is_empty() {
             let leftover = self.feed_slice(data);
             self.remainder
                 .extend_from_slice(data.get(leftover..).unwrap_or_default());
         } else {
-            self.remainder.extend_from_slice(data);
-            let buf = std::mem::take(&mut self.remainder);
-            let leftover = self.feed_slice(&buf);
+            let mut scratch = std::mem::take(&mut self.scratch);
+            scratch.clear();
+            scratch.extend_from_slice(&self.remainder);
+            scratch.extend_from_slice(data);
+            let leftover = self.feed_slice(&scratch);
+            self.remainder.clear();
             self.remainder
-                .extend_from_slice(buf.get(leftover..).unwrap_or_default());
+                .extend_from_slice(scratch.get(leftover..).unwrap_or_default());
+            self.scratch = scratch;
         }
         // Safety cap: remainder must never exceed TS_PACKET_SIZE-1 bytes.
         // feed_slice guarantees the unprocessed tail is < TS_PACKET_SIZE under
