@@ -60,6 +60,12 @@ impl Origin {
         crate::sync::lock(&self.routes).insert(path.to_string(), body.into());
     }
 
+    /// Answer 404 for `path` from now on, as an origin does when a signed URL
+    /// expires.
+    pub(super) fn unserve(&self, path: &str) {
+        crate::sync::lock(&self.routes).remove(path);
+    }
+
     /// Serve `path_and_query` exactly, taking precedence over [`Self::serve`]:
     /// `?sig=1` and `?sig=2` can answer differently.
     pub(super) fn serve_exact(&self, path_and_query: &str, body: impl Into<Vec<u8>>) {
@@ -585,6 +591,80 @@ async fn a_failing_audio_rendition_does_not_hold_back_the_video() {
         origin.count("/live/high.m3u8") > polled,
         "the video playlist is still polled at its cadence"
     );
+
+    task.cancel();
+    tokio::time::timeout(Duration::from_secs(5), task.join())
+        .await
+        .expect("the pull task stops");
+    engine.cancel_pipeline_input(INPUT_ID).await;
+}
+
+/// An audio rendition the pull gave up on is re-armed at the next master
+/// resolution the video itself triggers: when its variant URL expires, the
+/// master is resolved again, the recovered rendition is followed, and its
+/// retry budget starts fresh. The abandonment itself stays bounded: only the
+/// video's trigger re-arms it, never the audio's own 404.
+#[tokio::test]
+async fn an_abandoned_audio_rendition_is_rearmed_at_the_videos_master_resolution() {
+    let origin = Origin::new();
+    origin.serve("/live/master.m3u8", AUDIO_MASTER);
+    origin.serve("/live/high.m3u8", media_playlist(&["seg0.ts"]));
+    origin.serve("/live/seg0.ts", av_segment());
+    let base = origin.spawn().await;
+
+    let (engine, ingest) = test_ingest(limits());
+    let task = spawn(
+        engine.clone(),
+        ingest,
+        identity(),
+        source(
+            format!("{base}/live/master.m3u8"),
+            VariantRule::HighestBandwidth,
+        ),
+        limits(),
+    );
+
+    let audio = "/live/audio/0/index.m3u8";
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while origin.count(audio) < MAX_ATTEMPTS as usize {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the audio rendition is tried once per cycle before it is abandoned");
+    let abandoned = origin.count(audio);
+    tokio::time::sleep(Duration::from_millis(1_000)).await;
+    assert_eq!(
+        origin.count(audio),
+        abandoned,
+        "the abandoned rendition is not asked for on the audio's own failures"
+    );
+
+    // The rendition recovers at the origin, and only the video's variant URL
+    // expires: resolving the master again re-arms the audio.
+    origin.serve(audio, media_playlist(&["a0.ts"]));
+    origin.serve("/live/audio/0/a0.ts", av_segment());
+    let masters = origin.count("/live/master.m3u8");
+    origin.unserve("/live/high.m3u8");
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while origin.count("/live/master.m3u8") == masters {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the video's expired variant sent the pull back to the master");
+    // The variant URL recovers with a new segment, and the master resolution
+    // already re-armed the audio: the next video cycle follows it.
+    origin.serve("/live/high.m3u8", media_playlist(&["seg1.ts"]));
+    origin.serve("/live/seg1.ts", av_segment());
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while origin.count(audio) <= abandoned {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the video's master resolution re-armed the audio rendition");
+    wait_for_request(&origin, "/live/audio/0/a0.ts").await;
 
     task.cancel();
     tokio::time::timeout(Duration::from_secs(5), task.join())

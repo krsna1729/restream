@@ -609,6 +609,7 @@ async fn a_cancelled_task_dispatches_nothing() {
         video: Follow::new(PULL_DIR, PLAYLIST_PATH),
         audio: None,
         audio_abandoned: false,
+        rearm_audio: false,
         last_refused: None,
         re_expired: false,
     };

@@ -610,16 +610,28 @@ Sources: `src/api/hls_ingest.rs`, `src/media/hls_ingest/`,
   (`DEFAULT=YES`, else `AUTOSELECT=YES`, else the first with a `URI`), that
   playlist is followed too. Video and audio merge onto the ring in DTS order.
   A rendition that stalls delays the other by at most three target durations.
+  A rendition that re-anchors adopts another's offset only when the two
+  crossed the same generation (see Discontinuities), so a shared timeline
+  break lands on one new timeline whatever the raw jump; a variant switch or
+  init change keeps the clock and uses raw proximity instead.
 - **fMP4.** The `EXT-X-MAP` names the init segment. Identical init bytes under
-  a new URI change nothing; new bytes rebuild the demuxer and start a
-  discontinuity. The last applied init per rendition stays with the stream
-  key, so a restarted session reuses it; `EXT-X-ENDLIST` or a refused init
+  a new URI change nothing; new bytes rebuild the demuxer and re-anchor on
+  the same clock (an init change is not a timeline break). The last applied
+  init per rendition stays with the stream key, so a restarted session reuses
+  it; `EXT-X-ENDLIST` or a refused init
   clears it, and deleting the input forgets it. Each fragment needs a `tfdt`.
   An HEVC sample is a keyframe only when it is a sync sample and an IRAP
   picture (NAL types 16–23).
-- **Discontinuities.** An encoder restart (sequence or names go back) or
-  `EXT-X-DISCONTINUITY` starts a new epoch. Timestamps continue after the last
-  forwarded ones.
+- **Discontinuities.** Ordering classifies every mark before the publisher
+  sees it. An encoder restart (sequence or names go back) or
+  `EXT-X-DISCONTINUITY` is a *timeline break*: it starts a new epoch and
+  increments a generation shared by every rendition that crosses the same
+  break. Timestamps continue after the last forwarded ones, and a rendition
+  on the old generation never lends its offset to one on the new generation,
+  so a sub-window forward jump (an SSAI ad) cannot survive as a gap. A
+  variant switch (same clock, only rendition 0 marks it) and a changed
+  `EXT-X-MAP` init *keep the clock*: the re-anchored rendition may adopt a
+  nearby rendition's offset by raw proximity, which keeps A/V aligned.
 - **Pacing.** Released media reaches the ring at media pace. Media that is
   behind is published at once, up to one target duration. A session takes
   new objects only while less than two target durations of media, and at most
@@ -684,7 +696,12 @@ The diagram shows a pull feeding the same session code as a push.
   403 or 404 on the media playlist, and after a failed retry burst.
 - **Audio.** A separate `EXT-X-MEDIA` audio rendition is followed too
   (`pull/a/`). Its failures do not stop video; after six failed cycles in a
-  row the pull drops audio until it restarts.
+  row the pull drops audio and continues video-only. It re-arms the rendition
+  at the next master resolution the video itself triggers (an expired video
+  variant URL or a failed video retry burst): a fresh six-cycle budget, so a
+  rendition that recovered is followed again without restarting the pull.
+  An audio 404 also re-resolves the master but never re-arms the rendition,
+  so a broken one cannot loop; there is no timer-based retry.
 - **Credentials.** They go only to the source's own origin (scheme, host and
   port). Each pull has its own cookie jar.
 - **Redirects.** At most 10. `https` to `http` is refused. A cross-origin hop

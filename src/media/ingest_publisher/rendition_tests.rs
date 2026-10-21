@@ -245,12 +245,12 @@ async fn a_discontinuity_crossed_by_both_renditions_keeps_them_aligned() {
     publisher.select_rendition(0, rendition);
     publisher.publish(&target, b"v1").await.unwrap();
     // The restart reaches the video first...
-    publisher.discontinuity(&target);
+    publisher.reanchor(&target, DiscontinuityKind::Timeline { generation: 1 });
     publisher.publish(&target, b"v0'").await.unwrap();
     // ...while the audio of the old timeline's last segment is still to come.
     publisher.select_rendition(1, rendition);
     publisher.publish(&target, b"a1").await.unwrap();
-    publisher.discontinuity(&target);
+    publisher.reanchor(&target, DiscontinuityKind::Timeline { generation: 1 });
     publisher.publish(&target, b"a0'").await.unwrap();
     publisher.flush(&target);
 
@@ -277,5 +277,109 @@ async fn a_discontinuity_crossed_by_both_renditions_keeps_them_aligned() {
     assert!(
         (audio_restart - video_restart).abs() <= 20,
         "after the restart video starts at {video_restart} and audio at {audio_restart}"
+    );
+}
+
+/// An SSAI ad starts a few seconds past the content on both renditions: a
+/// forward jump inside the merge window at a timeline break. The video
+/// crosses first and must not adopt the audio's old-timeline offset, or the
+/// jump would stay in the output as a gap; the audio then joins it on the new
+/// generation.
+#[tokio::test]
+async fn a_sub_window_forward_jump_at_a_timeline_break_leaves_no_gap() {
+    let (_engine, target, ring) = harness("renditions-timeline-break").await;
+    let start = ring.get_write_idx();
+    let variant = Box::new(Scripted {
+        batches: VecDeque::from([video(0), video(5_000)]),
+        ..Scripted::default()
+    });
+    let rendition = || -> Box<dyn SegmentDemux> {
+        Box::new(Scripted {
+            batches: VecDeque::from([audio(0), audio(5_000)]),
+            ..Scripted::default()
+        })
+    };
+    let mut publisher = SegmentPublisher::new(variant, IngestTimestamps::default());
+    // Three target durations: the 5 s jump is inside the window.
+    publisher.interleave(2, Duration::from_secs(10), &target);
+
+    publisher.publish(&target, b"v0").await.unwrap();
+    publisher.select_rendition(1, rendition);
+    publisher.publish(&target, b"a0").await.unwrap();
+    // The ad break reaches the video first. Its raw time is close to the
+    // audio's last one, but the audio has not crossed generation 1.
+    publisher.select_rendition(0, rendition);
+    publisher.reanchor(&target, DiscontinuityKind::Timeline { generation: 1 });
+    publisher.publish(&target, b"v0-ad").await.unwrap();
+    // The audio crosses the same generation and joins the video's offset.
+    publisher.select_rendition(1, rendition);
+    publisher.reanchor(&target, DiscontinuityKind::Timeline { generation: 1 });
+    publisher.publish(&target, b"a0-ad").await.unwrap();
+    publisher.flush(&target);
+
+    let published = on_ring(&ring, start);
+    let track = |media_type: MediaType| -> Vec<i64> {
+        published
+            .iter()
+            .filter(|(kind, _)| *kind == media_type)
+            .map(|(_, dts)| *dts)
+            .collect()
+    };
+    let (video, audio) = (track(MediaType::Video), track(MediaType::Audio));
+    assert_eq!((video.len(), audio.len()), (100, 200), "nothing is lost");
+    for (name, track, frame) in [("video", &video, 40), ("audio", &audio, 20)] {
+        assert!(
+            track
+                .windows(2)
+                .all(|pair| pair[1] > pair[0] && pair[1] - pair[0] <= frame),
+            "{name} has a gap or goes backwards: {track:?}"
+        );
+    }
+    assert_eq!(
+        (video[50], audio[100]),
+        (1_981, 1_981),
+        "the ad starts right after the content on both renditions"
+    );
+}
+
+/// A variant switch marks a discontinuity on rendition 0 only, on the same
+/// source clock. The clock-keeping mark keeps the proximity rule: the new
+/// variant adopts the audio rendition's offset instead of re-anchoring after
+/// it, so the two stay aligned even though the switch jumped ahead.
+#[tokio::test]
+async fn a_variant_switch_keeps_the_renditions_aligned() {
+    let (_engine, target, ring) = harness("renditions-variant-switch").await;
+    let start = ring.get_write_idx();
+    let variant = Box::new(Scripted {
+        batches: VecDeque::from([video(0), video(3_000)]),
+        ..Scripted::default()
+    });
+    let rendition = || -> Box<dyn SegmentDemux> {
+        Box::new(Scripted {
+            batches: VecDeque::from([audio(0)]),
+            ..Scripted::default()
+        })
+    };
+    let mut publisher = SegmentPublisher::new(variant, IngestTimestamps::default());
+    publisher.interleave(2, Duration::from_secs(10), &target);
+
+    publisher.publish(&target, b"v0").await.unwrap();
+    publisher.select_rendition(1, rendition);
+    publisher.publish(&target, b"a0").await.unwrap();
+    // The master selects another variant: only rendition 0 re-anchors.
+    publisher.select_rendition(0, rendition);
+    publisher.reanchor(&target, DiscontinuityKind::Clock);
+    publisher.publish(&target, b"v1").await.unwrap();
+    publisher.flush(&target);
+
+    let video: Vec<i64> = on_ring(&ring, start)
+        .into_iter()
+        .filter(|(kind, _)| *kind == MediaType::Video)
+        .map(|(_, dts)| dts)
+        .collect();
+    assert_eq!(video.len(), 100, "nothing is lost");
+    assert_eq!(
+        video[50], 3_000,
+        "the switched variant kept the audio rendition's offset"
     );
 }

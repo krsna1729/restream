@@ -163,7 +163,7 @@ fn each_rendition_delivers_its_own_init() {
             (
                 release.rendition,
                 String::from_utf8(init.payload.bytes.to_vec()).unwrap(),
-                release.discontinuity,
+                !matches!(release.reanchor, Reanchor::None),
             )
         })
         .collect();
@@ -234,5 +234,115 @@ fn a_rendition_followed_before_its_master_keeps_its_init() {
             (1, 1, "audio/index1.ts".into(), true),
         ],
         "the audio continues at its next sequence, its init delivered to its new demuxer"
+    );
+}
+
+/// Mark one segment of a listing with `EXT-X-DISCONTINUITY`, as an SSAI ad
+/// break does in both the variant's and the audio rendition's playlist.
+fn with_discontinuity(mut playlist: Playlist, sequence: u64) -> Playlist {
+    if let Playlist::Media(media) = &mut playlist {
+        for segment in &mut media.segments {
+            if segment.sequence == sequence {
+                segment.discontinuity = true;
+            }
+        }
+    }
+    playlist
+}
+
+/// The reanchor mark of every release, as (rendition, sequence, mark).
+fn reanchors(session: &mut Session, now: Instant) -> Vec<(usize, u64, Reanchor)> {
+    let mut out = Vec::new();
+    session.poll(now, &mut out);
+    out.iter()
+        .map(|release| (release.rendition, release.sequence, release.reanchor))
+        .collect()
+}
+
+/// `EXT-X-DISCONTINUITY` on the same entry of both playlists is one timeline
+/// generation: each rendition counts it, so the publisher sees the same
+/// generation on both.
+#[test]
+fn a_timeline_break_on_both_renditions_counts_the_same_generation() {
+    let t0 = Instant::now();
+    let mut session = Session::new(limits());
+    session.on_playlist("master.m3u8", master(Some("audio/index.m3u8")), t0);
+    for name in [
+        "high/index0.ts",
+        "high/index1.ts",
+        "high/index2.ts",
+        "audio/index0.ts",
+        "audio/index1.ts",
+        "audio/index2.ts",
+    ] {
+        seg(&mut session, name, t0);
+    }
+    // An SSAI break marked on the same entry of both playlists.
+    session.on_playlist(
+        "high/index.m3u8",
+        with_discontinuity(media("high/", 0, 3, false), 1),
+        t0,
+    );
+    session.on_playlist(
+        "audio/index.m3u8",
+        with_discontinuity(media("audio/", 0, 3, false), 1),
+        t0,
+    );
+
+    let marks = reanchors(&mut session, t0);
+    assert_eq!(
+        marks,
+        vec![
+            (0, 0, Reanchor::None),
+            (0, 1, Reanchor::Timeline(1)),
+            (0, 2, Reanchor::None),
+            (1, 0, Reanchor::None),
+            (1, 1, Reanchor::Timeline(1)),
+            (1, 2, Reanchor::None),
+        ],
+        "the same break is generation 1 on both renditions"
+    );
+}
+
+/// A variant switch re-anchors rendition 0 but keeps the clock: its next
+/// release is a `Clock` mark, not a new generation. The audio rendition's
+/// playlist is unchanged, so its generation stays where it was.
+#[test]
+fn a_variant_switch_keeps_the_clock() {
+    let t0 = Instant::now();
+    let mut session = Session::new(limits());
+    let variant = |bandwidth, path: &str| Variant {
+        bandwidth,
+        path: path.into(),
+        audio_group: Some("aud".into()),
+        codecs: Vec::new(),
+    };
+    let same_audio = |path: &str| {
+        Playlist::Master(MasterPlaylist {
+            variants: vec![variant(2_500_000, path)],
+            audio: vec![audio("en", true, Some("audio/index.m3u8"))],
+            session_key: None,
+        })
+    };
+    session.on_playlist("master.m3u8", same_audio("high/index.m3u8"), t0);
+    for name in ["high/index0.ts", "high/index1.ts", "audio/index0.ts"] {
+        seg(&mut session, name, t0);
+    }
+    session.on_playlist("high/index.m3u8", media("high/", 0, 2, false), t0);
+    session.on_playlist("audio/index.m3u8", media("audio/", 0, 1, false), t0);
+    assert!(
+        reanchors(&mut session, t0)
+            .iter()
+            .all(|(_, _, mark)| *mark == Reanchor::None)
+    );
+
+    // The master selects another variant on the same clock.
+    session.on_playlist("master.m3u8", same_audio("alt/index.m3u8"), t0);
+    seg(&mut session, "alt/index0.ts", t0);
+    session.on_playlist("alt/index.m3u8", media("alt/", 0, 1, false), t0);
+    assert_eq!(
+        reanchors(&mut session, t0),
+        vec![(0, 0, Reanchor::Clock)],
+        "the switched variant re-anchors without a new generation"
     );
 }

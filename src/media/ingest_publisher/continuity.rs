@@ -12,6 +12,13 @@ pub(super) struct ContinuousTimestampState {
     /// The next packet starts an unrelated timeline: re-anchor it right after
     /// the latest timestamp forwarded on any stream, whichever way it jumped.
     rebase_pending: bool,
+    /// The timeline generation a pending re-anchor crosses, when the mark is
+    /// a timeline break (`EXT-X-DISCONTINUITY`, a new epoch). `None` marks a
+    /// re-anchor that keeps the clock (a variant switch, an init change).
+    pending_generation: Option<u64>,
+    /// The newest timeline generation this state has crossed. Renditions
+    /// compare it to decide whether an offset belongs to their timeline.
+    generation: u64,
     /// The raw (source) timestamp of the last packet, before the offset: what
     /// another rendition on the same source clock compares itself with.
     last_raw_ms: Option<i64>,
@@ -35,6 +42,16 @@ impl ContinuousTimestampState {
         self.rebase_pending
     }
 
+    /// The generation a pending re-anchor crosses, or `None` when it keeps
+    /// the clock.
+    pub(super) fn pending_generation(&self) -> Option<u64> {
+        self.pending_generation
+    }
+
+    pub(super) fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub(super) fn offset_ms(&self) -> i64 {
         self.offset_ms
     }
@@ -49,10 +66,14 @@ impl ContinuousTimestampState {
     }
 
     /// Settle a pending re-anchor with an offset chosen by the caller (one
-    /// that keeps this state aligned with another on the same source clock).
+    /// that keeps this state aligned with another on the same timeline). A
+    /// pending timeline break starts the state's new generation.
     pub(super) fn rebase_to(&mut self, offset_ms: i64) {
         self.rebase_pending = false;
         self.offset_ms = offset_ms;
+        if let Some(generation) = self.pending_generation.take() {
+            self.generation = self.generation.max(generation);
+        }
     }
 
     pub(super) fn continuity_timestamp_ms(packet: &MediaPacket) -> i64 {
@@ -65,17 +86,34 @@ impl ContinuousTimestampState {
 
     /// Backward jumps re-anchor on their own; a forward jump (an encoder
     /// restart, an HLS `EXT-X-DISCONTINUITY`) re-anchors only when marked.
-    pub(super) fn mark_discontinuity(&mut self) {
+    ///
+    /// A clock-keeping mark (a variant switch, an init change) leaves the
+    /// generation alone. It never downgrades a pending timeline break: the
+    /// next packet still belongs to the new timeline.
+    pub(super) fn mark_clock_discontinuity(&mut self) {
+        if !self.rebase_pending {
+            self.rebase_pending = true;
+        }
+    }
+
+    /// A timeline break shared by every rendition: the next packet starts
+    /// `generation`. Only a rendition that crossed the same generation can
+    /// lend it an offset.
+    pub(super) fn mark_timeline_break(&mut self, generation: u64) {
         self.rebase_pending = true;
+        self.pending_generation = Some(generation);
     }
 
     pub(super) fn apply(&mut self, packet: &mut MediaPacket) {
         let stream_key = Self::stream_key(packet);
         let raw_timestamp_ms = Self::continuity_timestamp_ms(packet);
-        if std::mem::take(&mut self.rebase_pending)
-            && let Some(latest_ms) = self.last_timestamp_ms_by_stream.values().copied().max()
-        {
-            self.offset_ms = latest_ms.saturating_add(1).saturating_sub(raw_timestamp_ms);
+        if std::mem::take(&mut self.rebase_pending) {
+            if let Some(latest_ms) = self.last_timestamp_ms_by_stream.values().copied().max() {
+                self.offset_ms = latest_ms.saturating_add(1).saturating_sub(raw_timestamp_ms);
+            }
+            if let Some(generation) = self.pending_generation.take() {
+                self.generation = self.generation.max(generation);
+            }
         }
         if let Some(last_timestamp_ms) = self.last_timestamp_ms_by_stream.get(&stream_key).copied()
         {
@@ -178,7 +216,7 @@ mod tests {
         timestamps.apply(&mut video);
         timestamps.apply(&mut audio);
 
-        timestamps.mark_discontinuity();
+        timestamps.mark_clock_discontinuity();
         let mut jumped_video = test_packet(MediaType::Video, 0, 9_000_000, 9_000_000);
         let mut jumped_audio = test_packet(MediaType::Audio, 0, 9_000_005, 9_000_005);
         timestamps.apply(&mut jumped_video);
