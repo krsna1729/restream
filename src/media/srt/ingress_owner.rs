@@ -508,7 +508,7 @@ impl OwnerLoop {
                     self.pending_events.push_back(SrtIngressEvent::Probe {
                         logical_peer,
                         identity,
-                        probe,
+                        probe: Box::new(probe),
                     });
                 }
             }

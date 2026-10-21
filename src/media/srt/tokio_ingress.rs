@@ -252,7 +252,7 @@ impl SrtServer {
             } => {
                 let ring = match sessions.get(&logical_peer) {
                     Some(Session::Publish(publisher)) => {
-                        self.apply_probe(publisher, identity, probe).await
+                        self.apply_probe(publisher, identity, *probe).await
                     }
                     _ => None,
                 };

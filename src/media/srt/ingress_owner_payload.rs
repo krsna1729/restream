@@ -208,7 +208,7 @@ impl OwnerLoop {
                     self.pending_events.push_back(SrtIngressEvent::Probe {
                         logical_peer: self.session(peer),
                         identity,
-                        probe,
+                        probe: Box::new(probe),
                     });
                 }
             }

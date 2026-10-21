@@ -98,7 +98,8 @@ pub(crate) enum SrtIngressEvent {
     Probe {
         logical_peer: IngressPeer,
         identity: super::ingress_media::ProbeIdentity,
-        probe: DemuxProbe,
+        // Topology-only allocation keeps every bounded bridge slot compact.
+        probe: Box<DemuxProbe>,
     },
     /// Terminal. The Owner has already flushed the publisher's media.
     Disconnected {
