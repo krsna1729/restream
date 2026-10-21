@@ -25,7 +25,6 @@ items).
 - [Q-089 MoQ origin track-set changes](#q-089-protocol-sonnet-the-moq-origin-follows-a-track-set-change-while-served)
 - [Q-091 SRT Backup replays the lost prefix](#q-091-protocol-opus-srt-backup-failover-replays-the-lost-prefix)
 - [Q-092 no descendants of a dropped dependency](#q-092-resilience-opus-never-emit-descendants-of-a-dropped-dependency-bearing-unit)
-- [Q-093 headless MoQ subscriber](#q-093-testing-sonnet-headless-moq-subscriber-for-impairment-and-capacity-gates)
 - [Q-094 sideband media events](#q-094-protocol-opus-first-class-sideband-media-events)
 - [Q-095 stream inspector](#q-095-observability-sonnet-stream-inspector-gop-health-skew-and-scte)
 - [Q-096 GRO and arrival timestamps](#q-096-performance-sonnet-gro-and-arrival-timestamps-in-the-reference-srt-path)
@@ -508,21 +507,6 @@ items).
 - Gates: a test per boundary that drops one unit and asserts no later
   dependent unit is emitted before the keyframe; a mutation that removes
   the suppression fails it.
-- Status: open (Filed: 2026-10-20 by claude, from the Prism comparison).
-
-### Q-093 [testing] [sonnet] Headless MoQ subscriber for impairment and capacity gates
-
-- Goal: a non-browser subscriber reports startup delay, frame and keyframe
-  delivery, audio delivery and A/V skew through an impaired network, beside
-  the browser E2E.
-- Why: Chromium E2E is slow and nondeterministic for impairment;
-  `moq-dev-interop --browsers` proves the product, not the protocol under
-  loss.
-- Change: extend the `moq-dev-interop` subscriber entry (or a small binary
-  over moq-net/hang) to print those counts as JSON and drive one harness
-  mode under netem.
-- Gates: a harness mode with 2 % loss and 200 ms delay that still reports
-  keyframes and audio; the browser E2E stays unchanged.
 - Status: open (Filed: 2026-10-20 by claude, from the Prism comparison).
 
 ### Q-094 [protocol] [opus] First-class sideband media events

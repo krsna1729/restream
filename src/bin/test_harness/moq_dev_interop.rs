@@ -57,7 +57,7 @@ mod run;
 mod tests;
 
 use checks::*;
-use peers::*;
+pub(crate) use peers::*;
 use run::*;
 
 use super::*;

@@ -281,6 +281,14 @@
           },
           "purpose": "MoQ against pinned moq-cli 0.14.7 and moq-relay 0.17.7 (scripts/dev/moq/fetch-moq-dev.sh): default moq-lite-06 + hang, or --ietf for explicit moqt-19 + MSF/LOC. RTMP-fed Restream egress to relay, catalog and negotiated-version assertions, CLI TS readback >=20 s with H.264/AAC, monotonic PTS and frame rate; authenticated origin readback and token refusal; relay crash/restart with uninterrupted RTMP sibling. Default ingest uses moq import ts directly; --ietf ingest uses a separate Restream source -> dedicated real relay -> Restream listener via a draft-19-only cluster dial, then RTMP readback >=8 s. --browsers retains Chromium/Firefox lite WebTransport playback of origin and relay with @moq/watch, including token-less origin refusal"
         },
+        "moq-impairment": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": false
+          },
+          "purpose": "Headless MoQ subscriber under impairment: one RTMP-fed Restream pipeline publishes to the pinned moq-relay, then a loopback netem qdisc (2% loss, 200 ms delay, relay QUIC port only) is applied and `moq_subscriber` reads the broadcast over the production moq-net/hang path. Reports startup delay (catalog-ready to first media), video frames/keyframes, audio frames/bytes and A/V arrival skew (wall-clock gap between the two tracks delivering the same media instant, matched within 25 ms, after a 2 s join warmup); asserts keyframes > 0, audio > 0, p95 arrival skew <= 500 ms (maximum reported) and startup <= 10 s. Manual protocol evidence beside the unchanged browser E2E (no CI job runs it); needs the default private network namespace with CAP_NET_ADMIN"
+        },
         "moq-relay-interop": {
           "suiteDefault": false,
           "requires": {

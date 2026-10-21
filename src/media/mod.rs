@@ -49,6 +49,8 @@ pub use moq::bench_entry as moq_bench_entry;
 #[cfg(fuzzing)]
 #[doc(hidden)]
 pub use moq::fuzz_entry as moq_fuzz_entry;
+#[doc(hidden)]
+pub use moq::subscribe_entry as moq_subscribe_entry;
 #[forbid(unsafe_code)]
 pub mod mpegts;
 pub mod packet;
