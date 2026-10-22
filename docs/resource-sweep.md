@@ -115,6 +115,7 @@ Configuration is parsed by
 | `MSR_PEER` | `mediamtx` or `sink` |
 | `PEER_COUNT` | Peer instances/ports, default 1 |
 | `RESOURCE_SWEEP_SRT_PEER_HOSTS` | Remote SRT receiver hosts; unset means loopback |
+| `HARNESS_SRT_SINK_OWNERS_PER_PORT` | Owners per harness SRT sink port, default 2 (clamped to 1–4) |
 | `RESOURCE_SWEEP_HLS_TLS` | `1` selects HTTPS on the counting HLS sink |
 | `RESOURCE_SWEEP_RTMPS_CERT`, `RESOURCE_SWEEP_RTMPS_KEY` | Certificate/key pair for MediaMTX or the counting RTMPS listener |
 | `RESOURCE_SWEEP_NO_CLEANUP` | `1` skips final stack cleanup; retaining a live workload also requires `cumulative` |

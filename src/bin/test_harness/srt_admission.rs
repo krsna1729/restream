@@ -74,7 +74,7 @@ pub(crate) async fn srt_admission() -> Result<Value, String> {
         .map(|i| u16::try_from(i).ok().and_then(|i| sink_base.checked_add(i)))
         .collect::<Option<Vec<u16>>>()
         .ok_or("sink port overflow")?;
-    let sink = HarnessSrtSinkPool::start(&sink_ports, 8 * 1024 * 1024)?;
+    let sink = HarnessSrtSinkPool::start(&sink_ports, 8 * 1024 * 1024, 1)?;
     let mut child = start_restream_child_with_env(
         &default_restream_bin(),
         &ports,

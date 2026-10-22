@@ -124,6 +124,7 @@ fn sink_state(
     ports: &[u16],
     sink: &crate::harness_srt_sink::SrtSinkCountersHandle,
     requested_rcvbuf: usize,
+    owners_per_port: usize,
 ) -> Value {
     let (nic_rx_dropped, nic_tx_dropped) = host_nic_drop_counters();
     let mut state = state_json(
@@ -137,6 +138,7 @@ fn sink_state(
         nic_tx_dropped,
     );
     state["requestedRcvbufBytes"] = json!(requested_rcvbuf);
+    state["ownersPerPort"] = json!(owners_per_port);
     state["sinkDrops"] = sink.drops().json();
     state["effectiveSocketBuffers"] = probe_effective_socket_buffers(requested_rcvbuf);
     state
@@ -162,6 +164,7 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
     );
     let state_port = u16::try_from(state_port).map_err(|_| "SRT_SINK_STATE_PORT out of range")?;
     let udp_buffer = env_usize("HARNESS_SRT_SINK_UDP_BUFFER", 8 * 1024 * 1024);
+    let owners_per_port = configured_owners_per_port();
     let interval_secs = env_secs("SRT_SINK_REPORT_SECS", 5).max(1);
     if let Ok(mask) = std::env::var("SRT_SINK_CPUSET")
         && !mask.trim().is_empty()
@@ -170,7 +173,7 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
         pin_to_cpuset(mask.trim())?;
         println!("[srt-sink] pinned to cpus {mask}");
     }
-    let pool = HarnessSrtSinkPool::start(&ports, udp_buffer)?;
+    let pool = HarnessSrtSinkPool::start(&ports, udp_buffer, owners_per_port)?;
 
     let started = Instant::now();
     let started_ms = SystemTime::now()
@@ -190,10 +193,19 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
         let run = run.clone();
         let ports = ports.clone();
         let counters = pool.counters();
-        std::sync::Arc::new(move || sink_state(&run, started_ms, &ports, &counters, udp_buffer))
+        std::sync::Arc::new(move || {
+            sink_state(
+                &run,
+                started_ms,
+                &ports,
+                &counters,
+                udp_buffer,
+                owners_per_port,
+            )
+        })
     }));
     println!(
-        "[srt-sink] run {run} listening on {ports:?} with one SRT Owner thread per port, {udp_buffer} B udp buffer; \
+        "[srt-sink] run {run} listening on {ports:?} with {owners_per_port} SRT Owner(s) per port, {udp_buffer} B udp buffer; \
          state endpoint on {state_port}/state (dual-stack when available); send SIGINT/SIGTERM to stop"
     );
 
@@ -237,6 +249,7 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
         "statePort": state_port,
         "sinkDropsSinceStart": sink_drops.json(),
         "udpBufferBytes": udp_buffer,
+        "ownersPerPort": owners_per_port,
         "uptimeSecs": started.elapsed().as_secs(),
         "stoppedBy": stopped_by,
         "accepted": counters.accepted,
