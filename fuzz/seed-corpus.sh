@@ -122,3 +122,7 @@ for track_count in 2 65; do
     printf '\x01\x00\x05\x02\x10\x00\x21\x10'
   } > "$out/seed-msf-shared-init-$track_count"
 done
+
+# moq_wire: moq-net's own generated seeds, one valid input per draft and
+# message type for the IETF and moq-lite codecs plus announce streams.
+cargo run --quiet --manifest-path moq-seeds/Cargo.toml -- corpus/moq_wire

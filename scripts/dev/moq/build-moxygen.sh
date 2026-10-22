@@ -56,20 +56,26 @@ checkout() {
 
 mkdir -p "$SCRATCH"
 checkout https://github.com/axboe/liburing.git "$LIBURING_COMMIT" "$SCRATCH/liburing-src"
-if [[ ! -f "$SCRATCH/liburing/include/liburing.h" ]]; then
+# Reuse the install only when its stamp names the pinned commit; an interrupted
+# or older install is rebuilt.
+if [[ "$(cat "$SCRATCH/liburing/.commit" 2>/dev/null)" != "$LIBURING_COMMIT" ]]; then
+    rm -rf "$SCRATCH/liburing"
     (cd "$SCRATCH/liburing-src" &&
         ./configure --prefix="$SCRATCH/liburing" >/dev/null &&
         make -j"$JOBS" -C src >/dev/null &&
         make -C src install >/dev/null)
+    printf '%s\n' "$LIBURING_COMMIT" >"$SCRATCH/liburing/.commit"
 fi
 
 checkout https://github.com/facebookexperimental/moxygen.git "$MOXYGEN_COMMIT" "$SCRATCH/moxygen-src"
+# CMake 4 reads CMAKE_POLICY_VERSION_MINIMUM from the environment for every
+# project getdeps configures, the dependencies included.
 export CMAKE_POLICY_VERSION_MINIMUM=3.5 CFLAGS="-std=gnu17"
 export CPATH="$SCRATCH/liburing/include" LIBRARY_PATH="$SCRATCH/liburing/lib"
 (cd "$SCRATCH/moxygen-src" &&
     python3 build/fbcode_builder/getdeps.py build --allow-system-packages --src-dir=. \
         --scratch-path "$SCRATCH/scratch" --num-jobs "$JOBS" --no-tests --free-up-disk \
-        --build-type Release --extra-cmake-defines '{"CMAKE_POLICY_VERSION_MINIMUM":"3.5"}' \
+        --build-type Release \
         --cmake-target moqrelayserver moxygen)
 
 built="$SCRATCH/scratch/build/moxygen/moxygen/relay/moqrelayserver"

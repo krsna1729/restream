@@ -152,6 +152,24 @@ fn log_tail(log: &str) -> String {
     lines.into_iter().rev().collect::<Vec<_>>().join("\n")
 }
 
+/// Whether the relay received the broadcast's PUBLISH_NAMESPACE and then
+/// answered it with PUBLISH_NAMESPACE_OK on the same session. moxygen logs
+/// the request on arrival, before deciding, so arrival alone is not consent.
+fn namespace_status(log: &str, broadcast: &str) -> (bool, bool) {
+    let request = format!("onPublishNamespaceImpl ns={broadcast} sess=");
+    let mut lines = log.lines();
+    let Some(session) = lines.by_ref().find_map(|line| {
+        line.split(&request)
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+    }) else {
+        return (false, false);
+    };
+    let ok = format!(" sess={session}");
+    let accepted = lines.any(|line| line.contains("publishNamespaceOk ") && line.ends_with(&ok));
+    (true, accepted)
+}
+
 /// What one draft's relay log says about Restream's publishing session:
 /// every negotiated ALPN and whether the broadcast's namespace was accepted.
 fn relay_verdict(log: &str, alpn: &str, broadcast: &str) -> (bool, Value) {
@@ -160,12 +178,11 @@ fn relay_verdict(log: &str, alpn: &str, broadcast: &str) -> (bool, Value) {
         .filter_map(|line| line.split("Negotiated ALPN: ").nth(1))
         .map(str::trim)
         .collect();
-    let namespace = format!("onPublishNamespaceImpl ns={broadcast} ");
-    let published = log.lines().any(|line| line.contains(&namespace));
-    let ok = published && !negotiated.is_empty() && negotiated.iter().all(|seen| *seen == alpn);
+    let (received, accepted) = namespace_status(log, broadcast);
+    let ok = accepted && !negotiated.is_empty() && negotiated.iter().all(|seen| *seen == alpn);
     (
         ok,
-        json!({"expectedAlpn": alpn, "negotiated": negotiated, "publishNamespace": published}),
+        json!({"expectedAlpn": alpn, "negotiated": negotiated, "publishNamespaceReceived": received, "publishNamespaceAccepted": accepted}),
     )
 }
 
@@ -305,9 +322,8 @@ pub(crate) async fn moq_moxygen_interop(args: &[String]) -> Result<Value, String
         for relay in &mut relays {
             let draft = relay.draft;
             let (alpn, broadcast) = (relay.alpn(), relay.broadcast());
-            let namespace = format!("onPublishNamespaceImpl ns={broadcast} ");
             let published = relay
-                .wait_log(PUBLISH_TIMEOUT, |log| log.contains(&namespace))
+                .wait_log(PUBLISH_TIMEOUT, |log| namespace_status(log, &broadcast).1)
                 .await;
             let log = std::fs::read_to_string(&relay.log).unwrap_or_default();
             let (ok, mut detail) = relay_verdict(&log, &alpn, &broadcast);
@@ -411,10 +427,11 @@ mod tests {
 V1023 MoQServer.cpp:199] Server: Negotiated ALPN: moqt-16
 V1023 MoQRelaySession.cpp:1082] onPublishNamespaceImpl ns=live/egress-d16.msf sess=0x1
 V1023 MoQServer.cpp:199] Server: Negotiated ALPN: moqt-16
+V1023 MoQRelaySession.cpp:1173] publishNamespaceOk reqID=0 sess=0x1
 ";
 
     #[test]
-    fn relay_verdict_needs_the_namespace_and_only_the_pinned_draft() {
+    fn relay_verdict_needs_the_accepted_namespace_and_only_the_pinned_draft() {
         assert!(relay_verdict(LOG, "moqt-16", "live/egress-d16.msf").0);
         // Another broadcast, or a prefix of it, is not this one.
         assert!(!relay_verdict(LOG, "moqt-16", "live/egress-d16").0);
@@ -424,5 +441,12 @@ V1023 MoQServer.cpp:199] Server: Negotiated ALPN: moqt-16
         assert!(!relay_verdict(&mixed, "moqt-16", "live/egress-d16.msf").0);
         // No session at all proves nothing.
         assert!(!relay_verdict("", "moqt-16", "live/egress-d16.msf").0);
+        // Received but never answered, or answered on another session, is not accepted.
+        let unanswered = LOG.replace("publishNamespaceOk reqID=0 sess=0x1\n", "");
+        let (ok, detail) = relay_verdict(&unanswered, "moqt-16", "live/egress-d16.msf");
+        assert!(!ok);
+        assert_eq!(detail["publishNamespaceReceived"], true);
+        let other = LOG.replace("reqID=0 sess=0x1", "reqID=0 sess=0x2");
+        assert!(!relay_verdict(&other, "moqt-16", "live/egress-d16.msf").0);
     }
 }

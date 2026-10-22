@@ -91,7 +91,9 @@ probe chatter or other "expected noise". Fix or suppress it in the helper.
 `fuzz/` holds cargo-fuzz targets for the parsers that read untrusted bytes.
 Each calls production code. Private parsers are reached through
 `media::rtmp::fuzz_entry`, `media::egress::fuzz_entry` and
-`media::moq_fuzz_entry`; these exist only under `--cfg fuzzing`.
+`media::moq_fuzz_entry`; these exist only under `--cfg fuzzing`. The
+vendored moq-net's wire codecs are reached through its `fuzz` feature
+(`moq_net::fuzz`).
 
 | Target | Input | Production code |
 |---|---|---|
@@ -106,10 +108,17 @@ Each calls production code. Private parsers are reached through
 | `hls_playlist` | HLS push ingest m3u8 body; first byte picks the path depth | `hls_ingest::playlist::parse` |
 | `fmp4_ingest` | HLS push ingest fMP4: 2-byte init length, init segment, then one media segment in 4 KiB chunks | `fmp4::boxes`, `Fmp4Demux::check_init`, `apply_init`, media segment demux |
 | `moq_ingest` | MoQ ingest: 2-byte catalog length, hang/MSF catalog, then frames | upstream MSF consumer, `from_hang_catalog`, `TrackSet::new`, `IngestTrack::push` (LOC/legacy timestamps, NAL units, AAC, CMAF fragments) |
+| `moq_wire` | MoQ session bytes: a draft and message-type selector, then the body | vendored moq-net IETF (drafts 14-22) and moq-lite control/object codecs, moq-lite announce-stream prefix compression (decoded value must re-encode to itself) |
 
 ```sh
 cd fuzz
-./seed-corpus.sh   # seeds ts_demux, http_response, hls_playlist, fmp4_ingest, moq_ingest
+./seed-corpus.sh   # seeds ts_demux, http_response, hls_playlist, fmp4_ingest, moq_ingest, moq_wire
+```
+
+`moq_wire` seeds come from `moq_net::fuzz::seeds()`, written by the small
+`fuzz/moq-seeds` crate so seeding does not build restream.
+
+```sh
 cargo +nightly fuzz run <target> -- -max_total_time=60
 ```
 
