@@ -11,7 +11,7 @@ items).
 
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
 - [Q-026 frozen-SRT-destination RSS gate](#q-026-resilience-opus-attribute-and-recalibrate-the-frozen-srt-destination-rss-gate)
-- [Q-027 residual SRT×100 sink loss](#q-027-performance-opus-find-the-residual-receiver-side-loss-in-the-multi-owner-srt-sink-at-srt100)
+- [Q-027 residual SRT×100 repeat failure](#q-027-performance-opus-find-why-srt100-still-fails-a-repeat-with-the-multi-owner-sink)
 - [Q-031 one capacity allocator](#q-031-architecture-opus-derive-every-thread-count-from-one-capacity-allocator)
 - [Q-033 host-level shard pool](#q-033-architecture-opus-run-egress-shards-from-one-host-level-pool-instead-of-per-feed-groups)
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
@@ -86,7 +86,7 @@ items).
   or reproducing that shape with those inputs; a smaller current pass does
   not supply them. Keep the 64 MiB gate unchanged.
 
-### Q-027 [performance] [opus] Find the residual receiver-side loss in the multi-Owner SRT sink at SRT×100
+### Q-027 [performance] [opus] Find why SRT×100 still fails a repeat with the multi-Owner sink
 - Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
   sink (two `SO_REUSEPORT` Owners per port) services every session at
   SRT×100, so a failing repeat is Restream's.
@@ -100,15 +100,17 @@ items).
   change) passed 6 of 7 at 100 outputs
   (`.local/artifacts/capacity-ramp/20261022T034708Z`); `summary.md` reports
   SRT capacity 0.
-  - Failing rep3: Restream's stall sweep closed five leaves with `srt egress
-    leaf closed unexpectedly: no progress (stalled)`, the plain-stall class,
-    not shard-saturated; 14 destinations received exactly 0 bytes (ratioMin
-    0, Jain 0.86, median 1.008). Whole sessions stopped at the sink.
+  - Failing rep3: 14 destinations measured zero receiver delivery (ratioMin
+    0, Jain 0.86, median 1.008), and 5 sender leaves stalled: Restream's
+    stall sweep closed them with `srt egress leaf closed unexpectedly: no
+    progress (stalled)`, the plain-stall class, not shard-saturated. Cause
+    unproven.
   - Kernel socket drops concentrate on one reuseport member per port (rep5
     8,785 vs 0; rep7 6,398 vs 0), and Owner RX buffer exhaustions run 6k-12k
     in every repeat.
-  Next probe: per-Owner session and ACK counters in the sink, or check whether
-  one sink Owner stopped servicing its sessions during rep3.
+  Receiver-side hypothesis, unproven: one sink Owner stopped servicing its
+  sessions during rep3. Probe it with per-Owner session and ACK counters in
+  the sink.
 - Status: open (Filed: 2026-10-02 by claude; narrowed 2026-10-22 after the
   PR #402 review).
 
