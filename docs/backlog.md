@@ -233,11 +233,14 @@ items).
 - Gates: interop with moxygen, MediaMTX and Cloudflare's relay as
   subscribers (one harness mode); fuzz targets for the control and object
   parsers.
-- Status: open; phase 1 (moq-lite-06 + hang, loom model for the origin
-  hand-off) landed in #371 with no regression on the unchanged shared
-  egress and ring benches (A/A); capacity model v5 prices the MoQ egress
-  leaf from a measured per-output cost
-  (Filed: 2026-10-05 by claude, from the architecture reviews).
+- Status: open; phase 1 (moq-lite-06 + hang, loom model for the origin hand-off)
+  landed in #371 with no regression on the unchanged shared egress and ring
+  benches (A/A); capacity model v5 prices the egress leaf from measured
+  per-output cost. IETF wire-codec fuzzing now runs through `moq_wire`;
+  MSF/LOC catalog and media parsing is exercised by `moq_ingest`. Still open:
+  one real subscriber interop mode covering moxygen, the MediaMTX v1.21.2
+  subset, and Cloudflare's draft-16 token-path relay; validate draft-18.
+  (Filed: 2026-10-05 by claude, from the architecture reviews.)
 
 ### Q-049 [resilience] [opus] Find why connected SRT leaves sent nothing under host overload
 - Evidence: while `mixed.signal` ran an H.265 case beside another case on a
