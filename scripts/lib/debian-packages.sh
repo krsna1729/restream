@@ -133,7 +133,7 @@ restream_debian_apt() {
     restream_with_timeout_as_root "apt-get $1" "$limit" bash -c '
         export DEBIAN_FRONTEND=noninteractive
         if [[ "$1" == install ]]; then
-            dpkg --configure -a
+            dpkg --force-confdef --force-confold --configure -a
         fi
         exec apt-get -q \
             -o Acquire::Retries=3 \
