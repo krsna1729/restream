@@ -469,6 +469,36 @@ LOC/MSF dialect mismatches are source/spec-evidenced in
 Use `moq-dev-interop --ietf` for the supported IETF gate; do not fork a
 MediaMTX-specific profile.
 
+### MoQ through moxygen (`moq-moxygen-interop`)
+
+`moq-moxygen-interop` checks Restream's IETF egress against moxygen, an
+independent C++ MOQT implementation. moxygen publishes no release binaries,
+so `scripts/dev/moq/build-moxygen.sh` builds `moqrelayserver` from a pinned
+commit with moxygen's own getdeps and installs
+`.local/bin/moxygen-<commit>/moqrelayserver` with a `.commit` stamp; the
+mode refuses another stamp. `MOQ_MOXYGEN_RELAY_BIN` overrides the path, not
+the commit. The script documents its host workarounds (CMake 4 policy floor,
+C17 for libunwind, a pinned liburing for folly); none of them touch moxygen.
+It is **manual evidence, not a CI job**: the build takes 30-60 minutes.
+
+For each draft moxygen supports (16 and 18), one relay offers only that
+draft, and one RTMP-fed pipeline has one `moqt://` output per relay with the
+matching `version=moqt-NN`. Each relay log must show the draft negotiated
+and the broadcast's PUBLISH_NAMESPACE accepted (`dNNRestreamPublish`). The
+pinned `moq` CLI then reads the broadcast back through moxygen on the same
+draft (MSF catalog, LOC media), and FFprobe checks H.264/AAC, monotonic
+timestamps and the frame rate over at least 10 s (`dNNReadBack`).
+
+```sh
+scripts/dev/moq/fetch-moq-dev.sh
+scripts/dev/moq/build-moxygen.sh
+scripts/harness/run.sh moq-moxygen-interop -- --no-netns
+```
+
+`.local/artifacts/moq-moxygen-interop/` holds `report.json`, the relay,
+Restream and publisher logs, and the CLI captures with their FFprobe JSON.
+Port overrides: `MOQ_MOXYGEN_INTEROP_D16`, `MOQ_MOXYGEN_INTEROP_D18`.
+
 ### Transport CI tiers
 
 - Pull requests: `integration-shards` (one SRT smoke, one RTMP smoke whose

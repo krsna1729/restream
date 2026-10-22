@@ -237,9 +237,13 @@ items).
   landed in #371 with no regression on the unchanged shared egress and ring
   benches (A/A); capacity model v5 prices the egress leaf from measured
   per-output cost. IETF wire-codec fuzzing now runs through `moq_wire`;
-  MSF/LOC catalog and media parsing is exercised by `moq_ingest`. Still open:
-  one real subscriber interop mode covering moxygen, the MediaMTX v1.21.2
-  subset, and Cloudflare's draft-16 token-path relay; validate draft-18.
+  MSF/LOC catalog and media parsing is exercised by `moq_ingest`. moxygen
+  done: `moq-moxygen-interop` (pinned `c392ebfc`, built by
+  `scripts/dev/moq/build-moxygen.sh`) publishes MSF/LOC to moxygen's relay on
+  draft-16 and draft-18 and reads it back through moxygen with FFprobe
+  checks. Still open: the MediaMTX subset (blocked on Q-097's upstream
+  dialect alignment) and Cloudflare's draft-16 relay, which needs an account
+  relay and a publish-capable token (the public demo JWT only subscribes).
   (Filed: 2026-10-05 by claude, from the architecture reviews.)
 
 ### Q-049 [resilience] [opus] Find why connected SRT leaves sent nothing under host overload
@@ -311,8 +315,13 @@ items).
   protocol `"moq"`.
 - Gates: interop with moxygen and MediaMTX as publishers (one harness mode);
   a fuzz target for the object parser.
-- Status: open; phase 1 landed in #371 (Filed: 2026-10-16 by claude, user
-  request; with Q-047).
+- Status: open; phase 1 landed in #371. Both named publishers are blocked:
+  pinned moxygen (`c392ebfc`) has no MSF/LOC publisher (its FLV streamer
+  sends MoqMi without a catalog, and its media server serves CMAF as a
+  server rather than dialling a relay or Restream), and MediaMTX waits on
+  Q-097. Closing needs either an upstream MSF/LOC publisher or a decision
+  to accept another one. (Filed: 2026-10-16 by claude, user request; with
+  Q-047.)
 
 ### Q-071 [architecture] [sonnet] HLS-to-HLS passthrough
 - Goal: an HLS output relays the selected HLS input's segments instead of

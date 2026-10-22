@@ -314,7 +314,7 @@ impl CliTarget<'_> {
         .iter()
         .chain(stage)
         .map(|arg| {
-            if self.version == IETF_VERSION && *arg == "hang" {
+            if self.version.starts_with("moq-transport-") && *arg == "hang" {
                 "msf".to_string()
             } else {
                 arg.to_string()
