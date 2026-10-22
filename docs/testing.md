@@ -91,7 +91,9 @@ probe chatter or other "expected noise". Fix or suppress it in the helper.
 `fuzz/` holds cargo-fuzz targets for the parsers that read untrusted bytes.
 Each calls production code. Private parsers are reached through
 `media::rtmp::fuzz_entry`, `media::egress::fuzz_entry` and
-`media::moq_fuzz_entry`; these exist only under `--cfg fuzzing`.
+`media::moq_fuzz_entry`; these exist only under `--cfg fuzzing`. The
+vendored moq-net's wire codecs are reached through its `fuzz` feature
+(`moq_net::fuzz`).
 
 | Target | Input | Production code |
 |---|---|---|
@@ -106,10 +108,17 @@ Each calls production code. Private parsers are reached through
 | `hls_playlist` | HLS push ingest m3u8 body; first byte picks the path depth | `hls_ingest::playlist::parse` |
 | `fmp4_ingest` | HLS push ingest fMP4: 2-byte init length, init segment, then one media segment in 4 KiB chunks | `fmp4::boxes`, `Fmp4Demux::check_init`, `apply_init`, media segment demux |
 | `moq_ingest` | MoQ ingest: 2-byte catalog length, hang/MSF catalog, then frames | upstream MSF consumer, `from_hang_catalog`, `TrackSet::new`, `IngestTrack::push` (LOC/legacy timestamps, NAL units, AAC, CMAF fragments) |
+| `moq_wire` | MoQ session bytes: a draft and message-type selector, then the body | vendored moq-net IETF (drafts 14-22) and moq-lite control/object codecs, moq-lite announce-stream prefix compression (decoded value must re-encode to itself) |
 
 ```sh
 cd fuzz
-./seed-corpus.sh   # seeds ts_demux, http_response, hls_playlist, fmp4_ingest, moq_ingest
+./seed-corpus.sh   # seeds ts_demux, http_response, hls_playlist, fmp4_ingest, moq_ingest, moq_wire
+```
+
+`moq_wire` seeds come from `moq_net::fuzz::seeds()`, written by the small
+`fuzz/moq-seeds` crate so seeding does not build restream.
+
+```sh
 cargo +nightly fuzz run <target> -- -max_total_time=60
 ```
 
@@ -468,6 +477,36 @@ LOC/MSF dialect mismatches are source/spec-evidenced in
 [Q-091](backlog.md#q-091-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop).
 Use `moq-dev-interop --ietf` for the supported IETF gate; do not fork a
 MediaMTX-specific profile.
+
+### MoQ through moxygen (`moq-moxygen-interop`)
+
+`moq-moxygen-interop` checks Restream's IETF egress against moxygen, an
+independent C++ MOQT implementation. moxygen publishes no release binaries,
+so `scripts/dev/moq/build-moxygen.sh` builds `moqrelayserver` from a pinned
+commit with moxygen's own getdeps and installs
+`.local/bin/moxygen-<commit>/moqrelayserver` with a `.commit` stamp; the
+mode refuses another stamp. `MOQ_MOXYGEN_RELAY_BIN` overrides the path, not
+the commit. The script documents its host workarounds (CMake 4 policy floor,
+C17 for libunwind, a pinned liburing for folly); none of them touch moxygen.
+It is **manual evidence, not a CI job**: the build takes 30-60 minutes.
+
+For each draft moxygen supports (16 and 18), one relay offers only that
+draft, and one RTMP-fed pipeline has one `moqt://` output per relay with the
+matching `version=moqt-NN`. Each relay log must show the draft negotiated
+and the broadcast's PUBLISH_NAMESPACE accepted (`dNNRestreamPublish`). The
+pinned `moq` CLI then reads the broadcast back through moxygen on the same
+draft (MSF catalog, LOC media), and FFprobe checks H.264/AAC, monotonic
+timestamps and the frame rate over at least 10 s (`dNNReadBack`).
+
+```sh
+scripts/dev/moq/fetch-moq-dev.sh
+scripts/dev/moq/build-moxygen.sh
+scripts/harness/run.sh moq-moxygen-interop -- --no-netns
+```
+
+`.local/artifacts/moq-moxygen-interop/` holds `report.json`, the relay,
+Restream and publisher logs, and the CLI captures with their FFprobe JSON.
+Port overrides: `MOQ_MOXYGEN_INTEROP_D16`, `MOQ_MOXYGEN_INTEROP_D18`.
 
 ### Transport CI tiers
 

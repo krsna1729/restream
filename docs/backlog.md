@@ -231,13 +231,21 @@ items).
   catalog and LOC objects, Cloudflare's draft-16 (token in the URL path) and
   the MediaMTX v1.21.2 subset, beside the moq-lite-06 + hang profile.
 - Gates: interop with moxygen, MediaMTX and Cloudflare's relay as
-  subscribers (one harness mode); fuzz targets for the control and object
-  parsers.
-- Status: open; phase 1 (moq-lite-06 + hang, loom model for the origin
-  hand-off) landed in #371 with no regression on the unchanged shared
-  egress and ring benches (A/A); capacity model v5 prices the MoQ egress
-  leaf from a measured per-output cost
-  (Filed: 2026-10-05 by claude, from the architecture reviews).
+  subscribers (a harness mode per peer: moxygen's needs its own built relay);
+  fuzz targets for the control and object parsers.
+- Status: open; phase 1 (moq-lite-06 + hang, loom model for the origin hand-off)
+  landed in #371 with no regression on the unchanged shared egress and ring
+  benches (A/A); capacity model v5 prices the egress leaf from measured
+  per-output cost. IETF and moq-lite wire-codec fuzzing (control, object and
+  announce streams) now runs through `moq_wire`, seeded from moq-net;
+  MSF/LOC catalog and media parsing is exercised by `moq_ingest`. moxygen
+  done: `moq-moxygen-interop` (pinned `c392ebfc`, built by
+  `scripts/dev/moq/build-moxygen.sh`) publishes MSF/LOC to moxygen's relay on
+  draft-16 and draft-18 and reads it back through moxygen with FFprobe
+  checks. Still open: the MediaMTX subset (blocked on Q-097's upstream
+  dialect alignment) and Cloudflare's draft-16 relay, which needs an account
+  relay and a publish-capable token (the public demo JWT only subscribes).
+  (Filed: 2026-10-05 by claude, from the architecture reviews.)
 
 ### Q-049 [resilience] [opus] Find why connected SRT leaves sent nothing under host overload
 - Evidence: while `mixed.signal` ran an H.265 case beside another case on a
@@ -308,8 +316,14 @@ items).
   protocol `"moq"`.
 - Gates: interop with moxygen and MediaMTX as publishers (one harness mode);
   a fuzz target for the object parser.
-- Status: open; phase 1 landed in #371 (Filed: 2026-10-16 by claude, user
-  request; with Q-047).
+- Status: open; phase 1 landed in #371. The object-parser fuzz gate is met
+  (`moq_wire` runs moq-net's IETF object codecs). Both named publishers are
+  blocked:
+  pinned moxygen (`c392ebfc`) has no MSF/LOC publisher (its FLV streamer
+  sends MoqMi without a catalog, and its media server serves CMAF as a
+  server rather than dialling a relay or Restream), and MediaMTX waits on
+  Q-097. Closing waits for an upstream MSF/LOC publisher (user decision,
+  2026-10-22). (Filed: 2026-10-16 by claude, user request; with Q-047.)
 
 ### Q-071 [architecture] [sonnet] HLS-to-HLS passthrough
 - Goal: an HLS output relays the selected HLS input's segments instead of

@@ -289,6 +289,14 @@
           },
           "purpose": "Headless MoQ subscriber under impairment: one RTMP-fed Restream pipeline publishes to the pinned moq-relay, then a loopback netem qdisc (2% loss, 200 ms delay, relay QUIC port only) is applied and `moq_subscriber` reads the broadcast over the production moq-net/hang path. Reports startup delay (catalog-ready to first media), video frames/keyframes, audio frames/bytes and A/V arrival skew (wall-clock gap between the two tracks delivering the same media instant, matched within 25 ms, after a 2 s join warmup); asserts keyframes > 0, audio > 0, p95 arrival skew <= 500 ms (maximum reported) and startup <= 10 s. Manual protocol evidence beside the unchanged browser E2E (no CI job runs it); needs the default private network namespace with CAP_NET_ADMIN"
         },
+        "moq-moxygen-interop": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": false
+          },
+          "purpose": "MoQ egress through moxygen's moqrelayserver from a pinned commit (scripts/dev/moq/build-moxygen.sh), an independent C++ MOQT implementation: one RTMP-fed pipeline publishes MSF/LOC to one relay per draft (16 and 18), each offering only that draft. Asserts each relay negotiated the pinned draft and accepted the broadcast's PUBLISH_NAMESPACE, then the pinned moq CLI reads the broadcast back through moxygen on the same draft: TS readback >=10 s with H.264/AAC, monotonic PTS and frame rate. Manual protocol evidence (no CI job builds moxygen)"
+        },
         "moq-relay-interop": {
           "suiteDefault": false,
           "requires": {
