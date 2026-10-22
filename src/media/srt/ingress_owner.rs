@@ -503,10 +503,12 @@ impl OwnerLoop {
                     .contain_peer_media(logical_peer.id, |ingress, stats| {
                         ingress.attach_publisher(logical_peer.id, media, stats)
                     })
+                    && let Some(identity) = self.media.probe_identity(logical_peer.id)
                 {
                     self.pending_events.push_back(SrtIngressEvent::Probe {
                         logical_peer,
-                        probe,
+                        identity,
+                        probe: Box::new(probe),
                     });
                 }
             }
@@ -518,9 +520,17 @@ impl OwnerLoop {
                     self.media.attach_reader(logical_peer.id, reader);
                 }
             }
-            IngressCommand::ProbeApplied { logical_peer, ring } => {
-                self.media
-                    .probe_applied(logical_peer.id, ring, &self.stats.ingress_owner);
+            IngressCommand::ProbeApplied {
+                logical_peer,
+                identity,
+                ring,
+            } => {
+                self.media.probe_applied(
+                    logical_peer.id,
+                    identity,
+                    ring,
+                    &self.stats.ingress_owner,
+                );
             }
             IngressCommand::Disconnect { logical_peer } => self.disconnect(logical_peer.id, now),
             IngressCommand::Shutdown => self.shutting_down = true,

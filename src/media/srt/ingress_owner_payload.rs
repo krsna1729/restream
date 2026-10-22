@@ -203,10 +203,15 @@ impl OwnerLoop {
         match self.contain_peer_media(peer, |ingress, stats| {
             ingress.on_payload(peer, chunk, stats)
         }) {
-            Some(Some(probe)) => self.pending_events.push_back(SrtIngressEvent::Probe {
-                logical_peer: self.session(peer),
-                probe,
-            }),
+            Some(Some(probe)) => {
+                if let Some(identity) = self.media.probe_identity(peer) {
+                    self.pending_events.push_back(SrtIngressEvent::Probe {
+                        logical_peer: self.session(peer),
+                        identity,
+                        probe: Box::new(probe),
+                    });
+                }
+            }
             Some(None) => {}
             None => self.cancel_payload_work(peer),
         }

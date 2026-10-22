@@ -12,6 +12,7 @@ mod mpegts_probe;
 mod mux;
 mod wire;
 
+pub(crate) use demux::TopologyChanges;
 pub use demux::{DemuxProbe, TsDemuxer};
 pub use mux::{MuxStreamConfig, PacketMeta, TsMuxer, TsSegmentView, TsServiceMetadata};
 
@@ -97,6 +98,11 @@ use wire::{
     CRC32_TABLE, SDT_PID, TS_PACKET_SIZE, TS_SYNC_BYTE, crc32_mpeg2, ms_to_ts, parse_timestamp,
     ts_to_ms, write_pcr, write_timestamp,
 };
+
+#[cfg(test)]
+pub(crate) fn test_crc32_mpeg2(data: &[u8]) -> u32 {
+    wire::crc32_mpeg2(data)
+}
 
 #[cfg(test)]
 #[path = "mpegts_tests.rs"]

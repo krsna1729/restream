@@ -25,10 +25,9 @@
 //! closes the old generation (ending its viewers) and installs the new one as
 //! current. Viewers keep the generation they started on; a generation stops
 //! with its last viewer, while a replacement with no viewers stays current for
-//! the next viewer to join. A same-session per-track removal that leaves the
-//! ring's retained configuration in place is not detected (SRT reports only its
-//! first probe; PMT updates can retain removed tracks), so a served generation
-//! can keep a track the source stopped.
+//! the next viewer to join. SRT PMT changes replace the ring's authoritative
+//! track metadata in the same session, so removals and reappearance also
+//! revalidate generations without a later viewer attach.
 
 pub(crate) mod token;
 
@@ -578,10 +577,8 @@ impl Origin {
 /// broadcast serves, including a recirculation input whose engine metadata is
 /// empty). The selected-ingest state only answers total media loss: no active
 /// ingest but a session or disconnect record means nothing is feeding the
-/// ring, so no track survives. A same-session per-track removal that leaves
-/// the ring's retained configuration in place is a known limitation (see the
-/// media pipeline docs): SRT reports only its first probe, and PMT updates can
-/// retain removed tracks.
+/// ring, so no track survives. Same-session SRT PMT changes replace the ring's
+/// track metadata and clear removed decoder configurations.
 async fn resolve_pipeline(
     engine: &MediaEngine,
     pipeline_id: &str,

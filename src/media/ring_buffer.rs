@@ -67,7 +67,7 @@
 
 use arc_swap::ArcSwapOption;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 use tracing::debug;
 
@@ -163,10 +163,11 @@ pub struct RingBuffer {
     created_at: Instant,
     notify: Arc<tokio::sync::Notify>,
     pub readers: std::sync::Mutex<Vec<std::sync::Weak<ReaderInfo>>>,
-    /// Video codec of packets in this ring, set once by the producer.
-    /// `"h264"`, `"hevc"`, or empty string (= infer from ingest metadata).
-    /// All packets in a ring share one codec — this avoids per-packet tagging.
-    pub codec_hint: std::sync::OnceLock<String>,
+    /// Current hint: 0 unknown/absent, 1 initial hint, 2 H.264, 3 HEVC.
+    /// The immutable initial string preserves arbitrary producer codec names
+    /// and the borrowed getter; later supported PMT changes use static names.
+    codec_hint: AtomicU8,
+    initial_codec_hint: std::sync::OnceLock<String>,
     /// Per-track codec configurations with generations (video: raw Annex B
     /// parameter sets, so late-joining stages can seed decoders before the
     /// next keyframe). Written by the producer only.
@@ -224,7 +225,8 @@ impl RingBuffer {
             created_at: Instant::now(),
             notify: Arc::new(tokio::sync::Notify::new()),
             readers: std::sync::Mutex::new(Vec::new()),
-            codec_hint: std::sync::OnceLock::new(),
+            codec_hint: AtomicU8::new(0),
+            initial_codec_hint: std::sync::OnceLock::new(),
             track_configs: TrackConfigs::new(),
             audio_tracks: ArcSwapOption::empty(),
             estimated_pkt_rate: std::sync::atomic::AtomicU32::new(0),
@@ -402,18 +404,48 @@ impl RingBuffer {
         Some(self.capacity as f64 / rate as f64)
     }
 
-    /// Set the video codec hint for this ring.  Called once by the producer
-    /// (e.g. external transcoder, hevc_to_h264 stage).  No-op if already set.
+    /// Set or replace the supported video codec hint. Called only on metadata
+    /// changes, never per packet; an unchanged hint does not wake observers.
     pub fn set_codec_hint(&self, codec: &str) {
-        if self.codec_hint.set(codec.to_string()).is_ok() {
-            debug!(codec, "ring codec hint set");
+        use crate::domain::output_spec::VideoCodecKind;
+        let initial = self.initial_codec_hint.get_or_init(|| codec.to_string());
+        let hint = if codec.is_empty() {
+            0
+        } else if codec == initial {
+            1
+        } else {
+            match VideoCodecKind::from_codec_name(codec) {
+                VideoCodecKind::H264 => 2,
+                VideoCodecKind::Hevc => 3,
+                VideoCodecKind::Unknown => 1,
+            }
+        };
+        if self.codec_hint.swap(hint, Ordering::AcqRel) != hint {
             self.wake_metadata_subscribers();
         }
     }
 
     /// Return the codec hint if set, or empty string.
     pub fn codec_hint_str(&self) -> &str {
-        self.codec_hint.get().map(|s| s.as_str()).unwrap_or("")
+        match self.codec_hint.load(Ordering::Acquire) {
+            0 => "",
+            2 => "h264",
+            3 => "hevc",
+            _ => self
+                .initial_codec_hint
+                .get()
+                .map(String::as_str)
+                .unwrap_or(""),
+        }
+    }
+
+    /// Remove a producer's video track, including its current decoder
+    /// configuration. Historical configurations remain available to readers
+    /// draining packets published before this boundary.
+    pub(crate) fn remove_video_track(&self) {
+        self.track_configs.clear(MediaType::Video, 0);
+        self.codec_hint.store(0, Ordering::Release);
+        self.wake_metadata_subscribers();
     }
 
     /// Record `bytes` as the configuration of one track. Same bytes keep the
@@ -522,6 +554,11 @@ impl RingBuffer {
     /// An empty `tracks` vec clears the metadata, signalling "not yet known" to
     /// downstream stages — this is used by RTMP ingest on publisher reconnect.
     pub fn set_audio_tracks(&self, tracks: Vec<crate::media::metadata::AudioMeta>) {
+        for track_index in 0..CONFIG_TRACKS_PER_TYPE as u32 {
+            if !tracks.iter().any(|track| track.track_index == track_index) {
+                self.track_configs.clear(MediaType::Audio, track_index);
+            }
+        }
         let count = tracks.len();
         if tracks.is_empty() {
             self.audio_tracks.store(None);

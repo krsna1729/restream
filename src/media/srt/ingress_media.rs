@@ -6,8 +6,8 @@
 //!
 //! Tokio keeps session lifecycle: it authenticates a `Connected` peer, builds
 //! its [`SrtPublisherMedia`] (engine registration) and attaches it with a
-//! command; it applies the one-time stream probe; it does the ingest
-//! bookkeeping on `Disconnected`, after the Owner has flushed the media.
+//! command; it applies initial probes and later container topology updates;
+//! it does ingest bookkeeping on `Disconnected`, after the Owner flushes media.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::Ordering;
@@ -19,7 +19,7 @@ use srt_transport::advanced::admission::LogicalPeerId;
 
 use crate::media::engine::{IngestRegistration, MediaEngine};
 use crate::media::input_gate::InputTimestampMapper;
-use crate::media::mpegts::{DemuxProbe, TsDemuxer};
+use crate::media::mpegts::{DemuxProbe, TopologyChanges, TsDemuxer};
 use crate::media::packet::MediaPacket;
 use crate::media::ring_buffer::RingBuffer;
 use crate::media::snapshots::SrtIngressOwnerStats;
@@ -40,9 +40,9 @@ pub(crate) struct MediaLimits {
     /// gives up its oldest, so a newly arriving peer always gets room.
     pub(crate) unattached_peer_bytes: usize,
     pub(crate) unattached_total_bytes: usize,
-    /// Packets decoded after a publisher's first stream probe are held until
-    /// Tokio answers (the ring may be replaced): per publisher, Owner-wide and
-    /// for at most `probe_hold_timeout`.
+    /// Packets decoded after a publisher's probe or topology update are held
+    /// until Tokio answers (the ring may be replaced): per publisher, Owner-wide
+    /// and for at most `probe_hold_timeout`.
     pub(crate) probe_hold_peer_bytes: usize,
     pub(crate) probe_hold_total_bytes: usize,
     pub(crate) probe_hold_timeout: Duration,
@@ -74,14 +74,13 @@ pub(crate) struct SrtPublisherMedia {
     pub(super) first_media_ms: Arc<std::sync::atomic::AtomicU64>,
     pub(super) ingest_metrics: Arc<crate::media::stage_metrics::StageMetrics>,
     pub(super) last_progress_ms: Arc<std::sync::atomic::AtomicU64>,
-    pub(super) probe_sent: bool,
 }
 
 impl SrtPublisherMedia {
     fn forward(&mut self, packets: &mut Vec<MediaPacket>, keyframes: bool) {
         ingest_packets::forward_ingest_packets(
             packets,
-            &self.ring_buffer,
+            &mut self.ring_buffer,
             &self.registration,
             &mut self.timestamp_mapper,
             &mut self.standby_gop,
@@ -149,11 +148,20 @@ impl SrtReaderMedia {
 struct PublisherSlot {
     media: Box<SrtPublisherMedia>,
     /// Waiting for Tokio to apply the probe; drained groups are held in order.
+    probe_revision: u64,
     probe_pending: bool,
     held: VecDeque<Vec<MediaPacket>>,
     held_bytes: usize,
-    /// When the probe went to Tokio (for the hold timeout and ack latency).
+    /// First outstanding probe's send time: absolute hold timeout and ack latency.
     probe_sent_at: Option<Instant>,
+}
+
+/// Identifies a container update within exactly one ingest attempt. A late
+/// control response must not release a newer hold or redirect a replacement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ProbeIdentity {
+    pub(crate) attempt_id: u64,
+    pub(crate) revision: u64,
 }
 
 #[derive(Default)]
@@ -197,7 +205,7 @@ fn group_bytes(packets: &[MediaPacket]) -> usize {
 }
 
 impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
-    /// One received payload. Returns the publisher's first stream probe, which
+    /// One received payload. Returns a stream probe or topology update, which
     /// Tokio must apply ([`Self::probe_applied`]) before held packets flow.
     pub(crate) fn on_payload(
         &mut self,
@@ -218,8 +226,8 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
 
     /// Demux one payload and publish (or hold) what it completes.
     ///
-    /// The packets completed by the payload that yields the first stream
-    /// probe are published to the current ring; only later ones are held.
+    /// Packets completed by the payload yielding a probe or topology update
+    /// reach the current ring; only later ones are held.
     /// A hold ends when Tokio answers ([`Self::probe_applied`]) or, as an
     /// explicit overflow outcome, when it would exceed the publisher's or the
     /// Owner's byte budget or outlive `probe_hold_timeout`: held packets are
@@ -239,6 +247,12 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
             std::panic::resume_unwind(Box::new("injected SRT media panic"));
         }
         slot.media.demuxer.feed(payload.as_ref());
+        // Consume every accepted PMT identity change, even if later PMTs in
+        // this same feed restore the original layout or no probe is complete.
+        let changes = slot.media.demuxer.take_topology_changes();
+        if changes.audio || changes.video {
+            Self::invalidate_buffered(slot, changes, held_total);
+        }
         if slot.media.demuxer.drain_into(&mut slot.media.packets) > 0 {
             if !slot.probe_pending {
                 slot.media.forward_drained();
@@ -274,19 +288,60 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
         );
         media.ingest_metrics.record_in(len);
         media.last_progress_ms.store(now_ms, Ordering::Relaxed);
-        if media.probe_sent {
-            return None;
-        }
         let probe = media.demuxer.take_probe()?;
-        media.probe_sent = true;
+        // A slow control response can leave packets from an older topology
+        // held here. Never replay those removed tracks into the updated ring.
+        let keep = |packet: &MediaPacket| match packet.media_type {
+            crate::media::packet::MediaType::Video => probe.video.is_some(),
+            crate::media::packet::MediaType::Audio => probe
+                .audio_tracks
+                .iter()
+                .any(|track| track.track_index == packet.track_index),
+        };
+        media.standby_gop.retain(keep);
+        let previous_bytes = slot.held_bytes;
+        for group in &mut slot.held {
+            group.retain(keep);
+        }
+        // Empty batches still own Vec capacity; free them with their credits.
+        slot.held.retain(|group| !group.is_empty());
+        slot.held_bytes = slot.held.iter().map(|group| group_bytes(group)).sum();
+        *held_total -= previous_bytes - slot.held_bytes;
+        slot.probe_revision = slot.probe_revision.wrapping_add(1);
+        if !slot.probe_pending {
+            slot.probe_sent_at = Some(Instant::now());
+        }
         slot.probe_pending = true;
-        slot.probe_sent_at = Some(Instant::now());
         Some(probe)
+    }
+
+    fn invalidate_buffered(
+        slot: &mut PublisherSlot,
+        changes: TopologyChanges,
+        held_total: &mut usize,
+    ) {
+        let keep = |packet: &MediaPacket| match packet.media_type {
+            crate::media::packet::MediaType::Audio => !changes.audio,
+            crate::media::packet::MediaType::Video => !changes.video,
+        };
+        slot.media.standby_gop.retain(keep);
+        let previous = slot.held_bytes;
+        for group in &mut slot.held {
+            group.retain(keep);
+        }
+        slot.held.retain(|group| !group.is_empty());
+        slot.held_bytes = slot.held.iter().map(|group| group_bytes(group)).sum();
+        *held_total -= previous - slot.held_bytes;
     }
 
     /// Publish every held group to the current ring, in order, and stop
     /// holding.
     fn release_held(slot: &mut PublisherSlot, held_total: &mut usize) {
+        // A superseded revision may already have sealed the source ring.
+        // Overflow and detach must also flush into its current successor.
+        while let Some(next) = slot.media.ring_buffer.next.load_full() {
+            slot.media.ring_buffer = next;
+        }
         slot.probe_pending = false;
         while let Some(mut group) = slot.held.pop_front() {
             slot.media.forward(&mut group, true);
@@ -355,6 +410,7 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
             .insert_entry(PublisherSlot {
                 media,
                 probe_pending: false,
+                probe_revision: 0,
                 held: VecDeque::new(),
                 held_bytes: 0,
                 probe_sent_at: None,
@@ -380,17 +436,31 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
         self.readers.insert(peer, reader);
     }
 
+    pub(crate) fn probe_identity(&self, peer: K) -> Option<ProbeIdentity> {
+        let slot = self.publishers.get(&peer)?;
+        Some(ProbeIdentity {
+            attempt_id: slot.media.registration.attempt_id,
+            revision: slot.probe_revision,
+        })
+    }
+
     /// Tokio applied the stream probe; `ring` replaces the publisher's ring.
     /// Held packets flow in their original order.
     pub(crate) fn probe_applied(
         &mut self,
         peer: K,
+        identity: ProbeIdentity,
         ring: Option<Arc<RingBuffer>>,
         stats: &SrtIngressOwnerStats,
     ) {
         let Some(slot) = self.publishers.get_mut(&peer) else {
             return;
         };
+        if identity.attempt_id != slot.media.registration.attempt_id
+            || identity.revision != slot.probe_revision
+        {
+            return;
+        }
         if let Some(sent_at) = slot.probe_sent_at.take() {
             let waited = u64::try_from(sent_at.elapsed().as_micros()).unwrap_or(u64::MAX);
             stats

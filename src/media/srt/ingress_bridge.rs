@@ -5,7 +5,7 @@
 //!
 //! The listener is one Owner thread, or K when `RESTREAM_SRT_INGRESS_OWNERS`
 //! asks for a `SO_REUSEPORT` group (one srt-rs `owner_plans` entry each). The
-//! bridges carry session lifecycle only (admission, the one-time stream probe,
+//! bridges carry session lifecycle only (admission, stream probe/topology updates,
 //! disconnect). Media runs to completion on the Owner that holds the session
 //! (`ingress_media`); nothing per packet crosses any bridge.
 
@@ -62,6 +62,7 @@ pub(crate) enum IngressCommand {
     /// Tokio applied the publisher's stream probe; `ring` replaces its ring.
     ProbeApplied {
         logical_peer: IngressPeer,
+        identity: super::ingress_media::ProbeIdentity,
         ring: Option<Arc<RingBuffer>>,
     },
     /// Begin an orderly protocol disconnect of one peer. The owner retires the
@@ -92,11 +93,13 @@ pub(crate) enum SrtIngressEvent {
         logical_peer: IngressPeer,
         stream_id: String,
     },
-    /// A publisher's first stream probe. Its packets are held on the Owner
-    /// until Tokio answers with [`IngressCommand::ProbeApplied`].
+    /// A publisher's stream probe or authoritative container topology update.
+    /// Its packets are held until Tokio answers with [`IngressCommand::ProbeApplied`].
     Probe {
         logical_peer: IngressPeer,
-        probe: DemuxProbe,
+        identity: super::ingress_media::ProbeIdentity,
+        // Topology-only allocation keeps every bounded bridge slot compact.
+        probe: Box<DemuxProbe>,
     },
     /// Terminal. The Owner has already flushed the publisher's media.
     Disconnected {
@@ -208,7 +211,7 @@ impl SrtIngressHandle {
             let thread = match spawned {
                 Ok(thread) => thread,
                 Err(error) => {
-                    stop_started(owners).await;
+                    stop_started(owners, None).await;
                     return Err(IngressStartError(format!(
                         "spawn SRT ingress thread: {error}"
                     )));
@@ -231,7 +234,7 @@ impl SrtIngressHandle {
                     local_addr.get_or_insert(addr);
                 }
                 Err(message) => {
-                    stop_started(owners).await;
+                    stop_started(owners, None).await;
                     return Err(IngressStartError(message));
                 }
             }
@@ -280,10 +283,44 @@ impl SrtIngressHandle {
             .any(|link| link.commands.is_disconnected())
     }
 
-    /// Orderly stop: deliver `Shutdown` to every Owner (bounded wait for
-    /// bridge room), then join them all and report one truthful verdict.
-    pub(crate) async fn shutdown(self) -> IngressExit {
-        stop_started(self.owners).await
+    /// Deliver the already-accepted pending command before `Shutdown`, within
+    /// the existing shared shutdown deadline, then join all Owner threads.
+    pub(crate) async fn shutdown(self, pending: Option<IngressCommand>) -> IngressExit {
+        stop_started(self.owners, pending).await
+    }
+
+    /// Controlled transport endpoints for production-control backpressure
+    /// tests. Only channel construction differs; routing/queue logic is real.
+    #[cfg(test)]
+    pub(super) fn test_channels(
+        owner_count: usize,
+    ) -> (
+        Self,
+        Vec<flume::Receiver<IngressCommand>>,
+        mpsc::Sender<SrtIngressEvent>,
+    ) {
+        let mut owners = Vec::new();
+        let mut receivers = Vec::new();
+        for _ in 0..owner_count {
+            let (commands, receiver) = flume::bounded(1);
+            owners.push(OwnerLink {
+                commands,
+                thread: None,
+            });
+            receivers.push(receiver);
+        }
+        let (events_tx, events) = mpsc::channel(1);
+        let (_telemetry_tx, telemetry) = mpsc::channel(1);
+        (
+            Self {
+                events,
+                telemetry,
+                owners,
+                local_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
+            },
+            receivers,
+            events_tx,
+        )
     }
 }
 
@@ -296,25 +333,21 @@ fn owner_thread_name(port: u16, index: usize, owners: usize) -> String {
 }
 
 /// Shut down and join every Owner in `owners`: all quiescent, first fault.
-async fn stop_started(owners: Vec<OwnerLink>) -> IngressExit {
+async fn stop_started(owners: Vec<OwnerLink>, pending: Option<IngressCommand>) -> IngressExit {
     let deadline = Instant::now() + Duration::from_secs(2);
+    let mut delivered = true;
+    if let Some(command) = pending
+        && let Some(link) = command
+            .owner()
+            .and_then(|index| owners.get(usize::from(index)))
+    {
+        delivered &= send_before_deadline(&link.commands, command, deadline).await;
+    }
     for link in &owners {
-        let mut command = IngressCommand::Shutdown;
-        loop {
-            match link.commands.try_send(command) {
-                Ok(()) | Err(flume::TrySendError::Disconnected(_)) => break,
-                Err(flume::TrySendError::Full(back)) => {
-                    if Instant::now() >= deadline {
-                        break;
-                    }
-                    command = back;
-                    tokio::time::sleep(Duration::from_millis(5)).await;
-                }
-            }
-        }
+        delivered &= send_before_deadline(&link.commands, IngressCommand::Shutdown, deadline).await;
     }
     let mut exit = IngressExit {
-        quiescent: true,
+        quiescent: delivered,
         fault: None,
     };
     for OwnerLink { commands, thread } in owners {
@@ -337,4 +370,23 @@ async fn stop_started(owners: Vec<OwnerLink>) -> IngressExit {
         }
     }
     exit
+}
+
+async fn send_before_deadline(
+    commands: &flume::Sender<IngressCommand>,
+    mut command: IngressCommand,
+    deadline: Instant,
+) -> bool {
+    loop {
+        match commands.try_send(command) {
+            Ok(()) | Err(flume::TrySendError::Disconnected(_)) => return true,
+            Err(flume::TrySendError::Full(back)) => {
+                if Instant::now() >= deadline {
+                    return false;
+                }
+                command = back;
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }
+    }
 }

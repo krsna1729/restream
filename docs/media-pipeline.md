@@ -448,7 +448,10 @@ lifecycle and probe events (dotted).
 - **Bridges.** Commands to the owner: `AttachPublisher`, `AttachReader`,
   `ProbeApplied`, `Disconnect`, `Shutdown` (256 per owner). Events to Tokio:
   `Connected`, `Probe`, `Disconnected`, `Fault` (256, shared)
-  (`src/media/srt/ingress_bridge.rs`).
+  (`src/media/srt/ingress_bridge.rs`). Tokio retains at most one deferred
+  command; a full Owner command bridge backpressures event consumption instead
+  of growing a reply queue behind another Owner's topology churn. Shutdown
+  delivers that accepted command before the native Owner's peer drain.
 - **Payload work.** Messages stay in packet chunks. A 64-slot owner-local work
   list holds them; a visit consumes at most 64 chunks, 16 per message, and
   retires at most 64 actions. Events keep queue order, so a disconnect never
@@ -944,11 +947,25 @@ The diagram shows a dashboard preview subscribing to a pipeline.
   installs it and closes the old one, ending its viewers. Viewers never move
   between generations; new viewers join the current one, a replacement with no
   viewers stays current until the next replacement or teardown, and a pipeline
-  that lost all media is refused with its served generation closed. A
-  same-session removal that leaves the ring's retained configuration in place
-  is not detected yet (Q-098): SRT reports only its first probe and PMT
-  updates can retain removed tracks, so a served generation can keep a track
-  the source stopped until a reconnect or total loss replaces it.
+  that lost all media is refused with its served generation closed. SRT PMT
+  topology changes replace the ingest/ring track snapshot within the same
+  session, clearing absent tracks and their current decoder configuration
+  while preserving retained track configuration. PMT sections are structurally
+  bounded and MPEG-2 CRC-validated before changing stream identities, including
+  same-version changes. A first valid empty table is authoritative, unlike an
+  unprobed nonempty table or unknown-metadata recirculation. Every PID/kind/index
+  boundary invalidates affected completed packets, held media and standby GOP
+  state, even if multiple PMTs coalesce into the original final layout in one
+  receive. Unchanged identities retain their decoder configuration and partial
+  PES. Reappearing tracks are advertised after decoder configuration is probed.
+  Owner/control acknowledgements carry the ingest attempt and update revision;
+  stale responses cannot redirect a replacement publisher or release a newer
+  topology hold. Each accepted response carries the current shared ring even
+  without a resize or while deselected; held-media release and standby promotion
+  follow sealed ring handoffs. An outstanding hold keeps its first probe's
+  absolute timeout across later changes; filtered empty batches free their
+  packet-vector allocations before payload credits are returned. No per-packet
+  control events or selected-input presence mask are needed.
 - **Media.** The same conversion as MoQ egress: video plus the first AAC
   track.
 - **Browser.** `MoqPreview` (`web/ts/control-room/moq-preview.tsx`) needs

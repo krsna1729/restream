@@ -182,3 +182,6 @@ mod nal_scanning;
 
 #[path = "mpegts_tests/tables_and_sync.rs"]
 mod tables_and_sync;
+
+#[path = "mpegts_tests/topology_review.rs"]
+mod topology_review;

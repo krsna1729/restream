@@ -73,9 +73,14 @@ async fn owner_runs_publisher_media_to_completion_without_losing_payloads() {
                 };
                 assert!(handle.try_send(command).is_ok());
             }
-            Ok(Some(SrtIngressEvent::Probe { logical_peer, .. })) => {
+            Ok(Some(SrtIngressEvent::Probe {
+                logical_peer,
+                identity,
+                ..
+            })) => {
                 let command = IngressCommand::ProbeApplied {
                     logical_peer,
+                    identity,
                     ring: None,
                 };
                 assert!(handle.try_send(command).is_ok());
@@ -95,7 +100,7 @@ async fn owner_runs_publisher_media_to_completion_without_losing_payloads() {
     let snapshot = stats.ingress_owner.snapshot();
     assert_eq!(snapshot.media_payloads, CHUNKS as u64, "{snapshot:?}");
     assert_eq!(snapshot.media_unattached_dropped, 0, "{snapshot:?}");
-    let exit = handle.shutdown().await;
+    let exit = handle.shutdown(None).await;
     assert!(exit.quiescent, "{exit:?}");
     assert!(exit.fault.is_none());
 }
@@ -184,9 +189,14 @@ async fn two_owners_share_the_port_and_each_session_command_reaches_its_owner() 
                 };
                 assert!(handle.try_send(command).is_ok());
             }
-            Ok(Some(SrtIngressEvent::Probe { logical_peer, .. })) => {
+            Ok(Some(SrtIngressEvent::Probe {
+                logical_peer,
+                identity,
+                ..
+            })) => {
                 let command = IngressCommand::ProbeApplied {
                     logical_peer,
+                    identity,
                     ring: None,
                 };
                 assert!(handle.try_send(command).is_ok());
@@ -217,7 +227,7 @@ async fn two_owners_share_the_port_and_each_session_command_reaches_its_owner() 
         (2, 2 * super::ingress_owner::INGRESS_TX_CAPACITY as u64),
         "each Owner reports itself and adds its TX capacity"
     );
-    let exit = handle.shutdown().await;
+    let exit = handle.shutdown(None).await;
     assert!(exit.quiescent, "{exit:?}");
     assert!(exit.fault.is_none());
     let snapshot = stats.ingress_owner.snapshot();
@@ -261,7 +271,6 @@ fn test_publisher_media(
         first_media_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         ingest_metrics: Arc::new(crate::media::stage_metrics::StageMetrics::new()),
         last_progress_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        probe_sent: false,
     });
     (media, bytes_received)
 }
@@ -382,7 +391,7 @@ async fn owner_stamps_receive_quality_and_stops_sampling_retired_peers() {
         }
     }
     assert_eq!(after, 0, "no samples after the peer retired");
-    let exit = handle.shutdown().await;
+    let exit = handle.shutdown(None).await;
     assert!(exit.quiescent, "{exit:?}");
 }
 
@@ -419,7 +428,7 @@ async fn a_full_telemetry_bridge_drops_samples_and_never_delays_the_protocol() {
         snapshot.rx_packets >= 40,
         "the protocol kept receiving: {snapshot:?}"
     );
-    let exit = handle.shutdown().await;
+    let exit = handle.shutdown(None).await;
     assert!(exit.quiescent, "{exit:?}");
 }
 

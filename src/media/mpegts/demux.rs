@@ -23,7 +23,7 @@ use super::mpegts_probe::{
     audio_meta_complete, h264_is_keyframe, h265_is_keyframe, probe_audio, probe_video,
     video_meta_complete,
 };
-use super::wire::{PAT_PID, TS_PACKET_SIZE, TS_SYNC_BYTE, parse_timestamp, ts_to_ms};
+use super::wire::{PAT_PID, TS_PACKET_SIZE, TS_SYNC_BYTE, crc32_mpeg2, parse_timestamp, ts_to_ms};
 use crate::media::metadata::{AudioMeta, VideoMeta};
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
 
@@ -148,6 +148,34 @@ pub struct DemuxProbe {
     pub audio_tracks: Vec<AudioMeta>,
 }
 
+/// Media identities invalidated by any accepted PMT since the last take,
+/// even when coalesced tables restore the original layout before probing.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct TopologyChanges {
+    pub(crate) audio: bool,
+    pub(crate) video: bool,
+}
+
+impl TopologyChanges {
+    fn mark(&mut self, kind: StreamKind) {
+        match kind.media_type() {
+            MediaType::Audio => self.audio = true,
+            MediaType::Video => self.video = true,
+        }
+    }
+}
+
+/// Decoded configurations survive PMT changes only while their PID and codec
+/// kind remain live. Keeping these avoids retaining entire probe PES payloads.
+#[derive(Debug)]
+enum StreamProbe {
+    Video {
+        meta: VideoMeta,
+        sequence_header: Option<Bytes>,
+    },
+    Audio(AudioMeta),
+}
+
 #[derive(Debug, Clone, Default)]
 struct StreamDescriptors {
     language: Option<String>,
@@ -187,6 +215,19 @@ fn pid_13(high: u8, low: u8) -> u16 {
     u16::from_be_bytes([high & 0x1F, low])
 }
 
+fn descriptors_are_valid(mut data: &[u8]) -> bool {
+    while !data.is_empty() {
+        let Some((&[_, len], tail)) = data.split_first_chunk::<2>() else {
+            return false;
+        };
+        let Some(tail) = tail.get(usize::from(len)..) else {
+            return false;
+        };
+        data = tail;
+    }
+    true
+}
+
 fn pmt_stream_loop_bounds(data: &[u8], end: usize) -> Option<(usize, usize)> {
     let stream_loop_end = end.checked_sub(4)?;
     if end > data.len() || stream_loop_end < 12 {
@@ -195,10 +236,17 @@ fn pmt_stream_loop_bounds(data: &[u8], end: usize) -> Option<(usize, usize)> {
 
     let &[high, low] = data.get(10..12)?.first_chunk::<2>()?;
     let stream_loop_start = 12usize.checked_add(length_12(high, low))?;
+    if !descriptors_are_valid(data.get(12..stream_loop_start)?) {
+        return None;
+    }
     let mut entries = data.get(stream_loop_start..stream_loop_end)?;
     while !entries.is_empty() {
         let (&[_, _, _, info_high, info_low], tail) = entries.split_first_chunk::<5>()?;
-        entries = tail.get(length_12(info_high, info_low)..)?;
+        let (descriptors, tail) = tail.split_at_checked(length_12(info_high, info_low))?;
+        if !descriptors_are_valid(descriptors) {
+            return None;
+        }
+        entries = tail;
     }
 
     Some((stream_loop_start, stream_loop_end))
@@ -210,7 +258,9 @@ pub struct TsDemuxer {
     pub(super) pid_to_stream: Box<[u16; PID_COUNT]>,
     pmt_pid: Option<u16>,
     probed: bool,
+    initial_probe_done: bool,
     probe_result: Option<DemuxProbe>,
+    topology_changes: TopologyChanges,
     pub(super) remainder: Vec<u8>,
     /// Staging for feeds that join a partial packet with a new chunk.
     /// Retains the largest joined feed allocation until this demuxer is
@@ -219,7 +269,9 @@ pub struct TsDemuxer {
     output: Vec<MediaPacket>,
     audio_track_counter: u32,
     video_track_count: usize,
-    probe_payloads: Vec<Option<Vec<u8>>>,
+    stream_probes: Vec<Option<StreamProbe>>,
+    /// Program/ES descriptor loops, excluding version, CRC and PCR PID.
+    pmt_layout: Vec<u8>,
     pmt_buf: Vec<u8>,
     pmt_expected: usize,
     /// Last seen PMT version_number (bits 5–1 of the version/indicator byte).
@@ -240,13 +292,16 @@ impl TsDemuxer {
             pid_to_stream: Box::new([NO_STREAM; PID_COUNT]),
             pmt_pid: None,
             probed: false,
+            initial_probe_done: false,
             probe_result: None,
+            topology_changes: TopologyChanges::default(),
             remainder: Vec::new(),
             scratch: Vec::new(),
             output: Vec::with_capacity(16),
             audio_track_counter: 0,
             video_track_count: 0,
-            probe_payloads: Vec::new(),
+            stream_probes: Vec::new(),
+            pmt_layout: Vec::new(),
             pmt_buf: Vec::new(),
             pmt_expected: 0,
             pmt_version: PMT_VER_UNSET,
@@ -328,9 +383,17 @@ impl TsDemuxer {
         moved
     }
 
-    /// Take the probe result (available after the first PMT + PES headers are parsed).
+    /// Take the initial complete probe or the latest authoritative track-set
+    /// snapshot. Removals publish immediately; new tracks wait for decoded
+    /// configuration. Results replace, rather than extend, the previous set.
     pub fn take_probe(&mut self) -> Option<DemuxProbe> {
         self.probe_result.take()
+    }
+
+    /// Take boundary invalidations before draining packets or using a probe.
+    /// These do not depend on configuration completeness or the final layout.
+    pub(crate) fn take_topology_changes(&mut self) -> TopologyChanges {
+        std::mem::take(&mut self.topology_changes)
     }
 
     /// Whether PMT has been parsed and streams are known.
@@ -563,28 +626,36 @@ impl TsDemuxer {
     }
 
     fn parse_pmt(&mut self, payload: &[u8], pusi: bool) {
-        if pusi {
+        let data = if pusi {
+            self.pmt_buf.clear();
+            self.pmt_expected = 0;
             let Some(data) = section_after_pointer(payload) else {
                 return;
             };
             let Some(&[0x02, length_high, length_low]) = data.first_chunk::<3>() else {
                 return;
             };
-            self.pmt_expected = length_12(length_high, length_low).saturating_add(3);
-            self.pmt_buf.clear();
-            self.pmt_buf.extend_from_slice(data);
+            // A PMT section_length is at most 1021, including its CRC.
+            let section_len = length_12(length_high, length_low);
+            if !(13..=1021).contains(&section_len) {
+                return;
+            }
+            self.pmt_expected = section_len.saturating_add(3);
+            data
         } else if self.pmt_expected > 0 {
-            self.pmt_buf.extend_from_slice(payload);
+            payload
         } else {
             return;
-        }
-
+        };
+        let remaining = self.pmt_expected.saturating_sub(self.pmt_buf.len());
+        self.pmt_buf
+            .extend_from_slice(data.get(..data.len().min(remaining)).unwrap_or_default());
         if self.pmt_buf.len() < self.pmt_expected {
             return;
         }
 
         let data = &self.pmt_buf;
-        let end = self.pmt_expected.min(data.len());
+        let end = self.pmt_expected;
 
         let (Some((loop_start, loop_end)), Some(&version_byte)) =
             (pmt_stream_loop_bounds(data, end), data.get(5))
@@ -594,22 +665,38 @@ impl TsDemuxer {
             return;
         };
 
-        let incoming_version = (version_byte >> 1) & 0x1F;
-        if self.pmt_version == incoming_version {
+        // PMTs have one section. A future table must not consume its version
+        // or disturb the active topology/configuration.
+        if crc32_mpeg2(data) != 0
+            || version_byte & 1 == 0
+            || !matches!(data.get(6..8), Some([0, 0]))
+        {
             self.pmt_buf.clear();
             self.pmt_expected = 0;
             return;
         }
-        self.pmt_version = incoming_version;
+        self.pmt_version = (version_byte >> 1) & 0x1F;
+        let layout = data.get(10..loop_end).unwrap_or_default();
+        if self.pmt_layout == layout {
+            self.pmt_buf.clear();
+            self.pmt_expected = 0;
+            return;
+        }
+        self.pmt_layout.clear();
+        self.pmt_layout.extend_from_slice(layout);
 
-        // Preserve in-flight PES for PIDs retained by a PMT version update.
-        let mut old_pes: HashMap<u16, PesAccumulator> =
-            self.streams.drain(..).map(|s| (s.pid, s.pes)).collect();
+        let mut probes = std::mem::take(&mut self.stream_probes).into_iter();
+        let mut old_streams: HashMap<u16, (StreamInfo, Option<StreamProbe>)> = self
+            .streams
+            .drain(..)
+            .map(|stream| (stream.pid, (stream, probes.next().flatten())))
+            .collect();
         self.pid_to_stream.fill(NO_STREAM);
         self.audio_track_counter = 0;
         self.video_track_count = 0;
-        self.probe_payloads.clear();
-
+        let mut removed_config = false;
+        let mut retained_metadata_changed = false;
+        let mut changes = TopologyChanges::default();
         let mut has_video = false;
         // `pmt_stream_loop_bounds` validated that these entries tile the loop.
         let mut entries = data.get(loop_start..loop_end).unwrap_or_default();
@@ -623,7 +710,6 @@ impl TsDemuxer {
                 break;
             };
             entries = tail;
-            let descriptors = parse_stream_descriptors(descriptor_bytes);
 
             if let Some(kind) = StreamKind::from_stream_type(stream_type) {
                 let track_index = match kind.media_type() {
@@ -642,17 +728,42 @@ impl TsDemuxer {
                     }
                 };
 
+                let descriptors = parse_stream_descriptors(descriptor_bytes);
+                // Reusing a PID for another codec cannot continue its old PES,
+                // ADTS framing, or decoded configuration.
+                let (pes, continuity, probe) = match old_streams.remove(&es_pid) {
+                    Some((old, probe)) if old.kind == kind => {
+                        if old.track_index != track_index {
+                            changes.mark(kind);
+                        }
+                        retained_metadata_changed |= probe.is_some()
+                            && (old.track_index != track_index
+                                || old.language != descriptors.language
+                                || old.title != descriptors.title);
+                        (old.pes, old.continuity, probe)
+                    }
+                    Some((old, probe)) => {
+                        changes.mark(old.kind);
+                        changes.mark(kind);
+                        removed_config |= probe.is_some();
+                        (PesAccumulator::new(), CC_UNSET, None)
+                    }
+                    None => {
+                        changes.mark(kind);
+                        (PesAccumulator::new(), CC_UNSET, None)
+                    }
+                };
                 let stream_idx = self.streams.len();
-                let pes = old_pes.remove(&es_pid).unwrap_or_else(PesAccumulator::new);
                 self.streams.push(StreamInfo {
                     pid: es_pid,
                     kind,
                     track_index,
-                    language: descriptors.language.clone(),
-                    title: descriptors.title.clone(),
-                    continuity: CC_UNSET,
+                    language: descriptors.language,
+                    title: descriptors.title,
+                    continuity,
                     pes,
                 });
+                self.stream_probes.push(probe);
                 if let (Some(slot), Ok(index)) = (
                     self.pid_to_stream.get_mut(usize::from(es_pid)),
                     u16::try_from(stream_idx),
@@ -662,103 +773,119 @@ impl TsDemuxer {
             }
         }
 
+        for (old, probe) in old_streams.values() {
+            changes.mark(old.kind);
+            removed_config |= probe.is_some();
+        }
+        // Completed packets carry indexes, not PIDs. Discard affected media
+        // while this boundary's old identities are still known; a later PMT
+        // in this feed must not relabel them under a restored final layout.
+        if changes.audio || changes.video {
+            self.output.retain(|packet| match packet.media_type {
+                MediaType::Audio => !changes.audio,
+                MediaType::Video => !changes.video,
+            });
+            self.topology_changes.audio |= changes.audio;
+            self.topology_changes.video |= changes.video;
+        }
+        self.probed = self.stream_probes.iter().all(Option::is_some);
         self.pmt_buf.clear();
         self.pmt_expected = 0;
+        // Preserve initial promotion's completeness requirement. Once promoted,
+        // removals/index/descriptor changes must not wait for an added track's
+        // PES. Its decoded configuration will publish a later full snapshot.
+        if self.probed || (self.initial_probe_done && (removed_config || retained_metadata_changed))
+        {
+            self.publish_probe();
+        }
     }
 
-    fn probe_payload_complete(&self, stream_idx: usize, payload: &[u8]) -> bool {
-        let Some(stream) = self.streams.get(stream_idx) else {
-            return false;
+    pub(super) fn try_build_probe(&mut self, stream_idx: usize, payload: &[u8]) {
+        if self.stream_probes.len() < self.streams.len() {
+            self.stream_probes.resize_with(self.streams.len(), || None);
+        }
+        let Some(slot) = self.stream_probes.get_mut(stream_idx) else {
+            return;
         };
-        match stream.kind.media_type() {
-            MediaType::Video => video_meta_complete(
-                stream.kind,
-                &probe_video(stream.kind, stream.pid, None, None, payload),
-            ),
-            MediaType::Audio => audio_meta_complete(
-                stream.kind,
-                &probe_audio(
+        if slot.is_some() {
+            return;
+        }
+        let Some(stream) = self.streams.get(stream_idx) else {
+            return;
+        };
+        *slot = Some(match stream.kind.media_type() {
+            MediaType::Video => {
+                let meta = probe_video(stream.kind, stream.pid, None, None, payload);
+                if !video_meta_complete(stream.kind, &meta) {
+                    return;
+                }
+                let sequence_header = if stream.kind == StreamKind::H264 {
+                    crate::media::codec::build_avcc_sequence_header(payload)
+                } else {
+                    None
+                };
+                StreamProbe::Video {
+                    meta,
+                    sequence_header,
+                }
+            }
+            MediaType::Audio => {
+                let meta = probe_audio(
                     stream.kind,
                     stream.track_index,
                     stream.pid,
                     None,
                     None,
                     payload,
-                ),
-            ),
+                );
+                if !audio_meta_complete(stream.kind, &meta) {
+                    return;
+                }
+                StreamProbe::Audio(meta)
+            }
+        });
+        if self.stream_probes.iter().all(Option::is_some) {
+            self.probed = true;
+            self.publish_probe();
         }
     }
 
-    pub(super) fn try_build_probe(&mut self, stream_idx: usize, payload: &[u8]) {
-        if self.probe_payloads.len() < self.streams.len() {
-            self.probe_payloads.resize(self.streams.len(), None);
-        }
-        let replace = match self.probe_payloads.get(stream_idx) {
-            None => return,
-            Some(None) => true,
-            Some(Some(existing)) => !self.probe_payload_complete(stream_idx, existing),
-        };
-        if replace && let Some(slot) = self.probe_payloads.get_mut(stream_idx) {
-            *slot = Some(payload.to_vec());
-        }
-
-        if self.probe_payloads.iter().any(|p| p.is_none()) {
-            return;
-        }
-
-        let mut video_meta = None;
-        let mut audio_tracks = Vec::new();
+    fn publish_probe(&mut self) {
+        let mut video = None;
         let mut video_sequence_header = None;
-        let mut probe_complete = true;
-
-        for (stream, data) in self.streams.iter().zip(&self.probe_payloads) {
-            let Some(data) = data.as_deref() else {
-                return;
-            };
-            match stream.kind.media_type() {
-                MediaType::Video => {
-                    if video_meta.is_none() {
-                        let meta = probe_video(
-                            stream.kind,
-                            stream.pid,
-                            stream.language.clone(),
-                            stream.title.clone(),
-                            data,
-                        );
-                        if stream.kind == StreamKind::H264 {
-                            video_sequence_header =
-                                crate::media::codec::build_avcc_sequence_header(data);
-                        }
-                        probe_complete &= video_meta_complete(stream.kind, &meta);
-                        video_meta = Some(meta);
-                    }
+        let mut audio_tracks = Vec::new();
+        for (stream, probe) in self.streams.iter().zip(&self.stream_probes) {
+            match probe {
+                Some(StreamProbe::Video {
+                    meta,
+                    sequence_header,
+                }) => {
+                    let mut meta = meta.clone();
+                    meta.language = stream.language.clone();
+                    meta.title = stream.title.clone();
+                    video = Some(meta);
+                    video_sequence_header = sequence_header.clone();
                 }
-                MediaType::Audio => {
-                    let meta = probe_audio(
-                        stream.kind,
-                        stream.track_index,
-                        stream.pid,
-                        stream.language.clone(),
-                        stream.title.clone(),
-                        data,
-                    );
-                    probe_complete &= audio_meta_complete(stream.kind, &meta);
+                Some(StreamProbe::Audio(meta)) => {
+                    let mut meta = meta.clone();
+                    meta.track_index = stream.track_index;
+                    meta.language = stream.language.clone();
+                    meta.title = stream.title.clone();
                     audio_tracks.push(meta);
                 }
+                None => {}
             }
         }
-
-        if !probe_complete {
-            return;
-        }
-
-        let has_video_meta = video_meta.is_some();
-        self.probed = true;
-        self.probe_payloads.clear();
+        let video_track_count = if video.is_some() {
+            self.video_track_count.max(1)
+        } else {
+            0
+        };
+        self.initial_probe_done = true;
         self.probe_result = Some(DemuxProbe {
-            video: video_meta,
+            video,
             video_sequence_header,
-            video_track_count: self.video_track_count.max(usize::from(has_video_meta)),
+            video_track_count,
             audio_tracks,
         });
     }

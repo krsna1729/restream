@@ -92,3 +92,119 @@ async fn a_registration_dropped_after_the_demote_restores_the_previous_input() {
         "a dropped replacement left the previous input demoted"
     );
 }
+
+#[tokio::test]
+async fn q098_authoritative_tracks_follow_selection_and_reject_replaced_attempts() {
+    use crate::media::metadata::{AudioMeta, VideoMeta};
+
+    let engine = MediaEngine::new();
+    let ring = engine.get_or_create_pipeline("pipe").await;
+    let first = engine
+        .try_register_pipeline_input_attempt("pipe", "first", "key1", "srt", true)
+        .await
+        .unwrap();
+    let backup = engine
+        .try_register_pipeline_input_attempt("pipe", "backup", "key2", "srt", false)
+        .await
+        .unwrap();
+    let video = VideoMeta {
+        codec: "h264".to_string(),
+        ..VideoMeta::default()
+    };
+    let audio = AudioMeta {
+        codec: "aac".to_string(),
+        sample_rate: 48_000,
+        channels: 2,
+        ..AudioMeta::default()
+    };
+    engine
+        .replace_ingest_session_tracks(&first, Some(video), vec![audio.clone()], 1, None)
+        .await;
+    ring.set_video_parameter_sets(vec![1, 2, 3]);
+    engine
+        .replace_ingest_session_tracks(&backup, None, vec![audio], 0, None)
+        .await;
+    assert_eq!(
+        ring.codec_hint_str(),
+        "h264",
+        "standby cannot clear selection"
+    );
+    assert!(ring.video_config().is_some());
+
+    assert!(engine.select_pipeline_input("pipe", "backup").await);
+    assert!(
+        ring.codec_hint_str().is_empty(),
+        "promotion installs known absence"
+    );
+    assert!(ring.video_config().is_none());
+    assert!(ring.audio_tracks().is_some());
+    backup.cancel_token.cancel();
+    let replacement = engine
+        .try_register_pipeline_input_attempt("pipe", "backup", "key3", "srt", true)
+        .await
+        .unwrap();
+    engine
+        .replace_ingest_session_tracks(
+            &replacement,
+            Some(VideoMeta {
+                codec: "h264".to_string(),
+                ..VideoMeta::default()
+            }),
+            Vec::new(),
+            1,
+            None,
+        )
+        .await;
+    // A late old-session removal must not erase the replacement's video.
+    engine
+        .replace_ingest_session_tracks(&backup, None, Vec::new(), 0, None)
+        .await;
+    assert_eq!(ring.codec_hint_str(), "h264");
+    let metadata = engine
+        .with_ingest_session(&replacement, |ingest| ingest.metadata())
+        .await
+        .unwrap();
+    assert!(metadata.video.is_some());
+    assert!(metadata.audio.is_none());
+    assert!(ring.audio_tracks().is_none());
+}
+
+#[tokio::test]
+async fn q098_authoritative_snapshot_clears_an_obsolete_sequence_header() {
+    let engine = MediaEngine::new();
+    engine.get_or_create_pipeline("pipe").await;
+    let registration = engine
+        .try_register_pipeline_input_attempt("pipe", "input", "key", "srt", true)
+        .await
+        .unwrap();
+    let video = |codec: &str| crate::media::metadata::VideoMeta {
+        codec: codec.to_string(),
+        ..Default::default()
+    };
+    engine
+        .replace_ingest_session_tracks(
+            &registration,
+            Some(video("h264")),
+            Vec::new(),
+            1,
+            Some(bytes::Bytes::from_static(b"avc")),
+        )
+        .await;
+    assert!(
+        engine
+            .get_ingest_session_sequence_headers(&registration)
+            .await
+            .0
+            .is_some()
+    );
+    engine
+        .replace_ingest_session_tracks(&registration, Some(video("hevc")), Vec::new(), 1, None)
+        .await;
+    assert!(
+        engine
+            .get_ingest_session_sequence_headers(&registration)
+            .await
+            .0
+            .is_none()
+    );
+}

@@ -12,7 +12,7 @@ use crate::media::standby_gop::StandbyGopCache;
 /// records in-band configuration. Shared by SRT and MoQ ingest.
 pub(crate) fn forward_ingest_packets(
     packets: &mut Vec<MediaPacket>,
-    ring: &RingBuffer,
+    ring: &mut Arc<RingBuffer>,
     registration: &IngestRegistration,
     timestamp_mapper: &mut InputTimestampMapper,
     standby_gop: &mut StandbyGopCache,
@@ -48,6 +48,12 @@ pub(crate) fn forward_ingest_packets(
         let Some(lease) = registration.gate.try_enter(replay_boundary) else {
             return;
         };
+        // Another selected producer may have resized the shared ring while
+        // this source was standby. Resolve handoffs only on promotion, not
+        // on the ordinary active publication path.
+        while let Some(next) = ring.next.load_full() {
+            *ring = next;
+        }
         *packets = standby_gop.take_replay();
         lease
     };
@@ -121,7 +127,7 @@ mod tests {
     fn promotion_replays_cached_gop_before_the_next_live_keyframe() {
         let gate = Arc::new(InputPacketGate::standby());
         let registration = registration(gate.clone(), 1_000);
-        let ring = RingBuffer::new(16);
+        let mut ring = Arc::new(RingBuffer::new(16));
         let mut mapper = InputTimestampMapper::default();
         let mut standby_gop = StandbyGopCache::default();
         let mut packets = vec![
@@ -131,7 +137,7 @@ mod tests {
 
         forward_ingest_packets(
             &mut packets,
-            &ring,
+            &mut ring,
             &registration,
             &mut mapper,
             &mut standby_gop,
@@ -144,7 +150,7 @@ mod tests {
         packets.push(packet(MediaType::Audio, 115, false));
         forward_ingest_packets(
             &mut packets,
-            &ring,
+            &mut ring,
             &registration,
             &mut mapper,
             &mut standby_gop,
@@ -166,6 +172,49 @@ mod tests {
         assert!(!standby_gop.is_replay_ready());
     }
 
+    #[test]
+    fn q098_review_standby_promotion_follows_shared_ring_handoffs() {
+        let gate = Arc::new(InputPacketGate::standby());
+        let registration = registration(gate.clone(), i64::MIN);
+        let original = Arc::new(RingBuffer::new(16));
+        let intermediate = Arc::new(RingBuffer::new(32));
+        let current = Arc::new(RingBuffer::new(64));
+        let mut ring = original.clone();
+        let mut mapper = InputTimestampMapper::default();
+        let mut cache = StandbyGopCache::default();
+        let mut packets = vec![packet(MediaType::Video, 100, true)];
+        forward_ingest_packets(
+            &mut packets,
+            &mut ring,
+            &registration,
+            &mut mapper,
+            &mut cache,
+            None,
+        );
+        original.seal_and_forward(intermediate.clone());
+        intermediate.seal_and_forward(current.clone());
+        gate.arm_for_promotion();
+        for dts in [110, 120] {
+            packets.push(packet(MediaType::Audio, dts, false));
+            forward_ingest_packets(
+                &mut packets,
+                &mut ring,
+                &registration,
+                &mut mapper,
+                &mut cache,
+                None,
+            );
+        }
+        assert!(Arc::ptr_eq(&ring, &current));
+        assert_eq!(original.get_write_idx(), 0);
+        assert_eq!(intermediate.get_write_idx(), 0);
+        assert_eq!(
+            current.get_write_idx(),
+            3,
+            "replay and subsequent active media use the current ring"
+        );
+    }
+
     /// SRT ingest records the in-band parameter sets it publishes, on the
     /// pipeline ring and the preview ring, from the packet carrying them.
     #[test]
@@ -173,7 +222,7 @@ mod tests {
         let registration = registration(Arc::new(InputPacketGate::active()), i64::MIN);
         let preview = Arc::new(RingBuffer::new(16));
         registration.preview_ring.store(Some(preview.clone()));
-        let ring = RingBuffer::new(16);
+        let mut ring = Arc::new(RingBuffer::new(16));
         let sets: &[u8] = &[
             0, 0, 0, 1, 0x67, 0x42, 0, 0x1e, 0xf4, 0x05, 1, 0xec, 0x80, 0, 0, 0, 1, 0x68, 0xce,
             0x06, 0xe2,
@@ -188,14 +237,14 @@ mod tests {
 
         forward_ingest_packets(
             &mut packets,
-            &ring,
+            &mut ring,
             &registration,
             &mut InputTimestampMapper::default(),
             &mut StandbyGopCache::default(),
             None,
         );
 
-        for ring in [&ring, &*preview] {
+        for ring in [&*ring, &*preview] {
             assert_eq!(
                 ring.frame_unit(0).map(|unit| unit.config_generation),
                 Some(0)

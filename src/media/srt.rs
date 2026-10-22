@@ -22,7 +22,7 @@ mod ingress_owner;
 mod ingress_quality;
 #[cfg(test)]
 #[path = "srt/ingress_test_support.rs"]
-mod ingress_test_support;
+pub(crate) mod ingress_test_support;
 #[path = "srt/knobs.rs"]
 mod knobs;
 #[path = "srt/shared_muxer.rs"]

@@ -1,9 +1,9 @@
 //! Tokio session lifecycle for srt-rs ingress: admission, publisher and reader
-//! registration, the one-time stream probe, disconnect bookkeeping, receive
+//! registration, stream probes/topology updates, disconnect bookkeeping, receive
 //! quality and deletion checks. Media never passes through here: it runs to
 //! completion on the ingress Owner thread (`ingress_media`).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,33 +34,43 @@ use super::ingress_quality::{QualityFold, QualitySample};
 /// Lifecycle only: media does not wait on it.
 const HOUSEKEEPING_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Tokio's end of the ingress Owners: the bounded command bridges plus the
-/// commands waiting for bridge room. Sessions are addressed only by
-/// `IngressPeer` (Owner index + `LogicalPeerId`); the protocol and media state
-/// they name live on that Owner's thread.
+/// One command may wait for an Owner bridge. While it does, event consumption
+/// is backpressured: neither another Owner nor PMT churn can grow a reply queue.
+/// Housekeeping/telemetry remain responsive on the existing listener select.
 struct Ingress {
     handle: SrtIngressHandle,
-    pending_commands: VecDeque<IngressCommand>,
+    pending_command: Option<IngressCommand>,
 }
 
 impl Ingress {
-    /// Queue a command for the Owner. Never lost: a full bridge leaves it
-    /// queued (in order) for the next flush.
-    fn command(&mut self, command: IngressCommand) {
-        self.pending_commands.push_back(command);
+    fn command(&mut self, command: IngressCommand) -> Result<(), IngressCommand> {
         self.flush_commands();
+        if self.pending_command.is_some() {
+            return Err(command);
+        }
+        self.pending_command = Some(command);
+        self.flush_commands();
+        Ok(())
     }
 
-    fn disconnect(&mut self, peer: IngressPeer) {
-        self.command(IngressCommand::Disconnect { logical_peer: peer });
+    fn disconnect(&mut self, peer: IngressPeer) -> Result<(), IngressCommand> {
+        self.command(IngressCommand::Disconnect { logical_peer: peer })
     }
 
     fn flush_commands(&mut self) {
-        while let Some(command) = self.pending_commands.pop_front() {
-            if let Err(command) = self.handle.try_send(command) {
-                self.pending_commands.push_front(command);
-                break;
-            }
+        if let Some(command) = self.pending_command.take() {
+            self.pending_command = self.handle.try_send(command).err();
+        }
+    }
+
+    async fn next_event(
+        events: &mut tokio::sync::mpsc::Receiver<SrtIngressEvent>,
+        pending: &Option<IngressCommand>,
+    ) -> Option<SrtIngressEvent> {
+        if pending.is_some() {
+            std::future::pending().await
+        } else {
+            events.recv().await
         }
     }
 }
@@ -131,7 +141,7 @@ impl SrtServer {
         };
         let mut ingress = Ingress {
             handle,
-            pending_commands: VecDeque::new(),
+            pending_command: None,
         };
 
         let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -152,12 +162,17 @@ impl SrtServer {
         housekeeping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
-                event = ingress.handle.events.recv() => match event {
+                event = Ingress::next_event(&mut ingress.handle.events, &ingress.pending_command) => match event {
                     Some(SrtIngressEvent::Fault { detail }) => {
                         owner_fault = Some(detail);
                         break;
                     }
-                    Some(event) => self.handle_ingress_event(&mut ingress, &mut sessions, event).await,
+                    Some(event) => {
+                        if self.handle_ingress_event(&mut ingress, &mut sessions, event).await.is_err() {
+                            owner_fault = Some("SRT ingress command reservation exhausted".to_string());
+                            break;
+                        }
+                    }
                     None => {
                         owner_fault = Some("the SRT ingress owner thread stopped".to_string());
                         break;
@@ -182,13 +197,9 @@ impl SrtServer {
             ingress.flush_commands();
         }
 
-        // Ask every live peer to close orderly, then stop the owner (which
-        // flushes every publisher's last media) and report its truthful
-        // verdict before the listener is marked stopped.
-        for logical_peer in sessions.keys().copied().collect::<Vec<_>>() {
-            ingress.disconnect(logical_peer);
-        }
-        let exit = ingress.handle.shutdown().await;
+        // Deliver the one already-accepted command before shutdown. Native
+        // Owner shutdown closes all peers and flushes their last media.
+        let exit = ingress.handle.shutdown(ingress.pending_command).await;
         if let Some(fault) = owner_fault.as_ref().or(exit.fault.as_ref()) {
             error!(port, fault = %fault, quiescent = exit.quiescent, "SRT listener stopped after an owner fault");
         } else if !exit.quiescent {
@@ -234,7 +245,7 @@ impl SrtServer {
         ingress: &mut Ingress,
         sessions: &mut HashMap<IngressPeer, Session>,
         event: SrtIngressEvent,
-    ) {
+    ) -> Result<(), IngressCommand> {
         match event {
             SrtIngressEvent::Fault { .. } => {}
             SrtIngressEvent::Connected {
@@ -243,19 +254,26 @@ impl SrtServer {
                 stream_id,
             } => {
                 self.handle_connected(ingress, sessions, peer, logical_peer, stream_id)
-                    .await;
+                    .await?;
             }
             SrtIngressEvent::Probe {
                 logical_peer,
+                identity,
                 probe,
             } => {
                 let ring = match sessions.get(&logical_peer) {
-                    Some(Session::Publish(publisher)) => self.apply_probe(publisher, probe).await,
+                    Some(Session::Publish(publisher)) => {
+                        self.apply_probe(publisher, identity, *probe).await
+                    }
                     _ => None,
                 };
                 // Always answer: the Owner holds the publisher's packets until
                 // it hears back.
-                ingress.command(IngressCommand::ProbeApplied { logical_peer, ring });
+                ingress.command(IngressCommand::ProbeApplied {
+                    logical_peer,
+                    identity,
+                    ring,
+                })?;
             }
             SrtIngressEvent::Disconnected {
                 peer,
@@ -268,6 +286,7 @@ impl SrtServer {
                 info!(peer = %peer, %reason, "SRT peer disconnected");
             }
         }
+        Ok(())
     }
 
     async fn handle_connected(
@@ -277,7 +296,7 @@ impl SrtServer {
         peer: SocketAddr,
         logical_peer: IngressPeer,
         stream_id: String,
-    ) {
+    ) -> Result<(), IngressCommand> {
         let parsed = parse_srt_stream_id(&stream_id);
         let client_ip = peer.ip().to_string();
         let access_mode = match parsed.mode {
@@ -293,8 +312,7 @@ impl SrtServer {
             })
             .is_some()
         {
-            ingress.disconnect(logical_peer);
-            return;
+            return ingress.disconnect(logical_peer);
         }
         let pipeline = match self
             .pipeline_access
@@ -304,8 +322,7 @@ impl SrtServer {
             Ok(pipeline) => pipeline,
             Err(error) => {
                 warn!(peer = %peer, error = ?error, "rejecting unauthorized SRT stream");
-                ingress.disconnect(logical_peer);
-                return;
+                return ingress.disconnect(logical_peer);
             }
         };
         match parsed.mode {
@@ -319,11 +336,11 @@ impl SrtServer {
                         ingress.command(IngressCommand::AttachPublisher {
                             logical_peer,
                             media,
-                        });
+                        })?;
                     }
                     Err(error) => {
                         warn!(peer = %peer, %error, "rejecting SRT publisher");
-                        ingress.disconnect(logical_peer);
+                        ingress.disconnect(logical_peer)?;
                     }
                 }
             }
@@ -339,14 +356,15 @@ impl SrtServer {
                     ingress.command(IngressCommand::AttachReader {
                         logical_peer,
                         reader,
-                    });
+                    })?;
                 }
                 Err(error) => {
                     warn!(peer = %peer, %error, "rejecting SRT reader");
-                    ingress.disconnect(logical_peer);
+                    ingress.disconnect(logical_peer)?;
                 }
             },
         }
+        Ok(())
     }
 
     /// Register an admitted publisher and build the media state the Owner
@@ -414,7 +432,6 @@ impl SrtServer {
             first_media_ms,
             ingest_metrics,
             last_progress_ms,
-            probe_sent: false,
         });
         let session = PublisherSession {
             pipeline_id: pipeline.id,
@@ -425,58 +442,27 @@ impl SrtServer {
         Ok((session, media))
     }
 
-    /// Apply a publisher's first stream probe to its ingest session, and adapt
-    /// the pipeline ring when this input is selected. Returns the replacement
-    /// ring for the Owner.
-    ///
-    /// The video/audio metadata is written last, after the audio tracks, the
-    /// track selection and the ring resize: it opens an output's start gate
-    /// (`MediaEngine::ingest_tracks_ready`), so an output attaches to the
-    /// resized ring rather than migrating to it mid-read, and the codec hint
-    /// lands on the ring the pipeline keeps.
+    /// Apply an authoritative container snapshot and adapt the selected ring.
+    /// The engine serializes the attempt/selection check and complete metadata
+    /// replacement with selection and origin resolution. Resize precedes the
+    /// metadata that opens the output start gate.
     pub(super) async fn apply_probe(
         &self,
         publisher: &PublisherSession,
+        identity: super::ingress_media::ProbeIdentity,
         probe: DemuxProbe,
     ) -> Option<Arc<RingBuffer>> {
-        let video_fps = probe.video.as_ref().map(|video| video.fps).unwrap_or(30.0);
-        let audio_track_count = probe.audio_tracks.len();
-        let first_audio = probe.audio_tracks.first().cloned();
-        let selected_video_track_index = probe.video.as_ref().map(|_| 0);
-        self.engine
-            .update_ingest_session_video_track_selection(
-                &publisher.registration,
-                probe.video_track_count,
-                selected_video_track_index,
-            )
-            .await;
-        if !probe.audio_tracks.is_empty() {
-            self.engine
-                .update_ingest_session_audio_tracks(
-                    &publisher.pipeline_id,
-                    &publisher.registration,
-                    probe.audio_tracks,
-                )
-                .await;
+        if publisher.registration.attempt_id != identity.attempt_id {
+            return None;
         }
-        let ring = if self
+        let ring = self
             .engine
-            .is_ingest_session_selected(&publisher.pipeline_id, &publisher.registration)
-            .await
-        {
-            self.engine
-                .adapt_pipeline_ring(&publisher.pipeline_id, video_fps, audio_track_count)
-                .await
-        } else {
-            None
-        };
-        self.engine
-            .update_ingest_session_meta(
-                &publisher.pipeline_id,
+            .replace_ingest_session_tracks(
                 &publisher.registration,
                 probe.video,
-                first_audio,
-                None,
+                probe.audio_tracks,
+                probe.video_track_count,
+                probe.video_sequence_header,
             )
             .await;
         self.engine
@@ -535,8 +521,10 @@ async fn close_deleted_sessions(
     ingress: &mut Ingress,
     sessions: &mut HashMap<IngressPeer, Session>,
 ) {
+    if ingress.pending_command.is_some() {
+        return;
+    }
     let live_pipelines = engine.ingests.pipelines.read().await;
-    let mut to_close = Vec::new();
     for (peer, session) in sessions.iter_mut() {
         let (pipeline_id, closing) = match session {
             Session::Publish(publisher) => (&publisher.pipeline_id, &mut publisher.closing),
@@ -546,12 +534,16 @@ async fn close_deleted_sessions(
             } => (&*pipeline_id, closing),
         };
         if !*closing && !live_pipelines.contains_key(pipeline_id) {
-            *closing = true;
-            to_close.push(*peer);
+            if ingress.disconnect(*peer).is_ok() {
+                *closing = true;
+            }
+            if ingress.pending_command.is_some() {
+                break;
+            }
         }
     }
-    drop(live_pipelines);
-    for peer in to_close {
-        ingress.disconnect(peer);
-    }
 }
+
+#[cfg(test)]
+#[path = "tokio_ingress_tests.rs"]
+mod tests;
