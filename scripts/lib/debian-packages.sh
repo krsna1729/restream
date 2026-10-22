@@ -106,13 +106,49 @@ restream_debian_install_packages() {
     local apt_timeout="${RESTREAM_APT_TIMEOUT:-5m}"
     local apt_attempts="${RESTREAM_APT_ATTEMPTS:-3}"
     local apt_retry_delay="${RESTREAM_APT_RETRY_DELAY:-5}"
+    local apt_log
+    apt_log=$(mktemp)
 
+    local status=0
     restream_retry "apt-get update" "$apt_attempts" "$apt_retry_delay" \
-        restream_with_timeout_as_root "apt-get update" "$apt_timeout" \
-        apt-get update -qq
-    restream_retry "apt-get install" "$apt_attempts" "$apt_retry_delay" \
-        restream_with_timeout_as_root "apt-get install" "$apt_timeout" \
-        apt-get install -y -qq "${missing[@]}"
+        restream_debian_apt "$apt_log" "$apt_timeout" update &&
+        restream_retry "apt-get install" "$apt_attempts" "$apt_retry_delay" \
+            restream_debian_apt "$apt_log" "$apt_timeout" install -y "${missing[@]}" ||
+        status=$?
+    rm -f "$apt_log"
+    return "$status"
+}
+
+# restream_debian_apt LOG LIMIT ARGS...: one bounded, non-interactive apt-get
+# run. Its output goes to LOG and is printed only on failure, so a run that
+# hits the time limit shows where it stopped. A run killed mid-install can
+# leave dpkg half-configured, so each install attempt first finishes pending
+# configuration.
+restream_debian_apt() {
+    local log=$1
+    local limit=$2
+    shift 2
+    local status=0
+    echo "apt-get $1 (timeout ${limit}; output shown on failure)"
+    restream_with_timeout_as_root "apt-get $1" "$limit" bash -c '
+        export DEBIAN_FRONTEND=noninteractive
+        if [[ "$1" == install ]]; then
+            dpkg --configure -a
+        fi
+        exec apt-get -q \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            -o DPkg::Lock::Timeout=120 \
+            -o Dpkg::Options::=--force-confdef \
+            -o Dpkg::Options::=--force-confold \
+            "$@"
+    ' bash "$@" >"$log" 2>&1 || status=$?
+    if ((status != 0)); then
+        echo "apt-get $1 failed (exit $status); last output:" >&2
+        tail -n 40 "$log" >&2
+    fi
+    return "$status"
 }
 
 restream_debian_install_groups() {
