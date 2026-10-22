@@ -50,9 +50,11 @@ pub mod srt_knobs {
     pub use super::knobs::{recv_budget, recv_budget_or};
 }
 
-/// The production SRT Owner runtime and datagram ceiling, so the test
-/// harness's SRT sink (a separate crate) runs the same Owner path as ingress.
+/// The production SRT Owner runtime, datagram ceiling and listener shape, so
+/// the test harness's SRT sink (a separate crate) runs the same Owner path as
+/// ingress.
 pub mod srt_owner_runtime {
+    pub use super::ingress_owner::listener_shape;
     pub use crate::media::egress::backends::srt::owner_set::{
         SRT_OWNER_WIRE_CEILING, production_runtime,
     };

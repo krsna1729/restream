@@ -103,10 +103,12 @@ record CPU sets that make the intended locality explicit.
 
 - `CAPACITY_EGRESS_SHARDS` overrides the product's shard ceiling. Compare
   the default first; changing the ceiling is a separate experiment.
-- `CAPACITY_SINK_THREADS` sets the SRT sink port budget (the name predates
-  per-port Owner groups); `CAPACITY_PEER_COUNT` sets sink instances and ports.
-  Each SRT port runs `HARNESS_SRT_SINK_OWNERS_PER_PORT` Owners (default 2,
-  clamped to 1–4). Keep these settings fixed across A/B runs.
+- `CAPACITY_PEER_COUNT` sets SRT sink instances and ports (default: the
+  harness CPU count). Each SRT port runs `HARNESS_SRT_SINK_OWNERS_PER_PORT`
+  Owners (default 2, clamped to 1–4) in one `SO_REUSEPORT` group. Keep these
+  settings fixed across A/B runs. The sink refuses a port that already has a
+  UDP socket in `/proc/net/udp{,6}`: a leftover sink from an earlier run would
+  otherwise join the group and take part of the flows.
 - Sink-port count changes SRT send batching as well as receiver parallelism.
   Outputs to one destination address can share batched sends. A single-port
   sink is not equivalent to independent remote destinations.

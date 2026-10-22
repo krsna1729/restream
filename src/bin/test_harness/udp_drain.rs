@@ -25,7 +25,7 @@ use super::*;
 
 /// A wildcard UDP socket with `SO_REUSEPORT`, a large receive buffer and a
 /// read timeout so the drain loop can observe the stop flag.
-fn bind_drain_socket(
+pub(crate) fn bind_drain_socket(
     port: u16,
     rcvbuf: usize,
     timeout: Duration,

@@ -237,8 +237,12 @@ Sink mode details:
   `SO_REUSEPORT` listener group; `HARNESS_SRT_SINK_OWNERS_PER_PORT` sets the
   group size (1–4). Payload bytes are counted per logical connection
   (`LogicalPeerId`), since callers share UDP sockets. `srtSinkDrops` records
-  kernel drops per socket (local port and inode) and the aggregate Owner-RX
-  `dropped`, `bufferExhaustions` and `truncated` totals.
+  kernel drops per socket (local port and inode), the aggregate Owner-RX
+  `dropped`, `bufferExhaustions` and `truncated` totals, and `ownerFaults`:
+  a faulted Owner stops the whole pool, because a reuseport group member
+  that exits rehashes its sessions onto members that drop them. The pool
+  refuses a port that already has a UDP socket, so a leftover sink cannot
+  join its group.
 - Read `bytesOutDelta` against the target rate. `outputsPresent` alone does
   not prove sustained throughput.
 

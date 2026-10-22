@@ -11,6 +11,7 @@ items).
 
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
 - [Q-026 frozen-SRT-destination RSS gate](#q-026-resilience-opus-attribute-and-recalibrate-the-frozen-srt-destination-rss-gate)
+- [Q-027 residual SRT×100 sink loss](#q-027-performance-opus-find-the-residual-receiver-side-loss-in-the-multi-owner-srt-sink-at-srt100)
 - [Q-031 one capacity allocator](#q-031-architecture-opus-derive-every-thread-count-from-one-capacity-allocator)
 - [Q-033 host-level shard pool](#q-033-architecture-opus-run-egress-shards-from-one-host-level-pool-instead-of-per-feed-groups)
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
@@ -84,6 +85,32 @@ items).
   allocation stacks/live-vs-free data and feed/transport ownership snapshots,
   or reproducing that shape with those inputs; a smaller current pass does
   not supply them. Keep the 64 MiB gate unchanged.
+
+### Q-027 [performance] [opus] Find the residual receiver-side loss in the multi-Owner SRT sink at SRT×100
+- Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
+  sink (two `SO_REUSEPORT` Owners per port) services every session at
+  SRT×100, so a failing repeat is Restream's.
+- Files: `src/bin/test_harness/harness_srt_sink.rs`; production reference
+  `src/media/srt/ingress_owner.rs`.
+- Gates: the unchanged ramp (`CAPACITY_PROTOCOLS=srt CAPACITY_SRT_OUTPUTS=100
+  CAPACITY_REPEATS=7`, Restream on 4 CPUs, harness on 2, `CAPACITY_PEER_COUNT=2`,
+  default 8 MiB sink buffer) passes 7 of 7, so `summary.md` reports SRT
+  capacity 100 (it needs every repeat to pass).
+- Context: the multi-Owner sink (PR #402, measured on 0c3174f7 plus that
+  change) passed 6 of 7 at 100 outputs
+  (`.local/artifacts/capacity-ramp/20261022T034708Z`); `summary.md` reports
+  SRT capacity 0.
+  - Failing rep3: Restream's stall sweep closed five leaves with `srt egress
+    leaf closed unexpectedly: no progress (stalled)`, the plain-stall class,
+    not shard-saturated; 14 destinations received exactly 0 bytes (ratioMin
+    0, Jain 0.86, median 1.008). Whole sessions stopped at the sink.
+  - Kernel socket drops concentrate on one reuseport member per port (rep5
+    8,785 vs 0; rep7 6,398 vs 0), and Owner RX buffer exhaustions run 6k-12k
+    in every repeat.
+  Next probe: per-Owner session and ACK counters in the sink, or check whether
+  one sink Owner stopped servicing its sessions during rep3.
+- Status: open (Filed: 2026-10-02 by claude; narrowed 2026-10-22 after the
+  PR #402 review).
 
 ### Q-031 [architecture] [opus] Derive every thread count from one capacity allocator
 - Goal: thread counts follow measured service demand (λ × D at a target
