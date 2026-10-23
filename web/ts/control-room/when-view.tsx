@@ -27,7 +27,7 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
-/** Now, to the half minute, shared by every caller. */
+/** A tick every 30 s shared by every caller, to keep relative times current. */
 export function useClock(): number {
   return useSyncExternalStore(subscribe, () => now);
 }
@@ -43,10 +43,12 @@ export function When(props: {
   noZone?: boolean;
   className?: string;
 }) {
-  const clock = useClock();
+  // The shared clock only re-renders; the reading is taken now, so an
+  // event newer than the last tick never reads as in the future.
+  useClock();
   if (props.atMs === null || props.atMs === undefined || !Number.isFinite(props.atMs)) return <span className={props.className}>--</span>;
   const at = props.atMs;
-  const reference = Math.max(clock, Date.now() - 30_000);
+  const reference = Date.now();
   const relative = relativeTime(at, reference);
   const absolute = absoluteTime(at, reference, { seconds: props.seconds, noZone: props.noZone });
   const show = props.show ?? "both";
