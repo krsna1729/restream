@@ -226,7 +226,39 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS sessions (
             token TEXT PRIMARY KEY,
-            created_at INTEGER NOT NULL
+            created_at INTEGER NOT NULL,
+            user_id TEXT,
+            view_as TEXT
+        );",
+    )
+    .execute(pool)
+    .await?;
+    // A session without a member is the built-in admin's.
+    super::migrations::ensure_column_exists(pool, "sessions", "user_id", "TEXT").await?;
+    super::migrations::ensure_column_exists(pool, "sessions", "view_as", "TEXT").await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            role TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            disabled INTEGER NOT NULL DEFAULT 0,
+            password_hash TEXT NOT NULL
+        );",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            at INTEGER NOT NULL,
+            username TEXT NOT NULL,
+            role TEXT NOT NULL,
+            method TEXT NOT NULL,
+            path TEXT NOT NULL,
+            status INTEGER NOT NULL
         );",
     )
     .execute(pool)

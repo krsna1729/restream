@@ -8,7 +8,7 @@ use crate::application::pipeline_inputs::PipelineInputService;
 use crate::application::recirculation::RecirculationService;
 use crate::application::services::{
     AgentService, AuthService, FileIngestService, IngestService, MediaLibraryService,
-    PipelineService, SettingsService,
+    PipelineService, SettingsService, TeamService,
 };
 
 pub mod agent;
@@ -33,6 +33,7 @@ pub mod runtime_state;
 pub mod settings;
 pub mod state;
 pub mod static_assets;
+pub mod team;
 pub mod telemetry;
 
 /// Storage-neutral application services consumed by the HTTP boundary.
@@ -42,6 +43,7 @@ pub struct AppServices {
     pub recirculation_service: RecirculationService,
     pub ingest_service: IngestService,
     pub auth_service: AuthService,
+    pub team_service: TeamService,
     pub settings_service: SettingsService,
     pub file_ingest_service: FileIngestService,
     pub media_library_service: MediaLibraryService,

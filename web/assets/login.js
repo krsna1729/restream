@@ -1,6 +1,7 @@
 (() => {
   const form = document.getElementById("login-form");
   const input = document.getElementById("password-input");
+  const usernameInput = document.getElementById("username-input");
   const toggleBtn = document.getElementById("toggle-password-btn");
   const eyeIcon = document.getElementById("eye-icon");
   const eyeOffIcon = document.getElementById("eye-off-icon");
@@ -58,7 +59,13 @@
       const res = await fetch(withBasePath("/api/v1/auth/login"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: input.value }),
+        body: JSON.stringify({
+          username:
+            usernameInput instanceof HTMLInputElement
+              ? usernameInput.value.trim() || "admin"
+              : "admin",
+          password: input.value,
+        }),
       });
       if (res.ok) {
         const returnPath = new URLSearchParams(window.location.search).get(

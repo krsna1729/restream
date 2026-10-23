@@ -73,6 +73,10 @@ use super::static_assets::{
     logo_handler, settings_html_redirect_handler, spa_fallback_handler,
     status_html_redirect_handler,
 };
+use super::team::{
+    audit_handler, create_user_handler, delete_user_handler, list_users_handler, me_handler,
+    update_user_handler, view_as_handler,
+};
 use super::telemetry::{
     metrics_system_handler, pipeline_diagnostics_run_handler, status_get_handler,
     status_sbom_get_handler, v1_capacity_scenario_handler, v1_dashboard_runtime_handler,
@@ -109,6 +113,11 @@ pub const PUBLIC_ROUTE_PATHS: &[&str] = &[
 // points that should only resolve after the request has passed session checks.
 pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
     "/api/v1/auth/logout",
+    "/api/v1/auth/me",
+    "/api/v1/auth/view-as",
+    "/api/v1/users",
+    "/api/v1/users/{id}",
+    "/api/v1/audit",
     "/api/v1/auth/change-password",
     "/api/v1/auth/dismiss-password-change",
     "/api/v1/security/rate-limits",
@@ -286,6 +295,17 @@ fn create_app_router() -> Router<Arc<AppState>> {
         .route("/logo.png", get(logo_handler))
         .route("/api/v1/auth/login", post(login_post_handler))
         .route("/api/v1/auth/logout", post(logout_handler))
+        .route("/api/v1/auth/me", get(me_handler))
+        .route("/api/v1/auth/view-as", post(view_as_handler))
+        .route(
+            "/api/v1/users",
+            get(list_users_handler).post(create_user_handler),
+        )
+        .route(
+            "/api/v1/users/{id}",
+            patch(update_user_handler).delete(delete_user_handler),
+        )
+        .route("/api/v1/audit", get(audit_handler))
         .route(
             "/api/v1/auth/change-password",
             post(change_password_handler),
@@ -548,6 +568,12 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             wake_reconciler_after_mutation,
+        ))
+        // Outermost of the two: a request the role policy refuses never
+        // reaches a handler, so it never wakes the reconciler either.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            super::team::authorize_and_audit,
         ))
         .with_state(state)
 }

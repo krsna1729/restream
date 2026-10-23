@@ -18,6 +18,8 @@ export const WORKSPACES = [
   "media",
   "system",
   "changes",
+  "team",
+  "audit",
   "settings",
 ] as const;
 
@@ -38,6 +40,8 @@ export const WORKSPACE_LABELS: Record<Workspace, string> = {
   media: "Media",
   system: "System",
   changes: "Changes",
+  team: "Team",
+  audit: "Audit log",
   settings: "Settings",
 };
 

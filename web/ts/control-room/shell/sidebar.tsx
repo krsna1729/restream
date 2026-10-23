@@ -10,7 +10,8 @@ import { PlaceLink, usePlace } from "../router.js";
 import type { LiveSnapshot } from "../store.js";
 import { compactCount } from "./badges.js";
 import type { NavBadge } from "./badges.js";
-import { NAV_GROUPS, NAV_ICONS } from "./nav.js";
+import { useSession } from "../session.js";
+import { NAV_ICONS, navGroupsFor } from "./nav.js";
 
 const BADGE_TONE = {
   bad: "bg-error text-error-content",
@@ -41,9 +42,10 @@ export function NavList(props: {
   onNavigate?: () => void;
 }) {
   const place = usePlace();
+  const session = useSession();
   return (
     <nav aria-label="Workspaces" className="flex flex-col gap-3">
-      {NAV_GROUPS.map((group) => (
+      {navGroupsFor(session.role).map((group) => (
         <div key={group.label}>
           {props.rail ? (
             <div className="mx-auto my-1 h-px w-6 bg-base-content/10" aria-hidden="true" />

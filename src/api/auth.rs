@@ -17,10 +17,13 @@ use super::state::{
     SESSION_MAX_AGE_SECONDS, check_field_len, clear_session_cookie, get_session_token_from_headers,
     hash_session_token, make_session_cookie, to_hex,
 };
+use crate::application::services::team_service::{BUILTIN_ADMIN_ID, BUILTIN_ADMIN_USERNAME};
 use crate::media::security::RateLimitScope;
 
 #[derive(Deserialize)]
 pub struct LoginPayload {
+    /// A team member; absent or `admin` is the built-in admin.
+    pub username: Option<String>,
     pub password: Option<String>,
 }
 
@@ -170,9 +173,29 @@ pub async fn login_post_handler(
     if let Some(r) = check_field_len("password", &password, MAX_PASSWORD_LEN) {
         return r;
     }
-    let stored_hash = match state.auth_service.get_password_hash().await {
-        Ok(Some(hash)) => hash,
-        _ => return incorrect_password_response(),
+    let username = payload.username.unwrap_or_default().trim().to_string();
+    if let Some(r) = check_field_len("username", &username, 64) {
+        return r;
+    }
+    // The built-in admin's password is the dashboard password; every other
+    // member's is on their record.
+    let member = if username.is_empty() || username == BUILTIN_ADMIN_USERNAME {
+        None
+    } else {
+        match state.team_service.login_candidate(&username).await {
+            Ok(Some(stored)) => Some(stored),
+            _ => {
+                state.record_security_failure(RateLimitScope::DashboardLogin, &client_ip);
+                return incorrect_password_response();
+            }
+        }
+    };
+    let stored_hash = match &member {
+        Some(stored) => stored.password_hash.clone(),
+        None => match state.auth_service.get_password_hash().await {
+            Ok(Some(hash)) => hash,
+            _ => return incorrect_password_response(),
+        },
     };
 
     let verified = tokio::task::spawn_blocking(move || verify_password(&password, &stored_hash))
@@ -205,6 +228,22 @@ pub async fn login_post_handler(
             .into_response();
     }
 
+    let member_id = member.as_ref().map(|stored| stored.user.id.as_str());
+    if member_id.is_some()
+        && state
+            .team_service
+            .bind_session(&token_hash, member_id)
+            .await
+            .is_err()
+    {
+        // An unbound session would be the built-in admin's: never leave one.
+        let _ = state.auth_service.delete_session(&token_hash).await;
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to create session",
+        )
+            .into_response();
+    }
     state.add_session_hash(token_hash).await;
 
     let cookie = make_session_cookie(
@@ -271,6 +310,21 @@ pub async fn change_password_handler(
             .into_response();
     }
 
+    let principal = match state.team_service.principal(&token_hash).await {
+        Ok(Some(principal)) => principal,
+        _ => return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response(),
+    };
+    if principal.user_id != BUILTIN_ADMIN_ID {
+        return change_member_password(
+            &state,
+            &principal.user_id,
+            &token_hash,
+            current_password,
+            new_password,
+        )
+        .await;
+    }
+
     let stored_hash = match state.auth_service.get_password_hash().await {
         Ok(Some(hash)) => hash,
         _ => {
@@ -331,6 +385,58 @@ pub async fn change_password_handler(
     // operator reminder for the current installation.
     dismiss_bootstrap_password_prompt(&state).await;
 
+    ok_json_response()
+}
+
+/// A member's own password change: verified against their record, and their
+/// other sessions end.
+async fn change_member_password(
+    state: &AppState,
+    user_id: &str,
+    token_hash: &str,
+    current_password: String,
+    new_password: String,
+) -> Response {
+    let incorrect = || {
+        (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Current password is incorrect"})),
+        )
+            .into_response()
+    };
+    let Ok(Some(stored)) = state.team_service.stored_user(user_id).await else {
+        return incorrect();
+    };
+    let stored_hash = stored.password_hash;
+    let verified =
+        tokio::task::spawn_blocking(move || verify_password(&current_password, &stored_hash))
+            .await
+            .unwrap_or(false);
+    if !verified {
+        return incorrect();
+    }
+    let new_hash = tokio::task::spawn_blocking(move || hash_password(&new_password))
+        .await
+        .unwrap_or_default();
+    if new_hash.is_empty() {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to hash new password",
+        )
+            .into_response();
+    }
+    if state
+        .team_service
+        .set_own_password(user_id, &new_hash, token_hash)
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to update password",
+        )
+            .into_response();
+    }
     ok_json_response()
 }
 

@@ -22,6 +22,10 @@ import type {
   OutputProtocol,
   PipelineSummarySnapshot,
   FlightTrace,
+  AuditEntry,
+  Role,
+  SessionPrincipal,
+  TeamMember,
   BuildLogsStreamUrlOptions,
   PipelineMutationResponse,
   OutputMutationResponse,
@@ -164,7 +168,9 @@ async function getConfig(
   if (options.view === "dashboard") query.set("view", "dashboard");
   const suffix = query.toString();
   const url = suffix ? `/api/v1/settings?${suffix}` : "/api/v1/settings";
-  return apiRequest<ConfigData>(url);
+  // A viewer may not read settings (they hold stream keys): no config, no
+  // alert; the views that use it work without.
+  return apiRequest<ConfigData>(url, { silentStatuses: [403] });
 }
 
 interface GetSystemMetricsOptions {
@@ -765,8 +771,69 @@ async function advanceOperation(
   );
 }
 
+/** Who this session is; null (quietly) when it has no principal. */
+async function getSession(): Promise<SessionPrincipal | null> {
+  return apiRequest<SessionPrincipal>("/api/v1/auth/me", { silentStatuses: [404] });
+}
+
+/** View the dashboard as a lower role (the server enforces it), or null to
+ * return to one's own. */
+async function setViewAs(role: Role | null): Promise<SessionPrincipal | null> {
+  return apiRequest<SessionPrincipal>("/api/v1/auth/view-as", {
+    method: "POST",
+    body: { role },
+  });
+}
+
+async function listTeam(): Promise<TeamMember[] | null> {
+  const body = await apiRequest<{ users: TeamMember[] }>("/api/v1/users", { silentStatuses: [403] });
+  return body?.users ?? null;
+}
+
+async function createTeamMember(member: {
+  username: string;
+  password: string;
+  role: Role;
+}): Promise<TeamMember | null> {
+  return apiRequest<TeamMember>("/api/v1/users", { method: "POST", body: member });
+}
+
+async function updateTeamMember(
+  id: string,
+  change: { role?: Role; disabled?: boolean; password?: string },
+): Promise<TeamMember | null> {
+  return apiRequest<TeamMember>(`/api/v1/users/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: change,
+  });
+}
+
+async function deleteTeamMember(id: string): Promise<boolean> {
+  const body = await apiRequest<{ deleted: boolean }>(`/api/v1/users/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  return body?.deleted === true;
+}
+
+/** Newest first; `before` pages back from an entry id. */
+async function getAudit(before?: number, limit = 100): Promise<AuditEntry[] | null> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  if (before !== undefined) query.set("before", String(before));
+  const body = await apiRequest<{ entries: AuditEntry[] }>(`/api/v1/audit?${query}`, {
+    silentStatuses: [403],
+  });
+  return body?.entries ?? null;
+}
+
 export {
   apiRequest,
+  getSession,
+  setViewAs,
+  listTeam,
+  createTeamMember,
+  updateTeamMember,
+  deleteTeamMember,
+  getAudit,
   getConfig,
   getSystemMetrics,
   getAggregateAlerts,

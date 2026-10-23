@@ -7,7 +7,7 @@
 //   node scripts/dev/frontend/fixture-server.mjs --preset plant --port 3031
 //
 // Presets: small, plant, extreme. It is for development only: it has no
-// auth, accepts every mutation it understands, and labels itself synthetic.
+// auth (the session is the built-in admin, who can view as a lower role), accepts every mutation it understands, and labels itself synthetic.
 
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer } from "node:http";
@@ -15,6 +15,7 @@ import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createDeployment, PRESETS } from "./fixtures/density.mjs";
+import { createTeam } from "./fixtures/team.mjs";
 
 const args = new Map();
 for (let index = 2; index < process.argv.length; index += 1) {
@@ -33,6 +34,7 @@ const root = resolve(fileURLToPath(new URL("../../../public", import.meta.url)))
 
 const plant = createDeployment({ preset, seed });
 const subscribers = new Set();
+const team = createTeam({ seed, outputs: plant.state().outputs, members: preset === "small" ? 4 : preset === "plant" ? 24 : 120 });
 
 setInterval(() => {
   const delta = plant.tick(Date.now());
@@ -121,8 +123,20 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (pathname.startsWith("/api/")) {
+    const method = req.method ?? "GET";
+    const body = method === "GET" ? null : await readBody(req);
+    const answer = team.handle(method, pathname, searchParams, body);
+    if (answer) {
+      if (method !== "GET") team.record(method, pathname, answer.status ?? 200);
+      return sendJson(res, answer.body, answer.status ?? 200);
+    }
+    req.fixtureBody = body;
+  }
+
   const start = pathname.match(/^\/api\/v1\/pipelines\/[^/]+\/outputs\/([^/]+)\/(start|stop)$/);
   if (start && req.method === "POST") {
+    team.record("POST", pathname, 200);
     const ok = plant.setDesired(decodeURIComponent(start[1]), start[2] === "start" ? "running" : "stopped");
     return sendJson(res, ok ? { message: "ok", desiredState: start[2] === "start" ? "running" : "stopped" } : { error: "not found" }, ok ? 200 : 404);
   }
@@ -135,7 +149,7 @@ const server = createServer(async (req, res) => {
   }
   if (pathname.startsWith("/api/")) {
     if (req.method !== "GET") {
-      await readBody(req);
+      team.record(req.method, pathname, 200);
       return sendJson(res, { message: "fixture: accepted, not applied" });
     }
     console.log(`fixture: no data for ${req.method} ${pathname}`);

@@ -13,7 +13,7 @@ export const PRESETS = {
 };
 
 /** mulberry32: small, fast, deterministic. */
-function rng(seed) {
+export function rng(seed) {
   let a = seed >>> 0;
   const next = () => {
     a = (a + 0x6d2b79f5) >>> 0;

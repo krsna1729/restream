@@ -40,6 +40,8 @@ mod observability;
 mod outputs;
 #[path = "api/pipelines.rs"]
 mod pipelines;
+#[path = "api/team.rs"]
+mod team;
 
 async fn test_app() -> (axum::Router, SqlitePool) {
     let (app, pool, _) = test_app_with_engine().await;

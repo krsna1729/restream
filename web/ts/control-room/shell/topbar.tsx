@@ -12,6 +12,9 @@ import { StatusDot } from "../../ui/tone.js";
 import { formatAge } from "../format.js";
 import { SAMPLE_STALE_AFTER_MS, useNow } from "../store.js";
 import type { LiveSnapshot } from "../store.js";
+import type { Role } from "../../core/api-types.js";
+import { useSession } from "../session.js";
+import { ROLE_LABEL, ROLE_SUMMARY, viewAsChoices } from "../team-model.js";
 import { Brand } from "./sidebar.js";
 
 /** The live pill: stream state, revision and the age of the oldest sample. */
@@ -86,7 +89,8 @@ export function PrefsControls() {
   );
 }
 
-function PrefsMenu() {
+/** A dropdown that closes on an outside click. */
+function useDropdown() {
   const details = useRef<HTMLDetailsElement | null>(null);
   useEffect(() => {
     const close = (event: MouseEvent) => {
@@ -95,6 +99,91 @@ function PrefsMenu() {
     document.addEventListener("click", close);
     return () => document.removeEventListener("click", close);
   }, []);
+  return details;
+}
+
+/** Who is signed in, the role they act as, and viewing as a lower one. */
+export function SessionControls(props: { onDone?: () => void }) {
+  const session = useSession();
+  const principal = session.principal;
+  if (!principal) return null;
+  const own = principal.role;
+  const choices: Role[] = [own, ...viewAsChoices(own).reverse()];
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-3">
+        <span className="grid size-9 place-items-center rounded-full bg-primary/15 text-primary">
+          <Icon name="user" className="size-5" />
+        </span>
+        <div className="min-w-0">
+          <div className="truncate font-semibold">{principal.username}</div>
+          <div className="text-xs text-base-content/70">{ROLE_LABEL[own]}</div>
+        </div>
+      </div>
+      {choices.length > 1 && (
+        <Segmented<Role>
+          label="View as"
+          value={principal.effectiveRole}
+          options={choices.map((role): [Role, string] => [role, role === own ? `Me (${ROLE_LABEL[role]})` : ROLE_LABEL[role]])}
+          onChange={(role) => {
+            props.onDone?.();
+            void session.viewAs(role === own ? null : role);
+          }}
+        />
+      )}
+      <p className="text-xs text-base-content/70">{ROLE_SUMMARY[principal.effectiveRole]}</p>
+      <button type="button" className="btn btn-ghost btn-sm justify-start border-base-content/15" onClick={() => void session.signOut()}>
+        Sign out
+      </button>
+    </div>
+  );
+}
+
+function UserMenu() {
+  const details = useDropdown();
+  const session = useSession();
+  if (!session.principal) return null;
+  const viewing = session.principal.viewAs !== null;
+  return (
+    <details ref={details} className="dropdown dropdown-end">
+      <summary
+        className={`btn btn-ghost btn-sm gap-2 ${viewing ? "text-warning" : ""}`}
+        aria-label={`Account: ${session.principal.username}, acting as ${ROLE_LABEL[session.role]}`}
+      >
+        <Icon name={viewing ? "eye" : "user"} className="size-[1.15rem]" />
+        <span className="hidden max-w-32 truncate lg:inline">{session.principal.username}</span>
+      </summary>
+      <div className="dropdown-content z-30 mt-2 w-72 rounded-box border border-base-content/10 bg-base-200 p-4 shadow-xl">
+        <SessionControls
+          onDone={() => {
+            if (details.current) details.current.open = false;
+          }}
+        />
+      </div>
+    </details>
+  );
+}
+
+/** While a member views the dashboard as a lower role: say so, and how to stop. */
+export function ViewAsBanner() {
+  const session = useSession();
+  const view = session.principal?.viewAs;
+  if (!session.principal || !view) return null;
+  return (
+    <div role="status" className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-warning/30 bg-warning/15 px-3 py-2 text-sm md:px-5">
+      <Icon name="eye" className="size-4 shrink-0 text-warning" />
+      <span className="min-w-0 flex-1">
+        Viewing as <strong>{ROLE_LABEL[view]}</strong>. The engine enforces it: what this role cannot do is refused, not just hidden.
+      </span>
+      <button type="button" className="btn btn-warning btn-xs" onClick={() => void session.viewAs(null)}>
+        Back to {ROLE_LABEL[session.principal.role]}
+      </button>
+    </div>
+  );
+}
+
+function PrefsMenu() {
+  const details = useDropdown();
   return (
     <details ref={details} className="dropdown dropdown-end">
       <summary className="btn btn-ghost btn-sm btn-square" aria-label="View preferences">
@@ -153,6 +242,9 @@ export function Topbar(props: { live: LiveSnapshot; onSearch: () => void; extra?
         <ModeToggle />
         <span className="hidden md:inline-flex">
           <PrefsMenu />
+        </span>
+        <span className="hidden md:inline-flex">
+          <UserMenu />
         </span>
       </div>
     </header>

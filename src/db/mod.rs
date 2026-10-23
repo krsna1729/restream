@@ -14,6 +14,7 @@ mod pipeline_repo;
 pub mod recording_repo;
 mod schema;
 pub(crate) mod session_repo;
+pub(crate) mod team_repo;
 
 pub use ingest_repo::{
     IngestRecord, create_ingest, delete_ingest, get_ingest, get_ingest_by_stream_key, list_ingests,
