@@ -38,7 +38,15 @@ export function createFixtureApi({ preset, seed }) {
     [/^\/api\/v1\/pipelines\/([^/]+)\/inputs$/, (m) => plant.pipelineInputs(decodeURIComponent(m[1]))],
     [/^\/api\/v1\/pipelines\/([^/]+)\/file-ingest$/, () => ({ configured: false, running: false })],
     [/^\/api\/v1\/pipelines\/([^/]+)\/summary$/, (m) => plant.pipelineSummary(decodeURIComponent(m[1]))],
-    [/^\/api\/v1\/pipelines\/([^/]+)\/flight-recorder$/, (m) => plant.flightRecorder(decodeURIComponent(m[1]))],
+    [
+      /^\/api\/v1\/pipelines\/([^/]+)\/flight-recorder$/,
+      (m, q) =>
+        plant.flightRecorder(decodeURIComponent(m[1]), {
+          since: q.get("since") ? Date.parse(q.get("since")) : undefined,
+          until: q.get("until") ? Date.parse(q.get("until")) : undefined,
+          points: q.get("points") ? Number(q.get("points")) : undefined,
+        }),
+    ],
     [/^\/api\/v1\/pipelines\/([^/]+)\/probe$/, () => ({ audioTracks: [{ trackIndex: 0, codec: "aac", channels: 2, sampleRate: 48000 }] })],
   ];
 

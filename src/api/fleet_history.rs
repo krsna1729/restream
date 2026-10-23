@@ -47,12 +47,17 @@ pub async fn v1_fleet_history_handler(
 pub struct FlightRecorderQuery {
     /// RFC 3339: only samples taken at or after it; every kept one without.
     since: Option<chrono::DateTime<chrono::Utc>>,
+    /// RFC 3339: only samples taken before it; up to now without.
+    until: Option<chrono::DateTime<chrono::Utc>>,
+    /// At most this many samples, evenly thinned (default and cap 2,000).
+    points: Option<usize>,
 }
 
 /// `GET /api/v1/pipelines/:pipelineId/flight-recorder`: the pipeline's
 /// recorded ingest, ring and output health
-/// ([`crate::application::flight_recorder`]); 404 for a pipeline the
-/// recorder has not seen.
+/// ([`crate::application::flight_recorder`]) over `since`..`until`: the
+/// persisted history, then the full-rate recent samples, thinned to
+/// `points`; 404 for a pipeline neither has seen.
 pub async fn v1_flight_recorder_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -66,9 +71,17 @@ pub async fn v1_flight_recorder_handler(
         Ok(query) => query,
         Err(rejection) => return rejection.into_response(),
     };
-    match state
-        .flight_recorder
-        .trace(&pipeline_id, query.since.map_or(0, epoch_ms))
+    match crate::application::flight_recorder::trace_window(
+        &state.flight_recorder,
+        &state.db,
+        &pipeline_id,
+        query.since.map_or(0, epoch_ms),
+        query.until.map_or(u64::MAX, epoch_ms),
+        query
+            .points
+            .unwrap_or(crate::application::flight_recorder::FLIGHT_MAX_POINTS),
+    )
+    .await
     {
         Some(trace) => Json(trace).into_response(),
         None => (

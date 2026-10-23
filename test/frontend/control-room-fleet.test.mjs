@@ -310,3 +310,11 @@ test("a logs link carries its destination, and any other move drops it", () => {
   assert.deepEqual(placeSearch({ x: "1" }, { workspace: "logs", pipelineId: "p1", outputId: "out_1" }), { w: "logs", p: "p1", o: "out_1", x: "1" });
   assert.deepEqual(placeSearch({ w: "logs", p: "p1", o: "out_1" }, { workspace: "operate", pipelineId: "p1" }), { w: "operate", p: "p1" });
 });
+
+test("a replay window rides in the URL and a following one has no end", () => {
+  assert.deepEqual(placeFromSearch({ w: "stability", p: "p1", from: "1000", to: "5000" }).replay, { fromMs: 1000, toMs: 5000 });
+  assert.deepEqual(placeFromSearch({ w: "stability", p: "p1", from: "1000" }).replay, { fromMs: 1000, toMs: null });
+  assert.equal(placeFromSearch({ w: "stability", from: "soon" }).replay, undefined);
+  assert.deepEqual(placeSearch({}, { workspace: "stability", pipelineId: "p1", replay: { fromMs: 1000, toMs: null } }), { w: "stability", p: "p1", from: "1000" });
+  assert.deepEqual(placeSearch({ w: "stability", from: "1", to: "2" }, { workspace: "fleet", pipelineId: null }), { w: "fleet" });
+});

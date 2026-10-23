@@ -200,3 +200,127 @@ fn outputs_health_counts_wanted_outputs_and_sums_running_egresses() {
         }
     );
 }
+
+fn sample(at_ms: u64) -> FlightSample {
+    FlightSample {
+        at_ms,
+        ingest: None,
+        ring: None,
+        outputs: OutputsHealth::default(),
+    }
+}
+
+#[test]
+fn thinning_keeps_the_ends_and_spreads_the_rest() {
+    let samples: Vec<FlightSample> = (0..10).map(sample).collect();
+    let kept: Vec<u64> = thin(samples.clone(), 4).iter().map(|s| s.at_ms).collect();
+    assert_eq!(kept, vec![0, 3, 6, 9]);
+    assert_eq!(thin(samples.clone(), 10).len(), 10, "nothing to thin");
+    let kept: Vec<u64> = thin((0..1001).map(sample).collect(), 3)
+        .iter()
+        .map(|s| s.at_ms)
+        .collect();
+    assert_eq!(kept, vec![0, 500, 1000]);
+}
+
+#[tokio::test]
+async fn a_window_reads_the_persisted_history_then_the_recent_samples() {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    crate::db::setup_database_schema(&pool).await.unwrap();
+    // An hour ago, persisted every 10 s for 50 minutes.
+    let rows: Vec<(String, i64, String)> = (0..300)
+        .map(|i| {
+            let at = 1_000_000 + i * 10_000;
+            (
+                "p1".to_string(),
+                at as i64,
+                serde_json::to_string(&sample(at)).unwrap(),
+            )
+        })
+        .collect();
+    crate::db::flight_repo::insert_batch(&pool, &rows)
+        .await
+        .unwrap();
+    // The recorder started after them and holds 2 s samples.
+    let recorder = FlightRecorder::started_at(4_000_000, 300);
+    for at in (4_000_000..4_020_000).step_by(2_000) {
+        recorder.record(at, vec![probe("p1", None)]);
+    }
+
+    let trace = trace_window(&recorder, &pool, "p1", 0, u64::MAX, 2_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        trace.complete_from_ms, 1_000_000,
+        "complete from the oldest persisted sample"
+    );
+    assert_eq!(trace.detailed_from_ms, 4_000_000);
+    assert_eq!(trace.samples.len(), 300 + 10);
+    assert!(
+        trace
+            .samples
+            .windows(2)
+            .all(|pair| pair[0].at_ms < pair[1].at_ms),
+        "in time order"
+    );
+
+    // A window inside the persisted part reads only it; one inside memory only memory.
+    let old = trace_window(&recorder, &pool, "p1", 1_100_000, 1_200_000, 2_000)
+        .await
+        .unwrap();
+    assert_eq!(old.samples.len(), 10);
+    let recent = trace_window(&recorder, &pool, "p1", 4_010_000, u64::MAX, 2_000)
+        .await
+        .unwrap();
+    assert_eq!(recent.samples.first().unwrap().at_ms, 4_010_000);
+    // Thinned to the points asked for.
+    assert_eq!(
+        trace_window(&recorder, &pool, "p1", 0, u64::MAX, 50)
+            .await
+            .unwrap()
+            .samples
+            .len(),
+        50
+    );
+    // A pipeline neither knows.
+    assert!(
+        trace_window(&recorder, &pool, "nope", 0, u64::MAX, 50)
+            .await
+            .is_none()
+    );
+
+    crate::db::flight_repo::prune(&pool, 2_000_000)
+        .await
+        .unwrap();
+    let pruned = trace_window(&recorder, &pool, "p1", 0, u64::MAX, 2_000)
+        .await
+        .unwrap();
+    assert_eq!(pruned.complete_from_ms, 2_000_000);
+}
+
+#[tokio::test]
+async fn persisting_writes_each_pipelines_newest_sample_and_prunes_past_retention() {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    crate::db::setup_database_schema(&pool).await.unwrap();
+    crate::db::flight_repo::insert_batch(
+        &pool,
+        &[("p1".into(), 1, serde_json::to_string(&sample(1)).unwrap())],
+    )
+    .await
+    .unwrap();
+    let recorder = FlightRecorder::started_at(0, 10);
+    recorder.record(5_000, vec![probe("p1", None), probe("p2", None)]);
+    recorder.record(7_000, vec![probe("p1", None), probe("p2", None)]);
+    persist(&recorder, &pool, 7_000, Duration::from_secs(5), true).await;
+    for pipeline in ["p1", "p2"] {
+        let rows = crate::db::flight_repo::window(&pool, pipeline, 0, i64::MAX)
+            .await
+            .unwrap();
+        let times: Vec<i64> = rows.iter().map(|(at, _)| *at).collect();
+        assert_eq!(
+            times,
+            vec![7_000],
+            "{pipeline}: the newest only, the old row pruned"
+        );
+    }
+}

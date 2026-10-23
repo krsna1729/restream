@@ -286,8 +286,13 @@ async function getPipelineSummary(
 async function getFlightRecorder(
   pipelineId: string,
   since?: Date,
+  window: { until?: Date; points?: number } = {},
 ): Promise<FlightTrace | null> {
-  const suffix = since ? `?since=${encodeURIComponent(since.toISOString())}` : "";
+  const query = new URLSearchParams();
+  if (since) query.set("since", since.toISOString());
+  if (window.until) query.set("until", window.until.toISOString());
+  if (window.points) query.set("points", String(window.points));
+  const suffix = query.size > 0 ? `?${query}` : "";
   return apiRequest<FlightTrace>(
     `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/flight-recorder${suffix}`,
     { silentStatuses: [404] },

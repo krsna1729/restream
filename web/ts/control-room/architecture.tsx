@@ -142,8 +142,10 @@ const WATCHERS: readonly Block[] = [
   {
     id: "flight",
     title: "Flight recorder",
-    line: "every 2 s, 10 min per pipeline",
-    detail: ["Keeps each pipeline's recent counters so Stream health, the Stability Lab replay and incident evidence can look back."],
+    line: "every 2 s; a day kept",
+    detail: [
+      "Keeps each pipeline's counters so Stream health, the Stability Lab replay and incident evidence can look back: the last 10 minutes every 2 s in memory, and a sample every 10 s on disk for a day (RESTREAM_FLIGHT_HISTORY_HOURS).",
+    ],
     see: ["health", "stability"],
   },
   {

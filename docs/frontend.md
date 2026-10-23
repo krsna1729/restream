@@ -470,9 +470,21 @@ Two sources feed the same player:
   - The tests pin the outcome: after a 20 s blip the engine's backoff is
     back above 95% within 30 s, and both naive policies are still at 0% at
     the end.
-- **Replay a pipeline** (`storyFromTrace`): the pipeline's flight record,
-  with the source ring as the queue and its outputs as the destinations.
-  It follows the newest sample unless scrubbed.
+- **Replay a pipeline** (`stability/replay.tsx`, `storyFromTrace`): the
+  pipeline's flight record over a span the operator chooses, with the
+  source ring as the queue and its outputs as the destinations.
+  - An overview of the whole kept history (delivering share, 24 h by
+    default) sits on top; drag across it, or use the arrow keys, to pick a
+    span. Presets show the last 10 min, 1 h, 6 h or 24 h; the zoom buttons
+    halve or double the span around its middle (a following span keeps its
+    right edge on now). The rules are pure (`stability/replay-window.ts`).
+  - The span is the URL's (`?w=stability&p=…&from=…[&to=…]`, epoch ms; no
+    `to` follows now), so an incident's **Replay** opens the span from two
+    minutes before it opened to two minutes after it closed.
+  - A measured span is drawn whole with a playhead and plays at a steady
+    rate (a day in about a minute at 4×); the clock reads the time of day.
+    Older samples come from the persisted history every 10 s, the last 10
+    minutes every 2 s; the footer says which.
 
 ### Media
 

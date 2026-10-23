@@ -251,6 +251,22 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
     .execute(pool)
     .await?;
 
+    // The flight recorder's longer history: one sample per pipeline every
+    // FLIGHT_PERSIST_EVERY ticks, pruned to RESTREAM_FLIGHT_HISTORY_HOURS.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS flight_samples (
+            pipeline_id TEXT NOT NULL,
+            at_ms INTEGER NOT NULL,
+            sample TEXT NOT NULL,
+            PRIMARY KEY (pipeline_id, at_ms)
+        ) WITHOUT ROWID;",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS flight_samples_at ON flight_samples (at_ms);")
+        .execute(pool)
+        .await?;
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS share_links (
             id TEXT PRIMARY KEY,

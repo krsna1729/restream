@@ -75,6 +75,7 @@ The default layout lives under `.restream/`: `data/` holds only SQLite state,
 |---|---|---|---|
 | `RESTREAM_INITIAL_ADMIN_PASSWORD` | unset | String | Dashboard password (the built-in `admin` member's) on first startup. Unset: a random password is written to `restream-initial-admin-password.txt` next to the database, owner-only |
 | `RESTREAM_SECURE_SESSION_COOKIES` | off | bool | Adds the `Secure` attribute to session cookies (HTTPS deployments) |
+| `RESTREAM_FLIGHT_HISTORY_HOURS` | `24` | hours, 0 to 168 | How far back Stability Lab replays reach: every 10 s each pipeline's flight-recorder sample is kept in SQLite this long. 0 keeps only the last 10 minutes, in memory |
 | `RESTREAM_PUBLIC_URL` | unset | URL | The dashboard's public address; alert notifications link back to it. Unset: no links |
 | `RESTREAM_PUSH_SUBJECT` | `mailto:restream@localhost` | `mailto:` or `https:` URL | The contact in Web Push VAPID tokens; push services may use it to reach the operator. Anything else falls back to the default |
 | `RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM` | unset | PEM file path | Extra CA certificates added to public WebPKI roots for RTMPS and HTTPS HLS PUT outputs |

@@ -1150,9 +1150,67 @@ export function createDeployment({ preset = "plant", seed = 7, nowMs = Date.now(
     };
   }
 
-  function flightRecorder(pipelineId) {
-    const samples = flight.get(pipelineId) ?? [];
-    return { schema: "restream.trace.v1", pipelineId, intervalMs: 2000, completeFromMs: samples[0]?.atMs ?? startedMs, samples };
+  /** A stable 0..1 number for a pipeline and a time bucket. */
+  function noise(pipelineId, bucket) {
+    let hash = 2166136261;
+    for (const char of `${pipelineId}:${bucket}`) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+    return ((hash >>> 0) % 10_000) / 10_000;
+  }
+
+  /** The persisted history before the live samples: one sample per 10 s for
+   * a day, shaped like the newest live one, with an outage in about one
+   * ten-minute stretch in twelve (a dip, retries, then recovery). */
+  function persistedHistory(pipelineId, fromMs, toMs) {
+    const live = flight.get(pipelineId) ?? [];
+    const shape = live.at(-1);
+    if (!shape) return [];
+    const out = [];
+    const start = Math.max(fromMs, startedMs - 24 * 3_600_000);
+    for (let at = Math.ceil(start / 10_000) * 10_000; at < toMs; at += 10_000) {
+      const bucket = Math.floor(at / 600_000);
+      const hit = noise(pipelineId, bucket) < 0.08;
+      const phase = (at % 600_000) / 600_000;
+      const depth = hit ? Math.max(0, Math.sin(Math.PI * Math.min(1, phase * 2.5))) * (0.3 + noise(pipelineId, bucket + 7) * 0.7) : 0;
+      const wanted = shape.outputs.wanted;
+      const down = Math.round(wanted * depth);
+      out.push({
+        ...shape,
+        atMs: at,
+        outputs: {
+          ...shape.outputs,
+          delivering: Math.max(0, wanted - down),
+          degraded: down,
+          retrying: Math.round(down * 0.7),
+          stalled: Math.round(down * 0.2),
+          retryAttempts: Math.round(down * (1 + depth * 6)),
+          deliveredBps: shape.outputs.offeredBps * (1 - depth),
+        },
+      });
+    }
+    return out;
+  }
+
+  /** At most `max` samples, evenly spread, the ends kept. */
+  function thin(samples, max) {
+    if (samples.length <= max || max < 2) return samples;
+    return Array.from({ length: max }, (_, i) => samples[Math.round((i * (samples.length - 1)) / (max - 1))]);
+  }
+
+  function flightRecorder(pipelineId, { since = 0, until = Number.MAX_SAFE_INTEGER, points = 2000 } = {}) {
+    const live = flight.get(pipelineId) ?? [];
+    const detailedFromMs = live[0]?.atMs ?? startedMs;
+    const history = since < detailedFromMs ? persistedHistory(pipelineId, since, Math.min(until, detailedFromMs)) : [];
+    const recent = live.filter((sample) => sample.atMs >= since && sample.atMs < until);
+    const samples = thin([...history, ...recent], Math.max(2, Math.min(points, 2000)));
+    return {
+      schema: "restream.trace.v1",
+      pipelineId,
+      intervalMs: 2000,
+      completeFromMs: live.length ? startedMs - 24 * 3_600_000 : startedMs,
+      detailedFromMs,
+      persistedIntervalMs: 10_000,
+      samples,
+    };
   }
 
   /** Applies an operator mutation the fixture understands. */

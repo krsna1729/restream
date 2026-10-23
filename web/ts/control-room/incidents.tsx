@@ -29,6 +29,7 @@ import { useNow } from "./store.js";
 import type { LiveSnapshot } from "./store.js";
 import { When } from "./when-view.js";
 import { absoluteTime, duration } from "./when.js";
+import { incidentWindow } from "./stability/replay-window.js";
 
 /** Open incidents, what failed and what did not, and what to do. */
 export function Incidents({ live }: { live: LiveSnapshot }) {
@@ -260,6 +261,18 @@ function Detail(props: {
               <PlaceLink place={{ workspace: "logs", pipelineId: alert.pipelineId, outputId: alert.outputId ?? null }} className="btn btn-sm btn-outline">
                 {alert.outputId ? "Destination logs" : "Pipeline logs"}
               </PlaceLink>
+              {alert.firstSeen && (
+                <PlaceLink
+                  place={{
+                    workspace: "stability",
+                    pipelineId: alert.pipelineId,
+                    replay: incidentWindow(Date.parse(alert.firstSeen), props.resolvedAt ? Date.parse(props.resolvedAt) : null),
+                  }}
+                  className="btn btn-sm btn-outline"
+                >
+                  Replay
+                </PlaceLink>
+              )}
               <PlaceLink place={{ workspace: "operate", pipelineId: alert.pipelineId }} className="btn btn-sm btn-outline">
                 Operate pipeline
               </PlaceLink>

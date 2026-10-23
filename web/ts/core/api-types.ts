@@ -754,6 +754,9 @@ export interface FlightTrace {
   pipelineId: string;
   intervalMs: number;
   completeFromMs: number;
+  /** Where the full-rate samples begin; older ones are `persistedIntervalMs` apart. */
+  detailedFromMs: number;
+  persistedIntervalMs: number;
   samples: FlightSample[];
 }
 
