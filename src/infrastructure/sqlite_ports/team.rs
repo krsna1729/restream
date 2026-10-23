@@ -29,12 +29,24 @@ fn stored_user(row: crate::db::team_repo::UserRow) -> Result<StoredUser, TeamSto
             role,
             created_at_ms,
             disabled,
+            last_active_ms: None,
         },
         password_hash,
     })
 }
 
 impl TeamStore for SqliteTeamStore {
+    fn last_active(&self) -> TeamFuture<'_, Vec<(String, i64)>> {
+        Box::pin(async move {
+            crate::db::team_repo::last_active(
+                &self.pool,
+                crate::application::services::team_service::BUILTIN_ADMIN_USERNAME,
+            )
+            .await
+            .map_err(team_error)
+        })
+    }
+
     fn list_users(&self) -> TeamFuture<'_, Vec<crate::application::team::UserRecord>> {
         Box::pin(async move {
             crate::db::team_repo::list_users(&self.pool)

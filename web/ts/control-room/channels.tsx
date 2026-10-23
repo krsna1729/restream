@@ -20,6 +20,7 @@ import { buildChannels, bulkTargets, impactWords, platformSummaries, runBulk } f
 import type { BulkAction, Channel, ChannelState } from "./channels-model.js";
 import { formatBps } from "./format.js";
 import { PlaceLink } from "./router.js";
+import { PlatformMark } from "./platform-mark.js";
 import { useNow } from "./store.js";
 import type { LiveSnapshot } from "./store.js";
 import { LogsLink } from "./logs-link.js";
@@ -63,6 +64,7 @@ export function Channels({ live }: { live: LiveSnapshot }) {
   const reload = useCallback(() => void (canOperate ? getConfig().then(setConfig) : setConfig(null)), [canOperate]);
   useEffect(reload, [reload]);
   const urls = useMemo(() => new Map((config?.outputs ?? []).map((output) => [output.id, output.url])), [config]);
+  const watchUrls = useMemo(() => new Map((config?.outputs ?? []).flatMap((output) => (output.monitoringUrl ? [[output.id, output.monitoringUrl] as const] : []))), [config]);
   const channels = useMemo(() => (live.state ? buildChannels(live.state, urls) : null), [live.state, urls]);
   const [platform, setPlatform] = useState<string>("all");
   const [state, setState] = useState<StateFilter>("all");
@@ -234,6 +236,7 @@ export function Channels({ live }: { live: LiveSnapshot }) {
                   channel={channel}
                   detail={detail}
                   bps={live.rates?.egressBps.get(channel.output.id) ?? null}
+                  watchUrl={watchUrls.get(channel.output.id) ?? null}
                   onStopped={(ref) => setUndo({ label: `Stopped ${channel.output.name}`, items: [ref], untilMs: Date.now() + UNDO_MS })}
                 />
               ))}
@@ -260,16 +263,8 @@ export function Channels({ live }: { live: LiveSnapshot }) {
   );
 }
 
-const AVATAR_TONE: Record<string, string> = {
-  youtube: "bg-error/20 text-error",
-  twitch: "bg-secondary/20 text-secondary",
-  kick: "bg-success/20 text-success",
-  facebook: "bg-info/20 text-info",
-  x: "bg-base-content/15 text-base-content",
-  linkedin: "bg-primary/20 text-primary",
-};
 
-function ChannelCard(props: { channel: Channel; detail: boolean; bps: number | null; onStopped: (ref: OutputRef) => void }) {
+function ChannelCard(props: { channel: Channel; detail: boolean; bps: number | null; watchUrl: string | null; onStopped: (ref: OutputRef) => void }) {
   const canOperate = useSession().can("operator");
   const { channel } = props;
   const { output } = channel;
@@ -282,9 +277,7 @@ function ChannelCard(props: { channel: Channel; detail: boolean; bps: number | n
       className={`flex min-w-0 flex-col gap-2 rounded-box border bg-base-100 p-3 ${channel.state === "failed" ? "border-error/40" : channel.state === "retrying" || channel.state === "degraded" ? "border-warning/40" : "border-base-content/10"}`}
     >
       <div className="flex items-center gap-3">
-        <span aria-hidden="true" className={`grid size-10 shrink-0 place-items-center rounded-field text-sm font-bold ${AVATAR_TONE[channel.platform.id] ?? "bg-base-content/10 text-base-content/80"}`}>
-          {channel.platform.monogram}
-        </span>
+        <PlatformMark platform={channel.platform} size={40} />
         <div className="min-w-0 flex-1">
           <div className="truncate font-semibold" title={output.name}>
             {output.name}
@@ -324,6 +317,11 @@ function ChannelCard(props: { channel: Channel; detail: boolean; bps: number | n
         </StatusBadge>
         {output.retry ? <RetryIn atMs={output.retry.nextAttemptAtMs} attempts={output.retry.attempts} /> : <Since sinceMs={output.stateSinceMs} />}
         <span className="ml-auto tabular text-base-content/70">{channel.state === "live" ? formatBps(props.bps) : ""}</span>
+        {props.watchUrl && (
+          <a className="link link-hover touch-36 inline-flex items-center" href={props.watchUrl} target="_blank" rel="noreferrer" aria-label={`Watch ${output.name} on ${channel.platform.label}`}>
+            Watch ↗
+          </a>
+        )}
       </div>
       {trouble && channel.state !== "live" && (
         <div className="flex min-w-0 flex-col gap-0.5 text-xs" title={troubleTitle(trouble)}>

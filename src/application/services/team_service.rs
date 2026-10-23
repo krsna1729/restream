@@ -23,6 +23,7 @@ fn builtin_admin() -> UserRecord {
         role: Role::Admin,
         created_at_ms: 0,
         disabled: false,
+        last_active_ms: None,
     }
 }
 
@@ -131,7 +132,8 @@ impl TeamService {
         })
     }
 
-    /// The built-in admin first, then the stored members.
+    /// The built-in admin first, then the stored members, each with when
+    /// they were last active (signed in, or made an audited change).
     pub async fn list_users(&self) -> ServiceResult<Vec<UserRecord>> {
         let mut users = vec![builtin_admin()];
         users.extend(
@@ -140,6 +142,16 @@ impl TeamService {
                 .await
                 .map_err(store_error("list members"))?,
         );
+        let active: std::collections::HashMap<String, i64> = self
+            .store
+            .last_active()
+            .await
+            .map_err(store_error("read last activity"))?
+            .into_iter()
+            .collect();
+        for user in &mut users {
+            user.last_active_ms = active.get(&user.username).copied();
+        }
         Ok(users)
     }
 
@@ -285,7 +297,50 @@ mod tests {
             role,
             created_at_ms: 5,
             disabled: false,
+            last_active_ms: None,
         }
+    }
+
+    #[tokio::test]
+    async fn last_active_is_the_later_of_a_sign_in_and_an_audited_change() {
+        let (team, pool) = service().await;
+        team.create_user(member("u1", "ops", Role::Operator), "h")
+            .await
+            .unwrap();
+        team.create_user(member("u2", "idle", Role::Viewer), "h")
+            .await
+            .unwrap();
+        // ops signed in at 100 and changed something at 250; the built-in
+        // admin's unbound session is from 300.
+        crate::db::create_session(&pool, "t1", 100).await.unwrap();
+        team.bind_session("t1", Some("u1")).await.unwrap();
+        crate::db::create_session(&pool, "t2", 300).await.unwrap();
+        team.record(&AuditEntry {
+            id: 0,
+            at_ms: 250,
+            username: "ops".into(),
+            role: Role::Operator,
+            method: "POST".into(),
+            path: "/api/v1/pipelines".into(),
+            status: 201,
+        })
+        .await
+        .unwrap();
+        let active: Vec<(String, Option<i64>)> = team
+            .list_users()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|user| (user.username, user.last_active_ms))
+            .collect();
+        assert_eq!(
+            active,
+            vec![
+                ("admin".into(), Some(300)),
+                ("idle".into(), None),
+                ("ops".into(), Some(250)),
+            ]
+        );
     }
 
     #[tokio::test]

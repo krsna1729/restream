@@ -44,6 +44,10 @@ pub struct UserRecord {
     pub role: Role,
     pub created_at_ms: i64,
     pub disabled: bool,
+    /// When the member last signed in or made an audited change; `None`
+    /// when neither is kept (a list read fills it, a single read does not).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_active_ms: Option<i64>,
 }
 
 /// Who a session is, and the role it acts with.

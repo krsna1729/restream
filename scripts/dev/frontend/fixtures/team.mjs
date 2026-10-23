@@ -24,7 +24,7 @@ export function requiredRole(method, path) {
 
 export function createTeam({ seed = 7, members = 24, outputs = [], nowMs = Date.now() } = {}) {
   const random = rng(seed * 31 + 5);
-  const users = [{ id: "admin", username: "admin", role: "admin", createdAtMs: 0, disabled: false }];
+  const users = [{ id: "admin", username: "admin", role: "admin", createdAtMs: 0, disabled: false, lastActiveMs: nowMs - 4 * 60_000 }];
   for (let index = 0; index < members; index += 1) {
     const role = index < 3 ? "admin" : index < 12 ? "operator" : "viewer";
     users.push({
@@ -33,6 +33,8 @@ export function createTeam({ seed = 7, members = 24, outputs = [], nowMs = Date.
       role,
       createdAtMs: nowMs - random.int(2, 400) * 86_400_000,
       disabled: random.chance(0.08),
+      // Most were on in the last three days; a few never signed in.
+      ...(random.chance(0.85) ? { lastActiveMs: nowMs - random.int(1, 72 * 60) * 60_000 } : {}),
     });
   }
   let viewAs = null;

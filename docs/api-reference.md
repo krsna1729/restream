@@ -120,7 +120,7 @@ flowchart TD
 | `POST` | `/api/v1/auth/dismiss-password-change` | Hide the bootstrap "change the password" reminder |
 | `GET` | `/api/v1/auth/me` | The session's member, role, view and effective role |
 | `POST` | `/api/v1/auth/view-as` | Act as a lower role, `{ "role": "viewer" \| "operator" \| null }` |
-| `GET`, `POST` | `/api/v1/users` | List members; add one from `{ "username", "password", "role" }` (admin) |
+| `GET`, `POST` | `/api/v1/users` | List members (each with `lastActiveMs`, the later of its newest sign-in and audited change, when one is kept); add one from `{ "username", "password", "role" }` (admin) |
 | `PATCH`, `DELETE` | `/api/v1/users/:id` | Change `{ "role"?, "disabled"?, "password"? }`; remove (admin) |
 | `GET` | `/api/v1/audit?limit&before` | Change requests, newest first (admin) |
 | `GET` | `/api/v1/security/rate-limits` | List tracked failure counters and bans |

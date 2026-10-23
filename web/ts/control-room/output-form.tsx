@@ -203,7 +203,7 @@ export function OutputForm(props: {
         {url || "—"}
       </p>
       <label className="form-control">
-        <span className="label-text">Monitoring URL (optional, e.g. the YouTube watch page)</span>
+        <span className="label-text">Watch page (optional): where viewers see it, e.g. the YouTube watch URL</span>
         <input
           className="input input-sm"
           value={draft.monitoringUrl}

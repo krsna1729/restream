@@ -359,6 +359,9 @@ pub struct SessionBinding {
 /// Team members, the member behind each session, and the audit log.
 pub trait TeamStore: Send + Sync {
     fn list_users(&self) -> TeamFuture<'_, Vec<UserRecord>>;
+    /// `(username, ms)`: each member's latest sign-in or audited change; a
+    /// session with no member is the built-in admin's.
+    fn last_active(&self) -> TeamFuture<'_, Vec<(String, i64)>>;
     fn find_user_by_username<'a>(&'a self, username: &'a str)
     -> TeamFuture<'a, Option<StoredUser>>;
     fn find_user<'a>(&'a self, id: &'a str) -> TeamFuture<'a, Option<StoredUser>>;

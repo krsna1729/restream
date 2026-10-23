@@ -32,6 +32,8 @@ import {
 } from "./operate-model.js";
 import type { DestinationFilter, DestinationRow } from "./operate-model.js";
 import { OutputForm } from "./output-form.js";
+import { platformOf } from "./channels-model.js";
+import { PlatformMark } from "./platform-mark.js";
 import { PROTOCOL_LABEL } from "./protocol-style.js";
 import { useNow } from "./store.js";
 
@@ -99,6 +101,7 @@ export function DestinationMatrix(props: {
     () => new Map((config?.outputs ?? []).map((stored) => [stored.id, stored.monitoringUrl ?? ""])),
     [config],
   );
+  const targetUrls = useMemo(() => new Map((config?.outputs ?? []).map((stored) => [stored.id, stored.url])), [config]);
   const editedOutput = editing && editing !== "new" ? (config?.outputs.find((output) => output.id === editing) ?? null) : null;
 
   const toggle = async (output: OutputState) => {
@@ -119,7 +122,20 @@ export function DestinationMatrix(props: {
       sort: (row) => row.output.name.toLowerCase(),
       cell: (row) => (
         <span className="inline-flex min-w-0 items-center gap-2">
+          <PlatformMark platform={platformOf(targetUrls.get(row.output.id), row.output.protocol)} size={20} />
           <span className="truncate font-medium" title={row.output.name}>{row.output.name}</span>
+          {monitoringUrls.get(row.output.id) && (
+            <a
+              className="link link-hover shrink-0 text-xs text-base-content/70"
+              href={monitoringUrls.get(row.output.id)}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(event) => event.stopPropagation()}
+              aria-label={`Watch ${row.output.name}`}
+            >
+              Watch ↗
+            </a>
+          )}
           {isYoutubeUrl(monitoringUrls.get(row.output.id) ?? "") && (
             <YoutubeCheck name={row.output.name} url={monitoringUrls.get(row.output.id) ?? ""} />
           )}
