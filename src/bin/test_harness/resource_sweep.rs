@@ -12,15 +12,15 @@ use super::{
     HarnessSrtSinkPool, MSR_LANGUAGE_CODES, MSR_LANGUAGE_NAMES, PublishTrackSelection, RampApi,
     RtmpOutputMode, SignalTolerances, append_line, append_srt_crypto,
     apply_harness_srt_listener_env, apply_srt_listener_env, capture_signal_sample, cleanup_ramp_db,
-    create_backup_input, create_output, create_output_with_rtmp_mode, decode_pcm_quality,
-    default_restream_bin, default_work_db_path, env_secs, env_usize, ffprobe_live_sample,
-    file_tail_lines, harness_admin_password, harness_port_defaults, harness_srt_crypto_from_env,
-    harness_srt_ffmpeg_url, harness_srt_standard_publish_url, parse_srt_crypto_variants,
-    probe_dims_ramp, remove_mediamtx_config_env, run_ffmpeg_filter_log, safe_artifact_stem,
-    signal_report_json, spawn_publisher_with_selection, start_generalized_sink_server,
-    start_output, stop_child, stop_generalized_sink_server, sweep_fixture,
-    validate_signal_quality_with_tolerances, wait_for_api_input_live, wait_for_http_ok,
-    wait_for_input_state, wait_for_outputs_progress,
+    configured_owners_per_port, create_backup_input, create_output, create_output_with_rtmp_mode,
+    decode_pcm_quality, default_restream_bin, default_work_db_path, env_secs, env_usize,
+    ffprobe_live_sample, file_tail_lines, harness_admin_password, harness_port_defaults,
+    harness_srt_crypto_from_env, harness_srt_ffmpeg_url, harness_srt_standard_publish_url,
+    parse_srt_crypto_variants, probe_dims_ramp, remove_mediamtx_config_env, run_ffmpeg_filter_log,
+    safe_artifact_stem, signal_report_json, spawn_publisher_with_selection,
+    start_generalized_sink_server, start_output, stop_child, stop_generalized_sink_server,
+    sweep_fixture, validate_signal_quality_with_tolerances, wait_for_api_input_live,
+    wait_for_http_ok, wait_for_input_state, wait_for_outputs_progress,
 };
 
 #[path = "resource_sweep/bitrate.rs"]
@@ -109,10 +109,10 @@ struct ResourceSweepStack {
 }
 
 /// In-process harness-native sink peers: one RTMP accept-and-discard
-/// listener per `PEER_COUNT` instance (reused from `sinks.rs`, already
-/// harness-native and proven), plus one `HarnessSrtSinkPool` spanning every
-/// instance's SRT port with one production SRT Owner thread per port, so
-/// `PEER_COUNT` is also the SRT sink's thread count.
+/// listener per `PEER_COUNT` instance, plus one `HarnessSrtSinkPool` spanning
+/// every instance's SRT port with two production SRT Owner threads per port
+/// by default (`HARNESS_SRT_SINK_OWNERS_PER_PORT` configures the count).
+/// Kernel `SO_REUSEPORT` dispatches independent source flows across the Owners.
 #[derive(Default)]
 struct SinkPeerStack {
     rtmp: Vec<GeneralizedSinkServer>,
@@ -340,8 +340,8 @@ async fn start_resource_sweep_peers(env: &ResourceSweepEnv) -> Result<Vec<Child>
 /// equivalent of -- a harness sink peer is always started fresh, bound
 /// directly by this harness process.
 ///
-/// The SRT pool runs one production SRT Owner thread per `PEER_COUNT` port
-/// (`HarnessSrtSinkPool`).
+/// The SRT pool runs the configured number of production Owner threads per
+/// `PEER_COUNT` port (`HarnessSrtSinkPool`).
 async fn start_harness_sink_peers(
     env: &ResourceSweepEnv,
     needs: LocalPeerNeeds,
@@ -397,7 +397,8 @@ async fn start_harness_sink_peers(
 
     let srt_pool = if needs.srt {
         let udp_buffer = env_usize("HARNESS_SRT_SINK_UDP_BUFFER", 8 * 1024 * 1024);
-        match HarnessSrtSinkPool::start(&srt_ports, udp_buffer) {
+        let owners_per_port = configured_owners_per_port();
+        match HarnessSrtSinkPool::start(&srt_ports, udp_buffer, owners_per_port) {
             Ok(pool) => Some(pool),
             Err(err) => {
                 for server in rtmp {

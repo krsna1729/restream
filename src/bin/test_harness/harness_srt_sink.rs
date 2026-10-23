@@ -1,30 +1,38 @@
 //! SRT accept-and-discard listeners for scaling tests, on the production
-//! receive path: each port gets one `srt_transport::compio::Owner` on its own
-//! thread, built exactly like the SRT ingress Owner (forced io_uring runtime,
-//! managed multishot RX when the kernel supports it). The sink performs no
-//! media parsing and records only byte, connection and drop counters, so
+//! receive path: each port gets a configurable number of `srt_transport::compio::Owner`
+//! threads in one `SO_REUSEPORT` listener group, built exactly like the SRT ingress Owners
+//! (forced io_uring runtime, managed multishot RX when the kernel supports it). The sink
+//! performs no media parsing and records only byte, connection and drop counters, so
 //! MediaMTX is not in the scaling critical path.
 //!
 //! Drops are counted at both layers that can lose a datagram before SRT sees
-//! it: the kernel socket (`/proc/net/udp{,6}` `drops`, per port) and the
-//! Owner's managed-RX ring (`dropped`, `buffer_exhaustions`, `truncated`).
+//! it: each kernel socket (`/proc/net/udp{,6}` `drops`, per local port and
+//! inode) and the Owners' managed-RX rings (`dropped`, `buffer_exhaustions`,
+//! `truncated`).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
+use std::pin::pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use restream::media::srt::srt_owner_runtime::{SRT_OWNER_WIRE_CEILING, production_runtime};
+use futures_util::future::{Either, select};
+use restream::media::srt::srt_owner_runtime::{
+    SRT_OWNER_WIRE_CEILING, listener_shape, production_runtime,
+};
 use srt_proto::{ConnectionEvent, Timestamp};
-use srt_transport::advanced::admission::{AdmissionEvent, LogicalPeerId};
+use srt_transport::advanced::admission::{AdmissionEvent, BondedInputPolicy, LogicalPeerId};
 use srt_transport::compio::{
     Owner, OwnerServiceBudget, ProductionRuntimeConfig, RxModePolicy, observe_production_runtime,
 };
-use srt_transport::{ListenerConfig, ListenerTopology, PromotionPolicy, SocketBufferConfig};
+use srt_transport::{
+    ListenerConfig, ListenerTransfer, OwnerListenerPlan, RuntimeFlavor, SocketBufferConfig,
+    owner_plans,
+};
 
 /// The sink only replies with protocol control (handshake, ACK/NAK).
 const SINK_TX_CAPACITY: usize = 64;
@@ -34,6 +42,22 @@ const IDLE_PARK: Duration = Duration::from_millis(5);
 /// far below the delivery sampler's 1 s tick, and off the per-packet path.
 const PUBLISH_EVERY: Duration = Duration::from_millis(100);
 const SHUTDOWN_DRAIN: Duration = Duration::from_secs(2);
+/// Listener transfers accepted per visit, as in the ingress Owner; a
+/// non-empty inbox keeps the Owner from parking.
+const TRANSFERS_PER_VISIT: usize = 32;
+pub(crate) const DEFAULT_SINK_OWNERS_PER_PORT: usize = 2;
+const MAX_SINK_OWNERS_PER_PORT: usize = 4;
+pub(crate) fn configured_owners_per_port() -> usize {
+    let owners_per_port = std::env::var("HARNESS_SRT_SINK_OWNERS_PER_PORT")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_SINK_OWNERS_PER_PORT);
+    clamp_owners_per_port(owners_per_port)
+}
+
+fn clamp_owners_per_port(owners_per_port: usize) -> usize {
+    owners_per_port.clamp(1, MAX_SINK_OWNERS_PER_PORT)
+}
 
 /// Cloneable handle to a running pool's counters.
 #[derive(Clone)]
@@ -58,13 +82,15 @@ impl SrtSinkCountersHandle {
         self.counters.snapshot()
     }
 
-    /// Cumulative drops at the kernel socket and the Owner RX ring.
+    /// Cumulative drops at the kernel sockets and every Owner RX ring, and
+    /// the Owner faults that stopped the pool.
     pub(crate) fn drops(&self) -> SrtSinkDrops {
         let owner = lock(&self.counters.owner_rx)
             .values()
             .fold(OwnerRxDrops::default(), |sum, rx| sum.plus(*rx));
         SrtSinkDrops {
             owner,
+            owner_faults: self.counters.owner_faults.load(Ordering::Acquire),
             socket: socket_drops(&self.ports),
         }
     }
@@ -106,24 +132,32 @@ impl OwnerRxDrops {
     }
 }
 
-/// Drops at both layers. `socket` is `None` when `/proc/net/udp` is
-/// unreadable, so a missing sensor never reads as zero drops.
+/// Drops at both layers. `socket` is `None` when `/proc/net/udp{,6}` is
+/// unreadable, so a missing sensor never reads as zero. Keys identify each
+/// local port and socket inode separately.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SrtSinkDrops {
     pub owner: OwnerRxDrops,
-    /// Kernel socket drops per sink port.
-    pub socket: Option<BTreeMap<u16, u64>>,
+    /// Owners that faulted. Any fault stops the whole pool: a reuseport
+    /// member that exits rehashes its sessions onto members that drop them.
+    pub owner_faults: u64,
+    pub socket: Option<BTreeMap<(u16, u64), u64>>,
 }
 
 impl SrtSinkDrops {
     /// Drops accumulated since `start` (a rated window's first reading).
+    /// A socket present at `start` but gone by now (a closed relocated-leg
+    /// socket) loses that window's drops. Owner faults stay cumulative: a
+    /// fault stops the pool, so every later window must show it.
     pub(crate) fn since(&self, start: &Self) -> Self {
         let socket = match (&self.socket, &start.socket) {
             (Some(end), Some(begin)) => Some(
                 end.iter()
-                    .map(|(port, drops)| {
-                        let base = begin.get(port).copied().unwrap_or(0);
-                        (*port, drops.saturating_sub(base))
+                    .map(|(socket, drops)| {
+                        (
+                            *socket,
+                            drops.saturating_sub(begin.get(socket).copied().unwrap_or(0)),
+                        )
                     })
                     .collect(),
             ),
@@ -131,18 +165,32 @@ impl SrtSinkDrops {
         };
         Self {
             owner: self.owner.since(start.owner),
+            owner_faults: self.owner_faults,
             socket,
         }
     }
 
     /// The one JSON shape for sink drops (state endpoint and sweep records).
     pub(crate) fn json(&self) -> serde_json::Value {
+        let socket_drops = self.socket.as_ref().map(|sockets| {
+            sockets
+                .iter()
+                .map(|((port, inode), drops)| {
+                    serde_json::json!({
+                        "port": port,
+                        "inode": inode,
+                        "drops": drops,
+                    })
+                })
+                .collect::<Vec<_>>()
+        });
         serde_json::json!({
             "ownerRxDropped": self.owner.dropped,
             "ownerRxBufferExhaustions": self.owner.buffer_exhaustions,
             "ownerRxTruncated": self.owner.truncated,
-            "socketDrops": self.socket,
-            "socketDropsTotal": self.socket.as_ref().map(|ports| ports.values().sum::<u64>()),
+            "ownerFaults": self.owner_faults,
+            "socketDrops": socket_drops,
+            "socketDropsTotal": self.socket.as_ref().map(|sockets| sockets.values().sum::<u64>()),
         })
     }
 }
@@ -153,7 +201,8 @@ struct SinkCounters {
     discarded_bytes: AtomicU64,
     closed: AtomicU64,
     per_peer: Mutex<HashMap<(u16, u64), u64>>,
-    owner_rx: Mutex<HashMap<u16, OwnerRxDrops>>,
+    owner_rx: Mutex<HashMap<(u16, u16), OwnerRxDrops>>,
+    owner_faults: AtomicU64,
     /// Pool-wide connection sequence, so indexes never collide across ports.
     next_connection: AtomicU64,
 }
@@ -174,34 +223,102 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 pub(crate) struct HarnessSrtSinkPool {
     ports: Arc<[u16]>,
+    owners_per_port: usize,
     stop: Arc<AtomicBool>,
     counters: Arc<SinkCounters>,
     threads: Vec<JoinHandle<()>>,
 }
 
 impl HarnessSrtSinkPool {
-    /// One Owner thread per port (`Owner::listen` is per-port), so the port
-    /// count is the sink's thread count.
-    pub(crate) fn start(ports: &[u16], udp_buffer: usize) -> Result<Self, String> {
+    /// Start one listener group per port. Every group member owns its own
+    /// runtime and socket; `SO_REUSEPORT` distributes independent source flows.
+    pub(crate) fn start(
+        ports: &[u16],
+        udp_buffer: usize,
+        owners_per_port: usize,
+    ) -> Result<Self, String> {
+        Self::start_staggered(ports, udp_buffer, owners_per_port, Duration::ZERO)
+    }
+
+    /// [`Self::start`], with Owner `i` of each port starting `i × stagger`
+    /// late, so tests can reproduce member startup skew.
+    fn start_staggered(
+        ports: &[u16],
+        udp_buffer: usize,
+        owners_per_port: usize,
+        stagger: Duration,
+    ) -> Result<Self, String> {
         if ports.is_empty() {
             return Err("harness SRT sink pool needs at least one port".to_string());
         }
+        let mut unique_ports = HashSet::with_capacity(ports.len());
+        for &port in ports {
+            if !unique_ports.insert(port) {
+                return Err(format!("harness SRT sink pool has duplicate port {port}"));
+            }
+        }
+        // `SO_REUSEPORT` would let a leftover same-user sink silently join a
+        // port's group (srt-rs's registry guards one process only), so a sink
+        // port that already has any UDP socket refuses the pool.
+        if let Some(sockets) = socket_drops(ports) {
+            let taken: BTreeSet<u16> = sockets.keys().map(|(port, _)| *port).collect();
+            if !taken.is_empty() {
+                return Err(format!(
+                    "harness SRT sink port(s) {taken:?} already have a UDP socket"
+                ));
+            }
+        }
+        let owners_per_port = clamp_owners_per_port(owners_per_port);
         let stop = Arc::new(AtomicBool::new(false));
         let counters = Arc::new(SinkCounters::default());
-        let (ready_tx, ready_rx) = mpsc::sync_channel(ports.len());
+        // One timestamp origin for every Owner: srt-rs requires it per layout,
+        // because a relocated session carries its timers to another member
+        // (as `SrtIngressHandle::start` shares one epoch across its seats).
+        let epoch = Instant::now();
+        let mut planned = Vec::with_capacity(ports.len() * owners_per_port);
+        for &port in ports {
+            let plans = build_listener_plans(port, udp_buffer, owners_per_port)?;
+            if plans.len() != owners_per_port {
+                return Err(format!(
+                    "SRT sink port {port} planned {} Owners, expected {owners_per_port}",
+                    plans.len()
+                ));
+            }
+            let (members, inboxes): (Vec<_>, Vec<_>) = plans
+                .iter()
+                .map(|_| flume::unbounded::<ListenerTransfer>())
+                .unzip();
+            for (owner_index, (plan, inbox)) in plans.into_iter().zip(inboxes).enumerate() {
+                let owner_index = u16::try_from(owner_index)
+                    .map_err(|_| "too many SRT sink Owners".to_string())?;
+                planned.push(SinkOwnerSeat {
+                    port,
+                    owner_index,
+                    plan,
+                    epoch,
+                    startup_delay: stagger * u32::from(owner_index),
+                    inbox,
+                    members: members.clone(),
+                });
+            }
+        }
+        let thread_count = planned.len();
+        let (ready_tx, ready_rx) = mpsc::sync_channel(thread_count);
         let mut pool = Self {
             ports: ports.into(),
+            owners_per_port,
             stop,
             counters,
-            threads: Vec::with_capacity(ports.len()),
+            threads: Vec::with_capacity(thread_count),
         };
-        for &port in ports {
+        for seat in planned {
             let stop = pool.stop.clone();
             let counters = pool.counters.clone();
             let ready_tx = ready_tx.clone();
+            let thread_name = format!("srt-s-{}-{}", seat.port, seat.owner_index);
             match std::thread::Builder::new()
-                .name(format!("harness-srt-sink-{port}"))
-                .spawn(move || sink_thread(port, udp_buffer, stop, counters, ready_tx))
+                .name(thread_name)
+                .spawn(move || sink_thread(seat, stop, counters, ready_tx))
             {
                 Ok(thread) => pool.threads.push(thread),
                 Err(error) => {
@@ -224,8 +341,9 @@ impl HarnessSrtSinkPool {
             }
         }
         tracing::info!(
-            "[harness-srt-sink] srt-rs Owner sink on {} port(s)",
-            ports.len()
+            "[harness-srt-sink] srt-rs Owner sink on {} port(s), {} Owner(s) per port",
+            ports.len(),
+            pool.owners_per_port
         );
         Ok(pool)
     }
@@ -257,26 +375,69 @@ impl HarnessSrtSinkPool {
         let counters = self.counters.snapshot();
         let drops = self.counters().drops();
         tracing::info!(
-            "[harness-srt-sink] stopped {} port(s), accepted={}, discarded={}MB, closed={}, \
-             owner_rx_dropped={}, socket_drops={:?}",
+            "[harness-srt-sink] stopped {} port(s), {} Owner(s) per port, accepted={}, discarded={}MB, closed={}, \
+             owner_rx_dropped={}, owner_faults={}, socket_drops={:?}",
             self.ports.len(),
+            self.owners_per_port,
             counters.accepted,
             counters.discarded_bytes / (1024 * 1024),
             counters.closed,
             drops.owner.dropped,
+            drops.owner_faults,
             drops.socket.map(|ports| ports.values().sum::<u64>()),
         );
     }
 }
 
-fn sink_thread(
+fn build_listener_plans(
     port: u16,
     udp_buffer: usize,
+    owners_per_port: usize,
+) -> Result<Vec<OwnerListenerPlan>, String> {
+    let owners = NonZeroUsize::new(owners_per_port).expect("owner count is clamped above zero");
+    let (topology, promotion) = listener_shape(owners);
+    let config = ListenerConfig::builder(SocketAddr::from(([0, 0, 0, 0], port)))
+        .topology(topology)
+        .bonded_inputs(BondedInputPolicy::Accept)
+        .configure_transport(|transport| {
+            transport.socket_buffers = NonZeroUsize::new(udp_buffer)
+                .map(SocketBufferConfig::Bytes)
+                .unwrap_or(SocketBufferConfig::SystemDefault);
+            transport.promotion = promotion;
+        })
+        .build()
+        .map_err(|error| error.to_string())?;
+    owner_plans(&config, RuntimeFlavor::Compio).map_err(|error| error.to_string())
+}
+struct SinkOwnerSeat {
+    port: u16,
+    owner_index: u16,
+    plan: OwnerListenerPlan,
+    /// The pool's one timestamp origin (see `start_staggered`).
+    epoch: Instant,
+    /// Zero outside tests that reproduce member startup skew.
+    startup_delay: Duration,
+    inbox: flume::Receiver<ListenerTransfer>,
+    members: Vec<flume::Sender<ListenerTransfer>>,
+}
+
+fn sink_thread(
+    seat: SinkOwnerSeat,
     stop: Arc<AtomicBool>,
     counters: Arc<SinkCounters>,
     ready_tx: SyncSender<Result<(), String>>,
 ) {
-    let (mut owner, runtime) = match build_owner(port, udp_buffer) {
+    let SinkOwnerSeat {
+        port,
+        owner_index,
+        plan,
+        epoch,
+        startup_delay,
+        inbox,
+        members,
+    } = seat;
+    std::thread::sleep(startup_delay);
+    let (mut owner, runtime) = match build_owner(&plan) {
         Ok(built) => {
             let _ = ready_tx.send(Ok(()));
             built
@@ -286,14 +447,16 @@ fn sink_thread(
             return;
         }
     };
-    let epoch = Instant::now();
     let now =
         || Timestamp::from_micros(epoch.elapsed().as_micros().min(u128::from(u64::MAX)) as u64);
     let idle_us = u64::try_from(IDLE_PARK.as_micros()).unwrap_or(u64::MAX);
     let mut events: Vec<AdmissionEvent> = Vec::with_capacity(64);
+    let mut transfers: Vec<ListenerTransfer> = Vec::with_capacity(TRANSFERS_PER_VISIT);
     // Connection index and bytes per logical peer (its raw id is private).
     let mut per_peer: HashMap<LogicalPeerId, (u64, u64)> = HashMap::new();
     let mut published_at = Instant::now();
+    // A transfer received while parked, accepted first on the next visit.
+    let mut transfer_stash: Option<ListenerTransfer> = None;
     while !stop.load(Ordering::Acquire) {
         // One non-blocking driver poll per visit reaps TX completions and RX.
         runtime.enter(|| {
@@ -301,9 +464,35 @@ fn sink_thread(
             runtime.run();
         });
         let at = now();
+        let mut budget = TRANSFERS_PER_VISIT;
+        if let Some(transfer) = transfer_stash.take() {
+            owner.accept_listener_transfer(transfer, at);
+            budget -= 1;
+        }
+        for _ in 0..budget {
+            match inbox.try_recv() {
+                Ok(transfer) => owner.accept_listener_transfer(transfer, at),
+                Err(flume::TryRecvError::Empty | flume::TryRecvError::Disconnected) => break,
+            }
+        }
         let report = runtime.block_on(owner.service(at, OwnerServiceBudget::default()));
+        owner.poll_listener_transfers(&mut transfers);
+        for transfer in transfers.drain(..) {
+            if let Some(member) = members.get(transfer.to) {
+                let _ = member.send(transfer);
+            }
+        }
         if let Some(fault) = owner.fault() {
-            tracing::error!(port, ?fault, "harness SRT sink Owner faulted");
+            tracing::error!(
+                port,
+                owner_index,
+                ?fault,
+                "harness SRT sink Owner faulted; stopping the pool"
+            );
+            counters.owner_faults.fetch_add(1, Ordering::AcqRel);
+            // srt-rs requires a reuseport group to stop together: a member
+            // that exits rehashes its sessions onto members that drop them.
+            stop.store(true, Ordering::Release);
             break;
         }
         owner.poll_listener_events(&mut events);
@@ -327,10 +516,10 @@ fn sink_thread(
                         })
                         .1 += len;
                 }
+                // A closed connection is no longer a destination: keep
+                // reused sink stacks from reporting it as a stalled one.
                 ConnectionEvent::Disconnected { .. } => {
                     counters.closed.fetch_add(1, Ordering::Relaxed);
-                    // A closed connection is no longer a destination: keep
-                    // reused sink stacks from reporting it as a stalled one.
                     if let Some((index, _)) = per_peer.remove(&logical_peer) {
                         lock(&counters.per_peer).remove(&(port, index));
                     }
@@ -347,7 +536,7 @@ fn sink_thread(
             );
             if let Some(rx) = owner.rx_stats().listener {
                 lock(&counters.owner_rx).insert(
-                    port,
+                    (port, owner_index),
                     OwnerRxDrops {
                         dropped: rx.dropped,
                         buffer_exhaustions: rx.buffer_exhaustions,
@@ -356,20 +545,35 @@ fn sink_thread(
                 );
             }
         }
-        if !report.work_remaining {
+        // Like the ingress Owner: queued transfers run the next visit without
+        // parking, and one arriving while parked wakes the Owner.
+        if !report.work_remaining && inbox.is_empty() {
             let wait =
                 Duration::from_micros(owner.time_until_next_deadline(at, idle_us)).min(IDLE_PARK);
-            runtime.block_on(owner.wait_for_activity(wait));
+            transfer_stash = runtime.block_on(async {
+                // Every Owner holds a sender to its own inbox, so it never
+                // closes while this Owner runs.
+                let transfer = pin!(inbox.recv_async());
+                let activity = pin!(owner.wait_for_activity(wait));
+                match select(transfer, activity).await {
+                    Either::Left((transfer, _)) => transfer.ok(),
+                    Either::Right(((), _)) => None,
+                }
+            });
         }
     }
     if !runtime.block_on(owner.shutdown_and_drain(SHUTDOWN_DRAIN)) {
-        tracing::warn!(port, "harness SRT sink Owner did not reach quiescence");
+        tracing::warn!(
+            port,
+            owner_index,
+            "harness SRT sink Owner did not reach quiescence"
+        );
     }
 }
 
 /// The SRT ingress Owner's construction (`media::srt::ingress_owner::build`)
 /// minus the admission resolver: the sink accepts every caller.
-fn build_owner(port: u16, udp_buffer: usize) -> Result<(Owner, compio::runtime::Runtime), String> {
+fn build_owner(plan: &OwnerListenerPlan) -> Result<(Owner, compio::runtime::Runtime), String> {
     let mut runtime_config =
         ProductionRuntimeConfig::for_owner(SINK_TX_CAPACITY, SRT_OWNER_WIRE_CEILING);
     // A/B knob: managed-RX provided buffers (power of two; production 256).
@@ -386,146 +590,47 @@ fn build_owner(port: u16, udp_buffer: usize) -> Result<(Owner, compio::runtime::
         SINK_TX_CAPACITY,
         SRT_OWNER_WIRE_CEILING,
     ));
-    let config = ListenerConfig::builder(SocketAddr::from(([0, 0, 0, 0], port)))
-        .topology(ListenerTopology::PerPort)
-        .configure_transport(|transport| {
-            transport.socket_buffers = NonZeroUsize::new(udp_buffer)
-                .map(SocketBufferConfig::Bytes)
-                .unwrap_or(SocketBufferConfig::SystemDefault);
-            transport.promotion = PromotionPolicy::Never;
-        })
-        .build()
-        .map_err(|error| error.to_string())?;
     let mut owner = Owner::new_with_ceiling(SINK_TX_CAPACITY, SRT_OWNER_WIRE_CEILING);
     owner
         .set_rx_substrate(profile.managed_rx_substrate())
         .map_err(|error| error.to_string())?;
     owner.set_rx_mode_policy(RxModePolicy::ManagedPreferred);
     runtime
-        .block_on(async { owner.listen(&config) })
+        .block_on(async { owner.listen_planned(plan, None) })
         .map_err(|error| error.to_string())?;
     Ok((owner, runtime))
 }
 
-/// Kernel drops per sink port from `/proc/net/udp` and `/proc/net/udp6`.
-fn socket_drops(ports: &[u16]) -> Option<BTreeMap<u16, u64>> {
+/// Kernel drops per sink socket from `/proc/net/udp` and `/proc/net/udp6`.
+fn socket_drops(ports: &[u16]) -> Option<BTreeMap<(u16, u64), u64>> {
     let mut drops = BTreeMap::new();
     let mut readable = false;
     for path in ["/proc/net/udp", "/proc/net/udp6"] {
         if let Ok(table) = std::fs::read_to_string(path) {
             readable = true;
-            for (port, count) in parse_udp_socket_drops(&table) {
+            for (port, inode, count) in parse_udp_socket_drops(&table) {
                 if ports.contains(&port) {
-                    *drops.entry(port).or_insert(0) += count;
+                    *drops.entry((port, inode)).or_insert(0) += count;
                 }
             }
         }
     }
-    readable.then(|| {
-        for &port in ports {
-            drops.entry(port).or_insert(0);
-        }
-        drops
-    })
+    readable.then_some(drops)
 }
 
-/// `(local port, drops)` for every socket row of a `/proc/net/udp{,6}` table:
-/// field 1 is `ADDR:PORT` in hex, field 12 is the socket's `drops`.
-fn parse_udp_socket_drops(table: &str) -> impl Iterator<Item = (u16, u64)> + '_ {
+/// `(local port, inode, drops)` for each `/proc/net/udp{,6}` socket row:
+/// field 1 is `ADDR:PORT` in hex, field 9 is the inode, field 12 is `drops`.
+fn parse_udp_socket_drops(table: &str) -> impl Iterator<Item = (u16, u64, u64)> + '_ {
     table.lines().skip(1).filter_map(|line| {
         let fields: Vec<&str> = line.split_whitespace().collect();
         let port = fields.get(1)?.rsplit_once(':')?.1;
         let port = u16::from_str_radix(port, 16).ok()?;
+        let inode = fields.get(9)?.parse::<u64>().ok()?;
         let drops = fields.get(12)?.parse::<u64>().ok()?;
-        Some((port, drops))
+        Some((port, inode, drops))
     })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn free_udp_ports(count: usize) -> Vec<u16> {
-        (0..count)
-            .map(|_| {
-                let socket = std::net::UdpSocket::bind("127.0.0.1:0").expect("probe socket");
-                socket.local_addr().expect("probe address").port()
-            })
-            .collect()
-    }
-
-    #[test]
-    fn sink_pool_starts_one_owner_per_port_and_stops() {
-        let pool = HarnessSrtSinkPool::start(&free_udp_ports(2), 0).expect("start sink pool");
-        assert_eq!(pool.threads.len(), 2);
-        let drops = pool.counters().drops();
-        let socket = drops.socket.expect("/proc/net/udp readable on Linux");
-        assert_eq!(socket.len(), 2, "every sink port reports socket drops");
-        pool.stop();
-    }
-
-    #[test]
-    fn sink_pool_rejects_a_port_already_bound() {
-        let ports = free_udp_ports(1);
-        let pool = HarnessSrtSinkPool::start(&ports, 0).expect("start sink pool");
-        assert!(HarnessSrtSinkPool::start(&ports, 0).is_err());
-        pool.stop();
-    }
-
-    #[test]
-    fn udp_table_rows_yield_port_and_drops() {
-        let table = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops\n\
-          1: 00000000:1F90 00000000:0000 07 00000000:00000000 00:00000000 00000000  1000        0 12345 2 0000000000000000 17\n\
-          2: 0100007F:0035 00000000:0000 07 00000000:00000000 00:00000000 00000000     0        0 23456 2 0000000000000000 0\n";
-        let rows: Vec<_> = parse_udp_socket_drops(table).collect();
-        assert_eq!(rows, [(8080, 17), (53, 0)]);
-        // An IPv6 row parses the same way (address is 32 hex digits).
-        let v6 = "header\n  0: 00000000000000000000000000000000:1F91 00000000000000000000000000000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 1 2 0000000000000000 5\n";
-        assert_eq!(parse_udp_socket_drops(v6).collect::<Vec<_>>(), [(8081, 5)]);
-    }
-
-    #[test]
-    fn window_drops_subtract_the_start_reading_per_port() {
-        let start = SrtSinkDrops {
-            owner: OwnerRxDrops {
-                dropped: 10,
-                buffer_exhaustions: 1,
-                truncated: 0,
-            },
-            socket: Some(BTreeMap::from([(1, 100), (2, 5)])),
-        };
-        let end = SrtSinkDrops {
-            owner: OwnerRxDrops {
-                dropped: 25,
-                buffer_exhaustions: 1,
-                truncated: 2,
-            },
-            socket: Some(BTreeMap::from([(1, 160), (2, 5), (3, 9)])),
-        };
-        let window = end.since(&start);
-        assert_eq!(window.owner.dropped, 15);
-        assert_eq!(window.owner.truncated, 2);
-        assert_eq!(
-            window.socket,
-            Some(BTreeMap::from([(1, 60), (2, 0), (3, 9)]))
-        );
-        // A missing reading at either end stays missing, never zero.
-        let unknown = SrtSinkDrops {
-            socket: None,
-            ..end.clone()
-        };
-        assert_eq!(unknown.since(&start).socket, None);
-    }
-
-    proptest::proptest! {
-        /// Any well-formed row round-trips its port and drop count.
-        #[test]
-        fn udp_rows_round_trip(port in proptest::num::u16::ANY, drops in proptest::num::u64::ANY, addr in "[0-9A-F]{8}") {
-            let table = format!(
-                "header\n  0: {addr}:{port:04X} 00000000:0000 07 00000000:00000000 00:00000000 00000000 0 0 1 2 0000000000000000 {drops}\n"
-            );
-            let rows: Vec<_> = parse_udp_socket_drops(&table).collect();
-            proptest::prop_assert_eq!(rows, vec![(port, drops)]);
-        }
-    }
-}
+#[path = "harness_srt_sink_tests.rs"]
+mod tests;

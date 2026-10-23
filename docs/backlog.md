@@ -9,9 +9,9 @@ items).
 
 ## Contents
 
-- [Q-027 harness SRT sink drops at SRT×100](#q-027-performance-opus-stop-the-harness-srt-sink-dropping-datagrams-at-srt100-kernel-700-38)
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
 - [Q-026 frozen-SRT-destination RSS gate](#q-026-resilience-opus-attribute-and-recalibrate-the-frozen-srt-destination-rss-gate)
+- [Q-027 residual SRT×100 repeat failure](#q-027-performance-opus-find-why-srt100-still-fails-a-repeat-with-the-multi-owner-sink)
 - [Q-031 one capacity allocator](#q-031-architecture-opus-derive-every-thread-count-from-one-capacity-allocator)
 - [Q-033 host-level shard pool](#q-033-architecture-opus-run-egress-shards-from-one-host-level-pool-instead-of-per-feed-groups)
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
@@ -27,47 +27,6 @@ items).
 - [Q-095 stream inspector](#q-095-observability-sonnet-stream-inspector-gop-health-skew-and-scte)
 - [Q-096 GRO and arrival timestamps](#q-096-performance-sonnet-gro-and-arrival-timestamps-in-the-reference-srt-path)
 - [Q-097 MediaMTX MoQ dialect interoperability](#q-097-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop)
-
-### Q-027 [performance] [opus] Stop the harness SRT sink dropping datagrams at SRT×100 (kernel 7.0.0-38)
-- Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
-  sink keeps up with SRT×100 on this host, and receiver loss is reported per
-  socket so it can never again be mistaken for Restream loss.
-- Files: `src/bin/test_harness/harness_srt_sink.rs`, `resource_sweep.rs`,
-  `srt_sink.rs`; production reference `src/media/srt/ingress_owner.rs`.
-- Gates: `CAPACITY_PROTOCOLS=srt CAPACITY_SRT_OUTPUTS=100` (Restream on 4 CPUs,
-  harness on 2) passes at least 6 of 7 repeats with the default 8 MiB sink
-  buffer; per-socket receive drops and managed-RX exhaustion appear in the
-  resource-sweep results.
-- Context: after the reboot from kernel 7.0.0-34 to 7.0.0-38 the same release
-  binary went from 8/8 SRT×100 passes to intermittent failure. Evidence
-  (2026-10-03, `6f1bcfbf`, 21 probed runs):
-  - Restream's send side is healthy in failing runs: 69–107k TX datagrams/s,
-    all completed, about 850 per output per second against ~760 needed.
-  - Pass or fail follows the harness sink's UDP receive-buffer drops: passes at
-    500–2,400 drops/s, failures at 19,800–39,200/s (7 runs, 2 passed).
-  - A 24 MiB sink buffer cut drops to 0–4,300/s and passed 2 of 4.
-  - GSO off in Restream (one `sendmsg` per datagram) passed 1 of 4 with drops of
-    1.4k–29k/s, against 0 of 4 with GSO on: not the cause.
-  - The sink drains at most 512 datagrams per wake, then sends every control
-    packet with its own `send_to().await` before reading again; at ~64k
-    datagrams/s per socket an 8 MiB buffer covers ~56 ms of not reading, while
-    the harness CPUs are shared with the publisher and the VPS shows vCPU gaps
-    up to 128 ms.
-  Plan: run the sink on the srt-rs Compio Owner listener exactly as SRT ingress
-  does (managed multishot RX fills a kernel-side buffer ring, batched TX), with
-  per-socket drop counters. Proving that 7.0.0-38 itself made the receive path
-  burstier needs a boot back into 7.0.0-34 (owner decision).
-  Owner sink result (2026-10-03, #217): the plan did not fix it. On 2 harness
-  vCPUs the Owner sink passed 0 of 7 with 17.5–25.5k managed-RX buffer
-  exhaustions and 23k–361k kernel socket drops per 30 s window. A 4096-entry
-  RX ring removed the exhaustions but delivered less (2–21 of 100), so
-  exhaustion is a symptom. With 3 harness vCPUs (the script's default split)
-  it delivered 97, 100 and 99 of 100: the sink is CPU-bound at one Owner per
-  port. Production SRT ingest has the same one-Owner-per-port ceiling.
-  Next: multiple Owners per port (`SO_REUSEPORT` in `Owner::listen`), added
-  when kernel socket drops persist with the Owner busy; then rerun this gate.
-- Status: open (Filed: 2026-10-02 by claude; investigated 2026-10-03). Blocks
-  SRT capacity evidence on this host at the 4/2 CPU split.
 
 ### Q-025 [performance] [opus] Re-qualify the SRT shard law after transport convergence
 - Goal: settle `EgressShardProfile::SrtCpuParallel` and
@@ -126,6 +85,34 @@ items).
   allocation stacks/live-vs-free data and feed/transport ownership snapshots,
   or reproducing that shape with those inputs; a smaller current pass does
   not supply them. Keep the 64 MiB gate unchanged.
+
+### Q-027 [performance] [opus] Find why SRT×100 still fails a repeat with the multi-Owner sink
+- Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
+  sink (two `SO_REUSEPORT` Owners per port) services every session at
+  SRT×100, so a failing repeat is Restream's.
+- Files: `src/bin/test_harness/harness_srt_sink.rs`; production reference
+  `src/media/srt/ingress_owner.rs`.
+- Gates: the unchanged ramp (`CAPACITY_PROTOCOLS=srt CAPACITY_SRT_OUTPUTS=100
+  CAPACITY_REPEATS=7`, Restream on 4 CPUs, harness on 2, `CAPACITY_PEER_COUNT=2`,
+  default 8 MiB sink buffer) passes 7 of 7, so `summary.md` reports SRT
+  capacity 100 (it needs every repeat to pass).
+- Context: the multi-Owner sink (PR #402, measured on 0c3174f7 plus that
+  change) passed 6 of 7 at 100 outputs
+  (`.local/artifacts/capacity-ramp/20261022T034708Z`); `summary.md` reports
+  SRT capacity 0.
+  - Failing rep3: 14 destinations measured zero receiver delivery (ratioMin
+    0, Jain 0.86, median 1.008), and 5 sender leaves stalled: Restream's
+    stall sweep closed them with `srt egress leaf closed unexpectedly: no
+    progress (stalled)`, the plain-stall class, not shard-saturated. Cause
+    unproven.
+  - Kernel socket drops concentrate on one reuseport member per port (rep5
+    8,785 vs 0; rep7 6,398 vs 0), and Owner RX buffer exhaustions run 6k-12k
+    in every repeat.
+  Receiver-side hypothesis, unproven: one sink Owner stopped servicing its
+  sessions during rep3. Probe it with per-Owner session and ACK counters in
+  the sink.
+- Status: open (Filed: 2026-10-02 by claude; narrowed 2026-10-22 after the
+  PR #402 review).
 
 ### Q-031 [architecture] [opus] Derive every thread count from one capacity allocator
 - Goal: thread counts follow measured service demand (λ × D at a target

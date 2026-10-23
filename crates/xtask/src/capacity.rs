@@ -40,10 +40,9 @@ Environment (all optional):
   CAPACITY_HARNESS_CPUS    cpuset for harness, publisher and sinks (default: the rest)
   CAPACITY_EGRESS_SHARDS   RESTREAM_EGRESS_SHARDS override (default: product default,
                            CPU-derived and clamped 2..=8)
-  CAPACITY_SINK_THREADS    SRT sink thread budget (default: CPUs in the harness set)
-  CAPACITY_PEER_COUNT      sink instances / ports (default: the SRT sink thread count, so
-                           each sink thread owns one port; a single port funnels a shard's
-                           SRT flows onto one SO_REUSEPORT socket)
+  CAPACITY_PEER_COUNT      SRT sink instances / ports (default: CPUs in the harness set)
+  HARNESS_SRT_SINK_OWNERS_PER_PORT
+                           Owner threads per SRT sink port (default 2, clamped 1..=4)
   CAPACITY_STOP_AFTER_FAIL stop a protocol's ladder after a rung where no repeat
                            passed (default 1)
   CAPACITY_ARTIFACT_ROOT   output root (default .local/artifacts/capacity-ramp/<utc stamp>)
@@ -168,11 +167,13 @@ pub(crate) fn capacity_ramp(args: &[&str]) -> StepResult {
     };
     let restream_cpus = env_or("CAPACITY_RESTREAM_CPUS", &join(&cpus[..half]));
     let harness_cpus = env_or("CAPACITY_HARNESS_CPUS", &join(&cpus[half..]));
-    let sink_threads = env_number(
-        "CAPACITY_SINK_THREADS",
+    let peer_count = env_number(
+        "CAPACITY_PEER_COUNT",
         expand_cpu_list(&harness_cpus)?.len() as u64,
     )?;
-    let peer_count = env_number("CAPACITY_PEER_COUNT", sink_threads)?;
+    // Default 2 and range 1..=4 mirror the harness's
+    // `DEFAULT_SINK_OWNERS_PER_PORT`/`MAX_SINK_OWNERS_PER_PORT` (another crate).
+    let sink_owners_per_port = env_number("HARNESS_SRT_SINK_OWNERS_PER_PORT", 2)?.clamp(1, 4);
 
     // --- Preflight ---------------------------------------------------------
     for process in ["restream", "mediamtx", "ffmpeg"] {
@@ -295,7 +296,7 @@ pub(crate) fn capacity_ramp(args: &[&str]) -> StepResult {
         "build_profile": build_profile,
         "egress_shards": egress_shards.clone().unwrap_or_else(|| "default".into()),
         "malloc_arena_max": arena_max.clone().unwrap_or_else(|| "restream provisional default".into()),
-        "sink_threads": sink_threads,
+        "sink_owners_per_port": sink_owners_per_port,
         "host_jitter": host_jitter,
         "peer_count": peer_count,
         "bitrate": bitrate,
@@ -333,6 +334,10 @@ pub(crate) fn capacity_ramp(args: &[&str]) -> StepResult {
         ("RESTREAM_CPUSET", restream_cpus.clone()),
         ("MSR_PEER", "sink".into()),
         ("PEER_COUNT", peer_count.to_string()),
+        (
+            "HARNESS_SRT_SINK_OWNERS_PER_PORT",
+            sink_owners_per_port.to_string(),
+        ),
         (
             "RESTREAM_BIN",
             bin_dir.join("restream").display().to_string(),
@@ -856,11 +861,12 @@ fn summary_markdown(provenance: &Value, rows: &[Rung]) -> String {
             ),
             format!("- kernel {}; {}", field("kernel", "?"), field("memory", "")),
             format!(
-                "- Restream CPUs `{}`, harness/sink CPUs `{}`, egress shards {}, SRT sink threads {}, malloc arenas {}",
+                "- Restream CPUs `{}`, harness/sink CPUs `{}`, egress shards {}, SRT sink ports {}, Owners per port {}, malloc arenas {}",
                 field("restream_cpus", "None"),
                 field("harness_cpus", "None"),
                 field("egress_shards", "None"),
-                field("sink_threads", "None"),
+                field("peer_count", "None"),
+                field("sink_owners_per_port", "None"),
                 field("malloc_arena_max", "restream provisional default")
             ),
             format!("- host jitter (gaps > 5 ms on each Restream CPU, nothing else scheduled): {jitter}"),

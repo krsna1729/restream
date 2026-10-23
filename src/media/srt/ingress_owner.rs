@@ -183,12 +183,11 @@ struct OwnerLoop {
     published: Published,
 }
 
-/// The srt-rs listener this ingress runs, split into one plan per Owner:
-/// one `PerPort` Owner, or `config.owners` members of a `SO_REUSEPORT`
-/// group whose bonded legs relocate to the member holding their group.
-pub(super) fn listener_plans(config: &IngressConfig) -> Result<Vec<OwnerListenerPlan>, String> {
-    let owners = std::num::NonZeroUsize::new(config.owners).unwrap_or(std::num::NonZeroUsize::MIN);
-    let (topology, promotion) = if owners.get() == 1 {
+/// The listener shape for `owners` Owners on one port: one `PerPort` Owner,
+/// or a `SO_REUSEPORT` group whose bonded legs relocate to the member holding
+/// their group. Shared with the test harness's SRT sink.
+pub fn listener_shape(owners: std::num::NonZeroUsize) -> (ListenerTopology, PromotionPolicy) {
+    if owners.get() == 1 {
         (ListenerTopology::PerPort, PromotionPolicy::Never)
     } else {
         (
@@ -197,7 +196,14 @@ pub(super) fn listener_plans(config: &IngressConfig) -> Result<Vec<OwnerListener
             },
             PromotionPolicy::Relocate,
         )
-    };
+    }
+}
+
+/// The srt-rs listener this ingress runs, split into one plan per Owner
+/// (see [`listener_shape`]).
+pub(super) fn listener_plans(config: &IngressConfig) -> Result<Vec<OwnerListenerPlan>, String> {
+    let owners = std::num::NonZeroUsize::new(config.owners).unwrap_or(std::num::NonZeroUsize::MIN);
+    let (topology, promotion) = listener_shape(owners);
     let listener_config = ListenerConfig::builder(config.bind)
         .topology(topology)
         .bonded_inputs(BondedInputPolicy::Accept)
