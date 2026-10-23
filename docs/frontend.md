@@ -80,7 +80,7 @@ applied as attributes on `<html>`.
 |---|---|---|
 | Theme | system (default), dark, light | DaisyUI theme `restream-dark` or `restream-light` (`web/styles/input.css`); system follows `prefers-color-scheme` live |
 | Density | comfortable (default), compact | Root font size 15px or 13.5px; every rem-based size scales with it |
-| Section detail | off (default), on, per section | A section's Detail switch (`useSectionDetail`, `DetailToggle`) adds its ids and counters: the destination matrix gains delivery ratio, feed lag, shard and stage; channel cards gain id, attempt phase, shard, stage and the raw error. Every page also ends with its raw payload, collapsed (`RawJson`, serialised only when opened) |
+| Section detail | off (default), on, per section | A section's Detail switch (`useSectionDetail`, `DetailToggle`) adds its ids and counters: the destination matrix gains delivery ratio, feed lag and shard; channel cards gain id, attempt phase, shard, stage and the raw error. Every page also ends with its raw payload, collapsed (`RawJson`, serialised only when opened) |
 
 ### Color
 
@@ -325,8 +325,8 @@ Every workspace shows live data only.
   filtered by state (needs attention, retrying, starting, delivering,
   stopped), protocol and name (`filterDestinationRows`); windowed, so every
   destination is one scroll away. A retrying output shows its attempt and a
-  countdown to the next one. The Detail switch adds delivery ratio, feed lag,
-  shard and stage.
+  countdown to the next one. The Detail switch adds delivery ratio, feed lag
+  and shard.
 - The graph draws at most 8 egress groups per column, worst first, and folds
   the rest into a link to the Destinations view.
 

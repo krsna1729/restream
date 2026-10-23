@@ -1,7 +1,7 @@
 // Every destination of one pipeline: filterable by state, protocol and name,
 // windowed so thousands of rows scroll, with start/stop, edit and delete.
 // Each row reads as a state badge, a retry countdown and the cause in words;
-// the Detail switch adds delivery ratio, feed lag, shard and stage.
+// the Detail switch adds delivery ratio, feed lag and shard.
 
 import { useMemo, useState } from "react";
 
