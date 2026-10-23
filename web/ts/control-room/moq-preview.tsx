@@ -120,7 +120,7 @@ export function MoqPreview(props: { pipelineId: string; label: string }) {
             {state === "idle" ? `Preview ${props.label}` : `Retry preview ${props.label}`}
           </button>
         )}
-        <span role="status" className="text-xs opacity-70">
+        <span role="status" className="text-xs text-base-content/70">
           {state === "failed" ? `preview unavailable: ${reason}` : STATUS_TEXT[state]}
         </span>
       </div>

@@ -53,7 +53,7 @@ export function PipelineForm(props: {
       </label>
       {stored ? (
         <div className="space-y-1 text-sm">
-          <p className="text-xs opacity-70">Publish to</p>
+          <p className="text-xs text-base-content/70">Publish to</p>
           {stored.ingestUrls?.rtmp && <p className="break-all font-mono text-xs">{stored.ingestUrls.rtmp}</p>}
           {stored.ingestUrls?.srt && <p className="break-all font-mono text-xs">{stored.ingestUrls.srt}</p>}
           <label className="label cursor-pointer justify-start gap-2">
@@ -67,7 +67,7 @@ export function PipelineForm(props: {
             <span className="label-text">Issue a new stream key (publishers must switch to it)</span>
           </label>
           {props.keyLocked && (
-            <p className="text-xs opacity-70">Stop the destinations first: the encoder would lose the key at its next reconnect.</p>
+            <p className="text-xs text-base-content/70">Stop the destinations first: the encoder would lose the key at its next reconnect.</p>
           )}
         </div>
       ) : (

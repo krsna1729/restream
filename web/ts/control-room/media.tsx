@@ -26,6 +26,7 @@ import { PipelineForm } from "./pipeline-form.js";
 import { Freshness, usePolled } from "./polled.js";
 import { PlaceLink, useGo } from "./router.js";
 import type { LiveSnapshot } from "./store.js";
+import { PageHeader } from "../ui/page-header.js";
 
 const READINESS_BADGE = {
   ready: "badge-success",
@@ -53,9 +54,13 @@ export function Media({ live }: { live: LiveSnapshot }) {
   const chosen =
     files?.find((file) => mediaKey(file) === selected || file.name === selected) ?? null;
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
+      <PageHeader
+        eyebrow="Media library"
+        title="Recordings and source files"
+        subtitle="Upload, probe and reuse media as a looping live source."
+      />
       <div className="flex flex-wrap items-center gap-3">
-        <h2 className="text-xl font-semibold">Media</h2>
         <Freshness atMs={library.atMs} />
         <input
           type="search"
@@ -68,7 +73,7 @@ export function Media({ live }: { live: LiveSnapshot }) {
         <Upload onUploaded={library.refresh} />
       </div>
       {files === null ? (
-        <p className="opacity-70">Loading the media directory…</p>
+        <p className="text-base-content/70">Loading the media directory…</p>
       ) : (
         <div className="grid gap-4 lg:grid-cols-[1fr_22rem]">
           <Library
@@ -89,7 +94,7 @@ export function Media({ live }: { live: LiveSnapshot }) {
                 }}
               />
             ) : (
-              <p className="rounded bg-base-200 p-4 text-sm opacity-70">
+              <p className="rounded bg-base-200 p-4 text-sm text-base-content/70">
                 Select a file to see its streams and whether it can feed a live
                 pipeline.
               </p>
@@ -140,14 +145,14 @@ function Library(props: {
       <div className="card-body gap-3 p-4">
         <h3 id="media-library" className="card-title text-base">
           Library
-          <span className="text-sm font-normal opacity-70">
+          <span className="text-sm font-normal text-base-content/70">
             {props.files.length === props.total
               ? `${props.total} files`
               : `${props.files.length} of ${props.total} files`}
           </span>
         </h3>
         {props.total === 0 ? (
-          <p className="text-sm opacity-70">
+          <p className="text-sm text-base-content/70">
             The media directory is empty. Upload a file, or record a pipeline.
           </p>
         ) : (
@@ -169,18 +174,18 @@ function FileList(props: {
 }) {
   return (
     <div>
-      <h4 className="mb-1 text-xs uppercase opacity-70">
+      <h4 className="mb-1 text-xs uppercase text-base-content/70">
         {props.title} · {props.files.length}
       </h4>
       {props.files.length === 0 ? (
-        <p className="text-sm opacity-70">None.</p>
+        <p className="text-sm text-base-content/70">None.</p>
       ) : (
         <ul className="space-y-1" aria-label={props.title}>
           {props.files.map((file) => (
             <li key={mediaKey(file)}>
               <button
                 type="button"
-                className={`flex w-full flex-wrap items-center gap-2 rounded px-2 py-1 text-left text-sm hover:bg-base-100 ${
+                className={`flex min-h-11 w-full flex-wrap items-center gap-2 rounded-field px-2 py-1 text-left text-sm hover:bg-base-100 md:min-h-8 ${
                   mediaKey(file) === props.selected ? "bg-base-100 font-semibold" : ""
                 }`}
                 aria-pressed={mediaKey(file) === props.selected}
@@ -188,7 +193,7 @@ function FileList(props: {
               >
                 <span className="min-w-0 flex-1 truncate">{file.name}</span>
                 <ConversionBadge file={file} />
-                <span className="tabular-nums opacity-70">
+                <span className="tabular-nums text-base-content/70">
                   {formatBytes(file.sourceSize ?? file.size)}
                 </span>
               </button>
@@ -233,21 +238,21 @@ function Asset(props: {
           {file.name}
         </h3>
         <dl className="grid grid-cols-[8rem_1fr] gap-1 text-sm">
-          <dt className="opacity-70">Original</dt>
+          <dt className="text-base-content/70">Original</dt>
           <dd className="break-all">
             {forms.original} · {formatBytes(file.sourceSize ?? file.size)}
           </dd>
           {forms.converted && (
             <>
-              <dt className="opacity-70">Converted</dt>
+              <dt className="text-base-content/70">Converted</dt>
               <dd className="break-all">
                 {forms.converted} · {formatBytes(file.convertedSize)}
               </dd>
             </>
           )}
-          <dt className="opacity-70">Modified</dt>
+          <dt className="text-base-content/70">Modified</dt>
           <dd>{new Date(file.modifiedAt).toLocaleString()}</dd>
-          <dt className="opacity-70">Used by</dt>
+          <dt className="text-base-content/70">Used by</dt>
           <dd>{ingests === 0 ? "no pipeline" : `${ingests} file ingest${ingests === 1 ? "" : "s"}`}</dd>
         </dl>
         {file.conversionStatus === "failed" && file.conversionError && (
@@ -301,9 +306,9 @@ function useAnalysis(filename: string): MediaFileAnalysis | null | "failed" {
 }
 
 function Analysis({ analysis }: { analysis: MediaFileAnalysis | null | "failed" }) {
-  if (analysis === null) return <p className="text-sm opacity-70">Probing the file…</p>;
+  if (analysis === null) return <p className="text-sm text-base-content/70">Probing the file…</p>;
   if (analysis === "failed") {
-    return <p className="text-sm opacity-70">The engine could not probe this file.</p>;
+    return <p className="text-sm text-base-content/70">The engine could not probe this file.</p>;
   }
   const readiness = ingestReadiness(analysis);
   return (
@@ -315,14 +320,14 @@ function Analysis({ analysis }: { analysis: MediaFileAnalysis | null | "failed" 
         </span>
       </div>
       <dl className="mt-2 grid grid-cols-[8rem_1fr] gap-1">
-        <dt className="opacity-70">Video</dt>
+        <dt className="text-base-content/70">Video</dt>
         <dd>
           {analysis.videoCodec ?? "--"}
           {analysis.fps ? ` · ${analysis.fps.toFixed(2)} fps` : ""}
         </dd>
-        <dt className="opacity-70">Duration</dt>
+        <dt className="text-base-content/70">Duration</dt>
         <dd>{formatDuration(analysis.durationSec)}</dd>
-        <dt className="opacity-70">Keyframes</dt>
+        <dt className="text-base-content/70">Keyframes</dt>
         <dd>
           {analysis.keyframeCount}
           {analysis.averageKeyframeIntervalSec
@@ -347,7 +352,7 @@ function RecordingTimeline({ file }: { file: MediaFile }) {
   if (events === null) return null;
   return (
     <div className="rounded bg-base-100 p-3 text-sm">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <b>Recording timeline</b>
         {file.pipelineId && (
           <PlaceLink
@@ -362,7 +367,7 @@ function RecordingTimeline({ file }: { file: MediaFile }) {
         {events.map((event) => (
           <li key={event.label} className="grid grid-cols-[0.5rem_6rem_1fr] items-center gap-2">
             <span className={`h-2 w-2 rounded-full ${TIMELINE_DOT[event.tone]}`} />
-            <span className="tabular-nums opacity-70">
+            <span className="tabular-nums text-base-content/70">
               {event.atMs === null ? "--" : new Date(event.atMs).toLocaleTimeString()}
             </span>
             <span className={event.tone === "error" ? "text-error" : undefined}>
@@ -391,7 +396,7 @@ function UseAsSource(props: {
     props.analysis === "failed" ? null : ingestReadiness(props.analysis),
   );
   if (draft === null) {
-    return <p className="text-sm opacity-70">A file with no video cannot feed a pipeline.</p>;
+    return <p className="text-sm text-base-content/70">A file with no video cannot feed a pipeline.</p>;
   }
   if (!open) {
     return (
@@ -443,7 +448,7 @@ function Rename(props: { file: MediaFile; onRenamed: (name: string) => void }) {
 function Delete(props: { file: MediaFile; onDeleted: () => void }) {
   if ((props.file.ingestCount ?? 0) > 0) {
     return (
-      <p className="text-xs opacity-70">
+      <p className="text-xs text-base-content/70">
         A pipeline ingests this file: remove that ingest before deleting it.
       </p>
     );
@@ -484,18 +489,18 @@ function Storage({ live, files }: { live: LiveSnapshot; files: readonly MediaFil
               </span>
             </div>
             <dl className="grid grid-cols-[8rem_1fr] gap-1 text-sm">
-              <dt className="opacity-70">Used · free</dt>
+              <dt className="text-base-content/70">Used · free</dt>
               <dd>
                 {formatBytes(disk.usedBytes)} · {formatBytes(disk.freeBytes)}
               </dd>
-              <dt className="opacity-70">Directory</dt>
+              <dt className="text-base-content/70">Directory</dt>
               <dd className="break-all">{disk.mediaDir ?? "--"}</dd>
-              <dt className="opacity-70">Mount</dt>
+              <dt className="text-base-content/70">Mount</dt>
               <dd className="break-all">{disk.mountPoint ?? "--"}</dd>
             </dl>
           </>
         ) : (
-          <p className="text-sm opacity-70">Waiting for the host sample…</p>
+          <p className="text-sm text-base-content/70">Waiting for the host sample…</p>
         )}
         <p className="text-sm">
           {files.length} files · {formatBytes(files.reduce((sum, file) => sum + file.size, 0))}

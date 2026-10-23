@@ -105,7 +105,7 @@ function IngestSecurity(props: { current: IngestSecurityConfig; save: Saver }) {
       title="Failed-attempt limits"
       onSave={() => props.save({ ingestSecurity: limits })}
     >
-      <p className="text-xs opacity-70">
+      <p className="text-xs text-base-content/70">
         A client that fails to sign in or publish this often within the window is
         banned for the ban length.
       </p>
@@ -153,9 +153,9 @@ function Attempts() {
           )}
         </div>
         {attempts === null ? (
-          <p className="text-sm opacity-70">Loading…</p>
+          <p className="text-sm text-base-content/70">Loading…</p>
         ) : attempts.length === 0 ? (
-          <p className="text-sm opacity-70">No client has failed recently.</p>
+          <p className="text-sm text-base-content/70">No client has failed recently.</p>
         ) : (
           <table className="table table-sm" aria-label="Failed attempts">
             <thead>

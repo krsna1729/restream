@@ -1,15 +1,102 @@
 @import "tailwindcss";
 @plugin 'daisyui' {
-  themes: dim;
+  themes: false;
 }
 
+/* Restream's two themes. Status colour carries meaning (success: delivering,
+   warning: attention, error: failure, info: neutral runtime notice); accent
+   marks operational actions. Surfaces step page (base-300) → panel
+   (base-200) → row (base-100). Both themes keep body and secondary text at
+   or above WCAG AA on every surface. */
+@plugin 'daisyui/theme' {
+  name: "restream-dark";
+  default: true;
+  prefersdark: true;
+  color-scheme: dark;
+  --color-base-100: oklch(26% 0.03 235);
+  --color-base-200: oklch(22% 0.03 235);
+  --color-base-300: oklch(17.5% 0.028 235);
+  --color-base-content: oklch(94% 0.012 230);
+  --color-primary: oklch(78% 0.12 220);
+  --color-primary-content: oklch(20% 0.04 235);
+  --color-secondary: oklch(72% 0.13 285);
+  --color-secondary-content: oklch(20% 0.04 285);
+  --color-accent: oklch(82% 0.14 170);
+  --color-accent-content: oklch(22% 0.05 170);
+  --color-neutral: oklch(32% 0.03 235);
+  --color-neutral-content: oklch(92% 0.01 230);
+  --color-info: oklch(80% 0.11 225);
+  --color-info-content: oklch(22% 0.04 225);
+  --color-success: oklch(79% 0.15 160);
+  --color-success-content: oklch(22% 0.05 160);
+  --color-warning: oklch(84% 0.13 85);
+  --color-warning-content: oklch(25% 0.05 85);
+  --color-error: oklch(71% 0.17 17);
+  --color-error-content: oklch(22% 0.05 17);
+  --radius-selector: 0.375rem;
+  --radius-field: 0.375rem;
+  --radius-box: 0.5rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+@plugin 'daisyui/theme' {
+  name: "restream-light";
+  default: false;
+  prefersdark: false;
+  color-scheme: light;
+  --color-base-100: oklch(97.5% 0.005 240);
+  --color-base-200: oklch(100% 0 0);
+  --color-base-300: oklch(95% 0.007 240);
+  --color-base-content: oklch(24% 0.03 245);
+  --color-primary: oklch(52% 0.15 245);
+  --color-primary-content: oklch(98% 0.01 245);
+  --color-secondary: oklch(50% 0.16 285);
+  --color-secondary-content: oklch(98% 0.01 285);
+  --color-accent: oklch(50% 0.11 170);
+  --color-accent-content: oklch(98% 0.01 170);
+  --color-neutral: oklch(30% 0.03 245);
+  --color-neutral-content: oklch(97% 0.005 245);
+  --color-info: oklch(52% 0.13 235);
+  --color-info-content: oklch(98% 0.01 235);
+  --color-success: oklch(52% 0.13 155);
+  --color-success-content: oklch(98% 0.01 155);
+  --color-warning: oklch(62% 0.14 70);
+  --color-warning-content: oklch(20% 0.04 70);
+  --color-error: oklch(54% 0.19 22);
+  --color-error-content: oklch(98% 0.01 22);
+  --radius-selector: 0.375rem;
+  --radius-field: 0.375rem;
+  --radius-box: 0.5rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+/* Density scales every rem-based size at once: comfortable for operators
+   on touch and at a distance, compact for engineers reading thousands of
+   rows. */
 @layer base {
+  html {
+    font-size: 15px;
+  }
+  html[data-density="compact"] {
+    font-size: 13.5px;
+  }
+
   body {
     font-family:
       "Aptos", "Segoe UI Variable", "Segoe UI", "IBM Plex Sans",
       "Helvetica Neue", Arial, sans-serif;
-    font-size: 0.9375rem;
-    letter-spacing: 0.005em;
+    font-size: 1rem;
+    letter-spacing: 0.003em;
+    background: var(--color-base-300);
+    -webkit-font-smoothing: antialiased;
   }
 
   code,
@@ -21,10 +108,26 @@
       "Cascadia Mono", "Cascadia Code", "JetBrains Mono", "SFMono-Regular",
       Consolas, "Liberation Mono", monospace;
   }
+
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }
 
-/* The dim theme's 50/60% secondary text falls below WCAG AA. Keep the
-   semantic utility names while enforcing one readable secondary-text floor. */
+/* Secondary text never falls below AA: the semantic utility names stay,
+   the floor is enforced once here. */
 @layer utilities {
   .text-base-content\/50,
   .text-base-content\/55,
@@ -32,23 +135,91 @@
   .stat-title,
   .stat-desc,
   .table thead {
-    color: color-mix(
-      in oklab,
-      var(--color-base-content) 72%,
-      transparent
-    );
+    color: color-mix(in oklab, var(--color-base-content) 72%, transparent);
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Compact uppercase label (11px at comfortable density). */
+  .kicker {
+    font-size: 0.733rem;
+    font-weight: 650;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: color-mix(in oklab, var(--color-base-content) 72%, transparent);
+  }
+
+  .badge-success,
+  .badge-warning,
+  .badge-error,
+  .badge-info {
+    background: color-mix(in oklab, var(--badge-color) 16%, transparent);
+    color: var(--badge-color);
+    border-color: color-mix(in oklab, var(--badge-color) 32%, transparent);
+  }
+  .badge-success { --badge-color: var(--color-success); }
+  .badge-warning { --badge-color: var(--color-warning); }
+  .badge-error { --badge-color: var(--color-error); }
+  .badge-info { --badge-color: var(--color-info); }
+  .scrollbar-thin {
+    scrollbar-width: thin;
   }
 }
 
-@media (max-width: 767px) {
-  .stats {
-    display: grid !important;
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-    max-width: 100%;
-    overflow: hidden;
-  }
-
-  .stats .stat {
+/* Legacy markup (DaisyUI cards, badges, tables) wears the same surfaces and
+   tones as the ui/ primitives, so every workspace reads as one system. */
+@layer components {
+  .card {
     min-width: 0;
+    border: 1px solid color-mix(in oklab, var(--color-base-content) 10%, transparent);
+    border-radius: var(--radius-box);
+  }
+  .card-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    flex-wrap: wrap;
+    align-items: baseline;
+  }
+  .badge {
+    font-weight: 600;
+    border-radius: 9999px;
+  }
+  .table :where(thead) {
+    font-size: 0.733rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .table :where(td, th) {
+    padding-block: 0.5rem;
+  }
+  .table :where(tbody tr):hover {
+    background: color-mix(in oklab, var(--color-base-content) 5%, transparent);
+  }
+}
+
+/* Touch screens get 36px targets even on compact controls. */
+@media (pointer: coarse) {
+  .btn-xs,
+  .btn-sm,
+  .input-sm,
+  .select-sm,
+  .input,
+  .select {
+    min-height: 36px;
+  }
+  .btn-xs,
+  .btn-sm {
+    min-width: 36px;
+  }
+}
+
+@keyframes rs-flow {
+  from {
+    stroke-dashoffset: 24;
+  }
+  to {
+    stroke-dashoffset: 0;
   }
 }

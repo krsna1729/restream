@@ -17,6 +17,7 @@ import {
   profilesToSave,
 } from "./settings-model.js";
 import type { ProfileRow } from "./settings-model.js";
+import { PageHeader } from "../ui/page-header.js";
 
 /** Engine settings. `/settings` is read once when the page opens (it also
  * lists every pipeline and output); each form saves only its own part and
@@ -26,7 +27,7 @@ export function Settings() {
   useEffect(() => {
     void getConfig().then(setConfig);
   }, []);
-  if (config === null) return <p className="opacity-70">Loading settings…</p>;
+  if (config === null) return <p className="text-base-content/70">Loading settings…</p>;
   const save: Saver = async (patch) => {
     const stored = await patchConfig(patch);
     if (stored === null) return false;
@@ -34,8 +35,8 @@ export function Settings() {
     return true;
   };
   return (
-    <div className="space-y-4">
-      <h2 className="text-xl font-semibold">Settings</h2>
+    <div className="flex flex-col gap-4">
+      <PageHeader eyebrow="Settings" title="Engine settings" subtitle="Each card saves only its own part." />
       <div className="grid gap-4 lg:grid-cols-2">
         <General config={config} save={save} />
         <SrtIngest current={config.srtIngest} save={save} />
@@ -119,7 +120,7 @@ function SrtIngest(props: { current: SrtGlobalIngestConfig | undefined; save: Sa
         })
       }
     >
-      <p className="text-xs opacity-70">
+      <p className="text-xs text-base-content/70">
         Every SRT publisher without a pipeline override uses these.
       </p>
       <label className="form-control">

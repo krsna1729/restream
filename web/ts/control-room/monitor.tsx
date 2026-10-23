@@ -11,7 +11,9 @@ import { PipelineScope } from "./pipeline-scope.js";
 import { Freshness, usePolled } from "./polled.js";
 import type { Polled } from "./polled.js";
 import { appendSample, WINDOW_MS } from "./sample-window.js";
-import { Sparkline } from "./sparkline.js";
+import { Panel } from "../ui/panel.js";
+import { TimeSeries } from "../ui/time-series.js";
+import { StatusBadge } from "../ui/tone.js";
 import { pipelineGraph } from "./state-views.js";
 import { SAMPLE_INTERVAL_MS, SAMPLE_STALE_AFTER_MS } from "./store.js";
 import type { LiveSnapshot } from "./store.js";
@@ -24,6 +26,16 @@ const SIGNAL_LABELS: Record<Signal, string> = {
   ringFillPercent: "Source ring fill",
   maxShardProgressMs: "Slowest shard progress",
   degradedOutputs: "Degraded outputs",
+};
+
+const SIGNAL_COLOR: Record<Signal, string> = {
+  ingestBps: "text-primary",
+  egressBps: "text-accent",
+  deliveringPercent: "text-success",
+  maxFeedLag: "text-secondary",
+  ringFillPercent: "text-info",
+  maxShardProgressMs: "text-secondary",
+  degradedOutputs: "text-warning",
 };
 
 function formatSignal(signal: Signal, value: number | null): string {
@@ -108,22 +120,16 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
   const first = shown[0];
   const last = shown[shown.length - 1];
   return (
-    <div className="space-y-4">
-    <section className="card bg-base-200" aria-labelledby="monitor-signals">
-      <div className="card-body gap-3 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 id="monitor-signals" className="card-title text-base">
-            Correlated signals
-            <span className="text-xs font-normal opacity-70">
-              one clock · since this page opened, up to 15 min · {shown.length} samples
-              {frozen && last && ` · paused at ${new Date(last.atMs).toLocaleTimeString()}`}
-              {compare && " · dashed: now"}
-            </span>
-          </h3>
-          <span className="flex items-center gap-1">
+    <div className="flex flex-col gap-4">
+      <Panel
+        id="monitor-signals"
+        title="Correlated signals"
+        subtitle={`one clock · since this page opened, up to 15 min · ${shown.length} samples${frozen && last ? ` · paused at ${new Date(last.atMs).toLocaleTimeString()}` : ""}${compare ? " · dashed: now" : ""}`}
+        actions={
+          <>
             <button
               type="button"
-              className="btn btn-xs"
+              className={`btn btn-sm ${frozen ? "btn-primary" : ""}`}
               aria-pressed={frozen !== null}
               onClick={() => {
                 setFrozen(frozen ? null : history);
@@ -134,7 +140,7 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
             </button>
             <button
               type="button"
-              className="btn btn-xs"
+              className="btn btn-sm"
               aria-pressed={comparing}
               disabled={frozen === null}
               title="Overlay the live window on the paused one"
@@ -144,47 +150,48 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
             </button>
             <Freshness atMs={props.live.telemetryAtMs} />
             <Freshness atMs={resources.atMs} />
-          </span>
-        </div>
+          </>
+        }
+      >
         {onsets.length > 0 && (
-          <p className="text-sm" aria-label="Incident onsets">
-            <span className="badge badge-warning badge-sm mr-2">incident</span>
+          <p className="mb-3 flex flex-wrap items-center gap-2 text-sm" aria-label="Incident onsets">
+            <StatusBadge tone="warn" dot>
+              incident
+            </StatusBadge>
             {onsets.length === 1 ? "An output degraded at " : "Outputs degraded at "}
-            {onsets.map((at) => new Date(at).toLocaleTimeString()).join(", ")}; the cursor
-            marks it on every signal.
+            {onsets.map((at) => new Date(at).toLocaleTimeString()).join(", ")}; the cursor marks it on every signal.
           </p>
         )}
         {first === undefined || last === undefined ? (
-          <p className="opacity-70">Collecting the first sample…</p>
+          <p className="text-base-content/70">Collecting the first sample…</p>
         ) : (
-          <dl className="space-y-2">
+          <dl className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
             {SIGNALS.map((signal) => (
-              <div
-                key={signal}
-                className="grid grid-cols-[12rem_1fr_7rem] items-center gap-3"
-              >
-                <dt className="text-sm">{SIGNAL_LABELS[signal]}</dt>
+              <div key={signal} className="min-w-0 rounded-box border border-base-content/10 bg-base-100 p-3">
+                <div className="mb-1 flex items-baseline justify-between gap-2">
+                  <dt className="kicker truncate">{SIGNAL_LABELS[signal]}</dt>
+                  <dd className="tabular text-lg font-semibold" aria-label={`${SIGNAL_LABELS[signal]} now`}>
+                    {formatSignal(signal, last[signal])}
+                  </dd>
+                </div>
                 <dd>
-                  <Sparkline
-                    history={shown}
-                    pick={(sample) => sample[signal]}
+                  <TimeSeries
+                    samples={shown}
                     label={`${SIGNAL_LABELS[signal]} over time`}
-                    marks={onsets}
-                    compare={compare}
+                    height={72}
+                    showLegend={false}
+                    top={signal === "deliveringPercent" || signal === "ringFillPercent" ? 100 : undefined}
+                    ghost={compare}
+                    axisFormat={signal === "ingestBps" || signal === "egressBps" ? (value) => formatBps(value).replace("/s", "") : undefined}
+                    marks={onsets.map((atMs) => ({ atMs, tone: "warn" as const, kind: "incident" }))}
+                    series={[{ id: signal, label: SIGNAL_LABELS[signal], pick: (sample) => sample[signal], color: SIGNAL_COLOR[signal], area: true, format: (value) => formatSignal(signal, value) }]}
                   />
-                </dd>
-                <dd
-                  className="text-right text-sm tabular-nums"
-                  aria-label={`${SIGNAL_LABELS[signal]} now`}
-                >
-                  {formatSignal(signal, last[signal])}
                 </dd>
               </div>
             ))}
           </dl>
         )}
-      </div>
-    </section>
+      </Panel>
       <MonitorPanels live={props.live} pipelineId={props.pipelineId} />
     </div>
   );

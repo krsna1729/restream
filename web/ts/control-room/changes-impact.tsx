@@ -37,31 +37,31 @@ export function Impact({ topology, pipelineId }: { topology: TopologyDiff; pipel
       <div className="card-body gap-3 p-4">
         <h3 id="changes-impact" className="card-title text-base">
           Impact
-          <span className="text-xs font-normal opacity-70">
+          <span className="text-xs font-normal text-base-content/70">
             outputs wanted running, planned for{" "}
             {topology.ingestCodec ? `the live ${topology.ingestCodec} ingest` : "no live ingest (no codec bridge)"}
           </span>
         </h3>
         <dl className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
           <div>
-            <dt className="opacity-70">Outputs added</dt>
+            <dt className="text-base-content/70">Outputs added</dt>
             <dd className="tabular-nums">{load.addOutputs}</dd>
           </div>
           <div>
-            <dt className="opacity-70">Outputs removed</dt>
+            <dt className="text-base-content/70">Outputs removed</dt>
             <dd className="tabular-nums">{load.removedOutputs}</dd>
           </div>
           <div>
-            <dt className="opacity-70">New stages</dt>
+            <dt className="text-base-content/70">New stages</dt>
             <dd className="tabular-nums">{topology.addedStages.length}</dd>
           </div>
           <div>
-            <dt className="opacity-70">Retired stages</dt>
+            <dt className="text-base-content/70">Retired stages</dt>
             <dd className="tabular-nums">{topology.retiredStages.length}</dd>
           </div>
         </dl>
         {lines.length === 0 ? (
-          <p className="text-sm opacity-70">No output is wanted running before or after.</p>
+          <p className="text-sm text-base-content/70">No output is wanted running before or after.</p>
         ) : (
           <table className="table table-sm" aria-label="Topology diff">
             <thead>
@@ -110,14 +110,14 @@ export function Impact({ topology, pipelineId }: { topology: TopologyDiff; pipel
                 <Meters title="Before, on the priors" rows={serviceCenterRows(scenario.baseline)} />
                 <Meters title="After, on the priors" rows={serviceCenterRows(scenario.projected)} />
               </div>
-              <p className="text-xs opacity-70">
+              <p className="text-xs text-base-content/70">
                 The capacity scenario prices added outputs and stages on the calibration priors;
                 it does not credit removals.
               </p>
             </div>
           )
         ) : (
-          <p className="text-sm opacity-70">The change adds no outputs or stages, so it adds no load.</p>
+          <p className="text-sm text-base-content/70">The change adds no outputs or stages, so it adds no load.</p>
         )}
       </div>
     </section>
@@ -142,7 +142,7 @@ export function Convergence(props: { operation: ChangeOperation; live: LiveSnaps
             {/* The offset reads the sequence; the wall-clock time stays on hover
                 and on the first step, so a later reader sees when it ran. */}
             <span
-              className="tabular-nums opacity-70"
+              className="tabular-nums text-base-content/70"
               title={new Date(step.atMs).toISOString()}
             >
               {index === 0 ? new Date(step.atMs).toLocaleTimeString() : offset(step.offsetMs)}

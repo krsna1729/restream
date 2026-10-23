@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
-const { buildFleetModel, pipelineHealth } = await loadCompiledFrontendModule(
+const { attentionGroups, buildFleetModel, pipelineHealth } = await loadCompiledFrontendModule(
   "control-room/fleet-model.js",
 );
 const { telemetryRates } = await loadCompiledFrontendModule(
@@ -272,4 +272,35 @@ test("a query string stays plain strings through the round trip", () => {
     "?w=fleet&debug=1",
   );
   assert.equal(stringifySearch({}), "");
+});
+
+test("attention groups roll causes up across pipelines, largest first", () => {
+  const rejected = { code: "rejected", phase: "connect", error: "refused" };
+  const model = buildFleetModel(
+    state(
+      [
+        { id: "a", name: "A", ingest: INGEST, standbyInputs: 0, recording: false },
+        { id: "b", name: "B", ingest: null, standbyInputs: 0, recording: false },
+        { id: "c", name: "C", ingest: INGEST, standbyInputs: 0, recording: false },
+      ],
+      [
+        output("a1", "a", diagnosed("destination", rejected)),
+        output("c1", "c", diagnosed("destination", { ...rejected, error: "timeout" })),
+        output("b1", "b", diagnosed("ingest", { code: "noPublisher" })),
+        output("b2", "b", diagnosed("ingest", { code: "noPublisher" })),
+        output("b3", "b", diagnosed("ingest", { code: "noPublisher" })),
+      ],
+    ),
+    null,
+  );
+  const groups = attentionGroups(model.attention);
+  assert.deepEqual(
+    groups.map((group) => [group.key, group.outputs, group.pipelines, group.items.length]),
+    [
+      ["ingest:noPublisher", 3, 1, 1],
+      // Two different errors are two items but one kind of trouble.
+      ["destination:rejected", 2, 2, 2],
+    ],
+  );
+  assert.equal(groups[1].title, "Destination rejected the stream");
 });

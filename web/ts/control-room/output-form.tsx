@@ -199,7 +199,7 @@ export function OutputForm(props: {
           )}
         </div>
       )}
-      <p className="break-all font-mono text-xs opacity-70" aria-label="Destination URL">
+      <p className="break-all font-mono text-xs text-base-content/70" aria-label="Destination URL">
         {url || "—"}
       </p>
       <label className="form-control">
@@ -329,7 +329,7 @@ export function OutputForm(props: {
           </div>
         )}
         {audioNotes(draft, caps, tracks).map((note, index) => (
-          <p key={index} className="text-xs opacity-70">
+          <p key={index} className="text-xs text-base-content/70">
             {note}
           </p>
         ))}

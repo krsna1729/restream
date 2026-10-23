@@ -203,7 +203,7 @@ export function Preview(props: { url: string; label: string }) {
             {state === "idle" ? `Preview ${props.label}` : `Retry preview ${props.label}`}
           </button>
         )}
-        <span role="status" className="text-xs opacity-70">
+        <span role="status" className="text-xs text-base-content/70">
           {STATUS_TEXT[state]}
         </span>
         {showing && tracks.length > 1 && (

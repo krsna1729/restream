@@ -90,11 +90,17 @@ test("fleet shows a no-publisher cause live and drops it when the output stops",
       }),
     ).toHaveAttribute("aria-current", "page");
 
-    // No publisher: one upstream cause for the pipeline's wanted output.
+    // No publisher: one upstream cause for the pipeline's wanted output,
+    // rolled up with every other pipeline that has none.
     const attention = page.getByRole("region", { name: /Needs attention/ });
-    const item = attention.getByRole("listitem").filter({ hasText: name });
-    await expect(item).toContainText("ingest: no publisher connected");
-    await expect(item).toContainText("1 output: cr-out");
+    const group = attention.getByRole("button", { name: /No publisher connected/ });
+    if ((await group.getAttribute("aria-expanded")) !== "true") await group.click();
+    const item = attention
+      .getByRole("listitem")
+      .filter({ hasText: name })
+      .filter({ hasNot: page.getByRole("button") });
+    await expect(item).toContainText("no publisher connected");
+    await expect(item).toContainText("cr-out");
     await expect(item.getByRole("link", { name })).toHaveAttribute(
       "href",
       new RegExp(`[?&]w=operate&p=${pipelineId}$`),
@@ -143,23 +149,20 @@ test("fleet: shared work, open incidents, the history and the worst-first table"
     ).toBe(true);
 
     await page.goto("/?w=fleet");
-    await expect(page.locator(".stat").filter({ hasText: "Shared work" })).toContainText(
-      /\d+ stages/,
-    );
-    await expect(page.locator(".stat").filter({ hasText: "Open incidents" })).toContainText(
+    await expect(page.getByRole("group", { name: "Shared work" })).toContainText(/\d+ stages/);
+    await expect(page.getByRole("group", { name: "Open incidents" })).toContainText(
       /\d+ critical · \d+ warning/,
     );
 
     // The wanted output with no publisher is a degraded ingest output, sampled
     // into the page's history on the store's 2 s clock.
     const history = page.getByRole("region", { name: /Fleet history/ });
-    await expect(history.getByRole("img", { name: "Headroom over time" })).toBeVisible();
-    await expect(history).toContainText(/Now by layer:.*ingest [1-9]/);
-    await expect(history.getByLabel("Degraded outputs now")).toHaveText(/^[1-9]\d*$/);
+    await expect(history.getByRole("img", { name: /Delivery and headroom over time/ })).toBeVisible();
+    await expect(history).toContainText(/now: .*ingest [1-9]/);
     await expect(history).toContainText(/[2-9]\d* samples|\d{2,} samples/);
 
     // Degraded rows come first, each linked to its Operate view.
-    const table = page.getByRole("table", { name: "Fleet pipelines" });
+    const table = page.getByRole("table", { name: "Worst pipelines" });
     const row = table.getByRole("row").filter({ hasText: name });
     await expect(row).toContainText("1 degraded");
     await expect(row.getByRole("link", { name })).toHaveAttribute(
@@ -208,9 +211,9 @@ test("operate: find a pipeline, start and stop an output, promote an input", asy
     // The inventory finds it by name, in any case.
     await page.goto("/?w=pipelines");
     await page.getByRole("searchbox", { name: "Search pipelines" }).fill(name.toUpperCase());
-    const rows = page.getByRole("row").filter({ hasText: pipelineId });
+    const rows = page.getByRole("row").filter({ hasText: name });
     await expect(rows).toHaveCount(1);
-    await expect(rows).toContainText("no input");
+    await expect(rows).toContainText("no source");
     await expect(rows).toContainText("SRT 1");
     await rows.getByRole("link", { name }).click();
     await expect(page).toHaveURL(new RegExp(`w=operate&p=${pipelineId}`));
@@ -226,10 +229,12 @@ test("operate: find a pipeline, start and stop an output, promote an input", asy
 
     // Start from the matrix: desired follows over the state stream.
     await matrixRow.getByRole("button", { name: "Start cr-out" }).click();
-    await expect(matrixRow.getByRole("cell").nth(2)).toHaveText("running");
+    await expect(matrixRow.getByRole("button", { name: "Stop cr-out" })).toBeVisible();
+    await expect(matrixRow).toContainText("waiting for source");
     await expect(matrixRow).toContainText("no publisher connected");
     await matrixRow.getByRole("button", { name: "Stop cr-out" }).click();
-    await expect(matrixRow.getByRole("cell").nth(2)).toHaveText("stopped");
+    await expect(matrixRow.getByRole("button", { name: "Start cr-out" })).toBeVisible();
+    await expect(matrixRow).toContainText("stopped");
 
     // Promote the backup: the deck shows it selected once the API answers.
     const deck = page.getByRole("region", { name: /Source deck/ });
@@ -1419,7 +1424,7 @@ test("program preview over MoQ: the switch plays the program straight from the e
   }
 });
 
-test("matrix: a large fleet renders a bounded window and can show the rest", async ({
+test("matrix: a large fleet renders a window of rows and scrolls to the rest", async ({
   page,
 }) => {
   // 500 outputs over the API, then two full renders.
@@ -1458,15 +1463,21 @@ test("matrix: a large fleet renders a bounded window and can show the rest", asy
 
     await page.goto(`/?w=operate&p=${pipelineId}`);
     const matrix = page.getByRole("region", { name: /Destination matrix/ });
-    // The window is capped at DESTINATION_ROW_LIMIT (200 in
-    // operate-model.ts): the header row, 200 destination rows, and the "more
-    // not shown" row.
-    await expect(matrix.getByRole("row")).toHaveCount(202);
-    await expect(matrix).toContainText(`${total - 200} more not shown`);
+    const table = matrix.getByRole("table", { name: "Destinations" });
+    // Every row is in the table's count; only the window in view is in the
+    // DOM (ui/data-table.tsx), so the render stays small.
+    await expect(table).toHaveAttribute("aria-rowcount", String(total));
+    await expect(matrix).toContainText(`${total} rows`);
+    expect(await table.getByRole("row").count()).toBeLessThan(80);
 
-    // The rest are deferred, not dropped: one click shows every row.
-    await matrix.getByRole("button", { name: `Show all ${total}` }).click();
-    await expect(matrix.getByRole("row")).toHaveCount(total + 1);
+    // Nothing is dropped: scrolling the matrix reaches its last row (by
+    // name, as none is degraded).
+    const last = table.getByRole("row").filter({ hasText: /^cr-m-99\b/ });
+    await expect(last).toHaveCount(0);
+    await table.locator(".overflow-y-auto").evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect(table.getByRole("row").filter({ hasText: "cr-m-99" }).first()).toBeVisible();
   } finally {
     await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
   }
@@ -1547,16 +1558,17 @@ test("pipelines: protocol mix, the stage two outputs share, and the recording ca
   try {
     const pipelineId = await liveFilePipeline(page, name);
     pipelineIds.push(pipelineId);
-    const sinkIds: string[] = [];
+    const sinkNames: string[] = [];
     // One sink per output. Two outputs publishing to one ingest URL race for
     // that input's single publisher slot: the engine refuses the second
     // ("Input already has an active publisher"), and whether its retry lands
     // after the other's reconnect decides the card this test reads — so the
     // test measured a race, not the card.
     for (const output of ["cr-share-a", "cr-share-b"]) {
-      const sink = await loopbackSink(page, `crpipessink${stamp}${output.slice(-1)}`);
+      const sinkName = `crpipessink${stamp}${output.slice(-1)}`;
+      const sink = await loopbackSink(page, sinkName);
       pipelineIds.push(sink.pipelineId);
-      sinkIds.push(sink.pipelineId);
+      sinkNames.push(sinkName);
       const created = await page.request.post(`/api/v1/pipelines/${pipelineId}/outputs`, {
         data: {
           name: output,
@@ -1593,12 +1605,12 @@ test("pipelines: protocol mix, the stage two outputs share, and the recording ca
     await recording.click();
     await expect(recording).toHaveAttribute("aria-pressed", "true");
     const rows = page.getByRole("table").getByRole("row");
-    await expect(rows.filter({ hasText: pipelineId })).toHaveCount(1);
+    await expect(rows.filter({ hasText: name })).toHaveCount(1);
     // Neither sink is recording, so neither is listed while the filter is on.
-    for (const id of sinkIds) await expect(rows.filter({ hasText: id })).toHaveCount(0);
+    for (const sink of sinkNames) await expect(rows.filter({ hasText: sink })).toHaveCount(0);
     // A second click clears the card.
     await recording.click();
-    for (const id of sinkIds) await expect(rows.filter({ hasText: id })).toHaveCount(1);
+    for (const sink of sinkNames) await expect(rows.filter({ hasText: sink })).toHaveCount(1);
   } finally {
     for (const id of pipelineIds) await page.request.delete(`/api/v1/pipelines/${id}`);
   }
