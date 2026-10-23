@@ -23,6 +23,11 @@ export function auditLayout({ phone }) {
   const visible = (element) => {
     const style = getComputedStyle(element);
     if (style.display === "none" || style.visibility === "hidden") return null;
+    // What the browser does not render: a closed <details> (newer Chromium
+    // keeps its content laid out under content-visibility: hidden),
+    // content-visibility, visibility, or opacity 0 anywhere above.
+    if (element.closest("details:not([open])") && !element.closest("summary")) return null;
+    if (element.checkVisibility && !element.checkVisibility({ contentVisibilityAuto: true, opacityProperty: true, visibilityProperty: true })) return null;
     const rect = element.getBoundingClientRect();
     return rect.width === 0 || rect.height === 0 ? null : { style, rect };
   };
