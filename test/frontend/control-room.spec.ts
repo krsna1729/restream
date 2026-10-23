@@ -541,7 +541,7 @@ test("incidents and capacity: an alert's evidence packet and an engine-made proj
     await page.getByLabel("Resolved window").selectOption("15m");
     const resolved = queue
       .getByRole("button")
-      .filter({ hasText: /resolved .* ago/ })
+      .filter({ hasText: /resolved (just now|.* ago)/ })
       // The title kept the name it had while open.
       .filter({ hasText: `${name}: ` })
       .first();
