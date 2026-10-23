@@ -12,7 +12,7 @@ import type { Tone } from "../ui/tone.js";
 import type { SystemMetrics } from "../types.js";
 import { degradedTotal } from "./fleet-history.js";
 import type { FleetSample } from "./fleet-history.js";
-import { attentionGroups, buildFleetModel, describeCause, worstFirst } from "./fleet-model.js";
+import { attentionGroups, buildFleetModel, describeCause, roomFor, worstFirst } from "./fleet-model.js";
 import type { AttentionGroup, FleetModel, FleetPipelineRow } from "./fleet-model.js";
 import { counted, formatBps, formatPercent } from "./format.js";
 import { PipelineTable } from "./pipeline-table.js";
@@ -116,7 +116,7 @@ function Headline(props: {
         value={headroom === null ? "--" : formatPercent(headroom * 100)}
         meter={capacity?.projectedUtilization ?? null}
         tone={headroom === null ? undefined : utilizationTone(capacity?.projectedUtilization) === "ok" ? undefined : utilizationTone(capacity?.projectedUtilization)}
-        foot={capacity ? `hottest: ${capacity.hottestCenter}${capacity.flowMeasured ? " · measured" : " · projected"}` : "no capacity sample"}
+        foot={capacity ? roomWords(capacity) : "no capacity sample"}
       />
       <Kpi
         label="Shared work"
@@ -345,4 +345,12 @@ function FleetTable({ rows }: { rows: readonly FleetPipelineRow[] }) {
       {rows.length === 0 ? <EmptyState title="No pipeline yet" /> : <PipelineTable rows={shown} label="Worst pipelines" />}
     </Panel>
   );
+}
+
+/** "room for about 120 more destinations · hottest: egress". */
+function roomWords(capacity: CapacitySnapshot): string {
+  const room = roomFor(capacity.projectedUtilization, capacity.activeLeaves);
+  const hottest = `hottest: ${capacity.hottestCenter}`;
+  if (room === null) return `${hottest}${capacity.flowMeasured ? " · measured" : " · projected"}`;
+  return room === 0 ? `at the safe limit · ${hottest}` : `room for about ${counted(room, "more destination", "more destinations")} · ${hottest}`;
 }

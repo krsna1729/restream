@@ -336,3 +336,17 @@ export function attentionGroups(items: readonly AttentionItem[]): readonly Atten
         a.key.localeCompare(b.key),
     );
 }
+
+/**
+ * Headroom as destinations: about how many more outputs like the ones now
+ * running fit before the host passes its safe load. A rough count (each
+ * output is assumed to cost the average now) rounded to two figures, so it
+ * reads as the estimate it is. Null with nothing running to average.
+ */
+export function roomFor(projectedUtilization: number, activeOutputs: number, safeUtilization = 0.8): number | null {
+  if (activeOutputs <= 0 || projectedUtilization <= 0) return null;
+  const room = Math.max(0, Math.floor(((safeUtilization - projectedUtilization) * activeOutputs) / projectedUtilization));
+  if (room < 10) return room;
+  const scale = 10 ** (Math.floor(Math.log10(room)) - 1);
+  return Math.floor(room / scale) * scale;
+}

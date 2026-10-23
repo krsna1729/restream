@@ -3,9 +3,8 @@ import test from "node:test";
 
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
-const { attentionGroups, buildFleetModel, pipelineHealth } = await loadCompiledFrontendModule(
-  "control-room/fleet-model.js",
-);
+const fleetModel = await loadCompiledFrontendModule("control-room/fleet-model.js");
+const { attentionGroups, buildFleetModel, pipelineHealth } = fleetModel;
 const { telemetryRates } = await loadCompiledFrontendModule(
   "control-room/rates.js",
 );
@@ -317,4 +316,13 @@ test("a replay window rides in the URL and a following one has no end", () => {
   assert.equal(placeFromSearch({ w: "stability", from: "soon" }).replay, undefined);
   assert.deepEqual(placeSearch({}, { workspace: "stability", pipelineId: "p1", replay: { fromMs: 1000, toMs: null } }), { w: "stability", p: "p1", from: "1000" });
   assert.deepEqual(placeSearch({ w: "stability", from: "1", to: "2" }, { workspace: "fleet", pipelineId: null }), { w: "fleet" });
+});
+
+test("headroom reads as about how many more destinations fit", () => {
+  const { roomFor } = fleetModel;
+  assert.equal(roomFor(0.4, 100), 100, "half the safe load used: as many again");
+  assert.equal(roomFor(0.3, 37), 61, "rounded to two figures");
+  assert.equal(roomFor(0.79, 10), 0);
+  assert.equal(roomFor(0.9, 10), 0, "past the safe load: no room, never negative");
+  assert.equal(roomFor(0.2, 0), null, "nothing running to average");
 });

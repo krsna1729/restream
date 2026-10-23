@@ -161,3 +161,33 @@ export function contributionTransport(protocol: string | undefined): "SRT" | "TC
       return null;
   }
 }
+
+/** H.264 live bitrates the big platforms suggest per height, in Mb/s,
+ * at 30 fps and at 50/60 fps (YouTube's published table; Twitch caps
+ * 1080p60 near 6 Mb/s, inside the same range). */
+const SUGGESTED_MBPS: ReadonlyArray<readonly [number, readonly [number, number], readonly [number, number]]> = [
+  [2160, [13, 34], [20, 51]],
+  [1440, [6, 13], [9, 18]],
+  [1080, [3, 6], [4.5, 9]],
+  [720, [1.5, 4], [2.25, 6]],
+  [480, [0.5, 2], [0.5, 2]],
+  [360, [0.4, 1], [0.4, 1]],
+];
+
+/** The bitrate in words against what platforms suggest for the picture:
+ * "about right for 1080p30", "low for 1080p60 (platforms suggest 4.5–9 Mb/s)". */
+export function bitrateWords(
+  bps: number | null | undefined,
+  height: number | null | undefined,
+  fps: number | null | undefined,
+): { readonly severity: Severity; readonly words: string } | null {
+  if (!bps || !height || bps <= 0 || height <= 0) return null;
+  const row = SUGGESTED_MBPS.find(([rowHeight]) => height >= rowHeight * 0.9) ?? SUGGESTED_MBPS[SUGGESTED_MBPS.length - 1]!;
+  const high = (fps ?? 30) > 40;
+  const [low, top] = high ? row[2] : row[1];
+  const picture = `${row[0]}p${high ? 60 : 30}`;
+  const mbps = bps / 1e6;
+  if (mbps < low * 0.8) return { severity: "warn", words: `low for ${picture} (platforms suggest ${low}–${top} Mb/s)` };
+  if (mbps > top * 1.25) return { severity: "ok", words: `more than ${picture} needs; fine if the uplink keeps up` };
+  return { severity: "ok", words: `about right for ${picture}` };
+}
