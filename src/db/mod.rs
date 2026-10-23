@@ -3,6 +3,7 @@
 //! in-place column backfills for contract migrations. WAL mode is enabled for
 //! concurrent reader/writer access.
 
+pub(crate) mod flight_repo;
 mod ingest_repo;
 mod job_repo;
 pub mod log_repo;

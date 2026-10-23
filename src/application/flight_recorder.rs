@@ -15,7 +15,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
 
@@ -35,12 +35,22 @@ pub const FLIGHT_HISTORY_SPAN: Duration = Duration::from_secs(10 * 60);
 pub const FLIGHT_HISTORY_CAP: usize =
     (FLIGHT_HISTORY_SPAN.as_secs() / FLIGHT_SAMPLE_INTERVAL.as_secs()) as usize;
 
+/// Every this many samples, the newest of each pipeline is also persisted.
+pub const FLIGHT_PERSIST_EVERY: u32 = 5;
+
+/// The persisted history's spacing: [`FLIGHT_PERSIST_EVERY`] samples.
+pub const FLIGHT_PERSIST_INTERVAL: Duration =
+    Duration::from_secs(FLIGHT_SAMPLE_INTERVAL.as_secs() * FLIGHT_PERSIST_EVERY as u64);
+
+/// The most samples one trace request returns; longer windows are thinned.
+pub const FLIGHT_MAX_POINTS: usize = 2_000;
+
 /// The trace format's name and version, for files exported from the page.
 pub const TRACE_SCHEMA: &str = "restream.trace.v1";
 
 /// The selected ingest at one instant. A value the publisher's protocol
 /// does not report is absent, never zero.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct IngestHealth {
     pub input_id: String,
@@ -63,7 +73,7 @@ pub struct IngestHealth {
     pub receive_buffer: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RingHealth {
     pub fill: u64,
@@ -74,7 +84,7 @@ pub struct RingHealth {
 }
 
 /// The pipeline's outputs at one instant.
-#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct OutputsHealth {
     pub wanted: u32,
@@ -92,7 +102,7 @@ pub struct OutputsHealth {
     pub worst_feed_lag: u64,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct FlightSample {
     pub at_ms: u64,
@@ -111,6 +121,10 @@ pub struct FlightTrace {
     /// After when the trace is complete: the recorder started then, the
     /// pipeline appeared then, or older samples were dropped.
     pub complete_from_ms: u64,
+    /// Where the full-rate samples begin; older ones, from the persisted
+    /// history, are [`FLIGHT_PERSIST_INTERVAL`] apart.
+    pub detailed_from_ms: u64,
+    pub persisted_interval_ms: u64,
     pub samples: Vec<FlightSample>,
 }
 
@@ -325,8 +339,150 @@ impl FlightRecorder {
             pipeline_id: pipeline_id.to_string(),
             interval_ms: FLIGHT_SAMPLE_INTERVAL.as_millis() as u64,
             complete_from_ms: trace.complete_from_ms,
+            detailed_from_ms: trace.complete_from_ms,
+            persisted_interval_ms: FLIGHT_PERSIST_INTERVAL.as_millis() as u64,
             samples: trace.samples.range(first..).cloned().collect(),
         })
+    }
+
+    /// The newest sample of every pipeline, to persist.
+    pub fn newest(&self) -> Vec<(String, FlightSample)> {
+        let traces = crate::sync::lock(&self.traces);
+        traces
+            .iter()
+            .filter_map(|(pipeline_id, trace)| {
+                Some((pipeline_id.clone(), trace.samples.back()?.clone()))
+            })
+            .collect()
+    }
+
+    /// The kept samples in `[since_ms, until_ms)` and where the kept run
+    /// begins; `None` for a pipeline the recorder does not know.
+    fn memory_window(
+        &self,
+        pipeline_id: &str,
+        since_ms: u64,
+        until_ms: u64,
+    ) -> Option<(u64, Vec<FlightSample>)> {
+        let traces = crate::sync::lock(&self.traces);
+        let trace = traces.get(pipeline_id)?;
+        let first = trace
+            .samples
+            .partition_point(|sample| sample.at_ms < since_ms);
+        let end = trace
+            .samples
+            .partition_point(|sample| sample.at_ms < until_ms);
+        Some((
+            trace.complete_from_ms,
+            trace
+                .samples
+                .range(first..end.max(first))
+                .cloned()
+                .collect(),
+        ))
+    }
+}
+
+/// At most `max` samples, evenly spread, the first and last always kept.
+pub fn thin(samples: Vec<FlightSample>, max: usize) -> Vec<FlightSample> {
+    let len = samples.len();
+    if len <= max || max < 2 {
+        return samples;
+    }
+    let mut picked = Vec::with_capacity(max);
+    let mut next = 0usize;
+    for (index, sample) in samples.into_iter().enumerate() {
+        // The i-th pick is at round(i * (len - 1) / (max - 1)).
+        let want = (next * (len - 1) + (max - 1) / 2) / (max - 1);
+        if index == want {
+            picked.push(sample);
+            next += 1;
+            if next == max {
+                break;
+            }
+        }
+    }
+    picked
+}
+
+/// A pipeline's trace over `[since_ms, until_ms)`: the persisted history
+/// for what the memory no longer holds, then the full-rate samples, thinned
+/// to `max_points`. `None` when neither knows the pipeline.
+pub async fn trace_window(
+    recorder: &FlightRecorder,
+    pool: &SqlitePool,
+    pipeline_id: &str,
+    since_ms: u64,
+    until_ms: u64,
+    max_points: usize,
+) -> Option<FlightTrace> {
+    let memory = recorder.memory_window(pipeline_id, since_ms, until_ms);
+    let detailed_from_ms = memory.as_ref().map_or(until_ms, |(from, _)| *from);
+    let mut samples = Vec::new();
+    let mut oldest = memory.as_ref().map(|(from, _)| *from);
+    if since_ms < detailed_from_ms {
+        let to_i64 = |ms: u64| i64::try_from(ms).unwrap_or(i64::MAX);
+        if let Ok(rows) = crate::db::flight_repo::window(
+            pool,
+            pipeline_id,
+            to_i64(since_ms),
+            to_i64(detailed_from_ms.min(until_ms)),
+        )
+        .await
+        {
+            samples.extend(
+                rows.into_iter()
+                    .filter_map(|(_, json)| serde_json::from_str::<FlightSample>(&json).ok()),
+            );
+        }
+        if let Ok(Some(first)) = crate::db::flight_repo::oldest(pool, pipeline_id).await {
+            let first = u64::try_from(first).unwrap_or(0);
+            oldest = Some(oldest.map_or(first, |kept| kept.min(first)));
+        }
+    }
+    if memory.is_none() && samples.is_empty() {
+        return None;
+    }
+    if let Some((_, recent)) = memory {
+        samples.extend(recent);
+    }
+    Some(FlightTrace {
+        schema: TRACE_SCHEMA,
+        pipeline_id: pipeline_id.to_string(),
+        interval_ms: FLIGHT_SAMPLE_INTERVAL.as_millis() as u64,
+        complete_from_ms: oldest.unwrap_or(since_ms),
+        detailed_from_ms,
+        persisted_interval_ms: FLIGHT_PERSIST_INTERVAL.as_millis() as u64,
+        samples: thin(samples, max_points.clamp(2, FLIGHT_MAX_POINTS)),
+    })
+}
+
+/// Persists the newest samples and drops what is older than `retention`.
+async fn persist(
+    recorder: &FlightRecorder,
+    pool: &SqlitePool,
+    now_ms: u64,
+    retention: Duration,
+    prune: bool,
+) {
+    let rows: Vec<(String, i64, String)> = recorder
+        .newest()
+        .into_iter()
+        .filter_map(|(pipeline_id, sample)| {
+            let json = serde_json::to_string(&sample).ok()?;
+            Some((pipeline_id, i64::try_from(sample.at_ms).ok()?, json))
+        })
+        .collect();
+    if let Err(err) = crate::db::flight_repo::insert_batch(pool, &rows).await {
+        tracing::warn!(error = %err, "flight recorder: persisting samples failed");
+    }
+    if prune {
+        let before = now_ms.saturating_sub(retention.as_millis() as u64);
+        if let Err(err) =
+            crate::db::flight_repo::prune(pool, i64::try_from(before).unwrap_or(0)).await
+        {
+            tracing::warn!(error = %err, "flight recorder: pruning history failed");
+        }
     }
 }
 
@@ -443,10 +599,12 @@ pub async fn run_flight_recorder(
     pool: SqlitePool,
     engine: Arc<MediaEngine>,
     interval: Duration,
+    retention: Option<Duration>,
     shutdown: CancellationToken,
 ) {
     let mut ticks = tokio::time::interval(interval);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut tick: u32 = 0;
     loop {
         tokio::select! {
             () = shutdown.cancelled() => return,
@@ -454,7 +612,22 @@ pub async fn run_flight_recorder(
         }
         hub.refresh_on_demand(&pool, &engine).await;
         let probes = collect_probes(&hub, &engine).await;
-        recorder.record(MediaEngine::now_epoch_ms(), probes);
+        let now_ms = MediaEngine::now_epoch_ms();
+        recorder.record(now_ms, probes);
+        tick = tick.wrapping_add(1);
+        if let Some(retention) = retention
+            && tick % FLIGHT_PERSIST_EVERY == 0
+        {
+            // Prune about once a minute (every sixth persisted tick).
+            persist(
+                &recorder,
+                &pool,
+                now_ms,
+                retention,
+                tick % (FLIGHT_PERSIST_EVERY * 6) == 0,
+            )
+            .await;
+        }
     }
 }
 

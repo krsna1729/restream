@@ -1194,10 +1194,15 @@ Every 2 s, whether or not anyone watches, it samples three things:
 - the source ring;
 - the pipeline's outputs.
 
-It keeps 10 minutes per pipeline, oldest dropped first; a deleted pipeline's
-trace is dropped with it. `?since=` (RFC 3339, inclusive, optional) returns
-only newer samples, so a page polls incrementally. Returns `404` until the
-recorder has sampled the pipeline. The values come from counters the engine
+It keeps the last 10 minutes in memory, and every 10 s also writes each
+pipeline's newest sample to SQLite, kept for `RESTREAM_FLIGHT_HISTORY_HOURS`
+(default 24; 0 keeps only memory). A deleted pipeline's history is dropped
+with it. `?since=` and `?until=` (RFC 3339, optional) bound the window, so a
+page polls incrementally or asks for any span the history holds;
+`?points=` (default and cap 2,000) thins a long window evenly, first and last
+samples kept. `detailedFromMs` says where the 2 s samples begin; older ones
+are `persistedIntervalMs` apart. Returns `404` until the recorder has sampled
+the pipeline. The values come from counters the engine
 already keeps, read once per interval on the recorder's own task.
 
 ```json
@@ -1206,6 +1211,8 @@ already keeps, read once per interval on the recorder's own task.
   "pipelineId": "pipeline_…",
   "intervalMs": 2000,
   "completeFromMs": 1792742000000,
+  "detailedFromMs": 1792742000000,
+  "persistedIntervalMs": 10000,
   "samples": [
     {
       "atMs": 1792742537902,

@@ -59,6 +59,9 @@ export interface Place {
   readonly pipelineId: string | null;
   /** Logs only: the destination to filter to (`o`); dropped on any move. */
   readonly outputId?: string | null;
+  /** Stability Lab only: the replay window (`from`, `to` in epoch ms; no
+   * `to` follows now); dropped on any move. */
+  readonly replay?: { readonly fromMs: number; readonly toMs: number | null } | null;
 }
 
 /**
@@ -69,6 +72,8 @@ export type PlaceSearch = {
   readonly w: Workspace;
   readonly p?: string;
   readonly o?: string;
+  readonly from?: string;
+  readonly to?: string;
 } & Record<string, unknown>;
 
 function isWorkspace(value: unknown): value is Workspace {
@@ -81,13 +86,23 @@ function isWorkspace(value: unknown): value is Workspace {
 export function placeFromSearch(search: Record<string, unknown>): Place {
   const pipelineId = search.p;
   const outputId = search.o;
+  const fromMs = Number(search.from);
+  const toMs = search.to === undefined ? null : Number(search.to);
+  const replay =
+    search.from !== undefined && Number.isFinite(fromMs) && (toMs === null || Number.isFinite(toMs))
+      ? { fromMs, toMs }
+      : null;
   return {
     workspace: isWorkspace(search.w) ? search.w : "fleet",
     pipelineId:
       typeof pipelineId === "string" && pipelineId !== "" ? pipelineId : null,
     ...(typeof outputId === "string" && outputId !== "" ? { outputId } : {}),
+    ...(replay ? { replay } : {}),
   };
 }
+
+/** The query keys a place owns; every other parameter is kept as it was. */
+const PLACE_KEYS: ReadonlySet<string> = new Set(["w", "p", "o", "from", "to"]);
 
 /** The search a place names; `p` is absent without a pipeline. */
 export function placeSearch(
@@ -96,12 +111,14 @@ export function placeSearch(
 ): PlaceSearch {
   // fromEntries defines own properties, so `__proto__` stays a parameter.
   const rest = Object.fromEntries(
-    Object.entries(search).filter(([key]) => key !== "w" && key !== "p" && key !== "o"),
+    Object.entries(search).filter(([key]) => !PLACE_KEYS.has(key)),
   );
   return {
     w: place.workspace,
     ...(place.pipelineId === null ? {} : { p: place.pipelineId }),
     ...(place.outputId ? { o: place.outputId } : {}),
+    ...(place.replay ? { from: String(Math.round(place.replay.fromMs)) } : {}),
+    ...(place.replay && place.replay.toMs !== null ? { to: String(Math.round(place.replay.toMs)) } : {}),
     ...rest,
   };
 }

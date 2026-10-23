@@ -253,6 +253,8 @@ pub async fn run_app(config: Arc<AppConfig>) {
         pool.clone(),
         engine.clone(),
         crate::application::flight_recorder::FLIGHT_SAMPLE_INTERVAL,
+        (config.flight_history_hours > 0)
+            .then(|| std::time::Duration::from_secs(config.flight_history_hours * 3600)),
         projector_stop.clone(),
     ));
     tokio::spawn(crate::api::alerts::run_alert_notifier(

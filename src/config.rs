@@ -386,6 +386,10 @@ pub struct AppConfig {
     /// The dashboard's public URL (`RESTREAM_PUBLIC_URL`): notifications
     /// link back to it. `None` sends no links.
     pub public_url: Option<String>,
+    /// How long the flight recorder's persisted history reaches back
+    /// (`RESTREAM_FLIGHT_HISTORY_HOURS`, default 24, at most a week); 0
+    /// keeps only the last 10 minutes, in memory.
+    pub flight_history_hours: u64,
     /// The contact in Web Push VAPID tokens (`RESTREAM_PUSH_SUBJECT`): a
     /// `mailto:` or `https:` URL push services may use to reach the operator.
     pub push_subject: String,
@@ -686,6 +690,7 @@ impl Default for AppConfig {
             initial_admin_password: None,
             secure_session_cookies: false,
             public_url: None,
+            flight_history_hours: 24,
             push_subject: DEFAULT_PUSH_SUBJECT.to_string(),
             rtmps_extra_trust_roots_pem_path: None,
             moq_ca_dir: None,
@@ -797,6 +802,7 @@ impl AppConfig {
         let initial_admin_password = env_var("RESTREAM_INITIAL_ADMIN_PASSWORD");
         let secure_session_cookies = env_bool("RESTREAM_SECURE_SESSION_COOKIES").unwrap_or(false);
         let public_url = env_var("RESTREAM_PUBLIC_URL").filter(|value| !value.is_empty());
+        let flight_history_hours = env_u64("RESTREAM_FLIGHT_HISTORY_HOURS", 24).min(24 * 7);
         let push_subject = env_var("RESTREAM_PUSH_SUBJECT")
             .filter(|value| value.starts_with("mailto:") || value.starts_with("https://"))
             .unwrap_or_else(|| DEFAULT_PUSH_SUBJECT.to_string());
@@ -874,6 +880,7 @@ impl AppConfig {
             initial_admin_password,
             secure_session_cookies,
             public_url,
+            flight_history_hours,
             push_subject,
             rtmps_extra_trust_roots_pem_path,
             moq_ca_dir,

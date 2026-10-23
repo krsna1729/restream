@@ -132,7 +132,7 @@ export const GUIDES: readonly Guide[] = [
     steps: [
       { text: "Open Stability Lab and pick A platform blips for 20 s.", workspace: "stability" },
       { text: "Play it under Engine backoff, then under Retry at once: the second keeps the shards busy with handshakes long after the outage." },
-      { text: "Replay a pipeline to see the same view built from what the engine recorded." },
+      { text: "Replay a pipeline to see the same view built from what the engine recorded; drag across its history, or open an incident and press Replay, to pick the span." },
     ],
   },
   {

@@ -412,6 +412,9 @@ pub async fn pipelines_delete_handler(
             refresh_srt_ingest_policy_store(&state).await;
             // Its watch links go with it.
             state.share_links.forget_pipeline(&id).await;
+            // Its replay history goes with it; a failure only leaves rows the
+            // retention prune removes.
+            let _ = crate::db::flight_repo::forget(&state.db, &id).await;
             Json(serde_json::json!({"message": format!("Pipeline {} deleted", id)})).into_response()
         }
         Ok(false) => (StatusCode::NOT_FOUND, "Pipeline not found").into_response(),
