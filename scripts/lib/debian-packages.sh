@@ -147,8 +147,27 @@ restream_debian_apt() {
     if ((status != 0)); then
         echo "apt-get $1 failed (exit $status); last output:" >&2
         tail -n 40 "$log" >&2
+        restream_debian_demote_mirror
     fi
     return "$status"
+}
+
+# GitHub's Ubuntu runners fetch through the apt `mirror` method from
+# /etc/apt/apt-mirrors.txt, which falls over to the next mirror on errors but
+# not on a download that only crawls; such stalls on the first (Azure) mirror
+# are what time installs out. After a failed run, drop the first mirror so the
+# next attempt fetches from the next one. Hosts without that list are untouched,
+# and the last mirror is never dropped.
+restream_debian_demote_mirror() {
+    local list=/etc/apt/apt-mirrors.txt
+    [[ -f "$list" ]] || return 0
+    local mirrors
+    mirrors=$(grep -c . "$list" || true)
+    ((mirrors > 1)) || return 0
+    echo "debian-packages: dropping apt mirror $(grep -m1 . "$list" | cut -f1)" >&2
+    restream_run_as_root bash -c \
+        'awk "NF && !dropped { dropped = 1; next } 1" "$1" >"$1.new" && mv "$1.new" "$1"' \
+        bash "$list"
 }
 
 restream_debian_install_groups() {
