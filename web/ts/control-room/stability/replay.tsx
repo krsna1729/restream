@@ -61,7 +61,9 @@ function ReplayPlayer(props: { pipelineId: string; window: ReplayWindow; onWindo
     () => getFlightRecorder(props.pipelineId, new Date(Date.now() - DAY_MS), { points: 360 }),
     60_000,
   );
-  const oldestMs = overview.value?.completeFromMs ?? nowMs - 10 * 60_000;
+  // A span may reach back before the history starts (that part is empty),
+  // never past the day the history can hold.
+  const oldestMs = Math.min(overview.value?.completeFromMs ?? nowMs, nowMs - DAY_MS);
   const window = clampWindow(props.window, oldestMs, nowMs);
   const { fromMs, toMs } = edges(window, nowMs);
   const following = window.toMs === null;
@@ -118,7 +120,7 @@ function ReplayPlayer(props: { pipelineId: string; window: ReplayWindow; onWindo
           measured
           follow={following}
           title="pipeline"
-          footer={footer(trace.value, fromMs)}
+          footer={footer(trace.value)}
         />
       )}
     </>
@@ -126,9 +128,11 @@ function ReplayPlayer(props: { pipelineId: string; window: ReplayWindow; onWindo
 }
 
 /** Which samples the story is made of, in words. */
-function footer(trace: FlightTrace, fromMs: number): string {
+function footer(trace: FlightTrace): string {
   const detailed = trace.detailedFromMs ?? trace.completeFromMs;
-  if (fromMs >= detailed) return "restream flight recorder · measured every 2 s, modelled in between";
+  // Only samples actually shown decide it: a span reaching back before the
+  // recorder started holds no older, coarser ones.
+  if ((trace.samples[0]?.atMs ?? detailed) >= detailed) return "restream flight recorder · measured every 2 s, modelled in between";
   return `restream flight recorder · measured every ${Math.round((trace.persistedIntervalMs ?? 10_000) / 1000)} s before ${absoluteTime(detailed, Date.now())}, every 2 s after, modelled in between`;
 }
 
