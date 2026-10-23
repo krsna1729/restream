@@ -383,6 +383,12 @@ export function buildRuntimeStateStreamUrl(since?: string): string {
   return withBasePath(path);
 }
 
+/** A PNG still of a stored media file (the engine picks a frame a few
+ * seconds in); 404 when the file has no picture. */
+export function mediaPosterUrl(filename: string): string {
+  return withBasePath(`/api/v1/media/${encodeURIComponent(filename)}/poster`);
+}
+
 /** The HLS preview of what a pipeline sends (its program). */
 export function programPreviewUrl(pipelineId: string): string {
   return withBasePath(`/hls/${encodeURIComponent(pipelineId)}/master.m3u8`);

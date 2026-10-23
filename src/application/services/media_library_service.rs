@@ -23,6 +23,9 @@ use super::error::{ServiceError, ServiceResult};
 use super::ingest_service::IngestService;
 use super::pipeline_service::PipelineService;
 
+/// Posters extracted at once; the rest wait their turn.
+const POSTER_CONCURRENCY: usize = 2;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Recording metadata projected onto a media-library row when a file is backed
 /// by a persisted recording session.
@@ -337,6 +340,27 @@ impl MediaLibraryService {
         tokio::task::spawn_blocking(move || crate::media::file_analysis::analyze_media_file(&path))
             .await
             .map_err(|error| format!("analysis task failed: {error}"))?
+    }
+
+    /// A PNG poster of one frame of a stored file. FFmpeg runs on the
+    /// blocking pool, at most `POSTER_CONCURRENCY` at a time so a library
+    /// page asking for many cannot crowd out other blocking work; a panic
+    /// inside FFmpeg is an error for this poster, not the engine.
+    pub async fn media_poster(&self, path: PathBuf) -> Result<Vec<u8>, String> {
+        static PERMITS: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+        let _permit = PERMITS
+            .get_or_init(|| tokio::sync::Semaphore::new(POSTER_CONCURRENCY))
+            .acquire()
+            .await
+            .map_err(|error| format!("poster queue closed: {error}"))?;
+        tokio::task::spawn_blocking(move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                crate::media::poster::extract_poster(&path)
+            }))
+            .unwrap_or_else(|_| Err("poster extraction panicked".to_string()))
+        })
+        .await
+        .map_err(|error| format!("poster task failed: {error}"))?
     }
 
     /// Enables recording for one pipeline and starts the runtime recording task

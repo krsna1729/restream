@@ -31,6 +31,71 @@ async fn media_analysis_reports_sparse_checked_in_fixture() {
     let _ = std::fs::remove_dir_all(temp_dir);
 }
 
+#[tokio::test]
+async fn a_media_poster_is_a_png_revalidated_by_its_etag() {
+    let (app, cookie, temp_dir, _pool) = authenticated_app_with_temp_media().await;
+    let fixture = restream::test_fixtures::sparse_gop_mp4_fixture()
+        .expect("checked-in sparse GOP fixture should exist");
+    tokio::fs::copy(&fixture, temp_dir.join("clip.mp4"))
+        .await
+        .unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            "/api/v1/media/clip.mp4/poster",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers()["content-type"], "image/png");
+    let tag = resp.headers()["etag"].to_str().unwrap().to_string();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&body[..8], b"\x89PNG\r\n\x1a\n");
+
+    // The browser's copy is still good: no second decode, no body.
+    let again = Request::builder()
+        .method("GET")
+        .uri("/api/v1/media/clip.mp4/poster")
+        .header("Cookie", &cookie)
+        .header("If-None-Match", &tag)
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(again).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+
+    // A missing file, and a path out of the library, are refused.
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            "/api/v1/media/none.mp4/poster",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            "/api/v1/media/..%2Fsecret/poster",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert!(resp.status().is_client_error());
+
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
 // --- Round 7 #1: media delete path traversal guard ---
 
 #[tokio::test]
