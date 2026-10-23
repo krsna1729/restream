@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
-const { degradedTotal, takeFleetSample } = await loadCompiledFrontendModule(
+const { degradedTotal, sentSince, takeFleetSample } = await loadCompiledFrontendModule(
   "control-room/fleet-history.js",
 );
 const { worstFirst } = await loadCompiledFrontendModule("control-room/fleet-model.js");
@@ -95,4 +95,12 @@ test("the fleet table puts degraded first, then starting, healthy and idle", () 
   );
   // The caller's rows keep their order.
   assert.equal(rows[0].name, "idle");
+});
+
+test("traffic since midnight sums the samples from then, and says when counting started", () => {
+  const window = { completeFromMs: 1_000, samples: [{ atMs: 900, sentBytes: 5 }, { atMs: 2_000, sentBytes: 40 }, { atMs: 3_000, sentBytes: 2 }] };
+  assert.deepEqual(sentSince(window, 1_500), { bytes: 42, fromMs: 1_500 });
+  // The history starts after the asked moment (a restart): counted from it.
+  assert.deepEqual(sentSince({ ...window, completeFromMs: 2_500 }, 1_500), { bytes: 42, fromMs: 2_500 });
+  assert.equal(sentSince(null, 0), null);
 });

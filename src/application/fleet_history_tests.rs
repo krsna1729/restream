@@ -7,6 +7,7 @@ fn sample(at_ms: u64) -> FleetSample {
         headroom_percent: 50.0,
         delivering_percent: None,
         degraded: DegradedByLayer::default(),
+        sent_bytes: 0,
     }
 }
 
@@ -188,5 +189,34 @@ async fn the_sample_counts_wanted_outputs_as_the_control_room_does() {
     assert_eq!(
         none_wanted.headroom_percent, 0.0,
         "over capacity: no headroom"
+    );
+}
+
+#[test]
+fn bytes_sent_count_growth_and_a_restarted_or_new_output_whole() {
+    let mut seen = HashMap::new();
+    let at = |pairs: &[(&str, u64)]| {
+        pairs
+            .iter()
+            .map(|(id, bytes)| (id.to_string(), *bytes))
+            .collect()
+    };
+    assert_eq!(
+        bytes_sent_since(&mut seen, at(&[("a", 100), ("b", 50)])),
+        150,
+        "first look: all of each"
+    );
+    assert_eq!(
+        bytes_sent_since(&mut seen, at(&[("a", 160), ("b", 50)])),
+        60,
+        "growth only"
+    );
+    // b restarted (its counter went back), c is new, a is gone.
+    assert_eq!(bytes_sent_since(&mut seen, at(&[("b", 20), ("c", 5)])), 25);
+    assert_eq!(seen.len(), 2, "a removed output is forgotten");
+    assert_eq!(
+        bytes_sent_since(&mut seen, at(&[("a", 30)])),
+        30,
+        "back again: counted from its start"
     );
 }

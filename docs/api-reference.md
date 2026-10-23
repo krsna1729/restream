@@ -1168,7 +1168,8 @@ ms after the previous one, so a clock step back does not reorder history.
 {
   "samples": [
     { "atMs": 1792152000000, "headroomPercent": 74.5, "deliveringPercent": 50.0,
-      "degraded": { "ingest": 1, "feed": 0, "shard": 0, "destination": 0 } }
+      "degraded": { "ingest": 1, "feed": 0, "shard": 0, "destination": 0 },
+      "sentBytes": 28125000 }
   ],
   "completeFromMs": 1792151000000,
   "intervalMs": 5000,
@@ -1181,6 +1182,9 @@ ms after the previous one, so a clock step back does not reorder history.
 - `deliveringPercent`: wanted outputs that are converged and flowing; `null`
   when none is wanted.
 - `degraded`: wanted outputs with a diagnosis, by `diagnosis.layer`.
+- `sentBytes`: bytes every output sent since the previous sample (an output
+  new or restarted since then counts from its start); a span's traffic is
+  the sum of its samples. Fleet shows today's.
 - `completeFromMs`: history is complete only after this instant (server
   start or the latest dropped sample).
 - `newestMs`: the newest sample kept (`null` before the first). Once it is at

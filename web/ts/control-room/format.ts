@@ -42,3 +42,13 @@ export function formatBytes(bytes: number | null | undefined): string {
 export function counted(count: number, noun: string, plural = `${noun}s`): string {
   return `${count.toLocaleString()} ${count === 1 ? noun : plural}`;
 }
+
+/** Bytes in decimal units, as traffic is billed: "412 GB", "1.3 TB". */
+export function formatTraffic(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined || !Number.isFinite(bytes) || bytes < 0) return "--";
+  const units: ReadonlyArray<readonly [number, string]> = [[1e12, "TB"], [1e9, "GB"], [1e6, "MB"], [1e3, "kB"]];
+  for (const [size, unit] of units) {
+    if (bytes >= size) return `${(bytes / size).toFixed(bytes >= size * 100 ? 0 : 1)} ${unit}`;
+  }
+  return `${Math.round(bytes)} B`;
+}

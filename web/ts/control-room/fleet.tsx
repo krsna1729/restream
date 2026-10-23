@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 
+import { getFleetHistory } from "../core/api.js";
 import type { AlertsSnapshot } from "../core/api-types.js";
 import type { CapacitySnapshot } from "../core/generated/runtime-state.js";
 import { Kpi, KpiRow, MeterRow } from "../ui/kpi.js";
@@ -10,18 +11,20 @@ import { TimeSeries } from "../ui/time-series.js";
 import { StatusBadge, utilizationTone } from "../ui/tone.js";
 import type { Tone } from "../ui/tone.js";
 import type { SystemMetrics } from "../types.js";
-import { degradedTotal } from "./fleet-history.js";
+import { degradedTotal, sentSince } from "./fleet-history.js";
 import type { FleetSample } from "./fleet-history.js";
 import { attentionGroups, buildFleetModel, describeCause, roomFor, worstFirst } from "./fleet-model.js";
 import type { AttentionGroup, FleetModel, FleetPipelineRow } from "./fleet-model.js";
-import { counted, formatBps, formatPercent } from "./format.js";
+import { counted, formatBps, formatPercent, formatTraffic } from "./format.js";
 import { PipelineTable } from "./pipeline-table.js";
-import { Freshness, useOpenAlerts } from "./polled.js";
+import { Freshness, useOpenAlerts, usePolled } from "./polled.js";
 import type { Polled } from "./polled.js";
 import { PlaceLink } from "./router.js";
+import { localDay } from "./schedule-model.js";
 import type { LiveSnapshot } from "./store.js";
 import { LogsLink } from "./logs-link.js";
 import { explainCause, troubleTitle } from "./trouble-model.js";
+import { When } from "./when-view.js";
 
 export function Fleet({ live }: { live: LiveSnapshot }) {
   const model = useMemo(
@@ -78,6 +81,10 @@ function Headline(props: {
 }) {
   const { model, capacity } = props;
   const alerts = props.alerts.value;
+  // Today's traffic from the engine's own history (kept for a day).
+  const midnight = localDay(Date.now());
+  const today = usePolled(["fleet-today", midnight], () => getFleetHistory({ since: new Date(midnight) }), 60_000);
+  const sent = sentSince(today.value, midnight);
   const critical = alerts?.alerts.filter((alert) => alert.severity === "critical").length ?? 0;
   const delivering = model.outputsWanted === 0 ? null : model.outputsDelivering / model.outputsWanted;
   const headroom = capacity ? Math.max(0, 1 - capacity.projectedUtilization) : null;
@@ -96,7 +103,21 @@ function Headline(props: {
         value={`${model.pipelinesReceiving} / ${model.pipelinesTotal}`}
         foot={`${model.pipelinesHealthy} fully healthy`}
       />
-      <Kpi label="Egress" value={formatBps(model.egressBps)} foot={`ingest ${formatBps((props.ingestBps ?? NaN) * 1000)}`} />
+      <Kpi
+        label="Egress"
+        value={formatBps(model.egressBps)}
+        foot={
+          <>
+            ingest {formatBps((props.ingestBps ?? NaN) * 1000)}
+            {sent && sent.bytes > 0 && (
+              <>
+                {" · "}
+                {formatTraffic(sent.bytes)} sent {sent.fromMs > midnight ? <>since <When atMs={sent.fromMs} show="at" noZone /></> : "today"}
+              </>
+            )}
+          </>
+        }
+      />
       <Kpi
         label="Open incidents"
         value={alerts ? alerts.alerts.length.toLocaleString() : "--"}

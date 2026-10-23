@@ -155,6 +155,20 @@ impl MediaEngine {
         self.egresses.active.read().await.len()
     }
 
+    /// Each running output's cumulative bytes sent, for the fleet history's
+    /// traffic totals: a read lock and one atomic load per output.
+    pub async fn egress_bytes_sent(&self) -> Vec<(String, u64)> {
+        self.egresses
+            .active
+            .read()
+            .await
+            .iter()
+            .map(|(output_id, egress)| {
+                (output_id.clone(), egress.bytes_sent.load(Ordering::Relaxed))
+            })
+            .collect()
+    }
+
     pub async fn active_egress_diag_snapshots(&self, pipeline_id: &str) -> Vec<EgressDiagSnapshot> {
         let egresses = self.egresses.active.read().await;
         egresses

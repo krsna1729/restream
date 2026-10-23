@@ -63,3 +63,16 @@ export function degradedTotal(sample: FleetSample): number | null {
     ? null
     : LAYERS.reduce((sum, layer) => sum + (sample.degraded?.[layer] ?? 0), 0);
 }
+
+/** What the engine sent from `fromMs` (local midnight, say): the sum of
+ * the engine history's per-sample traffic, and from when it is counted
+ * (later than asked when the history starts later: a restart). */
+export function sentSince(
+  window: { samples: readonly { atMs: number; sentBytes?: number }[]; completeFromMs: number } | null,
+  fromMs: number,
+): { bytes: number; fromMs: number } | null {
+  if (window === null) return null;
+  let bytes = 0;
+  for (const sample of window.samples) if (sample.atMs >= fromMs) bytes += sample.sentBytes ?? 0;
+  return { bytes, fromMs: Math.max(fromMs, window.completeFromMs) };
+}
