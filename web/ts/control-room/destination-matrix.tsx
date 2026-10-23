@@ -305,7 +305,7 @@ export function DestinationMatrix(props: {
           }))}
         />
         {protocols.length > 1 && (
-          <div className="lg:ml-auto">
+          <div className="min-w-0 lg:ml-auto">
             <ChipGroup<EgressProtocol | "any">
               label="Protocol"
               value={protocol}

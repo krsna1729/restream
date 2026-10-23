@@ -1691,3 +1691,47 @@ test("inspect: a node's metric cards and bottleneck judgement, then the global m
     }
   }
 });
+
+test("channels: platforms from stored URLs, and a confirmed bulk go-live", async ({ page }) => {
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  const stamp = Date.now();
+  const name = `cr-channels-${stamp}`;
+  const created = await page.request.post("/api/v1/pipelines", {
+    data: { name, streamKey: `crchannels_${stamp}` },
+  });
+  expect(created.ok()).toBe(true);
+  const pipelineId: string = (await created.json()).pipeline.id;
+  try {
+    for (const [label, url] of [
+      ["cr-ch-yt", "rtmp://a.rtmp.youtube.com/live2/cr-key"],
+      ["cr-ch-tw", "rtmp://live.twitch.tv/app/cr-key"],
+    ]) {
+      const output = await page.request.post(`/api/v1/pipelines/${pipelineId}/outputs`, {
+        data: { name: label, url, config: { video: { mode: "source" }, audio: { mode: "all" } } },
+      });
+      expect(output.ok()).toBe(true);
+    }
+
+    await page.goto("/?w=channels");
+    await page.getByRole("combobox", { name: "Pipeline" }).selectOption(pipelineId);
+    const youtube = page.getByRole("listitem", { name: "Channel cr-ch-yt" });
+    await expect(youtube).toContainText("YouTube");
+    await expect(page.getByRole("listitem", { name: "Channel cr-ch-tw" })).toContainText("Twitch");
+    await expect(youtube.getByRole("switch")).toHaveAttribute("aria-checked", "false");
+
+    // Bulk actions act on the filtered set: this pipeline's two channels.
+    await page.getByRole("button", { name: "Go live (2)" }).click();
+    const confirm = page.getByRole("dialog", { name: "Confirm bulk action" });
+    await expect(confirm).toContainText("Go live on 2 channels?");
+    await confirm.getByRole("button", { name: "Go live on 2" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Going live" })).toContainText("2 / 2");
+    // The engine wants both running; with no publisher they wait for one.
+    await expect(youtube.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+    await expect(youtube).toContainText("waiting for source");
+  } finally {
+    await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
+  }
+});
