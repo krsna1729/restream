@@ -11,6 +11,7 @@ import type {
   RuntimeState,
 } from "../core/generated/runtime-state.js";
 import type { TelemetryRates } from "./rates.js";
+import { explainCause } from "./trouble-model.js";
 
 export interface FleetPipelineRow {
   readonly id: string;
@@ -241,34 +242,9 @@ export function worstFirst(rows: readonly FleetPipelineRow[]): readonly FleetPip
   );
 }
 
-/** One operator sentence for a diagnosis cause. */
+/** A diagnosed cause in a few plain words (`trouble-model.ts` has the fix). */
 export function describeCause(cause: Cause): string {
-  switch (cause.code) {
-    case "noPublisher":
-      return "no publisher connected";
-    case "stageNotProducing":
-      return `stage ${cause.stage} not producing (${cause.phase})`;
-    case "shardPanicked":
-      return `egress shard ${cause.shard} panicked`;
-    case "shardStalled":
-      return `egress shard ${cause.shard} stalled`;
-    case "shardStopped":
-      return `egress shard ${cause.shard} stopped`;
-    case "capacityRefused":
-      return `egress capacity full: ${cause.error}`;
-    case "retriesExhausted":
-      return "retries exhausted";
-    case "retryBudgetNearlySpent":
-      return `retrying · attempt ${cause.attempts} / ${cause.max}`;
-    case "rejected":
-      return cause.phase
-        ? `rejected at ${cause.phase}: ${cause.error}`
-        : `rejected: ${cause.error}`;
-    case "backpressured":
-      return cause.stalled ? "backpressured and stalled" : "backpressured";
-    case "noProgress":
-      return "no progress";
-  }
+  return explainCause(cause).summary;
 }
 
 export type HealthFilter = PipelineHealth["tone"] | "all";

@@ -57,6 +57,8 @@ export interface Place {
   readonly workspace: Workspace;
   /** The pipeline a pipeline workspace shows; kept across workspaces. */
   readonly pipelineId: string | null;
+  /** Logs only: the destination to filter to (`o`); dropped on any move. */
+  readonly outputId?: string | null;
 }
 
 /**
@@ -66,6 +68,7 @@ export interface Place {
 export type PlaceSearch = {
   readonly w: Workspace;
   readonly p?: string;
+  readonly o?: string;
 } & Record<string, unknown>;
 
 function isWorkspace(value: unknown): value is Workspace {
@@ -77,10 +80,12 @@ function isWorkspace(value: unknown): value is Workspace {
 /** The place a parsed query names; an absent or unknown workspace is Fleet. */
 export function placeFromSearch(search: Record<string, unknown>): Place {
   const pipelineId = search.p;
+  const outputId = search.o;
   return {
     workspace: isWorkspace(search.w) ? search.w : "fleet",
     pipelineId:
       typeof pipelineId === "string" && pipelineId !== "" ? pipelineId : null,
+    ...(typeof outputId === "string" && outputId !== "" ? { outputId } : {}),
   };
 }
 
@@ -91,11 +96,12 @@ export function placeSearch(
 ): PlaceSearch {
   // fromEntries defines own properties, so `__proto__` stays a parameter.
   const rest = Object.fromEntries(
-    Object.entries(search).filter(([key]) => key !== "w" && key !== "p"),
+    Object.entries(search).filter(([key]) => key !== "w" && key !== "p" && key !== "o"),
   );
   return {
     w: place.workspace,
     ...(place.pipelineId === null ? {} : { p: place.pipelineId }),
+    ...(place.outputId ? { o: place.outputId } : {}),
     ...rest,
   };
 }

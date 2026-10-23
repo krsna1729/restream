@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
+import type { ReactNode } from "react";
 
 import type { LifecycleEventsSnapshot, OperatorAlert, ResolvedAlert } from "../core/api-types.js";
 import type { FleetHistoryWindow } from "../core/generated/runtime-state.js";
 import { degradedTotal } from "./fleet-history.js";
-import { formatAge } from "./format.js";
 import {
   RESOLVED_WINDOWS,
   correlationWindow,
@@ -27,6 +27,8 @@ import { TimeSeries } from "../ui/time-series.js";
 import { StatusBadge } from "../ui/tone.js";
 import { useNow } from "./store.js";
 import type { LiveSnapshot } from "./store.js";
+import { When } from "./when-view.js";
+import { absoluteTime, duration } from "./when.js";
 
 /** Open incidents, what failed and what did not, and what to do. */
 export function Incidents({ live }: { live: LiveSnapshot }) {
@@ -157,7 +159,7 @@ function Queue(props: {
   const now = useNow(1000);
   const [severity, setSeverity] = useState<"all" | "critical" | "warning">("all");
   const shownOpen = props.open.filter((alert) => severity === "all" || alert.severity === severity);
-  const item = (alert: OperatorAlert, sub: string) => (
+  const item = (alert: OperatorAlert, sub: ReactNode) => (
     <li key={alert.id}>
       <button
         type="button"
@@ -173,9 +175,7 @@ function Queue(props: {
             {alert.severity}
           </StatusBadge>
         </span>
-        <span className="text-xs text-base-content/70">
-          {affected(alert, props.names)} · {sub}
-        </span>
+        <span className="text-xs text-base-content/70">{sub}</span>
       </button>
     </li>
   );
@@ -197,14 +197,30 @@ function Queue(props: {
       <div className="scrollbar-thin max-h-[70dvh] overflow-y-auto">
         <ul className="divide-y divide-base-content/5">
           {shownOpen.map((alert) =>
-            item(alert, alert.firstSeen ? `open ${formatAge(Date.parse(alert.firstSeen), now)}` : "open"),
+            item(
+              alert,
+              alert.firstSeen ? (
+                <>
+                  open {duration(now - Date.parse(alert.firstSeen))} · since <When atMs={Date.parse(alert.firstSeen)} show="at" />
+                </>
+              ) : (
+                "open"
+              ),
+            ),
           )}
         </ul>
         {props.resolved.length > 0 && (
           <>
             <h3 className="kicker border-t border-base-content/10 px-3 pt-3 pb-1">Resolved</h3>
             <ul className="divide-y divide-base-content/5 opacity-80">
-              {props.resolved.map(({ alert, resolvedAt }) => item(alert, `resolved ${formatAge(Date.parse(resolvedAt), now)} ago`))}
+              {props.resolved.map(({ alert, resolvedAt }) =>
+                item(
+                  alert,
+                  <>
+                    resolved <When atMs={Date.parse(resolvedAt)} show="ago" />
+                  </>,
+                ),
+              )}
             </ul>
           </>
         )}
@@ -240,9 +256,14 @@ function Detail(props: {
             {isOpen ? "open" : "resolved"}
           </StatusBadge>
           {alert.pipelineId && (
-            <PlaceLink place={{ workspace: "operate", pipelineId: alert.pipelineId }} className="btn btn-sm">
-              Operate pipeline
-            </PlaceLink>
+            <>
+              <PlaceLink place={{ workspace: "logs", pipelineId: alert.pipelineId, outputId: alert.outputId ?? null }} className="btn btn-sm btn-outline">
+                {alert.outputId ? "Destination logs" : "Pipeline logs"}
+              </PlaceLink>
+              <PlaceLink place={{ workspace: "operate", pipelineId: alert.pipelineId }} className="btn btn-sm btn-outline">
+                Operate pipeline
+              </PlaceLink>
+            </>
           )}
         </>
       }
@@ -274,9 +295,7 @@ function Detail(props: {
           <ol className="space-y-1 text-sm" aria-label="Incident timeline">
             {timeline.map((event) => (
               <li key={event.seq} className="grid grid-cols-[7rem_1fr] gap-2">
-                <time className="tabular-nums text-base-content/70" dateTime={event.timestamp}>
-                  {new Date(event.timestamp).toLocaleTimeString()}
-                </time>
+                <When atMs={Date.parse(event.timestamp)} show="at" seconds noZone className="text-base-content/70" />
                 <span>
                   {event.kind}
                   {event.outputId && ` · ${props.names.get(event.outputId) ?? event.outputId}`}
@@ -310,7 +329,7 @@ function Correlation(props: {
       </div>
       <p className="text-xs text-base-content/70">
         The engine's fleet samples from a minute before the incident opened
-        {first && ` (first at ${new Date(first.atMs).toLocaleTimeString()})`}; the
+        {first && ` (first at ${absoluteTime(first.atMs, Date.now(), { seconds: true })})`}; the
         cursor marks when it opened and, once it did, closed.
       </p>
       {kept !== null && props.fromMs <= kept.completeFromMs && (

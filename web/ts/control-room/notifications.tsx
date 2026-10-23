@@ -38,10 +38,9 @@ import {
   setInTabSetting,
 } from "./browser-notify.js";
 import { ConfirmDelete } from "./confirm.js";
-import { formatAge } from "./format.js";
+import { When } from "./when-view.js";
 import { CHANNEL_KINDS, channelHealth, channelProblem, guessKind } from "./notify-model.js";
 import { useSession } from "./session.js";
-import { useNow } from "./store.js";
 
 const SEVERITY_LABEL: Record<NotifySeverity, string> = {
   critical: "Critical only",
@@ -284,7 +283,6 @@ function ChannelForm(props: { initial: NotifyChannelDraft; editing: boolean; onS
 }
 
 function Channels() {
-  const now = useNow(5000);
   const [channels, setChannels] = useState<NotifyChannel[] | null>(null);
   const [deliveries, setDeliveries] = useState<NotifyDelivery[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
@@ -340,7 +338,7 @@ function Channels() {
               {last.ok ? "Delivered" : "Failed"}
             </StatusBadge>
             <span className="truncate text-xs text-base-content/65">
-              {formatAge(last.atMs, now)} · {last.detail}
+              <When atMs={last.atMs} show="ago" /> · {last.detail}
             </span>
           </span>
         );
@@ -398,9 +396,9 @@ function Channels() {
     {
       id: "when",
       header: "When",
-      width: "8rem",
+      width: "13rem",
       sort: (delivery) => delivery.atMs,
-      cell: (delivery) => <span className="tabular">{formatAge(delivery.atMs, now)}</span>,
+      cell: (delivery) => <When atMs={delivery.atMs} show="both" seconds />,
     },
     { id: "to", header: "To", width: "minmax(9rem,1fr)", sort: (delivery) => delivery.targetName, cell: (delivery) => <span className="truncate">{delivery.targetName}</span> },
     {

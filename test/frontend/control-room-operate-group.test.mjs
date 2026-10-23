@@ -139,7 +139,7 @@ test("the inspection reads only the group's outputs: worst delivery, lag, resync
       id: "b",
       name: "b",
       layer: "destination",
-      cause: "backpressured and stalled",
+      cause: "Stuck: the server is not accepting data",
       ruledOut: ["ingest", "feed", "shard"],
     },
   ]);

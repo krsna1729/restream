@@ -23,7 +23,7 @@ const CONFIDENCE_BADGE: Record<string, string> = {
   estimated: "badge-warning",
 };
 
-/** The engineering view under the cockpit: who owns what, and how sure. */
+/** The view under the cockpit: who owns what, and how sure. */
 export function Inspect(props: { live: LiveSnapshot; pipelineId: string | null }) {
   return (
     <PipelineScope

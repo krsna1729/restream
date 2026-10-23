@@ -99,13 +99,13 @@ test("fleet shows a no-publisher cause live and drops it when the output stops",
       .getByRole("listitem")
       .filter({ hasText: name })
       .filter({ hasNot: page.getByRole("button") });
-    await expect(item).toContainText("no publisher connected");
+    await expect(item).toContainText("No publisher connected");
     await expect(item).toContainText("cr-out");
     await expect(item.getByRole("link", { name })).toHaveAttribute(
       "href",
       new RegExp(`[?&]w=operate&p=${pipelineId}$`),
     );
-    await expect(page.getByRole("status")).toContainText("live · rev");
+    await expect(page.getByRole("status").first()).toContainText("Live ·");
 
     const stop = await page.request.post(
       `/api/v1/pipelines/${pipelineId}/outputs/${outputId}/stop`,
@@ -231,7 +231,7 @@ test("operate: find a pipeline, start and stop an output, promote an input", asy
     await matrixRow.getByRole("button", { name: "Start cr-out" }).click();
     await expect(matrixRow.getByRole("button", { name: "Stop cr-out" })).toBeVisible();
     await expect(matrixRow).toContainText("waiting for source");
-    await expect(matrixRow).toContainText("no publisher connected");
+    await expect(matrixRow).toContainText("No publisher connected");
     await matrixRow.getByRole("button", { name: "Stop cr-out" }).click();
     await expect(matrixRow.getByRole("button", { name: "Start cr-out" })).toBeVisible();
     await expect(matrixRow).toContainText("stopped");
@@ -364,7 +364,7 @@ test("incidents: the correlation reaches back to an incident older than the page
     const incident = page
       .getByRole("region", { name: /^Open/ })
       .getByRole("button")
-      .filter({ hasText: `pipeline ${name}` })
+      .filter({ hasText: `${name}: ` })
       .first();
     await incident.click();
     // The chart spans the open: its cursor is drawn although the page
@@ -515,7 +515,8 @@ test("incidents and capacity: an alert's evidence packet and an engine-made proj
 
     await page.goto("/?w=incidents");
     const queue = page.getByRole("region", { name: /^Open/ });
-    const incident = queue.getByRole("button").filter({ hasText: `pipeline ${name}` }).first();
+    // The title names the pipeline, not its id.
+    const incident = queue.getByRole("button").filter({ hasText: `${name}: No active publisher` }).first();
     await expect(incident).toBeVisible();
     await incident.click();
     const packet = page.getByRole("region", { name: "Evidence packet" });
@@ -541,7 +542,8 @@ test("incidents and capacity: an alert's evidence packet and an engine-made proj
     const resolved = queue
       .getByRole("button")
       .filter({ hasText: /resolved .* ago/ })
-      .filter({ hasText: `pipeline ${pipelineId}` })
+      // The title kept the name it had while open.
+      .filter({ hasText: `${name}: ` })
       .first();
     await expect(resolved).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText("resolved in the last 15m")).toBeVisible();

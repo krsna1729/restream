@@ -120,7 +120,7 @@ export const PAGE_HELP: Record<Workspace, PageHelp> = {
   },
   inspect: {
     purpose: "Which resource is this pipeline really waiting on?",
-    when: "Engineering triage: memory, CPU and queue ownership per node.",
+    when: "When something is slow or stuck and you need to know which resource is the bottleneck.",
     terms: [
       ["Confidence", "Measured (read from the OS or engine), derived (computed from measurements) or estimated (modelled)."],
       ["Egress shard", "A thread that sends to many destinations; the unit of egress capacity."],
@@ -258,7 +258,7 @@ export const PAGE_HELP: Record<Workspace, PageHelp> = {
   },
   architecture: {
     purpose: "How does restream work as a whole?",
-    when: "To build a mental model before operating or engineering it.",
+    when: "To understand what happens to a stream between the encoder and the platforms.",
     terms: [],
     tour: [{ target: '[aria-label="System diagram"]', title: "Click a block", body: "Each block explains its job and links to the page that shows it live." }],
   },
@@ -267,7 +267,7 @@ export const PAGE_HELP: Record<Workspace, PageHelp> = {
 /** The first-run tour: the shell, then one stop per everyday page. */
 export const ONBOARDING: readonly TourStep[] = [
   { workspace: "fleet", title: "Welcome to the control room", body: "A two-minute tour of where things are. Leave it any time with Esc; restart it from the help button (?) in the top bar." },
-  { workspace: "fleet", target: 'nav[aria-label="Workspaces"]', title: "Workspaces", body: "Operate runs the plant, Understand explains it, Manage configures it, Engineer goes deep, Learn teaches it." },
+  { workspace: "fleet", target: 'nav[aria-label="Workspaces"]', title: "Workspaces", body: "Operate runs the plant, Understand explains it, Manage configures it, Diagnose digs into it, Learn teaches it." },
   { workspace: "fleet", target: HEADER, title: "Fleet: the home screen", body: "One verdict for the whole plant, the pipelines that need attention and the host's headroom." },
   { workspace: "channels", target: panel("channels-list"), title: "Channels", body: "Every destination on every platform, with bulk go-live, retry and stop." },
   { workspace: "operate", target: PIPELINE_TABS, title: "One pipeline in depth", body: "Operate, Stream health, Monitor, Inspect and Logs all look at the pipeline you pick." },

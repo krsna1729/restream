@@ -304,3 +304,9 @@ test("attention groups roll causes up across pipelines, largest first", () => {
   );
   assert.equal(groups[1].title, "Destination rejected the stream");
 });
+
+test("a logs link carries its destination, and any other move drops it", () => {
+  assert.deepEqual(placeFromSearch({ w: "logs", p: "p1", o: "out_1" }), { workspace: "logs", pipelineId: "p1", outputId: "out_1" });
+  assert.deepEqual(placeSearch({ x: "1" }, { workspace: "logs", pipelineId: "p1", outputId: "out_1" }), { w: "logs", p: "p1", o: "out_1", x: "1" });
+  assert.deepEqual(placeSearch({ w: "logs", p: "p1", o: "out_1" }, { workspace: "operate", pipelineId: "p1" }), { w: "operate", p: "p1" });
+});

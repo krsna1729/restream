@@ -16,6 +16,7 @@ import { StatusBadge } from "../ui/tone.js";
 import type { Tone } from "../ui/tone.js";
 import { ConfirmDelete } from "./confirm.js";
 import { useSession } from "./session.js";
+import { When } from "./when-view.js";
 import {
   ROLES,
   ROLE_LABEL,
@@ -207,7 +208,7 @@ export function Team() {
       width: "8rem",
       priority: 3,
       sort: (member) => member.createdAtMs,
-      cell: (member) => (member.createdAtMs > 0 ? new Date(member.createdAtMs).toISOString().slice(0, 10) : "install"),
+      cell: (member) => (member.createdAtMs > 0 ? <When atMs={member.createdAtMs} show="ago" /> : "install"),
     },
     {
       id: "actions",
@@ -323,13 +324,9 @@ export function Audit() {
     {
       id: "when",
       header: "When",
-      width: "11rem",
+      width: "15rem",
       sort: (entry) => entry.atMs,
-      cell: (entry) => (
-        <time className="tabular" dateTime={new Date(entry.atMs).toISOString()}>
-          {new Date(entry.atMs).toISOString().replace("T", " ").slice(0, 19)}
-        </time>
-      ),
+      cell: (entry) => <When atMs={entry.atMs} show="both" />,
     },
     {
       id: "who",

@@ -19,7 +19,9 @@ import { StatusBadge } from "../ui/tone.js";
 import type { Tone } from "../ui/tone.js";
 import { ConfirmDelete } from "./confirm.js";
 import { useSession } from "./session.js";
-import { describeCause } from "./fleet-model.js";
+import { LogsLink } from "./logs-link.js";
+import { outputTrouble, troubleTitle } from "./trouble-model.js";
+import { retryWords } from "./when.js";
 import { formatBps } from "./format.js";
 import {
   destinationFilterCounts,
@@ -52,12 +54,7 @@ export function outputState(output: OutputState, delivering: boolean): { tone: T
   return { tone: "info", label: output.convergence === "stopping" ? "stopping" : "starting" };
 }
 
-function cause(output: OutputState): string {
-  if (output.diagnosis) return describeCause(output.diagnosis.cause);
-  if (output.evidence) return output.evidence.error;
-  if (output.backpressure) return `held back: ${output.backpressure}`;
-  return "";
-}
+
 
 /** Seconds until the next attempt, ticking. */
 function RetryCountdown(props: { atMs: number; attempts: number }) {
@@ -65,7 +62,7 @@ function RetryCountdown(props: { atMs: number; attempts: number }) {
   const seconds = Math.max(0, Math.round((props.atMs - now) / 1000));
   return (
     <span className="tabular whitespace-nowrap text-xs text-base-content/70">
-      #{props.attempts} · {seconds > 0 ? `next in ${seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`}` : "now"}
+      {retryWords(props.attempts, seconds * 1000)}
     </span>
   );
 }
@@ -207,10 +204,13 @@ export function DestinationMatrix(props: {
       priority: 2,
       bare: true,
       cell: (row) => {
-        const text = cause(row.output);
-        return text ? (
-          <span className={`block truncate ${row.output.diagnosis ? "text-warning" : "text-base-content/70"}`} title={text}>
-            {text}
+        const trouble = outputTrouble(row.output);
+        return trouble ? (
+          <span className="flex min-w-0 items-baseline gap-2">
+            <span className={`truncate ${row.output.diagnosis ? "text-warning" : "text-base-content/70"}`} title={troubleTitle(trouble)}>
+              {trouble.summary}
+            </span>
+            <LogsLink pipelineId={props.pipelineId} outputId={row.output.id} />
           </span>
         ) : (
           <span className="text-base-content/60">—</span>

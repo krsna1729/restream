@@ -10,6 +10,7 @@ import { usePrefs } from "../../ui/prefs.js";
 import type { Density, ThemeChoice } from "../../ui/prefs.js";
 import { StatusDot } from "../../ui/tone.js";
 import { formatAge } from "../format.js";
+import { absoluteTime, fullTime } from "../when.js";
 import { SAMPLE_STALE_AFTER_MS, useNow } from "../store.js";
 import type { LiveSnapshot } from "../store.js";
 import type { Role } from "../../core/api-types.js";
@@ -25,33 +26,35 @@ export function LiveStatus(props: { live: LiveSnapshot; compact?: boolean }) {
     live.telemetryAtMs === null || live.metricsAtMs === null ? null : Math.min(live.telemetryAtMs, live.metricsAtMs);
   const stale = live.stream !== "live" || sampledAtMs === null || now - sampledAtMs > SAMPLE_STALE_AFTER_MS;
   const tone = live.stream !== "live" ? "bad" : stale ? "warn" : "ok";
-  const label =
-    live.stream === "live" ? `live · rev ${live.state?.revision ?? "--"}` : live.stream;
+  const label = live.stream === "live" ? "Live" : live.stream === "connecting" ? "Connecting" : "Reconnecting";
+  const age = sampledAtMs === null ? "waiting for numbers" : stale ? `numbers ${formatAge(sampledAtMs, now)} old` : "up to date";
   return (
     <span
       role="status"
-      title="Runtime state stream and the age of the oldest sampled source"
+      title={`State stream ${live.stream}, revision ${live.state?.revision ?? "--"}; oldest sample ${formatAge(sampledAtMs, now)} old`}
       className={`inline-flex items-center gap-2 rounded-full border border-base-content/10 bg-base-100 px-2.5 py-1 text-xs tabular ${tone === "ok" ? "" : tone === "warn" ? "text-warning" : "text-error"}`}
     >
       <StatusDot tone={tone} pulse={tone === "ok"} />
       {props.compact ? (
         <span className="sr-only">
-          {label} · sample {formatAge(sampledAtMs, now)}
+          {label} · {age}
         </span>
       ) : (
         <span>
-          {label} · sample {formatAge(sampledAtMs, now)}
+          {label} · {age}
         </span>
       )}
     </span>
   );
 }
 
+/** The viewer's clock with its zone, and UTC beside it for shared plans. */
 function UtcClock() {
   const now = useNow(1000);
   return (
-    <time className="hidden text-xs text-base-content/70 tabular 2xl:inline" dateTime={new Date(now).toISOString()}>
-      {new Date(now).toISOString().slice(11, 19)} UTC
+    <time className="hidden text-xs text-base-content/70 tabular 2xl:inline" dateTime={new Date(now).toISOString()} title={fullTime(now)}>
+      {absoluteTime(now, now, { seconds: true }).replace(/^Today /, "")}
+      <span className="text-base-content/50"> · {new Date(now).toISOString().slice(11, 16)} UTC</span>
     </time>
   );
 }
