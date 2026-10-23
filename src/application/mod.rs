@@ -25,6 +25,7 @@ pub mod runtime_state;
 pub mod schedules;
 pub mod services;
 pub mod settings;
+pub mod share;
 pub mod srt_ingest;
 pub mod team;
 pub mod topology;

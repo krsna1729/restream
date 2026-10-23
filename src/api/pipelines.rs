@@ -410,6 +410,8 @@ pub async fn pipelines_delete_handler(
         Ok(true) => {
             state.reconcile.wake();
             refresh_srt_ingest_policy_store(&state).await;
+            // Its watch links go with it.
+            state.share_links.forget_pipeline(&id).await;
             Json(serde_json::json!({"message": format!("Pipeline {} deleted", id)})).into_response()
         }
         Ok(false) => (StatusCode::NOT_FOUND, "Pipeline not found").into_response(),

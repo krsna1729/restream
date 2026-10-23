@@ -77,6 +77,12 @@ pub struct AuditEntry {
     pub status: u16,
 }
 
+/// Share links carry the token that opens a stream to anyone.
+fn is_share_links(path: &str) -> bool {
+    path.starts_with("/api/v1/share-links")
+        || (path.starts_with("/api/v1/pipelines/") && path.ends_with("/share-links"))
+}
+
 /// Paths whose reads expose secrets (stream keys, destination URLs,
 /// notification targets) or the team itself.
 fn read_role(path: &str) -> Role {
@@ -84,6 +90,7 @@ fn read_role(path: &str) -> Role {
         Role::Viewer
     } else if path.starts_with("/api/v1/users")
         || path.starts_with("/api/v1/notifications")
+        || is_share_links(path)
         || path.starts_with("/api/v1/audit")
         || path.starts_with("/api/v1/security/")
     {
@@ -110,6 +117,7 @@ pub fn required_role(method: &str, path: &str) -> Role {
         return Role::Viewer;
     }
     if path == "/api/v1/settings"
+        || is_share_links(path)
         || path.starts_with("/api/v1/notifications")
         || path.starts_with("/api/v1/security/")
         || path.starts_with("/api/v1/users")

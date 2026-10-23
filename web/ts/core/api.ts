@@ -23,6 +23,7 @@ import type {
   PipelineSummarySnapshot,
   FlightTrace,
   AuditEntry,
+  ShareLink,
   Schedule,
   ScheduleDraft,
   NotifyChannel,
@@ -949,8 +950,38 @@ async function runSchedule(id: string): Promise<{ ok: boolean; result?: string }
   return apiRequest(`/api/v1/schedules/${encodeURIComponent(id)}/run`, { method: "POST" });
 }
 
+async function listShareLinks(pipelineId: string): Promise<ShareLink[] | null> {
+  const body = await apiRequest<{ links: ShareLink[] }>(
+    `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/share-links`,
+    { silentStatuses: [403] },
+  );
+  return body?.links ?? null;
+}
+
+/** `lifetimeHours` null: until revoked. */
+async function createShareLink(
+  pipelineId: string,
+  label: string,
+  lifetimeHours: number | null,
+): Promise<ShareLink | null> {
+  return apiRequest<ShareLink>(`/api/v1/pipelines/${encodeURIComponent(pipelineId)}/share-links`, {
+    method: "POST",
+    body: { label, lifetimeHours },
+  });
+}
+
+async function revokeShareLink(id: string): Promise<boolean> {
+  const body = await apiRequest<{ deleted: boolean }>(`/api/v1/share-links/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  return body?.deleted === true;
+}
+
 export {
   apiRequest,
+  listShareLinks,
+  createShareLink,
+  revokeShareLink,
   listSchedules,
   createSchedule,
   updateSchedule,

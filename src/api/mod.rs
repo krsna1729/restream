@@ -33,6 +33,7 @@ pub mod router;
 pub mod runtime_state;
 pub mod schedules;
 pub mod settings;
+pub mod share;
 pub mod state;
 pub mod static_assets;
 pub mod team;

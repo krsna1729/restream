@@ -325,6 +325,11 @@ the media library. Loop then repeats the whole list. While it runs, the file
 switch shows what is playing ("Now playing 2 of 3 · name"). The rules are
 `moveQueued` and `nowPlayingLabel` in `manage-model.ts`.
 
+Admins also get a **Share** panel at the foot of Operate. It makes public
+watch links (a label and a lifetime) and lists them with their expiry and
+view count, with copy-link, copy-embed (a responsive iframe), open and
+revoke (`share-panel.tsx`, `share-model.ts`).
+
 ### Inspect (one pipeline)
 
 - Resource map polled every 2 s

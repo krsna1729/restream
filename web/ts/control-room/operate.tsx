@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useSession } from "./session.js";
+import { SharePanel } from "./share-panel.js";
 import { getConfig, promotePipelineInput } from "../core/api.js";
 import { withBasePath } from "../core/base-path.js";
 import type { ConfigData, PipelineInput } from "../types.js";
@@ -41,7 +42,9 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
   // Stored settings (URLs, output configs, profiles) are not in the state
   // stream: read once, and again after every edit.
   const [config, setConfig] = useState<ConfigData | null>(null);
-  const canOperate = useSession().can("operator");
+  const session = useSession();
+  const canOperate = session.can("operator");
+  const isAdmin = session.can("admin");
   // A viewer may not read settings (stream keys); the views work without.
   const reloadConfig = useCallback(
     () => void (canOperate ? getConfig().then(setConfig) : setConfig(null)),
@@ -120,6 +123,7 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
         config={config}
         onConfigChanged={reloadConfig}
       />
+      {isAdmin && <SharePanel pipelineId={pipelineId} pipelineName={pipeline?.name ?? pipelineId} />}
     </>
   );
 }

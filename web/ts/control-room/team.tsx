@@ -228,8 +228,9 @@ export function Team() {
             </button>
             <ResetPassword member={member} onDone={reload} />
             <ConfirmDelete
-              label="Remove"
+              label={`Remove ${member.username}`}
               question={`Remove ${member.username}?`}
+              verb="Remove"
               onDelete={async () => {
                 const removed = await deleteTeamMember(member.id);
                 if (removed) setMembers((current) => current?.filter((candidate) => candidate.id !== member.id) ?? null);
