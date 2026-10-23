@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
-const { overallSeverity, streamVerdicts } = await loadCompiledFrontendModule(
+const { bitrateWords, overallSeverity, streamVerdicts } = await loadCompiledFrontendModule(
   "control-room/stream-health-model.js",
 );
 
@@ -94,4 +94,12 @@ test("only a pushed source has a contribution link to judge", async () => {
   assert.equal(contributionTransport("RTMP"), "TCP");
   assert.equal(contributionTransport("file"), null);
   assert.equal(contributionTransport(undefined), null);
+});
+
+test("a bitrate reads against what platforms suggest for its picture", () => {
+  assert.deepEqual(bitrateWords(4.5e6, 1080, 30), { severity: "ok", words: "about right for 1080p30" });
+  assert.equal(bitrateWords(2e6, 1080, 60).severity, "warn");
+  assert.match(bitrateWords(2e6, 1080, 60).words, /low for 1080p60 \(platforms suggest 4.5–9 Mb\/s\)/);
+  assert.match(bitrateWords(12e6, 720, 30).words, /more than 720p30 needs/);
+  assert.equal(bitrateWords(null, 1080, 30), null);
 });

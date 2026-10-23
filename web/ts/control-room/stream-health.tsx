@@ -16,7 +16,7 @@ import { formatBps } from "./format.js";
 import { PipelineScope } from "./pipeline-scope.js";
 import { Freshness, useFlightRecorder } from "./polled.js";
 import type { LiveSnapshot } from "./store.js";
-import { KEYFRAME_LIMIT_SEC, KEYFRAME_TARGET_SEC, contributionTransport, overallSeverity, streamVerdicts } from "./stream-health-model.js";
+import { KEYFRAME_LIMIT_SEC, KEYFRAME_TARGET_SEC, bitrateWords, contributionTransport, overallSeverity, streamVerdicts } from "./stream-health-model.js";
 import type { Severity } from "./stream-health-model.js";
 
 const TONE: Record<Severity, Tone> = { ok: "ok", warn: "warn", bad: "bad" };
@@ -36,6 +36,7 @@ function Health(props: { pipelineId: string }) {
   const verdicts = useMemo(() => streamVerdicts(samples), [samples]);
   const last: FlightSample | undefined = samples[samples.length - 1];
   const ingest = last?.ingest ?? null;
+  const quality = bitrateWords(ingest?.bitrateBps, ingest?.height, ingest?.fps);
   const transport = contributionTransport(ingest?.protocol);
   if (trace.value === null) {
     return <EmptyState title="Waiting for the flight recorder…" detail="The engine samples every pipeline every 2 s; the first sample is on its way." />;
@@ -68,7 +69,12 @@ function Health(props: { pipelineId: string }) {
           value={ingest?.height ? `${ingest.height}p` : "--"}
           foot={ingest ? `${(ingest.videoCodec ?? "?").toUpperCase()} · ${ingest.width ?? "?"}×${ingest.height ?? "?"} · ${ingest.protocol.toUpperCase()}` : "no source"}
         />
-        <Kpi label="Bitrate" value={formatBps(ingest?.bitrateBps)} foot={ingest ? `${Math.round(ingest.packetsPerSec)} packets/s` : "--"} />
+        <Kpi
+          label="Bitrate"
+          value={formatBps(ingest?.bitrateBps)}
+          tone={quality?.severity === "warn" ? "warn" : undefined}
+          foot={quality?.words ?? (ingest ? `${Math.round(ingest.packetsPerSec)} packets/s` : "--")}
+        />
         <Kpi label="Frame rate" value={ingest?.fps ? `${ingest.fps.toFixed(ingest.fps % 1 ? 2 : 0)} fps` : "--"} />
         <Kpi
           label="Keyframe interval"
