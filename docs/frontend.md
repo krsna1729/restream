@@ -760,9 +760,11 @@ answers `fetch` and `EventSource`) and write a static demo folder to
 themes and section detail into `.local/shots/<label>/`. It runs
 `layout-audit.mjs` on each page (horizontal page scroll, clipped text,
 select text under its arrow, stray hairline scrollbars, controls on one row
-at different heights or centres, phone touch targets under 36px) and
+at different heights or centres, phone touch targets under 36px, text below
+WCAG AA contrast against what is actually behind it) and
 records console errors. `test/frontend/control-room-layout.spec.ts` runs the
-same audit in CI on every workspace at 1440 and 375 px, and checks every
+same audit in CI on every workspace at 1440 and 375 px in both themes (and
+on a page whose host restyles `body`), and checks every
 pipeline view shows the pipeline tabs.
 
 ```sh

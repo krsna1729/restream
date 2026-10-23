@@ -13,6 +13,9 @@
 // - misaligned: controls on one line of one row that differ in height or
 //   sit off each other's centre line.
 // - smallTargets (phones): touch targets under 36 px.
+// - lowContrast: text below WCAG AA against what is actually behind it
+//   (4.5:1, or 3:1 from 24 px / 18.66 px bold); placeholders and disabled
+//   controls are exempt, as WCAG exempts them.
 //
 // Must stay self-contained: Playwright serialises the function's source.
 export function auditLayout({ phone }) {
@@ -30,6 +33,42 @@ export function auditLayout({ phone }) {
   const hairlineScroll = [];
   const misaligned = [];
   const smallTargets = [];
+  const lowContrast = [];
+  // Any CSS colour (oklch, color-mix…) to sRGB through a 1 px canvas.
+  const paint = document.createElement("canvas");
+  paint.width = paint.height = 1;
+  const pen = paint.getContext("2d", { willReadFrequently: true });
+  const rgba = (color) => {
+    pen.clearRect(0, 0, 1, 1);
+    pen.fillStyle = "#000";
+    pen.fillStyle = color;
+    pen.fillRect(0, 0, 1, 1);
+    const [r, g, b, a] = pen.getImageData(0, 0, 1, 1).data;
+    return [r, g, b, a / 255];
+  };
+  const over = (top, under) => top.slice(0, 3).map((value, index) => value * top[3] + under[index] * (1 - top[3]));
+  // What is behind an element: its own and its ancestors' backgrounds,
+  // composited from the page up.
+  const backdrop = (element) => {
+    const layers = [];
+    for (let node = element; node; node = node.parentElement) {
+      const layer = rgba(getComputedStyle(node).backgroundColor);
+      if (layer[3] > 0) layers.push(layer);
+      if (layer[3] >= 1) break;
+    }
+    let color = [255, 255, 255];
+    for (const layer of layers.reverse()) color = over(layer, color);
+    return color;
+  };
+  const luminance = ([r, g, b]) =>
+    [r, g, b]
+      .map((value) => value / 255)
+      .map((value) => (value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4))
+      .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+  const ratio = (a, b) => {
+    const [high, low] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (high + 0.05) / (low + 0.05);
+  };
   const overflowing = [];
   const measure = document.createElement("canvas").getContext("2d");
   const CONTROL = "button, select, input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=hidden]), a.btn, [role=button]";
@@ -56,6 +95,27 @@ export function auditLayout({ phone }) {
       style.overflowX !== "scroll"
     ) {
       clipped.push(element.textContent.trim().slice(0, 40));
+    }
+    const ownText =
+      hasText ||
+      element.tagName === "SELECT" ||
+      element.tagName === "TEXTAREA" ||
+      (element.tagName === "INPUT" && !["checkbox", "radio", "range", "color", "hidden"].includes(element.type) && element.value);
+    if (ownText && !element.closest(":disabled, [aria-disabled=true], .btn-disabled, [aria-hidden=true]")) {
+      const background = backdrop(element);
+      const ink = rgba(style.color);
+      // Opacity on the element or an ancestor fades the text into its backdrop.
+      let fade = 1;
+      for (let node = element; node; node = node.parentElement) fade *= Number(getComputedStyle(node).opacity);
+      // Nothing to read while it is hidden by opacity (a closed menu).
+      if (fade < 0.05) continue;
+      const text = over([...ink.slice(0, 3), ink[3] * fade], background);
+      const size = parseFloat(style.fontSize);
+      const large = size >= 24 || (size >= 18.66 && Number(style.fontWeight) >= 700);
+      const contrast = ratio(text, background);
+      if (contrast < (large ? 3 : 4.5)) {
+        lowContrast.push(`${name(element)} ${contrast.toFixed(2)}:1 rgb(${text.map(Math.round)}) on rgb(${background.map(Math.round)})`);
+      }
     }
     if (element.tagName === "SELECT" && !element.multiple && element.selectedOptions[0]) {
       measure.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
@@ -120,6 +180,7 @@ export function auditLayout({ phone }) {
     hairlineScroll,
     misaligned,
     smallTargets,
+    lowContrast,
     domNodes: document.getElementsByTagName("*").length,
   };
 }

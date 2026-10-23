@@ -186,7 +186,7 @@ function Week(props: { schedules: readonly Schedule[]; recordings: readonly Medi
               {day.items.slice(0, 12).map((item) => (
                 <li
                   key={`${item.schedule.id}-${item.atMs}`}
-                  className={`min-w-0 rounded-field border border-l-4 border-base-content/10 bg-base-200 px-2 py-1 text-xs ${ACTION_TONE[item.schedule.action]} ${item.atMs < props.now ? "opacity-55" : ""}`}
+                  className={`min-w-0 rounded-field border border-l-4 border-base-content/10 bg-base-200 px-2 py-1 text-xs ${item.atMs < props.now ? "border-l-base-content/25" : ACTION_TONE[item.schedule.action]}`}
                 >
                   <div className="tabular font-semibold">{TIME.format(item.atMs)}</div>
                   <div className="truncate" title={item.schedule.name}>{item.schedule.name}</div>
