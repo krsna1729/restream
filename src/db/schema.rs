@@ -252,6 +252,24 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
     .await?;
 
     sqlx::query(
+        "CREATE TABLE IF NOT EXISTS schedules (
+            id TEXT PRIMARY KEY,
+            pipeline_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            action TEXT NOT NULL,
+            output_ids TEXT NOT NULL DEFAULT '[]',
+            at INTEGER NOT NULL,
+            repeat TEXT NOT NULL,
+            enabled INTEGER NOT NULL,
+            last_run INTEGER,
+            last_result TEXT,
+            created_at INTEGER NOT NULL
+        );",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
         "CREATE TABLE IF NOT EXISTS notify_channels (
             id TEXT PRIMARY KEY,
             kind TEXT NOT NULL,

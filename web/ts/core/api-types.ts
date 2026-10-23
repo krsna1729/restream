@@ -834,3 +834,27 @@ export interface PushSubscriptionRecord {
   minSeverity: NotifySeverity;
   createdAtMs: number;
 }
+
+export type ScheduleAction = "startOutputs" | "stopOutputs" | "startFile" | "stopFile";
+export type ScheduleRepeat = "once" | "daily" | "weekly";
+
+export interface ScheduleDraft {
+  pipelineId: string;
+  name: string;
+  action: ScheduleAction;
+  /** Output actions: the destinations; empty means all of them. */
+  outputIds: string[];
+  atMs: number;
+  repeat: ScheduleRepeat;
+  enabled: boolean;
+}
+
+/** A scheduled event (`application/schedules.rs`). */
+export interface Schedule extends ScheduleDraft {
+  id: string;
+  lastRunMs: number | null;
+  /** "ok: …", "failed: …", "skipped: …" or "running". */
+  lastResult: string | null;
+  createdAtMs: number;
+  nextAtMs: number | null;
+}

@@ -71,6 +71,10 @@ use super::pipelines::{
     pipelines_delete_handler, pipelines_get_handler, pipelines_post_handler,
     pipelines_update_handler,
 };
+use super::schedules::{
+    create_schedule_handler, delete_schedule_handler, list_schedules_handler, run_schedule_handler,
+    update_schedule_handler,
+};
 use super::settings::{config_get_handler, config_patch_handler};
 use super::state::AppState;
 use super::static_assets::{
@@ -132,6 +136,9 @@ pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
     "/api/v1/notifications/push/subscriptions",
     "/api/v1/notifications/push/subscriptions/{id}",
     "/api/v1/notifications/push/test",
+    "/api/v1/schedules",
+    "/api/v1/schedules/{id}",
+    "/api/v1/schedules/{id}/run",
     "/api/v1/auth/change-password",
     "/api/v1/auth/dismiss-password-change",
     "/api/v1/security/rate-limits",
@@ -347,6 +354,15 @@ fn create_app_router() -> Router<Arc<AppState>> {
             axum::routing::delete(unsubscribe_handler),
         )
         .route("/api/v1/notifications/push/test", post(test_push_handler))
+        .route(
+            "/api/v1/schedules",
+            get(list_schedules_handler).post(create_schedule_handler),
+        )
+        .route(
+            "/api/v1/schedules/{id}",
+            put(update_schedule_handler).delete(delete_schedule_handler),
+        )
+        .route("/api/v1/schedules/{id}/run", post(run_schedule_handler))
         .route(
             "/api/v1/auth/change-password",
             post(change_password_handler),

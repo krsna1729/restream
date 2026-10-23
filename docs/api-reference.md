@@ -23,6 +23,7 @@ grouped by resource. Base URL: `http://localhost:3030` (the HTTP port is
 - [Health and status](#health-and-status)
 - [Operator views](#operator-views)
 - [Notifications](#notifications)
+- [Schedules](#schedules)
 - [Telemetry](#telemetry)
 - [HLS pull](#hls-pull)
 - [HLS push ingest](#hls-push-ingest)
@@ -101,6 +102,7 @@ flowchart TD
 | Health and host | `/healthz`, `/metrics/system`, `/api/v1/engine*`, `/dashboard/runtime`, `/capacity/scenario` | [Health and status](#health-and-status) |
 | Operator views | `/overview`, `/alerts`, `/events`, `…/summary`, `…/alerts`, `/engine/resource-map` | [Operator views](#operator-views) |
 | Notifications | `/api/v1/notifications/*` | [Notifications](#notifications) |
+| Schedules | `/api/v1/schedules*` | [Schedules](#schedules) |
 | Telemetry | `/measure`, `/engine/telemetry`, `…/telemetry`, `/stages/:stageKey/telemetry` | [Telemetry](#telemetry) |
 | HLS pull | `/hls/*` | [HLS pull](#hls-pull) |
 | HLS push | `/ingest/hls/:streamKey/*path` | [HLS push ingest](#hls-push-ingest) |
@@ -1527,6 +1529,43 @@ engine generates on first use and keeps in `meta`. Its `sub` claim is
 critical opening. The service worker (`public/sw.js`) shows the payload
 `{ "title", "body", "tag", "severity", "url" }`. One notification is kept per
 alert, and a click opens the incident view.
+
+## Schedules
+
+Scheduled events start or stop a pipeline's destinations or its file
+source at set times (`src/application/schedules.rs`). The scheduler task
+(`run_scheduler`, every 5 s) runs each due occurrence, whether or not a
+dashboard is open.
+
+| Method | Route | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/schedules` | `{ "schedules": [...] }`, each with `nextAtMs` |
+| `POST` | `/api/v1/schedules` | Add one (`201`) |
+| `PUT`, `DELETE` | `/api/v1/schedules/:id` | Replace its settings; remove it |
+| `POST` | `/api/v1/schedules/:id/run` | Run the action now: `{ "ok": true, "result" }`, or `409 { "ok": false, "error" }` |
+
+Reads need a viewer; changes need an operator.
+
+A schedule is
+`{ "pipelineId", "name", "action", "outputIds", "atMs", "repeat", "enabled" }`.
+Responses add `id`, `lastRunMs`, `lastResult`, `createdAtMs` and `nextAtMs`.
+
+- `action` is one of:
+  - `startOutputs` / `stopOutputs`: set the listed destinations' desired
+    state (`outputIds` empty: all of the pipeline's) and wake the
+    reconciler, as the per-output start and stop routes do;
+  - `startFile` / `stopFile`: play or stop the pipeline's configured file
+    or playlist (no `outputIds`, else `409`).
+- `atMs` is the first occurrence in UTC milliseconds. `repeat` is `once`,
+  `daily` (every 24 h of UTC) or `weekly`. A daily event keeps its UTC time
+  across a daylight-saving change.
+- An occurrence runs if the scheduler sees it within 60 s
+  (`RUN_GRACE_MS`). One missed by more (the engine was down) is recorded as
+  `skipped: the engine was not running at …` and never fired late.
+- Occurrences already past when a schedule is added or edited are not run.
+- `lastResult` is `running`, `ok: …` (what it did), `failed: …` or
+  `skipped: …`. Each run is also in the audit log as member `scheduler`,
+  method `RUN`.
 
 ## Telemetry
 

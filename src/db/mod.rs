@@ -13,6 +13,7 @@ mod output_repo;
 pub mod pipeline_input_repo;
 mod pipeline_repo;
 pub mod recording_repo;
+pub(crate) mod schedule_repo;
 mod schema;
 pub(crate) mod session_repo;
 pub(crate) mod team_repo;
