@@ -12,7 +12,7 @@ export interface NavGroup {
 /** Operate the plant, understand it, manage it; engineering tools last. */
 export const NAV_GROUPS: readonly NavGroup[] = [
   { label: "Operate", items: ["fleet", "channels", "pipelines", "operate", "monitor"] },
-  { label: "Understand", items: ["incidents", "health", "capacity"] },
+  { label: "Understand", items: ["incidents", "health", "capacity", "stability"] },
   { label: "Manage", items: ["media", "changes", "settings"] },
   { label: "Engineer", items: ["inspect", "logs", "system"] },
 ];
@@ -28,6 +28,7 @@ export const NAV_ICONS: Record<Workspace, IconName> = {
   health: "health",
   logs: "logs",
   capacity: "capacity",
+  stability: "stability",
   media: "media",
   system: "system",
   changes: "changes",

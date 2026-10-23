@@ -400,6 +400,49 @@ and tab row (`pipeline-scope.tsx`).
   limit and whether it is configured or a prior. "Draft it in Changes" opens
   a planned change.
 
+### Stability Lab
+
+A short trigger can leave a system stuck long after it ends (a metastable
+failure). The Lab shows whether restream's egress rides one out, as a
+narrated story in the anatomy of the reference overload videos.
+
+- KPIs for wanted, not delivering and delivering.
+- Each egress shard's queue as a strip of cells coloured by what it holds:
+  new media, re-sent copies or handshakes. A callout appears once the
+  backlog passes the stall line.
+- Each shard's destinations by state.
+- Reconnects per second, the share of work that is overhead, and the
+  hottest shard's CPU.
+- A chart of wanted, delivering and reconnects, with the trigger and the
+  stuck span shaded and a "STALLED" badge.
+- A chapter chip and caption (healthy, outage/spike/CPU cut, overflow,
+  stuck, recovering, recovered), and a footer that says whether the story
+  is modelled or measured.
+
+Two sources feed the same player:
+
+- **Simulate** (`stability/sim-engine.ts`): a pure, seeded fluid model,
+  stepped every 100 ms. Each shard is a service center serving fresh media,
+  copies and handshakes.
+  - A destination whose shard queue is older than the stall line stalls
+    and resyncs, which re-sends what it missed.
+  - Past the give-up timeout it is torn down and retried under the
+    reconnect policy.
+  - The policy is the engine's own (`retryPolicy` from
+    `/capacity/scenario`: exponential from 5 s to 300 s with equal
+    jitter), "retry every 1 s" or "retry at once".
+  - Scenarios: a platform blip, 200 destinations started at once (with a
+    pacing toggle, as Channels' bulk go-live paces), and a shard losing
+    CPU.
+  - "Restart worst shard here" adds an operator action at the playhead and
+    re-runs.
+  - The tests pin the outcome: after a 20 s blip the engine's backoff is
+    back above 95% within 30 s, and both naive policies are still at 0% at
+    the end.
+- **Replay a pipeline** (`storyFromTrace`): the pipeline's flight record,
+  with the source ring as the queue and its outputs as the destinations.
+  It follows the newest sample unless scrubbed.
+
 ### Media
 
 - Media directory (`/media`) split into recordings and source files, newest

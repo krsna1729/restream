@@ -430,12 +430,22 @@ pub async fn v1_capacity_scenario_handler(
                 .into_response();
         }
     };
+    let policy = state.engine.config.tuning.output_retry_policy();
+    let retry_policy = serde_json::json!({
+        "maxRetries": policy.max_retries,
+        "baseMs": policy.base_ms,
+        "maxMs": policy.max_ms,
+        "jitter": "equal",
+    });
     Json(serde_json::json!({
         "addOutputs": change.outputs,
         "addStages": change.stages,
         "ratedBy": scenario.rated_by,
         "ingest": scenario.ingest,
         "calibration": state.engine.capacity_calibration(),
+        // The output reconnect policy, so a what-if (the Stability Lab)
+        // replays the engine's own backoff rather than a guessed one.
+        "retryPolicy": retry_policy,
         "baseline": scenario.baseline,
         "projected": scenario.projected,
     }))

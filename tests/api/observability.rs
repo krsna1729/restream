@@ -690,6 +690,12 @@ async fn capacity_scenario_projects_the_change_without_claiming_a_measurement() 
         serde_json::json!({ "rtmp": 0, "rtmps": 0, "srt": 0 })
     );
 
+    // The reconnect policy the engine retries outputs with: the defaults.
+    assert_eq!(
+        same["retryPolicy"],
+        serde_json::json!({ "maxRetries": 10, "baseMs": 5000, "maxMs": 300000, "jitter": "equal" })
+    );
+
     // The calibration says what it was priced on, limit by limit.
     let calibration = &same["calibration"];
     assert_eq!(calibration["modelVersion"], 5);

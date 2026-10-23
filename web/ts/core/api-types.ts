@@ -116,6 +116,9 @@ export interface CapacityScenario {
   ratedBy: string | null;
   ingest: { bps: number; pps: number };
   calibration: CapacityCalibration;
+  /** The engine's output reconnect policy: exponential from `baseMs`,
+   * capped at `maxMs`, half fixed and half jittered ("equal" jitter). */
+  retryPolicy: { maxRetries: number; baseMs: number; maxMs: number; jitter: "equal" };
   baseline: CapacitySnapshot;
   projected: CapacitySnapshot;
 }

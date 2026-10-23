@@ -1228,7 +1228,7 @@ Returns `{ health, metrics }` so a dashboard refresh costs one round trip.
 Query: `add_rtmp`, `add_rtmps`, `add_srt`, `add_stages` (non-negative
 integers, default 0) and optional `pipeline_id`. A malformed query is `400`
 after authentication. Returns `{ addOutputs: { rtmp, rtmps, srt },
-addStages, ratedBy, ingest, calibration, baseline, projected }`.
+addStages, ratedBy, ingest, calibration, retryPolicy, baseline, projected }`.
 
 - Both sides price one sample of the current workload on the calibration
   priors (`flowMeasured: false`), so they compare like with like.
@@ -1250,6 +1250,11 @@ addStages, ratedBy, ingest, calibration, baseline, projected }`.
 - `calibration` holds `limits` (six service-center ceilings), `sources`
   (each `configured` via `RESTREAM_CAPACITY_*` or a `prior` scaled to
   `priorCpus`) and `safeUtilization`.
+- `retryPolicy` is the output reconnect policy: `{ maxRetries, baseMs,
+  maxMs, jitter: "equal" }`. The delay before attempt n is `baseMs · 2^n`,
+  capped at `maxMs`; half of it is fixed and half is spread per output.
+  It comes from `RESTREAM_OUTPUT_MAX_RETRIES`, `RESTREAM_OUTPUT_RETRY_BASE_MS`
+  and `RESTREAM_OUTPUT_RETRY_MAX_MS`. The Stability Lab simulates with it.
 
 ### `GET /api/v1/engine`
 

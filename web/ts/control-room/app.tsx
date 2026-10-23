@@ -22,6 +22,7 @@ import { MobileTabs, MoreSheet } from "./shell/mobile-nav.js";
 import { Sidebar } from "./shell/sidebar.js";
 import { Topbar } from "./shell/topbar.js";
 import { useLive } from "./store.js";
+import { StabilityLab } from "./stability/stability.js";
 import { System } from "./system.js";
 
 export function App() {
@@ -85,6 +86,7 @@ function Shell() {
             <Logs key={place.pipelineId ?? ""} live={live} pipelineId={place.pipelineId} />
           )}
           {place.workspace === "capacity" && <Capacity live={live} />}
+          {place.workspace === "stability" && <StabilityLab live={live} />}
           {place.workspace === "media" && <Media live={live} />}
           {place.workspace === "system" && <System live={live} />}
           {place.workspace === "changes" && <Changes live={live} />}
