@@ -3,6 +3,7 @@ import { useState } from "react";
 import { createPipeline, updatePipeline } from "../core/api.js";
 import type { MediaFile } from "../core/api-types.js";
 import type { ConfigPipeline } from "../types.js";
+import { Field } from "../ui/controls.js";
 import { moveQueued, pipelineDraft, pipelineProblem, pipelineWrite } from "./manage-model.js";
 import type { PipelineDraft } from "./manage-model.js";
 import { SettingsForm } from "./settings-form.js";
@@ -45,14 +46,13 @@ export function PipelineForm(props: {
         return true;
       }}
     >
-      <label className="form-control">
-        <span className="label-text">Name</span>
+      <Field label="Name">
         <input
           className="input input-sm"
           value={draft.name}
           onChange={(event) => set({ name: event.target.value })}
         />
-      </label>
+      </Field>
       {stored ? (
         <div className="space-y-1 text-sm">
           <p className="text-xs text-base-content/70">Publish to</p>
@@ -66,25 +66,23 @@ export function PipelineForm(props: {
               disabled={props.keyLocked}
               onChange={(event) => set({ rotateKey: event.target.checked })}
             />
-            <span className="label-text">Issue a new stream key (publishers must switch to it)</span>
+            <span className="text-sm">Issue a new stream key (publishers must switch to it)</span>
           </label>
           {props.keyLocked && (
             <p className="text-xs text-base-content/70">Stop the destinations first: the encoder would lose the key at its next reconnect.</p>
           )}
         </div>
       ) : (
-        <label className="form-control">
-          <span className="label-text">Stream key (empty: the engine makes one)</span>
+        <Field label="Stream key (empty: the engine makes one)">
           <input
             className="input input-sm font-mono"
             autoComplete="off"
             value={draft.streamKey}
             onChange={(event) => set({ streamKey: event.target.value })}
           />
-        </label>
+        </Field>
       )}
-      <label className="form-control">
-        <span className="label-text">Source</span>
+      <Field label="Source">
         <select
           className="select select-sm"
           value={draft.source}
@@ -93,11 +91,10 @@ export function PipelineForm(props: {
           <option value="live">A live publisher (RTMP or SRT)</option>
           <option value="file">A media file</option>
         </select>
-      </label>
+      </Field>
       {draft.source === "file" && (
         <div className="grid gap-2 md:grid-cols-2">
-          <label className="form-control md:col-span-2">
-            <span className="label-text">{draft.queue.length > 0 ? "First file" : "File"}</span>
+          <Field label={draft.queue.length > 0 ? "First file" : "File"} className="md:col-span-2">
             <select
               className="select select-sm"
               value={draft.filename}
@@ -110,18 +107,16 @@ export function PipelineForm(props: {
                 </option>
               ))}
             </select>
-          </label>
+          </Field>
           <Playlist first={draft.filename} queue={draft.queue} files={props.files} onChange={(queue) => set({ queue })} />
-          <label className="form-control">
-            <span className="label-text">Start at (HH:MM:SS, empty: the start)</span>
+          <Field label="Start at (HH:MM:SS, empty: the start)">
             <input
               className="input input-sm"
               value={draft.startTime}
               onChange={(event) => set({ startTime: event.target.value })}
             />
-          </label>
-          <label className="form-control">
-            <span className="label-text">Keyframe interval (s, Live Optimized)</span>
+          </Field>
+          <Field label="Keyframe interval (s, Live Optimized)">
             <input
               type="number"
               min={1}
@@ -130,7 +125,7 @@ export function PipelineForm(props: {
               value={draft.targetGopSeconds}
               onChange={(event) => set({ targetGopSeconds: Number(event.target.value) })}
             />
-          </label>
+          </Field>
           <label className="label cursor-pointer justify-start gap-2">
             <input
               type="checkbox"
@@ -138,7 +133,7 @@ export function PipelineForm(props: {
               checked={draft.loop}
               onChange={(event) => set({ loop: event.target.checked })}
             />
-            <span className="label-text">{draft.queue.length > 0 ? "Loop the playlist" : "Loop"}</span>
+            <span className="text-sm">{draft.queue.length > 0 ? "Loop the playlist" : "Loop"}</span>
           </label>
           <label className="label cursor-pointer justify-start gap-2">
             <input
@@ -147,13 +142,12 @@ export function PipelineForm(props: {
               checked={draft.liveOptimized}
               onChange={(event) => set({ liveOptimized: event.target.checked })}
             />
-            <span className="label-text">Live Optimized (re-encode to the keyframe interval)</span>
+            <span className="text-sm">Live Optimized (re-encode to the keyframe interval)</span>
           </label>
         </div>
       )}
       <div className="grid gap-2 md:grid-cols-2">
-        <label className="form-control">
-          <span className="label-text">SRT ingest encryption</span>
+        <Field label="SRT ingest encryption">
           <select
             className="select select-sm"
             value={draft.srtMode}
@@ -165,9 +159,8 @@ export function PipelineForm(props: {
             <option value="plaintext">plaintext</option>
             <option value="encrypted">encrypted</option>
           </select>
-        </label>
-        <label className="form-control">
-          <span className="label-text">SRT receive latency (ms, empty: engine setting)</span>
+        </Field>
+        <Field label="SRT receive latency (ms, empty: engine setting)">
           <input
             type="number"
             min={20}
@@ -176,11 +169,10 @@ export function PipelineForm(props: {
             value={draft.srtLatencyMs}
             onChange={(event) => set({ srtLatencyMs: event.target.value })}
           />
-        </label>
+        </Field>
         {encrypted && (
           <>
-            <label className="form-control">
-              <span className="label-text">SRT passphrase (10 to 79 bytes)</span>
+            <Field label="SRT passphrase (10 to 79 bytes)">
               <input
                 type="password"
                 autoComplete="off"
@@ -188,9 +180,8 @@ export function PipelineForm(props: {
                 value={draft.srtPassphrase}
                 onChange={(event) => set({ srtPassphrase: event.target.value })}
               />
-            </label>
-            <label className="form-control">
-              <span className="label-text">SRT key length</span>
+            </Field>
+            <Field label="SRT key length">
               <select
                 className="select select-sm"
                 value={draft.srtPbkeylen}
@@ -202,7 +193,7 @@ export function PipelineForm(props: {
                 <option value={24}>AES-192</option>
                 <option value={32}>AES-256</option>
               </select>
-            </label>
+            </Field>
           </>
         )}
       </div>
@@ -218,7 +209,7 @@ function Playlist(props: { first: string; queue: readonly string[]; files: reado
   const runtime = playlistRuntime(durations);
   return (
     <div className="flex flex-col gap-2 md:col-span-2" role="group" aria-label="Playlist">
-      <span className="label-text">
+      <span className="text-sm">
         Then play
         {props.queue.length > 0 && <span className="text-base-content/60 tabular"> · the whole playlist {runtimeWords(runtime)}</span>}
       </span>

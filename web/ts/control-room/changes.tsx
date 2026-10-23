@@ -24,6 +24,7 @@ import { PageHeader } from "../ui/page-header.js";
 import { Panel } from "../ui/panel.js";
 import { StatusBadge } from "../ui/tone.js";
 import type { Tone } from "../ui/tone.js";
+import { Field } from "../ui/controls.js";
 
 const STAGE_TONE: Record<StageState, Tone> = {
   done: "ok",
@@ -150,16 +151,14 @@ function DefineChange(props: {
     <>
       <Panel id="changes-define" title="Define the change">
         <div className="flex flex-col gap-3">
-          <label className="form-control">
-            <span className="label-text">Why (kept in the audit log)</span>
+          <Field label="Why (kept in the audit log)">
             <input
               className="input input-sm"
               value={intent}
               onChange={(event) => setIntent(event.target.value)}
             />
-          </label>
-          <label className="form-control">
-            <span className="label-text">Pipeline</span>
+          </Field>
+          <Field label="Pipeline">
             <select
               className="select select-sm"
               value={pipelineId}
@@ -172,13 +171,12 @@ function DefineChange(props: {
                 </option>
               ))}
             </select>
-          </label>
+          </Field>
           <ul className="space-y-2">
             {drafts.map((draft, index) => (
               <li key={index} className="rounded bg-base-300 p-3" aria-label={`Change ${index + 1}`}>
                 <div className="grid gap-2 md:grid-cols-3">
-                  <label className="form-control">
-                    <span className="label-text text-xs">Change</span>
+                  <Field label="Change">
                     <select
                       className="select select-sm"
                       value={draft.kind}
@@ -192,10 +190,9 @@ function DefineChange(props: {
                         </option>
                       ))}
                     </select>
-                  </label>
+                  </Field>
                   {draft.kind !== "addOutput" && (
-                    <label className="form-control">
-                      <span className="label-text text-xs">Destination</span>
+                    <Field label="Destination">
                       <select
                         className="select select-sm"
                         value={draft.outputId}
@@ -208,36 +205,29 @@ function DefineChange(props: {
                           </option>
                         ))}
                       </select>
-                    </label>
+                    </Field>
                   )}
                   {(draft.kind === "addOutput" || draft.kind === "updateOutput") && (
                     <>
-                      <label className="form-control">
-                        <span className="label-text text-xs">
-                          Name{draft.kind === "updateOutput" ? " (empty keeps it)" : ""}
-                        </span>
+                      <Field label={<>Name{draft.kind === "updateOutput" ? " (empty keeps it)" : ""}</>}>
                         <input
                           className="input input-sm"
                           value={draft.name}
                           onChange={(event) => edit(index, { name: event.target.value })}
                         />
-                      </label>
-                      <label className="form-control">
-                        <span className="label-text text-xs">
-                          URL{draft.kind === "updateOutput" ? " (empty keeps it)" : ""}
-                        </span>
+                      </Field>
+                      <Field label={<>URL{draft.kind === "updateOutput" ? " (empty keeps it)" : ""}</>}>
                         <input
                           className="input input-sm font-mono"
                           value={draft.url}
                           onChange={(event) => edit(index, { url: event.target.value })}
                         />
-                      </label>
+                      </Field>
                     </>
                   )}
                   {draft.kind === "addOutput" && (
                     <>
-                      <label className="form-control">
-                        <span className="label-text text-xs">Video</span>
+                      <Field label="Video">
                         <select
                           className="select select-sm"
                           value={draft.profile}
@@ -250,9 +240,8 @@ function DefineChange(props: {
                             </option>
                           ))}
                         </select>
-                      </label>
-                      <label className="form-control">
-                        <span className="label-text text-xs">After applying</span>
+                      </Field>
+                      <Field label="After applying">
                         <select
                           className="select select-sm"
                           value={draft.desiredState}
@@ -265,7 +254,7 @@ function DefineChange(props: {
                           <option value="stopped">stopped</option>
                           <option value="running">running</option>
                         </select>
-                      </label>
+                      </Field>
                     </>
                   )}
                 </div>
@@ -379,14 +368,13 @@ function Operation(props: {
           a restart forgets them.
         </p>
         {step === "approve" && (
-          <label className="form-control">
-            <span className="label-text">Approval reason (audited)</span>
+          <Field label="Approval reason (audited)">
             <input
               className="input input-sm"
               value={reason}
               onChange={(event) => setReason(event.target.value)}
             />
-          </label>
+          </Field>
         )}
         {operation.status === "verificationFailed" && (
           <p className="text-sm">

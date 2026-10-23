@@ -18,6 +18,7 @@ import {
 } from "./settings-model.js";
 import type { ProfileRow } from "./settings-model.js";
 import { PageHeader } from "../ui/page-header.js";
+import { Field } from "../ui/controls.js";
 
 /** Engine settings. `/settings` is read once when the page opens (it also
  * lists every pipeline and output); each form saves only its own part and
@@ -68,23 +69,21 @@ function General({ config, save }: { config: ConfigData; save: Saver }) {
         })
       }
     >
-      <label className="form-control">
-        <span className="label-text">Server name</span>
+      <Field label="Server name">
         <input
           className="input input-sm"
           value={serverName}
           onChange={(event) => setServerName(event.target.value)}
         />
-      </label>
-      <label className="form-control">
-        <span className="label-text">Ingest host</span>
+      </Field>
+      <Field label="Ingest host">
         <input
           className="input input-sm"
           placeholder="the address publishers use; empty uses this host"
           value={ingestHost}
           onChange={(event) => setIngestHost(event.target.value)}
         />
-      </label>
+      </Field>
       <label className="label cursor-pointer justify-start gap-2">
         <input
           type="checkbox"
@@ -92,7 +91,7 @@ function General({ config, save }: { config: ConfigData; save: Saver }) {
           checked={retainTs}
           onChange={(event) => setRetainTs(event.target.checked)}
         />
-        <span className="label-text">Keep the recorded TS after converting it to MP4</span>
+        <span className="text-sm">Keep the recorded TS after converting it to MP4</span>
       </label>
     </SettingsForm>
   );
@@ -123,8 +122,7 @@ function SrtIngest(props: { current: SrtGlobalIngestConfig | undefined; save: Sa
       <p className="text-xs text-base-content/70">
         Every SRT publisher without a pipeline override uses these.
       </p>
-      <label className="form-control">
-        <span className="label-text">Encryption</span>
+      <Field label="Encryption">
         <select
           className="select select-sm"
           value={mode}
@@ -133,11 +131,10 @@ function SrtIngest(props: { current: SrtGlobalIngestConfig | undefined; save: Sa
           <option value="plaintext">plaintext</option>
           <option value="encrypted">encrypted</option>
         </select>
-      </label>
+      </Field>
       {encrypted && (
         <>
-          <label className="form-control">
-            <span className="label-text">Passphrase (10 to 79 bytes)</span>
+          <Field label="Passphrase (10 to 79 bytes)">
             <input
               type="password"
               className="input input-sm"
@@ -145,9 +142,8 @@ function SrtIngest(props: { current: SrtGlobalIngestConfig | undefined; save: Sa
               value={passphrase}
               onChange={(event) => setPassphrase(event.target.value)}
             />
-          </label>
-          <label className="form-control">
-            <span className="label-text">Key length</span>
+          </Field>
+          <Field label="Key length">
             <select
               className="select select-sm"
               value={pbkeylen}
@@ -157,11 +153,10 @@ function SrtIngest(props: { current: SrtGlobalIngestConfig | undefined; save: Sa
               <option value={24}>AES-192</option>
               <option value={32}>AES-256</option>
             </select>
-          </label>
+          </Field>
         </>
       )}
-      <label className="form-control">
-        <span className="label-text">Receive latency (ms, 20 to 8000)</span>
+      <Field label="Receive latency (ms, 20 to 8000)">
         <input
           type="number"
           min={20}
@@ -171,7 +166,7 @@ function SrtIngest(props: { current: SrtGlobalIngestConfig | undefined; save: Sa
           value={latencyMs}
           onChange={(event) => setLatencyMs(Number(event.target.value))}
         />
-      </label>
+      </Field>
     </SettingsForm>
   );
 }
@@ -228,8 +223,7 @@ function Profiles(props: {
                 )}
               </div>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                <label className="form-control">
-                  <span className="label-text text-xs">Preset</span>
+                <Field label="Preset">
                   <select
                     className="select select-sm"
                     value={row.profile.preset}
@@ -241,9 +235,8 @@ function Profiles(props: {
                       <option key={preset}>{preset}</option>
                     ))}
                   </select>
-                </label>
-                <label className="form-control">
-                  <span className="label-text text-xs">Tune</span>
+                </Field>
+                <Field label="Tune">
                   <select
                     className="select select-sm"
                     value={row.profile.tune}
@@ -257,10 +250,9 @@ function Profiles(props: {
                       </option>
                     ))}
                   </select>
-                </label>
+                </Field>
                 {PROFILE_NUMBERS.map(([field, label, min, max]) => (
-                  <label key={field} className="form-control">
-                    <span className="label-text text-xs">{label}</span>
+                  <Field key={field} label={label}>
                     <input
                       type="number"
                       min={min}
@@ -274,7 +266,7 @@ function Profiles(props: {
                         })
                       }
                     />
-                  </label>
+                  </Field>
                 ))}
               </div>
             </li>

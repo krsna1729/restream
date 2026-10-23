@@ -107,3 +107,15 @@ export function CopyButton(props: { text: string; label: string }) {
     </button>
   );
 }
+
+/** A labelled control: its caption over it (and an optional hint under
+ * it), the whole a `<label>` so the caption names the control. */
+export function Field(props: { label: ReactNode; hint?: ReactNode; className?: string; children: ReactNode }) {
+  return (
+    <label className={`flex min-w-0 flex-col justify-end gap-1 [&>:is(input,select,textarea,.join)]:w-full ${props.className ?? ""}`}>
+      <span className="text-[0.8rem] font-medium text-base-content/80">{props.label}</span>
+      {props.children}
+      {props.hint && <span className="text-xs text-base-content/65">{props.hint}</span>}
+    </label>
+  );
+}

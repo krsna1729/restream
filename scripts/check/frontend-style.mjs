@@ -19,6 +19,7 @@ const RULES = [
     fix: "a status is a StatusBadge from ui/tone.tsx",
   },
   { pattern: /-mb-px border-b-2/, fix: "tabs under a header use the tab-strip classes" },
+  { pattern: /\bform-control\b|\blabel-text\b/, fix: "a labelled control is a Field from ui/controls.tsx" },
   {
     pattern: /new Date\([^)]*\)\.toLocale(String|DateString|TimeString)\(/,
     fix: "a time is <When> or absoluteTime() from when.ts: one format, with its time zone",

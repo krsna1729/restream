@@ -9,6 +9,7 @@ import {
 } from "../core/api.js";
 import type { ConfigData, IngestSecurityConfig } from "../types.js";
 import { Panel } from "../ui/panel.js";
+import { Field } from "../ui/controls.js";
 import { Freshness, usePolled } from "./polled.js";
 import { SettingsForm } from "./settings-form.js";
 import type { Saver } from "./settings-form.js";
@@ -66,8 +67,7 @@ function Password({ recommended }: { recommended: boolean }) {
           ["New password again", confirm, setConfirm, "new-password"],
         ] as const
       ).map(([label, value, set, autoComplete]) => (
-        <label key={label} className="form-control">
-          <span className="label-text">{label}</span>
+        <Field key={label} label={label}>
           <input
             type="password"
             className="input input-sm"
@@ -75,7 +75,7 @@ function Password({ recommended }: { recommended: boolean }) {
             value={value}
             onChange={(event) => set(event.target.value)}
           />
-        </label>
+        </Field>
       ))}
       <button
         type="button"
@@ -112,8 +112,7 @@ function IngestSecurity(props: { current: IngestSecurityConfig; save: Saver }) {
       </p>
       <div className="grid grid-cols-2 gap-2">
         {LIMIT_FIELDS.map(([field, label]) => (
-          <label key={field} className="form-control">
-            <span className="label-text text-xs">{label}</span>
+          <Field key={field} label={label}>
             <input
               type="number"
               min={1}
@@ -122,7 +121,7 @@ function IngestSecurity(props: { current: IngestSecurityConfig; save: Saver }) {
               value={limits[field]}
               onChange={(event) => setLimits({ ...limits, [field]: Number(event.target.value) })}
             />
-          </label>
+          </Field>
         ))}
       </div>
     </SettingsForm>
