@@ -318,7 +318,7 @@ function Channels() {
       id: "sends",
       header: "Sends",
       width: "minmax(10rem,1.2fr)",
-      priority: 2,
+      priority: 3,
       cell: (channel) => (
         <span className="truncate text-sm">
           {SEVERITY_LABEL[channel.minSeverity]}
@@ -349,7 +349,7 @@ function Channels() {
     {
       id: "actions",
       header: <span className="sr-only">Actions</span>,
-      width: "minmax(15rem,1.6fr)",
+      width: "minmax(12rem,1.6fr)",
       bare: true,
       cell: (channel) => (
         <span className="flex flex-wrap items-center gap-1">
