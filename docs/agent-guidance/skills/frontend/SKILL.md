@@ -20,7 +20,8 @@ dashboard route contract.
 
 ## Contract
 
-- Route every dashboard API call through `web/ts/core/api.ts`; route
+- Route every dashboard API call through `web/ts/core/api.ts` (the admin
+  surfaces live in `core/api-admin.ts`, re-exported by `api.ts`); route
   literals elsewhere fail `node scripts/check/api-drift.mjs`.
 - Routing and per-view polling use TanStack Router and Query
   (`web/ts/control-room/router.tsx`, `polled.tsx`); the pushed runtime state

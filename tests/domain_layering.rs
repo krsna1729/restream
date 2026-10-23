@@ -101,7 +101,14 @@ fn declared_dependency_roots(cargo_toml: &str) -> BTreeSet<String> {
 }
 
 fn uses_dependency(source: &str, dependency: &str) -> bool {
-    if source.contains(&format!("{dependency}::")) {
+    // A path use starts at a word boundary: `String::` is not `ring::`.
+    let path = format!("{dependency}::");
+    if source.match_indices(&path).any(|(offset, _)| {
+        source[..offset]
+            .chars()
+            .next_back()
+            .is_none_or(|before| !before.is_ascii_alphanumeric() && before != '_')
+    }) {
         return true;
     }
     source.lines().any(|line| {
@@ -117,4 +124,11 @@ fn uses_dependency(source: &str, dependency: &str) -> bool {
                 == Some(dependency)
         })
     })
+}
+
+#[test]
+fn a_dependency_use_starts_at_a_word_boundary() {
+    assert!(uses_dependency("let x = ring::digest();", "ring"));
+    assert!(uses_dependency("use ring::hmac;", "ring"));
+    assert!(!uses_dependency("let s = String::new();", "ring"));
 }

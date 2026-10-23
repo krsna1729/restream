@@ -6,8 +6,8 @@ import path from "node:path";
 const repoRoot = process.cwd();
 
 const directApiFetchAllowlist = new Set(["web/pages/login.html"]);
-const routeLiteralAllowlist = new Set(["web/ts/core/api.ts", "web/pages/login.html"]);
-const apiRequestAllowlist = new Set(["web/ts/core/api.ts"]);
+const routeLiteralAllowlist = new Set(["web/ts/core/api.ts", "web/ts/core/api-admin.ts", "web/pages/login.html"]);
+const apiRequestAllowlist = new Set(["web/ts/core/api.ts", "web/ts/core/api-admin.ts"]);
 
 const directApiFetchPattern = /fetch\s*\(\s*(["'`])\/api\b/;
 const apiRequestPattern = /\bapiRequest\s*\(/;
