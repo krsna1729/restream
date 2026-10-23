@@ -36,8 +36,13 @@ await build({
 });
 await build({
   input: join(publicDir, "js/control-room/main.js"),
-  output: { file: join(out, "app.js"), format: "esm", minify: true, inlineDynamicImports: true },
+  output: { file: join(out, "app.js"), format: "esm", minify: true, codeSplitting: false },
   logLevel: "warn",
+  // React libraries mark modules "use client"; one bundle has no server side.
+  onLog(level, log, handler) {
+    if (log.code === "MODULE_LEVEL_DIRECTIVE") return;
+    handler(level, log);
+  },
 });
 copyFileSync(join(publicDir, "output.css"), join(out, "output.css"));
 copyFileSync(join(publicDir, "logo.png"), join(out, "logo.png"));
