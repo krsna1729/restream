@@ -26,6 +26,7 @@ import { StabilityLab } from "./stability/stability.js";
 import { System } from "./system.js";
 import { Audit, Team } from "./team.js";
 import { Notifications } from "./notifications.js";
+import { ScheduleView } from "./schedule.js";
 import { useInTabAlertNotifications } from "./browser-notify.js";
 
 export function App() {
@@ -85,6 +86,7 @@ function Shell() {
           {place.workspace === "operate" && <Operate live={live} pipelineId={place.pipelineId} />}
           {place.workspace === "inspect" && <Inspect live={live} pipelineId={place.pipelineId} />}
           {place.workspace === "monitor" && <Monitor live={live} pipelineId={place.pipelineId} />}
+          {place.workspace === "schedule" && <ScheduleView live={live} />}
           {place.workspace === "health" && <StreamHealth live={live} pipelineId={place.pipelineId} />}
           {place.workspace === "incidents" && <Incidents live={live} />}
           {place.workspace === "logs" && (

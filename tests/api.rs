@@ -42,6 +42,8 @@ mod observability;
 mod outputs;
 #[path = "api/pipelines.rs"]
 mod pipelines;
+#[path = "api/schedules.rs"]
+mod schedules;
 #[path = "api/team.rs"]
 mod team;
 

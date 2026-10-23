@@ -260,6 +260,11 @@ pub async fn run_app(config: Arc<AppConfig>) {
         crate::api::alerts::NOTIFY_INTERVAL,
         projector_stop.clone(),
     ));
+    tokio::spawn(crate::api::schedules::run_scheduler(
+        state.clone(),
+        crate::api::schedules::SCHEDULER_TICK,
+        projector_stop.clone(),
+    ));
     let mut runtime = runtime::RuntimeTasks::launch(runtime::RuntimeLaunch {
         config,
         state,

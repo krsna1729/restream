@@ -168,7 +168,7 @@ primitives still reads as one system.
 is `app.tsx` plus `control-room/shell/`.
 
 - Navigation groups the workspaces (`shell/nav.ts`): Operate (Fleet,
-  Channels, Pipelines, Operate, Monitor), Understand (Incidents, Stream
+  Channels, Pipelines, Operate, Monitor, Schedule), Understand (Incidents, Stream
   health, Capacity, Stability Lab), Manage (Media, Changes, Team, Audit log,
   Settings, with Notifications before Team), Engineer (Inspect, Logs,
   System), filtered to what the
@@ -486,6 +486,16 @@ byte passphrase), transcode profiles (built-ins kept), failed-attempt
 limits, dashboard password. The failed-attempts list is polled; forgetting
 one client sends its scope key, forgetting all sends no scope (other scopes
 get 400). Log out is on the password card.
+
+### Schedule
+
+The week ahead by local day (a list on phones), the events with their next
+time, repeat and how the last run went, and a form to schedule one: a name,
+a pipeline, an action (go live, stop destinations, play or stop the file
+source), the destinations (all, or chosen), a local time and a repeat.
+Operators can run an event now, pause it or delete it. Times are entered and
+shown in the browser's local time; the engine keeps UTC (`schedule-model.ts`
+mirrors its occurrence rule).
 
 ### Notifications
 

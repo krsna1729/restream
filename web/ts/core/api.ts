@@ -23,6 +23,8 @@ import type {
   PipelineSummarySnapshot,
   FlightTrace,
   AuditEntry,
+  Schedule,
+  ScheduleDraft,
   NotifyChannel,
   NotifyChannelDraft,
   NotifyDelivery,
@@ -922,8 +924,38 @@ async function testPush(): Promise<NotifyDelivery[] | null> {
   return body?.deliveries ?? null;
 }
 
+async function listSchedules(): Promise<Schedule[] | null> {
+  const body = await apiRequest<{ schedules: Schedule[] }>("/api/v1/schedules", { silentStatuses: [404] });
+  return body?.schedules ?? null;
+}
+
+async function createSchedule(draft: ScheduleDraft): Promise<Schedule | null> {
+  return apiRequest<Schedule>("/api/v1/schedules", { method: "POST", body: draft });
+}
+
+async function updateSchedule(id: string, draft: ScheduleDraft): Promise<Schedule | null> {
+  return apiRequest<Schedule>(`/api/v1/schedules/${encodeURIComponent(id)}`, { method: "PUT", body: draft });
+}
+
+async function deleteSchedule(id: string): Promise<boolean> {
+  const body = await apiRequest<{ deleted: boolean }>(`/api/v1/schedules/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  return body?.deleted === true;
+}
+
+/** Runs the action now (the times stay); `result` says what it did. */
+async function runSchedule(id: string): Promise<{ ok: boolean; result?: string } | null> {
+  return apiRequest(`/api/v1/schedules/${encodeURIComponent(id)}/run`, { method: "POST" });
+}
+
 export {
   apiRequest,
+  listSchedules,
+  createSchedule,
+  updateSchedule,
+  deleteSchedule,
+  runSchedule,
   listNotifyChannels,
   createNotifyChannel,
   updateNotifyChannel,

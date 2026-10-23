@@ -1937,3 +1937,52 @@ test("playlists: the editor saves the play order, and a running playlist moves t
     for (const name of clips) await page.request.delete(`/api/v1/media/${encodeURIComponent(name)}`);
   }
 });
+
+test("schedule: an event added in the UI can run now, and the engine runs a timed one on its own", async ({ page }) => {
+  test.setTimeout(90_000);
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  const stamp = Date.now();
+  const created = await page.request.post("/api/v1/pipelines", {
+    data: { name: `cr-sched-${stamp}`, streamKey: `crsched_${stamp}` },
+  });
+  const pipelineId: string = (await created.json()).pipeline.id;
+  const output = await page.request.post(`/api/v1/pipelines/${pipelineId}/outputs`, {
+    data: { name: "cr-sched-out", url: "rtmp://127.0.0.1:9/live/x", config: { video: { mode: "source" }, audio: { mode: "all" } } },
+  });
+  expect(output.ok()).toBe(true);
+  const ids: string[] = [];
+  try {
+    await page.goto("/?w=schedule");
+    const add = page.getByRole("region", { name: "Schedule an event" });
+    await add.getByLabel("Event name").fill(`cr-go-live-${stamp}`);
+    await add.getByRole("combobox", { name: "Pipeline to schedule" }).selectOption(pipelineId);
+    await add.getByRole("button", { name: "Schedule it" }).click();
+    const row = page.getByRole("row").filter({ hasText: `cr-go-live-${stamp}` });
+    await expect(row).toContainText("Go live");
+    await row.getByRole("button", { name: "Run now" }).click();
+    await expect(page.getByRole("status").filter({ hasText: `cr-go-live-${stamp}` })).toContainText("1 of 1 destinations wanted running");
+
+    // A one-off a few seconds ahead: the engine's scheduler runs it.
+    const timed = await page.request.post("/api/v1/schedules", {
+      data: { pipelineId, name: `cr-timed-${stamp}`, action: "stopOutputs", outputIds: [], atMs: Date.now() + 6_000, repeat: "once" },
+    });
+    expect(timed.ok()).toBe(true);
+    const timedId: string = (await timed.json()).id;
+    ids.push(timedId);
+    await expect
+      .poll(async () => {
+        const all = (await (await page.request.get("/api/v1/schedules")).json()).schedules as Array<{ id: string; lastResult: string | null }>;
+        return all.find((schedule) => schedule.id === timedId)?.lastResult;
+      }, { timeout: 30_000 })
+      .toBe("ok: 1 of 1 destinations stopped");
+  } finally {
+    const all = (await (await page.request.get("/api/v1/schedules")).json()).schedules as Array<{ id: string; pipelineId: string }>;
+    for (const schedule of all.filter((candidate) => candidate.pipelineId === pipelineId)) {
+      await page.request.delete(`/api/v1/schedules/${schedule.id}`);
+    }
+    await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
+  }
+});

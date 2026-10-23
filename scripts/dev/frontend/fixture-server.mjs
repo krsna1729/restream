@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 
 import { createDeployment, PRESETS } from "./fixtures/density.mjs";
 import { createNotify } from "./fixtures/notify.mjs";
+import { createSchedules } from "./fixtures/schedule.mjs";
 import { createTeam } from "./fixtures/team.mjs";
 
 const args = new Map();
@@ -35,6 +36,7 @@ const root = resolve(fileURLToPath(new URL("../../../public", import.meta.url)))
 
 const plant = createDeployment({ preset, seed });
 const subscribers = new Set();
+const schedules = createSchedules({ seed, pipelines: plant.state().pipelines, outputs: plant.state().outputs, count: preset === "small" ? 6 : 40 });
 const notify = createNotify({ seed, alerts: plant.alerts({}).alerts ?? [] });
 const team = createTeam({ seed, outputs: plant.state().outputs, members: preset === "small" ? 4 : preset === "plant" ? 24 : 120 });
 
@@ -128,7 +130,7 @@ const server = createServer(async (req, res) => {
   if (pathname.startsWith("/api/")) {
     const method = req.method ?? "GET";
     const body = method === "GET" ? null : await readBody(req);
-    const answer = team.handle(method, pathname, searchParams, body) ?? notify.handle(method, pathname, body);
+    const answer = team.handle(method, pathname, searchParams, body) ?? notify.handle(method, pathname, body) ?? schedules.handle(method, pathname, body);
     if (answer) {
       if (method !== "GET") team.record(method, pathname, answer.status ?? 200);
       return sendJson(res, answer.body, answer.status ?? 200);
