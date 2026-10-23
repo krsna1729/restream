@@ -8,6 +8,8 @@ import type { ConfigData, PipelineInput } from "../types.js";
 import { Kpi, KpiRow } from "../ui/kpi.js";
 import { Panel } from "../ui/panel.js";
 import { RawJson } from "../ui/raw-json.js";
+import { Since } from "./when-view.js";
+import { NextEvent } from "./next-event.js";
 import { StatusBadge } from "../ui/tone.js";
 import type { Tone } from "../ui/tone.js";
 import { DestinationMatrix } from "./destination-matrix.js";
@@ -72,7 +74,15 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
           label="Source"
           value={pipeline?.ingest ? pipeline.ingest.protocol.toUpperCase() : "offline"}
           tone={pipeline?.ingest ? "ok" : "bad"}
-          foot={pipeline?.ingest ? `${formatBps(props.live.rates?.ingestBps.get(pipelineId))} · ${pipeline.standbyInputs} standby` : "no publisher connected"}
+          foot={
+            pipeline?.ingest ? (
+              <>
+                {formatBps(props.live.rates?.ingestBps.get(pipelineId))} · <Since sinceMs={pipeline.ingest.sinceMs} prefix="on air for" className="" />
+              </>
+            ) : (
+              "no publisher connected"
+            )
+          }
         />
         <Kpi
           label="Delivering"
@@ -95,6 +105,7 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
           foot={pipeline?.recording ? "a file is being written" : "not recording"}
         />
       </KpiRow>
+      <NextEvent pipelineId={pipelineId} />
       {stored && (
         <PipelineBar
           pipeline={stored}

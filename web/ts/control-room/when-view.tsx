@@ -4,7 +4,7 @@
 
 import { useSyncExternalStore } from "react";
 
-import { absoluteTime, fullTime, relativeTime } from "./when.js";
+import { absoluteTime, duration, fullTime, relativeTime } from "./when.js";
 
 const listeners = new Set<() => void>();
 let now = Date.now();
@@ -56,6 +56,22 @@ export function When(props: {
     <time dateTime={new Date(at).toISOString()} title={`${fullTime(at)} · ${relative}`} className={`tabular ${props.className ?? ""}`}>
       {show === "ago" ? relative : absolute}
       {show === "both" && <span className="text-base-content/60"> · {relative}</span>}
+    </time>
+  );
+}
+
+/** How long something has been as it is: "for 2 h 5 min", the moment it
+ * started on hover. Nothing for an unknown start. */
+export function Since(props: { sinceMs: number | null | undefined; prefix?: string; className?: string }) {
+  useClock();
+  if (!props.sinceMs) return null;
+  return (
+    <time
+      dateTime={new Date(props.sinceMs).toISOString()}
+      title={`Since ${fullTime(props.sinceMs)}`}
+      className={`tabular whitespace-nowrap ${props.className ?? "text-xs text-base-content/60"}`}
+    >
+      {props.prefix ?? "for"} {duration(Date.now() - props.sinceMs)}
     </time>
   );
 }

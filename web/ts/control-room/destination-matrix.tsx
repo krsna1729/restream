@@ -22,6 +22,7 @@ import { useSession } from "./session.js";
 import { LogsLink } from "./logs-link.js";
 import { outputTrouble, troubleTitle } from "./trouble-model.js";
 import { retryWords } from "./when.js";
+import { Since } from "./when-view.js";
 import { formatBps } from "./format.js";
 import {
   destinationFilterCounts,
@@ -145,7 +146,11 @@ export function DestinationMatrix(props: {
             <StatusBadge tone={state.tone} dot>
               {state.label}
             </StatusBadge>
-            {row.output.retry && <RetryCountdown atMs={row.output.retry.nextAttemptAtMs} attempts={row.output.retry.attempts} />}
+            {row.output.retry ? (
+              <RetryCountdown atMs={row.output.retry.nextAttemptAtMs} attempts={row.output.retry.attempts} />
+            ) : (
+              <Since sinceMs={row.output.stateSinceMs} />
+            )}
           </span>
         );
       },

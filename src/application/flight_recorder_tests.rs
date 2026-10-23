@@ -23,6 +23,7 @@ fn output(
         retry: None,
         evidence: None,
         diagnosis: None,
+        state_since_ms: 0,
     }
 }
 

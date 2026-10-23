@@ -36,7 +36,11 @@ export type IngestState = { inputId: string, protocol: string, videoCodec: strin
 /**
  * The ingest is an SRT group (bonded) connection.
  */
-bonded: boolean, };
+bonded: boolean, 
+/**
+ * Unix epoch ms since when this input has been the connected source.
+ */
+sinceMs: number, };
 
 export type OutputState = { id: string, pipelineId: string, name: string, protocol: EgressProtocol, 
 /**
@@ -64,7 +68,13 @@ backpressure: string | null, retry: RetryState | null, evidence: FailureEvidence
 /**
  * Why a desired-running output is degraded; `null` when it is not.
  */
-diagnosis: Diagnosis | null, };
+diagnosis: Diagnosis | null, 
+/**
+ * Unix epoch ms since when the output has been in its current state
+ * (desired, convergence, flow, degraded or not): "live for 2 h", "down
+ * for 4 min". Outputs present when the engine started read from then.
+ */
+stateSinceMs: number, };
 
 export type InputState = { id: string, pipelineId: string, 
 /**

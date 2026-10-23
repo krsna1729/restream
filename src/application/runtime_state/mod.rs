@@ -115,6 +115,9 @@ pub struct IngestState {
     pub video_codec: Option<String>,
     /// The ingest is an SRT group (bonded) connection.
     pub bonded: bool,
+    /// Unix epoch ms since when this input has been the connected source.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub since_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -143,6 +146,11 @@ pub struct OutputState {
     pub evidence: Option<FailureEvidence>,
     /// Why a desired-running output is degraded; `null` when it is not.
     pub diagnosis: Option<Diagnosis>,
+    /// Unix epoch ms since when the output has been in its current state
+    /// (desired, convergence, flow, degraded or not): "live for 2 h", "down
+    /// for 4 min". Outputs present when the engine started read from then.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub state_since_ms: u64,
 }
 
 /// How actual relates to desired.
@@ -242,6 +250,7 @@ pub async fn project(engine: &MediaEngine, rows: &Rows<'_>) -> Projection {
                     protocol: ingest.protocol.clone(),
                     video_codec: metadata.video.map(|video| video.codec),
                     bonded: metadata.quality.srt_bonded == Some(true),
+                    since_ms: 0,
                 },
             )
         })
@@ -501,11 +510,38 @@ fn project_output(
         retry,
         evidence,
         diagnosis,
+        state_since_ms: 0,
     }
 }
 
 /// The entity-level difference from `old` to `new` (epoch and revision left
 /// for the hub to set).
+/// Stamps when each output entered its state and each ingest connected:
+/// unchanged since `old`, the old stamp carries over; changed (or new), it
+/// is `now_ms`. A new projection is built with zero stamps, so this runs on
+/// every publish before the diff.
+pub fn stamp_since(old: &Projection, new: &mut Projection, now_ms: u64) {
+    for (id, output) in new.outputs.iter_mut() {
+        let same = old.outputs.get(id).filter(|before| {
+            before.desired == output.desired
+                && before.convergence == output.convergence
+                && before.flow == output.flow
+                && before.diagnosis.is_some() == output.diagnosis.is_some()
+        });
+        output.state_since_ms = same.map_or(now_ms, |before| before.state_since_ms);
+    }
+    for (id, pipeline) in new.pipelines.iter_mut() {
+        if let Some(ingest) = pipeline.ingest.as_mut() {
+            let same = old
+                .pipelines
+                .get(id)
+                .and_then(|before| before.ingest.as_ref())
+                .filter(|before| before.input_id == ingest.input_id);
+            ingest.since_ms = same.map_or(now_ms, |before| before.since_ms);
+        }
+    }
+}
+
 pub fn diff(old: &Projection, new: &Projection) -> StateDelta {
     fn changed<V: Clone + PartialEq>(
         old: &BTreeMap<String, V>,

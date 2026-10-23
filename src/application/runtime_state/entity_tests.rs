@@ -328,3 +328,49 @@ async fn a_keyed_input_names_its_moq_url_only_while_moq_ingest_is_on() {
     assert_eq!(on.moq.as_deref(), Some("https://localhost:4443/key-main"));
     assert_eq!((on.rtmp, on.srt, on.hls), (off.rtmp, off.srt, off.hls));
 }
+
+#[test]
+fn since_stamps_carry_while_nothing_changes_and_reset_when_something_does() {
+    let output = OutputState {
+        id: "o1".into(),
+        pipeline_id: "p1".into(),
+        name: "YouTube".into(),
+        protocol: EgressProtocol::Rtmp,
+        shard: None,
+        stage: None,
+        desired: DesiredOutputState::Running,
+        actual: None,
+        convergence: Convergence::Converged,
+        flow: Flow::Flowing,
+        backpressure: None,
+        retry: None,
+        evidence: None,
+        diagnosis: None,
+        state_since_ms: 0,
+    };
+    let mut before = Projection::default();
+    before.outputs.insert("o1".into(), output.clone());
+    stamp_since(&Projection::default(), &mut before, 1_000);
+    assert_eq!(
+        before.outputs["o1"].state_since_ms, 1_000,
+        "a new output starts now"
+    );
+
+    let mut same = Projection::default();
+    same.outputs.insert("o1".into(), output.clone());
+    stamp_since(&before, &mut same, 5_000);
+    assert_eq!(
+        same.outputs["o1"].state_since_ms, 1_000,
+        "unchanged: the stamp carries"
+    );
+
+    let mut changed = Projection::default();
+    let mut flowing = output.clone();
+    flowing.flow = Flow::Stalled;
+    changed.outputs.insert("o1".into(), flowing);
+    stamp_since(&same, &mut changed, 9_000);
+    assert_eq!(
+        changed.outputs["o1"].state_since_ms, 9_000,
+        "a new flow restarts it"
+    );
+}

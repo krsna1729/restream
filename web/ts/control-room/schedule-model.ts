@@ -71,9 +71,9 @@ export function agenda(schedules: readonly Schedule[], nowMs: number, days: numb
 }
 
 /** The soonest enabled occurrence after now. */
-export function nextUp(schedules: readonly Schedule[]): Schedule | null {
+export function nextUp(schedules: readonly Schedule[], pipelineId: string | null = null): Schedule | null {
   return schedules
-    .filter((schedule) => schedule.enabled && schedule.nextAtMs !== null)
+    .filter((schedule) => schedule.enabled && schedule.nextAtMs !== null && (pipelineId === null || schedule.pipelineId === pipelineId))
     .reduce<Schedule | null>((best, schedule) => (best === null || (schedule.nextAtMs ?? Infinity) < (best.nextAtMs ?? Infinity) ? schedule : best), null);
 }
 
@@ -113,3 +113,4 @@ export function untilLabel(atMs: number, nowMs: number): string {
   if (hours < 48) return `in ${hours} h${minutes % 60 ? ` ${minutes % 60} min` : ""}`;
   return `in ${Math.round(hours / 24)} days`;
 }
+

@@ -435,6 +435,26 @@ export function createDeployment({ preset = "plant", seed = 7, nowMs = Date.now(
     return { pipelineId: pipeline.id, nodes, edges };
   }
 
+  /** As the engine stamps them: since when each output has been in its
+   * state and each ingest connected. The first stamps spread over the last
+   * few hours, so a fresh plant reads as one that has been running. */
+  const sinceKeys = new Map();
+  function stampSince(now) {
+    for (const output of outputs) {
+      const key = `${output.desired}|${output.convergence}|${output.flow}|${output.diagnosis ? 1 : 0}`;
+      const held = sinceKeys.get(output.id);
+      if (!held || held.key !== key) sinceKeys.set(output.id, { key, since: held ? now : now - random.int(60_000, 6 * 3_600_000) });
+      output.stateSinceMs = sinceKeys.get(output.id).since;
+    }
+    for (const pipeline of pipelines) {
+      if (!pipeline.ingest) continue;
+      const key = `ingest:${pipeline.ingest.inputId}`;
+      const held = sinceKeys.get(pipeline.id);
+      if (!held || held.key !== key) sinceKeys.set(pipeline.id, { key, since: held ? now : now - random.int(600_000, 8 * 3_600_000) });
+      pipeline.ingest.sinceMs = sinceKeys.get(pipeline.id).since;
+    }
+  }
+
   function state() {
     return {
       epoch,
@@ -728,6 +748,7 @@ export function createDeployment({ preset = "plant", seed = 7, nowMs = Date.now(
       changed.graphs.add(pipelineId);
     }
 
+    stampSince(now);
     deriveAlerts(now);
     fleetSamples.push(fleetSample(now));
     if (fleetSamples.length > 17_280) fleetSamples.shift();
@@ -1228,6 +1249,8 @@ export function createDeployment({ preset = "plant", seed = 7, nowMs = Date.now(
 
   // Warm history so charts start populated: 15 minutes at 2 s.
   for (let back = 450; back > 0; back -= 1) tick(nowMs - back * 2000);
+
+  stampSince(startedMs);
 
   return {
     preset,

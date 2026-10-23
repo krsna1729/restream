@@ -139,6 +139,7 @@ fn output(
             cause: Cause::NoPublisher,
             ruled_out: Vec::new(),
         }),
+        state_since_ms: 0,
     }
 }
 
