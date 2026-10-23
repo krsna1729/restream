@@ -688,3 +688,62 @@ export interface LogPage {
   logs: AppLogRow[];
   hasMore: boolean;
 }
+
+/** The selected ingest at one recorded instant; a value the publisher's
+ * protocol does not report is absent (`IngestHealth` in
+ * `application/flight_recorder.rs`). */
+export interface IngestHealth {
+  inputId: string;
+  protocol: string;
+  bitrateBps: number | null;
+  packetsPerSec: number;
+  videoCodec: string | null;
+  width: number | null;
+  height: number | null;
+  fps: number | null;
+  /** Mean and longest gap between the ingest's last keyframes. */
+  gopSec: number | null;
+  maxGopSec: number | null;
+  rttMs: number | null;
+  lossPerSec: number | null;
+  retransPerSec: number | null;
+  /** SRT receive buffer fill, 0..1. */
+  receiveBuffer: number | null;
+}
+
+export interface RingHealth {
+  fill: number;
+  capacity: number;
+  worstLagSlots: number;
+  overflows: number;
+}
+
+export interface OutputsHealth {
+  wanted: number;
+  delivering: number;
+  degraded: number;
+  retrying: number;
+  stalled: number;
+  retryAttempts: number;
+  offeredBps: number;
+  deliveredBps: number;
+  resyncs: number;
+  worstFeedLag: number;
+}
+
+export interface FlightSample {
+  atMs: number;
+  ingest: IngestHealth | null;
+  ring: RingHealth | null;
+  outputs: OutputsHealth;
+}
+
+/** `GET /pipelines/{id}/flight-recorder`: a pipeline's recorded health,
+ * oldest first, sampled every `intervalMs` (`restream.trace.v1`). */
+export interface FlightTrace {
+  schema: "restream.trace.v1";
+  pipelineId: string;
+  intervalMs: number;
+  completeFromMs: number;
+  samples: FlightSample[];
+}

@@ -6,12 +6,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
 
 import {
+  getFlightRecorder,
   getAggregateAlerts,
   getEngineHealth,
   getFleetHistory,
   getLifecycleEvents,
 } from "../core/api.js";
-import type { AlertsSnapshot, LifecycleEventsSnapshot } from "../core/api-types.js";
+import type { AlertsSnapshot, FlightTrace, LifecycleEventsSnapshot } from "../core/api-types.js";
 import type { FleetHistoryWindow } from "../core/generated/runtime-state.js";
 import type { HealthData } from "../types.js";
 import { formatAge } from "./format.js";
@@ -141,6 +142,28 @@ export function useFleetHistory(
     toMs === null ? null : (window) => fleetSpanSettled(window, toMs),
   );
 }
+
+/**
+ * A pipeline's flight record, polled on the dashboard's clock. The first
+ * load reads the whole kept trace, later ones only the samples after the
+ * newest held, merged and trimmed to the server's span.
+ */
+export function useFlightRecorder(pipelineId: string): Polled<FlightTrace> {
+  const client = useQueryClient();
+  const key = ["flight-recorder", pipelineId];
+  return usePolled(key, async () => {
+    const held = client.getQueryData<FlightTrace>(key);
+    const last = held?.samples[held.samples.length - 1];
+    const next = await getFlightRecorder(pipelineId, last ? new Date(last.atMs + 1) : undefined);
+    if (next === null) return null;
+    const kept = (held?.samples ?? []).filter((sample) => sample.atMs > next.completeFromMs);
+    const samples = [...kept, ...next.samples];
+    return { ...next, samples: samples.slice(-FLIGHT_SAMPLES_KEPT) };
+  });
+}
+
+/** The engine keeps 10 min at 2 s (`FLIGHT_HISTORY_CAP`). */
+const FLIGHT_SAMPLES_KEPT = 300;
 
 /** How old a polled panel's data is; amber once it missed two loads. */
 export function Freshness({

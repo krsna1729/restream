@@ -13,7 +13,7 @@ import { PlaceLink, useGo } from "./router.js";
 import type { LiveSnapshot } from "./store.js";
 
 /** The workspaces about one pipeline, as tabs under its header. */
-const PIPELINE_TABS: readonly Workspace[] = ["operate", "monitor", "inspect", "logs"];
+const PIPELINE_TABS: readonly Workspace[] = ["operate", "health", "monitor", "inspect", "logs"];
 
 /**
  * A workspace about one pipeline: a searchable picker until one is chosen

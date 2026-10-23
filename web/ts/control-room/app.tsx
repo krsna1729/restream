@@ -15,6 +15,7 @@ import { Pipelines } from "./pipelines.js";
 import { useOpenAlerts } from "./polled.js";
 import { usePlace } from "./router.js";
 import { Settings } from "./settings.js";
+import { StreamHealth } from "./stream-health.js";
 import { navBadges } from "./shell/badges.js";
 import { CommandPalette, useCommandPaletteShortcut } from "./shell/command-palette.js";
 import { MobileTabs, MoreSheet } from "./shell/mobile-nav.js";
@@ -78,6 +79,7 @@ function Shell() {
           {place.workspace === "operate" && <Operate live={live} pipelineId={place.pipelineId} />}
           {place.workspace === "inspect" && <Inspect live={live} pipelineId={place.pipelineId} />}
           {place.workspace === "monitor" && <Monitor live={live} pipelineId={place.pipelineId} />}
+          {place.workspace === "health" && <StreamHealth live={live} pipelineId={place.pipelineId} />}
           {place.workspace === "incidents" && <Incidents live={live} />}
           {place.workspace === "logs" && (
             <Logs key={place.pipelineId ?? ""} live={live} pipelineId={place.pipelineId} />
