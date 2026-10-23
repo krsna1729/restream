@@ -219,6 +219,17 @@ test("operate: find a pipeline, start and stop an output, promote an input", asy
     await expect(page).toHaveURL(new RegExp(`w=operate&p=${pipelineId}`));
     await expect(page.getByRole("heading", { name })).toBeVisible();
 
+    // Nothing on air yet: the go-live checks say what to do first, and the
+    // encoder card gives OBS's server and key for this pipeline.
+    const goLive = page.getByRole("region", { name: "Going live" });
+    await expect(goLive.getByRole("list", { name: "Go-live checks" })).toContainText("Connect a source");
+    await expect(goLive.getByRole("list", { name: "Go-live checks" })).toContainText("Not live anywhere");
+    const encoder = goLive.getByRole("region", { name: "Set up your encoder" });
+    await expect(encoder).toContainText(/rtmp:\/\/.+/);
+    await expect(encoder).not.toContainText("croperate_");
+    await encoder.getByRole("button", { name: "show" }).click();
+    await expect(encoder).toContainText("croperate_");
+
     // The media graph and the matrix come from the engine; the stopped
     // output is in neither delivering count.
     await expect(
