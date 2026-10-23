@@ -1093,6 +1093,7 @@ export function createDeployment({ preset = "plant", seed = 7, nowMs = Date.now(
         priorCpus: size.cores,
         safeUtilization: 0.8,
       },
+      retryPolicy: { maxRetries: 10, baseMs: 5000, maxMs: 300000, jitter: "equal" },
       baseline,
       projected,
     };

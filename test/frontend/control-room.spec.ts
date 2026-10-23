@@ -1772,3 +1772,36 @@ test("stream health: the flight recorder judges a live publisher's keyframes", a
     await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
   }
 });
+
+test("stability lab: naive retries stay stuck after a blip, the engine's backoff recovers", async ({ page }) => {
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  await page.goto("/?w=stability");
+  const story = page.getByRole("region", { name: "Chapter" });
+  const slider = page.getByRole("slider", { name: "Position in the story" });
+
+  await page.getByRole("button", { name: "Retry at once" }).click();
+  await slider.fill(await slider.getAttribute("max") ?? "0");
+  await expect(story).toContainText("Stuck");
+  await expect(story).toContainText("the loop feeds itself");
+  await expect(page.getByText("STALLED · 0 delivering")).toBeVisible();
+
+  // The engine's own policy (from /capacity/scenario's retryPolicy).
+  await page.getByRole("button", { name: "Engine backoff" }).click();
+  await slider.fill(await slider.getAttribute("max") ?? "0");
+  await expect(story).toContainText("Recovered");
+  await expect(story).toContainText("engine backoff 5 s → 300 s");
+
+  // A measured replay reads the pipeline's flight record.
+  const pipelineId = await liveFilePipeline(page, `crlab${Date.now()}`);
+  try {
+    await page.getByRole("button", { name: "Replay a pipeline" }).click();
+    await page.getByRole("combobox", { name: "Pipeline" }).selectOption(pipelineId);
+    await expect(story).toContainText(/Healthy|Retrying|Degraded|No source/, { timeout: 20_000 });
+    await expect(story).toContainText("measured samples every 2 s");
+  } finally {
+    await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
+  }
+});
