@@ -214,7 +214,12 @@ headroomPercent: number,
 /**
  * Wanted outputs delivering, as a percentage; `null` when none is wanted.
  */
-deliveringPercent: number | null, degraded: DegradedByLayer, };
+deliveringPercent: number | null, degraded: DegradedByLayer, 
+/**
+ * Bytes every egress sent since the previous sample (0 in the first),
+ * so a span's total is the sum of its samples.
+ */
+sentBytes: number, };
 
 export type DegradedByLayer = { ingest: number, feed: number, shard: number, destination: number, };
 

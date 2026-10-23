@@ -563,6 +563,8 @@ export function createDeployment({ preset = "plant", seed = 7, nowMs = Date.now(
       headroomPercent: Math.max(0, 100 - capacity.projectedUtilization * 100),
       deliveringPercent: wanted.length ? (100 * delivering) / wanted.length : null,
       degraded,
+      // About 4.5 Mb/s per delivering output over the 2 s between samples.
+      sentBytes: Math.round((delivering * 4.5e6 * 2) / 8),
     };
   }
 

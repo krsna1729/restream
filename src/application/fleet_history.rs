@@ -4,7 +4,7 @@
 //! before a page did can still be read against them
 //! (`GET /api/v1/fleet/history?since=`).
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -54,6 +54,10 @@ pub struct FleetSample {
     /// Wanted outputs delivering, as a percentage; `null` when none is wanted.
     pub delivering_percent: Option<f64>,
     pub degraded: DegradedByLayer,
+    /// Bytes every egress sent since the previous sample (0 in the first),
+    /// so a span's total is the sum of its samples.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub sent_bytes: u64,
 }
 
 /// The samples a window asked for, oldest first, and after when the kept
@@ -115,7 +119,26 @@ pub fn take_fleet_sample<'a>(
         headroom_percent: (100.0 * (1.0 - f64::from(capacity.projected_utilization))).max(0.0),
         delivering_percent: (wanted > 0).then(|| 100.0 * f64::from(delivering) / f64::from(wanted)),
         degraded,
+        sent_bytes: 0,
     }
+}
+
+/// Bytes sent since the last call, from each output's cumulative
+/// `bytes_sent`: the growth of a counter seen before, all of one that is
+/// new or went backwards (its output restarted). `seen` keeps only the
+/// outputs present now.
+pub fn bytes_sent_since(seen: &mut HashMap<String, u64>, now: Vec<(String, u64)>) -> u64 {
+    let mut total = 0u64;
+    let mut next = HashMap::with_capacity(now.len());
+    for (output_id, bytes) in now {
+        total = total.saturating_add(match seen.get(&output_id) {
+            Some(&before) if bytes >= before => bytes - before,
+            _ => bytes,
+        });
+        next.insert(output_id, bytes);
+    }
+    *seen = next;
+    total
 }
 
 struct HistoryState {
@@ -219,6 +242,9 @@ pub async fn run_fleet_sampler(
 ) {
     let mut ticks = tokio::time::interval(interval);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Counters at start-up are history, not this sample's traffic.
+    let mut sent = HashMap::new();
+    bytes_sent_since(&mut sent, engine.egress_bytes_sent().await);
     loop {
         tokio::select! {
             () = shutdown.cancelled() => return,
@@ -227,9 +253,10 @@ pub async fn run_fleet_sampler(
         hub.refresh_on_demand(&pool, &engine).await;
         let capacity = engine.capacity_snapshot().await;
         let at_ms = MediaEngine::now_epoch_ms();
-        let sample = hub
+        let mut sample = hub
             .read(|projection| take_fleet_sample(at_ms, projection.outputs.values(), &capacity))
             .await;
+        sample.sent_bytes = bytes_sent_since(&mut sent, engine.egress_bytes_sent().await);
         history.push(sample);
     }
 }
