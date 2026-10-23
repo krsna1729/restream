@@ -154,18 +154,20 @@ The primitives live in `web/ts/ui/`, a layer below the app: `ui/` may import
 | `StatusBadge`, `StatusDot`, `Tone` | `tone.tsx` | One tone vocabulary (ok, warn, bad, info, neutral, accent) for every state |
 | `DataTable` | `data-table.tsx` | Sortable table whose columns carry a priority; cards on phones; windowed past 80 rows (`useWindowedRows`) |
 | `TimeSeries` | `time-series.tsx` | Multi-series chart: area, dashed, gaps for missing samples, bands, labelled cursors, a ghost overlay, hover readout |
-| `SearchField`, `ChipGroup`, `ShareBar` | `controls.tsx` | Filters and a protocol-mix bar |
+| `Field`, `SearchField`, `ChipGroup`, `CopyButton`, `ShareBar` | `controls.tsx` | A labelled control (caption over it, optional hint), filters, a copy button and a protocol-mix bar |
 | `RawJson` | `raw-json.tsx` | A section's raw payload, collapsed and copyable |
 | `Icon` | `icons.tsx` | Inline stroke icons |
 
 Pages are built from these, not from raw DaisyUI markup:
 `scripts/check/frontend-style.mjs` (CI, Source architecture audit) fails on
 legacy cards (`card bg-base-200`, `card-body`, `card-title`), DaisyUI 4
-`*-bordered` classes, a status drawn as a bare toned `badge`, and
-hand-rolled header tabs. A line that must keep one says why in a
+`*-bordered` classes, DaisyUI 4 `form-control`/`label-text` (a labelled
+control is a `Field`), a status drawn as a bare toned `badge`, hand-rolled
+header tabs, and dates formatted by hand instead of `<When>`. A line that must keep one says why in a
 `// style-ok: <reason>` comment on the line before. Tabs under a header use
-the `tab-strip` classes; a row of filters uses `filter-bar`, which aligns
-captions, controls, checkboxes and statuses on one baseline.
+the `tab-strip` classes; a row of filters uses `filter-bar` (its fields
+carry `filter-field`), which aligns captions, controls, checkboxes and
+statuses on one baseline.
 
 ## Shell and routing
 

@@ -4,6 +4,7 @@ import { createPipelineInput, updatePipelineInput } from "../core/api.js";
 import { withBasePath } from "../core/base-path.js";
 import type { PullHeaderPair } from "../core/api-types.js";
 import type { PipelineInput, PipelineInputKind, PullAuthKind, VariantRule } from "../types.js";
+import { Field } from "../ui/controls.js";
 import {
   AUTH_COOKIES_NOTE,
   AUTH_COOKIES_PLACEHOLDER,
@@ -71,16 +72,14 @@ export function InputForm(props: {
         return true;
       }}
     >
-      <label className="form-control">
-        <span className="label-text">Label</span>
+      <Field label="Label">
         <input
           className="input input-sm"
           value={draft.label}
           onChange={(event) => set({ label: event.target.value })}
         />
-      </label>
-      <label className="form-control">
-        <span className="label-text">Source</span>
+      </Field>
+      <Field label="Source">
         <select
           className="select select-sm"
           value={draft.kind}
@@ -92,7 +91,7 @@ export function InputForm(props: {
             </option>
           ))}
         </select>
-      </label>
+      </Field>
       {current && current.kind === "keyed" && (
         <div className="space-y-1 text-sm">
           <p className="text-xs text-base-content/70">Publish to</p>
@@ -117,8 +116,7 @@ export function InputForm(props: {
       )}
       {draft.kind === "keyed" && (
         <div className="space-y-2">
-          <label className="form-control">
-            <span className="label-text">HLS push authentication</span>
+          <Field label="HLS push authentication">
             <select
               className="select select-sm"
               value={draft.pushAuthKind}
@@ -129,7 +127,7 @@ export function InputForm(props: {
               <option value="none">None</option>
               <option value="basic">Basic (username and password)</option>
             </select>
-          </label>
+          </Field>
           <p className="text-xs text-base-content/70">
             Protects HLS publishing only, not RTMP, SRT, or playback. Send credentials
             separately using the publisher's HTTP Basic auth settings; publish URLs stay unchanged.
@@ -147,25 +145,22 @@ export function InputForm(props: {
           )}
           {!draft.keepPushAuth && draft.pushAuthKind === "basic" && (
             <>
-              <label className="form-control">
-                <span className="label-text">HLS push username</span>
+              <Field label="HLS push username">
                 <input className="input input-sm" autoComplete="off"
                   value={draft.pushUsername}
                   onChange={(event) => set({ pushUsername: event.target.value })} />
-              </label>
-              <label className="form-control">
-                <span className="label-text">HLS push password</span>
+              </Field>
+              <Field label="HLS push password">
                 <input type="password" className="input input-sm"
                   autoComplete="new-password" value={draft.pushPassword}
                   onChange={(event) => set({ pushPassword: event.target.value })} />
-              </label>
+              </Field>
             </>
           )}
         </div>
       )}
       {fields.includes("sourceUrl") && (
-        <label className="form-control">
-          <span className="label-text">HLS source URL</span>
+        <Field label="HLS source URL">
           <input
             className="input input-sm font-mono"
             inputMode="url"
@@ -173,11 +168,10 @@ export function InputForm(props: {
             value={draft.sourceUrl}
             onChange={(event) => set({ sourceUrl: event.target.value })}
           />
-        </label>
+        </Field>
       )}
       {fields.includes("variantRule") && (
-        <label className="form-control">
-          <span className="label-text">Rendition</span>
+        <Field label="Rendition">
           <select
             className="select select-sm"
             value={draft.variantRule}
@@ -189,12 +183,11 @@ export function InputForm(props: {
               </option>
             ))}
           </select>
-        </label>
+        </Field>
       )}
       {fields.includes("auth") && (
         <div className="space-y-2">
-          <label className="form-control">
-            <span className="label-text">Authentication</span>
+          <Field label="Authentication">
             <select
               className="select select-sm"
               value={draft.authKind}
@@ -208,7 +201,7 @@ export function InputForm(props: {
                 </option>
               ))}
             </select>
-          </label>
+          </Field>
           {note && draft.keepAuth && (
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <span role="status" className="badge badge-sm badge-ghost">
@@ -232,8 +225,7 @@ export function InputForm(props: {
             </div>
           )}
           {shown.includes("token") && (
-            <label className="form-control">
-              <span className="label-text">Token</span>
+            <Field label="Token">
               <input
                 type="password"
                 autoComplete="off"
@@ -241,11 +233,10 @@ export function InputForm(props: {
                 value={draft.token}
                 onChange={(event) => set({ token: event.target.value })}
               />
-            </label>
+            </Field>
           )}
           {shown.includes("cookies") && (
-            <label className="form-control">
-              <span className="label-text">Cookie string (copied from the origin)</span>
+            <Field label="Cookie string (copied from the origin)">
               <textarea
                 rows={3}
                 autoComplete="off"
@@ -255,22 +246,20 @@ export function InputForm(props: {
                 onChange={(event) => set({ cookies: event.target.value })}
               />
               <span className="text-xs text-base-content/70">{AUTH_COOKIES_NOTE}</span>
-            </label>
+            </Field>
           )}
           {shown.includes("username") && (
-            <label className="form-control">
-              <span className="label-text">Username</span>
+            <Field label="Username">
               <input
                 autoComplete="off"
                 className="input input-sm"
                 value={draft.username}
                 onChange={(event) => set({ username: event.target.value })}
               />
-            </label>
+            </Field>
           )}
           {shown.includes("password") && (
-            <label className="form-control">
-              <span className="label-text">Password</span>
+            <Field label="Password">
               <input
                 type="password"
                 autoComplete="off"
@@ -278,11 +267,11 @@ export function InputForm(props: {
                 value={draft.password}
                 onChange={(event) => set({ password: event.target.value })}
               />
-            </label>
+            </Field>
           )}
           {shown.includes("headers") && (
             <div className="space-y-1">
-              <span className="label-text">Request headers</span>
+              <span className="text-sm">Request headers</span>
               {draft.headers.map((header, index) => (
                 <div key={index} className="flex flex-wrap gap-2">
                   <input

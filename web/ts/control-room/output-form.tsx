@@ -11,6 +11,7 @@ import { createOutput, getPipelineProbe, updateOutput } from "../core/api.js";
 import type { ProbeAudioTrack } from "../core/api-types.js";
 import { OUTPUT_SERVER_PRESETS } from "../core/output-url.js";
 import type { ConfigOutput } from "../types.js";
+import { Field } from "../ui/controls.js";
 import {
   audioChoiceCounts,
   audioNotes,
@@ -76,16 +77,14 @@ export function OutputForm(props: {
       }}
     >
       <div className="grid gap-2 md:grid-cols-2">
-        <label className="form-control">
-          <span className="label-text">Name</span>
+        <Field label="Name">
           <input
             className="input input-sm"
             value={draft.name}
             onChange={(event) => set({ name: event.target.value })}
           />
-        </label>
-        <label className="form-control">
-          <span className="label-text">Protocol</span>
+        </Field>
+        <Field label="Protocol">
           <select
             className="select select-sm"
             value={draft.protocol}
@@ -98,36 +97,32 @@ export function OutputForm(props: {
             <option value="srt">SRT</option>
             <option value="hls">HLS (HTTP upload)</option>
           </select>
-        </label>
+        </Field>
       </div>
       {draft.protocol === "srt" ? (
         <div className="grid gap-2 md:grid-cols-3">
-          <label className="form-control">
-            <span className="label-text">Host</span>
+          <Field label="Host">
             <input
               className="input input-sm"
               value={draft.srt.host}
               onChange={(event) => setSrt({ host: event.target.value })}
             />
-          </label>
-          <label className="form-control">
-            <span className="label-text">Port</span>
+          </Field>
+          <Field label="Port">
             <input
               className="input input-sm"
               value={draft.srt.port}
               onChange={(event) => setSrt({ port: event.target.value })}
             />
-          </label>
-          <label className="form-control">
-            <span className="label-text">Stream ID</span>
+          </Field>
+          <Field label="Stream ID">
             <input
               className="input input-sm font-mono"
               value={draft.srt.streamId}
               onChange={(event) => setSrt({ streamId: event.target.value })}
             />
-          </label>
-          <label className="form-control">
-            <span className="label-text">Passphrase (empty: none)</span>
+          </Field>
+          <Field label="Passphrase (empty: none)">
             <input
               type="password"
               autoComplete="off"
@@ -135,9 +130,8 @@ export function OutputForm(props: {
               value={draft.srt.passphrase}
               onChange={(event) => setSrt({ passphrase: event.target.value })}
             />
-          </label>
-          <label className="form-control">
-            <span className="label-text">Key length</span>
+          </Field>
+          <Field label="Key length">
             <select
               className="select select-sm"
               value={draft.srt.pbkeylen}
@@ -147,20 +141,18 @@ export function OutputForm(props: {
               <option value="24">AES-192</option>
               <option value="32">AES-256</option>
             </select>
-          </label>
-          <label className="form-control">
-            <span className="label-text">Other options (a=b&amp;c=d)</span>
+          </Field>
+          <Field label={<>Other options (a=b&amp;c=d)</>}>
             <input
               className="input input-sm font-mono"
               value={draft.srt.extraQuery}
               onChange={(event) => setSrt({ extraQuery: event.target.value })}
             />
-          </label>
+          </Field>
         </div>
       ) : (
         <div className="grid gap-2 md:grid-cols-3">
-          <label className="form-control">
-            <span className="label-text">Server</span>
+          <Field label="Server">
             <select
               className="select select-sm"
               value={draft.server}
@@ -172,19 +164,17 @@ export function OutputForm(props: {
                 </option>
               ))}
             </select>
-          </label>
-          <label className="form-control md:col-span-2">
-            <span className="label-text">{draft.server ? "Stream key" : "URL"}</span>
+          </Field>
+          <Field label={draft.server ? "Stream key" : "URL"} className="md:col-span-2">
             <input
               className="input input-sm font-mono"
               autoComplete="off"
               value={draft.input}
               onChange={(event) => set({ input: event.target.value })}
             />
-          </label>
+          </Field>
           {draft.protocol === "rtmp" && !draft.server && (
-            <label className="form-control">
-              <span className="label-text">RTMP flavour</span>
+            <Field label="RTMP flavour">
               <select
                 className="select select-sm"
                 value={draft.rtmpMode}
@@ -195,24 +185,22 @@ export function OutputForm(props: {
                 <option value="legacy">legacy (H.264)</option>
                 <option value="enhanced">enhanced (H.265 capable)</option>
               </select>
-            </label>
+            </Field>
           )}
         </div>
       )}
       <p className="break-all font-mono text-xs text-base-content/70" aria-label="Destination URL">
         {url || "—"}
       </p>
-      <label className="form-control">
-        <span className="label-text">Watch page (optional): where viewers see it, e.g. the YouTube watch URL</span>
+      <Field label="Watch page (optional): where viewers see it, e.g. the YouTube watch URL">
         <input
           className="input input-sm"
           value={draft.monitoringUrl}
           onChange={(event) => set({ monitoringUrl: event.target.value })}
         />
-      </label>
+      </Field>
       <div className="grid gap-2 md:grid-cols-2">
-        <label className="form-control">
-          <span className="label-text">Video</span>
+        <Field label="Video">
           <select
             className="select select-sm"
             value={draft.profile === null ? "c:" : draft.profile ? `p:${draft.profile}` : "s:"}
@@ -229,9 +217,8 @@ export function OutputForm(props: {
               </option>
             ))}
           </select>
-        </label>
-        <label className="form-control">
-          <span className="label-text">Video codec</span>
+        </Field>
+        <Field label="Video codec">
           <select
             className="select select-sm"
             value={draft.codec}
@@ -242,10 +229,10 @@ export function OutputForm(props: {
             <option value="h264">H.264</option>
             <option value="h265">H.265</option>
           </select>
-        </label>
+        </Field>
       </div>
       <fieldset className="space-y-2">
-        <legend className="label-text">Audio</legend>
+        <legend className="text-sm">Audio</legend>
         <p className="flex flex-wrap gap-1 text-xs" aria-label="Audio limits">
           <span className="badge badge-sm badge-ghost">
             {getAudioPlatformLabel(platform)} · {detectAudioProtocol(url, draft.protocol).toUpperCase()}
@@ -288,7 +275,7 @@ export function OutputForm(props: {
                     })
                   }
                 />
-                <span className="label-text">{trackLabel(tracks, position)}</span>
+                <span className="text-sm">{trackLabel(tracks, position)}</span>
               </label>
             ))}
           </div>

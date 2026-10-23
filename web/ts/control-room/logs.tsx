@@ -10,6 +10,7 @@ import { When } from "./when-view.js";
 import { zoneName } from "./when.js";
 import { PageHeader } from "../ui/page-header.js";
 import { StatusDot } from "../ui/tone.js";
+import { Field } from "../ui/controls.js";
 import { PipelineHeading } from "./pipeline-scope.js";
 import { useGo } from "./router.js";
 
@@ -117,8 +118,7 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null; out
         Engine logs
       </h2>
       <div className="filter-bar">
-        <label className="form-control">
-          <span className="label-text text-xs">Scope</span>
+        <Field label="Scope" className="filter-field">
           <select
             className="select select-sm sm:w-56"
             value={scope.kind === "pipeline" ? `p:${scope.pipelineId}` : scope.kind}
@@ -145,10 +145,9 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null; out
               ))
             )}
           </select>
-        </label>
+        </Field>
         {scope.kind === "pipeline" && (
-          <label className="form-control">
-            <span className="label-text text-xs">Destination</span>
+          <Field label="Destination" className="filter-field">
             <select
               className="select select-sm sm:w-56"
               value={scope.outputId ?? ""}
@@ -161,10 +160,9 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null; out
                 </option>
               ))}
             </select>
-          </label>
+          </Field>
         )}
-        <label className="form-control">
-          <span className="label-text text-xs">Level</span>
+        <Field label="Level" className="filter-field">
           <select
             className="select select-sm sm:w-40"
             value={level}
@@ -179,7 +177,7 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null; out
               </option>
             ))}
           </select>
-        </label>
+        </Field>
         <label className="flex h-8 cursor-pointer items-center gap-2 text-sm">
           <input
             type="checkbox"

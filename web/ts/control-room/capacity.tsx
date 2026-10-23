@@ -17,6 +17,7 @@ import { PageHeader } from "../ui/page-header.js";
 import { Panel } from "../ui/panel.js";
 import { StatusBadge } from "../ui/tone.js";
 import type { Tone } from "../ui/tone.js";
+import { Field } from "../ui/controls.js";
 
 const FLOW_TONE: Record<FlowDiagnosis["status"], Tone> = {
   healthy: "ok",
@@ -156,8 +157,7 @@ function Scenario({ live }: { live: LiveSnapshot }) {
             project();
           }}
         >
-          <label className="form-control">
-            <span className="label-text text-xs">More outputs</span>
+          <Field label="More outputs">
             <input
               type="number"
               min={0}
@@ -166,9 +166,8 @@ function Scenario({ live }: { live: LiveSnapshot }) {
               value={addOutputs}
               onChange={(event) => setAddOutputs(Math.max(0, Number(event.target.value) || 0))}
             />
-          </label>
-          <label className="form-control">
-            <span className="label-text text-xs">Carrying the ingest of</span>
+          </Field>
+          <Field label="Carrying the ingest of">
             <select
               className="select select-sm"
               value={pipelineId}
@@ -181,9 +180,8 @@ function Scenario({ live }: { live: LiveSnapshot }) {
                 </option>
               ))}
             </select>
-          </label>
-          <label className="form-control">
-            <span className="label-text text-xs">Protocol</span>
+          </Field>
+          <Field label="Protocol">
             <select
               className="select select-sm"
               value={protocol}
@@ -195,9 +193,8 @@ function Scenario({ live }: { live: LiveSnapshot }) {
                 </option>
               ))}
             </select>
-          </label>
-          <label className="form-control">
-            <span className="label-text text-xs">Encoding</span>
+          </Field>
+          <Field label="Encoding">
             <select
               className="select select-sm"
               value={addStages}
@@ -209,7 +206,7 @@ function Scenario({ live }: { live: LiveSnapshot }) {
                 </option>
               ))}
             </select>
-          </label>
+          </Field>
           <button type="submit" className="btn btn-sm btn-primary">
             Project
           </button>
