@@ -168,6 +168,7 @@ impl IngestWriter for FakeIngestWriter {
                 start_time: start_time.to_string(),
                 live_optimized,
                 target_gop_seconds,
+                playlist: Vec::new(),
             };
             crate::sync::lock(&self.created).push(ingest.clone());
             Ok(ingest)
@@ -220,6 +221,23 @@ impl IngestWriter for FakeIngestWriter {
         })
     }
 
+    fn set_ingest_playlist<'a>(
+        &'a self,
+        _id: &'a str,
+        _playlist: &'a [String],
+    ) -> IngestUpdateFuture<'a> {
+        Box::pin(async move { Ok(None) })
+    }
+
+    fn rename_ingest_file<'a>(
+        &'a self,
+        _id: &'a str,
+        _from: &'a str,
+        _to: &'a str,
+    ) -> IngestUpdateFuture<'a> {
+        Box::pin(async move { Ok(None) })
+    }
+
     fn delete_ingest<'a>(&'a self, id: &'a str) -> IngestDeleteFuture<'a> {
         Box::pin(async move {
             if let Some(message) = self.fail {
@@ -241,6 +259,7 @@ impl FakeIngestLookup {
             start_time: "00:00:05".to_string(),
             live_optimized: true,
             target_gop_seconds: 4,
+            playlist: Vec::new(),
         }
     }
 }
@@ -729,6 +748,7 @@ async fn persist_pipeline_file_ingest_updates_pipeline_and_deletes_stale_ingests
             start_time: "00:00:10".to_string(),
             live_optimized: false,
             target_gop_seconds: 2,
+            playlist: Vec::new(),
         },
         || "generated".to_string(),
     )
@@ -797,6 +817,7 @@ async fn persist_pipeline_file_ingest_creates_new_ingest_when_none_exists() {
             start_time: "00:00:00".to_string(),
             live_optimized: true,
             target_gop_seconds: 4,
+            playlist: Vec::new(),
         },
         || "generated-id".to_string(),
     )
@@ -849,6 +870,7 @@ async fn persist_pipeline_file_ingest_surfaces_race_when_update_target_disappear
             start_time: "00:00:10".to_string(),
             live_optimized: false,
             target_gop_seconds: 2,
+            playlist: Vec::new(),
         },
         || "generated".to_string(),
     )

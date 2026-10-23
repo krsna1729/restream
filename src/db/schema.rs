@@ -194,6 +194,7 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
     )
     .execute(pool)
     .await?;
+    super::migrations::ensure_column_exists(pool, "ingests", "playlist", "TEXT").await?;
     super::migrations::ensure_column_exists(
         pool,
         "ingests",

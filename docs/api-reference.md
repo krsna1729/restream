@@ -942,6 +942,36 @@ Responses carry `id`, `filename`, `streamKey`, `loop`, `startTime`,
   keyframe every `targetGopSeconds` and scene-cut GOP drift disabled.
 - Stop and delete kill the child and reap it.
 
+### Playlists
+
+The per-pipeline `PUT` (and a pipeline's `fileIngest` on create or update)
+also takes `playlist`: the files to play in order, at most 200
+(`MAX_PLAYLIST_ITEMS`). Each entry is checked like `filename`. The first
+entry becomes `filename`; a list of one file is that file. The per-pipeline
+responses carry `playlist` (every file in order, one entry for a single
+file) and `nowPlaying` (while running, the index of the playing file, else
+`null`).
+
+```json
+{ "filename": "intro.mp4", "playlist": ["intro.mp4", "show/part1.mp4", "outro.mp4"], "loopFlag": true, "liveOptimized": true }
+```
+
+- The engine plays each file with its own FFmpeg run and keeps the
+  pipeline's timestamps continuous across files, as it does when a looping
+  file restarts. The start time applies to the first file of the first pass
+  only.
+- `loop` starts the list over after its last file; without it the ingest
+  ends after the last file. One file still loops inside FFmpeg
+  (`-stream_loop -1`).
+- A file that fails is skipped. The ingest stops once every file has failed
+  in a row, so a list of unreadable files never respawns FFmpeg forever
+  (`next_item` in `src/media/external_file_ingest.rs`).
+- Files should share codecs and resolution: with `-c copy` a change
+  between files reaches every destination. `liveOptimized` re-encodes each
+  file to the same H.264/AAC.
+- Renaming a media file renames it in every playlist, and a file in any
+  playlist counts as in use.
+
 ## Media files
 
 | Method | Route | Purpose |

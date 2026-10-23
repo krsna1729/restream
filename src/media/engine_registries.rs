@@ -311,6 +311,8 @@ impl HlsRegistry {
 pub struct FileIngestRegistry {
     pub children: TokioRwLock<HashMap<String, tokio::process::Child>>,
     pub active: TokioRwLock<HashSet<String>>,
+    /// The item each running ingest is playing (0 for a single file).
+    pub positions: TokioRwLock<HashMap<String, usize>>,
 }
 
 impl Default for FileIngestRegistry {
@@ -324,6 +326,7 @@ impl FileIngestRegistry {
         Self {
             children: TokioRwLock::new(HashMap::new()),
             active: TokioRwLock::new(HashSet::new()),
+            positions: TokioRwLock::new(HashMap::new()),
         }
     }
 }

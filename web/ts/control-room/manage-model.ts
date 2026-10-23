@@ -34,7 +34,10 @@ export interface PipelineDraft {
   /** On edit: ask the engine for a new key (publishers must follow it). */
   readonly rotateKey: boolean;
   readonly source: "live" | "file";
+  /** The first file. */
   readonly filename: string;
+  /** The files after the first, in play order: a playlist when any. */
+  readonly queue: readonly string[];
   readonly loop: boolean;
   readonly startTime: string;
   readonly liveOptimized: boolean;
@@ -55,6 +58,7 @@ export function pipelineDraft(pipeline: ConfigPipeline | null): PipelineDraft {
     rotateKey: false,
     source: file ? "file" : "live",
     filename: file?.filename ?? "",
+    queue: file?.playlist && file.playlist.length > 1 ? file.playlist.slice(1) : [],
     loop: file?.loop ?? true,
     startTime: file?.startTime ?? "",
     liveOptimized: file?.liveOptimized ?? false,
@@ -72,6 +76,7 @@ function sourceOf(draft: PipelineDraft): Pick<PipelineWrite, "inputSource" | "fi
     inputSource: `file:${draft.filename}`,
     fileIngest: {
       filename: draft.filename,
+      ...(draft.queue.length > 0 ? { playlist: [draft.filename, ...draft.queue] } : {}),
       loopFlag: draft.loop,
       startTime: draft.startTime.trim(),
       liveOptimized: draft.liveOptimized,
@@ -314,4 +319,19 @@ export function audioNotes(
     notes.push("Nobody publishes now, so the source tracks are unknown; track 1 is the default.");
   }
   return notes;
+}
+
+/** The queue with item `index` moved by `by` (-1 up, +1 down), clamped. */
+export function moveQueued(queue: readonly string[], index: number, by: -1 | 1): string[] {
+  const target = index + by;
+  if (index < 0 || index >= queue.length || target < 0 || target >= queue.length) return [...queue];
+  const next = [...queue];
+  [next[index], next[target]] = [next[target], next[index]];
+  return next;
+}
+
+/** "2 of 3 · b.mp4" for a running playlist; null for one file or idle. */
+export function nowPlayingLabel(playlist: readonly string[] | undefined, nowPlaying: number | null | undefined): string | null {
+  if (!playlist || playlist.length < 2 || nowPlaying == null || nowPlaying < 0 || nowPlaying >= playlist.length) return null;
+  return `${nowPlaying + 1} of ${playlist.length} · ${playlist[nowPlaying]}`;
 }

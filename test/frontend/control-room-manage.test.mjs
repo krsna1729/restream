@@ -4,6 +4,8 @@ import test from "node:test";
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
 const {
+  moveQueued,
+  nowPlayingLabel,
   audioChoiceCounts,
   audioNotes,
   outputDraft,
@@ -197,4 +199,24 @@ test("audio notes say what is dropped or downmixed, and when tracks are unknown"
   assert.match(audioNotes({ ...ok, audio: "downmix", tracks: [1] }, stereoOnly, tracks).join(" "), /downmixed/);
   assert.match(audioNotes(ok, anything, []).join(" "), /unknown/);
   assert.doesNotMatch(audioNotes({ ...ok, audio: "remap" }, stereoOnly, tracks).join(" "), /not sent/);
+});
+
+test("a playlist sends every file in order, and one file sends no playlist", () => {
+  const draft = { ...pipelineDraft(filePipeline), queue: ["b.mp4", "c.mp4"] };
+  const write = pipelineWrite(draft, filePipeline);
+  assert.deepEqual(write.fileIngest.playlist, ["clip.ts", "b.mp4", "c.mp4"]);
+  assert.equal(write.inputSource, "file:clip.ts");
+  assert.equal("playlist" in pipelineWrite({ ...draft, queue: [] }, null).fileIngest, false);
+
+  const stored = { ...filePipeline, fileIngest: { ...filePipeline.fileIngest, playlist: ["clip.ts", "b.mp4"] } };
+  assert.deepEqual(pipelineDraft(stored).queue, ["b.mp4"]);
+  assert.equal("fileIngest" in pipelineWrite(pipelineDraft(stored), stored), false, "unchanged: not re-sent");
+});
+
+test("queued files move within bounds, and a running playlist says what plays", () => {
+  assert.deepEqual(moveQueued(["a", "b", "c"], 2, -1), ["a", "c", "b"]);
+  assert.deepEqual(moveQueued(["a", "b"], 0, -1), ["a", "b"]);
+  assert.equal(nowPlayingLabel(["a", "b", "c"], 1), "2 of 3 · b");
+  assert.equal(nowPlayingLabel(["a"], 0), null);
+  assert.equal(nowPlayingLabel(["a", "b"], null), null);
 });

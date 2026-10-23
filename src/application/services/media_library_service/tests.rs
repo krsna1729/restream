@@ -1,4 +1,5 @@
 use super::*;
+use crate::application::models::Ingest;
 use crate::application::ports::{
     IngestCatalogFuture, IngestDeleteFuture, IngestLookup, IngestLookupFuture, IngestUpdateFuture,
     IngestWriteError, IngestWriteFuture, IngestWriter, MetaLookupError, MetaStoreWriter,
@@ -180,6 +181,23 @@ impl IngestWriter for RenameRollbackIngestStore {
             ingest.filename = filename.to_string();
             Ok(Some(ingest.clone()))
         })
+    }
+
+    fn set_ingest_playlist<'a>(
+        &'a self,
+        _id: &'a str,
+        _playlist: &'a [String],
+    ) -> IngestUpdateFuture<'a> {
+        Box::pin(async move { Ok(None) })
+    }
+
+    fn rename_ingest_file<'a>(
+        &'a self,
+        id: &'a str,
+        _from: &'a str,
+        to: &'a str,
+    ) -> IngestUpdateFuture<'a> {
+        self.update_ingest_filename(id, to)
     }
 
     fn delete_ingest<'a>(&'a self, _id: &'a str) -> IngestDeleteFuture<'a> {
@@ -407,6 +425,7 @@ async fn rename_media_file_rolls_back_prior_ingest_updates_on_later_failure() {
         start_time: "00:00:01".to_string(),
         live_optimized: true,
         target_gop_seconds: 2,
+        playlist: Vec::new(),
     };
     let second = Ingest {
         id: "ing-2".to_string(),
@@ -416,6 +435,7 @@ async fn rename_media_file_rolls_back_prior_ingest_updates_on_later_failure() {
         start_time: String::new(),
         live_optimized: false,
         target_gop_seconds: 4,
+        playlist: Vec::new(),
     };
     let ingest_store = Arc::new(RenameRollbackIngestStore::new(
         vec![first.clone(), second.clone()],
@@ -587,6 +607,23 @@ impl IngestWriter for ConcurrentWriteIngestStore {
         })
     }
 
+    fn set_ingest_playlist<'a>(
+        &'a self,
+        _id: &'a str,
+        _playlist: &'a [String],
+    ) -> IngestUpdateFuture<'a> {
+        Box::pin(async move { Ok(None) })
+    }
+
+    fn rename_ingest_file<'a>(
+        &'a self,
+        id: &'a str,
+        _from: &'a str,
+        to: &'a str,
+    ) -> IngestUpdateFuture<'a> {
+        self.update_ingest_filename(id, to)
+    }
+
     fn delete_ingest<'a>(&'a self, _id: &'a str) -> IngestDeleteFuture<'a> {
         Box::pin(async move { Ok(false) })
     }
@@ -611,6 +648,7 @@ async fn rename_media_file_does_not_revert_concurrent_ingest_field_changes() {
         start_time: "00:00:01".to_string(),
         live_optimized: true,
         target_gop_seconds: 2,
+        playlist: Vec::new(),
     };
     let ingest_store = Arc::new(ConcurrentWriteIngestStore::new(ingest, "sk-rotated"));
     let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();

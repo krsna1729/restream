@@ -132,6 +132,21 @@ impl MediaEngine {
 
     pub async fn clear_file_ingest_running(&self, id: &str) {
         self.file_ingests.active.write().await.remove(id);
+        self.file_ingests.positions.write().await.remove(id);
+    }
+
+    /// Records which item of its playlist a file ingest is playing.
+    pub async fn set_file_ingest_position(&self, id: &str, index: usize) {
+        self.file_ingests
+            .positions
+            .write()
+            .await
+            .insert(id.to_string(), index);
+    }
+
+    /// The item a running file ingest is playing.
+    pub async fn file_ingest_position(&self, id: &str) -> Option<usize> {
+        self.file_ingests.positions.read().await.get(id).copied()
     }
 
     /// Registers a recording, or returns `None` if already active; check-and-insert under one lock closes the start/start race.

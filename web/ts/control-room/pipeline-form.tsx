@@ -3,7 +3,7 @@ import { useState } from "react";
 import { createPipeline, updatePipeline } from "../core/api.js";
 import type { MediaFile } from "../core/api-types.js";
 import type { ConfigPipeline } from "../types.js";
-import { pipelineDraft, pipelineProblem, pipelineWrite } from "./manage-model.js";
+import { moveQueued, pipelineDraft, pipelineProblem, pipelineWrite } from "./manage-model.js";
 import type { PipelineDraft } from "./manage-model.js";
 import { SettingsForm } from "./settings-form.js";
 
@@ -95,7 +95,7 @@ export function PipelineForm(props: {
       {draft.source === "file" && (
         <div className="grid gap-2 md:grid-cols-2">
           <label className="form-control md:col-span-2">
-            <span className="label-text">File</span>
+            <span className="label-text">{draft.queue.length > 0 ? "First file" : "File"}</span>
             <select
               className="select select-sm select-bordered"
               value={draft.filename}
@@ -109,6 +109,7 @@ export function PipelineForm(props: {
               ))}
             </select>
           </label>
+          <Playlist queue={draft.queue} files={props.files} onChange={(queue) => set({ queue })} />
           <label className="form-control">
             <span className="label-text">Start at (HH:MM:SS, empty: the start)</span>
             <input
@@ -135,7 +136,7 @@ export function PipelineForm(props: {
               checked={draft.loop}
               onChange={(event) => set({ loop: event.target.checked })}
             />
-            <span className="label-text">Loop</span>
+            <span className="label-text">{draft.queue.length > 0 ? "Loop the playlist" : "Loop"}</span>
           </label>
           <label className="label cursor-pointer justify-start gap-2">
             <input
@@ -204,5 +205,58 @@ export function PipelineForm(props: {
         )}
       </div>
     </SettingsForm>
+  );
+}
+
+/** The files that play after the first, in order: add from the library,
+ * move, remove. Files should share codecs (or use Live Optimized). */
+function Playlist(props: { queue: readonly string[]; files: readonly MediaFile[]; onChange: (queue: string[]) => void }) {
+  const [adding, setAdding] = useState("");
+  return (
+    <div className="flex flex-col gap-2 md:col-span-2" role="group" aria-label="Playlist">
+      <span className="label-text">Then play</span>
+      {props.queue.length === 0 ? (
+        <p className="text-xs text-base-content/65">Nothing: the file plays alone. Add files to make a playlist.</p>
+      ) : (
+        <ol className="flex flex-col gap-1">
+          {props.queue.map((name, index) => (
+            <li key={`${index}-${name}`} className="flex min-w-0 items-center gap-2 rounded-field border border-base-content/10 bg-base-100 px-2 py-1 text-sm">
+              <span className="tabular w-6 shrink-0 text-base-content/60">{index + 2}.</span>
+              <span className="min-w-0 flex-1 truncate">{name}</span>
+              <button type="button" className="btn btn-ghost btn-xs" aria-label={`Move ${name} up`} disabled={index === 0} onClick={() => props.onChange(moveQueued(props.queue, index, -1))}>
+                ↑
+              </button>
+              <button type="button" className="btn btn-ghost btn-xs" aria-label={`Move ${name} down`} disabled={index === props.queue.length - 1} onClick={() => props.onChange(moveQueued(props.queue, index, 1))}>
+                ↓
+              </button>
+              <button type="button" className="btn btn-ghost btn-xs" aria-label={`Remove ${name}`} onClick={() => props.onChange(props.queue.filter((_, at) => at !== index))}>
+                ✕
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
+      <div className="flex gap-2">
+        <select className="select select-sm select-bordered min-w-0 flex-1" aria-label="File to add to the playlist" value={adding} onChange={(event) => setAdding(event.target.value)}>
+          <option value="">Add a file…</option>
+          {props.files.map((file) => (
+            <option key={file.name} value={file.name}>
+              {file.name}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className="btn btn-sm"
+          disabled={!adding}
+          onClick={() => {
+            props.onChange([...props.queue, adding]);
+            setAdding("");
+          }}
+        >
+          Add
+        </button>
+      </div>
+    </div>
   );
 }

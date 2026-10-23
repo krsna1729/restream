@@ -278,6 +278,21 @@ pub trait IngestWriter: Send + Sync {
         id: &'a str,
         filename: &'a str,
     ) -> IngestUpdateFuture<'a>;
+    /// Sets the ingest's playlist (play order, the first being its
+    /// `filename`); an empty list makes it a single file again.
+    fn set_ingest_playlist<'a>(
+        &'a self,
+        id: &'a str,
+        playlist: &'a [String],
+    ) -> IngestUpdateFuture<'a>;
+    /// Renames one media file wherever this ingest uses it: its `filename`
+    /// and every playlist entry. Rename and its rollback use this.
+    fn rename_ingest_file<'a>(
+        &'a self,
+        id: &'a str,
+        from: &'a str,
+        to: &'a str,
+    ) -> IngestUpdateFuture<'a>;
     fn delete_ingest<'a>(&'a self, id: &'a str) -> IngestDeleteFuture<'a>;
 }
 

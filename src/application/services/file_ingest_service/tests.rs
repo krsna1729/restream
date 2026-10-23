@@ -17,6 +17,7 @@ fn ingest_with(live_optimized: bool) -> Ingest {
         start_time: "00:00:05".to_string(),
         live_optimized,
         target_gop_seconds: 4,
+        playlist: Vec::new(),
     }
 }
 
@@ -115,6 +116,23 @@ impl IngestWriter for NoopIngestWriter {
         _filename: &'a str,
     ) -> IngestUpdateFuture<'a> {
         Box::pin(async move { Err(IngestWriteError::new("unexpected update")) })
+    }
+
+    fn set_ingest_playlist<'a>(
+        &'a self,
+        _id: &'a str,
+        _playlist: &'a [String],
+    ) -> IngestUpdateFuture<'a> {
+        Box::pin(async move { Ok(None) })
+    }
+
+    fn rename_ingest_file<'a>(
+        &'a self,
+        _id: &'a str,
+        _from: &'a str,
+        _to: &'a str,
+    ) -> IngestUpdateFuture<'a> {
+        Box::pin(async move { Ok(None) })
     }
 
     fn delete_ingest<'a>(&'a self, _id: &'a str) -> IngestDeleteFuture<'a> {
@@ -240,6 +258,7 @@ async fn apply_file_ingest_payload_surfaces_persist_failure() {
                 start_time: String::new(),
                 live_optimized: false,
                 target_gop_seconds: 2,
+                playlist: Vec::new(),
             })),
         )
         .await
@@ -292,6 +311,7 @@ async fn apply_file_ingest_payload_preserves_runtime_when_persist_fails() {
                 start_time: String::new(),
                 live_optimized: false,
                 target_gop_seconds: 2,
+                playlist: Vec::new(),
             })),
         )
         .await

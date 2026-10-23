@@ -10,6 +10,9 @@ pub struct IngestRecord {
     pub start_time: String,
     pub live_optimized: bool,
     pub target_gop_seconds: u32,
+    /// The ordered files of a playlist (JSON array), first = `filename`;
+    /// `None` for a single file.
+    pub playlist: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -43,7 +46,7 @@ pub async fn create_ingest(
 
 pub async fn get_ingest(pool: &SqlitePool, id: &str) -> Result<Option<IngestRecord>, sqlx::Error> {
     sqlx::query_as::<_, IngestRecord>(
-        "SELECT id, filename, stream_key, loop, start_time, live_optimized, target_gop_seconds FROM ingests WHERE id = ?",
+        "SELECT id, filename, stream_key, loop, start_time, live_optimized, target_gop_seconds, playlist FROM ingests WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -55,7 +58,7 @@ pub async fn get_ingest_by_stream_key(
     stream_key: &str,
 ) -> Result<Option<IngestRecord>, sqlx::Error> {
     sqlx::query_as::<_, IngestRecord>(
-        "SELECT id, filename, stream_key, loop, start_time, live_optimized, target_gop_seconds FROM ingests WHERE stream_key = ? ORDER BY rowid DESC LIMIT 1",
+        "SELECT id, filename, stream_key, loop, start_time, live_optimized, target_gop_seconds, playlist FROM ingests WHERE stream_key = ? ORDER BY rowid DESC LIMIT 1",
     )
     .bind(stream_key)
     .fetch_optional(pool)
@@ -67,7 +70,7 @@ pub async fn list_ingests_for_stream_key(
     stream_key: &str,
 ) -> Result<Vec<IngestRecord>, sqlx::Error> {
     sqlx::query_as::<_, IngestRecord>(
-        "SELECT id, filename, stream_key, loop, start_time, live_optimized, target_gop_seconds FROM ingests WHERE stream_key = ? ORDER BY rowid ASC",
+        "SELECT id, filename, stream_key, loop, start_time, live_optimized, target_gop_seconds, playlist FROM ingests WHERE stream_key = ? ORDER BY rowid ASC",
     )
     .bind(stream_key)
     .fetch_all(pool)
@@ -76,7 +79,7 @@ pub async fn list_ingests_for_stream_key(
 
 pub async fn list_ingests(pool: &SqlitePool) -> Result<Vec<IngestRecord>, sqlx::Error> {
     sqlx::query_as::<_, IngestRecord>(
-        "SELECT id, filename, stream_key, loop, start_time, live_optimized, target_gop_seconds FROM ingests ORDER BY rowid ASC",
+        "SELECT id, filename, stream_key, loop, start_time, live_optimized, target_gop_seconds, playlist FROM ingests ORDER BY rowid ASC",
     )
     .fetch_all(pool)
     .await
@@ -87,7 +90,8 @@ pub async fn list_ingests_for_filename(
     filename: &str,
 ) -> Result<Vec<IngestRecord>, sqlx::Error> {
     sqlx::query_as::<_, IngestRecord>(
-        "SELECT id, filename, stream_key, loop, start_time, live_optimized, target_gop_seconds FROM ingests WHERE filename = ?",
+        "SELECT id, filename, stream_key, loop, start_time, live_optimized, target_gop_seconds, playlist FROM ingests
+         WHERE filename = ?1 OR EXISTS (SELECT 1 FROM json_each(ingests.playlist) WHERE value = ?1)",
     )
     .bind(filename)
     .fetch_all(pool)
@@ -156,4 +160,52 @@ pub async fn delete_ingest(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Er
         .execute(pool)
         .await?;
     Ok(result.rows_affected() > 0)
+}
+
+/// Sets (or, with `None`, clears) an ingest's playlist: a JSON array of
+/// filenames whose first entry is its `filename`.
+pub async fn set_ingest_playlist(
+    pool: &SqlitePool,
+    id: &str,
+    playlist: Option<&str>,
+) -> Result<Option<IngestRecord>, sqlx::Error> {
+    let result = sqlx::query("UPDATE ingests SET playlist = ? WHERE id = ?")
+        .bind(playlist)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+    get_ingest(pool, id).await
+}
+
+/// Renames one media file wherever an ingest uses it: its `filename` and
+/// every playlist entry, in order.
+pub async fn rename_ingest_file(
+    pool: &SqlitePool,
+    id: &str,
+    from: &str,
+    to: &str,
+) -> Result<Option<IngestRecord>, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE ingests SET
+            filename = CASE WHEN filename = ?1 THEN ?2 ELSE filename END,
+            playlist = CASE WHEN playlist IS NULL THEN NULL ELSE (
+                SELECT json_group_array(item) FROM (
+                    SELECT CASE WHEN value = ?1 THEN ?2 ELSE value END AS item
+                    FROM json_each(ingests.playlist) ORDER BY key
+                )
+            ) END
+         WHERE id = ?3",
+    )
+    .bind(from)
+    .bind(to)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+    get_ingest(pool, id).await
 }

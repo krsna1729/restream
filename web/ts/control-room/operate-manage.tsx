@@ -23,6 +23,7 @@ import type {
 import type { ConfigPipeline, PipelineInput } from "../types.js";
 import { ConfirmDelete } from "./confirm.js";
 import { InputForm } from "./input-form.js";
+import { nowPlayingLabel } from "./manage-model.js";
 import { PipelineForm } from "./pipeline-form.js";
 import { usePolled } from "./polled.js";
 import { useGo } from "./router.js";
@@ -127,15 +128,26 @@ function FileSwitch(props: {
   const file = state.value;
   const fileId = file?.configured ? file.id : undefined;
   if (!file || !fileId) return null;
+  const playing = file.running ? nowPlayingLabel(file.playlist, file.nowPlaying) : null;
+  const many = (file.playlist?.length ?? 1) > 1;
   return (
-    <button
-      type="button"
-      className="btn btn-sm btn-outline"
-      disabled={props.busy}
-      onClick={() => props.act(() => (file.running ? stopIngest : startIngest)(fileId), state.refresh)}
-    >
-      {file.running ? `Stop file ${file.filename}` : `Play file ${file.filename}`}
-    </button>
+    <span className="inline-flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        className="btn btn-sm btn-outline"
+        disabled={props.busy}
+        onClick={() => props.act(() => (file.running ? stopIngest : startIngest)(fileId), state.refresh)}
+      >
+        {file.running
+          ? many ? "Stop playlist" : `Stop file ${file.filename}`
+          : many ? `Play playlist (${file.playlist?.length} files)` : `Play file ${file.filename}`}
+      </button>
+      {playing && (
+        <span role="status" aria-label="Now playing" className="text-sm text-base-content/75">
+          Now playing {playing}
+        </span>
+      )}
+    </span>
   );
 }
 

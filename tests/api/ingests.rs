@@ -291,3 +291,68 @@ async fn ingest_start_requires_matching_pipeline() {
     let json = body_json(resp).await;
     assert_eq!(json["error"], "No pipeline found for stream key");
 }
+
+#[tokio::test]
+async fn a_playlist_is_stored_in_order_and_its_first_file_is_the_filename() {
+    let (app, _) = test_app().await;
+    let cookie = login(&app).await;
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            "/api/v1/pipelines",
+            &cookie,
+            Some(r#"{"name":"Playlist","streamKey":"key01_7d71124cde80358ca7c13081"}"#),
+        ))
+        .await
+        .unwrap();
+    let pipeline_id = body_json(resp).await["pipeline"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let uri = format!("/api/v1/pipelines/{pipeline_id}/file-ingest");
+
+    let playlist = serde_json::json!({
+        "filename": "ignored.mp4",
+        "playlist": ["intro.mp4", "show/part1.mp4", "outro.mp4"],
+        "loop": true
+    });
+    let resp = app
+        .clone()
+        .oneshot(auth_req("PUT", &uri, &cookie, Some(&playlist.to_string())))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["filename"], "intro.mp4");
+    assert_eq!(
+        json["playlist"],
+        serde_json::json!(["intro.mp4", "show/part1.mp4", "outro.mp4"])
+    );
+    assert_eq!(json["nowPlaying"], serde_json::Value::Null, "not running");
+
+    // One file again: the playlist goes.
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "PUT",
+            &uri,
+            &cookie,
+            Some(r#"{"filename":"solo.mp4"}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        body_json(resp).await["playlist"],
+        serde_json::json!(["solo.mp4"])
+    );
+
+    // Every entry is checked like a filename.
+    let escape = serde_json::json!({ "filename": "a.mp4", "playlist": ["a.mp4", "../etc/passwd"] });
+    let resp = app
+        .clone()
+        .oneshot(auth_req("PUT", &uri, &cookie, Some(&escape.to_string())))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
