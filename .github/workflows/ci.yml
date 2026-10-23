@@ -92,6 +92,8 @@ jobs:
         run: cargo xtask source-audit
       - name: Check Markdown documentation
         run: node scripts/check/docs.mjs
+      - name: Check the dashboard is built from its primitives
+        run: node scripts/check/frontend-style.mjs
 
   docker-runtime-smoke:
     name: Docker runtime source-build smoke (targeted)

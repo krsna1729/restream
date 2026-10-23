@@ -7,14 +7,16 @@
 //     [--role viewer|operator]   (view the dashboard as a lower role)
 //
 // Writes PNGs and report.json to .local/shots/<label>/. For each page it
-// checks: no horizontal page scroll, no text clipped by its own box, touch
-// targets of at least 36 px on phone widths, and console errors. It uses
+// runs layout-audit.mjs (page overflow, clipped text and selects, stray
+// scrollbars, misaligned control rows, 36 px touch targets on phones) and
+// records console errors. It uses
 // the preinstalled Chromium (PLAYWRIGHT_BROWSERS_PATH) and never downloads.
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { chromium } from "@playwright/test";
+import { auditLayout } from "./layout-audit.mjs";
 
 const args = new Map();
 for (let index = 2; index < process.argv.length; index += 1) {
@@ -27,7 +29,7 @@ const base = args.get("base") ?? "http://127.0.0.1:3031";
 const label = args.get("label") ?? "current";
 const workspaces = list(
   "workspaces",
-  "fleet,pipelines,operate,inspect,monitor,incidents,logs,capacity,media,system,changes,settings",
+  "fleet,channels,pipelines,operate,health,monitor,inspect,logs,schedule,incidents,capacity,stability,media,changes,team,audit,notifications,settings,system,guides,architecture",
 );
 const widths = list("widths", "375,768,1440").map(Number);
 const themes = list("themes", "dark");
@@ -88,58 +90,14 @@ for (const width of widths) {
         if (pipeline) query.set("p", pipeline);
         await page.goto(`${base}/?${query}`, { waitUntil: "domcontentloaded" });
         await page.waitForTimeout(settleMs);
-        const checks = await page.evaluate((phone) => {
-          const doc = document.documentElement;
-          const horizontalScroll = doc.scrollWidth > doc.clientWidth + 1;
-          const clipped = [];
-          const smallTargets = [];
-          for (const element of document.querySelectorAll("body *")) {
-            const style = getComputedStyle(element);
-            if (style.display === "none" || style.visibility === "hidden") continue;
-            const rect = element.getBoundingClientRect();
-            if (rect.width === 0 || rect.height === 0) continue;
-            const hasText = [...element.childNodes].some(
-              (node) => node.nodeType === 3 && node.textContent.trim().length > 0,
-            );
-            if (
-              hasText &&
-              style.overflowX !== "visible" === false &&
-              element.scrollWidth > element.clientWidth + 2 &&
-              style.textOverflow !== "ellipsis" &&
-              style.overflowX !== "auto" &&
-              style.overflowX !== "scroll"
-            ) {
-              clipped.push(element.textContent.trim().slice(0, 40));
-            }
-            if (
-              phone &&
-              element.matches("a[href], button, select, input, [role=button], [role=tab]") &&
-              // WCAG 2.5.8 exempts links inline in text.
-              !(element.tagName === "A" && style.display === "inline") &&
-              element.type !== "checkbox" &&
-              element.type !== "radio" &&
-              element.type !== "range" &&
-              (rect.height < 35.5 || rect.width < 35.5) &&
-              // A control inside a touch-sized label is hit through it.
-              !((target) => target && target.getBoundingClientRect().height >= 35.5)(element.closest("label.touch-36")) &&
-              !element.closest("[data-dense-ok]")
-            ) {
-              smallTargets.push(
-                `${element.tagName.toLowerCase()} ${(element.textContent || element.getAttribute("aria-label") || "").trim().slice(0, 24)} ${Math.round(rect.width)}x${Math.round(rect.height)}`,
-              );
-            }
-          }
-          return {
-            horizontalScroll,
-            scrollWidth: doc.scrollWidth,
-            clientWidth: doc.clientWidth,
-            clipped: clipped.slice(0, 12),
-            clippedCount: clipped.length,
-            smallTargets: smallTargets.slice(0, 12),
-            smallTargetCount: smallTargets.length,
-            domNodes: document.getElementsByTagName("*").length,
-          };
-        }, width < 768);
+        const audit = await page.evaluate(auditLayout, { phone: width < 768 });
+        const checks = {
+          ...audit,
+          clipped: audit.clipped.slice(0, 12),
+          clippedCount: audit.clipped.length,
+          smallTargets: audit.smallTargets.slice(0, 12),
+          smallTargetCount: audit.smallTargets.length,
+        };
         const file = `${workspace}-${width}-${theme}-${mode}${role ? `-${role}` : ""}.png`;
         await page.screenshot({ path: join(out, file), fullPage });
         report.push({ workspace, width, theme, detail: mode, role: role || "admin", file, errors: [...errors], ...checks });
@@ -147,6 +105,9 @@ for (const width of widths) {
           checks.horizontalScroll ? `HSCROLL(${checks.scrollWidth}>${checks.clientWidth})` : "",
           checks.clippedCount ? `clipped:${checks.clippedCount}` : "",
           checks.smallTargetCount ? `small:${checks.smallTargetCount}` : "",
+          checks.selectClipped.length ? `select:${checks.selectClipped.length}` : "",
+          checks.hairlineScroll.length ? `hairline:${checks.hairlineScroll.length}` : "",
+          checks.misaligned.length ? `misaligned:${checks.misaligned.length}` : "",
           errors.length ? `errors:${errors.length}` : "",
         ]
           .filter(Boolean)

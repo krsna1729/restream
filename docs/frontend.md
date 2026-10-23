@@ -158,9 +158,14 @@ The primitives live in `web/ts/ui/`, a layer below the app: `ui/` may import
 | `RawJson` | `raw-json.tsx` | A section's raw payload, collapsed and copyable |
 | `Icon` | `icons.tsx` | Inline stroke icons |
 
-Legacy DaisyUI markup (`card`, `badge-*`, `table`) is restyled in
-`input.css` to the same surfaces and tones, so a view not yet moved to the
-primitives still reads as one system.
+Pages are built from these, not from raw DaisyUI markup:
+`scripts/check/frontend-style.mjs` (CI, Source architecture audit) fails on
+legacy cards (`card bg-base-200`, `card-body`, `card-title`), DaisyUI 4
+`*-bordered` classes, a status drawn as a bare toned `badge`, and
+hand-rolled header tabs. A line that must keep one says why in a
+`// style-ok: <reason>` comment on the line before. Tabs under a header use
+the `tab-strip` classes; a row of filters uses `filter-bar`, which aligns
+captions, controls, checkboxes and statuses on one baseline.
 
 ## Shell and routing
 
@@ -750,8 +755,13 @@ run the same synthetic engine inside the page (`fixtures/browser-backend.mjs`
 answers `fetch` and `EventSource`) and write a static demo folder to
 `.local/demo/` that any web server can host: no engine, no login.
 `scripts/dev/frontend/shots.mjs` screenshots every workspace across widths,
-themes and section detail into `.local/shots/<label>/`. It flags horizontal page
-scroll, clipped text, phone touch targets under 36px, and console errors.
+themes and section detail into `.local/shots/<label>/`. It runs
+`layout-audit.mjs` on each page (horizontal page scroll, clipped text,
+select text under its arrow, stray hairline scrollbars, controls on one row
+at different heights or centres, phone touch targets under 36px) and
+records console errors. `test/frontend/control-room-layout.spec.ts` runs the
+same audit in CI on every workspace at 1440 and 375 px, and checks every
+pipeline view shows the pipeline tabs.
 
 ```sh
 npm run build:frontend
