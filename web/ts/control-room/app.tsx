@@ -3,6 +3,7 @@ import { useCallback, useMemo, useState } from "react";
 import { PrefsProvider } from "../ui/prefs.js";
 import { Capacity } from "./capacity.js";
 import { Changes } from "./changes.js";
+import { Channels } from "./channels.js";
 import { Fleet } from "./fleet.js";
 import { Incidents } from "./incidents.js";
 import { Inspect } from "./inspect.js";
@@ -72,6 +73,7 @@ function Shell() {
         </div>
         <main className="mx-auto w-full max-w-[1680px] flex-1 px-3 pt-4 pb-24 md:px-6 md:pb-8">
           {place.workspace === "fleet" && <Fleet live={live} />}
+          {place.workspace === "channels" && <Channels live={live} />}
           {place.workspace === "pipelines" && <Pipelines live={live} />}
           {place.workspace === "operate" && <Operate live={live} pipelineId={place.pipelineId} />}
           {place.workspace === "inspect" && <Inspect live={live} pipelineId={place.pipelineId} />}

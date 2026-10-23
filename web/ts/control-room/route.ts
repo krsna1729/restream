@@ -5,6 +5,7 @@
 
 export const WORKSPACES = [
   "fleet",
+  "channels",
   "pipelines",
   "operate",
   "inspect",
@@ -22,6 +23,7 @@ export type Workspace = (typeof WORKSPACES)[number];
 
 export const WORKSPACE_LABELS: Record<Workspace, string> = {
   fleet: "Fleet",
+  channels: "Channels",
   pipelines: "Pipelines",
   operate: "Operate",
   inspect: "Inspect",

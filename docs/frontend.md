@@ -264,6 +264,22 @@ Every workspace shows live data only.
 - A worst-first table of at most 12 pipelines, sharing rows with Pipelines
   (`pipeline-table.tsx`) and linking there for the rest.
 
+### Channels
+
+- Every destination as a channel on a platform (`channels-model.ts`):
+  YouTube, Twitch, Kick, Facebook, X, LinkedIn, Instagram and Vimeo by the
+  stored URL's host; anything else is a custom destination of its protocol.
+  URLs come from `/settings`, read once and after each bulk run.
+- Platform tiles (live / total, how many need attention) filter the grid;
+  chips filter by state (needs attention, live, off) and platform; a picker
+  narrows to one pipeline; search matches channel or pipeline names.
+- Each card has a go-live/stop switch, its state in words, the retry
+  attempt and countdown, its rate, and the cause when it is not live.
+- Bulk Go live, Retry failed (a stop then a start, which resets the
+  engine's retry budget) and Stop act on the filtered set after a
+  confirmation that names the count. They run 6 at a time (`runBulk`), and
+  a refused channel is counted, never fatal.
+
 ### Pipelines
 
 - The inventory, attention first, then size. Search by name or id; filter

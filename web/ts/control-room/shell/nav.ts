@@ -11,7 +11,7 @@ export interface NavGroup {
 
 /** Operate the plant, understand it, manage it; engineering tools last. */
 export const NAV_GROUPS: readonly NavGroup[] = [
-  { label: "Operate", items: ["fleet", "pipelines", "operate", "monitor"] },
+  { label: "Operate", items: ["fleet", "channels", "pipelines", "operate", "monitor"] },
   { label: "Understand", items: ["incidents", "capacity"] },
   { label: "Manage", items: ["media", "changes", "settings"] },
   { label: "Engineer", items: ["inspect", "logs", "system"] },
@@ -19,6 +19,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 
 export const NAV_ICONS: Record<Workspace, IconName> = {
   fleet: "fleet",
+  channels: "channels",
   pipelines: "pipelines",
   operate: "operate",
   inspect: "inspect",
@@ -33,7 +34,7 @@ export const NAV_ICONS: Record<Workspace, IconName> = {
 };
 
 /** The phone's bottom bar: the on-call path first; the rest under More. */
-export const MOBILE_TABS: readonly Workspace[] = ["fleet", "incidents", "pipelines", "operate"];
+export const MOBILE_TABS: readonly Workspace[] = ["fleet", "incidents", "channels", "operate"];
 
 /** Workspaces that show one pipeline and need one picked. */
 export const PIPELINE_WORKSPACES: ReadonlySet<Workspace> = new Set(["operate", "inspect", "monitor"]);

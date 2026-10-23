@@ -20,6 +20,11 @@ export const OUTPUT_SERVER_PRESETS: Record<string, OutputServerPreset[]> = {
       rtmpMode: "enhanced",
     },
     { label: "Facebook", value: "rtmps://live-api-s.facebook.com:443/rtmp/" },
+    { label: "Twitch", value: "rtmp://live.twitch.tv/app/" },
+    {
+      label: "Kick",
+      value: "rtmps://fa723fc1b171.global-contribute.live-video.net/app/",
+    },
     {
       label: "VDO Cipher",
       value: "rtmp://live-ingest-01.vd0.co:1935/livestream/",
