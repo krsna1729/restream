@@ -92,3 +92,11 @@ export function channelHealth(deliveries: readonly NotifyDelivery[]): Map<string
   }
   return health;
 }
+
+/** The tab's title with the open alerts in front: "(2!) Fleet · Restream"
+ * when any is critical, "(3) …" when only warnings, unchanged when none. */
+export function tabTitle(base: string, alerts: readonly OperatorAlert[]): string {
+  if (alerts.length === 0) return base;
+  const critical = alerts.some((alert) => alert.severity === "critical");
+  return `(${alerts.length}${critical ? "!" : ""}) ${base}`;
+}

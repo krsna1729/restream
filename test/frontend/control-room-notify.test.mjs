@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
-const { guessKind, channelProblem, newlyOpened, base64UrlToBytes, channelHealth } = await loadCompiledFrontendModule(
+const { guessKind, channelProblem, newlyOpened, tabTitle, base64UrlToBytes, channelHealth } = await loadCompiledFrontendModule(
   "control-room/notify-model.js",
 );
 
@@ -47,4 +47,10 @@ test("each channel's health comes from its deliveries, latest first", () => {
   ]);
   assert.deepEqual([health.get("c").sent, health.get("c").failed, health.get("c").last.detail], [1, 1, "HTTP 503"]);
   assert.equal(health.get("d").failed, 0);
+});
+
+test("the tab title counts open alerts and marks a critical one", () => {
+  assert.equal(tabTitle("Fleet · Restream", []), "Fleet · Restream");
+  assert.equal(tabTitle("Fleet · Restream", [{ severity: "warning" }, { severity: "warning" }]), "(2) Fleet · Restream");
+  assert.equal(tabTitle("Fleet · Restream", [{ severity: "warning" }, { severity: "critical" }]), "(2!) Fleet · Restream");
 });

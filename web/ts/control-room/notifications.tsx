@@ -41,6 +41,7 @@ import { ConfirmDelete } from "./confirm.js";
 import { When } from "./when-view.js";
 import { CHANNEL_KINDS, channelHealth, channelProblem, guessKind } from "./notify-model.js";
 import { useSession } from "./session.js";
+import { chime as playChime, chimeEnabled, setChimeEnabled } from "./tab-alerts.js";
 
 const SEVERITY_LABEL: Record<NotifySeverity, string> = {
   critical: "Critical only",
@@ -66,6 +67,7 @@ function ThisBrowser() {
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [inTab, setInTab] = useState(inTabSetting());
+  const [chime, setChime] = useState(chimeEnabled);
   const [permission, setPermission] = useState(notificationPermission());
   useEffect(() => {
     void currentPush().then(setRecord);
@@ -188,6 +190,20 @@ function ThisBrowser() {
           {permission === "denied" && inTab !== "off" && (
             <p className="text-sm text-warning">This site's notifications are blocked in the browser's settings.</p>
           )}
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="toggle toggle-sm"
+              checked={chime}
+              onChange={(event) => {
+                setChimeEnabled(event.target.checked);
+                setChime(event.target.checked);
+                if (event.target.checked) playChime();
+              }}
+            />
+            A short chime for each new critical alert
+          </label>
+          <p className="text-xs text-base-content/60">The tab's title and icon always show how many alerts are open.</p>
         </div>
       </div>
     </Panel>
