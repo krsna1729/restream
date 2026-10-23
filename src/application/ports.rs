@@ -2,6 +2,7 @@
 //! that orchestration code depends on.
 
 use crate::application::models::{Ingest, Job, Pipeline};
+use crate::application::notify::{Delivery, NotifyChannel, PushSubscription};
 use crate::application::team::{AuditEntry, Role, UserRecord};
 use std::fmt;
 use std::future::Future;
@@ -377,6 +378,83 @@ pub trait TeamStore: Send + Sync {
     fn append_audit<'a>(&'a self, entry: &'a AuditEntry) -> TeamFuture<'a, ()>;
     /// Newest first; `before` pages back from an entry id.
     fn list_audit(&self, limit: u32, before: Option<i64>) -> TeamFuture<'_, Vec<AuditEntry>>;
+}
+
+pub type NotifyFuture<'a, T> =
+    Pin<Box<dyn Future<Output = Result<T, NotifyStoreError>> + Send + 'a>>;
+
+#[derive(Debug, Clone)]
+pub struct NotifyStoreError {
+    message: String,
+}
+
+impl NotifyStoreError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for NotifyStoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for NotifyStoreError {}
+
+/// Notification channels, browser push subscriptions and the delivery log.
+pub trait NotifyStore: Send + Sync {
+    fn list_channels(&self) -> NotifyFuture<'_, Vec<NotifyChannel>>;
+    /// Inserts or replaces by id.
+    fn save_channel<'a>(&'a self, channel: &'a NotifyChannel) -> NotifyFuture<'a, ()>;
+    fn delete_channel<'a>(&'a self, id: &'a str) -> NotifyFuture<'a, bool>;
+    fn list_subscriptions(&self) -> NotifyFuture<'_, Vec<PushSubscription>>;
+    /// Inserts, or replaces the subscription with the same endpoint.
+    fn save_subscription<'a>(&'a self, subscription: &'a PushSubscription) -> NotifyFuture<'a, ()>;
+    fn delete_subscription<'a>(&'a self, id: &'a str) -> NotifyFuture<'a, bool>;
+    fn append_delivery<'a>(&'a self, delivery: &'a Delivery) -> NotifyFuture<'a, ()>;
+    /// Newest first.
+    fn list_deliveries(&self, limit: u32) -> NotifyFuture<'_, Vec<Delivery>>;
+}
+
+/// How one HTTP attempt ended: the status it got, or why it got none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostOutcome {
+    pub status: Option<u16>,
+    pub error: Option<String>,
+}
+
+impl PostOutcome {
+    pub fn ok(&self) -> bool {
+        self.status
+            .is_some_and(|status| (200..300).contains(&status))
+    }
+}
+
+pub type PostFuture<'a> = Pin<Box<dyn Future<Output = PostOutcome> + Send + 'a>>;
+
+/// Sends notifications over the network.
+pub trait NotifyTransport: Send + Sync {
+    /// POSTs a JSON body with extra headers.
+    fn post_json<'a>(
+        &'a self,
+        url: &'a str,
+        body: Vec<u8>,
+        headers: Vec<(&'static str, String)>,
+    ) -> PostFuture<'a>;
+    /// Encrypts `payload` for the subscription and sends it to its push
+    /// service, signed with the engine's VAPID key naming `subject`.
+    fn push<'a>(
+        &'a self,
+        subscription: &'a PushSubscription,
+        payload: Vec<u8>,
+        urgent: bool,
+        subject: &'a str,
+    ) -> PostFuture<'a>;
+    /// The VAPID public key browsers subscribe with (base64url).
+    fn push_public_key(&self) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + '_>>;
 }
 
 pub trait JobStore: Send + Sync {

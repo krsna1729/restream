@@ -251,6 +251,53 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
     .await?;
 
     sqlx::query(
+        "CREATE TABLE IF NOT EXISTS notify_channels (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            name TEXT NOT NULL,
+            target TEXT NOT NULL,
+            secret TEXT,
+            min_severity TEXT NOT NULL,
+            on_resolved INTEGER NOT NULL,
+            enabled INTEGER NOT NULL,
+            created_at INTEGER NOT NULL
+        );",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            endpoint TEXT NOT NULL UNIQUE,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            min_severity TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS notify_deliveries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            at INTEGER NOT NULL,
+            target_id TEXT NOT NULL,
+            target_name TEXT NOT NULL,
+            event TEXT NOT NULL,
+            alert_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            ok INTEGER NOT NULL,
+            attempts INTEGER NOT NULL,
+            detail TEXT NOT NULL
+        );",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
         "CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             at INTEGER NOT NULL,

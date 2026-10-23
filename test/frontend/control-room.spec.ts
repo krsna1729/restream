@@ -1843,3 +1843,46 @@ test("team: an admin adds a viewer, views as one, and the audit log records both
   const created = members.find((member) => member.username === username);
   if (created) await page.request.delete(`/api/v1/users/${created.id}`);
 });
+
+test("notifications: a webhook channel's test arrives signed, and the delivery is logged", async ({ page }) => {
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  const { createServer } = await import("node:http");
+  const received: Array<{ signature: string | undefined; body: string }> = [];
+  const server = createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => (body += chunk));
+    request.on("end", () => {
+      received.push({ signature: request.headers["x-restream-signature"] as string | undefined, body });
+      response.writeHead(204).end();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as { port: number }).port;
+  const name = `cr-hook-${Date.now()}`;
+  try {
+    await page.goto("/?w=notifications");
+    const add = page.getByRole("region", { name: "Add a channel" });
+    await add.getByRole("combobox", { name: "Channel kind" }).selectOption("webhook");
+    await add.getByLabel("Channel name").fill(name);
+    await add.getByLabel("Channel URL").fill(`http://127.0.0.1:${port}/hook`);
+    await add.getByRole("button", { name: "Add channel" }).click();
+    await expect(add.getByRole("status")).toContainText("Signing secret for");
+
+    const row = page.getByRole("row").filter({ hasText: name });
+    await row.getByRole("button", { name: "Send test" }).click();
+    await expect(row).toContainText("Delivered");
+    expect(received).toHaveLength(1);
+    expect(received[0].signature).toMatch(/^t=\d+,v1=[0-9a-f]{64}$/);
+    expect(JSON.parse(received[0].body).event).toBe("test");
+    await expect(page.getByRole("table", { name: "Notification deliveries" })).toContainText(name);
+  } finally {
+    server.close();
+    const channels = (await (await page.request.get("/api/v1/notifications/channels")).json()).channels as Array<{ id: string; name: string }>;
+    for (const channel of channels.filter((candidate) => candidate.name === name)) {
+      await page.request.delete(`/api/v1/notifications/channels/${channel.id}`);
+    }
+  }
+});

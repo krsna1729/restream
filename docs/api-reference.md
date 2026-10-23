@@ -22,6 +22,7 @@ grouped by resource. Base URL: `http://localhost:3030` (the HTTP port is
 - [Runtime state](#runtime-state)
 - [Health and status](#health-and-status)
 - [Operator views](#operator-views)
+- [Notifications](#notifications)
 - [Telemetry](#telemetry)
 - [HLS pull](#hls-pull)
 - [HLS push ingest](#hls-push-ingest)
@@ -99,6 +100,7 @@ flowchart TD
 | Runtime state | `/api/v1/state`, `/state/stream`, `/fleet/history` | [Runtime state](#runtime-state) |
 | Health and host | `/healthz`, `/metrics/system`, `/api/v1/engine*`, `/dashboard/runtime`, `/capacity/scenario` | [Health and status](#health-and-status) |
 | Operator views | `/overview`, `/alerts`, `/events`, `…/summary`, `…/alerts`, `/engine/resource-map` | [Operator views](#operator-views) |
+| Notifications | `/api/v1/notifications/*` | [Notifications](#notifications) |
 | Telemetry | `/measure`, `/engine/telemetry`, `…/telemetry`, `/stages/:stageKey/telemetry` | [Telemetry](#telemetry) |
 | HLS pull | `/hls/*` | [HLS pull](#hls-pull) |
 | HLS push | `/ingest/hls/:streamKey/*path` | [HLS push ingest](#hls-push-ingest) |
@@ -1436,6 +1438,65 @@ stage and output nodes are filtered to that pipeline.
   safe utilization (80%), else `clear`.
 - `limits` has `totalNodeCount`, `returnedNodeCount`, `truncatedNodeCount`
   and `maxTopN`.
+
+## Notifications
+
+The engine evaluates alerts every 5 s (`run_alert_notifier`), whether or
+not a dashboard is open, and tells each recipient that wants a confirmed
+change (`src/application/notify.rs`):
+
+- An alert must be present for 2 evaluations in a row before it is
+  announced as opened, and absent for 2 before it is announced as resolved.
+  A condition that flickers for one sample pages nobody. Alerts already
+  open when the engine starts are learned, not announced.
+- A recipient wants an event when its severity is at least the recipient's
+  `minSeverity` (`warning` < `critical`). For channels, resolutions also
+  need `onResolved`.
+- Each delivery gets up to 3 tries, about 2 s and 15 s apart (plus up to
+  25% jitter). A 4xx other than 408 and 429 is final. A push service's 404
+  or 410 removes the subscription. Each outcome is logged (newest 2,000).
+- Deliveries run off the evaluation loop: a slow receiver never delays the
+  next check. The HTTP client has a 10 s timeout and follows no redirects.
+
+| Method | Route | Role | Purpose |
+|---|---|---|---|
+| `GET`, `POST` | `/api/v1/notifications/channels` | admin | List channels; add one |
+| `PUT`, `DELETE` | `/api/v1/notifications/channels/:id` | admin | Edit (the kind is fixed); remove |
+| `POST` | `/api/v1/notifications/channels/:id/test` | admin | Send a test now; returns the delivery |
+| `GET` | `/api/v1/notifications/channels/:id/secret` | admin | A webhook's signing secret |
+| `GET` | `/api/v1/notifications/deliveries?limit` | admin | Delivery outcomes, newest first (1–500, default 100) |
+| `GET` | `/api/v1/notifications/push/key` | any | `{ "publicKey" }`: the VAPID key browsers subscribe with |
+| `GET`, `POST` | `/api/v1/notifications/push/subscriptions` | any | The caller's own browsers; register one |
+| `DELETE` | `/api/v1/notifications/push/subscriptions/:id` | any | Remove one of the caller's own |
+| `POST` | `/api/v1/notifications/push/test` | any | A test push to the caller's browsers |
+
+A channel is
+`{ "kind": "webhook" | "slack" | "discord", "name", "target", "minSeverity", "onResolved", "enabled" }`.
+`target` must be an `http(s)` URL; the listing never includes a secret.
+Adding a webhook returns `{ "channel", "secret" }` once.
+
+What each kind is sent:
+
+- **webhook**: `{ "schema": "restream.notify.v1", "event": "opened" | "resolved" | "test", "atMs", "alert": { "id", "severity", "title", "cause", "recommendedAction", "pipelineId"?, "outputId"? }, "link" }`.
+  It carries the header `X-Restream-Event` and
+  `X-Restream-Signature: t=<unix s>,v1=<hex HMAC-SHA256(secret, "<t>.<body>")>`.
+  A receiver recomputes the signature and rejects stale `t` values.
+- **slack**: `{ "text" }` with the headline, cause, next step and link.
+- **discord**: `{ "content", "embeds": [{ "title", "description", "color", "url" }] }`.
+
+`link` points at `RESTREAM_PUBLIC_URL` when that is set.
+
+**Browser push.** A subscription is the browser's `PushSubscription.toJSON()`
+(`{ "endpoint", "keys": { "p256dh", "auth" } }`) plus `minSeverity`, and it
+belongs to the member who registers it. The endpoint must be `https` on a
+named public host: no address literals, `localhost` or `.local` names, so a
+member cannot point the engine at internal services. Messages are encrypted
+per RFC 8291 (`aes128gcm`) and signed with a VAPID key (RFC 8292) that the
+engine generates on first use and keeps in `meta`. Its `sub` claim is
+`RESTREAM_PUSH_SUBJECT`. `TTL` is one hour, and `Urgency` is `high` for a
+critical opening. The service worker (`public/sw.js`) shows the payload
+`{ "title", "body", "tag", "severity", "url" }`. One notification is kept per
+alert, and a click opens the incident view.
 
 ## Telemetry
 

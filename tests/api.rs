@@ -34,6 +34,8 @@ mod hls;
 mod ingests;
 #[path = "api/media.rs"]
 mod media;
+#[path = "api/notifications.rs"]
+mod notifications;
 #[path = "api/observability.rs"]
 mod observability;
 #[path = "api/outputs.rs"]

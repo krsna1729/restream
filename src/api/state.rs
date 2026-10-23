@@ -75,6 +75,10 @@ pub struct AppStateRuntimeConfig {
     pub srt_passphrase: Option<String>,
     pub srt_pbkeylen: i32,
     pub secure_session_cookies: bool,
+    /// See [`AppConfig::public_url`].
+    pub public_url: Option<String>,
+    /// See [`AppConfig::push_subject`].
+    pub push_subject: String,
     /// Hex SHA-256 of the MoQ listener's leaf certificate, read once at
     /// startup as the listener reads it: viewer grants carry it so a browser
     /// can pin a short-lived self-signed certificate.
@@ -102,6 +106,8 @@ impl From<&AppConfig> for AppStateRuntimeConfig {
             srt_passphrase: config.srt_passphrase.clone(),
             srt_pbkeylen: config.srt_pbkeylen,
             secure_session_cookies: config.secure_session_cookies,
+            public_url: config.public_url.clone(),
+            push_subject: config.push_subject.clone(),
             moq_certificate_sha256: config
                 .moq_ingest
                 .config()
@@ -133,6 +139,7 @@ pub struct AppState {
     pub ingest_service: IngestService,
     pub auth_service: AuthService,
     pub team_service: crate::application::services::TeamService,
+    pub notify_service: crate::application::services::NotifyService,
     pub settings_service: SettingsService,
     pub file_ingest_service: FileIngestService,
     pub media_library_service: MediaLibraryService,
@@ -177,11 +184,18 @@ impl AppState {
             ingest_service,
             auth_service,
             team_service,
+            notify_service,
             settings_service,
             file_ingest_service,
             media_library_service,
             agent_service,
         } = services;
+        notify_service.configure(
+            crate::application::services::notify_service::NotifyContext {
+                public_url: runtime.public_url.clone(),
+                push_subject: runtime.push_subject.clone(),
+            },
+        );
 
         let runtime_state = Arc::new(crate::application::runtime_state::hub::StateHub::new(
             runtime.ports.server_ports(),
@@ -205,6 +219,7 @@ impl AppState {
             ingest_service,
             auth_service,
             team_service,
+            notify_service,
             settings_service,
             file_ingest_service,
             media_library_service,

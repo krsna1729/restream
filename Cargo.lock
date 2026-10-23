@@ -3295,6 +3295,7 @@ dependencies = [
  "rand 0.10.2",
  "rcgen",
  "reqwest",
+ "ring",
  "rml_rtmp",
  "rtrb",
  "rust-embed",

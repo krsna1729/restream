@@ -75,6 +75,8 @@ The default layout lives under `.restream/`: `data/` holds only SQLite state,
 |---|---|---|---|
 | `RESTREAM_INITIAL_ADMIN_PASSWORD` | unset | String | Dashboard password (the built-in `admin` member's) on first startup. Unset: a random password is written to `restream-initial-admin-password.txt` next to the database, owner-only |
 | `RESTREAM_SECURE_SESSION_COOKIES` | off | bool | Adds the `Secure` attribute to session cookies (HTTPS deployments) |
+| `RESTREAM_PUBLIC_URL` | unset | URL | The dashboard's public address; alert notifications link back to it. Unset: no links |
+| `RESTREAM_PUSH_SUBJECT` | `mailto:restream@localhost` | `mailto:` or `https:` URL | The contact in Web Push VAPID tokens; push services may use it to reach the operator. Anything else falls back to the default |
 | `RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM` | unset | PEM file path | Extra CA certificates added to public WebPKI roots for RTMPS and HTTPS HLS PUT outputs |
 | `RESTREAM_SRT_PASSPHRASE` | unset (plaintext) | String | SRT encryption passphrase |
 | `RESTREAM_SRT_PBKEYLEN` | `16` | Key length in bytes | SRT key length used with the passphrase |

@@ -11,13 +11,14 @@ const FIRST = ["ana", "ben", "chi", "dev", "eli", "fay", "gus", "hana", "ivo", "
 
 /** The least role a request needs; mirrors `application/team.rs`. */
 export function requiredRole(method, path) {
+  if (path.startsWith("/api/v1/notifications/push/")) return "viewer";
   if (["GET", "HEAD", "OPTIONS"].includes(method)) {
-    if (/^\/api\/v1\/(users|audit|security\/)/.test(path)) return "admin";
+    if (/^\/api\/v1\/(users|audit|security\/|notifications)/.test(path)) return "admin";
     if (path === "/api/v1/settings" || path.startsWith("/api/v1/stream-keys")) return "operator";
     return "viewer";
   }
   if (path.startsWith("/api/v1/auth/")) return "viewer";
-  if (path === "/api/v1/settings" || /^\/api\/v1\/(security\/|users|encodings\/custom)/.test(path)) return "admin";
+  if (path === "/api/v1/settings" || /^\/api\/v1\/(security\/|users|encodings\/custom|notifications)/.test(path)) return "admin";
   return "operator";
 }
 

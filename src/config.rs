@@ -286,6 +286,10 @@ impl EgressFabricConfig {
     }
 }
 
+/// The VAPID contact when `RESTREAM_PUSH_SUBJECT` is unset or not a
+/// `mailto:`/`https:` URL.
+pub const DEFAULT_PUSH_SUBJECT: &str = "mailto:restream@localhost";
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub ports: ServerPorts,
@@ -379,6 +383,12 @@ pub struct AppConfig {
     pub srt_ingress_window_memory_bytes: Option<u64>,
     pub initial_admin_password: Option<String>,
     pub secure_session_cookies: bool,
+    /// The dashboard's public URL (`RESTREAM_PUBLIC_URL`): notifications
+    /// link back to it. `None` sends no links.
+    pub public_url: Option<String>,
+    /// The contact in Web Push VAPID tokens (`RESTREAM_PUSH_SUBJECT`): a
+    /// `mailto:` or `https:` URL push services may use to reach the operator.
+    pub push_subject: String,
     pub rtmps_extra_trust_roots_pem_path: Option<String>,
     /// Operator directory that confines `moqt://…?ca=` reads
     /// (`RESTREAM_MOQ_CA_DIR`). `None` denies custom CA reads.
@@ -675,6 +685,8 @@ impl Default for AppConfig {
             srt_ingress_window_memory_bytes: None,
             initial_admin_password: None,
             secure_session_cookies: false,
+            public_url: None,
+            push_subject: DEFAULT_PUSH_SUBJECT.to_string(),
             rtmps_extra_trust_roots_pem_path: None,
             moq_ca_dir: None,
             moq_ingest: MoqIngestSetting::Off,
@@ -784,6 +796,10 @@ impl AppConfig {
         .filter(|&bytes| bytes > 0);
         let initial_admin_password = env_var("RESTREAM_INITIAL_ADMIN_PASSWORD");
         let secure_session_cookies = env_bool("RESTREAM_SECURE_SESSION_COOKIES").unwrap_or(false);
+        let public_url = env_var("RESTREAM_PUBLIC_URL").filter(|value| !value.is_empty());
+        let push_subject = env_var("RESTREAM_PUSH_SUBJECT")
+            .filter(|value| value.starts_with("mailto:") || value.starts_with("https://"))
+            .unwrap_or_else(|| DEFAULT_PUSH_SUBJECT.to_string());
         let rtmps_extra_trust_roots_pem_path = env_var("RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM");
         let moq_ca_dir = env_var("RESTREAM_MOQ_CA_DIR").filter(|value| !value.is_empty());
 
@@ -857,6 +873,8 @@ impl AppConfig {
             srt_ingress_window_memory_bytes,
             initial_admin_password,
             secure_session_cookies,
+            public_url,
+            push_subject,
             rtmps_extra_trust_roots_pem_path,
             moq_ca_dir,
             moq_ingest,

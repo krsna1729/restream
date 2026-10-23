@@ -77,10 +77,13 @@ pub struct AuditEntry {
     pub status: u16,
 }
 
-/// Paths whose reads expose secrets (stream keys, destination URLs) or the
-/// team itself.
+/// Paths whose reads expose secrets (stream keys, destination URLs,
+/// notification targets) or the team itself.
 fn read_role(path: &str) -> Role {
-    if path.starts_with("/api/v1/users")
+    if path.starts_with("/api/v1/notifications/push/") {
+        Role::Viewer
+    } else if path.starts_with("/api/v1/users")
+        || path.starts_with("/api/v1/notifications")
         || path.starts_with("/api/v1/audit")
         || path.starts_with("/api/v1/security/")
     {
@@ -93,17 +96,21 @@ fn read_role(path: &str) -> Role {
 }
 
 /// The least role a request needs. Reads need a viewer (except the secret
-/// and team reads above); a session's own auth actions need only a session;
-/// settings, security, custom encodings and the team need an admin; every
-/// other change needs an operator.
+/// and team reads above); a session's own auth actions and push
+/// subscriptions need only a session; settings, security, custom encodings,
+/// notification channels and the team need an admin; every other change
+/// needs an operator.
 pub fn required_role(method: &str, path: &str) -> Role {
     if matches!(method, "GET" | "HEAD" | "OPTIONS") {
         return read_role(path);
     }
-    if path.starts_with("/api/v1/auth/") {
+    // A session's own auth actions and a member's own browser push
+    // subscriptions need only a session.
+    if path.starts_with("/api/v1/auth/") || path.starts_with("/api/v1/notifications/push/") {
         return Role::Viewer;
     }
     if path == "/api/v1/settings"
+        || path.starts_with("/api/v1/notifications")
         || path.starts_with("/api/v1/security/")
         || path.starts_with("/api/v1/users")
         || path.starts_with("/api/v1/encodings/custom")
@@ -179,6 +186,20 @@ mod tests {
             ("POST", "/api/v1/users", Role::Admin),
             ("DELETE", "/api/v1/users/u", Role::Admin),
             ("PUT", "/api/v1/encodings/custom", Role::Admin),
+            ("GET", "/api/v1/notifications/channels", Role::Admin),
+            ("POST", "/api/v1/notifications/channels/c/test", Role::Admin),
+            ("GET", "/api/v1/notifications/deliveries", Role::Admin),
+            ("GET", "/api/v1/notifications/push/key", Role::Viewer),
+            (
+                "POST",
+                "/api/v1/notifications/push/subscriptions",
+                Role::Viewer,
+            ),
+            (
+                "DELETE",
+                "/api/v1/notifications/push/subscriptions/s",
+                Role::Viewer,
+            ),
         ];
         for (method, path, role) in cases {
             assert_eq!(required_role(method, path), role, "{method} {path}");

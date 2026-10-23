@@ -8,6 +8,7 @@ mod job_repo;
 pub mod log_repo;
 pub(crate) mod meta_repo;
 pub(crate) mod migrations;
+pub(crate) mod notify_repo;
 mod output_repo;
 pub mod pipeline_input_repo;
 mod pipeline_repo;

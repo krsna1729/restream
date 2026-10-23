@@ -33,6 +33,7 @@ await Promise.all([
     rm(path.join(publicDir, 'login.html'), { force: true }),
     rm(path.join(publicDir, 'base-path.js'), { force: true }),
     rm(path.join(publicDir, 'login.js'), { force: true }),
+    rm(path.join(publicDir, 'sw.js'), { force: true }),
     rm(path.join(publicDir, 'logo.png'), { force: true }),
     rm(path.join(publicDir, 'output.css'), { force: true }),
     rm(path.join(publicDir, 'js'), { recursive: true, force: true }),
@@ -41,6 +42,7 @@ await cp(path.join(repoRoot, 'web', 'pages', 'index.html'), path.join(publicDir,
 await cp(path.join(repoRoot, 'web', 'pages', 'login.html'), path.join(publicDir, 'login.html'));
 await cp(path.join(repoRoot, 'web', 'assets', 'base-path.js'), path.join(publicDir, 'base-path.js'));
 await cp(path.join(repoRoot, 'web', 'assets', 'login.js'), path.join(publicDir, 'login.js'));
+await cp(path.join(repoRoot, 'web', 'assets', 'sw.js'), path.join(publicDir, 'sw.js'));
 await cp(path.join(repoRoot, 'web', 'assets', 'logo.png'), path.join(publicDir, 'logo.png'));
 
 await mkdir(targetDir, { recursive: true });
