@@ -6,8 +6,9 @@ import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 const {
   buildMediaGraph,
   buildDestinationRows,
+  destinationFilterCounts,
+  filterDestinationRows,
   isYoutubeUrl,
-  windowDestinationRows,
   youtubeVerdict,
 } = await loadCompiledFrontendModule(
   "control-room/operate-model.js",
@@ -158,63 +159,6 @@ test("destinations: degraded first, then wanted but not delivering, then by name
   assert.equal(alpha.delivering, false);
 });
 
-test("the destination window keeps the leading rows and reports the rest", () => {
-  const rows = ["a", "b", "c", "d", "e"].map((id) => ({
-    output: output(id),
-    delivering: false,
-    feedLagUnits: null,
-  }));
-
-  const capped = windowDestinationRows(rows, 3);
-  assert.deepEqual(
-    capped.visible.map((row) => row.output.id),
-    ["a", "b", "c"],
-  );
-  assert.equal(capped.hidden, 2);
-  assert.equal(capped.hiddenDegraded, 2);
-
-  // The button's argument: everything, nothing hidden.
-  const whole = windowDestinationRows(rows, Number.POSITIVE_INFINITY);
-  assert.equal(whole.visible.length, 5);
-  assert.equal(whole.hidden, 0);
-  assert.equal(whole.hiddenDegraded, 0);
-
-  const exact = windowDestinationRows(rows, 5);
-  assert.equal(exact.visible.length, 5);
-  assert.equal(exact.hidden, 0);
-
-  const none = windowDestinationRows(rows, 0);
-  assert.equal(none.visible.length, 0);
-  assert.equal(none.hidden, 5);
-  assert.equal(none.hiddenDegraded, 5);
-});
-
-test("the hidden count separates the rows that need attention", () => {
-  const rows = [
-    { output: output("a"), delivering: true, feedLagUnits: null },
-    { output: output("b"), delivering: true, feedLagUnits: null },
-    {
-      output: output("c", { diagnosis: "no-publisher" }),
-      delivering: false,
-      feedLagUnits: null,
-    },
-    {
-      output: output("d", { desired: "running" }),
-      delivering: false,
-      feedLagUnits: null,
-    },
-  ];
-  // A healthy row (b, rank 2) sits in the hidden part, so the count cannot be
-  // the hidden length.
-  const { visible, hidden, hiddenDegraded } = windowDestinationRows(rows, 1);
-  assert.deepEqual(
-    visible.map((row) => row.output.id),
-    ["a"],
-  );
-  assert.equal(hidden, 3);
-  assert.equal(hiddenDegraded, 2);
-});
-
 test("the inventory filters by name or id in any case, and by health", () => {
   const ingest = { inputId: "in", protocol: "srt", videoCodec: "h264" };
   const model = buildFleetModel(
@@ -268,4 +212,31 @@ test("only YouTube monitoring URLs offer the check, and the verdict prefers live
   );
   assert.equal(youtubeVerdict({ ...page, live_now: false, upcoming: false }), "YouTube: not live");
   assert.equal(youtubeVerdict(null), "YouTube: could not read the page");
+});
+
+test("destination filters partition by state and narrow by protocol and name", () => {
+  const rows = buildDestinationRows(
+    "p",
+    [
+      output("ok-yt"),
+      output("bad-tw", { ...DEGRADED, convergence: "retrying", retry: { attempts: 2, nextAttemptAtMs: 0 } }),
+      output("new-srt", { protocol: "srt", convergence: "starting", flow: "idle", actual: "connecting" }),
+      output("off", { desired: "stopped", convergence: "converged", flow: "idle", actual: null }),
+    ],
+    null,
+  );
+  assert.deepEqual(destinationFilterCounts(rows), {
+    all: 4,
+    attention: 1,
+    retrying: 1,
+    starting: 1,
+    delivering: 1,
+    stopped: 1,
+  });
+  const ids = (filtered) => filtered.map((row) => row.output.id);
+  // Degraded first survives filtering.
+  assert.deepEqual(ids(filterDestinationRows(rows, "all", "", null)), ["bad-tw", "new-srt", "off", "ok-yt"]);
+  assert.deepEqual(ids(filterDestinationRows(rows, "all", "", "srt")), ["new-srt"]);
+  assert.deepEqual(ids(filterDestinationRows(rows, "all", "YT", null)), ["ok-yt"]);
+  assert.deepEqual(ids(filterDestinationRows(rows, "retrying", "", null)), ["bad-tw"]);
 });

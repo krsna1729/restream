@@ -74,10 +74,10 @@ function Anatomy({ live, pipelineId }: { live: LiveSnapshot; pipelineId: string 
       <div className="grid gap-4 lg:grid-cols-[1fr_22rem]">
         <section className="card bg-base-200" aria-labelledby="inspect-map">
           <div className="card-body gap-3 p-4">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 id="inspect-map" className="card-title text-base">
                 {global ? "Global resource map" : "Resource map"}
-                <span className="text-xs font-normal opacity-70">
+                <span className="text-xs font-normal text-base-content/70">
                   under pressure first, then by memory held
                 </span>
               </h3>
@@ -102,7 +102,7 @@ function Anatomy({ live, pipelineId }: { live: LiveSnapshot; pipelineId: string 
               </span>
             </div>
             {rows === null ? (
-              <p className="opacity-70">Loading resource map…</p>
+              <p className="text-base-content/70">Loading resource map…</p>
             ) : (
               <ResourceTable
                 rows={rows}
@@ -213,16 +213,16 @@ function NodeDetail({ row, graph }: { row: ResourceRow | null; graph: GraphData 
           <dl className="grid grid-cols-2 gap-2" aria-label="Node metrics">
             {cards.map((card) => (
               <div key={card.label} className="rounded bg-base-100 p-2">
-                <dt className="text-xs opacity-70">{card.label}</dt>
+                <dt className="text-xs text-base-content/70">{card.label}</dt>
                 <dd className="text-lg font-semibold tabular-nums">{card.value}</dd>
-                <dd className="text-xs opacity-60">{card.foot}</dd>
+                <dd className="text-xs text-base-content/60">{card.foot}</dd>
               </div>
             ))}
           </dl>
         )}
         {row?.node.judgement && <Judgement judgement={row.node.judgement} />}
         {row === null ? (
-          <p className="opacity-70">No node.</p>
+          <p className="text-base-content/70">No node.</p>
         ) : (
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
             {[
@@ -235,7 +235,7 @@ function NodeDetail({ row, graph }: { row: ResourceRow | null; graph: GraphData 
               ...scalarEntries(row.node.metrics).map(([k, v]) => [k, v]),
             ].map(([key, value]) => (
               <div key={key} className="contents">
-                <dt className="opacity-70">{key}</dt>
+                <dt className="text-base-content/70">{key}</dt>
                 <dd className="break-all tabular-nums">{value}</dd>
               </div>
             ))}
@@ -262,7 +262,7 @@ function Judgement({ judgement }: { judgement: NodeJudgement }) {
         <b>{verdict.title}</b>
         <p>
           {judgement.reason}.{" "}
-          <span className="opacity-70">
+          <span className="text-base-content/70">
             {judgement.measured
               ? "From a measurement."
               : "From the capacity model's calibration priors (observe-only)."}
@@ -287,16 +287,16 @@ function StagePipe(props: { stageKey: string }) {
     <div aria-label="Stage pipe" role="group" className="text-sm">
       <h4 className="font-medium">Pipe</h4>
       {stage.value === null ? (
-        <p className="opacity-70">Loading stage detail…</p>
+        <p className="text-base-content/70">Loading stage detail…</p>
       ) : snapshot === null ? (
-        <p className="opacity-70">No telemetry for this stage (it may have stopped).</p>
+        <p className="text-base-content/70">No telemetry for this stage (it may have stopped).</p>
       ) : rows.length === 0 ? (
-        <p className="opacity-70">This stage has no pipe.</p>
+        <p className="text-base-content/70">This stage has no pipe.</p>
       ) : (
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
           {rows.map(([key, value]) => (
             <div key={key} className="contents">
-              <dt className="opacity-70">{key}</dt>
+              <dt className="text-base-content/70">{key}</dt>
               <dd className="break-all tabular-nums">{value}</dd>
             </div>
           ))}
@@ -311,22 +311,22 @@ function RingPanel(props: { ring: RingView | null; atMs: number | null }) {
   return (
     <section className="card bg-base-200" aria-labelledby="inspect-ring">
       <div className="card-body gap-2 p-4">
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 id="inspect-ring" className="card-title text-base">
             Source ring
           </h3>
           <Freshness atMs={props.atMs} />
         </div>
         {ring === null ? (
-          <p className="opacity-70">No source ring runs.</p>
+          <p className="text-base-content/70">No source ring runs.</p>
         ) : (
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
-            <dt className="opacity-70">Fill</dt>
+            <dt className="text-base-content/70">Fill</dt>
             <dd className="tabular-nums">
               {ring.fill} / {ring.capacity} ·{" "}
               {formatPercent((100 * ring.fill) / ring.capacity)}
             </dd>
-            <dt className="opacity-70">Retained payload</dt>
+            <dt className="text-base-content/70">Retained payload</dt>
             <dd className="tabular-nums">{formatBytes(ring.payloadBytes)}</dd>
           </dl>
         )}
@@ -347,15 +347,15 @@ function ShardsPanel(props: {
           Egress shards
         </h3>
         {props.truncated && (
-          <p className="text-sm opacity-70">
+          <p className="text-sm text-base-content/70">
             The map is truncated: some shards may not be listed.
           </p>
         )}
         {shards === null ? (
-          <p className="opacity-70">Loading…</p>
+          <p className="text-base-content/70">Loading…</p>
         ) : shards.length === 0 ? (
           !props.truncated && (
-            <p className="opacity-70">No output of this pipeline runs on a shard.</p>
+            <p className="text-base-content/70">No output of this pipeline runs on a shard.</p>
           )
         ) : (
           <ul className="space-y-2">
@@ -375,8 +375,8 @@ function ShardsPanel(props: {
                     {shard.state}
                   </span>
                 </div>
-                <div className="break-all text-xs opacity-70">feed {shard.feed}</div>
-                <div className="mt-1 opacity-70">
+                <div className="break-all text-xs text-base-content/70">feed {shard.feed}</div>
+                <div className="mt-1 text-base-content/70">
                   progress {shard.progressAgeMs ?? "--"} ms · commands{" "}
                   {shard.commandDepth ?? "--"} / {shard.commandCapacity ?? "--"} ·{" "}
                   {shard.mediaTicks ?? "--"} media ticks
@@ -400,7 +400,7 @@ function AttributionPanel(props: {
           How sure the numbers are
         </h3>
         {props.attribution === null ? (
-          <p className="opacity-70">Loading…</p>
+          <p className="text-base-content/70">Loading…</p>
         ) : (
           <dl className="space-y-1 text-sm">
             {Object.entries(props.attribution).map(([confidence, sources]) => (
@@ -412,7 +412,7 @@ function AttributionPanel(props: {
                     {confidence}
                   </span>
                 </dt>
-                <dd className="opacity-70">{sources.join(", ").replaceAll("_", " ")}</dd>
+                <dd className="text-base-content/70">{sources.join(", ").replaceAll("_", " ")}</dd>
               </div>
             ))}
           </dl>

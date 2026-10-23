@@ -43,7 +43,7 @@ export function Diagnostics(props: { pipeline: { id: string; name: string } }) {
               >
                 {run.report.checks.length} checks · {verdict.failed} failed · {verdict.withIssues} with issues
               </span>
-              <span className="text-xs opacity-70">
+              <span className="text-xs text-base-content/70">
                 {run.report.protocol.toUpperCase()} · {(run.report.totalDurationMs / 1000).toFixed(1)} s
               </span>
               <button
@@ -81,9 +81,9 @@ export function Diagnostics(props: { pipeline: { id: string; name: string } }) {
                         : "ok"}
                   </span>
                   <span className="font-medium">{check.name}</span>
-                  <span className="text-xs opacity-70">{check.durationMs} ms</span>
+                  <span className="text-xs text-base-content/70">{check.durationMs} ms</span>
                 </div>
-                <p className="text-xs opacity-70">{check.description}</p>
+                <p className="text-xs text-base-content/70">{check.description}</p>
                 {check.issues.length > 0 && (
                   <ul className="list-disc pl-5 text-warning">
                     {check.issues.map((issue, index) => (
@@ -91,9 +91,9 @@ export function Diagnostics(props: { pipeline: { id: string; name: string } }) {
                     ))}
                   </ul>
                 )}
-                {check.help && <p className="text-xs italic opacity-70">{check.help}</p>}
+                {check.help && <p className="text-xs italic text-base-content/70">{check.help}</p>}
                 <details>
-                  <summary className="cursor-pointer text-xs opacity-70">Output</summary>
+                  <summary className="cursor-pointer text-xs text-base-content/70">Output</summary>
                   <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-xs">
                     $ {check.command}
                     {"\n"}

@@ -305,3 +305,58 @@ export function filterPipelineRows(
       (operational === null || OPERATIONAL[operational](row)),
   );
 }
+
+/** Attention items that share a layer and a kind of cause, across
+ * pipelines: "12 pipelines have no publisher", "46 destinations rejected the
+ * stream". At thousands of outputs the per-item list is too long to read;
+ * the groups say what kind of trouble the plant is in. */
+export interface AttentionGroup {
+  readonly key: string;
+  readonly layer: Layer;
+  readonly code: Cause["code"];
+  readonly title: string;
+  readonly outputs: number;
+  readonly pipelines: number;
+  /** Worst first: the items with the most outputs. */
+  readonly items: readonly AttentionItem[];
+}
+
+const GROUP_TITLE: Record<Cause["code"], string> = {
+  noPublisher: "No publisher connected",
+  stageNotProducing: "A shared stage is not producing",
+  shardPanicked: "An egress shard panicked",
+  shardStalled: "An egress shard stalled",
+  shardStopped: "An egress shard stopped",
+  capacityRefused: "Egress capacity is full",
+  retriesExhausted: "Retries exhausted",
+  retryBudgetNearlySpent: "Retry budget nearly spent",
+  rejected: "Destination rejected the stream",
+  backpressured: "Destination is not keeping up",
+  noProgress: "No progress",
+};
+
+export function attentionGroups(items: readonly AttentionItem[]): readonly AttentionGroup[] {
+  const groups = new Map<string, { layer: Layer; code: Cause["code"]; items: AttentionItem[] }>();
+  for (const item of items) {
+    const key = `${item.layer}:${item.cause.code}`;
+    const group = groups.get(key);
+    if (group) group.items.push(item);
+    else groups.set(key, { layer: item.layer, code: item.cause.code, items: [item] });
+  }
+  return [...groups.entries()]
+    .map(([key, group]) => ({
+      key,
+      layer: group.layer,
+      code: group.code,
+      title: GROUP_TITLE[group.code],
+      outputs: group.items.reduce((sum, item) => sum + item.outputs.length, 0),
+      pipelines: new Set(group.items.map((item) => item.pipelineId)).size,
+      items: group.items,
+    }))
+    .sort(
+      (a, b) =>
+        b.outputs - a.outputs ||
+        LAYER_ORDER[a.layer] - LAYER_ORDER[b.layer] ||
+        a.key.localeCompare(b.key),
+    );
+}

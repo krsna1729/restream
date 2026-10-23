@@ -12,6 +12,7 @@ import { Meters, serviceCenterRows } from "./fleet.js";
 import { formatBps, formatPercent } from "./format.js";
 import { PlaceLink } from "./router.js";
 import type { LiveSnapshot } from "./store.js";
+import { PageHeader } from "../ui/page-header.js";
 
 const FLOW_BADGE: Record<FlowDiagnosis["status"], string> = {
   healthy: "badge-success",
@@ -29,11 +30,15 @@ const PRIORS = "calibration priors, observe-only";
 export function Capacity({ live }: { live: LiveSnapshot }) {
   const capacity = live.metrics?.capacity ?? null;
   if (capacity === null) {
-    return <p className="opacity-70">Waiting for the capacity snapshot…</p>;
+    return <p className="text-base-content/70">Waiting for the capacity snapshot…</p>;
   }
   return (
-    <div className="space-y-4">
-      <h2 className="text-xl font-semibold">Capacity</h2>
+    <div className="flex flex-col gap-4">
+      <PageHeader
+        eyebrow="Capacity · observe-only"
+        title="How much more this host can carry"
+        subtitle="Load per service center from the calibration priors, the measured egress flow, and what-if scenarios priced by the engine."
+      />
       <div className="grid gap-4 lg:grid-cols-2">
         <section className="card bg-base-200" aria-labelledby="capacity-now">
           <div className="card-body gap-3 p-4">
@@ -48,7 +53,7 @@ export function Capacity({ live }: { live: LiveSnapshot }) {
                 ["Outputs · stages", `${capacity.activeLeaves} · ${capacity.uniqueStages}`],
               ].map(([label, value]) => (
                 <div key={label} className="rounded bg-base-100 p-2">
-                  <dt className="text-xs opacity-70">{label}</dt>
+                  <dt className="text-xs text-base-content/70">{label}</dt>
                   <dd className="tabular-nums">{value}</dd>
                 </div>
               ))}
@@ -75,7 +80,7 @@ function FlowDoctor({ capacity }: { capacity: CapacitySnapshot }) {
           Flow Doctor · {flow.center}
         </h4>
         <span className={`badge badge-sm ${FLOW_BADGE[flow.status]}`}>{flow.status}</span>
-        <span className="text-xs opacity-70">
+        <span className="text-xs text-base-content/70">
           {capacity.flowMeasured
             ? "measured from the busiest egress shard"
             : `no shard runs: projected from ${PRIORS}`}
@@ -94,7 +99,7 @@ function FlowDoctor({ capacity }: { capacity: CapacitySnapshot }) {
           ["Errors", String(flow.errors)],
         ].map(([label, value]) => (
           <div key={label}>
-            <dt className="text-xs opacity-70">{label}</dt>
+            <dt className="text-xs text-base-content/70">{label}</dt>
             <dd className="tabular-nums">{value}</dd>
           </div>
         ))}
@@ -150,7 +155,7 @@ function Scenario({ live }: { live: LiveSnapshot }) {
       <div className="card-body gap-3 p-4">
         <h3 id="capacity-scenario" className="card-title text-base">
           Scenario
-          <span className="text-xs font-normal opacity-70">{PRIORS}</span>
+          <span className="text-xs font-normal text-base-content/70">{PRIORS}</span>
         </h3>
         {/* A failed request (a pipeline with no live ingest) shows in the
             app's error alert. */}
@@ -219,7 +224,7 @@ function Scenario({ live }: { live: LiveSnapshot }) {
             Project
           </button>
         </form>
-        <p className="text-xs opacity-70">
+        <p className="text-xs text-base-content/70">
           Both sides are priced on the priors, so they compare like with like;
           the measured flow is the Flow Doctor's. Each added output carries its
           pipeline's ingest, in the packets its protocol sends; a rendition is
@@ -240,7 +245,7 @@ function Scenario({ live }: { live: LiveSnapshot }) {
                 {result.projected.flow.status}
               </span>
             </p>
-            <p className="text-xs opacity-70">
+            <p className="text-xs text-base-content/70">
               {result.ratedBy === null
                 ? "No ingest is live: the added outputs carry nothing yet."
                 : `Each added output carries ${name(result.ratedBy)}: ${formatBps(result.ingest.bps)}, ${Math.round(result.ingest.pps)} pps.`}
@@ -271,7 +276,7 @@ function Calibration({ calibration }: { calibration: CapacityCalibration }) {
     <section className="rounded bg-base-100 p-3" aria-labelledby="capacity-calibration">
       <h4 id="capacity-calibration" className="font-medium">
         Calibration
-        <span className="ml-2 text-xs font-normal opacity-70">
+        <span className="ml-2 text-xs font-normal text-base-content/70">
           model v{calibration.modelVersion} · safe below{" "}
           {formatPercent(calibration.safeUtilization * 100)}
         </span>

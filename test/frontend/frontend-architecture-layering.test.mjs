@@ -67,3 +67,8 @@ test("core/ does not import upward from control-room/", async () => {
   const violations = await collectViolations("core", ["control-room"]);
   assert.deepEqual(violations, []);
 });
+
+test("ui/ primitives do not import the app in control-room/", async () => {
+  const violations = await collectViolations("ui", ["control-room"]);
+  assert.deepEqual(violations, []);
+});

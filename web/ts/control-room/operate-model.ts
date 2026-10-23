@@ -187,31 +187,6 @@ export function buildDestinationRows(
     );
 }
 
-/** How many destination rows the matrix renders before the operator asks for
- * the rest. Rows are degraded-first, so the cap hides the least urgent tail
- * while 200 or fewer rows are urgent; the footer names the degraded rows it
- * does hide. */
-export const DESTINATION_ROW_LIMIT = 200;
-
-/** The rows a bounded matrix renders, how many the cap hides, and how many of
- * the hidden rows are degraded. */
-export function windowDestinationRows(
-  rows: readonly DestinationRow[],
-  limit: number,
-): {
-  readonly visible: readonly DestinationRow[];
-  readonly hidden: number;
-  readonly hiddenDegraded: number;
-} {
-  const shown = Math.max(0, Math.min(limit, rows.length));
-  const hidden = rows.slice(shown);
-  return {
-    visible: rows.slice(0, shown),
-    hidden: hidden.length,
-    hiddenDegraded: hidden.filter((row) => destinationRank(row) < 2).length,
-  };
-}
-
 /** A monitoring URL the engine can check on YouTube (watch, share or live
  * page). */
 export function isYoutubeUrl(url: string): boolean {
@@ -233,4 +208,56 @@ export function youtubeVerdict(status: YoutubeMonitoringStatus | null): string {
       ? "scheduled, not live yet"
       : "not live";
   return `YouTube: ${state}`;
+}
+
+/** The destination matrix's state filter. */
+export type DestinationFilter = "all" | "attention" | "retrying" | "starting" | "delivering" | "stopped";
+
+/** Whether `row` is in `filter`'s set. Retrying is a subset of attention
+ * when the engine diagnosed it; it is offered on its own because "what is
+ * reconnecting right now" is a question operators ask. */
+export function inDestinationFilter(row: DestinationRow, filter: DestinationFilter): boolean {
+  const output = row.output;
+  switch (filter) {
+    case "all":
+      return true;
+    case "attention":
+      return output.diagnosis !== null;
+    case "retrying":
+      return output.convergence === "retrying" || output.convergence === "retriesExhausted";
+    case "starting":
+      return output.desired === "running" && !row.delivering && output.diagnosis === null;
+    case "delivering":
+      return row.delivering;
+    case "stopped":
+      return output.desired === "stopped";
+  }
+}
+
+export const DESTINATION_FILTERS: readonly DestinationFilter[] = ["all", "attention", "retrying", "starting", "delivering", "stopped"];
+
+/** How many rows each filter holds. */
+export function destinationFilterCounts(rows: readonly DestinationRow[]): Record<DestinationFilter, number> {
+  const counts = { all: 0, attention: 0, retrying: 0, starting: 0, delivering: 0, stopped: 0 };
+  for (const row of rows) {
+    for (const filter of DESTINATION_FILTERS) if (inDestinationFilter(row, filter)) counts[filter] += 1;
+  }
+  return counts;
+}
+
+/** Rows in `filter`, on `protocol` (`null`: any), whose name or id holds
+ * `query` (any case). The order is kept: degraded first. */
+export function filterDestinationRows(
+  rows: readonly DestinationRow[],
+  filter: DestinationFilter,
+  query: string,
+  protocol: EgressProtocol | null,
+): readonly DestinationRow[] {
+  const needle = query.trim().toLowerCase();
+  return rows.filter(
+    (row) =>
+      inDestinationFilter(row, filter) &&
+      (protocol === null || row.output.protocol === protocol) &&
+      (needle === "" || row.output.name.toLowerCase().includes(needle) || row.output.id.toLowerCase().includes(needle)),
+  );
 }

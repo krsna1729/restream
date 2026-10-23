@@ -6,6 +6,7 @@ import type { AppLogRow } from "../types.js";
 import { LOG_ROWS_KEPT, logFieldsText, logFilters, withLiveRow } from "./diagnose-model.js";
 import type { LogLevel, LogScope } from "./diagnose-model.js";
 import type { LiveSnapshot } from "./store.js";
+import { PageHeader } from "../ui/page-header.js";
 
 const HISTORY_ROWS = 200;
 const LEVELS: ReadonlyArray<[LogLevel, string]> = [
@@ -18,7 +19,7 @@ const LEVEL_BADGES: Record<string, string> = {
   ERROR: "badge-error",
   WARN: "badge-warning",
   INFO: "badge-ghost",
-  DEBUG: "badge-ghost opacity-60",
+  DEBUG: "badge-ghost text-base-content/60",
 };
 
 /** The engine's log: the newest persisted rows for a scope, then every
@@ -94,9 +95,9 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null }) {
   return (
     <section className="space-y-4" aria-labelledby="logs-title">
       <div className="flex flex-wrap items-end gap-3">
-        <h2 id="logs-title" className="text-xl font-semibold">
-          Logs
-        </h2>
+        <div className="w-full">
+          <PageHeader eyebrow="Logs" title={<span id="logs-title">Engine logs</span>} subtitle="Newest first; streams matching rows live." />
+        </div>
         <label className="form-control">
           <span className="label-text text-xs">Scope</span>
           <select
@@ -185,9 +186,9 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null }) {
           </button>
         </p>
       ) : rows === null ? (
-        <p className="opacity-70">Loading log…</p>
+        <p className="text-base-content/70">Loading log…</p>
       ) : rows.length === 0 ? (
-        <p className="opacity-70">No rows match.</p>
+        <p className="text-base-content/70">No rows match.</p>
       ) : (
         <div className="overflow-x-auto">
           <table className="table table-xs" aria-label="Log rows">
@@ -216,7 +217,7 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null }) {
                       {row.message}
                       {fields && (
                         <details>
-                          <summary className="cursor-pointer opacity-70">fields</summary>
+                          <summary className="cursor-pointer text-base-content/70">fields</summary>
                           <pre className="whitespace-pre-wrap">{fields}</pre>
                         </details>
                       )}
@@ -226,7 +227,7 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null }) {
               })}
             </tbody>
           </table>
-          <p className="mt-2 text-xs opacity-70">
+          <p className="mt-2 text-xs text-base-content/70">
             Newest first; the page keeps {LOG_ROWS_KEPT} rows
             {hasMore && `, and the engine holds older rows than the first ${HISTORY_ROWS} read`}.
           </p>

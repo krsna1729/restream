@@ -20,6 +20,7 @@ import {
 import type { ChangeDraft, Gate, StageState } from "./changes-model.js";
 import { Convergence, Impact } from "./changes-impact.js";
 import type { LiveSnapshot } from "./store.js";
+import { PageHeader } from "../ui/page-header.js";
 
 const STAGE_BADGE: Record<StageState, string> = {
   done: "badge-success",
@@ -65,9 +66,13 @@ export function Changes({ live }: { live: LiveSnapshot }) {
   const stages = progress(plan, operation);
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
+      <PageHeader
+        eyebrow="Change Studio"
+        title="Plan, approve, apply and verify"
+        subtitle="Destination changes judged by the engine before anything mutates."
+      />
       <div className="flex flex-wrap items-center gap-3">
-        <h2 className="text-xl font-semibold">Change Studio</h2>
         <ol className="flex gap-2" aria-label="Change progress">
           {STAGES.map((stage, index) => (
             <li key={stage} className={`badge ${STAGE_BADGE[stages[index]]}`} data-state={stages[index]}>
@@ -364,7 +369,7 @@ function Operation(props: {
             </li>
           ))}
         </ul>
-        <p className="text-xs opacity-70">
+        <p className="text-xs text-base-content/70">
           Approval confirms the change from this dashboard session; it is not a
           second person's sign-off. The engine keeps operations in memory only, so
           a restart forgets them.
@@ -444,7 +449,7 @@ function Judgement({ plan }: { plan: ChangePlan }) {
             className={`text-sm ${issue.severity === "error" ? "text-error" : "text-warning"}`}
           >
             {issue.message}
-            {issue.field ? <span className="opacity-60"> ({issue.field})</span> : null}
+            {issue.field ? <span className="text-base-content/60"> ({issue.field})</span> : null}
           </p>
         ))}
         <p className="text-sm">{impact.operatorSummary}</p>
@@ -454,7 +459,7 @@ function Judgement({ plan }: { plan: ChangePlan }) {
           </p>
         )}
         {notes.length > 0 && (
-          <ul className="list-disc pl-5 text-xs opacity-70">
+          <ul className="list-disc pl-5 text-xs text-base-content/70">
             {notes.map((note, index) => (
               <li key={index}>{note}</li>
             ))}
@@ -475,7 +480,7 @@ function GateTable(props: { label: string; rows: readonly Gate[] }) {
             <td className={row.passed ? "text-success" : "text-error"}>
               {row.passed ? "passed" : "failed"}
             </td>
-            <td className="opacity-70">{row.detail}</td>
+            <td className="text-base-content/70">{row.detail}</td>
           </tr>
         ))}
       </tbody>
@@ -509,7 +514,7 @@ function OperationResult({ operation }: { operation: ChangeOperation }) {
         <p className="text-sm">{operation.verificationResult.explanation}</p>
       )}
       {observations.map((line, index) => (
-        <p key={index} className="text-xs opacity-70">
+        <p key={index} className="text-xs text-base-content/70">
           {line}
         </p>
       ))}

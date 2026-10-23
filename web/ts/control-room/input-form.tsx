@@ -95,7 +95,7 @@ export function InputForm(props: {
       </label>
       {current && current.kind === "keyed" && (
         <div className="space-y-1 text-sm">
-          <p className="text-xs opacity-70">Publish to</p>
+          <p className="text-xs text-base-content/70">Publish to</p>
           {[
             current.ingestUrls?.rtmp,
             current.ingestUrls?.srt,
@@ -108,7 +108,7 @@ export function InputForm(props: {
                 {url}
               </p>
             ))}
-          <p className="text-xs opacity-70">
+          <p className="text-xs text-base-content/70">
             <a className="link" href={withBasePath(current.previewUrl)}>
               Preview
             </a>
@@ -130,7 +130,7 @@ export function InputForm(props: {
               <option value="basic">Basic (username and password)</option>
             </select>
           </label>
-          <p className="text-xs opacity-70">
+          <p className="text-xs text-base-content/70">
             Protects HLS publishing only, not RTMP, SRT, or playback. Send credentials
             separately using the publisher's HTTP Basic auth settings; publish URLs stay unchanged.
           </p>
@@ -214,7 +214,7 @@ export function InputForm(props: {
               <span role="status" className="badge badge-sm badge-ghost">
                 {note}
               </span>
-              <span className="opacity-70">Replace or clear it to change it.</span>
+              <span className="text-base-content/70">Replace or clear it to change it.</span>
               <button
                 type="button"
                 className="btn btn-xs btn-outline"
@@ -254,7 +254,7 @@ export function InputForm(props: {
                 value={draft.cookies}
                 onChange={(event) => set({ cookies: event.target.value })}
               />
-              <span className="text-xs opacity-70">{AUTH_COOKIES_NOTE}</span>
+              <span className="text-xs text-base-content/70">{AUTH_COOKIES_NOTE}</span>
             </label>
           )}
           {shown.includes("username") && (
@@ -321,7 +321,7 @@ export function InputForm(props: {
             </div>
           )}
           {draft.authKind === "none" && !draft.keepAuth && (
-            <p className="text-xs opacity-70">{AUTH_NONE_NOTE}</p>
+            <p className="text-xs text-base-content/70">{AUTH_NONE_NOTE}</p>
           )}
         </div>
       )}

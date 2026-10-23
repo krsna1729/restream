@@ -1,34 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import {
-  deleteOutput,
-  getConfig,
-  getYoutubeMonitoringStatus,
-  promotePipelineInput,
-  startOut,
-  stopOut,
-} from "../core/api.js";
+import { getConfig, promotePipelineInput } from "../core/api.js";
 import { withBasePath } from "../core/base-path.js";
-import type { OutputState } from "../core/generated/runtime-state.js";
 import type { ConfigData, PipelineInput } from "../types.js";
-import { ConfirmDelete } from "./confirm.js";
-import { describeCause } from "./fleet-model.js";
+import { Kpi, KpiRow } from "../ui/kpi.js";
+import { Panel } from "../ui/panel.js";
+import { useEngineer } from "../ui/prefs.js";
+import { StatusBadge } from "../ui/tone.js";
+import type { Tone } from "../ui/tone.js";
+import { DestinationMatrix } from "./destination-matrix.js";
 import { formatBps } from "./format.js";
 import { VARIANT_LABELS, inputSourceLines } from "./input-model.js";
 import { AddInput, EditInput, InputActions, PipelineBar } from "./operate-manage.js";
 import { MediaGraph } from "./operate-graph.js";
-import {
-  buildDestinationRows,
-  buildMediaGraph,
-  DESTINATION_ROW_LIMIT,
-  isYoutubeUrl,
-  windowDestinationRows,
-  youtubeVerdict,
-} from "./operate-model.js";
-import type { DestinationRow } from "./operate-model.js";
-import { OutputForm } from "./output-form.js";
+import { buildDestinationRows, buildMediaGraph, destinationFilterCounts } from "./operate-model.js";
 import { PipelineScope } from "./pipeline-scope.js";
-import { Freshness, usePolled } from "./polled.js";
+import { Freshness } from "./polled.js";
 import { Preview } from "./preview.js";
 import { pipelineGraph, pipelineInputs } from "./state-views.js";
 import type { LiveSnapshot } from "./store.js";
@@ -36,12 +23,7 @@ import type { LiveSnapshot } from "./store.js";
 /** The live pipeline cockpit: sources, the media path and destinations. */
 export function Operate(props: { live: LiveSnapshot; pipelineId: string | null }) {
   return (
-    <PipelineScope
-      live={props.live}
-      workspace="operate"
-      pipelineId={props.pipelineId}
-      verb="operate"
-    >
+    <PipelineScope live={props.live} workspace="operate" pipelineId={props.pipelineId} verb="operate">
       {(pipelineId) => <Cockpit live={props.live} pipelineId={pipelineId} />}
     </PipelineScope>
   );
@@ -53,45 +35,66 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
   const outputs = state?.outputs ?? [];
   // Pushed state with the store's sampled counters: a change shows as soon
   // as the state stream carries it.
-  const inputs = useMemo(
-    () => pipelineInputs(state, telemetry, pipelineId),
-    [state, telemetry, pipelineId],
-  );
-  const graph = useMemo(
-    () => pipelineGraph(state, telemetry, pipelineId),
-    [state, telemetry, pipelineId],
-  );
+  const inputs = useMemo(() => pipelineInputs(state, telemetry, pipelineId), [state, telemetry, pipelineId]);
+  const graph = useMemo(() => pipelineGraph(state, telemetry, pipelineId), [state, telemetry, pipelineId]);
   // Stored settings (URLs, output configs, profiles) are not in the state
   // stream: read once, and again after every edit.
   const [config, setConfig] = useState<ConfigData | null>(null);
   const reloadConfig = useCallback(() => void getConfig().then(setConfig), []);
   useEffect(reloadConfig, [reloadConfig]);
-  const columns = useMemo(
-    () => (graph ? buildMediaGraph(graph, outputs) : null),
-    [graph, outputs],
-  );
-  const rows = useMemo(
-    () => buildDestinationRows(pipelineId, outputs, graph),
-    [pipelineId, outputs, graph],
-  );
+  const columns = useMemo(() => (graph ? buildMediaGraph(graph, outputs) : null), [graph, outputs]);
+  const rows = useMemo(() => buildDestinationRows(pipelineId, outputs, graph), [pipelineId, outputs, graph]);
+  const counts = useMemo(() => destinationFilterCounts(rows), [rows]);
   const stored = config?.pipelines.find((pipeline) => pipeline.id === pipelineId) ?? null;
+  const pipeline = state?.pipelines.find((candidate) => candidate.id === pipelineId) ?? null;
+  const egressBps = useMemo(() => {
+    let total: number | null = null;
+    for (const row of rows) {
+      const rate = props.live.rates?.egressBps.get(row.output.id);
+      if (rate !== undefined) total = (total ?? 0) + rate;
+    }
+    return total;
+  }, [rows, props.live.rates]);
+  const wanted = rows.filter((row) => row.output.desired === "running").length;
   return (
     <>
+      <KpiRow max={5}>
+        <Kpi
+          label="Source"
+          value={pipeline?.ingest ? pipeline.ingest.protocol.toUpperCase() : "offline"}
+          tone={pipeline?.ingest ? "ok" : "bad"}
+          foot={pipeline?.ingest ? `${formatBps(props.live.rates?.ingestBps.get(pipelineId))} · ${pipeline.standbyInputs} standby` : "no publisher connected"}
+        />
+        <Kpi
+          label="Delivering"
+          value={`${counts.delivering} / ${wanted}`}
+          meter={wanted === 0 ? null : counts.delivering / wanted}
+          meterTone={counts.attention > 0 ? "warn" : "ok"}
+          foot="wanted destinations live"
+        />
+        <Kpi label="Egress" value={formatBps(egressBps)} foot={`${rows.length} destinations`} />
+        <Kpi
+          label="Needs attention"
+          value={String(counts.attention)}
+          tone={counts.attention > 0 ? "warn" : undefined}
+          foot={`${counts.retrying} retrying · ${counts.starting} starting`}
+        />
+        <Kpi
+          label="Recording"
+          value={pipeline?.recording ? "recording" : "off"}
+          tone={pipeline?.recording ? "bad" : undefined}
+          foot={pipeline?.recording ? "a file is being written" : "not recording"}
+        />
+      </KpiRow>
       {stored && (
         <PipelineBar
           pipeline={stored}
-          keyLocked={outputs.some(
-            (output) => output.pipelineId === pipelineId && output.desired === "running",
-          )}
+          keyLocked={outputs.some((output) => output.pipelineId === pipelineId && output.desired === "running")}
           onChanged={reloadConfig}
         />
       )}
-      <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
-        <SourceDeck
-          pipelineId={pipelineId}
-          inputs={inputs}
-          atMs={props.live.telemetryAtMs}
-        />
+      <div className="grid gap-4 2xl:grid-cols-[20rem_minmax(0,1fr)]">
+        <SourceDeck pipelineId={pipelineId} inputs={inputs} atMs={props.live.telemetryAtMs} />
         <MediaGraph
           pipelineId={pipelineId}
           columns={columns}
@@ -107,6 +110,7 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
         pipelineId={pipelineId}
         rows={rows}
         egressBps={props.live.rates?.egressBps ?? null}
+        egresses={telemetry?.egresses ?? null}
         config={config}
         onConfigChanged={reloadConfig}
       />
@@ -114,19 +118,13 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
   );
 }
 
-function inputStatus(input: PipelineInput): { label: string; badge: string } {
+function inputStatus(input: PipelineInput): { label: string; tone: Tone } {
   if (input.selected) {
-    if (input.runtime.forwardingState === "awaitingKeyframe") {
-      return { label: "awaiting keyframe", badge: "badge-info" };
-    }
-    return input.runtime.connected
-      ? { label: "active", badge: "badge-success" }
-      : { label: "selected · offline", badge: "badge-warning" };
+    if (input.runtime.forwardingState === "awaitingKeyframe") return { label: "awaiting keyframe", tone: "info" };
+    return input.runtime.connected ? { label: "on air", tone: "ok" } : { label: "selected · offline", tone: "bad" };
   }
-  if (!input.enabled) return { label: "disabled", badge: "badge-ghost" };
-  return input.runtime.connected
-    ? { label: "standby", badge: "badge-info" }
-    : { label: "offline", badge: "badge-ghost" };
+  if (!input.enabled) return { label: "disabled", tone: "neutral" };
+  return input.runtime.connected ? { label: "standby", tone: "info" } : { label: "offline", tone: "neutral" };
 }
 
 function SourceDeck(props: {
@@ -136,350 +134,97 @@ function SourceDeck(props: {
   atMs: number | null;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
+  const engineer = useEngineer();
   const { inputs } = props;
   const connected = inputs?.filter((input) => input.runtime.connected).length;
   return (
-    <section className="card bg-base-200" aria-labelledby="operate-sources">
-      <div className="card-body gap-3 p-4">
-        <div className="flex items-center justify-between gap-2">
-          <h3 id="operate-sources" className="card-title text-base">
-            Source deck
-            {inputs && (
-              <span className="text-xs font-normal opacity-70">
-                {connected} / {inputs.length} connected
-              </span>
-            )}
-          </h3>
-          <Freshness atMs={props.atMs} />
-        </div>
-        {inputs === null ? (
-          <p className="opacity-70">Loading inputs…</p>
-        ) : (
-          <ul className="space-y-2">
-            {inputs.map((input) => {
-              const status = inputStatus(input);
-              const video = input.runtime.video;
-              const rtt = input.runtime.quality?.msRtt;
-              const urls = inputSourceLines(input);
-              return (
-                <li
-                  key={input.id}
-                  aria-label={`Input ${input.label}`}
-                  className="rounded bg-base-100 p-2 text-sm"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium">
-                      {input.label}{" "}
-                      <span className="text-xs opacity-60">{input.role}</span>
-                    </span>
-                    <span className={`badge badge-sm ${status.badge}`}>
-                      {status.label}
-                    </span>
+    <Panel
+      id="operate-sources"
+      title="Source deck"
+      subtitle={inputs ? `${connected} / ${inputs.length} connected` : undefined}
+      actions={<Freshness atMs={props.atMs} />}
+    >
+      {inputs === null ? (
+        <p className="text-base-content/70">Loading inputs…</p>
+      ) : (
+        <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-1">
+          {inputs.map((input) => {
+            const status = inputStatus(input);
+            const video = input.runtime.video;
+            const rtt = input.runtime.quality?.msRtt ?? input.runtime.quality?.tcpRttMs;
+            const urls = inputSourceLines(input);
+            return (
+              <li
+                key={input.id}
+                aria-label={`Input ${input.label}`}
+                className={`rounded-box border bg-base-100 p-3 text-sm ${input.selected && input.runtime.connected ? "border-success/40" : "border-base-content/10"}`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="min-w-0 truncate font-semibold">
+                    {input.label} <span className="text-xs font-normal text-base-content/60">{input.role}</span>
+                  </span>
+                  <StatusBadge tone={status.tone} dot>
+                    {status.label}
+                  </StatusBadge>
+                </div>
+                {input.runtime.connected && (
+                  <div className="mt-1 text-xs text-base-content/70 tabular">
+                    {(input.runtime.protocol ?? "").toUpperCase()}
+                    {video?.codec && ` · ${video.codec} ${video.width ?? "?"}×${video.height ?? "?"}`}
+                    {video?.fps ? ` · ${Math.round(video.fps)} fps` : ""}
+                    {typeof rtt === "number" && ` · RTT ${rtt.toFixed(0)} ms`}
+                    {engineer && input.runtime.remoteAddr && ` · ${input.runtime.remoteAddr}`}
                   </div>
-                  {input.runtime.connected && (
-                    <div className="mt-1 opacity-70">
-                      {(input.runtime.protocol ?? "").toUpperCase()}
-                      {video?.codec &&
-                        ` · ${video.codec} ${video.width ?? "?"}×${video.height ?? "?"}`}
-                      {typeof rtt === "number" && ` · RTT ${rtt.toFixed(0)} ms`}
-                    </div>
-                  )}
-                  {input.runtime.connected && (
-                    <Preview url={withBasePath(input.previewUrl)} label={input.label} />
-                  )}
-                  {input.enabled && !input.selected && (
-                    <button
-                      type="button"
-                      className="btn btn-success btn-xs mt-2 w-full"
-                      disabled={busy !== null}
-                      onClick={async () => {
-                        setBusy(input.id);
-                        try {
-                          await promotePipelineInput(props.pipelineId, input.id);
-                        } finally {
-                          setBusy(null);
-                        }
-                      }}
-                    >
-                      {busy === input.id ? "Promoting…" : `Promote ${input.label}`}
-                    </button>
-                  )}
-                  {input.kind === "hlsPull" ? (
-                    <div className="mt-1 text-xs">
+                )}
+                {input.runtime.connected && <Preview url={withBasePath(input.previewUrl)} label={input.label} />}
+                {input.enabled && !input.selected && (
+                  <button
+                    type="button"
+                    className="btn btn-accent btn-sm mt-2 w-full"
+                    disabled={busy !== null}
+                    onClick={async () => {
+                      setBusy(input.id);
+                      try {
+                        await promotePipelineInput(props.pipelineId, input.id);
+                      } finally {
+                        setBusy(null);
+                      }
+                    }}
+                  >
+                    {busy === input.id ? "Promoting…" : `Promote ${input.label} on air`}
+                  </button>
+                )}
+                {input.kind === "hlsPull" ? (
+                  <div className="mt-2 text-xs">
+                    {urls.map((url) => (
+                      <p key={url} className="font-mono break-all">
+                        {url}
+                      </p>
+                    ))}
+                    <p className="text-base-content/70">{VARIANT_LABELS[input.variantRule]}</p>
+                  </div>
+                ) : (
+                  urls.length > 0 && (
+                    <details className="mt-2 text-xs">
+                      <summary className="cursor-pointer text-base-content/70">Publish URLs</summary>
                       {urls.map((url) => (
-                        <p key={url} className="break-all font-mono">
+                        <p key={url} className="mt-1 font-mono break-all select-all">
                           {url}
                         </p>
                       ))}
-                      <p className="opacity-70">
-                        {VARIANT_LABELS[input.variantRule]} ·{" "}
-                        <a className="link" href={withBasePath(input.previewUrl)}>
-                          Preview
-                        </a>
-                      </p>
-                    </div>
-                  ) : (
-                    urls.length > 0 && (
-                      <details className="mt-1 text-xs">
-                        <summary className="cursor-pointer opacity-70">Publish URLs</summary>
-                        {urls.map((url) => (
-                          <p key={url} className="break-all font-mono">
-                            {url}
-                          </p>
-                        ))}
-                      </details>
-                    )
-                  )}
-                  <InputActions pipelineId={props.pipelineId} input={input} />
-                  <EditInput pipelineId={props.pipelineId} input={input} />
-                </li>
-              );
-            })}
-          </ul>
-        )}
+                    </details>
+                  )
+                )}
+                <InputActions pipelineId={props.pipelineId} input={input} />
+                <EditInput pipelineId={props.pipelineId} input={input} />
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <div className="mt-3">
         <AddInput pipelineId={props.pipelineId} />
       </div>
-    </section>
-  );
-}
-
-function evidence(output: OutputState): string {
-  if (output.diagnosis) return describeCause(output.diagnosis.cause);
-  if (output.evidence) return output.evidence.error;
-  if (output.backpressure) return `held back: ${output.backpressure}`;
-  return "";
-}
-
-function DestinationMatrix(props: {
-  pipelineId: string;
-  rows: readonly DestinationRow[];
-  /** Per output, from two telemetry samples (the header's source too). */
-  egressBps: ReadonlyMap<string, number> | null;
-  /** Stored outputs (URL, config) and profiles, for the editor. */
-  config: ConfigData | null;
-  onConfigChanged: () => void;
-}) {
-  const [busy, setBusy] = useState<string | null>(null);
-  /** The output id being edited, "new", or null. */
-  const [editing, setEditing] = useState<string | null>(null);
-  /** The cap is lifted only when the operator asks for the whole fleet. */
-  const [showAll, setShowAll] = useState(false);
-  const { config } = props;
-  /** Stored monitoring URLs by output id: one pass per config, not one
-   * `find` per matrix row. */
-  const monitoringUrls = useMemo(
-    () =>
-      new Map(
-        (config?.outputs ?? []).map((stored) => [
-          stored.id,
-          stored.monitoringUrl ?? "",
-        ]),
-      ),
-    [config],
-  );
-  const { visible, hidden, hiddenDegraded } = useMemo(
-    () =>
-      windowDestinationRows(
-        props.rows,
-        showAll ? Number.POSITIVE_INFINITY : DESTINATION_ROW_LIMIT,
-      ),
-    [props.rows, showAll],
-  );
-  const editedOutput =
-    editing && editing !== "new"
-      ? (config?.outputs.find((output) => output.id === editing) ?? null)
-      : null;
-  return (
-    <section aria-labelledby="operate-destinations" className="space-y-3">
-      <div className="flex items-center gap-3">
-        <h3 id="operate-destinations" className="font-semibold">
-          Destination matrix{" "}
-          <span className="text-xs font-normal opacity-70">
-            degraded first · {props.rows.length} outputs
-          </span>
-        </h3>
-        <button
-          type="button"
-          className="btn btn-xs btn-primary"
-          disabled={config === null}
-          onClick={() => setEditing("new")}
-        >
-          Add destination
-        </button>
-      </div>
-      {config && (editing === "new" || editedOutput) && (
-        <OutputForm
-          key={editing}
-          pipelineId={props.pipelineId}
-          stored={editedOutput}
-          profiles={Object.keys(config.transcodeProfiles ?? {})}
-          defaultHost={config.ingestHost || "localhost"}
-          onSaved={(output) => {
-            // A new destination continues as an edit of what was stored.
-            setEditing(output.id);
-            props.onConfigChanged();
-          }}
-          onClose={() => setEditing(null)}
-        />
-      )}
-      <div className="overflow-x-auto">
-        <table className="table table-sm">
-          <thead>
-            <tr>
-              <th>Destination</th>
-              <th>Protocol</th>
-              <th>Desired</th>
-              <th>Actual</th>
-              <th>Convergence</th>
-              <th>Rate</th>
-              <th>Feed lag</th>
-              <th>Shard</th>
-              <th>Evidence</th>
-              <th>
-                <span className="sr-only">Action</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {visible.map(({ output, delivering, feedLagUnits }) => {
-              const running = output.desired === "running";
-              const monitoringUrl = monitoringUrls.get(output.id) ?? "";
-              return (
-                <tr key={output.id}>
-                  <td className="font-medium">
-                    {output.name}
-                    {isYoutubeUrl(monitoringUrl) && (
-                      <YoutubeCheck name={output.name} url={monitoringUrl} />
-                    )}
-                  </td>
-                  <td>{output.protocol.toUpperCase()}</td>
-                  <td>{output.desired}</td>
-                  <td>{output.actual ?? "—"}</td>
-                  <td>
-                    <span
-                      className={`badge badge-sm ${
-                        output.diagnosis
-                          ? "badge-warning"
-                          : delivering
-                            ? "badge-success"
-                            : "badge-ghost"
-                      }`}
-                    >
-                      {output.convergence} · {output.flow}
-                    </span>
-                    {output.retry && (
-                      <span className="ml-1 text-xs opacity-70">
-                        attempt {output.retry.attempts}
-                      </span>
-                    )}
-                  </td>
-                  <td className="tabular-nums">
-                    {formatBps(props.egressBps?.get(output.id))}
-                  </td>
-                  <td className="tabular-nums">{feedLagUnits ?? "—"}</td>
-                  <td className="tabular-nums">{output.shard ?? "—"}</td>
-                  <td className="max-w-xs truncate" title={evidence(output)}>
-                    {evidence(output)}
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      className={`btn btn-xs ${running ? "btn-outline" : "btn-primary"}`}
-                      disabled={busy !== null}
-                      aria-label={`${running ? "Stop" : "Start"} ${output.name}`}
-                      onClick={async () => {
-                        setBusy(output.id);
-                        try {
-                          await (running ? stopOut : startOut)(
-                            props.pipelineId,
-                            output.id,
-                          );
-                        } finally {
-                          setBusy(null);
-                        }
-                      }}
-                    >
-                      {busy === output.id ? "…" : running ? "Stop" : "Start"}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-xs btn-ghost ml-1"
-                      aria-label={`Edit ${output.name}`}
-                      disabled={config === null}
-                      onClick={() => setEditing(output.id)}
-                    >
-                      Edit
-                    </button>
-                    <span className="ml-1">
-                      <ConfirmDelete
-                        label={`Delete ${output.name}`}
-                        question="Delete this destination?"
-                        onDelete={async () => {
-                          const deleted =
-                            (await deleteOutput(props.pipelineId, output.id)) !== null;
-                          if (deleted) {
-                            if (editing === output.id) setEditing(null);
-                            props.onConfigChanged();
-                          }
-                          return deleted;
-                        }}
-                      />
-                    </span>
-                  </td>
-                </tr>
-              );
-            })}
-            {hidden > 0 && (
-              <tr>
-                <td colSpan={10} className="text-xs opacity-70">
-                  {hidden} more not shown
-                  {hiddenDegraded > 0 && ` (${hiddenDegraded} need attention)`}{" "}
-                  <button
-                    type="button"
-                    className="link link-primary"
-                    onClick={() => setShowAll(true)}
-                  >
-                    Show all {props.rows.length}
-                  </button>
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
-
-/** On request, asks the engine what YouTube's watch page says about the
- * stream; never polled. */
-function YoutubeCheck(props: { name: string; url: string }) {
-  const [checking, setChecking] = useState(false);
-  const [verdict, setVerdict] = useState<{ text: string; title: string } | null>(null);
-  return (
-    <span className="ml-2 text-xs font-normal">
-      <button
-        type="button"
-        className="btn btn-xs btn-ghost"
-        disabled={checking}
-        aria-label={`Check ${props.name} on YouTube`}
-        onClick={async () => {
-          setChecking(true);
-          try {
-            const status = await getYoutubeMonitoringStatus(props.url);
-            setVerdict({ text: youtubeVerdict(status), title: status?.title ?? "" });
-          } finally {
-            setChecking(false);
-          }
-        }}
-      >
-        {checking ? "…" : "YouTube"}
-      </button>
-      {verdict && (
-        <span role="status" title={verdict.title}>
-          {verdict.text}
-        </span>
-      )}
-    </span>
+    </Panel>
   );
 }

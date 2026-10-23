@@ -1,6 +1,9 @@
 import { useMemo } from "react";
 import type { ReactNode } from "react";
 
+import { KeyValue } from "../ui/kpi.js";
+import { Panel } from "../ui/panel.js";
+import { StatusBadge } from "../ui/tone.js";
 import { formatBps, formatPercent } from "./format.js";
 import { destinationOutlier, DELIVERY_FLOOR, inputTransport, mediaPath } from "./monitor-path.js";
 import { Freshness } from "./polled.js";
@@ -20,40 +23,25 @@ export function MonitorPanels(props: { live: LiveSnapshot; pipelineId: string })
   );
 }
 
-function Panel(props: {
-  id: string;
-  title: string;
-  atMs?: number | null;
-  badge?: ReactNode;
-  children: ReactNode;
-}) {
+function Section(props: { id: string; title: string; atMs?: number | null; badge?: ReactNode; children: ReactNode }) {
   return (
-    <section className="card bg-base-200" aria-labelledby={props.id}>
-      <div className="card-body gap-2 p-4">
-        <div className="flex items-center justify-between gap-2">
-          <h3 id={props.id} className="card-title text-base">
-            {props.title}
-            {props.badge}
-          </h3>
+    <Panel
+      id={props.id}
+      title={props.title}
+      actions={
+        <>
+          {props.badge}
           {props.atMs !== undefined && <Freshness atMs={props.atMs} />}
-        </div>
-        {props.children}
-      </div>
-    </section>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-2">{props.children}</div>
+    </Panel>
   );
 }
 
 function Rows({ rows }: { rows: ReadonlyArray<[string, string]> }) {
-  return (
-    <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-      {rows.map(([label, value]) => (
-        <div key={label} className="contents">
-          <dt className="opacity-70">{label}</dt>
-          <dd className="text-right tabular-nums">{value}</dd>
-        </div>
-      ))}
-    </dl>
-  );
+  return <KeyValue rows={rows} />;
 }
 
 function InputTransport(props: { live: LiveSnapshot; pipelineId: string }) {
@@ -63,24 +51,24 @@ function InputTransport(props: { live: LiveSnapshot; pipelineId: string }) {
     return inputs === null ? undefined : inputTransport(inputs);
   }, [state, telemetry, props.pipelineId]);
   return (
-    <Panel id="monitor-transport" title="Input transport" atMs={props.live.telemetryAtMs}>
+    <Section id="monitor-transport" title="Input transport" atMs={props.live.telemetryAtMs}>
       {transport === undefined ? (
-        <p className="text-sm opacity-70">Loading inputs…</p>
+        <p className="text-sm text-base-content/70">Loading inputs…</p>
       ) : transport === null ? (
-        <p className="text-sm opacity-70">No selected input is connected.</p>
+        <p className="text-sm text-base-content/70">No selected input is connected.</p>
       ) : (
         <>
           <p className="text-sm">
             {transport.label} · {transport.protocol}
           </p>
           {transport.rows.length === 0 ? (
-            <p className="text-sm opacity-70">The publisher reports no transport metrics.</p>
+            <p className="text-sm text-base-content/70">The publisher reports no transport metrics.</p>
           ) : (
             <Rows rows={transport.rows} />
           )}
         </>
       )}
-    </Panel>
+    </Section>
   );
 }
 
@@ -91,9 +79,9 @@ function SharedPath(props: { live: LiveSnapshot; pipelineId: string }) {
     return graph ? mediaPath(graph, state?.outputs ?? []) : null;
   }, [state, telemetry, props.pipelineId]);
   return (
-    <Panel id="monitor-path" title="Shared media path" atMs={props.live.telemetryAtMs}>
+    <Section id="monitor-path" title="Shared media path" atMs={props.live.telemetryAtMs}>
       {path === null ? (
-        <p className="text-sm opacity-70">Loading the processing graph…</p>
+        <p className="text-sm text-base-content/70">Loading the processing graph…</p>
       ) : (
         <Rows
           rows={[
@@ -122,7 +110,7 @@ function SharedPath(props: { live: LiveSnapshot; pipelineId: string }) {
           ]}
         />
       )}
-    </Panel>
+    </Section>
   );
 }
 
@@ -135,20 +123,20 @@ function Outlier(props: { live: LiveSnapshot; pipelineId: string }) {
     [props.pipelineId, outputs, egresses],
   );
   return (
-    <Panel
+    <Section
       id="monitor-outlier"
       title="Destination outlier"
       atMs={props.live.telemetryAtMs}
       badge={
         outlier && (
-          <span className="badge badge-warning badge-sm font-normal">{outlier.name}</span>
+          <StatusBadge tone="warn">{outlier.name}</StatusBadge>
         )
       }
     >
       {!egresses ? (
-        <p className="text-sm opacity-70">Waiting for engine telemetry…</p>
+        <p className="text-sm text-base-content/70">Waiting for engine telemetry…</p>
       ) : outlier === null ? (
-        <p className="text-sm opacity-70">
+        <p className="text-sm text-base-content/70">
           Every rated output delivers at least {formatPercent(100 * DELIVERY_FLOOR)} of its
           feed.
         </p>
@@ -174,6 +162,6 @@ function Outlier(props: { live: LiveSnapshot; pipelineId: string }) {
           </PlaceLink>
         </>
       )}
-    </Panel>
+    </Section>
   );
 }

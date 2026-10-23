@@ -19,7 +19,12 @@ import {
 import { Freshness, useFleetHistory, useLifecycleEvents, useOpenAlerts } from "./polled.js";
 import type { Polled } from "./polled.js";
 import { PlaceLink } from "./router.js";
-import { Sparkline } from "./sparkline.js";
+import { ChipGroup } from "../ui/controls.js";
+import { PageHeader } from "../ui/page-header.js";
+import { EmptyState, Panel } from "../ui/panel.js";
+import { RawJson } from "../ui/raw-json.js";
+import { TimeSeries } from "../ui/time-series.js";
+import { StatusBadge } from "../ui/tone.js";
 import { useNow } from "./store.js";
 import type { LiveSnapshot } from "./store.js";
 
@@ -55,39 +60,37 @@ export function Incidents({ live }: { live: LiveSnapshot }) {
     return map;
   }, [live.state]);
 
+  const critical = open.filter((alert) => alert.severity === "critical").length;
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <h2 className="text-xl font-semibold">Incidents</h2>
-        <span className="badge badge-warning">{open.length} open</span>
-        <span className="badge badge-ghost">
-          {resolved.length} resolved in the last {resolvedWindow.label}
-        </span>
-        <label className="flex items-center gap-1 text-sm">
-          Resolved window
-          <select
-            className="select select-bordered select-xs"
-            value={windowIndex}
-            onChange={(event) => setWindowIndex(Number(event.target.value))}
-          >
-            {RESOLVED_WINDOWS.map((option, index) => (
-              <option key={option.label} value={index}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className="ml-auto">
-          <Freshness atMs={alerts.atMs} />
-        </span>
-      </div>
+    <div className="flex flex-col gap-4">
+      <PageHeader
+        eyebrow="Incidents"
+        title={open.length === 0 ? "No open incident" : `${open.length} open incident${open.length === 1 ? "" : "s"}`}
+        tone={critical > 0 ? "bad" : open.length > 0 ? "warn" : "ok"}
+        subtitle={`${critical} critical · ${open.length - critical} warning · ${resolved.length} resolved in the last ${resolvedWindow.label}`}
+        actions={
+          <>
+            <label className="flex items-center gap-2 text-sm text-base-content/70">
+              Resolved window
+              <select className="select select-sm w-24" value={windowIndex} onChange={(event) => setWindowIndex(Number(event.target.value))}>
+                {RESOLVED_WINDOWS.map((option, index) => (
+                  <option key={option.label} value={index}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Freshness atMs={alerts.atMs} />
+          </>
+        }
+      />
       {alerts.value?.resolvedCompleteFrom !== undefined &&
         alerts.atMs !== null &&
         resolvedMayBeIncomplete(
           alerts.atMs - resolvedWindow.ms,
           alerts.value.resolvedCompleteFrom,
         ) && (
-          <p className="text-xs opacity-70">
+          <p className="text-xs text-base-content/70">
             The engine's resolved history is complete only from{" "}
             {new Date(alerts.value.resolvedCompleteFrom).toLocaleString()} (it
             restarted then, or dropped older ones): earlier closings in this
@@ -95,9 +98,9 @@ export function Incidents({ live }: { live: LiveSnapshot }) {
           </p>
         )}
       {alerts.value === null ? (
-        <p className="opacity-70">Loading alerts…</p>
+        <EmptyState title="Loading alerts…" />
       ) : (
-        <div className="grid gap-4 lg:grid-cols-[18rem_1fr_22rem]">
+        <div className="grid gap-4 lg:grid-cols-[20rem_minmax(0,1fr)] 2xl:grid-cols-[20rem_minmax(0,1fr)_24rem]">
           <Queue
             open={open}
             resolved={resolved}
@@ -122,9 +125,9 @@ export function Incidents({ live }: { live: LiveSnapshot }) {
               />
             </>
           ) : (
-            <p className="opacity-70 lg:col-span-2">
-              No open incident. Every alert the engine raises appears here.
-            </p>
+            <div className="lg:col-span-2">
+              <EmptyState tone="ok" title="All clear" detail="No open incident. Every alert the engine raises appears here, with its evidence." />
+            </div>
           )}
         </div>
       )}
@@ -152,61 +155,61 @@ function Queue(props: {
   onSelect: (id: string) => void;
 }) {
   const now = useNow(1000);
+  const [severity, setSeverity] = useState<"all" | "critical" | "warning">("all");
+  const shownOpen = props.open.filter((alert) => severity === "all" || alert.severity === severity);
   const item = (alert: OperatorAlert, sub: string) => (
     <li key={alert.id}>
       <button
         type="button"
         aria-pressed={alert.id === props.selectedId}
-        className={`flex w-full flex-col items-start gap-1 rounded p-2 text-left ${
-          alert.id === props.selectedId ? "bg-base-300" : "hover:bg-base-300/50"
+        className={`flex w-full flex-col items-start gap-1 border-l-2 px-3 py-2 text-left transition-colors ${alert.severity === "critical" ? "border-l-error" : "border-l-warning"} ${
+          alert.id === props.selectedId ? "bg-primary/10" : "hover:bg-base-content/5"
         }`}
         onClick={() => props.onSelect(alert.id)}
       >
-        <span className="flex w-full items-center justify-between gap-2">
-          <b className="min-w-0 break-words text-sm">{alert.title}</b>
-          <span
-            className={`badge badge-sm shrink-0 ${alert.severity === "critical" ? "badge-error" : "badge-warning"}`}
-          >
+        <span className="flex w-full items-start justify-between gap-2">
+          <b className="min-w-0 text-sm break-words">{alert.title}</b>
+          <StatusBadge tone={alert.severity === "critical" ? "bad" : "warn"} className="shrink-0">
             {alert.severity}
-          </span>
+          </StatusBadge>
         </span>
-        <span className="text-xs opacity-70">
+        <span className="text-xs text-base-content/70">
           {affected(alert, props.names)} · {sub}
         </span>
       </button>
     </li>
   );
+  const critical = props.open.filter((alert) => alert.severity === "critical").length;
   return (
-    <section className="card bg-base-200" aria-labelledby="incident-queue">
-      <div className="card-body gap-2 p-3">
-        <h3 id="incident-queue" className="card-title text-base">
-          Open
-          <span className="text-xs font-normal opacity-70">
-            critical, then widest, then oldest
-          </span>
-        </h3>
-        <ul className="space-y-1">
-          {props.open.map((alert) =>
-            item(
-              alert,
-              alert.firstSeen
-                ? `open ${formatAge(Date.parse(alert.firstSeen), now)}`
-                : "open",
-            ),
+    <Panel id="incident-queue" title="Open" subtitle="critical, widest, oldest" flush>
+      <div className="border-b border-base-content/10 px-3 py-2">
+        <ChipGroup<"all" | "critical" | "warning">
+          label="Severity"
+          value={severity}
+          onChange={setSeverity}
+          chips={[
+            { value: "all", label: "All", count: props.open.length },
+            { value: "critical", label: "Critical", count: critical, alert: true },
+            { value: "warning", label: "Warning", count: props.open.length - critical },
+          ]}
+        />
+      </div>
+      <div className="scrollbar-thin max-h-[70dvh] overflow-y-auto">
+        <ul className="divide-y divide-base-content/5">
+          {shownOpen.map((alert) =>
+            item(alert, alert.firstSeen ? `open ${formatAge(Date.parse(alert.firstSeen), now)}` : "open"),
           )}
         </ul>
         {props.resolved.length > 0 && (
           <>
-            <h3 className="card-title mt-2 text-base">Resolved</h3>
-            <ul className="space-y-1 opacity-80">
-              {props.resolved.map(({ alert, resolvedAt }) =>
-                item(alert, `resolved ${formatAge(Date.parse(resolvedAt), now)} ago`),
-              )}
+            <h3 className="kicker border-t border-base-content/10 px-3 pt-3 pb-1">Resolved</h3>
+            <ul className="divide-y divide-base-content/5 opacity-80">
+              {props.resolved.map(({ alert, resolvedAt }) => item(alert, `resolved ${formatAge(Date.parse(resolvedAt), now)} ago`))}
             </ul>
           </>
         )}
       </div>
-    </section>
+    </Panel>
   );
 }
 
@@ -227,43 +230,43 @@ function Detail(props: {
   const span = correlationWindow(alert, props.resolvedAt);
   const fleet = useFleetHistory(span.fromMs, span.toMs);
   return (
-    <section className="card bg-base-200" aria-labelledby="incident-detail">
-      <div className="card-body gap-3 p-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <h3 id="incident-detail" className="card-title text-base">
-            {alert.title}
-          </h3>
-          <span className={`badge ${isOpen ? "badge-warning" : "badge-success"}`}>
+    <Panel
+      id="incident-detail"
+      title={alert.title}
+      stripe={isOpen ? (alert.severity === "critical" ? "bad" : "warn") : "ok"}
+      actions={
+        <>
+          <StatusBadge tone={isOpen ? "warn" : "ok"} dot>
             {isOpen ? "open" : "resolved"}
-          </span>
+          </StatusBadge>
           {alert.pipelineId && (
-            <PlaceLink
-              place={{ workspace: "operate", pipelineId: alert.pipelineId }}
-              className="link ml-auto text-sm"
-            >
-              Operate this pipeline
+            <PlaceLink place={{ workspace: "operate", pipelineId: alert.pipelineId }} className="btn btn-sm">
+              Operate pipeline
             </PlaceLink>
           )}
-        </div>
-        <div className="rounded bg-base-100 p-3 text-sm">
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        <div className="rounded-box bg-base-100 p-3 text-sm">
           <b>{isOpen ? "Current judgement" : "Last judgement"}</b>
           <p>{alert.cause}</p>
         </div>
         <Correlation fleet={fleet} fromMs={span.fromMs} marks={incidentMarks(alert, props.resolvedAt)} />
         <div className="flex items-center justify-between">
-          <h4 className="font-medium">Timeline</h4>
+          <h4 className="kicker">Timeline</h4>
           <Freshness atMs={events.atMs} />
         </div>
         {incomplete && (
-          <p className="text-xs opacity-70">
+          <p className="text-xs text-base-content/70">
             The engine keeps only its most recent events: part of the minute
             before this opened may no longer be kept.
           </p>
         )}
         {timeline === null ? (
-          <p className="opacity-70">Loading events…</p>
+          <p className="text-base-content/70">Loading events…</p>
         ) : timeline.length === 0 ? (
-          <p className="opacity-70">
+          <p className="text-base-content/70">
             No kept lifecycle event for {affected(alert, props.names)} since a
             minute before this opened.
           </p>
@@ -271,21 +274,21 @@ function Detail(props: {
           <ol className="space-y-1 text-sm" aria-label="Incident timeline">
             {timeline.map((event) => (
               <li key={event.seq} className="grid grid-cols-[7rem_1fr] gap-2">
-                <time className="tabular-nums opacity-70" dateTime={event.timestamp}>
+                <time className="tabular-nums text-base-content/70" dateTime={event.timestamp}>
                   {new Date(event.timestamp).toLocaleTimeString()}
                 </time>
                 <span>
                   {event.kind}
                   {event.outputId && ` · ${props.names.get(event.outputId) ?? event.outputId}`}
                   {event.phase && ` · ${event.phase}`}
-                  {event.error && <span className="opacity-70"> · {event.error}</span>}
+                  {event.error && <span className="text-base-content/70"> · {event.error}</span>}
                 </span>
               </li>
             ))}
           </ol>
         )}
       </div>
-    </section>
+    </Panel>
   );
 }
 
@@ -302,57 +305,47 @@ function Correlation(props: {
   return (
     <div aria-label="Correlation">
       <div className="flex items-center justify-between">
-        <h4 className="font-medium">Correlation</h4>
+        <h4 className="kicker">Correlation</h4>
         <Freshness atMs={props.fleet.atMs} staleAfterMs={props.fleet.staleAfterMs} />
       </div>
-      <p className="text-xs opacity-70">
+      <p className="text-xs text-base-content/70">
         The engine's fleet samples from a minute before the incident opened
         {first && ` (first at ${new Date(first.atMs).toLocaleTimeString()})`}; the
         cursor marks when it opened and, once it did, closed.
       </p>
       {kept !== null && props.fromMs <= kept.completeFromMs && (
-        <p className="text-xs opacity-70">
+        <p className="text-xs text-base-content/70">
           The engine's fleet history is complete only from{" "}
           {new Date(kept.completeFromMs).toLocaleString()} (it restarted then, or
           dropped older samples): the chart starts there.
         </p>
       )}
       {kept === null ? (
-        <p className="opacity-70">Loading the fleet history…</p>
+        <p className="text-base-content/70">Loading the fleet history…</p>
       ) : samples.length === 0 ? (
-        <p className="opacity-70">No fleet sample in this span yet.</p>
+        <p className="text-base-content/70">No fleet sample in this span yet.</p>
       ) : (
-        <dl className="grid grid-cols-[7rem_1fr] items-center gap-x-2 text-sm">
-          <dt>Delivering</dt>
-          <dd>
-            <Sparkline
-              history={samples}
-              pick={(sample) => sample.deliveringPercent}
-              label="Delivering over time"
-              top={100}
-              marks={props.marks}
-            />
-          </dd>
-          <dt>Headroom</dt>
-          <dd>
-            <Sparkline
-              history={samples}
-              pick={(sample) => sample.headroomPercent}
-              label="Headroom over time"
-              top={100}
-              marks={props.marks}
-            />
-          </dd>
-          <dt>Degraded</dt>
-          <dd>
-            <Sparkline
-              history={samples}
-              pick={degradedTotal}
-              label="Degraded outputs over time"
-              marks={props.marks}
-            />
-          </dd>
-        </dl>
+        <div className="flex flex-col gap-4">
+          <TimeSeries
+            samples={samples}
+            label="Delivering and headroom around the incident"
+            top={100}
+            height={120}
+            marks={props.marks.map((atMs, index) => ({ atMs, kind: "incident", label: index === 0 ? "opened" : "closed", tone: index === 0 ? ("bad" as const) : ("ok" as const) }))}
+            bands={props.marks.length > 0 ? [{ fromMs: props.marks[0], toMs: props.marks[1] ?? Number.POSITIVE_INFINITY, tone: "warn" as const }] : []}
+            series={[
+              { id: "delivering", label: "Delivering %", pick: (sample) => sample.deliveringPercent, color: "text-success", area: true, format: (value) => `${value.toFixed(1)}%` },
+              { id: "headroom", label: "Headroom %", pick: (sample) => sample.headroomPercent, color: "text-info", format: (value) => `${value.toFixed(0)}%` },
+            ]}
+          />
+          <TimeSeries
+            samples={samples}
+            label="Degraded outputs over time"
+            height={70}
+            marks={props.marks.map((atMs) => ({ atMs, kind: "incident", tone: "warn" as const }))}
+            series={[{ id: "degraded", label: "Degraded destinations", pick: degradedTotal, color: "text-warning", area: true }]}
+          />
+        </div>
       )}
     </div>
   );
@@ -387,28 +380,29 @@ function Evidence(props: {
     setTimeout(() => URL.revokeObjectURL(url), 0);
   };
   return (
-    <section className="card bg-base-200" aria-labelledby="incident-evidence">
-      <div className="card-body gap-3 p-4 text-sm">
-        <div className="flex items-center justify-between gap-2">
-          <h3 id="incident-evidence" className="card-title text-base">
-            Evidence packet
-          </h3>
-          <button type="button" className="btn btn-xs" onClick={download}>
-            Export evidence
-          </button>
-        </div>
+    <Panel
+      id="incident-evidence"
+      title="Evidence packet"
+      className="lg:col-span-2 2xl:col-span-1"
+      actions={
+        <button type="button" className="btn btn-sm" onClick={download}>
+          Export evidence
+        </button>
+      }
+    >
+      <div className="flex flex-col gap-4 text-sm">
         <div>
-          <h4 className="text-xs uppercase opacity-70">Affected</h4>
+          <h4 className="kicker">Affected</h4>
           <p>{affected(props.alert, props.names)}</p>
         </div>
         <div>
-          <h4 className="text-xs uppercase opacity-70">What failed</h4>
+          <h4 className="kicker">What failed</h4>
           <p>{packet.failed ?? "Not diagnosed by layer; see the evidence."}</p>
         </div>
         <div>
-          <h4 className="text-xs uppercase opacity-70">What did not fail</h4>
+          <h4 className="kicker">What did not fail</h4>
           {packet.notFailed.length === 0 ? (
-            <p className="opacity-70">Nothing ruled out.</p>
+            <p className="text-base-content/70">Nothing ruled out.</p>
           ) : (
             <ul className="list-inside list-disc">
               {packet.notFailed.map((layer) => (
@@ -418,13 +412,13 @@ function Evidence(props: {
           )}
         </div>
         <div>
-          <h4 className="text-xs uppercase opacity-70">Evidence</h4>
+          <h4 className="kicker">Evidence</h4>
           <ul className="space-y-1 break-words">
             {packet.evidence.map((line, index) => (
               // Two alerts may repeat a line: the position keeps keys unique.
               <li key={`${index}:${line.signal}`} className="flex items-start gap-2">
                 <span
-                  className={`badge badge-xs shrink-0 ${line.confidence === "measured" ? "badge-info" : "badge-ghost"}`}
+                  className={`shrink-0 rounded-full px-1.5 text-[0.7rem] font-semibold ${line.confidence === "measured" ? "bg-info/15 text-info" : "bg-base-content/10 text-base-content/80"}`}
                   title={
                     line.confidence === "measured"
                       ? "A reading the engine took."
@@ -438,11 +432,12 @@ function Evidence(props: {
             ))}
           </ul>
         </div>
-        <div className="rounded bg-base-100 p-3">
-          <h4 className="text-xs uppercase opacity-70">Operator action</h4>
-          <p>{packet.action}</p>
+        <div className="rounded-box border-l-4 border-accent bg-base-100 p-3">
+          <h4 className="kicker">Operator action</h4>
+          <p className="mt-1">{packet.action}</p>
         </div>
+        <RawJson value={props.alert} label="alert payload" />
       </div>
-    </section>
+    </Panel>
   );
 }

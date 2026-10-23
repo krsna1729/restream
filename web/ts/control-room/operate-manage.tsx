@@ -74,7 +74,7 @@ export function PipelineBar(props: {
           {recording?.enabled ? "Stop recording" : "Record"}
         </button>
         {recording?.enabled && (
-          <span className="text-xs opacity-70">
+          <span className="text-xs text-base-content/70">
             {recording.active ? "writing a file" : "armed: starts with the source"}
           </span>
         )}

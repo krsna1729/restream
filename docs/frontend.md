@@ -62,96 +62,129 @@ npm run build:frontend
 
 ## Design system
 
-Restream is a compact broadcast operations console. It must feel quiet,
-precise and easy to scan under time pressure. Status drives the look:
-restrained surfaces, clear state color, and media only when an operator asks.
+Restream is a broadcast operations console for two audiences: operators,
+who need a verdict and a big button under time pressure, and engineers,
+who need every counter. Status drives the look: restrained surfaces, clear
+state colour, and media only when someone asks. The whole system is
+token-based, so both themes and both densities come from one set of
+components.
+
+### Themes, density and audience
+
+Three viewer preferences live in `localStorage` (`restream.theme`,
+`restream.density`, `restream.mode`; `ui/prefs.tsx`). Blocked storage leaves
+the defaults. They are applied as attributes on `<html>`.
+
+| Preference | Values | Effect |
+|---|---|---|
+| Theme | system (default), dark, light | DaisyUI theme `restream-dark` or `restream-light` (`web/styles/input.css`); system follows `prefers-color-scheme` live |
+| Density | comfortable (default), compact | Root font size 15px or 13.5px; every rem-based size scales with it |
+| Audience | operator (default), engineer | Engineer mode adds stage keys, shard ids, delivery ratios, feed lag, remote addresses and raw payloads (`RawJson`) |
 
 ### Color
 
-The console uses DaisyUI's `dim` theme (`web/styles/input.css`). Components
-use semantic Tailwind and DaisyUI tokens, not fixed palette values.
+Components use semantic tokens, never fixed palette values.
 
 | Role | Token | Usage |
 |---|---|---|
 | Page surface | `base-300` | Application background |
-| Section surface | `base-200` | Primary panels |
-| Item surface | `base-100` | Rows, cards, menus |
+| Panel surface | `base-200` | Panels, sidebar, KPI tiles |
+| Item surface | `base-100` | Rows, cards inside panels, inputs |
 | Primary text | `base-content` | Labels and values |
-| Secondary text | `base-content/70` | Supporting information |
+| Secondary text | `base-content/70` | Supporting information (floored at AA in `input.css`) |
 | Border | `base-content/10` | Panel and row separation |
-| Primary action | `primary` | Create and submit actions |
-| Operational action | `accent` | Start, select, preview and promote |
-| Healthy | `success` | Connected and forwarding |
-| Attention | `warning` | Recovering and awaiting media |
-| Failure | `error` | Failed and destructive actions |
-| Information | `info` | Neutral runtime notices |
+| Primary action | `primary` | Create, submit, selection |
+| Operational action | `accent` | Start, promote, preview |
+| Healthy | `success` | Delivering, on air |
+| Attention | `warning` | Degraded, retrying, saturated |
+| Failure | `error` | Failed, gave up, overloaded, destructive |
+| Information | `info` | Starting, standby, neutral notices |
 
-Status color always carries meaning. Do not use decorative color or
-gradients.
+Protocols are categories, not states: `control-room/protocol-style.ts` maps
+each to a non-status hue. Status colour always carries meaning and is never
+the only signal: every badge says its state in words.
 
 ### Typography
 
 - Sans stack: Aptos, Segoe UI Variable, Segoe UI, IBM Plex Sans, Helvetica
-  Neue, Arial, sans-serif.
-- Mono stack: Cascadia Mono, Cascadia Code, JetBrains Mono, SFMono-Regular,
-  Consolas, Liberation Mono, monospace.
+  Neue, Arial, sans-serif. Mono stack: Cascadia Mono, Cascadia Code,
+  JetBrains Mono, SFMono-Regular, Consolas, Liberation Mono, monospace.
+- Numbers use tabular figures (`.tabular`). Compact uppercase labels use
+  `.kicker`.
 
-| Level | Size | Weight | Usage |
+| Level | Size (comfortable) | Weight | Usage |
 |---|---|---|---|
-| Page title | 18px | 600 | Workspace title |
-| Section title | 16px | 600 | Panel heading |
-| Item title | 14px | 600 | Input, output or monitor name |
-| Body | 15px | 400 | Default console text |
-| Supporting | 14px | 400 | Descriptions |
-| Metadata | 12px | 400–600 | Runtime and protocol details |
-| Compact label | 11px | 600 | Uppercase field labels |
+| Page title | 20px | 600 | Workspace verdict (`PageHeader`) |
+| KPI value | 24px | 600 | `Kpi` |
+| Panel title | 14px | 600 | `Panel` header |
+| Body | 15px | 400 | Default text |
+| Supporting | 13px | 400 | Subtitles, descriptions |
+| Kicker | 11px | 650 | Uppercase labels, eyebrows |
 
-Letter spacing is zero, except compact uppercase labels, which use
-`tracking-wide`.
+### Spacing, layout and motion
 
-### Spacing and layout
-
-- Spacing uses Tailwind's 4px unit. Panel padding is 16px, compact rows
-  8–12px, section gaps 12–16px. Content width is `max-w-7xl`.
-- The document owns scroll. Monitor cards use a responsive grid and fixed
-  16:9 media frames.
-- At 375px, controls and rows reflow to one column with no horizontal page
-  scroll. Stream keys and URLs scroll or wrap inside their own field.
-
-### Motion and depth
-
-- Use DaisyUI's hover, active and focus behavior. State transitions are
-  100–200ms transform or opacity changes. Loading media may use the spinner.
-  Respect `prefers-reduced-motion`; add no decorative motion.
-- Separate surfaces with borders and tone: sections `base-200`, rows
-  `base-100`, borders `base-content/10`. Shadows only on popovers and menus.
-  Card radius is at most 8px.
+- Spacing uses Tailwind's 4px unit; panels pad 16px; content is capped at
+  1680px.
+- The document owns scroll. Long lists scroll inside their own panel and
+  are windowed (`DataTable`).
+- At 375px nothing scrolls the page sideways; tables become cards and chip
+  rows scroll sideways inside themselves. On coarse pointers every control
+  is at least 36px (`@media (pointer: coarse)` in `input.css`).
+- Transitions are 150-300ms colour or width changes; `prefers-reduced-motion`
+  removes them. Shadows only on popovers and dialogs.
 
 ### Accessibility
 
-The target is WCAG 2.2 AA: 4.5:1 body text, 3:1 large text, visible focus,
-full keyboard reach, semantic buttons and labels, and no color-only status.
-Touch targets are at least 36px on compact surfaces. There is no open
-accessibility debt.
+The target is WCAG 2.2 AA: 4.5:1 body text, 3:1 large text, visible focus
+(`:focus-visible` outline), full keyboard reach (the command palette,
+tables, chips), semantic regions (every `Panel` with an id is a named
+region), and no colour-only status.
 
 ## Components
 
-| Component | Structure | Variants | States | Accessibility |
-|---|---|---|---|---|
-| Dashboard section | Section, optional header, full-width content | Standard, table, compact | Loading, empty, populated, error | Labelled by its heading |
-| Operational row | Title and state, metadata, command cluster | Selected, standby, disabled, disconnected | Default, hover, focus, busy, error | Command labels name the affected input or output |
-| Status badge | Short state label, optional detail | Healthy, attention, failure, neutral | Static | Text at AA contrast; color is never the only signal |
-| Monitor card | Title, state, actions, 16:9 frame | Input, program, output monitor, empty | Idle, loading, playing, offline, error | Media controls keyboard-reachable; buttons name their monitor |
-| Input manager | Compact input rows plus an add command | Selected primary, selected backup, standby, disabled | Loading, empty, busy, error, maximum reached | Labels, keys, URLs and actions reachable by keyboard and screen reader |
+The primitives live in `web/ts/ui/`, a layer below the app: `ui/` may import
+`core/`, never `control-room/` (`frontend-architecture-layering.test.mjs`).
 
-Command clusters wrap and become a vertical stack on narrow widths. Monitor
-cards sit in a grid; do not nest cards.
+| Component | File | What it is |
+|---|---|---|
+| `Panel`, `Tile`, `EmptyState` | `panel.tsx` | Titled section (title, subtitle, actions, optional status stripe); an in-panel card; an empty state that says why and what to do |
+| `PageHeader` | `page-header.tsx` | Eyebrow breadcrumb, verdict title (toned), subtitle, actions |
+| `Kpi`, `KpiRow`, `Meter`, `MeterRow`, `KeyValue` | `kpi.tsx` | KPI tile (a named group), threshold-toned meters (amber at 80%, red at 100%), labelled values |
+| `StatusBadge`, `StatusDot`, `Tone` | `tone.tsx` | One tone vocabulary (ok, warn, bad, info, neutral, accent) for every state |
+| `DataTable` | `data-table.tsx` | Sortable table whose columns carry a priority; cards on phones; windowed past 80 rows (`useWindowedRows`) |
+| `TimeSeries` | `time-series.tsx` | Multi-series chart: area, dashed, gaps for missing samples, bands, labelled cursors, a ghost overlay, hover readout |
+| `SearchField`, `ChipGroup`, `ShareBar` | `controls.tsx` | Filters and a protocol-mix bar |
+| `RawJson` | `raw-json.tsx` | Engineer mode's payload drawer |
+| `Icon` | `icons.tsx` | Inline stroke icons |
+
+Legacy DaisyUI markup (`card`, `badge-*`, `table`) is restyled in
+`input.css` to the same surfaces and tones, so a view not yet moved to the
+primitives still reads as one system.
 
 ## Shell and routing
 
 `/` is the dashboard: one React root (`web/ts/control-room/main.tsx`) in
-`web/pages/index.html`, mounting a TanStack Router (`router.tsx`).
+`web/pages/index.html`, mounting a TanStack Router (`router.tsx`). The shell
+is `app.tsx` plus `control-room/shell/`.
 
+- Navigation groups the workspaces (`shell/nav.ts`): Operate (Fleet,
+  Pipelines, Operate, Monitor), Understand (Incidents, Capacity), Manage
+  (Media, Changes, Settings), Engineer (Inspect, Logs, System). Live badges
+  count degraded destinations, pipelines and open alerts (`shell/badges.ts`);
+  an unknown count is absent, never zero.
+- Wide screens (1280px and up) show the sidebar with a host card (CPU,
+  memory, egress, ingest). Tablets show an icon rail. Phones show a bottom
+  bar (Fleet, Incidents, Pipelines, Operate, More); More opens a sheet with
+  every workspace, the host card and the preferences.
+- The top bar holds search, the live status, the UTC clock (2xl), the
+  Operator/Engineer switch and the preferences menu.
+- The command palette (`⌘K`, `Ctrl+K` or `/`) finds workspaces,
+  pipelines, destinations and open incidents from what the page holds, and
+  changes preferences (`shell/palette-model.ts`, ranked by prefix, word and
+  substring; every term must match).
+- Operate, Monitor, Inspect and Logs share a pipeline header with tabs
+  (`pipeline-scope.tsx`); with no pipeline chosen it shows a searchable,
+  windowed picker.
 - The place is in the query: `?w=<workspace>` and, for a pipeline view,
   `&p=<pipeline id>`. `route.ts` holds the pure rules; `router.tsx` wires
   them to TanStack Router, which owns history and link clicks.
@@ -208,9 +241,13 @@ Every workspace shows live data only.
 
 ### Fleet
 
-- Delivery counts. Degraded outputs grouped by cause: an upstream cause
-  (with stage or shard) covers every output it stalls; destination causes
-  stay per output. Ranked by outputs affected, upstream first on a tie.
+- A verdict headline and six KPIs: delivering share, pipelines live,
+  egress, open incidents, headroom and shared work.
+- Needs attention: degraded outputs grouped by cause (an upstream cause,
+  with stage or shard, covers every output it stalls; destination causes
+  stay per output), then rolled up by layer and kind of cause across
+  pipelines (`attentionGroups`), so thousands of degraded destinations read
+  as a handful of rows. Ranked by outputs affected, upstream first on a tie.
   Wanted outputs that neither deliver nor carry a diagnosis count as
   starting, never healthy.
 - Headroom from `/metrics/system`: measured host use; egress flow only when
@@ -224,7 +261,7 @@ Every workspace shows live data only.
   degraded outputs by layer. Source: `LiveSnapshot.history`, one
   `fleet-history.ts` sample per store sample, kept 15 min for this page
   session.
-- A worst-first table of at most 10 pipelines, sharing rows with Pipelines
+- A worst-first table of at most 12 pipelines, sharing rows with Pipelines
   (`pipeline-table.tsx`) and linking there for the rest.
 
 ### Pipelines
@@ -253,10 +290,15 @@ Every workspace shows live data only.
   fabric shards its outputs run on (`fabricFeed`, `shardId`) with state,
   command queue and progress age from `/metrics/system` (`egressShards`);
   and each diagnosed output's layer, cause and ruled-out layers.
-- Destination matrix from the state stream (feed lag from the running
-  egress, rate from telemetry) with Start/Stop. Degraded first, capped at
-  200 rows, with the hidden count, how many of them need attention, and
-  "show all".
+- Destination matrix (`destination-matrix.tsx`) from the state stream
+  (rate from telemetry) with Start/Stop, Edit and Delete. Degraded first;
+  filtered by state (needs attention, retrying, starting, delivering,
+  stopped), protocol and name (`filterDestinationRows`); windowed, so every
+  destination is one scroll away. A retrying output shows its attempt and a
+  countdown to the next one. Engineer mode adds delivery ratio, feed lag and
+  shard.
+- The graph draws at most 8 egress groups per column, worst first, and folds
+  the rest into a link to the Destinations view.
 
 ### Inspect (one pipeline)
 
@@ -522,10 +564,31 @@ Node tests in `test/frontend/`: `control-room-fleet`,
 `control-room-system`, `control-room-settings`, `control-room-changes`,
 `control-room-manage`, `control-room-diagnose` (each `.test.mjs`), and
 `frontend-runtime-state-stream.test.mjs` (stream liveness).
-`test/frontend/control-room.spec.ts` runs Playwright against a running
-engine.
+`control-room-shell` covers the command palette's ranking, the navigation
+badges and theme resolution. `test/frontend/control-room.spec.ts` runs
+Playwright against a running engine.
 
 ```sh
 npm run test:frontend
 npm run test:e2e
+```
+
+### Working on the UI at scale
+
+`scripts/dev/frontend/fixture-server.mjs` serves `public/` against a seeded
+synthetic deployment (`fixtures/density.mjs`) with no engine: `small` (5
+pipelines, 24 destinations), `plant` (150 pipelines, about 350 inputs, 3,000
+destinations) or `extreme` (400 pipelines, about 1,000 inputs, 10,000
+destinations, 32 shards per protocol). It streams state deltas every 2 s:
+outputs fail and retry, inputs fail over, and one shard stalls on a script.
+It is development-only (no auth) and every payload is synthetic.
+`scripts/dev/frontend/shots.mjs` screenshots every workspace across widths,
+themes and audiences into `.local/shots/<label>/`. It flags horizontal page
+scroll, clipped text, phone touch targets under 36px, and console errors.
+
+```sh
+npm run build:frontend
+node scripts/dev/frontend/fixture-server.mjs --preset plant --port 3031 &
+node scripts/dev/frontend/shots.mjs --base http://127.0.0.1:3031 --label mine \
+  --widths 375,768,1440 --themes dark,light --modes operator,engineer
 ```

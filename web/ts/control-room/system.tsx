@@ -17,6 +17,7 @@ import {
   ownerAttention,
 } from "./system-model.js";
 import type { CheckStatus, EngineStatus } from "./system-model.js";
+import { PageHeader } from "../ui/page-header.js";
 
 const CHECK_BADGE: Record<CheckStatus, string> = {
   ok: "badge-success",
@@ -40,17 +41,19 @@ export function System({ live }: { live: LiveSnapshot }) {
     void getEngineStatus<EngineStatus>().then(setStatus);
   }, []);
   if (health.value === null) {
-    return <p className="opacity-70">Loading engine health…</p>;
+    return <p className="text-base-content/70">Loading engine health…</p>;
   }
   const rows = hostReadiness(health.value);
   const overall = overallReadiness(rows);
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <h2 className="text-xl font-semibold">System</h2>
-        <span className={`badge ${CHECK_BADGE[overall]}`}>{CHECK_LABEL[overall]}</span>
-        <Freshness atMs={health.atMs} staleAfterMs={health.staleAfterMs} />
-      </div>
+    <div className="flex flex-col gap-4">
+      <PageHeader
+        eyebrow="System"
+        title={overall === "ok" ? "Host ready" : overall === "warning" ? "A host check needs attention" : "Host checks not reported"}
+        tone={overall === "ok" ? "ok" : overall === "warning" ? "warn" : undefined}
+        subtitle="Host readiness, kernel capabilities, execution classes, SRT ingress counters and this build."
+        actions={<Freshness atMs={health.atMs} staleAfterMs={health.staleAfterMs} />}
+      />
       <div className="grid gap-4 lg:grid-cols-2">
         <section className="card bg-base-200" aria-labelledby="system-host">
           <div className="card-body gap-2 p-4">
@@ -67,7 +70,7 @@ export function System({ live }: { live: LiveSnapshot }) {
                       {row.status}
                     </span>
                   </span>
-                  <span className="col-span-2 text-xs opacity-70">{row.detail}</span>
+                  <span className="col-span-2 text-xs text-base-content/70">{row.detail}</span>
                 </li>
               ))}
             </ul>
@@ -93,14 +96,14 @@ export function System({ live }: { live: LiveSnapshot }) {
           <div className="card-body gap-3 p-4">
             <h3 id="system-topology" className="card-title text-base">
               Execution topology
-              <span className="text-sm font-normal opacity-70">reported by the engine</span>
+              <span className="text-sm font-normal text-base-content/70">reported by the engine</span>
             </h3>
             <dl className="grid grid-cols-2 gap-2 sm:grid-cols-3">
               {executionTopology(health.value, live.metrics).map((cls) => (
                 <div key={cls.name} className="rounded bg-base-100 p-2">
-                  <dt className="text-xs opacity-70">{cls.name}</dt>
+                  <dt className="text-xs text-base-content/70">{cls.name}</dt>
                   <dd className="text-2xl tabular-nums">{cls.count ?? "--"}</dd>
-                  <dd className="text-xs opacity-70">{cls.unit}</dd>
+                  <dd className="text-xs text-base-content/70">{cls.unit}</dd>
                 </div>
               ))}
             </dl>
@@ -123,15 +126,15 @@ function Process({ live }: { live: LiveSnapshot }) {
   const sampled = engine.cpuSampleReady !== false;
   return (
     <dl className="grid grid-cols-[8rem_1fr] gap-1 text-sm">
-      <dt className="opacity-70">Restream CPU</dt>
+      <dt className="text-base-content/70">Restream CPU</dt>
       <dd className="tabular-nums">
         {sampled ? formatPercent(engine.restreamCpuPercent) : "sampling…"}
       </dd>
-      <dt className="opacity-70">FFmpeg CPU</dt>
+      <dt className="text-base-content/70">FFmpeg CPU</dt>
       <dd className="tabular-nums">
         {sampled ? formatPercent(engine.externalFfmpegCpuPercent) : "sampling…"}
       </dd>
-      <dt className="opacity-70">Memory</dt>
+      <dt className="text-base-content/70">Memory</dt>
       <dd className="tabular-nums">
         {formatBytes(engine.restreamMemoryBytes)} restream ·{" "}
         {formatBytes(engine.externalFfmpegMemoryBytes)} FFmpeg
@@ -147,12 +150,12 @@ function SrtOwners(props: { owner: SrtIngressOwnerHealth | null; restarts: numbe
       <div className="card-body gap-3 p-4">
         <h3 id="system-owners" className="card-title text-base">
           SRT ingress owners
-          <span className="text-sm font-normal opacity-70">
+          <span className="text-sm font-normal text-base-content/70">
             summed over every owner; counters since the engine started
           </span>
         </h3>
         {owner === null ? (
-          <p className="text-sm opacity-70">The SRT listener reports no owner.</p>
+          <p className="text-sm text-base-content/70">The SRT listener reports no owner.</p>
         ) : (
           <>
             <dl className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
@@ -167,7 +170,7 @@ function SrtOwners(props: { owner: SrtIngressOwnerHealth | null; restarts: numbe
                 ["Telemetry dropped", owner.telemetryDropped],
               ].map(([label, value]) => (
                 <div key={label}>
-                  <dt className="text-xs opacity-70">{label}</dt>
+                  <dt className="text-xs text-base-content/70">{label}</dt>
                   <dd className="tabular-nums">{value}</dd>
                 </div>
               ))}
@@ -203,7 +206,7 @@ function Attention({ findings }: { findings: readonly string[] }) {
 function Provenance(props: { status: EngineStatus | null; containedPanics: number }) {
   const { status } = props;
   if (status === null) {
-    return <p className="opacity-70">Loading build information…</p>;
+    return <p className="text-base-content/70">Loading build information…</p>;
   }
   const libs = status.nativeLibraries ?? {};
   return (
@@ -213,31 +216,31 @@ function Provenance(props: { status: EngineStatus | null; containedPanics: numbe
           Build and provenance
         </h3>
         <dl className="grid grid-cols-[8rem_1fr] gap-1 text-sm">
-          <dt className="opacity-70">Restream</dt>
+          <dt className="text-base-content/70">Restream</dt>
           <dd>{status.restream?.version ?? "--"}</dd>
-          <dt className="opacity-70">Commit</dt>
+          <dt className="text-base-content/70">Commit</dt>
           <dd className="break-all font-mono text-xs">{status.restream?.commit ?? "--"}</dd>
-          <dt className="opacity-70">Built</dt>
+          <dt className="text-base-content/70">Built</dt>
           <dd>{status.restream?.buildTimestamp ?? "--"}</dd>
-          <dt className="opacity-70">Rust</dt>
+          <dt className="text-base-content/70">Rust</dt>
           <dd>
             {status.toolchain?.rustc ?? "--"} · {status.toolchain?.target ?? "--"}
           </dd>
           {Object.entries(libs).map(([name, lib]) => (
             <div key={name} className="contents">
-              <dt className="opacity-70">{name}</dt>
+              <dt className="text-base-content/70">{name}</dt>
               <dd>
                 {lib?.version ?? "--"}
                 {lib?.license ? ` · ${lib.license}` : ""}
               </dd>
             </div>
           ))}
-          <dt className="opacity-70">Host</dt>
+          <dt className="text-base-content/70">Host</dt>
           <dd>
             {status.os?.hostname ?? "--"} · kernel {status.os?.kernelVersion ?? "--"} ·{" "}
             {status.os?.cpu?.logicalCpus ?? "--"} CPUs
           </dd>
-          <dt className="opacity-70">Contained panics</dt>
+          <dt className="text-base-content/70">Contained panics</dt>
           <dd className={props.containedPanics > 0 ? "text-warning" : undefined}>
             {props.containedPanics}
           </dd>
@@ -253,7 +256,7 @@ function Provenance(props: { status: EngineStatus | null; containedPanics: numbe
           >
             Download SBOM
           </button>
-          <span className="text-xs opacity-70">
+          <span className="text-xs text-base-content/70">
             {status.sbom?.componentCount ?? "--"} components
             {status.sbom?.licensesIncluded ? " · licenses included" : ""}
           </span>
