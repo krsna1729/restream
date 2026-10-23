@@ -335,3 +335,52 @@ export function nowPlayingLabel(playlist: readonly string[] | undefined, nowPlay
   if (!playlist || playlist.length < 2 || nowPlaying == null || nowPlaying < 0 || nowPlaying >= playlist.length) return null;
   return `${nowPlaying + 1} of ${playlist.length} · ${playlist[nowPlaying]}`;
 }
+
+/** A destination as an operator picks it: a platform's ingest (a preset
+ * server and its protocol) or a custom server of one protocol. */
+export interface DestinationChoice {
+  /** `protocol:server` ("rtmp:" for a custom RTMP server). */
+  readonly key: string;
+  readonly label: string;
+  readonly protocol: OutputProtocol;
+  /** The preset server URL, or "" for a custom one. */
+  readonly server: string;
+}
+
+const CUSTOM_LABEL: Record<OutputProtocol, string> = { rtmp: "Custom RTMP", srt: "Custom SRT", hls: "Custom HLS" };
+
+/** Every preset of every protocol (HLS ones named as such), then the three
+ * custom servers. */
+export function destinationChoices(): DestinationChoice[] {
+  const choices: DestinationChoice[] = [];
+  for (const protocol of ["rtmp", "hls"] as const) {
+    for (const preset of OUTPUT_SERVER_PRESETS[protocol] ?? []) {
+      if (!preset.value) continue;
+      choices.push({ key: `${protocol}:${preset.value}`, label: protocol === "hls" ? `${preset.label} (HLS)` : preset.label, protocol, server: preset.value });
+    }
+  }
+  for (const protocol of ["rtmp", "srt", "hls"] as const) {
+    choices.push({ key: `${protocol}:`, label: CUSTOM_LABEL[protocol], protocol, server: "" });
+  }
+  return choices;
+}
+
+/** The choice a draft stands on. */
+export function choiceKey(draft: OutputDraft): string {
+  return `${draft.protocol}:${draft.protocol === "srt" ? "" : draft.server}`;
+}
+
+/** The draft after picking `choice`: a stream key is kept from one
+ * platform to another, anything else starts empty; an empty name (or one
+ * the last pick filled in) takes the new choice's label. */
+export function applyChoice(draft: OutputDraft, choice: DestinationChoice, previous: DestinationChoice | null): OutputDraft {
+  const keepInput = draft.server !== "" && choice.server !== "" && draft.protocol === choice.protocol;
+  const named = draft.name.trim() === "" || (previous !== null && draft.name === previous.label);
+  return {
+    ...draft,
+    protocol: choice.protocol,
+    server: choice.server,
+    input: keepInput ? draft.input : "",
+    name: named ? choice.label : draft.name,
+  };
+}

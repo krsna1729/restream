@@ -4,6 +4,9 @@ import test from "node:test";
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
 const {
+  applyChoice,
+  choiceKey,
+  destinationChoices,
   moveQueued,
   nowPlayingLabel,
   audioChoiceCounts,
@@ -219,4 +222,27 @@ test("queued files move within bounds, and a running playlist says what plays", 
   assert.equal(nowPlayingLabel(["a", "b", "c"], 1), "2 of 3 · b");
   assert.equal(nowPlayingLabel(["a"], 0), null);
   assert.equal(nowPlayingLabel(["a", "b"], null), null);
+});
+
+test("destinations are picked as platforms or custom servers, keeping a stream key between platforms", () => {
+  const choices = destinationChoices();
+  const by = (label) => choices.find((choice) => choice.label === label);
+  assert.deepEqual(choices.slice(-3).map((choice) => choice.label), ["Custom RTMP", "Custom SRT", "Custom HLS"]);
+  assert.ok(by("YouTube") && by("Twitch") && by("YouTube (HLS)"));
+
+  const blank = outputDraft(null, "127.0.0.1");
+  assert.equal(choiceKey(blank), "rtmp:", "a new destination starts on a custom RTMP server");
+  const youtube = applyChoice({ ...blank, input: "rtmp://x/app/key" }, by("YouTube"), by("Custom RTMP"));
+  assert.equal(youtube.name, "YouTube", "an empty name takes the platform's");
+  assert.equal(youtube.input, "", "a custom URL is not a stream key");
+  assert.equal(choiceKey(youtube), by("YouTube").key);
+
+  const twitch = applyChoice({ ...youtube, input: "live_123" }, by("Twitch"), by("YouTube"));
+  assert.equal(twitch.input, "live_123", "a stream key carries from one platform to another");
+  assert.equal(twitch.name, "Twitch", "the name the last pick filled in follows the pick");
+  const named = applyChoice({ ...twitch, name: "Main" }, by("Kick"), by("Twitch"));
+  assert.equal(named.name, "Main", "a name the operator typed stays");
+  const srt = applyChoice(named, by("Custom SRT"), by("Kick"));
+  assert.equal(srt.protocol, "srt");
+  assert.equal(srt.input, "");
 });
