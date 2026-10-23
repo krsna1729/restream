@@ -67,7 +67,7 @@ export function MediaGraph(props: {
               type="button"
               role="tab"
               aria-selected={tab === value}
-              className={`h-8 shrink-0 rounded-field px-3 text-sm ${tab === value ? "bg-primary/15 font-semibold" : "text-base-content/70 hover:bg-base-content/5"}`}
+              className={`touch-36 h-8 shrink-0 rounded-field px-3 text-sm ${tab === value ? "bg-primary/15 font-semibold" : "text-base-content/70 hover:bg-base-content/5"}`}
               onClick={() => setTab(value)}
             >
               {label}

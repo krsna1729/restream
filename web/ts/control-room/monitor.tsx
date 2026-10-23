@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { getResourceMap } from "../core/api.js";
 import type { ResourceMapSnapshot } from "../core/api-types.js";
-import { formatBps, formatPercent } from "./format.js";
+import { counted, formatBps, formatPercent } from "./format.js";
 import { MAP_TOP_N } from "./inspect-model.js";
 import { incidentOnsets, SIGNALS, takeSample } from "./monitor-model.js";
 import type { MonitorSample, Signal } from "./monitor-model.js";
@@ -12,6 +12,7 @@ import { Freshness, usePolled } from "./polled.js";
 import type { Polled } from "./polled.js";
 import { appendSample, WINDOW_MS } from "./sample-window.js";
 import { Panel } from "../ui/panel.js";
+import { RawJson } from "../ui/raw-json.js";
 import { TimeSeries } from "../ui/time-series.js";
 import { StatusBadge } from "../ui/tone.js";
 import { pipelineGraph } from "./state-views.js";
@@ -54,6 +55,11 @@ function formatSignal(signal: Signal, value: number | null): string {
     case "degradedOutputs":
       return String(value);
   }
+}
+
+function oldest(...times: readonly (number | null)[]): number | null {
+  const known = times.filter((time): time is number => time !== null);
+  return known.length > 0 ? Math.min(...known) : null;
 }
 
 /** Correlated signals of one pipeline on one clock. */
@@ -124,12 +130,12 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
       <Panel
         id="monitor-signals"
         title="Correlated signals"
-        subtitle={`one clock · since this page opened, up to 15 min · ${shown.length} samples${frozen && last ? ` · paused at ${new Date(last.atMs).toLocaleTimeString()}` : ""}${compare ? " · dashed: now" : ""}`}
+        subtitle={`one clock · since this page opened, up to 15 min · ${counted(shown.length, "sample")}${frozen && last ? ` · paused at ${new Date(last.atMs).toLocaleTimeString()}` : ""}${compare ? " · dashed: now" : ""}`}
         actions={
           <>
             <button
               type="button"
-              className={`btn btn-sm ${frozen ? "btn-primary" : ""}`}
+              className={`btn btn-sm ${frozen ? "btn-primary" : "btn-outline"}`}
               aria-pressed={frozen !== null}
               onClick={() => {
                 setFrozen(frozen ? null : history);
@@ -140,7 +146,7 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
             </button>
             <button
               type="button"
-              className="btn btn-sm"
+              className={`btn btn-sm btn-outline ${comparing ? "btn-active" : ""}`}
               aria-pressed={comparing}
               disabled={frozen === null}
               title="Overlay the live window on the paused one"
@@ -148,8 +154,8 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
             >
               Compare
             </button>
-            <Freshness atMs={props.live.telemetryAtMs} />
-            <Freshness atMs={resources.atMs} />
+            {/* One age for the window: the older of its two feeds. */}
+            <Freshness atMs={oldest(props.live.telemetryAtMs, resources.atMs)} />
           </>
         }
       >
@@ -182,7 +188,7 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
                     showLegend={false}
                     top={signal === "deliveringPercent" || signal === "ringFillPercent" ? 100 : undefined}
                     ghost={compare}
-                    axisFormat={signal === "ingestBps" || signal === "egressBps" ? (value) => formatBps(value).replace("/s", "") : undefined}
+                    axisFormat={signal === "ingestBps" || signal === "egressBps" ? formatBps : undefined}
                     marks={onsets.map((atMs) => ({ atMs, tone: "warn" as const, kind: "incident" }))}
                     series={[{ id: signal, label: SIGNAL_LABELS[signal], pick: (sample) => sample[signal], color: SIGNAL_COLOR[signal], area: true, format: (value) => formatSignal(signal, value) }]}
                   />
@@ -193,6 +199,7 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
         )}
       </Panel>
       <MonitorPanels live={props.live} pipelineId={props.pipelineId} />
+      <RawJson value={last ?? null} label="newest correlated sample" />
     </div>
   );
 }

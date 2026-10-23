@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { SearchField } from "../ui/controls.js";
 import { PageHeader } from "../ui/page-header.js";
 import { EmptyState, Panel } from "../ui/panel.js";
+import { useEngineer } from "../ui/prefs.js";
 import { buildFleetModel, filterPipelineRows } from "./fleet-model.js";
 import { formatBps } from "./format.js";
 import { HealthBadge, PipelineTable } from "./pipeline-table.js";
@@ -29,6 +30,7 @@ export function PipelineScope(props: {
 }) {
   const { live, workspace, pipelineId } = props;
   const go = useGo();
+  const engineer = useEngineer();
   const state = live.state;
   const rows = useMemo(() => (state ? buildFleetModel(state, live.rates).pipelines : null), [state, live.rates]);
   const row = rows?.find((candidate) => candidate.id === pipelineId) ?? null;
@@ -59,7 +61,12 @@ export function PipelineScope(props: {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
-        eyebrow={`Pipeline · ${WORKSPACE_LABELS[workspace]}`}
+        eyebrow={
+          <>
+            Pipeline · {WORKSPACE_LABELS[workspace]}
+            {engineer && <span className="ml-2 font-mono normal-case tracking-normal select-all">{pipelineId}</span>}
+          </>
+        }
         title={
           <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
             {row.name} <HealthBadge row={row} />

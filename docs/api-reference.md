@@ -1294,10 +1294,11 @@ Returns `{ health, metrics }` so a dashboard refresh costs one round trip.
 
 ### `GET /metrics/system`
 
-`view=summary` trims disk and network detail. Top-level keys
+`view=summary` trims system-disk and network detail. Top-level keys
 (`build_system_metrics_snapshot`): `generatedAt`, `cpu`, `memory`, `engine`,
 `capacity`, `hostCapacity`, `mediaExecutor`, `egressShards`, `ioUring`,
-`rtmps`, `hlsPutTls`, `disk`, `network`, and `mediaDisk` in the full view.
+`rtmps`, `hlsPutTls`, `disk`, `network`, and `mediaDisk` (both views: the
+Media library's storage card reads the summary).
 
 - `engine.cpuPercent` and `engine.totalMemoryBytes` include restream plus its
   FFmpeg children; `restream*` and `externalFfmpeg*` fields split them.

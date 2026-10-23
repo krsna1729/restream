@@ -115,6 +115,7 @@ export function Pipelines({ live }: { live: LiveSnapshot }) {
       </div>
       <Panel
         flush
+        id="pipelines-list"
         title="Pipelines"
         subtitle={`${shown.length.toLocaleString()} of ${rows.length.toLocaleString()}`}
         actions={<SearchField value={query} onChange={setQuery} placeholder="Name or id" label="Search pipelines" className="w-full sm:w-56" />}

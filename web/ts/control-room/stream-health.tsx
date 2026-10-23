@@ -16,7 +16,7 @@ import { formatBps } from "./format.js";
 import { PipelineScope } from "./pipeline-scope.js";
 import { Freshness, useFlightRecorder } from "./polled.js";
 import type { LiveSnapshot } from "./store.js";
-import { KEYFRAME_LIMIT_SEC, KEYFRAME_TARGET_SEC, overallSeverity, streamVerdicts } from "./stream-health-model.js";
+import { KEYFRAME_LIMIT_SEC, KEYFRAME_TARGET_SEC, contributionTransport, overallSeverity, streamVerdicts } from "./stream-health-model.js";
 import type { Severity } from "./stream-health-model.js";
 
 const TONE: Record<Severity, Tone> = { ok: "ok", warn: "warn", bad: "bad" };
@@ -36,6 +36,7 @@ function Health(props: { pipelineId: string }) {
   const verdicts = useMemo(() => streamVerdicts(samples), [samples]);
   const last: FlightSample | undefined = samples[samples.length - 1];
   const ingest = last?.ingest ?? null;
+  const transport = contributionTransport(ingest?.protocol);
   if (trace.value === null) {
     return <EmptyState title="Waiting for the flight recorder…" detail="The engine samples every pipeline every 2 s; the first sample is on its way." />;
   }
@@ -75,11 +76,11 @@ function Health(props: { pipelineId: string }) {
           tone={ingest?.maxGopSec ? (ingest.maxGopSec > KEYFRAME_LIMIT_SEC ? "bad" : ingest.maxGopSec > KEYFRAME_TARGET_SEC * 1.05 ? "warn" : undefined) : undefined}
           foot={ingest?.maxGopSec ? `longest ${ingest.maxGopSec.toFixed(1)} s · target ${KEYFRAME_TARGET_SEC} s` : `target ${KEYFRAME_TARGET_SEC} s`}
         />
-        <Kpi label="Round trip" value={ingest?.rttMs ? `${Math.round(ingest.rttMs)} ms` : "--"} foot={ingest?.protocol === "srt" ? "SRT" : "TCP"} />
+        <Kpi label="Round trip" value={ingest?.rttMs ? `${Math.round(ingest.rttMs)} ms` : "--"} foot={transport ?? "no network link"} />
         <Kpi
           label="Loss"
           value={ingest?.lossPerSec === null || ingest?.lossPerSec === undefined ? "--" : `${ingest.lossPerSec.toFixed(1)}/s`}
-          foot={ingest?.retransPerSec ? `${ingest.retransPerSec.toFixed(1)} retransmits/s` : "not reported by this protocol"}
+          foot={ingest?.retransPerSec ? `${ingest.retransPerSec.toFixed(1)} retransmits/s` : transport ? "not reported by this protocol" : "no network link"}
         />
       </KpiRow>
       <div className="grid gap-4 xl:grid-cols-2">
@@ -87,7 +88,6 @@ function Health(props: { pipelineId: string }) {
           <TimeSeries
             samples={samples}
             label="Ingest bitrate over time"
-            axisFormat={(value) => formatBps(value).replace("/s", "")}
             series={[{ id: "bitrate", label: "Bitrate", pick: (sample) => sample.ingest?.bitrateBps ?? null, color: "text-primary", area: true, format: formatBps }]}
           />
         </Panel>
@@ -113,14 +113,21 @@ function Health(props: { pipelineId: string }) {
           />
         </Panel>
         <Panel id="health-link" title="Contribution link" subtitle="round trip and loss">
-          <TimeSeries
-            samples={samples}
-            label="Round trip and loss over time"
-            series={[
-              { id: "rtt", label: "RTT ms", pick: (sample) => sample.ingest?.rttMs ?? null, color: "text-info", format: (value) => `${value.toFixed(0)} ms` },
-              { id: "loss", label: "Loss/s", pick: (sample) => sample.ingest?.lossPerSec ?? null, color: "text-error", format: (value) => value.toFixed(1) },
-            ]}
-          />
+          {ingest && !transport ? (
+            <EmptyState
+              title="No contribution link"
+              detail="The engine reads this source itself; nothing crosses a network, so there is no round trip or loss to chart."
+            />
+          ) : (
+            <TimeSeries
+              samples={samples}
+              label="Round trip and loss over time"
+              series={[
+                { id: "rtt", label: "RTT ms", pick: (sample) => sample.ingest?.rttMs ?? null, color: "text-info", format: (value) => `${value.toFixed(0)} ms` },
+                { id: "loss", label: "Loss/s", pick: (sample) => sample.ingest?.lossPerSec ?? null, color: "text-error", format: (value) => value.toFixed(1) },
+              ]}
+            />
+          )}
         </Panel>
       </div>
       <RawJson value={last ?? null} label="newest flight sample" />

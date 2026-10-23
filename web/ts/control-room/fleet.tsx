@@ -15,7 +15,7 @@ import { degradedTotal } from "./fleet-history.js";
 import type { FleetSample } from "./fleet-history.js";
 import { attentionGroups, buildFleetModel, describeCause, worstFirst } from "./fleet-model.js";
 import type { AttentionGroup, FleetModel, FleetPipelineRow } from "./fleet-model.js";
-import { formatBps, formatPercent } from "./format.js";
+import { counted, formatBps, formatPercent } from "./format.js";
 import { PipelineTable } from "./pipeline-table.js";
 import { Freshness, useOpenAlerts } from "./polled.js";
 import type { Polled } from "./polled.js";
@@ -120,7 +120,7 @@ function Headline(props: {
       <Kpi
         label="Shared work"
         value={capacity ? `${capacity.uniqueStages.toLocaleString()} stages` : "--"}
-        foot={capacity ? `serve ${capacity.activeLeaves.toLocaleString()} active outputs` : "no capacity sample"}
+        foot={capacity ? `serve ${counted(capacity.activeLeaves, "active output")}` : "no capacity sample"}
       />
     </KpiRow>
   );
@@ -161,7 +161,7 @@ function Attention({ items }: { items: FleetModel["attention"] }) {
                   <span className="flex min-w-0 flex-1 flex-col sm:flex-row sm:items-center sm:gap-3">
                     <span className="truncate font-medium sm:flex-1">{group.title}</span>
                     <span className="shrink-0 text-xs text-base-content/70 tabular sm:text-sm">
-                      {group.outputs.toLocaleString()} destinations · {group.pipelines} pipeline{group.pipelines === 1 ? "" : "s"}
+                      {counted(group.outputs, "destination")} · {counted(group.pipelines, "pipeline")}
                     </span>
                   </span>
                   <span aria-hidden="true" className={`text-base-content/50 transition-transform ${isOpen ? "rotate-90" : ""}`}>›</span>
@@ -331,7 +331,7 @@ function FleetTable({ rows }: { rows: readonly FleetPipelineRow[] }) {
       flush
       actions={
         rows.length > shown.length ? (
-          <PlaceLink className="link text-sm" place={{ workspace: "pipelines", pipelineId: null }}>
+          <PlaceLink className="link touch-36 inline-flex items-center text-sm" place={{ workspace: "pipelines", pipelineId: null }}>
             All {rows.length.toLocaleString()} pipelines
           </PlaceLink>
         ) : undefined

@@ -199,7 +199,7 @@ export function Preview(props: { url: string; label: string }) {
             Stop preview
           </button>
         ) : (
-          <button type="button" className="btn btn-xs" onClick={start}>
+          <button type="button" className="btn btn-xs btn-outline" onClick={start}>
             {state === "idle" ? `Preview ${props.label}` : `Retry preview ${props.label}`}
           </button>
         )}

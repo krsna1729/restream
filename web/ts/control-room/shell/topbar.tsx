@@ -199,7 +199,7 @@ function PrefsMenu() {
 function ModeToggle() {
   const prefs = usePrefs();
   return (
-    <div className="join hidden lg:inline-flex" role="group" aria-label="Audience">
+    <div className="join hidden md:inline-flex" role="group" aria-label="Audience">
       {(["operator", "engineer"] as const).map((mode) => (
         <button
           key={mode}
@@ -223,8 +223,9 @@ export function Topbar(props: { live: LiveSnapshot; onSearch: () => void; extra?
       </div>
       <button
         type="button"
+        aria-label="Search and commands"
         onClick={props.onSearch}
-        className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-field border border-base-content/10 bg-base-100 px-3 text-left text-sm text-base-content/70 transition-colors hover:border-base-content/30 md:max-w-md"
+        className="touch-36 flex h-9 min-w-0 flex-1 items-center gap-2 rounded-field border border-base-content/10 bg-base-100 px-3 text-left text-sm text-base-content/70 transition-colors hover:border-base-content/30 md:max-w-md"
       >
         <Icon name="search" className="size-4 shrink-0" />
         <span className="truncate">Search pipelines, destinations, incidents…</span>

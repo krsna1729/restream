@@ -151,8 +151,8 @@ test("the topology shows each class's reported count, and unknown is not zero", 
   assert.deepEqual(
     topology.map((cls) => [cls.name, cls.count]),
     [
-      ["CONTROL", 2],
-      ["MEDIA", 3],
+      ["Control", 2],
+      ["Media", 3],
       ["RTMP ingress", 0],
       ["SRT ingress", 3],
       ["Egress fabric", 2],

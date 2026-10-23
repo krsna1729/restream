@@ -37,3 +37,8 @@ export function formatBytes(bytes: number | null | undefined): string {
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KiB`;
   return `${bytes.toFixed(0)} B`;
 }
+
+/** "1 destination", "3 destinations": a count and its noun. */
+export function counted(count: number, noun: string, plural = `${noun}s`): string {
+  return `${count.toLocaleString()} ${count === 1 ? noun : plural}`;
+}

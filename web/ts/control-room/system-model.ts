@@ -85,12 +85,12 @@ export function executionTopology(
   const media = metrics?.mediaExecutor;
   return [
     {
-      name: "CONTROL",
+      name: "Control",
       count: typeof tokio === "number" ? tokio : null,
       unit: "Tokio workers, configured",
     },
     {
-      name: "MEDIA",
+      name: "Media",
       // The media runtime starts with its first service; until then none run.
       count: media?.workers?.length ?? null,
       unit: `media workers running of ${media?.configuredWorkers ?? "--"}`,

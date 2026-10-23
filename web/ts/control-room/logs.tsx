@@ -157,7 +157,7 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null }) {
             ))}
           </select>
         </label>
-        <label className="label cursor-pointer gap-2">
+        <label className="label h-8 cursor-pointer gap-2">
           <input
             type="checkbox"
             className="checkbox checkbox-sm"
@@ -168,13 +168,13 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null }) {
         </label>
         <button
           type="button"
-          className="btn btn-sm btn-ghost"
+          className="btn btn-sm btn-outline"
           aria-pressed={!following}
           onClick={() => setFollowing(!following)}
         >
           {following ? "Pause live" : "Resume live"}
         </button>
-        <span role="status" className={`badge ${following && !streamDown ? "badge-success" : "badge-ghost"}`}>
+        <span role="status" className={`badge self-center ${following && !streamDown ? "badge-success" : "badge-ghost"}`}>
           {!following ? "paused" : streamDown ? "live stream unavailable" : "live"}
         </span>
       </div>
@@ -190,7 +190,7 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null }) {
       ) : rows.length === 0 ? (
         <p className="text-base-content/70">No rows match.</p>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
           <table className="table table-xs" aria-label="Log rows">
             <thead>
               <tr>
@@ -206,13 +206,13 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null }) {
                 const where = row.outputId ?? row.pipelineId;
                 return (
                   <tr key={row.id}>
-                    <td className="whitespace-nowrap font-mono">{row.ts}</td>
-                    <td>
+                    <td className="w-px whitespace-nowrap font-mono">{row.ts}</td>
+                    <td className="w-px">
                       <span className={`badge badge-sm ${LEVEL_BADGES[row.level ?? ""] ?? "badge-ghost"}`}>
                         {row.level}
                       </span>
                     </td>
-                    <td className="whitespace-nowrap">{where ? (names.get(where) ?? where) : "engine"}</td>
+                    <td className="w-px whitespace-nowrap">{where ? (names.get(where) ?? where) : "engine"}</td>
                     <td className="font-mono">
                       {row.message}
                       {fields && (
@@ -227,7 +227,7 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null }) {
               })}
             </tbody>
           </table>
-          <p className="mt-2 text-xs text-base-content/70">
+          <p className="px-3 py-2 text-xs text-base-content/70">
             Newest first; the page keeps {LOG_ROWS_KEPT} rows
             {hasMore && `, and the engine holds older rows than the first ${HISTORY_ROWS} read`}.
           </p>

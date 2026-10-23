@@ -6,7 +6,7 @@
 import { useMemo, useRef, useState } from "react";
 import type { PointerEvent, ReactNode } from "react";
 
-import { max, sparkline } from "./series-geometry.js";
+import { axisLabels, max, sparkline } from "./series-geometry.js";
 
 export interface Series<T> {
   readonly id: string;
@@ -144,9 +144,9 @@ export function TimeSeries<T extends { readonly atMs: number }>(props: {
       )}
       <div className="relative grid grid-cols-[3.5rem_minmax(0,1fr)]">
         <div className="relative text-right text-[0.7rem] text-base-content/60 tabular" style={{ height }}>
-          {gridLines.map((fraction) => (
-            <span key={fraction} className="absolute right-2 -translate-y-1/2 whitespace-nowrap" style={{ top: `${(1 - fraction) * 100}%` }}>
-              {(props.axisFormat ?? compact)(top * fraction)}
+          {axisLabels(top, gridLines, props.axisFormat ?? compact).map((text, index) => (
+            <span key={gridLines[index]} className="absolute right-2 -translate-y-1/2 whitespace-nowrap" style={{ top: `${(1 - gridLines[index]) * 100}%` }}>
+              {text}
             </span>
           ))}
         </div>

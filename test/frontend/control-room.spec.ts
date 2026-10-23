@@ -596,6 +596,8 @@ test("media and system: probe, rename and delete an upload; read the host and it
   const uploaded = `cr-media-${stamp}.mp4`;
   const renamed = `cr-renamed-${stamp}.mp4`;
   await page.goto("/?w=media");
+  // The storage card reads the host sample the shell polls (summary view).
+  await expect(page.getByLabel("Media disk used")).toBeVisible({ timeout: 15_000 });
   try {
     // A checked-in file whose keyframes are 5 s apart: wider than the live
     // GOP target, so it can only feed a pipeline through a re-encode.

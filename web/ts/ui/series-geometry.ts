@@ -44,3 +44,15 @@ export function sparkline<T extends { readonly atMs: number }>(
       points.length === 1 ? `${points[0]} ${points[0]}` : points.join(" "),
     );
 }
+
+/**
+ * Labels for the value axis at `fractions` (ascending) of `top`. When two
+ * ticks would print the same text (a tiny or empty scale, where "1 b" would
+ * show three times at different heights), only the two ends are labelled,
+ * so no printed tick misstates its height.
+ */
+export function axisLabels(top: number, fractions: readonly number[], format: (value: number) => string): string[] {
+  const labels = fractions.map((fraction) => format(top * fraction));
+  if (new Set(labels).size === labels.length) return labels;
+  return labels.map((label, index) => (index === 0 || index === labels.length - 1 ? label : ""));
+}
