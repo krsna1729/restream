@@ -616,7 +616,7 @@ pub async fn run_flight_recorder(
         recorder.record(now_ms, probes);
         tick = tick.wrapping_add(1);
         if let Some(retention) = retention
-            && tick % FLIGHT_PERSIST_EVERY == 0
+            && tick.is_multiple_of(FLIGHT_PERSIST_EVERY)
         {
             // Prune about once a minute (every sixth persisted tick).
             persist(
@@ -624,7 +624,7 @@ pub async fn run_flight_recorder(
                 &pool,
                 now_ms,
                 retention,
-                tick % (FLIGHT_PERSIST_EVERY * 6) == 0,
+                tick.is_multiple_of(FLIGHT_PERSIST_EVERY * 6),
             )
             .await;
         }

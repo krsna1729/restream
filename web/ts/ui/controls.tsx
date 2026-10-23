@@ -31,7 +31,13 @@ export interface Chip<T extends string> {
 
 export function ChipGroup<T extends string>(props: { label: string; value: T; chips: readonly Chip<T>[]; onChange: (value: T) => void }) {
   return (
-    <div role="group" aria-label={props.label} className="scrollbar-thin -mx-1 flex max-w-full gap-1.5 overflow-x-auto px-1 py-0.5 md:flex-wrap md:overflow-visible">
+    // A few chips wrap; a long set scrolls sideways on a phone and wraps
+    // from md up. (A near-fit scroller grows a hairline scrollbar.)
+    <div
+      role="group"
+      aria-label={props.label}
+      className={`-mx-1 flex max-w-full flex-wrap gap-1.5 px-1 py-0.5 ${props.chips.length > 4 ? "scrollbar-thin max-md:flex-nowrap max-md:overflow-x-auto" : ""}`}
+    >
       {props.chips.map((chip) => {
         const active = chip.value === props.value;
         return (
