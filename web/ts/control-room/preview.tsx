@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { redirectToLogin } from "../core/auth-redirect.js";
+import { AudioMeter } from "./audio-meter.js";
 
 /** Seconds a preview may take to produce its first segment: the engine
  * starts a preview on its first request and answers 404 until then. */
@@ -92,6 +93,11 @@ export function Preview(props: { url: string; label: string }) {
   const [state, setState] = useState<PreviewState>("idle");
   const [tracks, setTracks] = useState<ReadonlyArray<{ id: number; name: string }>>([]);
   const [track, setTrack] = useState<number | null>(null);
+  /** Made in the click that starts a preview (browsers allow audio then);
+   * the meter routes the element through it. */
+  const [audio, setAudio] = useState<AudioContext | null>(null);
+  const [element, setElement] = useState<HTMLVideoElement | null>(null);
+  useEffect(() => () => void audio?.close().catch(() => undefined), [audio]);
 
   useEffect(() => {
     const element = video.current;
@@ -180,6 +186,13 @@ export function Preview(props: { url: string; label: string }) {
   }, [attempt, props.url]);
 
   const start = () => {
+    if (!audio && typeof AudioContext !== "undefined") {
+      try {
+        setAudio(new AudioContext());
+      } catch {
+        /* no Web Audio: no meter */
+      }
+    }
     setTracks([]);
     setTrack(null);
     setState("starting");
@@ -227,7 +240,10 @@ export function Preview(props: { url: string; label: string }) {
       </div>
       {showing && (
         <video
-          ref={video}
+          ref={(node) => {
+            video.current = node;
+            setElement(node);
+          }}
           className="aspect-video w-full rounded bg-black"
           muted
           playsInline
@@ -235,6 +251,7 @@ export function Preview(props: { url: string; label: string }) {
           aria-label={`Video ${props.label}`}
         />
       )}
+      {showing && audio && element && state !== "starting" && <AudioMeter element={element} context={audio} label={props.label} />}
     </div>
   );
 }
