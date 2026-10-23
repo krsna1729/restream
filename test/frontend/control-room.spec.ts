@@ -1986,3 +1986,43 @@ test("schedule: an event added in the UI can run now, and the engine runs a time
     await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
   }
 });
+
+test("share: a link made in Operate plays the pipeline without signing in, until revoked", async ({ page, browser }) => {
+  test.setTimeout(120_000);
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  const pipelineId = await liveFilePipeline(page, `crshare${Date.now()}`);
+  const anonymous = await browser.newContext();
+  try {
+    await page.goto(`/?w=operate&p=${pipelineId}`);
+    const share = page.getByRole("region", { name: "Share" });
+    await share.getByLabel("Share link label").fill("cr website");
+    await share.getByRole("button", { name: "Create link" }).click();
+    const item = share.getByRole("listitem", { name: "Share link cr website" });
+    await expect(item).toContainText("Until");
+    const url = (await item.locator("code").textContent())?.trim() ?? "";
+    expect(url).toMatch(/\/watch\/[0-9a-f]{48}$/);
+    const token = url.split("/watch/")[1];
+
+    // Someone else, signed out: the player page and the stream it reads.
+    const viewer = await anonymous.newPage();
+    await viewer.goto(url);
+    await expect(viewer.locator(".title")).toContainText("crshare");
+    expect((await anonymous.request.get(`/api/v1/state`)).status()).toBe(401);
+    await expect
+      .poll(async () => (await anonymous.request.get(`/hls/${pipelineId}/master.m3u8?t=${token}`)).status(), { timeout: 40_000 })
+      .toBe(200);
+    expect((await anonymous.request.get(`/hls/${pipelineId}/master.m3u8`)).status()).toBe(401);
+
+    await item.getByRole("button", { name: "Revoke cr website" }).click();
+    await item.getByRole("button", { name: "Revoke", exact: true }).click();
+    await expect(share.getByRole("listitem", { name: "Share link cr website" })).toHaveCount(0);
+    expect((await anonymous.request.get(`/hls/${pipelineId}/master.m3u8?t=${token}`)).status()).toBe(401);
+    expect((await anonymous.request.get(url)).status()).toBe(404);
+  } finally {
+    await anonymous.close();
+    await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
+  }
+});

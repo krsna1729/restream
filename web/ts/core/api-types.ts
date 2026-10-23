@@ -858,3 +858,14 @@ export interface Schedule extends ScheduleDraft {
   createdAtMs: number;
   nextAtMs: number | null;
 }
+
+/** A public watch link to one pipeline (`application/share.rs`). */
+export interface ShareLink {
+  id: string;
+  pipelineId: string;
+  label: string;
+  token: string;
+  createdAtMs: number;
+  expiresAtMs: number | null;
+  views: number;
+}

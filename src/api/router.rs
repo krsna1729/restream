@@ -76,6 +76,10 @@ use super::schedules::{
     update_schedule_handler,
 };
 use super::settings::{config_get_handler, config_patch_handler};
+use super::share::{
+    create_share_link_handler, list_share_links_handler, revoke_share_link_handler,
+    watch_page_handler,
+};
 use super::state::AppState;
 use super::static_assets::{
     api_not_found_handler, css_handler, login_get_handler, login_html_redirect_handler,
@@ -113,6 +117,8 @@ pub const PUBLIC_ROUTE_PATHS: &[&str] = &[
     "/api/{*path}",
     "/healthz",
     "/metrics/system",
+    // The link's token is the credential (`application::share`).
+    "/watch/{token}",
     // The stream key in the path is the credential (resolved like RTMP and
     // SRT publish keys), not a dashboard session.
     "/ingest/hls/{stream_key}/{*path}",
@@ -139,6 +145,8 @@ pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
     "/api/v1/schedules",
     "/api/v1/schedules/{id}",
     "/api/v1/schedules/{id}/run",
+    "/api/v1/pipelines/{pipeline_id}/share-links",
+    "/api/v1/share-links/{id}",
     "/api/v1/auth/change-password",
     "/api/v1/auth/dismiss-password-change",
     "/api/v1/security/rate-limits",
@@ -363,6 +371,15 @@ fn create_app_router() -> Router<Arc<AppState>> {
             put(update_schedule_handler).delete(delete_schedule_handler),
         )
         .route("/api/v1/schedules/{id}/run", post(run_schedule_handler))
+        .route(
+            "/api/v1/pipelines/{pipeline_id}/share-links",
+            get(list_share_links_handler).post(create_share_link_handler),
+        )
+        .route(
+            "/api/v1/share-links/{id}",
+            axum::routing::delete(revoke_share_link_handler),
+        )
+        .route("/watch/{token}", get(watch_page_handler))
         .route(
             "/api/v1/auth/change-password",
             post(change_password_handler),

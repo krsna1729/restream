@@ -16,6 +16,7 @@ pub mod recording_repo;
 pub(crate) mod schedule_repo;
 mod schema;
 pub(crate) mod session_repo;
+pub(crate) mod share_repo;
 pub(crate) mod team_repo;
 
 pub use ingest_repo::{

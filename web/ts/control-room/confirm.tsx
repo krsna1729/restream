@@ -6,7 +6,10 @@ export function ConfirmDelete(props: {
   label: string;
   question: string;
   onDelete: () => Promise<boolean>;
+  /** The verb on both buttons; "Delete" by default. */
+  verb?: string;
 }) {
+  const verb = props.verb ?? "Delete";
   const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
   return armed ? (
@@ -25,7 +28,7 @@ export function ConfirmDelete(props: {
           }
         }}
       >
-        Delete
+        {verb}
       </button>
       <button type="button" className="btn btn-xs btn-ghost" onClick={() => setArmed(false)}>
         Keep
@@ -38,7 +41,7 @@ export function ConfirmDelete(props: {
       aria-label={props.label}
       onClick={() => setArmed(true)}
     >
-      Delete…
+      {verb}…
     </button>
   );
 }

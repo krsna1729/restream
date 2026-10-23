@@ -24,6 +24,7 @@ grouped by resource. Base URL: `http://localhost:3030` (the HTTP port is
 - [Operator views](#operator-views)
 - [Notifications](#notifications)
 - [Schedules](#schedules)
+- [Share links](#share-links)
 - [Telemetry](#telemetry)
 - [HLS pull](#hls-pull)
 - [HLS push ingest](#hls-push-ingest)
@@ -103,6 +104,7 @@ flowchart TD
 | Operator views | `/overview`, `/alerts`, `/events`, `…/summary`, `…/alerts`, `/engine/resource-map` | [Operator views](#operator-views) |
 | Notifications | `/api/v1/notifications/*` | [Notifications](#notifications) |
 | Schedules | `/api/v1/schedules*` | [Schedules](#schedules) |
+| Share links | `…/share-links`, `/api/v1/share-links/:id`, `/watch/:token` | [Share links](#share-links) |
 | Telemetry | `/measure`, `/engine/telemetry`, `…/telemetry`, `/stages/:stageKey/telemetry` | [Telemetry](#telemetry) |
 | HLS pull | `/hls/*` | [HLS pull](#hls-pull) |
 | HLS push | `/ingest/hls/:streamKey/*path` | [HLS push ingest](#hls-push-ingest) |
@@ -1566,6 +1568,38 @@ Responses add `id`, `lastRunMs`, `lastResult`, `createdAtMs` and `nextAtMs`.
 - `lastResult` is `running`, `ok: …` (what it did), `failed: …` or
   `skipped: …`. Each run is also in the audit log as member `scheduler`,
   method `RUN`.
+
+## Share links
+
+A share link lets anyone watch one pipeline's live preview without signing
+in, until it expires or an admin revokes it (`src/application/share.rs`).
+
+| Method | Route | Role | Purpose |
+|---|---|---|---|
+| `GET` | `/api/v1/pipelines/:pipelineId/share-links` | admin | `{ "links": [...] }` |
+| `POST` | `/api/v1/pipelines/:pipelineId/share-links` | admin | `{ "label", "lifetimeHours" }` (`null`: until revoked) → `201` link |
+| `DELETE` | `/api/v1/share-links/:id` | admin | Revoke: `{ "deleted": true }` |
+| `GET` | `/watch/:token` | public | The player page; `404` once expired or revoked |
+
+A link is
+`{ "id", "pipelineId", "label", "token", "createdAtMs", "expiresAtMs", "views" }`.
+
+- `token` is 48 hex characters. Admins read it, so a link can be copied
+  again.
+- A lifetime is 1 hour to 1 year, or until revoked. `views` counts
+  watch-page loads.
+- The token admits HLS reads (`/hls/:pipelineId/…?t=<token>`) of its own
+  pipeline only, never `/hls/inputs/…`, the API or another pipeline.
+  `require_hls_access` accepts a session or a live token.
+- Links are held in memory and reloaded on every change. Revoking stops
+  every player at once, including one already watching. Deleting a pipeline
+  deletes its links.
+- The player is a bare page using hls.js; every playlist and segment
+  request carries the token. It sends `Content-Security-Policy:
+  frame-ancestors *`, so any site can embed it in an iframe. That header
+  takes precedence over the server-wide `X-Frame-Options: SAMEORIGIN`. Its
+  asset and stream URLs are relative (`../`), so it works under a proxy
+  prefix.
 
 ## Telemetry
 

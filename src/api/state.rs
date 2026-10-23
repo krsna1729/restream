@@ -154,6 +154,8 @@ pub struct AppState {
     /// Each pipeline's recorded health behind
     /// `/api/v1/pipelines/:id/flight-recorder`.
     pub flight_recorder: Arc<crate::application::flight_recorder::FlightRecorder>,
+    /// Public watch links behind `/watch/:token` and token HLS reads.
+    pub share_links: Arc<crate::application::share::ShareLinks>,
     pub log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
     secure_session_cookies: bool,
     #[cfg(feature = "agent-execution")]
@@ -197,6 +199,7 @@ impl AppState {
             },
         );
 
+        let share_links = Arc::new(crate::application::share::ShareLinks::new(db.clone()));
         let runtime_state = Arc::new(crate::application::runtime_state::hub::StateHub::new(
             runtime.ports.server_ports(),
         ));
@@ -229,6 +232,7 @@ impl AppState {
             runtime_state,
             fleet_history: Arc::new(crate::application::fleet_history::FleetHistory::new()),
             flight_recorder: Arc::new(crate::application::flight_recorder::FlightRecorder::new()),
+            share_links,
             log_broadcast,
             secure_session_cookies: runtime.secure_session_cookies,
             #[cfg(feature = "agent-execution")]
@@ -467,14 +471,28 @@ pub async fn require_authenticated(state: &AppState, headers: &HeaderMap) -> Opt
     }
 }
 
-/// HLS currently shares the same session-based access policy as the rest of
-/// the authenticated API surface.
+/// HLS reads need a dashboard session, or a live share link's token (`?t=`)
+/// for the pipeline in the path.
 pub async fn require_hls_access(
     state: &AppState,
     headers: &HeaderMap,
-    _uri: &axum::http::Uri,
+    uri: &axum::http::Uri,
 ) -> Option<Response> {
-    require_authenticated(state, headers).await
+    if request_is_authenticated(state, headers).await {
+        return None;
+    }
+    // A share link's token admits reads of its own pipeline's preview.
+    if let (Some(pipeline_id), Some(token)) = (
+        crate::application::share::hls_pipeline_of(uri.path()),
+        crate::application::share::token_of(uri.query()),
+    ) && state
+        .share_links
+        .admits(token, pipeline_id, chrono::Utc::now().timestamp_millis())
+        .await
+    {
+        return None;
+    }
+    Some((StatusCode::UNAUTHORIZED, "Unauthorized").into_response())
 }
 
 /// Builds one dashboard session cookie with the repository's shared security

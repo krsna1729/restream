@@ -44,6 +44,8 @@ mod outputs;
 mod pipelines;
 #[path = "api/schedules.rs"]
 mod schedules;
+#[path = "api/share.rs"]
+mod share;
 #[path = "api/team.rs"]
 mod team;
 

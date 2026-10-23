@@ -47,7 +47,28 @@ export function createSchedules({ seed = 7, pipelines = [], outputs = [], count 
     return { ...schedule, nextAtMs: next };
   };
 
+  const links = new Map();
   function handle(method, path, body) {
+    const share = path.match(/^\/api\/v1\/pipelines\/([^/]+)\/share-links$/);
+    if (share) {
+      const list = links.get(share[1]) ?? [
+        { id: `sl_${share[1]}_1`, pipelineId: share[1], label: "Website embed", token: "f".repeat(48), createdAtMs: nowMs - 86_400_000, expiresAtMs: null, views: 1284 },
+        { id: `sl_${share[1]}_2`, pipelineId: share[1], label: "Client preview", token: "e".repeat(48), createdAtMs: nowMs - 3_600_000, expiresAtMs: nowMs + 5 * 3_600_000, views: 17 },
+      ];
+      links.set(share[1], list);
+      if (method === "GET") return { body: { links: list } };
+      const link = { id: `sl_${Date.now().toString(16)}`, pipelineId: share[1], label: body.label, token: Date.now().toString(16).padEnd(48, "0"), createdAtMs: Date.now(), expiresAtMs: body.lifetimeHours ? Date.now() + body.lifetimeHours * 3_600_000 : null, views: 0 };
+      list.push(link);
+      return { status: 201, body: link };
+    }
+    const revoke = path.match(/^\/api\/v1\/share-links\/([^/]+)$/);
+    if (revoke && method === "DELETE") {
+      for (const list of links.values()) {
+        const at = list.findIndex((link) => link.id === revoke[1]);
+        if (at >= 0) list.splice(at, 1);
+      }
+      return { body: { deleted: true } };
+    }
     if (path === "/api/v1/schedules" && method === "GET") return { body: { schedules: schedules.map(withNext) } };
     if (path === "/api/v1/schedules" && method === "POST") {
       const schedule = { ...body, id: `sch_${Date.now().toString(16)}`, lastRunMs: null, lastResult: null, createdAtMs: Date.now() };
