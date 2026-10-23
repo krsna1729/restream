@@ -8,7 +8,7 @@ import type { RuntimeState } from "../../core/generated/runtime-state.js";
 import { Icon } from "../../ui/icons.js";
 import type { IconName } from "../../ui/icons.js";
 import { usePrefs } from "../../ui/prefs.js";
-import type { Density, Mode, ThemeChoice } from "../../ui/prefs.js";
+import type { Density, ThemeChoice } from "../../ui/prefs.js";
 import { useGo, usePlace } from "../router.js";
 import { useSession } from "../session.js";
 import { canOpen } from "../team-model.js";
@@ -78,7 +78,6 @@ export function CommandPalette(props: {
     if (entry.action) {
       const [kind, value] = entry.action.split(":");
       if (kind === "theme") prefs.setTheme(value as ThemeChoice);
-      if (kind === "mode") prefs.setMode(value as Mode);
       if (kind === "density") prefs.setDensity(value as Density);
     }
     props.onClose();

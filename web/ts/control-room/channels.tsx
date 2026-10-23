@@ -12,7 +12,7 @@ import { ChipGroup, SearchField } from "../ui/controls.js";
 import { Icon } from "../ui/icons.js";
 import { Kpi, KpiRow, Meter } from "../ui/kpi.js";
 import { PageHeader } from "../ui/page-header.js";
-import { useEngineer } from "../ui/prefs.js";
+import { DetailToggle, useSectionDetail } from "../ui/prefs.js";
 import { EmptyState, Panel } from "../ui/panel.js";
 import { StatusBadge } from "../ui/tone.js";
 import type { Tone } from "../ui/tone.js";
@@ -53,6 +53,7 @@ const BULK_CONCURRENCY = 6;
 
 export function Channels({ live }: { live: LiveSnapshot }) {
   const canOperate = useSession().can("operator");
+  const [detail, setDetail] = useSectionDetail("channels");
   const [config, setConfig] = useState<ConfigData | null>(null);
   // Settings hold stream keys: a viewer neither reads them nor needs them.
   const reload = useCallback(() => void (canOperate ? getConfig().then(setConfig) : setConfig(null)), [canOperate]);
@@ -183,6 +184,7 @@ export function Channels({ live }: { live: LiveSnapshot }) {
               ))}
             </select>
             <SearchField value={query} onChange={setQuery} placeholder="Channel or pipeline" label="Search channels" className="w-full sm:w-56" />
+            <DetailToggle open={detail} onChange={setDetail} />
           </>
         }
       >
@@ -213,7 +215,7 @@ export function Channels({ live }: { live: LiveSnapshot }) {
           <>
             <ul className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
               {filtered.slice(0, shown).map((channel) => (
-                <ChannelCard key={channel.output.id} channel={channel} bps={live.rates?.egressBps.get(channel.output.id) ?? null} />
+                <ChannelCard key={channel.output.id} channel={channel} detail={detail} bps={live.rates?.egressBps.get(channel.output.id) ?? null} />
               ))}
             </ul>
             {filtered.length > shown && (
@@ -246,9 +248,8 @@ const AVATAR_TONE: Record<string, string> = {
   linkedin: "bg-primary/20 text-primary",
 };
 
-function ChannelCard(props: { channel: Channel; bps: number | null }) {
+function ChannelCard(props: { channel: Channel; detail: boolean; bps: number | null }) {
   const canOperate = useSession().can("operator");
-  const engineer = useEngineer();
   const { channel } = props;
   const { output } = channel;
   const [busy, setBusy] = useState(false);
@@ -307,7 +308,7 @@ function ChannelCard(props: { channel: Channel; bps: number | null }) {
           {problem}
         </p>
       )}
-      {engineer && (
+      {props.detail && (
         <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 border-t border-base-content/10 pt-2 font-mono text-[0.7rem] text-base-content/70">
           <dt>id</dt>
           <dd className="truncate select-all">{output.id}</dd>

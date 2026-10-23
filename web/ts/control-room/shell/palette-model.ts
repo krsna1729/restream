@@ -26,8 +26,6 @@ export const PALETTE_ACTIONS: ReadonlyArray<{ id: string; label: string; detail:
   { id: "theme:dark", label: "Theme: dark", detail: "Switch to the dark theme" },
   { id: "theme:light", label: "Theme: light", detail: "Switch to the light theme" },
   { id: "theme:system", label: "Theme: follow system", detail: "Match the operating system" },
-  { id: "mode:operator", label: "Mode: operator", detail: "Verdicts and large controls" },
-  { id: "mode:engineer", label: "Mode: engineer", detail: "Every counter, id and raw payload" },
   { id: "density:compact", label: "Density: compact", detail: "More rows per screen" },
   { id: "density:comfortable", label: "Density: comfortable", detail: "Larger type and targets" },
 ];

@@ -244,3 +244,18 @@
     stroke-dashoffset: 0;
   }
 }
+
+/* Unlayered, so they win over DaisyUI's own state rules. */
+/* A disabled control stays legible (about 3:1), only quieter: DaisyUI's
+   default reads as near-black on the dark surfaces. */
+.btn:disabled,
+.btn[disabled],
+.btn-disabled {
+  color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  background-color: color-mix(in oklab, var(--color-base-content) 8%, transparent);
+  border-color: color-mix(in oklab, var(--color-base-content) 12%, transparent);
+}
+/* The mark is drawn dark; on the dark theme it is inverted to read. */
+:root:not([data-theme="restream-light"]) .brand-logo {
+  filter: invert(1) hue-rotate(180deg);
+}

@@ -170,7 +170,7 @@ function GraphView(props: {
         return (
           <li key={index} className="flex flex-col items-stretch gap-2 lg:flex-row lg:items-center">
             {index > 0 && (
-              <span aria-hidden="true" className="self-center text-base-content/40 lg:rotate-0 max-lg:rotate-90">
+              <span aria-hidden="true" className="self-center text-base-content/60 lg:rotate-0 max-lg:rotate-90">
                 →
               </span>
             )}

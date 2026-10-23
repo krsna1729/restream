@@ -25,7 +25,7 @@ const BADGE_TONE = {
 export function Brand(props: { compact?: boolean }) {
   return (
     <div className="flex items-center gap-2.5 px-2 py-1">
-      <img src="logo.png" alt="" className="size-8 shrink-0 rounded-lg" />
+      <img src="logo.png" alt="" className="brand-logo size-8 shrink-0 rounded-lg" />
       {!props.compact && (
         <div className="min-w-0 leading-tight">
           <div className="truncate font-semibold">Restream</div>
