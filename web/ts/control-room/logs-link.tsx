@@ -8,7 +8,7 @@ export function LogsLink(props: { pipelineId: string | null | undefined; outputI
   return (
     <PlaceLink
       place={{ workspace: "logs", pipelineId: props.pipelineId, outputId: props.outputId ?? null }}
-      className="link link-hover shrink-0 text-xs text-base-content/70"
+      className="link link-hover touch-36 inline-flex shrink-0 items-center text-xs text-base-content/70"
     >
       {props.label ?? "Logs"}
     </PlaceLink>

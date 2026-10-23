@@ -16,7 +16,7 @@ export function NextEvent(props: { pipelineId: string | null }) {
   return (
     <PlaceLink
       place={{ workspace: "schedule", pipelineId: props.pipelineId }}
-      className="inline-flex max-w-full items-center gap-2 self-start rounded-full border border-base-content/15 bg-base-100 px-3 py-1 text-sm hover:border-primary/50"
+      className="touch-36 inline-flex max-w-full items-center gap-2 self-start rounded-full border border-base-content/15 bg-base-100 px-3 py-1 text-sm hover:border-primary/50"
     >
       <Icon name="schedule" className="size-4 shrink-0 text-primary" />
       <span className="truncate">

@@ -366,7 +366,7 @@ function Channels() {
       width: "minmax(12rem,1.6fr)",
       bare: true,
       cell: (channel) => (
-        <span className="flex flex-wrap items-center gap-1">
+        <span className="flex flex-wrap items-center justify-end gap-1">
           <button
             type="button"
             className="btn btn-ghost btn-xs"

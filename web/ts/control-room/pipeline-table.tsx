@@ -37,7 +37,7 @@ const COLUMNS: readonly Column<FleetPipelineRow>[] = [
     width: "minmax(10rem,2fr)",
     sort: (row) => row.name.toLowerCase(),
     cell: (row) => (
-      <PlaceLink className="font-medium hover:underline" place={{ workspace: "operate", pipelineId: row.id }}>
+      <PlaceLink className="touch-36 inline-flex items-center font-medium hover:underline" place={{ workspace: "operate", pipelineId: row.id }}>
         {row.name}
       </PlaceLink>
     ),

@@ -2,6 +2,8 @@ import { useState } from "react";
 
 import { runPipelineDiagnostics } from "../core/api.js";
 import type { DiagnosticsReport } from "../types.js";
+import { Panel } from "../ui/panel.js";
+import { StatusBadge } from "../ui/tone.js";
 import { diagnosticsFile, diagnosticsVerdict } from "./diagnose-model.js";
 
 /** Runs the engine's checks on the pipeline's live input (probe, GOP, ring,
@@ -11,12 +13,19 @@ export function Diagnostics(props: { pipeline: { id: string; name: string } }) {
   const [run, setRun] = useState<{ report: DiagnosticsReport; at: Date } | null>(null);
   const verdict = run ? diagnosticsVerdict(run.report) : null;
   return (
-    <section className="card bg-base-200" aria-labelledby="inspect-diagnostics">
-      <div className="card-body gap-3 p-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <h3 id="inspect-diagnostics" className="card-title text-base">
-            Diagnostics
-          </h3>
+    <Panel
+      id="inspect-diagnostics"
+      title="Diagnostics"
+      subtitle={run ? `${run.report.protocol.toUpperCase()} · ${(run.report.totalDurationMs / 1000).toFixed(1)} s` : undefined}
+      actions={
+        <>
+          {run && verdict && (
+            <span role="status">
+              <StatusBadge tone={verdict.failed > 0 ? "bad" : verdict.withIssues > 0 ? "warn" : "ok"} dot>
+                {run.report.checks.length} checks · {verdict.failed} failed · {verdict.withIssues} with issues
+              </StatusBadge>
+            </span>
+          )}
           <button
             type="button"
             className="btn btn-sm btn-primary"
@@ -33,22 +42,10 @@ export function Diagnostics(props: { pipeline: { id: string; name: string } }) {
           >
             {running ? "Running checks…" : run ? "Run again" : "Run diagnostics"}
           </button>
-          {run && verdict && (
-            <>
-              <span
-                role="status"
-                className={`badge ${
-                  verdict.failed > 0 ? "badge-error" : verdict.withIssues > 0 ? "badge-warning" : "badge-success"
-                }`}
-              >
-                {run.report.checks.length} checks · {verdict.failed} failed · {verdict.withIssues} with issues
-              </span>
-              <span className="text-xs text-base-content/70">
-                {run.report.protocol.toUpperCase()} · {(run.report.totalDurationMs / 1000).toFixed(1)} s
-              </span>
+          {run && (
               <button
                 type="button"
-                className="btn btn-sm btn-ghost"
+                className="btn btn-sm btn-outline border-base-content/20"
                 onClick={() => {
                   const file = diagnosticsFile(props.pipeline, run.report, run.at);
                   const url = URL.createObjectURL(new Blob([file.json], { type: "application/json" }));
@@ -61,25 +58,22 @@ export function Diagnostics(props: { pipeline: { id: string; name: string } }) {
               >
                 Download report
               </button>
-            </>
           )}
-        </div>
-        {run && (
+        </>
+      }
+    >
+        {run ? (
           <ol className="space-y-2" aria-label="Diagnostic checks">
             {run.report.checks.map((check) => (
-              <li key={check.index} aria-label={`Check ${check.name}`} className="rounded bg-base-100 p-2 text-sm">
+              <li key={check.index} aria-label={`Check ${check.name}`} className="rounded-box border border-base-content/10 bg-base-100 p-2 text-sm">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span
-                    className={`badge badge-sm ${
-                      check.exitCode !== 0 ? "badge-error" : check.issues.length > 0 ? "badge-warning" : "badge-success"
-                    }`}
-                  >
+                  <StatusBadge tone={check.exitCode !== 0 ? "bad" : check.issues.length > 0 ? "warn" : "ok"}>
                     {check.exitCode !== 0
                       ? `failed (exit ${check.exitCode})`
                       : check.issues.length > 0
                         ? `${check.issues.length} issue${check.issues.length === 1 ? "" : "s"}`
                         : "ok"}
-                  </span>
+                  </StatusBadge>
                   <span className="font-medium">{check.name}</span>
                   <span className="text-xs text-base-content/70">{check.durationMs} ms</span>
                 </div>
@@ -104,8 +98,9 @@ export function Diagnostics(props: { pipeline: { id: string; name: string } }) {
               </li>
             ))}
           </ol>
+        ) : (
+          <p className="text-sm text-base-content/70">Runs the engine's checks on the live input: probe, keyframes, ring and outputs. A run takes seconds.</p>
         )}
-      </div>
-    </section>
+    </Panel>
   );
 }

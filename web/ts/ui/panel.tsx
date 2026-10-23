@@ -31,11 +31,12 @@ export function Panel(props: {
         <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-base-content/10 px-4 py-2.5">
           <div className="flex min-w-0 flex-1 items-baseline gap-2">
             {props.title && (
-              <h3 id={labelled} className="shrink-0 text-[0.95rem] font-semibold">
+              // Long names (ids, keys) wrap anywhere rather than widen the page.
+              <h3 id={labelled} className="min-w-0 text-[0.95rem] font-semibold [overflow-wrap:anywhere]">
                 {props.title}
               </h3>
             )}
-            {props.subtitle && <span className="hidden truncate text-xs text-base-content/70 sm:inline">{props.subtitle}</span>}
+            {props.subtitle && <span className="hidden min-w-0 shrink-[2] truncate text-xs text-base-content/70 sm:inline">{props.subtitle}</span>}
           </div>
           {props.actions && <div className="flex flex-wrap items-center gap-2">{props.actions}</div>}
         </header>

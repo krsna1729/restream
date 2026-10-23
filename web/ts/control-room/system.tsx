@@ -17,12 +17,16 @@ import {
   ownerAttention,
 } from "./system-model.js";
 import type { CheckStatus, EngineStatus } from "./system-model.js";
+import { Kpi, KeyValue, KpiRow } from "../ui/kpi.js";
 import { PageHeader } from "../ui/page-header.js";
+import { Panel } from "../ui/panel.js";
+import { StatusBadge } from "../ui/tone.js";
+import type { Tone } from "../ui/tone.js";
 
-const CHECK_BADGE: Record<CheckStatus, string> = {
-  ok: "badge-success",
-  warning: "badge-warning",
-  unknown: "badge-ghost",
+const CHECK_TONE: Record<CheckStatus, Tone> = {
+  ok: "ok",
+  warning: "warn",
+  unknown: "neutral",
 };
 
 const CHECK_LABEL: Record<CheckStatus, string> = {
@@ -41,7 +45,7 @@ export function System({ live }: { live: LiveSnapshot }) {
     void getEngineStatus<EngineStatus>().then(setStatus);
   }, []);
   if (health.value === null) {
-    return <p className="text-base-content/70">Loading engine health…</p>;
+    return <p className="text-sm text-base-content/70">Loading engine health…</p>;
   }
   const rows = hostReadiness(health.value);
   const overall = overallReadiness(rows);
@@ -55,20 +59,17 @@ export function System({ live }: { live: LiveSnapshot }) {
         actions={<Freshness atMs={health.atMs} staleAfterMs={health.staleAfterMs} />}
       />
       <div className="grid gap-4 lg:grid-cols-2">
-        <section className="card bg-base-200" aria-labelledby="system-host">
-          <div className="card-body gap-2 p-4">
-            <h3 id="system-host" className="card-title text-base">
-              Host readiness
-            </h3>
+        <Panel id="system-host" title="Host readiness">
+          <div className="flex flex-col gap-3">
             <ul className="space-y-2" aria-label="Host checks">
               {rows.map((row) => (
                 <li key={row.key} className="grid grid-cols-[1fr_auto] gap-x-2 text-sm">
                   <span className="font-medium">{row.label}</span>
                   <span className="flex items-center gap-2 tabular-nums">
                     {row.value}
-                    <span className={`badge badge-sm ${CHECK_BADGE[row.status]}`}>
+                    <StatusBadge tone={CHECK_TONE[row.status]} dot>
                       {row.status}
-                    </span>
+                    </StatusBadge>
                   </span>
                   <span className="col-span-2 text-xs text-base-content/70">{row.detail}</span>
                 </li>
@@ -76,40 +77,25 @@ export function System({ live }: { live: LiveSnapshot }) {
             </ul>
             <ul className="flex flex-wrap gap-2 text-sm" aria-label="Kernel capabilities">
               {kernelCapabilities(live.metrics).map((cap) => (
-                <li
-                  key={cap.label}
-                  className={`badge ${
-                    cap.available === null
-                      ? "badge-ghost"
-                      : cap.available
-                        ? "badge-success"
-                        : "badge-warning"
-                  }`}
-                >
-                  {cap.label} · {cap.available === null ? "unknown" : cap.available ? "available" : "unavailable"} · {cap.detail}
+                <li key={cap.label} className="max-w-full">
+                  <StatusBadge tone={cap.available === null ? "neutral" : cap.available ? "ok" : "warn"}>
+                    {cap.label} · {cap.available === null ? "unknown" : cap.available ? "available" : "unavailable"} · {cap.detail}
+                  </StatusBadge>
                 </li>
               ))}
             </ul>
           </div>
-        </section>
-        <section className="card bg-base-200" aria-labelledby="system-topology">
-          <div className="card-body gap-3 p-4">
-            <h3 id="system-topology" className="card-title text-base">
-              Execution topology
-              <span className="text-sm font-normal text-base-content/70">reported by the engine</span>
-            </h3>
-            <dl className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        </Panel>
+        <Panel id="system-topology" title="Execution topology" subtitle="reported by the engine">
+          <div className="flex flex-col gap-3">
+            <KpiRow max={3}>
               {executionTopology(health.value, live.metrics).map((cls) => (
-                <div key={cls.name} className="rounded bg-base-100 p-2">
-                  <dt className="text-xs text-base-content/70">{cls.name}</dt>
-                  <dd className="text-2xl tabular-nums">{cls.count ?? "--"}</dd>
-                  <dd className="text-xs text-base-content/70">{cls.unit}</dd>
-                </div>
+                <Kpi key={cls.name} label={cls.name} value={cls.count ?? "--"} foot={cls.unit} />
               ))}
-            </dl>
+            </KpiRow>
             <Process live={live} />
           </div>
-        </section>
+        </Panel>
         <SrtOwners
           owner={health.value.srtListener?.ingressOwner ?? null}
           restarts={health.value.srtListener?.restarts ?? 0}
@@ -125,61 +111,48 @@ function Process({ live }: { live: LiveSnapshot }) {
   if (!engine) return null;
   const sampled = engine.cpuSampleReady !== false;
   return (
-    <dl className="grid grid-cols-[8rem_1fr] gap-1 text-sm">
-      <dt className="text-base-content/70">Restream CPU</dt>
-      <dd className="tabular-nums">
-        {sampled ? formatPercent(engine.restreamCpuPercent) : "sampling…"}
-      </dd>
-      <dt className="text-base-content/70">FFmpeg CPU</dt>
-      <dd className="tabular-nums">
-        {sampled ? formatPercent(engine.externalFfmpegCpuPercent) : "sampling…"}
-      </dd>
-      <dt className="text-base-content/70">Memory</dt>
-      <dd className="tabular-nums">
-        {formatBytes(engine.restreamMemoryBytes)} restream ·{" "}
-        {formatBytes(engine.externalFfmpegMemoryBytes)} FFmpeg
-      </dd>
-    </dl>
+    <KeyValue
+      rows={[
+        ["Restream CPU", sampled ? formatPercent(engine.restreamCpuPercent) : "sampling…"],
+        ["FFmpeg CPU", sampled ? formatPercent(engine.externalFfmpegCpuPercent) : "sampling…"],
+        ["Memory", `${formatBytes(engine.restreamMemoryBytes)} restream · ${formatBytes(engine.externalFfmpegMemoryBytes)} FFmpeg`],
+      ]}
+    />
   );
 }
 
 function SrtOwners(props: { owner: SrtIngressOwnerHealth | null; restarts: number }) {
   const { owner } = props;
   return (
-    <section className="card bg-base-200" aria-labelledby="system-owners">
-      <div className="card-body gap-3 p-4">
-        <h3 id="system-owners" className="card-title text-base">
-          SRT ingress owners
-          <span className="text-sm font-normal text-base-content/70">
-            summed over every owner; counters since the engine started
-          </span>
-        </h3>
+    <Panel id="system-owners" title="SRT ingress owners" subtitle="summed over every owner; counters since the engine started">
+      <div className="flex flex-col gap-3">
         {owner === null ? (
           <p className="text-sm text-base-content/70">The SRT listener reports no owner.</p>
         ) : (
           <>
-            <dl className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-              {[
-                ["Peers", owner.peers],
-                ["RX ring depth", owner.rxRingDepth],
-                ["TX in flight", `${owner.txInFlight} / ${owner.txCapacity}`],
-                ["Listener restarts", props.restarts],
-                ["Budget exhausted", owner.budgetExhausted],
-                ["Slow passes > 5 ms", owner.mediaSlowPasses5ms],
-                ["Longest pass", `${owner.mediaPassMaxUs} µs`],
-                ["Telemetry dropped", owner.telemetryDropped],
-              ].map(([label, value]) => (
-                <div key={label}>
-                  <dt className="text-xs text-base-content/70">{label}</dt>
-                  <dd className="tabular-nums">{value}</dd>
-                </div>
-              ))}
-            </dl>
+            <div className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
+              <KeyValue
+                rows={[
+                  ["Peers", owner.peers],
+                  ["RX ring depth", owner.rxRingDepth],
+                  ["TX in flight", `${owner.txInFlight} / ${owner.txCapacity}`],
+                  ["Listener restarts", props.restarts],
+                ]}
+              />
+              <KeyValue
+                rows={[
+                  ["Budget exhausted", owner.budgetExhausted],
+                  ["Slow passes > 5 ms", owner.mediaSlowPasses5ms],
+                  ["Longest pass", `${owner.mediaPassMaxUs} µs`],
+                  ["Telemetry dropped", owner.telemetryDropped],
+                ]}
+              />
+            </div>
             <Attention findings={ownerAttention(owner)} />
           </>
         )}
       </div>
-    </section>
+    </Panel>
   );
 }
 
@@ -206,45 +179,23 @@ function Attention({ findings }: { findings: readonly string[] }) {
 function Provenance(props: { status: EngineStatus | null; containedPanics: number }) {
   const { status } = props;
   if (status === null) {
-    return <p className="text-base-content/70">Loading build information…</p>;
+    return <p className="text-sm text-base-content/70">Loading build information…</p>;
   }
   const libs = status.nativeLibraries ?? {};
   return (
-    <section className="card bg-base-200" aria-labelledby="system-build">
-      <div className="card-body gap-3 p-4">
-        <h3 id="system-build" className="card-title text-base">
-          Build and provenance
-        </h3>
-        <dl className="grid grid-cols-[8rem_1fr] gap-1 text-sm">
-          <dt className="text-base-content/70">Restream</dt>
-          <dd>{status.restream?.version ?? "--"}</dd>
-          <dt className="text-base-content/70">Commit</dt>
-          <dd className="break-all font-mono text-xs">{status.restream?.commit ?? "--"}</dd>
-          <dt className="text-base-content/70">Built</dt>
-          <dd>{status.restream?.buildTimestamp ?? "--"}</dd>
-          <dt className="text-base-content/70">Rust</dt>
-          <dd>
-            {status.toolchain?.rustc ?? "--"} · {status.toolchain?.target ?? "--"}
-          </dd>
-          {Object.entries(libs).map(([name, lib]) => (
-            <div key={name} className="contents">
-              <dt className="text-base-content/70">{name}</dt>
-              <dd>
-                {lib?.version ?? "--"}
-                {lib?.license ? ` · ${lib.license}` : ""}
-              </dd>
-            </div>
-          ))}
-          <dt className="text-base-content/70">Host</dt>
-          <dd>
-            {status.os?.hostname ?? "--"} · kernel {status.os?.kernelVersion ?? "--"} ·{" "}
-            {status.os?.cpu?.logicalCpus ?? "--"} CPUs
-          </dd>
-          <dt className="text-base-content/70">Contained panics</dt>
-          <dd className={props.containedPanics > 0 ? "text-warning" : undefined}>
-            {props.containedPanics}
-          </dd>
-        </dl>
+    <Panel id="system-build" title="Build and provenance">
+      <div className="flex flex-col gap-3">
+        <KeyValue
+          rows={[
+            ["Restream", status.restream?.version ?? "--"],
+            ["Commit", <span key="commit" className="font-mono text-xs break-all">{status.restream?.commit ?? "--"}</span>],
+            ["Built", status.restream?.buildTimestamp ?? "--"],
+            ["Rust", `${status.toolchain?.rustc ?? "--"} · ${status.toolchain?.target ?? "--"}`],
+            ...Object.entries(libs).map(([name, lib]) => [name, `${lib?.version ?? "--"}${lib?.license ? ` · ${lib.license}` : ""}`] as const),
+            ["Host", `${status.os?.hostname ?? "--"} · kernel ${status.os?.kernelVersion ?? "--"} · ${status.os?.cpu?.logicalCpus ?? "--"} CPUs`],
+            ["Contained panics", <span key="panics" className={props.containedPanics > 0 ? "text-warning" : undefined}>{props.containedPanics}</span>],
+          ]}
+        />
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
@@ -262,7 +213,7 @@ function Provenance(props: { status: EngineStatus | null; containedPanics: numbe
           </span>
         </div>
       </div>
-    </section>
+    </Panel>
   );
 }
 

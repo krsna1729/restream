@@ -9,6 +9,9 @@ import type { LiveSnapshot } from "./store.js";
 import { When } from "./when-view.js";
 import { zoneName } from "./when.js";
 import { PageHeader } from "../ui/page-header.js";
+import { StatusDot } from "../ui/tone.js";
+import { PipelineHeading } from "./pipeline-scope.js";
+import { useGo } from "./router.js";
 
 const HISTORY_ROWS = 200;
 const LEVELS: ReadonlyArray<[LogLevel, string]> = [
@@ -28,9 +31,18 @@ const LEVEL_BADGES: Record<string, string> = {
  * matching row live as the engine writes it. */
 export function Logs(props: { live: LiveSnapshot; pipelineId: string | null; outputId?: string | null }) {
   const state = props.live.state;
-  const [scope, setScope] = useState<LogScope>(
-    props.pipelineId ? { kind: "pipeline", pipelineId: props.pipelineId, outputId: props.outputId ?? null } : { kind: "all" },
-  );
+  const go = useGo();
+  // A pipeline's logs live under its header and tabs, like its other
+  // views; the URL holds the pipeline, this page the rest of the scope.
+  const [unscoped, setUnscoped] = useState<"all" | "engine">("all");
+  const [outputId, setOutputId] = useState(props.outputId ?? null);
+  const [shownFor, setShownFor] = useState({ pipelineId: props.pipelineId, outputId: props.outputId ?? null });
+  if (shownFor.pipelineId !== props.pipelineId || shownFor.outputId !== (props.outputId ?? null)) {
+    setShownFor({ pipelineId: props.pipelineId, outputId: props.outputId ?? null });
+    setOutputId(props.outputId ?? null);
+  }
+  const scoped = props.pipelineId !== null && (state === null || state.pipelines.some((pipeline) => pipeline.id === props.pipelineId));
+  const scope: LogScope = scoped && props.pipelineId ? { kind: "pipeline", pipelineId: props.pipelineId, outputId } : { kind: unscoped };
   const [level, setLevel] = useState<LogLevel>("info");
   const [lifecycleOnly, setLifecycleOnly] = useState(false);
   const [following, setFollowing] = useState(true);
@@ -96,42 +108,51 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null; out
 
   return (
     <section className="space-y-4" aria-labelledby="logs-title">
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="w-full">
-          <PageHeader eyebrow="Logs" title={<span id="logs-title">Engine logs</span>} subtitle="Newest first; streams matching rows live." />
-        </div>
+      {scope.kind === "pipeline" ? (
+        <PipelineHeading live={props.live} workspace="logs" pipelineId={scope.pipelineId} />
+      ) : (
+        <PageHeader eyebrow="Logs" title="Engine logs" subtitle="Newest first; streams matching rows live." />
+      )}
+      <h2 id="logs-title" className="sr-only">
+        Engine logs
+      </h2>
+      <div className="filter-bar">
         <label className="form-control">
           <span className="label-text text-xs">Scope</span>
           <select
-            className="select select-sm select-bordered"
+            className="select select-sm sm:w-56"
             value={scope.kind === "pipeline" ? `p:${scope.pipelineId}` : scope.kind}
             onChange={(event) => {
               const value = event.target.value;
-              setScope(
-                value.startsWith("p:")
-                  ? { kind: "pipeline", pipelineId: value.slice(2), outputId: null }
-                  : value === "engine"
-                    ? { kind: "engine" }
-                    : { kind: "all" },
-              );
+              if (value.startsWith("p:")) {
+                go({ workspace: "logs", pipelineId: value.slice(2) });
+                return;
+              }
+              setUnscoped(value === "engine" ? "engine" : "all");
+              if (props.pipelineId !== null) go({ workspace: "logs", pipelineId: null });
             }}
           >
             <option value="all">Everything</option>
             <option value="engine">Engine only (no pipeline)</option>
-            {(state?.pipelines ?? []).map((pipeline) => (
-              <option key={pipeline.id} value={`p:${pipeline.id}`}>
-                Pipeline {pipeline.name}
-              </option>
-            ))}
+            {scope.kind === "pipeline" ? (
+              // The header names it and switches it; here it is just "this one".
+              <option value={`p:${scope.pipelineId}`}>This pipeline</option>
+            ) : (
+              (state?.pipelines ?? []).map((pipeline) => (
+                <option key={pipeline.id} value={`p:${pipeline.id}`}>
+                  Pipeline {pipeline.name}
+                </option>
+              ))
+            )}
           </select>
         </label>
         {scope.kind === "pipeline" && (
           <label className="form-control">
             <span className="label-text text-xs">Destination</span>
             <select
-              className="select select-sm select-bordered"
+              className="select select-sm sm:w-56"
               value={scope.outputId ?? ""}
-              onChange={(event) => setScope({ ...scope, outputId: event.target.value || null })}
+              onChange={(event) => setOutputId(event.target.value || null)}
             >
               <option value="">All of the pipeline</option>
               {pipelineOutputs.map((output) => (
@@ -145,7 +166,7 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null; out
         <label className="form-control">
           <span className="label-text text-xs">Level</span>
           <select
-            className="select select-sm select-bordered"
+            className="select select-sm sm:w-40"
             value={level}
             onChange={(event) => {
               const next = LEVELS.find(([value]) => value === event.target.value);
@@ -159,14 +180,14 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null; out
             ))}
           </select>
         </label>
-        <label className="label h-8 cursor-pointer gap-2">
+        <label className="flex h-8 cursor-pointer items-center gap-2 text-sm">
           <input
             type="checkbox"
             className="checkbox checkbox-sm"
             checked={lifecycleOnly}
             onChange={(event) => setLifecycleOnly(event.target.checked)}
           />
-          <span className="label-text">Lifecycle events only</span>
+          Lifecycle events only
         </label>
         <button
           type="button"
@@ -176,7 +197,8 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null; out
         >
           {following ? "Pause live" : "Resume live"}
         </button>
-        <span role="status" className={`badge self-center ${following && !streamDown ? "badge-success" : "badge-ghost"}`}>
+        <span role="status" className="inline-flex h-8 items-center gap-1.5 text-sm">
+          <StatusDot tone={following && !streamDown ? "ok" : "neutral"} />
           {!following ? "paused" : streamDown ? "live stream unavailable" : "live"}
         </span>
       </div>
@@ -188,9 +210,9 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null; out
           </button>
         </p>
       ) : rows === null ? (
-        <p className="text-base-content/70">Loading log…</p>
+        <p className="text-sm text-base-content/70">Loading log…</p>
       ) : rows.length === 0 ? (
-        <p className="text-base-content/70">No rows match.</p>
+        <p className="text-sm text-base-content/70">No rows match.</p>
       ) : (
         <div className="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
           <table className="table table-xs" aria-label="Log rows">

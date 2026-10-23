@@ -161,7 +161,7 @@ function GraphView(props: {
   onSelect: (group: EgressGroup) => void;
   onShowAll: () => void;
 }) {
-  if (props.columns === null) return <p className="text-base-content/70">Loading graph…</p>;
+  if (props.columns === null) return <p className="text-sm text-base-content/70">Loading graph…</p>;
   return (
     <ol className="scrollbar-thin flex flex-col items-stretch gap-2 lg:flex-row lg:items-center lg:overflow-x-auto lg:pb-2">
       {props.columns.map((column, index) => {
@@ -228,8 +228,8 @@ function GroupTable(props: {
   selected: string | null;
   onSelect: (group: EgressGroup) => void;
 }) {
-  if (props.groups === null) return <p className="text-base-content/70">Loading graph…</p>;
-  if (props.groups.length === 0) return <p className="text-base-content/70">No destinations.</p>;
+  if (props.groups === null) return <p className="text-sm text-base-content/70">Loading graph…</p>;
+  if (props.groups.length === 0) return <p className="text-sm text-base-content/70">No destinations.</p>;
   return (
     <table className="table table-sm" aria-label="Destination groups">
       <thead>
@@ -273,7 +273,7 @@ function Timeline(props: { pipelineId: string; outputs: readonly OutputState[] }
     () => new Map(props.outputs.map((output) => [output.id, output.name])),
     [props.outputs],
   );
-  if (events.value === null) return <p className="text-base-content/70">Loading events…</p>;
+  if (events.value === null) return <p className="text-sm text-base-content/70">Loading events…</p>;
   const latest = [...events.value.events].sort((a, b) => b.seq - a.seq);
   return (
     <div className="space-y-2">
@@ -282,7 +282,7 @@ function Timeline(props: { pipelineId: string; outputs: readonly OutputState[] }
         <Freshness atMs={events.atMs} />
       </div>
       {latest.length === 0 ? (
-        <p className="text-base-content/70">No kept lifecycle event for this pipeline.</p>
+        <p className="text-sm text-base-content/70">No kept lifecycle event for this pipeline.</p>
       ) : (
         <ol className="space-y-1 text-sm" aria-label="Pipeline timeline">
           {latest.map((event) => (

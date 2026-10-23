@@ -208,7 +208,7 @@ export function Preview(props: { url: string; label: string }) {
         </span>
         {showing && tracks.length > 1 && (
           <select
-            className="select select-xs select-bordered"
+            className="select select-xs"
             aria-label={`Audio track of ${props.label}`}
             value={track ?? ""}
             onChange={(event) => {

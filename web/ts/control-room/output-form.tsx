@@ -79,7 +79,7 @@ export function OutputForm(props: {
         <label className="form-control">
           <span className="label-text">Name</span>
           <input
-            className="input input-sm input-bordered"
+            className="input input-sm"
             value={draft.name}
             onChange={(event) => set({ name: event.target.value })}
           />
@@ -87,7 +87,7 @@ export function OutputForm(props: {
         <label className="form-control">
           <span className="label-text">Protocol</span>
           <select
-            className="select select-sm select-bordered"
+            className="select select-sm"
             value={draft.protocol}
             onChange={(event) =>
               // A URL of one protocol never fits another: start the new one empty.
@@ -105,7 +105,7 @@ export function OutputForm(props: {
           <label className="form-control">
             <span className="label-text">Host</span>
             <input
-              className="input input-sm input-bordered"
+              className="input input-sm"
               value={draft.srt.host}
               onChange={(event) => setSrt({ host: event.target.value })}
             />
@@ -113,7 +113,7 @@ export function OutputForm(props: {
           <label className="form-control">
             <span className="label-text">Port</span>
             <input
-              className="input input-sm input-bordered"
+              className="input input-sm"
               value={draft.srt.port}
               onChange={(event) => setSrt({ port: event.target.value })}
             />
@@ -121,7 +121,7 @@ export function OutputForm(props: {
           <label className="form-control">
             <span className="label-text">Stream ID</span>
             <input
-              className="input input-sm input-bordered font-mono"
+              className="input input-sm font-mono"
               value={draft.srt.streamId}
               onChange={(event) => setSrt({ streamId: event.target.value })}
             />
@@ -131,7 +131,7 @@ export function OutputForm(props: {
             <input
               type="password"
               autoComplete="off"
-              className="input input-sm input-bordered"
+              className="input input-sm"
               value={draft.srt.passphrase}
               onChange={(event) => setSrt({ passphrase: event.target.value })}
             />
@@ -139,7 +139,7 @@ export function OutputForm(props: {
           <label className="form-control">
             <span className="label-text">Key length</span>
             <select
-              className="select select-sm select-bordered"
+              className="select select-sm"
               value={draft.srt.pbkeylen}
               onChange={(event) => setSrt({ pbkeylen: event.target.value })}
             >
@@ -151,7 +151,7 @@ export function OutputForm(props: {
           <label className="form-control">
             <span className="label-text">Other options (a=b&amp;c=d)</span>
             <input
-              className="input input-sm input-bordered font-mono"
+              className="input input-sm font-mono"
               value={draft.srt.extraQuery}
               onChange={(event) => setSrt({ extraQuery: event.target.value })}
             />
@@ -162,7 +162,7 @@ export function OutputForm(props: {
           <label className="form-control">
             <span className="label-text">Server</span>
             <select
-              className="select select-sm select-bordered"
+              className="select select-sm"
               value={draft.server}
               onChange={(event) => set({ server: event.target.value })}
             >
@@ -176,7 +176,7 @@ export function OutputForm(props: {
           <label className="form-control md:col-span-2">
             <span className="label-text">{draft.server ? "Stream key" : "URL"}</span>
             <input
-              className="input input-sm input-bordered font-mono"
+              className="input input-sm font-mono"
               autoComplete="off"
               value={draft.input}
               onChange={(event) => set({ input: event.target.value })}
@@ -186,7 +186,7 @@ export function OutputForm(props: {
             <label className="form-control">
               <span className="label-text">RTMP flavour</span>
               <select
-                className="select select-sm select-bordered"
+                className="select select-sm"
                 value={draft.rtmpMode}
                 onChange={(event) =>
                   set({ rtmpMode: event.target.value === "enhanced" ? "enhanced" : "legacy" })
@@ -205,7 +205,7 @@ export function OutputForm(props: {
       <label className="form-control">
         <span className="label-text">Monitoring URL (optional, e.g. the YouTube watch page)</span>
         <input
-          className="input input-sm input-bordered"
+          className="input input-sm"
           value={draft.monitoringUrl}
           onChange={(event) => set({ monitoringUrl: event.target.value })}
         />
@@ -214,7 +214,7 @@ export function OutputForm(props: {
         <label className="form-control">
           <span className="label-text">Video</span>
           <select
-            className="select select-sm select-bordered"
+            className="select select-sm"
             value={draft.profile === null ? "c:" : draft.profile ? `p:${draft.profile}` : "s:"}
             onChange={(event) => {
               const value = event.target.value;
@@ -233,7 +233,7 @@ export function OutputForm(props: {
         <label className="form-control">
           <span className="label-text">Video codec</span>
           <select
-            className="select select-sm select-bordered"
+            className="select select-sm"
             value={draft.codec}
             disabled={draft.profile === null}
             onChange={(event) => set({ codec: event.target.value as OutputDraft["codec"] })}
@@ -261,7 +261,7 @@ export function OutputForm(props: {
           </span>
         </p>
         <select
-          className="select select-sm select-bordered"
+          className="select select-sm"
           aria-label="Audio routing"
           value={draft.audio}
           onChange={(event) => set({ audio: event.target.value as AudioMode })}
@@ -296,7 +296,7 @@ export function OutputForm(props: {
         {(draft.audio === "downmix" || draft.audio === "remap") && (
           <div className="flex flex-wrap gap-2">
             <select
-              className="select select-sm select-bordered"
+              className="select select-sm"
               aria-label="Source track"
               value={firstTrack}
               onChange={(event) => set({ tracks: [Number(event.target.value)] })}
@@ -311,7 +311,7 @@ export function OutputForm(props: {
               (["leftChannel", "rightChannel"] as const).map((side) => (
                 <select
                   key={side}
-                  className="select select-sm select-bordered"
+                  className="select select-sm"
                   aria-label={side === "leftChannel" ? "Left from channel" : "Right from channel"}
                   value={draft[side]}
                   onChange={(event) => {

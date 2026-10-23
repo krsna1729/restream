@@ -31,7 +31,7 @@ export interface Chip<T extends string> {
 
 export function ChipGroup<T extends string>(props: { label: string; value: T; chips: readonly Chip<T>[]; onChange: (value: T) => void }) {
   return (
-    <div role="group" aria-label={props.label} className="scrollbar-thin -mx-1 flex max-w-full gap-1.5 overflow-x-auto px-1 py-0.5">
+    <div role="group" aria-label={props.label} className="scrollbar-thin -mx-1 flex max-w-full gap-1.5 overflow-x-auto px-1 py-0.5 md:flex-wrap md:overflow-visible">
       {props.chips.map((chip) => {
         const active = chip.value === props.value;
         return (

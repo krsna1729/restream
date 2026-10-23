@@ -126,7 +126,7 @@ export function DetailToggle(props: { open: boolean; onChange: (open: boolean) =
       aria-pressed={props.open}
       onClick={() => props.onChange(!props.open)}
       title={props.open ? "Hide ids, counters and raw errors" : "Show ids, counters and raw errors"}
-      className={`btn btn-xs ${props.open ? "btn-primary" : "btn-outline border-base-content/20"}`}
+      className={`btn btn-sm ${props.open ? "btn-primary" : "btn-outline border-base-content/20"}`}
     >
       {props.label ?? "Detail"}
     </button>

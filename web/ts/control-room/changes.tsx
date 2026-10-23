@@ -21,12 +21,15 @@ import type { ChangeDraft, Gate, StageState } from "./changes-model.js";
 import { Convergence, Impact } from "./changes-impact.js";
 import type { LiveSnapshot } from "./store.js";
 import { PageHeader } from "../ui/page-header.js";
+import { Panel } from "../ui/panel.js";
+import { StatusBadge } from "../ui/tone.js";
+import type { Tone } from "../ui/tone.js";
 
-const STAGE_BADGE: Record<StageState, string> = {
-  done: "badge-success",
-  current: "badge-info",
-  failed: "badge-error",
-  todo: "badge-ghost",
+const STAGE_TONE: Record<StageState, Tone> = {
+  done: "ok",
+  current: "info",
+  failed: "bad",
+  todo: "neutral",
 };
 
 /** The operation this tab is working on, so leaving the workspace or
@@ -75,8 +78,10 @@ export function Changes({ live }: { live: LiveSnapshot }) {
       <div className="flex flex-wrap items-center gap-3">
         <ol className="flex gap-2" aria-label="Change progress">
           {STAGES.map((stage, index) => (
-            <li key={stage} className={`badge ${STAGE_BADGE[stages[index]]}`} data-state={stages[index]}>
-              {index + 1} · {stage}
+            <li key={stage} data-state={stages[index]}>
+              <StatusBadge tone={STAGE_TONE[stages[index]]}>
+                {index + 1} · {stage}
+              </StatusBadge>
             </li>
           ))}
         </ol>
@@ -143,15 +148,12 @@ function DefineChange(props: {
 
   return (
     <>
-      <section className="card bg-base-200" aria-labelledby="changes-define">
-        <div className="card-body gap-3 p-4">
-          <h3 id="changes-define" className="card-title text-base">
-            Define the change
-          </h3>
+      <Panel id="changes-define" title="Define the change">
+        <div className="flex flex-col gap-3">
           <label className="form-control">
             <span className="label-text">Why (kept in the audit log)</span>
             <input
-              className="input input-sm input-bordered"
+              className="input input-sm"
               value={intent}
               onChange={(event) => setIntent(event.target.value)}
             />
@@ -159,7 +161,7 @@ function DefineChange(props: {
           <label className="form-control">
             <span className="label-text">Pipeline</span>
             <select
-              className="select select-sm select-bordered"
+              className="select select-sm"
               value={pipelineId}
               onChange={(event) => setPipelineId(event.target.value)}
             >
@@ -178,7 +180,7 @@ function DefineChange(props: {
                   <label className="form-control">
                     <span className="label-text text-xs">Change</span>
                     <select
-                      className="select select-sm select-bordered"
+                      className="select select-sm"
                       value={draft.kind}
                       onChange={(event) =>
                         edit(index, { kind: event.target.value as ChangeDraft["kind"] })
@@ -195,7 +197,7 @@ function DefineChange(props: {
                     <label className="form-control">
                       <span className="label-text text-xs">Destination</span>
                       <select
-                        className="select select-sm select-bordered"
+                        className="select select-sm"
                         value={draft.outputId}
                         onChange={(event) => edit(index, { outputId: event.target.value })}
                       >
@@ -215,7 +217,7 @@ function DefineChange(props: {
                           Name{draft.kind === "updateOutput" ? " (empty keeps it)" : ""}
                         </span>
                         <input
-                          className="input input-sm input-bordered"
+                          className="input input-sm"
                           value={draft.name}
                           onChange={(event) => edit(index, { name: event.target.value })}
                         />
@@ -225,7 +227,7 @@ function DefineChange(props: {
                           URL{draft.kind === "updateOutput" ? " (empty keeps it)" : ""}
                         </span>
                         <input
-                          className="input input-sm input-bordered font-mono"
+                          className="input input-sm font-mono"
                           value={draft.url}
                           onChange={(event) => edit(index, { url: event.target.value })}
                         />
@@ -237,7 +239,7 @@ function DefineChange(props: {
                       <label className="form-control">
                         <span className="label-text text-xs">Video</span>
                         <select
-                          className="select select-sm select-bordered"
+                          className="select select-sm"
                           value={draft.profile}
                           onChange={(event) => edit(index, { profile: event.target.value })}
                         >
@@ -252,7 +254,7 @@ function DefineChange(props: {
                       <label className="form-control">
                         <span className="label-text text-xs">After applying</span>
                         <select
-                          className="select select-sm select-bordered"
+                          className="select select-sm"
                           value={draft.desiredState}
                           onChange={(event) =>
                             edit(index, {
@@ -302,7 +304,7 @@ function DefineChange(props: {
             </button>
           </div>
         </div>
-      </section>
+      </Panel>
 
       {currentPlan && <Judgement plan={currentPlan} />}
       {currentPlan?.graphPreview.topology && (
@@ -349,17 +351,19 @@ function Operation(props: {
           ? "Verify again"
           : "Verify";
   return (
-    <section className="card bg-base-200" aria-labelledby="changes-operation">
-      <div className="card-body gap-3 p-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <h3 id="changes-operation" className="card-title text-base">
-            Operation
-          </h3>
-          <span className="font-mono text-xs">{operation.operationId}</span>
-          <span className="badge" data-status={operation.status}>
+    <Panel
+      id="changes-operation"
+      title="Operation"
+      subtitle={<span className="font-mono">{operation.operationId}</span>}
+      actions={
+        <span data-status={operation.status}>
+          <StatusBadge tone={/failed/i.test(operation.status) ? "bad" : operation.status === "verified" ? "ok" : "neutral"} dot>
             {operation.status}
-          </span>
-        </div>
+          </StatusBadge>
+        </span>
+      }
+    >
+      <div className="flex flex-col gap-3">
         <p className="text-sm">{operation.intentSummary}</p>
         <ul className="text-sm" aria-label="Requested changes">
           {operation.request.proposedChanges.map((change, index) => (
@@ -378,7 +382,7 @@ function Operation(props: {
           <label className="form-control">
             <span className="label-text">Approval reason (audited)</span>
             <input
-              className="input input-sm input-bordered"
+              className="input input-sm"
               value={reason}
               onChange={(event) => setReason(event.target.value)}
             />
@@ -425,7 +429,7 @@ function Operation(props: {
         <OperationResult operation={operation} />
         <Convergence operation={operation} live={props.live} />
       </div>
-    </section>
+    </Panel>
   );
 }
 
@@ -433,16 +437,16 @@ function Judgement({ plan }: { plan: ChangePlan }) {
   const { validation, impact } = plan;
   const notes = [...plan.graphPreview.notes, ...impact.engineeringNotes];
   return (
-    <section className="card bg-base-200" aria-labelledby="changes-judgement">
-      <div className="card-body gap-2 p-4">
-        <div className="flex items-center gap-2">
-          <h3 id="changes-judgement" className="card-title text-base">
-            Engine judgement
-          </h3>
-          <span className={`badge ${validation.valid ? "badge-success" : "badge-error"}`}>
-            {validation.valid ? "valid" : "invalid"}
-          </span>
-        </div>
+    <Panel
+      id="changes-judgement"
+      title="Engine judgement"
+      actions={
+        <StatusBadge tone={validation.valid ? "ok" : "bad"} dot>
+          {validation.valid ? "valid" : "invalid"}
+        </StatusBadge>
+      }
+    >
+      <div className="flex flex-col gap-2">
         {[...validation.errors, ...validation.warnings].map((issue, index) => (
           <p
             key={index}
@@ -466,7 +470,7 @@ function Judgement({ plan }: { plan: ChangePlan }) {
           </ul>
         )}
       </div>
-    </section>
+    </Panel>
   );
 }
 
