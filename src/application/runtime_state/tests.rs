@@ -137,6 +137,7 @@ fn projection_with(outputs: &[(&str, Convergence)]) -> Projection {
                 retry: None,
                 evidence: None,
                 diagnosis: None,
+                state_since_ms: 0,
             },
         );
     }

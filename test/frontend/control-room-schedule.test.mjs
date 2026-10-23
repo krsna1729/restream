@@ -38,3 +38,11 @@ test("results read as tones, local inputs round-trip, and waits read as words", 
   assert.equal(untilLabel(T + 30_000, T), "in 30 s");
   assert.equal(untilLabel(T - 1, T), "now");
 });
+
+test("the next event for a pipeline is its soonest enabled one", () => {
+  const event = (id, pipelineId, nextAtMs, enabled = true) => ({ id, pipelineId, nextAtMs, enabled });
+  const all = [event("a", "p1", 5_000), event("b", "p2", 3_000), event("c", "p1", 2_000, false), event("e", "p1", null)];
+  assert.equal(nextUp(all).id, "b");
+  assert.equal(nextUp(all, "p1").id, "a", "paused and finished events are not next");
+  assert.equal(nextUp(all, "p3"), null);
+});

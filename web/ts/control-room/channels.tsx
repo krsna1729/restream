@@ -25,6 +25,8 @@ import type { LiveSnapshot } from "./store.js";
 import { LogsLink } from "./logs-link.js";
 import { outputTrouble, troubleTitle } from "./trouble-model.js";
 import { retryWords } from "./when.js";
+import { Since } from "./when-view.js";
+import { NextEvent } from "./next-event.js";
 
 const STATE_TONE: Record<ChannelState, Tone> = {
   live: "ok",
@@ -143,6 +145,7 @@ export function Channels({ live }: { live: LiveSnapshot }) {
           </div>
         }
       />
+      <NextEvent pipelineId={pipeline === "all" ? null : pipeline} />
       {progress && (
         <div role="status" className="flex flex-wrap items-center gap-3 rounded-box border border-base-content/10 bg-base-200 px-4 py-3 text-sm">
           <span className="font-medium">
@@ -302,7 +305,7 @@ function ChannelCard(props: { channel: Channel; detail: boolean; bps: number | n
         <StatusBadge tone={STATE_TONE[channel.state]} dot>
           {STATE_LABEL[channel.state]}
         </StatusBadge>
-        {output.retry && <RetryIn atMs={output.retry.nextAttemptAtMs} attempts={output.retry.attempts} />}
+        {output.retry ? <RetryIn atMs={output.retry.nextAttemptAtMs} attempts={output.retry.attempts} /> : <Since sinceMs={output.stateSinceMs} />}
         <span className="ml-auto tabular text-base-content/70">{channel.state === "live" ? formatBps(props.bps) : ""}</span>
       </div>
       {trouble && channel.state !== "live" && (

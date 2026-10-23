@@ -123,8 +123,13 @@ impl StateHub {
 
     /// Installs `projection` as current. Returns the published delta, or
     /// `None` when nothing changed (the revision stays).
-    pub async fn publish(&self, projection: Projection) -> Option<Arc<StateDelta>> {
+    pub async fn publish(&self, mut projection: Projection) -> Option<Arc<StateDelta>> {
         let mut current = self.current.lock().await;
+        super::stamp_since(
+            &current.projection,
+            &mut projection,
+            crate::media::engine::MediaEngine::now_epoch_ms(),
+        );
         let mut delta = diff(&current.projection, &projection);
         if delta.is_empty() {
             return None;
