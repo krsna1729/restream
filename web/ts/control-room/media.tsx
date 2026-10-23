@@ -11,6 +11,7 @@ import {
 import type { MediaFile, MediaFileAnalysis } from "../core/api-types.js";
 import { ConfirmDelete } from "./confirm.js";
 import { formatBytes, formatPercent } from "./format.js";
+import { Poster } from "./poster.js";
 import { When } from "./when-view.js";
 import {
   formatDuration,
@@ -192,6 +193,7 @@ function FileList(props: {
                 aria-pressed={mediaKey(file) === props.selected}
                 onClick={() => props.onSelect(mediaKey(file))}
               >
+                <Poster name={file.name} className="w-14" />
                 <span className="min-w-0 flex-1 truncate">{file.name}</span>
                 <ConversionBadge file={file} />
                 <span className="tabular-nums text-base-content/70">
@@ -235,6 +237,7 @@ function Asset(props: {
   return (
     <Panel id="media-asset" title={file.name}>
       <div className="flex flex-col gap-3">
+        <Poster key={`${file.name}:${file.modifiedAt}`} name={file.name} className="w-full max-w-sm" />
         <KeyValue
           rows={[
             ["Original", `${forms.original} · ${formatBytes(file.sourceSize ?? file.size)}`],

@@ -983,6 +983,7 @@ file) and `nowPlaying` (while running, the index of the playing file, else
 | `GET` | `/api/v1/media` | List library files: `{ "files": [...] }` |
 | `POST` | `/api/v1/media/upload` | Upload one file (multipart field `file`) |
 | `GET` | `/api/v1/media/:filename/analysis` | Codec, duration and GOP analysis |
+| `GET` | `/api/v1/media/:filename/poster` | A PNG still (320 px wide) from about 5 s in, decoded on the blocking pool two at a time; `ETag` from size and time, browser-cached for a day; `404` when the file has no picture |
 | `PATCH` | `/api/v1/media/:filename` | Rename from `{ "newName" }` |
 | `DELETE` | `/api/v1/media/:filename` | Delete an unreferenced file |
 | `GET`, `HEAD` | `/media/:filename` | Download or stream a file, with byte ranges |

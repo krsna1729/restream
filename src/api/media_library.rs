@@ -277,6 +277,62 @@ pub async fn media_upload_handler(
     }
 }
 
+/// `GET /api/v1/media/{filename}/poster`: a PNG still of the file, cached
+/// by the browser for a day and revalidated by the file's size and time.
+pub async fn media_poster_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(filename): Path<String>,
+) -> axum::response::Response {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
+    }
+    let path = match media_path_under_root(&state.media_dir, &filename) {
+        Ok(path) => path,
+        Err(status) => return status.into_response(),
+    };
+    let tag = match tokio::fs::metadata(&path).await {
+        Ok(meta) => format!(
+            "\"{}-{}\"",
+            meta.len(),
+            meta.modified()
+                .ok()
+                .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |at| at.as_secs())
+        ),
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let cache = [
+        (
+            axum::http::header::CACHE_CONTROL,
+            "private, max-age=86400".to_string(),
+        ),
+        (axum::http::header::ETAG, tag.clone()),
+    ];
+    if headers
+        .get(axum::http::header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        == Some(tag.as_str())
+    {
+        return (StatusCode::NOT_MODIFIED, cache).into_response();
+    }
+    match state.media_library_service.media_poster(path).await {
+        Ok(png) => (
+            [(axum::http::header::CONTENT_TYPE, "image/png".to_string())],
+            cache,
+            png,
+        )
+            .into_response(),
+        // No picture to show (audio-only, unreadable): the page shows a
+        // placeholder, so this is a quiet 404, not a server error.
+        Err(error) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response(),
+    }
+}
+
 pub async fn media_analysis_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

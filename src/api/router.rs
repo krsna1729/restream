@@ -46,8 +46,8 @@ use super::ingests::{
 use super::logs::{logs_handler, logs_stream_handler};
 use super::media_library::{
     MAX_MEDIA_UPLOAD_BYTES, media_analysis_handler, media_delete_handler, media_file_handler,
-    media_list_handler, media_rename_handler, media_upload_handler, recording_start_handler,
-    recording_stop_handler,
+    media_list_handler, media_poster_handler, media_rename_handler, media_upload_handler,
+    recording_start_handler, recording_stop_handler,
 };
 use super::notifications::{
     channel_secret_handler, create_channel_handler, delete_channel_handler, deliveries_handler,
@@ -214,6 +214,7 @@ pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
     "/api/v1/media",
     "/api/v1/media/upload",
     "/api/v1/media/{filename}/analysis",
+    "/api/v1/media/{filename}/poster",
     "/api/v1/media/{filename}",
     "/media/{filename}",
     "/hls/{pipeline_id}",
@@ -593,6 +594,7 @@ fn create_app_router() -> Router<Arc<AppState>> {
             "/api/v1/media/{filename}/analysis",
             get(media_analysis_handler),
         )
+        .route("/api/v1/media/{filename}/poster", get(media_poster_handler))
         .route(
             "/api/v1/media/{filename}",
             patch(media_rename_handler).delete(media_delete_handler),
