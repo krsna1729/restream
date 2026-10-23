@@ -51,10 +51,12 @@ copyFileSync(join(publicDir, "js/lib/hls.min.js"), join(out, "hls.min.js"));
 // The base path is wherever the page is served from, so the router and the
 // fetch shim agree on it under any host. The page carries no document
 // skeleton of its own: hosts that wrap pages (artifact viewers) add one,
-// and browsers supply one when served as is.
+// and browsers supply one when served as is. The charset is declared so a
+// plain file server does not decode the UTF-8 scripts as Latin-1.
 writeFileSync(
   join(out, "index.html"),
-  `<title>Restream Control Room</title>
+  `<meta charset="utf-8" />
+<title>Restream Control Room</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="icon" type="image/png" href="logo.png" />
 <link rel="stylesheet" type="text/css" href="output.css" />
