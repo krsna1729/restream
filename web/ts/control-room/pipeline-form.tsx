@@ -237,7 +237,7 @@ function Playlist(props: { queue: readonly string[]; files: readonly MediaFile[]
         </ol>
       )}
       <div className="flex gap-2">
-        <select className="select select-sm select-bordered min-w-0 flex-1" aria-label="File to add to the playlist" value={adding} onChange={(event) => setAdding(event.target.value)}>
+        <select className="select select-sm select-bordered min-w-0 flex-1" aria-label="Add to playlist" value={adding} onChange={(event) => setAdding(event.target.value)}>
           <option value="">Add a file…</option>
           {props.files.map((file) => (
             <option key={file.name} value={file.name}>
