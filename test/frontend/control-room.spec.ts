@@ -1744,6 +1744,18 @@ test("channels: platforms from stored URLs, and a confirmed bulk go-live", async
     // The engine wants both running; with no publisher they wait for one.
     await expect(youtube.getByRole("switch")).toHaveAttribute("aria-checked", "true");
     await expect(youtube).toContainText("waiting for source");
+
+    // A stop says what it touches, and can be undone for a minute.
+    await page.getByRole("button", { name: "Stop (2)" }).click();
+    await expect(confirm).toContainText("across 1 pipeline");
+    await confirm.getByRole("button", { name: "Stop 2" }).click();
+    await expect(youtube.getByRole("switch")).toHaveAttribute("aria-checked", "false");
+    const undo = page.getByRole("status", { name: "Undo" });
+    await expect(undo).toContainText("Stopped 2 channels");
+    await undo.getByRole("button", { name: "Undo", exact: true }).click();
+    await expect(youtube.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByRole("listitem", { name: "Channel cr-ch-tw" }).getByRole("switch")).toHaveAttribute("aria-checked", "true");
+    await expect(undo).toHaveCount(0);
   } finally {
     await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
   }

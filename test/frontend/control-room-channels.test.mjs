@@ -3,8 +3,8 @@ import test from "node:test";
 
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
-const { buildChannels, bulkTargets, channelState, platformOf, platformSummaries, runBulk } =
-  await loadCompiledFrontendModule("control-room/channels-model.js");
+const channelsModel = await loadCompiledFrontendModule("control-room/channels-model.js");
+const { buildChannels, bulkTargets, channelState, platformOf, platformSummaries, runBulk } = channelsModel;
 
 function output(id, overrides = {}) {
   return {
@@ -106,4 +106,18 @@ test("a bulk run keeps its concurrency bound and counts failures without stoppin
   assert.equal(peak, 3);
   assert.deepEqual(progress.at(-1), [7, 2]);
   assert.deepEqual(await runBulk([], async () => true, 4, () => {}), { done: 0, failed: 0 });
+});
+
+test("a bulk action names what it touches: top platforms and pipelines", () => {
+  const { impactWords } = channelsModel;
+  const make = (id, platformId, label, pipelineId) => ({ output: { id, pipelineId }, platform: { id: platformId, label } });
+  const channels = [
+    make("a", "yt", "YouTube", "p1"),
+    make("b", "yt", "YouTube", "p2"),
+    make("c", "tw", "Twitch", "p1"),
+    make("d", "fb", "Facebook", "p3"),
+    make("e", "kk", "Kick", "p3"),
+  ];
+  assert.equal(impactWords(channels), "YouTube 2 · Facebook 1 · Kick 1 · 1 more platform, across 3 pipelines");
+  assert.equal(impactWords(channels.slice(0, 1)), "YouTube 1, across 1 pipeline");
 });
