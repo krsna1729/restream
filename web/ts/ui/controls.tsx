@@ -1,6 +1,7 @@
 // Shared filter controls: a search field, single-choice chips that scroll
 // sideways on a phone instead of wrapping into a wall, and a count chip.
 
+import { useState } from "react";
 import type { ReactNode } from "react";
 
 import { Icon } from "./icons.js";
@@ -82,5 +83,27 @@ export function ShareBar(props: { label: string; items: ReadonlyArray<{ key: str
         ))}
       </ul>
     </div>
+  );
+}
+
+/** Copies `text`; where the clipboard is refused, shows it to copy by hand. */
+export function CopyButton(props: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="btn btn-ghost btn-xs"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(props.text);
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1500);
+        } catch {
+          window.prompt("Copy this:", props.text);
+        }
+      }}
+    >
+      {copied ? "Copied" : props.label}
+    </button>
   );
 }

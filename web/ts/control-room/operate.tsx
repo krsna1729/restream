@@ -9,6 +9,7 @@ import { Kpi, KpiRow } from "../ui/kpi.js";
 import { Panel } from "../ui/panel.js";
 import { RawJson } from "../ui/raw-json.js";
 import { Since } from "./when-view.js";
+import { GoLive } from "./go-live.js";
 import { NextEvent } from "./next-event.js";
 import { StatusBadge } from "../ui/tone.js";
 import type { Tone } from "../ui/tone.js";
@@ -112,6 +113,7 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
         />
       </KpiRow>
       <NextEvent pipelineId={pipelineId} />
+      <GoLive live={props.live} pipelineId={pipelineId} inputs={inputs} />
       {stored && (
         <PipelineBar
           pipeline={stored}

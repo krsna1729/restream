@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { createShareLink, listShareLinks, revokeShareLink } from "../core/api.js";
 import type { ShareLink } from "../core/api-types.js";
+import { CopyButton } from "../ui/controls.js";
 import { EmptyState, Panel } from "../ui/panel.js";
 import { StatusBadge } from "../ui/tone.js";
 import { ConfirmDelete } from "./confirm.js";
@@ -13,27 +14,6 @@ import { LIFETIMES, embedSnippet, linkState, watchUrl } from "./share-model.js";
 import { useNow } from "./store.js";
 import { absoluteTime } from "./when.js";
 
-
-function CopyButton(props: { text: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      type="button"
-      className="btn btn-ghost btn-xs"
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(props.text);
-          setCopied(true);
-          window.setTimeout(() => setCopied(false), 1500);
-        } catch {
-          window.prompt("Copy this:", props.text);
-        }
-      }}
-    >
-      {copied ? "Copied" : props.label}
-    </button>
-  );
-}
 
 export function SharePanel(props: { pipelineId: string; pipelineName: string }) {
   const now = useNow(60_000);
