@@ -16,12 +16,18 @@ test("replay: choose, widen and narrow the span; the URL keeps it", async ({ pag
     await expect
       .poll(async () => (await page.request.get(`/api/v1/pipelines/${pipelineId}/flight-recorder`)).status(), { timeout: 15_000 })
       .toBe(200);
-    // A bounded window from the URL (as an incident's Replay opens it).
+    // A bounded span from the URL, as an incident's Replay opens one; this
+    // one ends before the pipeline existed, so it holds nothing.
     const now = Date.now();
-    await page.goto(`/?w=stability&p=${pipelineId}&from=${now - 6 * 60_000}&to=${now - 60_000}`);
+    await page.goto(`/?w=stability&p=${pipelineId}&from=${now - 7 * 60_000}&to=${now - 2 * 60_000}`);
     const history = page.locator('section[aria-labelledby="replay-window"]');
     await expect(history).toContainText("5 min");
-    await expect(page.getByRole("button", { name: /^(Play|Replay)$/ })).toBeVisible();
+    await expect(page.getByText("Nothing recorded in this span")).toBeVisible();
+
+    // A following span ends now and plays what the recorder has.
+    await page.goto(`/?w=stability&p=${pipelineId}&from=${now - 3 * 60_000}`);
+    await expect(history).toContainText("→ now · 3 min");
+    await expect(page.getByRole("button", { name: /^(Play|Replay)$/ })).toBeVisible({ timeout: 15_000 });
 
     await history.getByRole("button", { name: "Last 10 min" }).click();
     await expect(history).toContainText("→ now · 10 min");

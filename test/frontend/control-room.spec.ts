@@ -1813,7 +1813,7 @@ test("stability lab: naive retries stay stuck after a blip, the engine's backoff
     await page.getByRole("button", { name: "Replay a pipeline" }).click();
     await page.getByRole("combobox", { name: "Pipeline" }).selectOption(pipelineId);
     await expect(story).toContainText(/Healthy|Retrying|Degraded|No source/, { timeout: 20_000 });
-    await expect(story).toContainText("measured samples every 2 s");
+    await expect(story).toContainText("measured every 2 s");
   } finally {
     await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
   }
