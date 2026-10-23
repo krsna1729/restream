@@ -91,7 +91,7 @@ for (const width of widths) {
         await page.goto(`${base}/?${query}`, { waitUntil: "domcontentloaded" });
         await page.waitForTimeout(settleMs);
         await page
-          .waitForFunction(() => document.getAnimations().every((animation) => !(animation instanceof CSSTransition) || animation.playState !== "running"), null, { timeout: 2_000 })
+          .waitForFunction(() => document.getAnimations().every((animation) => animation.playState !== "running" || animation.effect?.getComputedTiming().iterations === Infinity), null, { timeout: 2_000 })
           .catch(() => undefined);
         const audit = await page.evaluate(auditLayout, { phone: width < 768 });
         const checks = {

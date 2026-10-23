@@ -61,9 +61,11 @@ for (const [width, scheme] of [[1440, "dark"], [1440, "light"], [375, "dark"], [
         }
         // Let polls land, so the audit sees the page as people do.
         await page.waitForTimeout(800);
-        // ...and any closing menu finish fading: mid-fade text is not a contrast bug.
+        // ...and any closing menu finish fading (a transition or a keyframe
+        // animation; endless ones like a status pulse never end): mid-fade
+        // text is not a contrast bug.
         await page
-          .waitForFunction(() => document.getAnimations().every((animation) => !(animation instanceof CSSTransition) || animation.playState !== "running"), null, { timeout: 2_000 })
+          .waitForFunction(() => document.getAnimations().every((animation) => animation.playState !== "running" || animation.effect?.getComputedTiming().iterations === Infinity), null, { timeout: 2_000 })
           .catch(() => undefined);
         const audit = await page.evaluate(auditLayout, { phone });
         const found = [
@@ -95,6 +97,9 @@ test("layout: a page that wraps the console cannot turn its text black", async (
     await page.goto("/?w=fleet");
     await page.addStyleTag({ content: "body { color: #111; background: #fff; font-family: serif; }" });
     await expect(page.locator("main h1, main h2").first()).toBeVisible();
+    await page
+      .waitForFunction(() => document.getAnimations().every((animation) => animation.playState !== "running" || animation.effect?.getComputedTiming().iterations === Infinity), null, { timeout: 2_000 })
+      .catch(() => undefined);
     const audit = await page.evaluate(auditLayout, { phone: false });
     expect(audit.lowContrast, audit.lowContrast.join("\n")).toEqual([]);
   } finally {
