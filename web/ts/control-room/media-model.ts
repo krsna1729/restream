@@ -199,3 +199,22 @@ export function sourceDraft(
     liveOptimized: readiness?.kind === "needsReencode",
   };
 }
+
+/**
+ * A playlist's running time from its files' durations, and whether every
+ * file's is known (a file the engine could not probe leaves it partial).
+ */
+export function playlistRuntime(seconds: readonly (number | null | undefined)[]): { readonly totalSec: number; readonly complete: boolean } {
+  let totalSec = 0;
+  let complete = true;
+  for (const value of seconds) {
+    if (value === null || value === undefined || !Number.isFinite(value) || value < 0) complete = false;
+    else totalSec += value;
+  }
+  return { totalSec, complete };
+}
+
+/** "runs 1:12:05" or "runs at least 48:10". */
+export function runtimeWords(runtime: { totalSec: number; complete: boolean }): string {
+  return `runs ${runtime.complete ? "" : "at least "}${formatDuration(runtime.totalSec)}`;
+}

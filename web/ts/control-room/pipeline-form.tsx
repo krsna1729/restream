@@ -6,6 +6,8 @@ import type { ConfigPipeline } from "../types.js";
 import { moveQueued, pipelineDraft, pipelineProblem, pipelineWrite } from "./manage-model.js";
 import type { PipelineDraft } from "./manage-model.js";
 import { SettingsForm } from "./settings-form.js";
+import { useMediaDurations } from "./media-durations.js";
+import { formatDuration, playlistRuntime, runtimeWords } from "./media-model.js";
 
 /** Create a pipeline (`stored` null) or change one: name, stream key, live or
  * file source, and its SRT ingest override. */
@@ -109,7 +111,7 @@ export function PipelineForm(props: {
               ))}
             </select>
           </label>
-          <Playlist queue={draft.queue} files={props.files} onChange={(queue) => set({ queue })} />
+          <Playlist first={draft.filename} queue={draft.queue} files={props.files} onChange={(queue) => set({ queue })} />
           <label className="form-control">
             <span className="label-text">Start at (HH:MM:SS, empty: the start)</span>
             <input
@@ -210,11 +212,16 @@ export function PipelineForm(props: {
 
 /** The files that play after the first, in order: add from the library,
  * move, remove. Files should share codecs (or use Live Optimized). */
-function Playlist(props: { queue: readonly string[]; files: readonly MediaFile[]; onChange: (queue: string[]) => void }) {
+function Playlist(props: { first: string; queue: readonly string[]; files: readonly MediaFile[]; onChange: (queue: string[]) => void }) {
   const [adding, setAdding] = useState("");
+  const durations = useMediaDurations([props.first, ...props.queue]);
+  const runtime = playlistRuntime(durations);
   return (
     <div className="flex flex-col gap-2 md:col-span-2" role="group" aria-label="Playlist">
-      <span className="label-text">Then play</span>
+      <span className="label-text">
+        Then play
+        {props.queue.length > 0 && <span className="text-base-content/60 tabular"> · the whole playlist {runtimeWords(runtime)}</span>}
+      </span>
       {props.queue.length === 0 ? (
         <p className="text-xs text-base-content/65">Nothing: the file plays alone. Add files to make a playlist.</p>
       ) : (
@@ -223,6 +230,7 @@ function Playlist(props: { queue: readonly string[]; files: readonly MediaFile[]
             <li key={`${index}-${name}`} className="flex min-w-0 items-center gap-2 rounded-field border border-base-content/10 bg-base-100 px-2 py-1 text-sm">
               <span className="tabular w-6 shrink-0 text-base-content/60">{index + 2}.</span>
               <span className="min-w-0 flex-1 truncate">{name}</span>
+              <span className="tabular shrink-0 text-xs text-base-content/60">{formatDuration(durations[index + 1])}</span>
               <button type="button" className="btn btn-ghost btn-xs" aria-label={`Move ${name} up`} disabled={index === 0} onClick={() => props.onChange(moveQueued(props.queue, index, -1))}>
                 ↑
               </button>

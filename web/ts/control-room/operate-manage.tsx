@@ -24,9 +24,13 @@ import type { ConfigPipeline, PipelineInput } from "../types.js";
 import { ConfirmDelete } from "./confirm.js";
 import { InputForm } from "./input-form.js";
 import { nowPlayingLabel } from "./manage-model.js";
+import { useMediaDurations } from "./media-durations.js";
+import { playlistRuntime, runtimeWords } from "./media-model.js";
 import { PipelineForm } from "./pipeline-form.js";
 import { usePolled } from "./polled.js";
 import { useGo } from "./router.js";
+import { useLive } from "./store.js";
+import { When } from "./when-view.js";
 
 /** Recording and file ingest switches, the settings form and delete. */
 export function PipelineBar(props: {
@@ -127,9 +131,14 @@ function FileSwitch(props: {
   );
   const file = state.value;
   const fileId = file?.configured ? file.id : undefined;
+  const durations = useMediaDurations(file?.configured ? (file.playlist?.length ? file.playlist : [file.filename ?? ""]) : []);
+  const sinceMs = useLive().state?.pipelines.find((pipeline) => pipeline.id === props.pipelineId)?.ingest?.sinceMs ?? null;
   if (!file || !fileId) return null;
   const playing = file.running ? nowPlayingLabel(file.playlist, file.nowPlaying) : null;
   const many = (file.playlist?.length ?? 1) > 1;
+  const runtime = playlistRuntime(durations);
+  // Once through, from when the source went on air; a loop never ends.
+  const endsAtMs = file.running && !file.loop && runtime.complete && sinceMs ? sinceMs + runtime.totalSec * 1000 : null;
   return (
     <span className="inline-flex flex-wrap items-center gap-2">
       <button
@@ -145,6 +154,19 @@ function FileSwitch(props: {
       {playing && (
         <span role="status" aria-label="Now playing" className="text-sm text-base-content/75">
           Now playing {playing}
+        </span>
+      )}
+      {durations.some((value) => value !== null) && (
+        <span className="tabular text-sm text-base-content/70">
+          {many ? "the playlist " : ""}
+          {runtimeWords(runtime)}
+          {file.loop ? ", then loops" : ""}
+          {endsAtMs !== null && endsAtMs > Date.now() && (
+            <>
+              {" · ends "}
+              <When atMs={endsAtMs} show="at" />
+            </>
+          )}
         </span>
       )}
     </span>

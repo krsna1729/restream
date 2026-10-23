@@ -32,6 +32,7 @@ export function createFixtureApi({ preset, seed }) {
     [/^\/api\/v1\/engine\/resource-map$/, (_m, q) => plant.resourceMap({ pipelineId: q.get("pipeline_id") ?? undefined, topN: Number(q.get("top_n") ?? 200) })],
     [/^\/api\/v1\/capacity\/scenario$/, (_m, q) => plant.capacityScenario(q)],
     [/^\/api\/v1\/media$/, () => plant.mediaFiles()],
+    [/^\/api\/v1\/media\/([^/]+)\/analysis$/, (m) => mediaAnalysis(decodeURIComponent(m[1]))],
     [/^\/api\/v1\/logs$/, () => plant.logs()],
     [/^\/api\/v1\/security\/rate-limits$/, () => ({ attempts: [] })],
     [/^\/api\/v1\/audio-caps$/, () => ({ caps: {}, platformLabels: {} })],
@@ -82,5 +83,22 @@ export function createFixtureApi({ preset, seed }) {
     snapshot: () => plant.state(),
     tick: (nowMs) => plant.tick(nowMs),
     counts: () => plant.counts(),
+  };
+}
+
+/** A stable, plausible probe of a library file: 5 to 95 minutes, 2 s GOP. */
+function mediaAnalysis(name) {
+  let hash = 0;
+  for (const char of name) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  const durationSec = 300 + (hash % 5400);
+  return {
+    videoCodec: "h264",
+    fps: 30,
+    durationSec,
+    keyframeCount: Math.round(durationSec / 2),
+    averageKeyframeIntervalSec: 2,
+    maxKeyframeIntervalSec: 2,
+    sparseForLive: false,
+    liveGopTargetSeconds: 2,
   };
 }

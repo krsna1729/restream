@@ -3,9 +3,8 @@ import test from "node:test";
 
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
-const { mediaKey, recordingTimeline, sourceDraft } = await loadCompiledFrontendModule(
-  "control-room/media-model.js",
-);
+const mediaModel = await loadCompiledFrontendModule("control-room/media-model.js");
+const { mediaKey, recordingTimeline, sourceDraft } = mediaModel;
 
 const START = "2026-10-15T13:00:00Z";
 const STOP = "2026-10-15T13:42:00Z";
@@ -111,4 +110,11 @@ test("a recording stays selected when its .ts becomes the finalized .mp4", () =>
   assert.equal(mediaKey(writing), mediaKey(finalized));
   assert.equal(mediaKey({ name: "a.mp4" }), "a.mp4");
   assert.notEqual(mediaKey({ name: "a.mp4" }), mediaKey({ name: "b.mp4" }));
+});
+
+test("a playlist's running time adds its files and says when one is unknown", () => {
+  const { playlistRuntime, runtimeWords } = mediaModel;
+  assert.deepEqual(playlistRuntime([60, 125.4, 3600]), { totalSec: 3785.4, complete: true });
+  assert.equal(runtimeWords(playlistRuntime([60, 125.4, 3600])), "runs 1:03:05");
+  assert.equal(runtimeWords(playlistRuntime([60, null])), "runs at least 1:00");
 });
