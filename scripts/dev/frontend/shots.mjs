@@ -3,7 +3,7 @@
 //
 //   node scripts/dev/frontend/shots.mjs --base http://127.0.0.1:3031 --label before \
 //     [--workspaces fleet,operate] [--widths 375,768,1440] [--themes dark,light] \
-//     [--modes operator,engineer]
+//     [--modes operator,engineer] [--password admin] [--full 1]
 //
 // Writes PNGs and report.json to .local/shots/<label>/. For each page it
 // checks: no horizontal page scroll, no text clipped by its own box, touch
@@ -34,6 +34,7 @@ const modes = list("modes", "operator");
 const pipeline = args.get("pipeline") ?? "";
 const settleMs = Number(args.get("settle-ms") ?? 3500);
 const fullPage = args.get("full") === "1";
+const password = args.get("password");
 const out = join(".local", "shots", label);
 mkdirSync(out, { recursive: true });
 
@@ -64,6 +65,10 @@ for (const width of widths) {
         [theme, mode],
       );
       const page = await context.newPage();
+      if (password) {
+        const login = await page.request.post(`${base}/api/v1/auth/login`, { data: { password } });
+        if (!login.ok()) throw new Error(`login failed: ${login.status()}`);
+      }
       const errors = [];
       page.on("console", (message) => {
         if (message.type() === "error") errors.push(message.text());

@@ -333,6 +333,24 @@ Every workspace shows live data only.
   this pipeline uses, and the attribution legend.
 - Diagnostics: see [Logs and diagnostics](#logs-and-diagnostics).
 
+### Stream health (one pipeline)
+
+- Reads the pipeline's flight recorder (`useFlightRecorder`, polled every
+  2 s with `since`, so only new samples travel).
+- Verdicts in plain language over the last minute (`stream-health-model.ts`),
+  worst first:
+  - keyframe interval: platforms want 2 s, and most refuse past 4 s;
+  - bitrate collapse (below half its typical rate) or swing (±35%);
+  - frame-rate drop (20% below typical) or under 24 fps;
+  - sustained packet loss;
+  - a long round trip;
+  - a full SRT receive buffer;
+  - no source at all.
+- KPIs for the current video, bitrate, frame rate, keyframe interval, round
+  trip and loss. Charts of bitrate, keyframe interval (with the 2 s target
+  and 4 s limit drawn), frame rate, and round trip with loss. A metric the
+  protocol does not report is left out, never shown as zero.
+
 ### Monitor (one pipeline)
 
 - Ingest and egress rate, share of wanted outputs delivering, worst feed
@@ -351,8 +369,8 @@ Every workspace shows live data only.
   under the engine's 0.95 floor, against the median of its peers on the
   same stage and protocol.
 
-Operate, Inspect and Monitor share one header and picker
-(`pipeline-scope.tsx`).
+Operate, Stream health, Monitor, Inspect and Logs share one header, picker
+and tab row (`pipeline-scope.tsx`).
 
 ### Incidents
 

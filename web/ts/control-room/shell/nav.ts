@@ -12,7 +12,7 @@ export interface NavGroup {
 /** Operate the plant, understand it, manage it; engineering tools last. */
 export const NAV_GROUPS: readonly NavGroup[] = [
   { label: "Operate", items: ["fleet", "channels", "pipelines", "operate", "monitor"] },
-  { label: "Understand", items: ["incidents", "capacity"] },
+  { label: "Understand", items: ["incidents", "health", "capacity"] },
   { label: "Manage", items: ["media", "changes", "settings"] },
   { label: "Engineer", items: ["inspect", "logs", "system"] },
 ];
@@ -25,6 +25,7 @@ export const NAV_ICONS: Record<Workspace, IconName> = {
   inspect: "inspect",
   monitor: "monitor",
   incidents: "incidents",
+  health: "health",
   logs: "logs",
   capacity: "capacity",
   media: "media",
@@ -37,4 +38,4 @@ export const NAV_ICONS: Record<Workspace, IconName> = {
 export const MOBILE_TABS: readonly Workspace[] = ["fleet", "incidents", "channels", "operate"];
 
 /** Workspaces that show one pipeline and need one picked. */
-export const PIPELINE_WORKSPACES: ReadonlySet<Workspace> = new Set(["operate", "inspect", "monitor"]);
+export const PIPELINE_WORKSPACES: ReadonlySet<Workspace> = new Set(["operate", "health", "inspect", "monitor"]);

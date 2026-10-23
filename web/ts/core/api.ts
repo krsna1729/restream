@@ -21,6 +21,7 @@ import type {
   CapacityScenario,
   OutputProtocol,
   PipelineSummarySnapshot,
+  FlightTrace,
   BuildLogsStreamUrlOptions,
   PipelineMutationResponse,
   OutputMutationResponse,
@@ -272,6 +273,20 @@ async function getPipelineSummary(
 ): Promise<PipelineSummarySnapshot | null> {
   return apiRequest<PipelineSummarySnapshot>(
     `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/summary`,
+  );
+}
+
+/** The pipeline's recorded ingest, ring and output health
+ * (`application/flight_recorder.rs`); null (quietly) before the recorder
+ * has sampled it. */
+async function getFlightRecorder(
+  pipelineId: string,
+  since?: Date,
+): Promise<FlightTrace | null> {
+  const suffix = since ? `?since=${encodeURIComponent(since.toISOString())}` : "";
+  return apiRequest<FlightTrace>(
+    `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/flight-recorder${suffix}`,
+    { silentStatuses: [404] },
   );
 }
 
@@ -758,6 +773,7 @@ export {
   getLifecycleEvents,
   getEngineTelemetry,
   getPipelineSummary,
+  getFlightRecorder,
   getPipelineProbe,
   mintMoqPreview,
   getLogs,

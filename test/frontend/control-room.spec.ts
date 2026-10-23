@@ -1735,3 +1735,40 @@ test("channels: platforms from stored URLs, and a confirmed bulk go-live", async
     await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
   }
 });
+
+test("stream health: the flight recorder judges a live publisher's keyframes", async ({ page }) => {
+  test.setTimeout(90_000);
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  const pipelineId = await liveFilePipeline(page, `crhealth${Date.now()}`);
+  try {
+    // The recorder samples every 2 s; two samples give a bitrate.
+    await expect
+      .poll(
+        async () => {
+          const response = await page.request.get(`/api/v1/pipelines/${pipelineId}/flight-recorder`);
+          if (!response.ok()) return null;
+          const trace = await response.json();
+          return trace.samples.some((sample: { ingest: { bitrateBps: number | null } | null }) =>
+            Boolean(sample.ingest?.bitrateBps),
+          )
+            ? trace.schema
+            : null;
+        },
+        { timeout: 30_000 },
+      )
+      .toBe("restream.trace.v1");
+
+    await page.goto(`/?w=health&p=${pipelineId}`);
+    const verdicts = page.getByRole("list", { name: "Stream verdicts" });
+    // The clip is re-encoded with a 4 s GOP: past the platforms' 2 s ask,
+    // within their 4 s limit.
+    await expect(verdicts).toContainText(/Keyframe every [34]\.\d s/, { timeout: 20_000 });
+    await expect(page.getByRole("group", { name: "Video" })).toContainText(/\d+p/);
+    await expect(page.getByRole("img", { name: "Ingest bitrate over time" })).toBeVisible();
+  } finally {
+    await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
+  }
+});

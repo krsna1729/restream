@@ -143,6 +143,9 @@ pub struct AppState {
     pub runtime_state: Arc<crate::application::runtime_state::hub::StateHub>,
     /// The fleet's sampled signals behind `/api/v1/fleet/history` (Q-064).
     pub fleet_history: Arc<crate::application::fleet_history::FleetHistory>,
+    /// Each pipeline's recorded health behind
+    /// `/api/v1/pipelines/:id/flight-recorder`.
+    pub flight_recorder: Arc<crate::application::flight_recorder::FlightRecorder>,
     pub log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
     secure_session_cookies: bool,
     #[cfg(feature = "agent-execution")]
@@ -207,6 +210,7 @@ impl AppState {
             reconcile: Arc::new(crate::application::topology::ReconcileRequests::new()),
             runtime_state,
             fleet_history: Arc::new(crate::application::fleet_history::FleetHistory::new()),
+            flight_recorder: Arc::new(crate::application::flight_recorder::FlightRecorder::new()),
             log_broadcast,
             secure_session_cookies: runtime.secure_session_cookies,
             #[cfg(feature = "agent-execution")]

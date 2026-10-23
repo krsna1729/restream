@@ -96,14 +96,15 @@ export function HostCard(props: { live: LiveSnapshot }) {
       <div className="mb-2 flex items-center gap-2 font-semibold">
         <StatusDot tone={tone} />
         <span className="truncate">Host</span>
-        <span className="ml-auto tabular text-base-content/70">{metrics?.cpu?.cores ?? "--"} cores</span>
+        {metrics?.cpu?.cores ? <span className="ml-auto tabular text-base-content/70">{metrics.cpu.cores} cores</span> : null}
       </div>
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 tabular">
         <dt className="text-base-content/70">CPU</dt>
         <dd className="text-right">{formatPercent(cpu)}</dd>
         <dt className="text-base-content/70">Memory</dt>
         <dd className="text-right">
-          {formatPercent(memory)} <span className="text-base-content/60">of {formatBytes(metrics?.memory?.totalBytes)}</span>
+          {formatPercent(memory)}
+          {metrics?.memory?.totalBytes ? <span className="text-base-content/60"> of {formatBytes(metrics.memory.totalBytes)}</span> : null}
         </dd>
         <dt className="text-base-content/70">Egress</dt>
         <dd className="text-right">{formatBps((metrics?.network?.uploadKbps ?? NaN) * 1000)}</dd>

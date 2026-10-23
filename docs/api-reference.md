@@ -1101,6 +1101,57 @@ ms after the previous one, so a clock step back does not reorder history.
 - `newestMs`: the newest sample kept (`null` before the first). Once it is at
   or past a window's `until`, that window is final.
 
+### `GET /api/v1/pipelines/:pipelineId/flight-recorder`
+
+The pipeline's flight recorder (`src/application/flight_recorder.rs`).
+Every 2 s, whether or not anyone watches, it samples three things:
+
+- the selected ingest;
+- the source ring;
+- the pipeline's outputs.
+
+It keeps 10 minutes per pipeline, oldest dropped first; a deleted pipeline's
+trace is dropped with it. `?since=` (RFC 3339, inclusive, optional) returns
+only newer samples, so a page polls incrementally. Returns `404` until the
+recorder has sampled the pipeline. The values come from counters the engine
+already keeps, read once per interval on the recorder's own task.
+
+```json
+{
+  "schema": "restream.trace.v1",
+  "pipelineId": "pipeline_…",
+  "intervalMs": 2000,
+  "completeFromMs": 1792742000000,
+  "samples": [
+    {
+      "atMs": 1792742537902,
+      "ingest": { "inputId": "…", "protocol": "srt", "bitrateBps": 3903327.6,
+        "packetsPerSec": 147.6, "videoCodec": "h264", "width": 1920,
+        "height": 1080, "fps": 30.0, "gopSec": 2.0, "maxGopSec": 2.0,
+        "rttMs": 41.2, "lossPerSec": 0.0, "retransPerSec": 0.4,
+        "receiveBuffer": 0.08 },
+      "ring": { "fill": 812, "capacity": 4096, "worstLagSlots": 3, "overflows": 0 },
+      "outputs": { "wanted": 5, "delivering": 3, "degraded": 2, "retrying": 2,
+        "stalled": 0, "retryAttempts": 5, "offeredBps": 3159609.7,
+        "deliveredBps": 3171125.6, "resyncs": 0, "worstFeedLag": 0 }
+    }
+  ]
+}
+```
+
+- `ingest` is `null` while no input is selected and connected.
+  - `bitrateBps` is the byte counter's change over the interval within one
+    session; it is `null` on a session's first sample and across a
+    failover.
+  - `gopSec` and `maxGopSec` are the mean and longest gaps between the
+    session's last keyframes; a timestamp reset is skipped.
+  - A value the protocol does not report (`rttMs`, `lossPerSec` on TCP) is
+    `null`, never `0`.
+- `ring` is `null` while the pipeline has no source ring.
+- `outputs` counts wanted outputs, plus the counters summed over the running
+  egresses (`retryAttempts` over the retrying ones).
+  - `resyncs` and `overflows` are cumulative counters.
+
 ## Health and status
 
 | Method | Route | Purpose |

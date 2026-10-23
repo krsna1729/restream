@@ -591,20 +591,56 @@ export function createDeployment({ preset = "plant", seed = 7, nowMs = Date.now(
   function record(now) {
     for (const pipeline of pipelines) {
       const state = sim.get(pipeline.id);
-      const mine = outputsByPipeline.get(pipeline.id).filter((output) => output.desired === "running");
-      const delivered = mine.filter((output) => output.flow === "flowing" && !output.diagnosis).length;
-      const retrying = mine.filter((output) => output.convergence === "retrying").length;
+      const mine = outputsByPipeline.get(pipeline.id);
+      const wanted = mine.filter((output) => output.desired === "running");
+      const input = selectedInput(pipeline.id);
+      const inputSim = input ? sim.get(input.id) : null;
+      // A rare publisher wobble: bitrate and frame rate dip together.
+      const wobble = pipeline.ingest && random.chance(0.03) ? random.jitter(0.45, 0.2) : 1;
+      const ingest = pipeline.ingest && input
+        ? {
+            inputId: input.id,
+            protocol: pipeline.ingest.protocol,
+            bitrateBps: state.bitrateBps * wobble * random.jitter(1, 0.06),
+            packetsPerSec: (state.bitrateBps / 8 / 1300) * wobble,
+            videoCodec: "h264",
+            width: Math.round((state.height * 16) / 9),
+            height: state.height,
+            fps: Math.max(1, state.fps * (wobble < 1 ? 0.6 : 1)),
+            gopSec: state.gopSec * random.jitter(1, 0.03),
+            maxGopSec: state.gopSec * (random.chance(0.05) ? 2 : 1.02),
+            rttMs: inputSim ? random.jitter(inputSim.rttMs, 0.15) : null,
+            lossPerSec: pipeline.ingest.protocol === "srt" ? (random.chance(0.1) ? random.next() * 6 : 0) : null,
+            retransPerSec: pipeline.ingest.protocol === "srt" ? random.next() * 3 : null,
+            receiveBuffer: pipeline.ingest.protocol === "srt" ? random.jitter(0.08, 0.5) : null,
+          }
+        : null;
+      let offered = 0;
+      let delivered = 0;
+      for (const output of mine) {
+        if (output.actual === null) continue;
+        offered += state.bitrateBps;
+        delivered += output.flow === "flowing" ? state.bitrateBps * (sim.get(output.id).health === "slow" ? 0.7 : 0.995) : 0;
+      }
       const samples = flight.get(pipeline.id) ?? [];
       samples.push({
         atMs: now,
-        offeredPps: pipeline.ingest ? 900 * mine.length : 0,
-        deliveredPps: 900 * delivered,
-        ringFill: state.ringFill,
-        ringCapacity: state.ringCapacity,
-        retrying,
-        stalled: mine.filter((output) => output.flow === "stalled").length,
+        ingest,
+        ring: pipeline.ingest ? { fill: state.ringFill, capacity: state.ringCapacity, worstLagSlots: random.int(0, 60), overflows: state.overflows } : null,
+        outputs: {
+          wanted: wanted.length,
+          delivering: wanted.filter((output) => output.flow === "flowing" && !output.diagnosis).length,
+          degraded: wanted.filter((output) => output.diagnosis).length,
+          retrying: wanted.filter((output) => output.convergence === "retrying" || output.convergence === "retriesExhausted").length,
+          stalled: wanted.filter((output) => output.flow === "stalled").length,
+          retryAttempts: wanted.reduce((sum, output) => sum + (output.retry?.attempts ?? 0), 0),
+          offeredBps: offered,
+          deliveredBps: delivered,
+          resyncs: 0,
+          worstFeedLag: wanted.some((output) => output.flow === "stalled") ? 3800 : random.int(0, 40),
+        },
       });
-      if (samples.length > 600) samples.shift();
+      if (samples.length > 300) samples.shift();
       flight.set(pipeline.id, samples);
     }
   }
@@ -1114,7 +1150,8 @@ export function createDeployment({ preset = "plant", seed = 7, nowMs = Date.now(
   }
 
   function flightRecorder(pipelineId) {
-    return { schema: "restream.trace.v1", pipelineId, intervalMs: 2000, synthetic: true, samples: flight.get(pipelineId) ?? [] };
+    const samples = flight.get(pipelineId) ?? [];
+    return { schema: "restream.trace.v1", pipelineId, intervalMs: 2000, completeFromMs: samples[0]?.atMs ?? startedMs, samples };
   }
 
   /** Applies an operator mutation the fixture understands. */

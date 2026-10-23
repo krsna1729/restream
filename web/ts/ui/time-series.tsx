@@ -26,6 +26,13 @@ export interface Band {
   readonly label?: string;
 }
 
+/** A horizontal reference line (a target or a limit). */
+export interface Threshold {
+  readonly value: number;
+  readonly label: string;
+  readonly tone: "warn" | "bad" | "ok";
+}
+
 export interface Mark {
   readonly atMs: number;
   /** Names the kind of mark for tests and assistive tech (`incident`). */
@@ -80,6 +87,7 @@ export function TimeSeries<T extends { readonly atMs: number }>(props: {
   toMs?: number;
   /** Tick labels; defaults to compact numbers (1.2k, 4.5M). */
   axisFormat?: (value: number) => string;
+  thresholds?: readonly Threshold[];
 }) {
   const height = props.height ?? 140;
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -94,8 +102,9 @@ export function TimeSeries<T extends { readonly atMs: number }>(props: {
     const values = props.series.flatMap((series) =>
       [...props.samples, ...(props.ghost ?? [])].map(series.pick),
     );
-    return niceTop((max(values) ?? 0) * 1.08);
-  }, [props.samples, props.series, props.ghost, props.top]);
+    const ceiling = Math.max(max(values) ?? 0, ...(props.thresholds ?? []).map((threshold) => threshold.value));
+    return niceTop(ceiling * 1.08);
+  }, [props.samples, props.series, props.ghost, props.top, props.thresholds]);
   const x = (atMs: number) => ((atMs - fromMs) / span) * W;
   const y = (value: number) => height - (value / top) * height;
   const hovered = hover === null ? null : props.samples[hover] ?? null;
@@ -133,10 +142,10 @@ export function TimeSeries<T extends { readonly atMs: number }>(props: {
           {props.aside && <span className="ml-auto text-base-content/70 tabular">{props.aside}</span>}
         </figcaption>
       )}
-      <div className="relative grid grid-cols-[2.75rem_minmax(0,1fr)]">
+      <div className="relative grid grid-cols-[3.5rem_minmax(0,1fr)]">
         <div className="relative text-right text-[0.7rem] text-base-content/60 tabular" style={{ height }}>
           {gridLines.map((fraction) => (
-            <span key={fraction} className="absolute right-2 -translate-y-1/2" style={{ top: `${(1 - fraction) * 100}%` }}>
+            <span key={fraction} className="absolute right-2 -translate-y-1/2 whitespace-nowrap" style={{ top: `${(1 - fraction) * 100}%` }}>
               {(props.axisFormat ?? compact)(top * fraction)}
             </span>
           ))}
@@ -178,13 +187,16 @@ export function TimeSeries<T extends { readonly atMs: number }>(props: {
               </g>
             )),
           )}
+          {(props.thresholds ?? []).map((threshold) => (
+            <line key={`threshold-${threshold.value}`} data-series="threshold" x1={0} x2={W} y1={y(threshold.value)} y2={y(threshold.value)} className={MARK_STROKE[threshold.tone]} strokeWidth={1.25} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
+          ))}
           {(props.marks ?? []).filter((mark) => mark.atMs >= fromMs && mark.atMs <= toMs).map((mark) => (
             <line key={`mark-${mark.atMs}`} data-series={mark.kind ?? "mark"} x1={x(mark.atMs)} x2={x(mark.atMs)} y1={0} y2={height} className={MARK_STROKE[mark.tone ?? "warn"]} strokeWidth={1.5} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
           ))}
           {hovered && <line x1={x(hovered.atMs)} x2={x(hovered.atMs)} y1={0} y2={height} className="stroke-base-content/40" strokeWidth={1} vectorEffect="non-scaling-stroke" />}
         </svg>
         {/* Labels and end dots are HTML so they do not stretch with the plot. */}
-        <div className="pointer-events-none absolute inset-y-0 right-0 left-[2.75rem]">
+        <div className="pointer-events-none absolute inset-y-0 right-0 left-[3.5rem]">
           {(props.marks ?? []).filter((mark) => mark.label && mark.atMs >= fromMs && mark.atMs <= toMs).map((mark) => (
             <span key={`label-${mark.atMs}`} className="absolute top-0 -translate-x-full pr-1 text-[0.7rem] font-semibold whitespace-nowrap text-base-content/80" style={{ left: `${(x(mark.atMs) / W) * 100}%` }}>
               {mark.label}
@@ -198,6 +210,11 @@ export function TimeSeries<T extends { readonly atMs: number }>(props: {
                 <span key={`dot-${series.id}`} className={`absolute size-2 -translate-1/2 rounded-full bg-current ${series.color}`} style={{ left: `${(x(last.atMs) / W) * 100}%`, top: y(value) }} />
               );
             })}
+          {(props.thresholds ?? []).map((threshold) => (
+            <span key={`threshold-label-${threshold.value}`} className="absolute right-1 -translate-y-full text-[0.7rem] font-semibold text-base-content/70" style={{ top: y(threshold.value) }}>
+              {threshold.label}
+            </span>
+          ))}
           {props.callout && (
             <div className="absolute inset-0 flex items-center justify-center">{props.callout}</div>
           )}

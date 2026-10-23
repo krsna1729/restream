@@ -42,3 +42,39 @@ pub async fn v1_fleet_history_handler(
     let until_ms = query.until.map_or(u64::MAX, epoch_ms);
     Json(state.fleet_history.window(since_ms, until_ms)).into_response()
 }
+
+#[derive(Debug, serde::Deserialize)]
+pub struct FlightRecorderQuery {
+    /// RFC 3339: only samples taken at or after it; every kept one without.
+    since: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// `GET /api/v1/pipelines/:pipelineId/flight-recorder`: the pipeline's
+/// recorded ingest, ring and output health
+/// ([`crate::application::flight_recorder`]); 404 for a pipeline the
+/// recorder has not seen.
+pub async fn v1_flight_recorder_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    axum::extract::Path(pipeline_id): axum::extract::Path<String>,
+    query: Result<Query<FlightRecorderQuery>, axum::extract::rejection::QueryRejection>,
+) -> Response {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
+    }
+    let Query(query) = match query {
+        Ok(query) => query,
+        Err(rejection) => return rejection.into_response(),
+    };
+    match state
+        .flight_recorder
+        .trace(&pipeline_id, query.since.map_or(0, epoch_ms))
+    {
+        Some(trace) => Json(trace).into_response(),
+        None => (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "No flight record for this pipeline" })),
+        )
+            .into_response(),
+    }
+}
