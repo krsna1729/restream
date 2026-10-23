@@ -98,6 +98,13 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // A media poster: a colour-bar still per file, its hue from the name, so
+  // the library reads as pictures without real media.
+  const poster = pathname.match(/^\/api\/v1\/media\/([^/]+)\/poster$/);
+  if (poster) {
+    res.writeHead(200, { "content-type": "image/svg+xml", "cache-control": "no-store" });
+    return res.end(posterSvg(decodeURIComponent(poster[1])));
+  }
   if (pathname.startsWith("/api/") || pathname === "/metrics/system" || pathname === "/healthz") {
     const method = req.method ?? "GET";
     const body = method === "GET" ? null : await readBody(req);
@@ -116,3 +123,13 @@ server.listen(port, "127.0.0.1", () => {
     `fixture ${preset}: ${counts.pipelines} pipelines, ${counts.inputs} inputs, ${counts.outputs} outputs on http://127.0.0.1:${port}`,
   );
 });
+
+function posterSvg(name) {
+  let hash = 0;
+  for (const char of name) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  const hue = hash % 360;
+  const bars = ["#c0c0c0", "#c0c000", "#00c0c0", "#00c000", "#c000c0", "#c00000", "#0000c0"]
+    .map((color, index) => `<rect x="${index * 320 / 7}" width="${320 / 7 + 1}" height="120" fill="${color}"/>`)
+    .join("");
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" width="320" height="180">${bars}<rect y="120" width="320" height="60" fill="hsl(${hue} 45% 22%)"/><text x="160" y="157" font-family="sans-serif" font-size="18" fill="#fff" text-anchor="middle">${name.replace(/[<&]/g, "").slice(0, 28)}</text></svg>`;
+}
