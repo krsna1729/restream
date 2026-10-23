@@ -11,6 +11,7 @@ import {
 import type { MediaFile, MediaFileAnalysis } from "../core/api-types.js";
 import { ConfirmDelete } from "./confirm.js";
 import { formatBytes, formatPercent } from "./format.js";
+import { When } from "./when-view.js";
 import {
   formatDuration,
   ingestReadiness,
@@ -367,9 +368,7 @@ function RecordingTimeline({ file }: { file: MediaFile }) {
         {events.map((event) => (
           <li key={event.label} className="grid grid-cols-[0.5rem_6rem_1fr] items-center gap-2">
             <span className={`h-2 w-2 rounded-full ${TIMELINE_DOT[event.tone]}`} />
-            <span className="tabular-nums text-base-content/70">
-              {event.atMs === null ? "--" : new Date(event.atMs).toLocaleTimeString()}
-            </span>
+            <When atMs={event.atMs} show="at" seconds className="text-base-content/70" />
             <span className={event.tone === "error" ? "text-error" : undefined}>
               {event.label}
             </span>

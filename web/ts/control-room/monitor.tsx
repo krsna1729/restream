@@ -18,6 +18,7 @@ import { StatusBadge } from "../ui/tone.js";
 import { pipelineGraph } from "./state-views.js";
 import { SAMPLE_INTERVAL_MS, SAMPLE_STALE_AFTER_MS } from "./store.js";
 import type { LiveSnapshot } from "./store.js";
+import { absoluteTime } from "./when.js";
 
 const SIGNAL_LABELS: Record<Signal, string> = {
   ingestBps: "Ingest rate",
@@ -130,7 +131,7 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
       <Panel
         id="monitor-signals"
         title="Correlated signals"
-        subtitle={`one clock · since this page opened, up to 15 min · ${counted(shown.length, "sample")}${frozen && last ? ` · paused at ${new Date(last.atMs).toLocaleTimeString()}` : ""}${compare ? " · dashed: now" : ""}`}
+        subtitle={`one clock · since this page opened, up to 15 min · ${counted(shown.length, "sample")}${frozen && last ? ` · paused at ${absoluteTime(last.atMs, Date.now(), { seconds: true }).replace(/^Today /, "")}` : ""}${compare ? " · dashed: now" : ""}`}
         actions={
           <>
             <button
@@ -165,7 +166,7 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
               incident
             </StatusBadge>
             {onsets.length === 1 ? "An output degraded at " : "Outputs degraded at "}
-            {onsets.map((at) => new Date(at).toLocaleTimeString()).join(", ")}; the cursor marks it on every signal.
+            {onsets.map((at) => absoluteTime(at, Date.now(), { seconds: true }).replace(/^Today /, "")).join(", ")}; the cursor marks it on every signal.
           </p>
         )}
         {first === undefined || last === undefined ? (

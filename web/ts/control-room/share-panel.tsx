@@ -11,8 +11,8 @@ import { StatusBadge } from "../ui/tone.js";
 import { ConfirmDelete } from "./confirm.js";
 import { LIFETIMES, embedSnippet, linkState, watchUrl } from "./share-model.js";
 import { useNow } from "./store.js";
+import { absoluteTime } from "./when.js";
 
-const WHEN = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
 function CopyButton(props: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
@@ -92,7 +92,7 @@ export function SharePanel(props: { pipelineId: string; pipelineName: string }) 
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="truncate font-semibold">{link.label}</span>
                     <StatusBadge tone={state === "expired" ? "neutral" : state === "expiring" ? "warn" : "ok"}>
-                      {state === "expired" ? "Expired" : link.expiresAtMs === null ? "Until revoked" : `Until ${WHEN.format(link.expiresAtMs)}`}
+                      {state === "expired" ? "Expired" : link.expiresAtMs === null ? "Until revoked" : `Until ${absoluteTime(link.expiresAtMs, Date.now())}`}
                     </StatusBadge>
                     <span className="tabular text-xs text-base-content/65">{link.views.toLocaleString()} views</span>
                   </div>

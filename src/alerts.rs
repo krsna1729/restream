@@ -163,6 +163,33 @@ const COMMAND_CHANNEL_OVERLOAD_WARN_PCT: f64 = 80.0;
 
 // ─── Derivation ──────────────────────────────────────────────────────────────
 
+/// Names an alert's subjects for people: a title leads with its pipeline's
+/// name, and an output is called by its name rather than its id
+/// ("Newsroom: YouTube main reported an egress failure"). Ids stay in the
+/// alert's fields; a subject with no known name keeps the id.
+pub fn name_subjects(
+    alerts: &mut [Alert],
+    pipeline_names: &HashMap<String, String>,
+    output_names: &HashMap<String, String>,
+) {
+    for alert in alerts {
+        if let Some(output_id) = &alert.output_id
+            && let Some(name) = output_names.get(output_id)
+        {
+            alert.title = alert
+                .title
+                .replacen(&format!("Output '{output_id}'"), name, 1);
+        }
+        if let Some(pipeline) = alert
+            .pipeline_id
+            .as_ref()
+            .and_then(|id| pipeline_names.get(id))
+        {
+            alert.title = format!("{pipeline}: {}", alert.title);
+        }
+    }
+}
+
 /// Derive alerts from a `health_snapshot()` JSON value.
 /// Returns alerts sorted Critical-first, then Warning, then by pipeline id.
 pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
@@ -694,3 +721,7 @@ fn sorted(mut alerts: Vec<Alert>) -> Vec<Alert> {
 #[cfg(test)]
 #[path = "alerts_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "alerts_naming_tests.rs"]
+mod naming_tests;

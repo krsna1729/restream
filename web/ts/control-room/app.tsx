@@ -94,7 +94,7 @@ function Shell() {
             {place.workspace === "health" && <StreamHealth live={live} pipelineId={place.pipelineId} />}
             {place.workspace === "incidents" && <Incidents live={live} />}
             {place.workspace === "logs" && (
-              <Logs key={place.pipelineId ?? ""} live={live} pipelineId={place.pipelineId} />
+              <Logs key={`${place.pipelineId ?? ""}:${place.outputId ?? ""}`} live={live} pipelineId={place.pipelineId} outputId={place.outputId} />
             )}
             {place.workspace === "capacity" && <Capacity live={live} />}
             {place.workspace === "stability" && <StabilityLab live={live} />}

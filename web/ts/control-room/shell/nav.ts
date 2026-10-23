@@ -11,12 +11,12 @@ export interface NavGroup {
   readonly items: readonly Workspace[];
 }
 
-/** Operate the plant, understand it, manage it; engineering tools last. */
+/** Operate the plant, understand it, manage it, then dig into it; learning last. */
 export const NAV_GROUPS: readonly NavGroup[] = [
   { label: "Operate", items: ["fleet", "channels", "pipelines", "operate", "monitor", "schedule"] },
   { label: "Understand", items: ["incidents", "health", "capacity", "stability"] },
   { label: "Manage", items: ["media", "changes", "notifications", "team", "audit", "settings"] },
-  { label: "Engineer", items: ["inspect", "logs", "system"] },
+  { label: "Diagnose", items: ["inspect", "logs", "system"] },
   { label: "Learn", items: ["guides", "architecture"] },
 ];
 

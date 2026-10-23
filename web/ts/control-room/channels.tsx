@@ -18,11 +18,13 @@ import { StatusBadge } from "../ui/tone.js";
 import type { Tone } from "../ui/tone.js";
 import { buildChannels, bulkTargets, platformSummaries, runBulk } from "./channels-model.js";
 import type { BulkAction, Channel, ChannelState } from "./channels-model.js";
-import { describeCause } from "./fleet-model.js";
 import { formatBps } from "./format.js";
 import { PlaceLink } from "./router.js";
 import { useNow } from "./store.js";
 import type { LiveSnapshot } from "./store.js";
+import { LogsLink } from "./logs-link.js";
+import { outputTrouble, troubleTitle } from "./trouble-model.js";
+import { retryWords } from "./when.js";
 
 const STATE_TONE: Record<ChannelState, Tone> = {
   live: "ok",
@@ -254,7 +256,7 @@ function ChannelCard(props: { channel: Channel; detail: boolean; bps: number | n
   const { output } = channel;
   const [busy, setBusy] = useState(false);
   const on = output.desired === "running";
-  const problem = output.diagnosis ? describeCause(output.diagnosis.cause) : (output.evidence?.error ?? null);
+  const trouble = outputTrouble(output);
   return (
     <li
       aria-label={`Channel ${output.name}`}
@@ -303,10 +305,14 @@ function ChannelCard(props: { channel: Channel; detail: boolean; bps: number | n
         {output.retry && <RetryIn atMs={output.retry.nextAttemptAtMs} attempts={output.retry.attempts} />}
         <span className="ml-auto tabular text-base-content/70">{channel.state === "live" ? formatBps(props.bps) : ""}</span>
       </div>
-      {problem && channel.state !== "live" && (
-        <p className="truncate text-xs text-base-content/70" title={problem}>
-          {problem}
-        </p>
+      {trouble && channel.state !== "live" && (
+        <div className="flex min-w-0 flex-col gap-0.5 text-xs" title={troubleTitle(trouble)}>
+          <span className="flex min-w-0 items-baseline gap-2">
+            <span className="truncate font-medium text-base-content/80">{trouble.summary}</span>
+            <LogsLink pipelineId={output.pipelineId} outputId={output.id} />
+          </span>
+          {trouble.fix && <span className="line-clamp-2 text-base-content/65">{trouble.fix}</span>}
+        </div>
       )}
       {props.detail && (
         <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 border-t border-base-content/10 pt-2 font-mono text-[0.7rem] text-base-content/70">
@@ -341,7 +347,7 @@ function ChannelCard(props: { channel: Channel; detail: boolean; bps: number | n
 function RetryIn(props: { atMs: number; attempts: number }) {
   const now = useNow(1000);
   const seconds = Math.max(0, Math.round((props.atMs - now) / 1000));
-  return <span className="tabular text-base-content/70">attempt {props.attempts} · {seconds > 0 ? `next in ${seconds}s` : "now"}</span>;
+  return <span className="tabular text-base-content/70">{retryWords(props.attempts, seconds * 1000)}</span>;
 }
 
 function ConfirmBulk(props: { action: BulkAction | null; count: number; scope: string; onCancel: () => void; onConfirm: () => void }) {

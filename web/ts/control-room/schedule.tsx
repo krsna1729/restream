@@ -28,11 +28,12 @@ import {
 import { useSession } from "./session.js";
 import type { LiveSnapshot } from "./store.js";
 import { useNow } from "./store.js";
+import { When } from "./when-view.js";
+import { absoluteTime, fullTime } from "./when.js";
 
 const DAYS = 7;
 const TIME = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
 const DAY = new Intl.DateTimeFormat(undefined, { weekday: "short", day: "numeric", month: "short" });
-const WHEN = new Intl.DateTimeFormat(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
 const ACTION_TONE: Record<ScheduleAction, string> = {
   startOutputs: "border-l-success",
@@ -254,7 +255,7 @@ export function ScheduleView({ live }: { live: LiveSnapshot }) {
           <span className="text-sm text-base-content/60">Done</span>
         ) : (
           <span className="flex min-w-0 flex-col text-sm">
-            <span className="tabular">{WHEN.format(schedule.nextAtMs)}</span>
+            <span className="tabular" title={fullTime(schedule.nextAtMs)}>{absoluteTime(schedule.nextAtMs, now)}</span>
             <span className="text-xs text-base-content/65">
               {untilLabel(schedule.nextAtMs, now)} · {REPEAT_LABEL[schedule.repeat].toLowerCase()}
             </span>
@@ -270,7 +271,11 @@ export function ScheduleView({ live }: { live: LiveSnapshot }) {
         schedule.lastResult ? (
           <span className="flex min-w-0 items-center gap-2" title={schedule.lastResult}>
             <StatusBadge tone={resultTone(schedule.lastResult)}>{schedule.lastResult.split(":")[0]}</StatusBadge>
-            <span className="truncate text-xs text-base-content/65">{schedule.lastResult.split(": ").slice(1).join(": ")}</span>
+            <span className="truncate text-xs text-base-content/65">
+              {schedule.lastRunMs ? <When atMs={schedule.lastRunMs} show="ago" /> : null}
+              {schedule.lastRunMs ? " · " : ""}
+              {schedule.lastResult.split(": ").slice(1).join(": ")}
+            </span>
           </span>
         ) : (
           <span className="text-sm text-base-content/55">Not yet</span>

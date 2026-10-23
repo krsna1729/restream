@@ -12,6 +12,7 @@ import { StatusBadge } from "../ui/tone.js";
 import { MoqPreview, moqPreviewSupported } from "./moq-preview.js";
 import { Freshness, useLifecycleEvents } from "./polled.js";
 import { Preview } from "./preview.js";
+import { When } from "./when-view.js";
 
 type Tab = "graph" | "destinations" | "timeline" | "preview";
 
@@ -286,9 +287,7 @@ function Timeline(props: { pipelineId: string; outputs: readonly OutputState[] }
         <ol className="space-y-1 text-sm" aria-label="Pipeline timeline">
           {latest.map((event) => (
             <li key={event.seq} className="grid grid-cols-[7rem_1fr] gap-2">
-              <time className="tabular-nums text-base-content/70" dateTime={event.timestamp}>
-                {new Date(event.timestamp).toLocaleTimeString()}
-              </time>
+              <When atMs={Date.parse(event.timestamp)} show="at" seconds noZone className="text-base-content/70" />
               <span>
                 {event.kind}
                 {event.outputId && ` · ${names.get(event.outputId) ?? event.outputId}`}

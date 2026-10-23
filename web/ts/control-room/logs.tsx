@@ -6,6 +6,8 @@ import type { AppLogRow } from "../types.js";
 import { LOG_ROWS_KEPT, logFieldsText, logFilters, withLiveRow } from "./diagnose-model.js";
 import type { LogLevel, LogScope } from "./diagnose-model.js";
 import type { LiveSnapshot } from "./store.js";
+import { When } from "./when-view.js";
+import { zoneName } from "./when.js";
 import { PageHeader } from "../ui/page-header.js";
 
 const HISTORY_ROWS = 200;
@@ -24,10 +26,10 @@ const LEVEL_BADGES: Record<string, string> = {
 
 /** The engine's log: the newest persisted rows for a scope, then every
  * matching row live as the engine writes it. */
-export function Logs(props: { live: LiveSnapshot; pipelineId: string | null }) {
+export function Logs(props: { live: LiveSnapshot; pipelineId: string | null; outputId?: string | null }) {
   const state = props.live.state;
   const [scope, setScope] = useState<LogScope>(
-    props.pipelineId ? { kind: "pipeline", pipelineId: props.pipelineId, outputId: null } : { kind: "all" },
+    props.pipelineId ? { kind: "pipeline", pipelineId: props.pipelineId, outputId: props.outputId ?? null } : { kind: "all" },
   );
   const [level, setLevel] = useState<LogLevel>("info");
   const [lifecycleOnly, setLifecycleOnly] = useState(false);
@@ -194,7 +196,7 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null }) {
           <table className="table table-xs" aria-label="Log rows">
             <thead>
               <tr>
-                <th>Time</th>
+                <th>Time ({zoneName(Date.now())})</th>
                 <th>Level</th>
                 <th>Where</th>
                 <th>Message</th>
@@ -206,7 +208,9 @@ export function Logs(props: { live: LiveSnapshot; pipelineId: string | null }) {
                 const where = row.outputId ?? row.pipelineId;
                 return (
                   <tr key={row.id}>
-                    <td className="w-px whitespace-nowrap font-mono">{row.ts}</td>
+                    <td className="w-px whitespace-nowrap">
+                      <When atMs={row.ts ? Date.parse(row.ts) : null} show="at" seconds noZone />
+                    </td>
                     <td className="w-px">
                       <span className={`badge badge-sm ${LEVEL_BADGES[row.level ?? ""] ?? "badge-ghost"}`}>
                         {row.level}

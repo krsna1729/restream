@@ -171,7 +171,7 @@ is `app.tsx` plus `control-room/shell/`.
 - Navigation groups the workspaces (`shell/nav.ts`): Operate (Fleet,
   Channels, Pipelines, Operate, Monitor, Schedule), Understand (Incidents, Stream
   health, Capacity, Stability Lab), Manage (Media, Changes, Team, Audit log,
-  Settings, with Notifications before Team), Engineer (Inspect, Logs,
+  Settings, with Notifications before Team), Diagnose (Inspect, Logs,
   System), Learn (Guides, How it works), filtered to what the
   session's role may open (`navGroupsFor`). Live badges
   count degraded destinations, pipelines and open alerts (`shell/badges.ts`);
@@ -200,7 +200,13 @@ is `app.tsx` plus `control-room/shell/`.
   (`pipeline-scope.tsx`); with no pipeline chosen it shows a searchable,
   windowed picker.
 - The place is in the query: `?w=<workspace>` and, for a pipeline view,
-  `&p=<pipeline id>`. `route.ts` holds the pure rules; `router.tsx` wires
+  `&p=<pipeline id>`; Logs also takes `&o=<output id>`, which any other move
+  drops (`LogsLink` opens a problem's log this way).
+- Words for people: times show relative and clock time with the viewer's
+  zone, full instant and UTC on hover (`when.ts`, `<When>`); troubles read
+  as a summary and a fix, the engine's text in the tooltip
+  (`trouble-model.ts`); alert titles name the pipeline and destination
+  (`alerts::name_subjects`). `route.ts` holds the pure rules; `router.tsx` wires
   them to TanStack Router, which owns history and link clicks.
 - An absent or unknown workspace opens Fleet. The pipeline is kept across
   workspaces. Other query parameters are kept after `w` and `p`; a repeated

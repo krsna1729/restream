@@ -6,6 +6,7 @@ import { formatPercent } from "./format.js";
 import { Meters, serviceCenterRows } from "./fleet.js";
 import { convergenceTimeline, liveConvergence, scenarioLoad, topologyLines } from "./changes-model.js";
 import type { LiveSnapshot } from "./store.js";
+import { absoluteTime, fullTime } from "./when.js";
 
 /** The change's topology and what it costs, before anything is applied. */
 export function Impact({ topology, pipelineId }: { topology: TopologyDiff; pipelineId: string }) {
@@ -143,9 +144,9 @@ export function Convergence(props: { operation: ChangeOperation; live: LiveSnaps
                 and on the first step, so a later reader sees when it ran. */}
             <span
               className="tabular-nums text-base-content/70"
-              title={new Date(step.atMs).toISOString()}
+              title={fullTime(step.atMs)}
             >
-              {index === 0 ? new Date(step.atMs).toLocaleTimeString() : offset(step.offsetMs)}
+              {index === 0 ? absoluteTime(step.atMs, Date.now(), { seconds: true, noZone: true }) : offset(step.offsetMs)}
             </span>
             <span>{step.label}</span>
           </li>

@@ -61,6 +61,18 @@ fn alerts_response(
 pub async fn current_alerts(state: &AppState) -> (serde_json::Value, Vec<crate::alerts::Alert>) {
     let snapshot = dashboard_alert_snapshot(state).await;
     let mut alert_list = alerts::derive_alerts(&snapshot);
+    let runtime = state.runtime_state.snapshot().await;
+    let pipeline_names = runtime
+        .pipelines
+        .into_iter()
+        .map(|p| (p.id, p.name))
+        .collect();
+    let output_names = runtime
+        .outputs
+        .into_iter()
+        .map(|o| (o.id, o.name))
+        .collect();
+    alerts::name_subjects(&mut alert_list, &pipeline_names, &output_names);
     state.alert_tracker.track(&mut alert_list);
     (snapshot, alert_list)
 }

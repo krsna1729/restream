@@ -20,6 +20,8 @@ import { Freshness, useOpenAlerts } from "./polled.js";
 import type { Polled } from "./polled.js";
 import { PlaceLink } from "./router.js";
 import type { LiveSnapshot } from "./store.js";
+import { LogsLink } from "./logs-link.js";
+import { explainCause, troubleTitle } from "./trouble-model.js";
 
 export function Fleet({ live }: { live: LiveSnapshot }) {
   const model = useMemo(
@@ -169,12 +171,15 @@ function Attention({ items }: { items: FleetModel["attention"] }) {
                     {shown.map((item) => (
                       <li key={item.key} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 rounded-field bg-base-100 px-3 py-2 text-sm">
                         <div className="min-w-0">
-                          <PlaceLink className="font-medium hover:underline" place={{ workspace: "operate", pipelineId: item.pipelineId }}>
-                            {item.pipelineName}
-                          </PlaceLink>
+                          <span className="flex items-baseline gap-2">
+                            <PlaceLink className="font-medium hover:underline" place={{ workspace: "operate", pipelineId: item.pipelineId }}>
+                              {item.pipelineName}
+                            </PlaceLink>
+                            <LogsLink pipelineId={item.pipelineId} />
+                          </span>
                           <div
                             className="truncate text-xs text-base-content/70"
-                            title={`${describeCause(item.cause)}${item.ruledOut.length > 0 ? ` · ruled out ${item.ruledOut.join(", ")}` : ""}`}
+                            title={`${troubleTitle(explainCause(item.cause))}${item.ruledOut.length > 0 ? `\nRuled out: ${item.ruledOut.join(", ")}` : ""}`}
                           >
                             {describeCause(item.cause)}
                           </div>
