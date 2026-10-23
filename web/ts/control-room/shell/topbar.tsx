@@ -7,7 +7,7 @@ import type { ReactNode } from "react";
 
 import { Icon } from "../../ui/icons.js";
 import { usePrefs } from "../../ui/prefs.js";
-import type { Density, Mode, ThemeChoice } from "../../ui/prefs.js";
+import type { Density, ThemeChoice } from "../../ui/prefs.js";
 import { StatusDot } from "../../ui/tone.js";
 import { formatAge } from "../format.js";
 import { SAMPLE_STALE_AFTER_MS, useNow } from "../store.js";
@@ -77,12 +77,11 @@ function Segmented<T extends string>(props: { label: string; value: T; options: 
   );
 }
 
-/** Theme, density and audience, as segmented controls. */
+/** Theme and density, as segmented controls. */
 export function PrefsControls() {
   const prefs = usePrefs();
   return (
     <div className="flex flex-col gap-3">
-      <Segmented<Mode> label="Audience" value={prefs.mode} options={[["operator", "Operator"], ["engineer", "Engineer"]]} onChange={prefs.setMode} />
       <Segmented<ThemeChoice> label="Theme" value={prefs.theme} options={[["system", "System"], ["dark", "Dark"], ["light", "Light"]]} onChange={prefs.setTheme} />
       <Segmented<Density> label="Density" value={prefs.density} options={[["comfortable", "Comfortable"], ["compact", "Compact"]]} onChange={prefs.setDensity} />
     </div>
@@ -196,25 +195,6 @@ function PrefsMenu() {
   );
 }
 
-function ModeToggle() {
-  const prefs = usePrefs();
-  return (
-    <div className="join hidden md:inline-flex" role="group" aria-label="Audience">
-      {(["operator", "engineer"] as const).map((mode) => (
-        <button
-          key={mode}
-          type="button"
-          aria-pressed={prefs.mode === mode}
-          onClick={() => prefs.setMode(mode)}
-          className={`btn join-item btn-xs h-8 px-3 ${prefs.mode === mode ? "btn-primary" : "btn-ghost border-base-content/15"}`}
-        >
-          {mode === "operator" ? "Operator" : "Engineer"}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 export function Topbar(props: { live: LiveSnapshot; onSearch: () => void; extra?: ReactNode }) {
   return (
     <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-base-content/10 bg-base-300/90 px-3 backdrop-blur md:px-5">
@@ -240,7 +220,6 @@ export function Topbar(props: { live: LiveSnapshot; onSearch: () => void; extra?
           <LiveStatus live={props.live} compact />
         </span>
         <UtcClock />
-        <ModeToggle />
         <span className="hidden md:inline-flex">
           <PrefsMenu />
         </span>

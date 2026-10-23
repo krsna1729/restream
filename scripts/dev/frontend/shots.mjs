@@ -3,7 +3,7 @@
 //
 //   node scripts/dev/frontend/shots.mjs --base http://127.0.0.1:3031 --label before \
 //     [--workspaces fleet,operate] [--widths 375,768,1440] [--themes dark,light] \
-//     [--modes operator,engineer] [--password admin] [--full 1] \
+//     [--details summary,detail] [--password admin] [--full 1] \
 //     [--role viewer|operator]   (view the dashboard as a lower role)
 //
 // Writes PNGs and report.json to .local/shots/<label>/. For each page it
@@ -31,7 +31,9 @@ const workspaces = list(
 );
 const widths = list("widths", "375,768,1440").map(Number);
 const themes = list("themes", "dark");
-const modes = list("modes", "operator");
+// "detail" opens every section's Detail switch (ui/prefs.tsx).
+const details = list("details", "summary");
+const DETAIL_SECTIONS = ["destinations", "channels"];
 const pipeline = args.get("pipeline") ?? "";
 const settleMs = Number(args.get("settle-ms") ?? 3500);
 const fullPage = args.get("full") === "1";
@@ -47,7 +49,7 @@ const report = [];
 
 for (const width of widths) {
   for (const theme of themes) {
-    for (const mode of modes) {
+    for (const mode of details) {
       const context = await browser.newContext({
         viewport: { width, height: width < 768 ? 812 : width < 1280 ? 1024 : 960 },
         deviceScaleFactor: 1,
@@ -56,15 +58,15 @@ for (const width of widths) {
         isMobile: width < 768,
       });
       await context.addInitScript(
-        ([themeValue, modeValue]) => {
+        ([themeValue, detailValue, sections]) => {
           try {
             localStorage.setItem("restream.theme", themeValue);
-            localStorage.setItem("restream.mode", modeValue);
+            for (const section of sections) localStorage.setItem(`restream.detail.${section}`, detailValue === "detail" ? "1" : "0");
           } catch {
             /* storage blocked: defaults apply */
           }
         },
-        [theme, mode],
+        [theme, mode, DETAIL_SECTIONS],
       );
       const page = await context.newPage();
       if (password) {
@@ -140,7 +142,7 @@ for (const width of widths) {
         }, width < 768);
         const file = `${workspace}-${width}-${theme}-${mode}${role ? `-${role}` : ""}.png`;
         await page.screenshot({ path: join(out, file), fullPage });
-        report.push({ workspace, width, theme, mode, role: role || "admin", file, errors: [...errors], ...checks });
+        report.push({ workspace, width, theme, detail: mode, role: role || "admin", file, errors: [...errors], ...checks });
         const flags = [
           checks.horizontalScroll ? `HSCROLL(${checks.scrollWidth}>${checks.clientWidth})` : "",
           checks.clippedCount ? `clipped:${checks.clippedCount}` : "",

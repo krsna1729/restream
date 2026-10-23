@@ -62,24 +62,25 @@ npm run build:frontend
 
 ## Design system
 
-Restream is a broadcast operations console for two audiences: operators,
-who need a verdict and a big button under time pressure, and engineers,
-who need every counter. Status drives the look: restrained surfaces, clear
+Restream is a broadcast operations console. Every section leads with a
+verdict and the action it calls for; the counters behind it are one switch
+away in the section itself, never a console-wide mode. Status drives the look: restrained surfaces, clear
 state colour, and media only when someone asks. The whole system is
 token-based, so both themes and both densities come from one set of
 components.
 
-### Themes, density and audience
+### Themes, density and section detail
 
-Three viewer preferences live in `localStorage` (`restream.theme`,
-`restream.density`, `restream.mode`; `ui/prefs.tsx`). Blocked storage leaves
-the defaults. They are applied as attributes on `<html>`.
+Viewer preferences live in `localStorage` (`restream.theme`,
+`restream.density`, and `restream.detail.<section>` per section;
+`ui/prefs.tsx`). Blocked storage leaves the defaults. Theme and density are
+applied as attributes on `<html>`.
 
 | Preference | Values | Effect |
 |---|---|---|
 | Theme | system (default), dark, light | DaisyUI theme `restream-dark` or `restream-light` (`web/styles/input.css`); system follows `prefers-color-scheme` live |
 | Density | comfortable (default), compact | Root font size 15px or 13.5px; every rem-based size scales with it |
-| Audience | operator (default), engineer | Engineer mode adds stage keys, shard ids, delivery ratios, feed lag, remote addresses and raw payloads (`RawJson`) |
+| Section detail | off (default), on, per section | A section's Detail switch (`useSectionDetail`, `DetailToggle`) adds its ids and counters: the destination matrix gains delivery ratio, feed lag, shard and stage; channel cards gain id, attempt phase, shard, stage and the raw error. Every page also ends with its raw payload, collapsed (`RawJson`, serialised only when opened) |
 
 ### Color
 
@@ -154,7 +155,7 @@ The primitives live in `web/ts/ui/`, a layer below the app: `ui/` may import
 | `DataTable` | `data-table.tsx` | Sortable table whose columns carry a priority; cards on phones; windowed past 80 rows (`useWindowedRows`) |
 | `TimeSeries` | `time-series.tsx` | Multi-series chart: area, dashed, gaps for missing samples, bands, labelled cursors, a ghost overlay, hover readout |
 | `SearchField`, `ChipGroup`, `ShareBar` | `controls.tsx` | Filters and a protocol-mix bar |
-| `RawJson` | `raw-json.tsx` | Engineer mode's payload drawer |
+| `RawJson` | `raw-json.tsx` | A section's raw payload, collapsed and copyable |
 | `Icon` | `icons.tsx` | Inline stroke icons |
 
 Legacy DaisyUI markup (`card`, `badge-*`, `table`) is restyled in
@@ -180,8 +181,7 @@ is `app.tsx` plus `control-room/shell/`.
   bar (Fleet, Incidents, Channels, Operate, More); More opens a sheet with
   every workspace, the account, the host card and the preferences.
 - The top bar holds search, the help button, the live status, the UTC
-  clock (2xl), the Operator/Engineer switch (tablet and up) and the
-  preferences menu.
+  clock (2xl) and the preferences menu.
 - Help (`shell/help.tsx`, words in `help-model.ts`): the help button or `?`
   opens a drawer saying what the current page answers, when to use it and
   the terms it uses. From there a spotlight tour lights the page's parts one
@@ -325,8 +325,8 @@ Every workspace shows live data only.
   filtered by state (needs attention, retrying, starting, delivering,
   stopped), protocol and name (`filterDestinationRows`); windowed, so every
   destination is one scroll away. A retrying output shows its attempt and a
-  countdown to the next one. Engineer mode adds delivery ratio, feed lag and
-  shard.
+  countdown to the next one. The Detail switch adds delivery ratio, feed lag,
+  shard and stage.
 - The graph draws at most 8 egress groups per column, worst first, and folds
   the rest into a link to the Destinations view.
 
@@ -732,12 +732,12 @@ run the same synthetic engine inside the page (`fixtures/browser-backend.mjs`
 answers `fetch` and `EventSource`) and write a static demo folder to
 `.local/demo/` that any web server can host: no engine, no login.
 `scripts/dev/frontend/shots.mjs` screenshots every workspace across widths,
-themes and audiences into `.local/shots/<label>/`. It flags horizontal page
+themes and section detail into `.local/shots/<label>/`. It flags horizontal page
 scroll, clipped text, phone touch targets under 36px, and console errors.
 
 ```sh
 npm run build:frontend
 node scripts/dev/frontend/fixture-server.mjs --preset plant --port 3031 &
 node scripts/dev/frontend/shots.mjs --base http://127.0.0.1:3031 --label mine \
-  --widths 375,768,1440 --themes dark,light --modes operator,engineer
+  --widths 375,768,1440 --themes dark,light --details summary,detail
 ```

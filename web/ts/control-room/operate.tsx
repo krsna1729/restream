@@ -8,7 +8,6 @@ import type { ConfigData, PipelineInput } from "../types.js";
 import { Kpi, KpiRow } from "../ui/kpi.js";
 import { Panel } from "../ui/panel.js";
 import { RawJson } from "../ui/raw-json.js";
-import { useEngineer } from "../ui/prefs.js";
 import { StatusBadge } from "../ui/tone.js";
 import type { Tone } from "../ui/tone.js";
 import { DestinationMatrix } from "./destination-matrix.js";
@@ -146,7 +145,6 @@ function SourceDeck(props: {
   atMs: number | null;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
-  const engineer = useEngineer();
   const { inputs } = props;
   const connected = inputs?.filter((input) => input.runtime.connected).length;
   return (
@@ -185,7 +183,7 @@ function SourceDeck(props: {
                     {video?.codec && ` · ${video.codec} ${video.width ?? "?"}×${video.height ?? "?"}`}
                     {video?.fps ? ` · ${Math.round(video.fps)} fps` : ""}
                     {typeof rtt === "number" && ` · RTT ${rtt.toFixed(0)} ms`}
-                    {engineer && input.runtime.remoteAddr && ` · ${input.runtime.remoteAddr}`}
+                    {input.runtime.remoteAddr && ` · from ${input.runtime.remoteAddr}`}
                   </div>
                 )}
                 {input.runtime.connected && (

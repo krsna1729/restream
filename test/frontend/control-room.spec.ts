@@ -1541,6 +1541,15 @@ test("operate views: inspect an egress group, list the groups, read the pipeline
     // The engine's kept lifecycle events for this pipeline, newest first.
     await page.getByRole("tab", { name: "Timeline" }).click();
     await expect(page.getByRole("list", { name: "Pipeline timeline" })).toContainText("cr-group-a");
+
+    // The matrix's Detail switch adds its counters, and this browser keeps it.
+    const matrix = page.locator('section[aria-labelledby="operate-destinations"]');
+    await expect(matrix.getByText("Feed lag", { exact: true })).toHaveCount(0);
+    await matrix.getByRole("button", { name: "Detail" }).click();
+    await expect(matrix.getByText("Feed lag", { exact: true })).toBeVisible();
+    await page.reload();
+    await expect(matrix.getByRole("button", { name: "Detail" })).toHaveAttribute("aria-pressed", "true");
+    await expect(matrix.getByText("Feed lag", { exact: true })).toBeVisible();
   } finally {
     for (const id of pipelineIds) await page.request.delete(`/api/v1/pipelines/${id}`);
   }

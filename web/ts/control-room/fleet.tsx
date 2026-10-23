@@ -5,7 +5,6 @@ import type { CapacitySnapshot } from "../core/generated/runtime-state.js";
 import { Kpi, KpiRow, MeterRow } from "../ui/kpi.js";
 import { PageHeader } from "../ui/page-header.js";
 import { EmptyState, Panel } from "../ui/panel.js";
-import { useEngineer } from "../ui/prefs.js";
 import { RawJson } from "../ui/raw-json.js";
 import { TimeSeries } from "../ui/time-series.js";
 import { StatusBadge, utilizationTone } from "../ui/tone.js";
@@ -133,7 +132,6 @@ const LAYER_TONE: Record<AttentionGroup["layer"], Tone> = { ingest: "warn", feed
 function Attention({ items }: { items: FleetModel["attention"] }) {
   const groups = useMemo(() => attentionGroups(items), [items]);
   const [open, setOpen] = useState<string | null>(null);
-  const engineer = useEngineer();
   const expanded = open ?? groups[0]?.key ?? null;
   return (
     <Panel
@@ -174,9 +172,11 @@ function Attention({ items }: { items: FleetModel["attention"] }) {
                           <PlaceLink className="font-medium hover:underline" place={{ workspace: "operate", pipelineId: item.pipelineId }}>
                             {item.pipelineName}
                           </PlaceLink>
-                          <div className="truncate text-xs text-base-content/70" title={describeCause(item.cause)}>
+                          <div
+                            className="truncate text-xs text-base-content/70"
+                            title={`${describeCause(item.cause)}${item.ruledOut.length > 0 ? ` · ruled out ${item.ruledOut.join(", ")}` : ""}`}
+                          >
                             {describeCause(item.cause)}
-                            {engineer && item.ruledOut.length > 0 && ` · ruled out ${item.ruledOut.join(", ")}`}
                           </div>
                           <div className="truncate text-xs text-base-content/60">
                             {item.outputs.slice(0, 3).join(", ")}

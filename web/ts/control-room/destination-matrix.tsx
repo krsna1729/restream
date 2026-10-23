@@ -1,7 +1,7 @@
 // Every destination of one pipeline: filterable by state, protocol and name,
 // windowed so thousands of rows scroll, with start/stop, edit and delete.
-// Operators read a state badge, a retry countdown and the cause in words;
-// engineers also get delivery ratio, feed lag, shard and stage.
+// Each row reads as a state badge, a retry countdown and the cause in words;
+// the Detail switch adds delivery ratio, feed lag, shard and stage.
 
 import { useMemo, useState } from "react";
 
@@ -14,7 +14,7 @@ import { DataTable } from "../ui/data-table.js";
 import type { Column } from "../ui/data-table.js";
 import { Icon } from "../ui/icons.js";
 import { Panel } from "../ui/panel.js";
-import { useEngineer } from "../ui/prefs.js";
+import { DetailToggle, useSectionDetail } from "../ui/prefs.js";
 import { StatusBadge } from "../ui/tone.js";
 import type { Tone } from "../ui/tone.js";
 import { ConfirmDelete } from "./confirm.js";
@@ -78,7 +78,7 @@ export function DestinationMatrix(props: {
   config: ConfigData | null;
   onConfigChanged: () => void;
 }) {
-  const engineer = useEngineer();
+  const [detail, setDetail] = useSectionDetail("destinations");
   const [filter, setFilter] = useState<DestinationFilter>("all");
   const [protocol, setProtocol] = useState<EgressProtocol | "any">("any");
   const [query, setQuery] = useState("");
@@ -162,7 +162,7 @@ export function DestinationMatrix(props: {
       sort: (row) => props.egressBps?.get(row.output.id) ?? null,
       cell: (row) => formatBps(props.egressBps?.get(row.output.id)),
     },
-    ...(engineer
+    ...(detail
       ? ([
           {
             id: "ratio",
@@ -213,7 +213,7 @@ export function DestinationMatrix(props: {
             {text}
           </span>
         ) : (
-          <span className="text-base-content/40">—</span>
+          <span className="text-base-content/60">—</span>
         );
       },
     },
@@ -272,6 +272,7 @@ export function DestinationMatrix(props: {
       actions={
         <>
           <SearchField value={query} onChange={setQuery} placeholder="Name or id" label="Search destinations" className="w-full sm:w-52" />
+          <DetailToggle open={detail} onChange={setDetail} />
           {canOperate && (
             <button type="button" className="btn btn-primary btn-sm" disabled={config === null} onClick={() => setEditing("new")}>
               Add destination
