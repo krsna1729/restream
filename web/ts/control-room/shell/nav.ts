@@ -17,6 +17,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
   { label: "Understand", items: ["incidents", "health", "capacity", "stability"] },
   { label: "Manage", items: ["media", "changes", "notifications", "team", "audit", "settings"] },
   { label: "Engineer", items: ["inspect", "logs", "system"] },
+  { label: "Learn", items: ["guides", "architecture"] },
 ];
 
 export const NAV_ICONS: Record<Workspace, IconName> = {
@@ -39,6 +40,8 @@ export const NAV_ICONS: Record<Workspace, IconName> = {
   team: "team",
   audit: "audit",
   settings: "settings",
+  guides: "book",
+  architecture: "layers",
 };
 
 /** The phone's bottom bar: the on-call path first; the rest under More. */
