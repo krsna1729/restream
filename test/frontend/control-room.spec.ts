@@ -1375,6 +1375,9 @@ test("previews and stage detail: play the program and an input; a transcode stag
     await program.getByRole("button", { name: "Preview program" }).click();
     const status = program.getByRole("status");
     await expect(status).toHaveText("live", { timeout: 30_000 });
+    // Playing, the preview meters its audio without being heard.
+    await expect(program.getByRole("meter", { name: "Audio level of program" })).toBeVisible();
+    await expect(program.getByRole("button", { name: "Listen" })).toHaveAttribute("aria-pressed", "false");
     frozen = true;
     await expect(status).toHaveText("buffering", { timeout: 30_000 });
     await expect(status).toHaveText("stalled: no new frames", { timeout: 30_000 });
