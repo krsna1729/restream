@@ -171,7 +171,7 @@ function Week(props: { schedules: readonly Schedule[]; pipelineNames: Map<string
   const days = useMemo(() => agenda(props.schedules, props.now, DAYS), [props.schedules, props.now]);
   const today = localDay(props.now);
   return (
-    <div className="grid gap-2 md:grid-cols-7" role="list" aria-label="The week ahead">
+    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7" role="list" aria-label="The week ahead">
       {days.map((day) => (
         <section key={day.dayMs} role="listitem" aria-label={DAY.format(day.dayMs)} className={`min-w-0 rounded-box border bg-base-100 p-2 ${day.dayMs === today ? "border-primary/50" : "border-base-content/10"}`}>
           <h3 className={`kicker mb-2 ${day.dayMs === today ? "text-primary" : ""}`}>{day.dayMs === today ? "Today" : DAY.format(day.dayMs)}</h3>
@@ -234,7 +234,7 @@ export function ScheduleView({ live }: { live: LiveSnapshot }) {
       id: "pipeline",
       header: "Pipeline",
       width: "minmax(9rem,1fr)",
-      priority: 2,
+      priority: 3,
       sort: (schedule) => pipelineNames.get(schedule.pipelineId) ?? schedule.pipelineId,
       cell: (schedule) => (
         <PlaceLink className="truncate hover:underline" place={{ workspace: "operate", pipelineId: schedule.pipelineId }}>
@@ -265,7 +265,7 @@ export function ScheduleView({ live }: { live: LiveSnapshot }) {
       id: "last",
       header: "Last run",
       width: "minmax(12rem,1.6fr)",
-      priority: 2,
+      priority: 3,
       cell: (schedule) =>
         schedule.lastResult ? (
           <span className="flex min-w-0 items-center gap-2" title={schedule.lastResult}>
