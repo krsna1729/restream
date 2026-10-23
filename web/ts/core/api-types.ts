@@ -750,3 +750,35 @@ export interface FlightTrace {
   completeFromMs: number;
   samples: FlightSample[];
 }
+
+/** Team roles, least first (`application/team.rs`). */
+export type Role = "viewer" | "operator" | "admin";
+
+/** `GET /api/v1/auth/me`: who the session is and the role it acts as. */
+export interface SessionPrincipal {
+  userId: string;
+  username: string;
+  role: Role;
+  /** A lower role the session chose to view the dashboard as. */
+  viewAs: Role | null;
+  effectiveRole: Role;
+}
+
+export interface TeamMember {
+  id: string;
+  username: string;
+  role: Role;
+  createdAtMs: number;
+  disabled: boolean;
+}
+
+export interface AuditEntry {
+  id: number;
+  atMs: number;
+  username: string;
+  /** The role the change was made as (after any view-as). */
+  role: Role;
+  method: string;
+  path: string;
+  status: number;
+}

@@ -73,7 +73,8 @@ flowchart TD
     serve["http_server::serve<br/>(half-close only for /ingest/hls/)"] --> app["create_router"]
     serve --> ingest["create_hls_ingest_router"]
     app --> layers["apply_standard_layers<br/>4 MiB body limit + security headers"]
-    app --> wake["wake_reconciler_after_mutation"]
+    app --> roles["authorize_and_audit<br/>route role policy + audit log"]
+    roles --> wake["wake_reconciler_after_mutation"]
     layers --> staticDocs["create_compressed_static_router<br/>/login, /output.css, SPA fallback"]
     layers --> api["/api/v1/* JSON handlers"]
     layers --> hls["create_hls_router<br/>/hls/*"]
@@ -84,7 +85,7 @@ flowchart TD
 
 | Group | Routes | Section |
 |---|---|---|
-| Auth and security | `/api/v1/auth/*`, `/api/v1/security/rate-limits*` | [Authentication](#authentication) |
+| Auth, team and security | `/api/v1/auth/*`, `/api/v1/users*`, `/api/v1/audit`, `/api/v1/security/rate-limits*` | [Authentication](#authentication) |
 | Settings and discovery | `/api/v1/settings`, `/stream-keys`, `/audio-caps`, `/monitoring/youtube-status` | [Configuration and discovery](#configuration-and-discovery) |
 | Pipelines and inputs | `/api/v1/pipelines`, `…/inputs*` | [Pipelines](#pipelines) |
 | Outputs | `…/outputs*` | [Outputs](#outputs) |
@@ -107,10 +108,15 @@ flowchart TD
 
 | Method | Route | Purpose |
 |---|---|---|
-| `POST` | `/api/v1/auth/login` | Check `{ "password" }`, create a session, set the cookie |
+| `POST` | `/api/v1/auth/login` | Check `{ "username"?, "password" }`, create a session, set the cookie |
 | `POST` | `/api/v1/auth/logout` | Delete the current session and clear the cookie |
 | `POST` | `/api/v1/auth/change-password` | Change the password from `{ "currentPassword", "newPassword" }` |
 | `POST` | `/api/v1/auth/dismiss-password-change` | Hide the bootstrap "change the password" reminder |
+| `GET` | `/api/v1/auth/me` | The session's member, role, view and effective role |
+| `POST` | `/api/v1/auth/view-as` | Act as a lower role, `{ "role": "viewer" \| "operator" \| null }` |
+| `GET`, `POST` | `/api/v1/users` | List members; add one from `{ "username", "password", "role" }` (admin) |
+| `PATCH`, `DELETE` | `/api/v1/users/:id` | Change `{ "role"?, "disabled"?, "password"? }`; remove (admin) |
+| `GET` | `/api/v1/audit?limit&before` | Change requests, newest first (admin) |
 | `GET` | `/api/v1/security/rate-limits` | List tracked failure counters and bans |
 | `POST` | `/api/v1/security/rate-limits/reset` | Clear counters, optionally by `scope` and `ip` |
 
@@ -158,6 +164,48 @@ sequenceDiagram
   `403`. On success every other session is revoked; the caller's stays, and
   the bootstrap reminder is dismissed.
 - Logout, change password and dismiss return `{ "ok": true }`.
+
+### Team members and roles
+
+Each member signs in with `{ "username", "password" }`. An absent username,
+or `admin`, is the built-in admin: its password is the dashboard password
+above, its role is always admin, and it cannot be disabled or removed. Other
+members live in the `users` table with a scrypt hash and a role. A session
+row carries the member (`user_id`, null for the built-in admin) and the role
+it views as (`view_as`).
+
+Roles are ordered: `viewer` < `operator` < `admin`.
+
+| Role | May |
+|---|---|
+| `viewer` | Read every dashboard route except settings, stream keys, security, the team and the audit log |
+| `operator` | Also change the plant (pipelines, inputs, outputs, media, file ingest, recording, the agent plane) and read settings and stream keys |
+| `admin` | Also change settings, security and custom encodings, and manage the team and read the audit log |
+
+One layer in front of every `/api/v1/` handler (`authorize_and_audit` in
+`src/api/team.rs`) enforces `required_role(method, path)`
+(`src/application/team.rs`). A request without a valid session passes
+through to its handler, which answers `401` as before. A session whose role
+is too low gets `403 { "error", "requiredRole", "effectiveRole" }` before
+any handler runs. Reads any session may make skip the lookup.
+
+- **View as.** `POST /api/v1/auth/view-as` stores a lower role on the
+  session; every check then uses `min(role, viewAs)`, so the preview is what
+  that role can do, not a hidden-button approximation. `null`, or the
+  member's own role, ends it. It returns the `GET /auth/me` body:
+  `{ "userId", "username", "role", "viewAs", "effectiveRole" }`.
+- **Audit.** Every request that is not a read (`GET`/`HEAD`/`OPTIONS`) is
+  recorded with the member, the effective role, the method, the path and
+  the response status, including the `403`s. The log keeps the newest
+  10,000 entries (`AUDIT_LOG_CAP`). `GET /api/v1/audit` returns
+  `{ "entries": [{ "id", "atMs", "username", "role", "method", "path", "status" }] }`;
+  `limit` is clamped to 1–500 (default 100), and `before` pages back from an
+  entry id.
+- **Members.** Usernames are 1–64 letters, digits, `.`, `_`, `-` or `@`; a
+  taken one is `409`. Passwords need 12 bytes. A role change applies on the
+  member's next request. Disabling a member, or an admin resetting their
+  password, ends their sessions. A member's own password change
+  (`/auth/change-password`) ends their other sessions only.
 
 Rate limits: `GET` returns
 `{ "attempts": [{ "scope", "ip", "failureCount", "banned", "banRemainingMs" }] }`.

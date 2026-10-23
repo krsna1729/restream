@@ -6,7 +6,7 @@
 import type { OperatorAlert } from "../../core/api-types.js";
 import type { RuntimeState } from "../../core/generated/runtime-state.js";
 import { WORKSPACE_LABELS, WORKSPACES } from "../route.js";
-import type { Place } from "../route.js";
+import type { Place, Workspace } from "../route.js";
 
 export type PaletteKind = "workspace" | "pipeline" | "destination" | "incident" | "action";
 
@@ -36,8 +36,10 @@ export function paletteEntries(
   state: RuntimeState | null,
   alerts: readonly OperatorAlert[],
   currentPipeline: string | null,
+  /** The workspaces this session may open; all by default. */
+  canOpen: (workspace: Workspace) => boolean = () => true,
 ): PaletteEntry[] {
-  const entries: PaletteEntry[] = WORKSPACES.map((workspace) => ({
+  const entries: PaletteEntry[] = WORKSPACES.filter(canOpen).map((workspace) => ({
     id: `w:${workspace}`,
     kind: "workspace",
     label: WORKSPACE_LABELS[workspace],

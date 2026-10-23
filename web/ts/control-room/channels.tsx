@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { getConfig, startOut, stopOut } from "../core/api.js";
+import { useSession } from "./session.js";
 import type { ConfigData } from "../types.js";
 import { ChipGroup, SearchField } from "../ui/controls.js";
 import { Icon } from "../ui/icons.js";
@@ -50,8 +51,10 @@ const PAGE = 60;
 const BULK_CONCURRENCY = 6;
 
 export function Channels({ live }: { live: LiveSnapshot }) {
+  const canOperate = useSession().can("operator");
   const [config, setConfig] = useState<ConfigData | null>(null);
-  const reload = useCallback(() => void getConfig().then(setConfig), []);
+  // Settings hold stream keys: a viewer neither reads them nor needs them.
+  const reload = useCallback(() => void (canOperate ? getConfig().then(setConfig) : setConfig(null)), [canOperate]);
   useEffect(reload, [reload]);
   const urls = useMemo(() => new Map((config?.outputs ?? []).map((output) => [output.id, output.url])), [config]);
   const channels = useMemo(() => (live.state ? buildChannels(live.state, urls) : null), [live.state, urls]);
@@ -123,7 +126,7 @@ export function Channels({ live }: { live: LiveSnapshot }) {
         tone={trouble > 0 ? "warn" : liveCount > 0 ? "ok" : "neutral"}
         subtitle={`${trouble.toLocaleString()} need attention · ${off.toLocaleString()} off · bulk actions act on ${scopeLabel}`}
         actions={
-          <div className="flex flex-wrap gap-2">
+          canOperate && <div className="flex flex-wrap gap-2">
             <button type="button" className="btn btn-accent btn-sm" disabled={counts.start === 0 || progress !== null && progress.done < progress.total} onClick={() => setPending("start")}>
               <Icon name="play" className="size-3.5" /> Go live ({counts.start.toLocaleString()})
             </button>
@@ -242,6 +245,7 @@ const AVATAR_TONE: Record<string, string> = {
 };
 
 function ChannelCard(props: { channel: Channel; bps: number | null }) {
+  const canOperate = useSession().can("operator");
   const { channel } = props;
   const { output } = channel;
   const [busy, setBusy] = useState(false);
@@ -272,7 +276,8 @@ function ChannelCard(props: { channel: Channel; bps: number | null }) {
           role="switch"
           aria-checked={on}
           aria-label={`${on ? "Stop" : "Go live on"} ${output.name}`}
-          disabled={busy}
+          title={canOperate ? undefined : "Starting and stopping needs the operator role"}
+          disabled={busy || !canOperate}
           onClick={async () => {
             setBusy(true);
             try {

@@ -2,6 +2,7 @@
 //! that orchestration code depends on.
 
 use crate::application::models::{Ingest, Job, Pipeline};
+use crate::application::team::{AuditEntry, Role, UserRecord};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -299,6 +300,83 @@ pub trait SessionStore: Send + Sync {
     fn get_session_created_at<'a>(&'a self, token: &'a str) -> SessionLookupFuture<'a>;
     fn prune_expired_sessions<'a>(&'a self, max_age_ms: i64) -> SessionWriteFuture<'a>;
     fn list_sessions<'a>(&'a self) -> SessionListFuture<'a>;
+}
+
+pub type TeamFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, TeamStoreError>> + Send + 'a>>;
+
+#[derive(Debug, Clone)]
+pub struct TeamStoreError {
+    message: String,
+}
+
+impl TeamStoreError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for TeamStoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for TeamStoreError {}
+
+/// A stored member with the password hash login verifies against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredUser {
+    pub user: UserRecord,
+    pub password_hash: String,
+}
+
+/// The member a session belongs to (`None`: the built-in admin) and the role
+/// it views the dashboard as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionBinding {
+    pub user_id: Option<String>,
+    pub view_as: Option<Role>,
+}
+
+/// Team members, the member behind each session, and the audit log.
+pub trait TeamStore: Send + Sync {
+    fn list_users(&self) -> TeamFuture<'_, Vec<UserRecord>>;
+    fn find_user_by_username<'a>(&'a self, username: &'a str)
+    -> TeamFuture<'a, Option<StoredUser>>;
+    fn find_user<'a>(&'a self, id: &'a str) -> TeamFuture<'a, Option<StoredUser>>;
+    /// `Ok(false)` when the username is taken.
+    fn insert_user<'a>(
+        &'a self,
+        user: &'a UserRecord,
+        password_hash: &'a str,
+    ) -> TeamFuture<'a, bool>;
+    /// `Ok(false)` when no such member exists.
+    fn update_user<'a>(
+        &'a self,
+        id: &'a str,
+        role: Option<Role>,
+        disabled: Option<bool>,
+        password_hash: Option<&'a str>,
+    ) -> TeamFuture<'a, bool>;
+    fn delete_user<'a>(&'a self, id: &'a str) -> TeamFuture<'a, bool>;
+    /// Ends a member's sessions, except `keep` (a session token hash).
+    fn delete_user_sessions<'a>(
+        &'a self,
+        user_id: &'a str,
+        keep: Option<&'a str>,
+    ) -> TeamFuture<'a, ()>;
+    /// `Ok(false)` when the session does not exist.
+    fn bind_session<'a>(
+        &'a self,
+        token: &'a str,
+        binding: &'a SessionBinding,
+    ) -> TeamFuture<'a, bool>;
+    fn session_binding<'a>(&'a self, token: &'a str) -> TeamFuture<'a, Option<SessionBinding>>;
+    fn append_audit<'a>(&'a self, entry: &'a AuditEntry) -> TeamFuture<'a, ()>;
+    /// Newest first; `before` pages back from an entry id.
+    fn list_audit(&self, limit: u32, before: Option<i64>) -> TeamFuture<'_, Vec<AuditEntry>>;
 }
 
 pub trait JobStore: Send + Sync {

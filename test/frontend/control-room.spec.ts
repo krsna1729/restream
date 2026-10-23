@@ -1805,3 +1805,41 @@ test("stability lab: naive retries stay stuck after a blip, the engine's backoff
     await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
   }
 });
+
+test("team: an admin adds a viewer, views as one, and the audit log records both", async ({ page }) => {
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  const username = `cr-viewer-${Date.now()}`;
+
+  await page.goto("/?w=team");
+  const add = page.getByRole("region", { name: "Add a member" });
+  await add.getByLabel("Username").fill(username);
+  await add.getByLabel("Initial password").fill("correct-horse-battery");
+  await add.getByRole("combobox", { name: "New member's role" }).selectOption("viewer");
+  await add.getByRole("button", { name: "Add member" }).click();
+  await expect(page.getByRole("table", { name: "Team members" })).toContainText(username);
+
+  // View as a viewer: the engine enforces it, and the dashboard stops
+  // offering what it would refuse.
+  await page.getByLabel(/^Account: admin/).click();
+  await page.getByRole("button", { name: "Viewer", exact: true }).click();
+  const banner = page.getByRole("status").filter({ hasText: "Viewing as" });
+  await expect(banner).toContainText("Viewer");
+  await expect(page.getByRole("link", { name: "Team" })).toHaveCount(0);
+  const refused = await page.request.post("/api/v1/pipelines", { data: { name: "refused" } });
+  expect(refused.status()).toBe(403);
+  await banner.getByRole("button", { name: "Back to Admin" }).click();
+  await expect(banner).toHaveCount(0);
+
+  await page.goto("/?w=audit");
+  const log = page.getByRole("table", { name: "Audit log" });
+  await expect(log).toContainText("Added a team member");
+  await expect(log).toContainText("Refused");
+  await expect(log).toContainText("Switched the role they view as");
+
+  const members = (await (await page.request.get("/api/v1/users")).json()).users as Array<{ id: string; username: string }>;
+  const created = members.find((member) => member.username === username);
+  if (created) await page.request.delete(`/api/v1/users/${created.id}`);
+});

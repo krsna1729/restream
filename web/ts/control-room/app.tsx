@@ -20,10 +20,11 @@ import { navBadges } from "./shell/badges.js";
 import { CommandPalette, useCommandPaletteShortcut } from "./shell/command-palette.js";
 import { MobileTabs, MoreSheet } from "./shell/mobile-nav.js";
 import { Sidebar } from "./shell/sidebar.js";
-import { Topbar } from "./shell/topbar.js";
+import { Topbar, ViewAsBanner } from "./shell/topbar.js";
 import { useLive } from "./store.js";
 import { StabilityLab } from "./stability/stability.js";
 import { System } from "./system.js";
+import { Audit, Team } from "./team.js";
 
 export function App() {
   return (
@@ -60,6 +61,7 @@ function Shell() {
       <Sidebar live={live} badges={badges} />
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar live={live} onSearch={openPalette} />
+        <ViewAsBanner />
         {/* core/api.ts toggles these elements' classes and writes
             #error-msg's text; React owns neither (constant classes, no
             children). */}
@@ -90,6 +92,8 @@ function Shell() {
           {place.workspace === "media" && <Media live={live} />}
           {place.workspace === "system" && <System live={live} />}
           {place.workspace === "changes" && <Changes live={live} />}
+          {place.workspace === "team" && <Team />}
+          {place.workspace === "audit" && <Audit />}
           {place.workspace === "settings" && <Settings />}
         </main>
       </div>

@@ -168,14 +168,16 @@ primitives still reads as one system.
 is `app.tsx` plus `control-room/shell/`.
 
 - Navigation groups the workspaces (`shell/nav.ts`): Operate (Fleet,
-  Pipelines, Operate, Monitor), Understand (Incidents, Capacity), Manage
-  (Media, Changes, Settings), Engineer (Inspect, Logs, System). Live badges
+  Channels, Pipelines, Operate, Monitor), Understand (Incidents, Stream
+  health, Capacity, Stability Lab), Manage (Media, Changes, Team, Audit log,
+  Settings), Engineer (Inspect, Logs, System), filtered to what the
+  session's role may open (`navGroupsFor`). Live badges
   count degraded destinations, pipelines and open alerts (`shell/badges.ts`);
   an unknown count is absent, never zero.
 - Wide screens (1280px and up) show the sidebar with a host card (CPU,
   memory, egress, ingest). Tablets show an icon rail. Phones show a bottom
-  bar (Fleet, Incidents, Pipelines, Operate, More); More opens a sheet with
-  every workspace, the host card and the preferences.
+  bar (Fleet, Incidents, Channels, Operate, More); More opens a sheet with
+  every workspace, the account, the host card and the preferences.
 - The top bar holds search, the live status, the UTC clock (2xl), the
   Operator/Engineer switch and the preferences menu.
 - The command palette (`⌘K`, `Ctrl+K` or `/`) finds workspaces,
@@ -477,6 +479,26 @@ byte passphrase), transcode profiles (built-ins kept), failed-attempt
 limits, dashboard password. The failed-attempts list is polled; forgetting
 one client sends its scope key, forgetting all sends no scope (other scopes
 get 400). Log out is on the password card.
+
+### Team and Audit log
+
+Admin only; other roles do not see them in the navigation, and the engine
+refuses their routes. Team lists the members (the built-in `admin` first)
+with their role, status and age, adds one (username, initial password,
+role), and changes a role, disables, resets a password or removes inline.
+Audit log reads `/audit` 200 at a time with "Load older", filters by
+outcome (done, refused, failed) and by member or words, and says each change
+in plain words (`team-model.ts`, `describeChange`), with the raw request in
+the last column.
+
+The account menu in the top bar (in More on a phone) shows the member and
+their role and offers **View as** a lower role. The choice is stored on the
+session and enforced by the engine, and a banner says so until the member
+goes back. Views also stop offering what the role would be refused: a
+viewer gets no bulk actions or toggles on Channels, no actions column on
+the destination matrix, and never reads `/settings` (it holds stream keys).
+The session comes from `useSession()` (`session.tsx`); navigation filters
+by `navGroupsFor(role)`.
 
 ### Changes
 

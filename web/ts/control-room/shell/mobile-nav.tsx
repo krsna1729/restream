@@ -13,7 +13,7 @@ import { compactCount } from "./badges.js";
 import type { NavBadge } from "./badges.js";
 import { MOBILE_TABS, NAV_ICONS } from "./nav.js";
 import { HostCard, NavList } from "./sidebar.js";
-import { PrefsControls } from "./topbar.js";
+import { PrefsControls, SessionControls } from "./topbar.js";
 
 export function MobileTabs(props: {
   badges: Partial<Record<Workspace, NavBadge>>;
@@ -84,6 +84,7 @@ export function MoreSheet(props: {
         </div>
         <NavList badges={props.badges} onNavigate={props.onClose} />
         <div className="mt-4 flex flex-col gap-4">
+          <SessionControls onDone={props.onClose} />
           <HostCard live={props.live} />
           <PrefsControls />
         </div>

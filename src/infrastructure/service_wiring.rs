@@ -9,13 +9,13 @@ use crate::application::pipeline_inputs::PipelineInputService;
 use crate::application::recirculation::RecirculationService;
 use crate::application::services::{
     AgentService, AuthService, FileIngestService, IngestService, MediaLibraryService,
-    PipelineService, SettingsService,
+    PipelineService, SettingsService, TeamService,
 };
 use crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore;
 use crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter;
 use crate::infrastructure::sqlite_ports::{
     SqliteIngestLookup, SqliteJobStore, SqliteMetaStore, SqlitePipelineStore, SqliteRecordingStore,
-    SqliteSessionStore,
+    SqliteSessionStore, SqliteTeamStore,
 };
 
 /// Infrastructure-owned factory for SQLite application-port adapters.
@@ -41,6 +41,7 @@ impl<'pool> SqliteServiceFactory<'pool> {
             pipeline_input_service,
             recirculation_service,
             auth_service: self.auth_service(),
+            team_service: self.team_service(),
             settings_service,
             file_ingest_service: self.file_ingest_service(pipeline_service.clone()),
             media_library_service: self
@@ -74,6 +75,10 @@ impl<'pool> SqliteServiceFactory<'pool> {
             meta_store,
             Arc::new(SqliteSessionStore::new(self.db.clone())),
         )
+    }
+
+    pub fn team_service(&self) -> TeamService {
+        TeamService::with_store(Arc::new(SqliteTeamStore::new(self.db.clone())))
     }
 
     pub fn settings_service(&self) -> SettingsService {

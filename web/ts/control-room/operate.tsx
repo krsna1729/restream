@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { useSession } from "./session.js";
 import { getConfig, promotePipelineInput } from "../core/api.js";
 import { withBasePath } from "../core/base-path.js";
 import type { ConfigData, PipelineInput } from "../types.js";
@@ -40,7 +41,12 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
   // Stored settings (URLs, output configs, profiles) are not in the state
   // stream: read once, and again after every edit.
   const [config, setConfig] = useState<ConfigData | null>(null);
-  const reloadConfig = useCallback(() => void getConfig().then(setConfig), []);
+  const canOperate = useSession().can("operator");
+  // A viewer may not read settings (stream keys); the views work without.
+  const reloadConfig = useCallback(
+    () => void (canOperate ? getConfig().then(setConfig) : setConfig(null)),
+    [canOperate],
+  );
   useEffect(reloadConfig, [reloadConfig]);
   const columns = useMemo(() => (graph ? buildMediaGraph(graph, outputs) : null), [graph, outputs]);
   const rows = useMemo(() => buildDestinationRows(pipelineId, outputs, graph), [pipelineId, outputs, graph]);

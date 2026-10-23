@@ -10,6 +10,8 @@ import type { IconName } from "../../ui/icons.js";
 import { usePrefs } from "../../ui/prefs.js";
 import type { Density, Mode, ThemeChoice } from "../../ui/prefs.js";
 import { useGo, usePlace } from "../router.js";
+import { useSession } from "../session.js";
+import { canOpen } from "../team-model.js";
 import { paletteEntries, rank } from "./palette-model.js";
 import type { PaletteEntry, PaletteKind } from "./palette-model.js";
 
@@ -63,9 +65,10 @@ export function CommandPalette(props: {
     }
   }, [props.open]);
 
+  const session = useSession();
   const entries = useMemo(
-    () => (props.open ? paletteEntries(props.state, props.alerts, place.pipelineId) : []),
-    [props.open, props.state, props.alerts, place.pipelineId],
+    () => (props.open ? paletteEntries(props.state, props.alerts, place.pipelineId, (workspace) => canOpen(session.role, workspace)) : []),
+    [props.open, props.state, props.alerts, place.pipelineId, session.role],
   );
   const results = useMemo(() => rank(entries, query), [entries, query]);
 

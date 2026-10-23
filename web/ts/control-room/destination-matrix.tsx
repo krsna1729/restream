@@ -18,6 +18,7 @@ import { useEngineer } from "../ui/prefs.js";
 import { StatusBadge } from "../ui/tone.js";
 import type { Tone } from "../ui/tone.js";
 import { ConfirmDelete } from "./confirm.js";
+import { useSession } from "./session.js";
 import { describeCause } from "./fleet-model.js";
 import { formatBps } from "./format.js";
 import {
@@ -111,6 +112,7 @@ export function DestinationMatrix(props: {
     }
   };
 
+  const canOperate = useSession().can("operator");
   const columns: Column<DestinationRow>[] = [
     {
       id: "name",
@@ -270,9 +272,11 @@ export function DestinationMatrix(props: {
       actions={
         <>
           <SearchField value={query} onChange={setQuery} placeholder="Name or id" label="Search destinations" className="w-full sm:w-52" />
-          <button type="button" className="btn btn-primary btn-sm" disabled={config === null} onClick={() => setEditing("new")}>
-            Add destination
-          </button>
+          {canOperate && (
+            <button type="button" className="btn btn-primary btn-sm" disabled={config === null} onClick={() => setEditing("new")}>
+              Add destination
+            </button>
+          )}
         </>
       }
     >
@@ -320,7 +324,7 @@ export function DestinationMatrix(props: {
       </div>
       <DataTable
         rows={shown}
-        columns={columns}
+        columns={canOperate ? columns : columns.filter((column) => column.id !== "actions")}
         rowKey={(row) => row.output.id}
         label="Destinations"
         rowHeight={44}
