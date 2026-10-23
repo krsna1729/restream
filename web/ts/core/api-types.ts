@@ -393,6 +393,10 @@ export interface PipelineFileIngestConfig {
   configured: boolean;
   id?: string;
   filename?: string;
+  /** Every file in play order (one entry for a single file). */
+  playlist?: string[];
+  /** While running: the playlist item playing. */
+  nowPlaying?: number | null;
   streamKey?: string;
   loop?: boolean;
   startTime?: string;
@@ -603,6 +607,8 @@ export interface PipelineWrite {
   srtIngestPolicy?: SrtPipelineIngestConfig | null;
   fileIngest?: {
     filename: string;
+    /** Play order, when more than one file; the first is `filename`. */
+    playlist?: string[];
     loopFlag: boolean;
     startTime: string;
     liveOptimized: boolean;

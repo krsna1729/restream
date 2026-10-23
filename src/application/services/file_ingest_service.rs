@@ -27,6 +27,8 @@ use super::pipeline_service::PipelineService;
 /// configuration before it is translated into the domain/storage model.
 pub struct FileIngestConfigInput {
     pub filename: String,
+    /// Play order when more than one file; the first is `filename`.
+    pub playlist: Vec<String>,
     pub loop_flag: bool,
     pub start_time: String,
     pub live_optimized: bool,
@@ -253,7 +255,11 @@ impl FileIngestService {
             return Err(FileIngestStartError::AlreadyRunning);
         }
 
-        let file_path = Self::resolve_media_file_path(media_dir, &ingest.filename)?;
+        let files = ingest
+            .files()
+            .iter()
+            .map(|filename| Self::resolve_media_file_path(media_dir, filename))
+            .collect::<Result<Vec<_>, _>>()?;
         let input = self
             .pipeline_input_lookup
             .get_by_stream_key(&ingest.stream_key)
@@ -282,7 +288,7 @@ impl FileIngestService {
             ingest_id: ingest.id.clone(),
             pipeline_id: pipeline.id.clone(),
             source: ExternalFileIngestSource {
-                file_path,
+                files,
                 start_time: ingest.start_time.clone(),
                 loop_enabled: ingest.loop_flag,
                 live_optimized: ingest.live_optimized,
@@ -329,6 +335,7 @@ impl FileIngestService {
                         pipeline,
                         &FileIngestConfig {
                             filename: input.filename,
+                            playlist: input.playlist,
                             loop_flag: input.loop_flag,
                             start_time: input.start_time,
                             live_optimized: input.live_optimized,

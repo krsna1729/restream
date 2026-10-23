@@ -180,6 +180,8 @@ export interface PipelineFileIngestState {
   configured: boolean;
   id?: string;
   filename?: string;
+  playlist?: string[];
+  nowPlaying?: number | null;
   streamKey?: string;
   loop?: boolean;
   startTime?: string;

@@ -1886,3 +1886,54 @@ test("notifications: a webhook channel's test arrives signed, and the delivery i
     }
   }
 });
+
+test("playlists: the editor saves the play order, and a running playlist moves to its next file", async ({ page }) => {
+  test.setTimeout(120_000);
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { password: "admin" },
+  });
+  expect(login.ok()).toBe(true);
+  const stamp = Date.now();
+  // A 12 s clip, uploaded twice under two names: the playlist's two items.
+  const clips = [`cr-pl-a-${stamp}.mp4`, `cr-pl-b-${stamp}.mp4`];
+  for (const name of clips) {
+    const uploaded = await page.request.post("/api/v1/media/upload", {
+      multipart: {
+        file: { name, mimeType: "video/mp4", buffer: await readFile("test/fixtures/media-library/sparse-gop-5s.mp4") },
+      },
+    });
+    expect(uploaded.ok()).toBe(true);
+  }
+  const created = await page.request.post("/api/v1/pipelines", {
+    data: { name: `cr-playlist-${stamp}`, streamKey: `crplaylist_${stamp}` },
+  });
+  const pipelineId: string = (await created.json()).pipeline.id;
+  try {
+    // The editor: a file source, then a second file queued after it.
+    await page.goto(`/?w=operate&p=${pipelineId}`);
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const form = page.getByRole("region", { name: "Pipeline settings" });
+    await form.getByRole("combobox", { name: "Source" }).selectOption("file");
+    await form.getByRole("combobox", { name: "File", exact: true }).selectOption(clips[0]);
+    await form.getByRole("combobox", { name: "File to add to the playlist" }).selectOption(clips[1]);
+    await form.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(form.getByRole("group", { name: "Playlist" })).toContainText(`2.${clips[1]}`);
+    await form.getByRole("checkbox", { name: "Loop the playlist" }).uncheck();
+    await form.getByRole("checkbox", { name: /^Live Optimized/ }).check();
+    await form.getByRole("button", { name: "Save" }).click();
+    await expect
+      .poll(async () => (await (await page.request.get(`/api/v1/pipelines/${pipelineId}/file-ingest`)).json()).playlist)
+      .toEqual(clips);
+    const state = await (await page.request.get(`/api/v1/pipelines/${pipelineId}/file-ingest`)).json();
+    expect((await page.request.post(`/api/v1/ingests/${state.id}/start`)).ok()).toBe(true);
+    const nowPlaying = async () =>
+      (await (await page.request.get(`/api/v1/pipelines/${pipelineId}/file-ingest`)).json()).nowPlaying;
+    await expect.poll(nowPlaying, { timeout: 20_000 }).toBe(0);
+    await expect(page.getByRole("status", { name: "Now playing" })).toContainText(`1 of 2 · ${clips[0]}`, { timeout: 20_000 });
+    // The first clip is 12 s at real time; then the engine plays the second.
+    await expect.poll(nowPlaying, { timeout: 45_000 }).toBe(1);
+  } finally {
+    await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
+    for (const name of clips) await page.request.delete(`/api/v1/media/${encodeURIComponent(name)}`);
+  }
+});

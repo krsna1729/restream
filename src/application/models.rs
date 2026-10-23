@@ -22,6 +22,21 @@ pub struct Ingest {
     pub live_optimized: bool,
     #[serde(default = "default_file_ingest_target_gop_seconds")]
     pub target_gop_seconds: u32,
+    /// A playlist's files in play order, the first being `filename`; empty
+    /// for a single file. `loop` then repeats the whole list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub playlist: Vec<String>,
+}
+
+impl Ingest {
+    /// The files this ingest plays, in order.
+    pub fn files(&self) -> Vec<String> {
+        if self.playlist.is_empty() {
+            vec![self.filename.clone()]
+        } else {
+            self.playlist.clone()
+        }
+    }
 }
 
 pub const DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS: u32 = 2;

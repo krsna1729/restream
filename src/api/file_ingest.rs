@@ -24,6 +24,9 @@ use super::state::{AppState, MAX_NAME_LEN, check_field_len, require_authenticate
 #[serde(rename_all = "camelCase")]
 pub struct PipelineFileIngestPayload {
     pub filename: String,
+    /// Files in play order. When given, its first entry is the filename.
+    #[serde(default)]
+    pub playlist: Option<Vec<String>>,
     #[serde(alias = "loop")]
     pub loop_flag: Option<bool>,
     pub start_time: Option<String>,
@@ -55,8 +58,31 @@ pub fn validate_pipeline_file_ingest_payload(
     {
         return Some(r);
     }
+    if let Some(playlist) = &payload.playlist {
+        if playlist.len() > MAX_PLAYLIST_ITEMS {
+            return Some(
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("A playlist holds at most {MAX_PLAYLIST_ITEMS} files")
+                    })),
+                )
+                    .into_response(),
+            );
+        }
+        for filename in playlist {
+            if let Some(r) = check_field_len("playlist", filename, MAX_NAME_LEN)
+                .or_else(|| validate_file_ingest_filename(filename))
+            {
+                return Some(r);
+            }
+        }
+    }
     validate_file_ingest_filename(&payload.filename)
 }
+
+/// The most files one playlist plays.
+pub const MAX_PLAYLIST_ITEMS: usize = 200;
 
 /// Ensures the ingest filename stays relative to the configured media
 /// directory before any runtime or filesystem work is attempted.
@@ -97,6 +123,7 @@ fn file_ingest_state_response(
     Json(api_view_models::file_ingest_response(
         state.ingest,
         state.running,
+        state.now_playing,
     ))
     .into_response()
 }
@@ -108,8 +135,11 @@ fn deleted_response() -> Response {
 fn file_ingest_config_input(payload: PipelineFileIngestPayload) -> FileIngestConfigInput {
     // Normalize optional request fields once so service callers do not each need
     // to re-apply the API defaults.
+    // A playlist decides the filename: its first entry.
+    let playlist = payload.playlist.unwrap_or_default();
     FileIngestConfigInput {
-        filename: payload.filename,
+        filename: playlist.first().cloned().unwrap_or(payload.filename),
+        playlist,
         loop_flag: payload.loop_flag.unwrap_or(false),
         start_time: payload.start_time.unwrap_or_default(),
         live_optimized: payload.live_optimized.unwrap_or(false),

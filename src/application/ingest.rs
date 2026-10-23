@@ -168,6 +168,8 @@ pub struct FileIngestContext {
 pub struct PipelineFileIngestState {
     pub ingest: Option<Ingest>,
     pub running: bool,
+    /// While running: the playlist item playing (0 for a single file).
+    pub now_playing: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -186,6 +188,8 @@ pub enum ResolveFileIngestError {
 #[derive(Debug, Clone)]
 pub struct FileIngestConfig {
     pub filename: String,
+    /// Play order when more than one file; the first is `filename`.
+    pub playlist: Vec<String>,
     pub loop_flag: bool,
     pub start_time: String,
     pub live_optimized: bool,
@@ -235,8 +239,16 @@ pub async fn load_pipeline_file_ingest_state(
         Some(ingest) => engine.is_file_ingest_running(&ingest.id).await,
         None => false,
     };
+    let now_playing = match ingest.as_ref() {
+        Some(ingest) if running => engine.file_ingest_position(&ingest.id).await,
+        _ => None,
+    };
 
-    Ok(PipelineFileIngestState { ingest, running })
+    Ok(PipelineFileIngestState {
+        ingest,
+        running,
+        now_playing,
+    })
 }
 
 /// Stops the file sources publishing with `stream_key` and releases their
@@ -310,6 +322,18 @@ pub async fn persist_pipeline_file_ingest(
             .await
             .map_err(PersistFileIngestError::IngestWrite)?,
     };
+
+    // A playlist of one file is that file.
+    let playlist: &[String] = if config.playlist.len() > 1 {
+        &config.playlist
+    } else {
+        &[]
+    };
+    let saved = ingest_writer
+        .set_ingest_playlist(&saved.id, playlist)
+        .await
+        .map_err(PersistFileIngestError::IngestWrite)?
+        .unwrap_or(saved);
 
     let ingests = ingest_lookup
         .list_ingests_for_stream_key(&pipeline.stream_key)

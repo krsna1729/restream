@@ -45,6 +45,11 @@ pub(super) fn ingest_model(record: crate::db::IngestRecord) -> Ingest {
         start_time: record.start_time,
         live_optimized: record.live_optimized,
         target_gop_seconds: record.target_gop_seconds,
+        playlist: record
+            .playlist
+            .as_deref()
+            .and_then(|json| serde_json::from_str(json).ok())
+            .unwrap_or_default(),
     }
 }
 

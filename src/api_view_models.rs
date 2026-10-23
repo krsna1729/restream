@@ -36,15 +36,23 @@ pub(crate) fn pipeline_response_json_with_file_ingest(
     if let Some(object) = value.as_object_mut() {
         object.insert(
             "fileIngest".to_string(),
-            file_ingest_response(ingest, running),
+            file_ingest_response(ingest, running, None),
         );
     }
     value
 }
 
-pub(crate) fn file_ingest_response(ingest: Option<Ingest>, running: bool) -> serde_json::Value {
+/// `nowPlaying` is the playlist item a running ingest plays; `playlist`
+/// lists every file in order (one entry for a single file).
+pub(crate) fn file_ingest_response(
+    ingest: Option<Ingest>,
+    running: bool,
+    now_playing: Option<usize>,
+) -> serde_json::Value {
     match ingest {
         Some(ingest) => serde_json::json!({
+            "playlist": ingest.files(),
+            "nowPlaying": now_playing,
             "configured": true,
             "id": ingest.id,
             "filename": ingest.filename,
@@ -144,6 +152,7 @@ mod tests {
             start_time: "00:00:03".to_string(),
             live_optimized: true,
             target_gop_seconds: 3,
+            playlist: Vec::new(),
         };
 
         let pipeline_json = pipeline_response_json(&pipeline, "ingest.example", 1935, 10080);
@@ -155,8 +164,8 @@ mod tests {
             Some(ingest.clone()),
             true,
         );
-        let ingest_json = file_ingest_response(Some(ingest), true);
-        let missing_ingest_json = file_ingest_response(None, false);
+        let ingest_json = file_ingest_response(Some(ingest), true, Some(0));
+        let missing_ingest_json = file_ingest_response(None, false, None);
 
         assert_eq!(pipeline_json["id"], "pipeline-1");
         assert_eq!(

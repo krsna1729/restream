@@ -119,7 +119,23 @@ impl IngestService {
             .ok_or_else(|| Self::ingest_not_found(id))
     }
 
-    /// Lists all ingest records that point at one media-library filename.
+    /// Renames one media file wherever this ingest uses it (its filename
+    /// and every playlist entry).
+    pub async fn rename_ingest_file(
+        &self,
+        id: &str,
+        from: &str,
+        to: &str,
+    ) -> ServiceResult<Ingest> {
+        self.writer
+            .rename_ingest_file(id, from, to)
+            .await
+            .map_err(|e| ServiceError::internal(format!("rename ingest file: {e}")))?
+            .ok_or_else(|| Self::ingest_not_found(id))
+    }
+
+    /// Lists all ingest records that use one media-library filename, as
+    /// their file or in their playlist.
     pub async fn list_for_filename(&self, filename: &str) -> ServiceResult<Vec<Ingest>> {
         self.lookup
             .list_ingests_for_filename(filename)
@@ -236,6 +252,7 @@ mod tests {
                     start_time: start_time.to_string(),
                     live_optimized,
                     target_gop_seconds,
+                    playlist: Vec::new(),
                 };
                 self.ingests.lock().unwrap().push(ingest.clone());
                 Ok(ingest)
@@ -280,6 +297,23 @@ mod tests {
                 ingest.filename = filename.to_string();
                 Ok(Some(ingest.clone()))
             })
+        }
+
+        fn set_ingest_playlist<'a>(
+            &'a self,
+            _id: &'a str,
+            _playlist: &'a [String],
+        ) -> IngestUpdateFuture<'a> {
+            Box::pin(async move { Ok(None) })
+        }
+
+        fn rename_ingest_file<'a>(
+            &'a self,
+            _id: &'a str,
+            _from: &'a str,
+            _to: &'a str,
+        ) -> IngestUpdateFuture<'a> {
+            Box::pin(async move { Ok(None) })
         }
 
         fn delete_ingest<'a>(&'a self, id: &'a str) -> IngestDeleteFuture<'a> {

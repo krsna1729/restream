@@ -319,6 +319,12 @@ Every workspace shows live data only.
 - The graph draws at most 8 egress groups per column, worst first, and folds
   the rest into a link to the Destinations view.
 
+A file source can be a playlist. The pipeline settings list the files that
+play after the first; each can be moved or removed, and more are added from
+the media library. Loop then repeats the whole list. While it runs, the file
+switch shows what is playing ("Now playing 2 of 3 · name"). The rules are
+`moveQueued` and `nowPlayingLabel` in `manage-model.ts`.
+
 ### Inspect (one pipeline)
 
 - Resource map polled every 2 s

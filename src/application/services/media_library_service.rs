@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::application::models::{Ingest, Pipeline};
+use crate::application::models::Pipeline;
 use crate::application::ports::{MetaStore, MetaStoreWriter, RecordingStore};
 use crate::application::recording::{
     load_recording_settings, recording_enabled_meta_key, spawn_recording_task,
@@ -560,14 +560,18 @@ impl MediaLibraryService {
         for ingest in &ingests {
             if let Err(error) = self
                 .ingest_service
-                .update_ingest_filename(&ingest.id, new_name)
+                .rename_ingest_file(&ingest.id, filename, new_name)
                 .await
             {
                 rollback_ingest_updates(&self.ingest_service, updated_ingests).await;
                 rollback_renames(completed).await;
                 return Err(MediaRenameError::IngestUpdate(error.to_string()));
             }
-            updated_ingests.push(ingest.clone());
+            updated_ingests.push((
+                ingest.id.clone(),
+                filename.to_string(),
+                new_name.to_string(),
+            ));
         }
 
         Ok(ingests.len())
@@ -587,13 +591,14 @@ fn recording_fields(recording_meta: Option<&MediaRecordingMetadata>) -> Recordin
     }
 }
 
-/// Best-effort rollback for ingest filename updates after a later rename step
-/// fails.
-async fn rollback_ingest_updates(ingest_service: &IngestService, updated_ingests: Vec<Ingest>) {
-    for ingest in updated_ingests.into_iter().rev() {
-        let _ = ingest_service
-            .update_ingest_filename(&ingest.id, &ingest.filename)
-            .await;
+/// Best-effort rollback for ingest renames (id, from, to) after a later
+/// rename step fails: each is renamed back.
+async fn rollback_ingest_updates(
+    ingest_service: &IngestService,
+    updated_ingests: Vec<(String, String, String)>,
+) {
+    for (id, from, to) in updated_ingests.into_iter().rev() {
+        let _ = ingest_service.rename_ingest_file(&id, &to, &from).await;
     }
 }
 

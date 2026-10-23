@@ -292,6 +292,37 @@ impl IngestWriter for SqliteIngestLookup {
         })
     }
 
+    fn set_ingest_playlist<'a>(
+        &'a self,
+        id: &'a str,
+        playlist: &'a [String],
+    ) -> IngestUpdateFuture<'a> {
+        Box::pin(async move {
+            let json = (!playlist.is_empty())
+                .then(|| serde_json::to_string(playlist))
+                .transpose()
+                .map_err(|err| IngestWriteError::new(err.to_string()))?;
+            crate::db::set_ingest_playlist(&self.pool, id, json.as_deref())
+                .await
+                .map(|record| record.map(ingest_model))
+                .map_err(|err| IngestWriteError::new(err.to_string()))
+        })
+    }
+
+    fn rename_ingest_file<'a>(
+        &'a self,
+        id: &'a str,
+        from: &'a str,
+        to: &'a str,
+    ) -> IngestUpdateFuture<'a> {
+        Box::pin(async move {
+            crate::db::rename_ingest_file(&self.pool, id, from, to)
+                .await
+                .map(|record| record.map(ingest_model))
+                .map_err(|err| IngestWriteError::new(err.to_string()))
+        })
+    }
+
     fn delete_ingest<'a>(&'a self, id: &'a str) -> IngestDeleteFuture<'a> {
         Box::pin(async move {
             crate::db::delete_ingest(&self.pool, id)

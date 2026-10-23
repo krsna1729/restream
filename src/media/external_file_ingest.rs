@@ -18,11 +18,50 @@ use crate::media::ingest_publisher::IngestTimestamps;
 use process::SpawnedExternalFileIngest;
 
 pub(crate) struct ExternalFileIngestSource {
-    pub file_path: PathBuf,
+    /// The files to play in order; one file, or a playlist.
+    pub files: Vec<PathBuf>,
+    /// Applies to the first file of the first pass.
     pub start_time: String,
+    /// One file loops inside FFmpeg; a playlist starts over after its last.
     pub loop_enabled: bool,
     pub live_optimized: bool,
     pub target_gop_seconds: u32,
+}
+
+impl ExternalFileIngestSource {
+    pub(crate) fn is_playlist(&self) -> bool {
+        self.files.len() > 1
+    }
+}
+
+/// What plays after item `index` of `len` ended, cleanly (`clean`) or not,
+/// with `failures` items in a row (this one included) having failed: the
+/// next item, or `None` to stop.
+///
+/// - One file: a looping one is restarted (FFmpeg loops it, so an exit is
+///   a crash), any other stops.
+/// - A playlist moves on (a failed item is skipped), starting over after
+///   the last when it loops. It stops once every item has failed in a row,
+///   so a list of unreadable files cannot respawn FFmpeg forever.
+pub(crate) fn next_item(
+    len: usize,
+    index: usize,
+    loop_enabled: bool,
+    clean: bool,
+    failures: usize,
+) -> Option<usize> {
+    if len <= 1 {
+        return loop_enabled.then_some(0);
+    }
+    if !clean && failures >= len {
+        return None;
+    }
+    let next = index + 1;
+    if next < len {
+        Some(next)
+    } else {
+        loop_enabled.then_some(0)
+    }
 }
 
 pub(crate) struct ExternalFileIngestRuntime {
@@ -39,7 +78,7 @@ pub(crate) struct ExternalFileIngestRuntime {
 /// The caller remains responsible for rolling back its registration when the
 /// initial FFmpeg process cannot be spawned.
 pub(crate) fn start_external_file_ingest(runtime: ExternalFileIngestRuntime) -> Result<(), String> {
-    let spawned = process::spawn_child(&runtime.source)?;
+    let spawned = process::spawn_child(&runtime.source, 0, true)?;
     let runtime = Arc::new(runtime);
     let cleanup = CoordinatorCleanup::new(runtime.clone(), spawned.child.id());
     tokio::spawn(run_external_file_ingest(runtime, spawned, cleanup));
@@ -144,6 +183,13 @@ async fn cleanup_runtime(runtime: &ExternalFileIngestRuntime, child_pid: Option<
                 .write()
                 .await
                 .remove(&runtime.ingest_id);
+            runtime
+                .engine
+                .file_ingests
+                .positions
+                .write()
+                .await
+                .remove(&runtime.ingest_id);
         }
     }
     runtime
@@ -159,8 +205,14 @@ async fn run_external_file_ingest(
 ) {
     let cancel = runtime.registration.cancel_token.clone();
     let mut timestamps = IngestTimestamps::default();
+    let mut index = 0usize;
+    let mut failures = 0usize;
 
     loop {
+        runtime
+            .engine
+            .set_file_ingest_position(&runtime.ingest_id, index)
+            .await;
         cleanup.child_pid = spawned.child.id();
         let child_pid = cleanup.child_pid;
         {
@@ -275,7 +327,17 @@ async fn run_external_file_ingest(
                     true,
                 )
                 .await;
-        } else if exit_status.is_some() && !cancel.is_cancelled() && !runtime.source.loop_enabled {
+        }
+        let clean = exit_status.is_some_and(|status| status.success());
+        failures = if clean { 0 } else { failures + 1 };
+        let next = next_item(
+            runtime.source.files.len(),
+            index,
+            runtime.source.loop_enabled,
+            clean,
+            failures,
+        );
+        if next.is_none() && clean && !cancel.is_cancelled() {
             runtime
                 .engine
                 .record_ingest_disconnect_if_current(
@@ -288,11 +350,12 @@ async fn run_external_file_ingest(
                 .await;
         }
 
-        if cancel.is_cancelled() || !runtime.source.loop_enabled {
+        let Some(next) = next.filter(|_| !cancel.is_cancelled()) else {
             break;
-        }
+        };
+        index = next;
 
-        match process::spawn_child(&runtime.source) {
+        match process::spawn_child(&runtime.source, index, false) {
             Ok(next) => spawned = next,
             Err(err) => {
                 error!(
@@ -311,6 +374,34 @@ async fn run_external_file_ingest(
 #[cfg(test)]
 mod tests {
     use std::io::{Read, Write};
+
+    #[test]
+    fn one_file_restarts_only_when_it_loops() {
+        assert_eq!(super::next_item(1, 0, true, true, 0), Some(0));
+        assert_eq!(super::next_item(1, 0, true, false, 5), Some(0));
+        assert_eq!(super::next_item(1, 0, false, true, 0), None);
+    }
+
+    #[test]
+    fn a_playlist_plays_in_order_wraps_when_looping_and_skips_a_bad_item() {
+        assert_eq!(super::next_item(3, 0, false, true, 0), Some(1));
+        assert_eq!(
+            super::next_item(3, 2, false, true, 0),
+            None,
+            "the end without loop"
+        );
+        assert_eq!(super::next_item(3, 2, true, true, 0), Some(0), "start over");
+        assert_eq!(
+            super::next_item(3, 1, true, false, 1),
+            Some(2),
+            "a failed item is skipped"
+        );
+        assert_eq!(
+            super::next_item(3, 1, true, false, 3),
+            None,
+            "every item failed in a row"
+        );
+    }
     use std::os::fd::OwnedFd;
     use std::os::unix::net::UnixStream;
     use std::process::Stdio;
@@ -338,7 +429,7 @@ mod tests {
             ingest_id: name.to_string(),
             pipeline_id: name.to_string(),
             source: ExternalFileIngestSource {
-                file_path: PathBuf::new(),
+                files: vec![PathBuf::new()],
                 start_time: String::new(),
                 loop_enabled: true,
                 live_optimized: false,

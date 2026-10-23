@@ -845,3 +845,56 @@ async fn file_backed_pool_enables_wal_and_survives_concurrent_writers() {
 
 // M5: NULL legacy encoding in DB must not cause a decode failure. A row with
 // encoding=NULL falls back to the `config` column's default (source).
+
+#[tokio::test]
+async fn a_playlist_is_found_by_any_of_its_files_and_renamed_in_place() {
+    let pool = test_pool().await;
+    db::create_ingest(&pool, "i1", "a.mp4", "key-1", true, "", false, 2)
+        .await
+        .unwrap();
+    db::set_ingest_playlist(&pool, "i1", Some(r#"["a.mp4","b.mp4","a.mp4","c.mp4"]"#))
+        .await
+        .unwrap();
+    db::create_ingest(&pool, "i2", "z.mp4", "key-2", false, "", false, 2)
+        .await
+        .unwrap();
+
+    let users_of_b = db::list_ingests_for_filename(&pool, "b.mp4").await.unwrap();
+    assert_eq!(
+        users_of_b.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+        ["i1"]
+    );
+    assert!(
+        db::list_ingests_for_filename(&pool, "q.mp4")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let renamed = db::rename_ingest_file(&pool, "i1", "a.mp4", "intro.mp4")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(renamed.filename, "intro.mp4");
+    assert_eq!(
+        renamed.playlist.as_deref(),
+        Some(r#"["intro.mp4","b.mp4","intro.mp4","c.mp4"]"#),
+        "every entry, in order"
+    );
+    let middle = db::rename_ingest_file(&pool, "i1", "b.mp4", "bee.mp4")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        middle.filename, "intro.mp4",
+        "a non-first entry leaves the filename"
+    );
+    let single = db::rename_ingest_file(&pool, "i2", "z.mp4", "zed.mp4")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (single.filename.as_str(), single.playlist),
+        ("zed.mp4", None)
+    );
+}

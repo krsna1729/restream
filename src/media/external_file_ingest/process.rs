@@ -12,11 +12,15 @@ pub(super) struct SpawnedExternalFileIngest {
     pub(super) stderr: ChildStderr,
 }
 
+/// Spawns FFmpeg for item `index` of the source; `seek` applies the start
+/// time (the first item of the first pass only).
 pub(super) fn spawn_child(
     source: &ExternalFileIngestSource,
+    index: usize,
+    seek: bool,
 ) -> Result<SpawnedExternalFileIngest, String> {
     let ffmpeg_bin = crate::ffmpeg_binary::ffmpeg_bin_path();
-    let args = build_ffmpeg_args(source);
+    let args = build_ffmpeg_args(source, index, seek);
     let mut child = Command::new(ffmpeg_bin)
         .args(&args)
         .stdin(Stdio::null())
@@ -42,7 +46,7 @@ pub(super) fn spawn_child(
     })
 }
 
-fn build_ffmpeg_args(source: &ExternalFileIngestSource) -> Vec<String> {
+fn build_ffmpeg_args(source: &ExternalFileIngestSource, index: usize, seek: bool) -> Vec<String> {
     let mut args = vec![
         "-nostdin".into(),
         "-hide_banner".into(),
@@ -50,13 +54,19 @@ fn build_ffmpeg_args(source: &ExternalFileIngestSource) -> Vec<String> {
         "warning".into(),
         "-re".into(),
     ];
-    if source.loop_enabled {
+    // One file loops inside FFmpeg; a playlist loops by starting over.
+    if source.loop_enabled && !source.is_playlist() {
         args.extend(["-stream_loop".into(), "-1".into()]);
     }
-    if !source.start_time.is_empty() {
+    if seek && !source.start_time.is_empty() {
         args.extend(["-ss".into(), source.start_time.clone()]);
     }
-    args.extend(["-i".into(), source.file_path.to_string_lossy().into_owned()]);
+    let file = source.files.get(index).or(source.files.first());
+    args.extend([
+        "-i".into(),
+        file.map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    ]);
     if source.live_optimized {
         let target_gop_seconds = source.target_gop_seconds.max(1);
         args.extend([
@@ -154,12 +164,32 @@ mod tests {
 
     fn source(live_optimized: bool) -> ExternalFileIngestSource {
         ExternalFileIngestSource {
-            file_path: PathBuf::from("/media/clip.mp4"),
+            files: vec![PathBuf::from("/media/clip.mp4")],
             start_time: "00:00:05".to_string(),
             loop_enabled: true,
             live_optimized,
             target_gop_seconds: 4,
         }
+    }
+
+    #[test]
+    fn a_playlist_item_plays_its_own_file_once_and_seeks_only_when_asked() {
+        let playlist = ExternalFileIngestSource {
+            files: vec![PathBuf::from("/media/a.mp4"), PathBuf::from("/media/b.mp4")],
+            ..source(false)
+        };
+        let second = build_ffmpeg_args(&playlist, 1, false);
+        assert!(has_arg_pair(&second, "-i", "/media/b.mp4"));
+        assert!(
+            !second.iter().any(|arg| arg == "-stream_loop"),
+            "the list loops, not the item"
+        );
+        assert!(!second.iter().any(|arg| arg == "-ss"));
+        assert!(has_arg_pair(
+            &build_ffmpeg_args(&playlist, 0, true),
+            "-ss",
+            "00:00:05"
+        ));
     }
 
     fn has_arg_pair(args: &[String], first: &str, second: &str) -> bool {
@@ -169,7 +199,7 @@ mod tests {
 
     #[test]
     fn build_ffmpeg_args_uses_copy_path_by_default() {
-        let args = build_ffmpeg_args(&source(false));
+        let args = build_ffmpeg_args(&source(false), 0, true);
 
         assert!(has_arg_pair(&args, "-stream_loop", "-1"));
         assert!(has_arg_pair(&args, "-ss", "00:00:05"));
@@ -180,7 +210,7 @@ mod tests {
 
     #[test]
     fn build_ffmpeg_args_transcodes_live_optimized_inputs() {
-        let args = build_ffmpeg_args(&source(true));
+        let args = build_ffmpeg_args(&source(true), 0, true);
 
         assert!(has_arg_pair(&args, "-c:v", "libx264"));
         assert!(has_arg_pair(&args, "-c:a", "aac"));
@@ -197,7 +227,7 @@ mod tests {
         let mut source = source(true);
         source.target_gop_seconds = 0;
 
-        let args = build_ffmpeg_args(&source);
+        let args = build_ffmpeg_args(&source, 0, true);
 
         assert!(has_arg_pair(
             &args,
