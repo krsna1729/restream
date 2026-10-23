@@ -157,3 +157,24 @@ export async function runBulk<T>(
   await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, items.length)) }, worker));
   return { done, failed };
 }
+
+/**
+ * What a bulk action touches, in words: the biggest platforms by count
+ * and how many pipelines, e.g. "YouTube 12 · Twitch 8 · 2 more platforms,
+ * across 4 pipelines".
+ */
+export function impactWords(channels: readonly Channel[], shown = 3): string {
+  const byPlatform = new Map<string, { label: string; count: number }>();
+  const pipelines = new Set<string>();
+  for (const channel of channels) {
+    pipelines.add(channel.output.pipelineId);
+    const entry = byPlatform.get(channel.platform.id) ?? { label: channel.platform.label, count: 0 };
+    entry.count += 1;
+    byPlatform.set(channel.platform.id, entry);
+  }
+  const ranked = [...byPlatform.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+  const named = ranked.slice(0, shown).map((entry) => `${entry.label} ${entry.count.toLocaleString()}`);
+  const rest = ranked.length - shown;
+  if (rest > 0) named.push(`${rest} more platform${rest === 1 ? "" : "s"}`);
+  return `${named.join(" · ")}, across ${pipelines.size.toLocaleString()} pipeline${pipelines.size === 1 ? "" : "s"}`;
+}

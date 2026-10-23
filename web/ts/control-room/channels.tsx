@@ -16,7 +16,7 @@ import { DetailToggle, useSectionDetail } from "../ui/prefs.js";
 import { EmptyState, Panel } from "../ui/panel.js";
 import { StatusBadge } from "../ui/tone.js";
 import type { Tone } from "../ui/tone.js";
-import { buildChannels, bulkTargets, platformSummaries, runBulk } from "./channels-model.js";
+import { buildChannels, bulkTargets, impactWords, platformSummaries, runBulk } from "./channels-model.js";
 import type { BulkAction, Channel, ChannelState } from "./channels-model.js";
 import { formatBps } from "./format.js";
 import { PlaceLink } from "./router.js";
@@ -71,6 +71,7 @@ export function Channels({ live }: { live: LiveSnapshot }) {
   const [shown, setShown] = useState(PAGE);
   const [pending, setPending] = useState<BulkAction | null>(null);
   const [progress, setProgress] = useState<{ action: BulkAction; done: number; failed: number; total: number } | null>(null);
+  const [undo, setUndo] = useState<Undo | null>(null);
 
   const summaries = useMemo(() => (channels ? platformSummaries(channels) : []), [channels]);
   const filtered = useMemo(() => {
@@ -104,13 +105,19 @@ export function Channels({ live }: { live: LiveSnapshot }) {
   const run = async (action: BulkAction) => {
     const targets = bulkTargets(filtered, action);
     setPending(null);
+    setUndo(null);
     setProgress({ action, done: 0, failed: 0, total: targets.length });
+    const stopped: OutputRef[] = [];
     await runBulk(
       targets,
       async (channel) => {
         const { pipelineId, id } = channel.output;
         if (action === "start") return (await startOut(pipelineId, id)) !== null;
-        if (action === "stop") return (await stopOut(pipelineId, id)) !== null;
+        if (action === "stop") {
+          const ok = (await stopOut(pipelineId, id)) !== null;
+          if (ok) stopped.push({ pipelineId, id });
+          return ok;
+        }
         // Retry: a stop and a start reset the engine's retry budget.
         await stopOut(pipelineId, id);
         return (await startOut(pipelineId, id)) !== null;
@@ -118,6 +125,7 @@ export function Channels({ live }: { live: LiveSnapshot }) {
       BULK_CONCURRENCY,
       (done, failed) => setProgress({ action, done, failed, total: targets.length }),
     );
+    if (stopped.length > 0) setUndo({ label: `Stopped ${stopped.length.toLocaleString()} channel${stopped.length === 1 ? "" : "s"}`, items: stopped, untilMs: Date.now() + UNDO_MS });
     reload();
   };
 
@@ -146,6 +154,7 @@ export function Channels({ live }: { live: LiveSnapshot }) {
         }
       />
       <NextEvent pipelineId={pipeline === "all" ? null : pipeline} />
+      {undo && <UndoBar undo={undo} onDone={() => setUndo(null)} onUndone={reload} />}
       {progress && (
         <div role="status" className="flex flex-wrap items-center gap-3 rounded-box border border-base-content/10 bg-base-200 px-4 py-3 text-sm">
           <span className="font-medium">
@@ -220,7 +229,13 @@ export function Channels({ live }: { live: LiveSnapshot }) {
           <>
             <ul className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
               {filtered.slice(0, shown).map((channel) => (
-                <ChannelCard key={channel.output.id} channel={channel} detail={detail} bps={live.rates?.egressBps.get(channel.output.id) ?? null} />
+                <ChannelCard
+                  key={channel.output.id}
+                  channel={channel}
+                  detail={detail}
+                  bps={live.rates?.egressBps.get(channel.output.id) ?? null}
+                  onStopped={(ref) => setUndo({ label: `Stopped ${channel.output.name}`, items: [ref], untilMs: Date.now() + UNDO_MS })}
+                />
               ))}
             </ul>
             {filtered.length > shown && (
@@ -237,6 +252,7 @@ export function Channels({ live }: { live: LiveSnapshot }) {
         action={pending}
         count={pending ? counts[pending] : 0}
         scope={scopeLabel}
+        impact={pending ? impactWords(bulkTargets(filtered, pending)) : ""}
         onCancel={() => setPending(null)}
         onConfirm={() => pending && void run(pending)}
       />
@@ -253,7 +269,7 @@ const AVATAR_TONE: Record<string, string> = {
   linkedin: "bg-primary/20 text-primary",
 };
 
-function ChannelCard(props: { channel: Channel; detail: boolean; bps: number | null }) {
+function ChannelCard(props: { channel: Channel; detail: boolean; bps: number | null; onStopped: (ref: OutputRef) => void }) {
   const canOperate = useSession().can("operator");
   const { channel } = props;
   const { output } = channel;
@@ -292,7 +308,8 @@ function ChannelCard(props: { channel: Channel; detail: boolean; bps: number | n
             onClick={async () => {
               setBusy(true);
               try {
-                await (on ? stopOut : startOut)(output.pipelineId, output.id);
+                const ok = (await (on ? stopOut : startOut)(output.pipelineId, output.id)) !== null;
+                if (ok && on) props.onStopped({ pipelineId: output.pipelineId, id: output.id });
               } finally {
                 setBusy(false);
               }
@@ -353,7 +370,55 @@ function RetryIn(props: { atMs: number; attempts: number }) {
   return <span className="tabular text-base-content/70">{retryWords(props.attempts, seconds * 1000)}</span>;
 }
 
-function ConfirmBulk(props: { action: BulkAction | null; count: number; scope: string; onCancel: () => void; onConfirm: () => void }) {
+interface OutputRef {
+  readonly pipelineId: string;
+  readonly id: string;
+}
+
+interface Undo {
+  readonly label: string;
+  readonly items: readonly OutputRef[];
+  readonly untilMs: number;
+}
+
+/** How long a stop can be undone from the page. */
+const UNDO_MS = 60_000;
+
+/** "Stopped 12 channels · Undo (48 s)": starts exactly those again. */
+function UndoBar(props: { undo: Undo; onDone: () => void; onUndone: () => void }) {
+  const now = useNow(1000);
+  const [busy, setBusy] = useState(false);
+  const left = Math.ceil((props.undo.untilMs - now) / 1000);
+  useEffect(() => {
+    if (left <= 0 && !busy) props.onDone();
+  }, [left, busy]);
+  if (left <= 0 && !busy) return null;
+  return (
+    <div role="status" aria-label="Undo" className="flex flex-wrap items-center gap-3 rounded-box border border-base-content/10 bg-base-200 px-4 py-2 text-sm">
+      <span className="font-medium">{props.undo.label}</span>
+      <button
+        type="button"
+        className="btn btn-sm btn-outline"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          await runBulk(props.undo.items, async (ref) => (await startOut(ref.pipelineId, ref.id)) !== null, BULK_CONCURRENCY, () => undefined);
+          setBusy(false);
+          props.onDone();
+          props.onUndone();
+        }}
+      >
+        {busy ? "Starting again…" : "Undo"}
+      </button>
+      <span className="tabular text-xs text-base-content/60">{busy ? "" : `${left} s`}</span>
+      <button type="button" className="btn btn-ghost btn-sm ml-auto" aria-label="Dismiss undo" onClick={props.onDone}>
+        ✕
+      </button>
+    </div>
+  );
+}
+
+function ConfirmBulk(props: { action: BulkAction | null; count: number; scope: string; impact: string; onCancel: () => void; onConfirm: () => void }) {
   const dialog = useRef<HTMLDialogElement | null>(null);
   useEffect(() => {
     const element = dialog.current;
@@ -371,6 +436,8 @@ function ConfirmBulk(props: { action: BulkAction | null; count: number; scope: s
         <p className="mt-2 text-sm text-base-content/70">
           This acts on {props.scope}. {props.action === "stop" ? "Viewers on these channels lose the stream." : "Each channel connects to its platform with its stored key."}
         </p>
+        {props.impact && <p className="mt-2 text-sm font-medium">{props.impact}</p>}
+        {props.action === "stop" && <p className="mt-2 text-xs text-base-content/60">You can undo it for a minute after.</p>}
         <div className="modal-action">
           <button type="button" className="btn btn-ghost" onClick={props.onCancel}>
             Cancel
