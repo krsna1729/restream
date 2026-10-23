@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 
 import { getCapacityScenario } from "../core/api.js";
 import type { CapacityScenario, ChangeOperation, TopologyDiff } from "../core/api-types.js";
+import { Kpi, KpiRow } from "../ui/kpi.js";
+import { Panel } from "../ui/panel.js";
+import { StatusBadge } from "../ui/tone.js";
 import { formatPercent } from "./format.js";
 import { Meters, serviceCenterRows } from "./fleet.js";
 import { convergenceTimeline, liveConvergence, scenarioLoad, topologyLines } from "./changes-model.js";
@@ -34,33 +37,18 @@ export function Impact({ topology, pipelineId }: { topology: TopologyDiff; pipel
   }, [adds, rtmp, srt, load.addStages, live, pipelineId]);
   const lines = topologyLines(topology);
   return (
-    <section className="card bg-base-200" aria-labelledby="changes-impact">
-      <div className="card-body gap-3 p-4">
-        <h3 id="changes-impact" className="card-title text-base">
-          Impact
-          <span className="text-xs font-normal text-base-content/70">
-            outputs wanted running, planned for{" "}
-            {topology.ingestCodec ? `the live ${topology.ingestCodec} ingest` : "no live ingest (no codec bridge)"}
-          </span>
-        </h3>
-        <dl className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
-          <div>
-            <dt className="text-base-content/70">Outputs added</dt>
-            <dd className="tabular-nums">{load.addOutputs}</dd>
-          </div>
-          <div>
-            <dt className="text-base-content/70">Outputs removed</dt>
-            <dd className="tabular-nums">{load.removedOutputs}</dd>
-          </div>
-          <div>
-            <dt className="text-base-content/70">New stages</dt>
-            <dd className="tabular-nums">{topology.addedStages.length}</dd>
-          </div>
-          <div>
-            <dt className="text-base-content/70">Retired stages</dt>
-            <dd className="tabular-nums">{topology.retiredStages.length}</dd>
-          </div>
-        </dl>
+    <Panel
+      id="changes-impact"
+      title="Impact"
+      subtitle={`outputs wanted running, planned for ${topology.ingestCodec ? `the live ${topology.ingestCodec} ingest` : "no live ingest (no codec bridge)"}`}
+    >
+      <div className="flex flex-col gap-3">
+        <KpiRow>
+          <Kpi label="Outputs added" value={load.addOutputs} />
+          <Kpi label="Outputs removed" value={load.removedOutputs} />
+          <Kpi label="New stages" value={topology.addedStages.length} />
+          <Kpi label="Retired stages" value={topology.retiredStages.length} />
+        </KpiRow>
         {lines.length === 0 ? (
           <p className="text-sm text-base-content/70">No output is wanted running before or after.</p>
         ) : (
@@ -79,9 +67,9 @@ export function Impact({ topology, pipelineId }: { topology: TopologyDiff; pipel
                   <td className="font-mono text-xs">
                     {line.stage}{" "}
                     {line.newStage ? (
-                      <span className="badge badge-warning badge-sm">new stage</span>
+                      <StatusBadge tone="warn">new stage</StatusBadge>
                     ) : line.after > line.before && line.before > 0 ? (
-                      <span className="badge badge-success badge-sm">reuse</span>
+                      <StatusBadge tone="ok">reuse</StatusBadge>
                     ) : null}
                   </td>
                   <td>{line.protocol.toUpperCase()}</td>
@@ -102,9 +90,13 @@ export function Impact({ topology, pipelineId }: { topology: TopologyDiff; pipel
                 {formatPercent(scenario.baseline.projectedUtilization * 100)} →{" "}
                 <b>{formatPercent(scenario.projected.projectedUtilization * 100)}</b>{" "}
                 {scenario.projected.flow.status === "healthy" ? (
-                  <span className="badge badge-success badge-sm">within headroom</span>
+                  <StatusBadge tone="ok" dot>
+                    within headroom
+                  </StatusBadge>
                 ) : (
-                  <span className="badge badge-warning badge-sm">{scenario.projected.flow.status}</span>
+                  <StatusBadge tone="warn" dot>
+                    {scenario.projected.flow.status}
+                  </StatusBadge>
                 )}
               </p>
               <div className="grid gap-3 md:grid-cols-2">
@@ -121,7 +113,7 @@ export function Impact({ topology, pipelineId }: { topology: TopologyDiff; pipel
           <p className="text-sm text-base-content/70">The change adds no outputs or stages, so it adds no load.</p>
         )}
       </div>
-    </section>
+    </Panel>
   );
 }
 

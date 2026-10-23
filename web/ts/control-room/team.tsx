@@ -219,10 +219,10 @@ export function Team() {
         member.id === BUILTIN_ADMIN ? (
           <span className="text-xs text-base-content/60">Password under Settings → Security</span>
         ) : (
-          <span className="flex flex-wrap items-center gap-1">
+          <span className="flex flex-wrap items-center justify-end gap-1">
             <button
               type="button"
-              className="btn btn-ghost btn-xs"
+              className="btn btn-ghost btn-xs min-w-16"
               onClick={async () => replace(await updateTeamMember(member.id, { disabled: !member.disabled }))}
             >
               {member.disabled ? "Enable" : "Disable"}

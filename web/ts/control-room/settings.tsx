@@ -27,7 +27,7 @@ export function Settings() {
   useEffect(() => {
     void getConfig().then(setConfig);
   }, []);
-  if (config === null) return <p className="text-base-content/70">Loading settings…</p>;
+  if (config === null) return <p className="text-sm text-base-content/70">Loading settings…</p>;
   const save: Saver = async (patch) => {
     const stored = await patchConfig(patch);
     if (stored === null) return false;
@@ -71,7 +71,7 @@ function General({ config, save }: { config: ConfigData; save: Saver }) {
       <label className="form-control">
         <span className="label-text">Server name</span>
         <input
-          className="input input-sm input-bordered"
+          className="input input-sm"
           value={serverName}
           onChange={(event) => setServerName(event.target.value)}
         />
@@ -79,7 +79,7 @@ function General({ config, save }: { config: ConfigData; save: Saver }) {
       <label className="form-control">
         <span className="label-text">Ingest host</span>
         <input
-          className="input input-sm input-bordered"
+          className="input input-sm"
           placeholder="the address publishers use; empty uses this host"
           value={ingestHost}
           onChange={(event) => setIngestHost(event.target.value)}
@@ -126,7 +126,7 @@ function SrtIngest(props: { current: SrtGlobalIngestConfig | undefined; save: Sa
       <label className="form-control">
         <span className="label-text">Encryption</span>
         <select
-          className="select select-sm select-bordered"
+          className="select select-sm"
           value={mode}
           onChange={(event) => setMode(event.target.value === "encrypted" ? "encrypted" : "plaintext")}
         >
@@ -140,7 +140,7 @@ function SrtIngest(props: { current: SrtGlobalIngestConfig | undefined; save: Sa
             <span className="label-text">Passphrase (10 to 79 bytes)</span>
             <input
               type="password"
-              className="input input-sm input-bordered"
+              className="input input-sm"
               autoComplete="off"
               value={passphrase}
               onChange={(event) => setPassphrase(event.target.value)}
@@ -149,7 +149,7 @@ function SrtIngest(props: { current: SrtGlobalIngestConfig | undefined; save: Sa
           <label className="form-control">
             <span className="label-text">Key length</span>
             <select
-              className="select select-sm select-bordered"
+              className="select select-sm"
               value={pbkeylen}
               onChange={(event) => setPbkeylen(Number(event.target.value) as 16 | 24 | 32)}
             >
@@ -167,7 +167,7 @@ function SrtIngest(props: { current: SrtGlobalIngestConfig | undefined; save: Sa
           min={20}
           max={8000}
           required
-          className="input input-sm input-bordered"
+          className="input input-sm"
           value={latencyMs}
           onChange={(event) => setLatencyMs(Number(event.target.value))}
         />
@@ -209,7 +209,7 @@ function Profiles(props: {
             <li key={index} className="space-y-2 rounded bg-base-100 p-3">
               <div className="flex items-center gap-2">
                 <input
-                  className="input input-sm input-bordered font-mono"
+                  className="input input-sm font-mono"
                   aria-label="Profile name"
                   value={row.name}
                   readOnly={builtIn}
@@ -220,7 +220,7 @@ function Profiles(props: {
                 ) : (
                   <button
                     type="button"
-                    className="btn btn-ghost btn-xs text-error"
+                    className="btn btn-ghost btn-sm text-error"
                     onClick={() => setRows(rows.filter((_, at) => at !== index))}
                   >
                     Remove
@@ -231,7 +231,7 @@ function Profiles(props: {
                 <label className="form-control">
                   <span className="label-text text-xs">Preset</span>
                   <select
-                    className="select select-sm select-bordered"
+                    className="select select-sm"
                     value={row.profile.preset}
                     onChange={(event) =>
                       edit(index, { profile: { ...row.profile, preset: event.target.value } })
@@ -245,7 +245,7 @@ function Profiles(props: {
                 <label className="form-control">
                   <span className="label-text text-xs">Tune</span>
                   <select
-                    className="select select-sm select-bordered"
+                    className="select select-sm"
                     value={row.profile.tune}
                     onChange={(event) =>
                       edit(index, { profile: { ...row.profile, tune: event.target.value } })
@@ -266,7 +266,7 @@ function Profiles(props: {
                       min={min}
                       max={max}
                       required
-                      className="input input-sm input-bordered"
+                      className="input input-sm"
                       value={row.profile[field]}
                       onChange={(event) =>
                         edit(index, {

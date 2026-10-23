@@ -8,6 +8,7 @@ import {
   resetRateLimitState,
 } from "../core/api.js";
 import type { ConfigData, IngestSecurityConfig } from "../types.js";
+import { Panel } from "../ui/panel.js";
 import { Freshness, usePolled } from "./polled.js";
 import { SettingsForm } from "./settings-form.js";
 import type { Saver } from "./settings-form.js";
@@ -69,7 +70,7 @@ function Password({ recommended }: { recommended: boolean }) {
           <span className="label-text">{label}</span>
           <input
             type="password"
-            className="input input-sm input-bordered"
+            className="input input-sm"
             autoComplete={autoComplete}
             value={value}
             onChange={(event) => set(event.target.value)}
@@ -117,7 +118,7 @@ function IngestSecurity(props: { current: IngestSecurityConfig; save: Saver }) {
               type="number"
               min={1}
               required
-              className="input input-sm input-bordered"
+              className="input input-sm"
               value={limits[field]}
               onChange={(event) => setLimits({ ...limits, [field]: Number(event.target.value) })}
             />
@@ -132,17 +133,16 @@ function Attempts() {
   const state = usePolled(["rate-limit-state"], getRateLimitState);
   const attempts = state.value?.attempts ?? null;
   return (
-    <section className="card bg-base-200" aria-labelledby="settings-attempts">
-      <div className="card-body gap-3 p-4">
-        <div className="flex items-center gap-2">
-          <h3 id="settings-attempts" className="card-title text-base">
-            Failed attempts
-          </h3>
+    <Panel
+      id="settings-attempts"
+      title="Failed attempts"
+      actions={
+        <>
           <Freshness atMs={state.atMs} />
           {attempts !== null && attempts.length > 0 && (
             <button
               type="button"
-              className="btn btn-xs btn-outline ml-auto"
+              className="btn btn-xs btn-outline border-base-content/20"
               onClick={async () => {
                 // No scope: the engine forgets every client in every scope.
                 if ((await resetRateLimitState({})) !== null) state.refresh();
@@ -151,7 +151,10 @@ function Attempts() {
               Forget all
             </button>
           )}
-        </div>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3">
         {attempts === null ? (
           <p className="text-sm text-base-content/70">Loading…</p>
         ) : attempts.length === 0 ? (
@@ -196,6 +199,6 @@ function Attempts() {
           </table>
         )}
       </div>
-    </section>
+    </Panel>
   );
 }

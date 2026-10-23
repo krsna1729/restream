@@ -29,10 +29,11 @@ import { useSession } from "./session.js";
 import type { LiveSnapshot } from "./store.js";
 import { useNow } from "./store.js";
 import { When } from "./when-view.js";
-import { absoluteTime, fullTime } from "./when.js";
+import { absoluteTime, fullTime, zoneName } from "./when.js";
 
 const DAYS = 7;
-const TIME = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
+// 24-hour, as every time in the console; the zone is in the panel title.
+const TIME = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 const DAY = new Intl.DateTimeFormat(undefined, { weekday: "short", day: "numeric", month: "short" });
 
 const ACTION_TONE: Record<ScheduleAction, string> = {
@@ -336,7 +337,7 @@ export function ScheduleView({ live }: { live: LiveSnapshot }) {
           {message}
         </p>
       )}
-      <Panel id="schedule-week" title="The week ahead" subtitle="Local time">
+      <Panel id="schedule-week" title="The week ahead" subtitle={`Times in ${zoneName(Date.now())}`}>
         <Week schedules={schedules ?? []} pipelineNames={pipelineNames} now={now} />
       </Panel>
       {canOperate && (

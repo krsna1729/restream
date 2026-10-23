@@ -2,6 +2,10 @@ import { useMemo, useState } from "react";
 
 import { getResourceMap, getStageTelemetry } from "../core/api.js";
 import type { GraphData, NodeJudgement, ResourceMapSnapshot } from "../core/api-types.js";
+import { KeyValue } from "../ui/kpi.js";
+import { Panel, Tile } from "../ui/panel.js";
+import { StatusBadge } from "../ui/tone.js";
+import type { Tone } from "../ui/tone.js";
 import { formatBytes, formatPercent } from "./format.js";
 import {
   buildResourceRows,
@@ -17,10 +21,10 @@ import { Freshness, usePolled } from "./polled.js";
 import { pipelineGraph } from "./state-views.js";
 import type { LiveSnapshot } from "./store.js";
 
-const CONFIDENCE_BADGE: Record<string, string> = {
-  measured: "badge-success",
-  derived: "badge-info",
-  estimated: "badge-warning",
+const CONFIDENCE_TONE: Record<string, Tone> = {
+  measured: "ok",
+  derived: "info",
+  estimated: "warn",
 };
 
 /** The view under the cockpit: who owns what, and how sure. */
@@ -72,46 +76,38 @@ function Anatomy({ live, pipelineId }: { live: LiveSnapshot; pipelineId: string 
   return (
     <>
       <div className="grid gap-4 lg:grid-cols-[1fr_22rem]">
-        <section className="card bg-base-200" aria-labelledby="inspect-map">
-          <div className="card-body gap-3 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 id="inspect-map" className="card-title text-base">
-                {global ? "Global resource map" : "Resource map"}
-                <span className="text-xs font-normal text-base-content/70">
-                  under pressure first, then by memory held
-                </span>
-              </h3>
-              <span className="flex items-center gap-2">
-                {truncated > 0 && (
-                  <span className="badge badge-sm badge-warning">
-                    {truncated} lighter nodes not shown
-                  </span>
-                )}
-                <Freshness atMs={map.atMs} />
-                <button
-                  type="button"
-                  className="btn btn-xs"
-                  aria-pressed={global}
-                  onClick={() => {
-                    setGlobal(!global);
-                    setSelectedId(null);
-                  }}
-                >
-                  {global ? "This pipeline only" : "Global resource map"}
-                </button>
-              </span>
-            </div>
-            {rows === null ? (
-              <p className="text-base-content/70">Loading resource map…</p>
-            ) : (
-              <ResourceTable
-                rows={rows}
-                selectedId={selected?.node.id ?? null}
-                onSelect={setSelectedId}
-              />
-            )}
-          </div>
-        </section>
+        <Panel
+          id="inspect-map"
+          title={global ? "Global resource map" : "Resource map"}
+          subtitle="under pressure first, then by memory held"
+          actions={
+            <>
+              {truncated > 0 && <StatusBadge tone="warn">{truncated} lighter nodes not shown</StatusBadge>}
+              <Freshness atMs={map.atMs} />
+              <button
+                type="button"
+                className="btn btn-xs btn-outline border-base-content/20"
+                aria-pressed={global}
+                onClick={() => {
+                  setGlobal(!global);
+                  setSelectedId(null);
+                }}
+              >
+                {global ? "This pipeline only" : "Global resource map"}
+              </button>
+            </>
+          }
+        >
+          {rows === null ? (
+            <p className="text-sm text-base-content/70">Loading resource map…</p>
+          ) : (
+            <ResourceTable
+              rows={rows}
+              selectedId={selected?.node.id ?? null}
+              onSelect={setSelectedId}
+            />
+          )}
+        </Panel>
         {/* The graph is this pipeline's: it names consumers only here. */}
         <NodeDetail row={selected} graph={global ? null : graph} />
       </div>
@@ -166,18 +162,14 @@ function ResourceTable(props: {
               <td className="tabular-nums">{formatBytes(memoryBytes)}</td>
               <td>
                 {confidence && (
-                  <span
-                    className={`badge badge-sm ${CONFIDENCE_BADGE[confidence] ?? "badge-outline"}`}
-                  >
-                    {confidence}
-                  </span>
+                  <StatusBadge tone={CONFIDENCE_TONE[confidence] ?? "neutral"}>{confidence}</StatusBadge>
                 )}
               </td>
               <td>
                 {hotspots.map((hotspot) => (
-                  <span key={hotspot} className="badge badge-sm badge-warning mr-1">
+                  <StatusBadge key={hotspot} tone="warn" className="mr-1">
                     {hotspot}
-                  </span>
+                  </StatusBadge>
                 ))}
               </td>
             </tr>
@@ -204,46 +196,38 @@ function scalarEntries(
 function NodeDetail({ row, graph }: { row: ResourceRow | null; graph: GraphData | null }) {
   const cards = row ? nodeCards(row.node, graph) : [];
   return (
-    <section className="card bg-base-200" aria-labelledby="inspect-node">
-      <div className="card-body gap-3 p-4">
-        <h3 id="inspect-node" className="card-title text-base">
-          {row ? `Selected · ${row.node.label}` : "Selected node"}
-        </h3>
+    <Panel id="inspect-node" title={row ? `Selected · ${row.node.label}` : "Selected node"}>
+      <div className="flex flex-col gap-3">
         {cards.length > 0 && (
-          <dl className="grid grid-cols-2 gap-2" aria-label="Node metrics">
+          <div role="group" className="grid grid-cols-2 gap-2" aria-label="Node metrics">
             {cards.map((card) => (
-              <div key={card.label} className="rounded bg-base-100 p-2">
-                <dt className="text-xs text-base-content/70">{card.label}</dt>
-                <dd className="text-lg font-semibold tabular-nums">{card.value}</dd>
-                <dd className="text-xs text-base-content/60">{card.foot}</dd>
-              </div>
+              <Tile key={card.label}>
+                <div className="kicker">{card.label}</div>
+                <div className="tabular text-lg font-semibold">{card.value}</div>
+                <div className="text-xs text-base-content/70">{card.foot}</div>
+              </Tile>
             ))}
-          </dl>
+          </div>
         )}
         {row?.node.judgement && <Judgement judgement={row.node.judgement} />}
         {row === null ? (
-          <p className="text-base-content/70">No node.</p>
+          <p className="text-sm text-base-content/70">No node.</p>
         ) : (
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
-            {[
+          <KeyValue
+            rows={[
               ["id", row.node.id],
               ["kind", row.node.kind],
               ["execution", row.node.execution ?? "—"],
-              ...(row.node.state ? [["state", row.node.state]] : []),
+              ...(row.node.state ? [["state", row.node.state] as const] : []),
               ["memory", `${formatBytes(row.memoryBytes)} (${row.node.memory?.source ?? "—"})`],
-              ...scalarEntries(row.node.threads).map(([k, v]) => [`threads.${k}`, v]),
-              ...scalarEntries(row.node.metrics).map(([k, v]) => [k, v]),
-            ].map(([key, value]) => (
-              <div key={key} className="contents">
-                <dt className="text-base-content/70">{key}</dt>
-                <dd className="min-w-0 break-words tabular-nums">{value}</dd>
-              </div>
-            ))}
-          </dl>
+              ...scalarEntries(row.node.threads).map(([k, v]) => [`threads.${k}`, v] as const),
+              ...scalarEntries(row.node.metrics).map(([k, v]) => [k, v] as const),
+            ]}
+          />
         )}
         {row?.node.kind === "stage" && <StagePipe key={row.node.id} stageKey={row.node.id} />}
       </div>
-    </section>
+    </Panel>
   );
 }
 
@@ -287,11 +271,11 @@ function StagePipe(props: { stageKey: string }) {
     <div aria-label="Stage pipe" role="group" className="text-sm">
       <h4 className="font-medium">Pipe</h4>
       {stage.value === null ? (
-        <p className="text-base-content/70">Loading stage detail…</p>
+        <p className="text-sm text-base-content/70">Loading stage detail…</p>
       ) : snapshot === null ? (
-        <p className="text-base-content/70">No telemetry for this stage (it may have stopped).</p>
+        <p className="text-sm text-base-content/70">No telemetry for this stage (it may have stopped).</p>
       ) : rows.length === 0 ? (
-        <p className="text-base-content/70">This stage has no pipe.</p>
+        <p className="text-sm text-base-content/70">This stage has no pipe.</p>
       ) : (
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
           {rows.map(([key, value]) => (
@@ -309,29 +293,18 @@ function StagePipe(props: { stageKey: string }) {
 function RingPanel(props: { ring: RingView | null; atMs: number | null }) {
   const { ring } = props;
   return (
-    <section className="card bg-base-200" aria-labelledby="inspect-ring">
-      <div className="card-body gap-2 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 id="inspect-ring" className="card-title text-base">
-            Source ring
-          </h3>
-          <Freshness atMs={props.atMs} />
-        </div>
-        {ring === null ? (
-          <p className="text-base-content/70">No source ring runs.</p>
-        ) : (
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
-            <dt className="text-base-content/70">Fill</dt>
-            <dd className="tabular-nums">
-              {ring.fill} / {ring.capacity} ·{" "}
-              {formatPercent((100 * ring.fill) / ring.capacity)}
-            </dd>
-            <dt className="text-base-content/70">Retained payload</dt>
-            <dd className="tabular-nums">{formatBytes(ring.payloadBytes)}</dd>
-          </dl>
-        )}
-      </div>
-    </section>
+    <Panel id="inspect-ring" title="Source ring" actions={<Freshness atMs={props.atMs} />}>
+      {ring === null ? (
+        <p className="text-sm text-base-content/70">No source ring runs.</p>
+      ) : (
+        <KeyValue
+          rows={[
+            ["Fill", `${ring.fill} / ${ring.capacity} · ${formatPercent((100 * ring.fill) / ring.capacity)}`],
+            ["Retained payload", formatBytes(ring.payloadBytes)],
+          ]}
+        />
+      )}
+    </Panel>
   );
 }
 
@@ -341,21 +314,18 @@ function ShardsPanel(props: {
 }) {
   const { shards } = props;
   return (
-    <section className="card bg-base-200" aria-labelledby="inspect-shards">
-      <div className="card-body gap-2 p-4">
-        <h3 id="inspect-shards" className="card-title text-base">
-          Egress shards
-        </h3>
+    <Panel id="inspect-shards" title="Egress shards">
+      <div className="flex flex-col gap-2">
         {props.truncated && (
           <p className="text-sm text-base-content/70">
             The map is truncated: some shards may not be listed.
           </p>
         )}
         {shards === null ? (
-          <p className="text-base-content/70">Loading…</p>
+          <p className="text-sm text-base-content/70">Loading…</p>
         ) : shards.length === 0 ? (
           !props.truncated && (
-            <p className="text-base-content/70">No output of this pipeline runs on a shard.</p>
+            <p className="text-sm text-base-content/70">No output of this pipeline runs on a shard.</p>
           )
         ) : (
           <ul className="space-y-2">
@@ -363,17 +333,15 @@ function ShardsPanel(props: {
               <li
                 key={shard.id}
                 aria-label={`Shard ${shard.protocol} ${shard.index}`}
-                className="rounded bg-base-100 p-2 text-sm"
+                className="rounded-box border border-base-content/10 bg-base-100 p-2 text-sm"
               >
                 <div className="flex items-center justify-between">
                   <span className="font-medium">
                     {shard.protocol.toUpperCase()} shard {shard.index}
                   </span>
-                  <span
-                    className={`badge badge-sm ${shard.state === "healthy" ? "badge-success" : "badge-warning"}`}
-                  >
+                  <StatusBadge tone={shard.state === "healthy" ? "ok" : "warn"} dot>
                     {shard.state}
-                  </span>
+                  </StatusBadge>
                 </div>
                 <div className="break-all text-xs text-base-content/70">feed {shard.feed}</div>
                 <div className="mt-1 text-base-content/70">
@@ -386,7 +354,7 @@ function ShardsPanel(props: {
           </ul>
         )}
       </div>
-    </section>
+    </Panel>
   );
 }
 
@@ -394,30 +362,21 @@ function AttributionPanel(props: {
   attribution: Record<string, string[]> | null;
 }) {
   return (
-    <section className="card bg-base-200" aria-labelledby="inspect-attribution">
-      <div className="card-body gap-2 p-4">
-        <h3 id="inspect-attribution" className="card-title text-base">
-          How sure the numbers are
-        </h3>
-        {props.attribution === null ? (
-          <p className="text-base-content/70">Loading…</p>
+    <Panel id="inspect-attribution" title="How sure the numbers are">
+      {props.attribution === null ? (
+          <p className="text-sm text-base-content/70">Loading…</p>
         ) : (
           <dl className="space-y-1 text-sm">
             {Object.entries(props.attribution).map(([confidence, sources]) => (
               <div key={confidence}>
                 <dt>
-                  <span
-                    className={`badge badge-sm ${CONFIDENCE_BADGE[confidence] ?? "badge-outline"}`}
-                  >
-                    {confidence}
-                  </span>
+                  <StatusBadge tone={CONFIDENCE_TONE[confidence] ?? "neutral"}>{confidence}</StatusBadge>
                 </dt>
                 <dd className="text-base-content/70">{sources.join(", ").replaceAll("_", " ")}</dd>
               </div>
             ))}
           </dl>
         )}
-      </div>
-    </section>
+    </Panel>
   );
 }

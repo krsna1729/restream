@@ -27,14 +27,18 @@ import { PipelineForm } from "./pipeline-form.js";
 import { Freshness, usePolled } from "./polled.js";
 import { PlaceLink, useGo } from "./router.js";
 import type { LiveSnapshot } from "./store.js";
+import { KeyValue, Meter } from "../ui/kpi.js";
 import { PageHeader } from "../ui/page-header.js";
+import { Panel } from "../ui/panel.js";
+import { StatusBadge } from "../ui/tone.js";
+import type { Tone } from "../ui/tone.js";
 
-const READINESS_BADGE = {
-  ready: "badge-success",
-  needsReencode: "badge-warning",
-  unknown: "badge-ghost",
-  noVideo: "badge-error",
-} as const;
+const READINESS_TONE: Record<"ready" | "needsReencode" | "unknown" | "noVideo", Tone> = {
+  ready: "ok",
+  needsReencode: "warn",
+  unknown: "neutral",
+  noVideo: "bad",
+};
 
 const READINESS_LABEL = {
   ready: "safe to use live",
@@ -65,7 +69,7 @@ export function Media({ live }: { live: LiveSnapshot }) {
         <Freshness atMs={library.atMs} />
         <input
           type="search"
-          className="input input-sm input-bordered ml-auto w-64"
+          className="input input-sm ml-auto w-64"
           placeholder="Search by file name"
           aria-label="Search media"
           value={query}
@@ -74,7 +78,7 @@ export function Media({ live }: { live: LiveSnapshot }) {
         <Upload onUploaded={library.refresh} />
       </div>
       {files === null ? (
-        <p className="text-base-content/70">Loading the media directory…</p>
+        <p className="text-sm text-base-content/70">Loading the media directory…</p>
       ) : (
         <div className="grid gap-4 lg:grid-cols-[1fr_22rem]">
           <Library
@@ -142,16 +146,12 @@ function Library(props: {
 }) {
   const { recordings, sources } = splitLibrary(props.files);
   return (
-    <section className="card bg-base-200" aria-labelledby="media-library">
-      <div className="card-body gap-3 p-4">
-        <h3 id="media-library" className="card-title text-base">
-          Library
-          <span className="text-sm font-normal text-base-content/70">
-            {props.files.length === props.total
-              ? `${props.total} files`
-              : `${props.files.length} of ${props.total} files`}
-          </span>
-        </h3>
+    <Panel
+      id="media-library"
+      title="Library"
+      subtitle={props.files.length === props.total ? `${props.total} files` : `${props.files.length} of ${props.total} files`}
+    >
+      <div className="flex flex-col gap-3">
         {props.total === 0 ? (
           <p className="text-sm text-base-content/70">
             The media directory is empty. Upload a file, or record a pipeline.
@@ -163,7 +163,7 @@ function Library(props: {
           </>
         )}
       </div>
-    </section>
+    </Panel>
   );
 }
 
@@ -208,16 +208,16 @@ function FileList(props: {
 
 function ConversionBadge({ file }: { file: MediaFile }) {
   if (file.conversionStatus === "converting") {
-    return <span className="badge badge-sm badge-warning">converting</span>;
+    return <StatusBadge tone="warn">converting</StatusBadge>;
   }
   if (file.conversionStatus === "ready") {
-    return <span className="badge badge-sm badge-success">MP4 ready</span>;
+    return <StatusBadge tone="ok">MP4 ready</StatusBadge>;
   }
   if (file.conversionStatus === "failed") {
     return (
-      <span className="badge badge-sm badge-error" title={file.conversionError ?? undefined}>
+      <StatusBadge tone="bad" title={file.conversionError ?? undefined}>
         conversion failed
-      </span>
+      </StatusBadge>
     );
   }
   return null;
@@ -233,29 +233,16 @@ function Asset(props: {
   const ingests = file.ingestCount ?? 0;
   const analysis = useAnalysis(file.name);
   return (
-    <section className="card bg-base-200" aria-labelledby="media-asset">
-      <div className="card-body gap-3 p-4">
-        <h3 id="media-asset" className="card-title break-all text-base">
-          {file.name}
-        </h3>
-        <dl className="grid grid-cols-[8rem_1fr] gap-1 text-sm">
-          <dt className="text-base-content/70">Original</dt>
-          <dd className="break-all">
-            {forms.original} · {formatBytes(file.sourceSize ?? file.size)}
-          </dd>
-          {forms.converted && (
-            <>
-              <dt className="text-base-content/70">Converted</dt>
-              <dd className="break-all">
-                {forms.converted} · {formatBytes(file.convertedSize)}
-              </dd>
-            </>
-          )}
-          <dt className="text-base-content/70">Modified</dt>
-          <dd>{new Date(file.modifiedAt).toLocaleString()}</dd>
-          <dt className="text-base-content/70">Used by</dt>
-          <dd>{ingests === 0 ? "no pipeline" : `${ingests} file ingest${ingests === 1 ? "" : "s"}`}</dd>
-        </dl>
+    <Panel id="media-asset" title={file.name}>
+      <div className="flex flex-col gap-3">
+        <KeyValue
+          rows={[
+            ["Original", `${forms.original} · ${formatBytes(file.sourceSize ?? file.size)}`],
+            !!forms.converted && ["Converted", `${forms.converted} · ${formatBytes(file.convertedSize)}`],
+            ["Modified", <When atMs={new Date(file.modifiedAt).getTime()} show="both" />],
+            ["Used by", ingests === 0 ? "no pipeline" : `${ingests} file ingest${ingests === 1 ? "" : "s"}`],
+          ]}
+        />
         {file.conversionStatus === "failed" && file.conversionError && (
           <p className="text-sm text-error">{file.conversionError}</p>
         )}
@@ -287,7 +274,7 @@ function Asset(props: {
         <Rename file={file} onRenamed={props.onChanged} />
         <Delete file={file} onDeleted={() => props.onChanged(null)} />
       </div>
-    </section>
+    </Panel>
   );
 }
 
@@ -313,12 +300,12 @@ function Analysis({ analysis }: { analysis: MediaFileAnalysis | null | "failed" 
   }
   const readiness = ingestReadiness(analysis);
   return (
-    <div className="rounded bg-base-100 p-3 text-sm" aria-label="Ingest readiness">
+    <div className="rounded-box border border-base-content/10 bg-base-100 p-3 text-sm" aria-label="Ingest readiness">
       <div className="flex items-center gap-2">
         <b>Ingest readiness</b>
-        <span className={`badge badge-sm ${READINESS_BADGE[readiness.kind]}`}>
+        <StatusBadge tone={READINESS_TONE[readiness.kind]} dot>
           {READINESS_LABEL[readiness.kind]}
-        </span>
+        </StatusBadge>
       </div>
       <dl className="mt-2 grid grid-cols-[8rem_1fr] gap-1">
         <dt className="text-base-content/70">Video</dt>
@@ -429,7 +416,7 @@ function Rename(props: { file: MediaFile; onRenamed: (name: string) => void }) {
       }}
     >
       <input
-        className="input input-sm input-bordered min-w-0 flex-1"
+        className="input input-sm min-w-0 flex-1"
         aria-label="New file name"
         title="The file extension must stay the same"
         value={name}
@@ -469,34 +456,23 @@ function Storage({ live, files }: { live: LiveSnapshot; files: readonly MediaFil
   const disk = live.metrics?.mediaDisk;
   const converting = files.filter((file) => file.conversionStatus === "converting").length;
   return (
-    <section className="card bg-base-200" aria-labelledby="media-storage">
-      <div className="card-body gap-2 p-4">
-        <h3 id="media-storage" className="card-title text-base">
-          Storage
-        </h3>
+    <Panel id="media-storage" title="Storage">
+      <div className="flex flex-col gap-2">
         {disk ? (
           <>
             <div className="grid grid-cols-[1fr_3rem] items-center gap-2">
-              <progress
-                className="progress w-full"
-                value={disk.usedPercent ?? 0}
-                max={100}
-                aria-label="Media disk used"
-              />
+              <Meter value={disk.usedPercent === null || disk.usedPercent === undefined ? null : disk.usedPercent / 100} label="Media disk used" />
               <span className="text-right text-sm tabular-nums">
                 {formatPercent(disk.usedPercent)}
               </span>
             </div>
-            <dl className="grid grid-cols-[8rem_1fr] gap-1 text-sm">
-              <dt className="text-base-content/70">Used · free</dt>
-              <dd>
-                {formatBytes(disk.usedBytes)} · {formatBytes(disk.freeBytes)}
-              </dd>
-              <dt className="text-base-content/70">Directory</dt>
-              <dd className="break-all">{disk.mediaDir ?? "--"}</dd>
-              <dt className="text-base-content/70">Mount</dt>
-              <dd className="break-all">{disk.mountPoint ?? "--"}</dd>
-            </dl>
+            <KeyValue
+              rows={[
+                ["Used · free", `${formatBytes(disk.usedBytes)} · ${formatBytes(disk.freeBytes)}`],
+                ["Directory", disk.mediaDir ?? "--"],
+                ["Mount", disk.mountPoint ?? "--"],
+              ]}
+            />
           </>
         ) : (
           <p className="text-sm text-base-content/70">Waiting for the host sample…</p>
@@ -506,6 +482,6 @@ function Storage({ live, files }: { live: LiveSnapshot; files: readonly MediaFil
           {converting > 0 && ` · ${converting} converting`}
         </p>
       </div>
-    </section>
+    </Panel>
   );
 }

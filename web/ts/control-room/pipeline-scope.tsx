@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { SearchField } from "../ui/controls.js";
@@ -28,7 +28,6 @@ export function PipelineScope(props: {
   children: (pipelineId: string) => ReactNode;
 }) {
   const { live, workspace, pipelineId } = props;
-  const go = useGo();
   const state = live.state;
   const rows = useMemo(() => (state ? buildFleetModel(state, live.rates).pipelines : null), [state, live.rates]);
   const row = rows?.find((candidate) => candidate.id === pipelineId) ?? null;
@@ -58,6 +57,38 @@ export function PipelineScope(props: {
   }
   return (
     <div className="flex flex-col gap-4">
+      <PipelineHeading live={live} workspace={workspace} pipelineId={pipelineId} />
+      <div key={pipelineId} className="flex flex-col gap-4">
+        {props.children(pipelineId)}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One pipeline's header (name, health, rates, a picker) and the tabs
+ * between the workspaces about it; null while it is unknown.
+ */
+export function PipelineHeading(props: { live: LiveSnapshot; workspace: Workspace; pipelineId: string }) {
+  const { live, workspace, pipelineId } = props;
+  const go = useGo();
+  const state = live.state;
+  const rows = useMemo(() => (state ? buildFleetModel(state, live.rates).pipelines : null), [state, live.rates]);
+  const row = rows?.find((candidate) => candidate.id === pipelineId) ?? null;
+  const tabs = useRef<HTMLElement | null>(null);
+  // On a phone the strip scrolls: bring the current tab into it.
+  useEffect(() => {
+    const strip = tabs.current;
+    const current = strip?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (!strip || !current) return;
+    const left = current.offsetLeft - strip.offsetLeft;
+    if (left + current.offsetWidth > strip.scrollLeft + strip.clientWidth || left < strip.scrollLeft) {
+      strip.scrollLeft = left - (strip.clientWidth - current.offsetWidth) / 2;
+    }
+  }, [workspace, row !== null]);
+  if (state === null || row === null) return null;
+  return (
+    <>
       <PageHeader
         eyebrow={`Pipeline · ${WORKSPACE_LABELS[workspace]}`}
         title={
@@ -81,22 +112,19 @@ export function PipelineScope(props: {
           </select>
         }
       />
-      <nav aria-label="Pipeline views" className="scrollbar-thin -mt-1 flex gap-1 overflow-x-auto border-b border-base-content/10">
+      <nav ref={tabs} aria-label="Pipeline views" className="tab-strip -mt-1">
         {PIPELINE_TABS.map((tab) => (
           <PlaceLink
             key={tab}
             place={{ workspace: tab, pipelineId }}
             current={tab === workspace}
-            className={`-mb-px border-b-2 px-3 py-2 text-sm whitespace-nowrap ${tab === workspace ? "border-primary font-semibold" : "border-transparent text-base-content/70 hover:text-base-content"}`}
+            className="tab-strip-item"
           >
             {WORKSPACE_LABELS[tab]}
           </PlaceLink>
         ))}
       </nav>
-      <div key={pipelineId} className="flex flex-col gap-4">
-        {props.children(pipelineId)}
-      </div>
-    </div>
+    </>
   );
 }
 

@@ -15,6 +15,7 @@ import {
 import type { AlertsSnapshot, FlightTrace, LifecycleEventsSnapshot } from "../core/api-types.js";
 import type { FleetHistoryWindow } from "../core/generated/runtime-state.js";
 import type { HealthData } from "../types.js";
+import { StatusBadge } from "../ui/tone.js";
 import { formatAge } from "./format.js";
 import { fleetSpanSettled } from "./incidents-model.js";
 import { SAMPLE_INTERVAL_MS, SAMPLE_STALE_AFTER_MS, useNow } from "./store.js";
@@ -177,12 +178,9 @@ export function Freshness({
   if (atMs === null) return null;
   const stale = now - atMs > staleAfterMs;
   return (
-    <span
-      className={`badge badge-sm ${stale ? "badge-warning" : "badge-ghost"}`}
-      title="time since the last successful update"
-    >
+    <StatusBadge tone={stale ? "warn" : "neutral"} title="time since the last successful update" className="shrink-0 tabular font-medium">
       {stale ? "stale · " : ""}
       {formatAge(atMs, now)}
-    </span>
+    </StatusBadge>
   );
 }

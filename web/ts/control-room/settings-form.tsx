@@ -1,10 +1,11 @@
-// One Settings card: a form that saves its own part of the settings and
+// One Settings panel: a form that saves its own part of the settings and
 // says when the engine stored it.
 
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
 import type { ConfigPatch } from "../core/api.js";
+import { Panel } from "../ui/panel.js";
 
 /** Saves one part of the settings; true when the engine stored it. */
 export type Saver = (patch: ConfigPatch) => Promise<boolean>;
@@ -24,17 +25,14 @@ export function SettingsForm(props: {
     return () => window.clearTimeout(timer);
   }, [saved]);
   return (
-    <section className="card bg-base-200" aria-labelledby={props.id}>
+    <Panel id={props.id} title={props.title}>
       <form
-        className="card-body gap-3 p-4"
+        className="flex flex-col gap-3"
         onSubmit={async (event) => {
           event.preventDefault();
           if (!props.problem) setSaved(await props.onSave());
         }}
       >
-        <h3 id={props.id} className="card-title text-base">
-          {props.title}
-        </h3>
         {props.children}
         <div className="flex items-center gap-3">
           <button
@@ -52,6 +50,6 @@ export function SettingsForm(props: {
           )}
         </div>
       </form>
-    </section>
+    </Panel>
   );
 }

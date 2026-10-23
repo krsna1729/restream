@@ -170,7 +170,7 @@ function Trends(props: { live: LiveSnapshot; pipelineId: string }) {
           </p>
         )}
         {first === undefined || last === undefined ? (
-          <p className="text-base-content/70">Collecting the first sample…</p>
+          <p className="text-sm text-base-content/70">Collecting the first sample…</p>
         ) : (
           <dl className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
             {SIGNALS.map((signal) => (

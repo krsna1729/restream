@@ -233,7 +233,7 @@ export function DestinationMatrix(props: {
           <span className="inline-flex items-center gap-1" onClick={(event) => event.stopPropagation()}>
             <button
               type="button"
-              className={`btn btn-xs h-7 ${running ? "btn-ghost border-base-content/20" : "btn-accent"}`}
+              className={`btn btn-xs ${running ? "btn-ghost border-base-content/20" : "btn-accent"}`}
               disabled={busy !== null}
               aria-label={`${running ? "Stop" : "Start"} ${row.output.name}`}
               onClick={() => void toggle(row.output)}
@@ -243,7 +243,7 @@ export function DestinationMatrix(props: {
             </button>
             <button
               type="button"
-              className="btn btn-ghost btn-xs h-7"
+              className="btn btn-ghost btn-xs"
               aria-label={`Edit ${row.output.name}`}
               disabled={config === null}
               onClick={() => setEditing(row.output.id)}

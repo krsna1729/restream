@@ -155,7 +155,7 @@ function Outlier(props: { live: LiveSnapshot; pipelineId: string }) {
             ]}
           />
           <PlaceLink
-            className="link text-sm"
+            className="link touch-36 inline-flex items-center self-start text-sm"
             place={{ workspace: "operate", pipelineId: props.pipelineId }}
           >
             Open in Operate

@@ -30,13 +30,20 @@ export function Kpi(props: {
       className={`flex min-w-0 flex-col gap-1 rounded-box border border-base-content/10 bg-base-200 px-4 py-3 text-left ${props.onClick ? "transition-colors hover:border-base-content/30" : ""}`}
     >
       <span className="kicker truncate">{props.label}</span>
-      <span className={`tabular truncate text-2xl leading-tight font-semibold ${props.tone ? TONE_TEXT[props.tone] : ""}`}>
-        {props.value}
-      </span>
+      {props.value === "--" ? (
+        // Unknown: a quiet dash, not a big "- -".
+        <span className="text-2xl leading-tight font-semibold text-base-content/40" aria-label="unknown">
+          —
+        </span>
+      ) : (
+        <span className={`tabular truncate text-2xl leading-tight font-semibold ${props.tone ? TONE_TEXT[props.tone] : ""}`}>
+          {props.value}
+        </span>
+      )}
       {props.meter !== undefined && (
         <Meter value={props.meter} tone={props.meterTone} label={typeof props.label === "string" ? props.label : "level"} />
       )}
-      {props.foot && <span className="truncate text-xs text-base-content/70">{props.foot}</span>}
+      {props.foot && <span className="line-clamp-2 text-xs text-base-content/70">{props.foot}</span>}
     </Tag>
   );
 }

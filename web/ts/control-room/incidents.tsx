@@ -95,7 +95,7 @@ export function Incidents({ live }: { live: LiveSnapshot }) {
         ) && (
           <p className="text-xs text-base-content/70">
             The engine's resolved history is complete only from{" "}
-            {new Date(alerts.value.resolvedCompleteFrom).toLocaleString()} (it
+            <When atMs={new Date(alerts.value.resolvedCompleteFrom).getTime()} show="at" /> (it
             restarted then, or dropped older ones): earlier closings in this
             window may be missing.
           </p>
@@ -298,9 +298,9 @@ function Detail(props: {
           </p>
         )}
         {timeline === null ? (
-          <p className="text-base-content/70">Loading events…</p>
+          <p className="text-sm text-base-content/70">Loading events…</p>
         ) : timeline.length === 0 ? (
-          <p className="text-base-content/70">
+          <p className="text-sm text-base-content/70">
             No kept lifecycle event for {affected(alert, props.names)} since a
             minute before this opened.
           </p>
@@ -348,14 +348,14 @@ function Correlation(props: {
       {kept !== null && props.fromMs <= kept.completeFromMs && (
         <p className="text-xs text-base-content/70">
           The engine's fleet history is complete only from{" "}
-          {new Date(kept.completeFromMs).toLocaleString()} (it restarted then, or
+          <When atMs={kept.completeFromMs} show="at" /> (it restarted then, or
           dropped older samples): the chart starts there.
         </p>
       )}
       {kept === null ? (
-        <p className="text-base-content/70">Loading the fleet history…</p>
+        <p className="text-sm text-base-content/70">Loading the fleet history…</p>
       ) : samples.length === 0 ? (
-        <p className="text-base-content/70">No fleet sample in this span yet.</p>
+        <p className="text-sm text-base-content/70">No fleet sample in this span yet.</p>
       ) : (
         <div className="flex flex-col gap-4">
           <TimeSeries
@@ -434,7 +434,7 @@ function Evidence(props: {
         <div>
           <h4 className="kicker">What did not fail</h4>
           {packet.notFailed.length === 0 ? (
-            <p className="text-base-content/70">Nothing ruled out.</p>
+            <p className="text-sm text-base-content/70">Nothing ruled out.</p>
           ) : (
             <ul className="list-inside list-disc">
               {packet.notFailed.map((layer) => (

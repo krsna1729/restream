@@ -198,7 +198,12 @@ export function TimeSeries<T extends { readonly atMs: number }>(props: {
         {/* Labels and end dots are HTML so they do not stretch with the plot. */}
         <div className="pointer-events-none absolute inset-y-0 right-0 left-[3.5rem]">
           {(props.marks ?? []).filter((mark) => mark.label && mark.atMs >= fromMs && mark.atMs <= toMs).map((mark) => (
-            <span key={`label-${mark.atMs}`} className="absolute top-0 -translate-x-full pr-1 text-[0.7rem] font-semibold whitespace-nowrap text-base-content/80" style={{ left: `${(x(mark.atMs) / W) * 100}%` }}>
+            // Left of its line, unless that would run over the axis labels.
+            <span
+              key={`label-${mark.atMs}`}
+              className={`absolute top-0 text-[0.7rem] font-semibold whitespace-nowrap text-base-content/80 ${x(mark.atMs) / W < 0.12 ? "pl-1" : "-translate-x-full pr-1"}`}
+              style={{ left: `${(x(mark.atMs) / W) * 100}%` }}
+            >
               {mark.label}
             </span>
           ))}

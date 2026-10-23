@@ -74,7 +74,7 @@ export function InputForm(props: {
       <label className="form-control">
         <span className="label-text">Label</span>
         <input
-          className="input input-sm input-bordered"
+          className="input input-sm"
           value={draft.label}
           onChange={(event) => set({ label: event.target.value })}
         />
@@ -82,7 +82,7 @@ export function InputForm(props: {
       <label className="form-control">
         <span className="label-text">Source</span>
         <select
-          className="select select-sm select-bordered"
+          className="select select-sm"
           value={draft.kind}
           onChange={(event) => set({ kind: event.target.value as PipelineInputKind })}
         >
@@ -120,7 +120,7 @@ export function InputForm(props: {
           <label className="form-control">
             <span className="label-text">HLS push authentication</span>
             <select
-              className="select select-sm select-bordered"
+              className="select select-sm"
               value={draft.pushAuthKind}
               onChange={(event) =>
                 setDraft(choosePushAuthKind(draft, event.target.value as "none" | "basic"))
@@ -149,13 +149,13 @@ export function InputForm(props: {
             <>
               <label className="form-control">
                 <span className="label-text">HLS push username</span>
-                <input className="input input-sm input-bordered" autoComplete="off"
+                <input className="input input-sm" autoComplete="off"
                   value={draft.pushUsername}
                   onChange={(event) => set({ pushUsername: event.target.value })} />
               </label>
               <label className="form-control">
                 <span className="label-text">HLS push password</span>
-                <input type="password" className="input input-sm input-bordered"
+                <input type="password" className="input input-sm"
                   autoComplete="new-password" value={draft.pushPassword}
                   onChange={(event) => set({ pushPassword: event.target.value })} />
               </label>
@@ -167,7 +167,7 @@ export function InputForm(props: {
         <label className="form-control">
           <span className="label-text">HLS source URL</span>
           <input
-            className="input input-sm input-bordered font-mono"
+            className="input input-sm font-mono"
             inputMode="url"
             placeholder="https://origin.example/live/master.m3u8"
             value={draft.sourceUrl}
@@ -179,7 +179,7 @@ export function InputForm(props: {
         <label className="form-control">
           <span className="label-text">Rendition</span>
           <select
-            className="select select-sm select-bordered"
+            className="select select-sm"
             value={draft.variantRule}
             onChange={(event) => set({ variantRule: event.target.value as VariantRule })}
           >
@@ -196,7 +196,7 @@ export function InputForm(props: {
           <label className="form-control">
             <span className="label-text">Authentication</span>
             <select
-              className="select select-sm select-bordered"
+              className="select select-sm"
               value={draft.authKind}
               onChange={(event) =>
                 setDraft(chooseAuthKind(draft, event.target.value as PullAuthKind))
@@ -237,7 +237,7 @@ export function InputForm(props: {
               <input
                 type="password"
                 autoComplete="off"
-                className="input input-sm input-bordered font-mono"
+                className="input input-sm font-mono"
                 value={draft.token}
                 onChange={(event) => set({ token: event.target.value })}
               />
@@ -249,7 +249,7 @@ export function InputForm(props: {
               <textarea
                 rows={3}
                 autoComplete="off"
-                className="textarea textarea-sm textarea-bordered font-mono"
+                className="textarea textarea-sm font-mono"
                 placeholder={AUTH_COOKIES_PLACEHOLDER}
                 value={draft.cookies}
                 onChange={(event) => set({ cookies: event.target.value })}
@@ -262,7 +262,7 @@ export function InputForm(props: {
               <span className="label-text">Username</span>
               <input
                 autoComplete="off"
-                className="input input-sm input-bordered"
+                className="input input-sm"
                 value={draft.username}
                 onChange={(event) => set({ username: event.target.value })}
               />
@@ -274,7 +274,7 @@ export function InputForm(props: {
               <input
                 type="password"
                 autoComplete="off"
-                className="input input-sm input-bordered"
+                className="input input-sm"
                 value={draft.password}
                 onChange={(event) => set({ password: event.target.value })}
               />
@@ -286,14 +286,14 @@ export function InputForm(props: {
               {draft.headers.map((header, index) => (
                 <div key={index} className="flex flex-wrap gap-2">
                   <input
-                    className="input input-xs input-bordered flex-1"
+                    className="input input-xs flex-1"
                     aria-label={`Header ${index + 1} name`}
                     placeholder="Name"
                     value={header.name}
                     onChange={(event) => setHeader(index, { name: event.target.value })}
                   />
                   <input
-                    className="input input-xs input-bordered flex-1"
+                    className="input input-xs flex-1"
                     aria-label={`Header ${index + 1} value`}
                     placeholder="Value"
                     value={header.value}

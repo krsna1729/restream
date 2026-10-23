@@ -77,7 +77,13 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
           foot={
             pipeline?.ingest ? (
               <>
-                {formatBps(props.live.rates?.ingestBps.get(pipelineId))} · <Since sinceMs={pipeline.ingest.sinceMs} prefix="on air for" className="" />
+                {formatBps(props.live.rates?.ingestBps.get(pipelineId))}
+                {pipeline.ingest.sinceMs ? (
+                  <>
+                    {" · "}
+                    <Since sinceMs={pipeline.ingest.sinceMs} prefix="on air for" className="" />
+                  </>
+                ) : null}
               </>
             ) : (
               "no publisher connected"
@@ -166,7 +172,7 @@ function SourceDeck(props: {
       actions={<Freshness atMs={props.atMs} />}
     >
       {inputs === null ? (
-        <p className="text-base-content/70">Loading inputs…</p>
+        <p className="text-sm text-base-content/70">Loading inputs…</p>
       ) : (
         <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-1">
           {inputs.map((input) => {
@@ -205,7 +211,7 @@ function SourceDeck(props: {
                 {input.enabled && !input.selected && (
                   <button
                     type="button"
-                    className="btn btn-accent btn-sm mt-2 w-full"
+                    className="btn btn-outline btn-accent btn-sm mt-2"
                     disabled={busy !== null}
                     onClick={async () => {
                       setBusy(input.id);
@@ -226,7 +232,7 @@ function SourceDeck(props: {
                         {url}
                       </p>
                     ))}
-                    <p className="text-base-content/70">{VARIANT_LABELS[input.variantRule]}</p>
+                    <p className="text-sm text-base-content/70">{VARIANT_LABELS[input.variantRule]}</p>
                   </div>
                 ) : (
                   urls.length > 0 && (

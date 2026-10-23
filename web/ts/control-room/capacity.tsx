@@ -12,12 +12,16 @@ import { Meters, serviceCenterRows } from "./fleet.js";
 import { formatBps, formatPercent } from "./format.js";
 import { PlaceLink } from "./router.js";
 import type { LiveSnapshot } from "./store.js";
+import { Kpi, KeyValue, KpiRow } from "../ui/kpi.js";
 import { PageHeader } from "../ui/page-header.js";
+import { Panel } from "../ui/panel.js";
+import { StatusBadge } from "../ui/tone.js";
+import type { Tone } from "../ui/tone.js";
 
-const FLOW_BADGE: Record<FlowDiagnosis["status"], string> = {
-  healthy: "badge-success",
-  saturated: "badge-warning",
-  overloaded: "badge-error",
+const FLOW_TONE: Record<FlowDiagnosis["status"], Tone> = {
+  healthy: "ok",
+  saturated: "warn",
+  overloaded: "bad",
 };
 
 const PRIORS = "calibration priors, observe-only";
@@ -30,7 +34,7 @@ const PRIORS = "calibration priors, observe-only";
 export function Capacity({ live }: { live: LiveSnapshot }) {
   const capacity = live.metrics?.capacity ?? null;
   if (capacity === null) {
-    return <p className="text-base-content/70">Waiting for the capacity snapshot…</p>;
+    return <p className="text-sm text-base-content/70">Waiting for the capacity snapshot…</p>;
   }
   return (
     <div className="flex flex-col gap-4">
@@ -40,31 +44,21 @@ export function Capacity({ live }: { live: LiveSnapshot }) {
         subtitle="Load per service center from the calibration priors, the measured egress flow, and what-if scenarios priced by the engine."
       />
       <div className="grid gap-4 lg:grid-cols-2">
-        <section className="card bg-base-200" aria-labelledby="capacity-now">
-          <div className="card-body gap-3 p-4">
-            <h3 id="capacity-now" className="card-title text-base">
-              Service centers now
-            </h3>
-            <dl className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-              {[
-                ["Ingress", `${Math.round(capacity.ingressPps)} pps`],
-                ["Egress work", `${Math.round(capacity.egressPps)} pps`],
-                ["Media", formatBps(capacity.mediaBps)],
-                ["Outputs · stages", `${capacity.activeLeaves} · ${capacity.uniqueStages}`],
-              ].map(([label, value]) => (
-                <div key={label} className="rounded bg-base-100 p-2">
-                  <dt className="text-xs text-base-content/70">{label}</dt>
-                  <dd className="tabular-nums">{value}</dd>
-                </div>
-              ))}
-            </dl>
+        <Panel id="capacity-now" title="Service centers now">
+          <div className="flex flex-col gap-3">
+            <KpiRow>
+              <Kpi label="Ingress" value={`${Math.round(capacity.ingressPps)} pps`} />
+              <Kpi label="Egress work" value={`${Math.round(capacity.egressPps)} pps`} />
+              <Kpi label="Media" value={formatBps(capacity.mediaBps)} />
+              <Kpi label="Outputs · stages" value={`${capacity.activeLeaves} · ${capacity.uniqueStages}`} />
+            </KpiRow>
             <Meters
               title={`Projected load · ${PRIORS} · hottest: ${capacity.hottestCenter}`}
               rows={serviceCenterRows(capacity)}
             />
             <FlowDoctor capacity={capacity} />
           </div>
-        </section>
+        </Panel>
         <Scenario live={live} />
       </div>
     </div>
@@ -74,36 +68,36 @@ export function Capacity({ live }: { live: LiveSnapshot }) {
 function FlowDoctor({ capacity }: { capacity: CapacitySnapshot }) {
   const { flow } = capacity;
   return (
-    <section className="rounded bg-base-100 p-3" aria-labelledby="capacity-flow">
+    <section className="rounded-box border border-base-content/10 bg-base-100 p-3" aria-labelledby="capacity-flow">
       <div className="flex flex-wrap items-center gap-2">
         <h4 id="capacity-flow" className="font-medium">
           Flow Doctor · {flow.center}
         </h4>
-        <span className={`badge badge-sm ${FLOW_BADGE[flow.status]}`}>{flow.status}</span>
+        <StatusBadge tone={FLOW_TONE[flow.status]} dot>
+          {flow.status}
+        </StatusBadge>
         <span className="text-xs text-base-content/70">
           {capacity.flowMeasured
             ? "measured from the busiest egress shard"
             : `no shard runs: projected from ${PRIORS}`}
         </span>
       </div>
-      <dl className="mt-2 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-        {[
-          ["Utilization", formatPercent(flow.utilization * 100)],
-          ["Queue", String(Math.round(flow.queue))],
-          ["Progress age", `${Math.round(flow.delayMs)} ms`],
-          [
-            "Deadline slack",
-            flow.deadlineSlackMs === null ? "none" : `${Math.round(flow.deadlineSlackMs)} ms`,
-          ],
-          ["Backlog slope", String(flow.backlogSlope)],
-          ["Errors", String(flow.errors)],
-        ].map(([label, value]) => (
-          <div key={label}>
-            <dt className="text-xs text-base-content/70">{label}</dt>
-            <dd className="tabular-nums">{value}</dd>
-          </div>
-        ))}
-      </dl>
+      <div className="mt-2 grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
+        <KeyValue
+          rows={[
+            ["Utilization", formatPercent(flow.utilization * 100)],
+            ["Queue", String(Math.round(flow.queue))],
+            ["Progress age", `${Math.round(flow.delayMs)} ms`],
+          ]}
+        />
+        <KeyValue
+          rows={[
+            ["Deadline slack", flow.deadlineSlackMs === null ? "none" : `${Math.round(flow.deadlineSlackMs)} ms`],
+            ["Backlog slope", String(flow.backlogSlope)],
+            ["Errors", String(flow.errors)],
+          ]}
+        />
+      </div>
     </section>
   );
 }
@@ -151,12 +145,8 @@ function Scenario({ live }: { live: LiveSnapshot }) {
   const pipelines = live.state?.pipelines ?? [];
   const name = (id: string) => pipelines.find((pipeline) => pipeline.id === id)?.name ?? id;
   return (
-    <section className="card bg-base-200" aria-labelledby="capacity-scenario">
-      <div className="card-body gap-3 p-4">
-        <h3 id="capacity-scenario" className="card-title text-base">
-          Scenario
-          <span className="text-xs font-normal text-base-content/70">{PRIORS}</span>
-        </h3>
+    <Panel id="capacity-scenario" title="Scenario" subtitle={PRIORS}>
+      <div className="flex flex-col gap-3">
         {/* A failed request (a pipeline with no live ingest) shows in the
             app's error alert. */}
         <form
@@ -172,7 +162,7 @@ function Scenario({ live }: { live: LiveSnapshot }) {
               type="number"
               min={0}
               max={100000}
-              className="input input-sm input-bordered w-28"
+              className="input input-sm w-28"
               value={addOutputs}
               onChange={(event) => setAddOutputs(Math.max(0, Number(event.target.value) || 0))}
             />
@@ -180,7 +170,7 @@ function Scenario({ live }: { live: LiveSnapshot }) {
           <label className="form-control">
             <span className="label-text text-xs">Carrying the ingest of</span>
             <select
-              className="select select-sm select-bordered"
+              className="select select-sm"
               value={pipelineId}
               onChange={(event) => setPipelineId(event.target.value)}
             >
@@ -195,7 +185,7 @@ function Scenario({ live }: { live: LiveSnapshot }) {
           <label className="form-control">
             <span className="label-text text-xs">Protocol</span>
             <select
-              className="select select-sm select-bordered"
+              className="select select-sm"
               value={protocol}
               onChange={(event) => setProtocol(event.target.value as OutputProtocol)}
             >
@@ -209,7 +199,7 @@ function Scenario({ live }: { live: LiveSnapshot }) {
           <label className="form-control">
             <span className="label-text text-xs">Encoding</span>
             <select
-              className="select select-sm select-bordered"
+              className="select select-sm"
               value={addStages}
               onChange={(event) => setAddStages(Number(event.target.value))}
             >
@@ -241,9 +231,9 @@ function Scenario({ live }: { live: LiveSnapshot }) {
               Projected hottest center: <b>{result.projected.hottestCenter}</b> ·{" "}
               {formatPercent(result.baseline.projectedUtilization * 100)} →{" "}
               <b>{formatPercent(result.projected.projectedUtilization * 100)}</b>{" "}
-              <span className={`badge badge-sm ${FLOW_BADGE[result.projected.flow.status]}`}>
+              <StatusBadge tone={FLOW_TONE[result.projected.flow.status]} dot>
                 {result.projected.flow.status}
-              </span>
+              </StatusBadge>
             </p>
             <p className="text-xs text-base-content/70">
               {result.ratedBy === null
@@ -259,7 +249,7 @@ function Scenario({ live }: { live: LiveSnapshot }) {
           </div>
         )}
       </div>
-    </section>
+    </Panel>
   );
 }
 
@@ -273,7 +263,7 @@ function addedOutputs(added: CapacityScenario["addOutputs"]): string {
 /** What every projection is priced on, and where each number came from. */
 function Calibration({ calibration }: { calibration: CapacityCalibration }) {
   return (
-    <section className="rounded bg-base-100 p-3" aria-labelledby="capacity-calibration">
+    <section className="rounded-box border border-base-content/10 bg-base-100 p-3" aria-labelledby="capacity-calibration">
       <h4 id="capacity-calibration" className="font-medium">
         Calibration
         <span className="ml-2 text-xs font-normal text-base-content/70">
@@ -296,14 +286,14 @@ function Calibration({ calibration }: { calibration: CapacityCalibration }) {
               <td className="tabular-nums">{format(calibration.limits[key])}</td>
               <td>
                 {calibration.sources[key] === "configured" ? (
-                  <span className="badge badge-sm badge-info">configured</span>
+                  <StatusBadge tone="info">configured</StatusBadge>
                 ) : (
-                  <span
-                    className="badge badge-sm badge-ghost"
+                  <StatusBadge
+                    tone="neutral"
                     title={`A conservative prior scaled to ${calibration.priorCpus} CPUs, not a measurement of this host`}
                   >
                     prior · {calibration.priorCpus} CPUs
-                  </span>
+                  </StatusBadge>
                 )}
               </td>
             </tr>

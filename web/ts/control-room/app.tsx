@@ -75,6 +75,7 @@ function Shell() {
           {/* core/api.ts toggles these elements' classes and writes
               #error-msg's text; React owns neither (constant classes, no
               children). */}
+          {/* style-ok: core/api.ts toggles this element's classes */}
           <span id="saving-badge" className="badge badge-info fixed top-3 right-3 z-50 hidden">
             saving…
           </span>
@@ -96,7 +97,7 @@ function Shell() {
             {place.workspace === "health" && <StreamHealth live={live} pipelineId={place.pipelineId} />}
             {place.workspace === "incidents" && <Incidents live={live} />}
             {place.workspace === "logs" && (
-              <Logs key={`${place.pipelineId ?? ""}:${place.outputId ?? ""}`} live={live} pipelineId={place.pipelineId} outputId={place.outputId} />
+              <Logs live={live} pipelineId={place.pipelineId} outputId={place.outputId} />
             )}
             {place.workspace === "capacity" && <Capacity live={live} />}
             {place.workspace === "stability" && <StabilityLab live={live} />}
