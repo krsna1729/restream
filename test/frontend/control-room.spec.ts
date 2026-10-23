@@ -1871,7 +1871,7 @@ test("notifications: a webhook channel's test arrives signed, and the delivery i
     await add.getByRole("button", { name: "Add channel" }).click();
     await expect(add.getByRole("status")).toContainText("Signing secret for");
 
-    const row = page.getByRole("row").filter({ hasText: name });
+    const row = page.getByRole("table", { name: "Notification channels" }).getByRole("row").filter({ hasText: name });
     await row.getByRole("button", { name: "Send test" }).click();
     await expect(row).toContainText("Delivered");
     expect(received).toHaveLength(1);
@@ -1915,7 +1915,7 @@ test("playlists: the editor saves the play order, and a running playlist moves t
     const form = page.getByRole("region", { name: "Pipeline settings" });
     await form.getByRole("combobox", { name: "Source" }).selectOption("file");
     await form.getByRole("combobox", { name: "File", exact: true }).selectOption(clips[0]);
-    await form.getByRole("combobox", { name: "File to add to the playlist" }).selectOption(clips[1]);
+    await form.getByRole("combobox", { name: "Add to playlist" }).selectOption(clips[1]);
     await form.getByRole("button", { name: "Add", exact: true }).click();
     await expect(form.getByRole("group", { name: "Playlist" })).toContainText(`2.${clips[1]}`);
     await form.getByRole("checkbox", { name: "Loop the playlist" }).uncheck();
