@@ -16,7 +16,7 @@ export function PageHeader(props: {
   actions?: ReactNode;
 }) {
   return (
-    <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+    <header data-tour="page-header" className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
       <div className="min-w-0">
         {props.eyebrow && <div className="kicker mb-1 truncate text-primary">{props.eyebrow}</div>}
         <h2 className={`text-xl leading-tight font-semibold text-balance ${props.tone ? TONE_TEXT[props.tone] : ""}`}>

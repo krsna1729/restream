@@ -171,7 +171,7 @@ is `app.tsx` plus `control-room/shell/`.
   Channels, Pipelines, Operate, Monitor, Schedule), Understand (Incidents, Stream
   health, Capacity, Stability Lab), Manage (Media, Changes, Team, Audit log,
   Settings, with Notifications before Team), Engineer (Inspect, Logs,
-  System), filtered to what the
+  System), Learn (Guides, How it works), filtered to what the
   session's role may open (`navGroupsFor`). Live badges
   count degraded destinations, pipelines and open alerts (`shell/badges.ts`);
   an unknown count is absent, never zero.
@@ -179,8 +179,19 @@ is `app.tsx` plus `control-room/shell/`.
   memory, egress, ingest). Tablets show an icon rail. Phones show a bottom
   bar (Fleet, Incidents, Channels, Operate, More); More opens a sheet with
   every workspace, the account, the host card and the preferences.
-- The top bar holds search, the live status, the UTC clock (2xl), the
-  Operator/Engineer switch and the preferences menu.
+- The top bar holds search, the help button, the live status, the UTC
+  clock (2xl), the Operator/Engineer switch (tablet and up) and the
+  preferences menu.
+- Help (`shell/help.tsx`, words in `help-model.ts`): the help button or `?`
+  opens a drawer saying what the current page answers, when to use it and
+  the terms it uses. From there a spotlight tour lights the page's parts one
+  at a time (a step targets a CSS selector, usually a Panel's
+  `section[aria-labelledby]`; a step with no visible target shows a centred
+  card), and the onboarding tour walks the console across workspaces. Steps
+  are filtered to what the session's role may do and open (`stepsFor`).
+  Guides (`guides-model.ts`) are task walkthroughs whose steps link to their
+  pages; How it works (`architecture.tsx`) explains the system block by
+  block, each linked to the page that shows it live.
 - The command palette (`⌘K`, `Ctrl+K` or `/`) finds workspaces,
   pipelines, destinations and open incidents from what the page holds, and
   changes preferences (`shell/palette-model.ts`, ranked by prefix, word and
@@ -715,7 +726,11 @@ pipelines, 24 destinations), `plant` (150 pipelines, about 350 inputs, 3,000
 destinations) or `extreme` (400 pipelines, about 1,000 inputs, 10,000
 destinations, 32 shards per protocol). It streams state deltas every 2 s:
 outputs fail and retry, inputs fail over, and one shard stalls on a script.
-It is development-only (no auth) and every payload is synthetic.
+It is development-only (no auth) and every payload is synthetic. Its routes
+live in `fixtures/api.mjs`, so `scripts/dev/frontend/static-demo.mjs` can
+run the same synthetic engine inside the page (`fixtures/browser-backend.mjs`
+answers `fetch` and `EventSource`) and write a static demo folder to
+`.local/demo/` that any web server can host: no engine, no login.
 `scripts/dev/frontend/shots.mjs` screenshots every workspace across widths,
 themes and audiences into `.local/shots/<label>/`. It flags horizontal page
 scroll, clipped text, phone touch targets under 36px, and console errors.
