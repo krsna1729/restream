@@ -49,6 +49,11 @@ use super::media_library::{
     media_list_handler, media_rename_handler, media_upload_handler, recording_start_handler,
     recording_stop_handler,
 };
+use super::notifications::{
+    channel_secret_handler, create_channel_handler, delete_channel_handler, deliveries_handler,
+    list_channels_handler, my_subscriptions_handler, push_key_handler, subscribe_handler,
+    test_channel_handler, test_push_handler, unsubscribe_handler, update_channel_handler,
+};
 use super::outputs::{
     output_status_handler, outputs_create_handler, outputs_delete_handler, outputs_start_handler,
     outputs_stop_handler, outputs_update_handler, youtube_monitoring_status_handler,
@@ -118,6 +123,15 @@ pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
     "/api/v1/users",
     "/api/v1/users/{id}",
     "/api/v1/audit",
+    "/api/v1/notifications/channels",
+    "/api/v1/notifications/channels/{id}",
+    "/api/v1/notifications/channels/{id}/test",
+    "/api/v1/notifications/channels/{id}/secret",
+    "/api/v1/notifications/deliveries",
+    "/api/v1/notifications/push/key",
+    "/api/v1/notifications/push/subscriptions",
+    "/api/v1/notifications/push/subscriptions/{id}",
+    "/api/v1/notifications/push/test",
     "/api/v1/auth/change-password",
     "/api/v1/auth/dismiss-password-change",
     "/api/v1/security/rate-limits",
@@ -306,6 +320,33 @@ fn create_app_router() -> Router<Arc<AppState>> {
             patch(update_user_handler).delete(delete_user_handler),
         )
         .route("/api/v1/audit", get(audit_handler))
+        .route(
+            "/api/v1/notifications/channels",
+            get(list_channels_handler).post(create_channel_handler),
+        )
+        .route(
+            "/api/v1/notifications/channels/{id}",
+            put(update_channel_handler).delete(delete_channel_handler),
+        )
+        .route(
+            "/api/v1/notifications/channels/{id}/test",
+            post(test_channel_handler),
+        )
+        .route(
+            "/api/v1/notifications/channels/{id}/secret",
+            get(channel_secret_handler),
+        )
+        .route("/api/v1/notifications/deliveries", get(deliveries_handler))
+        .route("/api/v1/notifications/push/key", get(push_key_handler))
+        .route(
+            "/api/v1/notifications/push/subscriptions",
+            get(my_subscriptions_handler).post(subscribe_handler),
+        )
+        .route(
+            "/api/v1/notifications/push/subscriptions/{id}",
+            axum::routing::delete(unsubscribe_handler),
+        )
+        .route("/api/v1/notifications/push/test", post(test_push_handler))
         .route(
             "/api/v1/auth/change-password",
             post(change_password_handler),

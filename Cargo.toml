@@ -66,6 +66,8 @@ libc = "0.2"
 futures-util = "0.3"
 scrypt = { version = "0.11", features = ["simple"] }
 rand = "0.10"
+# Web Push: VAPID (ES256), RFC 8291 payload encryption, webhook HMAC.
+ring = "0.17"
 sha2 = "0.11"
 md-5 = "0.11"
 ffmpeg-next = { version = "9.0", default-features = false, features = ["codec", "filter", "format", "software-resampling", "software-scaling"] }

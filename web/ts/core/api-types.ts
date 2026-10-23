@@ -782,3 +782,49 @@ export interface AuditEntry {
   path: string;
   status: number;
 }
+
+export type NotifySeverity = "warning" | "critical";
+export type ChannelKind = "webhook" | "slack" | "discord";
+
+/** A notification channel (`application/notify.rs`); its secret is never listed. */
+export interface NotifyChannel {
+  id: string;
+  kind: ChannelKind;
+  name: string;
+  target: string;
+  minSeverity: NotifySeverity;
+  onResolved: boolean;
+  enabled: boolean;
+  createdAtMs: number;
+}
+
+export interface NotifyChannelDraft {
+  kind: ChannelKind;
+  name: string;
+  target: string;
+  minSeverity: NotifySeverity;
+  onResolved: boolean;
+  enabled: boolean;
+}
+
+export interface NotifyDelivery {
+  id: number;
+  atMs: number;
+  targetId: string;
+  targetName: string;
+  event: "opened" | "resolved" | "test";
+  alertId: string;
+  title: string;
+  ok: boolean;
+  attempts: number;
+  /** "HTTP 204", or why there was no answer. */
+  detail: string;
+}
+
+export interface PushSubscriptionRecord {
+  id: string;
+  username: string;
+  endpoint: string;
+  minSeverity: NotifySeverity;
+  createdAtMs: number;
+}

@@ -9,13 +9,13 @@ use crate::application::pipeline_inputs::PipelineInputService;
 use crate::application::recirculation::RecirculationService;
 use crate::application::services::{
     AgentService, AuthService, FileIngestService, IngestService, MediaLibraryService,
-    PipelineService, SettingsService, TeamService,
+    NotifyService, PipelineService, SettingsService, TeamService,
 };
 use crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore;
 use crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter;
 use crate::infrastructure::sqlite_ports::{
-    SqliteIngestLookup, SqliteJobStore, SqliteMetaStore, SqlitePipelineStore, SqliteRecordingStore,
-    SqliteSessionStore, SqliteTeamStore,
+    SqliteIngestLookup, SqliteJobStore, SqliteMetaStore, SqliteNotifyStore, SqlitePipelineStore,
+    SqliteRecordingStore, SqliteSessionStore, SqliteTeamStore,
 };
 
 /// Infrastructure-owned factory for SQLite application-port adapters.
@@ -42,6 +42,7 @@ impl<'pool> SqliteServiceFactory<'pool> {
             recirculation_service,
             auth_service: self.auth_service(),
             team_service: self.team_service(),
+            notify_service: self.notify_service(),
             settings_service,
             file_ingest_service: self.file_ingest_service(pipeline_service.clone()),
             media_library_service: self
@@ -79,6 +80,19 @@ impl<'pool> SqliteServiceFactory<'pool> {
 
     pub fn team_service(&self) -> TeamService {
         TeamService::with_store(Arc::new(SqliteTeamStore::new(self.db.clone())))
+    }
+
+    pub fn notify_service(&self) -> NotifyService {
+        let meta = Arc::new(SqliteMetaStore::new(self.db.clone()));
+        NotifyService::with_ports(
+            Arc::new(SqliteNotifyStore::new(self.db.clone())),
+            Arc::new(
+                crate::infrastructure::notify_transport::HttpNotifyTransport::new(
+                    meta.clone(),
+                    meta,
+                ),
+            ),
+        )
     }
 
     pub fn settings_service(&self) -> SettingsService {

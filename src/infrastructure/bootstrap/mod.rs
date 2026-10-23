@@ -255,6 +255,11 @@ pub async fn run_app(config: Arc<AppConfig>) {
         crate::application::flight_recorder::FLIGHT_SAMPLE_INTERVAL,
         projector_stop.clone(),
     ));
+    tokio::spawn(crate::api::alerts::run_alert_notifier(
+        state.clone(),
+        crate::api::alerts::NOTIFY_INTERVAL,
+        projector_stop.clone(),
+    ));
     let mut runtime = runtime::RuntimeTasks::launch(runtime::RuntimeLaunch {
         config,
         state,

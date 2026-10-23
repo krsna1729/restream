@@ -55,6 +55,52 @@ fn alerts_response(
     Json(body).into_response()
 }
 
+/// The open alerts now, stamped by the tracker. Alerts are derived from the
+/// same health snapshot shape the dashboard uses, so transport-only alert
+/// logic does not need to understand engine internals.
+pub async fn current_alerts(state: &AppState) -> (serde_json::Value, Vec<crate::alerts::Alert>) {
+    let snapshot = dashboard_alert_snapshot(state).await;
+    let mut alert_list = alerts::derive_alerts(&snapshot);
+    state.alert_tracker.track(&mut alert_list);
+    (snapshot, alert_list)
+}
+
+/// How often the notifier evaluates alerts.
+pub const NOTIFY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Evaluates alerts every `interval` whether or not a dashboard is open,
+/// and tells every channel and browser that wants each confirmed change
+/// (`application::notify`). Deliveries run off the loop, so a slow
+/// receiver never delays the next evaluation. It also keeps the alert
+/// tracker's history current when nobody is polling `/alerts`.
+pub async fn run_alert_notifier(
+    state: Arc<AppState>,
+    interval: std::time::Duration,
+    shutdown: tokio_util::sync::CancellationToken,
+) {
+    let mut transitions = crate::application::notify::AlertTransitions::default();
+    let mut ticks = tokio::time::interval(interval);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            () = shutdown.cancelled() => return,
+            _ = ticks.tick() => {}
+        }
+        let (_, open) = current_alerts(&state).await;
+        let briefs: Vec<_> = open
+            .iter()
+            .map(crate::application::notify::AlertBrief::from)
+            .collect();
+        let events = transitions.observe(&briefs, chrono::Utc::now().timestamp_millis());
+        for event in events {
+            let notify = state.notify_service.clone();
+            tokio::spawn(async move {
+                notify.dispatch(&event).await;
+            });
+        }
+    }
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub struct AlertsQuery {
     /// RFC 3339: only resolved alerts that closed at or after it.
@@ -78,11 +124,7 @@ pub async fn aggregate_alerts_handler(
         Err(rejection) => return rejection.into_response(),
     };
 
-    // Alerts are derived from the same health snapshot shape the dashboard uses
-    // so transport-only alert logic does not need to understand engine internals.
-    let snapshot = dashboard_alert_snapshot(&state).await;
-    let mut alert_list = alerts::derive_alerts(&snapshot);
-    state.alert_tracker.track(&mut alert_list);
+    let (snapshot, alert_list) = current_alerts(&state).await;
     let resolved = query
         .since
         .map(|since| state.alert_tracker.resolved_since(since));

@@ -170,7 +170,8 @@ is `app.tsx` plus `control-room/shell/`.
 - Navigation groups the workspaces (`shell/nav.ts`): Operate (Fleet,
   Channels, Pipelines, Operate, Monitor), Understand (Incidents, Stream
   health, Capacity, Stability Lab), Manage (Media, Changes, Team, Audit log,
-  Settings), Engineer (Inspect, Logs, System), filtered to what the
+  Settings, with Notifications before Team), Engineer (Inspect, Logs,
+  System), filtered to what the
   session's role may open (`navGroupsFor`). Live badges
   count degraded destinations, pipelines and open alerts (`shell/badges.ts`);
   an unknown count is absent, never zero.
@@ -479,6 +480,19 @@ byte passphrase), transcode profiles (built-ins kept), failed-attempt
 limits, dashboard password. The failed-attempts list is polled; forgetting
 one client sends its scope key, forgetting all sends no scope (other scopes
 get 400). Log out is on the password card.
+
+### Notifications
+
+Every member sets up **this browser**. Push uses the engine's VAPID key and a
+service worker (`web/assets/sw.js`, served as `/sw.js`), so alerts arrive
+with no tab open. It needs HTTPS or localhost and a reachable push service.
+In-tab notifications show a system notification for each newly opened alert
+while the tab is hidden; the choice is per browser
+(`restream.notify.inTab`). Admins also manage the shared channels: Slack and
+Discord (a pasted URL picks the kind) and signed webhooks, whose secret is
+shown once. They can send a test and read the delivery log, and each
+channel's row shows its latest delivery. The rules behind it are in
+`notify-model.ts` and `browser-notify.ts`.
 
 ### Team and Audit log
 

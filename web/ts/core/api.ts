@@ -23,6 +23,11 @@ import type {
   PipelineSummarySnapshot,
   FlightTrace,
   AuditEntry,
+  NotifyChannel,
+  NotifyChannelDraft,
+  NotifyDelivery,
+  NotifySeverity,
+  PushSubscriptionRecord,
   Role,
   SessionPrincipal,
   TeamMember,
@@ -825,8 +830,112 @@ async function getAudit(before?: number, limit = 100): Promise<AuditEntry[] | nu
   return body?.entries ?? null;
 }
 
+async function listNotifyChannels(): Promise<NotifyChannel[] | null> {
+  const body = await apiRequest<{ channels: NotifyChannel[] }>("/api/v1/notifications/channels", {
+    silentStatuses: [403],
+  });
+  return body?.channels ?? null;
+}
+
+/** A new channel; a webhook's signing secret is returned only here. */
+async function createNotifyChannel(
+  draft: NotifyChannelDraft,
+): Promise<{ channel: NotifyChannel; secret: string | null } | null> {
+  return apiRequest("/api/v1/notifications/channels", { method: "POST", body: draft });
+}
+
+async function updateNotifyChannel(id: string, draft: NotifyChannelDraft): Promise<NotifyChannel | null> {
+  return apiRequest<NotifyChannel>(`/api/v1/notifications/channels/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: draft,
+  });
+}
+
+async function deleteNotifyChannel(id: string): Promise<boolean> {
+  const body = await apiRequest<{ deleted: boolean }>(
+    `/api/v1/notifications/channels/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+  return body?.deleted === true;
+}
+
+/** Sends a test now; the delivery says how it ended. */
+async function testNotifyChannel(id: string): Promise<NotifyDelivery | null> {
+  return apiRequest<NotifyDelivery>(`/api/v1/notifications/channels/${encodeURIComponent(id)}/test`, {
+    method: "POST",
+  });
+}
+
+async function getNotifyChannelSecret(id: string): Promise<string | null> {
+  const body = await apiRequest<{ secret: string | null }>(
+    `/api/v1/notifications/channels/${encodeURIComponent(id)}/secret`,
+  );
+  return body?.secret ?? null;
+}
+
+async function listNotifyDeliveries(limit = 100): Promise<NotifyDelivery[] | null> {
+  const body = await apiRequest<{ deliveries: NotifyDelivery[] }>(
+    `/api/v1/notifications/deliveries?limit=${limit}`,
+    { silentStatuses: [403] },
+  );
+  return body?.deliveries ?? null;
+}
+
+async function getPushPublicKey(): Promise<string | null> {
+  const body = await apiRequest<{ publicKey: string }>("/api/v1/notifications/push/key", {
+    silentStatuses: [404],
+  });
+  return body?.publicKey ?? null;
+}
+
+async function listMyPushSubscriptions(): Promise<PushSubscriptionRecord[] | null> {
+  const body = await apiRequest<{ subscriptions: PushSubscriptionRecord[] }>(
+    "/api/v1/notifications/push/subscriptions",
+    { silentStatuses: [404] },
+  );
+  return body?.subscriptions ?? null;
+}
+
+/** Registers this browser's push subscription (`PushSubscription.toJSON()`). */
+async function savePushSubscription(
+  subscription: { endpoint: string; keys: { p256dh: string; auth: string } },
+  minSeverity: NotifySeverity,
+): Promise<PushSubscriptionRecord | null> {
+  return apiRequest<PushSubscriptionRecord>("/api/v1/notifications/push/subscriptions", {
+    method: "POST",
+    body: { endpoint: subscription.endpoint, keys: subscription.keys, minSeverity },
+  });
+}
+
+async function deletePushSubscription(id: string): Promise<boolean> {
+  const body = await apiRequest<{ deleted: boolean }>(
+    `/api/v1/notifications/push/subscriptions/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+  return body?.deleted === true;
+}
+
+async function testPush(): Promise<NotifyDelivery[] | null> {
+  const body = await apiRequest<{ deliveries: NotifyDelivery[] }>("/api/v1/notifications/push/test", {
+    method: "POST",
+  });
+  return body?.deliveries ?? null;
+}
+
 export {
   apiRequest,
+  listNotifyChannels,
+  createNotifyChannel,
+  updateNotifyChannel,
+  deleteNotifyChannel,
+  testNotifyChannel,
+  getNotifyChannelSecret,
+  listNotifyDeliveries,
+  getPushPublicKey,
+  listMyPushSubscriptions,
+  savePushSubscription,
+  deletePushSubscription,
+  testPush,
   getSession,
   setViewAs,
   listTeam,

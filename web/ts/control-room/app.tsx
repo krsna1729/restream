@@ -25,6 +25,8 @@ import { useLive } from "./store.js";
 import { StabilityLab } from "./stability/stability.js";
 import { System } from "./system.js";
 import { Audit, Team } from "./team.js";
+import { Notifications } from "./notifications.js";
+import { useInTabAlertNotifications } from "./browser-notify.js";
 
 export function App() {
   return (
@@ -44,6 +46,7 @@ function Shell() {
   useCommandPaletteShortcut(openPalette);
 
   const openAlerts = alerts.value?.alerts ?? null;
+  useInTabAlertNotifications(openAlerts);
   const badges = useMemo(
     () =>
       navBadges(
@@ -92,6 +95,7 @@ function Shell() {
           {place.workspace === "media" && <Media live={live} />}
           {place.workspace === "system" && <System live={live} />}
           {place.workspace === "changes" && <Changes live={live} />}
+          {place.workspace === "notifications" && <Notifications />}
           {place.workspace === "team" && <Team />}
           {place.workspace === "audit" && <Audit />}
           {place.workspace === "settings" && <Settings />}
