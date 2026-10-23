@@ -11,6 +11,7 @@ cargo-fuzz = true
 bytes = "1"
 libfuzzer-sys = "0.4"
 restream = { path = ".." }
+moq-net = { path = "../vendor/moq-net", features = ["fuzz"] }
 
 # Not part of the root workspace: cargo-fuzz builds it with nightly and
 # sanitizer flags.
@@ -97,6 +98,13 @@ bench = false
 [[bin]]
 name = "moq_ingest"
 path = "fuzz_targets/moq_ingest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "moq_wire"
+path = "fuzz_targets/moq_wire.rs"
 test = false
 doc = false
 bench = false

@@ -1,0 +1,12 @@
+[package]
+name = "moq-wire-seeds"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Its own workspace: it writes moq-net's generated seeds for the `moq_wire`
+# target without building restream (see ../seed-corpus.sh).
+[workspace]
+
+[dependencies]
+moq-net = { path = "../../vendor/moq-net", features = ["fuzz"] }
