@@ -28,6 +28,7 @@ import { Audit, Team } from "./team.js";
 import { Notifications } from "./notifications.js";
 import { ScheduleView } from "./schedule.js";
 import { useInTabAlertNotifications } from "./browser-notify.js";
+import { useTabAlerts } from "./tab-alerts.js";
 import { Architecture } from "./architecture.js";
 import { Guides } from "./guides.js";
 import { HelpButton, TourProvider } from "./shell/help.js";
@@ -51,6 +52,7 @@ function Shell() {
 
   const openAlerts = alerts.value?.alerts ?? null;
   useInTabAlertNotifications(openAlerts);
+  useTabAlerts(openAlerts);
   const badges = useMemo(
     () =>
       navBadges(
