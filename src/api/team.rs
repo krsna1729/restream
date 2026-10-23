@@ -248,6 +248,7 @@ pub async fn create_user_handler(
         role: payload.role,
         created_at_ms: chrono::Utc::now().timestamp_millis(),
         disabled: false,
+        last_active_ms: None,
     };
     match state.team_service.create_user(user, &hash).await {
         Ok(user) => (StatusCode::CREATED, Json(user)).into_response(),

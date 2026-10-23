@@ -173,6 +173,7 @@ export function Team() {
       sort: (member) => member.username,
       cell: (member) => (
         <span className="flex min-w-0 items-center gap-2">
+          <Avatar name={member.username} dimmed={member.disabled} />
           <span className="truncate font-semibold">{member.username}</span>
           {member.username === session.principal?.username && <span className="text-xs text-base-content/60">(you)</span>}
         </span>
@@ -201,6 +202,15 @@ export function Team() {
       priority: 2,
       sort: (member) => (member.disabled ? 1 : 0),
       cell: (member) => <StatusBadge tone={member.disabled ? "neutral" : "ok"} dot>{member.disabled ? "Disabled" : "Active"}</StatusBadge>,
+    },
+    {
+      id: "active",
+      header: "Last active",
+      width: "8rem",
+      priority: 2,
+      sort: (member) => member.lastActiveMs ?? 0,
+      cell: (member) =>
+        member.lastActiveMs ? <When atMs={member.lastActiveMs} show="ago" /> : <span className="text-base-content/60">never</span>,
     },
     {
       id: "since",
@@ -418,5 +428,21 @@ export function Audit() {
         </Panel>
       )}
     </div>
+  );
+}
+
+const AVATAR_TONES = ["bg-primary/20 text-primary", "bg-secondary/20 text-secondary", "bg-accent/20 text-accent", "bg-info/20 text-info", "bg-success/20 text-success", "bg-warning/20 text-warning"];
+
+/** Initials on a colour picked from the name, so a member is recognisable
+ * at a glance in a long list: "ana.ops" is AO. */
+function Avatar(props: { name: string; dimmed?: boolean }) {
+  const parts = props.name.split(/[._\-\s]+/).filter(Boolean);
+  const initials = ((parts[0]?.[0] ?? "?") + (parts[1]?.[0] ?? parts[0]?.[1] ?? "")).toUpperCase();
+  let hash = 0;
+  for (const char of props.name) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return (
+    <span aria-hidden="true" className={`grid size-7 shrink-0 place-items-center rounded-full text-[0.7rem] font-bold ${AVATAR_TONES[hash % AVATAR_TONES.length]} ${props.dimmed ? "opacity-50" : ""}`}>
+      {initials}
+    </span>
   );
 }

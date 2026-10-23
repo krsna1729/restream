@@ -779,6 +779,8 @@ export interface TeamMember {
   role: Role;
   createdAtMs: number;
   disabled: boolean;
+  /** Latest sign-in or audited change; absent when none is kept. */
+  lastActiveMs?: number;
 }
 
 export interface AuditEntry {

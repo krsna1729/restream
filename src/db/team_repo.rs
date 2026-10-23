@@ -28,6 +28,29 @@ pub async fn list_users(pool: &SqlitePool) -> Result<Vec<UserRow>, sqlx::Error> 
     Ok(rows.iter().map(user_row).collect())
 }
 
+/// `(username, ms)` for everyone with a kept sign-in or audited change:
+/// the later of their newest session and their newest audit entry. A
+/// session without a member belongs to `builtin_admin`. Read on a list
+/// request only, so requests themselves never write activity.
+pub async fn last_active(
+    pool: &SqlitePool,
+    builtin_admin: &str,
+) -> Result<Vec<(String, i64)>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT username, MAX(at) FROM (
+             SELECT CASE WHEN s.user_id IS NULL THEN ? ELSE u.username END AS username,
+                    s.created_at AS at
+               FROM sessions s LEFT JOIN users u ON u.id = s.user_id
+             UNION ALL
+             SELECT username, at FROM audit_log
+         ) WHERE username IS NOT NULL GROUP BY username",
+    )
+    .bind(builtin_admin)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.iter().map(|row| (row.get(0), row.get(1))).collect())
+}
+
 pub async fn find_user_by_username(
     pool: &SqlitePool,
     username: &str,
