@@ -161,13 +161,19 @@ restream_debian_apt() {
 restream_debian_demote_mirror() {
     local list=/etc/apt/apt-mirrors.txt
     [[ -f "$list" ]] || return 0
-    local mirrors
-    mirrors=$(grep -c . "$list" || true)
-    ((mirrors > 1)) || return 0
-    echo "debian-packages: dropping apt mirror $(grep -m1 . "$list" | cut -f1)" >&2
-    restream_run_as_root bash -c \
-        'awk "NF && !dropped { dropped = 1; next } 1" "$1" >"$1.new" && mv "$1.new" "$1"' \
-        bash "$list"
+    # One predicate for counting and dropping: a mirror entry is a line whose
+    # first field exists and is not a comment.
+    restream_run_as_root bash -c '
+        awk '\''
+            FNR == NR { if (NF && $1 !~ /^#/) entries++; next }
+            NF && $1 !~ /^#/ && !dropped && entries > 1 {
+                dropped = 1
+                print "debian-packages: dropping apt mirror " $1 > "/dev/stderr"
+                next
+            }
+            { print }
+        '\'' "$1" "$1" >"$1.new" && mv "$1.new" "$1"
+    ' bash "$list"
 }
 
 restream_debian_install_groups() {
