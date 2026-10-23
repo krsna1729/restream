@@ -114,3 +114,31 @@ export function untilLabel(atMs: number, nowMs: number): string {
   return `in ${Math.round(hours / 24)} days`;
 }
 
+
+/** A recording on the agenda: what was (or is being) written, and when. */
+export interface RecordingEvent {
+  readonly name: string;
+  readonly pipelineId: string | null;
+  readonly startMs: number;
+  /** `null` while it is still being written. */
+  readonly endMs: number | null;
+}
+
+/** The library's recordings that started on the day beginning at `dayMs`,
+ * oldest first. Files without a recorded start are not events. */
+export function recordingsOn(
+  files: readonly { name: string; kind?: string; pipelineId?: string | null; recordingStatus?: string | null; recordingStartedAt?: string | null; recordingEndedAt?: string | null }[],
+  dayMs: number,
+): RecordingEvent[] {
+  const next = new Date(dayMs);
+  next.setDate(next.getDate() + 1);
+  const end = next.getTime();
+  return files
+    .flatMap((file) => {
+      const startMs = file.kind === "recording" && file.recordingStartedAt ? Date.parse(file.recordingStartedAt) : NaN;
+      if (!Number.isFinite(startMs) || startMs < dayMs || startMs >= end) return [];
+      const ended = file.recordingEndedAt ? Date.parse(file.recordingEndedAt) : NaN;
+      return [{ name: file.name, pipelineId: file.pipelineId ?? null, startMs, endMs: file.recordingStatus === "recording" || !Number.isFinite(ended) ? null : ended }];
+    })
+    .sort((a, b) => a.startMs - b.startMs);
+}

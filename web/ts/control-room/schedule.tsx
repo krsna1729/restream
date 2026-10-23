@@ -5,8 +5,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { createSchedule, deleteSchedule, listSchedules, runSchedule, updateSchedule } from "../core/api.js";
-import type { Schedule, ScheduleAction, ScheduleDraft, ScheduleRepeat } from "../core/api-types.js";
+import { createSchedule, deleteSchedule, listMediaFiles, listSchedules, runSchedule, updateSchedule } from "../core/api.js";
+import type { MediaFile, Schedule, ScheduleAction, ScheduleDraft, ScheduleRepeat } from "../core/api-types.js";
 import { DataTable } from "../ui/data-table.js";
 import type { Column } from "../ui/data-table.js";
 import { PageHeader } from "../ui/page-header.js";
@@ -21,6 +21,7 @@ import {
   fromLocalInput,
   localDay,
   nextUp,
+  recordingsOn,
   resultTone,
   toLocalInput,
   untilLabel,
@@ -169,7 +170,7 @@ function ScheduleForm(props: { live: LiveSnapshot; onAdded: (schedule: Schedule)
   );
 }
 
-function Week(props: { schedules: readonly Schedule[]; pipelineNames: Map<string, string>; now: number }) {
+function Week(props: { schedules: readonly Schedule[]; recordings: readonly MediaFile[]; pipelineNames: Map<string, string>; now: number }) {
   const days = useMemo(() => agenda(props.schedules, props.now, DAYS), [props.schedules, props.now]);
   const today = localDay(props.now);
   return (
@@ -177,8 +178,9 @@ function Week(props: { schedules: readonly Schedule[]; pipelineNames: Map<string
       {days.map((day) => (
         <section key={day.dayMs} role="listitem" aria-label={DAY.format(day.dayMs)} className={`min-w-0 rounded-box border bg-base-100 p-2 ${day.dayMs === today ? "border-primary/50" : "border-base-content/10"}`}>
           <h3 className={`kicker mb-2 ${day.dayMs === today ? "text-primary" : ""}`}>{day.dayMs === today ? "Today" : DAY.format(day.dayMs)}</h3>
+          <Recordings files={props.recordings} dayMs={day.dayMs} pipelineNames={props.pipelineNames} now={props.now} />
           {day.items.length === 0 ? (
-            <p className="text-xs text-base-content/50">Nothing</p>
+            recordingsOn(props.recordings, day.dayMs).length === 0 && <p className="text-xs text-base-content/50">Nothing</p>
           ) : (
             <ol className="flex flex-col gap-1.5">
               {day.items.slice(0, 12).map((item) => (
@@ -202,12 +204,40 @@ function Week(props: { schedules: readonly Schedule[]; pipelineNames: Map<string
   );
 }
 
+/** The day's recordings, as events beside its schedule: one still being
+ * written says so; each opens in Media. */
+function Recordings(props: { files: readonly MediaFile[]; dayMs: number; pipelineNames: Map<string, string>; now: number }) {
+  const events = recordingsOn(props.files, props.dayMs);
+  if (events.length === 0) return null;
+  return (
+    <ol className="mb-1.5 flex flex-col gap-1.5" aria-label="Recordings">
+      {events.map((event) => (
+        <li key={event.name} className="min-w-0 rounded-field border border-l-4 border-base-content/10 border-l-error/70 bg-base-200 px-2 py-1 text-xs">
+          <PlaceLink place={{ workspace: "media", pipelineId: null }} className="block min-w-0 hover:underline">
+            <div className="tabular font-semibold">
+              {TIME.format(event.startMs)}
+              {event.endMs === null ? " · recording now" : `–${TIME.format(event.endMs)}`}
+            </div>
+            <div className="truncate text-base-content/65">
+              Recorded · {(event.pipelineId && props.pipelineNames.get(event.pipelineId)) || event.name}
+            </div>
+          </PlaceLink>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 export function ScheduleView({ live }: { live: LiveSnapshot }) {
   const now = useNow(30_000);
   const canOperate = useSession().can("operator");
   const [schedules, setSchedules] = useState<Schedule[] | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const reload = useCallback(() => void listSchedules().then(setSchedules), []);
+  const [recordings, setRecordings] = useState<MediaFile[]>([]);
+  const reload = useCallback(() => {
+    void listSchedules().then(setSchedules);
+    void listMediaFiles().then((page) => setRecordings(page?.files ?? []));
+  }, []);
   useEffect(() => {
     reload();
     const timer = window.setInterval(reload, 30_000);
@@ -338,7 +368,7 @@ export function ScheduleView({ live }: { live: LiveSnapshot }) {
         </p>
       )}
       <Panel id="schedule-week" title="The week ahead" subtitle={`Times in ${zoneName(Date.now())}`}>
-        <Week schedules={schedules ?? []} pipelineNames={pipelineNames} now={now} />
+        <Week schedules={schedules ?? []} recordings={recordings} pipelineNames={pipelineNames} now={now} />
       </Panel>
       {canOperate && (
         <Panel id="schedule-add" title="Schedule an event">

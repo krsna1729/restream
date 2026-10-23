@@ -46,3 +46,19 @@ test("the next event for a pipeline is its soonest enabled one", () => {
   assert.equal(nextUp(all, "p1").id, "a", "paused and finished events are not next");
   assert.equal(nextUp(all, "p3"), null);
 });
+
+test("recordings that started on a day are its events, oldest first; one still writing has no end", async () => {
+  const { recordingsOn, localDay } = await loadCompiledFrontendModule("control-room/schedule-model.js");
+  const day = localDay(Date.UTC(2026, 9, 23, 12));
+  const at = (hours) => new Date(day + hours * 3_600_000).toISOString();
+  const files = [
+    { name: "late.mp4", kind: "recording", pipelineId: "p1", recordingStatus: "recording", recordingStartedAt: at(18) },
+    { name: "early.mp4", kind: "recording", pipelineId: "p2", recordingStatus: "ready", recordingStartedAt: at(9), recordingEndedAt: at(10) },
+    { name: "yesterday.mp4", kind: "recording", recordingStatus: "ready", recordingStartedAt: at(-3), recordingEndedAt: at(-2) },
+    { name: "upload.mp4", kind: "source" },
+  ];
+  const events = recordingsOn(files, day);
+  assert.deepEqual(events.map((event) => event.name), ["early.mp4", "late.mp4"]);
+  assert.equal(events[0].endMs - events[0].startMs, 3_600_000);
+  assert.equal(events[1].endMs, null);
+});

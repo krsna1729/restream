@@ -737,6 +737,12 @@ test("media: a recording's timeline, then the recording as a new pipeline's sour
     pipelineIds.push(created);
     const ingest = await (await page.request.get(`/api/v1/pipelines/${created}/file-ingest`)).json();
     expect(ingest).toMatchObject({ configured: true, filename: recorded, loop: true });
+
+    // Today's schedule shows the recording as an event, named by its pipeline.
+    await page.goto("/?w=schedule");
+    await expect(
+      page.getByRole("list", { name: "The week ahead" }).getByRole("list", { name: "Recordings" }).first(),
+    ).toContainText(`Recorded · crrec${stamp}`);
   } finally {
     for (const id of pipelineIds.reverse()) await page.request.delete(`/api/v1/pipelines/${id}`);
     if (recorded) await page.request.delete(`/api/v1/media/${encodeURIComponent(recorded)}`);
