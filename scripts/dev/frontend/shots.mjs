@@ -3,7 +3,8 @@
 //
 //   node scripts/dev/frontend/shots.mjs --base http://127.0.0.1:3031 --label before \
 //     [--workspaces fleet,operate] [--widths 375,768,1440] [--themes dark,light] \
-//     [--modes operator,engineer] [--password admin] [--full 1]
+//     [--modes operator,engineer] [--password admin] [--full 1] \
+//     [--role viewer|operator]   (view the dashboard as a lower role)
 //
 // Writes PNGs and report.json to .local/shots/<label>/. For each page it
 // checks: no horizontal page scroll, no text clipped by its own box, touch
@@ -35,6 +36,7 @@ const pipeline = args.get("pipeline") ?? "";
 const settleMs = Number(args.get("settle-ms") ?? 3500);
 const fullPage = args.get("full") === "1";
 const password = args.get("password");
+const role = args.get("role") ?? "";
 const out = join(".local", "shots", label);
 mkdirSync(out, { recursive: true });
 
@@ -68,6 +70,10 @@ for (const width of widths) {
       if (password) {
         const login = await page.request.post(`${base}/api/v1/auth/login`, { data: { password } });
         if (!login.ok()) throw new Error(`login failed: ${login.status()}`);
+      }
+      if (role) {
+        const viewAs = await page.request.post(`${base}/api/v1/auth/view-as`, { data: { role } });
+        if (!viewAs.ok()) throw new Error(`view-as ${role} failed: ${viewAs.status()}`);
       }
       const errors = [];
       page.on("console", (message) => {
@@ -110,7 +116,10 @@ for (const width of widths) {
               !(element.tagName === "A" && style.display === "inline") &&
               element.type !== "checkbox" &&
               element.type !== "radio" &&
+              element.type !== "range" &&
               (rect.height < 35.5 || rect.width < 35.5) &&
+              // A control inside a touch-sized label is hit through it.
+              !((target) => target && target.getBoundingClientRect().height >= 35.5)(element.closest("label.touch-36")) &&
               !element.closest("[data-dense-ok]")
             ) {
               smallTargets.push(
@@ -129,9 +138,9 @@ for (const width of widths) {
             domNodes: document.getElementsByTagName("*").length,
           };
         }, width < 768);
-        const file = `${workspace}-${width}-${theme}-${mode}.png`;
+        const file = `${workspace}-${width}-${theme}-${mode}${role ? `-${role}` : ""}.png`;
         await page.screenshot({ path: join(out, file), fullPage });
-        report.push({ workspace, width, theme, mode, file, errors: [...errors], ...checks });
+        report.push({ workspace, width, theme, mode, role: role || "admin", file, errors: [...errors], ...checks });
         const flags = [
           checks.horizontalScroll ? `HSCROLL(${checks.scrollWidth}>${checks.clientWidth})` : "",
           checks.clippedCount ? `clipped:${checks.clippedCount}` : "",

@@ -259,7 +259,7 @@ function Player(props: {
   const chapterTone = frame.chapter.tone === "ok" ? "ok" : frame.chapter.tone === "info" ? "info" : frame.chapter.tone === "warn" ? "warn" : "bad";
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-3" aria-label="Stability story">
+    <div className="flex w-full flex-col gap-3" aria-label="Stability story">
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" className="btn btn-primary btn-sm" onClick={() => {
           if (index >= last) setPosition(0);
@@ -290,7 +290,7 @@ function Player(props: {
         {props.actions?.(frame.atMs)}
       </div>
 
-      <Panel>
+      <Panel id="stability-destinations">
         <div className="grid grid-cols-3 items-center gap-x-4 gap-y-2 md:grid-cols-[auto_1fr_1fr_1fr] md:gap-x-6" role="group" aria-label="Destinations now">
           <span className="col-span-3 text-lg font-semibold md:col-span-1">destinations</span>
           <Headline label="wanted" value={frame.wanted.toLocaleString()} />
@@ -304,6 +304,7 @@ function Player(props: {
       </Panel>
 
       <Panel
+        id="stability-queues"
         title={props.title}
         actions={
           <span className="flex items-center gap-3 text-xs text-base-content/80">
@@ -359,7 +360,7 @@ function Player(props: {
         </div>
       </div>
 
-      <Panel title="destinations over time">
+      <Panel id="stability-chart" title="destinations over time">
         <TimeSeries
           samples={shown}
           fromMs={startMs}

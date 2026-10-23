@@ -7,11 +7,12 @@ import { withBasePath } from "../core/base-path.js";
 import type { ConfigData, PipelineInput } from "../types.js";
 import { Kpi, KpiRow } from "../ui/kpi.js";
 import { Panel } from "../ui/panel.js";
+import { RawJson } from "../ui/raw-json.js";
 import { useEngineer } from "../ui/prefs.js";
 import { StatusBadge } from "../ui/tone.js";
 import type { Tone } from "../ui/tone.js";
 import { DestinationMatrix } from "./destination-matrix.js";
-import { formatBps } from "./format.js";
+import { counted, formatBps } from "./format.js";
 import { VARIANT_LABELS, inputSourceLines } from "./input-model.js";
 import { AddInput, EditInput, InputActions, PipelineBar } from "./operate-manage.js";
 import { MediaGraph } from "./operate-graph.js";
@@ -81,7 +82,7 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
           meterTone={counts.attention > 0 ? "warn" : "ok"}
           foot="wanted destinations live"
         />
-        <Kpi label="Egress" value={formatBps(egressBps)} foot={`${rows.length} destinations`} />
+        <Kpi label="Egress" value={formatBps(egressBps)} foot={counted(rows.length, "destination")} />
         <Kpi
           label="Needs attention"
           value={String(counts.attention)}
@@ -124,6 +125,7 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
         onConfigChanged={reloadConfig}
       />
       {isAdmin && <SharePanel pipelineId={pipelineId} pipelineName={pipeline?.name ?? pipelineId} />}
+      <RawJson value={{ pipeline, graph, outputs: rows.map((row) => row.output) }} label="pipeline, graph and outputs as streamed" />
     </>
   );
 }
@@ -186,7 +188,11 @@ function SourceDeck(props: {
                     {engineer && input.runtime.remoteAddr && ` · ${input.runtime.remoteAddr}`}
                   </div>
                 )}
-                {input.runtime.connected && <Preview url={withBasePath(input.previewUrl)} label={input.label} />}
+                {input.runtime.connected && (
+                  <div className="mt-2">
+                    <Preview url={withBasePath(input.previewUrl)} label={input.label} />
+                  </div>
+                )}
                 {input.enabled && !input.selected && (
                   <button
                     type="button"
@@ -226,7 +232,9 @@ function SourceDeck(props: {
                   )
                 )}
                 <InputActions pipelineId={props.pipelineId} input={input} />
-                <EditInput pipelineId={props.pipelineId} input={input} />
+                <div className="mt-2">
+                  <EditInput pipelineId={props.pipelineId} input={input} />
+                </div>
               </li>
             );
           })}

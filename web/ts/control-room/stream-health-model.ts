@@ -147,3 +147,17 @@ export function overallSeverity(verdicts: readonly Verdict[]): Severity {
   if (verdicts.some((verdict) => verdict.severity === "warn")) return "warn";
   return "ok";
 }
+
+/** The transport a publisher's contribution link runs over, or null when the
+ * source has no network link to judge (a file played by the engine, a pull). */
+export function contributionTransport(protocol: string | undefined): "SRT" | "TCP" | null {
+  switch (protocol?.toLowerCase()) {
+    case "srt":
+      return "SRT";
+    case "rtmp":
+    case "rtmps":
+      return "TCP";
+    default:
+      return null;
+  }
+}

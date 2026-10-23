@@ -84,7 +84,7 @@ export function PipelineBar(props: {
         )}
         <button
           type="button"
-          className="btn btn-sm btn-ghost"
+          className="btn btn-sm btn-outline"
           aria-expanded={editing}
           onClick={() => setEditing(!editing)}
         >
@@ -187,7 +187,7 @@ export function EditInput(props: { pipelineId: string; input: PipelineInput }) {
     <>
       <button
         type="button"
-        className="btn btn-xs btn-ghost mt-2"
+        className="btn btn-xs btn-outline"
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >

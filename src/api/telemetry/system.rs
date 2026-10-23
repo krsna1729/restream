@@ -157,6 +157,8 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
             "disk": {
                 "usedPercent": disk_pct,
             },
+            // The Media library's storage card reads the summary too.
+            "mediaDisk": media_disk,
             "network": {
                 "downloadKbps": dl_kbps,
                 "uploadKbps": ul_kbps,

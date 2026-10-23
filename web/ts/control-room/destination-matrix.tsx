@@ -64,7 +64,7 @@ function RetryCountdown(props: { atMs: number; attempts: number }) {
   const now = useNow(1000);
   const seconds = Math.max(0, Math.round((props.atMs - now) / 1000));
   return (
-    <span className="tabular text-xs text-base-content/70">
+    <span className="tabular whitespace-nowrap text-xs text-base-content/70">
       #{props.attempts} · {seconds > 0 ? `next in ${seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`}` : "now"}
     </span>
   );
@@ -139,12 +139,12 @@ export function DestinationMatrix(props: {
     {
       id: "state",
       header: "State",
-      width: "minmax(9rem,1fr)",
+      width: "minmax(13rem,1fr)",
       sort: (row) => (row.output.diagnosis ? 0 : row.delivering ? 2 : 1),
       cell: (row) => {
         const state = outputState(row.output, row.delivering);
         return (
-          <span className="inline-flex min-w-0 items-center gap-2">
+          <span className="inline-flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
             <StatusBadge tone={state.tone} dot>
               {state.label}
             </StatusBadge>

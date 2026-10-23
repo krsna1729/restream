@@ -7,11 +7,11 @@ import { Icon } from "./icons.js";
 
 export function SearchField(props: { value: string; onChange: (value: string) => void; placeholder: string; label: string; className?: string }) {
   return (
-    <label className={`input input-sm flex h-9 min-w-0 items-center gap-2 ${props.className ?? ""}`}>
+    <label className={`input input-sm touch-36 flex h-9 min-w-0 items-center gap-2 ${props.className ?? ""}`}>
       <Icon name="search" className="size-4 shrink-0 opacity-60" />
       <input
         type="search"
-        className="min-w-0 grow"
+        className="min-w-0 grow self-stretch"
         placeholder={props.placeholder}
         aria-label={props.label}
         value={props.value}
@@ -40,7 +40,7 @@ export function ChipGroup<T extends string>(props: { label: string; value: T; ch
             type="button"
             aria-pressed={active}
             onClick={() => props.onChange(chip.value)}
-            className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-sm whitespace-nowrap transition-colors ${active ? "border-primary bg-primary/15 font-semibold" : "border-base-content/15 hover:border-base-content/35"}`}
+            className={`touch-36 inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-sm whitespace-nowrap transition-colors ${active ? "border-primary bg-primary/15 font-semibold" : "border-base-content/15 hover:border-base-content/35"}`}
           >
             {chip.label}
             {chip.count !== undefined && (

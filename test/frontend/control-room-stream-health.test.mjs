@@ -87,3 +87,11 @@ test("frame drops, loss, a long link and a full buffer each have a verdict; no s
   assert.equal(mixed[0].severity, "bad");
   assert.deepEqual(streamVerdicts([]), []);
 });
+
+test("only a pushed source has a contribution link to judge", async () => {
+  const { contributionTransport } = await loadCompiledFrontendModule("control-room/stream-health-model.js");
+  assert.equal(contributionTransport("srt"), "SRT");
+  assert.equal(contributionTransport("RTMP"), "TCP");
+  assert.equal(contributionTransport("file"), null);
+  assert.equal(contributionTransport(undefined), null);
+});

@@ -154,7 +154,7 @@ function ResourceTable(props: {
               <td>
                 <button
                   type="button"
-                  className="link link-hover font-medium"
+                  className="link link-hover touch-36 text-left font-medium"
                   aria-pressed={node.id === props.selectedId}
                   onClick={() => props.onSelect(node.id)}
                 >
@@ -167,7 +167,7 @@ function ResourceTable(props: {
               <td>
                 {confidence && (
                   <span
-                    className={`badge badge-sm ${CONFIDENCE_BADGE[confidence] ?? "badge-ghost"}`}
+                    className={`badge badge-sm ${CONFIDENCE_BADGE[confidence] ?? "badge-outline"}`}
                   >
                     {confidence}
                   </span>
@@ -236,7 +236,7 @@ function NodeDetail({ row, graph }: { row: ResourceRow | null; graph: GraphData 
             ].map(([key, value]) => (
               <div key={key} className="contents">
                 <dt className="text-base-content/70">{key}</dt>
-                <dd className="break-all tabular-nums">{value}</dd>
+                <dd className="min-w-0 break-words tabular-nums">{value}</dd>
               </div>
             ))}
           </dl>
@@ -297,7 +297,7 @@ function StagePipe(props: { stageKey: string }) {
           {rows.map(([key, value]) => (
             <div key={key} className="contents">
               <dt className="text-base-content/70">{key}</dt>
-              <dd className="break-all tabular-nums">{value}</dd>
+              <dd className="min-w-0 break-words tabular-nums">{value}</dd>
             </div>
           ))}
         </dl>
@@ -407,7 +407,7 @@ function AttributionPanel(props: {
               <div key={confidence}>
                 <dt>
                   <span
-                    className={`badge badge-sm ${CONFIDENCE_BADGE[confidence] ?? "badge-ghost"}`}
+                    className={`badge badge-sm ${CONFIDENCE_BADGE[confidence] ?? "badge-outline"}`}
                   >
                     {confidence}
                   </span>

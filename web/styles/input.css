@@ -171,6 +171,26 @@
 /* Legacy markup (DaisyUI cards, badges, tables) wears the same surfaces and
    tones as the ui/ primitives, so every workspace reads as one system. */
 @layer components {
+  /* DaisyUI 5 dropped form-control and label-text; the forms keep that
+     markup, so a field is its caption stacked over a full-width control. */
+  .form-control {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 0.25rem;
+    min-width: 0;
+  }
+  .form-control > :where(.input, .select, .textarea, .join) {
+    width: 100%;
+  }
+  .label-text {
+    font-size: 0.867rem;
+  }
+  .form-control > .label-text {
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: color-mix(in oklab, var(--color-base-content) 78%, transparent);
+  }
   .card {
     min-width: 0;
     border: 1px solid color-mix(in oklab, var(--color-base-content) 10%, transparent);
@@ -206,7 +226,8 @@
   .input-sm,
   .select-sm,
   .input,
-  .select {
+  .select,
+  .touch-36 {
     min-height: 36px;
   }
   .btn-xs,

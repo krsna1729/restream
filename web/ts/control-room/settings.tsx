@@ -177,7 +177,7 @@ function SrtIngest(props: { current: SrtGlobalIngestConfig | undefined; save: Sa
 }
 
 const PROFILE_NUMBERS: ReadonlyArray<[keyof TranscodeProfile, string, number, number?]> = [
-  ["crf", "CRF (0 lossless, 23 default)", 0, 51],
+  ["crf", "CRF (23 default)", 0, 51],
   ["gop", "GOP (frames)", 0],
   ["bframes", "B-frames", 0, 16],
   ["bitrate", "Bitrate (kb/s, 0 auto)", 0],

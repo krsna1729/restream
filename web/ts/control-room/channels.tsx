@@ -12,6 +12,7 @@ import { ChipGroup, SearchField } from "../ui/controls.js";
 import { Icon } from "../ui/icons.js";
 import { Kpi, KpiRow, Meter } from "../ui/kpi.js";
 import { PageHeader } from "../ui/page-header.js";
+import { useEngineer } from "../ui/prefs.js";
 import { EmptyState, Panel } from "../ui/panel.js";
 import { StatusBadge } from "../ui/tone.js";
 import type { Tone } from "../ui/tone.js";
@@ -168,6 +169,7 @@ export function Channels({ live }: { live: LiveSnapshot }) {
       </KpiRow>
       <Panel
         flush
+        id="channels-list"
         title="Channels"
         subtitle={`${filtered.length.toLocaleString()} of ${total.toLocaleString()} · trouble first`}
         actions={
@@ -246,6 +248,7 @@ const AVATAR_TONE: Record<string, string> = {
 
 function ChannelCard(props: { channel: Channel; bps: number | null }) {
   const canOperate = useSession().can("operator");
+  const engineer = useEngineer();
   const { channel } = props;
   const { output } = channel;
   const [busy, setBusy] = useState(false);
@@ -271,23 +274,26 @@ function ChannelCard(props: { channel: Channel; bps: number | null }) {
             </PlaceLink>
           </div>
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={on}
-          aria-label={`${on ? "Stop" : "Go live on"} ${output.name}`}
-          title={canOperate ? undefined : "Starting and stopping needs the operator role"}
-          disabled={busy || !canOperate}
-          onClick={async () => {
-            setBusy(true);
-            try {
-              await (on ? stopOut : startOut)(output.pipelineId, output.id);
-            } finally {
-              setBusy(false);
-            }
-          }}
-          className={`toggle toggle-sm shrink-0 ${on ? "toggle-success" : ""}`}
-        />
+        {/* The label widens the switch's hit area to a touch target. */}
+        <label className="touch-36 -my-1 grid shrink-0 place-items-center px-1">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={on}
+            aria-label={`${on ? "Stop" : "Go live on"} ${output.name}`}
+            title={canOperate ? undefined : "Starting and stopping needs the operator role"}
+            disabled={busy || !canOperate}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await (on ? stopOut : startOut)(output.pipelineId, output.id);
+              } finally {
+                setBusy(false);
+              }
+            }}
+            className={`toggle toggle-sm shrink-0 ${on ? "toggle-success" : ""}`}
+          />
+        </label>
       </div>
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <StatusBadge tone={STATE_TONE[channel.state]} dot>
@@ -300,6 +306,32 @@ function ChannelCard(props: { channel: Channel; bps: number | null }) {
         <p className="truncate text-xs text-base-content/70" title={problem}>
           {problem}
         </p>
+      )}
+      {engineer && (
+        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 border-t border-base-content/10 pt-2 font-mono text-[0.7rem] text-base-content/70">
+          <dt>id</dt>
+          <dd className="truncate select-all">{output.id}</dd>
+          <dt>attempt</dt>
+          <dd className="truncate">
+            {output.actual ?? "none"} · {output.convergence} · flow {output.flow}
+            {output.shard !== null && ` · shard ${output.shard}`}
+          </dd>
+          {output.stage && (
+            <>
+              <dt>stage</dt>
+              <dd className="truncate">{output.stage}</dd>
+            </>
+          )}
+          {output.evidence && (
+            <>
+              <dt>error</dt>
+              <dd className="break-words">
+                {output.evidence.phase ? `[${output.evidence.phase}] ` : ""}
+                {output.evidence.error}
+              </dd>
+            </>
+          )}
+        </dl>
       )}
     </li>
   );
