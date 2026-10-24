@@ -63,6 +63,9 @@ serde_json = "1.0"
 bytes = "1.12"
 sysinfo = "0.39"
 libc = "0.2"
+# Safe system-call wrappers (owned/borrowed fds, typed flags). The few calls it
+# does not model (TCP_INFO, kTLS crypto setup, getrusage, mallopt) stay on libc.
+rustix = { version = "1.1", features = ["fs", "net", "pipe", "process", "time"] }
 futures-util = "0.3"
 scrypt = { version = "0.11", features = ["simple"] }
 rand = "0.10"

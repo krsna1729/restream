@@ -325,7 +325,6 @@ async fn run_child(
             stdin,
             pump.into_queue_refill(child_cancel.clone()),
             Arc::new(crate::media::pipe_metrics::PipeMetrics::default()),
-            crate::media::timing::clock(),
             input_done,
         )
         .map_err(|error| error.to_string())?,

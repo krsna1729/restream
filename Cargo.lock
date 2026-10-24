@@ -3255,6 +3255,7 @@ dependencies = [
  "rml_rtmp",
  "rtrb",
  "rust-embed",
+ "rustix",
  "rustls-pki-types",
  "scrypt",
  "serde",

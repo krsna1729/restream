@@ -1,218 +1,15 @@
-//! Portable elapsed-time measurement for instrumentation.
+//! Per-thread CPU readings for the media threads' own utilisation figures.
 //!
-//! Production use is the external-transcoder stdin/stdout pipe-stall path
-//! (`external_transcoder` / `ffmpeg_process`): [`calibrate`] at stage start,
-//! then [`Clock::now`] / [`Clock::delta_us`] around those pipe I/O waits. The
-//! free [`now`] / [`delta_us`] helpers exist for benches. This is not a
-//! packet-inner-loop clock and is not used throughout the media stack.
-//! [`Instant`] is the fallback when invariant TSC is missing or calibration is
-//! out of bounds.
-//!
-//! The implementation selects the fastest reliable source at startup:
-//!
-//! - **x86_64 with invariant TSC** (`CPUID[0x80000007].EDX[8]`): uses `rdtsc`
-//!   (≈3 cycles) instead of `Instant::now()` (≈20-40 cycles via VDSO).
-//! - **All other cases**: falls back to `Instant::now()`. This covers non-x86_64
-//!   architectures, hypervisors with coarse timers, and CPUs where TSC calibration
-//!   returns a value outside sane bounds (100 MHz – 10 GHz).
-//!
-//! # Why not always use `Instant`?
-//!
-//! `Instant::now()` on Linux calls `clock_gettime(CLOCK_MONOTONIC)` via VDSO,
-//! which IS TSC-backed but adds calibration scaling (~15-35 extra cycles). On
-//! the pipe-stall counters this module actually samples, those cycles can
-//! accumulate. The path is not a tight packet inner loop, so either
-//! implementation is correct — the rdtsc path is a measured improvement for
-//! that instrumentation, not a stack-wide clock policy.
-//!
-//! # Calibration
-//!
-//! [`calibrate`] triggers a 200 µs busy-wait to measure CPU frequency. It is
-//! safe to call from async tasks (no `thread::sleep`, no syscalls) and is
-//! amortised via [`OnceLock`] — the busy-wait runs at most once per process.
-//! Call it eagerly at stage startup to avoid the cost in the first hot window.
-//!
-//! [`calibrate`] returns `true` if rdtsc is active; [`using_tsc`] re-queries the
-//! same cached result for diagnostic logging.
-//!
-//! # Thread CPU
-//!
-//! [`thread_cpu_ns`] reads the calling thread's own CPU clock
-//! (`CLOCK_THREAD_CPUTIME_ID`, one syscall, ~0.2 µs), the egress shards'
-//! utilization and the media executor's per-poll CPU. [`thread_usage`] reads
-//! `getrusage(RUSAGE_THREAD)` (~0.2 µs): the user/system split, which the
-//! kernel apportions from tick samples, and exact minor/major fault counts.
+//! [`thread_cpu_ns`] reads the calling thread's CPU clock
+//! (`CLOCK_THREAD_CPUTIME_ID`, a system call of about 0.2 µs) for the egress
+//! shards' utilisation and the media executor's per-poll CPU. [`thread_usage`] reads `getrusage(RUSAGE_THREAD)` (about
+//! 0.2 µs): the user/system split, which the kernel apportions from tick
+//! samples, and exact minor/major fault counts. Wall-clock intervals use
+//! `std::time::Instant`.
 
-use std::sync::OnceLock;
-use std::time::Instant;
-
-const MIN_CYCLES_PER_US: f64 = 100.0; // 100 MHz — floor for any real CPU
-const MAX_CYCLES_PER_US: f64 = 10_000.0; // 10 GHz — ceiling beyond current hardware
-const MIN_WINDOW_US: f64 = 50.0; // reject calibrations shorter than this
-
-enum Backend {
-    Tsc(f64), // microseconds per cycle, derived from validated calibration
-    Instant,  // fallback: invariant TSC absent or calibration out of bounds
-}
-
-/// Opaque timestamp. Holds either TSC cycles or nanos since a fixed origin.
-/// Use only with [`delta_us`] from this module — do not interpret directly.
-#[derive(Copy, Clone)]
-pub struct Timestamp(u64);
-
-/// Cached timing backend handle for hot loops.
-#[derive(Copy, Clone)]
-pub struct Clock(&'static Backend);
-
-static BACKEND: OnceLock<Backend> = OnceLock::new();
-static ORIGIN: OnceLock<Instant> = OnceLock::new();
-
-fn origin() -> Instant {
-    *ORIGIN.get_or_init(Instant::now)
-}
-
-#[cfg(target_arch = "x86_64")]
-fn has_invariant_tsc() -> bool {
-    // CPUID leaf 0x80000007 ("Advanced Power Management Information")
-    // EDX bit 8 = invariant TSC.
-    let r = core::arch::x86_64::__cpuid(0x8000_0007);
-    (r.edx & (1 << 8)) != 0
-}
-
-#[cfg(not(target_arch = "x86_64"))]
-fn has_invariant_tsc() -> bool {
-    false
-}
-
-fn backend() -> &'static Backend {
-    BACKEND.get_or_init(|| {
-        #[cfg(target_arch = "x86_64")]
-        {
-            if !has_invariant_tsc() {
-                return Backend::Instant;
-            }
-
-            let t0 = Instant::now();
-            // SAFETY: RDTSC is present on every x86_64 CPU and has no memory effects.
-            let c0 = unsafe { core::arch::x86_64::_rdtsc() };
-            while t0.elapsed().as_micros() < 200 {
-                core::hint::spin_loop();
-            }
-            let elapsed_us = t0.elapsed().as_micros() as f64;
-            // SAFETY: RDTSC is present on every x86_64 CPU and has no memory effects.
-            let c1 = unsafe { core::arch::x86_64::_rdtsc() };
-
-            if elapsed_us < MIN_WINDOW_US {
-                return Backend::Instant; // timer granularity too coarse
-            }
-            let cps = c1.saturating_sub(c0) as f64 / elapsed_us;
-            if !(MIN_CYCLES_PER_US..=MAX_CYCLES_PER_US).contains(&cps) {
-                return Backend::Instant; // calibration out of sane bounds
-            }
-            Backend::Tsc(1.0 / cps)
-        }
-        #[cfg(not(target_arch = "x86_64"))]
-        {
-            Backend::Instant
-        }
-    })
-}
-
-/// Trigger calibration eagerly (200 µs busy-wait, once per process).
-/// Returns `true` if rdtsc is in use, `false` if falling back to `Instant`.
-/// Call once at startup to amortise the busy-wait before the hot path runs.
-pub fn calibrate() -> bool {
-    matches!(backend(), Backend::Tsc(_))
-}
-
-/// Return a cached timing backend handle for packet loops.
-#[inline]
-pub fn clock() -> Clock {
-    Clock(backend())
-}
-
-/// `true` if rdtsc passed all validation checks; `false` means `Instant` fallback.
-#[inline]
-pub fn using_tsc() -> bool {
-    matches!(backend(), Backend::Tsc(_))
-}
-
-impl Clock {
-    /// Capture a timestamp with the cached backend.
-    #[inline(always)]
-    pub fn now(self) -> Timestamp {
-        match self.0 {
-            Backend::Tsc(_) => {
-                #[cfg(target_arch = "x86_64")]
-                // SAFETY: RDTSC is present on every x86_64 CPU and has no memory effects.
-                return Timestamp(unsafe { core::arch::x86_64::_rdtsc() });
-                #[cfg(not(target_arch = "x86_64"))]
-                unreachable!()
-            }
-            Backend::Instant => {
-                Timestamp(Instant::now().duration_since(origin()).as_nanos() as u64)
-            }
-        }
-    }
-
-    /// Microseconds elapsed since `start` was captured by this clock.
-    #[inline(always)]
-    pub fn delta_us(self, start: Timestamp) -> u64 {
-        match self.0 {
-            Backend::Tsc(us_per_cycle) => {
-                #[cfg(target_arch = "x86_64")]
-                {
-                    // SAFETY: RDTSC is present on every x86_64 CPU and has no memory effects.
-                    let now = unsafe { core::arch::x86_64::_rdtsc() };
-                    (now.saturating_sub(start.0) as f64 * us_per_cycle) as u64
-                }
-                #[cfg(not(target_arch = "x86_64"))]
-                unreachable!()
-            }
-            Backend::Instant => {
-                let now_ns = Instant::now().duration_since(origin()).as_nanos() as u64;
-                now_ns.saturating_sub(start.0) / 1_000
-            }
-        }
-    }
-}
-
-/// Capture a timestamp. Pair with [`delta_us`].
-#[inline(always)]
-pub fn now() -> Timestamp {
-    clock().now()
-}
-
-/// Microseconds elapsed since `start` was captured with [`now`].
-#[inline(always)]
-pub fn delta_us(start: Timestamp) -> u64 {
-    clock().delta_us(start)
-}
-
-/// Validate a raw cycles-per-µs value produced by calibration.
-/// Returns the value if within sane bounds, `None` if calibration should be rejected.
-pub fn validate_cps(cps: f64, window_us: f64) -> Option<f64> {
-    if window_us < MIN_WINDOW_US {
-        return None;
-    }
-    if !(MIN_CYCLES_PER_US..=MAX_CYCLES_PER_US).contains(&cps) {
-        return None;
-    }
-    Some(cps)
-}
-
-/// CPU time the calling thread has consumed. Zero if the clock is unavailable.
+/// CPU time the calling thread has consumed.
 pub(crate) fn thread_cpu_ns() -> u64 {
-    let mut ts = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    // SAFETY: `ts` is a valid out-pointer for the call; the clock id is a
-    // constant supported on Linux.
-    let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) };
-    if rc != 0 {
-        return 0;
-    }
+    let ts = rustix::time::clock_gettime(rustix::time::ClockId::ThreadCPUTime);
     (ts.tv_sec.max(0) as u64)
         .saturating_mul(1_000_000_000)
         .saturating_add(ts.tv_nsec.max(0) as u64)
@@ -267,82 +64,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn validate_rejects_zero_window() {
-        assert!(validate_cps(3000.0, 0.0).is_none());
-        assert!(validate_cps(3000.0, 10.0).is_none());
-        assert!(validate_cps(3000.0, 49.9).is_none());
-    }
-
-    #[test]
-    fn validate_rejects_out_of_bounds_cps() {
-        assert!(validate_cps(50.0, 200.0).is_none());
-        assert!(validate_cps(15_000.0, 200.0).is_none());
-        assert!(validate_cps(0.0, 200.0).is_none());
-        assert!(validate_cps(-1.0, 200.0).is_none());
-    }
-
-    #[test]
-    fn validate_accepts_sane_values() {
-        assert!(validate_cps(1_000.0, 200.0).is_some());
-        assert!(validate_cps(3_000.0, 200.0).is_some());
-        assert!(validate_cps(5_000.0, 200.0).is_some());
-        assert!(validate_cps(100.0, 50.0).is_some());
-        assert!(validate_cps(10_000.0, 50.0).is_some());
-    }
-
-    #[test]
-    fn delta_us_is_monotone() {
-        let t0 = now();
-        let d = delta_us(t0);
-        let d2 = delta_us(t0);
-        assert!(d2 >= d);
-    }
-
-    #[test]
-    fn delta_us_measures_real_elapsed() {
-        let wall_start = Instant::now();
-        let clock = clock();
-        let t0 = clock.now();
-        let deadline = std::time::Duration::from_millis(50);
-        let mut max_delta = 0u64;
-
-        while wall_start.elapsed() < deadline {
-            max_delta = max_delta.max(clock.delta_us(t0));
-            if max_delta >= 3_000 {
-                break;
-            }
-            std::hint::spin_loop();
+    fn thread_cpu_advances_with_work_on_this_thread() {
+        let before = thread_cpu_ns();
+        let start = std::time::Instant::now();
+        let mut x = 0u64;
+        while start.elapsed() < std::time::Duration::from_millis(20) {
+            x = std::hint::black_box(x.wrapping_add(1));
         }
-
-        let wall_us = wall_start.elapsed().as_micros() as u64;
+        let spent = thread_cpu_ns().saturating_sub(before);
         assert!(
-            max_delta >= 3_000,
-            "expected timing backend to report at least 3000 µs within {wall_us} µs of wall time, max observed was {max_delta} µs"
-        );
-        assert!(
-            max_delta < 5_000_000,
-            "expected < 5 000 000 µs, got {} µs",
-            max_delta
+            spent >= 5_000_000,
+            "20 ms of spinning read as {spent} ns of CPU"
         );
     }
 
-    #[cfg(target_arch = "x86_64")]
     #[test]
-    fn invariant_tsc_check_does_not_panic() {
-        let _ = has_invariant_tsc();
-    }
-
-    #[test]
-    fn delta_us_saturates_instead_of_underflowing_for_a_future_start() {
-        // `Timestamp` is opaque to callers, but a stale/corrupted value
-        // (e.g. from a clock backend swap or memory corruption) could still
-        // land here with a value "later" than `now`. Both backends use
-        // `saturating_sub`; confirm the result is a clamped 0, not a huge
-        // wrapped u64 that would look like a multi-hour stall.
-        let clock = clock();
-        let real_now = clock.now();
-        let bogus_future = Timestamp(real_now.0.saturating_add(1_000_000_000));
-
-        assert_eq!(clock.delta_us(bogus_future), 0);
+    fn thread_usage_since_never_goes_negative() {
+        let later = thread_usage();
+        let earlier = ThreadUsage {
+            user_us: later.user_us + 1,
+            ..later
+        };
+        assert_eq!(later.since(earlier).user_us, 0);
     }
 }
