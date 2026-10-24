@@ -19,14 +19,17 @@ pub use aac::{
     build_adts_header, build_adts_header_for, strip_adts,
 };
 pub(crate) use bits::{BitReader, rbsp};
-pub(crate) use enhanced_rtmp_hevc::parse_hevc_profile_tier_level;
+pub(crate) use enhanced_rtmp_hevc::{
+    EX_CODED_FRAMES, EX_CODED_FRAMES_X, EX_SEQUENCE_START, ExVideoTag, ex_video_tag, hvcc_record,
+    parse_hevc_profile_tier_level,
+};
 pub use enhanced_rtmp_hevc::{
     build_hevc_enhanced_rtmp_sequence_header, hevc_video_for_enhanced_rtmp_with_composition_into,
 };
 pub(crate) use h264_sps::{level_name, parse_h264_sps, profile_name};
 pub(crate) use video::{
-    AnnexbParameterSetAccumulator, annexb_parameter_sets, avcc_record, for_each_annexb_nalu,
-    raw_annexb_is_keyframe, take_u16_prefixed,
+    AnnexbParameterSetAccumulator, annexb_parameter_sets, avcc_record, flv_video_config,
+    for_each_annexb_nalu, raw_annexb_is_keyframe, take_u16_prefixed,
 };
 pub use video::{
     annexb_to_avcc, annexb_to_avcc_into, annexb_to_avcc_with_scratch, avcc_to_annexb,

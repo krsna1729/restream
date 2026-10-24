@@ -408,16 +408,32 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                 } else if let Some(ms) = held("stillForMs")
                     && ms >= crate::media::stream_qa::STILL_ALERT_MS
                 {
+                    let slate = qa.get("stillIsSlate").and_then(|v| v.as_bool()) == Some(true);
+                    let (id, title, summary, fix) = if slate {
+                        (
+                            "picture_slate",
+                            "A slate is on air",
+                            "The picture has stayed the same and looks drawn (bars, a card or a still graphic): viewers see a slate, not the program.",
+                            "If the slate is not planned, switch the encoder back to the program scene.",
+                        )
+                    } else {
+                        (
+                            "picture_frozen",
+                            "Picture is frozen",
+                            "The source keeps sending, but the camera picture has stayed exactly the same. A frozen camera or a stuck capture looks like this.",
+                            "Restart the camera or capture source on the encoder.",
+                        )
+                    };
                     alerts.push(Alert {
                         pipeline_id: Some(pipeline_id.clone()),
                         ..Alert::new(
-                            format!("pipeline:{}:input:picture_frozen", pipeline_id),
+                            format!("pipeline:{}:input:{}", pipeline_id, id),
                             Severity::Warning,
                             Scope::Pipeline,
-                            "Picture has not changed",
-                            "The source keeps sending, but the picture has stayed the same. A frozen camera or a stuck capture looks like this; so does a slate meant to be still.",
+                            title,
+                            summary,
                             vec![Evidence::measured(format!("unchanged for {} s", ms / 1000))],
-                            "If this is not a planned still, restart the camera or capture source on the encoder.",
+                            fix,
                             &generated_at,
                         )
                     });
@@ -435,6 +451,35 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                             "The source's first audio track has carried no sound.",
                             vec![Evidence::measured(format!("silent for {} s", ms / 1000))],
                             "Check the encoder's audio input and mixer, and that the right track is first.",
+                            &generated_at,
+                        )
+                    });
+                }
+                for silent in qa
+                    .get("silentTracks")
+                    .and_then(|v| v.as_array())
+                    .into_iter()
+                    .flatten()
+                {
+                    let (Some(track), Some(ms)) = (
+                        silent.get("track").and_then(|v| v.as_u64()),
+                        silent.get("silentForMs").and_then(|v| v.as_u64()),
+                    ) else {
+                        continue;
+                    };
+                    if ms < crate::media::stream_qa::SILENT_ALERT_MS {
+                        continue;
+                    }
+                    alerts.push(Alert {
+                        pipeline_id: Some(pipeline_id.clone()),
+                        ..Alert::new(
+                            format!("pipeline:{}:input:audio_silent:track{}", pipeline_id, track + 1),
+                            Severity::Warning,
+                            Scope::Pipeline,
+                            format!("Audio track {} is silent", track + 1),
+                            format!("The source's audio track {} has carried no sound.", track + 1),
+                            vec![Evidence::measured(format!("silent for {} s", ms / 1000))],
+                            "Check that the encoder routes a source to this track, or drop the track if it is not meant to carry sound.",
                             &generated_at,
                         )
                     });

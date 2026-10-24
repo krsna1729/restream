@@ -114,9 +114,10 @@ export function PictureAndSound(props: {
           {!enabled && (
             <p className="text-xs text-base-content/70">
               Checks are off. On, this server runs a small FFmpeg that decodes
-              the keyframes and the first audio track (about 2% of a CPU core
-              per pipeline) to catch a black or frozen picture, silence and
-              loudness, and raises incidents for them.
+              the keyframes and every audio track (about 2% of a CPU core per
+              pipeline, plus about 0.5% per extra track) to catch a black or
+              frozen picture, a slate, silence and loudness, and raises
+              incidents for them.
             </p>
           )}
         </div>

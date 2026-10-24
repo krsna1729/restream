@@ -1269,8 +1269,13 @@ Both return the state:
   "active": true,
   "findings": {
     "pictureCheckedMs": 1792742537000, "blackSinceMs": null,
-    "stillSinceMs": null, "soundCheckedMs": 1792742537400,
-    "silentSinceMs": null, "loudnessLufs": -18.4
+    "stillSinceMs": null, "stillIsSlate": false,
+    "soundCheckedMs": 1792742537400, "silentSinceMs": null,
+    "loudnessLufs": -18.4,
+    "tracks": [
+      { "silentSinceMs": null, "loudnessLufs": -18.4 },
+      { "silentSinceMs": 1792742525000, "loudnessLufs": -70.0 }
+    ]
   }
 }
 ```
@@ -1280,27 +1285,38 @@ Both return the state:
   each checked pipeline runs one external FFmpeg (`src/media/stream_qa/`;
   no codec runs inside the engine). Its source ring is fed to FFmpeg's
   stdin as MPEG-TS on a dedicated thread.
-  - FFmpeg decodes only keyframes and writes each as a 64×36 grey thumbnail
-    to stdout; the engine judges it black (98% of it dark) or unchanged
-    (mean difference to the last under 0.5 of 255).
-  - FFmpeg writes the first audio track as 48 kHz stereo f32 to a Unix
-    socket the engine listens on; the engine measures short-term loudness
-    (3 s, ITU-R BS.1770 K-weighting), floored at -70 LUFS; -60 LUFS or less
-    is silence.
+  - FFmpeg decodes only keyframes (H.264 or H.265, over SRT or RTMP,
+    enhanced RTMP included) and writes each as a 64×36 grey thumbnail to
+    stdout; the engine judges it black (98% of it dark) or unchanged (mean
+    difference to the last under 0.5 of 255). An unchanged picture whose
+    neighbouring pixels are mostly equal (60% or more) looks drawn — bars,
+    a card — and is reported as a slate (`stillIsSlate`); camera pictures
+    measure 10–44%.
+  - FFmpeg writes every audio track, up to 16, as 48 kHz stereo f32 merged
+    side by side to a Unix socket the engine listens on; the engine
+    measures each track's short-term loudness (3 s, ITU-R BS.1770
+    K-weighting), floored at -70 LUFS; -60 LUFS or less is silence.
+    `silentSinceMs` and `loudnessLufs` are the first track's; `tracks` has
+    them all in source order.
   - It never holds the ring's writer: a feed that falls behind is moved to
     the next keyframe like any reader. A child that exits or crashes is
     started again after 2 s, doubling to 30 s.
   - Cost, measured on a 1080p30 H.264 source with a 2 s GOP: about 2% of
-    a CPU core per checked pipeline (about 0.9% in the child, 1.3% in the
-    engine's feed and reader threads).
+    a CPU core per checked pipeline with one audio track (about 0.9% in the
+    child, 1.3% in the engine's feed and reader threads). Each further
+    track adds about 0.45% in the child for its AAC decode: the checked-in
+    16-track clip costs the child 9.5% against 2.6% for its first track
+    alone.
 - `findings` is `null` while no sampler runs. A `*SinceMs` is set while its
   condition holds. A finding whose check is over 10 s old is ignored by the
   alert rules.
 - Alerts (`GET /api/v1/alerts`), and with them incidents and notifications:
   - `pipeline:{id}:input:picture_black`: critical, after 10 s;
   - `pipeline:{id}:input:picture_frozen`: warning, after 30 s unchanged, and
-    not while black;
-  - `pipeline:{id}:input:audio_silent`: warning, after 10 s.
+    not while black; `picture_slate` instead when the still picture looks
+    drawn;
+  - `pipeline:{id}:input:audio_silent`: warning, after 10 s of a silent
+    first track; `audio_silent:track{n}` for a later track `n` (1-based).
 
 ## Health and status
 

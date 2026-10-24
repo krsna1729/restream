@@ -64,7 +64,7 @@ fn parse_flv_video_h264_sequence_header() {
 }
 
 #[test]
-fn flv_avcc_config_annexb_parameter_sets_extracts_sps_and_pps() {
+fn flv_config_annexb_parameter_sets_extracts_sps_and_pps() {
     #[rustfmt::skip]
         let data: &[u8] = &[
             0x17, 0x00, 0x00, 0x00, 0x00, // FLV header + AVC seq header + comp time
@@ -76,7 +76,7 @@ fn flv_avcc_config_annexb_parameter_sets_extracts_sps_and_pps() {
             0x68, 0xCE, // PPS NAL (nal_type=8)
         ];
 
-    let parameter_sets = flv_avcc_config_annexb_parameter_sets(data).unwrap();
+    let parameter_sets = flv_config_annexb_parameter_sets(data).unwrap();
     assert_eq!(
         parameter_sets,
         vec![0, 0, 0, 1, 0x67, 0x64, 0x00, 0x1F, 0, 0, 0, 1, 0x68, 0xCE]
@@ -84,23 +84,23 @@ fn flv_avcc_config_annexb_parameter_sets_extracts_sps_and_pps() {
 }
 
 #[test]
-fn flv_avcc_config_annexb_parameter_sets_rejects_truncated_input() {
+fn flv_config_annexb_parameter_sets_rejects_truncated_input() {
     let data: &[u8] = &[
         0x17, 0x00, 0x00, 0x00, 0x00, 0x01, 0x64, 0x00, 0x1F, 0xFF, 0xE1,
     ];
-    assert!(flv_avcc_config_annexb_parameter_sets(data).is_none());
+    assert!(flv_config_annexb_parameter_sets(data).is_none());
 }
 
 #[test]
-fn flv_avcc_config_annexb_parameter_sets_rejects_non_h264() {
+fn flv_config_annexb_parameter_sets_rejects_non_h264() {
     let data: &[u8] = &[
         0x1C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x64, 0x00, 0x1F, 0xFF, 0xE1,
     ];
-    assert!(flv_avcc_config_annexb_parameter_sets(data).is_none());
+    assert!(flv_config_annexb_parameter_sets(data).is_none());
 }
 
 #[test]
-fn flv_avcc_config_annexb_parameter_sets_rejects_sps_ok_pps_truncated() {
+fn flv_config_annexb_parameter_sets_rejects_sps_ok_pps_truncated() {
     // SPS parses fully, numPPS = 1, but the PPS length/body never arrives.
     // A partial SPS-only extraction would be worse than none (the decoder
     // still can't decode without a PPS), so this must yield None.
@@ -112,11 +112,11 @@ fn flv_avcc_config_annexb_parameter_sets_rejects_sps_ok_pps_truncated() {
         0x67, 0x64, 0x00, 0x1F, // SPS NAL
         0x01, // numPPS = 1, then buffer ends
     ];
-    assert!(flv_avcc_config_annexb_parameter_sets(data).is_none());
+    assert!(flv_config_annexb_parameter_sets(data).is_none());
 }
 
 #[test]
-fn flv_avcc_config_annexb_parameter_sets_rejects_max_declared_length_tiny_buffer() {
+fn flv_config_annexb_parameter_sets_rejects_max_declared_length_tiny_buffer() {
     // SPS declares a 0xFFFF-byte length but only 2 bytes actually follow.
     #[rustfmt::skip]
     let data: &[u8] = &[
@@ -125,19 +125,19 @@ fn flv_avcc_config_annexb_parameter_sets_rejects_max_declared_length_tiny_buffer
         0xFF, 0xFF, // SPS length = 65535
         0xAA, 0xBB, // only 2 bytes present
     ];
-    assert!(flv_avcc_config_annexb_parameter_sets(data).is_none());
+    assert!(flv_config_annexb_parameter_sets(data).is_none());
 }
 
 proptest! {
     #[test]
-    fn flv_avcc_config_annexb_parameter_sets_never_panics(
+    fn flv_config_annexb_parameter_sets_never_panics(
         bytes in prop::collection::vec(any::<u8>(), 0..128)
     ) {
-        let _ = flv_avcc_config_annexb_parameter_sets(&bytes);
+        let _ = flv_config_annexb_parameter_sets(&bytes);
     }
 
     #[test]
-    fn flv_avcc_config_annexb_parameter_sets_truncation_fails_closed(
+    fn flv_config_annexb_parameter_sets_truncation_fails_closed(
         has_sps in any::<bool>(),
         has_pps in any::<bool>(),
         sps_rest in prop::collection::vec(any::<u8>(), 0..16),
@@ -175,13 +175,13 @@ proptest! {
         }
         let expected = crate::media::codec::annexb_parameter_sets(&annexb);
 
-        let actual = flv_avcc_config_annexb_parameter_sets(&data);
+        let actual = flv_config_annexb_parameter_sets(&data);
         prop_assert_eq!(actual, expected);
 
         // Any strict prefix of a well-formed record must fail closed, never
         // yielding a partial SPS/PPS extraction.
         for cut in 0..data.len() {
-            let partial = flv_avcc_config_annexb_parameter_sets(&data[..cut]);
+            let partial = flv_config_annexb_parameter_sets(&data[..cut]);
             prop_assert!(partial.is_none(), "truncated at {cut} produced Some(..)");
         }
     }
@@ -291,4 +291,43 @@ proptest! {
         prop_assert_eq!(meta.sample_rate, rate);
         prop_assert_eq!(meta.channels, channels);
     }
+}
+
+#[test]
+fn an_enhanced_rtmp_hevc_publish_is_probed_classified_and_timed() {
+    use crate::media::codec;
+    let (probe, _, packets) = crate::test_fixtures::primary_av_packets_for_codec("h265").unwrap();
+    let keyframe = packets
+        .iter()
+        .find(|p| p.media_type == MediaType::Video && p.is_keyframe)
+        .unwrap();
+    let header = codec::build_hevc_enhanced_rtmp_sequence_header(&keyframe.payload).unwrap();
+
+    let meta = parse_flv_video_meta(&header).unwrap();
+    assert_eq!(meta.codec, "h265");
+    assert_eq!((meta.width, meta.height), (probe.width, probe.height));
+    assert_eq!(
+        classify_flv_video_packet(&header),
+        Some(FlvVideoPacketKind::SequenceHeader)
+    );
+    assert_eq!(
+        flv_config_annexb_parameter_sets(&header),
+        codec::annexb_parameter_sets(&keyframe.payload)
+    );
+
+    let mut tag = Vec::new();
+    codec::hevc_video_for_enhanced_rtmp_with_composition_into(&keyframe.payload, true, 80, &mut tag);
+    assert_eq!(
+        classify_flv_video_packet(&tag),
+        Some(FlvVideoPacketKind::Keyframe)
+    );
+    assert_eq!(flv_video_composition_time_ms(&tag), 80);
+    codec::hevc_video_for_enhanced_rtmp_with_composition_into(&keyframe.payload, false, 0, &mut tag);
+    assert_eq!(
+        classify_flv_video_packet(&tag),
+        Some(FlvVideoPacketKind::Interframe)
+    );
+    assert_eq!(flv_video_composition_time_ms(&tag), 0);
+    // Sequence end carries no picture.
+    assert_eq!(classify_flv_video_packet(b"\x92hvc1"), None);
 }

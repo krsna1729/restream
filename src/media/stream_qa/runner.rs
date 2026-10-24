@@ -3,9 +3,10 @@
 //! the transcoder's input pump (on its own thread, with back-pressure: a
 //! slow child makes this reader lag and the ring moves it forward; the
 //! writer and the outputs never wait). FFmpeg decodes only keyframes and
-//! writes, per keyframe, a 64x36 grey thumbnail to stdout; it writes the
-//! first audio track as 48 kHz stereo f32 to fd 3. Two threads read those
-//! and feed the [`QaTracker`]. A child that dies is started again with
+//! writes, per keyframe, a 64x36 grey thumbnail to stdout; it writes every
+//! audio track (up to [`MAX_SOUND_TRACKS`]) as 48 kHz stereo f32, the
+//! tracks side by side, to a Unix socket. Two threads read those and feed
+//! the [`QaTracker`]. A child that dies is started again with
 //! backoff: a crash in FFmpeg costs this pipeline's checks a few seconds
 //! and nothing else.
 
@@ -26,9 +27,11 @@ use crate::media::ffmpeg::stage_input::StageInputPump;
 use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_metrics::StageMetrics;
 
-/// The audio FFmpeg hands back: 48 kHz, two channels, f32.
+/// The audio FFmpeg hands back: 48 kHz, two channels per track, f32.
 pub const SOUND_RATE: u32 = 48_000;
 pub const SOUND_CHANNELS: usize = 2;
+/// Tracks measured; a source with more has the rest left unchecked.
+pub const MAX_SOUND_TRACKS: usize = 16;
 /// A loudness reading every half second.
 const SOUND_EVERY_MS: u64 = 500;
 /// Backoff between restarts of a child that exited, doubling to the cap;
@@ -39,10 +42,12 @@ const RAN_LONG_ENOUGH: Duration = Duration::from_secs(60);
 
 /// FFmpeg's arguments: TS on stdin; keyframes only, decoded on one thread;
 /// per keyframe a grey thumbnail on stdout (raw, `THUMB_WIDTH` x
-/// `THUMB_HEIGHT` bytes); the first audio track as f32 to `sound` (a Unix
-/// socket the engine listens on), when `Some`. A side the source lacks is
-/// left out (FFmpeg refuses a map that matches nothing).
-pub fn qa_ffmpeg_args(input: &str, video: bool, sound: Option<&str>) -> Vec<String> {
+/// `THUMB_HEIGHT` bytes); with `sound` (a Unix socket the engine listens
+/// on, and the source's track count) each audio track as stereo f32, the
+/// tracks merged side by side into one stream (track `t` is channels `2t`
+/// and `2t + 1`). A side the source lacks is left out (FFmpeg refuses a map
+/// that matches nothing).
+pub fn qa_ffmpeg_args(input: &str, video: bool, sound: Option<(&str, usize)>) -> Vec<String> {
     let mut args: Vec<String> = [
         "-nostdin",
         "-hide_banner",
@@ -52,11 +57,13 @@ pub fn qa_ffmpeg_args(input: &str, video: bool, sound: Option<&str>) -> Vec<Stri
         "1",
         "-filter_threads",
         "1",
-        "-skip_frame",
-        "nokey",
     ]
     .map(String::from)
     .to_vec();
+    // A video decoder option: FFmpeg refuses it on an input with no video.
+    if video {
+        args.extend(["-skip_frame", "nokey"].map(String::from));
+    }
     if input == "pipe:0" {
         args.extend(["-f", "mpegts"].map(String::from));
     }
@@ -77,21 +84,39 @@ pub fn qa_ffmpeg_args(input: &str, video: bool, sound: Option<&str>) -> Vec<Stri
             .map(String::from),
         );
     }
-    if let Some(sound) = sound {
-        args.extend(
-            [
-                "-map",
-                "0:a:0",
-                "-ac",
-                &SOUND_CHANNELS.to_string(),
-                "-ar",
-                &SOUND_RATE.to_string(),
-                "-f",
-                "f32le",
-                &format!("unix:{sound}"),
-            ]
-            .map(String::from),
-        );
+    if let Some((sound, tracks)) = sound {
+        let tracks = tracks.clamp(1, MAX_SOUND_TRACKS);
+        if tracks == 1 {
+            args.extend(
+                [
+                    "-map",
+                    "0:a:0",
+                    "-ac",
+                    &SOUND_CHANNELS.to_string(),
+                    "-ar",
+                    &SOUND_RATE.to_string(),
+                ]
+                .map(String::from),
+            );
+        } else {
+            let mut graph = String::new();
+            for track in 0..tracks {
+                graph.push_str(&format!(
+                    "[0:a:{track}]aresample={SOUND_RATE},aformat=sample_fmts=flt:channel_layouts=stereo[a{track}];"
+                ));
+            }
+            for track in 0..tracks {
+                graph.push_str(&format!("[a{track}]"));
+            }
+            graph.push_str(&format!("amerge=inputs={tracks}[sound]"));
+            args.extend(["-filter_complex".to_string(), graph]);
+            args.extend(["-map", "[sound]"].map(String::from));
+        }
+        args.extend([
+            "-f".to_string(),
+            "f32le".to_string(),
+            format!("unix:{sound}"),
+        ]);
     }
     args
 }
@@ -133,40 +158,51 @@ pub fn read_pictures(mut pipe: impl Read, findings: &Findings) {
     }
 }
 
-/// Reads interleaved f32 stereo until the pipe ends, measuring it, and
-/// reports the loudness every half second.
-pub fn read_sound(mut pipe: impl Read, findings: &Findings) {
-    let Some(mut meter) = LoudnessMeter::new(SOUND_RATE, SOUND_CHANNELS) else {
+/// Reads interleaved f32 (`tracks` stereo pairs side by side) until the
+/// pipe ends, measuring each track, and reports their loudness every half
+/// second.
+pub fn read_sound(mut pipe: impl Read, findings: &Findings, tracks: usize) {
+    let tracks = tracks.clamp(1, MAX_SOUND_TRACKS);
+    let Some(mut meters) = (0..tracks)
+        .map(|_| LoudnessMeter::new(SOUND_RATE, SOUND_CHANNELS))
+        .collect::<Option<Vec<_>>>()
+    else {
         return;
     };
     // 100 ms of audio per read.
-    let frame_bytes = SOUND_CHANNELS * 4;
+    let frame_bytes = tracks * SOUND_CHANNELS * 4;
     let mut bytes = vec![0u8; (SOUND_RATE as usize / 10) * frame_bytes];
-    let mut planes = vec![Vec::new(); SOUND_CHANNELS];
+    let mut planes = vec![vec![Vec::new(); SOUND_CHANNELS]; tracks];
     let mut last_reading = 0;
+    let mut readings = Vec::with_capacity(tracks);
     loop {
         let filled = match read_some(&mut pipe, &mut bytes) {
             0 => return,
             filled => filled - filled % frame_bytes,
         };
-        for plane in &mut planes {
+        for plane in planes.iter_mut().flatten() {
             plane.clear();
         }
         for frame in bytes[..filled].chunks_exact(frame_bytes) {
             for (channel, sample) in frame.chunks_exact(4).enumerate() {
-                planes[channel].push(f32::from_le_bytes([
-                    sample[0], sample[1], sample[2], sample[3],
-                ]));
+                planes[channel / SOUND_CHANNELS][channel % SOUND_CHANNELS].push(
+                    f32::from_le_bytes([sample[0], sample[1], sample[2], sample[3]]),
+                );
             }
         }
-        let views: Vec<&[f32]> = planes.iter().map(Vec::as_slice).collect();
-        meter.push_planar(&views);
+        for (meter, track) in meters.iter_mut().zip(&planes) {
+            let views: Vec<&[f32]> = track.iter().map(Vec::as_slice).collect();
+            meter.push_planar(&views);
+        }
         let now = MediaEngine::now_epoch_ms();
-        if now.saturating_sub(last_reading) >= SOUND_EVERY_MS
-            && let Some(lufs) = meter.short_term_lufs()
-        {
+        if now.saturating_sub(last_reading) < SOUND_EVERY_MS {
+            continue;
+        }
+        readings.clear();
+        readings.extend(meters.iter().map_while(LoudnessMeter::short_term_lufs));
+        if readings.len() == tracks {
             last_reading = now;
-            findings.update(|tracker| tracker.sound(now, lufs));
+            findings.update(|tracker| tracker.sound(now, &readings));
         }
     }
 }
@@ -280,6 +316,7 @@ async fn run_child(
     };
     let has_video = video.is_some();
     let has_audio = !audio.is_empty();
+    let sound_tracks = audio.len().min(MAX_SOUND_TRACKS);
     if !has_video && !has_audio {
         return Err("the source has reported no track yet".to_string());
     }
@@ -305,7 +342,11 @@ async fn run_child(
         .args(qa_ffmpeg_args(
             "pipe:0",
             has_video,
-            sound.as_ref().map(SoundSocket::path).as_deref(),
+            sound
+                .as_ref()
+                .map(|socket| (socket.path(), sound_tracks))
+                .as_ref()
+                .map(|(path, tracks)| (path.as_str(), *tracks)),
         ))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -349,7 +390,7 @@ async fn run_child(
                 .spawn(move || {
                     // FFmpeg connects once it has decoded the first audio.
                     if let Some(stream) = sound.accept(Duration::from_secs(30), &stop) {
-                        read_sound(stream, &sound_findings);
+                        read_sound(stream, &sound_findings, sound_tracks);
                     }
                 })
                 .map_err(|error| error.to_string())?,
@@ -388,12 +429,27 @@ mod tests {
 
     #[test]
     fn arguments_leave_out_a_side_the_source_lacks() {
-        let both = qa_ffmpeg_args("pipe:0", true, Some("/tmp/s.sock")).join(" ");
+        let both = qa_ffmpeg_args("pipe:0", true, Some(("/tmp/s.sock", 1))).join(" ");
         assert!(both.contains("-skip_frame nokey -f mpegts -i pipe:0"));
         assert!(both.contains("scale=64:36:flags=area,format=gray -f rawvideo pipe:1"));
         assert!(both.contains("-map 0:a:0 -ac 2 -ar 48000 -f f32le unix:/tmp/s.sock"));
+        let three = qa_ffmpeg_args("pipe:0", false, Some(("/s", 3))).join(" ");
         assert!(
-            !qa_ffmpeg_args("pipe:0", false, Some("/s"))
+            !three.contains("-skip_frame"),
+            "an audio-only source gets no video decoder option"
+        );
+        assert!(three.contains(
+            "[0:a:2]aresample=48000,aformat=sample_fmts=flt:channel_layouts=stereo[a2];"
+        ));
+        assert!(three.contains("[a0][a1][a2]amerge=inputs=3[sound] -map [sound] -f f32le unix:/s"));
+        assert!(
+            !qa_ffmpeg_args("pipe:0", true, Some(("/s", 99)))
+                .join(" ")
+                .contains("[0:a:16]"),
+            "tracks past the cap are not checked"
+        );
+        assert!(
+            !qa_ffmpeg_args("pipe:0", false, Some(("/s", 1)))
                 .join(" ")
                 .contains("pipe:1")
         );
@@ -427,14 +483,26 @@ mod tests {
             bytes.extend_from_slice(&sample.to_le_bytes());
             bytes.extend_from_slice(&sample.to_le_bytes());
         }
-        read_sound(&bytes[..], &findings);
+        read_sound(&bytes[..], &findings, 1);
         let lufs = published.lock().unwrap().loudness_lufs.unwrap();
         assert!((lufs + 23.0).abs() < 0.2, "{lufs}");
+
+        // Two tracks side by side: the tone, then silence.
+        let mut pair = Vec::new();
+        for frame in bytes.chunks_exact(8) {
+            pair.extend_from_slice(frame);
+            pair.extend_from_slice(&[0u8; 8]);
+        }
+        read_sound(&pair[..], &findings, 2);
+        let qa = published.lock().unwrap().clone();
+        assert!((qa.tracks[0].loudness_lufs + 23.0).abs() < 0.2);
+        assert_eq!(qa.tracks[1].loudness_lufs, -70.0);
+        assert!(qa.tracks[1].silent_since_ms.is_some());
     }
 
     /// The real FFmpeg on the checked-in clip, with the arguments the
     /// sampler uses (a file instead of stdin): keyframes come out as moving
-    /// colour bars and the tone as a loudness.
+    /// colour bars and each of its 16 tracks as a loudness.
     #[test]
     fn ffmpeg_turns_the_fixture_into_pictures_and_a_loudness() {
         let path = crate::test_fixtures::checked_in_fixture(
@@ -442,7 +510,11 @@ mod tests {
         )
         .unwrap();
         let socket = SoundSocket::bind().unwrap();
-        let mut args = qa_ffmpeg_args(&path.display().to_string(), true, Some(&socket.path()));
+        let mut args = qa_ffmpeg_args(
+            &path.display().to_string(),
+            true,
+            Some((&socket.path(), MAX_SOUND_TRACKS)),
+        );
         // Ten seconds is enough for 3 s of loudness and a few keyframes.
         let input = args.iter().position(|arg| arg == "-i").unwrap();
         args.splice(input..input, ["-t".to_string(), "10".to_string()]);
@@ -459,7 +531,7 @@ mod tests {
             let stream = socket
                 .accept(Duration::from_secs(10), &CancellationToken::new())
                 .expect("ffmpeg connects for the sound");
-            read_sound(stream, &sound_findings);
+            read_sound(stream, &sound_findings, MAX_SOUND_TRACKS);
         });
         read_pictures(child.stdout.take().unwrap(), &findings);
         sound.join().unwrap();
@@ -469,5 +541,116 @@ mod tests {
         assert_eq!(qa.black_since_ms, None, "colour bars are not black");
         let lufs = qa.loudness_lufs.expect("3 s of audio measured");
         assert!((-70.0..0.0).contains(&lufs), "loudness {lufs}");
+        assert_eq!(qa.tracks.len(), MAX_SOUND_TRACKS, "every track measured");
+    }
+
+    /// A clip whose second track is silent: the checks name that track.
+    #[test]
+    fn ffmpeg_finds_the_silent_second_track() {
+        let path = crate::test_fixtures::checked_in_fixture(
+            "test/fixtures/stream-qa/tone-then-silent-track.mp4",
+        )
+        .unwrap();
+        let socket = SoundSocket::bind().unwrap();
+        let args = qa_ffmpeg_args(
+            &path.display().to_string(),
+            false,
+            Some((&socket.path(), 2)),
+        );
+        let mut child = std::process::Command::new(crate::ffmpeg_binary::ffmpeg_bin_path())
+            .args(&args)
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let published = Arc::new(Mutex::new(StreamQa::default()));
+        let findings = Findings::new(published.clone());
+        let stream = socket
+            .accept(Duration::from_secs(10), &CancellationToken::new())
+            .expect("ffmpeg connects for the sound");
+        read_sound(stream, &findings, 2);
+        assert!(child.wait().unwrap().success());
+        let qa = published.lock().unwrap().clone();
+        assert_eq!(qa.tracks.len(), 2);
+        assert_eq!(qa.silent_since_ms, None, "the first track carries a tone");
+        let now = qa.sound_checked_ms.unwrap();
+        assert_eq!(
+            qa.other_silent_tracks(now)
+                .first()
+                .map(|silent| silent.track),
+            Some(1)
+        );
+    }
+
+    /// An enhanced RTMP H.265 publish (the checked-in H.265 clip as the
+    /// egress converter writes it) yields pictures: the feeder turns its
+    /// tags into TS led by the hvcC parameter sets, as the sampler's pump
+    /// does, and FFmpeg decodes keyframes from it with the sampler's
+    /// arguments.
+    #[test]
+    fn an_enhanced_rtmp_hevc_source_yields_pictures() {
+        use crate::media::codec;
+        use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
+        use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
+        use std::io::Write;
+
+        let (video, _, packets) =
+            crate::test_fixtures::primary_av_packets_for_codec("h265").unwrap();
+        let video_packets: Vec<&MediaPacket> = packets
+            .iter()
+            .filter(|p| p.media_type == MediaType::Video)
+            .collect();
+        let header = codec::build_hevc_enhanced_rtmp_sequence_header(
+            &video_packets
+                .iter()
+                .find(|p| p.is_keyframe)
+                .unwrap()
+                .payload,
+        )
+        .unwrap();
+        let mut feeder = TsPacketFeeder::new(
+            Some(&video),
+            Arc::new(Vec::new()),
+            PacketFeedConfig::default(),
+        );
+        feeder.set_video_sequence_header_from_avcc(&header);
+        let (mut ts, mut tag) = (Vec::new(), Vec::new());
+        for packet in video_packets {
+            let composition = i32::try_from(packet.pts - packet.dts).unwrap();
+            codec::hevc_video_for_enhanced_rtmp_with_composition_into(
+                &packet.payload,
+                packet.is_keyframe,
+                composition,
+                &mut tag,
+            );
+            let flv = MediaPacket {
+                payload: bytes::Bytes::copy_from_slice(&tag),
+                format: PayloadFormat::Flv,
+                ..packet.clone()
+            };
+            feeder.extend_ts_for_packet(&flv, &mut ts);
+        }
+        assert!(!ts.is_empty(), "the feeder muxed the enhanced tags");
+
+        let mut child = std::process::Command::new(crate::ffmpeg_binary::ffmpeg_bin_path())
+            .args(qa_ffmpeg_args("pipe:0", true, None))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let writer = std::thread::spawn(move || {
+            let _ = stdin.write_all(&ts);
+        });
+        let published = Arc::new(Mutex::new(StreamQa::default()));
+        read_pictures(
+            child.stdout.take().unwrap(),
+            &Findings::new(published.clone()),
+        );
+        writer.join().unwrap();
+        assert!(child.wait().unwrap().success());
+        let qa = published.lock().unwrap().clone();
+        assert!(qa.picture_checked_ms.is_some(), "keyframes decoded");
+        assert_eq!(qa.black_since_ms, None);
     }
 }

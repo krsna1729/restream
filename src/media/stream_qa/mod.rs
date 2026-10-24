@@ -38,11 +38,27 @@ pub struct StreamQa {
     pub black_since_ms: Option<u64>,
     /// When the picture last changed, while it has not since.
     pub still_since_ms: Option<u64>,
+    /// While still: the picture looks drawn (bars, a card), so it is
+    /// likely a slate rather than a frozen camera.
+    #[serde(default)]
+    pub still_is_slate: bool,
     /// The last sound measured; absent until 3 s of one track decode.
     pub sound_checked_ms: Option<u64>,
+    /// The first track's silence and loudness (also `tracks[0]`).
     pub silent_since_ms: Option<u64>,
     /// Short-term loudness (3 s), LUFS, floored at -70.
     pub loudness_lufs: Option<f64>,
+    /// Every audio track checked, in source order.
+    #[serde(default)]
+    pub tracks: Vec<TrackSound>,
+}
+
+/// One audio track's sound.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackSound {
+    pub silent_since_ms: Option<u64>,
+    pub loudness_lufs: f64,
 }
 
 impl StreamQa {
@@ -67,6 +83,31 @@ impl StreamQa {
     pub fn silent_for_ms(&self, now_ms: u64) -> Option<u64> {
         Self::held(self.silent_since_ms, self.sound_checked_ms, now_ms)
     }
+
+    /// Each track after the first that is silent now: (index, how long).
+    pub fn other_silent_tracks(&self, now_ms: u64) -> Vec<SilentTrack> {
+        self.tracks
+            .iter()
+            .enumerate()
+            .skip(1)
+            .filter_map(|(track, sound)| {
+                Self::held(sound.silent_since_ms, self.sound_checked_ms, now_ms).map(
+                    |silent_for_ms| SilentTrack {
+                        track,
+                        silent_for_ms,
+                    },
+                )
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SilentTrack {
+    /// 0-based, in source order.
+    pub track: usize,
+    pub silent_for_ms: u64,
 }
 
 /// What the alert rules read: how long each condition has held now.
@@ -75,8 +116,11 @@ impl StreamQa {
 pub struct QaHeld {
     pub black_for_ms: Option<u64>,
     pub still_for_ms: Option<u64>,
+    pub still_is_slate: bool,
     pub silent_for_ms: Option<u64>,
     pub loudness_lufs: Option<f64>,
+    /// Silent tracks after the first.
+    pub silent_tracks: Vec<SilentTrack>,
 }
 
 impl StreamQa {
@@ -84,8 +128,10 @@ impl StreamQa {
         QaHeld {
             black_for_ms: self.black_for_ms(now_ms),
             still_for_ms: self.still_for_ms(now_ms),
+            still_is_slate: self.still_is_slate,
             silent_for_ms: self.silent_for_ms(now_ms),
             loudness_lufs: self.loudness_lufs,
+            silent_tracks: self.other_silent_tracks(now_ms),
         }
     }
 }
@@ -119,21 +165,32 @@ impl QaTracker {
         if changed {
             self.last_change_ms = at_ms;
             self.qa.still_since_ms = None;
+            self.qa.still_is_slate = false;
         } else {
             self.qa.still_since_ms = Some(self.last_change_ms);
+            self.qa.still_is_slate = picture::looks_like_slate(&thumb);
         }
         self.last_thumb = Some(thumb);
         self.qa.picture_checked_ms = Some(at_ms);
     }
 
-    /// One short-term loudness reading at `at_ms`.
-    pub fn sound(&mut self, at_ms: u64, loudness_lufs: f64) {
-        self.qa.silent_since_ms = if loudness_lufs <= SILENT_BELOW_LUFS {
-            Some(self.qa.silent_since_ms.unwrap_or(at_ms))
-        } else {
-            None
-        };
-        self.qa.loudness_lufs = Some(loudness_lufs);
+    /// One short-term loudness reading per track at `at_ms`, in source
+    /// order.
+    pub fn sound(&mut self, at_ms: u64, loudness_lufs: &[f64]) {
+        self.qa
+            .tracks
+            .resize_with(loudness_lufs.len(), TrackSound::default);
+        for (track, &lufs) in self.qa.tracks.iter_mut().zip(loudness_lufs) {
+            track.silent_since_ms = if lufs <= SILENT_BELOW_LUFS {
+                Some(track.silent_since_ms.unwrap_or(at_ms))
+            } else {
+                None
+            };
+            track.loudness_lufs = lufs;
+        }
+        let first = self.qa.tracks.first();
+        self.qa.silent_since_ms = first.and_then(|track| track.silent_since_ms);
+        self.qa.loudness_lufs = first.map(|track| track.loudness_lufs);
         self.qa.sound_checked_ms = Some(at_ms);
     }
 
@@ -183,13 +240,71 @@ mod tests {
         tracker.picture(4_000, thumb(200));
         assert_eq!(tracker.snapshot().black_since_ms, None);
 
-        tracker.sound(1_000, -70.0);
-        tracker.sound(2_000, -65.0);
+        tracker.sound(1_000, &[-70.0]);
+        tracker.sound(2_000, &[-65.0]);
         assert_eq!(tracker.snapshot().silent_since_ms, Some(1_000));
         assert_eq!(tracker.snapshot().silent_for_ms(2_500), Some(1_500));
-        tracker.sound(3_000, -23.0);
+        tracker.sound(3_000, &[-23.0]);
         assert_eq!(tracker.snapshot().silent_since_ms, None);
         assert_eq!(tracker.snapshot().loudness_lufs, Some(-23.0));
+    }
+
+    #[test]
+    fn a_still_slate_is_told_from_a_still_picture() {
+        let mut tracker = QaTracker::default();
+        let slate = thumb(128);
+        tracker.picture(1_000, slate.clone());
+        tracker.picture(2_000, slate);
+        assert!(tracker.snapshot().still_is_slate, "a flat card held still");
+        // A textured picture held still is a frozen picture.
+        let textured: Vec<u8> = (0..slate_len()).map(|i| (i * 37 % 251) as u8).collect();
+        tracker.picture(3_000, textured.clone());
+        assert!(
+            !tracker.snapshot().still_is_slate,
+            "changed: not still at all"
+        );
+        tracker.picture(4_000, textured);
+        assert_eq!(tracker.snapshot().still_since_ms, Some(3_000));
+        assert!(!tracker.snapshot().still_is_slate);
+    }
+
+    fn slate_len() -> usize {
+        (picture::THUMB_WIDTH * picture::THUMB_HEIGHT) as usize
+    }
+
+    #[test]
+    fn every_track_is_measured_and_a_silent_second_track_is_named() {
+        let mut tracker = QaTracker::default();
+        tracker.sound(1_000, &[-23.0, -70.0, -20.0]);
+        tracker.sound(2_000, &[-22.0, -68.0, -61.0]);
+        let qa = tracker.snapshot();
+        assert_eq!(qa.loudness_lufs, Some(-22.0), "the first track leads");
+        assert_eq!(qa.silent_since_ms, None);
+        assert_eq!(
+            qa.other_silent_tracks(3_000),
+            [
+                SilentTrack {
+                    track: 1,
+                    silent_for_ms: 2_000
+                },
+                SilentTrack {
+                    track: 2,
+                    silent_for_ms: 1_000
+                },
+            ]
+        );
+        tracker.sound(3_000, &[-22.0, -18.0, -61.0]);
+        assert_eq!(
+            tracker.snapshot().other_silent_tracks(3_000),
+            [SilentTrack {
+                track: 2,
+                silent_for_ms: 1_000
+            }]
+        );
+        // A source with fewer tracks drops the rest.
+        tracker.sound(4_000, &[-70.0]);
+        assert_eq!(tracker.snapshot().tracks.len(), 1);
+        assert_eq!(tracker.snapshot().silent_since_ms, Some(4_000));
     }
 
     #[test]

@@ -101,7 +101,7 @@ use egress_packets::{rtmp_output_waits_for_video, rtmp_video_packet_can_be_dropp
 use enhanced::{enhanced_rtmp_connect_packet, raw_packet_starts_with_hevc_parameter_set};
 #[cfg(test)]
 use flv::{
-    FlvVideoPacketKind, classify_flv_video_packet, flv_avcc_config_annexb_parameter_sets,
+    FlvVideoPacketKind, classify_flv_video_packet, flv_config_annexb_parameter_sets,
     flv_video_composition_time_ms, parse_flv_audio_meta, parse_flv_video_meta,
 };
 #[cfg(test)]

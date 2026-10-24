@@ -72,6 +72,25 @@ fn picture_and_sound_checks_alert_once_a_condition_has_held_long_enough() {
 }
 
 #[test]
+fn a_still_slate_and_a_silent_later_track_are_named_for_what_they_are() {
+    use crate::media::stream_qa::{SILENT_ALERT_MS, STILL_ALERT_MS};
+    assert_eq!(
+        qa_alert_ids(json!({ "stillForMs": STILL_ALERT_MS, "stillIsSlate": true })),
+        ["pipeline:pipe1:input:picture_slate"]
+    );
+    assert_eq!(
+        qa_alert_ids(json!({
+            "silentTracks": [
+                { "track": 1, "silentForMs": SILENT_ALERT_MS },
+                { "track": 2, "silentForMs": SILENT_ALERT_MS - 1 },
+            ],
+        })),
+        ["pipeline:pipe1:input:audio_silent:track2"],
+        "track 2 (index 1) has been silent long enough; track 3 not yet"
+    );
+}
+
+#[test]
 fn a_destination_off_its_usual_is_a_named_warning() {
     use crate::application::destination_baselines::{Anomaly, Signal};
     let anomalies = [
