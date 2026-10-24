@@ -18,7 +18,43 @@ static CONFIGURED_FFMPEG_PATH: OnceLock<Option<String>> = OnceLock::new();
 
 /// Where `restream ffmpeg-fetch` installs its executable.
 const FETCH_DIR: &str = ".restream/runtime/ffmpeg";
-const FETCH_RELEASE: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest";
+/// The pinned BtbN FFmpeg-Builds release: a month's last build, which BtbN
+/// keeps for two years (daily builds go after 14 days). The Dockerfile's
+/// `ffmpeg-fetch` stage installs the same assets; a test keeps the two equal.
+pub const PINNED_RELEASE: &str = "autobuild-2026-09-30-13-08";
+const RELEASES: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/download";
+
+/// One BtbN static GPL archive and its SHA-256.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Asset {
+    pub name: &'static str,
+    pub sha256: &'static str,
+}
+
+/// The pinned archive for an architecture.
+pub fn pinned_asset(arch: &str) -> Option<Asset> {
+    match arch {
+        "x86_64" => Some(Asset {
+            name: "ffmpeg-n8.1.3-9-g29e619e767-linux64-gpl-8.1.tar.xz",
+            sha256: "97ce978979194b5cf7e06a5e68020dbdaa7a4f3294c5452b6a1bc347100dbb79",
+        }),
+        "aarch64" => Some(Asset {
+            name: "ffmpeg-n8.1.3-9-g29e619e767-linuxarm64-gpl-8.1.tar.xz",
+            sha256: "10523d1e0be6b3ce62a9708cc50815c4b5eb5f36ae147fbe2afeecda6f2d6845",
+        }),
+        _ => None,
+    }
+}
+
+/// Which build `restream ffmpeg-fetch` installs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Channel {
+    /// The pinned release, verified against the digest in this source.
+    Pinned,
+    /// BtbN's floating `latest` 8.1 build, verified against that release's
+    /// own checksum list (`--latest`).
+    Latest,
+}
 
 #[derive(Debug, PartialEq)]
 enum Resolution {
@@ -167,8 +203,8 @@ fn fallback(fetched: &Path, path_env: Option<OsString>, configured: Option<Strin
         .map_or(Resolution::Missing(configured), Resolution::System)
 }
 
-fn release_asset() -> Option<&'static str> {
-    match std::env::consts::ARCH {
+fn latest_asset_name(arch: &str) -> Option<&'static str> {
+    match arch {
         "x86_64" => Some("ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz"),
         "aarch64" => Some("ffmpeg-n8.1-latest-linuxarm64-gpl-8.1.tar.xz"),
         _ => None,
@@ -185,15 +221,52 @@ fn expected_sha256<'a>(listing: &'a str, asset: &str) -> Option<&'a str> {
     })
 }
 
+/// The download client. Besides the bundled web roots it trusts the PEM
+/// bundle in `SSL_CERT_FILE`, if set: hosts behind a TLS-inspecting proxy
+/// name its CA there.
+fn http_client() -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder();
+    if let Some(path) = std::env::var_os("SSL_CERT_FILE") {
+        let pem = std::fs::read(&path).map_err(|error| {
+            format!(
+                "reading SSL_CERT_FILE {}: {error}",
+                Path::new(&path).display()
+            )
+        })?;
+        let certificates = reqwest::Certificate::from_pem_bundle(&pem)
+            .map_err(|error| format!("SSL_CERT_FILE is not a PEM bundle: {error}"))?;
+        for certificate in certificates {
+            builder = builder.add_root_certificate(certificate);
+        }
+    }
+    builder
+        .build()
+        .map_err(|error| format!("building the HTTP client: {}", with_causes(&error)))
+}
+
+/// An error and its sources, joined: reqwest's own message omits the cause
+/// (DNS, TLS, proxy) an operator needs.
+fn with_causes(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    text
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// `restream ffmpeg-fetch`: download the BtbN FFmpeg 8.1 static GPL build
-/// for this architecture, verify it against the release's checksum list, and
-/// install `bin/ffmpeg` under `.restream/runtime/ffmpeg/`. Progress and
-/// errors go to `out`. Optional: a system FFmpeg on `PATH` works without it.
-pub fn fetch(out: &mut impl Write) -> i32 {
+/// `restream ffmpeg-fetch [--latest]`: download the BtbN FFmpeg 8.1 static
+/// GPL build for this architecture (the pinned release, or `latest`), verify
+/// its SHA-256, and install `ffmpeg` and `ffprobe` under
+/// `.restream/runtime/ffmpeg/`. Progress and errors go to `out`. Optional: a
+/// system FFmpeg on `PATH` works without it.
+pub fn fetch(channel: Channel, out: &mut impl Write) -> i32 {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -204,8 +277,12 @@ pub fn fetch(out: &mut impl Write) -> i32 {
             return 1;
         }
     };
-    let _ = writeln!(out, "downloading the BtbN FFmpeg 8.1 build ...");
-    match runtime.block_on(fetch_into(Path::new(FETCH_DIR))) {
+    let which = match channel {
+        Channel::Pinned => PINNED_RELEASE,
+        Channel::Latest => "latest",
+    };
+    let _ = writeln!(out, "downloading the BtbN FFmpeg 8.1 build ({which}) ...");
+    match runtime.block_on(fetch_into(channel, Path::new(FETCH_DIR))) {
         Ok(path) => {
             let version = std::process::Command::new(&path)
                 .arg("-version")
@@ -224,10 +301,10 @@ pub fn fetch(out: &mut impl Write) -> i32 {
     }
 }
 
-async fn fetch_into(dir: &Path) -> Result<PathBuf, String> {
-    let asset = release_asset()
-        .ok_or_else(|| format!("no release build for {}", std::env::consts::ARCH))?;
-    let client = reqwest::Client::new();
+async fn fetch_into(channel: Channel, dir: &Path) -> Result<PathBuf, String> {
+    let arch = std::env::consts::ARCH;
+    let unsupported = || format!("no release build for {arch}");
+    let client = http_client()?;
     let get = |url: String| {
         let client = client.clone();
         async move {
@@ -236,35 +313,58 @@ async fn fetch_into(dir: &Path) -> Result<PathBuf, String> {
                 .send()
                 .await
                 .and_then(reqwest::Response::error_for_status)
-                .map_err(|error| format!("GET {url}: {error}"))
+                .map_err(|error| format!("GET {url}: {}", with_causes(&error)))
         }
     };
 
-    let listing = get(format!("{FETCH_RELEASE}/checksums.sha256"))
-        .await?
-        .text()
-        .await
-        .map_err(|error| format!("reading checksums: {error}"))?;
-    let expected = expected_sha256(&listing, asset)
-        .ok_or_else(|| format!("{asset} is not in the release checksum list"))?
-        .to_ascii_lowercase();
+    let (base, asset, expected) = match channel {
+        Channel::Pinned => {
+            let asset = pinned_asset(arch).ok_or_else(unsupported)?;
+            (
+                format!("{RELEASES}/{PINNED_RELEASE}"),
+                asset.name,
+                asset.sha256.to_string(),
+            )
+        }
+        Channel::Latest => {
+            let asset = latest_asset_name(arch).ok_or_else(unsupported)?;
+            let base = format!("{RELEASES}/latest");
+            let listing = get(format!("{base}/checksums.sha256"))
+                .await?
+                .text()
+                .await
+                .map_err(|error| format!("reading checksums: {error}"))?;
+            let expected = expected_sha256(&listing, asset)
+                .ok_or_else(|| format!("{asset} is not in the release checksum list"))?
+                .to_ascii_lowercase();
+            (base, asset, expected)
+        }
+    };
 
     std::fs::create_dir_all(dir).map_err(|error| format!("creating {}: {error}", dir.display()))?;
     let archive = dir.join(format!("{asset}.part"));
+    let mut response = get(format!("{base}/{asset}")).await?;
     let mut file = std::fs::File::create(&archive)
         .map_err(|error| format!("creating {}: {error}", archive.display()))?;
-    let mut response = get(format!("{FETCH_RELEASE}/{asset}")).await?;
     let mut hasher = Sha256::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|error| format!("downloading {asset}: {error}"))?
-    {
-        hasher.update(&chunk);
-        file.write_all(&chunk)
-            .map_err(|error| format!("writing {}: {error}", archive.display()))?;
+    let downloaded: Result<(), String> = async {
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|error| format!("downloading {asset}: {}", with_causes(&error)))?
+        {
+            hasher.update(&chunk);
+            file.write_all(&chunk)
+                .map_err(|error| format!("writing {}: {error}", archive.display()))?;
+        }
+        Ok(())
     }
+    .await;
     drop(file);
+    if let Err(error) = downloaded {
+        let _ = std::fs::remove_file(&archive);
+        return Err(error);
+    }
     let actual = hex(&hasher.finalize());
     if actual != expected {
         let _ = std::fs::remove_file(&archive);

@@ -21,7 +21,6 @@ use crate::media::startup_policy;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::OnceLock;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -37,7 +36,6 @@ pub(crate) use catalog::{
 use catalog::{now_rfc3339, write_conversion_state};
 
 const MIN_DURATION_SECS: u64 = 5;
-const MP4_MUXER_NAME: &str = "mov";
 
 pub struct RecordingStart {
     pub recording_id: String,
@@ -172,53 +170,6 @@ fn build_recording_remux_args(
     ]
 }
 
-fn ffmpeg_muxers_include_mp4(listing: &str) -> bool {
-    listing.lines().any(|line| {
-        let trimmed = line.trim();
-        let mut parts = trimmed.split_whitespace();
-        let flags = parts.next().unwrap_or_default();
-        let muxer_names = parts.next().unwrap_or_default();
-        flags.contains('E')
-            && muxer_names
-                .split(',')
-                .any(|name| name == MP4_MUXER_NAME || name == "mp4")
-    })
-}
-
-fn ffmpeg_supports_mp4_muxer() -> bool {
-    static SUPPORTS_MP4_MUXER: OnceLock<bool> = OnceLock::new();
-    *SUPPORTS_MP4_MUXER.get_or_init(|| {
-        let ffmpeg = crate::ffmpeg_binary::ffmpeg_bin_path();
-        match std::process::Command::new(ffmpeg)
-            .args(["-hide_banner", "-muxers"])
-            .output()
-        {
-            Ok(output) if output.status.success() => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                ffmpeg_muxers_include_mp4(&stdout)
-            }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                warn!(
-                    ffmpeg = %ffmpeg.display(),
-                    status = %output.status,
-                    stderr = %stderr.trim(),
-                    "failed to inspect ffmpeg muxer support; recording remux disabled"
-                );
-                false
-            }
-            Err(error) => {
-                warn!(
-                    ffmpeg = %ffmpeg.display(),
-                    err = %error,
-                    "failed to spawn ffmpeg for muxer probe; recording remux disabled"
-                );
-                false
-            }
-        }
-    })
-}
-
 async fn remux_recording_to_mp4(
     recording_id: String,
     ts_path: PathBuf,
@@ -226,8 +177,15 @@ async fn remux_recording_to_mp4(
     ffmpeg_threads: u32,
     metadata: Option<RecordingMetadataReporter>,
 ) {
-    if !ffmpeg_supports_mp4_muxer() {
-        let error = "Configured FFmpeg binary does not expose the mov/mp4 muxer".to_string();
+    let capabilities = crate::ffmpeg_capabilities::report().await;
+    if !capabilities.available(crate::ffmpeg_capabilities::Feature::RecordingRemux) {
+        let missing = capabilities
+            .features
+            .iter()
+            .find(|status| status.feature == crate::ffmpeg_capabilities::Feature::RecordingRemux)
+            .map(|status| status.missing.join(", "))
+            .unwrap_or_default();
+        let error = format!("FFmpeg cannot remux recordings to MP4: it lacks {missing}");
         write_conversion_state(
             &ts_path,
             RecordingConversionStatus::Failed,
@@ -242,8 +200,7 @@ async fn remux_recording_to_mp4(
         }
         info!(
             source = %ts_path.display(),
-            muxer = MP4_MUXER_NAME,
-            "recording remux skipped because ffmpeg lacks mp4 muxer support"
+            "recording remux skipped: FFmpeg lacks what MP4 remux needs"
         );
         return;
     }

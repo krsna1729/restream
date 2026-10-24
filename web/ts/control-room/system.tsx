@@ -11,12 +11,17 @@ import { Freshness, useEngineHealth } from "./polled.js";
 import type { LiveSnapshot } from "./store.js";
 import {
   executionTopology,
+  ffmpegReadiness,
   hostReadiness,
   kernelCapabilities,
   overallReadiness,
   ownerAttention,
 } from "./system-model.js";
-import type { CheckStatus, EngineStatus } from "./system-model.js";
+import type {
+  CheckStatus,
+  EngineStatus,
+  ReadinessRow,
+} from "./system-model.js";
 import { Kpi, KeyValue, KpiRow } from "../ui/kpi.js";
 import { PageHeader } from "../ui/page-header.js";
 import { Panel } from "../ui/panel.js";
@@ -39,7 +44,9 @@ export function System({ live }: { live: LiveSnapshot }) {
     void getEngineStatus<EngineStatus>().then(setStatus);
   }, []);
   if (health.value === null) {
-    return <p className="text-sm text-base-content/70">Loading engine health…</p>;
+    return (
+      <p className="text-sm text-base-content/70">Loading engine health…</p>
+    );
   }
   const rows = hostReadiness(health.value);
   const overall = overallReadiness(rows);
@@ -47,44 +54,67 @@ export function System({ live }: { live: LiveSnapshot }) {
     <div className="flex flex-col gap-4">
       <PageHeader
         eyebrow="System"
-        title={overall === "ok" ? "Host ready" : overall === "warning" ? "A host check needs attention" : "Host checks not reported"}
-        tone={overall === "ok" ? "ok" : overall === "warning" ? "warn" : undefined}
+        title={
+          overall === "ok"
+            ? "Host ready"
+            : overall === "warning"
+              ? "A host check needs attention"
+              : "Host checks not reported"
+        }
+        tone={
+          overall === "ok" ? "ok" : overall === "warning" ? "warn" : undefined
+        }
         subtitle="Host readiness, kernel capabilities, execution classes, SRT ingress counters and this build."
-        actions={<Freshness atMs={health.atMs} staleAfterMs={health.staleAfterMs} />}
+        actions={
+          <Freshness atMs={health.atMs} staleAfterMs={health.staleAfterMs} />
+        }
       />
       <div className="grid gap-4 lg:grid-cols-2">
         <Panel id="system-host" title="Host readiness">
           <div className="flex flex-col gap-3">
-            <ul className="space-y-2" aria-label="Host checks">
-              {rows.map((row) => (
-                <li key={row.key} className="grid grid-cols-[1fr_auto] gap-x-2 text-sm">
-                  <span className="font-medium">{row.label}</span>
-                  <span className="flex items-center gap-2 tabular-nums">
-                    {row.value}
-                    <StatusBadge tone={CHECK_TONE[row.status]} dot>
-                      {row.status}
-                    </StatusBadge>
-                  </span>
-                  <span className="col-span-2 text-xs text-base-content/70">{row.detail}</span>
-                </li>
-              ))}
-            </ul>
-            <ul className="flex flex-wrap gap-2 text-sm" aria-label="Kernel capabilities">
+            <CheckList label="Host checks" rows={rows} />
+            <ul
+              className="flex flex-wrap gap-2 text-sm"
+              aria-label="Kernel capabilities"
+            >
               {kernelCapabilities(live.metrics).map((cap) => (
                 <li key={cap.label} className="max-w-full">
-                  <StatusBadge tone={cap.available === null ? "neutral" : cap.available ? "ok" : "warn"}>
-                    {cap.label} · {cap.available === null ? "unknown" : cap.available ? "available" : "unavailable"} · {cap.detail}
+                  <StatusBadge
+                    tone={
+                      cap.available === null
+                        ? "neutral"
+                        : cap.available
+                          ? "ok"
+                          : "warn"
+                    }
+                  >
+                    {cap.label} ·{" "}
+                    {cap.available === null
+                      ? "unknown"
+                      : cap.available
+                        ? "available"
+                        : "unavailable"}{" "}
+                    · {cap.detail}
                   </StatusBadge>
                 </li>
               ))}
             </ul>
           </div>
         </Panel>
-        <Panel id="system-topology" title="Execution topology" subtitle="reported by the engine">
+        <Panel
+          id="system-topology"
+          title="Execution topology"
+          subtitle="reported by the engine"
+        >
           <div className="flex flex-col gap-3">
             <KpiRow max={3}>
               {executionTopology(health.value, live.metrics).map((cls) => (
-                <Kpi key={cls.name} label={cls.name} value={cls.count ?? "--"} foot={cls.unit} />
+                <Kpi
+                  key={cls.name}
+                  label={cls.name}
+                  value={cls.count ?? "--"}
+                  foot={cls.unit}
+                />
               ))}
             </KpiRow>
             <Process live={live} />
@@ -94,9 +124,45 @@ export function System({ live }: { live: LiveSnapshot }) {
           owner={health.value.srtListener?.ingressOwner ?? null}
           restarts={health.value.srtListener?.restarts ?? 0}
         />
-        <Provenance status={status} containedPanics={health.value.containedPanics ?? 0} />
+        <Panel
+          id="system-ffmpeg"
+          title="FFmpeg"
+          subtitle="every codec runs in these executables"
+        >
+          <CheckList
+            label="FFmpeg checks"
+            rows={ffmpegReadiness(status?.externalTools)}
+          />
+        </Panel>
+        <Provenance
+          status={status}
+          containedPanics={health.value.containedPanics ?? 0}
+        />
       </div>
     </div>
+  );
+}
+
+function CheckList(props: { label: string; rows: readonly ReadinessRow[] }) {
+  return (
+    <ul className="space-y-2" aria-label={props.label}>
+      {props.rows.map((row) => (
+        <li key={row.key} className="grid grid-cols-[1fr_auto] gap-x-2 text-sm">
+          <span className="font-medium">{row.label}</span>
+          <span className="flex items-center gap-2 tabular-nums">
+            {row.value}
+            <StatusBadge tone={CHECK_TONE[row.status]} dot>
+              {row.status}
+            </StatusBadge>
+          </span>
+          {row.detail && (
+            <span className="col-span-2 text-xs break-all text-base-content/70">
+              {row.detail}
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -107,21 +173,41 @@ function Process({ live }: { live: LiveSnapshot }) {
   return (
     <KeyValue
       rows={[
-        ["Restream CPU", sampled ? formatPercent(engine.restreamCpuPercent) : "sampling…"],
-        ["FFmpeg CPU", sampled ? formatPercent(engine.externalFfmpegCpuPercent) : "sampling…"],
-        ["Memory", `${formatBytes(engine.restreamMemoryBytes)} restream · ${formatBytes(engine.externalFfmpegMemoryBytes)} FFmpeg`],
+        [
+          "Restream CPU",
+          sampled ? formatPercent(engine.restreamCpuPercent) : "sampling…",
+        ],
+        [
+          "FFmpeg CPU",
+          sampled
+            ? formatPercent(engine.externalFfmpegCpuPercent)
+            : "sampling…",
+        ],
+        [
+          "Memory",
+          `${formatBytes(engine.restreamMemoryBytes)} restream · ${formatBytes(engine.externalFfmpegMemoryBytes)} FFmpeg`,
+        ],
       ]}
     />
   );
 }
 
-function SrtOwners(props: { owner: SrtIngressOwnerHealth | null; restarts: number }) {
+function SrtOwners(props: {
+  owner: SrtIngressOwnerHealth | null;
+  restarts: number;
+}) {
   const { owner } = props;
   return (
-    <Panel id="system-owners" title="SRT ingress owners" subtitle="summed over every owner; counters since the engine started">
+    <Panel
+      id="system-owners"
+      title="SRT ingress owners"
+      subtitle="summed over every owner; counters since the engine started"
+    >
       <div className="flex flex-col gap-3">
         {owner === null ? (
-          <p className="text-sm text-base-content/70">The SRT listener reports no owner.</p>
+          <p className="text-sm text-base-content/70">
+            The SRT listener reports no owner.
+          </p>
         ) : (
           <>
             <div className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
@@ -170,10 +256,15 @@ function Attention({ findings }: { findings: readonly string[] }) {
   );
 }
 
-function Provenance(props: { status: EngineStatus | null; containedPanics: number }) {
+function Provenance(props: {
+  status: EngineStatus | null;
+  containedPanics: number;
+}) {
   const { status } = props;
   if (status === null) {
-    return <p className="text-sm text-base-content/70">Loading build information…</p>;
+    return (
+      <p className="text-sm text-base-content/70">Loading build information…</p>
+    );
   }
   const libs = status.nativeLibraries ?? {};
   return (
@@ -182,12 +273,39 @@ function Provenance(props: { status: EngineStatus | null; containedPanics: numbe
         <KeyValue
           rows={[
             ["Restream", status.restream?.version ?? "--"],
-            ["Commit", <span key="commit" className="font-mono text-xs break-all">{status.restream?.commit ?? "--"}</span>],
+            [
+              "Commit",
+              <span key="commit" className="font-mono text-xs break-all">
+                {status.restream?.commit ?? "--"}
+              </span>,
+            ],
             ["Built", status.restream?.buildTimestamp ?? "--"],
-            ["Rust", `${status.toolchain?.rustc ?? "--"} · ${status.toolchain?.target ?? "--"}`],
-            ...Object.entries(libs).map(([name, lib]) => [name, `${lib?.version ?? "--"}${lib?.license ? ` · ${lib.license}` : ""}`] as const),
-            ["Host", `${status.os?.hostname ?? "--"} · kernel ${status.os?.kernelVersion ?? "--"} · ${status.os?.cpu?.logicalCpus ?? "--"} CPUs`],
-            ["Contained panics", <span key="panics" className={props.containedPanics > 0 ? "text-warning" : undefined}>{props.containedPanics}</span>],
+            [
+              "Rust",
+              `${status.toolchain?.rustc ?? "--"} · ${status.toolchain?.target ?? "--"}`,
+            ],
+            ...Object.entries(libs).map(
+              ([name, lib]) =>
+                [
+                  name,
+                  `${lib?.version ?? "--"}${lib?.license ? ` · ${lib.license}` : ""}`,
+                ] as const,
+            ),
+            [
+              "Host",
+              `${status.os?.hostname ?? "--"} · kernel ${status.os?.kernelVersion ?? "--"} · ${status.os?.cpu?.logicalCpus ?? "--"} CPUs`,
+            ],
+            [
+              "Contained panics",
+              <span
+                key="panics"
+                className={
+                  props.containedPanics > 0 ? "text-warning" : undefined
+                }
+              >
+                {props.containedPanics}
+              </span>,
+            ],
           ]}
         />
         <div className="flex flex-wrap items-center gap-2">

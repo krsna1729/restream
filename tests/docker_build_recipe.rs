@@ -149,3 +149,36 @@ fn every_patch_path_is_staged_before_the_warm_build() {
         );
     }
 }
+
+/// The images install the FFmpeg build `restream ffmpeg-fetch` pins: same
+/// release, same archive and digest for each architecture.
+#[test]
+fn images_install_the_pinned_ffmpeg_build() {
+    let stage = DOCKERFILE
+        .split("AS ffmpeg-fetch")
+        .nth(1)
+        .and_then(|rest| rest.split("\nFROM ").next())
+        .expect("Dockerfile has an ffmpeg-fetch stage");
+    assert!(
+        stage.contains(&format!(
+            "releases/download/{}/",
+            restream::ffmpeg_binary::PINNED_RELEASE
+        )),
+        "ffmpeg-fetch stage must download the pinned release"
+    );
+    for (docker_arch, arch) in [("amd64", "x86_64"), ("arm64", "aarch64")] {
+        let asset = restream::ffmpeg_binary::pinned_asset(arch).expect("pinned asset");
+        let line = stage
+            .lines()
+            .position(|line| line.trim_start().starts_with(&format!("{docker_arch})")))
+            .unwrap_or_else(|| panic!("no {docker_arch} case"));
+        let case: String = stage.lines().skip(line).take(2).collect();
+        assert!(
+            case.contains(&format!("asset={}", asset.name))
+                && case.contains(&format!("sha256={}", asset.sha256)),
+            "{docker_arch} must install {} with sha256 {}",
+            asset.name,
+            asset.sha256
+        );
+    }
+}

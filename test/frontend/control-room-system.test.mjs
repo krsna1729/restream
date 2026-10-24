@@ -12,6 +12,7 @@ const {
   overallReadiness,
   ownerAttention,
 } = await loadCompiledFrontendModule("control-room/system-model.js");
+const systemModel = await loadCompiledFrontendModule("control-room/system-model.js");
 
 function file(name, overrides = {}) {
   return { name, size: 1, modifiedAt: "2026-10-12T10:00:00Z", ...overrides };
@@ -202,4 +203,31 @@ test("owner findings name each counter of lost or late work, and only those", ()
   ]) {
     assert.equal(ownerAttention({ ...clean, [field]: value }).length, 1, field);
   }
+});
+
+test("the FFmpeg check names each tool's version and what an unavailable feature lacks", () => {
+  const { ffmpegReadiness } = systemModel;
+  assert.deepEqual(
+    ffmpegReadiness(null).map((row) => [row.key, row.status]),
+    [["ffmpeg", "unknown"]],
+  );
+  const rows = ffmpegReadiness({
+    ffmpeg: { path: "/usr/bin/ffmpeg", version: "6.1.1", error: null },
+    ffprobe: { path: "ffprobe", version: null, error: "ffprobe: No such file or directory" },
+    features: [
+      { feature: "transcoding", available: false, missing: ["encoder libx265"] },
+      { feature: "posters", available: true, missing: [] },
+    ],
+  });
+  assert.deepEqual(
+    rows.map((row) => [row.label, row.value, row.status]),
+    [
+      ["FFmpeg", "6.1.1", "ok"],
+      ["ffprobe", "not found", "warning"],
+      ["Transcoding", "unavailable", "warning"],
+      ["Thumbnails", "available", "ok"],
+    ],
+  );
+  assert.match(rows[1].detail, /No such file/);
+  assert.match(rows[2].detail, /lacks encoder libx265/);
 });

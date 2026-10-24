@@ -137,31 +137,14 @@ fn build_recording_remux_args_targets_faststart_mp4_copy() {
     assert_eq!(args.last().map(String::as_str), Some("/tmp/output.tmp.mp4"));
 }
 
-#[test]
-fn ffmpeg_muxers_include_mp4_detects_mov_muxer_aliases() {
-    let listing = "Formats:\n D.. = Demuxing supported\n .E. = Muxing supported\n ---\n  E mov,mp4,m4a,3gp,3g2,mj2 QuickTime / MOV\n  E mpegts MPEG-TS\n";
-    assert!(ffmpeg_muxers_include_mp4(listing));
-}
-
-#[test]
-fn ffmpeg_muxers_include_mp4_detects_plain_mov_muxer_name() {
-    let listing = "Formats:\n D.. = Demuxing supported\n .E. = Muxing supported\n ---\n  E mov             QuickTime / MOV\n  E mpegts          MPEG-TS (MPEG-2 Transport Stream)\n";
-    assert!(ffmpeg_muxers_include_mp4(listing));
-}
-
-#[test]
-fn ffmpeg_muxers_include_mp4_rejects_missing_mov_muxer() {
-    let listing =
-        "Formats:\n .E. = Muxing supported\n ---\n  E matroska Matroska\n  E mpegts MPEG-TS\n";
-    assert!(!ffmpeg_muxers_include_mp4(listing));
-}
-
 async fn remux_recording_fixture(
     settings: RecordingSettings,
 ) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     assert!(
-        ffmpeg_supports_mp4_muxer(),
-        "bundled ffmpeg must expose mp4 muxing for recording remux"
+        crate::ffmpeg_capabilities::report()
+            .await
+            .available(crate::ffmpeg_capabilities::Feature::RecordingRemux),
+        "the test host's ffmpeg must be able to remux recordings"
     );
 
     let fixture = crate::test_fixtures::canonical_h264_ts_fixture()

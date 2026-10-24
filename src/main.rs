@@ -23,10 +23,16 @@ fn main() {
             });
         }
         if flag == "ffmpeg-fetch" {
+            let channel = match args.next() {
+                None => restream::ffmpeg_binary::Channel::Pinned,
+                Some(arg) if arg == "--latest" => restream::ffmpeg_binary::Channel::Latest,
+                Some(_) => print_usage_and_exit(),
+            };
             if args.next().is_some() {
                 print_usage_and_exit();
             }
             std::process::exit(restream::ffmpeg_binary::fetch(
+                channel,
                 &mut std::io::stdout().lock(),
             ));
         }
@@ -71,7 +77,9 @@ fn main() {
 }
 
 fn print_usage_and_exit() -> ! {
-    eprintln!("usage: restream [host-check | host-tune | ffmpeg-fetch | --emit-sbom <path>]");
+    eprintln!(
+        "usage: restream [host-check | host-tune | ffmpeg-fetch [--latest] | --emit-sbom <path>]"
+    );
     std::process::exit(2);
 }
 
