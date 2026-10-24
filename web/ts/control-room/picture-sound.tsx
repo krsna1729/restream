@@ -65,12 +65,14 @@ export function PictureAndSound(props: {
             checked={enabled}
             disabled={!canOperate || busy || qa.value === null}
             onChange={async (event) => {
+              const wanted = event.target.checked;
+              // Show the change at once; the engine's answer settles it, and
+              // a failed save puts the switch back.
+              const before = enabled;
+              setWritten(wanted);
               setBusy(true);
-              const saved = await setStreamQa(
-                props.pipelineId,
-                event.target.checked,
-              );
-              if (saved) setWritten(saved.enabled);
+              const saved = await setStreamQa(props.pipelineId, wanted);
+              setWritten(saved ? saved.enabled : before);
               qa.refresh();
               setBusy(false);
             }}
