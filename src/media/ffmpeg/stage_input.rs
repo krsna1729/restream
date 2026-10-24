@@ -37,6 +37,10 @@ pub struct StageInputPump {
     feeder: TsPacketFeeder,
     metrics: Arc<StageMetrics>,
     include_audio: bool,
+    /// Video packets other than keyframes are dropped before muxing: for a
+    /// consumer that decodes keyframes only (the picture checks), so the
+    /// pipe carries a fraction of the stream.
+    video_keyframes_only: bool,
     lifecycle: Option<Arc<StageLifecycle>>,
     has_emitted_first_input: bool,
     /// Optional engine + pipeline for dynamic sequence-header refresh on
@@ -67,10 +71,17 @@ impl StageInputPump {
             feeder,
             metrics,
             include_audio,
+            video_keyframes_only: false,
             lifecycle: None,
             has_emitted_first_input: false,
             engine_refresh: None,
         }
+    }
+
+    /// Feed only video keyframes (and all audio): see `video_keyframes_only`.
+    pub fn with_video_keyframes_only(mut self) -> Self {
+        self.video_keyframes_only = true;
+        self
     }
 
     pub fn with_lifecycle(mut self, lifecycle: Arc<StageLifecycle>) -> Self {
@@ -130,6 +141,9 @@ impl StageInputPump {
 
         for pkt in packets.drain(..) {
             if !self.include_audio && pkt.media_type == MediaType::Audio {
+                continue;
+            }
+            if self.video_keyframes_only && pkt.media_type == MediaType::Video && !pkt.is_keyframe {
                 continue;
             }
 
@@ -395,6 +409,50 @@ mod tests {
         let snapshot = lifecycle.snapshot();
         assert_eq!(snapshot.phase, StagePhase::FirstInput);
         assert!(snapshot.first_input_at.is_some());
+    }
+
+    #[test]
+    fn a_keyframes_only_pump_feeds_keyframes_and_audio_and_drops_the_rest() {
+        let feed = |keyframes_only: bool| {
+            let ring = Arc::new(RingBuffer::new(16));
+            let metrics = Arc::new(StageMetrics::new());
+            ring.set_video_parameter_sets(h264_parameter_sets());
+            let audio = crate::media::metadata::AudioMeta {
+                codec: "aac".to_string(),
+                sample_rate: 48_000,
+                channels: 2,
+                track_index: 0,
+                ..Default::default()
+            };
+            let mut pump = StageInputPump::new(
+                "keyframes".to_string(),
+                ring.clone(),
+                0,
+                Some(&video_meta()),
+                &[audio],
+                true,
+                metrics.clone(),
+            );
+            if keyframes_only {
+                pump = pump.with_video_keyframes_only();
+            }
+            ring.push(video_keyframe(0));
+            for pts in [33, 66, 99] {
+                ring.push(MediaPacket {
+                    is_keyframe: false,
+                    payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x41, 0x9a, 0x02]),
+                    ..video_keyframe(pts)
+                });
+                ring.push(audio_packet(pts));
+            }
+            ring.push(video_keyframe(132));
+            ring.mark_end_of_stream();
+            drain(pump);
+            metrics.packets_in.load(Ordering::Relaxed)
+        };
+        // Two keyframes and three audio packets, not the three deltas.
+        assert_eq!(feed(true), 5);
+        assert_eq!(feed(false), 8);
     }
 
     fn video_pump(ring: &Arc<RingBuffer>, metrics: &Arc<StageMetrics>) -> StageInputPump {
