@@ -37,14 +37,6 @@ fn nofile_limit_json(configured: u64, snapshot: NofileLimitSnapshot) -> NofileLi
             error: None,
             unsupported: None,
         },
-        NofileLimitSnapshot::ReadFailed => NofileLimitJson {
-            configured,
-            soft: None,
-            hard: None,
-            satisfied: false,
-            error: Some("getrlimit failed"),
-            unsupported: None,
-        },
         #[cfg(not(unix))]
         NofileLimitSnapshot::Unsupported => NofileLimitJson {
             configured,

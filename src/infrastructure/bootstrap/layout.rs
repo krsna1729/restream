@@ -2,18 +2,14 @@ use crate::config::AppConfig;
 use tracing::{info, warn};
 
 pub(super) fn set_rlimit(limit: u64) {
-    // SAFETY: `limit` is initialized on the stack, its pointer remains valid
-    // for the call, and `setrlimit` does not retain it.
-    unsafe {
-        let limit = libc::rlimit {
-            rlim_cur: limit,
-            rlim_max: limit,
-        };
-        if libc::setrlimit(libc::RLIMIT_NOFILE, &limit) != 0 {
-            warn!("failed to raise RLIMIT_NOFILE limit");
-        } else {
-            info!(limit = limit.rlim_cur, "raised file descriptor limit");
-        }
+    let rlimit = rustix::process::Rlimit {
+        current: Some(limit),
+        maximum: Some(limit),
+    };
+    if rustix::process::setrlimit(rustix::process::Resource::Nofile, rlimit).is_err() {
+        warn!("failed to raise RLIMIT_NOFILE limit");
+    } else {
+        info!(limit, "raised file descriptor limit");
     }
 }
 

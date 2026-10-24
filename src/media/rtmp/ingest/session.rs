@@ -72,7 +72,7 @@ pub(super) async fn handle_session_results(
                             return Err("RTMP listener shutting down");
                         }
                     }
-                    set_tcp_socket_buffers(socket.raw_fd(), engine.config.rtmp_stream_buffer_bytes);
+                    set_tcp_socket_buffers(socket.as_fd(), engine.config.rtmp_stream_buffer_bytes);
                     let responses = session
                         .accept_request(request_id)
                         .map_err(|_| "Failed to accept publish request")?;

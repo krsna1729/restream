@@ -11,14 +11,8 @@ use crate::media::startup_policy;
 
 /// A Tokio child pipe as a blocking `File`, for a dedicated I/O thread.
 pub(crate) fn blocking_pipe(fd: std::os::fd::OwnedFd) -> std::io::Result<std::fs::File> {
-    use std::os::fd::AsRawFd;
-    let raw = fd.as_raw_fd();
-    // SAFETY: `raw` is a valid descriptor owned by `fd` for this call.
-    let flags = unsafe { libc::fcntl(raw, libc::F_GETFL) };
-    // SAFETY: as above; F_SETFL takes no pointers.
-    if flags < 0 || unsafe { libc::fcntl(raw, libc::F_SETFL, flags & !libc::O_NONBLOCK) } < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
+    let flags = rustix::fs::fcntl_getfl(&fd)?;
+    rustix::fs::fcntl_setfl(&fd, flags - rustix::fs::OFlags::NONBLOCK)?;
     Ok(std::fs::File::from(fd))
 }
 
@@ -42,10 +36,8 @@ pub(crate) fn spawn_external_stdin_writer(
     // 18-stream burst) while staying well below the Linux 1 MB max.
     #[cfg(target_os = "linux")]
     {
-        use std::os::fd::AsRawFd;
-        const PIPE_BUF_SIZE: libc::c_int = 256 * 1024;
-        // SAFETY: F_SETPIPE_SZ on a descriptor owned by `fd`; no pointers; failure is harmless.
-        let _ = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETPIPE_SZ, PIPE_BUF_SIZE) };
+        // Failure is harmless: the pipe keeps the default size.
+        let _ = rustix::pipe::fcntl_setpipe_size(&fd, 256 * 1024);
     }
     let mut stdin = blocking_pipe(fd)?;
     std::thread::Builder::new()

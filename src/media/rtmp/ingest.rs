@@ -57,6 +57,10 @@ impl RtmpClientSocket {
         self.stream.as_raw_fd()
     }
 
+    fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        std::os::fd::AsFd::as_fd(&self.stream)
+    }
+
     pub(super) async fn read(&mut self, buffer: Vec<u8>) -> io::Result<(usize, Vec<u8>)> {
         use compio::io::AsyncRead;
         let compio::BufResult(result, buffer) = self.stream.read(buffer).await;
@@ -623,40 +627,15 @@ pub(super) struct RtmpIngestSession {
     pub(super) pipeline_id: String,
     pub(super) registration: IngestRegistration,
 }
-#[cfg(target_os = "linux")]
-fn set_tcp_socket_buffers(fd: RawFd, size: usize) {
-    let Ok(size) = libc::c_int::try_from(size) else {
-        warn!("RTMP socket buffer size does not fit c_int");
-        return;
-    };
-    // SAFETY: `fd` is the live TCP socket still owned by this Compio session.
-    // `setsockopt` reads the stack-allocated `size` value of the stated length.
-    // The socket option values are valid for both calls below.
-    unsafe {
-        if libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_RCVBUF,
-            &size as *const _ as *const libc::c_void,
-            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-        ) != 0
-        {
-            warn!("failed to set RTMP receive socket buffer");
-        }
-        if libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_SNDBUF,
-            &size as *const _ as *const libc::c_void,
-            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-        ) != 0
-        {
-            warn!("failed to set RTMP send socket buffer");
-        }
+fn set_tcp_socket_buffers(socket: std::os::fd::BorrowedFd<'_>, size: usize) {
+    use rustix::net::sockopt;
+    if sockopt::set_socket_recv_buffer_size(socket, size).is_err() {
+        warn!("failed to set RTMP receive socket buffer");
+    }
+    if sockopt::set_socket_send_buffer_size(socket, size).is_err() {
+        warn!("failed to set RTMP send socket buffer");
     }
 }
-#[cfg(not(target_os = "linux"))]
-fn set_tcp_socket_buffers(_fd: RawFd, _size: usize) {}
 pub(super) async fn handle_rtmp_client(
     stream: compio::net::TcpStream,
     client_addr: SocketAddr,
@@ -668,7 +647,7 @@ pub(super) async fn handle_rtmp_client(
     let mut socket = RtmpClientSocket::new(stream, shutdown.clone());
     let client_ip = client_addr.ip().to_string();
     let client_addr_text = client_addr.to_string();
-    set_tcp_socket_buffers(socket.raw_fd(), engine.config.rtmp_preauth_buffer_bytes);
+    set_tcp_socket_buffers(socket.as_fd(), engine.config.rtmp_preauth_buffer_bytes);
 
     let handshake = tokio::select! {
         result = compio::time::timeout(

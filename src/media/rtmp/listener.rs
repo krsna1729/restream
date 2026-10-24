@@ -499,71 +499,23 @@ fn bind_rtmp_listener(
     backlog: u32,
     reuse_port: bool,
 ) -> Result<std::net::TcpListener, io::Error> {
-    use std::os::fd::{FromRawFd, OwnedFd};
+    use rustix::net::{AddressFamily, SocketFlags, SocketType, sockopt};
 
-    // SAFETY: socket(2) takes no pointers; the result is checked below.
-    let fd = unsafe {
-        libc::socket(
-            libc::AF_INET,
-            libc::SOCK_STREAM | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
-            0,
-        )
-    };
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: `fd` is a fresh socket owned by nothing else; `OwnedFd` closes it
-    // on every early return below.
-    let socket = unsafe { OwnedFd::from_raw_fd(fd) };
-    let check = |result: libc::c_int| {
-        if result < 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
-    };
-    let enable: libc::c_int = 1;
-    // SAFETY: `enable` is a live c_int of the length passed; `fd` is owned by `socket`.
-    check(unsafe {
-        libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_REUSEADDR,
-            (&enable as *const libc::c_int).cast(),
-            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-        )
-    })?;
+    let socket = rustix::net::socket_with(
+        AddressFamily::INET,
+        SocketType::STREAM,
+        SocketFlags::NONBLOCK | SocketFlags::CLOEXEC,
+        None,
+    )?;
+    sockopt::set_socket_reuseaddr(&socket, true)?;
     if reuse_port {
-        // SAFETY: `enable` is a live c_int of the length passed; `fd` is owned by `socket`.
-        check(unsafe {
-            libc::setsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_REUSEPORT,
-                (&enable as *const libc::c_int).cast(),
-                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-            )
-        })?;
+        sockopt::set_socket_reuseport(&socket, true)?;
     }
-    let address = libc::sockaddr_in {
-        sin_family: libc::AF_INET as libc::sa_family_t,
-        sin_port: port.to_be(),
-        sin_addr: libc::in_addr {
-            s_addr: u32::from(std::net::Ipv4Addr::UNSPECIFIED).to_be(),
-        },
-        sin_zero: [0; 8],
-    };
-    // SAFETY: `address` is a live sockaddr_in of the length passed; `fd` is owned by `socket`.
-    check(unsafe {
-        libc::bind(
-            fd,
-            (&address as *const libc::sockaddr_in).cast(),
-            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
-        )
-    })?;
-    let backlog = libc::c_int::try_from(backlog).unwrap_or(libc::c_int::MAX);
-    // SAFETY: listen(2) on the owned fd; no pointers.
-    check(unsafe { libc::listen(fd, backlog) })?;
+    rustix::net::bind(
+        &socket,
+        &std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, port),
+    )?;
+    rustix::net::listen(&socket, i32::try_from(backlog).unwrap_or(i32::MAX))?;
     Ok(std::net::TcpListener::from(socket))
 }
 
