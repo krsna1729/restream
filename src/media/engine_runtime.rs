@@ -175,6 +175,67 @@ impl MediaEngine {
             .is_some_and(|token| !token.is_cancelled())
     }
 
+    /// Registers a pipeline's stream checks, or returns `None` if they run
+    /// already; check-and-insert under one lock, as for recordings.
+    pub fn register_stream_qa(
+        &self,
+        pipeline_id: &str,
+    ) -> Option<(
+        CancellationToken,
+        Arc<std::sync::Mutex<crate::media::stream_qa::StreamQa>>,
+    )> {
+        let mut entries = crate::sync::lock(&self.stream_qa.entries);
+        if entries
+            .get(pipeline_id)
+            .is_some_and(|entry| !entry.cancel.is_cancelled())
+        {
+            return None;
+        }
+        let entry = crate::media::engine_registries::StreamQaEntry {
+            cancel: CancellationToken::new(),
+            findings: Arc::default(),
+        };
+        let handles = (entry.cancel.clone(), entry.findings.clone());
+        entries.insert(pipeline_id.to_string(), entry);
+        Some(handles)
+    }
+
+    /// Stops a pipeline's stream checks.
+    pub fn unregister_stream_qa(&self, pipeline_id: &str) {
+        if let Some(entry) = crate::sync::lock(&self.stream_qa.entries).remove(pipeline_id) {
+            entry.cancel.cancel();
+        }
+    }
+
+    /// Drops the entry a finished sampler left, unless a newer one replaced
+    /// it (a stop and a start raced the thread's exit).
+    pub fn release_stream_qa(
+        &self,
+        pipeline_id: &str,
+        findings: &Arc<std::sync::Mutex<crate::media::stream_qa::StreamQa>>,
+    ) {
+        let mut entries = crate::sync::lock(&self.stream_qa.entries);
+        if entries
+            .get(pipeline_id)
+            .is_some_and(|entry| Arc::ptr_eq(&entry.findings, findings))
+        {
+            entries.remove(pipeline_id);
+        }
+    }
+
+    pub fn is_stream_qa_active(&self, pipeline_id: &str) -> bool {
+        crate::sync::lock(&self.stream_qa.entries)
+            .get(pipeline_id)
+            .is_some_and(|entry| !entry.cancel.is_cancelled())
+    }
+
+    /// The latest findings of a pipeline's running checks.
+    pub fn stream_qa(&self, pipeline_id: &str) -> Option<crate::media::stream_qa::StreamQa> {
+        let entries = crate::sync::lock(&self.stream_qa.entries);
+        let entry = entries.get(pipeline_id)?;
+        Some(crate::sync::lock(&entry.findings).clone())
+    }
+
     pub async fn cancel_all_active_tasks(&self) {
         {
             let egresses = self.egresses.cancel_tokens.read().await;
@@ -193,6 +254,9 @@ impl MediaEngine {
             for token in recordings.values() {
                 token.cancel();
             }
+        }
+        for entry in crate::sync::lock(&self.stream_qa.entries).values() {
+            entry.cancel.cancel();
         }
         self.shutdown_all_srt_fabric_runtimes().await;
         self.shutdown_all_rtmp_fabric_runtimes().await;

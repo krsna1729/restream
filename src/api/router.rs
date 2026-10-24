@@ -203,6 +203,7 @@ pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
     "/api/v1/pipelines/{pipeline_id}/diagnostics/run",
     "/api/v1/pipelines/{pipeline_id}/recording/start",
     "/api/v1/pipelines/{pipeline_id}/recording/stop",
+    "/api/v1/pipelines/{pipeline_id}/stream-qa",
     "/api/v1/encodings/custom",
     "/api/v1/ingests",
     "/api/v1/ingests/{id}",
@@ -567,6 +568,11 @@ fn create_app_router() -> Router<Arc<AppState>> {
         .route(
             "/api/v1/pipelines/{pipeline_id}/recording/stop",
             post(recording_stop_handler),
+        )
+        .route(
+            "/api/v1/pipelines/{pipeline_id}/stream-qa",
+            get(crate::api::stream_qa::stream_qa_get_handler)
+                .put(crate::api::stream_qa::stream_qa_put_handler),
         )
         .route(
             "/api/v1/encodings/custom",

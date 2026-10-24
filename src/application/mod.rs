@@ -27,6 +27,7 @@ pub mod services;
 pub mod settings;
 pub mod share;
 pub mod srt_ingest;
+pub mod stream_qa;
 pub mod team;
 pub mod topology;
 pub mod transcode_profiles;

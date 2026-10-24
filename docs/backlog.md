@@ -27,11 +27,11 @@ items).
 - [Q-095 stream inspector](#q-095-observability-sonnet-stream-inspector-gop-health-skew-and-scte)
 - [Q-096 GRO and arrival timestamps](#q-096-performance-sonnet-gro-and-arrival-timestamps-in-the-reference-srt-path)
 - [Q-097 MediaMTX MoQ dialect interoperability](#q-097-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop)
-- [Q-098 automatic stream QA](#q-098-observability-sonnet-automatic-stream-qa-from-ffmpeg-detectors)
 - [Q-099 per-destination anomaly baselines](#q-099-observability-sonnet-anomaly-baselines-per-destination)
 - [Q-100 agent protocol: approval mid-task and live panels](#q-100-agent-opus-agent-protocol-approval-mid-task-and-live-panels)
 - [Q-101 incident investigation and approval UX](#q-101-agent-opus-explain-an-incident-and-approve-its-fix-in-one-place)
 - [Q-102 plain-language command palette](#q-102-frontend-sonnet-plain-language-command-palette)
+- [Q-103 picture and sound checks: wider coverage](#q-103-observability-sonnet-picture-and-sound-checks-wider-coverage)
 
 ### Q-025 [performance] [opus] Re-qualify the SRT shard law after transport convergence
 - Goal: settle `EgressShardProfile::SrtCpuParallel` and
@@ -515,21 +515,6 @@ items).
     with these contracts aligned; then require both directions and media
     read-back before re-enabling the MediaMTX gate.
 
-### Q-098 [observability] [sonnet] Automatic stream QA from FFmpeg detectors
-
-- Goal: black frames, frozen video, silence and loudness (EBU R128) on a
-  live pipeline show in Stream health and open incidents, as the keyframe
-  and bitrate verdicts do now. A later step may add slate and "technical
-  difficulties" card detection with a vision model on the same samples.
-- Why: the console sees transport faults but not a stream that delivers a
-  frozen or silent picture; viewers notice those first.
-- Files: a sampled QA stage off the hot path (`src/media/`), the ingest
-  health history (`src/application/`), `stream-health-model.ts`.
-- Gates: fixture media with a black, a frozen and a silent stretch yields
-  each verdict at the right time; no per-packet work on Owner threads;
-  a capacity ramp before and after.
-- Status: open (Filed: 2026-10-24 by claude, from the platform research).
-
 ### Q-099 [observability] [sonnet] Anomaly baselines per destination
 
 - Goal: each destination learns its own normal bitrate, RTT, drops and
@@ -576,3 +561,13 @@ items).
 - Gates: a request maps to the same plan the buttons would make; nothing
   applies without the approval step.
 - Status: open (Filed: 2026-10-24 by claude, from the platform research).
+
+### Q-103 [observability] [sonnet] Picture and sound checks: wider coverage
+
+- Goal: the checks (`src/media/stream_qa/`) also read enhanced-RTMP HEVC
+  pictures, measure every audio track (not only the first), and tell a
+  slate or "technical difficulties" card from a live picture (a vision
+  model over the same thumbnails).
+- Gates: a fixture per case (RTMP HEVC, a silent second track, a slate)
+  yields its finding; the sampler's measured CPU stays within its budget.
+- Status: open (Filed: 2026-10-24 by claude, the rest of Q-098).

@@ -13,6 +13,7 @@ import { TimeSeries } from "../ui/time-series.js";
 import { StatusBadge } from "../ui/tone.js";
 import type { Tone } from "../ui/tone.js";
 import { formatBps } from "./format.js";
+import { PictureAndSound } from "./picture-sound.js";
 import { PipelineScope } from "./pipeline-scope.js";
 import { Freshness, useFlightRecorder } from "./polled.js";
 import type { LiveSnapshot } from "./store.js";
@@ -136,6 +137,7 @@ function Health(props: { pipelineId: string }) {
           )}
         </Panel>
       </div>
+      <PictureAndSound pipelineId={props.pipelineId} samples={samples} />
       <RawJson value={last ?? null} label="newest flight sample" />
     </>
   );

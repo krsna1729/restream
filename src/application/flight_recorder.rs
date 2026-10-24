@@ -71,6 +71,10 @@ pub struct IngestHealth {
     pub retrans_per_sec: Option<f64>,
     /// SRT receive buffer fill, 0..1.
     pub receive_buffer: Option<f64>,
+    /// The picture and sound checks' findings, when they run for the
+    /// pipeline (absent in samples taken before they existed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qa: Option<crate::media::stream_qa::StreamQa>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -145,6 +149,7 @@ pub struct IngestProbe {
     pub loss_per_sec: Option<f64>,
     pub retrans_per_sec: Option<f64>,
     pub receive_buffer: Option<f64>,
+    pub qa: Option<crate::media::stream_qa::StreamQa>,
 }
 
 /// One running egress's counters.
@@ -307,6 +312,7 @@ impl FlightRecorder {
                     loss_per_sec: ingest.loss_per_sec,
                     retrans_per_sec: ingest.retrans_per_sec,
                     receive_buffer: ingest.receive_buffer,
+                    qa: ingest.qa,
                 }
             });
             if ingest.is_none() {
@@ -539,6 +545,7 @@ async fn collect_probes(hub: &StateHub, engine: &MediaEngine) -> Vec<PipelinePro
                 loss_per_sec: quality.packets_received_loss_per_sec,
                 retrans_per_sec: quality.packets_received_retrans_per_sec,
                 receive_buffer,
+                qa: engine.stream_qa(pipeline_id),
             },
         );
     }

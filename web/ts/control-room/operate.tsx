@@ -11,6 +11,7 @@ import { RawJson } from "../ui/raw-json.js";
 import { Since } from "./when-view.js";
 import { GoLive } from "./go-live.js";
 import { NextEvent } from "./next-event.js";
+import { audioTrackWords } from "./stream-health-model.js";
 import { StatusBadge } from "../ui/tone.js";
 import type { Tone } from "../ui/tone.js";
 import { DestinationMatrix } from "./destination-matrix.js";
@@ -201,6 +202,14 @@ function SourceDeck(props: {
                     {(input.runtime.protocol ?? "").toUpperCase()}
                     {video?.codec && ` · ${video.codec} ${video.width ?? "?"}×${video.height ?? "?"}`}
                     {video?.fps ? ` · ${Math.round(video.fps)} fps` : ""}
+                    {input.runtime.audio &&
+                      ` · ${audioTrackWords({
+                        trackIndex: input.runtime.audio.trackIndex ?? 0,
+                        codec: input.runtime.audio.codec,
+                        channels: input.runtime.audio.channels,
+                        channelLayout: input.runtime.audio.channelLayout,
+                        sampleRate: input.runtime.audio.sampleRate,
+                      })}`}
                     {typeof rtt === "number" && ` · RTT ${rtt.toFixed(0)} ms`}
                     {input.runtime.remoteAddr && ` · from ${input.runtime.remoteAddr}`}
                   </div>

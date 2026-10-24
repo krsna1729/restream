@@ -136,6 +136,7 @@ impl Reconciler {
                 self.engine.recover_pipeline_fabrics().await;
                 self.engine.recover_hls_put_fabrics().await;
                 if self.reconcile_recordings(tick).await {
+                    self.reconcile_stream_qa(tick).await;
                     self.sweep_idle_hls().await;
                     self.engine.reap_file_ingests().await;
                 }
@@ -217,6 +218,23 @@ impl Reconciler {
         )
         .await;
         true
+    }
+
+    async fn reconcile_stream_qa(&self, tick: u64) {
+        if let Err(error) = crate::application::stream_qa::reconcile_stream_qa(
+            &self.engine,
+            self.pipeline_catalog.as_ref(),
+            &self.meta_store,
+            self.config.tuning.ingest_disconnect_grace_ms,
+        )
+        .await
+        {
+            warn!(
+                tick,
+                err = %error,
+                "pipeline catalog error while reconciling stream checks"
+            );
+        }
     }
 
     async fn sweep_idle_hls(&self) {

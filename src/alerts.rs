@@ -328,6 +328,61 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                 });
             }
 
+            // Picture and sound checks, where they run.
+            if let Some(qa) = input.get("qa") {
+                let held = |key: &str| qa.get(key).and_then(|v| v.as_u64());
+                if let Some(ms) = held("blackForMs")
+                    && ms >= crate::media::stream_qa::BLACK_ALERT_MS
+                {
+                    alerts.push(Alert {
+                        pipeline_id: Some(pipeline_id.clone()),
+                        ..Alert::new(
+                            format!("pipeline:{}:input:picture_black", pipeline_id),
+                            Severity::Critical,
+                            Scope::Pipeline,
+                            "Picture is black",
+                            "The source is connected and sending, but its picture is black, so every destination shows black.",
+                            vec![Evidence::measured(format!("black for {} s", ms / 1000))],
+                            "Check the encoder's scene, camera or capture input; the stream itself is fine.",
+                            &generated_at,
+                        )
+                    });
+                } else if let Some(ms) = held("stillForMs")
+                    && ms >= crate::media::stream_qa::STILL_ALERT_MS
+                {
+                    alerts.push(Alert {
+                        pipeline_id: Some(pipeline_id.clone()),
+                        ..Alert::new(
+                            format!("pipeline:{}:input:picture_frozen", pipeline_id),
+                            Severity::Warning,
+                            Scope::Pipeline,
+                            "Picture has not changed",
+                            "The source keeps sending, but the picture has stayed the same. A frozen camera or a stuck capture looks like this; so does a slate meant to be still.",
+                            vec![Evidence::measured(format!("unchanged for {} s", ms / 1000))],
+                            "If this is not a planned still, restart the camera or capture source on the encoder.",
+                            &generated_at,
+                        )
+                    });
+                }
+                if let Some(ms) = held("silentForMs")
+                    && ms >= crate::media::stream_qa::SILENT_ALERT_MS
+                {
+                    alerts.push(Alert {
+                        pipeline_id: Some(pipeline_id.clone()),
+                        ..Alert::new(
+                            format!("pipeline:{}:input:audio_silent", pipeline_id),
+                            Severity::Warning,
+                            Scope::Pipeline,
+                            "Sound is silent",
+                            "The source's first audio track has carried no sound.",
+                            vec![Evidence::measured(format!("silent for {} s", ms / 1000))],
+                            "Check the encoder's audio input and mixer, and that the right track is first.",
+                            &generated_at,
+                        )
+                    });
+                }
+            }
+
             // Per-reader: lag and overflow
             if let Some(readers) = input.get("readerMetrics").and_then(|v| v.as_array()) {
                 for reader in readers {

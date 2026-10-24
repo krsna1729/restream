@@ -4,7 +4,7 @@
 // most any accepts), a steady bitrate, a steady frame rate, and a link
 // without sustained loss.
 
-import type { FlightSample } from "../core/api-types.js";
+import type { FlightSample, ProbeAudioTrack, StreamQaFindings } from "../core/api-types.js";
 
 export type Severity = "ok" | "warn" | "bad";
 
@@ -137,6 +137,8 @@ export function streamVerdicts(samples: readonly FlightSample[]): Verdict[] {
     verdicts.push({ key: "buffer", severity: "bad", title: `Receive buffer ${Math.round(buffer * 100)}% full`, detail: "The engine is falling behind the publisher." });
   }
 
+  verdicts.push(...qaVerdicts(last.ingest.qa ?? null, last.atMs));
+
   const order: Record<Severity, number> = { bad: 0, warn: 1, ok: 2 };
   return verdicts.sort((a, b) => order[a.severity] - order[b.severity]);
 }
@@ -190,4 +192,83 @@ export function bitrateWords(
   if (mbps < low * 0.8) return { severity: "warn", words: `low for ${picture} (platforms suggest ${low}–${top} Mb/s)` };
   if (mbps > top * 1.25) return { severity: "ok", words: `more than ${picture} needs; fine if the uplink keeps up` };
   return { severity: "ok", words: `about right for ${picture}` };
+}
+
+/** The engine's alert lines for the picture and sound checks
+ * (`media/stream_qa/mod.rs`): a verdict turns red or amber with them. */
+export const BLACK_ALERT_SEC = 10;
+export const STILL_ALERT_SEC = 30;
+export const SILENT_ALERT_SEC = 10;
+/** A check older than this says nothing about now. */
+const QA_STALE_MS = 10_000;
+
+/** How long a finding has held at `nowMs`, if its check is current. */
+function held(sinceMs: number | null, checkedMs: number | null, nowMs: number): number | null {
+  if (checkedMs === null || nowMs - checkedMs > QA_STALE_MS || sinceMs === null) return null;
+  return Math.max(0, nowMs - sinceMs) / 1000;
+}
+
+/** Loudness in words, against what live platforms play back (about -14
+ * LUFS; broadcast aims for -23). */
+export function loudnessWords(lufs: number | null): { severity: Severity; words: string } | null {
+  if (lufs === null) return null;
+  if (lufs <= -60) return { severity: "warn", words: "silent" };
+  if (lufs > -9) return { severity: "warn", words: "very loud: platforms will turn it down, and it may clip" };
+  if (lufs < -30) return { severity: "warn", words: "quiet: viewers will turn it up" };
+  return { severity: "ok", words: "a comfortable level for streaming" };
+}
+
+/** Verdicts from the picture and sound checks; none while they are off. */
+export function qaVerdicts(qa: StreamQaFindings | null, nowMs: number): Verdict[] {
+  if (qa === null) return [];
+  const verdicts: Verdict[] = [];
+  const black = held(qa.blackSinceMs, qa.pictureCheckedMs, nowMs);
+  const still = held(qa.stillSinceMs, qa.pictureCheckedMs, nowMs);
+  if (qa.pictureCheckedMs === null || nowMs - qa.pictureCheckedMs > QA_STALE_MS) {
+    verdicts.push({ key: "picture", severity: "warn", title: "Picture not checked", detail: "No keyframe has decoded recently (H.264 and H.265 over SRT, H.264 over RTMP)." });
+  } else if (black !== null) {
+    verdicts.push({
+      key: "picture",
+      severity: black >= BLACK_ALERT_SEC ? "bad" : "warn",
+      title: `Picture black for ${Math.round(black)} s`,
+      detail: "The stream is fine but shows black: check the encoder's scene or camera input.",
+    });
+  } else if (still !== null && still >= 4) {
+    verdicts.push({
+      key: "picture",
+      severity: still >= STILL_ALERT_SEC ? "warn" : "ok",
+      title: `Picture unchanged for ${Math.round(still)} s`,
+      detail: "A frozen camera or capture looks like this; so does a slate meant to be still.",
+    });
+  } else {
+    verdicts.push({ key: "picture", severity: "ok", title: "Picture is moving", detail: "Not black, and changing between keyframes." });
+  }
+  const silent = held(qa.silentSinceMs, qa.soundCheckedMs, nowMs);
+  const loudness = qa.soundCheckedMs !== null && nowMs - qa.soundCheckedMs <= QA_STALE_MS ? loudnessWords(qa.loudnessLufs) : null;
+  if (silent !== null) {
+    verdicts.push({
+      key: "sound",
+      severity: silent >= SILENT_ALERT_SEC ? "bad" : "warn",
+      title: `Silent for ${Math.round(silent)} s`,
+      detail: "The first audio track carries no sound: check the encoder's audio input and mixer.",
+    });
+  } else if (loudness && qa.loudnessLufs !== null) {
+    verdicts.push({ key: "sound", severity: loudness.severity, title: `Sound at ${qa.loudnessLufs.toFixed(0)} LUFS`, detail: `${loudness.words[0].toUpperCase()}${loudness.words.slice(1)}.` });
+  } else {
+    verdicts.push({ key: "sound", severity: "warn", title: "Sound not measured", detail: "Measured on the first AAC track once 3 s of it decode." });
+  }
+  return verdicts;
+}
+
+const LAYOUT_WORDS: Record<string, string> = { mono: "mono", stereo: "stereo", "5.1": "5.1 surround", "5.1(side)": "5.1 surround", "7.1": "7.1 surround" };
+
+/** One audio track in words: "AAC · 48 kHz · stereo". */
+export function audioTrackWords(track: ProbeAudioTrack): string {
+  const parts: string[] = [];
+  if (track.codec) parts.push(track.codec.toUpperCase());
+  if (track.sampleRate) parts.push(`${Number((track.sampleRate / 1000).toFixed(1))} kHz`);
+  const layout = track.channelLayout ? (LAYOUT_WORDS[track.channelLayout] ?? track.channelLayout) : null;
+  if (layout) parts.push(layout);
+  else if (track.channels) parts.push(track.channels === 1 ? "mono" : track.channels === 2 ? "stereo" : `${track.channels} channels`);
+  return parts.join(" · ") || "details not reported yet";
 }

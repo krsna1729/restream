@@ -438,16 +438,20 @@ pub(crate) async fn health_snapshot_view(
                     .get(pipeline_id)
                     .copied()
                     .unwrap_or(0);
-                Some((
-                    pipeline_id.clone(),
-                    api_view_models::active_pipeline_input_json(
-                        ingest,
-                        recent_ingests.get(pipeline_id.as_str()),
-                        total_bytes_sent,
-                        readers_count,
-                        reader_metrics,
-                    ),
-                ))
+                let mut input = api_view_models::active_pipeline_input_json(
+                    ingest,
+                    recent_ingests.get(pipeline_id.as_str()),
+                    total_bytes_sent,
+                    readers_count,
+                    reader_metrics,
+                );
+                // The picture and sound checks, where they run.
+                if let Some(qa) = engine.stream_qa(pipeline_id)
+                    && let Ok(held) = serde_json::to_value(qa.held_at(MediaEngine::now_epoch_ms()))
+                {
+                    input["qa"] = held;
+                }
+                Some((pipeline_id.clone(), input))
             })
             .collect()
     };

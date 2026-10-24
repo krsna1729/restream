@@ -235,6 +235,9 @@ export function createDeployment({ preset = "plant", seed = 7, nowMs = Date.now(
   let eventSeq = 1;
   const fleetSamples = [];
   const flight = new Map(); // pipelineId -> samples
+  // Pipelines whose picture and sound checks are on: the first, so the
+  // demo shows them; the switch adds and removes others.
+  const qaOn = new Set(pipelines.slice(0, 1).map((pipeline) => pipeline.id));
   let storm = null; // { shard, protocol, untilTick }
 
   const emit = (event) => {
@@ -636,6 +639,16 @@ export function createDeployment({ preset = "plant", seed = 7, nowMs = Date.now(
             lossPerSec: pipeline.ingest.protocol === "srt" ? (random.chance(0.1) ? random.next() * 6 : 0) : null,
             retransPerSec: pipeline.ingest.protocol === "srt" ? random.next() * 3 : null,
             receiveBuffer: pipeline.ingest.protocol === "srt" ? random.jitter(0.08, 0.5) : null,
+            ...(qaOn.has(pipeline.id) && {
+              qa: {
+                pictureCheckedMs: now,
+                blackSinceMs: null,
+                stillSinceMs: null,
+                soundCheckedMs: now,
+                silentSinceMs: null,
+                loudnessLufs: -16 + (random.next() - 0.5) * 4 + (wobble < 1 ? -6 : 0),
+              },
+            }),
           }
         : null;
       let offered = 0;
@@ -1275,6 +1288,16 @@ export function createDeployment({ preset = "plant", seed = 7, nowMs = Date.now(
     logs,
     flightRecorder,
     pipelineSummary,
+    streamQa(pipelineId) {
+      const enabled = qaOn.has(pipelineId);
+      const pipeline = pipelines.find((candidate) => candidate.id === pipelineId);
+      const newest = (flight.get(pipelineId) ?? []).at(-1);
+      return { enabled, active: enabled && Boolean(pipeline?.ingest), findings: enabled ? (newest?.ingest?.qa ?? null) : null };
+    },
+    setStreamQa(pipelineId, enabled) {
+      if (enabled) qaOn.add(pipelineId);
+      else qaOn.delete(pipelineId);
+    },
     setDesired,
     counts: () => ({ pipelines: pipelines.length, inputs: inputs.length, outputs: outputs.length }),
   };
