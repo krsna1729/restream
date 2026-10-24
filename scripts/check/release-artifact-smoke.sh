@@ -57,7 +57,7 @@ done
     echo "release-artifact-smoke: restream archive is missing release compliance files" >&2
     exit 1
 }
-for license in Apache-2.0.txt GPL-2.0.txt MPL-2.0.txt; do
+for license in Apache-2.0.txt GPL-3.0.txt; do
     [[ -f "$stage/licenses/$license" ]] || {
         echo "release-artifact-smoke: restream archive is missing third-party license text: $license" >&2
         exit 1

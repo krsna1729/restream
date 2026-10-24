@@ -77,6 +77,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
     );
     crate::host_tuning::warn_unmet();
     crate::ffmpeg_binary::ffmpeg_bin_path();
+    tokio::spawn(crate::ffmpeg_capabilities::check_at_startup());
     match crate::malloc_tuning::applied() {
         Some(setting @ crate::malloc_tuning::ArenaSetting::Failed { .. })
         | Some(setting @ crate::malloc_tuning::ArenaSetting::InvalidOverride { .. }) => warn!(

@@ -1412,6 +1412,14 @@ addStages, ratedBy, ingest, calibration, retryPolicy, baseline, projected }`.
   "restream": { "version": "0.1.0", "commit": "abc558b", "buildTimestamp": "..." },
   "toolchain": { "rustc": "...", "target": "x86_64-unknown-linux-gnu", "llvm": "...", "gccRuntime": "..." },
   "nativeLibraries": { "srt": {}, "sqlite": {} },
+  "externalTools": {
+    "ffmpeg": { "path": "/usr/local/bin/ffmpeg", "version": "n8.1.3-9-g29e619e767-20260930", "error": null },
+    "ffprobe": { "path": "/usr/local/bin/ffprobe", "version": "n8.1.3-9-g29e619e767-20260930", "error": null },
+    "features": [
+      { "feature": "transcoding", "available": false, "missing": ["encoder libx265"] },
+      { "feature": "recordingRemux", "available": true, "missing": [] }
+    ]
+  },
   "sbom": { "format": "CycloneDX", "specVersion": "1.5", "endpoint": "/api/v1/engine/sbom" },
   "os": { "platform": "linux", "arch": "x86_64", "cpu": { "modelName": "...", "logicalCpus": 20, "flags": [] } }
 }
@@ -1420,8 +1428,13 @@ addStages, ratedBy, ingest, calibration, retryPolicy, baseline, projected }`.
 - `nativeLibraries` lists the libraries linked into the engine. `srt`
   reports `version` (runtime), `buildVersion` (build script), `license` and
   `bondingAvailable`; a version mismatch is a packaging problem. `sqlite`
-  reports `version`, `sourceId` and `license`. FFmpeg is an external
-  executable, not a linked library, so it is not listed.
+  reports `version`, `sourceId` and `license`.
+- `externalTools` is the startup check of the FFmpeg executables (`null`
+  until it finishes, about a second after start). Each feature
+  (`transcoding`, `fileIngest`, `recordingRemux`, `posters`,
+  `pictureAndSoundChecks`, `mediaAnalysis`) is `available` or names what the
+  build lacks; an executable that did not run has `version: null` and an
+  `error`.
 - `os.cpu` is a debugging subset: model, core/thread topology,
   virtualization and the acceleration flags that explain codec throughput.
 

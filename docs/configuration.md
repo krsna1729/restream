@@ -212,14 +212,11 @@ or OS path errors. Without `ca=`, the bundled public roots remain in use;
 | `RESTREAM_EGRESS_VISIT_MAX_UNITS` | `32` | `1..=4096` | Units per leaf visit |
 | `RESTREAM_EGRESS_VISIT_MAX_BYTES` | `262144` | `188..=16 MiB` | Bytes per leaf visit |
 | `RESTREAM_EGRESS_VISIT_MAX_US` | `2000` | `1..=1000000` | Microseconds per leaf visit |
-| `RESTREAM_EGRESS_MAX_PENDING_BYTES` | `262144` | `1..=16 MiB` | Protocol bytes queued per output (not the TCP socket buffer) |
+| `RESTREAM_EGRESS_MAX_PENDING_BYTES` | `262144` | `1..=16 MiB` | Startup warning and config summary only; per-output limits come from `LeafPolicy::default()` |
 | `RESTREAM_EGRESS_DRAIN_TIMEOUT_MS` | `3000` | `1..=60000` | On shutdown, how long a shard lets leaves flush queued bytes |
 
-Shard growth: before each new RTMP or SRT output is placed, the pool is sized
-from CPU per delivered bit times the feed's bitrate, targeting 50% shard busy.
-Cold priors are 128 (RTMP) and 64 (SRT) outputs per shard. Live outputs never
-move. A shard retires only after 60 healthy windows with one shard fewer
-projected under 40% busy, a 5-minute dwell, and its last output leaving.
+Shard growth, admission and shrink are described in
+[Egress architecture](egress-architecture.md#shard-sizing-and-placement).
 
 `EgressFabricConfig::validate` runs at startup and logs a
 `restream.config.warning` (non-fatal) when:
@@ -252,20 +249,27 @@ least 5, then capped by the max children value.
 FFmpeg is not bundled. The executable resolves in this order
 (`src/ffmpeg_binary.rs`): `FFMPEG_BIN_PATH`; the copy installed by
 `restream ffmpeg-fetch` in `.restream/runtime/ffmpeg/`; `ffmpeg` on `PATH`.
-If none is found, the server still starts and logs one warning; only
-FFmpeg-backed features fail. Recording remux needs the `mov/mp4` muxer;
-video presets need `libx264` and `libx265`; posters need the PNG encoder;
-the picture and sound checks need the `unix` protocol.
+If none is found, the server still starts; only FFmpeg-backed features fail.
 
 `ffprobe` (media analysis) resolves as `FFPROBE_BIN_PATH`, then the
 `ffprobe` beside the resolved FFmpeg, then `ffprobe` on `PATH`.
 
-`restream ffmpeg-fetch` downloads the
+At startup the engine lists what the resolved build provides (encoders,
+decoders, muxers, demuxers, filters, protocols, bitstream filters) and checks
+it against what each feature uses: transcoding, file ingest, recording remux,
+posters, picture and sound checks, media analysis. The lists live in
+`Feature::needs` (`src/ffmpeg_capabilities.rs`). A feature whose needs are
+missing is logged at startup with what it lacks, reported in
+`externalTools` on `GET /api/v1/engine`, and fails when used; the rest work.
+
+`restream ffmpeg-fetch` installs the pinned
 [BtbN](https://github.com/BtbN/FFmpeg-Builds) FFmpeg 8.1 static GPL build
-for the host architecture from the `latest` release, checks it against
-`checksums.sha256`, and installs `bin/ffmpeg` and `bin/ffprobe`. It needs
-GNU `tar` with xz. The container images run the same download and set
-`FFMPEG_BIN_PATH=/usr/local/bin/ffmpeg` and
+for the host architecture (see [FFmpeg versions](ffmpeg-versions.md)),
+verifies its SHA-256 against the digest in the source, and installs
+`ffmpeg` and `ffprobe`. `restream ffmpeg-fetch --latest` takes BtbN's
+floating `latest` 8.1 build instead, verified against that release's
+checksum list. It needs GNU `tar` with xz. The container images install the
+pinned build and set `FFMPEG_BIN_PATH=/usr/local/bin/ffmpeg` and
 `FFPROBE_BIN_PATH=/usr/local/bin/ffprobe`.
 
 ### Threads and memory

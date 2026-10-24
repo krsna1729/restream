@@ -1001,6 +1001,11 @@ export function createDeployment({ preset = "plant", seed = 7, nowMs = Date.now(
       restream: { version: "0.42.0-fixture", commit: "fixture", buildTimestamp: new Date(startedMs).toISOString() },
       toolchain: { rustc: "1.93.0", target: "x86_64-unknown-linux-gnu" },
       nativeLibraries: { srt: { version: "srt-rs", license: "Apache-2.0" }, sqlite: { version: "3.50.4", license: "blessing" } },
+      externalTools: {
+        ffmpeg: { path: "/usr/local/bin/ffmpeg", version: "n8.1.3-9-g29e619e767-20260930", error: null },
+        ffprobe: { path: "/usr/local/bin/ffprobe", version: "n8.1.3-9-g29e619e767-20260930", error: null },
+        features: ["transcoding", "fileIngest", "recordingRemux", "posters", "pictureAndSoundChecks", "mediaAnalysis"].map((feature) => ({ feature, available: true, missing: [] })),
+      },
       sbom: { endpoint: "/api/v1/engine/sbom", componentCount: 612, licensesIncluded: true },
       os: { hostname: `restream-${preset}`, kernelVersion: "6.18.44", cpu: { modelName: "Synthetic EPYC", logicalCpus: size.cores } },
     };

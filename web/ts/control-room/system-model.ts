@@ -14,13 +14,38 @@ import { formatBytes } from "./format.js";
 export interface EngineStatus {
   restream?: { version?: string; commit?: string; buildTimestamp?: string };
   toolchain?: { rustc?: string; target?: string };
-  nativeLibraries?: Record<string, { version?: string; license?: string } | undefined>;
-  sbom?: { endpoint?: string; componentCount?: number; licensesIncluded?: boolean };
+  nativeLibraries?: Record<
+    string,
+    { version?: string; license?: string } | undefined
+  >;
+  sbom?: {
+    endpoint?: string;
+    componentCount?: number;
+    licensesIncluded?: boolean;
+  };
+  externalTools?: ExternalTools | null;
   os?: {
     hostname?: string;
     kernelVersion?: string | null;
     cpu?: { modelName?: string | null; logicalCpus?: number };
   };
+}
+
+/** The engine's startup check of its FFmpeg executables. */
+export interface ExternalTools {
+  ffmpeg: ExternalTool;
+  ffprobe: ExternalTool;
+  features: ReadonlyArray<{
+    feature: string;
+    available: boolean;
+    missing: readonly string[];
+  }>;
+}
+
+interface ExternalTool {
+  path: string;
+  version: string | null;
+  error: string | null;
 }
 
 export type CheckStatus = "ok" | "warning" | "unknown";
@@ -119,7 +144,9 @@ export function executionTopology(
 }
 
 /** Kernel features the data path uses, when the engine has probed them. */
-export function kernelCapabilities(metrics: SystemMetrics | null): ReadonlyArray<{
+export function kernelCapabilities(
+  metrics: SystemMetrics | null,
+): ReadonlyArray<{
   readonly label: string;
   readonly available: boolean | null;
   readonly detail: string;
@@ -137,33 +164,97 @@ export function kernelCapabilities(metrics: SystemMetrics | null): ReadonlyArray
     {
       label: "Kernel TLS",
       available: ktls ? ciphers > 0 : null,
-      detail: ktls ? `${ciphers} of ${Object.keys(ktls).length} cipher suites` : "not probed",
+      detail: ktls
+        ? `${ciphers} of ${Object.keys(ktls).length} cipher suites`
+        : "not probed",
     },
   ];
 }
 
 /** The SRT ingress Owner counters that mean lost or late work when they are
  * not zero, with what each one means. */
-export function ownerAttention(owner: SrtIngressOwnerHealth): readonly string[] {
+export function ownerAttention(
+  owner: SrtIngressOwnerHealth,
+): readonly string[] {
   const findings: string[] = [];
   if (owner.faulted) findings.push("An Owner reported a fault.");
   if (owner.rxRingDropped > 0) {
-    findings.push(`${owner.rxRingDropped} datagrams dropped: the receive ring was full.`);
+    findings.push(
+      `${owner.rxRingDropped} datagrams dropped: the receive ring was full.`,
+    );
   }
   if (owner.rxBufferExhaustions > 0) {
-    findings.push(`${owner.rxBufferExhaustions} receives found no free buffer.`);
+    findings.push(
+      `${owner.rxBufferExhaustions} receives found no free buffer.`,
+    );
   }
   if (owner.eventBridgeFullVisits > 0) {
-    findings.push(`${owner.eventBridgeFullVisits} visits found the event bridge to Tokio full.`);
+    findings.push(
+      `${owner.eventBridgeFullVisits} visits found the event bridge to Tokio full.`,
+    );
   }
   if (owner.telemetryDropped > 0) {
     findings.push(`${owner.telemetryDropped} telemetry samples dropped.`);
   }
   if (owner.overloadDisconnects > 0) {
-    findings.push(`${owner.overloadDisconnects} peers disconnected for overload.`);
+    findings.push(
+      `${owner.overloadDisconnects} peers disconnected for overload.`,
+    );
   }
   if (owner.mediaSlowPasses20ms > 0) {
     findings.push(`${owner.mediaSlowPasses20ms} media passes took over 20 ms.`);
   }
   return findings;
+}
+
+const FEATURE_LABEL: Record<string, string> = {
+  transcoding: "Transcoding",
+  fileIngest: "Playing media files",
+  recordingRemux: "Recordings as MP4",
+  posters: "Thumbnails",
+  pictureAndSoundChecks: "Picture and sound checks",
+  mediaAnalysis: "Media file analysis",
+};
+
+/** One row per FFmpeg executable and per feature that depends on them. */
+export function ffmpegReadiness(
+  tools: ExternalTools | null | undefined,
+): readonly ReadinessRow[] {
+  if (!tools) {
+    return [
+      {
+        key: "ffmpeg",
+        label: "FFmpeg",
+        value: "checking",
+        status: "unknown",
+        detail: "The startup check has not finished.",
+      },
+    ];
+  }
+  const tool = (
+    key: string,
+    label: string,
+    found: ExternalTool,
+  ): ReadinessRow => ({
+    key,
+    label,
+    value: found.version ?? "not found",
+    status: found.version ? "ok" : "warning",
+    detail: found.error ?? found.path,
+  });
+  return [
+    tool("ffmpeg", "FFmpeg", tools.ffmpeg),
+    tool("ffprobe", "ffprobe", tools.ffprobe),
+    ...tools.features.map(
+      (feature): ReadinessRow => ({
+        key: feature.feature,
+        label: FEATURE_LABEL[feature.feature] ?? feature.feature,
+        value: feature.available ? "available" : "unavailable",
+        status: feature.available ? "ok" : "warning",
+        detail: feature.available
+          ? ""
+          : `FFmpeg lacks ${feature.missing.join(", ")}. Run restream ffmpeg-fetch for a complete build.`,
+      }),
+    ),
+  ];
 }

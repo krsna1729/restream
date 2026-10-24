@@ -11,7 +11,7 @@ component. It is intentionally not a replacement for the license texts in
 |---|---|---|---|
 | srt-rs | git commit `9b20d515805aa2d920ffa2d84fd8061310779910` ([krsna1729/srt-rs](https://github.com/krsna1729/srt-rs), pinned in `Cargo.toml`) | Apache-2.0 | <https://github.com/krsna1729/srt-rs> |
 | hls.js | npm package `hls.js@1.7.3` | Apache-2.0 | <https://github.com/video-dev/hls.js> |
-| FFmpeg executable (container images only) | BtbN `ffmpeg-n8.1-latest-linux64-gpl-8.1` (or `linuxarm64`) from the `latest` release, verified against that release's `checksums.sha256` at image build | GPL; the archive's `LICENSE.txt` names the exact version | <https://github.com/BtbN/FFmpeg-Builds> |
+| FFmpeg executable (container images; `restream ffmpeg-fetch`) | BtbN release `autobuild-2026-09-30-13-08`, `ffmpeg-n8.1.3-9-g29e619e767-linux64-gpl-8.1` (or `linuxarm64`), verified against the SHA-256 pinned in `src/ffmpeg_binary.rs` | GPL-3.0-or-later (`--enable-gpl --enable-version3`) | <https://github.com/BtbN/FFmpeg-Builds> |
 
 The Restream binary links no FFmpeg, x264 or x265 code. Its native
 components are srt-rs, SQLite, libgcc, the Rust standard library and glibc;

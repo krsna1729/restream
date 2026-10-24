@@ -134,8 +134,9 @@ RUN cargo xtask build-bench
 FROM toolchain AS runtime-state
 RUN mkdir -p /restream-state && touch /restream-state/.keep
 
-# FFmpeg is not bundled in the binary; images carry the same BtbN build that
-# `restream ffmpeg-fetch` installs, verified against the release checksums.
+# FFmpeg is not linked into the engine; images carry the BtbN build that
+# `restream ffmpeg-fetch` installs: the same release and SHA-256 digests as
+# src/ffmpeg_binary.rs (tests/docker_build_recipe.rs keeps them equal).
 FROM ubuntu:24.04 AS ffmpeg-fetch
 ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
@@ -143,19 +144,19 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl xz-utils \
     && rm -rf /var/lib/apt/lists/*
 RUN case "${TARGETARCH:-amd64}" in \
-        amd64) asset=ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz ;; \
-        arm64) asset=ffmpeg-n8.1-latest-linuxarm64-gpl-8.1.tar.xz ;; \
+        amd64) asset=ffmpeg-n8.1.3-9-g29e619e767-linux64-gpl-8.1.tar.xz \
+            sha256=97ce978979194b5cf7e06a5e68020dbdaa7a4f3294c5452b6a1bc347100dbb79 ;; \
+        arm64) asset=ffmpeg-n8.1.3-9-g29e619e767-linuxarm64-gpl-8.1.tar.xz \
+            sha256=10523d1e0be6b3ce62a9708cc50815c4b5eb5f36ae147fbe2afeecda6f2d6845 ;; \
         *) echo "no FFmpeg build for ${TARGETARCH}" >&2; exit 1 ;; \
     esac \
-    && base=https://github.com/BtbN/FFmpeg-Builds/releases/download/latest \
     && cd /tmp \
-    && curl -fsSLO "$base/checksums.sha256" \
-    && curl -fsSLO "$base/$asset" \
-    && grep " \*\?$asset\$" checksums.sha256 | sha256sum -c - \
+    && curl -fsSLO "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/$asset" \
+    && echo "$sha256  $asset" | sha256sum -c - \
     && tar -xJf "$asset" --strip-components=2 --wildcards '*/bin/ffmpeg' '*/bin/ffprobe' \
     && install -m 0755 ffmpeg /usr/local/bin/ffmpeg \
     && install -m 0755 ffprobe /usr/local/bin/ffprobe \
-    && rm -f "$asset" ffmpeg ffprobe checksums.sha256
+    && rm -f "$asset" ffmpeg ffprobe
 
 # ── Stage 4: distroless runtime ──────────────────────────────────────────────
 #
@@ -174,7 +175,7 @@ ARG RESTREAM_BUILD_TIMESTAMP
 LABEL org.opencontainers.image.source="https://github.com/krsna1729/restream" \
     org.opencontainers.image.revision="${RESTREAM_BUILD_GIT_COMMIT}" \
     org.opencontainers.image.created="${RESTREAM_BUILD_TIMESTAMP}" \
-    org.opencontainers.image.licenses="MIT AND GPL-2.0-or-later AND MPL-2.0 AND Apache-2.0"
+    org.opencontainers.image.licenses="MIT AND Apache-2.0 AND GPL-3.0-or-later"
 
 EXPOSE 3030 1935 10080/udp
 
@@ -225,7 +226,7 @@ ARG RESTREAM_BUILD_TIMESTAMP
 LABEL org.opencontainers.image.source="https://github.com/krsna1729/restream" \
     org.opencontainers.image.revision="${RESTREAM_BUILD_GIT_COMMIT}" \
     org.opencontainers.image.created="${RESTREAM_BUILD_TIMESTAMP}" \
-    org.opencontainers.image.licenses="MIT AND GPL-2.0-or-later AND MPL-2.0 AND Apache-2.0"
+    org.opencontainers.image.licenses="MIT AND Apache-2.0 AND GPL-3.0-or-later"
 
 EXPOSE 3030 1935 10080/udp
 
@@ -266,7 +267,7 @@ ARG RESTREAM_BUILD_TIMESTAMP
 LABEL org.opencontainers.image.source="https://github.com/krsna1729/restream" \
     org.opencontainers.image.revision="${RESTREAM_BUILD_GIT_COMMIT}" \
     org.opencontainers.image.created="${RESTREAM_BUILD_TIMESTAMP}" \
-    org.opencontainers.image.licenses="MIT AND GPL-2.0-or-later AND MPL-2.0 AND Apache-2.0"
+    org.opencontainers.image.licenses="MIT AND Apache-2.0 AND GPL-3.0-or-later"
 COPY --from=harness-build /workspace/target/bench/restream /workspace/target/bench/restream
 COPY --from=harness-build /workspace/target/bench/test_harness /workspace/target/bench/test_harness
 COPY test/fixtures/ test/fixtures/
