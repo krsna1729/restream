@@ -634,11 +634,10 @@ mod tests {
         .await
         .expect("child and ingest registry cleanup");
         assert!(runtime.registration.cancel_token.is_cancelled());
-        // SAFETY: signal zero only queries whether the child still exists.
-        assert_eq!(unsafe { libc::kill(pid as libc::pid_t, 0) }, -1);
+        let pid = rustix::process::Pid::from_raw(pid as i32).expect("child pid");
         assert_eq!(
-            std::io::Error::last_os_error().raw_os_error(),
-            Some(libc::ESRCH)
+            rustix::process::test_kill_process(pid),
+            Err(rustix::io::Errno::SRCH)
         );
     }
 

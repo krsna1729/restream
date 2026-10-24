@@ -161,13 +161,9 @@ fn observe(requirement: &Requirement) -> Option<String> {
 
 #[cfg(unix)]
 fn nofile_hard() -> Option<u64> {
-    let mut limit = libc::rlimit {
-        rlim_cur: 0,
-        rlim_max: 0,
-    };
-    // SAFETY: getrlimit writes only to the provided struct, which outlives
-    // the call.
-    (unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } == 0).then_some(limit.rlim_max)
+    // `None` is RLIM_INFINITY.
+    let limit = rustix::process::getrlimit(rustix::process::Resource::Nofile);
+    Some(limit.maximum.unwrap_or(u64::MAX))
 }
 
 #[cfg(not(unix))]
@@ -225,8 +221,7 @@ pub fn host_check(out: &mut impl std::io::Write) -> i32 {
 /// modules, then report to `out`. Report-only requirements are left untouched.
 pub fn host_tune(out: &mut impl std::io::Write) -> i32 {
     #[cfg(unix)]
-    // SAFETY: geteuid has no preconditions.
-    let root = unsafe { libc::geteuid() } == 0;
+    let root = rustix::process::geteuid().is_root();
     #[cfg(not(unix))]
     let root = false;
     if !root {

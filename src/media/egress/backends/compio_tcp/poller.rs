@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::net::{SocketAddr, TcpStream};
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
 use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -132,26 +132,13 @@ impl CompioTcpPoller {
         _timeout: Duration,
     ) -> Result<TcpConnectAttempt, TcpEgressPollError> {
         let stream = open_nonblocking_tcp(peer_addr)?;
-        let fd = stream.as_raw_fd();
-        let (address, address_len) = socket_address(peer_addr);
-        // SAFETY: `fd` is the open socket owned by `stream`; `address` is a live
-        // sockaddr_storage initialised for `address_len` bytes.
-        let result = unsafe {
-            libc::connect(
-                fd,
-                (&address as *const libc::sockaddr_storage).cast(),
-                address_len,
-            )
-        };
-        if result == 0 {
-            return Ok(TcpConnectAttempt::Connected(self.adopt(stream)?));
-        }
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::EINPROGRESS) {
-            return Err(Self::error("compio_tcp_connect", error));
+        match rustix::net::connect(&stream, &peer_addr) {
+            Ok(()) => return Ok(TcpConnectAttempt::Connected(self.adopt(stream)?)),
+            Err(rustix::io::Errno::INPROGRESS) => {}
+            Err(errno) => return Err(Self::error("compio_tcp_connect", errno.into())),
         }
         let stream = self.adopt(stream)?;
-        self.register_leaf(fd, key, generation, TcpEgressInterest::WRITE)?;
+        self.register_leaf(stream.as_fd(), key, generation, TcpEgressInterest::WRITE)?;
         Ok(TcpConnectAttempt::InProgress(stream))
     }
 
@@ -217,13 +204,14 @@ impl CompioTcpPoller {
 
     pub(crate) fn register_leaf(
         &mut self,
-        fd: RawFd,
+        socket: BorrowedFd<'_>,
         key: LeafKey,
         generation: u64,
         interest: TcpEgressInterest,
     ) -> Result<(), TcpEgressPollError> {
+        let fd = socket.as_raw_fd();
         self.remove(fd)?;
-        let stream = CompioTcpStream::duplicate_std_fd(fd)
+        let stream = CompioTcpStream::duplicate_std_fd(socket)
             .map_err(|error| Self::error("compio_tcp_connect_register", error))?;
         let stream = self
             .runtime
@@ -607,83 +595,23 @@ fn poll_ready_batch(
 }
 
 fn open_nonblocking_tcp(peer_addr: SocketAddr) -> Result<TcpStream, TcpEgressPollError> {
-    let domain = match peer_addr {
-        SocketAddr::V4(_) => libc::AF_INET,
-        SocketAddr::V6(_) => libc::AF_INET6,
+    use rustix::net::{AddressFamily, SocketFlags, SocketType, ipproto};
+    let family = match peer_addr {
+        SocketAddr::V4(_) => AddressFamily::INET,
+        SocketAddr::V6(_) => AddressFamily::INET6,
     };
-    // SAFETY: socket(2) takes no pointers; the result is checked below.
-    let fd = unsafe {
-        libc::socket(
-            domain,
-            libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
-            libc::IPPROTO_TCP,
-        )
-    };
-    if fd < 0 {
-        let error = io::Error::last_os_error();
-        return Err(CompioTcpPoller::error("compio_tcp_socket", error));
-    }
-    // SAFETY: `fd` is a fresh socket checked above and owned by nothing else; the TcpStream
-    // takes sole ownership.
-    let stream = unsafe { TcpStream::from_raw_fd(fd) };
+    let socket = rustix::net::socket_with(
+        family,
+        SocketType::STREAM,
+        SocketFlags::NONBLOCK | SocketFlags::CLOEXEC,
+        Some(ipproto::TCP),
+    )
+    .map_err(|errno| CompioTcpPoller::error("compio_tcp_socket", errno.into()))?;
+    let stream = TcpStream::from(socket);
     stream
         .set_nodelay(true)
         .map_err(|error| CompioTcpPoller::error("compio_tcp_nodelay", error))?;
     Ok(stream)
-}
-
-fn socket_address(peer_addr: SocketAddr) -> (libc::sockaddr_storage, libc::socklen_t) {
-    // SAFETY: sockaddr_storage is plain old data; all-zero bytes are a valid value.
-    let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
-    match peer_addr {
-        SocketAddr::V4(address) => {
-            let value = libc::sockaddr_in {
-                sin_family: libc::AF_INET as libc::sa_family_t,
-                sin_port: address.port().to_be(),
-                sin_addr: libc::in_addr {
-                    s_addr: u32::from_ne_bytes(address.ip().octets()),
-                },
-                sin_zero: [0; 8],
-            };
-            // SAFETY: two distinct live locals; sockaddr_in is smaller than sockaddr_storage,
-            // so the copy is in bounds and does not overlap.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    (&value as *const libc::sockaddr_in).cast::<u8>(),
-                    (&mut storage as *mut libc::sockaddr_storage).cast::<u8>(),
-                    std::mem::size_of::<libc::sockaddr_in>(),
-                );
-            }
-            (
-                storage,
-                std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
-            )
-        }
-        SocketAddr::V6(address) => {
-            let value = libc::sockaddr_in6 {
-                sin6_family: libc::AF_INET6 as libc::sa_family_t,
-                sin6_port: address.port().to_be(),
-                sin6_flowinfo: address.flowinfo(),
-                sin6_addr: libc::in6_addr {
-                    s6_addr: address.ip().octets(),
-                },
-                sin6_scope_id: address.scope_id(),
-            };
-            // SAFETY: two distinct live locals; sockaddr_in6 is smaller than sockaddr_storage,
-            // so the copy is in bounds and does not overlap.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    (&value as *const libc::sockaddr_in6).cast::<u8>(),
-                    (&mut storage as *mut libc::sockaddr_storage).cast::<u8>(),
-                    std::mem::size_of::<libc::sockaddr_in6>(),
-                );
-            }
-            (
-                storage,
-                std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t,
-            )
-        }
-    }
 }
 
 #[cfg(test)]

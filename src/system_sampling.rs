@@ -15,7 +15,6 @@ pub(crate) enum NofileLimitSnapshot {
         soft: u64,
         hard: u64,
     },
-    ReadFailed,
     #[cfg(not(unix))]
     Unsupported,
 }
@@ -118,19 +117,12 @@ fn sample_host_settings_uncached() -> HostSettingsSnapshot {
 
 #[cfg(unix)]
 fn sample_nofile_limit() -> NofileLimitSnapshot {
-    let mut limit = libc::rlimit {
-        rlim_cur: 0,
-        rlim_max: 0,
-    };
-    // SAFETY: getrlimit writes to the provided rlimit struct for the current
-    // process. The pointer is valid for the duration of the call.
-    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } == 0 {
-        NofileLimitSnapshot::Available {
-            soft: limit.rlim_cur,
-            hard: limit.rlim_max,
-        }
-    } else {
-        NofileLimitSnapshot::ReadFailed
+    // getrlimit(RLIMIT_NOFILE) cannot fail for the calling process; `None`
+    // is RLIM_INFINITY.
+    let limit = rustix::process::getrlimit(rustix::process::Resource::Nofile);
+    NofileLimitSnapshot::Available {
+        soft: limit.current.unwrap_or(u64::MAX),
+        hard: limit.maximum.unwrap_or(u64::MAX),
     }
 }
 

@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::io::{self, IoSlice, Read, Write};
 use std::net::TcpStream;
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
@@ -302,10 +302,13 @@ impl CompioTcpStream {
         }
     }
     pub(crate) fn raw_fd(&self) -> RawFd {
+        self.as_fd().as_raw_fd()
+    }
+    pub(crate) fn as_fd(&self) -> BorrowedFd<'_> {
         match self {
-            Self::Compio { stream, .. } => stream.as_raw_fd(),
+            Self::Compio { stream, .. } => stream.as_fd(),
             #[cfg(test)]
-            Self::Std(stream) => stream.as_raw_fd(),
+            Self::Std(stream) => stream.as_fd(),
         }
     }
     pub(crate) fn set_ancillary_mode(&self) {
@@ -373,30 +376,15 @@ impl CompioTcpStream {
 
     pub(crate) fn shutdown(&self, how: std::net::Shutdown) -> io::Result<()> {
         let how = match how {
-            std::net::Shutdown::Read => libc::SHUT_RD,
-            std::net::Shutdown::Write => libc::SHUT_WR,
-            std::net::Shutdown::Both => libc::SHUT_RDWR,
+            std::net::Shutdown::Read => rustix::net::Shutdown::Read,
+            std::net::Shutdown::Write => rustix::net::Shutdown::Write,
+            std::net::Shutdown::Both => rustix::net::Shutdown::Both,
         };
-        // SAFETY: shutdown(2) on this stream's own open fd; no pointers.
-        let result = unsafe { libc::shutdown(self.raw_fd(), how) };
-        if result == 0 {
-            Ok(())
-        } else {
-            Err(io::Error::last_os_error())
-        }
+        Ok(rustix::net::shutdown(self.as_fd(), how)?)
     }
-    pub(crate) fn duplicate_std_fd(fd: RawFd) -> io::Result<TcpStream> {
-        // SAFETY: fcntl(F_DUPFD_CLOEXEC) takes no pointers; `fd` is only borrowed for the call.
-        let duplicate = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
-        if duplicate < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: `duplicate` is a new descriptor checked above and owned by nothing else.
-        let stream = unsafe { TcpStream::from_raw_fd(duplicate) };
-        if let Err(error) = stream.set_nonblocking(true) {
-            drop(stream);
-            return Err(error);
-        }
+    pub(crate) fn duplicate_std_fd(fd: BorrowedFd<'_>) -> io::Result<TcpStream> {
+        let stream = TcpStream::from(rustix::io::fcntl_dupfd_cloexec(fd, 0)?);
+        stream.set_nonblocking(true)?;
         Ok(stream)
     }
 }
@@ -717,9 +705,7 @@ struct PollTarget(Rc<compio::net::TcpStream>);
 
 impl std::os::fd::AsFd for PollTarget {
     fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
-        // SAFETY: the `Rc` held by `self` keeps the descriptor open for the
-        // lifetime of the borrow.
-        unsafe { std::os::fd::BorrowedFd::borrow_raw(self.0.as_raw_fd()) }
+        self.0.as_fd()
     }
 }
 
@@ -746,23 +732,16 @@ async fn receive_before_ktls(
     }
     data.clear();
     data.resize(room, 0);
-    // SAFETY: `data` was just resized to `room` bytes and recv writes at most `room`; the fd is
-    // this stream's own.
-    let count = unsafe {
-        libc::recv(
-            stream.as_raw_fd(),
-            data.as_mut_ptr().cast(),
-            room,
-            libc::MSG_DONTWAIT,
-        )
-    };
-    if count < 0 {
-        let error = io::Error::last_os_error();
-        data.clear();
-        return (error.kind() != io::ErrorKind::WouldBlock).then_some(Err(error));
+    match rustix::net::recv(&**stream, &mut data[..], rustix::net::RecvFlags::DONTWAIT) {
+        Ok((count, _)) => {
+            data.truncate(count);
+            Some(Ok(count))
+        }
+        Err(errno) => {
+            data.clear();
+            (errno != rustix::io::Errno::WOULDBLOCK).then(|| Err(errno.into()))
+        }
     }
-    data.truncate(count as usize);
-    Some(Ok(count as usize))
 }
 
 async fn receive_ancillary_worker(

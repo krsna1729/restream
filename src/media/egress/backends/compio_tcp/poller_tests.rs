@@ -2,7 +2,7 @@ use super::{CompioTcpPoller, CompioTcpStream, TcpConnectAttempt};
 use crate::media::egress::leaf_arena::LeafKey;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsFd, AsRawFd};
 use std::thread;
 use std::time::Duration;
 
@@ -133,7 +133,7 @@ fn compio_poller_reports_generation_tagged_connect_readiness() {
         poller.remove(event.fd).unwrap();
     }
     poller
-        .register_leaf(stream.raw_fd(), key, 8, super::TcpEgressInterest::WRITE)
+        .register_leaf(stream.as_fd(), key, 8, super::TcpEgressInterest::WRITE)
         .unwrap();
     let (_command_tx, commands) = flume::unbounded();
     assert!(matches!(
@@ -355,7 +355,7 @@ fn command_and_socket_readiness_are_serviced_fairly() {
     let fd = stream.raw_fd();
     let key = LeafKey::for_test(9, 0);
     poller
-        .register_leaf(fd, key, 11, super::TcpEgressInterest::WRITE)
+        .register_leaf(stream.as_fd(), key, 11, super::TcpEgressInterest::WRITE)
         .unwrap();
     let (command_tx, commands) = flume::unbounded();
     const WAKE_COUNT: usize = 64;
@@ -430,7 +430,12 @@ fn active_completions_do_not_starve_pending_connect_readiness() {
     let pending_fd = pending_client.as_raw_fd();
     let pending_key = LeafKey::for_test(21, 0);
     poller
-        .register_leaf(pending_fd, pending_key, 32, super::TcpEgressInterest::WRITE)
+        .register_leaf(
+            pending_client.as_fd(),
+            pending_key,
+            32,
+            super::TcpEgressInterest::WRITE,
+        )
         .unwrap();
     let (pending_peer, _) = pending_server.join().unwrap();
 
@@ -477,7 +482,12 @@ fn compio_poller_reports_simultaneous_read_and_write_readiness() {
     let fd = stream.raw_fd();
     let key = LeafKey::for_test(4, 0);
     poller
-        .register_leaf(fd, key, 13, super::TcpEgressInterest::READ_WRITE)
+        .register_leaf(
+            stream.as_fd(),
+            key,
+            13,
+            super::TcpEgressInterest::READ_WRITE,
+        )
         .unwrap();
     server.join().unwrap();
 
