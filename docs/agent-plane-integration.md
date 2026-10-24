@@ -37,8 +37,7 @@ Restream.
 ## Browser boundary
 
 The dashboard is not an agent client. Operator workflows use the
-authenticated control-plane API. The diagnostics "Ask AI" action is a manual
-handoff to an external chat, not an embedded tool-calling runtime.
+authenticated control-plane API.
 
 Do not couple dashboard reads or mutations to the agent routes.
 

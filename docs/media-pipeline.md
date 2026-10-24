@@ -990,7 +990,7 @@ Restream does not generate a certificate (`src/media/moq/tls.rs`).
 A `moqt://` output publishes the pipeline to a moq-lite or IETF relay over
 native QUIC. The pinned IETF interop peer is moq-relay 0.17.7 on `moqt-19`;
 MediaMTX's incompatible dialect is tracked separately in
-[Q-091](backlog.md#q-091-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop).
+[Q-097](backlog.md#q-097-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop).
 
 ```mermaid
 flowchart LR
@@ -1126,7 +1126,7 @@ carries control, lifecycle and the probe, not per-packet media. See
 | MoQ ingest and origin | `moq-ingest` | Compio QUIC endpoint, sessions, origin pumps |
 | FFmpeg stage | `restream-ffin`, `restream-ffout`, FFmpeg child | pipe buffers, stage output ring |
 | Audio router, SRT TS muxer, HLS segmenters | `restream-media` | output ring, `TsChunkRing`, `HlsStore`, `Fmp4HlsStore` |
-| Egress (RTMP, SRT, HLS PUT, MoQ, pipeline, sink) | `egress-<shard>` | leaf state; SRT owner per address family |
+| Egress (RTMP, SRT, HLS PUT, MoQ, pipeline, sink) | `egress-shard-<n>` | leaf state; SRT owner per address family |
 | HLS PUT over `https` without kTLS | Reqwest uploader on Tokio | upload policy state |
 | Picture and sound checks (opt in per pipeline) | an external FFmpeg per checked pipeline; `restream-ffin` feeds it, `stream-qa-pic` and `stream-qa-snd` read it | its own source-ring reader and TS feeder; decoding happens in the child (`src/media/stream_qa/`) |
 

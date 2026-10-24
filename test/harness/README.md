@@ -1,6 +1,6 @@
 # Test harness DSL
 
-This directory is the new manifest surface for the integration harness.
+This directory holds the manifests the integration harness runs.
 
 The Rust harness loads this surface for canonical suites, scenario-backed
 matrix runs, and special workflow inventory.

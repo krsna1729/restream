@@ -26,14 +26,13 @@ evidence. Inspect the current harness catalog before choosing a workload.
 
 Record the revision/dirty tree, host, command, workload, and comparable
 before/after numbers. Use Criterion's saved baseline for local comparisons;
-put the numbers in the commit message of a measured change. Historical numbers are context, not
-a current control run.
+put the numbers in the commit message of a measured change. Historical numbers
+are context, not a current control run.
 
 ## Choose the work
 
-- **Benchmark or ledger check:** run the relevant target and compare medians
-  with the recorded threshold (default ±5% for throughput ledger rows).
-  Confirm a suspected regression with comparable runs before attributing it.
+- **Benchmark check:** run the relevant target and compare medians with a
+  saved Criterion baseline. Confirm a suspected regression with comparable runs before attributing it.
 - **Resource check:** run `scripts/harness/run.sh resource-sweep`; compare
   delivered work, RSS, and ring payload.
 - **Optimization:** measure before editing, change one variable, then repeat

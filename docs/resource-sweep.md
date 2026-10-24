@@ -11,7 +11,6 @@ question is maximum fan-out with repeated delivery gates.
 - [Controls](#controls)
 - [Artifacts and counters](#artifacts-and-counters)
 - [Per-rendition FFmpeg child cost](#per-rendition-ffmpeg-child-cost)
-- [Profiling workflow](#profiling-workflow)
 - [Matrix resource constraints](#matrix-resource-constraints)
 
 ## Run one scenario
@@ -182,27 +181,6 @@ Record the fixture, codec, output kinds, shared stage keys, child count,
 child RSS, child CPU and delivered destinations for each rung. Keep the
 numbers in the measured change's commit message, not a dated table here.
 
-## Profiling workflow
-
-Run one scenario with a long enough sample window to attach the profiler.
-First obtain a comparable unprofiled run; profiling changes scheduling and
-cost. Use the same release binary and fixture for both.
-
-```sh
-perf stat -e task-clock,context-switches,cpu-migrations,page-faults \
-  -p <restream-pid> -- sleep 10
-perf record -F 99 -e cpu-clock -g -p <restream-pid> -- sleep 10
-perf report --stdio --no-children
-```
-
-Use a kernel-compatible `perf`. Record whether PMU events are available on
-the host. Profile encoder children separately when they dominate total
-CPU; optimizing the parent cannot remove child codec work.
-
-End the harness normally. If inspection mode left processes running,
-identify their PIDs and command lines before stopping only those owned by
-the run. Do not use process-name-wide `pkill` on a shared host.
-
 ## Matrix resource constraints
 
 A live matrix proves protocol or recovery behavior for its exercised
@@ -221,12 +199,5 @@ A semaphore that bounds a server resource does not cap the whole process
 tree, and Cargo job limits impose no runtime cgroup. Apply whole-process
 limits externally when the experiment requires them.
 
-Choose the smallest harness mode that proves the changed boundary. Capture
-its summary and the evidence needed to explain a failure. Broaden the
-matrix only after the focused scenario works. Check variable names against
-their source owner: an ignored environment variable is not a constraint.
-
-Separate protocol correctness, recovery, directional resource evidence and
-deployment recommendations. Only the first two are usually established by
-one bounded run. Record repeatable measurements, limitations and host
-identity in the commit that makes the change.
+Check variable names against their source owner: an ignored environment
+variable is not a constraint.

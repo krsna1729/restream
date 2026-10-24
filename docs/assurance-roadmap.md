@@ -74,8 +74,8 @@ checker runs.
 |---|---|---|
 | 1 Language | Compio Owners are `!Send` and thread-homed. `[lints]` in `Cargo.toml` deny `unsafe_op_in_unsafe_fn`, `unused_must_use` and `clippy::undocumented_unsafe_blocks`. FFI-free modules carry `#[forbid(unsafe_code)]` on their `mod` declaration. `src/lib.rs` refuses `panic = "abort"` builds. | Sans-I/O single-owner protocol core; `srt-lifecycle` forbids `unsafe`. |
 | 2 API design | Per-entity panic boundaries and admission bounds ([isolation audit](isolation-audit.md)); locks only through poison-tolerant `crate::sync`. `ReadyQueue` owns membership; `LeafArena` resolves generational `LeafKey`s; `WorkBudget` debits itself; HLS persistent consumers hold a `PersistentLease`; the egress manager asks `CommandSink` for free slots. | Logical peer and caller ids, bounded caller pool, `DenseSlotArena`. |
-| 3 Ecosystem | Property tests, live fault modes, twelve cargo-fuzz targets, narrow `miri` and `asan` jobs ([testing](testing.md#miri-and-addresssanitizer)). | proptests, cargo-fuzz, ASan in `cargo xtask ci`. |
-| 4 Model checking | Nine Loom models in the concurrency gate; seven Kani proofs over `LeafArena`, `ReadyQueue` and `WorkBudget` ([testing](testing.md#kani-proofs)). | One Loom model (reuseport group); three Kani proofs over `DenseSlotArena`. |
+| 3 Ecosystem | Property tests, live fault modes, cargo-fuzz targets, narrow `miri` and `asan` jobs ([testing](testing.md#miri-and-addresssanitizer)). | proptests, cargo-fuzz, ASan in `cargo xtask ci`. |
+| 4 Model checking | Loom models in the concurrency gate; Kani proofs over `LeafArena`, `ReadyQueue` and `WorkBudget` ([testing](testing.md#kani-proofs)). | One Loom model (reuseport group); three Kani proofs over `DenseSlotArena`. |
 | 5–6 TLA+, Lean | None. | None. |
 
 ## Placement patterns
@@ -125,11 +125,8 @@ Practice:
 
 - A counterexample from any checker becomes a deterministic Rust regression
   test with the same steps.
-- A commit that changes an invariant names the rung that enforces it and the
-  test that proves it.
 - Fuzz belongs where external bytes enter. Theorem provers do not prove
   parser robustness.
-- Hot-path changes need before/after benchmark or codegen evidence.
 
 ## Open work
 

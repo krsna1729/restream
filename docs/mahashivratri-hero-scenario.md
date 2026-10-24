@@ -10,8 +10,6 @@ runtime graph it should produce, and how the `msr` harness mode runs it.
 
 - [Workload](#workload)
 - [Expected runtime graph](#expected-runtime-graph)
-- [Capacity model](#capacity-model)
-- [Risks](#risks)
 - [Run the harness](#run-the-harness)
 - [Controls](#controls)
 - [Peer modes](#peer-modes)
@@ -115,41 +113,6 @@ Six seconds of headroom needs about 9,180 to 9,360 ring slots, under the
 The 30 routers together inspect about 46,000 packets per second. Payload
 bytes are shared; packet objects, ring writes, metrics and notifications are
 per route.
-
-## Capacity model
-
-Planning estimates, not measurements, at about 192 kbps per stereo AAC
-track:
-
-| Source video bitrate | Payload egress at 1,200 outputs |
-|---:|---:|
-| 8 Mbps | 9.8 Gbps |
-| 12 Mbps | 14.6 Gbps |
-| 25 Mbps | 30.2 Gbps |
-| 40 Mbps | 48.2 Gbps |
-
-Wire overhead, retransmission and headroom come on top. One selected track
-gives about 80 media messages per output per second at 30 fps and 110 at
-60 fps: 96,000 to 132,000 sends per second for the population. A localhost
-run measures CPU, memory, tasks, queues and sockets; it cannot certify a NIC.
-
-## Risks
-
-| ID | Risk | Evidence |
-|---|---|---|
-| MSR-01 | Aggregate bandwidth exceeds the host link | Measured bytes/s plus external-link certification |
-| MSR-02 | RTMP packetization and socket work saturates workers | CPU, scheduler, progress and latency across the ramp |
-| MSR-03 | 30 audio routers cause allocation or cache pressure | Stage CPU, RSS, retained payload, allocation profile |
-| MSR-04 | Adaptive ring replacement disrupts mass startup | Startup timeline, cancellations, retries, time to progress |
-| MSR-05 | Correlated sink failure causes a retry, log or DB storm | Fault slice with bounded recovery and reconciler timing |
-| MSR-06 | Slow outputs overflow and restart repeatedly | Slow-sink slices; overflow and retry counters |
-| MSR-07 | SRT outputs use too many threads or buffers | Thread count, RSS/PSS, kernel socket memory |
-| MSR-08 | An RTMP destination refuses 5.1 AAC | Interop probe of 5.1 passthrough and downmix |
-| MSR-09 | The shared 4K HEVC compatibility stage misses real time | Stage CPU, output progress, decode probe, overflow counters |
-| MSR-10 | Teardown leaks tasks, stages, sockets or memory | Post-stop convergence and return to baseline |
-
-Open evidence: external-link certification (MSR-01), 4K and HEVC envelopes,
-degradation slices, and per-language audio identity at full scale.
 
 ## Run the harness
 

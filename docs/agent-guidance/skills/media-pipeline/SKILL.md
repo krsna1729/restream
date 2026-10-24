@@ -14,11 +14,11 @@ Read before changing `src/media/`:
 
 ## Ownership
 
-- Tokio owns the control plane: API handlers, reconciliation, timers and
-  application session state. Per-packet media work does not belong on
-  Tokio: SRT and RTMP ingest media run to completion on their ingress
-  owners; the shared TS mux and the HLS segmenter are still on Tokio and are
-  moving to the owner that publishes the feed.
+- Tokio CONTROL owns the control plane: API handlers, reconciliation, timers
+  and application session state. Per-packet media work never runs there:
+  RTMP, SRT and MoQ ingest media run to completion on their Compio owners;
+  shared TS muxing, audio routers, HLS segmenting and recording run on the
+  MEDIA executor (`restream-media`); egress runs on `egress-shard-N`.
 - SRT transport sockets and protocol state (`PeerTable`, timers, ACK/NAK, TX)
   are owned by dedicated Compio `Owner` threads: one ingress owner thread per
   listener member (`RESTREAM_SRT_INGRESS_OWNERS`, default 1; more than one
@@ -28,16 +28,14 @@ Read before changing `src/media/`:
   shard. Never move SRT sockets or `PeerTable` state onto Tokio; address SRT
   ingress sessions from Tokio only by `IngressPeer` (Owner index +
   `LogicalPeerId`) through bounded commands and events.
-- RTMP/RTMPS sockets stay on the native TCP/io_uring shard workers until the
-  Compio TCP migration.
+- RTMP/RTMPS sockets stay on their Compio owner: ingress owners for ingest,
+  egress shards for output.
 - Blocking calls (child pipes, files) belong on dedicated OS threads or the
   blocking pool, never on Tokio workers or an Owner thread. Codecs run only in
   FFmpeg child processes.
 - Wrap OS-thread entry points with `catch_unwind(AssertUnwindSafe(...))`; the Compio Owner threads report an
   `Owner` fault as a bridge event, and a panic there closes the bridge, which
   Tokio treats as a listener stop.
-- No internal or external failure path may crash the engine; isolate faults
-  and surface errors.
 
 ## Media semantics
 
@@ -56,18 +54,12 @@ Read before changing `src/media/`:
 Hot paths include `src/media/`, ring buffers, mux/demux loops, the recording byte queue,
 SRT/RTMP packet loops, HLS segmenting, and transcoder data paths.
 
+- Follow the hot-path contract in
+  [high-performance data path](../../../high-performance-data-path.md#hot-path-contracts):
+  no per-packet allocation, logging, serialization, locks, async channel
+  sends or syscalls; burst APIs, hoisted buffers and `Bytes` ownership
+  transfer instead of copies.
 - Benchmark before and after with the relevant `benches/` suite.
-- Avoid per-packet allocation, logging, serialization, locks, async channel
-  sends, and system calls.
-- Do not add logging inside packet-level loops in
-  `src/media/ring_buffer.rs` or `src/media/byte_queue.rs`.
-- Use burst APIs where available.
-- Hoist reusable buffers outside loops and clear them inside the loop.
-- Prefer `Bytes` and `BytesMut` ownership transfer over payload copies.
-- Do not add diagnostic readers or metrics that alter production pipeline
-  behavior.
-- Keep protocol correctness tests at least as strong as performance
-  validation.
 - For SIMD, benchmark scalar first, keep a scalar fallback, use runtime
   feature detection, and minimize `unsafe`.
 

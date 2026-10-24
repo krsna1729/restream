@@ -35,7 +35,7 @@ dashboard route contract.
 
 - Default: `npm run test:frontend` (run only the new or changed test
   locally; CI runs the rest).
-- Browser-only behavior: `npx playwright test`.
+- Browser-only behavior: `npm run test:e2e`.
 - Coverage: `npm run test:frontend:coverage`.
 - Layering or module-boundary refactors: see
   [layering-audit](../layering-audit/SKILL.md).
