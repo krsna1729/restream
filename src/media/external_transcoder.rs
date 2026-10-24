@@ -47,15 +47,13 @@ use crate::media::pipe_metrics::PipeMetrics;
 use crate::media::stage_lifecycle::{StageBackendKind, StageLifecycleGuard, StagePhase};
 
 mod ffmpeg_process;
+pub(crate) use ffmpeg_process::{blocking_pipe, reap_external_child, spawn_external_stdin_writer};
 pub use ffmpeg_process::{
     build_stage_ffmpeg_args, build_stage_ffmpeg_args_for_input,
     build_stage_ffmpeg_args_for_input_streams, build_stage_ffmpeg_args_for_observed_input_streams,
     build_stage_ffmpeg_video_only_args, build_stage_ffmpeg_video_only_args_for_input,
 };
-use ffmpeg_process::{
-    reap_external_child, spawn_external_stderr_logger, spawn_external_stdin_writer,
-    spawn_external_stdout_reader,
-};
+use ffmpeg_process::{spawn_external_stderr_logger, spawn_external_stdout_reader};
 
 /// Stdin writes or stdout reads exceeding this threshold are counted as stalls/idles.
 /// 1 ms filters normal async scheduling jitter while catching real back-pressure.

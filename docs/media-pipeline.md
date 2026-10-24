@@ -1128,7 +1128,7 @@ carries control, lifecycle and the probe, not per-packet media. See
 | Audio router, SRT TS muxer, HLS segmenters | `restream-media` | output ring, `TsChunkRing`, `HlsStore`, `Fmp4HlsStore` |
 | Egress (RTMP, SRT, HLS PUT, MoQ, pipeline, sink) | `egress-<shard>` | leaf state; SRT owner per address family |
 | HLS PUT over `https` without kTLS | Reqwest uploader on Tokio | upload policy state |
-| Picture and sound checks (opt in per pipeline) | `stream-qa-<id>`, one per checked pipeline | its own source-ring reader, one H.264/H.265 and one AAC decoder, a 64×36 thumbnail (`src/media/stream_qa/`) |
+| Picture and sound checks (opt in per pipeline) | an external FFmpeg per checked pipeline; `restream-ffin` feeds it, `stream-qa-pic` and `stream-qa-snd` read it | its own source-ring reader and TS feeder; decoding happens in the child (`src/media/stream_qa/`) |
 
 Rings are shared: one source ring per pipeline and one output ring per stage,
 independent of the output count.

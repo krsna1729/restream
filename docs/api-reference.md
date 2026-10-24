@@ -1275,16 +1275,19 @@ Both return the state:
 
 - The checks are off unless turned on (`stream_qa_enabled:{id}` in the meta
   store). On, and while the source is live or within the reconnect grace,
-  one OS thread per pipeline (`src/media/stream_qa/`) reads the source ring.
-  - It decodes at most one video keyframe a second (H.264 and H.265 from
-    TS, SRT and file sources; H.264 from RTMP), shrinks it to a 64×36 grey
-    thumbnail and judges it black (98% of it dark) or unchanged (mean
-    difference to the last under 0.5 of 255).
-  - It decodes the first audio track (AAC) and measures short-term loudness
-    (3 s, ITU-R BS.1770 K-weighting, every channel weighted 1), floored at
-    -70 LUFS; -60 LUFS or less is silence.
-  - It never holds the ring's writer: a sampler that falls behind is moved
-    to the next keyframe like any reader.
+  each checked pipeline runs one external FFmpeg (`src/media/stream_qa/`;
+  no codec runs inside the engine). Its source ring is fed to FFmpeg's
+  stdin as MPEG-TS on a dedicated thread.
+  - FFmpeg decodes only keyframes and writes each as a 64×36 grey thumbnail
+    to stdout; the engine judges it black (98% of it dark) or unchanged
+    (mean difference to the last under 0.5 of 255).
+  - FFmpeg writes the first audio track as 48 kHz stereo f32 to a Unix
+    socket the engine listens on; the engine measures short-term loudness
+    (3 s, ITU-R BS.1770 K-weighting), floored at -70 LUFS; -60 LUFS or less
+    is silence.
+  - It never holds the ring's writer: a feed that falls behind is moved to
+    the next keyframe like any reader. A child that exits or crashes is
+    started again after 2 s, doubling to 30 s.
 - `findings` is `null` while no sampler runs. A `*SinceMs` is set while its
   condition holds. A finding whose check is over 10 s old is ignored by the
   alert rules.

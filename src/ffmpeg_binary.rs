@@ -75,6 +75,71 @@ pub fn ffmpeg_bin_path() -> &'static Path {
     })
 }
 
+/// The resolved `ffprobe`: `FFPROBE_BIN_PATH`, else the one beside the
+/// resolved FFmpeg (the fetched release and most packages ship both), else
+/// the first on `PATH`, else the bare name (a spawn then fails clearly).
+pub fn ffprobe_bin_path() -> &'static Path {
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| {
+        if let Some(configured) = std::env::var_os("FFPROBE_BIN_PATH").map(PathBuf::from)
+            && is_file(&configured)
+        {
+            return configured;
+        }
+        let beside = ffmpeg_bin_path().with_file_name("ffprobe");
+        if is_file(&beside) {
+            return beside;
+        }
+        std::env::var_os("PATH")
+            .iter()
+            .flat_map(std::env::split_paths)
+            .map(|dir| dir.join("ffprobe"))
+            .find(|candidate| is_file(candidate))
+            .unwrap_or_else(|| PathBuf::from("ffprobe"))
+    })
+}
+
+/// Runs an FFmpeg tool to completion and returns its stdout. It is killed
+/// past `within` (and if this future is dropped); a non-zero exit is an
+/// error carrying the end of its stderr.
+pub async fn run_tool(
+    program: &Path,
+    args: &[String],
+    within: std::time::Duration,
+) -> Result<Vec<u8>, String> {
+    let child = tokio::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| format!("{}: {error}", program.display()))?;
+    let output = tokio::time::timeout(within, child.wait_with_output())
+        .await
+        .map_err(|_| format!("{} took longer than {within:?}", program.display()))?
+        .map_err(|error| format!("{}: {error}", program.display()))?;
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let tail: String = stderr
+            .trim()
+            .chars()
+            .rev()
+            .take(400)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        Err(format!(
+            "{} failed ({}): {tail}",
+            program.display(),
+            output.status
+        ))
+    }
+}
+
 fn is_file(path: &Path) -> bool {
     path.metadata().is_ok_and(|meta| meta.is_file())
 }
@@ -218,7 +283,12 @@ async fn fetch_into(dir: &Path) -> Result<PathBuf, String> {
         .arg(&archive)
         .arg("-C")
         .arg(&staging)
-        .args(["--strip-components=2", "--wildcards", "*/bin/ffmpeg"])
+        .args([
+            "--strip-components=2",
+            "--wildcards",
+            "*/bin/ffmpeg",
+            "*/bin/ffprobe",
+        ])
         .status()
         .map_err(|error| format!("running tar: {error}"))?;
     let _ = std::fs::remove_file(&archive);
@@ -230,6 +300,13 @@ async fn fetch_into(dir: &Path) -> Result<PathBuf, String> {
     let target = dir.join("ffmpeg");
     std::fs::rename(&binary, &target)
         .map_err(|error| format!("installing {}: {error}", target.display()))?;
+    // ffprobe reads stored media for the library (codec, frame rate, GOP).
+    let probe = staging.join("ffprobe");
+    if is_file(&probe) {
+        let probe_target = dir.join("ffprobe");
+        std::fs::rename(&probe, &probe_target)
+            .map_err(|error| format!("installing {}: {error}", probe_target.display()))?;
+    }
     let _ = std::fs::remove_dir_all(&staging);
     Ok(target)
 }

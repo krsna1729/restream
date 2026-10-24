@@ -1,9 +1,15 @@
 //! Offline media-file inspection helpers used to validate ingest suitability
-//! and expose operator diagnostics for stored media assets.
+//! and expose operator diagnostics for stored media assets. The external
+//! `ffprobe` reads the file (its JSON and CSV output are a stable
+//! interface); nothing here decodes or demuxes in the engine.
 
-use ffmpeg_next::{format, media};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::time::Duration;
+
+/// A probe that takes longer than this is abandoned (a long file's packet
+/// list reads in well under it).
+const PROBE_WITHIN: Duration = Duration::from_secs(60);
 
 pub const LIVE_GOP_WARNING_THRESHOLD_SECS: f64 = 2.0;
 pub const DEFAULT_LIVE_GOP_TARGET_SECONDS: u32 = 2;
@@ -52,95 +58,135 @@ fn gop_stats_from_keyframe_times(keyframe_times: &[f64]) -> (Option<f64>, Option
     )
 }
 
-fn codec_name(id: ffmpeg_next::codec::Id) -> String {
-    match id {
-        ffmpeg_next::codec::Id::H264 => "h264",
-        ffmpeg_next::codec::Id::HEVC => "hevc",
-        ffmpeg_next::codec::Id::AAC => "aac",
-        other => return format!("{other:?}").to_ascii_lowercase(),
-    }
-    .to_string()
+/// `ffprobe`'s view of the first video stream and the container.
+#[derive(Debug, Default, Deserialize)]
+struct Probe {
+    #[serde(default)]
+    streams: Vec<ProbeStream>,
+    format: Option<ProbeFormat>,
 }
 
-fn timestamp_seconds(
-    stream: &ffmpeg_next::Stream<'_>,
-    packet: &ffmpeg_next::Packet,
-) -> Option<f64> {
-    let ts = packet.dts().or_else(|| packet.pts())?;
-    let tb = stream.time_base();
-    if tb.1 == 0 {
-        return Some(ts as f64);
-    }
-    Some(ts as f64 * tb.0 as f64 / tb.1 as f64)
+#[derive(Debug, Default, Deserialize)]
+struct ProbeStream {
+    codec_name: Option<String>,
+    avg_frame_rate: Option<String>,
 }
 
-pub fn analyze_media_file(path: &Path) -> Result<MediaFileAnalysis, String> {
-    let mut ictx =
-        format::input(path).map_err(|error| format!("Failed to open media file: {error}"))?;
-    let Some(video_stream) = ictx.streams().best(media::Type::Video).or_else(|| {
-        ictx.streams()
-            .find(|stream| stream.parameters().medium() == media::Type::Video)
-    }) else {
-        return Ok(MediaFileAnalysis {
-            video_codec: None,
-            fps: None,
-            duration_sec: None,
-            keyframe_count: 0,
-            average_keyframe_interval_sec: None,
-            max_keyframe_interval_sec: None,
-            sparse_for_live: false,
-            live_gop_target_seconds: DEFAULT_LIVE_GOP_TARGET_SECONDS,
-        });
-    };
+#[derive(Debug, Default, Deserialize)]
+struct ProbeFormat {
+    duration: Option<String>,
+}
 
-    let video_index = video_stream.index();
-    let video_codec = Some(codec_name(video_stream.parameters().id()));
-    let frame_rate = video_stream.avg_frame_rate();
-    let fps = if frame_rate.0 > 0 && frame_rate.1 > 0 {
-        Some(round_metric(frame_rate.0 as f64 / frame_rate.1 as f64))
-    } else {
-        None
-    };
-    let duration_sec = if ictx.duration() > 0 {
-        Some(round_metric(ictx.duration() as f64 / 1_000_000.0))
-    } else {
-        None
-    };
+/// "30000/1001" as a number; `None` for "0/0" or anything unreadable.
+fn frame_rate(text: &str) -> Option<f64> {
+    let (num, den) = text.split_once('/')?;
+    let (num, den) = (num.parse::<f64>().ok()?, den.parse::<f64>().ok()?);
+    (num > 0.0 && den > 0.0).then(|| round_metric(num / den))
+}
 
-    let mut keyframe_times = Vec::new();
-    for (stream, packet) in ictx.packets() {
-        if stream.index() != video_index || !packet.is_key() {
-            continue;
-        }
-        if let Some(timestamp) = timestamp_seconds(&stream, &packet) {
-            keyframe_times.push(timestamp);
-        }
-    }
+/// Keyframe times from `ffprobe`'s packet CSV (`dts_time,pts_time,flags`
+/// per line): the decode time of each packet flagged `K`, else its
+/// presentation time.
+fn keyframe_times(csv: &str) -> Vec<f64> {
+    csv.lines()
+        .filter_map(|line| {
+            let mut fields = line.trim().split(',');
+            let dts = fields.next()?;
+            let pts = fields.next()?;
+            let flags = fields.next()?;
+            if !flags.starts_with('K') {
+                return None;
+            }
+            dts.parse().ok().or_else(|| pts.parse().ok())
+        })
+        .collect()
+}
 
+fn analysis_from(probe: Probe, keyframe_times: &[f64]) -> MediaFileAnalysis {
+    let stream = probe.streams.into_iter().next();
     let (average_keyframe_interval_sec, max_keyframe_interval_sec, sparse_for_live) =
-        gop_stats_from_keyframe_times(&keyframe_times);
-
-    Ok(MediaFileAnalysis {
-        video_codec,
-        fps,
-        duration_sec,
+        gop_stats_from_keyframe_times(keyframe_times);
+    MediaFileAnalysis {
+        video_codec: stream.as_ref().and_then(|stream| stream.codec_name.clone()),
+        fps: stream
+            .as_ref()
+            .and_then(|stream| stream.avg_frame_rate.as_deref())
+            .and_then(frame_rate),
+        duration_sec: probe
+            .format
+            .and_then(|format| format.duration)
+            .and_then(|duration| duration.parse::<f64>().ok())
+            .filter(|duration| *duration > 0.0)
+            .map(round_metric),
         keyframe_count: keyframe_times.len(),
         average_keyframe_interval_sec,
         max_keyframe_interval_sec,
         sparse_for_live,
         live_gop_target_seconds: DEFAULT_LIVE_GOP_TARGET_SECONDS,
-    })
+    }
+}
+
+pub async fn analyze_media_file(path: &Path) -> Result<MediaFileAnalysis, String> {
+    let ffprobe = crate::ffmpeg_binary::ffprobe_bin_path();
+    let file = path.display().to_string();
+    let header = crate::ffmpeg_binary::run_tool(
+        ffprobe,
+        &[
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name,avg_frame_rate:format=duration",
+            "-of",
+            "json",
+            &file,
+        ]
+        .map(String::from),
+        PROBE_WITHIN,
+    )
+    .await
+    .map_err(|error| format!("Failed to open media file: {error}"))?;
+    let probe: Probe = serde_json::from_slice(&header)
+        .map_err(|error| format!("Failed to open media file: unreadable probe ({error})"))?;
+    if probe.streams.is_empty() {
+        return Ok(analysis_from(probe, &[]));
+    }
+    let packets = crate::ffmpeg_binary::run_tool(
+        ffprobe,
+        &[
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "packet=dts_time,pts_time,flags",
+            "-of",
+            "csv=p=0",
+            &file,
+        ]
+        .map(String::from),
+        PROBE_WITHIN,
+    )
+    .await
+    .map_err(|error| format!("Failed to read media packets: {error}"))?;
+    Ok(analysis_from(
+        probe,
+        &keyframe_times(&String::from_utf8_lossy(&packets)),
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn canonical_fixture_reports_2_second_gop() {
+    #[tokio::test]
+    async fn canonical_fixture_reports_2_second_gop() {
         let fixture =
             crate::test_fixtures::canonical_h264_ts_fixture().expect("fixture should exist");
-        let analysis = analyze_media_file(&fixture).expect("analysis should succeed");
+        let analysis = analyze_media_file(&fixture)
+            .await
+            .expect("analysis should succeed");
 
         assert_eq!(analysis.video_codec.as_deref(), Some("h264"));
         assert_eq!(analysis.keyframe_count, 4);
@@ -149,10 +195,12 @@ mod tests {
         assert!(!analysis.sparse_for_live);
     }
 
-    #[test]
-    fn sparse_fixture_reports_sparse_gop() {
+    #[tokio::test]
+    async fn sparse_fixture_reports_sparse_gop() {
         let fixture = crate::test_fixtures::sparse_gop_mp4_fixture().expect("fixture should exist");
-        let analysis = analyze_media_file(&fixture).expect("analysis should succeed");
+        let analysis = analyze_media_file(&fixture)
+            .await
+            .expect("analysis should succeed");
 
         assert_eq!(analysis.video_codec.as_deref(), Some("h264"));
         assert_eq!(analysis.keyframe_count, 3);
@@ -169,16 +217,16 @@ mod tests {
         assert!(is_sparse_gop_interval(5.0));
     }
 
-    #[test]
-    fn analyze_media_file_returns_err_for_nonexistent_path() {
+    #[tokio::test]
+    async fn analyze_media_file_returns_err_for_nonexistent_path() {
         let missing = Path::new("/nonexistent/does-not-exist-analysis-fixture.ts");
-        let result = analyze_media_file(missing);
+        let result = analyze_media_file(missing).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Failed to open media file"));
     }
 
-    #[test]
-    fn analyze_media_file_returns_err_for_unparseable_content() {
+    #[tokio::test]
+    async fn analyze_media_file_returns_err_for_unparseable_content() {
         let dir = std::env::temp_dir();
         let path = dir.join(format!(
             "restream-file-analysis-garbage-{}.ts",
@@ -186,7 +234,7 @@ mod tests {
         ));
         std::fs::write(&path, [0xFFu8; 4096]).expect("write garbage fixture");
 
-        let result = analyze_media_file(&path);
+        let result = analyze_media_file(&path).await;
         let _ = std::fs::remove_file(&path);
 
         assert!(
@@ -227,14 +275,24 @@ mod tests {
     }
 
     #[test]
-    fn codec_name_maps_known_codecs_and_falls_back_for_unknown() {
-        assert_eq!(codec_name(ffmpeg_next::codec::Id::H264), "h264");
-        assert_eq!(codec_name(ffmpeg_next::codec::Id::HEVC), "hevc");
-        assert_eq!(codec_name(ffmpeg_next::codec::Id::AAC), "aac");
-        // Any codec outside the explicit match falls back to the
-        // lowercased Debug representation rather than panicking.
-        assert_eq!(codec_name(ffmpeg_next::codec::Id::VP8), "vp8");
-        assert_eq!(codec_name(ffmpeg_next::codec::Id::None), "none");
+    fn probe_output_reads_into_an_analysis() {
+        let probe: Probe = serde_json::from_str(
+            r#"{"programs":[],"streams":[{"codec_name":"hevc","avg_frame_rate":"30000/1001"}],
+                "format":{"duration":"12.500000"}}"#,
+        )
+        .unwrap();
+        let csv = "0.000000,0.066733,K__\n0.033367,0.033367,___\n2.002000,2.002000,K_\nN/A,4.004000,K__\n";
+        let analysis = analysis_from(probe, &keyframe_times(csv));
+        assert_eq!(analysis.video_codec.as_deref(), Some("hevc"));
+        assert_eq!(analysis.fps, Some(29.97));
+        assert_eq!(analysis.duration_sec, Some(12.5));
+        assert_eq!(
+            analysis.keyframe_count, 3,
+            "non-key packets skipped; pts when dts is N/A"
+        );
+        assert_eq!(analysis.max_keyframe_interval_sec, Some(2.002));
+        assert_eq!(frame_rate("0/0"), None);
+        assert_eq!(frame_rate("nonsense"), None);
     }
 
     #[test]

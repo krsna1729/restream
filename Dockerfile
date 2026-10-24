@@ -159,9 +159,10 @@ RUN case "${TARGETARCH:-amd64}" in \
     && curl -fsSLO "$base/checksums.sha256" \
     && curl -fsSLO "$base/$asset" \
     && grep " \*\?$asset\$" checksums.sha256 | sha256sum -c - \
-    && tar -xJf "$asset" --strip-components=2 --wildcards '*/bin/ffmpeg' \
+    && tar -xJf "$asset" --strip-components=2 --wildcards '*/bin/ffmpeg' '*/bin/ffprobe' \
     && install -m 0755 ffmpeg /usr/local/bin/ffmpeg \
-    && rm -f "$asset" ffmpeg checksums.sha256
+    && install -m 0755 ffprobe /usr/local/bin/ffprobe \
+    && rm -f "$asset" ffmpeg ffprobe checksums.sha256
 
 # ── Stage 4: distroless runtime ──────────────────────────────────────────────
 #
@@ -186,7 +187,8 @@ EXPOSE 3030 1935 10080/udp
 
 COPY --from=runtime-state --chown=1000:1000 /restream-state /.restream
 COPY --from=ffmpeg-fetch /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
-ENV FFMPEG_BIN_PATH=/usr/local/bin/ffmpeg
+COPY --from=ffmpeg-fetch /usr/local/bin/ffprobe /usr/local/bin/ffprobe
+ENV FFMPEG_BIN_PATH=/usr/local/bin/ffmpeg FFPROBE_BIN_PATH=/usr/local/bin/ffprobe
 
 USER 1000:1000
 
@@ -219,7 +221,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates netbase tzdata \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=ffmpeg-fetch /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
-ENV FFMPEG_BIN_PATH=/usr/local/bin/ffmpeg
+COPY --from=ffmpeg-fetch /usr/local/bin/ffprobe /usr/local/bin/ffprobe
+ENV FFMPEG_BIN_PATH=/usr/local/bin/ffmpeg FFPROBE_BIN_PATH=/usr/local/bin/ffprobe
 
 COPY --from=runtime-tree /workspace/target/release/restream /restream
 COPY distribution/ /usr/share/doc/restream/distribution/

@@ -62,7 +62,8 @@ into. Source is `src/config.rs` unless noted.
 | `RESTREAM_DB_PATH` | `.restream/data/restream.db` | File path | SQLite database (plus WAL/SHM sidecars) |
 | `RESTREAM_MEDIA_DIR` | `.restream/media` | Directory | Uploads and recordings (`DEFAULT_MEDIA_DIR`) |
 | `RESTREAM_LOG_DIR` | `.restream/logs` | Directory | Rotated text log files |
-| `FFMPEG_BIN_PATH` | unset | Executable path | FFmpeg used by the external transcoder, file ingest and recording remux; see [FFmpeg](#ffmpeg) |
+| `FFMPEG_BIN_PATH` | unset | Executable path | FFmpeg used by the external transcoder, file ingest, recording remux, posters and the picture and sound checks; see [FFmpeg](#ffmpeg) |
+| `FFPROBE_BIN_PATH` | unset | Executable path | `ffprobe` used to analyse stored media; see [FFmpeg](#ffmpeg) |
 | `RESTREAM_NOFILE_LIMIT` | `65536` | `>= 1` | Requested `RLIMIT_NOFILE` soft limit at startup |
 
 The default layout lives under `.restream/`: `data/` holds only SQLite state,
@@ -253,14 +254,19 @@ FFmpeg is not bundled. The executable resolves in this order
 `restream ffmpeg-fetch` in `.restream/runtime/ffmpeg/`; `ffmpeg` on `PATH`.
 If none is found, the server still starts and logs one warning; only
 FFmpeg-backed features fail. Recording remux needs the `mov/mp4` muxer;
-video presets need `libx264` and `libx265`.
+video presets need `libx264` and `libx265`; posters need the PNG encoder;
+the picture and sound checks need the `unix` protocol.
+
+`ffprobe` (media analysis) resolves as `FFPROBE_BIN_PATH`, then the
+`ffprobe` beside the resolved FFmpeg, then `ffprobe` on `PATH`.
 
 `restream ffmpeg-fetch` downloads the
 [BtbN](https://github.com/BtbN/FFmpeg-Builds) FFmpeg 8.1 static GPL build
 for the host architecture from the `latest` release, checks it against
-`checksums.sha256`, and installs `bin/ffmpeg`. It needs GNU `tar` with xz.
-The container images run the same download and set
-`FFMPEG_BIN_PATH=/usr/local/bin/ffmpeg`.
+`checksums.sha256`, and installs `bin/ffmpeg` and `bin/ffprobe`. It needs
+GNU `tar` with xz. The container images run the same download and set
+`FFMPEG_BIN_PATH=/usr/local/bin/ffmpeg` and
+`FFPROBE_BIN_PATH=/usr/local/bin/ffprobe`.
 
 ### Threads and memory
 
