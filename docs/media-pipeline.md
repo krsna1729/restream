@@ -265,7 +265,7 @@ cannot carry is rejected before it is saved
 | RTMP, enhanced mode | H.264, H.265 | passthrough as Enhanced RTMP `hvc1` |
 | SRT | H.264, H.265 | passthrough in MPEG-TS |
 | HLS (`http://`, `https://`, `hls://`) | H.264 | `hevc_to_h264` stage |
-| HLS preview | H.264 | shared `hevc_to_h264:from:source` stage |
+| HLS preview | H.264, or H.265 for a browser that decodes it | shared `hevc_to_h264:from:source` stage; none for `/hls/{id}.hevc/` |
 | `moqt://` | H.264, H.265 | passthrough |
 | `pipeline://`, `sink://` | any | passthrough |
 
@@ -273,7 +273,7 @@ Restream's muxers and packagers write AAC audio only. Ingest codecs:
 
 | Ingest | Video | Audio |
 |---|---|---|
-| RTMP | H.264 (FLV codec ID 7) | AAC |
+| RTMP | H.264 (FLV codec ID 7, enhanced `avc1`), H.265 (enhanced `hvc1`, legacy codec ID 12) | AAC |
 | SRT, file | H.264 (TS type `0x1B`), H.265 (`0x24`) | AAC ADTS (`0x0F`), AAC LATM (`0x11`) |
 | HLS push and pull | H.264, H.265 in MPEG-TS or fMP4 (`avc1`, `hev1`, `hvc1`) | AAC (`mp4a`) |
 | MoQ | H.264, H.265 | AAC, up to eight tracks |
@@ -796,9 +796,13 @@ The diagram shows the preview path from the ring to the browser.
   `audio/{track}/index.m3u8`, `audio/{track}/init.mp4` and
   `audio/{track}/segN.m4s` (`src/api/router.rs`). `/hls/{pipeline_id}` and
   `/hls/{pipeline_id}/index.m3u8` return the primary playlist.
-- **Codecs.** H.264 `avc1` and AAC `mp4a`, with RFC 6381 `CODECS` from the
-  sample entries. HEVC sources go through the shared
-  `hevc_to_h264:from:source` stage.
+- **Codecs.** H.264 `avc1`, H.265 `hvc1` and AAC `mp4a`, with RFC 6381
+  `CODECS` from the sample entries. An HEVC program preview has two forms:
+  `/hls/{pipeline_id}/` goes through the shared `hevc_to_h264:from:source`
+  stage (FFmpeg), and `/hls/{pipeline_id}.hevc/`, which the dashboard asks
+  for when the browser reports it decodes H.265, segments the source ring as
+  it is, with no stage. The two are separate preview stores; pipeline ids
+  never contain a dot. Input previews always take the bridge.
 - **Window.** The playlist advertises `RESTREAM_HLS_MAX_SEGMENTS` (default
   20) segments and keeps 6 more fetchable. `EXT-X-TARGETDURATION` starts at
   the first segment's duration and never decreases.

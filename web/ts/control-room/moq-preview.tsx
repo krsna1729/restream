@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { mintMoqPreview } from "../core/api.js";
+import { moqUndecodableReason } from "./preview-codec.js";
 
 /** No decoded frame for this long after connecting means nothing plays. */
 const FIRST_FRAME_MS = 15_000;
@@ -21,7 +22,7 @@ const STATUS_TEXT: Record<Exclude<MoqState, "failed">, string> = {
 /** A muted live MoQ preview of the pipeline's program, straight from the
  * engine's MoQ origin over WebTransport. The player (`@moq/watch`) loads
  * only when asked. */
-export function MoqPreview(props: { pipelineId: string; label: string }) {
+export function MoqPreview(props: { pipelineId: string; label: string; sourceCodec?: string | null }) {
   const canvas = useRef<HTMLCanvasElement | null>(null);
   /** 0 while off; each start (or retry) is a new attempt. */
   const [attempt, setAttempt] = useState(0);
@@ -48,6 +49,11 @@ export function MoqPreview(props: { pipelineId: string; label: string }) {
     const firstFrame = window.setTimeout(() => fail("no frames: is the pipeline live?"), FIRST_FRAME_MS);
 
     void (async () => {
+      // MoQ sends the source as it is: say at once when this browser
+      // cannot decode it, rather than waiting out the first-frame timer.
+      const undecodable = await moqUndecodableReason(props.sourceCodec);
+      if (ended) return;
+      if (undecodable) return fail(undecodable);
       const grant = await mintMoqPreview(props.pipelineId);
       if (ended) return;
       if (!grant) return fail("MoQ is off on this engine");
@@ -95,7 +101,7 @@ export function MoqPreview(props: { pipelineId: string; label: string }) {
       void session.closed.then((error) => fail(error ? error.message : "the engine ended the session"));
     })().catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
     return end;
-  }, [attempt, props.pipelineId]);
+  }, [attempt, props.pipelineId, props.sourceCodec]);
 
   const start = () => {
     setReason("");

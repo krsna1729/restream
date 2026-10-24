@@ -169,7 +169,13 @@ pub fn video_for_ts_into<'a>(
             if body.is_empty() {
                 return None;
             }
-            if packet_type == 0 {
+            if packet_type == 0 && tag & 0x0F == 12 {
+                if let Some((nls, annexb)) = flv_video_config(payload) {
+                    *nalu_len_size = nls;
+                    *sps_pps_cache = annexb;
+                }
+                None
+            } else if packet_type == 0 {
                 // Sequence header — update SPS/PPS cache, no frame to emit.
                 // A malformed/truncated header parses to an empty Vec; only
                 // overwrite the cache on success (see the Raw-format sibling
@@ -243,17 +249,28 @@ pub(crate) fn flv_video_config(payload: &[u8]) -> Option<(usize, Vec<u8>)> {
             let (&[tag, 0, ..], body) = payload.split_first_chunk::<5>()? else {
                 return None;
             };
-            if tag & 0x0F != 7 {
-                return None;
+            match tag & 0x0F {
+                7 => {
+                    let record = avcc_record(body)?;
+                    if record.sps.is_empty() || record.pps.is_empty() {
+                        return None;
+                    }
+                    (
+                        record.length_size_minus_one,
+                        [record.sps, record.pps].concat(),
+                    )
+                }
+                // Legacy FLV HEVC (codec id 12): an hvcC record.
+                12 => {
+                    let record = hvcc_record(body)?;
+                    if record.vps.is_empty() || record.sps.is_empty() || record.pps.is_empty() {
+                        return None;
+                    }
+                    let sets = [record.vps, record.sps, record.pps].concat();
+                    (record.length_size_minus_one, sets)
+                }
+                _ => return None,
             }
-            let record = avcc_record(body)?;
-            if record.sps.is_empty() || record.pps.is_empty() {
-                return None;
-            }
-            (
-                record.length_size_minus_one,
-                [record.sps, record.pps].concat(),
-            )
         }
     };
     let mut annexb = Vec::new();

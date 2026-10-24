@@ -56,7 +56,8 @@ impl From<ShareLinkRecord> for ShareLink {
 /// previews (`/hls/inputs/…`) are never shared.
 pub fn hls_pipeline_of(path: &str) -> Option<&str> {
     let rest = path.strip_prefix("/hls/")?;
-    let pipeline = rest.split('/').next()?;
+    let preview = rest.split('/').next()?;
+    let pipeline = crate::media::engine_hls::preview_pipeline(preview).0;
     (!pipeline.is_empty() && pipeline != "inputs").then_some(pipeline)
 }
 

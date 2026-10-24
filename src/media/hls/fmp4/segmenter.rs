@@ -291,6 +291,7 @@ async fn resolve_hls_preview_metadata(
     pipeline_id: &str,
     preview_video_meta: Option<VideoMeta>,
 ) -> Option<(VideoMeta, Vec<AudioMeta>)> {
+    let pipeline_id = crate::media::engine_hls::preview_pipeline(pipeline_id).0;
     loop {
         if cancel_token.is_cancelled() {
             return None;
@@ -349,7 +350,9 @@ pub(super) async fn resolve_hls_sequence_headers(
     {
         engine.get_input_sequence_headers(input_id).await
     } else {
-        engine.get_sequence_headers(pipeline_id).await
+        engine
+            .get_sequence_headers(crate::media::engine_hls::preview_pipeline(pipeline_id).0)
+            .await
     }
 }
 

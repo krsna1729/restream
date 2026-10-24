@@ -19,6 +19,24 @@ fn pipeline_id_from_hls_preview_registry_key(key: &str) -> Option<&str> {
     key.strip_prefix(HLS_PREVIEW_KEY_PREFIX)
 }
 
+/// A program preview id with this suffix passes H.265 through, for a browser
+/// that decodes it; the plain id gets the shared H.264 bridge. Pipeline ids
+/// (`pipeline_<hex>`) never contain a dot.
+const HEVC_PASSTHROUGH_PREVIEW_SUFFIX: &str = ".hevc";
+
+pub(crate) fn hevc_passthrough_preview_id(pipeline_id: &str) -> String {
+    format!("{pipeline_id}{HEVC_PASSTHROUGH_PREVIEW_SUFFIX}")
+}
+
+/// The pipeline a program preview id shows, and whether it passes H.265
+/// through.
+pub(crate) fn preview_pipeline(preview_id: &str) -> (&str, bool) {
+    match preview_id.strip_suffix(HEVC_PASSTHROUGH_PREVIEW_SUFFIX) {
+        Some(pipeline_id) => (pipeline_id, true),
+        None => (preview_id, false),
+    }
+}
+
 pub(crate) fn input_hls_preview_resource_id(input_id: &str) -> String {
     format!("{INPUT_PREVIEW_RESOURCE_PREFIX}{input_id}")
 }
@@ -296,7 +314,9 @@ impl MediaEngine {
         {
             self.ingests.sessions.read().await.contains_key(input_id)
         } else {
-            self.has_active_ingest(pipeline_id).await
+            // A passthrough preview id names its pipeline with a suffix.
+            self.has_active_ingest(preview_pipeline(pipeline_id).0)
+                .await
         };
         let preview_key = hls_preview_registry_key(pipeline_id);
         let consumers = self.hls.consumers.read().await;

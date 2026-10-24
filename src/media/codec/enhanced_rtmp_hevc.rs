@@ -172,7 +172,9 @@ fn push_hvcc_array(out: &mut Vec<u8>, nal_type: u8, nalu: &[u8]) -> Option<()> {
     Some(())
 }
 
-fn h265_annexb_to_length_prefixed_into(data: &[u8], out: &mut Vec<u8>) -> bool {
+/// Annex B H.265 as 4-byte length-prefixed NAL units, without the VPS, SPS,
+/// PPS and access unit delimiters; whether a picture slice was written.
+pub(crate) fn h265_annexb_to_length_prefixed_into(data: &[u8], out: &mut Vec<u8>) -> bool {
     let nalus = split_annexb_nalus(data);
     let mut has_vcl = false;
     for nalu in &nalus {

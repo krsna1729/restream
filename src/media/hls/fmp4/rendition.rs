@@ -3,13 +3,13 @@ use shiguredo_mp4::{TrackKind, boxes::SampleEntry, mux::Fmp4SegmentMuxer};
 use tracing::warn;
 
 use super::codec::{
-    VIDEO_TIMESCALE, audio_default_duration, build_aac_sample_entry,
-    build_h264_sample_entry_from_flv_sequence_header, build_h264_sample_entry_from_video_packet,
-    build_mux_samples, default_video_duration, is_flv_avc_sequence_header, rescale_ms,
-    sample_entry_codec_string,
+    PreviewVideoCodec, VIDEO_TIMESCALE, audio_default_duration, build_aac_sample_entry,
+    build_mux_samples, build_sample_entry_from_flv_sequence_header,
+    build_sample_entry_from_video_packet, default_video_duration, flv_coded_frame_body,
+    flv_sequence_header_codec, is_flv_video_sequence_header, rescale_ms, sample_entry_codec_string,
 };
 use super::store::Fmp4HlsStore;
-use crate::media::codec::{annexb_to_avcc_into, strip_adts};
+use crate::media::codec::{annexb_to_avcc_into, h265_annexb_to_length_prefixed_into, strip_adts};
 use crate::media::metadata::{AudioMeta, VideoMeta};
 use crate::media::packet::{MediaPacket, PayloadFormat};
 
@@ -41,6 +41,7 @@ impl MonotonicTimestampState {
 }
 
 pub(super) struct VideoRenditionState {
+    codec: PreviewVideoCodec,
     muxer: Fmp4SegmentMuxer,
     sample_entry: Option<SampleEntry>,
     payload: Vec<u8>,
@@ -53,17 +54,19 @@ pub(super) struct VideoRenditionState {
 
 impl VideoRenditionState {
     pub(super) fn new(video: &VideoMeta, video_sequence_header: Option<&[u8]>) -> Self {
-        let avc_sequence_header =
-            video_sequence_header.filter(|payload| is_flv_avc_sequence_header(payload));
+        let codec = PreviewVideoCodec::of(video);
+        // A header of another codec (a stale one across a codec change) is
+        // not this rendition's.
+        let flv_sequence_header = video_sequence_header
+            .filter(|payload| flv_sequence_header_codec(payload) == Some(codec));
         let sample_entry =
-            avc_sequence_header.and_then(build_h264_sample_entry_from_flv_sequence_header);
-        let logged_missing_sample_entry = sample_entry.is_none() && avc_sequence_header.is_some();
+            flv_sequence_header.and_then(build_sample_entry_from_flv_sequence_header);
+        let logged_missing_sample_entry = sample_entry.is_none() && flv_sequence_header.is_some();
         if logged_missing_sample_entry {
-            warn!(
-                "fMP4 preview could not build an avc1 sample entry from the video sequence header"
-            );
+            warn!("fMP4 preview could not build a sample entry from the video sequence header");
         }
         Self {
+            codec,
             muxer: Fmp4SegmentMuxer::new().expect("fmp4 muxer must construct"),
             sample_entry,
             payload: Vec::new(),
@@ -76,13 +79,14 @@ impl VideoRenditionState {
     }
 
     pub(super) fn push_packet(&mut self, packet: &MediaPacket, zero_ms: i64) -> Result<(), String> {
-        if packet.format == PayloadFormat::Flv && is_flv_avc_sequence_header(&packet.payload) {
-            let parsed = build_h264_sample_entry_from_flv_sequence_header(&packet.payload);
+        if packet.format == PayloadFormat::Flv && is_flv_video_sequence_header(&packet.payload) {
+            if flv_sequence_header_codec(&packet.payload) != Some(self.codec) {
+                return Ok(());
+            }
+            let parsed = build_sample_entry_from_flv_sequence_header(&packet.payload);
             if parsed.is_none() && !self.logged_missing_sample_entry {
                 self.logged_missing_sample_entry = true;
-                warn!(
-                    "fMP4 preview could not parse an avc1 sample entry from an FLV sequence header"
-                );
+                warn!("fMP4 preview could not parse a sample entry from an FLV sequence header");
             }
             if let Some(parsed) = parsed {
                 self.sample_entry = Some(parsed);
@@ -91,14 +95,14 @@ impl VideoRenditionState {
         }
 
         if self.sample_entry.is_none()
-            && let Some(sample_entry) = build_h264_sample_entry_from_video_packet(packet)
+            && let Some(sample_entry) = build_sample_entry_from_video_packet(packet, self.codec)
         {
             self.sample_entry = Some(sample_entry);
         }
         if self.sample_entry.is_none() {
             if !self.logged_missing_sample_entry {
                 self.logged_missing_sample_entry = true;
-                warn!("fMP4 preview is dropping packets until an avc1 sample entry can be built");
+                warn!("fMP4 preview is dropping packets until a sample entry can be built");
             }
             return Ok(());
         }
@@ -106,14 +110,19 @@ impl VideoRenditionState {
         let payload_start = self.payload.len() as u64;
         match packet.format {
             PayloadFormat::Flv => {
-                if packet.payload.len() <= 5 || packet.payload[1] == 0 {
+                let Some(body) = flv_coded_frame_body(&packet.payload) else {
                     return Ok(());
+                };
+                self.payload.extend_from_slice(body);
+            }
+            PayloadFormat::Raw => match self.codec {
+                PreviewVideoCodec::H264 => {
+                    annexb_to_avcc_into(&packet.payload, &mut self.payload);
                 }
-                self.payload.extend_from_slice(&packet.payload[5..]);
-            }
-            PayloadFormat::Raw => {
-                annexb_to_avcc_into(&packet.payload, &mut self.payload);
-            }
+                PreviewVideoCodec::H265 => {
+                    h265_annexb_to_length_prefixed_into(&packet.payload, &mut self.payload);
+                }
+            },
         }
         let payload_size = self.payload.len().saturating_sub(payload_start as usize);
         if payload_size == 0 {

@@ -35,12 +35,23 @@ pub struct HlsPreviewGraph {
 ///
 /// Returns `None` when the ingest codec cannot be determined within the
 /// deadline (3 seconds).
+///
+/// A passthrough preview id (`<pipeline>.hevc`) reads the source ring as it
+/// is, H.265 included: the browser asked for it because it decodes H.265.
 pub async fn resolve_hls_preview_graph(
     engine: Arc<MediaEngine>,
-    pipeline_id: &str,
+    preview_id: &str,
     cancel: CancellationToken,
 ) -> Option<HlsPreviewGraph> {
+    let (pipeline_id, passthrough) = crate::media::engine_hls::preview_pipeline(preview_id);
     let source_ring = engine.get_or_create_pipeline(pipeline_id).await;
+    if passthrough {
+        return Some(HlsPreviewGraph {
+            video_ring: source_ring,
+            video_meta: None,
+            stage: None,
+        });
+    }
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
 
     loop {
@@ -222,6 +233,82 @@ mod tests {
         assert!(
             tokio::time::Instant::now() >= start + std::time::Duration::from_secs(3),
             "must not return before the 3s resolution deadline"
+        );
+    }
+
+    /// A browser that decodes H.265 gets the source ring as it is: no
+    /// `hevc_to_h264` stage (no FFmpeg) is leased or planned for it.
+    #[tokio::test]
+    async fn a_passthrough_preview_reads_the_source_and_starts_no_stage() {
+        let engine = engine_with_pipeline("pipe-preview-passthrough").await;
+        let source = engine
+            .get_or_create_pipeline("pipe-preview-passthrough")
+            .await;
+        source.set_codec_hint("hevc");
+        let id = crate::media::engine_hls::hevc_passthrough_preview_id("pipe-preview-passthrough");
+        assert_eq!(
+            crate::media::engine_hls::preview_pipeline(&id),
+            ("pipe-preview-passthrough", true)
+        );
+        assert_eq!(
+            crate::media::engine_hls::preview_pipeline("pipe-preview-passthrough"),
+            ("pipe-preview-passthrough", false)
+        );
+        let graph = resolve_hls_preview_graph(engine.clone(), &id, CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(
+            Arc::ptr_eq(&graph.video_ring, &source),
+            "reads the source ring"
+        );
+        assert!(graph.stage.is_none(), "no transcode stage");
+        assert!(
+            engine.active_hls_preview_stage_keys().await.is_empty(),
+            "nothing keeps a bridge alive for it"
+        );
+    }
+
+    /// A passthrough preview's segmenter stage is keyed by its preview id;
+    /// it must count as its pipeline's runtime, or the topology sweep tears
+    /// down a "pipeline" that is not configured and kills the preview.
+    #[tokio::test]
+    async fn a_passthrough_preview_stage_counts_as_its_pipeline() {
+        let engine = engine_with_pipeline("pipe-preview-owner").await;
+        let id = crate::media::engine_hls::hevc_passthrough_preview_id("pipe-preview-owner");
+        let key = StageKey::new(id.as_str(), StageKind::hls());
+        let _runtime = engine
+            .get_or_create_non_ring_stage_runtime(
+                key,
+                crate::media::stage_lifecycle::StagePhase::Registered,
+                crate::media::stage_lifecycle::StageBackendKind::HlsSegmenter,
+                CancellationToken::new(),
+            )
+            .await;
+        let ids = engine.runtime_pipeline_ids().await;
+        assert!(ids.contains("pipe-preview-owner"));
+        assert!(!ids.contains(&id), "{ids:?}");
+    }
+
+    /// The reconciler keeps a passthrough preview while its pipeline is live
+    /// and someone watches: the preview id is not the pipeline id.
+    #[tokio::test]
+    async fn a_watched_passthrough_preview_of_a_live_pipeline_is_kept() {
+        let engine = engine_with_pipeline("pipe-preview-kept").await;
+        let id = crate::media::engine_hls::hevc_passthrough_preview_id("pipe-preview-kept");
+        engine.ensure_hls_preview_segmenter(&id).await;
+        engine.touch_hls_preview(&id).await;
+        assert!(
+            !engine
+                .should_shutdown_hls_preview_segmenter(&id, 60_000)
+                .await,
+            "live and just watched"
+        );
+        engine.unregister_ingest("pipe-preview-kept").await;
+        assert!(
+            engine
+                .should_shutdown_hls_preview_segmenter(&id, 60_000)
+                .await,
+            "its pipeline went away"
         );
     }
 

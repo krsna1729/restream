@@ -140,7 +140,8 @@ impl MediaEngine {
     }
 
     /// Pipeline ids that hold runtime state: a source ring or a shared stage.
-    /// Input-preview resource ids can key a ring too, but are not pipelines.
+    /// Input-preview resource ids can key a ring too, but are not pipelines;
+    /// a passthrough program preview's stage counts as its pipeline's.
     pub async fn runtime_pipeline_ids(&self) -> HashSet<String> {
         let mut ids = self
             .ingests
@@ -158,10 +159,16 @@ impl MediaEngine {
                 .keys()
                 .map(|key| key.pipeline.as_str().to_string()),
         );
-        ids.retain(|id| {
-            crate::media::engine_hls::input_id_from_hls_preview_resource_id(id).is_none()
-        });
-        ids
+        ids.into_iter()
+            .filter(|id| {
+                crate::media::engine_hls::input_id_from_hls_preview_resource_id(id).is_none()
+            })
+            .map(|id| {
+                crate::media::engine_hls::preview_pipeline(&id)
+                    .0
+                    .to_string()
+            })
+            .collect()
     }
 
     /// Tears down the runtime of a deleted pipeline: its ingest sessions
@@ -172,6 +179,10 @@ impl MediaEngine {
         self.unregister_ingest(pipeline_id).await;
         self.cleanup_pipeline_stages(pipeline_id).await;
         self.shutdown_hls_preview_segmenter(pipeline_id).await;
+        self.shutdown_hls_preview_segmenter(
+            &crate::media::engine_hls::hevc_passthrough_preview_id(pipeline_id),
+        )
+        .await;
         self.shutdown_hls_segmenter(pipeline_id).await;
     }
 

@@ -186,7 +186,10 @@ impl TsPacketFeeder {
 }
 
 fn parse_video_sequence_header(flv_sequence_header: &[u8]) -> (usize, Vec<u8>) {
-    if crate::media::codec::ex_video_tag(flv_sequence_header).is_some() {
+    let legacy_hevc = flv_sequence_header
+        .first()
+        .is_some_and(|tag| tag & 0x0F == 12);
+    if legacy_hevc || crate::media::codec::ex_video_tag(flv_sequence_header).is_some() {
         crate::media::codec::flv_video_config(flv_sequence_header).unwrap_or((4, Vec::new()))
     } else if flv_sequence_header.len() > 5 {
         crate::media::codec::parse_avcc_config(&flv_sequence_header[5..])

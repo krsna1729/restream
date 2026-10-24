@@ -388,9 +388,12 @@ export function mediaPosterUrl(filename: string): string {
   return withBasePath(`/api/v1/media/${encodeURIComponent(filename)}/poster`);
 }
 
-/** The HLS preview of what a pipeline sends (its program). */
-export function programPreviewUrl(pipelineId: string): string {
-  return withBasePath(`/hls/${encodeURIComponent(pipelineId)}/master.m3u8`);
+/** The HLS preview of what a pipeline sends (its program). With
+ * `hevcPassthrough`, an H.265 source comes as it is (for a browser that
+ * decodes H.265) instead of the engine's H.264 copy. */
+export function programPreviewUrl(pipelineId: string, options: { hevcPassthrough?: boolean } = {}): string {
+  const id = options.hevcPassthrough ? `${pipelineId}.hevc` : pipelineId;
+  return withBasePath(`/hls/${encodeURIComponent(id)}/master.m3u8`);
 }
 
 async function createPipeline(
