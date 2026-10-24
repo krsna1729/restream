@@ -488,9 +488,16 @@ mod tests {
         let (video_index, audio_index) = (video.index(), audio.index());
         let video_base = f64::from(video.time_base());
         let audio_base = f64::from(audio.time_base());
+        let parameters = video.parameters();
+        // SAFETY: `parameters` holds the stream's live AVCodecParameters for
+        // this whole block; FFmpeg keeps `extradata_size` readable bytes at a
+        // non-null `extradata` (checked first), copied out before it ends.
         let extradata = unsafe {
-            let parameters = video.parameters();
             let raw = &*parameters.as_ptr();
+            assert!(
+                !raw.extradata.is_null(),
+                "the fixture's H.264 track has an avcC record"
+            );
             std::slice::from_raw_parts(raw.extradata, raw.extradata_size as usize).to_vec()
         };
         let audio_parameters = codec::Context::from_parameters(audio.parameters())

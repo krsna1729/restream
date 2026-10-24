@@ -72,7 +72,7 @@ export function PictureAndSound(props: { pipelineId: string; samples: readonly F
           )}
           {!enabled && (
             <p className="text-xs text-base-content/70">
-              Checks are off. On, this server decodes one keyframe a second and the first audio track (about 1% of a CPU core) to catch a black or
+              Checks are off. On, this server decodes one keyframe a second and the first audio track (about 1% of a CPU core and 7 MB per pipeline) to catch a black or
               frozen picture, silence and loudness, and raises incidents for them.
             </p>
           )}
