@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
-const { audioTrackWords, bitrateWords, loudnessWords, overallSeverity, qaVerdicts, streamVerdicts } = await loadCompiledFrontendModule(
+const { audioTrackWords, bitrateWords, loudnessWords, overallSeverity, qaCostWords, qaVerdicts, streamVerdicts, trackSoundWords } = await loadCompiledFrontendModule(
   "control-room/stream-health-model.js",
 );
 
@@ -176,4 +176,13 @@ test("loudness and audio tracks in words", () => {
   assert.equal(audioTrackWords({ trackIndex: 1, codec: "aac", sampleRate: 44_100, channelLayout: "5.1" }), "AAC · 44.1 kHz · 5.1 surround");
   assert.equal(audioTrackWords({ trackIndex: 2, channels: 6 }), "6 channels");
   assert.equal(audioTrackWords({ trackIndex: 3 }), "details not reported yet");
+});
+
+test("the checks' cost is stated for the pipeline's tracks, and each track's sound in words", () => {
+  assert.equal(qaCostWords(1), "about 2.0% of a CPU core (1 audio track)");
+  assert.equal(qaCostWords(16), "about 8.8% of a CPU core (16 audio tracks)");
+  assert.equal(qaCostWords(0), "about 2.0% of a CPU core (0 audio tracks)");
+  assert.equal(trackSoundWords(undefined), "checking");
+  assert.equal(trackSoundWords({ silentSinceMs: 1, loudnessLufs: -70 }), "silent");
+  assert.equal(trackSoundWords({ silentSinceMs: null, loudnessLufs: -18.4 }), "-18 LUFS");
 });

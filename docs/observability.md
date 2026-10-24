@@ -582,7 +582,7 @@ optional `pipelineId` / `stageId` / `outputId`, `title`, `cause`, `evidence`
 | `pipeline:<id>:input:picture_frozen` | warning | Checks on: camera picture unchanged for 30 s (not while black) |
 | `pipeline:<id>:input:picture_slate` | warning | Checks on: picture unchanged for 30 s and drawn (bars, a card) |
 | `pipeline:<id>:input:audio_silent` | warning | Checks on: first audio track at or under -60 LUFS for 10 s |
-| `pipeline:<id>:input:audio_silent:track<n>` | warning | Checks on: audio track `n` (2 to 16) at or under -60 LUFS for 10 s |
+| `pipeline:<id>:input:audio_silent:track<n>` | warning | Checks on: audio track `n` (2 and up) at or under -60 LUFS for 10 s |
 
 The picture and sound checks are opt in per pipeline; see
 [API reference](api-reference.md#picture-and-sound-checks).

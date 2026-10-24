@@ -737,7 +737,7 @@ export interface StreamQaFindings {
   silentSinceMs: number | null;
   /** Short-term loudness (3 s), LUFS, floored at -70. */
   loudnessLufs: number | null;
-  /** Every audio track checked, in source order (up to 16). */
+  /** Every audio track checked, in source order. */
   tracks?: TrackSoundFindings[];
 }
 

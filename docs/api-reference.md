@@ -1292,8 +1292,9 @@ Both return the state:
     neighbouring pixels are mostly equal (60% or more) looks drawn — bars,
     a card — and is reported as a slate (`stillIsSlate`); camera pictures
     measure 10–44%.
-  - FFmpeg writes every audio track, up to 16, as 48 kHz stereo f32 merged
-    side by side to a Unix socket the engine listens on; the engine
+  - FFmpeg writes every audio track as 48 kHz stereo f32, up to 32 tracks
+    merged side by side per Unix socket the engine listens on (one more socket
+    per further 32); the engine
     measures each track's short-term loudness (3 s, ITU-R BS.1770
     K-weighting), floored at -70 LUFS; -60 LUFS or less is silence.
     `silentSinceMs` and `loudnessLufs` are the first track's; `tracks` has

@@ -218,6 +218,21 @@ export function loudnessWords(lufs: number | null): { severity: Severity; words:
   return { severity: "ok", words: "a comfortable level for streaming" };
 }
 
+/** The checks' measured cost: about 2% of a core with one audio track, and
+ * about 0.45% more for each further track FFmpeg decodes. */
+export function qaCostWords(audioTracks: number): string {
+  const percent = 2 + 0.45 * Math.max(0, audioTracks - 1);
+  const tracks = audioTracks === 1 ? "1 audio track" : `${audioTracks} audio tracks`;
+  return `about ${percent < 10 ? percent.toFixed(1) : Math.round(percent)}% of a CPU core (${tracks})`;
+}
+
+/** One track's sound as the checks last measured it. */
+export function trackSoundWords(track: { silentSinceMs: number | null; loudnessLufs: number } | undefined): string {
+  if (track === undefined) return "checking";
+  if (track.silentSinceMs !== null) return "silent";
+  return `${track.loudnessLufs.toFixed(0)} LUFS`;
+}
+
 /** Verdicts from the picture and sound checks; none while they are off. */
 export function qaVerdicts(qa: StreamQaFindings | null, nowMs: number): Verdict[] {
   if (qa === null) return [];
