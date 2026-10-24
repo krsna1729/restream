@@ -6,6 +6,7 @@ import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 const { atLeast, canOpen, viewAsChoices, describeChange, auditOutcome, filterAudit } =
   await loadCompiledFrontendModule("control-room/team-model.js");
 const { navGroupsFor } = await loadCompiledFrontendModule("control-room/shell/nav.js");
+const { WORKSPACES } = await loadCompiledFrontendModule("control-room/route.js");
 
 test("roles are ordered, and a member views only as a lower role", () => {
   assert.ok(atLeast("admin", "operator") && atLeast("operator", "operator"));
@@ -22,6 +23,15 @@ test("navigation offers only what the role may open", () => {
   assert.ok(!items("viewer").includes("settings"));
   assert.ok(items("viewer").includes("fleet") && items("viewer").includes("incidents"));
   assert.equal(canOpen("viewer", "stability"), true);
+});
+
+test("every workspace sits in one group; the deeper tools in the folded one", () => {
+  const groups = navGroupsFor("admin");
+  const listed = groups.flatMap((group) => group.items);
+  assert.deepEqual([...listed].sort(), [...WORKSPACES].sort(), "none dropped, none twice");
+  const folded = groups.filter((group) => group.folded).flatMap((group) => group.items);
+  assert.ok(folded.includes("stability") && folded.includes("inspect") && folded.includes("capacity"));
+  assert.ok(!folded.includes("fleet") && !folded.includes("channels") && !folded.includes("incidents"));
 });
 
 test("the audit log reads as plain words, raw when a change is unknown", () => {

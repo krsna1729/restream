@@ -19,6 +19,7 @@ import { counted, formatBps, formatPercent, formatTraffic } from "./format.js";
 import { PipelineTable } from "./pipeline-table.js";
 import { Freshness, useOpenAlerts, usePolled } from "./polled.js";
 import type { Polled } from "./polled.js";
+import { StartHere } from "./start-here.js";
 import { PlaceLink } from "./router.js";
 import { localDay } from "./schedule-model.js";
 import type { LiveSnapshot } from "./store.js";
@@ -45,6 +46,7 @@ export function Fleet({ live }: { live: LiveSnapshot }) {
         tone={verdict.tone}
         subtitle={`${model.outputsDelivering.toLocaleString()} of ${model.outputsWanted.toLocaleString()} wanted destinations delivering · ${formatBps(model.egressBps)} out`}
       />
+      <StartHere rows={model.pipelines} />
       <Headline model={model} capacity={capacity} alerts={alerts} ingestBps={live.metrics?.network?.downloadKbps} />
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <Attention items={model.attention} />
@@ -68,8 +70,9 @@ function headline(model: FleetModel): { text: string; tone: Tone } {
     };
   }
   if (pending > 0) return { text: `${pending} destination${pending === 1 ? "" : "s"} starting`, tone: "info" };
+  if (model.pipelinesTotal === 0) return { text: "Nothing set up yet", tone: "neutral" };
   return model.outputsWanted === 0
-    ? { text: "No destination is wanted running", tone: "neutral" }
+    ? { text: "Nothing is live: no destination is switched on", tone: "neutral" }
     : { text: "Every wanted destination is delivering", tone: "ok" };
 }
 

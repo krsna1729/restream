@@ -419,6 +419,7 @@ test("inspect and monitor: one pipeline's anatomy and signals on one clock", asy
 
     // The nav keeps the pipeline when the workspace changes.
     await page.goto(`/?w=operate&p=${pipelineId}`);
+    await openMoreTools(page);
     await page
       .getByRole("navigation", { name: "Workspaces" })
       .getByRole("link", { name: "Inspect" })
@@ -568,6 +569,8 @@ test("incidents and capacity: an alert's evidence packet and an engine-made proj
         .getByText("resolved", { exact: true }),
     ).toBeVisible();
 
+    await openMoreTools(page);
+
     await page
       .getByRole("navigation", { name: "Workspaces" })
       .getByRole("link", { name: "Capacity" })
@@ -658,6 +661,7 @@ test("media and system: probe, rename and delete an upload; read the host and it
     }
     return route.fulfill({ response, json: health });
   });
+  await openMoreTools(page);
   await page
     .getByRole("navigation", { name: "Workspaces" })
     .getByRole("link", { name: "System" })
@@ -1145,6 +1149,12 @@ const LIVE_CLIP = "colorbar-timer-2v16a.mp4";
 /** A pipeline whose source the engine publishes itself (a looped file ingest
  * of `LIVE_CLIP`), so a case needs no outside publisher; returns once its
  * input is on. */
+/** Unfolds the sidebar's More tools group, where the deeper tools live. */
+async function openMoreTools(page: Page): Promise<void> {
+  const toggle = page.getByRole("navigation", { name: "Workspaces" }).getByRole("button", { name: /More tools/ });
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+}
+
 async function liveFilePipeline(page: Page, name: string): Promise<string> {
   const created = await page.request.post("/api/v1/pipelines", {
     data: { name, streamKey: `${name}_${Date.now()}` },
@@ -1889,6 +1899,32 @@ test("team: an admin adds a viewer, views as one, and the audit log records both
   const members = (await (await page.request.get("/api/v1/users")).json()).users as Array<{ id: string; username: string }>;
   const created = members.find((member) => member.username === username);
   if (created) await page.request.delete(`/api/v1/users/${created.id}`);
+});
+
+test("navigation: the deeper tools fold under More tools, open while in use, and the choice is kept", async ({ page }) => {
+  const login = await page.request.post("/api/v1/auth/login", { data: { password: "admin" } });
+  expect(login.ok()).toBe(true);
+  const nav = page.getByRole("navigation", { name: "Workspaces" });
+  const toggle = nav.getByRole("button", { name: /More tools/ });
+
+  await page.goto("/?w=fleet");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(nav.getByRole("link", { name: "Capacity" })).toHaveCount(0);
+  await expect(nav.getByRole("link", { name: "Channels" })).toBeVisible();
+
+  // In one of its tools, the group is open.
+  await page.goto("/?w=capacity");
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(nav.getByRole("link", { name: "Capacity" })).toHaveAttribute("aria-current", "page");
+
+  // Unfolded by hand, it stays open across a reload.
+  await page.goto("/?w=fleet");
+  await toggle.click();
+  await expect(nav.getByRole("link", { name: "Stability Lab" })).toBeVisible();
+  await page.reload();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await toggle.click();
+  await expect(nav.getByRole("link", { name: "Stability Lab" })).toHaveCount(0);
 });
 
 test("pipeline picker: search every pipeline, Enter opens the top match in the same view", async ({ page }) => {

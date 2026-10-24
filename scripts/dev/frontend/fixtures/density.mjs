@@ -7,6 +7,7 @@
 // be measured data; the fixture server labels every page as synthetic.
 
 export const PRESETS = {
+  empty: { pipelines: 0, outputs: 0, backupRatio: 0, shardsPerProtocol: 1, cores: 8 },
   small: { pipelines: 5, outputs: 24, backupRatio: 0.4, shardsPerProtocol: 2, cores: 8 },
   plant: { pipelines: 150, outputs: 3000, backupRatio: 0.9, shardsPerProtocol: 12, cores: 48 },
   extreme: { pipelines: 400, outputs: 10000, backupRatio: 1, shardsPerProtocol: 32, cores: 64 },

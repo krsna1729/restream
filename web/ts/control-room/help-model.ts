@@ -267,7 +267,7 @@ export const PAGE_HELP: Record<Workspace, PageHelp> = {
 /** The first-run tour: the shell, then one stop per everyday page. */
 export const ONBOARDING: readonly TourStep[] = [
   { workspace: "fleet", title: "Welcome to the control room", body: "A two-minute tour of where things are. Leave it any time with Esc; restart it from the help button (?) in the top bar." },
-  { workspace: "fleet", target: 'nav[aria-label="Workspaces"]', title: "Workspaces", body: "Operate runs the plant, Understand explains it, Manage configures it, Diagnose digs into it, Learn teaches it." },
+  { workspace: "fleet", target: 'nav[aria-label="Workspaces"]', title: "Workspaces", body: "Operate runs the plant, Understand explains it, Manage configures it, Learn teaches it. More tools opens capacity, stability, inspection, logs and the rest when you need them." },
   { workspace: "fleet", target: HEADER, title: "Fleet: the home screen", body: "One verdict for the whole plant, the pipelines that need attention and the host's headroom." },
   { workspace: "channels", target: panel("channels-list"), title: "Channels", body: "Every destination on every platform, with bulk go-live, retry and stop." },
   { workspace: "operate", target: PIPELINE_TABS, title: "One pipeline in depth", body: "Operate, Stream health, Monitor, Inspect and Logs all look at the pipeline you pick." },

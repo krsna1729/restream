@@ -2,6 +2,7 @@
 // tablets, and the same list inside the phone's More drawer.
 
 import { Icon } from "../../ui/icons.js";
+import { useSectionDetail } from "../../ui/prefs.js";
 import { StatusDot } from "../../ui/tone.js";
 import { formatBps, formatBytes, formatPercent } from "../format.js";
 import { WORKSPACE_LABELS } from "../route.js";
@@ -43,46 +44,78 @@ export function NavList(props: {
 }) {
   const place = usePlace();
   const session = useSession();
+  const [unfolded, setUnfolded] = useSectionDetail("nav.more-tools");
   return (
     <nav aria-label="Workspaces" className="flex flex-col gap-3">
-      {navGroupsFor(session.role).map((group) => (
-        <div key={group.label}>
-          {props.rail ? (
-            <div className="mx-auto my-1 h-px w-6 bg-base-content/10" aria-hidden="true" />
-          ) : (
-            <div className="kicker px-3 pb-1">{group.label}</div>
-          )}
-          <ul className="flex flex-col gap-0.5" onClick={props.onNavigate}>
-            {group.items.map((id) => {
-              const current = id === place.workspace;
-              const badge = props.badges[id];
-              return (
-                <li key={id}>
-                  <PlaceLink
-                    place={{ workspace: id, pipelineId: place.pipelineId }}
-                    current={current}
-                    className={`relative flex min-h-9 items-center gap-3 rounded-field px-3 py-2 text-sm transition-colors ${current ? "bg-primary/15 font-semibold text-base-content" : "text-base-content/80 hover:bg-base-content/5 hover:text-base-content"} ${props.rail ? "justify-center px-0" : ""}`}
-                  >
-                    {current && <span aria-hidden="true" className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-primary" />}
-                    <Icon name={NAV_ICONS[id]} className={`size-[1.15rem] shrink-0 ${current ? "text-primary" : ""}`} />
-                    <span className={props.rail ? "sr-only" : "truncate"}>{WORKSPACE_LABELS[id]}</span>
-                    {badge && props.rail && badge.tone !== "neutral" && (
-                      <span title={badge.title} className={`absolute top-1 right-2.5 size-2 rounded-full ${badge.tone === "bad" ? "bg-error" : "bg-warning"}`}>
-                        <span className="sr-only">{badge.title}</span>
-                      </span>
-                    )}
-                    {badge && !props.rail && (
-                      <span title={badge.title} className={`ml-auto tabular rounded-full px-1.5 text-[0.7rem] leading-5 font-semibold ${BADGE_TONE[badge.tone]}`}>
-                        {compactCount(badge.count)}
-                      </span>
-                    )}
-                  </PlaceLink>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      ))}
+      {navGroupsFor(session.role).map((group) => {
+        const open = !group.folded || unfolded || group.items.includes(place.workspace);
+        // A folded group still says when something in it needs a look.
+        const flagged = group.items.map((id) => props.badges[id]).filter((badge) => badge && badge.tone !== "neutral" && badge.tone !== "ok");
+        const worst = flagged.find((badge) => badge?.tone === "bad") ?? flagged[0];
+        return (
+          <div key={group.label}>
+            {group.folded ? (
+              <button
+                type="button"
+                aria-expanded={open}
+                aria-controls={`nav-group-${group.label}`}
+                disabled={group.items.includes(place.workspace)}
+                title={group.items.includes(place.workspace) ? "Open while you are in one of its tools" : undefined}
+                onClick={() => setUnfolded(!unfolded)}
+                className={`touch-36 flex w-full items-center gap-2 rounded-field text-left hover:bg-base-content/5 disabled:cursor-default disabled:hover:bg-transparent ${props.rail ? "justify-center px-0 py-1" : "px-3 py-1"}`}
+              >
+                {props.rail ? (
+                  <Icon name="more" className="size-[1.15rem] text-base-content/70" />
+                ) : (
+                  <span className="kicker flex-1">{group.label}</span>
+                )}
+                {props.rail && <span className="sr-only">{group.label}</span>}
+                {!open && worst && (
+                  <span title={worst.title} className={`size-2 rounded-full ${worst.tone === "bad" ? "bg-error" : "bg-warning"}`}>
+                    <span className="sr-only">{worst.title}</span>
+                  </span>
+                )}
+                {!props.rail && <Icon name="chevron" className={`size-3.5 text-base-content/70 transition-transform ${open ? "rotate-90" : ""}`} />}
+              </button>
+            ) : props.rail ? (
+              <div className="mx-auto my-1 h-px w-6 bg-base-content/10" aria-hidden="true" />
+            ) : (
+              <div className="kicker px-3 pb-1">{group.label}</div>
+            )}
+            {open && (
+              <ul id={`nav-group-${group.label}`} className="flex flex-col gap-0.5" onClick={props.onNavigate}>
+                {group.items.map((id) => {
+                  const current = id === place.workspace;
+                  const badge = props.badges[id];
+                  return (
+                    <li key={id}>
+                      <PlaceLink
+                        place={{ workspace: id, pipelineId: place.pipelineId }}
+                        current={current}
+                        className={`relative flex min-h-9 items-center gap-3 rounded-field px-3 py-2 text-sm transition-colors ${current ? "bg-primary/15 font-semibold text-base-content" : "text-base-content/80 hover:bg-base-content/5 hover:text-base-content"} ${props.rail ? "justify-center px-0" : ""}`}
+                      >
+                        {current && <span aria-hidden="true" className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-primary" />}
+                        <Icon name={NAV_ICONS[id]} className={`size-[1.15rem] shrink-0 ${current ? "text-primary" : ""}`} />
+                        <span className={props.rail ? "sr-only" : "truncate"}>{WORKSPACE_LABELS[id]}</span>
+                        {badge && props.rail && badge.tone !== "neutral" && (
+                          <span title={badge.title} className={`absolute top-1 right-2.5 size-2 rounded-full ${badge.tone === "bad" ? "bg-error" : "bg-warning"}`}>
+                            <span className="sr-only">{badge.title}</span>
+                          </span>
+                        )}
+                        {badge && !props.rail && (
+                          <span title={badge.title} className={`ml-auto tabular rounded-full px-1.5 text-[0.7rem] leading-5 font-semibold ${BADGE_TONE[badge.tone]}`}>
+                            {compactCount(badge.count)}
+                          </span>
+                        )}
+                      </PlaceLink>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        );
+      })}
     </nav>
   );
 }

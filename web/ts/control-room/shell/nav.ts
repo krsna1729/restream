@@ -9,15 +9,23 @@ import { canOpen } from "../team-model.js";
 export interface NavGroup {
   readonly label: string;
   readonly items: readonly Workspace[];
+  /** Folded until opened (remembered per browser), and open while one of
+   * its workspaces is the current one. */
+  readonly folded?: boolean;
 }
 
-/** Operate the plant, understand it, manage it, then dig into it; learning last. */
+/**
+ * What most people need first: run streams, see trouble, manage the
+ * basics, learn. The deeper tools (capacity, stability, inspection, logs,
+ * the host, changes, the audit trail, the architecture) sit in one folded
+ * group, a click away, so a first look is not a wall of words.
+ */
 export const NAV_GROUPS: readonly NavGroup[] = [
   { label: "Operate", items: ["fleet", "channels", "pipelines", "operate", "monitor", "schedule"] },
-  { label: "Understand", items: ["incidents", "health", "capacity", "stability"] },
-  { label: "Manage", items: ["media", "changes", "notifications", "team", "audit", "settings"] },
-  { label: "Diagnose", items: ["inspect", "logs", "system"] },
-  { label: "Learn", items: ["guides", "architecture"] },
+  { label: "Understand", items: ["incidents", "health"] },
+  { label: "Manage", items: ["media", "notifications", "team", "settings"] },
+  { label: "Learn", items: ["guides"] },
+  { label: "More tools", folded: true, items: ["capacity", "stability", "inspect", "logs", "system", "changes", "audit", "architecture"] },
 ];
 
 export const NAV_ICONS: Record<Workspace, IconName> = {
