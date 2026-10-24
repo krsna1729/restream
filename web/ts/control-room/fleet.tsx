@@ -11,7 +11,7 @@ import { TimeSeries } from "../ui/time-series.js";
 import { StatusBadge, utilizationTone } from "../ui/tone.js";
 import type { Tone } from "../ui/tone.js";
 import type { SystemMetrics } from "../types.js";
-import { degradedTotal, sentSince } from "./fleet-history.js";
+import { sentSince } from "./fleet-history.js";
 import type { FleetSample } from "./fleet-history.js";
 import { attentionGroups, buildFleetModel, describeCause, roomFor, worstFirst } from "./fleet-model.js";
 import type { AttentionGroup, FleetModel, FleetPipelineRow } from "./fleet-model.js";

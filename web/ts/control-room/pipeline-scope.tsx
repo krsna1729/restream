@@ -74,7 +74,6 @@ export function PipelineScope(props: {
  */
 export function PipelineHeading(props: { live: LiveSnapshot; workspace: Workspace; pipelineId: string }) {
   const { live, workspace, pipelineId } = props;
-  const go = useGo();
   const state = live.state;
   const rows = useMemo(() => (state ? buildFleetModel(state, live.rates).pipelines : null), [state, live.rates]);
   const row = rows?.find((candidate) => candidate.id === pipelineId) ?? null;

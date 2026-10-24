@@ -23,7 +23,7 @@ import {
   outputUrl,
   outputWrite,
 } from "./manage-model.js";
-import type { AudioMode, OutputDraft, OutputProtocol } from "./manage-model.js";
+import type { AudioMode, OutputDraft } from "./manage-model.js";
 import { PlatformMark } from "./platform-mark.js";
 import { SettingsForm } from "./settings-form.js";
 

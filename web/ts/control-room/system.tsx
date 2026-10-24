@@ -5,7 +5,7 @@ import {
   getEngineSbomEndpoint,
   getEngineStatus,
 } from "../core/api.js";
-import type { HealthData, SrtIngressOwnerHealth } from "../types.js";
+import type { SrtIngressOwnerHealth } from "../types.js";
 import { formatBytes, formatPercent } from "./format.js";
 import { Freshness, useEngineHealth } from "./polled.js";
 import type { LiveSnapshot } from "./store.js";
@@ -27,12 +27,6 @@ const CHECK_TONE: Record<CheckStatus, Tone> = {
   ok: "ok",
   warning: "warn",
   unknown: "neutral",
-};
-
-const CHECK_LABEL: Record<CheckStatus, string> = {
-  ok: "host checks pass",
-  warning: "a host check fails",
-  unknown: "a host check is unknown",
 };
 
 /** Whether this host suits the engine, what runs, and what this build is.
