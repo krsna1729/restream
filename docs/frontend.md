@@ -150,11 +150,13 @@ The primitives live in `web/ts/ui/`, a layer below the app: `ui/` may import
 |---|---|---|
 | `Panel`, `Tile`, `EmptyState` | `panel.tsx` | Titled section (title, subtitle, actions, optional status stripe); an in-panel card; an empty state that says why and what to do |
 | `PageHeader` | `page-header.tsx` | Eyebrow breadcrumb, verdict title (toned), subtitle, actions |
-| `Kpi`, `KpiRow`, `Meter`, `MeterRow`, `KeyValue` | `kpi.tsx` | KPI tile (a named group), threshold-toned meters (amber at 80%, red at 100%), labelled values |
-| `StatusBadge`, `StatusDot`, `Tone` | `tone.tsx` | One tone vocabulary (ok, warn, bad, info, neutral, accent) for every state |
+| `Kpi`, `KpiRow`, `Meter`, `MeterRow`, `KeyValue` | `kpi.tsx` | KPI tile (a named group), threshold-toned meters (amber at 80%, red at 100%), labelled values; `KpiRow` columns follow its own width (a container query), not the window's |
+| `StatusBadge`, `StatusDot`, `Tone` | `tone.tsx` | One tone vocabulary (ok, warn, bad, info, neutral, accent) for every state; the dot is DaisyUI's `status` |
+| `MiniTrend` | `mini-trend.tsx` | A row-sized line of the last minute of one rate (Fleet and Pipelines tables: ingest) |
 | `DataTable` | `data-table.tsx` | Sortable table whose columns carry a priority; cards on phones; windowed past 80 rows (`useWindowedRows`) |
 | `TimeSeries` | `time-series.tsx` | Multi-series chart: area, dashed, gaps for missing samples, bands, labelled cursors, a ghost overlay, hover readout |
-| `Field`, `SearchField`, `ChipGroup`, `CopyButton`, `ShareBar` | `controls.tsx` | A labelled control (caption over it, optional hint), filters, a copy button and a protocol-mix bar |
+| `Field`, `UnitInput`, `SearchField`, `ChipGroup`, `CopyButton`, `ShareBar` | `controls.tsx` | A labelled control (caption over it, optional hint, and an `invalid` message shown in the error colour once the person leaves a control marked `validator` with a value its constraints refuse), a text box with its unit inside, filters, a copy button and a protocol-mix bar |
+| `MenuButton` | `controls.tsx` | A button that opens a panel beside it: the browser's popover (top layer, light dismiss, Escape) placed by CSS anchor positioning, a fixed corner where that is unsupported, fading in with `@starting-style` |
 | `RawJson` | `raw-json.tsx` | A section's raw payload, collapsed and copyable |
 | `Icon` | `icons.tsx` | Inline stroke icons |
 
@@ -168,6 +170,12 @@ header tabs, and dates formatted by hand instead of `<When>`. A line that must k
 the `tab-strip` classes; a row of filters uses `filter-bar` (its fields
 carry `filter-field`), which aligns captions, controls, checkboxes and
 statuses on one baseline.
+
+A move to another workspace crossfades through the View Transitions API
+(`viewTransition` on `PlaceLink` and `useGo`); a filter or pipeline change
+inside one workspace swaps at once, and reduced motion drops the animation.
+Text areas grow with their content (`field-sizing: content`) between a
+floor and a ceiling.
 
 ## Shell and routing
 
@@ -408,7 +416,8 @@ revoke (`share-panel.tsx`, `share-model.ts`).
   same stage and protocol.
 
 Operate, Stream health, Monitor, Inspect and Logs share one header, picker
-and tab row (`pipeline-scope.tsx`).
+and tab row (`pipeline-scope.tsx`). The picker searches every pipeline by
+name or id, worst health first; Enter opens the top match in the same view.
 
 ### Incidents
 

@@ -2,9 +2,9 @@
 // sample age, the clock, and the viewer's preferences. On a phone it keeps
 // the brand, the liveness dot and search; the rest moves to More.
 
-import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 
+import { MenuButton } from "../../ui/controls.js";
 import { Icon } from "../../ui/icons.js";
 import { usePrefs } from "../../ui/prefs.js";
 import type { Density, ThemeChoice } from "../../ui/prefs.js";
@@ -91,19 +91,6 @@ export function PrefsControls() {
   );
 }
 
-/** A dropdown that closes on an outside click. */
-function useDropdown() {
-  const details = useRef<HTMLDetailsElement | null>(null);
-  useEffect(() => {
-    const close = (event: MouseEvent) => {
-      if (details.current?.open && !details.current.contains(event.target as Node)) details.current.open = false;
-    };
-    document.addEventListener("click", close);
-    return () => document.removeEventListener("click", close);
-  }, []);
-  return details;
-}
-
 /** Who is signed in, the role they act as, and viewing as a lower one. */
 export function SessionControls(props: { onDone?: () => void }) {
   const session = useSession();
@@ -142,27 +129,22 @@ export function SessionControls(props: { onDone?: () => void }) {
 }
 
 function UserMenu() {
-  const details = useDropdown();
   const session = useSession();
   if (!session.principal) return null;
   const viewing = session.principal.viewAs !== null;
   return (
-    <details ref={details} className="dropdown dropdown-end">
-      <summary
-        className={`btn btn-ghost btn-sm gap-2 ${viewing ? "text-warning" : ""}`}
-        aria-label={`Account: ${session.principal.username}, acting as ${ROLE_LABEL[session.role]}`}
-      >
-        <Icon name={viewing ? "eye" : "user"} className="size-[1.15rem]" />
-        <span className="hidden max-w-32 truncate lg:inline">{session.principal.username}</span>
-      </summary>
-      <div className="dropdown-content z-30 mt-2 w-72 rounded-box border border-base-content/10 bg-base-200 p-4 shadow-xl">
-        <SessionControls
-          onDone={() => {
-            if (details.current) details.current.open = false;
-          }}
-        />
-      </div>
-    </details>
+    <MenuButton
+      label={`Account: ${session.principal.username}, acting as ${ROLE_LABEL[session.role]}`}
+      className={`btn btn-ghost btn-sm gap-2 ${viewing ? "text-warning" : ""}`}
+      button={
+        <>
+          <Icon name={viewing ? "eye" : "user"} className="size-[1.15rem]" />
+          <span className="hidden max-w-32 truncate lg:inline">{session.principal.username}</span>
+        </>
+      }
+    >
+      {(close) => <SessionControls onDone={close} />}
+    </MenuButton>
   );
 }
 
@@ -185,16 +167,10 @@ export function ViewAsBanner() {
 }
 
 function PrefsMenu() {
-  const details = useDropdown();
   return (
-    <details ref={details} className="dropdown dropdown-end">
-      <summary className="btn btn-ghost btn-sm btn-square" aria-label="View preferences">
-        <Icon name="settings" className="size-[1.15rem]" />
-      </summary>
-      <div className="dropdown-content z-30 mt-2 w-72 rounded-box border border-base-content/10 bg-base-200 p-4 shadow-xl">
-        <PrefsControls />
-      </div>
-    </details>
+    <MenuButton label="View preferences" className="btn btn-ghost btn-sm btn-square" button={<Icon name="settings" className="size-[1.15rem]" />}>
+      {() => <PrefsControls />}
+    </MenuButton>
   );
 }
 

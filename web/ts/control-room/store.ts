@@ -14,7 +14,7 @@ import type {
 import type { SystemMetrics } from "../types.js";
 import { takeFleetSample } from "./fleet-history.js";
 import type { FleetSample } from "./fleet-history.js";
-import { telemetryRates } from "./rates.js";
+import { appendTrends, telemetryRates } from "./rates.js";
 import type { TelemetryRates } from "./rates.js";
 import { appendSample, WINDOW_MS } from "./sample-window.js";
 
@@ -30,6 +30,9 @@ export interface LiveSnapshot {
   /** Fleet-wide signals, one per sample, for the last `WINDOW_MS` of this
    * session (empty after a restart). */
   readonly history: readonly FleetSample[];
+  /** Each pipeline's ingest bits per second over the last minute, oldest
+   * first, for the trend in its row. */
+  readonly ingestTrend: ReadonlyMap<string, readonly number[]>;
 }
 
 export const SAMPLE_INTERVAL_MS = 2000;
@@ -56,6 +59,7 @@ const EMPTY: LiveSnapshot = {
   telemetryAtMs: null,
   metricsAtMs: null,
   history: [],
+  ingestTrend: new Map(),
 };
 
 let snapshot = EMPTY;
@@ -81,12 +85,14 @@ async function sample(signal: AbortSignal): Promise<void> {
     capacity: metrics?.capacity ?? null,
   });
   // A failed source keeps its last value; its timestamp shows the age.
+  const rates = telemetry ? telemetryRates(snapshot.telemetry, telemetry) : null;
   publish({
     ...(telemetry && {
       telemetry,
-      rates: telemetryRates(snapshot.telemetry, telemetry) ?? snapshot.rates,
+      rates: rates ?? snapshot.rates,
       telemetryAtMs: now,
     }),
+    ...(rates && { ingestTrend: appendTrends(snapshot.ingestTrend, rates.ingestBps) }),
     ...(metrics && { metrics, metricsAtMs: now }),
     history: appendSample(snapshot.history, sampled, WINDOW_MS),
   });

@@ -18,7 +18,7 @@ import {
 } from "./settings-model.js";
 import type { ProfileRow } from "./settings-model.js";
 import { PageHeader } from "../ui/page-header.js";
-import { Field } from "../ui/controls.js";
+import { Field, UnitInput } from "../ui/controls.js";
 
 /** Engine settings. `/settings` is read once when the page opens (it also
  * lists every pipeline and output); each form saves only its own part and
@@ -156,13 +156,13 @@ function SrtIngest(props: { current: SrtGlobalIngestConfig | undefined; save: Sa
           </Field>
         </>
       )}
-      <Field label="Receive latency (ms, 20 to 8000)">
-        <input
+      <Field label="Receive latency" invalid="20 to 8000 ms">
+        <UnitInput
+          unit="ms"
           type="number"
           min={20}
           max={8000}
           required
-          className="input input-sm"
           value={latencyMs}
           onChange={(event) => setLatencyMs(Number(event.target.value))}
         />
@@ -252,13 +252,13 @@ function Profiles(props: {
                   </select>
                 </Field>
                 {PROFILE_NUMBERS.map(([field, label, min, max]) => (
-                  <Field key={field} label={label}>
+                  <Field key={field} label={label} invalid={max === undefined ? `${min} or more` : `${min} to ${max}`}>
                     <input
                       type="number"
                       min={min}
                       max={max}
                       required
-                      className="input input-sm"
+                      className="input input-sm validator"
                       value={row.profile[field]}
                       onChange={(event) =>
                         edit(index, {

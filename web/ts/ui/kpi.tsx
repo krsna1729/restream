@@ -50,13 +50,19 @@ export function Kpi(props: {
 
 /** KPI tiles that reflow: 2 across on a phone, up to `max` on wide screens. */
 export function KpiRow(props: { children: ReactNode; max?: 3 | 4 | 5 | 6 }) {
+  // Columns follow the room the row has (a container query), not the
+  // window: the same row fits a full page, a side column or a phone.
   const cols = {
-    3: "md:grid-cols-3",
-    4: "md:grid-cols-4",
-    5: "md:grid-cols-3 xl:grid-cols-5",
-    6: "md:grid-cols-3 xl:grid-cols-6",
+    3: "@2xl:grid-cols-3",
+    4: "@2xl:grid-cols-4",
+    5: "@2xl:grid-cols-3 @4xl:grid-cols-5",
+    6: "@2xl:grid-cols-3 @4xl:grid-cols-6",
   }[props.max ?? 4];
-  return <div className={`grid grid-cols-2 gap-3 ${cols}`}>{props.children}</div>;
+  return (
+    <div className="@container">
+      <div className={`grid grid-cols-2 gap-3 ${cols}`}>{props.children}</div>
+    </div>
+  );
 }
 
 /** A thin fill bar, toned by threshold unless a tone is given. */

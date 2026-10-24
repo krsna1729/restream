@@ -257,6 +257,49 @@
   }
 }
 
+/* A menu panel (MenuButton): under its button's end edge, flipped when
+   there is no room; fades and drops in, also when it first opens. */
+.menu-pop {
+  margin: 0;
+  inset: auto;
+  position-area: bottom span-left;
+  position-try-fallbacks: flip-block, flip-inline;
+  margin-block-start: 0.5rem;
+  opacity: 0;
+  translate: 0 -4px;
+  transition:
+    opacity 0.15s ease,
+    translate 0.15s ease,
+    overlay 0.15s allow-discrete,
+    display 0.15s allow-discrete;
+}
+.menu-pop:popover-open {
+  opacity: 1;
+  translate: 0 0;
+}
+@starting-style {
+  .menu-pop:popover-open {
+    opacity: 0;
+    translate: 0 -4px;
+  }
+}
+@supports not (position-area: bottom) {
+  .menu-pop {
+    position: fixed;
+    inset: 3.75rem 1rem auto auto;
+  }
+}
+
+/* Moving between workspaces crossfades (View Transitions); reduced
+   motion swaps at once. */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}
+
 @keyframes rs-flow {
   from {
     stroke-dashoffset: 24;

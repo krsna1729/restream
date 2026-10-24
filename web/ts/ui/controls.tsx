@@ -1,8 +1,8 @@
 // Shared filter controls: a search field, single-choice chips that scroll
 // sideways on a phone instead of wrapping into a wall, and a count chip.
 
-import { useState } from "react";
-import type { ReactNode } from "react";
+import { useId, useRef, useState } from "react";
+import type { InputHTMLAttributes, ReactNode } from "react";
 
 import { Icon } from "./icons.js";
 
@@ -109,13 +109,64 @@ export function CopyButton(props: { text: string; label: string }) {
 }
 
 /** A labelled control: its caption over it (and an optional hint under
- * it), the whole a `<label>` so the caption names the control. */
-export function Field(props: { label: ReactNode; hint?: ReactNode; className?: string; children: ReactNode }) {
+ * it), the whole a `<label>` so the caption names the control. `invalid`
+ * says what a valid value is; it shows, in the error colour, once the
+ * person has left the control (`:user-invalid`) with a value its
+ * constraints refuse. Give the control the `validator` class. */
+export function Field(props: { label: ReactNode; hint?: ReactNode; invalid?: ReactNode; className?: string; children: ReactNode }) {
   return (
-    <label className={`flex min-w-0 flex-col justify-end gap-1 [&>:is(input,select,textarea,.join)]:w-full ${props.className ?? ""}`}>
+    <label className={`flex min-w-0 flex-col justify-end gap-1 [&>:is(input,select,textarea,.join,.input)]:w-full ${props.className ?? ""}`}>
       <span className="text-[0.8rem] font-medium text-base-content/80">{props.label}</span>
       {props.children}
+      {props.invalid && <span className="validator-hint mt-0 hidden text-xs">{props.invalid}</span>}
       {props.hint && <span className="text-xs text-base-content/65">{props.hint}</span>}
     </label>
+  );
+}
+
+/** A text box with its unit inside it, at the end ("ms", "kbps"). */
+export function UnitInput(props: Omit<InputHTMLAttributes<HTMLInputElement>, "size"> & { unit: string; small?: boolean }) {
+  const { unit, small, className, ...input } = props;
+  return (
+    <div className={`input validator ${small ? "input-sm" : ""} ${className ?? ""}`}>
+      <input {...input} className="grow tabular" />
+      <span className="text-xs text-base-content/70">{unit}</span>
+    </div>
+  );
+}
+
+/** A button that opens a panel beside it: the browser's popover (top
+ * layer, light dismiss, Escape) placed by CSS anchor positioning, with a
+ * fixed corner where anchoring is unsupported. `children` gets `close`. */
+export function MenuButton(props: {
+  label: string;
+  className: string;
+  button: ReactNode;
+  width?: string;
+  /** Runs as the panel opens, e.g. to focus a search box in it. */
+  onOpen?: () => void;
+  children: (close: () => void) => ReactNode;
+}) {
+  const id = useId();
+  const panel = useRef<HTMLDivElement | null>(null);
+  const anchor = `--menu-${id.replace(/[^a-zA-Z0-9]/g, "")}`;
+  return (
+    <>
+      <button type="button" popoverTarget={id} aria-label={props.label} className={props.className} style={{ anchorName: anchor }}>
+        {props.button}
+      </button>
+      <div
+        ref={panel}
+        id={id}
+        popover="auto"
+        style={{ positionAnchor: anchor }}
+        onToggle={(event) => {
+          if ((event.nativeEvent as ToggleEvent).newState === "open") props.onOpen?.();
+        }}
+        className={`menu-pop rounded-box border border-base-content/10 bg-base-200 p-4 text-base-content shadow-xl ${props.width ?? "w-72"}`}
+      >
+        {props.children(() => panel.current?.hidePopover())}
+      </div>
+    </>
   );
 }

@@ -125,10 +125,15 @@ export function OutputForm(props: {
           </Field>
         )}
         {draft.protocol !== "srt" && !draft.server && (
-          <Field label="URL" hint={draft.protocol === "hls" ? "The playlist URL to upload to." : "Server and stream key in one URL."}>
+          <Field
+            label="URL"
+            hint={draft.protocol === "hls" ? "The playlist URL to upload to." : "Server and stream key in one URL."}
+            invalid={draft.protocol === "hls" ? "Starts with http:// or https://" : "Starts with rtmp:// or rtmps://"}
+          >
             <input
-              className="input font-mono"
+              className="input validator font-mono"
               autoComplete="off"
+              pattern={draft.protocol === "hls" ? "https?://\\S+" : "rtmps?://\\S+"}
               placeholder={draft.protocol === "hls" ? "https://host/path/out.m3u8" : "rtmp://host/app/stream-key"}
               value={draft.input}
               onChange={(event) => set({ input: event.target.value })}
@@ -155,8 +160,16 @@ export function OutputForm(props: {
             <Field label="Host">
               <input className="input" placeholder="srt.example.com" value={draft.srt.host} onChange={(event) => setSrt({ host: event.target.value })} />
             </Field>
-            <Field label="Port">
-              <input className="input" inputMode="numeric" placeholder="9000" value={draft.srt.port} onChange={(event) => setSrt({ port: event.target.value })} />
+            <Field label="Port" invalid="1 to 65535">
+              <input
+                className="input validator"
+                type="number"
+                min={1}
+                max={65535}
+                placeholder="9000"
+                value={draft.srt.port}
+                onChange={(event) => setSrt({ port: event.target.value })}
+              />
             </Field>
             <Field label="Stream ID">
               <input className="input font-mono" placeholder="optional" value={draft.srt.streamId} onChange={(event) => setSrt({ streamId: event.target.value })} />

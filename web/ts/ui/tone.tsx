@@ -24,6 +24,16 @@ export const TONE_BG: Record<Tone, string> = {
   accent: "bg-accent",
 };
 
+// DaisyUI's status dot: the tone's colour with a little depth.
+const STATUS: Record<Tone, string> = {
+  ok: "status-success",
+  warn: "status-warning",
+  bad: "status-error",
+  info: "status-info",
+  neutral: "bg-base-content/40",
+  accent: "status-accent",
+};
+
 const BADGE: Record<Tone, string> = {
   ok: "bg-success/15 text-success border-success/30",
   warn: "bg-warning/15 text-warning border-warning/30",
@@ -51,7 +61,7 @@ export function StatusDot(props: { tone: Tone; pulse?: boolean; className?: stri
   return (
     <span
       aria-hidden="true"
-      className={`inline-block size-2 shrink-0 rounded-full ${TONE_BG[props.tone]} ${props.pulse ? "motion-safe:animate-pulse" : ""} ${props.className ?? ""}`}
+      className={`status inline-block size-2 shrink-0 rounded-full ${STATUS[props.tone]} ${props.pulse ? "motion-safe:animate-pulse" : ""} ${props.className ?? ""}`}
     />
   );
 }

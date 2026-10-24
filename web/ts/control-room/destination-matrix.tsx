@@ -21,7 +21,7 @@ import { ConfirmDelete } from "./confirm.js";
 import { useSession } from "./session.js";
 import { LogsLink } from "./logs-link.js";
 import { outputTrouble, troubleTitle } from "./trouble-model.js";
-import { retryWords } from "./when.js";
+import { RetryCountdown } from "./retry-countdown.js";
 import { Since } from "./when-view.js";
 import { formatBps } from "./format.js";
 import {
@@ -35,7 +35,6 @@ import { OutputForm } from "./output-form.js";
 import { platformOf } from "./channels-model.js";
 import { PlatformMark } from "./platform-mark.js";
 import { PROTOCOL_LABEL } from "./protocol-style.js";
-import { useNow } from "./store.js";
 
 const FILTER_LABEL: Record<DestinationFilter, string> = {
   all: "All",
@@ -60,16 +59,6 @@ export function outputState(output: OutputState, delivering: boolean): { tone: T
 
 
 /** Seconds until the next attempt, ticking. */
-function RetryCountdown(props: { atMs: number; attempts: number }) {
-  const now = useNow(1000);
-  const seconds = Math.max(0, Math.round((props.atMs - now) / 1000));
-  return (
-    <span className="tabular whitespace-nowrap text-xs text-base-content/70">
-      {retryWords(props.attempts, seconds * 1000)}
-    </span>
-  );
-}
-
 export function DestinationMatrix(props: {
   pipelineId: string;
   rows: readonly DestinationRow[];
@@ -163,7 +152,7 @@ export function DestinationMatrix(props: {
               {state.label}
             </StatusBadge>
             {row.output.retry ? (
-              <RetryCountdown atMs={row.output.retry.nextAttemptAtMs} attempts={row.output.retry.attempts} />
+              <RetryCountdown atMs={row.output.retry.nextAttemptAtMs} attempts={row.output.retry.attempts} className="text-xs text-base-content/70" />
             ) : (
               <Since sinceMs={row.output.stateSinceMs} />
             )}
