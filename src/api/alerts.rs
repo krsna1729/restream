@@ -61,6 +61,10 @@ fn alerts_response(
 pub async fn current_alerts(state: &AppState) -> (serde_json::Value, Vec<crate::alerts::Alert>) {
     let snapshot = dashboard_alert_snapshot(state).await;
     let mut alert_list = alerts::derive_alerts(&snapshot);
+    alert_list.extend(alerts::anomaly_alerts(
+        &state.flight_recorder.baselines.anomalies(),
+        &snapshot_generated_at(&snapshot),
+    ));
     let runtime = state.runtime_state.snapshot().await;
     let pipeline_names = runtime
         .pipelines

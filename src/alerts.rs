@@ -190,6 +190,64 @@ pub fn name_subjects(
     }
 }
 
+/// One alert per destination off its usual
+/// (`application::destination_baselines`): a warning that names the signal,
+/// the value now and the usual one.
+pub fn anomaly_alerts(
+    anomalies: &[crate::application::destination_baselines::Anomaly],
+    generated_at: &str,
+) -> Vec<Alert> {
+    use crate::application::destination_baselines::Signal;
+    anomalies
+        .iter()
+        .map(|anomaly| {
+            let (key, title, measured, cause) = match anomaly.signal {
+                Signal::DeliveryRatio => (
+                    "delivery",
+                    "delivers less than usual",
+                    format!(
+                        "delivery ratio {:.3}, usually {:.3}",
+                        anomaly.value, anomaly.usual
+                    ),
+                    "The destination accepts a smaller share of the stream than it normally does, before it falls below the fixed delivery floor.",
+                ),
+                Signal::RttMs => (
+                    "rtt",
+                    "is slower to reach than usual",
+                    format!(
+                        "round trip {:.0} ms, usually {:.0} ms",
+                        anomaly.value, anomaly.usual
+                    ),
+                    "The network path to the destination got longer or congested.",
+                ),
+                Signal::RetransPerSec => (
+                    "retransmits",
+                    "is resending more than usual",
+                    format!(
+                        "{:.1} retransmits/s, usually {:.1}",
+                        anomaly.value, anomaly.usual
+                    ),
+                    "SRT is resending more packets to this destination than it normally does: loss on the path.",
+                ),
+            };
+            Alert {
+                pipeline_id: Some(anomaly.pipeline_id.clone()),
+                output_id: Some(anomaly.output_id.clone()),
+                ..Alert::new(
+                    format!("output:{}:anomaly:{key}", anomaly.output_id),
+                    Severity::Warning,
+                    Scope::Output,
+                    format!("Output '{}' {title}", anomaly.output_id),
+                    cause,
+                    vec![Evidence::derived(measured)],
+                    "Watch it: if it keeps worsening, check the destination's status page and this server's uplink.",
+                    generated_at,
+                )
+            }
+        })
+        .collect()
+}
+
 /// Derive alerts from a `health_snapshot()` JSON value.
 /// Returns alerts sorted Critical-first, then Warning, then by pipeline id.
 pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {

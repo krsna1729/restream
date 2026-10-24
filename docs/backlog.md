@@ -27,7 +27,6 @@ items).
 - [Q-095 stream inspector](#q-095-observability-sonnet-stream-inspector-gop-health-skew-and-scte)
 - [Q-096 GRO and arrival timestamps](#q-096-performance-sonnet-gro-and-arrival-timestamps-in-the-reference-srt-path)
 - [Q-097 MediaMTX MoQ dialect interoperability](#q-097-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop)
-- [Q-099 per-destination anomaly baselines](#q-099-observability-sonnet-anomaly-baselines-per-destination)
 - [Q-100 agent protocol: approval mid-task and live panels](#q-100-agent-opus-agent-protocol-approval-mid-task-and-live-panels)
 - [Q-101 incident investigation and approval UX](#q-101-agent-opus-explain-an-incident-and-approve-its-fix-in-one-place)
 - [Q-102 plain-language command palette](#q-102-frontend-sonnet-plain-language-command-palette)
@@ -514,18 +513,6 @@ items).
     describes both forms. Revisit against an unmodified upstream release
     with these contracts aligned; then require both directions and media
     read-back before re-enabling the MediaMTX gate.
-
-### Q-099 [observability] [sonnet] Anomaly baselines per destination
-
-- Goal: each destination learns its own normal bitrate, RTT, drops and
-  reconnect rate, and flags a departure from it before a fixed threshold
-  would; plain statistics, no language model.
-- Files: `src/application/fleet_history.rs` or a sibling sampler,
-  `trouble-model.ts`, Incidents.
-- Gates: a proptest of the baseline against a simple model; a replayed
-  flight-recorder trace with a slow degradation is flagged earlier than the
-  threshold rule.
-- Status: open (Filed: 2026-10-24 by claude, from the platform research).
 
 ### Q-100 [agent] [opus] Agent protocol: approval mid-task and live panels
 

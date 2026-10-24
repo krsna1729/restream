@@ -1026,3 +1026,48 @@ fn picture_and_sound_checks_alert_once_a_condition_has_held_long_enough() {
     // Absent findings (checks off, or stale) raise nothing.
     assert!(qa_alert_ids(json!({ "blackForMs": null, "loudnessLufs": -23.0 })).is_empty());
 }
+
+#[test]
+fn a_destination_off_its_usual_is_a_named_warning() {
+    use crate::application::destination_baselines::{Anomaly, Signal};
+    let anomalies = [
+        Anomaly {
+            pipeline_id: "pipe1".into(),
+            output_id: "out1".into(),
+            signal: Signal::DeliveryRatio,
+            value: 0.96,
+            usual: 0.999,
+            since_ms: 1,
+        },
+        Anomaly {
+            pipeline_id: "pipe1".into(),
+            output_id: "out1".into(),
+            signal: Signal::RttMs,
+            value: 180.0,
+            usual: 40.0,
+            since_ms: 1,
+        },
+    ];
+    let mut alerts = anomaly_alerts(&anomalies, "2026-10-24T00:00:00Z");
+    let ids: Vec<&str> = alerts.iter().map(|alert| alert.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        ["output:out1:anomaly:delivery", "output:out1:anomaly:rtt"]
+    );
+    assert!(
+        alerts
+            .iter()
+            .all(|alert| alert.severity == Severity::Warning)
+    );
+    assert_eq!(
+        alerts[1].evidence[0].signal,
+        "round trip 180 ms, usually 40 ms"
+    );
+    let pipelines = [("pipe1".to_string(), "Sunday".to_string())].into();
+    let outputs = [("out1".to_string(), "YouTube main".to_string())].into();
+    name_subjects(&mut alerts, &pipelines, &outputs);
+    assert_eq!(
+        alerts[0].title,
+        "Sunday: YouTube main delivers less than usual"
+    );
+}
