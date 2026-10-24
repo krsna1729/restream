@@ -11,7 +11,11 @@ import { Panel } from "../ui/panel.js";
 import { TimeSeries } from "../ui/time-series.js";
 import { usePolled } from "./polled.js";
 import { useSession } from "./session.js";
-import { audioTrackWords } from "./stream-health-model.js";
+import {
+  audioTrackWords,
+  qaCostWords,
+  trackSoundWords,
+} from "./stream-health-model.js";
 
 /** Loudness is drawn as LU above this floor, so the scale starts at 0. */
 const FLOOR = -70;
@@ -89,7 +93,7 @@ export function PictureAndSound(props: {
             </p>
           ) : (
             <ol className="flex flex-col gap-1.5" aria-label="Audio tracks">
-              {tracks.map((track) => (
+              {tracks.map((track, index) => (
                 <li
                   key={track.trackIndex}
                   className="flex items-baseline gap-2 rounded-field bg-base-100 px-3 py-2 text-sm"
@@ -100,13 +104,11 @@ export function PictureAndSound(props: {
                   <span className="text-base-content/70">
                     {audioTrackWords(track)}
                   </span>
-                  {track.trackIndex ===
-                    Math.min(...tracks.map((each) => each.trackIndex)) &&
-                    enabled && (
-                      <span className="ml-auto text-xs text-base-content/70">
-                        checked
-                      </span>
-                    )}
+                  {enabled && (
+                    <span className="ml-auto text-xs text-base-content/70">
+                      {trackSoundWords(qa.value?.findings?.tracks?.[index])}
+                    </span>
+                  )}
                 </li>
               ))}
             </ol>
@@ -114,10 +116,9 @@ export function PictureAndSound(props: {
           {!enabled && (
             <p className="text-xs text-base-content/70">
               Checks are off. On, this server runs a small FFmpeg that decodes
-              the keyframes and every audio track (about 2% of a CPU core per
-              pipeline, plus about 0.5% per extra track) to catch a black or
-              frozen picture, a slate, silence and loudness, and raises
-              incidents for them.
+              the keyframes and every audio track to catch a black or frozen
+              picture, a slate, silence and loudness, and raises incidents for
+              them. For this pipeline that costs {qaCostWords(tracks.length)}.
             </p>
           )}
         </div>

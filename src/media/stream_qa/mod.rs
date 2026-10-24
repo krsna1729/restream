@@ -174,13 +174,20 @@ impl QaTracker {
         self.qa.picture_checked_ms = Some(at_ms);
     }
 
-    /// One short-term loudness reading per track at `at_ms`, in source
-    /// order.
-    pub fn sound(&mut self, at_ms: u64, loudness_lufs: &[f64]) {
-        self.qa
-            .tracks
-            .resize_with(loudness_lufs.len(), TrackSound::default);
-        for (track, &lufs) in self.qa.tracks.iter_mut().zip(loudness_lufs) {
+    /// The source has this many audio tracks now; readings past it are
+    /// dropped with the tracks.
+    pub fn set_track_count(&mut self, tracks: usize) {
+        self.qa.tracks.resize_with(tracks, TrackSound::default);
+    }
+
+    /// One short-term loudness reading at `at_ms` for each track from
+    /// `first` on, in source order.
+    pub fn sound(&mut self, at_ms: u64, first: usize, loudness_lufs: &[f64]) {
+        let end = first.saturating_add(loudness_lufs.len());
+        if self.qa.tracks.len() < end {
+            self.qa.tracks.resize_with(end, TrackSound::default);
+        }
+        for (track, &lufs) in self.qa.tracks[first..end].iter_mut().zip(loudness_lufs) {
             track.silent_since_ms = if lufs <= SILENT_BELOW_LUFS {
                 Some(track.silent_since_ms.unwrap_or(at_ms))
             } else {
@@ -188,9 +195,11 @@ impl QaTracker {
             };
             track.loudness_lufs = lufs;
         }
-        let first = self.qa.tracks.first();
-        self.qa.silent_since_ms = first.and_then(|track| track.silent_since_ms);
-        self.qa.loudness_lufs = first.map(|track| track.loudness_lufs);
+        if first == 0 {
+            let lead = self.qa.tracks.first();
+            self.qa.silent_since_ms = lead.and_then(|track| track.silent_since_ms);
+            self.qa.loudness_lufs = lead.map(|track| track.loudness_lufs);
+        }
         self.qa.sound_checked_ms = Some(at_ms);
     }
 
@@ -240,11 +249,11 @@ mod tests {
         tracker.picture(4_000, thumb(200));
         assert_eq!(tracker.snapshot().black_since_ms, None);
 
-        tracker.sound(1_000, &[-70.0]);
-        tracker.sound(2_000, &[-65.0]);
+        tracker.sound(1_000, 0, &[-70.0]);
+        tracker.sound(2_000, 0, &[-65.0]);
         assert_eq!(tracker.snapshot().silent_since_ms, Some(1_000));
         assert_eq!(tracker.snapshot().silent_for_ms(2_500), Some(1_500));
-        tracker.sound(3_000, &[-23.0]);
+        tracker.sound(3_000, 0, &[-23.0]);
         assert_eq!(tracker.snapshot().silent_since_ms, None);
         assert_eq!(tracker.snapshot().loudness_lufs, Some(-23.0));
     }
@@ -275,8 +284,8 @@ mod tests {
     #[test]
     fn every_track_is_measured_and_a_silent_second_track_is_named() {
         let mut tracker = QaTracker::default();
-        tracker.sound(1_000, &[-23.0, -70.0, -20.0]);
-        tracker.sound(2_000, &[-22.0, -68.0, -61.0]);
+        tracker.sound(1_000, 0, &[-23.0, -70.0, -20.0]);
+        tracker.sound(2_000, 0, &[-22.0, -68.0, -61.0]);
         let qa = tracker.snapshot();
         assert_eq!(qa.loudness_lufs, Some(-22.0), "the first track leads");
         assert_eq!(qa.silent_since_ms, None);
@@ -293,7 +302,7 @@ mod tests {
                 },
             ]
         );
-        tracker.sound(3_000, &[-22.0, -18.0, -61.0]);
+        tracker.sound(3_000, 0, &[-22.0, -18.0, -61.0]);
         assert_eq!(
             tracker.snapshot().other_silent_tracks(3_000),
             [SilentTrack {
@@ -301,8 +310,17 @@ mod tests {
                 silent_for_ms: 1_000
             }]
         );
+        // A later group reports its own tracks.
+        tracker.sound(3_500, 40, &[-70.0]);
+        assert_eq!(tracker.snapshot().tracks.len(), 41);
+        assert_eq!(
+            tracker.snapshot().loudness_lufs,
+            Some(-22.0),
+            "the first track still leads"
+        );
         // A source with fewer tracks drops the rest.
-        tracker.sound(4_000, &[-70.0]);
+        tracker.set_track_count(1);
+        tracker.sound(4_000, 0, &[-70.0]);
         assert_eq!(tracker.snapshot().tracks.len(), 1);
         assert_eq!(tracker.snapshot().silent_since_ms, Some(4_000));
     }
