@@ -2,7 +2,7 @@
 //!
 //! Key questions answered:
 //!   1. How much does record_in() cost per packet? (atomic fetch_add × 2)
-//!   2. How much does timing::now() + timing::delta_us() cost vs Instant::now() + elapsed()?
+//!   2. How much does Instant::now() + elapsed() cost?
 //!   3. What is the full per-packet overhead in the stdin write path?
 //!
 //! Run:
@@ -83,7 +83,7 @@ fn bench_pipe_metrics_snapshot(c: &mut Criterion) {
     });
 }
 
-// ── Timing comparison: rdtsc vs Instant ─────────────────────────────────────
+// ── Timing: Instant ──────────────────────────────────────────────────────────
 
 fn bench_instant_now_elapsed(c: &mut Criterion) {
     c.bench_function("timing/instant_now_plus_elapsed", |b| {
@@ -94,63 +94,22 @@ fn bench_instant_now_elapsed(c: &mut Criterion) {
     });
 }
 
-fn bench_tsc_now_delta(c: &mut Criterion) {
-    use restream::media::timing;
-    let using = timing::calibrate();
-    let label = if using {
-        "timing/tsc_now_plus_delta_us"
-    } else {
-        "timing/tsc_now_plus_delta_us_instant_fallback"
-    };
-    c.bench_function(label, |b| {
-        b.iter(|| {
-            let t0 = timing::now();
-            let _ = black_box(timing::delta_us(t0));
-        });
-    });
-}
-
-fn bench_tsc_cached_clock_delta(c: &mut Criterion) {
-    use restream::media::timing;
-    let using = timing::calibrate();
-    let clock = timing::clock();
-    let label = if using {
-        "timing/tsc_cached_clock_now_plus_delta_us"
-    } else {
-        "timing/tsc_cached_clock_now_plus_delta_us_instant_fallback"
-    };
-    c.bench_function(label, |b| {
-        b.iter(|| {
-            let t0 = clock.now();
-            let _ = black_box(clock.delta_us(t0));
-        });
-    });
-}
-
 // ── Simulated stdin write path ────────────────────────────────────────────────
 // Models the per-packet overhead in the external transcoder's stdin loop:
-//   cached clock now() + (write) + delta_us() + conditional record + record_in.
+//   Instant::now() + (write) + elapsed() + conditional record + record_in.
 // The write itself is not benchmarked (it's I/O); we measure the surrounding
 // instrumentation cost only.
 
 fn bench_stdin_instrumentation_overhead(c: &mut Criterion) {
-    use restream::media::timing;
     let sm = StageMetrics::new();
     let pm = PipeMetrics::default();
-    let using = timing::calibrate();
-    let clock = timing::clock();
-    let label = if using {
-        "pipe/stdin_instrumentation_per_packet_tsc_cached_clock"
-    } else {
-        "pipe/stdin_instrumentation_per_packet_instant_fallback_cached_clock"
-    };
     const THRESHOLD: u64 = 1_000;
 
-    c.bench_function(label, |b| {
+    c.bench_function("pipe/stdin_instrumentation_per_packet", |b| {
         b.iter(|| {
-            let t0 = clock.now();
-            // Simulate a fast (non-stalling) write: delta_us will be near zero.
-            let write_us = clock.delta_us(t0);
+            let t0 = Instant::now();
+            // Simulate a fast (non-stalling) write: the elapsed time is near zero.
+            let write_us = t0.elapsed().as_micros() as u64;
             if write_us > THRESHOLD {
                 pm.record_stall(write_us);
             }
@@ -169,8 +128,6 @@ criterion_group!(
     bench_pipe_metrics_record_idle,
     bench_pipe_metrics_snapshot,
     bench_instant_now_elapsed,
-    bench_tsc_now_delta,
-    bench_tsc_cached_clock_delta,
     bench_stdin_instrumentation_overhead,
 );
 criterion_main!(benches);

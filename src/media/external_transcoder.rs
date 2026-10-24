@@ -59,8 +59,6 @@ use ffmpeg_process::{spawn_external_stderr_logger, spawn_external_stdout_reader}
 /// 1 ms filters normal async scheduling jitter while catching real back-pressure.
 const PIPE_STALL_THRESHOLD_US: u64 = 1_000;
 
-use crate::media::timing;
-
 #[cfg(test)]
 use crate::media::packet::MediaType;
 
@@ -256,10 +254,6 @@ pub(crate) async fn run_external_ffmpeg_backend(
         }
     };
 
-    if !timing::calibrate() {
-        info!(correlation_id=%correlation_id, pipeline_id=%pipeline_id, stage_encoding=%encoding, "[ext-transcoder] pipe timing: Instant fallback");
-    }
-    let timing_clock = timing::clock();
     let pipe_metrics = Arc::new(PipeMetrics::default());
     ctx.engine
         .register_pipe_metrics(stage_key.clone(), pipe_metrics.clone())
@@ -282,7 +276,6 @@ pub(crate) async fn run_external_ffmpeg_backend(
         stdout,
         output_normalizer,
         pipe_metrics.clone(),
-        timing_clock,
         ctx.cancel.clone(),
     )
     .and_then(|reader| {
@@ -291,7 +284,6 @@ pub(crate) async fn run_external_ffmpeg_backend(
             stdin,
             input_pump.into_queue_refill(ctx.cancel.clone()),
             pipe_metrics.clone(),
-            timing_clock,
             input_done_tx,
         )
     })

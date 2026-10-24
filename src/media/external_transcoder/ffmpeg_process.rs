@@ -32,7 +32,6 @@ pub(crate) fn spawn_external_stdin_writer(
     stdin: tokio::process::ChildStdin,
     mut input: crate::media::ffmpeg::stage_input::StageInputRefill,
     pipe_metrics: Arc<PipeMetrics>,
-    timing_clock: crate::media::timing::Clock,
     done: tokio::sync::oneshot::Sender<Result<(), String>>,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     use std::io::Write;
@@ -59,11 +58,11 @@ pub(crate) fn spawn_external_stdin_writer(
                     if !input.refill(&mut batch) {
                         return Ok(());
                     }
-                    let t0 = timing_clock.now();
+                    let t0 = std::time::Instant::now();
                     stdin
                         .write_all(&batch)
                         .map_err(|error| format!("stdin write failed: {error}"))?;
-                    let write_us = timing_clock.delta_us(t0);
+                    let write_us = t0.elapsed().as_micros() as u64;
                     if write_us > super::PIPE_STALL_THRESHOLD_US {
                         pipe_metrics.record_stall(write_us);
                     }
@@ -82,7 +81,6 @@ pub(super) fn spawn_external_stdout_reader(
     stdout: tokio::process::ChildStdout,
     mut output: crate::media::ffmpeg::stage_output::StageOutputNormalizer,
     pipe_metrics: Arc<PipeMetrics>,
-    timing_clock: crate::media::timing::Clock,
     cancel: CancellationToken,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
@@ -99,9 +97,9 @@ pub(super) fn spawn_external_stdout_reader(
                 let mut buf = vec![0u8; MEDIA_TS_BATCH_TARGET_BYTES];
                 let mut pkts = Vec::with_capacity(MEDIA_PRODUCER_BATCH_PACKETS);
                 loop {
-                    let t0 = timing_clock.now();
+                    let t0 = std::time::Instant::now();
                     let result = stdout.read(&mut buf);
-                    let idle_us = timing_clock.delta_us(t0);
+                    let idle_us = t0.elapsed().as_micros() as u64;
                     match result {
                         Ok(0) | Err(_) => break,
                         Ok(n) => {
