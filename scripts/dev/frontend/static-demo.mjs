@@ -5,7 +5,8 @@
 // login; every number is synthetic and changes every 2 s.
 //
 //   npm run build:frontend && node scripts/dev/frontend/static-demo.mjs \
-//     [--out .local/demo] [--preset small|plant|extreme]
+//     [--out .local/demo] [--preset empty|small|plant|extreme]
+// The page also takes ?demo=<preset> to load another plant.
 //
 // Writes index.html, demo-backend.js, app.js, output.css, logo.png and
 // hls.min.js.
@@ -63,7 +64,8 @@ writeFileSync(
 <script>
   document.documentElement.setAttribute("data-theme", "restream-dark");
   window.__RESTREAM_BASE_PATH__ = location.pathname.replace(/\\/[^/]*$/, "");
-  window.__RESTREAM_DEMO_PRESET__ = ${JSON.stringify(preset)};
+  // ?demo=empty (or small, plant, extreme) picks another plant at load.
+  window.__RESTREAM_DEMO_PRESET__ = ((asked) => ["empty", "small", "plant", "extreme"].includes(asked) ? asked : ${JSON.stringify(preset)})(new URLSearchParams(location.search).get("demo"));
 </script>
 <script src="demo-backend.js"></script>
 <script src="hls.min.js"></script>
