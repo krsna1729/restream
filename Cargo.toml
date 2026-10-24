@@ -87,7 +87,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 url = "2"
 percent-encoding = "2"
 # MoQ catalog `initData` (the AAC AudioSpecificConfig) is base64.
-base64 = "0.22"
+base64 = "0.23"
 # MoQ (moq-lite + hang, IETF MOQT drafts 14-22): the moq.dev drivers and media
 # conventions, pinned; Restream supplies the Compio transport. `unsend` is the
 # vendored patch (vendor/moq-net/PATCH.md) that lets the IETF entry points run
