@@ -302,7 +302,9 @@ Returns `{ "caps": { "<platform>:<protocol>": { "codecs", "maxChannels",
 Query `url` (a YouTube watch, share or live URL; at most 2048 bytes). The
 server fetches the canonical watch page (5 s timeout, 512 KiB cap) and returns
 `{ "canonical_watch_url", "live_now", "live_content", "upcoming", "title" }`.
-A non-YouTube URL is `400`; a failed or oversized fetch is `502`.
+Only HTTP(S) YouTube or `youtu.be` URLs are accepted. Requests use canonical
+`www.youtube.com` URLs and follow only HTTPS redirects within `youtube.com`.
+An unsupported URL is `400`; a failed or oversized fetch is `502`.
 
 ## Pipelines
 

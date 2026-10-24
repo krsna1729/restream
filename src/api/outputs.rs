@@ -71,6 +71,7 @@ pub const PIPELINE_OUTPUT_CONFIG_ERROR: &str =
 const YOUTUBE_MONITORING_TIMEOUT: Duration = Duration::from_secs(5);
 const YOUTUBE_MONITORING_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const YOUTUBE_MONITORING_MAX_BYTES: usize = 512 * 1024;
+const YOUTUBE_WATCH_URL: &str = "https://www.youtube.com/watch";
 
 fn normalize_supported_url(
     url: &str,
@@ -123,14 +124,23 @@ pub struct YoutubeMonitoringStatusResponse {
     pub title: Option<String>,
 }
 
-/// Accepts the common YouTube watch/share/live URL shapes and converts them to
-/// one canonical watch URL for monitoring fetches.
-pub fn normalize_youtube_watch_url(url: &str) -> Option<String> {
+/// Accepts common YouTube watch/share/live URL shapes and returns a fixed
+/// YouTube request target plus the canonical watch URL for API responses.
+fn youtube_watch_target(url: &str) -> Option<(String, String)> {
     let parsed = Url::parse(url).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
     let host = parsed
         .host_str()?
         .trim_start_matches("www.")
         .to_ascii_lowercase();
+    if host != "youtu.be" && host != "youtube.com" && !host.ends_with(".youtube.com") {
+        return None;
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return None;
+    }
     let path_parts = parsed
         .path_segments()
         .map(|segments| segments.collect::<Vec<_>>())
@@ -141,7 +151,7 @@ pub fn normalize_youtube_watch_url(url: &str) -> Option<String> {
             .copied()
             .filter(|value| !value.is_empty())
             .map(str::to_string)
-    } else if host.ends_with("youtube.com") {
+    } else {
         parsed
             .query_pairs()
             .find(|(key, _)| key == "v")
@@ -157,10 +167,15 @@ pub fn normalize_youtube_watch_url(url: &str) -> Option<String> {
                     None
                 }
             })
-    } else {
-        None
     }?;
-    Some(format!("https://www.youtube.com/watch?v={video_id}"))
+    let mut canonical = Url::parse(YOUTUBE_WATCH_URL).ok()?;
+    canonical.query_pairs_mut().append_pair("v", &video_id);
+    Some((video_id, canonical.into()))
+}
+
+/// Canonicalizes a supported YouTube watch, share, live, embed, or Shorts URL.
+pub fn normalize_youtube_watch_url(url: &str) -> Option<String> {
+    youtube_watch_target(url).map(|(_, canonical)| canonical)
 }
 
 /// Small HTML substring probe used for the YouTube monitoring response shape.
@@ -216,10 +231,36 @@ fn youtube_monitoring_client() -> Result<reqwest::Client, YoutubeMonitoringFetch
         .connect_timeout(YOUTUBE_MONITORING_CONNECT_TIMEOUT)
         .timeout(YOUTUBE_MONITORING_TIMEOUT)
         .read_timeout(YOUTUBE_MONITORING_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            let url = attempt.url();
+            if url.scheme() == "https"
+                && url.host_str().is_some_and(|host| {
+                    host == "youtube.com" || host.ends_with(".youtube.com")
+                })
+            {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
         .build()
         .map_err(|_| YoutubeMonitoringFetchError::BuildClient)
 }
 
+async fn fetch_youtube_monitoring_text(
+    client: &reqwest::Client,
+    video_id: &str,
+) -> Result<String, YoutubeMonitoringFetchError> {
+    let response = client
+        .get(YOUTUBE_WATCH_URL)
+        .query(&[("v", video_id)])
+        .send()
+        .await
+        .map_err(|_| YoutubeMonitoringFetchError::Request)?;
+    read_limited_response(response, YOUTUBE_MONITORING_MAX_BYTES).await
+}
+
+#[cfg(test)]
 async fn fetch_limited_text(
     client: &reqwest::Client,
     url: &str,
@@ -229,9 +270,20 @@ async fn fetch_limited_text(
         .get(url)
         .send()
         .await
-        .map_err(|_| YoutubeMonitoringFetchError::Request)?
+        .map_err(|_| YoutubeMonitoringFetchError::Request)?;
+    read_limited_response(response, max_bytes).await
+}
+
+async fn read_limited_response(
+    response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<String, YoutubeMonitoringFetchError> {
+    let response = response
         .error_for_status()
         .map_err(|_| YoutubeMonitoringFetchError::Status)?;
+    if !response.status().is_success() {
+        return Err(YoutubeMonitoringFetchError::Status);
+    }
     let mut body = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
@@ -449,8 +501,8 @@ pub async fn youtube_monitoring_status_handler(
     if let Some(response) = check_field_len("url", &query.url, MAX_URL_LEN) {
         return response;
     }
-    let canonical_watch_url = match normalize_youtube_watch_url(query.url.trim()) {
-        Some(url) => url,
+    let (video_id, canonical_watch_url) = match youtube_watch_target(query.url.trim()) {
+        Some(target) => target,
         None => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -464,9 +516,7 @@ pub async fn youtube_monitoring_status_handler(
         Ok(client) => client,
         Err(error) => return youtube_fetch_error_response(error),
     };
-    let html = match fetch_limited_text(&client, &canonical_watch_url, YOUTUBE_MONITORING_MAX_BYTES)
-        .await
-    {
+    let html = match fetch_youtube_monitoring_text(&client, &video_id).await {
         Ok(html) => html,
         Err(error) => return youtube_fetch_error_response(error),
     };
@@ -647,6 +697,74 @@ mod tests {
             config: OutputConfig::source(),
             monitoring_url: None,
         }
+    }
+
+    #[test]
+    fn youtube_watch_target_restricts_hosts_and_encodes_video_ids() {
+        for url in [
+            "ftp://youtube.com/watch?v=abcdefghijk",
+            "https://notyoutube.com/watch?v=abcdefghijk",
+            "https://youtube.com.attacker.example/watch?v=abcdefghijk",
+            "https://user:password@youtube.com/watch?v=abcdefghijk",
+        ] {
+            assert!(
+                normalize_youtube_watch_url(url).is_none(),
+                "invalid YouTube URL was accepted"
+            );
+        }
+
+        let youtube_url = "https://www.youtube.com/watch?v=abc%26host%3D127.0.0.1";
+        let (video_id, canonical) = youtube_watch_target(youtube_url).unwrap();
+        assert_eq!(video_id, "abc&host=127.0.0.1");
+        assert_eq!(
+            canonical,
+            "https://www.youtube.com/watch?v=abc%26host%3D127.0.0.1"
+        );
+    }
+
+    #[tokio::test]
+    async fn youtube_fetch_does_not_follow_redirects_to_other_hosts() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let target = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_addr = target.local_addr().unwrap();
+        let target_hit = Arc::new(AtomicBool::new(false));
+        let target_hit_task = target_hit.clone();
+        tokio::spawn(async move {
+            if let Ok((mut socket, _)) = target.accept().await {
+                target_hit_task.store(true, Ordering::Relaxed);
+                let _ = socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await;
+            }
+        });
+
+        let redirect = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let redirect_addr = redirect.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut socket, _)) = redirect.accept().await {
+                let mut request = [0u8; 1024];
+                let _ = socket.read(&mut request).await;
+                let response = format!(
+                    "HTTP/1.1 302 Found\r\nLocation: http://{target_addr}/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+
+        let client = youtube_monitoring_client().unwrap();
+        let error = fetch_limited_text(
+            &client,
+            &format!("http://{redirect_addr}/watch"),
+            YOUTUBE_MONITORING_MAX_BYTES,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error, YoutubeMonitoringFetchError::Status);
+        assert!(!target_hit.load(Ordering::Relaxed));
     }
 
     async fn serve_once(status: &str, body: Vec<u8>) -> String {

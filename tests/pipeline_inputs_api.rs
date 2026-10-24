@@ -635,11 +635,11 @@ async fn basic_auth_accepts_credentials_that_survive_encoding() {
             "sourceUrl": "https://o.example/p.m3u8",
             "auth": {"kind": "basic", "username": username, "password": password},
         });
-        let (status, response) = post_input(&app, &cookie, &pipeline_id, &body.to_string()).await;
+        let (status, _) = post_input(&app, &cookie, &pipeline_id, &body.to_string()).await;
         assert_eq!(
             status,
             StatusCode::CREATED,
-            "expected 201 for basic {username:?}; got {status} {response}"
+            "basic auth input should be created"
         );
     }
 }

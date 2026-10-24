@@ -209,7 +209,7 @@ async fn hls_push_basic_real_http_accepts_and_observes_replace_clear() {
             } else {
                 StatusCode::UNAUTHORIZED
             };
-            assert_eq!(response.status(), expected, "{method} {password:?}");
+            assert_eq!(response.status(), expected, "{method} request status");
             if expected == StatusCode::ACCEPTED {
                 assert!(
                     server.engine.input_has_session(PIPELINE_ID, INPUT_ID).await,

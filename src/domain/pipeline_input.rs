@@ -459,7 +459,7 @@ mod tests {
             for secret in [token, password, cookie] {
                 assert!(
                     !printed.contains(secret),
-                    "{printed} must not carry {secret}"
+                    "{printed} must not carry a credential"
                 );
             }
         }
