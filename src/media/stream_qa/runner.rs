@@ -294,10 +294,7 @@ async fn run_child(
         Arc::new(StageMetrics::new()),
     )
     .with_video_sequence_header(sequence_header)
-    .with_engine(engine.clone(), pipeline_id.to_string())
-    // FFmpeg decodes keyframes only: the rest of the video need not cross
-    // the pipe.
-    .with_video_keyframes_only();
+    .with_engine(engine.clone(), pipeline_id.to_string());
 
     let sound = if has_audio {
         Some(SoundSocket::bind().map_err(|error| format!("sound socket: {error}"))?)
