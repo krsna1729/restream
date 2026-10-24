@@ -227,7 +227,7 @@ mod tests {
         ] {
             let setting = MoqIngestSetting::parse(Some(listen), cert, key, None, None);
             let MoqIngestSetting::Invalid(error) = &setting else {
-                panic!("{listen} {cert:?} {key:?} should be invalid, got {setting:?}");
+                panic!("{listen} listener config should be invalid");
             };
             assert!(error.contains(names), "{error}");
             assert_eq!(setting.config(), None);

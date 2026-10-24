@@ -40,6 +40,9 @@ A release must:
 Run them through the [release runbook](release-runbook.md). Changing a
 scanner, asset or smoke test is a script and CI change, not a docs change.
 SBOMs and packages are build outputs; do not commit them.
+Dependency advisory checks also run on pull requests; the full SBOM scan
+remains scheduled. Require both dependency checks in branch protection before
+merge.
 
 ## Native licenses
 

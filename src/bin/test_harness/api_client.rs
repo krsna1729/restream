@@ -2,11 +2,22 @@
 
 use super::*;
 
-pub(crate) const DEFAULT_HARNESS_ADMIN_PASSWORD: &str = "restream-local-harness-password";
+static GENERATED_HARNESS_ADMIN_PASSWORD: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(generate_harness_admin_password);
+
+fn generate_harness_admin_password() -> String {
+    let random_bytes = rand::random::<[u8; 32]>();
+    let mut password = String::with_capacity(random_bytes.len() * 2);
+    for byte in random_bytes {
+        use std::fmt::Write as _;
+        write!(&mut password, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    password
+}
 
 pub(crate) fn harness_admin_password() -> String {
     std::env::var("RESTREAM_INITIAL_ADMIN_PASSWORD")
-        .unwrap_or_else(|_| DEFAULT_HARNESS_ADMIN_PASSWORD.to_string())
+        .unwrap_or_else(|_| GENERATED_HARNESS_ADMIN_PASSWORD.clone())
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
@@ -360,4 +371,32 @@ async fn json_response(request: reqwest::RequestBuilder) -> Result<Value, String
         return Ok(Value::Null);
     }
     serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::generate_harness_admin_password;
+
+    #[test]
+    fn generated_harness_passwords_are_fresh_hex_credentials() {
+        let first = generate_harness_admin_password();
+        let second = generate_harness_admin_password();
+
+        assert_eq!(first.len(), 64);
+        assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn harness_password_uses_a_process_stable_random_default() {
+        if std::env::var_os("RESTREAM_INITIAL_ADMIN_PASSWORD").is_some() {
+            return;
+        }
+        let first = super::harness_admin_password();
+        let second = super::harness_admin_password();
+
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 64);
+        assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    }
 }
