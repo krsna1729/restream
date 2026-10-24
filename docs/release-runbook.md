@@ -24,12 +24,14 @@ flowchart TD
   ldd["scripts/release/local-due-diligence.sh vX.Y.Z"] --> push["git push release branch"]
   push --> dry["scripts/release/dispatch-dry-run.sh"]
   dry --> wf["release.yml (workflow_dispatch): package-build, full-live-harness, package-evidence, certify"]
+  wf --> arm["package-build-aarch64: arm64 archives + artifact smoke"]
+  arm --> ok
   wf --> ok{"dry-run succeeded for HEAD?"}
   ok -- no --> fix["fix, push, dispatch again"]
   fix --> dry
   ok -- yes --> tag["scripts/release/tag-and-publish.sh vX.Y.Z run-id"]
   tag --> tagwf["release.yml (tag v*): same jobs plus publish"]
-  tagwf --> gh["GitHub Release assets"]
+  tagwf --> gh["GitHub Release assets, SHA256SUMS, provenance and SBOM attestations"]
   tagwf --> img["scripts/release/publish-image.sh: GHCR vX.Y.Z and latest"]
 ```
 
@@ -97,6 +99,18 @@ Release assets plus GHCR `<tag>` and `latest` images.
 gh release view <vX.Y.Z> --json tagName,targetCommitish,assets,url
 docker manifest inspect ghcr.io/krsna1729/restream:<vX.Y.Z>
 docker manifest inspect ghcr.io/krsna1729/restream:latest
+```
+
+Every archive, the seccomp profile and the runtime image carry a
+Sigstore-signed build-provenance attestation, and each `restream` archive an
+SBOM attestation; `SHA256SUMS` lists the files:
+
+```sh
+gh attestation verify restream-<vX.Y.Z>-linux-aarch64.tar.gz --repo krsna1729/restream
+gh attestation verify restream-<vX.Y.Z>-linux-x86_64.tar.gz --repo krsna1729/restream \
+  --predicate-type https://cyclonedx.org/bom
+gh attestation verify oci://ghcr.io/krsna1729/restream:<vX.Y.Z> --repo krsna1729/restream
+sha256sum -c SHA256SUMS
 ```
 
 Check the assets against their owners:

@@ -10,7 +10,9 @@ cd "$ROOT"
 source "$ROOT/scripts/lib/release-common.sh"
 
 VERSION="${1:?usage: scripts/release/package-binaries.sh <version>}"
-ARCH="${RESTREAM_RELEASE_ARCH:-linux-x86_64}"
+# Host binaries are built natively: the archive is named for the build host
+# (linux-x86_64 or linux-aarch64).
+ARCH="${RESTREAM_RELEASE_ARCH:-linux-$(uname -m)}"
 OUT_DIR="${RESTREAM_RELEASE_DIR:-dist}"
 
 restream_release_require_version package-binaries "$VERSION"
@@ -24,7 +26,7 @@ scripts/release/prepare-build-tree.sh
 # `restream-mcp` is feature-gated. Build the supported executable set through
 # the native script so release packaging reuses the same static-link environment
 # and linkage checks as the runtime image.
-release_sbom="$OUT_DIR/restream-$VERSION.sbom.cdx.json"
+release_sbom="$OUT_DIR/restream-$VERSION-$ARCH.sbom.cdx.json"
 RESTREAM_SBOM_PATH="$release_sbom" \
 RESTREAM_BUILD_PROFILE=release \
 RESTREAM_BUILD_BINS="restream restream-mcp test_harness" \
@@ -56,7 +58,7 @@ install -m 0644 LICENSE.md "$restream_stage/LICENSE.md"
 install -m 0644 distribution/THIRD_PARTY_COMPONENTS.md "$restream_stage/THIRD_PARTY_COMPONENTS.md"
 mkdir -p "$restream_stage/licenses"
 cp -a distribution/licenses/. "$restream_stage/licenses/"
-install -m 0644 "$release_sbom" "$restream_stage/restream-$VERSION.sbom.cdx.json"
+install -m 0644 "$release_sbom" "$restream_stage/restream-$VERSION-$ARCH.sbom.cdx.json"
 
 mcp_stage="$tmp/restream-mcp-$VERSION-$ARCH"
 mkdir -p "$mcp_stage"
@@ -78,6 +80,10 @@ do
     echo "package-binaries: PASS archive=$archive"
 done
 
-scripts/release/package-runtime-image.sh "$VERSION"
+# The OCI runtime image ships for x86_64 only; other architectures publish
+# host archives (RESTREAM_RELEASE_IMAGE=0).
+if [[ "${RESTREAM_RELEASE_IMAGE:-1}" == "1" ]]; then
+    scripts/release/package-runtime-image.sh "$VERSION"
+fi
 
 echo "package-binaries: PASS sbom=$release_sbom"

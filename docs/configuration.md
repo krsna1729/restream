@@ -374,6 +374,24 @@ native threads.
 
 ## Host kernel settings
 
+Release binaries are built for `x86_64` and `aarch64` Linux on Ubuntu
+24.04, so they need glibc 2.39 or newer (Ubuntu 24.04, Debian 13, RHEL 10).
+The kernel floor is Linux 6.0: the SRT owner rings are created with
+`IORING_SETUP_SINGLE_ISSUER` and receive with multishot `recvmsg`, both 6.0.
+Newer kernels add optional paths, which the System page lists as the io_uring
+tier:
+
+| Kernel | Adds |
+|---|---|
+| 6.0 | Required: single-issuer rings, multishot receive, `SEND_ZC` |
+| 6.10 | Send and receive bundles |
+| 6.15 | Zero-copy receive; CQE waits not charged as iowait |
+
+kTLS (the `tls` module) carries RTMPS and HTTPS HLS PUT on the egress shards.
+Each cipher is probed at startup; an RTMPS output whose cipher the kernel
+cannot offload fails clearly, and HTTPS HLS outputs fall back to Reqwest (see
+[HLS](#hls)).
+
 The server never needs root. Use the one-shot helpers in the same binary
 (`src/host_tuning.rs`):
 

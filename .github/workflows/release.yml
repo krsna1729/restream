@@ -67,6 +67,33 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  package-build-aarch64:
+    name: Release package build (aarch64)
+    # Native arm64 runner: the host archives are built where they run, so the
+    # linkage check and the artifact smoke exercise the shipped bytes.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/ci-bootstrap
+        with:
+          node_version: '22'
+          system_deps_profile: build
+          rust_cache: 'true'
+      - name: Prepare release build tree
+        run: scripts/release/prepare-build-tree.sh
+      - name: Package release Linux binaries
+        env:
+          RESTREAM_RELEASE_IMAGE: '0'
+        run: scripts/release/package-binaries.sh "$RELEASE_VERSION"
+      - name: Smoke the packaged binary
+        run: scripts/check/release-artifact-smoke.sh "dist/restream-${RELEASE_VERSION}-linux-aarch64.tar.gz"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-dist-aarch64-${{ env.RELEASE_VERSION }}-${{ github.sha }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
   full-live-harness:
     needs: package-build
     uses: ./.github/workflows/_harness-runtime-shards.yml
@@ -121,7 +148,7 @@ jobs:
         run: |
           scripts/check/release-evidence.sh \
             "dist/restream-${RELEASE_VERSION}-oci.tar.gz" \
-            "dist/restream-${RELEASE_VERSION}.sbom.cdx.json" \
+            "dist/restream-${RELEASE_VERSION}-linux-x86_64.sbom.cdx.json" \
             "dist/restream-${RELEASE_VERSION}-linux-x86_64.tar.gz"
       - uses: actions/upload-artifact@v7
         if: always()
@@ -139,9 +166,10 @@ jobs:
     needs:
       - full-live-harness
       - package-evidence
+      - package-build-aarch64
     steps:
       - run: |
-          echo "Release dry-run certified: full live harness shards and package evidence passed."
+          echo "Release dry-run certified: full live harness shards, package evidence and the aarch64 package passed."
 
   publish:
     name: Release publish
@@ -151,6 +179,10 @@ jobs:
     permissions:
       contents: write
       packages: write
+      # Sigstore-signed build provenance and SBOM attestations (keyless,
+      # through the workflow's OIDC identity).
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -159,13 +191,26 @@ jobs:
           # Publish reads the same dist/ layout produced during package-build
           # and rehydrated during evidence verification.
           path: dist
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-dist-aarch64-${{ env.RELEASE_VERSION }}-${{ github.sha }}
+          path: dist-aarch64
       - name: Normalize release dist layout
         run: |
           if [[ -d dist/dist ]]; then
             cp -a dist/dist/. dist/
             rm -rf dist/dist
           fi
+          cp -a dist-aarch64/. dist/
+          # The SBOM inside each restream archive is also published beside it,
+          # so it can be attested against the archive.
+          for arch in linux-x86_64 linux-aarch64; do
+            tar -xzf "dist/restream-${GITHUB_REF_NAME}-${arch}.tar.gz" -C dist --strip-components=1 \
+              "restream-${GITHUB_REF_NAME}-${arch}/restream-${GITHUB_REF_NAME}-${arch}.sbom.cdx.json"
+          done
+          (cd dist && sha256sum restream-*.tar.gz restream-*.json test-harness-*.tar.gz > SHA256SUMS)
       - name: Publish release runtime image
+        id: image
         env:
           GH_TOKEN: ${{ github.token }}
           RESTREAM_REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
@@ -174,6 +219,32 @@ jobs:
           docker load -i "dist/restream-${RELEASE_VERSION}-oci.tar.gz"
           echo "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           scripts/release/publish-image.sh "$GITHUB_REF_NAME"
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$RESTREAM_REGISTRY_IMAGE:$GITHUB_REF_NAME")"
+          echo "digest=${digest#*@}" >> "$GITHUB_OUTPUT"
+      - name: Attest build provenance for the release assets
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/restream-*.tar.gz
+            dist/restream-mcp-*.tar.gz
+            dist/test-harness-*.tar.gz
+            dist/restream-*-seccomp.json
+      - name: Attest build provenance for the runtime image
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+      - name: Attest the x86_64 SBOM
+        uses: actions/attest-sbom@v4
+        with:
+          subject-path: dist/restream-${{ github.ref_name }}-linux-x86_64.tar.gz
+          sbom-path: dist/restream-${{ github.ref_name }}-linux-x86_64.sbom.cdx.json
+      - name: Attest the aarch64 SBOM
+        uses: actions/attest-sbom@v4
+        with:
+          subject-path: dist/restream-${{ github.ref_name }}-linux-aarch64.tar.gz
+          sbom-path: dist/restream-${{ github.ref_name }}-linux-aarch64.sbom.cdx.json
       - name: Publish release assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -181,7 +252,13 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             dist/restream-"$GITHUB_REF_NAME"-oci.tar.gz \
             dist/restream-"$GITHUB_REF_NAME"-seccomp.json \
+            dist/SHA256SUMS \
             dist/restream-"$GITHUB_REF_NAME"-linux-x86_64.tar.gz \
+            dist/restream-"$GITHUB_REF_NAME"-linux-x86_64.sbom.cdx.json \
             dist/restream-mcp-"$GITHUB_REF_NAME"-linux-x86_64.tar.gz \
             dist/test-harness-"$GITHUB_REF_NAME"-linux-x86_64.tar.gz \
+            dist/restream-"$GITHUB_REF_NAME"-linux-aarch64.tar.gz \
+            dist/restream-"$GITHUB_REF_NAME"-linux-aarch64.sbom.cdx.json \
+            dist/restream-mcp-"$GITHUB_REF_NAME"-linux-aarch64.tar.gz \
+            dist/test-harness-"$GITHUB_REF_NAME"-linux-aarch64.tar.gz \
             --generate-notes
