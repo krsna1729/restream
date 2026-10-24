@@ -1052,7 +1052,7 @@ test("manage: create a pipeline, edit its inputs, destinations, source and key, 
     await page.getByRole("button", { name: "Add destination" }).click();
     const add = page.getByRole("region", { name: "New destination" });
     await add.getByLabel("Name").fill("cr-yt");
-    await add.getByRole("combobox", { name: /^Server\b/ }).selectOption({ label: "YouTube" });
+    await add.getByRole("radio", { name: /^YouTube RTMP$/ }).check();
     await add.getByLabel("Stream key").fill("abcd-efgh");
     await add.getByRole("button", { name: "Save" }).click();
     const matrix = page.getByRole("region", { name: /Destination matrix/ });

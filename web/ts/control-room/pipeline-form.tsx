@@ -48,7 +48,7 @@ export function PipelineForm(props: {
     >
       <Field label="Name">
         <input
-          className="input input-sm"
+          className="input"
           value={draft.name}
           onChange={(event) => set({ name: event.target.value })}
         />
@@ -75,7 +75,7 @@ export function PipelineForm(props: {
       ) : (
         <Field label="Stream key (empty: the engine makes one)">
           <input
-            className="input input-sm font-mono"
+            className="input font-mono"
             autoComplete="off"
             value={draft.streamKey}
             onChange={(event) => set({ streamKey: event.target.value })}
@@ -84,7 +84,7 @@ export function PipelineForm(props: {
       )}
       <Field label="Source">
         <select
-          className="select select-sm"
+          className="select"
           value={draft.source}
           onChange={(event) => set({ source: event.target.value === "file" ? "file" : "live" })}
         >
@@ -93,10 +93,10 @@ export function PipelineForm(props: {
         </select>
       </Field>
       {draft.source === "file" && (
-        <div className="grid gap-2 md:grid-cols-2">
+        <div className="grid items-start gap-3 md:grid-cols-2">
           <Field label={draft.queue.length > 0 ? "First file" : "File"} className="md:col-span-2">
             <select
-              className="select select-sm"
+              className="select"
               value={draft.filename}
               onChange={(event) => set({ filename: event.target.value })}
             >
@@ -111,7 +111,7 @@ export function PipelineForm(props: {
           <Playlist first={draft.filename} queue={draft.queue} files={props.files} onChange={(queue) => set({ queue })} />
           <Field label="Start at (HH:MM:SS, empty: the start)">
             <input
-              className="input input-sm"
+              className="input"
               value={draft.startTime}
               onChange={(event) => set({ startTime: event.target.value })}
             />
@@ -120,7 +120,7 @@ export function PipelineForm(props: {
             <input
               type="number"
               min={1}
-              className="input input-sm"
+              className="input"
               disabled={!draft.liveOptimized}
               value={draft.targetGopSeconds}
               onChange={(event) => set({ targetGopSeconds: Number(event.target.value) })}
@@ -146,10 +146,10 @@ export function PipelineForm(props: {
           </label>
         </div>
       )}
-      <div className="grid gap-2 md:grid-cols-2">
+      <div className="grid items-start gap-3 md:grid-cols-2">
         <Field label="SRT ingest encryption">
           <select
-            className="select select-sm"
+            className="select"
             value={draft.srtMode}
             onChange={(event) =>
               set({ srtMode: event.target.value as PipelineDraft["srtMode"] })
@@ -165,7 +165,7 @@ export function PipelineForm(props: {
             type="number"
             min={20}
             max={8000}
-            className="input input-sm"
+            className="input"
             value={draft.srtLatencyMs}
             onChange={(event) => set({ srtLatencyMs: event.target.value })}
           />
@@ -176,14 +176,14 @@ export function PipelineForm(props: {
               <input
                 type="password"
                 autoComplete="off"
-                className="input input-sm"
+                className="input"
                 value={draft.srtPassphrase}
                 onChange={(event) => set({ srtPassphrase: event.target.value })}
               />
             </Field>
             <Field label="SRT key length">
               <select
-                className="select select-sm"
+                className="select"
                 value={draft.srtPbkeylen}
                 onChange={(event) =>
                   set({ srtPbkeylen: Number(event.target.value) as PipelineDraft["srtPbkeylen"] })
@@ -236,7 +236,7 @@ function Playlist(props: { first: string; queue: readonly string[]; files: reado
         </ol>
       )}
       <div className="flex gap-2">
-        <select className="select select-sm min-w-0 flex-1" aria-label="Add to playlist" value={adding} onChange={(event) => setAdding(event.target.value)}>
+        <select className="select min-w-0 flex-1" aria-label="Add to playlist" value={adding} onChange={(event) => setAdding(event.target.value)}>
           <option value="">Add a file…</option>
           {props.files.map((file) => (
             <option key={file.name} value={file.name}>

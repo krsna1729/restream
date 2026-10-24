@@ -90,6 +90,9 @@ for (const width of widths) {
         if (pipeline) query.set("p", pipeline);
         await page.goto(`${base}/?${query}`, { waitUntil: "domcontentloaded" });
         await page.waitForTimeout(settleMs);
+        await page
+          .waitForFunction(() => document.getAnimations().every((animation) => animation.playState !== "running" || animation.effect?.getComputedTiming().iterations === Infinity), null, { timeout: 2_000 })
+          .catch(() => undefined);
         const audit = await page.evaluate(auditLayout, { phone: width < 768 });
         const checks = {
           ...audit,

@@ -74,14 +74,14 @@ export function InputForm(props: {
     >
       <Field label="Label">
         <input
-          className="input input-sm"
+          className="input"
           value={draft.label}
           onChange={(event) => set({ label: event.target.value })}
         />
       </Field>
       <Field label="Source">
         <select
-          className="select select-sm"
+          className="select"
           value={draft.kind}
           onChange={(event) => set({ kind: event.target.value as PipelineInputKind })}
         >
@@ -118,7 +118,7 @@ export function InputForm(props: {
         <div className="space-y-2">
           <Field label="HLS push authentication">
             <select
-              className="select select-sm"
+              className="select"
               value={draft.pushAuthKind}
               onChange={(event) =>
                 setDraft(choosePushAuthKind(draft, event.target.value as "none" | "basic"))
@@ -146,12 +146,12 @@ export function InputForm(props: {
           {!draft.keepPushAuth && draft.pushAuthKind === "basic" && (
             <>
               <Field label="HLS push username">
-                <input className="input input-sm" autoComplete="off"
+                <input className="input" autoComplete="off"
                   value={draft.pushUsername}
                   onChange={(event) => set({ pushUsername: event.target.value })} />
               </Field>
               <Field label="HLS push password">
-                <input type="password" className="input input-sm"
+                <input type="password" className="input"
                   autoComplete="new-password" value={draft.pushPassword}
                   onChange={(event) => set({ pushPassword: event.target.value })} />
               </Field>
@@ -162,7 +162,7 @@ export function InputForm(props: {
       {fields.includes("sourceUrl") && (
         <Field label="HLS source URL">
           <input
-            className="input input-sm font-mono"
+            className="input font-mono"
             inputMode="url"
             placeholder="https://origin.example/live/master.m3u8"
             value={draft.sourceUrl}
@@ -173,7 +173,7 @@ export function InputForm(props: {
       {fields.includes("variantRule") && (
         <Field label="Rendition">
           <select
-            className="select select-sm"
+            className="select"
             value={draft.variantRule}
             onChange={(event) => set({ variantRule: event.target.value as VariantRule })}
           >
@@ -189,7 +189,7 @@ export function InputForm(props: {
         <div className="space-y-2">
           <Field label="Authentication">
             <select
-              className="select select-sm"
+              className="select"
               value={draft.authKind}
               onChange={(event) =>
                 setDraft(chooseAuthKind(draft, event.target.value as PullAuthKind))
@@ -229,7 +229,7 @@ export function InputForm(props: {
               <input
                 type="password"
                 autoComplete="off"
-                className="input input-sm font-mono"
+                className="input font-mono"
                 value={draft.token}
                 onChange={(event) => set({ token: event.target.value })}
               />
@@ -252,7 +252,7 @@ export function InputForm(props: {
             <Field label="Username">
               <input
                 autoComplete="off"
-                className="input input-sm"
+                className="input"
                 value={draft.username}
                 onChange={(event) => set({ username: event.target.value })}
               />
@@ -263,7 +263,7 @@ export function InputForm(props: {
               <input
                 type="password"
                 autoComplete="off"
-                className="input input-sm"
+                className="input"
                 value={draft.password}
                 onChange={(event) => set({ password: event.target.value })}
               />

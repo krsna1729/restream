@@ -16,6 +16,8 @@ export function SettingsForm(props: {
   onSave: () => Promise<boolean>;
   /** Why the form cannot be saved yet; the button stays disabled. */
   problem?: string | null;
+  /** Beside Save, after it (Cancel, say). */
+  actions?: ReactNode;
   children: ReactNode;
 }) {
   const [saved, setSaved] = useState(false);
@@ -34,7 +36,7 @@ export function SettingsForm(props: {
         }}
       >
         {props.children}
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3 border-t border-base-content/10 pt-3">
           <button
             type="submit"
             className="btn btn-sm btn-primary"
@@ -42,6 +44,7 @@ export function SettingsForm(props: {
           >
             Save
           </button>
+          {props.actions}
           {props.problem && <span className="text-sm text-warning">{props.problem}</span>}
           {saved && (
             <span role="status" className="text-sm text-success">

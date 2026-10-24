@@ -31,7 +31,7 @@
   --color-success-content: oklch(22% 0.05 160);
   --color-warning: oklch(84% 0.13 85);
   --color-warning-content: oklch(25% 0.05 85);
-  --color-error: oklch(71% 0.17 17);
+  --color-error: oklch(74% 0.16 18);
   --color-error-content: oklch(22% 0.05 17);
   --radius-selector: 0.375rem;
   --radius-field: 0.375rem;
@@ -60,13 +60,13 @@
   --color-accent-content: oklch(98% 0.01 170);
   --color-neutral: oklch(30% 0.03 245);
   --color-neutral-content: oklch(97% 0.005 245);
-  --color-info: oklch(52% 0.13 235);
+  --color-info: oklch(47% 0.12 235);
   --color-info-content: oklch(98% 0.01 235);
-  --color-success: oklch(52% 0.13 155);
+  --color-success: oklch(45% 0.11 155);
   --color-success-content: oklch(98% 0.01 155);
-  --color-warning: oklch(62% 0.14 70);
-  --color-warning-content: oklch(20% 0.04 70);
-  --color-error: oklch(54% 0.19 22);
+  --color-warning: oklch(46% 0.11 60);
+  --color-warning-content: oklch(98% 0.01 70);
+  --color-error: oklch(49% 0.18 22);
   --color-error-content: oklch(98% 0.01 22);
   --radius-selector: 0.375rem;
   --radius-field: 0.375rem;
@@ -129,9 +129,6 @@
 /* Secondary text never falls below AA: the semantic utility names stay,
    the floor is enforced once here. */
 @layer utilities {
-  .text-base-content\/50,
-  .text-base-content\/55,
-  .text-base-content\/60,
   .stat-title,
   .stat-desc,
   .table thead {
@@ -269,7 +266,38 @@
   }
 }
 
-/* Unlayered, so they win over DaisyUI's own state rules. */
+/* Unlayered, so they win over DaisyUI's and Tailwind's layered rules. */
+
+/* The app sets its own ink and ground. A host that wraps the page (an
+   artifact viewer, an embed, a browser extension) may style body; text
+   that inherits from there would turn black on the dark theme. */
+html[data-theme] body,
+#root {
+  color: var(--color-base-content);
+  background-color: var(--color-base-300);
+}
+
+/* Secondary text: one strength per theme, AA (4.5:1) on every surface.
+   The opacity steps in the markup (/40 to /75) all read as this; /80 and
+   up stay as written. */
+:root {
+  --muted-ink: 74%;
+}
+[data-theme="restream-light"] {
+  --muted-ink: 80%;
+}
+:is(
+    .text-base-content\/40,
+    .text-base-content\/50,
+    .text-base-content\/55,
+    .text-base-content\/60,
+    .text-base-content\/65,
+    .text-base-content\/70,
+    .text-base-content\/75,
+    .label
+  ) {
+  color: color-mix(in oklab, var(--color-base-content) var(--muted-ink), transparent);
+}
 /* A disabled control stays legible (about 3:1), only quieter: DaisyUI's
    default reads as near-black on the dark surfaces. */
 .btn:disabled,

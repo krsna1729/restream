@@ -213,7 +213,7 @@ function Queue(props: {
         {props.resolved.length > 0 && (
           <>
             <h3 className="kicker border-t border-base-content/10 px-3 pt-3 pb-1">Resolved</h3>
-            <ul className="divide-y divide-base-content/5 opacity-80">
+            <ul className="divide-y divide-base-content/5">
               {props.resolved.map(({ alert, resolvedAt }) =>
                 item(
                   alert,
