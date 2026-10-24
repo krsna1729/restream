@@ -13,28 +13,16 @@ unsafe extern "C" {
 
 const RUST_DEPENDENCIES_JSON: &str =
     include_str!(concat!(env!("OUT_DIR"), "/rust-runtime-dependencies.json"));
-const NATIVE_BUILD_INPUTS_JSON: &str =
-    include_str!(concat!(env!("OUT_DIR"), "/native-build-inputs.json"));
 
 fn c_string(pointer: *const c_char) -> String {
     if pointer.is_null() {
         return "unknown".to_string();
     }
     // SAFETY: Caller guarantees pointer is either null or a valid
-    // NUL-terminated C string obtained from a C library (Mbed TLS, FFmpeg,
-    // or glibc). The null case is checked above.
+    // NUL-terminated C string obtained from a C library (SQLite or glibc). The null case is checked above.
     unsafe { CStr::from_ptr(pointer) }
         .to_string_lossy()
         .into_owned()
-}
-
-fn av_version(version: u32) -> String {
-    format!(
-        "{}.{}.{}",
-        (version >> 16) & 0xff,
-        (version >> 8) & 0xff,
-        version & 0xff
-    )
 }
 
 fn license(expression: &str) -> Value {
@@ -87,70 +75,6 @@ fn native_component(
     component
 }
 
-fn native_component_with_inputs(
-    name: &str,
-    version: String,
-    license_expression: &str,
-    version_source: &str,
-    properties: Vec<Value>,
-    input_paths: &[&str],
-    native_inputs: &[Value],
-) -> Value {
-    let mut component = native_component(
-        name,
-        version,
-        license_expression,
-        version_source,
-        properties,
-    );
-    let entries = native_input_entries(input_paths, native_inputs);
-
-    let archive_hashes: Vec<_> = entries
-        .iter()
-        .filter(|entry| entry["kind"] == "static-archive")
-        .filter_map(|entry| {
-            entry["sha256"]
-                .as_str()
-                .map(|hash| json!({ "alg": "SHA-256", "content": hash }))
-        })
-        .collect();
-    if !archive_hashes.is_empty() {
-        component["hashes"] = json!(archive_hashes);
-    }
-
-    if let Some(list) = component["properties"].as_array_mut() {
-        for entry in entries {
-            if let (Some(path), Some(hash)) = (entry["path"].as_str(), entry["sha256"].as_str()) {
-                list.push(json!({ "name": "restream:nativeInput", "value": path }));
-                list.push(json!({
-                    "name": "restream:nativeInputSha256",
-                    "value": format!("{path}={hash}")
-                }));
-            }
-        }
-    }
-    component
-}
-
-fn native_input_entries<'a>(input_paths: &[&str], native_inputs: &'a [Value]) -> Vec<&'a Value> {
-    input_paths
-        .iter()
-        .filter_map(|path| {
-            native_inputs
-                .iter()
-                .find(|entry| entry["path"].as_str() == Some(*path))
-        })
-        .collect()
-}
-
-fn component_ref(components: &[Value], name: &str) -> Option<String> {
-    components
-        .iter()
-        .find(|component| component["name"] == name)
-        .and_then(|component| component["bom-ref"].as_str())
-        .map(str::to_owned)
-}
-
 fn sbom_dependencies(
     application_ref: &str,
     components: &[Value],
@@ -164,28 +88,6 @@ fn sbom_dependencies(
         "ref": application_ref,
         "dependsOn": component_refs
     })];
-
-    for (name, depends_on) in [
-        ("libavformat", &["libavcodec", "libavutil"][..]),
-        (
-            "libavfilter",
-            &["libavcodec", "libavformat", "libavutil"][..],
-        ),
-        ("libavcodec", &["libavutil", "x264", "x265"][..]),
-        ("libswscale", &["libavutil"][..]),
-        ("libswresample", &["libavutil"][..]),
-    ] {
-        if let Some(reference) = component_ref(components, name) {
-            let refs: Vec<String> = depends_on
-                .iter()
-                .filter_map(|dependency| component_ref(components, dependency))
-                .collect();
-            dependencies.push(json!({
-                "ref": reference,
-                "dependsOn": refs
-            }));
-        }
-    }
 
     for dependency in rust_dependencies {
         let Some(reference) = dependency["bomRef"].as_str() else {
@@ -270,94 +172,6 @@ fn sqlite_runtime_info() -> (String, String) {
     )
 }
 
-fn native_build_inputs() -> Vec<Value> {
-    serde_json::from_str(NATIVE_BUILD_INPUTS_JSON).expect("embedded native input inventory")
-}
-
-fn ffmpeg_components(native_inputs: &[Value]) -> (Vec<Value>, String, String) {
-    // SAFETY: avcodec_configuration and avcodec_license are FFmpeg C API
-    // functions that return NUL-terminated static strings valid for the
-    // process lifetime. No ownership transfer; caller must not free.
-    let configuration = c_string(unsafe { ffmpeg_next::ffi::avcodec_configuration() });
-    // SAFETY: as above, a static NUL-terminated string.
-    let license_text = c_string(unsafe { ffmpeg_next::ffi::avcodec_license() });
-    let license_expression = if license_text.to_ascii_lowercase().contains("gpl") {
-        "GPL-2.0-or-later"
-    } else {
-        "LGPL-2.1-or-later"
-    };
-    let common_properties = || {
-        vec![
-            json!({ "name": "restream:ffmpegConfiguration", "value": configuration }),
-            json!({ "name": "restream:runtimeLicenseText", "value": license_text }),
-        ]
-    };
-
-    // SAFETY: All ffmpeg_next::ffi::*_version() functions are FFmpeg C API
-    // calls that return a u32 version integer. No pointer arguments, no
-    // memory allocation; they are pure functions callable from any context.
-    let components = unsafe {
-        vec![
-            native_component_with_inputs(
-                "libavcodec",
-                av_version(ffmpeg_next::ffi::avcodec_version()),
-                license_expression,
-                "runtime API",
-                common_properties(),
-                &["lib/libavcodec.a", "lib/pkgconfig/libavcodec.pc"],
-                native_inputs,
-            ),
-            native_component_with_inputs(
-                "libavformat",
-                av_version(ffmpeg_next::ffi::avformat_version()),
-                license_expression,
-                "runtime API",
-                common_properties(),
-                &["lib/libavformat.a", "lib/pkgconfig/libavformat.pc"],
-                native_inputs,
-            ),
-            native_component_with_inputs(
-                "libavfilter",
-                av_version(ffmpeg_next::ffi::avfilter_version()),
-                license_expression,
-                "runtime API",
-                common_properties(),
-                &["lib/libavfilter.a", "lib/pkgconfig/libavfilter.pc"],
-                native_inputs,
-            ),
-            native_component_with_inputs(
-                "libswscale",
-                av_version(ffmpeg_next::ffi::swscale_version()),
-                license_expression,
-                "runtime API",
-                common_properties(),
-                &["lib/libswscale.a", "lib/pkgconfig/libswscale.pc"],
-                native_inputs,
-            ),
-            native_component_with_inputs(
-                "libswresample",
-                av_version(ffmpeg_next::ffi::swresample_version()),
-                license_expression,
-                "runtime API",
-                common_properties(),
-                &["lib/libswresample.a", "lib/pkgconfig/libswresample.pc"],
-                native_inputs,
-            ),
-            native_component_with_inputs(
-                "libavutil",
-                av_version(ffmpeg_next::ffi::avutil_version()),
-                license_expression,
-                "runtime API",
-                common_properties(),
-                &["lib/libavutil.a", "lib/pkgconfig/libavutil.pc"],
-                native_inputs,
-            ),
-        ]
-    };
-
-    (components, configuration, license_text)
-}
-
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 fn libc_component() -> Option<Value> {
     // SAFETY: gnu_get_libc_version is a glibc extension returning a
@@ -382,19 +196,13 @@ fn libc_component() -> Option<Value> {
 }
 
 pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
-    let native_inputs = native_build_inputs();
     let (sqlite_version, sqlite_source_id) = sqlite_runtime_info();
     let srt_version = crate::media::srt::linked_srt_version();
-    let x264_version = env!("RESTREAM_BUILD_X264_VERSION").to_string();
-    let x265_version = env!("RESTREAM_BUILD_X265_VERSION").to_string();
-    let (mut native_components, ffmpeg_configuration, ffmpeg_license) =
-        ffmpeg_components(&native_inputs);
-
-    native_components.extend([
-        native_component_with_inputs(
+    let mut native_components = vec![
+        native_component(
             "srt-rs",
             srt_version.clone(),
-            "MIT",
+            "Apache-2.0",
             "runtime API",
             vec![
                 json!({
@@ -406,8 +214,6 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
                     "value": env!("RESTREAM_BUILD_SRT_VERSION")
                 }),
             ],
-            &[],
-            &native_inputs,
         ),
         native_component(
             "SQLite",
@@ -419,42 +225,11 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
                 "value": sqlite_source_id
             })],
         ),
-        native_component_with_inputs(
-            "x264",
-            x264_version.clone(),
-            "GPL-2.0-or-later",
-            "linked pkg-config metadata at build time",
-            vec![json!({
-                "name": "restream:runtimeDispatch",
-                "value": "x86 assembly enabled"
-            })],
-            &["lib/libx264.a", "lib/pkgconfig/x264.pc"],
-            &native_inputs,
-        ),
-        native_component_with_inputs(
-            "x265",
-            x265_version.clone(),
-            "GPL-2.0-or-later",
-            "linked pkg-config metadata at build time",
-            vec![json!({
-                "name": "restream:runtimeDispatch",
-                "value": "x86 assembly enabled"
-            })],
-            &["lib/libx265.a", "lib/pkgconfig/x265.pc"],
-            &native_inputs,
-        ),
-        native_component(
-            "libstdc++",
-            env!("RESTREAM_GCC_RUNTIME_VERSION").to_string(),
-            "GPL-3.0-or-later WITH GCC-exception-3.1",
-            "C++ compiler used for linking",
-            Vec::new(),
-        ),
         native_component(
             "libgcc",
             env!("RESTREAM_GCC_RUNTIME_VERSION").to_string(),
             "GPL-3.0-or-later WITH GCC-exception-3.1",
-            "C/C++ compiler used for linking",
+            "C compiler used for linking",
             Vec::new(),
         ),
         native_component(
@@ -464,7 +239,7 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
             "rustc toolchain used for linking",
             Vec::new(),
         ),
-    ]);
+    ];
     if let Some(component) = libc_component() {
         native_components.push(component);
     }
@@ -495,10 +270,6 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
         "properties": [
             { "name": "restream:gitCommit", "value": env!("GIT_COMMIT_HASH") },
             {
-                "name": "restream:nativeBuildId",
-                "value": env!("RESTREAM_NATIVE_BUILD_ID")
-            },
-            {
                 "name": "restream:licenseFile",
                 "value": env!("CARGO_PKG_LICENSE_FILE")
             }
@@ -526,22 +297,17 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
             "properties": [
                 { "name": "restream:generatedBy", "value": "running process" },
                 { "name": "restream:rustDependencySource", "value": "resolved normal Cargo dependency closure" },
-                { "name": "restream:gitCommit", "value": env!("GIT_COMMIT_HASH") },
-                { "name": "restream:nativeBuildId", "value": env!("RESTREAM_NATIVE_BUILD_ID") }
+                { "name": "restream:gitCommit", "value": env!("GIT_COMMIT_HASH") }
             ]
         },
         "components": components,
         "dependencies": dependencies
     });
 
-    // SAFETY: av_version_info returns a NUL-terminated static string
-    // owned by FFmpeg, valid for the process lifetime.
-    let ffmpeg_version = c_string(unsafe { ffmpeg_next::ffi::av_version_info() });
     let status = json!({
         "restream": {
             "version": env!("CARGO_PKG_VERSION"),
             "commit": env!("GIT_COMMIT_HASH"),
-            "nativeBuildId": env!("RESTREAM_NATIVE_BUILD_ID"),
             "buildTimestamp": env!("RESTREAM_BUILD_TIMESTAMP"),
         },
         "toolchain": {
@@ -551,32 +317,16 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
             "gccRuntime": env!("RESTREAM_GCC_RUNTIME_VERSION"),
         },
         "nativeLibraries": {
-            "ffmpeg": {
-                "version": ffmpeg_version,
-                "configuration": ffmpeg_configuration,
-                "license": ffmpeg_license,
-                "x86Assembly": ffmpeg_configuration.contains("--enable-x86asm"),
-            },
             "srt": {
                 "version": srt_version,
                 "buildVersion": env!("RESTREAM_BUILD_SRT_VERSION"),
-                "license": "MIT",
+                "license": "Apache-2.0",
                 "bondingAvailable": bonding_available,
             },
             "sqlite": {
                 "version": sqlite_version,
                 "sourceId": sqlite_source_id,
                 "license": "blessing",
-            },
-            "x264": {
-                "version": x264_version,
-                "license": "GPL-2.0-or-later",
-                "versionSource": "linked pkg-config metadata at build time",
-            },
-            "x265": {
-                "version": x265_version,
-                "license": "GPL-2.0-or-later",
-                "versionSource": "linked pkg-config metadata at build time",
             }
         },
         "sbom": {
@@ -645,8 +395,8 @@ mod tests {
                     .is_some_and(|properties| properties.iter().any(|property| property
                         .get("name")
                         .and_then(|name| name.as_str())
-                        == Some("restream:ffmpegConfiguration"))))),
-            "runtime SBOM should expose native FFmpeg configuration provenance"
+                        == Some("restream:sqliteSourceId"))))),
+            "runtime SBOM should expose the linked SQLite source id"
         );
     }
 }

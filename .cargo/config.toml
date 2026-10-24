@@ -1,8 +1,8 @@
 [alias]
 xtask = "run --quiet --package xtask --"
 
-# Leave one CPU free so builds don't starve the desktop or a live run; static
-# FFmpeg links are memory-heavy. Override with: CARGO_BUILD_JOBS=N cargo build
+# Leave one CPU free so builds don't starve the desktop or a live run.
+# Override with: CARGO_BUILD_JOBS=N cargo build
 [build]
 jobs = -1
 
@@ -11,9 +11,3 @@ jobs = -1
 linker = "clang"
 rustflags = ["-C", "link-arg=-fuse-ld=mold", "-C", "link-arg=-Wl,-z,relro,-z,now"]
 
-# Point ffmpeg-sys-next's build.rs at the repo-managed static prefix so it
-# detects the correct FFmpeg version (≥ 8.0) and emits the right cfg flags.
-# Our build.rs handles actual linking; the sys crate's duplicate link
-# directives are harmless.
-[env]
-FFMPEG_DIR = { value = ".local/build/static/prefix", relative = true, force = false }

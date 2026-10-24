@@ -36,12 +36,9 @@ case "$profile" in
         groups=(harness-runtime)
         bootstrap_mediamtx=1
         ;;
-    native-build)
-        groups=(rust-build native-build)
-        ;;
     *)
         echo "ci-system-deps: unknown profile '$profile'" >&2
-        echo "expected one of: base, build, media, browser, browser-build, live, live-build, harness-runtime, live-runtime, native-build" >&2
+        echo "expected one of: base, build, media, browser, browser-build, live, live-build, harness-runtime, live-runtime" >&2
         exit 2
         ;;
 esac

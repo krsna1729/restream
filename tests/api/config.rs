@@ -191,31 +191,6 @@ async fn config_patch_recording_settings_persists() {
 }
 
 #[tokio::test]
-async fn config_patch_accepts_the_retired_backend_policy_field() {
-    // Dashboards saved before the in-process FFmpeg backends were removed
-    // still send `backendPolicy`; the patch succeeds and the field is gone.
-    let (app, _pool) = test_app().await;
-    let cookie = login(&app).await;
-
-    let resp = app
-        .clone()
-        .oneshot(auth_req(
-            "PATCH",
-            "/api/v1/settings",
-            &cookie,
-            Some(
-                r#"{"serverName":"Retired policy","backendPolicy":{"internalVideoPresets":true}}"#,
-            ),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let json = body_json(resp).await;
-    assert_eq!(json["serverName"], "Retired policy");
-    assert!(json.get("backendPolicy").is_none());
-}
-
-#[tokio::test]
 async fn config_patch_ingest_security_persists() {
     let (app, pool) = test_app().await;
     let cookie = login(&app).await;

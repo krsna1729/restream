@@ -25,7 +25,7 @@ skills; load the skill for the area you touch.
 - If overlapping work is visible in `git status`, diffs, or file contents, use hunk-based edits and hunk-based git operations. Do not overwrite, reformat, stage, or revert whole files unless explicitly asked.
 - Add or update tests for behavior changes.
 - No internal or external failure path may crash the engine; isolate faults and surface errors.
-- Anywhere in `src/`: no blocking or per-packet work on Tokio workers or Compio Owner threads; OS-thread entry points that cross FFmpeg/FFI `catch_unwind`; SRT sockets and `PeerTable` stay on Owner threads (details: [media-pipeline](docs/agent-guidance/skills/media-pipeline/SKILL.md)).
+- Anywhere in `src/`: no blocking or per-packet work on Tokio workers or Compio Owner threads; OS-thread entry points `catch_unwind`; codecs run only in FFmpeg child processes; SRT sockets and `PeerTable` stay on Owner threads (details: [media-pipeline](docs/agent-guidance/skills/media-pipeline/SKILL.md)).
 - Update docs when changing commands, configuration, architecture, protocols, or user-visible behavior.
 - Prefer targeted fixes over rewrites. Add abstractions only when they remove real complexity.
 
@@ -124,7 +124,7 @@ in on demand, and verify with the narrowest gate first.
 ## Build and Worktree Safety
 
 **Never run Cargo builds, tests, checks, clippy, or benchmarks while a live pipeline is running.**
-Static FFmpeg libraries can push a small host into OOM territory.
+Builds are memory heavy and can push a small host into OOM territory.
 
 Before heavy builds, check for live media; nothing else serializes builds
 against live runs or other worktrees:
@@ -141,8 +141,7 @@ pgrep -a -x cargo
   name does not establish ownership. Defer heavy work while other media runs.
 - Prefer `scripts/agent/worktree.sh <id>` over manual setup; use one worktree per agent or task.
 - Treat `target/`, `.cargo/`, and `node_modules/` as copied caches owned by the destination worktree; do not point multiple worktrees at one live `target/`.
-- Use `--no-share-static` when touching native or linkage-related inputs such as `build.rs`, Docker/static build scripts, or native `test/*.c` helpers.
-- Use `.agent-state/setup.env` as the source of truth for `WORK_ROOT` and the shared static root.
+- Use `.agent-state/setup.env` as the source of truth for `WORK_ROOT`.
 
 ## Testing
 

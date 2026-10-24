@@ -16,8 +16,8 @@ usage() {
     cat <<'EOF'
 Usage: scripts/release/prepare-build-tree.sh
 
-Installs locked frontend dependencies when node_modules is absent, ensures the
-pinned native prefix exists, then builds generated public/ frontend assets so
+Installs locked frontend dependencies when node_modules is absent, then builds
+generated public/ frontend assets so
 release/harness builds can embed them from a clean checkout.
 
 Environment:
@@ -61,19 +61,6 @@ case "$npm_ci_mode" in
         exit 2
         ;;
 esac
-
-native_state_ready() {
-    [[ -f .local/build/static/env.sh ]] &&
-        [[ -f .local/build/static/prefix/lib/libavcodec.a ]] &&
-        [[ -f .local/build/static/prefix/lib/libavformat.a ]] &&
-        [[ -x .local/build/static/prefix/bin/restream-ffmpeg-capabilities ]]
-}
-
-if native_state_ready; then
-    echo "prepare-build-tree: reusing existing native prefix"
-else
-    scripts/build/native-deps.sh
-fi
 
 frontend_assets_exist() {
     [[ -s public/index.html ]] &&

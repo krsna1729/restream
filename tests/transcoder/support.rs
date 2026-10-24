@@ -1,22 +1,13 @@
-use std::sync::{Arc, Once};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use restream::media::packet::MediaPacket;
 use restream::media::ring_buffer::Reader;
 
-static FFMPEG_TEST_LOGGING: Once = Once::new();
-
 pub(super) fn load_fixture() -> Vec<u8> {
-    configure_ffmpeg_test_logging();
     let path =
         restream::test_fixtures::canonical_h264_ts_fixture().unwrap_or_else(|e| panic!("{e}"));
     std::fs::read(&path).unwrap_or_else(|e| panic!("fixture missing at {}: {e}", path.display()))
-}
-
-pub(super) fn configure_ffmpeg_test_logging() {
-    FFMPEG_TEST_LOGGING.call_once(|| {
-        ffmpeg_next::util::log::set_level(ffmpeg_next::util::log::Level::Warning);
-    });
 }
 
 pub(super) fn load_primary_transport_packets(

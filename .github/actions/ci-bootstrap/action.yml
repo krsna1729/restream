@@ -18,10 +18,6 @@ inputs:
     description: Optional system dependency profile to install.
     required: false
     default: ""
-  native_prefix:
-    description: Whether to restore the cached native prefix.
-    required: false
-    default: "false"
   rust_cache:
     description: Whether to restore the Rust cache.
     required: false
@@ -55,9 +51,6 @@ runs:
       uses: ./.github/actions/system-deps
       with:
         profile: ${{ inputs.system_deps_profile }}
-
-    - if: ${{ inputs.native_prefix == 'true' }}
-      uses: ./.github/actions/native-prefix
 
     - if: ${{ inputs.rust_cache == 'true' }}
       uses: ./.github/actions/rust-cache

@@ -78,35 +78,15 @@ fn release_policy_metadata_is_declared_and_enforced() {
     assert!(cargo_toml.contains("repository = "));
     assert!(!cargo_toml.contains("release_max_level_"));
 
+    // Media codecs run only in external FFmpeg processes: the engine links no
+    // native media library.
     let build_rs = include_str!("../build.rs");
-    assert!(build_rs.contains("PKG_CONFIG_LIBDIR"));
-    assert!(build_rs.contains("remove_var(\"PKG_CONFIG_PATH\")"));
-    assert!(build_rs.contains("RESTREAM_NATIVE_BUILD_ID"));
-    assert!(build_rs.contains("native_build_id(&prefix)"));
-    assert!(build_rs.contains("embed_native_input_inventory(&prefix)"));
-    assert!(build_rs.contains("native-build-inputs.json"));
+    assert!(!cargo_toml.contains("ffmpeg-next"));
+    assert!(!cargo_toml.contains("ffmpeg-sys"));
+    assert!(!build_rs.contains("rustc-link-arg"));
+    assert!(!build_rs.contains("rustc-link-lib"));
     assert!(build_rs.contains("\"features\": features"));
     assert!(build_rs.contains("\"dependencyRefs\": dependency_refs"));
-    assert!(build_rs.contains("REQUIRED_STATIC_ARCHIVES"));
-    assert!(build_rs.contains("check_required_static_inputs(&prefix)"));
-    assert!(build_rs.contains("assert_pinned_paths(package, prefix, &library.link_paths)"));
-    assert!(build_rs.contains("assert_pinned_paths(package, prefix, &library.include_paths)"));
-    assert!(build_rs.contains("cargo:rustc-link-arg=-Wl,-Bdynamic"));
-    for native_input in [
-        "libavcodec.a",
-        "libavformat.a",
-        "libavfilter.a",
-        "libswscale.a",
-        "libswresample.a",
-        "libavutil.a",
-        "libx264.a",
-        "libx265.a",
-    ] {
-        assert!(
-            build_rs.contains(native_input),
-            "build.rs missing native input policy for {native_input}"
-        );
-    }
     // srt-rs is pinned to one git revision for both crates, and the release
     // attribution names that same revision. Checked by value, not by a copied
     // SHA, so a repin only has to keep the two files consistent.
@@ -149,24 +129,6 @@ fn release_policy_metadata_is_declared_and_enforced() {
     let sbom_workflow = include_str!("../.github/workflows/sbom-security.yml");
     assert!(sbom_workflow.contains("cargo deny check advisories licenses bans sources"));
 
-    let native_build = include_str!("../scripts/build/native-deps.sh");
-    assert!(native_build.contains("scripts/build/native/native-inputs.lock"));
-    assert!(native_build.contains("require_source_commit \"FFmpeg\""));
-    assert!(native_build.contains("reset_cmake_build_if_moved"));
-    assert!(native_build.contains("RESTREAM_VERIFY_NATIVE_INPUT_LOCK_ONLY"));
-
-    let native_lock = include_str!("../scripts/build/native/native-inputs.lock");
-    for required in [
-        "RESTREAM_LOCK_FFMPEG_COMMIT",
-        "RESTREAM_LOCK_X264_COMMIT",
-        "RESTREAM_LOCK_X265_COMMIT",
-    ] {
-        assert!(
-            native_lock.contains(required),
-            "native input lock must declare {required}"
-        );
-    }
-
     let license = include_str!("../LICENSE.md");
     assert!(license.contains("MIT License"));
     assert!(license.contains("Permission is hereby granted"));
@@ -176,8 +138,6 @@ fn release_policy_metadata_is_declared_and_enforced() {
         "env!(\"RESTREAM_BUILD_TIMESTAMP\")",
         "restream:enabledFeatures",
         "dependencyRefs",
-        "restream:nativeInputSha256",
-        "restream:nativeBuildId",
         "\"dependencies\": dependencies",
     ] {
         assert!(
@@ -665,7 +625,6 @@ fn source_distribution_manifest_matches_declared_build_inputs() {
     for script in [
         "scripts/harness/run.sh",
         "crates/xtask/src/bins.rs",
-        "scripts/build/native-deps.sh",
         "scripts/dev/frontend/prepare-assets.mjs",
     ] {
         assert!(

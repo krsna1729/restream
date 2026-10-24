@@ -35,7 +35,7 @@ The diagram shows how to pick the proof for a change.
 
 | Bug | Example | Proof |
 |---|---|---|
-| Lost wake: a task blocks forever after cancel or close | AVIO reader waits after the writer closed | Loom |
+| Lost wake: a task blocks forever after cancel or close | The recording queue reader waits after the writer closed | Loom |
 | Lost publication on a full channel | a feed's last publication stranded behind a full command queue | Loom plus controlled-race unit test |
 | Cancelled-stage reuse: registry returns a dead shared stage | transcoder stage replaced while a reader registers | Loom (`*_stage_loom`) |
 | Stale completion clobbers a replacement | old ingest disconnect poisons the new attempt | unit test (`stale_*_cannot_*`) |
@@ -57,7 +57,7 @@ The gates run every model in `LOOM_TARGETS`
 
 | Model | Proves |
 |---|---|
-| `avio_loom` | close, wake and backpressure on the blocking AVIO queue |
+| `byte_queue_loom` | close, wake and backpressure on the recording byte queue |
 | `egress_feed_wake_loom` | queued wakes coalesce, heads are independent, the full-channel retry bit is never lost (`AcqRel` swaps; the consumer clears it before reading the head) |
 | `input_selection_loom` | multi-input gate selection |
 | `moq_origin_loom` | the MoQ origin viewer cap never admits past its maximum and every release frees a slot; the ring-to-pump wake over a one-slot channel loses no publication |
@@ -70,9 +70,9 @@ The gates run every model in `LOOM_TARGETS`
 Build and run one model the way the gate does:
 
 ```sh
-cargo rustc --test avio_loom --message-format=json-render-diagnostics -- --cfg loom
+cargo rustc --test byte_queue_loom --message-format=json-render-diagnostics -- --cfg loom
 # then run the test executable named in the last compiler-artifact message:
-target/debug/deps/avio_loom-<hash> --nocapture
+target/debug/deps/byte_queue_loom-<hash> --nocapture
 ```
 
 `cargo xtask concurrency fast` does both steps for every model. Add a loom
@@ -142,7 +142,7 @@ equal or stronger replacement in the same change. Names marked *gate* run in
 | Egress cursor priming (`src/media/egress/visit_tests.rs`, *gate*) | `first_visit_primes_the_cursor_to_the_latest_sync_point`, `first_visit_primes_to_the_live_edge_without_a_sync_point`, `first_visit_primes_the_cursor_epoch_from_the_feed` |
 | SRT egress Owners (`src/media/egress/backends/srt/owner_set.rs`) | `runtime_and_owners_live_and_die_on_the_shard_thread`, `many_ipv4_outputs_share_one_owner_and_one_caller_socket`, `ipv4_and_ipv6_outputs_coexist_on_two_family_owners`, `mixed_family_bond_is_rejected_without_partial_admission` |
 | SRT egress scheduling (`src/media/egress/backends/srt/tests/`) | `stale_queued_admission_never_attaches_to_a_replacement_generation`, `late_dns_for_an_old_generation_is_ignored`, `one_ready_batch_is_one_owner_service_pass`, `a_wake_examines_a_bounded_slice_of_parked_leaves`, `command_wakes_a_parked_compio_wait_promptly`, `owner_protocol_deadline_bounds_the_park`, `shutdown_under_active_tx_reaches_owner_quiescence` |
-| AVIO (`src/media/avio.rs`, *gate*) | `avio_loom`, `media::avio::tests`, `write_batch_round_trips_random_chunks` |
+| Recording byte queue (`src/media/byte_queue.rs`, *gate*) | `byte_queue_loom`, `media::byte_queue::tests`, `write_batch_round_trips_random_chunks` |
 | Transcoder (*gate*) | `replacement_video_stage_preserves_codec_hint_and_audio_tracks` (`tests/transcoder.rs`); `external_output_stream_idx_routes_known_tracks_without_aliasing`, `proptest_external_output_dts_routing_preserves_per_stream_monotonicity`, `external_720p_stage_emits_live_packets_for_h264_marker_fixture`, `external_1080p_stage_remuxes_marker_fixture_with_monotone_dts` |
 | HLS (*gate*) | `hls_segment_boundaries_preserve_non_decreasing_dts_per_stream` |
 | SRT ingress Owner (`src/media/srt/ingress_*`, *gate* via `media::srt::ingress_live_tests`, `ingress_bridge_tests`, `ingress_admission`) | `read_play_sends_through_the_owner_and_target_deletion_disconnects`, `asynchronous_rejection_disconnects_the_owner_peer`, `fragmented_publisher_panic_retires_tail_without_stalling_an_existing_sibling`, `owner_stamps_receive_quality_and_stops_sampling_retired_peers`, `publisher_receive_quality_reaches_the_ingest_snapshot`, `one_ingress_owner_thread_serves_many_peers`, `owner_and_runtime_are_not_send`, `two_owners_share_the_port_and_each_session_command_reaches_its_owner` |

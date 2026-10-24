@@ -1,8 +1,9 @@
 # Release compliance
 
 Every distributed binary or container needs provenance, vulnerability,
-license, source-availability and startup evidence. Restream links Rust
-crates with native media libraries, so the native licenses matter. The
+license, source-availability and startup evidence. The engine binary links
+Rust crates and a few native libraries; container images also carry a GPL
+FFmpeg executable, so both sets of licenses matter. The
 scripts below enforce these properties; this page states them.
 
 ## Contents
@@ -17,9 +18,8 @@ scripts below enforce these properties; this page states them.
 
 A release must:
 
-- build from checked-in Rust, frontend and native input locks;
-- keep the source commit, build timestamp, native build identity
-  (`restream.nativeBuildId`) and full-provenance runtime SBOM;
+- build from checked-in Rust and frontend locks;
+- keep the source commit, build timestamp and full-provenance runtime SBOM;
 - scan Rust dependencies and the SBOM under the current policy;
 - prove the host binary starts outside the source tree and serves its
   embedded frontend;
@@ -43,24 +43,23 @@ SBOMs and packages are build outputs; do not commit them.
 
 ## Native licenses
 
-The runtime SBOM lists the native libraries in the shipped binary. Depending
-on the build, that includes FFmpeg, x264, x265, SRT, Mbed TLS, SQLite,
-compiler runtimes, glibc and the Rust standard library. Native input pins
-live in `scripts/build/native/native-inputs.lock`.
+The runtime SBOM lists the native components in the shipped binary:
+srt-rs, SQLite, libgcc, the Rust standard library and glibc. The binary links
+no FFmpeg, x264 or x265 code.
 
 An SBOM is inventory and scanner input. It does not replace license texts,
 attribution, copyright notices or source-availability obligations.
 
-x264 and x265 are `GPL-2.0-or-later`. FFmpeg's effective license depends on
-its configuration. Before external distribution, confirm that the exact
-build meets all GPL, LGPL, MPL and compiler-runtime obligations, or use a
-reviewed compatible build. See
+Container images ship the BtbN GPL FFmpeg build as separate `ffmpeg` and
+`ffprobe` executables; `restream ffmpeg-fetch` installs the same build on a
+host. Before external distribution, confirm that the image meets that
+build's GPL obligations and the compiler-runtime obligations of the binary. See
 [Source distribution](source-distribution.md#binary-and-container-distributions).
 
 ## Application license
 
-Restream is MIT-licensed. That does not replace the obligations of native
-components. The
+Restream is MIT-licensed. That does not replace the obligations of its
+native components or of the FFmpeg executable shipped beside it. The
 [third-party component manifest](../distribution/THIRD_PARTY_COMPONENTS.md)
 is the notice-chain entry point.
 

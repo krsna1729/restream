@@ -6,13 +6,10 @@ use restream::media::engine::MediaEngine;
 use restream::media::packet::{MediaType, PayloadFormat};
 use restream::media::ring_buffer::Reader;
 
-use crate::support::{
-    collect_packets_with_deadline, configure_ffmpeg_test_logging, load_primary_transport_packets,
-};
+use crate::support::{collect_packets_with_deadline, load_primary_transport_packets};
 
 #[test]
 fn rtmp_shaped_hevc_packets_drive_h264_edge_stage() {
-    configure_ffmpeg_test_logging();
     let _ = tracing_subscriber::fmt::try_init();
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     rt.block_on(async {

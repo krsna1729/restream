@@ -1,5 +1,5 @@
 use super::*;
-use crate::media::avio::MemoryQueue;
+use crate::media::byte_queue::MemoryQueue;
 use crate::media::mpegts::TsDemuxer;
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
 use std::sync::Arc;

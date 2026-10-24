@@ -3,49 +3,42 @@
 # Multi-stage build that keeps the build logic in repo scripts and uses Docker
 # layers only for cache boundaries:
 #
-#   1. native-deps  → OS packages, pinned Rust toolchain, static C/C++ prefix
+#   1. toolchain    → OS packages and the pinned Rust toolchain
 #   2. rust-build   → Cargo dependency warm-up, then the real application build
 #   3. runtime tree  → the shipped binaries
 #   4. runtime       → a distroless production image
 #   5. harness       → a minimal Ubuntu image for live protocol validation
 #
-# The native/static artifacts come from scripts/build/native-deps.sh, the Rust
-# toolchain bootstrap comes from scripts/dev/bootstrap.sh, and the native
-# application build comes from scripts/build/app-native.sh.
+# The Rust toolchain bootstrap comes from scripts/dev/bootstrap.sh and the
+# application build from scripts/build/app-native.sh. The engine links no media
+# library: FFmpeg is a separate executable (the ffmpeg-fetch stage below).
 
-# ── Stage 1: native-deps ─────────────────────────────────────────────────────
+# ── Stage 1: toolchain ───────────────────────────────────────────────────────
 #
-# Everything here changes rarely and is expensive to rebuild:
+# Everything here changes rarely:
 #   - fresh-Ubuntu bootstrap packages
 #   - pinned Rust toolchain
-#   - static SRT/FFmpeg/x264/x265 prefix under .local/build/static/
 #
 # Docker intentionally does not duplicate package or toolchain logic here.
 # scripts/dev/bootstrap.sh is the source of truth for what a fresh Ubuntu 24.04
 # machine needs, and Docker consumes that script directly.
-FROM ubuntu:24.04 AS native-deps
+FROM ubuntu:24.04 AS toolchain
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /workspace
 ENV RESTREAM_REPO_ROOT=/workspace
 
-# Only copy inputs that affect bootstrap/native compilation so app source edits
-# do not invalidate this expensive stage.
+# Only copy inputs that affect bootstrap so app source edits do not invalidate
+# this stage.
 COPY package.json package-lock.json ./
 COPY rust-toolchain.toml rust-toolchain.toml
 COPY scripts/lib/ scripts/lib/
 # Keep this stage script-aware but not script-global: copying all of scripts/
-# would make unrelated release/harness/frontend helper edits rebuild the static
-# native prefix. Add only bootstrap/native-build owners here.
+# would make unrelated release/harness/frontend helper edits rebuild the
+# toolchain. Add only bootstrap owners here.
 COPY scripts/dev/bootstrap.sh scripts/dev/harness-host-prereqs.sh scripts/dev/install-git-hooks.sh scripts/dev/
-COPY scripts/build/native-deps.sh scripts/build/
-COPY scripts/build/native/ scripts/build/native/
-COPY scripts/native/ scripts/native/
 COPY .githooks/ .githooks/
-COPY test/native/srt-bond-client.c test/native/srt-bond-client.c
-COPY test/native/srt-bond-server.c test/native/srt-bond-server.c
-COPY test/native/ffmpeg-capabilities.c test/native/ffmpeg-capabilities.c
 
 # bootstrap owns the fresh-Ubuntu dependency contract, including Node/npm
 # plus npm ci for the committed frontend toolchain dependencies.
@@ -58,7 +51,7 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 # Frontend edits should have their own cache boundary. This stage reuses the
 # Node/npm + node_modules state prepared by bootstrap.sh, then rebuilds the
 # generated browser assets under public/.
-FROM native-deps AS frontend-build
+FROM toolchain AS frontend-build
 
 WORKDIR /workspace
 
@@ -76,9 +69,9 @@ RUN npm run build:frontend
 #   - real src/ + built public/ assets         → relink just the app crate
 #
 # scripts/build/app-native.sh is used for both so Docker never re-implements the
-# static-link flags or verification logic.
+# linkage verification.
 
-FROM native-deps AS rust-build
+FROM toolchain AS rust-build
 
 WORKDIR /workspace
 # Release provenance is supplied by the caller because `.git/` is deliberately
@@ -95,7 +88,7 @@ ENV RESTREAM_BUILD_GIT_COMMIT=${RESTREAM_BUILD_GIT_COMMIT} \
 COPY scripts/build/app-native.sh scripts/build/emit-sbom.sh scripts/build/
 
 # Warm the release dependency graph without copying the real application code.
-# The dummy main compiles the full dependency set into .local/build/static/cargo-target
+# The dummy main compiles the full dependency set into target/
 # so ordinary src/ edits only need to rebuild our crate in the next layer.
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY .cargo/ .cargo/
@@ -138,7 +131,7 @@ RUN cargo xtask build-bench
 
 # Seed the state directory as a copyable path; WORKDIR alone did not make it
 # writable by UID 1000 in rootless container engines.
-FROM native-deps AS runtime-state
+FROM toolchain AS runtime-state
 RUN mkdir -p /restream-state && touch /restream-state/.keep
 
 # FFmpeg is not bundled in the binary; images carry the same BtbN build that

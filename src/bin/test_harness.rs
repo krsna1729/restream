@@ -210,17 +210,13 @@ fn main() {
     runtime.block_on(async {
         if let Err(error) = maybe_reexec_in_port_namespace() {
             eprintln!("test harness failed: {error}");
-            // SAFETY: _exit(2) only ends the process; skipping destructors and atexit is the
-            // point here.
-            unsafe { libc::_exit(1) };
+            std::process::exit(1);
         }
         if let Err(error) = run().await {
             eprintln!("test harness failed: {error}");
-            // Native FFmpeg/SRT worker threads can still be alive on a failed
-            // test. Avoid process-global C teardown while those threads exist.
-            // SAFETY: _exit(2) only ends the process; skipping destructors and atexit is the
-            // point here.
-            unsafe { libc::_exit(1) };
+            // Exit here rather than drop the runtime: a failed run can leave
+            // blocking tasks the runtime's drop would wait on.
+            std::process::exit(1);
         }
     });
 }
@@ -302,13 +298,9 @@ async fn run() -> Result<(), String> {
                 println!("{}", serde_json::to_string_pretty(&value).unwrap());
             }
             println!("artifact={}", path.display());
-            // Skip runtime teardown — OS threads holding FFmpeg/SRT C contexts
-            // race with global cleanup and cause spurious segfaults on exit.
-            // Use _exit to also skip atexit handlers (FFmpeg codec deregistration
-            // can deadlock with OS threads).
-            // SAFETY: _exit(2) only ends the process; skipping destructors and atexit is the
-            // point here.
-            unsafe { libc::_exit(0) };
+            // Exit without dropping the runtime, which would wait on the
+            // engine's still-running blocking tasks and OS threads.
+            std::process::exit(0);
         }
         Err(error) => Err(error),
     }

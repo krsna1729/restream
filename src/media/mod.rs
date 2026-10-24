@@ -9,7 +9,7 @@
 
 pub mod audio_router;
 #[forbid(unsafe_code)]
-pub mod avio;
+pub mod byte_queue;
 #[forbid(unsafe_code)]
 pub mod codec;
 pub mod egress;

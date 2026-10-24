@@ -1,10 +1,9 @@
-//! The FFmpeg executable for subprocess work: external transcodes, subprocess
-//! file ingest and recording remux.
+//! The FFmpeg and ffprobe executables. The engine links no codec library: all
+//! media decoding and encoding (transcodes, file ingest, recording remux,
+//! posters, media analysis, picture and sound checks) runs in these processes.
 //!
 //! Resolution order: `FFMPEG_BIN_PATH` (config, else environment), then the
-//! copy installed by `restream ffmpeg-fetch`, then `ffmpeg` on `PATH`. The
-//! in-process FFmpeg libraries are linked at build time and do not use this.
-//! A missing executable never stops the server; only FFmpeg-backed stages
+//! copy installed by `restream ffmpeg-fetch`, then `ffmpeg` on `PATH`. A missing executable never stops the server; only FFmpeg-backed stages
 //! fail, and startup logs how to fix it.
 
 use sha2::{Digest, Sha256};

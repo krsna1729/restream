@@ -770,7 +770,7 @@ history by those fields, not by message text.
 ### Invariants
 
 - No `println!` or `eprintln!` in `src/`; crate lints enforce this.
-- No logging in packet loops in `ring_buffer.rs` or `avio.rs`.
+- No logging in packet loops in `ring_buffer.rs` or `byte_queue.rs`.
 - Callsites never block on SQLite or SSE consumers.
 - SSE publishes only committed rows with a stable ID.
 - The file writer guard outlives every task that can log.
@@ -784,7 +784,7 @@ history by those fields, not by message text.
   counters do not prove what a receiver got.
 - `RingBuffer::fill_and_capacity()` reports occupancy from the slowest live
   reader, capped at capacity.
-- `MemoryQueue` (`src/media/avio.rs`) tracks high-water bytes and blocked
+- `MemoryQueue` (`src/media/byte_queue.rs`) tracks high-water bytes and blocked
   writes internally, but no API or graph snapshot exposes them.
 - HLS and recording share the TS packet feeder. An active task or token does
   not prove those mux paths are healthy.

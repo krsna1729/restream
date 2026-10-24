@@ -29,7 +29,6 @@ jobs:
       - uses: ./.github/actions/ci-bootstrap
         with:
           system_deps_profile: base
-          native_prefix: 'true'
           rust_cache: 'true'
 
       - name: Build bench binary for SBOM scan

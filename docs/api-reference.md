@@ -1409,19 +1409,19 @@ addStages, ratedBy, ingest, calibration, retryPolicy, baseline, projected }`.
 
 ```json
 {
-  "restream": { "version": "0.1.0", "commit": "abc558b", "nativeBuildId": "..." },
+  "restream": { "version": "0.1.0", "commit": "abc558b", "buildTimestamp": "..." },
   "toolchain": { "rustc": "...", "target": "x86_64-unknown-linux-gnu", "llvm": "...", "gccRuntime": "..." },
-  "nativeLibraries": { "ffmpeg": {}, "srt": {}, "sqlite": {}, "x264": {}, "x265": {} },
+  "nativeLibraries": { "srt": {}, "sqlite": {} },
   "sbom": { "format": "CycloneDX", "specVersion": "1.5", "endpoint": "/api/v1/engine/sbom" },
   "os": { "platform": "linux", "arch": "x86_64", "cpu": { "modelName": "...", "logicalCpus": 20, "flags": [] } }
 }
 ```
 
-- Native versions come from the loaded library where it has a runtime API.
-  Where a library reports both `version` (runtime) and `buildVersion` (build
-  script), a mismatch is a packaging or linking problem. x264 and x265 have
-  no runtime version call, so their pkg-config versions are embedded at
-  build time and labeled so.
+- `nativeLibraries` lists the libraries linked into the engine. `srt`
+  reports `version` (runtime), `buildVersion` (build script), `license` and
+  `bondingAvailable`; a version mismatch is a packaging problem. `sqlite`
+  reports `version`, `sourceId` and `license`. FFmpeg is an external
+  executable, not a linked library, so it is not listed.
 - `os.cpu` is a debugging subset: model, core/thread topology,
   virtualization and the acceleration flags that explain codec throughput.
 
@@ -1430,9 +1430,9 @@ addStages, ratedBy, ingest, calibration, retryPolicy, baseline, projected }`.
 Content type `application/vnd.cyclonedx+json; version=1.5`. Contains the
 Restream component and build identity; every resolved normal Rust crate from
 the locked dependency graph (version, package URL, source, license); the
-FFmpeg libraries, the srt-rs core and Tokio transport, SQLite, x264, x265,
-glibc where it applies, Rust std, libstdc++ and libgcc; and SPDX license
-expressions or `NOASSERTION`. Development and benchmark dependencies are not
+native components srt-rs, SQLite, libgcc, the Rust standard library and
+glibc where it applies; and SPDX license expressions or `NOASSERTION`. The
+external FFmpeg executable is not part of the binary and is not listed. Development and benchmark dependencies are not
 included.
 
 ## Operator views

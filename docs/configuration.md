@@ -236,7 +236,7 @@ projected under 40% busy, a 5-minute dwell, and its last output leaving.
 | `RESTREAM_RING_CAPACITY` | `1024` packets | `64..=16384` | Source/ingest packet ring |
 | `RESTREAM_RING_HEADROOM_SECS` | `6.0` | `0.1..=60.0` | Seconds of packets a pipeline ring grows to hold once the stream's frame rate and audio tracks are known (`adapt_pipeline_ring`); never below `RESTREAM_RING_CAPACITY` or above 16384 |
 | `RESTREAM_TRANSCODER_RING_CAPACITY` | `512` packets | `64..=16384` | Transcoder output ring |
-| `RESTREAM_AVIO_QUEUE_CAPACITY` | `524288` | 64 KiB..=16 MiB | AVIO bridge queue (recording) |
+| `RESTREAM_RECORDING_QUEUE_CAPACITY` | `524288` | 64 KiB..=16 MiB | Recording byte queue between the TS feed and the writer |
 | `RESTREAM_EXTERNAL_FFMPEG_THREADS` | FFmpeg chooses | `u32` | Codec threads per external FFmpeg |
 | `RESTREAM_RECORDING_FFMPEG_THREADS` | FFmpeg chooses | `u32` | Threads for recording remux |
 | `RESTREAM_EXTERNAL_FFMPEG_PERMITS` | derived | `>= 1` | Concurrent external FFmpeg stages. Overrides the derivation below |
@@ -363,7 +363,8 @@ policy) is the supported way to partition CPUs. The runtime does not pin its
 own threads.
 
 Resolved Tokio sizing appears in `/api/v1/engine/health`. The Tokio knobs do
-not cap native threads made by FFmpeg or SQLite. Tokio threads are named
+not cap native threads made by SQLite or the OS threads that feed FFmpeg
+child processes. Tokio threads are named
 `restream-tokio`, separate from `srt-in-<port>`, `sqlx-sqlite-*` and other
 native threads.
 

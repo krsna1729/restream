@@ -296,7 +296,7 @@ fn is_lifecycle(file: &str) -> bool {
             "src/media/engine.rs",
             "src/media/srt.rs",
             "src/media/ts_chunk_ring.rs",
-            "src/media/avio.rs",
+            "src/media/byte_queue.rs",
             "src/media/recording.rs",
             "src/media/recording/*.rs",
             "src/media/external_transcoder.rs",

@@ -329,7 +329,7 @@ pub struct AppConfig {
     pub rtmp_stream_buffer_bytes: usize,
     pub rtmp_egress_chunk_size: u32,
     pub ffmpeg_threads: Option<u32>,
-    pub avio_capacity: usize,
+    pub recording_queue_capacity: usize,
     pub hls_min_segment_ms: f64,
     pub hls_segment_capacity_bytes: usize,
     pub hls_max_segments: usize,
@@ -663,7 +663,7 @@ impl Default for AppConfig {
             rtmp_stream_buffer_bytes: 8 * 1024 * 1024,
             rtmp_egress_chunk_size: 16 * 1024,
             ffmpeg_threads: None,
-            avio_capacity: 512 * 1024,
+            recording_queue_capacity: 512 * 1024,
             hls_min_segment_ms: 1.0,
             hls_segment_capacity_bytes: 8 * 1024 * 1024,
             hls_max_segments: 20,
@@ -743,7 +743,7 @@ impl AppConfig {
             env_u32("RESTREAM_RTMP_EGRESS_CHUNK_SIZE", 16 * 1024).clamp(128, 1024 * 1024);
         let ffmpeg_threads =
             env_var("RESTREAM_EXTERNAL_FFMPEG_THREADS").and_then(|v| v.parse::<u32>().ok());
-        let avio_capacity = env_usize("RESTREAM_AVIO_QUEUE_CAPACITY", 512 * 1024)
+        let recording_queue_capacity = env_usize("RESTREAM_RECORDING_QUEUE_CAPACITY", 512 * 1024)
             .clamp(64 * 1024, 16 * 1024 * 1024);
 
         let hls_min_segment_ms = env_u64("RESTREAM_HLS_MIN_SEGMENT_MS", 1000) as f64 / 1000.0;
@@ -853,7 +853,7 @@ impl AppConfig {
             rtmp_stream_buffer_bytes,
             rtmp_egress_chunk_size,
             ffmpeg_threads,
-            avio_capacity,
+            recording_queue_capacity,
             hls_min_segment_ms,
             hls_segment_capacity_bytes,
             hls_max_segments,
@@ -951,7 +951,7 @@ impl AppConfig {
                 "recordingThreads": self.recording_threads,
             },
             "buffers": {
-                "avioCapacity": self.avio_capacity,
+                "recordingQueueCapacity": self.recording_queue_capacity,
                 "hlsMinSegmentMs": self.hls_min_segment_ms,
                 "hlsSegmentCapacityBytes": self.hls_segment_capacity_bytes,
                 "hlsMaxSegments": self.hls_max_segments,

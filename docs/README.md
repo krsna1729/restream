@@ -70,7 +70,7 @@ page is one `git log -- <path>` away.
 - [Release compliance](release-compliance.md) and
   [source distribution](source-distribution.md): license and source
   obligations of the shipped bytes.
-- [FFmpeg versions](ffmpeg-versions.md): native media dependency selection.
+- [FFmpeg versions](ffmpeg-versions.md): the external FFmpeg executable and its version.
 - [Third-party components](../distribution/THIRD_PARTY_COMPONENTS.md) and the
   [Docker seccomp profile](../distribution/docker/README.md).
 - [MIT license](../LICENSE.md).

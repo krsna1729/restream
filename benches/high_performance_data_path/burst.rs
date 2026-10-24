@@ -5,7 +5,7 @@ use std::{
 
 use bytes::Bytes;
 use criterion::{Criterion, Throughput};
-use restream::media::avio::MemoryQueue;
+use restream::media::byte_queue::MemoryQueue;
 use restream::media::metadata::{AudioMeta, VideoMeta};
 use restream::media::mpegts::{PacketMeta, TsMuxer};
 use restream::media::packet::{MediaPacket, MediaType, PayloadFormat};
@@ -23,7 +23,7 @@ use super::support::{PACKET_BYTES, RING_CAPACITY, packet};
 ///
 /// iter_custom is used so the ts_batch Vec is allocated ONCE (as in production,
 /// where it is declared before the outer loop and reused across bursts).
-/// A concurrent reader thread simulates the AVIO/SRT sender, which is what
+/// A concurrent reader thread simulates the blocking consumer (the recording writer), which is what
 /// makes reducing Condvar notifications worthwhile.
 ///
 /// DESIGN NOTE — counterintuitive initial result:
@@ -164,7 +164,7 @@ fn bench_burst_mux_write(c: &mut Criterion) {
 
     // --- AFTER (Q-009): mux directly into the accumulator, no per-packet
     // scratch buffer and no memmove of each packet's TS bytes into ts_batch.
-    // This is the production shape after the AVIO→TsMux copy elimination.
+    // This is the production shape after the queue→TsMux copy elimination.
     group.bench_function("batch_mux_into_write", |b| {
         b.iter_custom(|iterations| {
             let q = std::sync::Arc::new(MemoryQueue::new());
