@@ -117,7 +117,7 @@ fn emit_ffmpeg_static_archive_group() {
         // Not libm: with glibc linked dynamically, a static libm pulls in
         // libmvec.a, whose vector maths (sin/log in vectorised loops)
         // reference the dynamic loader's `_dl_x86_cpu_features` and fail
-        // to link. libm resolves from the dynamic glibc after the group.
+        // to link. libm is linked dynamically right after the group.
         "atomic",
         "pthread",
     ];
@@ -129,6 +129,9 @@ fn emit_ffmpeg_static_archive_group() {
     }
     println!("cargo:rustc-link-arg=-Wl,--end-group");
     println!("cargo:rustc-link-arg=-Wl,-Bdynamic");
+    // After the group, so GNU ld resolves x265's vector maths
+    // (`_ZGVdN4v_log2` and friends) from libm.so's as-needed libmvec.
+    println!("cargo:rustc-link-arg=-lm");
 }
 
 fn embed_pkg_version(env_name: &str, package: &str) {
