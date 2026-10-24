@@ -114,7 +114,10 @@ fn emit_ffmpeg_static_archive_group() {
         "gcc",
         "rt",
         "dl",
-        "m",
+        // Not libm: with glibc linked dynamically, a static libm pulls in
+        // libmvec.a, whose vector maths (sin/log in vectorised loops)
+        // reference the dynamic loader's `_dl_x86_cpu_features` and fail
+        // to link. libm resolves from the dynamic glibc after the group.
         "atomic",
         "pthread",
     ];
