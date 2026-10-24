@@ -578,6 +578,12 @@ optional `pipelineId` / `stageId` / `outputId`, `title`, `cause`, `evidence`
 | `pipeline:<id>:stage:<kind>:no_output` | warning | Phase `runningNoOutputYet`, input seen, no output yet |
 | `pipeline:<id>:stage:<kind>:waiting_for_keyframe` | warning | `hls` or `preview:*` stage in `waitingForKeyframe` |
 | `pipeline:<id>:stage:<kind>:capacity_exhausted` | warning | Phase `waitingForCapacity` or `capacityWaitMs ≥ 5000` |
+| `pipeline:<id>:input:picture_black` | critical | Picture and sound checks on: picture black for 10 s |
+| `pipeline:<id>:input:picture_frozen` | warning | Checks on: picture unchanged for 30 s (not while black) |
+| `pipeline:<id>:input:audio_silent` | warning | Checks on: first audio track at or under -60 LUFS for 10 s |
+
+The picture and sound checks are opt in per pipeline; see
+[API reference](api-reference.md#picture-and-sound-checks).
 
 ### Output alerts
 
@@ -594,6 +600,35 @@ Each output is reduced to `OutputSignals` and diagnosed once
 | `not_running` | The destination rejected the output in another phase |
 | `send_path_stalled` | `backpressureReason = stalled` |
 | `stale_progress` | Bytes sent, then `lastProgressAgeMs ≥ 10000` |
+
+### Destination anomalies
+
+Each running output also learns its own usual
+(`src/application/destination_baselines.rs`), fed by the flight recorder
+every 2 s. The signals are the delivery ratio (bad when low), the round
+trip (SRT's, else the TCP socket's) and SRT retransmits per second (both
+bad when high).
+
+- Each signal keeps an exponentially weighted mean and variance with about
+  5 minutes of memory. Nothing is judged for its first 150 samples
+  (5 min).
+- A signal is off its usual after 5 samples in a row (10 s) more than 4
+  deviations on its bad side. It clears after 5 samples back within 2.
+  While off, the baseline does not learn.
+- The deviation has a floor: 0.005 for the ratio, 10% of the usual (at
+  least 5 ms) for the round trip, and half the usual (at least 1/s) for
+  retransmits.
+- An output that stops running drops its baseline and learns again.
+
+| Id | Severity | Fires when |
+|---|---|---|
+| `output:<output>:anomaly:delivery` | warning | Delivery ratio below its usual |
+| `output:<output>:anomaly:rtt` | warning | Round trip above its usual |
+| `output:<output>:anomaly:retransmits` | warning | SRT retransmits above their usual |
+
+These catch a slow decline before a fixed limit does. For example, a ratio
+sliding 0.002 every 2 s from 1.0 is flagged before it crosses 0.95. They
+sit beside the diagnosis above, not instead of it.
 
 No output alert is raised when the cause is upstream or transient: no
 publisher (the pipeline alert covers it), a panicked, stalled or stopped shard

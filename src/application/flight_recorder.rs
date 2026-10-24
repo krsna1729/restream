@@ -237,6 +237,9 @@ struct Trace {
 /// dropped with their trace.
 pub struct FlightRecorder {
     traces: Mutex<HashMap<String, Trace>>,
+    /// Each running destination's usual, fed on the same clock
+    /// (`destination_baselines`); the alert rules read its anomalies.
+    pub baselines: crate::application::destination_baselines::DestinationBaselines,
     cap: usize,
     started_ms: u64,
 }
@@ -255,6 +258,7 @@ impl FlightRecorder {
     pub(crate) fn started_at(started_ms: u64, cap: usize) -> Self {
         Self {
             traces: Mutex::new(HashMap::new()),
+            baselines: Default::default(),
             cap: cap.max(1),
             started_ms,
         }
@@ -599,6 +603,36 @@ async fn collect_probes(hub: &StateHub, engine: &MediaEngine) -> Vec<PipelinePro
     .await
 }
 
+/// Every running egress's readings for its baseline: delivery ratio, round
+/// trip (SRT's, else the TCP socket's) and SRT retransmits per second.
+async fn destination_readings(
+    engine: &MediaEngine,
+) -> Vec<(
+    String,
+    String,
+    crate::application::destination_baselines::Readings,
+)> {
+    engine
+        .egresses
+        .active
+        .read()
+        .await
+        .values()
+        .map(|egress| {
+            let quality = crate::sync::lock(&egress.quality);
+            (
+                egress.pipeline_id.clone(),
+                egress.output_id.clone(),
+                crate::application::destination_baselines::Readings {
+                    delivery_ratio: quality.delivery_ratio,
+                    rtt_ms: quality.ms_rtt.or(quality.tcp_rtt_ms),
+                    retrans_per_sec: quality.packets_sent_retrans_per_sec,
+                },
+            )
+        })
+        .collect()
+}
+
 /// Samples every pipeline each `interval` until `shutdown`.
 pub async fn run_flight_recorder(
     recorder: Arc<FlightRecorder>,
@@ -621,6 +655,9 @@ pub async fn run_flight_recorder(
         let probes = collect_probes(&hub, &engine).await;
         let now_ms = MediaEngine::now_epoch_ms();
         recorder.record(now_ms, probes);
+        recorder
+            .baselines
+            .observe(now_ms, destination_readings(&engine).await);
         tick = tick.wrapping_add(1);
         if let Some(retention) = retention
             && tick.is_multiple_of(FLIGHT_PERSIST_EVERY)

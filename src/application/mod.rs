@@ -1,6 +1,7 @@
 //! Application-layer orchestration for ingest, egress, reconciliation, and
 //! persistence-facing ports.
 
+pub mod destination_baselines;
 pub mod diagnosis;
 pub mod egress;
 pub(crate) mod egress_moq_fabric;
