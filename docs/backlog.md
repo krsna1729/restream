@@ -27,6 +27,11 @@ items).
 - [Q-095 stream inspector](#q-095-observability-sonnet-stream-inspector-gop-health-skew-and-scte)
 - [Q-096 GRO and arrival timestamps](#q-096-performance-sonnet-gro-and-arrival-timestamps-in-the-reference-srt-path)
 - [Q-097 MediaMTX MoQ dialect interoperability](#q-097-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop)
+- [Q-098 automatic stream QA](#q-098-observability-sonnet-automatic-stream-qa-from-ffmpeg-detectors)
+- [Q-099 per-destination anomaly baselines](#q-099-observability-sonnet-anomaly-baselines-per-destination)
+- [Q-100 agent protocol: approval mid-task and live panels](#q-100-agent-opus-agent-protocol-approval-mid-task-and-live-panels)
+- [Q-101 incident investigation and approval UX](#q-101-agent-opus-explain-an-incident-and-approve-its-fix-in-one-place)
+- [Q-102 plain-language command palette](#q-102-frontend-sonnet-plain-language-command-palette)
 
 ### Q-025 [performance] [opus] Re-qualify the SRT shard law after transport convergence
 - Goal: settle `EgressShardProfile::SrtCpuParallel` and
@@ -510,3 +515,64 @@ items).
     with these contracts aligned; then require both directions and media
     read-back before re-enabling the MediaMTX gate.
 
+### Q-098 [observability] [sonnet] Automatic stream QA from FFmpeg detectors
+
+- Goal: black frames, frozen video, silence and loudness (EBU R128) on a
+  live pipeline show in Stream health and open incidents, as the keyframe
+  and bitrate verdicts do now. A later step may add slate and "technical
+  difficulties" card detection with a vision model on the same samples.
+- Why: the console sees transport faults but not a stream that delivers a
+  frozen or silent picture; viewers notice those first.
+- Files: a sampled QA stage off the hot path (`src/media/`), the ingest
+  health history (`src/application/`), `stream-health-model.ts`.
+- Gates: fixture media with a black, a frozen and a silent stretch yields
+  each verdict at the right time; no per-packet work on Owner threads;
+  a capacity ramp before and after.
+- Status: open (Filed: 2026-10-24 by claude, from the platform research).
+
+### Q-099 [observability] [sonnet] Anomaly baselines per destination
+
+- Goal: each destination learns its own normal bitrate, RTT, drops and
+  reconnect rate, and flags a departure from it before a fixed threshold
+  would; plain statistics, no language model.
+- Files: `src/application/fleet_history.rs` or a sibling sampler,
+  `trouble-model.ts`, Incidents.
+- Gates: a proptest of the baseline against a simple model; a replayed
+  flight-recorder trace with a slow degradation is flagged earlier than the
+  threshold rule.
+- Status: open (Filed: 2026-10-24 by claude, from the platform research).
+
+### Q-100 [agent] [opus] Agent protocol: approval mid-task and live panels
+
+- Goal: the MCP server (`src/agent_mcp/`) asks the person for input or
+  approval during a plan (elicitation), reports progress on long operations,
+  and returns small live panels (pipeline health, a plan diff with an
+  Approve button) that MCP clients render.
+- Why: it maps onto the existing plan → approve → apply flow instead of
+  approval living only in the dashboard.
+- Gates: the agent-plane tests drive an elicited approval end to end; a
+  refused approval leaves no change; the panel payloads are contract-tested.
+- Status: open (Filed: 2026-10-24 by claude, from the platform research).
+
+### Q-101 [agent] [opus] Explain an incident and approve its fix in one place
+
+- Goal: "Explain this incident" reads the incident's flight-recorder window
+  and proposes a fix as an agent-plane plan. The approval shows what the
+  change touches and how much, approves one action at a time by role, and
+  can be given from Slack or a push notification.
+- Files: Incidents (`web/ts/control-room/incidents*.tsx`), the agent plane
+  (`src/agent_plane/`), notifications.
+- Gates: a recorded incident yields a plan that names the right layer; an
+  approval from a role below the action's minimum is refused and audited.
+- Status: open (Filed: 2026-10-24 by claude, from the platform research).
+
+### Q-102 [frontend] [sonnet] Plain-language command palette
+
+- Goal: the ⌘K palette also takes a request in words ("stop Twitch on the
+  Sunday show") and acts through the agent plane, showing the plan before
+  anything runs.
+- Files: `web/ts/control-room/shell/command-palette.tsx`,
+  `palette-model.ts`, the agent API.
+- Gates: a request maps to the same plan the buttons would make; nothing
+  applies without the approval step.
+- Status: open (Filed: 2026-10-24 by claude, from the platform research).

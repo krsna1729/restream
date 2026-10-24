@@ -184,10 +184,13 @@ floor and a ceiling.
 is `app.tsx` plus `control-room/shell/`.
 
 - Navigation groups the workspaces (`shell/nav.ts`): Operate (Fleet,
-  Channels, Pipelines, Operate, Monitor, Schedule), Understand (Incidents, Stream
-  health, Capacity, Stability Lab), Manage (Media, Changes, Team, Audit log,
-  Settings, with Notifications before Team), Diagnose (Inspect, Logs,
-  System), Learn (Guides, How it works), filtered to what the
+  Channels, Pipelines, Operate, Monitor, Schedule), Understand (Incidents,
+  Stream health), Manage (Media, Notifications, Team, Settings), Learn
+  (Guides), and More tools (Capacity, Stability Lab, Inspect, Logs, System,
+  Changes, Audit log, How it works). More tools is folded until opened (the
+  choice is kept per browser) and stays open while one of its tools is the
+  current workspace; folded, it shows a dot when one of its badges needs a
+  look. The groups are filtered to what the
   session's role may open (`navGroupsFor`). Live badges
   count degraded destinations, pipelines and open alerts (`shell/badges.ts`);
   an unknown count is absent, never zero.
@@ -195,6 +198,12 @@ is `app.tsx` plus `control-room/shell/`.
   memory, egress, ingest). Tablets show an icon rail. Phones show a bottom
   bar (Fleet, Incidents, Channels, Operate, More); More opens a sheet with
   every workspace, the account, the host card and the preferences.
+- Fleet opens with "Start here" (`start-here.tsx`, steps in
+  `start-here-model.ts`) until something is live: create a pipeline,
+  connect an encoder, add a destination, go live. Each step is ticked off
+  from the runtime state on the pipeline furthest along; the next one says
+  what to do and offers the button for it. Operators and admins see it;
+  Hide keeps it away in this browser.
 - The top bar holds search, the help button, the live status, the UTC
   clock (2xl) and the preferences menu.
 - Help (`shell/help.tsx`, words in `help-model.ts`): the help button or `?`
