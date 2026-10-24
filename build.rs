@@ -1,8 +1,4 @@
-use std::io::Read;
-use std::path::{Path, PathBuf};
-
-use serde_json::json;
-use sha2::{Digest, Sha256};
+use std::path::PathBuf;
 
 fn main() {
     println!("cargo:rerun-if-changed=Cargo.lock");
@@ -11,7 +7,6 @@ fn main() {
     println!("cargo:rerun-if-env-changed=RESTREAM_BUILD_GIT_COMMIT");
     println!("cargo:rerun-if-env-changed=RESTREAM_BUILD_TIMESTAMP");
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
-    println!("cargo:rustc-check-cfg=cfg(restream_ffmpeg_needs_avcodec_close_shim)");
 
     let build_identity = build_identity();
     println!("cargo:rustc-env=GIT_COMMIT_HASH={}", build_identity.commit);
@@ -22,148 +17,10 @@ fn main() {
     embed_toolchain_versions();
     embed_rust_dependency_inventory();
 
-    // FFmpeg, x264, and x265 are linked statically from the repo-managed
-    // prefix. SRT is pure Rust in this build and must not pull native SRT or
-    // Mbed TLS archives into the application.
-    let manifest_dir =
-        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR missing"));
-    let prefix = manifest_dir.join(".local/build/static/prefix");
-    let lib_dir = prefix.join("lib");
-    let pkgconfig_dir = lib_dir.join("pkgconfig");
-
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux")
-        || std::env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("gnu")
-    {
-        panic!("restream static native build is currently supported only for linux-gnu targets");
-    }
-
-    // Keep pkg-config inside the generated static prefix. A host fallback would
-    // make release binaries depend on whichever native packages happen to be
-    // installed on the build machine.
-    // SAFETY: build scripts are single-threaded at the point this runs.
-    unsafe {
-        std::env::set_var("PKG_CONFIG_LIBDIR", pkgconfig_dir.display().to_string());
-        std::env::remove_var("PKG_CONFIG_PATH");
-        std::env::remove_var("PKG_CONFIG_SYSROOT_DIR");
-    }
-
-    check_required_static_inputs(&prefix);
-    embed_native_input_inventory(&prefix);
-
-    println!(
-        "cargo:rustc-env=RESTREAM_NATIVE_BUILD_ID={}",
-        native_build_id(&prefix)
-    );
-
-    // x264/x265 are C++; place libstdc++ after all Rust/native objects.
-    println!("cargo:rustc-link-search=native={}", lib_dir.display());
-    let output = std::process::Command::new("c++")
-        .arg("-print-file-name=libstdc++.a")
-        .output()
-        .expect("failed to ask C++ compiler for libstdc++.a");
-    let archive_path = String::from_utf8(output.stdout)
-        .expect("C++ compiler returned a non-UTF-8 libstdc++.a path");
-    let archive_path = Path::new(archive_path.trim());
-    let stdcxx_dir = archive_path
-        .parent()
-        .filter(|p| archive_path.is_absolute() && p.exists())
-        .expect("C++ compiler did not return an absolute libstdc++.a path");
-    println!("cargo:rustc-link-search=native={}", stdcxx_dir.display());
-
-    let avcodec = probe_pinned_package("libavcodec", &prefix, true);
-    if avcodec
-        .version
-        .split('.')
-        .next()
-        .and_then(|major| major.parse::<u32>().ok())
-        .is_some_and(|major| major >= 60)
-    {
-        println!("cargo:rustc-cfg=restream_ffmpeg_needs_avcodec_close_shim");
-    }
-    for package in [
-        "libavformat",
-        "libavfilter",
-        "libswscale",
-        "libswresample",
-        "libavutil",
-    ] {
-        probe_pinned_package(package, &prefix, true);
-    }
-    emit_ffmpeg_static_archive_group();
-
-    embed_pkg_version("RESTREAM_BUILD_X264_VERSION", "x264");
-    embed_pkg_version("RESTREAM_BUILD_X265_VERSION", "x265");
+    // SRT is pure Rust (srt-rs); no native media libraries are linked. FFmpeg
+    // runs only as an external process (src/ffmpeg_binary.rs).
     println!("cargo:rustc-env=RESTREAM_BUILD_SRT_VERSION=srt-rs");
 }
-
-fn emit_ffmpeg_static_archive_group() {
-    // pkg-config and ffmpeg-sys can leave static FFmpeg archives in an order
-    // that is valid for dynamic linking but not for GNU ld's one-pass archive
-    // resolution. Repeat the repo-managed archives in a final group so
-    // cross-archive references such as swscale -> avutil resolve deterministically.
-    const FFMPEG_STATIC_GROUP_LIBS: &[&str] = &[
-        "avfilter",
-        "avformat",
-        "avcodec",
-        "swscale",
-        "swresample",
-        "avutil",
-        "x264",
-        "x265",
-        "stdc++",
-        "gcc",
-        "rt",
-        "dl",
-        // Not libm: with glibc linked dynamically, a static libm pulls in
-        // libmvec.a, whose vector maths (sin/log in vectorised loops)
-        // reference the dynamic loader's `_dl_x86_cpu_features` and fail
-        // to link. libm is linked dynamically right after the group.
-        "atomic",
-        "pthread",
-    ];
-
-    println!("cargo:rustc-link-arg=-Wl,-Bstatic");
-    println!("cargo:rustc-link-arg=-Wl,--start-group");
-    for library in FFMPEG_STATIC_GROUP_LIBS {
-        println!("cargo:rustc-link-arg=-l{library}");
-    }
-    println!("cargo:rustc-link-arg=-Wl,--end-group");
-    println!("cargo:rustc-link-arg=-Wl,-Bdynamic");
-    // After the group, so GNU ld resolves x265's vector maths
-    // (`_ZGVdN4v_log2` and friends) from libm.so's as-needed libmvec.
-    println!("cargo:rustc-link-arg=-lm");
-}
-
-fn embed_pkg_version(env_name: &str, package: &str) {
-    let manifest_dir =
-        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR missing"));
-    let prefix = manifest_dir.join(".local/build/static/prefix");
-    let cargo_metadata = matches!(package, "x264" | "x265");
-    let version = probe_pinned_package(package, &prefix, cargo_metadata).version;
-    println!("cargo:rustc-env={env_name}={version}");
-}
-
-const REQUIRED_PKG_CONFIG_PACKAGES: &[&str] = &[
-    "libavcodec",
-    "libavformat",
-    "libavfilter",
-    "libswscale",
-    "libswresample",
-    "libavutil",
-    "x264",
-    "x265",
-];
-
-const REQUIRED_STATIC_ARCHIVES: &[&str] = &[
-    "libavcodec.a",
-    "libavformat.a",
-    "libavfilter.a",
-    "libswscale.a",
-    "libswresample.a",
-    "libavutil.a",
-    "libx264.a",
-    "libx265.a",
-];
 
 struct BuildIdentity {
     commit: String,
@@ -217,200 +74,6 @@ fn git_output_checked<const N: usize>(args: [&str; N]) -> Result<String, String>
     String::from_utf8(output.stdout).map_err(|error| format!("git output was not UTF-8: {error}"))
 }
 
-fn probe_pinned_package(package: &str, prefix: &Path, cargo_metadata: bool) -> pkg_config::Library {
-    let library = pkg_config::Config::new()
-        .statik(true)
-        .cargo_metadata(cargo_metadata)
-        .probe(package)
-        .unwrap_or_else(|error| {
-            panic!(
-                "{package} not found in repo static prefix {}: {error}. Run `./scripts/build/native-deps.sh` first.",
-                prefix.display()
-            )
-        });
-    assert_pinned_paths(package, prefix, &library.link_paths);
-    assert_pinned_paths(package, prefix, &library.include_paths);
-    library
-}
-
-fn check_required_static_inputs(prefix: &Path) {
-    let lib_dir = prefix.join("lib");
-    let pkgconfig_dir = lib_dir.join("pkgconfig");
-
-    for archive in REQUIRED_STATIC_ARCHIVES {
-        let path = lib_dir.join(archive);
-        println!("cargo:rerun-if-changed={}", path.display());
-        assert_required_file(
-            &path,
-            &format!(
-                "repo static archive is missing: {}. Run `./scripts/build/native-deps.sh` first.",
-                path.display()
-            ),
-        );
-    }
-
-    for package in REQUIRED_PKG_CONFIG_PACKAGES {
-        let path = pkgconfig_dir.join(format!("{package}.pc"));
-        println!("cargo:rerun-if-changed={}", path.display());
-        assert_required_file(
-            &path,
-            &format!(
-                "repo static pkg-config file is missing: {}. Run `./scripts/build/native-deps.sh` first.",
-                path.display()
-            ),
-        );
-    }
-}
-
-fn assert_required_file(path: &Path, message: &str) {
-    match std::fs::metadata(path) {
-        Ok(metadata) if metadata.is_file() => {}
-        _ => panic!("{message}"),
-    }
-}
-
-fn embed_native_input_inventory(prefix: &Path) {
-    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR missing"));
-    let path = out_dir.join("native-build-inputs.json");
-    let mut inputs = Vec::new();
-
-    for archive in REQUIRED_STATIC_ARCHIVES {
-        inputs.push(native_input(
-            prefix,
-            &format!("lib/{archive}"),
-            "static-archive",
-        ));
-    }
-    for package in REQUIRED_PKG_CONFIG_PACKAGES {
-        inputs.push(native_input(
-            prefix,
-            &format!("lib/pkgconfig/{package}.pc"),
-            "pkg-config",
-        ));
-    }
-    inputs.sort_by(|left, right| left["path"].as_str().cmp(&right["path"].as_str()));
-
-    let bytes =
-        serde_json::to_vec_pretty(&inputs).expect("native build input inventory should serialize");
-    std::fs::write(&path, bytes).unwrap_or_else(|error| {
-        panic!(
-            "failed to write native build input inventory {}: {error}",
-            path.display()
-        )
-    });
-}
-
-fn native_input(prefix: &Path, relative_path: &str, kind: &str) -> serde_json::Value {
-    let path = prefix.join(relative_path);
-    json!({
-        "kind": kind,
-        "path": relative_path,
-        "sha256": file_sha256(&path),
-    })
-}
-
-fn file_sha256(path: &Path) -> String {
-    let mut file = std::fs::File::open(path)
-        .unwrap_or_else(|error| panic!("failed to open native input {}: {error}", path.display()));
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 8192];
-    loop {
-        let read = file.read(&mut buffer).unwrap_or_else(|error| {
-            panic!("failed to hash native input {}: {error}", path.display())
-        });
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    to_hex(&hasher.finalize())
-}
-
-fn assert_pinned_paths(package: &str, prefix: &Path, paths: &[PathBuf]) {
-    let prefix = prefix
-        .canonicalize()
-        .unwrap_or_else(|error| panic!("failed to canonicalize {}: {error}", prefix.display()));
-    for path in paths {
-        let canonical = path.canonicalize().unwrap_or_else(|error| {
-            panic!(
-                "pkg-config package {package} resolved missing path {}: {error}",
-                path.display()
-            )
-        });
-        if !canonical.starts_with(&prefix) {
-            panic!(
-                "pkg-config package {package} resolved host path {}; expected all native inputs under {}",
-                canonical.display(),
-                prefix.display()
-            );
-        }
-    }
-}
-
-fn native_build_id(prefix: &Path) -> String {
-    let mut files = Vec::new();
-    collect_native_inputs(&prefix.join("lib"), &mut files);
-    collect_native_inputs(&prefix.join("include"), &mut files);
-    files.sort();
-    if files.is_empty() {
-        panic!("native build provenance missing: no static prefix inputs found");
-    }
-
-    let mut hasher = Sha256::new();
-    for path in files {
-        println!("cargo:rerun-if-changed={}", path.display());
-        let relative = path.strip_prefix(prefix).unwrap_or(&path);
-        hasher.update(relative.to_string_lossy().as_bytes());
-        hasher.update([0]);
-        let mut file = std::fs::File::open(&path).unwrap_or_else(|error| {
-            panic!("failed to open native input {}: {error}", path.display())
-        });
-        let mut buffer = [0u8; 8192];
-        loop {
-            let read = file.read(&mut buffer).unwrap_or_else(|error| {
-                panic!("failed to hash native input {}: {error}", path.display())
-            });
-            if read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..read]);
-        }
-    }
-    to_hex(&hasher.finalize())
-}
-
-fn collect_native_inputs(dir: &Path, files: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries {
-        let entry =
-            entry.unwrap_or_else(|error| panic!("failed to read {}: {error}", dir.display()));
-        let path = entry.path();
-        let file_type = entry
-            .file_type()
-            .unwrap_or_else(|error| panic!("failed to inspect {}: {error}", path.display()));
-        if file_type.is_dir() {
-            collect_native_inputs(&path, files);
-        } else if matches!(
-            path.extension().and_then(|ext| ext.to_str()),
-            Some("a" | "pc" | "h" | "hpp")
-        ) {
-            files.push(path);
-        }
-    }
-}
-
-fn to_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(HEX[(byte >> 4) as usize] as char);
-        output.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    output
-}
-
 fn embed_toolchain_versions() {
     let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
     let output = std::process::Command::new(rustc)
@@ -431,12 +94,13 @@ fn embed_toolchain_versions() {
         println!("cargo:rustc-env={env_name}={value}");
     }
 
-    let cxx = std::env::var("CXX").unwrap_or_else(|_| "c++".to_string());
-    let output = std::process::Command::new(cxx)
+    // The C compiler that builds the bundled SQLite and ring and provides libgcc.
+    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
+    let output = std::process::Command::new(cc)
         .args(["-dumpfullversion", "-dumpversion"])
         .output()
-        .expect("failed to query C++ compiler version");
-    let version = String::from_utf8(output.stdout).expect("C++ compiler version was not UTF-8");
+        .expect("failed to query C compiler version");
+    let version = String::from_utf8(output.stdout).expect("C compiler version was not UTF-8");
     println!(
         "cargo:rustc-env=RESTREAM_GCC_RUNTIME_VERSION={}",
         version.trim()

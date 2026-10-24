@@ -129,12 +129,13 @@ before the fix lands.
 ### Miri and AddressSanitizer
 
 Two narrow memory-safety jobs. Neither runs the whole suite: Miri cannot run
-FFmpeg, io_uring or sockets, and the linked FFmpeg is not ASan-instrumented.
+child processes, io_uring or sockets, and ASan is limited to the modules that
+touch raw syscall and FFI memory.
 
 | CI job | Modules | Why |
 |---|---|---|
 | `miri` | `media::egress::tls::ktls::tests::ancillary`, `egress::leaf_arena`, `egress::scheduler`, `codec::bits` | the kTLS cmsg parser is project `unsafe`; the rest run fast under Miri and check std and dependency use |
-| `asan` | `media::avio`, `egress::tls`, `egress::backends::compio_tcp`, `external_transcoder`, `timing`, `rtmp::listener`, `rtmp::tests`, `tcp_stats`, `runtime_info` | Rust-side use of FFmpeg, kTLS and socket memory; leak detection off (FFmpeg keeps process-lifetime allocations) |
+| `asan` | `media::byte_queue`, `egress::tls`, `egress::backends::compio_tcp`, `external_transcoder`, `timing`, `rtmp::listener`, `rtmp::tests`, `tcp_stats`, `runtime_info` | kTLS, socket, SQLite/glibc FFI and child-pipe memory; leak detection off |
 
 Both jobs first run `scripts/ci/require-test-filters.sh`. It fails when a
 filter selects no test, so a renamed module cannot drop out silently.
@@ -143,7 +144,7 @@ filter selects no test, so a renamed module cannot drop out silently.
 MIRIFLAGS=-Zmiri-disable-isolation PROPTEST_CASES=8 \
   cargo +nightly miri test --lib -- media::egress::tls::ktls::tests::ancillary media::egress::leaf_arena
 RUSTFLAGS=-Zsanitizer=address ASAN_OPTIONS=detect_leaks=0 \
-  cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu --lib -- media::avio
+  cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu --lib -- media::byte_queue
 ```
 
 `ring_buffer` and `egress::journal` are not in Miri: they are too slow there
@@ -550,7 +551,6 @@ Treat these as test results, not assumptions.
 | SRT → RTMP | `mixed.live.srt.h264.a1.bf0` |
 | Built-in presets (`h264`, `720p`, `1080p`) | `tests/transcoder.rs` |
 | Other video presets | must be profiled and matrix-tested before they are advertised |
-| Linked FFmpeg features | `scripts/build/app-static.sh` runs `restream-ffmpeg-capabilities` |
 | HLS live segments | native TsMuxer validated in memory |
 | HLS upload egress | unit tests plus the `mixed.live.srt.h264.a1.bf2` HLS PUT probe |
 | Recording | readable file with correct streams and timestamps |
@@ -674,7 +674,7 @@ Each row is a stage boundary, its contract and the proof that enforces it.
 | HLS segmenter | planned key, no segment before init, visible keyframe/no-segment states | planned-key tests, fMP4 proptests, `hls_segment_boundaries_preserve_non_decreasing_dts_per_stream` |
 | Recording writer | metadata persists before failures; stage-owned lifecycle | `recording_media_writer_failure_reports_failed_without_finalization`, mixed-harness recording identity |
 | Snapshot → status/graph/alerts | non-producing `StagePhase`s surface `blockedBy` and details consistently | table-driven stage phase contract over status JSON, graph and alerts |
-| Cancel/teardown → cleanup | cancel wakes waiters, stops stages, clears registries, keeps causal status | `avio_loom`, `ts_chunk_ring_loom`, `ring_migration_loom`, `cargo xtask concurrency fast` |
+| Cancel/teardown → cleanup | cancel wakes waiters, stops stages, clears registries, keeps causal status | `byte_queue_loom`, `ts_chunk_ring_loom`, `ring_migration_loom`, `cargo xtask concurrency fast` |
 
 A new stage family, protocol boundary or runtime primitive adds a row here
 first. Then pick the lowest proof layer that catches the bug

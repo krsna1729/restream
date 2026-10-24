@@ -16,20 +16,13 @@ async fn status_returns_version_info() {
     assert!(engine["restream"]["version"].is_string());
     assert!(engine["restream"]["commit"].is_string());
     assert!(engine["restream"]["buildTimestamp"].is_string());
-    assert!(engine["restream"]["nativeBuildId"].is_string());
-    assert_ne!(
-        engine["restream"]["nativeBuildId"], engine["restream"]["commit"],
-        "native build id must identify native inputs, not reuse the source commit"
-    );
+    assert!(engine["restream"].get("nativeBuildId").is_none());
     assert!(engine.get("ffmpeg").is_none());
     assert!(engine["toolchain"]["rustc"].is_string());
-    assert!(engine["nativeLibraries"]["ffmpeg"]["version"].is_string());
-    assert!(engine["nativeLibraries"]["ffmpeg"]["configuration"].is_string());
+    assert!(engine["nativeLibraries"].get("ffmpeg").is_none());
     assert!(engine["nativeLibraries"]["srt"]["version"].is_string());
     assert!(engine["nativeLibraries"]["srt"]["bondingAvailable"].is_boolean());
     assert!(engine["nativeLibraries"]["sqlite"]["version"].is_string());
-    assert!(engine["nativeLibraries"]["x264"]["version"].is_string());
-    assert!(engine["nativeLibraries"]["x265"]["version"].is_string());
     assert_eq!(engine["sbom"]["format"], "CycloneDX");
     assert_eq!(engine["sbom"]["specVersion"], "1.5");
     assert_eq!(engine["sbom"]["licensesIncluded"], true);
@@ -80,13 +73,13 @@ async fn status_sbom_is_authenticated_cyclonedx_with_licenses() {
             .as_array()
             .unwrap()
             .iter()
-            .find(|property| property["name"] == "restream:nativeBuildId")
+            .find(|property| property["name"] == "restream:gitCommit")
             .unwrap()["value"],
         json["metadata"]["properties"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|property| property["name"] == "restream:nativeBuildId")
+            .find(|property| property["name"] == "restream:gitCommit")
             .unwrap()["value"]
     );
 
@@ -121,17 +114,8 @@ async fn status_sbom_is_authenticated_cyclonedx_with_licenses() {
             .is_some_and(|name| name.starts_with("windows-"))
     }));
     for name in [
-        "libavcodec",
-        "libavformat",
-        "libavfilter",
-        "libswscale",
-        "libswresample",
-        "libavutil",
         "srt-rs",
         "SQLite",
-        "x264",
-        "x265",
-        "libstdc++",
         "libgcc",
         "Rust standard library",
         "tokio",
@@ -150,47 +134,14 @@ async fn status_sbom_is_authenticated_cyclonedx_with_licenses() {
         );
     }
 
-    for (name, expected_inputs) in [
-        (
-            "libavcodec",
-            &["lib/libavcodec.a", "lib/pkgconfig/libavcodec.pc"][..],
-        ),
-        ("x264", &["lib/libx264.a", "lib/pkgconfig/x264.pc"][..]),
-    ] {
-        let component = components
-            .iter()
-            .find(|component| component["name"] == name)
-            .unwrap_or_else(|| panic!("missing native SBOM component {name}"));
+    // Codecs run in external FFmpeg processes, so no FFmpeg library is linked.
+    for absent in ["libavcodec", "libavformat", "x264", "x265", "libstdc++"] {
         assert!(
-            component["hashes"]
-                .as_array()
-                .is_some_and(|hashes| hashes.iter().any(|hash| {
-                    hash["alg"] == "SHA-256"
-                        && hash["content"]
-                            .as_str()
-                            .is_some_and(|content| content.len() == 64)
-                })),
-            "native component {name} should include a static archive SHA-256 hash"
+            !components
+                .iter()
+                .any(|component| component["name"] == absent),
+            "{absent} must not be linked into the engine"
         );
-        let properties = component["properties"].as_array().unwrap();
-        for input in expected_inputs {
-            assert!(
-                properties
-                    .iter()
-                    .any(|property| property["name"] == "restream:nativeInput"
-                        && property["value"] == *input),
-                "native component {name} should list input {input}"
-            );
-            assert!(
-                properties.iter().any(|property| {
-                    property["name"] == "restream:nativeInputSha256"
-                        && property["value"]
-                            .as_str()
-                            .is_some_and(|value| value.starts_with(&format!("{input}=")))
-                }),
-                "native component {name} should list input hash for {input}"
-            );
-        }
     }
 
     let dependencies = json["dependencies"].as_array().unwrap();

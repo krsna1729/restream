@@ -11,7 +11,7 @@
 use crate::domain::recording::RecordingSettings;
 use crate::domain::stage::StageKey;
 use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
-use crate::media::avio::MemoryQueue;
+use crate::media::byte_queue::MemoryQueue;
 use crate::media::engine::MediaEngine;
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
 use crate::media::mpegts::TsServiceMetadata;
@@ -599,8 +599,8 @@ pub async fn start_recording(
             encoding: "recording".to_string(),
         });
 
-    let queue = Arc::new(crate::media::avio::MemoryQueue::new_with_capacity(
-        engine.config.avio_capacity,
+    let queue = Arc::new(crate::media::byte_queue::MemoryQueue::new_with_capacity(
+        engine.config.recording_queue_capacity,
     ));
 
     // Outer abort closes queue space immediately, even while the media task
@@ -710,7 +710,7 @@ pub async fn start_recording(
 }
 
 fn run_ts_writer(
-    queue: Arc<crate::media::avio::MemoryQueue>,
+    queue: Arc<crate::media::byte_queue::MemoryQueue>,
     file_path: &str,
     // Cancellation propagates via queue.close() called by QueueCloseGuard on
     // the async side. The token is threaded through for future use (e.g., if

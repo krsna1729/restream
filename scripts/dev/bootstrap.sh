@@ -11,7 +11,6 @@ fi
 FRONTEND_NODE_MAJOR="${RESTREAM_FRONTEND_NODE_MAJOR:-22}"
 FRONTEND_NODE_MIN_MAJOR=20
 WITH_FRONTEND=1
-RUN_NATIVE_SETUP=1
 INSTALL_MEDIAMTX=1
 CONFIGURE_HARNESS_HOST=0
 CHECK_HARNESS_HOST=1
@@ -25,11 +24,9 @@ Bootstraps a Debian/Ubuntu development environment for this repo:
   - installs rustup if needed and the pinned Rust toolchain
   - installs frontend npm dependencies
   - installs a pinned mediamtx binary for live harness interoperability checks
-  - builds the pinned native dependency prefix via scripts/build/native-deps.sh
 
 Options:
   --skip-frontend      skip nodejs/npm install and npm ci
-  --skip-native-setup  skip scripts/build/native-deps.sh
   --skip-mediamtx      skip the live-harness Mediamtx binary
   --configure-harness-host
                       explicitly persist Linux user-namespace and SRT UDP-buffer
@@ -44,10 +41,6 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --skip-frontend)
             WITH_FRONTEND=0
-            shift
-            ;;
-        --skip-native-setup)
-            RUN_NATIVE_SETUP=0
             shift
             ;;
         --skip-mediamtx)
@@ -148,11 +141,6 @@ if (( CONFIGURE_HARNESS_HOST )); then
     "$ROOT/scripts/dev/harness-host-prereqs.sh" --configure
 elif (( CHECK_HARNESS_HOST )); then
     "$ROOT/scripts/dev/harness-host-prereqs.sh"
-fi
-
-if (( RUN_NATIVE_SETUP )); then
-    echo "bootstrap-dev: building pinned native dependency prefix"
-    "$ROOT/scripts/build/native-deps.sh"
 fi
 
 cat <<EOF

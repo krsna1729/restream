@@ -55,19 +55,6 @@ pub use config::{AppConfig, RuntimeTuning, ServerPorts, TokioRuntimeConfig};
 pub use infrastructure::bootstrap::run_app;
 pub use runtime_info::emit_sbom;
 
-/// # Safety
-///
-/// Exported with the C ABI as a link-time shim for the removed libavcodec
-/// symbol. Callers must pass a codec context pointer; the pointer is never
-/// dereferenced here, so any value is accepted.
-#[cfg(restream_ffmpeg_needs_avcodec_close_shim)]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn avcodec_close(
-    _ctx: *mut ffmpeg_next::ffi::AVCodecContext,
-) -> std::ffi::c_int {
-    0
-}
-
 #[cfg(test)]
 pub(crate) mod test_support {
     use std::{cell::Cell, panic, sync::Once};

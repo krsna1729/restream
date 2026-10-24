@@ -35,7 +35,6 @@ jobs:
         with:
           node_version: '22'
           system_deps_profile: build
-          native_prefix: 'true'
           rust_cache: 'true'
       - uses: docker/setup-buildx-action@v4
       - name: Prepare release build tree
@@ -103,7 +102,6 @@ jobs:
           # `live`: release evidence runs the container smoke, whose SRT
           # capability proof drives the live harness (FFmpeg and host tools).
           system_deps_profile: live
-          native_prefix: 'true'
           rust_cache: 'true'
       - uses: ./.github/actions/security-tools
       - name: Build the live harness used by the container SRT proof

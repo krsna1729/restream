@@ -112,8 +112,8 @@ flowchart TD
     subgraph Control["CONTROL: Tokio, restream-tokio"]
         C1["axum API, Reconciler"]
         C2["Ingest auth and lifecycle actors"]
-        C3["HlsPullTask, FFmpeg child supervision"]
-        C4["Blocking pool: libav file analysis,<br/>password hashing"]
+        C3["HlsPullTask, FFmpeg and ffprobe child supervision"]
+        C4["Blocking pool: password hashing"]
     end
     subgraph Media["MEDIA: Tokio, restream-media"]
         M1["Shared TS mux, HLS segmenters"]
@@ -246,7 +246,7 @@ Ring rules:
 SRT outputs share one MPEG-TS packaging per feed: the shared TS mux writes
 `TsChunkRing`, and each SRT leaf keeps only its cursor and socket state.
 Async-to-blocking boundaries, such as the recording writer, use a bounded
-`MemoryQueue` (`src/media/avio.rs`).
+`MemoryQueue` (`src/media/byte_queue.rs`).
 
 Timestamp rules:
 
@@ -491,7 +491,7 @@ owns the audit procedure.
 | `src/planner/` | Pure stage-graph planning |
 | `src/runtime/`, `src/api_runtime_views/` | Runtime contracts and operator snapshots |
 | `src/media/engine*.rs` | `MediaEngine`: media lifecycle, registries, fabric retention, snapshots |
-| `src/media/ring_buffer.rs`, `src/media/ts_chunk_ring.rs`, `src/media/avio.rs` | Bounded packet and byte transport |
+| `src/media/ring_buffer.rs`, `src/media/ts_chunk_ring.rs`, `src/media/byte_queue.rs` | Bounded packet and byte transport |
 | `src/media/rtmp/`, `src/media/srt/`, `src/media/mpegts/` | RTMP and SRT protocols, MPEG-TS mux and demux |
 | `src/media/hls_ingest/`, `src/media/hls_pull/`, `src/media/ingest_publisher/` | HLS push and pull ingest, byte-stream ingest publishing |
 | `src/media/moq/` | MoQ ingest, egress, origin and QUIC transport |

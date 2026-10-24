@@ -14,16 +14,17 @@
 //! └─────────────────────────────────────────────────────────────────────┘
 //!
 //! ┌─────────────── std::thread (OS threads, catch_unwind) ──────────────┐
-//! │  FFmpeg demuxer           RTMP/SRT ingest → RingBuffer push         │
 //! │  TS recording writer      MemoryQueue → .ts recording file          │
 //! │  FFmpeg child pipes       ring → stdin; stdout → ring               │
+//! │  Stream check readers     FFmpeg child → thumbnails, f32 audio      │
 //! └─────────────────────────────────────────────────────────────────────┘
 //! ```
 //!
-//! Tokio tasks handle all network I/O and coordination. CPU-bound FFmpeg work
-//! runs on dedicated OS threads to avoid starving the async runtime. All
-//! `std::thread::spawn` calls are wrapped in `catch_unwind` so an FFmpeg panic
-//! (e.g., from a corrupt stream) logs an error instead of taking down the process.
+//! Tokio tasks handle all network I/O and coordination. Blocking pipe and file
+//! work runs on dedicated OS threads to avoid starving the async runtime;
+//! codecs run in FFmpeg child processes. All `std::thread::spawn` calls are
+//! wrapped in `catch_unwind` so a panic (e.g. a demuxer bug on a corrupt
+//! stream) logs an error instead of taking down the process.
 
 mod auth;
 mod egress;

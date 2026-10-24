@@ -44,7 +44,7 @@ flowchart LR
 - `TsChunkRing` shares packaged MPEG-TS chunks across SRT destinations.
 - Egress shards read rings directly by cursor
   ([Egress architecture](egress-architecture.md)).
-- `MemoryQueue` (`src/media/avio.rs`) is the bounded byte queue between a
+- `MemoryQueue` (`src/media/byte_queue.rs`) is the bounded byte queue between a
   media producer and blocking native or file I/O.
 
 `MediaPacket` is pinned at 56 bytes by a size assertion in
@@ -162,7 +162,7 @@ an explicit failure-isolation gate and an owner decision.
 The `[[bench]]` targets in `Cargo.toml` and their code under `benches/` are
 the benchmark inventory. Hot-path examples: `ring_buffer`, `ingest_handoff`,
 `input_gate`, `egress_visit`, `rtmp_serializer`, `codec_conversions`,
-`avio_throughput`, `stage_feeder`. Live protocol modes belong to the harness
+`byte_queue_throughput`, `stage_feeder`. Live protocol modes belong to the harness
 (`scripts/harness/run.sh`).
 
 For a hot-path change:

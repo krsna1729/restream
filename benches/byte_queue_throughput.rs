@@ -1,12 +1,12 @@
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
-use restream::media::avio::MemoryQueue;
+use restream::media::byte_queue::MemoryQueue;
 use std::hint::black_box;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::thread;
 
-fn bench_avio_throughput(c: &mut Criterion) {
+fn bench_byte_queue_throughput(c: &mut Criterion) {
     let mut group = c.benchmark_group("in_memory_vs_tcp_loopback");
     let chunk_size = 65536;
     let iterations = 16; // 1 MB total transfer per run
@@ -137,7 +137,7 @@ fn bench_write_batch_overhead(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_avio_throughput,
+    bench_byte_queue_throughput,
     bench_memory_queue_len,
     bench_write_batch_overhead
 );

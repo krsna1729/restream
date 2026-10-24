@@ -1,11 +1,9 @@
 //! Central media engine state and public runtime contracts.
 
-use ffmpeg_next as ffmpeg;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
-use tracing::error;
 
 use crate::domain::stage::StageKey;
 use crate::domain::state::{EgressPhase, EgressRuntimeStatus, EgressStatus};
@@ -240,12 +238,6 @@ impl MediaEngine {
     }
 
     pub fn new_with_config(config: Arc<crate::AppConfig>) -> Self {
-        if let Err(error) = ffmpeg::init() {
-            error!(err = %error, "fatal: FFmpeg initialization failed; check library paths");
-            std::process::exit(1);
-        }
-        ffmpeg::util::log::set_level(ffmpeg::util::log::Level::Warning);
-
         Self {
             ingests: IngestRegistry::new(),
             egresses: EgressRegistry::new(),

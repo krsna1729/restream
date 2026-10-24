@@ -47,7 +47,6 @@ jobs:
         with:
           rust_components: clippy
           system_deps_profile: base
-          native_prefix: 'true'
           rust_cache: 'true'
       - name: Run clippy for library
         run: cargo clippy --lib -- -D warnings
@@ -143,7 +142,6 @@ jobs:
           # `live` (not `build`): the SRT and RTMP(S) media proofs drive the live
           # harness, which needs FFmpeg and the harness host tools.
           system_deps_profile: live
-          native_prefix: 'true'
           rust_cache: 'true'
       - if: ${{ steps.scope.outputs.run == 'true' }}
         name: Build frontend assets for the harness binary
@@ -185,7 +183,6 @@ jobs:
           node_version: '22'
           npm_ci: 'true'
           system_deps_profile: live
-          native_prefix: 'true'
           rust_cache: 'true'
       - name: Run API contract smoke
         run: cargo xtask api-contract
@@ -213,7 +210,6 @@ jobs:
           node_version: '22'
           npm_ci: 'true'
           system_deps_profile: browser
-          native_prefix: 'true'
           rust_cache: 'true'
       - name: Install Chromium and Firefox for app E2E
         run: npx playwright install --with-deps chromium firefox
@@ -230,7 +226,6 @@ jobs:
       - uses: ./.github/actions/ci-bootstrap
         with:
           system_deps_profile: media
-          native_prefix: 'true'
           rust_cache: 'true'
       - name: Run fast concurrency proof
         run: cargo xtask concurrency fast
@@ -248,7 +243,6 @@ jobs:
       - uses: ./.github/actions/ci-bootstrap
         with:
           system_deps_profile: live
-          native_prefix: 'true'
           rust_cache: 'true'
       - name: Run concurrency lifecycle proof
         env:
@@ -282,7 +276,6 @@ jobs:
           node_version: '22'
           npm_ci: 'true'
           system_deps_profile: media
-          native_prefix: 'true'
           rust_cache: 'true'
       - name: Build frontend assets for Rust tests
         run: npm run build:frontend
@@ -303,7 +296,6 @@ jobs:
           node_version: '22'
           npm_ci: 'true'
           system_deps_profile: media
-          native_prefix: 'true'
           rust_cache: 'true'
       - name: Build frontend assets for coverage
         run: npm run build:frontend
@@ -333,7 +325,6 @@ jobs:
           node_version: '22'
           npm_ci: 'true'
           system_deps_profile: media
-          native_prefix: 'true'
           rust_cache: 'true'
       - name: Build frontend assets for the library
         run: npm run build:frontend
@@ -367,7 +358,6 @@ jobs:
           node_version: '22'
           npm_ci: 'true'
           system_deps_profile: media
-          native_prefix: 'true'
           rust_cache: 'false'
           toolchain_cache: 'false'
       - name: Build frontend assets for the library
@@ -403,7 +393,6 @@ jobs:
           node_version: '22'
           npm_ci: 'true'
           system_deps_profile: media
-          native_prefix: 'true'
           rust_cache: 'false'
           toolchain_cache: 'false'
       - name: Build frontend assets for the library
@@ -430,7 +419,7 @@ jobs:
     timeout-minutes: 60
     env:
       ASAN_FILTERS: >-
-        media::avio
+        media::byte_queue
         media::egress::tls media::egress::backends::compio_tcp
         media::external_transcoder media::timing media::rtmp::listener
         media::rtmp::tests media::tcp_stats runtime_info
@@ -444,7 +433,6 @@ jobs:
           node_version: '22'
           npm_ci: 'true'
           system_deps_profile: media
-          native_prefix: 'true'
           rust_cache: 'false'
           toolchain_cache: 'false'
       - name: Build frontend assets for the library
@@ -452,8 +440,8 @@ jobs:
       - name: Install nightly with rust-src
         run: rustup toolchain install nightly --profile minimal --component rust-src
       # Rust code is instrumented (build-std, explicit target so proc-macros
-      # and build scripts are not); the linked FFmpeg is not. Leak detection
-      # is off: FFmpeg keeps process-lifetime allocations.
+      # and build scripts are not). Leak detection stays off: it has never
+      # been baselined, and process-lifetime statics would report as leaks.
       - name: The sanitizer flags are in effect
         run: |
           [[ $RUSTFLAGS == *sanitizer=address* ]] || { echo "RUSTFLAGS lost -Zsanitizer=address: $RUSTFLAGS"; exit 1; }
@@ -477,7 +465,6 @@ jobs:
           node_version: '22'
           npm_ci: 'true'
           system_deps_profile: build
-          native_prefix: 'true'
           rust_cache: 'true'
       - name: Build frontend assets for harness binaries
         run: npm run build:frontend

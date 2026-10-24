@@ -1,6 +1,6 @@
 ---
 name: media-pipeline
-description: Use before changing restream src/media/, RTMP/SRT/HLS protocol paths, transcoder stages, ring buffers, mux/demux, egress fabrics, per-packet hot paths, or thread/runtime placement (Tokio, Compio Owner, OS threads, blocking or FFmpeg/FFI calls) anywhere in src/.
+description: Use before changing restream src/media/, RTMP/SRT/HLS protocol paths, transcoder stages, ring buffers, mux/demux, egress fabrics, per-packet hot paths, or thread/runtime placement (Tokio, Compio Owner, OS threads, blocking calls) anywhere in src/.
 ---
 
 # Media Pipeline
@@ -30,10 +30,10 @@ Read before changing `src/media/`:
   `LogicalPeerId`) through bounded commands and events.
 - RTMP/RTMPS sockets stay on the native TCP/io_uring shard workers until the
   Compio TCP migration.
-- Blocking FFmpeg and other blocking calls belong on dedicated OS threads or
-  the blocking pool, never on Tokio workers or an Owner thread.
-- Wrap OS-thread entry points that cross native FFmpeg/FFI boundaries with
-  `catch_unwind(AssertUnwindSafe(...))`; the Compio Owner threads report an
+- Blocking calls (child pipes, files) belong on dedicated OS threads or the
+  blocking pool, never on Tokio workers or an Owner thread. Codecs run only in
+  FFmpeg child processes.
+- Wrap OS-thread entry points with `catch_unwind(AssertUnwindSafe(...))`; the Compio Owner threads report an
   `Owner` fault as a bridge event, and a panic there closes the bridge, which
   Tokio treats as a listener stop.
 - No internal or external failure path may crash the engine; isolate faults
@@ -53,14 +53,14 @@ Read before changing `src/media/`:
 
 ## Hot paths
 
-Hot paths include `src/media/`, ring buffers, mux/demux loops, AVIO queues,
+Hot paths include `src/media/`, ring buffers, mux/demux loops, the recording byte queue,
 SRT/RTMP packet loops, HLS segmenting, and transcoder data paths.
 
 - Benchmark before and after with the relevant `benches/` suite.
 - Avoid per-packet allocation, logging, serialization, locks, async channel
   sends, and system calls.
 - Do not add logging inside packet-level loops in
-  `src/media/ring_buffer.rs` or `src/media/avio.rs`.
+  `src/media/ring_buffer.rs` or `src/media/byte_queue.rs`.
 - Use burst APIs where available.
 - Hoist reusable buffers outside loops and clear them inside the loop.
 - Prefer `Bytes` and `BytesMut` ownership transfer over payload copies.

@@ -13,7 +13,7 @@ use crate::{StepResult, capture_into, cargo, child_output, run};
 
 /// `tests/<target>.rs` loom models, each built with `--cfg loom`.
 const LOOM_TARGETS: &[&str] = &[
-    "avio_loom",
+    "byte_queue_loom",
     "egress_feed_wake_loom",
     "input_selection_loom",
     "moq_origin_loom",
@@ -49,8 +49,8 @@ const COMMON_TESTS: &[(&str, &[&str])] = &[
     ("ring-multi-reader-proptest", &["test", "prop_multi_reader_migration_preserves_each_reader_order", "--test", "ring_migration", "--", "--nocapture"]),
     ("input-selection-proptest", &["test", "gate_matches_sequential_selection_model", "--test", "input_selection", "--", "--nocapture"]),
     ("standby-gop-proptest", &["test", "cache_never_exceeds_its_declared_limits", "--test", "standby_gop", "--", "--nocapture"]),
-    ("lib-avio-batch", &["test", "write_batch_round_trips_random_chunks", "--lib", "--", "--nocapture"]),
-    ("lib-avio-unit", &["test", "media::avio::tests", "--lib", "--", "--nocapture"]),
+    ("lib-byte-queue-batch", &["test", "write_batch_round_trips_random_chunks", "--lib", "--", "--nocapture"]),
+    ("lib-byte-queue-unit", &["test", "media::byte_queue::tests", "--lib", "--", "--nocapture"]),
     ("lib-srt-stream-id-normalization", &["test", "media::srt_stream_id::tests", "--lib", "--", "--nocapture"]),
     ("lib-srt-ingress-owner", &["test", "media::srt::ingress_live_tests", "--lib", "--", "--nocapture"]),
     ("lib-srt-ingress-bridges", &["test", "media::srt::ingress_bridge_tests", "--lib", "--", "--nocapture"]),
@@ -437,12 +437,12 @@ media::egress::visit_tests::live_start_cursor_never_rewinds: test
     #[test]
     fn loom_executable_takes_last_matching_artifact() {
         let messages = r#"{"reason":"compiler-artifact","target":{"name":"other"},"executable":"/t/other"}
-{"reason":"compiler-artifact","target":{"name":"avio_loom"},"executable":null}
+{"reason":"compiler-artifact","target":{"name":"byte_queue_loom"},"executable":null}
 {"reason":"build-finished","success":true}
-{"reason":"compiler-artifact","target":{"name":"avio_loom"},"executable":"/t/avio_loom-1"}"#;
+{"reason":"compiler-artifact","target":{"name":"byte_queue_loom"},"executable":"/t/byte_queue_loom-1"}"#;
         assert_eq!(
-            loom_executable(messages, "avio_loom").as_deref(),
-            Some("/t/avio_loom-1")
+            loom_executable(messages, "byte_queue_loom").as_deref(),
+            Some("/t/byte_queue_loom-1")
         );
         assert_eq!(loom_executable(messages, "missing"), None);
     }

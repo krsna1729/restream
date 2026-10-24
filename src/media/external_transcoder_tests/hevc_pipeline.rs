@@ -429,7 +429,6 @@ async fn hevc_hls_preview_stage_uses_hevc_input_and_emits_h264() {
             .expect("single-audio HEVC fixture");
 
     let engine = Arc::new(MediaEngine::new());
-    ffmpeg_next::util::log::set_level(ffmpeg_next::util::log::Level::Quiet);
     engine
         .try_register_ingest("pipe-hevc-preview-input", "stream-key", "srt")
         .await
@@ -536,7 +535,6 @@ async fn hevc_codec_edge_starts_for_video_only_ingest() {
             .expect("single-audio HEVC fixture");
 
     let engine = Arc::new(MediaEngine::new());
-    ffmpeg_next::util::log::set_level(ffmpeg_next::util::log::Level::Quiet);
     engine
         .try_register_ingest("pipe-hevc-video-only", "stream-key", "srt")
         .await

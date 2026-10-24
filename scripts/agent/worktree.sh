@@ -16,8 +16,6 @@ FORCE_CLEANUP=0
 SEED_TARGET=1
 SEED_CARGO=1
 SEED_NODE=1
-SHARE_STATIC=1
-COPY_STATIC=0
 TARGET_CACHE_MODE="subset"
 WITH_INCREMENTAL=0
 CHECK_FRONTEND_DEPS_PATH=""
@@ -51,8 +49,7 @@ usage() {
     cat <<'EOF'
 Usage: scripts/agent/worktree.sh [options] <id>
 
-Create, refresh, or clean up an agent worktree with warm caches and prepared
-static outputs.
+Create, refresh, or clean up an agent worktree with warm caches.
 
 Defaults:
   - new worktree path: <repo-common-root>/.local/worktrees/<id>
@@ -63,7 +60,6 @@ Defaults:
   - seed .cargo/ and node_modules/ from the source tree when present
   - install locked frontend dependencies in the destination worktree when the
     seeded node_modules/ tree is missing or incomplete
-  - share .local/build/static from the source tree when present
 
 Options:
   --cleanup                remove the worktree for <id> instead of creating/updating it
@@ -71,14 +67,12 @@ Options:
   --path <path>            override the destination worktree path
   --branch <name>          override the branch name (default: codex/<id>)
   --base <rev>             base revision for a new branch (default: HEAD)
-  --source <path>          source worktree used for cache/static seeding
+  --source <path>          source worktree used for cache seeding
   --full-target-cache      copy the full target/ tree instead of the pruned debug subset
   --with-incremental       include a small pruned debug incremental cache slice
   --no-target-cache        skip target/ seeding
   --no-cargo-config        skip .cargo/ seeding
   --no-node-modules        skip node_modules/ seeding
-  --no-share-static        skip .local/build/static sharing
-  --copy-static            copy .local/build/static instead of sharing it
   --check-frontend-deps <path>
                            verify a prepared frontend dependency tree and exit
   --dry-run                print actions without mutating the repo
@@ -86,10 +80,6 @@ Options:
 
 Notes:
   - Cleanup removes the worktree checkout. It does not delete the git branch.
-  - Static sharing is meant for tasks that do not modify the native/static
-    build layer. Use --copy-static when working on that layer so native inputs
-    are isolated but immediately buildable. Use --no-share-static only when the
-    worktree should start without generated static artifacts.
   - The default target warmup copies only high-value debug artifacts:
     debug/deps, debug/build, debug/.fingerprint, root debug binaries, and no
     incremental state unless --with-incremental is set.
@@ -463,56 +453,6 @@ seed_target_subset() {
     fi
 }
 
-share_path() {
-    local source_path="$1"
-    local target_path="$2"
-    local label="$3"
-
-    if [[ ! -e "$source_path" ]]; then
-        info "skip shared ${label}: source missing at $source_path"
-        return 0
-    fi
-
-    if [[ -L "$target_path" && "$(readlink "$target_path")" == "$source_path" ]]; then
-        info "shared ${label} already points at $source_path"
-        return 0
-    fi
-
-    if [[ -e "$target_path" || -L "$target_path" ]]; then
-        die "refusing to replace existing ${label} at $target_path; remove it or rerun with a fresh worktree"
-    fi
-
-    info "share ${label}: $target_path -> $source_path"
-    run_cmd mkdir -p "$(dirname "$target_path")"
-    run_cmd ln -s "$source_path" "$target_path"
-}
-
-rewrite_copied_static_pkgconfig() {
-    local source_static_root="$1"
-    local target_static_root="$2"
-    local source_prefix="$source_static_root/prefix"
-    local target_prefix="$target_static_root/prefix"
-    local pkgconfig_dir="$target_prefix/lib/pkgconfig"
-    local escaped_source
-    local escaped_target
-
-    if [[ ! -d "$pkgconfig_dir" ]]; then
-        info "skip copied static pkg-config rewrite: missing $pkgconfig_dir"
-        return 0
-    fi
-
-    info "rewrite copied static pkg-config paths: $source_prefix -> $target_prefix"
-    if ((DRY_RUN)); then
-        printf 'dry-run: rewrite *.pc under %q\n' "$pkgconfig_dir"
-        return 0
-    fi
-
-    escaped_source="$(printf '%s\n' "$source_prefix" | sed 's/[\/&]/\\&/g')"
-    escaped_target="$(printf '%s\n' "$target_prefix" | sed 's/[\/&]/\\&/g')"
-    find "$pkgconfig_dir" -maxdepth 1 -type f -name '*.pc' -print0 |
-        xargs -0 --no-run-if-empty sed -i "s/${escaped_source}/${escaped_target}/g"
-}
-
 write_agent_state() {
     local agent_state_dir="$1"
     local worktree_id="$2"
@@ -520,9 +460,8 @@ write_agent_state() {
     local worktree_path="$4"
     local source_tree="$5"
     local work_root="$6"
-    local shared_static_root="$7"
-    local target_cache_mode="$8"
-    local target_incremental="$9"
+    local target_cache_mode="$7"
+    local target_incremental="$8"
 
     info "write agent state in $agent_state_dir"
     run_cmd mkdir -p "$agent_state_dir"
@@ -538,7 +477,6 @@ AGENT_WORKTREE_PATH="$worktree_path"
 AGENT_SOURCE_TREE="$source_tree"
 AGENT_WORK_ROOT="$work_root"
 AGENT_WORK_DIR_TEMPLATE="$work_root/<mode>"
-AGENT_SHARED_STATIC_ROOT="$shared_static_root"
 AGENT_TARGET_CACHE_MODE="$target_cache_mode"
 AGENT_TARGET_CACHE_WITH_INCREMENTAL="$target_incremental"
 AGENT_WORKTREE_CLEANUP_COMMAND="scripts/agent/worktree.sh --cleanup $worktree_id"
@@ -610,16 +548,6 @@ while [[ $# -gt 0 ]]; do
             SEED_NODE=0
             shift
             ;;
-        --no-share-static)
-            SHARE_STATIC=0
-            COPY_STATIC=0
-            shift
-            ;;
-        --copy-static)
-            SHARE_STATIC=0
-            COPY_STATIC=1
-            shift
-            ;;
         --check-frontend-deps)
             [[ $# -ge 2 ]] || die "--check-frontend-deps requires a value"
             CHECK_FRONTEND_DEPS_PATH="$2"
@@ -673,7 +601,6 @@ if [[ -z "$BRANCH_NAME" ]]; then
     BRANCH_NAME="codex/$WORKTREE_ID"
 fi
 
-STATIC_SOURCE_ROOT="$SOURCE_TREE/.local/build/static"
 TARGET_SOURCE="$SOURCE_TREE/target"
 CARGO_SOURCE="$SOURCE_TREE/.cargo"
 NODE_SOURCE="$SOURCE_TREE/node_modules"
@@ -733,23 +660,8 @@ else
     info "skip node_modules seeding by request"
 fi
 
-if ((SHARE_STATIC)); then
-    share_path "$STATIC_SOURCE_ROOT" "$WORKTREE_PATH/.local/build/static" ".local/build/static"
-elif ((COPY_STATIC)); then
-    sync_tree "$STATIC_SOURCE_ROOT" "$WORKTREE_PATH/.local/build/static" ".local/build/static"
-    rewrite_copied_static_pkgconfig "$STATIC_SOURCE_ROOT" "$WORKTREE_PATH/.local/build/static"
-else
-    info "skip static outputs by request"
-fi
-
 AGENT_STATE_DIR="$WORKTREE_PATH/.agent-state"
 WORK_ROOT_DEFAULT="$WORKTREE_PATH/.local/artifacts/agents/$WORKTREE_ID"
-SHARED_STATIC_ROOT=""
-if ((SHARE_STATIC)); then
-    SHARED_STATIC_ROOT="$STATIC_SOURCE_ROOT"
-elif ((COPY_STATIC)); then
-    SHARED_STATIC_ROOT="$WORKTREE_PATH/.local/build/static"
-fi
 write_agent_state \
     "$AGENT_STATE_DIR" \
     "$WORKTREE_ID" \
@@ -757,7 +669,6 @@ write_agent_state \
     "$WORKTREE_PATH" \
     "$SOURCE_TREE" \
     "$WORK_ROOT_DEFAULT" \
-    "$SHARED_STATIC_ROOT" \
     "$TARGET_CACHE_MODE" \
     "$WITH_INCREMENTAL"
 

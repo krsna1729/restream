@@ -19,45 +19,19 @@ restream_debian_packages_for_group() {
         harness-runtime)
             printf '%s\n' ca-certificates curl ffmpeg iproute2 jq sqlite3 util-linux
             ;;
-        native-build)
-            printf '%s\n' build-essential bzip2 cmake curl file git mold nasm ninja-build perl pkg-config
-            ;;
-        ffmpeg-dev-headers)
-            printf '%s\n' \
-                libavcodec-dev \
-                libavdevice-dev \
-                libavfilter-dev \
-                libavformat-dev \
-                libavutil-dev \
-                libswresample-dev \
-                libswscale-dev
-            ;;
         dev-workstation)
             # This preserves scripts/dev/bootstrap.sh's historical package
             # surface while moving ownership of the list out of the bootstrap
             # orchestrator.
             printf '%s\n' \
                 build-essential \
-                bzip2 \
                 ca-certificates \
                 clang \
-                cmake \
                 curl \
                 ffmpeg \
-                file \
                 git \
                 jq \
-                libavcodec-dev \
-                libavdevice-dev \
-                libavfilter-dev \
-                libavformat-dev \
-                libavutil-dev \
-                libswresample-dev \
-                libswscale-dev \
                 mold \
-                nasm \
-                ninja-build \
-                perl \
                 pkg-config \
                 iproute2 \
                 sqlite3 \

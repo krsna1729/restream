@@ -26,7 +26,6 @@ pub struct HttpAgentBackend {
 struct BuildIdentity {
     version: String,
     commit: String,
-    native_build_id: String,
 }
 
 fn transport_error(error: reqwest::Error) -> AgentError {
@@ -48,14 +47,8 @@ impl HttpAgentBackend {
         let local = local_build_identity();
         if remote != local {
             return Err(AgentError::Transport(format!(
-                "restream-mcp {} ({}) expects restream {} ({}), but target {} reports {} ({})",
-                local.version,
-                local.commit,
-                local.version,
-                local.native_build_id,
-                self.base_url,
-                remote.version,
-                remote.commit
+                "restream-mcp {} ({}) expects the same restream build, but target {} reports {} ({})",
+                local.version, local.commit, self.base_url, remote.version, remote.commit
             )));
         }
 
@@ -136,7 +129,6 @@ fn local_build_identity() -> BuildIdentity {
     BuildIdentity {
         version: env!("CARGO_PKG_VERSION").to_string(),
         commit: env!("GIT_COMMIT_HASH").to_string(),
-        native_build_id: env!("GIT_COMMIT_HASH").to_string(),
     }
 }
 
@@ -168,20 +160,9 @@ fn parse_build_identity(payload: &Value) -> Result<BuildIdentity, AgentError> {
                 "target /api/v1/engine response is missing 'restream.commit'".to_string(),
             )
         })?;
-    let native_build_id = restream
-        .get("nativeBuildId")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            AgentError::Transport(
-                "target /api/v1/engine response is missing 'restream.nativeBuildId'".to_string(),
-            )
-        })?;
-
     Ok(BuildIdentity {
         version: version.to_string(),
         commit: commit.to_string(),
-        native_build_id: native_build_id.to_string(),
     })
 }
 
@@ -272,8 +253,7 @@ mod tests {
         let parsed = parse_build_identity(&json!({
             "restream": {
                 "version": "0.1.0",
-                "commit": "abc123",
-                "nativeBuildId": "abc123"
+                "commit": "abc123"
             }
         }))
         .expect("parse should succeed");
@@ -283,8 +263,16 @@ mod tests {
             BuildIdentity {
                 version: "0.1.0".to_string(),
                 commit: "abc123".to_string(),
-                native_build_id: "abc123".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn this_builds_engine_status_matches_the_local_identity() {
+        let (status, _) = crate::runtime_info::status_and_sbom(false);
+        assert_eq!(
+            parse_build_identity(&status).expect("engine status carries an identity"),
+            local_build_identity()
         );
     }
 

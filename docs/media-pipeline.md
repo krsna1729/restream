@@ -1136,7 +1136,7 @@ independent of the output count.
 | Buffer | Default | Source |
 |---|---|---|
 | Standby GOP cache | 16 MiB or 2,048 packets per input | `src/media/standby_gop.rs` |
-| Recording `MemoryQueue` | 512 KiB (`RESTREAM_AVIO_QUEUE_CAPACITY`, clamp 64 KiB–16 MiB); soft limit, a write can overshoot by one batch | `src/media/avio.rs` |
+| Recording `MemoryQueue` | 512 KiB (`RESTREAM_RECORDING_QUEUE_CAPACITY`, clamp 64 KiB–16 MiB); soft limit, a write can overshoot by one batch | `src/media/byte_queue.rs` |
 | HLS MPEG-TS window | `RESTREAM_HLS_MAX_SEGMENTS` (20); target duration starts at 6 s and never decreases | `src/media/hls/store.rs` |
 | HLS fMP4 window | 20 advertised, 26 kept | `src/media/hls/fmp4/store.rs` |
 

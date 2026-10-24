@@ -302,7 +302,7 @@ async fn read_wakes_on_write() {
 // releasing the capacity-check lock. A reader on another OS thread could
 // drain the buffer and call `notify_waiters()` in that gap — before the
 // writer's future existed to observe it — losing the wakeup and hanging
-// the writer forever. Reproduced by benches/avio_throughput.rs, which hung
+// the writer forever. Reproduced by benches/byte_queue_throughput.rs, which hung
 // indefinitely at 0% CPU on its first warmup iteration. This test mirrors
 // that shape (multi-thread runtime writer + tight-loop reader on a real
 // OS thread, capacity crossed on nearly every write) so the race window

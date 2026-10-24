@@ -13,7 +13,7 @@ with `--help` for its options.
 - [Worktrees for parallel work](#worktrees-for-parallel-work)
 - [Sharing one host](#sharing-one-host)
 - [Containers](#containers)
-- [Static and release builds](#static-and-release-builds)
+- [Release builds](#release-builds)
 
 ## Prerequisites
 
@@ -26,8 +26,8 @@ Restream builds on Linux x86_64. The scripts support Debian and Ubuntu.
 
 `bootstrap.sh` installs the apt packages, the pinned Rust toolchain
 (`rust-toolchain.toml`), Node and the frontend dependencies, a pinned
-MediaMTX, the Git pre-commit hook, and the static native prefix. It also
-checks the host for the live harness.
+MediaMTX and the Git pre-commit hook. It also checks the host for the live
+harness.
 
 - The package list lives in
   [`scripts/lib/debian-packages.sh`](../scripts/lib/debian-packages.sh). Do
@@ -43,10 +43,9 @@ scripts/build/app-native.sh
 RESTREAM_INITIAL_ADMIN_PASSWORD=change-me target/debug/restream
 ```
 
-1. `prepare.sh` refreshes the native prefix and builds the embedded frontend
-   assets. It stops with an instruction if `node_modules/` is missing.
-2. `app-native.sh` builds `target/debug/restream` and checks its native
-   linkage. `RESTREAM_BUILD_PROFILE=release` builds a release binary instead.
+1. `prepare.sh` builds the embedded frontend assets. It stops with an instruction if `node_modules/` is missing.
+2. `app-native.sh` builds `target/debug/restream`, checks that it links no
+   SRT or FFmpeg libraries, and emits its SBOM. `RESTREAM_BUILD_PROFILE=release` builds a release binary instead.
 3. The binary keeps its state under `.restream/` in the working directory.
    [Configuration](configuration.md) lists the path, listener and auth
    settings.
@@ -121,9 +120,6 @@ flowchart TD
 - The helper copies a pruned debug `target/`, `.cargo/` and `node_modules/`
   from the source tree. Each worktree owns its copies; never point two
   worktrees at one `target/`.
-- It shares `.local/build/static` by default. When you change native inputs
-  (`build.rs`, Docker or static build scripts, native test helpers), use
-  `--copy-static` to work on an isolated copy.
 - `setup.env` records `AGENT_WORK_ROOT` (default
   `.local/artifacts/agents/<id>` inside the worktree). Export it as
   `WORK_ROOT` and keep the task's artifacts under it.
@@ -138,7 +134,7 @@ ports or CPU.
 | Work | Rule |
 |---|---|
 | Heavy builds | Check `pgrep -a -x cargo` first. Nothing serializes builds across worktrees |
-| Builds and live media | Never build while a Restream, MediaMTX or FFmpeg pipeline runs. Static FFmpeg links can run a small host out of memory |
+| Builds and live media | Never build while a Restream, MediaMTX or FFmpeg pipeline runs. Builds are memory heavy and can run a small host out of memory |
 | Live correctness runs | Run modes through `scripts/harness/run.sh`; it rebuilds stale bench binaries. Overlap runs only when each has its own network, ports and artifacts, as `scripts/harness/parallel-fast-breadth.sh` provides |
 | Measurements | Benchmarks, sweeps and capacity ramps run serially on an idle host. A competing build or pipeline makes the result invalid |
 | Long-lived sessions | Give each dashboard or debug session an owner, its own runtime directory and a cleanup step. Prefer the harness or demo tooling that already owns ports |
@@ -149,8 +145,9 @@ full agent safety rules.
 ## Containers
 
 The [README](../README.md#run-the-container) shows the production image. The
-Dockerfile rebuilds the native prefix and frontend from the same scripts, then
-copies the binary and an FFmpeg executable into a distroless image.
+Dockerfile builds the frontend and binary from the same scripts, then copies
+the binary and the BtbN `ffmpeg` and `ffprobe` executables into a distroless
+image.
 
 The `harness` target holds the bench-profile `restream` and `test_harness`,
 pinned MediaMTX, FFmpeg and the committed fixtures. Its entry point is
@@ -171,11 +168,10 @@ docker run --rm --network host \
 - The `runtime-ubuntu` target is an escape hatch for unusual NSS or DNS
   setups. The default target is the distroless `runtime`.
 
-## Static and release builds
+## Release builds
 
-`scripts/build/app-static.sh` builds the fully static engineering binary,
-creating the native prefix if needed, and emits its SBOM. It is not a release
-artifact. [FFmpeg versions](ffmpeg-versions.md) owns the native source pins.
+The engine links no FFmpeg; codec work runs in an external `ffmpeg`.
+[FFmpeg versions](ffmpeg-versions.md) owns which build runs.
 
 Committed performance evidence uses `cargo xtask build-release`
 (`target/qual-release/`). Release candidates follow the

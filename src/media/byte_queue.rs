@@ -11,16 +11,16 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-pub const DEFAULT_AVIO_QUEUE_CAPACITY: usize = 512 * 1024;
+pub const DEFAULT_RECORDING_QUEUE_CAPACITY: usize = 512 * 1024;
 
 // 512 KB is the pre-cutover default: it absorbed bursts between the async TS
 // reader and the blocking SRT/RTMP sender threads that used this queue then
 // (scale-test evidence: max per-queue HWM = 398 KB at 8 Mb/s across all
 // config×bitrate combinations, 0 blocked_writes throughout). Recording is the
-// only user left; operators can raise it with RESTREAM_AVIO_QUEUE_CAPACITY.
+// only user left; operators can raise it with RESTREAM_RECORDING_QUEUE_CAPACITY.
 
-fn default_avio_queue_capacity() -> usize {
-    DEFAULT_AVIO_QUEUE_CAPACITY
+fn default_recording_queue_capacity() -> usize {
+    DEFAULT_RECORDING_QUEUE_CAPACITY
 }
 
 pub struct MemoryQueue {
@@ -45,7 +45,7 @@ impl Default for MemoryQueue {
 
 impl MemoryQueue {
     pub fn new() -> Self {
-        Self::new_with_capacity(default_avio_queue_capacity())
+        Self::new_with_capacity(default_recording_queue_capacity())
     }
 
     pub fn new_with_capacity(capacity: usize) -> Self {
@@ -273,5 +273,5 @@ impl MemoryQueue {
 }
 
 #[cfg(test)]
-#[path = "avio_tests.rs"]
+#[path = "byte_queue_tests.rs"]
 mod tests;
