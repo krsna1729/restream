@@ -752,8 +752,6 @@ history by those fields, not by message text.
 - Never log inside packet-level push, pull, read, mux, demux or send loops.
 - Control operations (stage creation, reader registration, resize, teardown)
   may log at `debug` or `info`.
-- Passing tests must not print expected warnings, panic text or media-tool
-  output. Suppress expected noise in the test helper.
 
 ### Implementation map
 

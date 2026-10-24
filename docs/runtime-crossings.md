@@ -118,40 +118,21 @@ CONTROL.
 
 ## Measurement references
 
-Each item gives the number a reader needs and where it came from. Full data
-is in the commit that recorded it.
+Numbers that set a current default or decision. The full data is in the
+commit that recorded it.
 
-- **M1** RTMP ingress owner cost: about 0.66% of a core per 8 Mbit/s
-  publisher (release, ingest only, 64 publishers). Permit and queue wait
-  percentiles are not instrumented. Open.
-- **M2** Direct play (C2, C7) is diagnostic. CI's `direct-play` shard checks
-  structure with ffprobe and decodes SRT `read` and RTMP `play` to a null
-  sink. No scaling study.
-- **M3** SRT ingest at 8–32 publishers held ~7.9 Mbit/s each. The
-  Owner→CONTROL event bridge (`INGRESS_EVENT_CAPACITY` 256, plus
-  `PENDING_EVENTS_MAX` 1024 on the Owner) carries lifecycle only; media
-  never waits on it (C3). The harness drives at most ~40 SRT publishers on
-  the reference host.
-- **M4** SRT ingress Owner ceiling: about 1.8% of a core per 8 Mbit/s
-  publisher, so one Owner saturates near 55 publishers.
-  `RESTREAM_SRT_INGRESS_OWNERS=2` lifted the per-Owner ceiling about 20%, not
-  2×, on a 6-vCPU KVM guest; the default stays 1.
-- **M5** RTMP ingress owners share only the allocator, the CONTROL session
-  consumer, the engine registries and the kernel. At up to 4 owners on 6
-  vCPUs there was no contention signature. Candidates if a larger host shows
-  one: `MALLOC_ARENA_MAX`, per-owner pools, CPU-aligned reuseport steering.
-- **M6** Single-shard SRT capacity (one 4 Mbit/s feed, sink receivers,
-  delivery-checked): one shard delivered every output up to 64 at 19–51%
-  busy, lost outputs at 96 (62% busy) and collapsed at 128 (89% busy). This
-  sets the SRT cold prior (64 outputs per shard) and the 60% admission
-  ceiling in `src/media/egress/sizing.rs`. Cross-host qualification is
-  open.
-- **M7** Pinning CONTROL, MEDIA and hot threads to separate CPUs saved about
-  10% process CPU at SRT × 64 but doubled shard run-queue wait; at RTMP × 100
-  the ranges overlapped. Decision: keep shared affinity
-  (`scripts/harness/restream-segregated.sh` reproduces the split arm).
-- **M8** Many-feed cost (SRT, 1.5 Mbit/s feeds, 2 outputs each): each extra
-  feed adds about 5% shard CPU, 2.4 threads and 15 MB, against about 0.7%
-  shard CPU per extra output on one feed. A host-level shared SRT pool cut
-  that cost but let one structural Owner fault fail outputs of several
-  feeds, so production keeps one shard group per feed.
+- **M4** One SRT ingress Owner costs about 1.8% of a core per 8 Mbit/s
+  publisher. A second Owner lifted the per-Owner ceiling about 20%, not 2×,
+  so `RESTREAM_SRT_INGRESS_OWNERS` defaults to 1.
+- **M6** One SRT shard (one 4 Mbit/s feed, delivery-checked) delivered every
+  output up to 64 at 19–51% busy and began losing outputs at 96 (62% busy).
+  This sets the SRT cold prior (64 outputs per shard) and the 60% admission
+  ceiling in `src/media/egress/sizing.rs`. Cross-host qualification is open.
+- **M7** Pinning CONTROL, MEDIA and hot threads to separate CPUs doubled
+  shard run-queue wait for about 10% less process CPU, so threads keep
+  shared affinity (`scripts/harness/restream-segregated.sh` reproduces the
+  split arm).
+- **M8** Each extra SRT feed adds about 5% shard CPU, 2.4 threads and 15 MB,
+  against about 0.7% shard CPU per extra output on one feed. A host-level
+  shared SRT pool cut that cost but let one Owner fault fail several feeds,
+  so production keeps one shard group per feed.

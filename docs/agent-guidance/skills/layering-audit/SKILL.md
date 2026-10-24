@@ -14,10 +14,11 @@ request, report findings without moving code.
 - Backend: `api` owns auth/validation/response shaping; `application` owns
   orchestration and persistence policy; `media` owns runtime and hot paths;
   `db` owns SQL; `domain` owns graph vocabulary; `planner` owns selection policy.
-- Frontend: `app` composes features; `core` owns shared transport/state/pure
-  helpers; `features` own bounded UI; `history` owns its state and rendering.
+- Frontend: `control-room/` composes the workspaces; `ui/` holds primitives
+  and imports only `core/`; `core/` owns shared transport, state and pure
+  helpers.
 
-Read the relevant part of [the layering roadmap](../../../architecture.md#layering-rules)
+Read the [layering rules](../../../architecture.md#layering-rules)
 for the current boundary. Use an existing code index when available, and verify
 suspected upward dependencies against current source.
 
@@ -44,8 +45,8 @@ Keep a boundary move behavior-preserving and run focused tests for every moved
 responsibility, then `cargo xtask source-audit`. Apply AGENTS.md contract,
 frontend, concurrency, and benchmark gates to the actual changes.
 
-For MCP/agent feature boundaries, run the roadmap's negative feature-matrix
-compile commands. Lower features must compile with `agent-plane` and
+For MCP/agent feature boundaries, run the `lint` CI job's
+`--no-default-features` MCP compile matrix (`.github/workflows/ci.yml`). Lower features must compile with `agent-plane` and
 `agent-execution` disabled; a feature graph that implicitly enables the upper
 layer does not prove isolation. Keep the `mcp-http-backend` gate beside its
 adapter module. Treat `mcp-embedded` as the intentional `mcp-core` plus

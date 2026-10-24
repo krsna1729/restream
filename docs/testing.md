@@ -251,7 +251,7 @@ with unclear reach. Report unrelated failures separately.
 | 2 Contract slice | neighbouring API, graph, protocol or lifecycle contracts | filtered tests by module, endpoint or protocol |
 | 3 Hot-path cost | the touched Criterion group | `cargo bench --bench <bench> -- <filter>` |
 | 4 Live protocol slice | one live topology | `target/bench/test_harness mixed.live.srt.h264.a1.bf2` |
-| 5 Scale slice | bounded ramp, restart, queue pressure or bonding | small `N_OUTPUTS` ramp, `bonding` |
+| 5 Scale slice | bounded ramp, restart or queue pressure | small `N_OUTPUTS` ramp |
 | 6 Full gate | release pass assembled from the stages above | full `cargo test`, benches, live modes |
 
 Split a growing suite along behavior, protocol, codec shape, topology, load
@@ -299,7 +299,7 @@ while Restream, MediaMTX or FFmpeg live processes run.
 | MoQ egress, origin, ingest, or the egress fabric | `moq-dev-interop` |
 | MoQ delivery under loss, startup and A/V skew | `moq-impairment` |
 | broad regression | a catalog suite, after the scoped mode passes |
-| performance or capacity | a measurement workflow, serial, bench profile |
+| performance or capacity | [capacity ramp](capacity-ramp.md) or [resource sweep](resource-sweep.md), serially on an idle host |
 
 ### HLS push ingest isolation (`hls-push-duty`)
 
@@ -342,10 +342,9 @@ snapshot (see
 `hostProbe` carries the probe thread's samples, gaps above 1 ms, maximum
 wall and thread-CPU gaps, and longest wake delay. These are contextual raw
 measurements, not evidence that any particular application poll was delayed
-by the host. Executor maxima/percentiles cover service lifetime, whereas the
-probe covers only the rated window. Its nominal 1 ms spin / 4 ms sleep cycle
-costs about 20% of one core and misses gaps outside spinning windows.
-Requested probe startup, clock or thread-join failures invalidate the run.
+by the host. The probe covers only the rated window (executor maxima cover
+service lifetime), costs about 20% of one core and misses gaps outside its
+spinning windows. A probe startup, clock or join failure invalidates the run.
 
 ### MoQ interop
 
@@ -475,7 +474,7 @@ failure, so partial counts survive. `.local/artifacts/moq-impairment/` holds
 (`scripts/dev/moq/fetch-mediamtx.sh`, `MOQ_INTEROP_MEDIAMTX_BIN`).
 It is diagnostic-only, not run by CI or suites: the SETUP, namespace and
 LOC/MSF dialect mismatches are source/spec-evidenced in
-[Q-091](backlog.md#q-091-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop).
+[Q-097](backlog.md#q-097-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop).
 Use `moq-dev-interop --ietf` for the supported IETF gate; do not fork a
 MediaMTX-specific profile.
 
@@ -592,29 +591,16 @@ flock -x /tmp/restream-host.lock python3 scripts/harness/srt_final_qual.py froze
 The frozen driver defaults to `target/qual-release/{restream,test_harness}`;
 `--restream-bin` and `--harness-bin` permit explicit binaries (including an
 exec-style allocation-profiler launcher that preserves the child PID).
-`--variant` is a report label only, not a binary selector. Each tag must be
-new. The campaign saves raw smaps/rollup, thread names, socket FD
-inodes and UDP tables, existing retained-ring and SRT Owner telemetry, harness
-stdout/stderr, and wall-clock phase markers through live progress, SIGSTOP,
-retry, output stop, pipeline deletion and intentional capture completion.
-Receiver-side MediaMTX byte growth is required before freezing. Missing/zero
-gate RSS is unavailable and fails; the artifact includes both read errors and
-nullable values, never a zero substitute. Exit zero alone is insufficient:
-the named frozen subtest must pass with available/bounded RSS, matching
-positive `rssBeforeStallKb`/`rssAfterStallKb` endpoints and the unchanged
-64 MiB limit. Missing reports and legacy endpoint keys are rejected.
-Missing attribution or process samples fail the driver as well. Ordered phase
-markers and samples must cover live progress before SIGSTOP and the full
-120-second retry observation, through `capture-complete` before intentional
-process shutdown. Phase proximity and consecutive capture gaps may not exceed
-two sampling intervals (2 seconds at the default 1 Hz). Late discovery,
-truncated sampling, sampler failure and observed process disappearance before
-capture completion fail; expected shutdown afterward does not. A timed-out
-harness runs in its own process group, which is terminated and then killed
-before sampler join and the final process census.
-RSS/smaps and ring payload alone cannot separate live heap from allocator
-retention; pair them with an allocation profiler before making that claim.
-The 64 MiB growth limit remains unchanged pending historical attribution.
+`--variant` is a report label only, and each tag must be new. The campaign
+records smaps, thread, socket and Owner telemetry with phase markers from
+live progress through SIGSTOP, retry, output stop and pipeline deletion. It
+fails closed: missing or zero RSS endpoints, missing reports, incomplete
+sample coverage or gaps over two sampling intervals fail the driver, and
+exit zero alone is not a pass. RSS and ring payload alone cannot separate
+live heap from allocator retention; pair them with an allocation profiler.
+The 64 MiB growth limit stays unchanged until
+[Q-026](backlog.md#q-026-resilience-opus-attribute-and-recalibrate-the-frozen-srt-destination-rss-gate)
+attributes the historical growth.
 
 - `srt.slow-peer` pauses application delivery on one `RawSrtSink` receiver
   while protocol timers keep running. Healthy siblings must keep progressing.
@@ -698,7 +684,7 @@ brings an equal or stronger proof in the same change.
 | Failure class | Replay | Guardrail |
 |---|---|---|
 | External H.265 capacity or zero-output stall | `test/fixtures/transport/correctness-h265.ts`, `bench-h265-1_5m.ts`, `bench-h265-1_5m-2a.ts`; `mixed.live.srt.h265.a1.bf2`, `mixed.live.srt.h265.a2.bf2` | `waitingForCapacity` health/alert tests; `cargo xtask concurrency fast` |
-| Low-CPU external-capacity collapse | `target/bench/test_harness resource-sweep` (output in `.local/artifacts/resource-sweep/`) | baselines in [resource sweep](resource-sweep.md) |
+| Low-CPU external-capacity collapse | `scripts/harness/run.sh resource-sweep` (output in `.local/artifacts/resource-sweep/`) | [resource sweep](resource-sweep.md) |
 | Recording `.tmp.mp4` or wrong-case media selection | `cargo test media_recording_identity --bin test_harness` | API media-library tests key recordings by `pipelineId`/`recordingId` |
 
 New failure evidence takes a durable form: a fixture registered in

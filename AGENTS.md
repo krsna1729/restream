@@ -20,7 +20,6 @@ skills; load the skill for the area you touch.
 ## Core Rules
 
 - Keep changes small, intentional, and consistent with existing Rust/TypeScript patterns.
-- Read the relevant code and docs before editing.
 - Preserve unrelated user or agent changes. Check `git status` before broad edits, staging, or commits.
 - If overlapping work is visible in `git status`, diffs, or file contents, use hunk-based edits and hunk-based git operations. Do not overwrite, reformat, stage, or revert whole files unless explicitly asked.
 - Add or update tests for behavior changes.
@@ -117,7 +116,7 @@ in on demand, and verify with the narrowest gate first.
 | frontend/backend contract surface | API contract | — |
 | test media, fixtures, bench/harness setup | Rust unit hygiene and fixtures | — |
 | Markdown documentation | Source architecture audit (`scripts/check/docs.mjs`) | — |
-| `web/ts/`, `web/styles/input.css` | Frontend unit, Frontend app, HLS browser | the new test only |
+| `web/ts/`, `web/styles/input.css` | Frontend unit, Frontend app E2E | the new test only |
 | RTMP/SRT/HLS protocol behavior | Transport live-harness; master push transport matrix | one harness mode for a new scenario (`test_harness catalog list-modes`) |
 | hot-path code | — | relevant `benches/` suite before and after |
 

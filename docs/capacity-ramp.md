@@ -49,20 +49,12 @@ runner's help for exact ladders and all options.
 
 ## Run it
 
-Use an otherwise idle Linux host. Stop only media processes that belong to
-your run. Do not build while any live pipeline is running, and do not run
-another benchmark or build beside a measurement.
-
-1. Use a worktree at the revision under test. Record any dirty changes; do
-   not compare an unexplained dirty tree with a clean build.
-2. Prepare the pinned toolchain and native dependencies as described in
-   [Development](development.md).
-3. Check disk space and running `restream`, `mediamtx`, `ffmpeg` and Cargo
-   processes. The runner refuses live media and, by default, a dirty tree.
-4. Check `io_uring` availability, CPU affinity and the file-descriptor
-   limit. The runner requires a limit of at least 65536. For RTMPS kTLS,
-   load the kernel `tls` module where required.
-5. Run the ramp under the host measurement lock:
+Use an otherwise idle Linux host and a worktree at the revision under test
+(build and process rules: [AGENTS.md](../AGENTS.md#build-and-worktree-safety)).
+The runner refuses live media and, by default, a dirty tree. It needs
+`io_uring` and a file-descriptor limit of at least 65536; for RTMPS kTLS,
+load the kernel `tls` module where required. Run it under the host
+measurement lock:
 
 ```sh
 flock -x /tmp/restream-host.lock cargo xtask capacity-ramp --help
@@ -169,6 +161,3 @@ Record CPU model/count, NUMA placement, OS/kernel, virtualization, memory,
 limits, receiver topology and jitter. Compare CPU per delivered output at
 equal rungs, not only the final passing rung. Two hosts that pass a capped
 ladder have not proved equal maximum capacity.
-
-Store reproducible measurements and caveats in the change's commit
-message. This guide defines the method; it is not a historical scoreboard.

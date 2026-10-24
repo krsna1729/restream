@@ -1,4 +1,4 @@
-// RTMP admission isolation (docs/isolation-audit.md F1, F2): one client
+// RTMP admission isolation (docs/isolation-audit.md): one client
 // cannot take every connection slot, and a client that never publishes
 // cannot hold a slot past the admission deadline. Included into the RTMP
 // test module.

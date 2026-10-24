@@ -3,7 +3,7 @@
 //! Centralizes stage creation, lifecycle registration, metrics, and backend
 //! selection so that outputs, HLS preview, recording, and diagnostics all use
 //! the same admission path. This is the runtime scheduler layer described in
-//! `docs/architecture.md` and `docs/implementation.md`.
+//! `docs/architecture.md`.
 
 use std::sync::Arc;
 use std::time::Duration;

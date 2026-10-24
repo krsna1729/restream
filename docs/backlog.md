@@ -1,18 +1,15 @@
 # Backlog
 
-The one list of open engineering work. Each item states its goal, the files it
-touches, the gates that prove it, and the evidence so far. Close an item by
-deleting it in the change that does the work; the commit message keeps the
-evidence. Larger directions live in [assurance roadmap](assurance-roadmap.md)
-(verification) and [runtime crossings](runtime-crossings.md) (open measurement
-items).
+The one list of open engineering work. Each item states what, why and the
+gates that close it. Close an item by deleting it in the change that does the
+work; the commit message keeps the evidence. Verification direction lives in
+the [assurance roadmap](assurance-roadmap.md).
 
 ## Contents
 
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
 - [Q-026 frozen-SRT-destination RSS gate](#q-026-resilience-opus-attribute-and-recalibrate-the-frozen-srt-destination-rss-gate)
 - [Q-027 residual SRT×100 repeat failure](#q-027-performance-opus-find-why-srt100-still-fails-a-repeat-with-the-multi-owner-sink)
-- [Q-031 one capacity allocator](#q-031-architecture-opus-derive-every-thread-count-from-one-capacity-allocator)
 - [Q-033 host-level shard pool](#q-033-architecture-opus-run-egress-shards-from-one-host-level-pool-instead-of-per-feed-groups)
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
 - [Q-047 MoQ egress: IETF MOQT profiles](#q-047-protocol-opus-moq-egress-ietf-moqt-profiles)
@@ -33,528 +30,225 @@ items).
 - [Q-103 picture and sound checks: wider coverage](#q-103-observability-sonnet-picture-and-sound-checks-wider-coverage)
 
 ### Q-025 [performance] [opus] Re-qualify the SRT shard law after transport convergence
-- Goal: settle `EgressShardProfile::SrtCpuParallel` and
-  `srt_egress_connect_concurrency` against the final Compio Owner and transport
-  architecture; the previous libsrt `CSndQueue` saturation rationale no longer
-  applies.
-- Files: `src/config.rs` (`target_egress_fabric_shards`,
-  `EgressShardProfile`, `srt_egress_connect_concurrency`).
-- Gates: one-core/shard-law matrix at the final transport topology, followed by
-  cross-host qualification; no production policy change without valid measured
-  evidence.
-- Context: WI3.7's provenance-clean current-host result is provisional
-  evidence, not a frozen coefficient or runtime-law decision. Defer new
-  measurement until WI4A–WI6 transport convergence, WI7/WI9 cleanup, and WI8
-  runtime/host calibration are complete. No production shard policy or
-  performance constants change from WI3.7.
-- Status: current-host part done (2026-10-02). The CPU-ceiling SRT profile is
-  gone: SRT and RTMP share one service-demand law (`src/media/egress/sizing.rs`)
-  with a delivery-checked cold prior (64 SRT outputs per shard at 4.8 Mbit/s),
-  and resizing never moves a live output (`docs/runtime-crossings.md` M6).
-  Still open: cross-host qualification of the cold prior and of
-  `srt_egress_connect_concurrency` (Filed: 2026-09-05 by claude, from PR #141
-  review).
+- Goal: qualify the SRT cold prior (64 outputs per shard at 4.8 Mbit/s,
+  `src/media/egress/sizing.rs`, [M6](runtime-crossings.md#measurement-references))
+  and `srt_egress_connect_concurrency` (`src/config.rs`) on a second host.
+- Gates: the single-shard SRT matrix on another host; no production policy
+  change without measured evidence.
 
 ### Q-026 [resilience] [opus] Attribute and recalibrate the frozen-SRT-destination RSS gate
-- Goal: explain the ~70 MB RSS growth of `fault.srt-output-stall`'s frozen
-  destination case (114 -> ~185 MB, then a plateau) and either remove the cause
-  or recalibrate the fixed 64 MiB `MAX_ACCEPTABLE_RSS_GROWTH_KB` from an
-  attribution, not from the observed result.
+- Goal: explain the historical ~70 MB RSS growth of `fault.srt-output-stall`'s
+  frozen-destination case (then a plateau), then remove the cause or
+  recalibrate the 64 MiB `MAX_ACCEPTABLE_RSS_GROWTH_KB` from that attribution.
 - Files: `src/bin/test_harness/fault_recovery/srt_stall.rs`, retry/cleanup paths
   in `src/media/egress/backends/srt*.rs`.
+- Context: current runs pass well under the gate and the opt-in attribution
+  census does not reproduce the old growth. Closing needs allocation stacks,
+  live-vs-free data and feed/transport ownership snapshots that explain or
+  reproduce that shape. Keep the gate unchanged until then.
 - Gates: `scripts/harness/run.sh fault.srt-output-stall -- --no-netns`;
   `scripts/harness/srt_final_qual.py frozen` for the RSS time series.
-- Context: WI2.5 measured the gate failing on BOTH `c323e5f5` (67.6 and 72.5 MB)
-  and the Compio Owner (69.7-74.6 MB over four runs), with a late-window plateau
-  in each (candidate ~197 MB, baseline ~184 MB). No Compio-specific retry-memory
-  regression, so the threshold was deliberately left unchanged; this debt
-  predates the cutover. New runs in #374 passed at +7.6 MiB (bench) and
-  +4.7 MiB (debug), and the scenario now gates CI's concurrency contract and
-  the nightly release shards. These passes do not attribute the previous
-  ~70 MB growth; attribution remains open and the threshold is unchanged.
-  Earlier evidence is in git history
-  (`test/harness/baselines/srt-compio-owner-final/`, removed with the ledgers). Filed: 2026-09-20 by claude.
-  The frozen summaries at `20a49036` retain only coarse RSS/thread/FD series;
-  the local per-second archives add PSS and Owner counters, but neither has
-  allocator live/free accounting, smaps, retained-ring payload or stop/delete
-  snapshots. The summaries' gate endpoint fields are null
-  because the driver read `rssBeforeKb`/`rssAfterKb` instead of the harness's
-  `rssBeforeStallKb`/`rssAfterStallKb`. The harness now fails closed on either
-  unreadable/zero RSS endpoint and the driver requires the current named
-  report plus complete lifecycle sample coverage, not merely exit zero.
-  An opt-in attribution census records lifecycle-aligned evidence. The new
-  release/heaptrack/mallinfo2 campaign separates current ring warmup, requested
-  heap and allocator-free arenas, but does not reproduce the old growth.
-  Closing this item still requires explaining that growth with historical
-  allocation stacks/live-vs-free data and feed/transport ownership snapshots,
-  or reproducing that shape with those inputs; a smaller current pass does
-  not supply them. Keep the 64 MiB gate unchanged.
 
 ### Q-027 [performance] [opus] Find why SRT×100 still fails a repeat with the multi-Owner sink
-- Goal: SRT capacity rungs measure Restream, not the receiver: the harness SRT
-  sink (two `SO_REUSEPORT` Owners per port) services every session at
-  SRT×100, so a failing repeat is Restream's.
-- Files: `src/bin/test_harness/harness_srt_sink.rs`; production reference
-  `src/media/srt/ingress_owner.rs`.
-- Gates: the unchanged ramp (`CAPACITY_PROTOCOLS=srt CAPACITY_SRT_OUTPUTS=100
-  CAPACITY_REPEATS=7`, Restream on 4 CPUs, harness on 2, `CAPACITY_PEER_COUNT=2`,
-  default 8 MiB sink buffer) passes 7 of 7, so `summary.md` reports SRT
-  capacity 100 (it needs every repeat to pass).
-- Context: the multi-Owner sink (PR #402, measured on 0c3174f7 plus that
-  change) passed 6 of 7 at 100 outputs
-  (`.local/artifacts/capacity-ramp/20261022T034708Z`); `summary.md` reports
-  SRT capacity 0.
-  - Failing rep3: 14 destinations measured zero receiver delivery (ratioMin
-    0, Jain 0.86, median 1.008), and 5 sender leaves stalled: Restream's
-    stall sweep closed them with `srt egress leaf closed unexpectedly: no
-    progress (stalled)`, the plain-stall class, not shard-saturated. Cause
-    unproven.
-  - Kernel socket drops concentrate on one reuseport member per port (rep5
-    8,785 vs 0; rep7 6,398 vs 0), and Owner RX buffer exhaustions run 6k-12k
-    in every repeat.
-  Receiver-side hypothesis, unproven: one sink Owner stopped servicing its
-  sessions during rep3. Probe it with per-Owner session and ACK counters in
-  the sink.
-- Status: open (Filed: 2026-10-02 by claude; narrowed 2026-10-22 after the
-  PR #402 review).
-
-### Q-031 [architecture] [opus] Derive every thread count from one capacity allocator
-- Goal: thread counts follow measured service demand (λ × D at a target
-  utilization, bounded by real CPUs) instead of independent constants that
-  together can claim more CPUs than the host has.
-- Files: `src/config.rs` (`default_tokio_worker_threads` = `ceil(C/3)` in
-  `[2, 8]`, `default_egress_fabric_shards` = `clamp(C, 2, 8)`,
-  `RESTREAM_RTMP_INGRESS_OWNERS`, `RESTREAM_SRT_INGRESS_OWNERS`),
-  `src/media/executor.rs` (MEDIA `clamp(C, 1, 4)`, fixed after start),
-  `src/media/egress/sizing.rs` (the one demand-driven law today).
-- Gates: mixed-load matrix (RTMP + SRT + HLS + recording) showing no
-  regression in delivery against the current constants; Kani/Lean obligations
-  in the [assurance roadmap](assurance-roadmap.md) once the model gates
-  admission.
-- Context: egress shards already use the demand law (Q-025). MEDIA has
-  per-class busy/poll telemetry but no feedback loop; no auto-resize before
-  mixed-load data. Ingress RX mode (managed multishot vs `RawReadiness`) is a
-  host fact with its own coefficients: model it, do not unify it.
-- Status: step 1 done (2026-10-13): one `HostCapacity` (`src/capacity.rs`),
-  read once at boot, holds the CPU count and the CONTROL, MEDIA and
-  per-pool egress defaults (values unchanged); every sizing law and the
-  capacity priors read it (before, three priors read `available_parallelism`,
-  the process's own cgroup, rather than the root `cpu.max` + affinity count
-  of the thread laws, and each fabric re-read `/proc` and `/sys` on every
-  rescale); `/metrics/system` `hostCapacity`
-  reports CPUs and threads per class. Measured (C = 6, 4 mixed scenarios up
-  to 100 outputs): CONTROL + MEDIA use less than 0.02 core and egress shards
-  carry over 90 % of engine CPU, so resizing resident classes does not move
-  delivery.
-  The first shortfall (SRT, transcoded feed, 50 outputs, host at 1.7 of 6
-  cores) sits in one SRT pool that grew to 4 shards at Add time and never
-  again: `Observe` only shrinks, and a grown shard takes only new outputs.
-  That is a placement/admission question and moves to Q-034 and Q-049.
+- Goal: SRT capacity rungs measure Restream, not the receiver.
+- Context: with the two-Owner `SO_REUSEPORT` harness sink
+  (`src/bin/test_harness/harness_srt_sink.rs`), SRT×100 passed 6 of 7
+  repeats. The failing repeat had 14 destinations at zero delivery and 5 leaves
+  closed by the plain stall sweep (not shard saturation); kernel drops
+  concentrated on one reuseport member per port. Hypothesis, unproven: one
+  sink Owner stopped servicing its sessions. Probe with per-Owner session and
+  ACK counters in the sink.
+- Gates: `CAPACITY_PROTOCOLS=srt CAPACITY_SRT_OUTPUTS=100 CAPACITY_REPEATS=7
+  CAPACITY_PEER_COUNT=2` (Restream on 4 CPUs, harness on 2) passes 7 of 7.
 
 ### Q-033 [architecture] [opus] Run egress shards from one host-level pool instead of per-feed groups
-- Goal: the unit of egress execution matches the resource it spends (host
-  CPU): shards are a host pool that serves every feed, not one group per
-  (protocol, feed).
+- Goal: shards are a host pool that serves every feed, not one group per
+  (protocol, feed), without widening failure domains.
 - Files: `src/media/egress/runtime.rs`, `src/media/engine_*_egress_fabric.rs`,
-  `src/media/egress/sizing.rs`, `src/media/egress/backends/sink_shard.rs` and
-  the pipeline-recirculation backend.
-- Gates: in the many-feed matrix (`runtime-crossings.md` M8), shard threads
-  stop growing with feeds and the shard CPU each extra feed adds (about 5%
-  per feed of 2 × 1.5 Mbit/s SRT today) falls toward the per-output cost
-  (about 0.7%), every output delivered; record the per-feed floor a pool
-  cannot remove (ingest, feed ring, publish wake). Per-feed isolation (Q-034
-  admission, a frozen destination, feed teardown) keeps its harness cases;
-  structural Owner and shard failures must keep the required failure domains,
-  not merely leave memory finite; loom for the shared publish wake (`WakeGate`).
-- Context: measured 2026-10-14 (M8). The same 48 Mbit/s of SRT egress over 32
-  connections costs 84–87% shard CPU as 16 feeds × 2 and 30–35% as 1 feed
-  × 32; process threads 51–52 against 21–22, RSS 291 MB against 62–73 MB.
-  Part of that is per-feed work a pool keeps (16 ingests, rings, wakes).
-  Every feed holds at least one shard thread per protocol, including sink
-  and pipeline outputs that have no socket poller and could run on MEDIA.
-  Feed publish wake cost scales with subscribed shards (`WakeGate`, W1).
-- Status: experiment complete, cutover rejected (2026-10-14, M9); implementation
-  remains open. At 16 × 2, pooling reduced shard CPU from 89.9/96.4% to
-  37.2/29.5%, with 32/32 delivered. Frozen-destination and feed-teardown
-  isolation passed, but an injected production Owner-fault handler failed
-  both feeds in a shared pool where the per-feed control spared the sibling.
-  Keep production per-feed groups until a design preserves the required
-  failure domains or that contract is explicitly changed. The rejected
-  prototype is preserved on its local experiment branch (`d8c39b52`).
+  `src/media/egress/sizing.rs`, `src/media/egress/backends/sink_shard.rs`.
+- Context: a pooled prototype cut shard CPU at 16 feeds × 2 outputs by more
+  than half, but an injected Owner fault failed both feeds in a shared pool
+  ([M8](runtime-crossings.md#measurement-references)). Production keeps
+  per-feed groups until a design preserves the failure domains or that
+  contract is explicitly changed.
+- Gates: in the many-feed matrix, shard threads stop growing with feeds and
+  per-feed shard CPU falls toward the per-output cost, every output
+  delivered; frozen-destination, feed-teardown and structural Owner/shard
+  faults keep their failure domains; loom for the shared publish wake
+  (`WakeGate`).
 
 ### Q-034 [resilience] [opus] Define one overload policy for shared service centers
 - Goal: when a shared Owner or shard saturates, viable destinations keep
-  delivering and the excess is shed or refused explicitly, with an
-  operator-visible reason.
-- Files: `src/media/egress/sizing.rs` (admission point before Add),
-  `src/media/egress/backends/srt*.rs`, `src/media/rtmp/` egress.
-- Gates: live harness case that drives one shard past saturation (M6: one SRT
-  shard collapses from 92/96 to 0/128 delivered) and asserts the surviving set
-  and the status contract.
-- Context: RTMP connections mostly fail and retry one at a time; SRT outputs
-  on one shard deteriorate together after saturation.
-- Status: admission done (2026-10-13). SRT and RTMP pools place new outputs
-  on their least-loaded shard; before an Add, after the pool grows for it,
-  the shard it would land on projects its busy with it (`ShardSizer::admit`,
-  ceiling 60%: one shard degraded at 62%). Over the ceiling, the Add is not
-  dispatched: the output fails with phase `egress_capacity`, the diagnosis
-  is `capacityRefused` at the shard layer, an output alert names it, and the
-  restart backoff retries it until the output's retry budget is spent
-  (`retriesExhausted` then). The price uses the feed's rate: a runtime's
-  first look at a ring takes the rate of its retained window (DTS), and a
-  new SRT runtime looks at the ring its TS muxer reads, because the muxer
-  may start with the runtime and every Add of a burst lands within the
-  first 0.5 s (observed: 80 Adds in 170 ms were priced at the 4.8 Mbit/s
-  reference rate before this). Live gate `srt.admission` (one 8 Mbit/s
-  feed, one sink thread per 32 outputs): on one shard, 39 of 96 admitted,
-  peak busy 42%; on two shards, 80 of 192, peak busy 46% and 47%; no
-  stalls, and refused outputs sent nothing. Priced at the reference rate,
-  76 per shard were admitted at 61–65% peak busy. With one sink thread for
-  all 192 outputs the receiver, not the shards, was the limit: shard 0
-  reached 70% and 27 outputs stalled. Admitted outputs are never shed; if
-  load rises after admission (feed bitrate), only new Adds are refused.
-  Still open: HLS PUT, sink and pipeline fabrics have no admission; the
-  cold prior prices this host at 1.4–1.9× its measured per-output cost
-  until a healthy window measures it (Q-025).
+  delivering and the excess is refused with an operator-visible reason.
+- Context: RTMP, SRT and MoQ refuse an Add that would push its shard above
+  60% busy (`ShardSizer::admit`, `capacityRefused`; live gate
+  `srt.admission`). Still open: HLS PUT, sink and pipeline fabrics have no
+  admission, and the cold prior overprices a host until a healthy window
+  measures it (Q-025).
+- Gates: the same admission contract and a live saturation case for each
+  remaining fabric.
 
 ### Q-047 [protocol] [opus] MoQ egress: IETF MOQT profiles
-- Goal: the MoQ egress and origin also speak IETF MOQT draft-18 with the MSF
-  catalog and LOC objects, Cloudflare's draft-16 (token in the URL path) and
-  the MediaMTX v1.21.2 subset, beside the moq-lite-06 + hang profile.
-- Gates: interop with moxygen, MediaMTX and Cloudflare's relay as
-  subscribers (a harness mode per peer: moxygen's needs its own built relay);
-  fuzz targets for the control and object parsers.
-- Status: open; phase 1 (moq-lite-06 + hang, loom model for the origin hand-off)
-  landed in #371 with no regression on the unchanged shared egress and ring
-  benches (A/A); capacity model v5 prices the egress leaf from measured
-  per-output cost. IETF and moq-lite wire-codec fuzzing (control, object and
-  announce streams) now runs through `moq_wire`, seeded from moq-net;
-  MSF/LOC catalog and media parsing is exercised by `moq_ingest`. moxygen
-  done: `moq-moxygen-interop` (pinned `c392ebfc`, built by
-  `scripts/dev/moq/build-moxygen.sh`) publishes MSF/LOC to moxygen's relay on
-  draft-16 and draft-18 and reads it back through moxygen with FFprobe
-  checks. Still open: the MediaMTX subset (blocked on Q-097's upstream
-  dialect alignment) and Cloudflare's draft-16 relay, which needs an account
-  relay and a publish-capable token (the public demo JWT only subscribes).
-  (Filed: 2026-10-05 by claude, from the architecture reviews.)
+- Goal: MoQ egress and origin also speak IETF MOQT draft-18 (MSF catalog, LOC
+  objects), Cloudflare's draft-16 (token in the URL path) and the MediaMTX
+  v1.21.2 subset, beside moq-lite + hang.
+- Done so far: wire-codec fuzzing (`moq_wire`, `moq_ingest`) and moxygen
+  interop (`moq-moxygen-interop`, draft-16 and draft-18).
+- Open: the MediaMTX subset (blocked on Q-097) and Cloudflare's draft-16 relay,
+  which needs an account relay and a publish-capable token.
+- Gates: a harness interop mode per peer.
 
 ### Q-049 [resilience] [opus] Find why connected SRT leaves sent nothing under host overload
-- Evidence: while `mixed.signal` ran an H.265 case beside another case on a
-  6-core host (the wave pairing fixed in Q-048), every SRT 1080p leaf of one
-  pipeline completed the SRT handshake (pcap: the FFmpeg listener accepted
-  the conclusion) and then sent no payload for 30 s. `/api/v1/engine/health`
-  showed `bytesOut` 0, feed lag growing, `backpressureReason`
-  `backpressured` and no caller quality stats. SRT 720p leaves and RTMP
-  1080p leaves on the same stage delivered. It did not reproduce
-  standalone.
-- Question: can a leaf be starved by its shard or Owner under host CPU
-  pressure while its siblings progress? That would break output isolation.
-- Gates: a reproduction (load generator plus one feed) or a proof that the
-  leaf cannot stall while connected; the fix keeps sibling leaves unaffected.
-- Not reproduced (2026-10-13, master `f040cbdc` plus #320, 6 cores):
-  `mixed.live.srt.h265.a2.bf2` with five CPU-bound spinners passed, and the
-  whole `mixed.signal` mode with four spinners passed (6 cases).
-- The stall bound does not explain the evidence; it contradicts it.
-  `classify_stall` (`egress/policy.rs`) marks a leaf with pending bytes as
-  `stalled` when its feed lag exceeds `max_lag_units` (300 for SRT) or when
-  it has made no progress for `max_backpressure_duration`. SRT leaves take
-  their limits from `LeafLimits::from_policy`, so that duration is
-  `LeafPolicy::no_progress_timeout`, 15 s (the 30 s `LeafLimits` default
-  does not apply to them). The SRT stall sweep (`srt_drain.rs`) closes a
-  stalled leaf and the output retries. A leaf that reported `backpressured`
-  for 30 s with growing lag was therefore either recording progress without
-  payload, or never reaching `stalled`. Progress without payload can come
-  from:
-  - `record_send` with units and no bytes (`leaf.rs`);
-  - the backlog-shrink rule in `SrtLeaf::observe_stall`.
-
-  A lag of 0 is reported while the cursor is unprimed. The leaf also
-  escapes the bound in these cases:
-  - With zero pending bytes the leaf is `idle`. When there are no caller
-    stats the backlog counts as 0.
-  - While the shard reports `saturated`, a stalled leaf is kept as
-    `shard_saturated` for as long as the overload lasts.
-
-  "No caller quality stats" means `owners.stats(&leaf.caller)` returned
-  nothing, or `sample_quality` had no first sample yet. The next probes:
-  - the Owner's view of that caller: still connecting, or missing from its
-    peer table?
-  - which of the progress paths above fired.
-- Status: open (Filed: 2026-10-12 by claude, found while fixing Q-048).
+- Evidence: under host CPU overload in `mixed.signal`, every SRT 1080p leaf of
+  one pipeline completed the handshake and then sent no payload for 30 s,
+  reporting `backpressured`, growing feed lag and no caller quality stats,
+  while sibling SRT 720p and RTMP leaves delivered. It did not reproduce with
+  CPU spinners.
+- Question: can a connected leaf be starved by its shard or Owner while
+  siblings progress? That would break output isolation.
+- Leads: such a leaf should have been closed as `stalled` after 15 s
+  (`classify_stall`, `egress/policy.rs`). It escapes that bound if it records
+  progress without payload (`record_send` with units and no bytes, the
+  backlog-shrink rule in `SrtLeaf::observe_stall`), has zero pending bytes or
+  no caller stats (counts as idle), or sits on a `shard_saturated` shard.
+  Next probes: the Owner's view of that caller, and which path fired.
+- Gates: a reproduction or a proof that a connected leaf cannot stall
+  silently; the fix keeps sibling leaves unaffected.
 
 ### Q-066 [testing] [sonnet] SRT multi-Owner test port can join a foreign reuseport group
 - Goal: `two_owners_share_the_port_and_each_session_command_reaches_its_owner`
   cannot share its port with another process.
-- Sources: a multi-Owner listener needs an explicit port (srt-rs
-  `owner_layout.rs`; production ingest uses a configured, well-known
-  one), so the test probes a free port and releases it before binding. A
-  bind error now retries on a fresh port. A foreign `SO_REUSEPORT` socket of
-  the same uid (another `cargo test` on this host) that takes the port in
-  the gap would instead join the group and take a share of the datagrams;
-  the test's byte counts fail on that, so it is loud, not silent. Removing
-  it needs a per-test network namespace for this unit test, or srt-rs
-  binding Owner 0 first and the rest to its port.
+- Why: the test probes a free port and releases it before binding; a foreign
+  same-uid `SO_REUSEPORT` socket (another `cargo test`) can take it in the gap
+  and join the group. The byte counts then fail loudly. Fix with a per-test
+  network namespace, or srt-rs binding Owner 0 first and the rest to its port.
 - Gates: none until it flakes.
-- Status: open (Filed: 2026-10-16 by claude).
 
 ### Q-070 [protocol] [opus] MoQ ingest: IETF MOQT profiles
 - Goal: an IETF MOQT draft-18 publisher (MSF catalog, LOC objects) feeds a
-  pipeline input through the existing MoQ listener, as moq-lite + hang
-  publishers do since #371.
-- Contract: the stream key comes from the connection path, else the track
-  namespace; objects map to `MediaPacket`s and the catalog's codec
-  configuration to the ring's track configuration; the input registers as
+  pipeline input through the existing MoQ listener. The stream key comes from
+  the connection path, else the track namespace; the input registers as
   protocol `"moq"`.
-- Gates: interop with moxygen and MediaMTX as publishers (one harness mode);
-  a fuzz target for the object parser.
-- Status: open; phase 1 landed in #371. The object-parser fuzz gate is met
-  (`moq_wire` runs moq-net's IETF object codecs). Both named publishers are
-  blocked:
-  pinned moxygen (`c392ebfc`) has no MSF/LOC publisher (its FLV streamer
-  sends MoqMi without a catalog, and its media server serves CMAF as a
-  server rather than dialling a relay or Restream), and MediaMTX waits on
-  Q-097. Closing waits for an upstream MSF/LOC publisher (user decision,
-  2026-10-22). (Filed: 2026-10-16 by claude, user request; with Q-047.)
+- Blocked: pinned moxygen has no MSF/LOC publisher and MediaMTX waits on
+  Q-097. Closing waits for an upstream MSF/LOC publisher (user decision).
+- Gates: interop with moxygen and MediaMTX as publishers (one harness mode).
 
 ### Q-071 [architecture] [sonnet] HLS-to-HLS passthrough
-- Goal: an HLS output relays the selected HLS input's segments instead of
-  demuxing and repackaging them.
-- Why it is possible: the HLS PUT shard already works at segment level
-  (`HlsStore`, `egress/backends/hls_put_shard.rs`), so a passthrough
-  skips the ring, the demuxer and the segmenter, and feeds the store the
-  shard already reads.
-- Conditions: HLS PUT output only; no stage between input and output;
-  matching container (TS to TS, fMP4 to fMP4), codecs and segment
-  boundaries (our output cuts at keyframes, 1 s minimum,
-  `hls/mod.rs:52`). The input must be self-initializing. Validated at
-  apply time, with a fallback to the normal path and a stated reason.
-- Costs:
-  - The output stops reading the ring, so capacity accounting, preview and
-    pipeline health need a stated answer for passthrough outputs.
-  - `HlsStore` gains a second source of truth, or gains a per-output
-    store.
-  - Failover between primary and backup inputs runs through the ring's
-    input gate and promotion timestamp mapper (`src/media/input_gate.rs`).
-    A relay loses failover unless it rebuilds it at segment level:
-    switch inputs on a segment boundary, add `EXT-X-DISCONTINUITY`, and
-    keep the output's media sequence monotonic. This must not ship
-    silently broken.
-- Trigger: telemetry showing meaningful CPU in HLS demux plus segmenting
-  for HLS-to-HLS pipelines. Until then the ring path stands.
-- Gates: one harness mode pushing HLS and relaying it, checked against a
-  normal-path run (bytes and timing); a test that an ineligible pipeline
-  (a stage, or a non-HLS output) falls back with the reason recorded.
-- Status: open (Filed: 2026-10-16 by claude, user question on passthrough;
-  after the HLS push and pull ingest work).
+- Goal: an HLS PUT output relays the selected HLS input's segments into the
+  `HlsStore` the shard already reads, skipping the ring, demuxer and segmenter.
+- Conditions: no stage between input and output; matching container, codecs
+  and segment boundaries; self-initializing input; validated at apply time
+  with a fallback to the normal path and a stated reason.
+- Costs: capacity accounting, preview and pipeline health need an answer for
+  outputs that skip the ring; failover (`src/media/input_gate.rs`) must be
+  rebuilt at segment level (switch on a boundary, `EXT-X-DISCONTINUITY`,
+  monotonic media sequence) or the relay must not ship.
+- Trigger: telemetry showing meaningful CPU in HLS demux plus segmenting for
+  HLS-to-HLS pipelines.
+- Gates: a harness mode relaying pushed HLS, checked against a normal-path run;
+  a test that an ineligible pipeline falls back with the reason recorded.
 
 ### Q-074 [performance] [opus] A rare multi-millisecond HLS ingest poll is bounded whatever its cause
 - Goal: a `hlsIngest` poll on the MEDIA executor never spends multiple
-  milliseconds of thread CPU, so one session cannot hold a shared worker.
-- Files: `src/media/executor.rs`, `src/media/ingest_publisher.rs`,
-  `src/media/ingest_publisher/`, `src/media/hls_ingest/`,
-  `src/media/mpegts/demux.rs`, `src/media/ring_buffer.rs`,
-  `src/bin/test_harness/hls_push_duty/`.
-- Delivered: a session yields after applying one queued object or publishing
-  one 64 KiB chunk. TS partial-packet joins reuse a staging allocation.
-  Executor rows expose CPU totals, maxima and a bucketed p99; the harness
-  reports per-window service means and optional independent clock-gap
-  samples (`--host-probe`). Its 250 µs mean threshold is an empirical
-  regression check for the measured TS workload, not a per-poll bound.
+  milliseconds of thread CPU.
 - Remaining work: `shiguredo_mp4::handle_media_segment` decodes the whole
-  `moof`, and sample planning runs in the poll first reaching that fragment.
-  Existing caps (4096 top-level boxes, 256 KiB `moof`, 16384 samples) bound
-  input size, not sub-millisecond CPU. Make parsing/planning incremental,
-  then verify both TS and fMP4 poll budgets.
-- Attribution limit: independent probe and application maxima cannot
-  establish the cause of a long poll, and the probe covers only the rated
-  window while executor maxima cover service lifetime. Recorded clock gaps
-  motivate host qualification but do not exclude application or kernel work.
-  Allocator A/B runs did not establish a repeatable tail improvement; no
-  allocator/kernel tuning change is justified. Measurements remain in the
-  relevant commits rather than a dated backlog ledger.
-- Gates: allocation-reuse and one-object-per-poll regressions; incremental
-  fMP4 parsing/planning regression; delivery-qualified release
+  `moof`, and sample planning runs in the poll that first reaches it. Make
+  fMP4 parsing/planning incremental (`src/media/hls_ingest/`,
+  `src/media/ingest_publisher/`), then verify TS and fMP4 poll budgets.
+  Allocator or kernel tuning showed no repeatable tail improvement.
+- Gates: an incremental fMP4 parsing/planning regression test; release
   `hls-push-duty -- --no-netns --hls-publishers 8 --duration-secs 60
   --poll-usage --host-probe` on a qualified host over five runs, with
   `hlsIngest` max CPU below 4 ms and fewer than one poll above 4 ms per
   minute per session. A mean or p99 passing does not waive the maximum.
-- Status: open (Filed: 2026-10-16 by claude). Incremental fMP4 work and
-  host-qualified CPU-maximum evidence remain outstanding.
-
 
 ### Q-091 [protocol] [opus] SRT Backup failover replays the lost prefix
-
-- Goal: when the active sender in an SRT Backup group disappears after the
-  group advanced its sequence, the promoted standby replays the group's
-  recent send history before new payload, so the packets the receiver
-  missed are not skipped forever.
-- Why: srt-rs marks the active unstable/broken, promotes the
-  highest-weight standby and aligns it to `group.next_send_sequence`; it
-  keeps no group-level recent-send history, so the interval the active
-  issued but the receiver never got has no physical sender. srtgo models
-  failover with `ActiveFresh`/`ActiveStable` states, a stability threshold
-  of `max(T_min, 2*SRTT + 4*RTTVar)` and a replay of retained history on
-  promotion; Robotweax independently treats failover as more than
-  switching the next sequence.
-- Change (srt-rs, then bump the pinned rev in `Cargo.toml`): retain a
-  bounded recent-send window per group, qualify standby stability with
-  the RTT-relative threshold, and replay the prefix on promotion; refuse
-  promotion when the window cannot cover the gap instead of skipping it.
-- Gates: differential cases against srtgo's state model for prefix loss,
-  RTT-relative stability and repeated failures; a harness mode that kills
-  the active SRT output mid-stream and checks receiver continuity.
-- Status: open (Filed: 2026-10-20 by claude, from the srt-rs/srtgo/srtrust
-  comparison).
+- Goal: when the active sender in an SRT Backup group disappears, the promoted
+  standby replays the group's recent send history before new payload, so the
+  receiver does not lose the interval the active issued but never delivered.
+- Change (srt-rs, then bump the pinned rev in `Cargo.toml`): a bounded
+  recent-send window per group, standby stability qualified by
+  `max(T_min, 2*SRTT + 4*RTTVar)` (as in srtgo), replay on promotion, and
+  refused promotion when the window cannot cover the gap.
+- Gates: differential cases against srtgo's state model; a harness mode that
+  kills the active SRT output mid-stream and checks receiver continuity.
 
 ### Q-092 [resilience] [opus] Never emit descendants of a dropped dependency-bearing unit
-
-- Goal: every fanout boundary that drops a video unit under pressure also
-  suppresses later units that depend on it, until the next keyframe.
-- Why: Prism's MoQ viewer queues mark the current GOP damaged and drop
-  later delta frames; Restream's boundaries (ring overrun, MoQ group
-  eviction, WebTransport pressure, HLS discontinuity, recirculation, RTMP
-  congestion) each handle this differently or not at all. An undecodable
-  descendant costs bandwidth and shows artifacts.
-- Change: one damaged-until-keyframe rule per boundary that can see
-  keyframe boundaries; where it cannot, document the fallback and test it.
-- Gates: a test per boundary that drops one unit and asserts no later
-  dependent unit is emitted before the keyframe; a mutation that removes
-  the suppression fails it.
-- Status: open (Filed: 2026-10-20 by claude, from the Prism comparison).
+- Goal: every fanout boundary that drops a video unit under pressure (ring
+  overrun, MoQ group eviction, WebTransport pressure, HLS discontinuity,
+  recirculation, RTMP congestion) also suppresses dependent units until the
+  next keyframe; where a boundary cannot see keyframes, document and test the
+  fallback.
+- Gates: a test per boundary that drops one unit and asserts no dependent unit
+  is emitted before the keyframe; removing the suppression fails it.
 
 ### Q-094 [protocol] [opus] First-class sideband media events
-
 - Goal: captions (CEA-608/708), SCTE-35 and SMPTE timecode survive ingest,
-  stages and egress as typed events with the same retention and timestamps
-  as media.
-- Why: Prism carries these from MPEG-TS to the browser; Restream smuggles
-  metadata or drops it, so a spliced or captioned source loses meaning.
-- Change: a media-event model shared by ring retention and each egress
-  writer, rather than per-path metadata.
-- Gates: an ingest fixture with captions and an SCTE-35 splice reaches the
-  HLS output and the MoQ catalog; a ring-overrun test keeps events aligned
-  with the retained media.
-- Status: open (Filed: 2026-10-20 by claude, from the Prism comparison).
+  stages and egress as typed events with media retention and timestamps,
+  through one media-event model rather than per-path metadata.
+- Gates: an ingest fixture with captions and an SCTE-35 splice reaches the HLS
+  output and the MoQ catalog; a ring-overrun test keeps events aligned with
+  retained media.
 
 ### Q-095 [observability] [sonnet] Stream inspector: GOP health, skew and SCTE
-
 - Goal: one view per live pipeline shows GOP health, A/V skew, source
   timecode, SCTE timeline, decoder state and transport state.
-- Why: current telemetry is resource-focused; Prism demonstrates the
-  media-facing half of observability. This is the human-facing side of the
-  telemetry work behind Q-071.
-- Gates: a frontend test for a pipeline that loses keyframes shows the
-  damaged state; every value comes from the API, not client guessing.
-- Status: open (Filed: 2026-10-20 by claude, from the Prism comparison).
+- Gates: a frontend test for a pipeline that loses keyframes shows the damaged
+  state; every value comes from the API.
 
 ### Q-096 [performance] [sonnet] GRO and arrival timestamps in the reference SRT path
-
-- Goal: the non-Compio reference path accepts GRO-coalesced datagrams and
-  records socket arrival time before queueing, so scheduler backlog does
-  not distort inter-arrival facts.
-- Why: srtrust exposes `poll_recv_gro` and stamps arrival at the socket;
-  Restream's GSO send exists, but the receive reference path and the
-  arrival-time discipline are neither documented nor proven.
-- Change (srt-rs): a portable UDP-offload abstraction for the reference
-  path; split coalesced receives into logical datagrams with the original
-  arrival stamp before protocol processing.
-- Gates: a unit test that a coalesced receive splits into logical
-  datagrams with identical arrival stamps; a bench of per-datagram cost
-  with and without GRO.
-- Status: open (Filed: 2026-10-20 by claude, from the srtrust comparison).
+- Goal: the non-Compio reference SRT path (srt-rs) accepts GRO-coalesced
+  datagrams and stamps socket arrival time before queueing, so scheduler
+  backlog does not distort inter-arrival facts.
+- Gates: a unit test that a coalesced receive splits into logical datagrams
+  with identical arrival stamps; a bench of per-datagram cost with and without
+  GRO.
 
 ### Q-097 [protocol] [opus] Align MediaMTX MoQ dialect with IETF interop
 - Goal: unmodified upstream MediaMTX interoperates with Restream's IETF
-  MSF/LOC profile in both directions; this is separate from Q-047/Q-070.
-- Files: `src/bin/test_harness/moq_relay_interop/`, the pinned upstream
-  MediaMTX release and its protocol implementation; no proprietary fork.
-- Gates: real egress and forwarded-ingest read-back with H.264/AAC,
-  monotonic timestamps and frame counts; retain lite/browser and
-  `moq-dev-interop --ietf` coverage, then enable the MediaMTX CI gate.
-- Status: open (Filed: 2026-10-18, recovered phase-2 source/spec audit).
-- MediaMTX v1.21.2 is a separate dialect blocker, not evidence that IETF
-  support is missing from moq-net. Keep `moq-relay-interop` diagnostic-only;
-  `moq-dev-interop --ietf` is the moq-relay 0.17.7 draft-19 gate. Do not
-  introduce a proprietary MediaMTX profile/fork to make the gate green.
-  Pinned source/spec evidence:
-  - Namespace discovery: MediaMTX's
-    [`controlmessage.Read`](https://github.com/bluenviron/mediamtx/blob/v1.21.2/internal/protocols/moq/controlmessage/message.go#L40-L63)
-    has no PUBLISH_NAMESPACE dispatch. MOQT-19
-    [§3.3 and §10.15](https://www.ietf.org/archive/id/draft-ietf-moq-transport-19.html#section-10.15)
-    define it as a request-stream opener, type `0x6`; the recovered
-    Restream→MediaMTX attempt failed with `unknown message type: 0x6`.
-  - Setup progress: MediaMTX's
-    [`performSetup`](https://github.com/bluenviron/mediamtx/blob/v1.21.2/internal/protocols/moq/client.go#L75-L126)
-    waits for the server's SETUP before sending its own for drafts 17–19.
-    The recovered MediaMTX→Restream attempt stalled because moq-net's
-    server waits for the client's SETUP. MOQT-19
-    [§3.3](https://www.ietf.org/archive/id/draft-ietf-moq-transport-19.html#section-3.3)
-    permits either peer to send first; do not misreport a client-first
-    requirement. Closing the control stream after SETUP also conflicts
-    with that section's control-stream lifetime requirement.
-  - Media representation: the pinned
-    [`session.go`](https://github.com/bluenviron/mediamtx/blob/v1.21.2/internal/servers/moq/session.go#L538-L564)
-    sends one codec frame per group, raw codec payload and a public
-    timestamp `0x06` in source codec ticks without a TIMESCALE.
-    [LOC-04 §2.2–2.3.1.2](https://www.ietf.org/archive/id/draft-ietf-moq-loc-04.html#section-2.3.1.1)
-    uses timestamp `0x10` and timescale `0x08` (absent timescale means
-    microseconds since Unix epoch). This is not the LOC framing consumed
-    by moq-loc 0.2.24. [MSF-00 §4.1](https://www.ietf.org/archive/id/draft-ietf-moq-msf-00.html#section-4.1)
-    requires a GOP's samples in one group, not a new group per frame.
-  - Catalog/codec subset: the pinned
-    [`catalog.Track`](https://github.com/bluenviron/mediamtx/blob/v1.21.2/internal/protocols/moq/catalog/catalog.go)
-    emits `channels`/`clockrate`; MSF-00
-    [§5.1.27, §5.1.31–32](https://www.ietf.org/archive/id/draft-ietf-moq-msf-00.html#section-5.1.32)
-    specifies `timescale`, `samplerate` and `channelConfig` (`samplerate`
-    itself is not a mismatch). Its
-    [`ToStream`](https://github.com/bluenviron/mediamtx/blob/v1.21.2/internal/protocols/moq/to_stream.go#L103-L125)
-    accepts `avc3`/`hev1`, not Restream's `avc1`/`hvc1`; LOC-04
-    [§2.1.1–2](https://www.ietf.org/archive/id/draft-ietf-moq-loc-04.html#section-2.1.2)
-    describes both forms. Revisit against an unmodified upstream release
-    with these contracts aligned; then require both directions and media
-    read-back before re-enabling the MediaMTX gate.
+  MSF/LOC profile in both directions. No proprietary MediaMTX fork or profile.
+- Blockers in MediaMTX v1.21.2 (pinned source, against MOQT-19, LOC-04 and
+  MSF-00):
+  - no PUBLISH_NAMESPACE (`0x6`) dispatch in `controlmessage.Read`;
+  - `performSetup` waits for the server's SETUP, as moq-net's server does for
+    the client's, so MediaMTX→Restream stalls;
+  - one codec frame per group with a `0x06` timestamp in codec ticks and no
+    timescale, where LOC uses `0x10`/`0x08` and MSF wants a GOP per group;
+  - the catalog emits `channels`/`clockrate` (MSF: `timescale`,
+    `channelConfig`) and `ToStream` accepts only `avc3`/`hev1`, not
+    Restream's `avc1`/`hvc1`.
+- Files: `src/bin/test_harness/moq_relay_interop/`. Keep `moq-relay-interop`
+  diagnostic-only; `moq-dev-interop --ietf` is the IETF gate.
+- Gates: real egress and forwarded-ingest read-back with H.264/AAC, monotonic
+  timestamps and frame counts against an unmodified upstream release; then
+  enable the MediaMTX CI gate.
 
 ### Q-100 [agent] [opus] Agent protocol: approval mid-task and live panels
-
-- Goal: the MCP server (`src/agent_mcp/`) asks the person for input or
-  approval during a plan (elicitation), reports progress on long operations,
-  and returns small live panels (pipeline health, a plan diff with an
-  Approve button) that MCP clients render.
-- Why: it maps onto the existing plan → approve → apply flow instead of
-  approval living only in the dashboard.
-- Gates: the agent-plane tests drive an elicited approval end to end; a
-  refused approval leaves no change; the panel payloads are contract-tested.
-- Status: open (Filed: 2026-10-24 by claude, from the platform research).
+- Goal: the MCP server (`src/agent_mcp/`) asks for input or approval during a
+  plan (elicitation), reports progress on long operations, and returns small
+  live panels (pipeline health, a plan diff with an Approve button).
+- Gates: agent-plane tests drive an elicited approval end to end; a refused
+  approval leaves no change; panel payloads are contract-tested.
 
 ### Q-101 [agent] [opus] Explain an incident and approve its fix in one place
-
 - Goal: "Explain this incident" reads the incident's flight-recorder window
-  and proposes a fix as an agent-plane plan. The approval shows what the
-  change touches and how much, approves one action at a time by role, and
-  can be given from Slack or a push notification.
-- Files: Incidents (`web/ts/control-room/incidents*.tsx`), the agent plane
-  (`src/agent_plane/`), notifications.
+  and proposes a fix as an agent-plane plan; approval shows what the change
+  touches, approves one action at a time by role, and can come from Slack or
+  a push notification.
+- Files: `web/ts/control-room/incidents*.tsx`, `src/agent_plane/`.
 - Gates: a recorded incident yields a plan that names the right layer; an
   approval from a role below the action's minimum is refused and audited.
-- Status: open (Filed: 2026-10-24 by claude, from the platform research).
 
 ### Q-102 [frontend] [sonnet] Plain-language command palette
-
-- Goal: the ⌘K palette also takes a request in words ("stop Twitch on the
-  Sunday show") and acts through the agent plane, showing the plan before
-  anything runs.
-- Files: `web/ts/control-room/shell/command-palette.tsx`,
-  `palette-model.ts`, the agent API.
+- Goal: the ⌘K palette also takes a request in words and acts through the
+  agent plane, showing the plan before anything runs.
+- Files: `web/ts/control-room/shell/command-palette.tsx`, `palette-model.ts`.
 - Gates: a request maps to the same plan the buttons would make; nothing
   applies without the approval step.
-- Status: open (Filed: 2026-10-24 by claude, from the platform research).
 
 ### Q-103 [observability] [sonnet] Picture and sound checks: wider coverage
-
 - Goal: the checks (`src/media/stream_qa/`) also read enhanced-RTMP HEVC
-  pictures, measure every audio track (not only the first), and tell a
-  slate or "technical difficulties" card from a live picture (a vision
-  model over the same thumbnails).
-- Gates: a fixture per case (RTMP HEVC, a silent second track, a slate)
-  yields its finding; the sampler's measured CPU stays within its budget.
-- Status: open (Filed: 2026-10-24 by claude, the rest of Q-098).
+  pictures, measure every audio track, and tell a slate card from a live
+  picture.
+- Gates: a fixture per case (RTMP HEVC, a silent second track, a slate) yields
+  its finding; the sampler's measured CPU stays within its budget.

@@ -67,8 +67,6 @@ cargo fmt --all
   `node scripts/check/docs.mjs`.
 - Use `--profile bench` instead of `--release` for local builds. Harness
   modes need `cargo xtask build-bench`, which fills `target/bench/`.
-- Cargo uses all CPUs but one (`jobs = -1` in `.cargo/config.toml`). Override
-  with `CARGO_BUILD_JOBS`.
 - Benchmarks are declared in `Cargo.toml` and live in `benches/`. A measured
   change puts its numbers in its commit message.
   [High-performance data path](high-performance-data-path.md) says when a
@@ -133,14 +131,12 @@ ports or CPU.
 
 | Work | Rule |
 |---|---|
-| Heavy builds | Check `pgrep -a -x cargo` first. Nothing serializes builds across worktrees |
-| Builds and live media | Never build while a Restream, MediaMTX or FFmpeg pipeline runs. Builds are memory heavy and can run a small host out of memory |
+| Builds | Never build while a live pipeline runs, and check for other builds first ([AGENTS.md](../AGENTS.md#build-and-worktree-safety)) |
 | Live correctness runs | Run modes through `scripts/harness/run.sh`; it rebuilds stale bench binaries. Overlap runs only when each has its own network, ports and artifacts, as `scripts/harness/parallel-fast-breadth.sh` provides |
 | Measurements | Benchmarks, sweeps and capacity ramps run serially on an idle host. A competing build or pipeline makes the result invalid |
 | Long-lived sessions | Give each dashboard or debug session an owner, its own runtime directory and a cleanup step. Prefer the harness or demo tooling that already owns ports |
 
-Do not kill processes another task owns. [AGENTS.md](../AGENTS.md) owns the
-full agent safety rules.
+Do not kill processes another task owns.
 
 ## Containers
 

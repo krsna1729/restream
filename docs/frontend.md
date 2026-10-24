@@ -3,9 +3,7 @@
 The dashboard is one React page: the control room. This page covers its
 design system, how it is built, how it reads data, what each workspace
 shows, and how previews play. Source lives in `web/ts/` and
-`web/styles/input.css`; `public/` is generated and not committed. The target
-operator experience is the
-[control-room mockup](design/control-room-mockup.html) (illustrative data).
+`web/styles/input.css`; `public/` is generated and not committed.
 
 ## Contents
 

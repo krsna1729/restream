@@ -497,31 +497,10 @@ Startup logs `srt egress shard runtime ready` per shard and
 
 ## Configuration
 
-Parsed in `EgressFabricConfig::from_env` (`src/config.rs`). Values are
-clamped; `validate` logs warnings for risky combinations but never stops
-startup.
-
-| Variable | Default | Range | Controls |
-|---|---|---|---|
-| `RESTREAM_EGRESS_SHARDS` | `clamp(CPUs, 2, 8)` | 1–1024 | Shard ceiling per feed |
-| `RESTREAM_EGRESS_COMMAND_CAPACITY` | 1024 | 1–65 536 | Command channel per shard |
-| `RESTREAM_EGRESS_COMMAND_BATCH` | 32 | 1–4096 | Commands per loop |
-| `RESTREAM_EGRESS_READY_BATCH` | 64 | 1–4096 | `on_ready` calls per loop |
-| `RESTREAM_EGRESS_TIMER_BATCH` | 64 | 1–4096 | Timers per loop |
-| `RESTREAM_EGRESS_MAX_LEAVES_PER_SHARD` | 4096 | 1–1 000 000 | `LeafArena` and `TimerWheel` capacity |
-| `RESTREAM_EGRESS_IDLE_WAIT_MS` | 25 | 1–1000 | Longest idle park |
-| `RESTREAM_EGRESS_TCP_POLLER_MAX_EVENTS` | 1024 | 1–65 536 | Compio TCP ready capacity |
-| `RESTREAM_EGRESS_VISIT_MAX_UNITS` | 32 | 1–4096 | `WorkBudget` units |
-| `RESTREAM_EGRESS_VISIT_MAX_BYTES` | 256 KiB | 188 B–16 MiB | `WorkBudget` bytes |
-| `RESTREAM_EGRESS_VISIT_MAX_US` | 2000 | 1–1 000 000 | `WorkBudget` time |
-| `RESTREAM_EGRESS_MAX_PENDING_BYTES` | 256 KiB | 1 B–16 MiB | Startup warning and config summary only; leaf limits use `LeafPolicy::default()` |
-| `RESTREAM_EGRESS_DRAIN_TIMEOUT_MS` | 3000 | 1–60 000 | Drain window on remove and shutdown |
-| `RESTREAM_HLS_PUT_FABRIC` | on | bool | HLS PUT on the fabric |
-
-`validate` warns when pending bytes are below visit bytes, shards exceed four
-times the CPU count, the drain timeout is under 50 ms, or the command batch
-exceeds the command capacity. SRT-specific settings are in
-[Configuration](configuration.md).
+`EgressFabricConfig::from_env` (`src/config.rs`) parses and clamps the
+`RESTREAM_EGRESS_*` variables; `validate` logs warnings for risky
+combinations but never stops startup. Variables, defaults, ranges and the
+warnings are listed in [Configuration](configuration.md#egress-fabric).
 
 ## Observability
 
