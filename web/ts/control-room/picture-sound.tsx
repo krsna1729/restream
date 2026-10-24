@@ -16,24 +16,47 @@ import { audioTrackWords } from "./stream-health-model.js";
 /** Loudness is drawn as LU above this floor, so the scale starts at 0. */
 const FLOOR = -70;
 
-export function PictureAndSound(props: { pipelineId: string; samples: readonly FlightSample[] }) {
+export function PictureAndSound(props: {
+  pipelineId: string;
+  samples: readonly FlightSample[];
+}) {
   const canOperate = useSession().can("operator");
-  const probe = usePolled(["probe", props.pipelineId], () => getPipelineProbe(props.pipelineId), 10_000);
-  const qa = usePolled(["stream-qa", props.pipelineId], () => getStreamQa(props.pipelineId), 10_000);
+  const probe = usePolled(
+    ["probe", props.pipelineId],
+    () => getPipelineProbe(props.pipelineId),
+    10_000,
+  );
+  const qa = usePolled(
+    ["stream-qa", props.pipelineId],
+    () => getStreamQa(props.pipelineId),
+    10_000,
+  );
   // What the last switch wrote, until the next poll reports the same.
   const [written, setWritten] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const polled = qa.value?.enabled ?? null;
-  const enabled = written !== null && written !== polled ? written : (polled ?? false);
+  const enabled =
+    written !== null && written !== polled ? written : (polled ?? false);
   const tracks: readonly ProbeAudioTrack[] = probe.value?.audioTracks ?? [];
-  const measured = props.samples.some((sample) => sample.ingest?.qa?.loudnessLufs != null);
+  const measured = props.samples.some(
+    (sample) => sample.ingest?.qa?.loudnessLufs != null,
+  );
   return (
     <Panel
       id="health-picture-sound"
       title="Picture and sound"
-      subtitle={tracks.length ? `${tracks.length} audio track${tracks.length === 1 ? "" : "s"}` : "no audio track reported"}
+      subtitle={
+        tracks.length
+          ? `${tracks.length} audio track${tracks.length === 1 ? "" : "s"}`
+          : "no audio track reported"
+      }
       actions={
-        <label className="flex cursor-pointer items-center gap-2 text-sm" title={canOperate ? undefined : "Turning checks on needs the operator role"}>
+        <label
+          className="flex cursor-pointer items-center gap-2 text-sm"
+          title={
+            canOperate ? undefined : "Turning checks on needs the operator role"
+          }
+        >
           Picture and sound checks
           <input
             type="checkbox"
@@ -43,7 +66,10 @@ export function PictureAndSound(props: { pipelineId: string; samples: readonly F
             disabled={!canOperate || busy || qa.value === null}
             onChange={async (event) => {
               setBusy(true);
-              const saved = await setStreamQa(props.pipelineId, event.target.checked);
+              const saved = await setStreamQa(
+                props.pipelineId,
+                event.target.checked,
+              );
               if (saved) setWritten(saved.enabled);
               qa.refresh();
               setBusy(false);
@@ -56,24 +82,39 @@ export function PictureAndSound(props: { pipelineId: string; samples: readonly F
         <div className="flex flex-col gap-2">
           <h3 className="kicker">Audio tracks</h3>
           {tracks.length === 0 ? (
-            <p className="text-sm text-base-content/70">The publisher has not reported an audio track yet.</p>
+            <p className="text-sm text-base-content/70">
+              The publisher has not reported an audio track yet.
+            </p>
           ) : (
             <ol className="flex flex-col gap-1.5" aria-label="Audio tracks">
               {tracks.map((track) => (
-                <li key={track.trackIndex} className="flex items-baseline gap-2 rounded-field bg-base-100 px-3 py-2 text-sm">
-                  <span className="font-medium">Track {track.trackIndex + 1}</span>
-                  <span className="text-base-content/70">{audioTrackWords(track)}</span>
-                  {track.trackIndex === Math.min(...tracks.map((each) => each.trackIndex)) && enabled && (
-                    <span className="ml-auto text-xs text-base-content/70">checked</span>
-                  )}
+                <li
+                  key={track.trackIndex}
+                  className="flex items-baseline gap-2 rounded-field bg-base-100 px-3 py-2 text-sm"
+                >
+                  <span className="font-medium">
+                    Track {track.trackIndex + 1}
+                  </span>
+                  <span className="text-base-content/70">
+                    {audioTrackWords(track)}
+                  </span>
+                  {track.trackIndex ===
+                    Math.min(...tracks.map((each) => each.trackIndex)) &&
+                    enabled && (
+                      <span className="ml-auto text-xs text-base-content/70">
+                        checked
+                      </span>
+                    )}
                 </li>
               ))}
             </ol>
           )}
           {!enabled && (
             <p className="text-xs text-base-content/70">
-              Checks are off. On, this server decodes one keyframe a second and the first audio track (about 1% of a CPU core and 7 MB per pipeline) to catch a black or
-              frozen picture, silence and loudness, and raises incidents for them.
+              Checks are off. On, this server runs a small FFmpeg that decodes
+              the keyframes and the first audio track (about 2% of a CPU core
+              per pipeline) to catch a black or frozen picture, silence and
+              loudness, and raises incidents for them.
             </p>
           )}
         </div>
@@ -86,12 +127,21 @@ export function PictureAndSound(props: { pipelineId: string; samples: readonly F
               height={120}
               top={-FLOOR}
               axisFormat={(value) => `${Math.round(value + FLOOR)}`}
-              thresholds={[{ value: -14 - FLOOR, label: "-14 LUFS: platform level", tone: "ok" }]}
+              thresholds={[
+                {
+                  value: -14 - FLOOR,
+                  label: "-14 LUFS: platform level",
+                  tone: "ok",
+                },
+              ]}
               series={[
                 {
                   id: "lufs",
                   label: "LUFS (3 s)",
-                  pick: (sample) => (sample.ingest?.qa?.loudnessLufs == null ? null : sample.ingest.qa.loudnessLufs - FLOOR),
+                  pick: (sample) =>
+                    sample.ingest?.qa?.loudnessLufs == null
+                      ? null
+                      : sample.ingest.qa.loudnessLufs - FLOOR,
                   color: "text-secondary",
                   area: true,
                   format: (value) => `${(value + FLOOR).toFixed(1)} LUFS`,
@@ -99,7 +149,11 @@ export function PictureAndSound(props: { pipelineId: string; samples: readonly F
               ]}
             />
           ) : (
-            <p className="text-sm text-base-content/70">{enabled ? "Measuring: the first reading comes after 3 s of sound." : "Turn the checks on to measure loudness."}</p>
+            <p className="text-sm text-base-content/70">
+              {enabled
+                ? "Measuring: the first reading comes after 3 s of sound."
+                : "Turn the checks on to measure loudness."}
+            </p>
           )}
         </div>
       </div>

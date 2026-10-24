@@ -1288,6 +1288,9 @@ Both return the state:
   - It never holds the ring's writer: a feed that falls behind is moved to
     the next keyframe like any reader. A child that exits or crashes is
     started again after 2 s, doubling to 30 s.
+  - Cost, measured on a 1080p30 H.264 source with a 2 s GOP: about 2% of
+    a CPU core per checked pipeline (about 0.9% in the child, 1.3% in the
+    engine's feed and reader threads).
 - `findings` is `null` while no sampler runs. A `*SinceMs` is set while its
   condition holds. A finding whose check is over 10 s old is ignored by the
   alert rules.
