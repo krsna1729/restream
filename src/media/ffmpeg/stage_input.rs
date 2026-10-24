@@ -212,7 +212,7 @@ impl StageInputRefill {
 /// while pending. Used only to wait for ring data or cancellation, both
 /// runtime-agnostic primitives (`Notify`, `CancellationToken`). The waker is
 /// cached per thread, so a poll that completes at once allocates nothing.
-fn block_on<F: std::future::Future>(future: F) -> F::Output {
+pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
     use std::task::{Context, Poll, Wake, Waker};
 
     struct ThreadUnpark(std::thread::Thread);

@@ -286,6 +286,17 @@ impl RecordingRegistry {
     }
 }
 
+/// Each checked pipeline's sampler: its stop token and its findings.
+pub struct StreamQaEntry {
+    pub cancel: CancellationToken,
+    pub findings: Arc<std::sync::Mutex<crate::media::stream_qa::StreamQa>>,
+}
+
+#[derive(Default)]
+pub struct StreamQaRegistry {
+    pub entries: std::sync::Mutex<HashMap<String, StreamQaEntry>>,
+}
+
 pub struct HlsRegistry {
     pub stores: TokioRwLock<HashMap<String, Arc<HlsStore>>>,
     pub preview_stores: TokioRwLock<HashMap<String, Arc<Fmp4HlsStore>>>,

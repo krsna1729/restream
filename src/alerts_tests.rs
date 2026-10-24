@@ -975,3 +975,54 @@ fn derive_alerts_triggers_warning_on_repeated_egress_resync() {
     );
     assert!(alerts[0].evidence.iter().any(|e| e.signal.contains("5")));
 }
+
+fn snapshot_with_qa(qa: serde_json::Value) -> serde_json::Value {
+    let mut snap = snapshot_with_pipeline("pipe1", "on");
+    snap["pipelines"]["pipe1"]["input"]["qa"] = qa;
+    snap
+}
+
+fn qa_alert_ids(qa: serde_json::Value) -> Vec<String> {
+    derive_alerts(&snapshot_with_qa(qa))
+        .into_iter()
+        .map(|alert| alert.id)
+        .collect()
+}
+
+#[test]
+fn picture_and_sound_checks_alert_once_a_condition_has_held_long_enough() {
+    use crate::media::stream_qa::{BLACK_ALERT_MS, SILENT_ALERT_MS, STILL_ALERT_MS};
+    // Short of each threshold: nothing.
+    assert!(
+        qa_alert_ids(json!({
+            "blackForMs": BLACK_ALERT_MS - 1,
+            "silentForMs": SILENT_ALERT_MS - 1,
+            "stillForMs": STILL_ALERT_MS - 1,
+        }))
+        .is_empty()
+    );
+    // Black is critical and names the pipeline's input; silence beside it.
+    let alerts = derive_alerts(&snapshot_with_qa(json!({
+        "blackForMs": BLACK_ALERT_MS,
+        "stillForMs": STILL_ALERT_MS,
+        "silentForMs": SILENT_ALERT_MS,
+    })));
+    let ids: Vec<&str> = alerts.iter().map(|alert| alert.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        [
+            "pipeline:pipe1:input:picture_black",
+            "pipeline:pipe1:input:audio_silent"
+        ],
+        "a black picture is not also reported as frozen"
+    );
+    assert_eq!(alerts[0].severity, Severity::Critical);
+    assert_eq!(alerts[1].severity, Severity::Warning);
+    // A still picture that is not black is a warning of its own.
+    assert_eq!(
+        qa_alert_ids(json!({ "stillForMs": STILL_ALERT_MS })),
+        ["pipeline:pipe1:input:picture_frozen"]
+    );
+    // Absent findings (checks off, or stale) raise nothing.
+    assert!(qa_alert_ids(json!({ "blackForMs": null, "loudnessLufs": -23.0 })).is_empty());
+}

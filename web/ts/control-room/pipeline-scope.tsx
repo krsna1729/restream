@@ -133,7 +133,7 @@ function PipelinePicker(props: { rows: readonly FleetPipelineRow[]; workspace: W
   return (
     <MenuButton
       label="Switch pipeline"
-      className="btn btn-sm w-full justify-between border-base-content/15 bg-base-100 font-normal sm:w-64"
+      className="btn btn-sm touch-36 w-full justify-between border-base-content/15 bg-base-100 font-normal sm:w-64"
       width="w-80"
       onOpen={() => search.current?.select()}
       button={

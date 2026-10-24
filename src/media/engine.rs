@@ -12,7 +12,7 @@ use crate::domain::state::{EgressPhase, EgressRuntimeStatus, EgressStatus};
 pub(crate) use crate::media::engine_hls::hls_preview_registry_key;
 use crate::media::engine_registries::{
     EgressRegistry, FabricRegistry, FileIngestRegistry, HlsRegistry, IngestRegistry,
-    RecordingRegistry, RuntimeInfra, StageRegistry,
+    RecordingRegistry, RuntimeInfra, StageRegistry, StreamQaRegistry,
 };
 use crate::media::metadata::{AudioMeta, VideoMeta};
 use crate::media::ring_buffer::RingBuffer;
@@ -220,6 +220,7 @@ pub struct MediaEngine {
     pub egresses: EgressRegistry,
     pub fabric: FabricRegistry,
     pub recordings: RecordingRegistry,
+    pub stream_qa: StreamQaRegistry,
     pub hls: HlsRegistry,
     pub file_ingests: FileIngestRegistry,
     pub stages: StageRegistry,
@@ -250,6 +251,7 @@ impl MediaEngine {
             egresses: EgressRegistry::new(),
             fabric: FabricRegistry::new(),
             recordings: RecordingRegistry::new(),
+            stream_qa: StreamQaRegistry::default(),
             hls: HlsRegistry::new(),
             file_ingests: FileIngestRegistry::new(),
             stages: StageRegistry::new(),

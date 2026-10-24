@@ -718,6 +718,30 @@ export interface IngestHealth {
   retransPerSec: number | null;
   /** SRT receive buffer fill, 0..1. */
   receiveBuffer: number | null;
+  /** The picture and sound checks' findings, where they run. */
+  qa?: StreamQaFindings | null;
+}
+
+/** What the picture and sound checks found (`StreamQa` in
+ * `media/stream_qa/mod.rs`): epoch ms; a `*SinceMs` is set while the
+ * condition holds. */
+export interface StreamQaFindings {
+  pictureCheckedMs: number | null;
+  blackSinceMs: number | null;
+  /** When the picture last changed, while it has not since. */
+  stillSinceMs: number | null;
+  soundCheckedMs: number | null;
+  silentSinceMs: number | null;
+  /** Short-term loudness (3 s), LUFS, floored at -70. */
+  loudnessLufs: number | null;
+}
+
+/** `GET`/`PUT /pipelines/{id}/stream-qa`. */
+export interface StreamQaState {
+  enabled: boolean;
+  /** A sampler runs now (on, and the source is live). */
+  active: boolean;
+  findings: StreamQaFindings | null;
 }
 
 export interface RingHealth {

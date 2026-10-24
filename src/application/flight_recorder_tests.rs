@@ -325,3 +325,27 @@ async fn persisting_writes_each_pipelines_newest_sample_and_prunes_past_retentio
         );
     }
 }
+
+#[test]
+fn stream_check_findings_ride_on_the_ingest_and_older_rows_still_read() {
+    let recorder = FlightRecorder::started_at(0, 10);
+    let mut checked = ingest("in", 1_000);
+    checked.qa = Some(crate::media::stream_qa::StreamQa {
+        picture_checked_ms: Some(900),
+        black_since_ms: Some(400),
+        ..Default::default()
+    });
+    recorder.record(1_000, vec![probe("p", Some(checked))]);
+    let sample = recorder.trace("p", 0).unwrap().samples.pop().unwrap();
+    let qa = sample
+        .ingest
+        .as_ref()
+        .and_then(|ingest| ingest.qa.clone())
+        .unwrap();
+    assert_eq!(qa.black_since_ms, Some(400));
+    // A row persisted before the checks existed has no `qa`: it still parses.
+    let mut row = serde_json::to_value(&sample).unwrap();
+    row["ingest"].as_object_mut().unwrap().remove("qa");
+    let old: FlightSample = serde_json::from_value(row).unwrap();
+    assert_eq!(old.ingest.unwrap().qa, None);
+}

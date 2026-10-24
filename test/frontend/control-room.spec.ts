@@ -1146,15 +1146,15 @@ test("manage: create a pipeline, edit its inputs, destinations, source and key, 
  * streams, 16 audio tracks). */
 const LIVE_CLIP = "colorbar-timer-2v16a.mp4";
 
-/** A pipeline whose source the engine publishes itself (a looped file ingest
- * of `LIVE_CLIP`), so a case needs no outside publisher; returns once its
- * input is on. */
 /** Unfolds the sidebar's More tools group, where the deeper tools live. */
 async function openMoreTools(page: Page): Promise<void> {
   const toggle = page.getByRole("navigation", { name: "Workspaces" }).getByRole("button", { name: /More tools/ });
   if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
 }
 
+/** A pipeline whose source the engine publishes itself (a looped file ingest
+ * of `LIVE_CLIP`), so a case needs no outside publisher; returns once its
+ * input is on. */
 async function liveFilePipeline(page: Page, name: string): Promise<string> {
   const created = await page.request.post("/api/v1/pipelines", {
     data: { name, streamKey: `${name}_${Date.now()}` },
@@ -1925,6 +1925,38 @@ test("navigation: the deeper tools fold under More tools, open while in use, and
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await toggle.click();
   await expect(nav.getByRole("link", { name: "Stability Lab" })).toHaveCount(0);
+});
+
+test("picture and sound: the checks turn on for a live source, judge it and list its audio tracks", async ({ page }) => {
+  test.setTimeout(120_000);
+  const login = await page.request.post("/api/v1/auth/login", { data: { password: "admin" } });
+  expect(login.ok()).toBe(true);
+  const pipelineId = await liveFilePipeline(page, `crqa${Date.now()}`);
+  try {
+    await page.goto(`/?w=health&p=${pipelineId}`);
+    const panel = page.getByRole("region", { name: "Picture and sound" });
+    // The clip carries 16 audio tracks; each is listed in words.
+    await expect(panel.getByRole("list", { name: "Audio tracks" }).getByRole("listitem")).toHaveCount(16, { timeout: 20_000 });
+    await expect(panel.getByRole("list", { name: "Audio tracks" })).toContainText(/AAC · \d+(\.\d)? kHz/);
+    const toggle = panel.getByRole("switch", { name: "Picture and sound checks" });
+    await expect(toggle).not.toBeChecked();
+    await toggle.check();
+    await expect(toggle).toBeChecked();
+    // The engine decodes the clip's colour bars and timer, and its tone.
+    const verdicts = page.getByRole("list", { name: "Stream verdicts" });
+    await expect(verdicts).toContainText("Picture is moving", { timeout: 30_000 });
+    await expect(verdicts).toContainText(/Sound at -?\d+ LUFS|Silent for/, { timeout: 30_000 });
+    const state = await (await page.request.get(`/api/v1/pipelines/${pipelineId}/stream-qa`)).json();
+    expect(state).toMatchObject({ enabled: true, active: true });
+    expect(state.findings.blackSinceMs).toBeNull();
+    // Off again: the sampler stops.
+    await toggle.uncheck();
+    await expect
+      .poll(async () => (await (await page.request.get(`/api/v1/pipelines/${pipelineId}/stream-qa`)).json()).active)
+      .toBe(false);
+  } finally {
+    await page.request.delete(`/api/v1/pipelines/${pipelineId}`);
+  }
 });
 
 test("pipeline picker: search every pipeline, Enter opens the top match in the same view", async ({ page }) => {

@@ -41,6 +41,7 @@ import type {
   PipelineInputWrite,
   MoqPreviewGrant,
   PipelineProbe,
+  StreamQaState,
   LogFilters,
   LogPage,
 } from "./api-types.js";
@@ -601,6 +602,20 @@ async function patchConfig(body: ConfigPatch): Promise<StoredConfig | null> {
   return apiRequest<StoredConfig>("/api/v1/settings", { method: "PATCH", body });
 }
 
+/** Whether a pipeline's picture and sound checks are on, and what they
+ * last found. */
+async function getStreamQa(pipelineId: string): Promise<StreamQaState | null> {
+  return apiRequest<StreamQaState>(`/api/v1/pipelines/${encodeURIComponent(pipelineId)}/stream-qa`);
+}
+
+/** Turns a pipeline's picture and sound checks on or off. */
+async function setStreamQa(pipelineId: string, enabled: boolean): Promise<StreamQaState | null> {
+  return apiRequest<StreamQaState>(`/api/v1/pipelines/${encodeURIComponent(pipelineId)}/stream-qa`, {
+    method: "PUT",
+    body: { enabled },
+  });
+}
+
 async function startRecording(
   pipeId: string,
 ): Promise<{ enabled: boolean; active: boolean } | null> {
@@ -788,6 +803,8 @@ export {
   getPipelineSummary,
   getFlightRecorder,
   getPipelineProbe,
+  getStreamQa,
+  setStreamQa,
   mintMoqPreview,
   getLogs,
   getStageTelemetry,

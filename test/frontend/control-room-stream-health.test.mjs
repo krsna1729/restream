@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
-const { bitrateWords, overallSeverity, streamVerdicts } = await loadCompiledFrontendModule(
+const { audioTrackWords, bitrateWords, loudnessWords, overallSeverity, qaVerdicts, streamVerdicts } = await loadCompiledFrontendModule(
   "control-room/stream-health-model.js",
 );
 
@@ -102,4 +102,57 @@ test("a bitrate reads against what platforms suggest for its picture", () => {
   assert.match(bitrateWords(2e6, 1080, 60).words, /low for 1080p60 \(platforms suggest 4.5–9 Mb\/s\)/);
   assert.match(bitrateWords(12e6, 720, 30).words, /more than 720p30 needs/);
   assert.equal(bitrateWords(null, 1080, 30), null);
+});
+
+const qa = (overrides) => ({
+  pictureCheckedMs: 100_000,
+  blackSinceMs: null,
+  stillSinceMs: null,
+  soundCheckedMs: 100_000,
+  silentSinceMs: null,
+  loudnessLufs: -16,
+  ...overrides,
+});
+const qaOf = (verdicts, key) => verdicts.find((verdict) => verdict.key === key);
+
+test("picture and sound: nothing while the checks are off, a moving picture at a good level is ok", () => {
+  assert.deepEqual(qaVerdicts(null, 100_000), []);
+  const verdicts = qaVerdicts(qa({}), 100_000);
+  assert.equal(qaOf(verdicts, "picture").severity, "ok");
+  assert.equal(qaOf(verdicts, "sound").severity, "ok");
+  assert.match(qaOf(verdicts, "sound").title, /-16 LUFS/);
+  // They join the stream's verdicts when the newest sample carries them.
+  const keys = streamVerdicts([sample(100_000, { qa: qa({}) })]).map((verdict) => verdict.key);
+  assert.ok(keys.includes("picture") && keys.includes("sound"));
+});
+
+test("black, still and silence turn amber, then red (or amber for a still) at the engine's alert lines", () => {
+  const at = (overrides) => qaVerdicts(qa(overrides), 100_000);
+  assert.equal(qaOf(at({ blackSinceMs: 95_000 }), "picture").severity, "warn", "5 s black");
+  assert.equal(qaOf(at({ blackSinceMs: 90_000 }), "picture").severity, "bad", "10 s black");
+  assert.equal(qaOf(at({ stillSinceMs: 98_000 }), "picture").title, "Picture is moving", "2 s unchanged is a pause");
+  assert.equal(qaOf(at({ stillSinceMs: 80_000 }), "picture").severity, "ok", "20 s still: shown, not flagged");
+  assert.equal(qaOf(at({ stillSinceMs: 70_000 }), "picture").severity, "warn", "30 s still");
+  assert.equal(qaOf(at({ blackSinceMs: 90_000, stillSinceMs: 50_000 }), "picture").title, "Picture black for 10 s", "black wins");
+  assert.equal(qaOf(at({ silentSinceMs: 95_000 }), "sound").severity, "warn");
+  assert.equal(qaOf(at({ silentSinceMs: 90_000 }), "sound").severity, "bad");
+});
+
+test("a stale or missing check says so instead of passing", () => {
+  const stale = qaVerdicts(qa({ blackSinceMs: 0 }), 100_000 + 11_000);
+  assert.equal(qaOf(stale, "picture").title, "Picture not checked");
+  assert.equal(qaOf(stale, "sound").title, "Sound not measured");
+  assert.equal(qaOf(qaVerdicts(qa({ soundCheckedMs: null, loudnessLufs: null }), 100_000), "sound").severity, "warn");
+});
+
+test("loudness and audio tracks in words", () => {
+  assert.equal(loudnessWords(null), null);
+  assert.equal(loudnessWords(-14).severity, "ok");
+  assert.equal(loudnessWords(-5).severity, "warn");
+  assert.equal(loudnessWords(-35).severity, "warn");
+  assert.equal(loudnessWords(-65).words, "silent");
+  assert.equal(audioTrackWords({ trackIndex: 0, codec: "aac", sampleRate: 48_000, channels: 2 }), "AAC · 48 kHz · stereo");
+  assert.equal(audioTrackWords({ trackIndex: 1, codec: "aac", sampleRate: 44_100, channelLayout: "5.1" }), "AAC · 44.1 kHz · 5.1 surround");
+  assert.equal(audioTrackWords({ trackIndex: 2, channels: 6 }), "6 channels");
+  assert.equal(audioTrackWords({ trackIndex: 3 }), "details not reported yet");
 });

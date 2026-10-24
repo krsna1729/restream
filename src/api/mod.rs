@@ -36,6 +36,7 @@ pub mod settings;
 pub mod share;
 pub mod state;
 pub mod static_assets;
+pub mod stream_qa;
 pub mod team;
 pub mod telemetry;
 

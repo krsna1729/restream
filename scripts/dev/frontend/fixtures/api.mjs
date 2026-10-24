@@ -48,7 +48,16 @@ export function createFixtureApi({ preset, seed }) {
           points: q.get("points") ? Number(q.get("points")) : undefined,
         }),
     ],
-    [/^\/api\/v1\/pipelines\/([^/]+)\/probe$/, () => ({ audioTracks: [{ trackIndex: 0, codec: "aac", channels: 2, sampleRate: 48000 }] })],
+    [
+      /^\/api\/v1\/pipelines\/([^/]+)\/probe$/,
+      () => ({
+        audioTracks: [
+          { trackIndex: 0, codec: "aac", channels: 2, channelLayout: "stereo", sampleRate: 48000 },
+          { trackIndex: 1, codec: "aac", channels: 2, channelLayout: "stereo", sampleRate: 48000 },
+        ],
+      }),
+    ],
+    [/^\/api\/v1\/pipelines\/([^/]+)\/stream-qa$/, (m) => plant.streamQa(decodeURIComponent(m[1]))],
   ];
 
   function handle(method, pathname, searchParams, body) {
@@ -56,6 +65,12 @@ export function createFixtureApi({ preset, seed }) {
     if (answer) {
       if (method !== "GET") team.record(method, pathname, answer.status ?? 200);
       return { status: answer.status ?? 200, body: answer.body };
+    }
+    const qa = pathname.match(/^\/api\/v1\/pipelines\/([^/]+)\/stream-qa$/);
+    if (qa && method === "PUT") {
+      team.record("PUT", pathname, 200);
+      plant.setStreamQa(decodeURIComponent(qa[1]), Boolean(body?.enabled));
+      return { status: 200, body: plant.streamQa(decodeURIComponent(qa[1])) };
     }
     const start = pathname.match(/^\/api\/v1\/pipelines\/[^/]+\/outputs\/([^/]+)\/(start|stop)$/);
     if (start && method === "POST") {

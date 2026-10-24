@@ -405,6 +405,16 @@ revoke (`share-panel.tsx`, `share-model.ts`).
   trip and loss. Charts of bitrate, keyframe interval (with the 2 s target
   and 4 s limit drawn), frame rate, and round trip with loss. A metric the
   protocol does not report is left out, never shown as zero.
+- Picture and sound (`picture-sound.tsx`):
+  - the publisher's audio tracks in words ("AAC · 48 kHz · stereo"), from
+    `/pipelines/{id}/probe`; Operate's source card shows the first;
+  - the switch for the engine's picture and sound checks (operators; off by
+    default, since they decode on the server);
+  - while they run, a loudness chart (LUFS, the -14 LUFS platform level
+    drawn) and verdicts beside the others: picture moving, black (amber,
+    red from 10 s), unchanged (amber from 30 s, a slate may be meant), and
+    sound level or silence (red from 10 s). A check over 10 s old reads as
+    "not checked", never as fine.
 
 ### Monitor (one pipeline)
 

@@ -18,7 +18,10 @@ export interface AudioTrack {
   pid?: number | null;
   codec?: string;
   channels?: number;
-  sample_rate?: number;
+  /** `AudioMeta` serialises camelCase: these are the fields it sends. */
+  sampleRate?: number;
+  channelLayout?: string | null;
+  trackIndex?: number;
   language?: string | null;
   title?: string | null;
   profile?: string;

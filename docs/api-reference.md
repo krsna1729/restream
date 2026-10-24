@@ -20,6 +20,7 @@ grouped by resource. Base URL: `http://localhost:3030` (the HTTP port is
 - [Media files](#media-files)
 - [Custom encoding](#custom-encoding)
 - [Runtime state](#runtime-state)
+- [Picture and sound checks](#picture-and-sound-checks)
 - [Health and status](#health-and-status)
 - [Operator views](#operator-views)
 - [Notifications](#notifications)
@@ -96,6 +97,7 @@ flowchart TD
 | Probe, graph, diagnostics, MoQ token | `…/probe`, `…/graph`, `…/diagnostics/*`, `…/moq-token` | [Probe, graph, and diagnostics](#probe-graph-and-diagnostics) |
 | Agent plane | `/api/v1/agent/*` | [Agent plane](#agent-plane) |
 | Recording | `…/recording/start`, `…/recording/stop` | [Recording](#recording) |
+| Picture and sound checks | `…/stream-qa` | [Picture and sound checks](#picture-and-sound-checks) |
 | File ingest | `…/file-ingest`, `/api/v1/ingests*` | [File ingest](#file-ingest) |
 | Media library | `/api/v1/media*`, `/media/:filename` | [Media files](#media-files) |
 | Custom encoding | `/api/v1/encodings/custom` | [Custom encoding](#custom-encoding) |
@@ -1243,10 +1245,54 @@ already keeps, read once per interval on the recorder's own task.
     session's last keyframes; a timestamp reset is skipped.
   - A value the protocol does not report (`rttMs`, `lossPerSec` on TCP) is
     `null`, never `0`.
+  - `qa` carries the [picture and sound checks'](#picture-and-sound-checks)
+    findings while they run; it is absent otherwise.
 - `ring` is `null` while the pipeline has no source ring.
 - `outputs` counts wanted outputs, plus the counters summed over the running
   egresses (`retryAttempts` over the retrying ones).
   - `resyncs` and `overflows` are cumulative counters.
+
+## Picture and sound checks
+
+| Method | Route | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/pipelines/:pipelineId/stream-qa` | Whether the checks are on, and what they last found |
+| `PUT` | `/api/v1/pipelines/:pipelineId/stream-qa` | `{ "enabled": bool }`: persist and start or stop now (operator) |
+
+Both return the state:
+
+```json
+{
+  "enabled": true,
+  "active": true,
+  "findings": {
+    "pictureCheckedMs": 1792742537000, "blackSinceMs": null,
+    "stillSinceMs": null, "soundCheckedMs": 1792742537400,
+    "silentSinceMs": null, "loudnessLufs": -18.4
+  }
+}
+```
+
+- The checks are off unless turned on (`stream_qa_enabled:{id}` in the meta
+  store). On, and while the source is live or within the reconnect grace,
+  one OS thread per pipeline (`src/media/stream_qa/`) reads the source ring.
+  - It decodes at most one video keyframe a second (H.264 and H.265 from
+    TS, SRT and file sources; H.264 from RTMP), shrinks it to a 64×36 grey
+    thumbnail and judges it black (98% of it dark) or unchanged (mean
+    difference to the last under 0.5 of 255).
+  - It decodes the first audio track (AAC) and measures short-term loudness
+    (3 s, ITU-R BS.1770 K-weighting, every channel weighted 1), floored at
+    -70 LUFS; -60 LUFS or less is silence.
+  - It never holds the ring's writer: a sampler that falls behind is moved
+    to the next keyframe like any reader.
+- `findings` is `null` while no sampler runs. A `*SinceMs` is set while its
+  condition holds. A finding whose check is over 10 s old is ignored by the
+  alert rules.
+- Alerts (`GET /api/v1/alerts`), and with them incidents and notifications:
+  - `pipeline:{id}:input:picture_black`: critical, after 10 s;
+  - `pipeline:{id}:input:picture_frozen`: warning, after 30 s unchanged, and
+    not while black;
+  - `pipeline:{id}:input:audio_silent`: warning, after 10 s.
 
 ## Health and status
 
