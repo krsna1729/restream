@@ -135,9 +135,13 @@ impl Feature {
             Feature::PictureAndSoundChecks => &[
                 (Demuxer, "mpegts"),
                 (Decoder, "h264"),
+                (Decoder, "hevc"),
                 (Decoder, "aac"),
                 (Filter, "scale"),
                 (Filter, "format"),
+                (Filter, "aresample"),
+                (Filter, "aformat"),
+                (Filter, "amerge"),
                 (Muxer, "rawvideo"),
                 (Muxer, "f32le"),
                 (Protocol, "pipe"),

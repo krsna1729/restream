@@ -8,7 +8,96 @@
 use bytes::Bytes;
 
 use super::bits::{BitReader, rbsp};
-use super::video::{signed_be24, split_annexb_nalus};
+use super::video::{signed_be24, split_annexb_nalus, take_u16_prefixed};
+
+/// Enhanced RTMP (E-RTMP v1) video packet types.
+pub(crate) const EX_SEQUENCE_START: u8 = 0;
+pub(crate) const EX_CODED_FRAMES: u8 = 1;
+pub(crate) const EX_CODED_FRAMES_X: u8 = 3;
+
+/// An enhanced RTMP video tag (`IsExHeader` set), borrowed. Only the H.264
+/// and H.265 FourCCs (`avc1`, `hvc1`) carry the 24-bit composition time on
+/// coded frames, so other FourCCs are not read.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ExVideoTag<'a> {
+    pub(crate) fourcc: [u8; 4],
+    pub(crate) packet_type: u8,
+    pub(crate) keyframe: bool,
+    pub(crate) composition_time_ms: i32,
+    /// The configuration record (sequence start) or the length-prefixed
+    /// NAL units (coded frames).
+    pub(crate) body: &'a [u8],
+}
+
+impl ExVideoTag<'_> {
+    pub(crate) fn is_hevc(&self) -> bool {
+        &self.fourcc == b"hvc1"
+    }
+}
+
+/// Reads an enhanced RTMP video tag header; `None` for a classic FLV video
+/// tag, another codec, or a truncated header.
+pub(crate) fn ex_video_tag(payload: &[u8]) -> Option<ExVideoTag<'_>> {
+    let (&[first, a, b, c, d], rest) = payload.split_first_chunk::<5>()?;
+    if first & 0x80 == 0 {
+        return None;
+    }
+    let fourcc = [a, b, c, d];
+    if &fourcc != b"hvc1" && &fourcc != b"avc1" {
+        return None;
+    }
+    let packet_type = first & 0x0F;
+    let (composition_time_ms, body) = if packet_type == EX_CODED_FRAMES {
+        let (&[high, mid, low], body) = rest.split_first_chunk::<3>()?;
+        let sign = if high & 0x80 != 0 { 0xFF } else { 0x00 };
+        (i32::from_be_bytes([sign, high, mid, low]), body)
+    } else {
+        (0, rest)
+    };
+    Some(ExVideoTag {
+        fourcc,
+        packet_type,
+        keyframe: (first >> 4) & 0x07 == 1,
+        composition_time_ms,
+        body,
+    })
+}
+
+/// An HEVCDecoderConfigurationRecord (ISO/IEC 14496-15 8.3.3.1), borrowed:
+/// the NALU length width and the VPS, SPS and PPS it carries. Truncation
+/// anywhere is `None`.
+pub(crate) struct HvccRecord<'a> {
+    /// `lengthSizeMinusOne` (0..=3).
+    pub(crate) length_size_minus_one: u8,
+    pub(crate) vps: Vec<&'a [u8]>,
+    pub(crate) sps: Vec<&'a [u8]>,
+    pub(crate) pps: Vec<&'a [u8]>,
+}
+
+pub(crate) fn hvcc_record(record: &[u8]) -> Option<HvccRecord<'_>> {
+    let (header, mut rest) = record.split_first_chunk::<23>()?;
+    let [.., length_byte, arrays] = *header;
+    let mut parsed = HvccRecord {
+        length_size_minus_one: length_byte & 0x03,
+        vps: Vec::new(),
+        sps: Vec::new(),
+        pps: Vec::new(),
+    };
+    for _ in 0..arrays {
+        let (&[kind, count_high, count_low], tail) = rest.split_first_chunk::<3>()?;
+        rest = tail;
+        for _ in 0..u16::from_be_bytes([count_high, count_low]) {
+            let nalu = take_u16_prefixed(&mut rest)?;
+            match kind & 0x3F {
+                32 => parsed.vps.push(nalu),
+                33 => parsed.sps.push(nalu),
+                34 => parsed.pps.push(nalu),
+                _ => {}
+            }
+        }
+    }
+    Some(parsed)
+}
 
 #[inline]
 pub fn hevc_video_for_enhanced_rtmp_with_composition_into(

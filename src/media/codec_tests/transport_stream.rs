@@ -462,3 +462,82 @@ fn audio_for_rtmp_no_adts_passthrough() {
     assert_eq!(result[1], 0x01);
     assert_eq!(&result[2..], &raw);
 }
+
+/// The checked-in H.265 clip's first keyframe and a later frame with a
+/// composition offset, as enhanced RTMP tags made by the egress converter.
+fn enhanced_hevc_fixture_tags() -> (bytes::Bytes, Vec<u8>, Vec<u8>, Vec<u8>) {
+    use crate::media::packet::MediaType;
+    let (_, _, packets) = crate::test_fixtures::primary_av_packets_for_codec("h265").unwrap();
+    let mut video = packets.iter().filter(|p| p.media_type == MediaType::Video);
+    let keyframe = video.next().filter(|p| p.is_keyframe).unwrap();
+    let header = build_hevc_enhanced_rtmp_sequence_header(&keyframe.payload).unwrap();
+    let mut key_tag = Vec::new();
+    assert!(hevc_video_for_enhanced_rtmp_with_composition_into(
+        &keyframe.payload,
+        true,
+        0,
+        &mut key_tag
+    ));
+    let next = video.next().unwrap();
+    let mut next_tag = Vec::new();
+    assert!(hevc_video_for_enhanced_rtmp_with_composition_into(
+        &next.payload,
+        false,
+        -40,
+        &mut next_tag
+    ));
+    (header, key_tag, next_tag, keyframe.payload.to_vec())
+}
+
+#[test]
+fn an_enhanced_rtmp_hevc_tag_converts_to_annexb_led_by_its_parameter_sets() {
+    let (header, key_tag, next_tag, keyframe) = enhanced_hevc_fixture_tags();
+    let (mut nls, mut cache, mut buf) = (4, Vec::new(), Vec::new());
+    assert!(video_for_ts_into(&header, PayloadFormat::Flv, &mut nls, &mut cache, &mut buf).is_none());
+    let sets = annexb_parameter_sets(&keyframe).unwrap();
+    assert_eq!(cache, sets, "VPS, SPS and PPS from the hvcC record");
+
+    let annexb = video_for_ts_into(&key_tag, PayloadFormat::Flv, &mut nls, &mut cache, &mut buf)
+        .unwrap()
+        .to_vec();
+    assert!(annexb.starts_with(&sets), "a keyframe is led by its parameter sets");
+    let slices = |data: &[u8]| -> Vec<Vec<u8>> {
+        split_annexb_nalus(data)
+            .into_iter()
+            .filter(|nalu| nalu.first().is_some_and(|b| (b >> 1) & 0x3F < 32))
+            .map(<[u8]>::to_vec)
+            .collect()
+    };
+    assert_eq!(slices(&annexb), slices(&keyframe), "the picture's slices come through whole");
+
+    // A coded frame with a composition time (packet type 1) skips the 3 CTS
+    // bytes and is not led by parameter sets.
+    let next = video_for_ts_into(&next_tag, PayloadFormat::Flv, &mut nls, &mut cache, &mut buf)
+        .unwrap();
+    assert!(!next.starts_with(&sets));
+    assert!(!slices(next).is_empty());
+}
+
+#[test]
+fn a_truncated_enhanced_sequence_start_keeps_the_cache() {
+    let (header, _, _, _) = enhanced_hevc_fixture_tags();
+    let (mut nls, mut cache, mut buf) = (4, vec![0, 0, 0, 1, 0x40], Vec::new());
+    for cut in [6, 20, 28, header.len() - 1] {
+        let _ = video_for_ts_into(&header[..cut], PayloadFormat::Flv, &mut nls, &mut cache, &mut buf);
+        assert_eq!(cache, [0, 0, 0, 1, 0x40], "cut at {cut}");
+        assert!(flv_video_config(&header[..cut]).is_none());
+    }
+}
+
+proptest! {
+    #[test]
+    fn enhanced_tag_parsing_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..96)) {
+        let mut tag = vec![0x80 | (bytes.first().copied().unwrap_or(0) & 0x7F)];
+        tag.extend_from_slice(b"hvc1");
+        tag.extend_from_slice(&bytes);
+        let (mut nls, mut cache, mut buf) = (4, Vec::new(), Vec::new());
+        let _ = video_for_ts_into(&tag, PayloadFormat::Flv, &mut nls, &mut cache, &mut buf);
+        let _ = flv_video_config(&tag);
+        let _ = ex_video_tag(&tag);
+    }
+}

@@ -225,7 +225,7 @@ export function qaVerdicts(qa: StreamQaFindings | null, nowMs: number): Verdict[
   const black = held(qa.blackSinceMs, qa.pictureCheckedMs, nowMs);
   const still = held(qa.stillSinceMs, qa.pictureCheckedMs, nowMs);
   if (qa.pictureCheckedMs === null || nowMs - qa.pictureCheckedMs > QA_STALE_MS) {
-    verdicts.push({ key: "picture", severity: "warn", title: "Picture not checked", detail: "No keyframe has decoded recently (H.264 and H.265 over SRT, H.264 over RTMP)." });
+    verdicts.push({ key: "picture", severity: "warn", title: "Picture not checked", detail: "No keyframe has decoded recently (H.264 or H.265, over SRT or RTMP)." });
   } else if (black !== null) {
     verdicts.push({
       key: "picture",
@@ -233,12 +233,19 @@ export function qaVerdicts(qa: StreamQaFindings | null, nowMs: number): Verdict[
       title: `Picture black for ${Math.round(black)} s`,
       detail: "The stream is fine but shows black: check the encoder's scene or camera input.",
     });
+  } else if (still !== null && still >= 4 && qa.stillIsSlate) {
+    verdicts.push({
+      key: "picture",
+      severity: still >= STILL_ALERT_SEC ? "warn" : "ok",
+      title: `Slate on for ${Math.round(still)} s`,
+      detail: "The picture is still and looks drawn (bars, a card): viewers see a slate. Switch back to the program if it is not planned.",
+    });
   } else if (still !== null && still >= 4) {
     verdicts.push({
       key: "picture",
       severity: still >= STILL_ALERT_SEC ? "warn" : "ok",
-      title: `Picture unchanged for ${Math.round(still)} s`,
-      detail: "A frozen camera or capture looks like this; so does a slate meant to be still.",
+      title: `Picture frozen for ${Math.round(still)} s`,
+      detail: "The camera picture has not changed: a frozen camera or a stuck capture. Restart it on the encoder.",
     });
   } else {
     verdicts.push({ key: "picture", severity: "ok", title: "Picture is moving", detail: "Not black, and changing between keyframes." });
@@ -255,7 +262,21 @@ export function qaVerdicts(qa: StreamQaFindings | null, nowMs: number): Verdict[
   } else if (loudness && qa.loudnessLufs !== null) {
     verdicts.push({ key: "sound", severity: loudness.severity, title: `Sound at ${qa.loudnessLufs.toFixed(0)} LUFS`, detail: `${loudness.words[0].toUpperCase()}${loudness.words.slice(1)}.` });
   } else {
-    verdicts.push({ key: "sound", severity: "warn", title: "Sound not measured", detail: "Measured on the first AAC track once 3 s of it decode." });
+    verdicts.push({ key: "sound", severity: "warn", title: "Sound not measured", detail: "Measured on every AAC track once 3 s of it decode." });
+  }
+  const tracks = qa.tracks ?? [];
+  const silentTracks = tracks
+    .map((track, index) => ({ index, silent: held(track.silentSinceMs, qa.soundCheckedMs, nowMs) }))
+    .filter((track) => track.index > 0 && track.silent !== null);
+  if (silentTracks.length > 0) {
+    const longest = Math.max(...silentTracks.map((track) => track.silent ?? 0));
+    const names = silentTracks.map((track) => track.index + 1).join(", ");
+    verdicts.push({
+      key: "tracks",
+      severity: longest >= SILENT_ALERT_SEC ? "warn" : "ok",
+      title: `${silentTracks.length === 1 ? "Track" : "Tracks"} ${names} silent`,
+      detail: "Check that the encoder routes sound to these tracks, or drop them if they are not meant to carry any.",
+    });
   }
   return verdicts;
 }

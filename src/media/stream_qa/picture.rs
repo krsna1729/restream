@@ -1,5 +1,6 @@
 //! What a picture shows, from a small grey thumbnail of a decoded frame:
-//! whether it is black, and whether it differs from the last one.
+//! whether it is black, whether it differs from the last one, and whether
+//! it looks like a slate (a drawn card) rather than a camera picture.
 
 /// Thumbnail size: enough to tell a picture changed, small enough to
 /// compare for nothing.
@@ -14,6 +15,14 @@ const BLACK_SHARE: f64 = 0.98;
 /// pictures; below it, coding noise on the same picture.
 const CHANGE_LEVEL: f64 = 0.5;
 
+/// Neighbouring pixels this close (0..255) are one flat area.
+const FLAT_STEP: u8 = 1;
+/// Share of flat neighbour pairs at or above which a picture is drawn, not
+/// shot. Measured on 64x36 thumbnails: camera photos 0.10-0.44 (texture
+/// and sensor noise survive the downscale), bars, test cards, flat colour
+/// and gradients 0.71 and up.
+const SLATE_FLAT_SHARE: f64 = 0.6;
+
 /// Nearly every pixel dark.
 pub fn is_black(thumb: &[u8]) -> bool {
     if thumb.is_empty() {
@@ -21,6 +30,30 @@ pub fn is_black(thumb: &[u8]) -> bool {
     }
     let dark = thumb.iter().filter(|&&pixel| pixel <= DARK_LEVEL).count();
     dark as f64 >= BLACK_SHARE * thumb.len() as f64
+}
+
+/// A drawn card (bars, a "be right back" slate, a test card): most
+/// neighbouring pixels, across and down, are equal. A thumbnail of another
+/// size is not judged.
+pub fn looks_like_slate(thumb: &[u8]) -> bool {
+    let (width, height) = (THUMB_WIDTH as usize, THUMB_HEIGHT as usize);
+    if thumb.len() != width * height {
+        return false;
+    }
+    let flat = |a: u8, b: u8| a.abs_diff(b) <= FLAT_STEP;
+    let across = thumb
+        .chunks_exact(width)
+        .flat_map(|row| row.windows(2))
+        .filter(|pair| flat(pair[0], pair[1]))
+        .count();
+    let down = thumb
+        .chunks_exact(width)
+        .zip(thumb.chunks_exact(width).skip(1))
+        .flat_map(|(upper, lower)| upper.iter().zip(lower))
+        .filter(|(a, b)| flat(**a, **b))
+        .count();
+    let pairs = height * (width - 1) + (height - 1) * width;
+    (across + down) as f64 >= SLATE_FLAT_SHARE * pairs as f64
 }
 
 /// Two thumbnails of different pictures; one of another size always is.
@@ -78,5 +111,27 @@ mod tests {
         }
         assert!(differs(&still, &moved), "four rows changed");
         assert!(differs(&still, &still[1..]), "another size");
+    }
+
+    fn thumbnail(name: &str) -> Vec<u8> {
+        let path =
+            crate::test_fixtures::checked_in_fixture(&format!("test/fixtures/stream-qa/{name}"))
+                .unwrap();
+        std::fs::read(path).unwrap()
+    }
+
+    /// Thumbnails FFmpeg made with the sampler's scaler from its own
+    /// sources (see test/fixtures/stream-qa/): drawn cards read as slates,
+    /// textured pictures do not.
+    #[test]
+    fn drawn_cards_are_slates_and_textured_pictures_are_not() {
+        for slate in ["smptehdbars.gray", "card.gray", "gradients.gray"] {
+            assert!(looks_like_slate(&thumbnail(slate)), "{slate}");
+        }
+        for picture in ["mandelbrot.gray", "life.gray"] {
+            assert!(!looks_like_slate(&thumbnail(picture)), "{picture}");
+        }
+        assert!(looks_like_slate(&flat(90)));
+        assert!(!looks_like_slate(&flat(90)[1..]), "another size");
     }
 }

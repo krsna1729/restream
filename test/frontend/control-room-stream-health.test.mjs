@@ -138,6 +138,27 @@ test("black, still and silence turn amber, then red (or amber for a still) at th
   assert.equal(qaOf(at({ silentSinceMs: 90_000 }), "sound").severity, "bad");
 });
 
+test("a still slate is told from a frozen picture, and silent later tracks are named", () => {
+  const at = (overrides) => qaVerdicts(qa(overrides), 100_000);
+  assert.equal(qaOf(at({ stillSinceMs: 70_000 }), "picture").title, "Picture frozen for 30 s");
+  const slate = qaOf(at({ stillSinceMs: 70_000, stillIsSlate: true }), "picture");
+  assert.equal(slate.title, "Slate on for 30 s");
+  assert.equal(slate.severity, "warn");
+  assert.equal(qaOf(at({ tracks: [{ silentSinceMs: null, loudnessLufs: -16 }] }), "tracks"), undefined);
+  const silent = qaOf(
+    at({
+      tracks: [
+        { silentSinceMs: null, loudnessLufs: -16 },
+        { silentSinceMs: 85_000, loudnessLufs: -70 },
+        { silentSinceMs: 98_000, loudnessLufs: -70 },
+      ],
+    }),
+    "tracks",
+  );
+  assert.equal(silent.title, "Tracks 2, 3 silent");
+  assert.equal(silent.severity, "warn", "track 2 has been silent 15 s");
+});
+
 test("a stale or missing check says so instead of passing", () => {
   const stale = qaVerdicts(qa({ blackSinceMs: 0 }), 100_000 + 11_000);
   assert.equal(qaOf(stale, "picture").title, "Picture not checked");

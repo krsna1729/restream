@@ -6,7 +6,7 @@
 use super::egress_connection::{RtmpSessionCore, RtmpSessionEvent};
 use super::egress_transport::RtmpUrlParts;
 use super::flv::{
-    FlvVideoPacketKind, classify_flv_video_packet, flv_avcc_config_annexb_parameter_sets,
+    FlvVideoPacketKind, classify_flv_video_packet, flv_config_annexb_parameter_sets,
     flv_video_composition_time_ms, parse_flv_audio_meta, parse_flv_video_meta,
 };
 
@@ -14,7 +14,7 @@ use super::flv::{
 pub fn flv_video_tag(data: &[u8]) {
     let kind = classify_flv_video_packet(data);
     let _ = flv_video_composition_time_ms(data);
-    if let Some(sets) = flv_avcc_config_annexb_parameter_sets(data) {
+    if let Some(sets) = flv_config_annexb_parameter_sets(data) {
         assert_eq!(kind, Some(FlvVideoPacketKind::SequenceHeader));
         assert!(
             sets.starts_with(&[0, 0, 0, 1]),

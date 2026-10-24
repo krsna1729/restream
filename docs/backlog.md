@@ -27,7 +27,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-100 agent protocol: approval mid-task and live panels](#q-100-agent-opus-agent-protocol-approval-mid-task-and-live-panels)
 - [Q-101 incident investigation and approval UX](#q-101-agent-opus-explain-an-incident-and-approve-its-fix-in-one-place)
 - [Q-102 plain-language command palette](#q-102-frontend-sonnet-plain-language-command-palette)
-- [Q-103 picture and sound checks: wider coverage](#q-103-observability-sonnet-picture-and-sound-checks-wider-coverage)
 
 ### Q-025 [performance] [opus] Re-qualify the SRT shard law after transport convergence
 - Goal: qualify the SRT cold prior (64 outputs per shard at 4.8 Mbit/s,
@@ -245,10 +244,3 @@ the [assurance roadmap](assurance-roadmap.md).
 - Files: `web/ts/control-room/shell/command-palette.tsx`, `palette-model.ts`.
 - Gates: a request maps to the same plan the buttons would make; nothing
   applies without the approval step.
-
-### Q-103 [observability] [sonnet] Picture and sound checks: wider coverage
-- Goal: the checks (`src/media/stream_qa/`) also read enhanced-RTMP HEVC
-  pictures, measure every audio track, and tell a slate card from a live
-  picture.
-- Gates: a fixture per case (RTMP HEVC, a silent second track, a slate) yields
-  its finding; the sampler's measured CPU stays within its budget.

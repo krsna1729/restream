@@ -31,7 +31,7 @@ use crate::media::stage_metrics::StageMetrics;
 use crate::media::standby_gop::StandbyGopCache;
 
 use super::flv::{
-    FlvVideoPacketKind, classify_flv_video_packet, flv_avcc_config_annexb_parameter_sets,
+    FlvVideoPacketKind, classify_flv_video_packet, flv_config_annexb_parameter_sets,
     flv_video_composition_time_ms, parse_flv_audio_meta, parse_flv_video_meta,
 };
 
@@ -80,9 +80,11 @@ impl RtmpPublisherMedia {
         let is_keyframe = matches!(packet_kind, Some(FlvVideoPacketKind::Keyframe));
         let dts = timestamp as i64;
         let pts = dts.saturating_add(i64::from(flv_video_composition_time_ms(&data)));
-        let parameter_sets = flv_avcc_config_annexb_parameter_sets(&data);
+        let parameter_sets = flv_config_annexb_parameter_sets(&data);
+        // A header the TS path can read (H.264, enhanced H.264/H.265) is
+        // kept for late joiners and the checks.
         if matches!(packet_kind, Some(FlvVideoPacketKind::SequenceHeader))
-            && data.first().is_some_and(|tag| tag & 0x0F == 7)
+            && parameter_sets.is_some()
         {
             *lock(&self.video_sequence_header) = Some(data.clone());
         }

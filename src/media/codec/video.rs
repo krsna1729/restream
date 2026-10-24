@@ -10,6 +10,9 @@ use std::ops::ControlFlow;
 
 use bytes::Bytes;
 
+use super::enhanced_rtmp_hevc::{
+    EX_CODED_FRAMES, EX_CODED_FRAMES_X, EX_SEQUENCE_START, ex_video_tag, hvcc_record,
+};
 use crate::media::packet::PayloadFormat;
 
 /// Prepare a video payload for MPEG-TS muxing (Annex B output).
@@ -141,6 +144,27 @@ pub fn video_for_ts_into<'a>(
         }
         PayloadFormat::Flv => {
             buf.clear();
+            if let Some(tag) = ex_video_tag(payload) {
+                return match tag.packet_type {
+                    EX_SEQUENCE_START => {
+                        // Fail closed like the classic header below: a bad
+                        // record keeps the cache it had.
+                        if let Some((nls, annexb)) = flv_video_config(payload) {
+                            *nalu_len_size = nls;
+                            *sps_pps_cache = annexb;
+                        }
+                        None
+                    }
+                    EX_CODED_FRAMES | EX_CODED_FRAMES_X => length_prefixed_frame_to_annexb(
+                        tag.keyframe,
+                        tag.body,
+                        *nalu_len_size,
+                        sps_pps_cache,
+                        buf,
+                    ),
+                    _ => None,
+                };
+            }
             let (&[tag, packet_type, ..], body) = payload.split_first_chunk::<5>()?;
             if body.is_empty() {
                 return None;
@@ -157,19 +181,87 @@ pub fn video_for_ts_into<'a>(
                 }
                 None
             } else {
-                let is_keyframe = (tag & 0xF0) == 0x10;
-                if is_keyframe && !sps_pps_cache.is_empty() {
-                    buf.extend_from_slice(sps_pps_cache);
-                }
-                let before = buf.len();
-                avcc_to_annexb_into(body, *nalu_len_size, buf);
-                if buf.len() == before {
-                    return None; // AVCC body was empty
-                }
-                Some(buf.as_slice())
+                length_prefixed_frame_to_annexb(
+                    (tag & 0xF0) == 0x10,
+                    body,
+                    *nalu_len_size,
+                    sps_pps_cache,
+                    buf,
+                )
             }
         }
     }
+}
+
+/// One frame's length-prefixed NAL units as Annex B, a keyframe led by the
+/// cached parameter sets; `None` when no NAL unit parses.
+fn length_prefixed_frame_to_annexb<'a>(
+    keyframe: bool,
+    body: &[u8],
+    nalu_len_size: usize,
+    sps_pps_cache: &[u8],
+    buf: &'a mut Vec<u8>,
+) -> Option<&'a [u8]> {
+    if keyframe && !sps_pps_cache.is_empty() {
+        buf.extend_from_slice(sps_pps_cache);
+    }
+    let before = buf.len();
+    avcc_to_annexb_into(body, nalu_len_size, buf);
+    if buf.len() == before {
+        return None;
+    }
+    Some(buf.as_slice())
+}
+
+/// The NALU length width and Annex B parameter sets of an FLV video
+/// sequence header: a classic H.264 one, or an enhanced RTMP `avc1`/`hvc1`
+/// sequence start. `None` for anything else, or a record missing a
+/// parameter set (an incomplete set would be prepended to keyframes as if
+/// it were whole).
+pub(crate) fn flv_video_config(payload: &[u8]) -> Option<(usize, Vec<u8>)> {
+    let (length_size_minus_one, sets): (u8, Vec<&[u8]>) = match ex_video_tag(payload) {
+        Some(tag) if tag.packet_type != EX_SEQUENCE_START => return None,
+        Some(tag) if tag.is_hevc() => {
+            let record = hvcc_record(tag.body)?;
+            if record.vps.is_empty() || record.sps.is_empty() || record.pps.is_empty() {
+                return None;
+            }
+            let sets = [record.vps, record.sps, record.pps].concat();
+            (record.length_size_minus_one, sets)
+        }
+        Some(tag) => {
+            let record = avcc_record(tag.body)?;
+            if record.sps.is_empty() || record.pps.is_empty() {
+                return None;
+            }
+            (
+                record.length_size_minus_one,
+                [record.sps, record.pps].concat(),
+            )
+        }
+        None => {
+            let (&[tag, 0, ..], body) = payload.split_first_chunk::<5>()? else {
+                return None;
+            };
+            if tag & 0x0F != 7 {
+                return None;
+            }
+            let record = avcc_record(body)?;
+            if record.sps.is_empty() || record.pps.is_empty() {
+                return None;
+            }
+            (
+                record.length_size_minus_one,
+                [record.sps, record.pps].concat(),
+            )
+        }
+    };
+    let mut annexb = Vec::new();
+    for nalu in sets {
+        annexb.extend_from_slice(&[0, 0, 0, 1]);
+        annexb.extend_from_slice(nalu);
+    }
+    Some((usize::from(length_size_minus_one).saturating_add(1), annexb))
 }
 
 fn refresh_annexb_parameter_set_cache(payload: &[u8], sps_pps_cache: &mut Vec<u8>) -> bool {

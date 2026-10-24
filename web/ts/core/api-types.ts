@@ -730,10 +730,21 @@ export interface StreamQaFindings {
   blackSinceMs: number | null;
   /** When the picture last changed, while it has not since. */
   stillSinceMs: number | null;
+  /** While still: the picture looks drawn (bars, a card): likely a slate. */
+  stillIsSlate?: boolean;
   soundCheckedMs: number | null;
+  /** The first track's silence and loudness. */
   silentSinceMs: number | null;
   /** Short-term loudness (3 s), LUFS, floored at -70. */
   loudnessLufs: number | null;
+  /** Every audio track checked, in source order (up to 16). */
+  tracks?: TrackSoundFindings[];
+}
+
+/** One audio track's sound (`TrackSound`). */
+export interface TrackSoundFindings {
+  silentSinceMs: number | null;
+  loudnessLufs: number;
 }
 
 /** `GET`/`PUT /pipelines/{id}/stream-qa`. */

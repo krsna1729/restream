@@ -13,6 +13,9 @@ use crate::media::codec::{self, take_u16_prefixed};
 use crate::media::metadata::{AudioMeta, VideoMeta};
 
 pub(super) fn parse_flv_video_meta(data: &[u8]) -> Option<VideoMeta> {
+    if let Some(tag) = codec::ex_video_tag(data) {
+        return Some(enhanced_video_meta(&tag));
+    }
     let &[tag, packet_type] = data.first_chunk::<2>()?;
     let codec_id = tag & 0x0F;
     let codec = match codec_id {
@@ -56,28 +59,49 @@ pub(super) fn parse_flv_video_meta(data: &[u8]) -> Option<VideoMeta> {
     Some(meta)
 }
 
-/// Extracts SPS/PPS from an FLV AVCDecoderConfigurationRecord (the H.264
-/// sequence-header video tag body) and re-emits them in Annex-B form
-/// (start-code prefixed), the format `RingBuffer::video_parameter_sets`
-/// callers expect. Returns `None` for anything malformed or non-H.264 —
-/// this parses untrusted publisher input, so it must never panic.
-pub(super) fn flv_avcc_config_annexb_parameter_sets(data: &[u8]) -> Option<Vec<u8>> {
-    let &[tag, packet_type] = data.first_chunk::<2>()?;
-    if tag & 0x0F != 7 || packet_type != 0 {
-        return None;
+/// An enhanced RTMP (`avc1`/`hvc1`) publish: the codec, and from a
+/// sequence start the picture size in its SPS.
+fn enhanced_video_meta(tag: &codec::ExVideoTag<'_>) -> VideoMeta {
+    let mut meta = VideoMeta {
+        codec: if tag.is_hevc() { "h265" } else { "h264" }.to_string(),
+        ..Default::default()
+    };
+    if tag.packet_type != codec::EX_SEQUENCE_START {
+        return meta;
     }
-    // Five FLV tag bytes, then the record.
-    let record = codec::avcc_record(data.get(5..)?)?;
-    let mut annexb = Vec::new();
-    for nalu in record.sps.iter().chain(&record.pps) {
-        annexb.extend_from_slice(&[0, 0, 0, 1]);
-        annexb.extend_from_slice(nalu);
+    if tag.is_hevc() {
+        if let Some(record) = codec::hvcc_record(tag.body)
+            && let Some(sps) = record.sps.first()
+            && let Some(info) = codec::parse_hevc_profile_tier_level(sps)
+        {
+            meta.width = info.width;
+            meta.height = info.height;
+        }
+    } else if let Some(record) = codec::avcc_record(tag.body)
+        && let Some((_nal_header, payload)) = record.sps.first().and_then(|sps| sps.split_first())
+        && let Some(info) = codec::parse_h264_sps(payload)
+    {
+        meta.width = info.width;
+        meta.height = info.height;
+        meta.fps = info.fps;
     }
+    meta
+}
 
+/// The parameter sets of an FLV video sequence header (classic H.264, or
+/// an enhanced RTMP `avc1`/`hvc1` sequence start) in Annex-B form, the
+/// format `RingBuffer::video_parameter_sets` callers expect. Returns `None`
+/// for anything malformed or another codec — this parses untrusted
+/// publisher input, so it must never panic.
+pub(super) fn flv_config_annexb_parameter_sets(data: &[u8]) -> Option<Vec<u8>> {
+    let (_, annexb) = codec::flv_video_config(data)?;
     codec::annexb_parameter_sets(&annexb)
 }
 
 pub(super) fn flv_video_composition_time_ms(data: &[u8]) -> i32 {
+    if let Some(tag) = codec::ex_video_tag(data) {
+        return tag.composition_time_ms;
+    }
     let Some(&[tag, packet_type, high, mid, low]) = data.first_chunk::<5>() else {
         return 0;
     };
@@ -97,6 +121,19 @@ pub(super) enum FlvVideoPacketKind {
 }
 
 pub(super) fn classify_flv_video_packet(data: &[u8]) -> Option<FlvVideoPacketKind> {
+    if let Some(tag) = codec::ex_video_tag(data) {
+        return match tag.packet_type {
+            codec::EX_SEQUENCE_START => Some(FlvVideoPacketKind::SequenceHeader),
+            codec::EX_CODED_FRAMES | codec::EX_CODED_FRAMES_X if tag.keyframe => {
+                Some(FlvVideoPacketKind::Keyframe)
+            }
+            codec::EX_CODED_FRAMES | codec::EX_CODED_FRAMES_X => {
+                Some(FlvVideoPacketKind::Interframe)
+            }
+            // Sequence end, metadata: no picture.
+            _ => None,
+        };
+    }
     let &[tag, packet_type] = data.first_chunk::<2>()?;
     if !matches!(tag & 0x0f, 7 | 12) {
         return None;

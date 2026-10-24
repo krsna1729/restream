@@ -186,7 +186,9 @@ impl TsPacketFeeder {
 }
 
 fn parse_video_sequence_header(flv_sequence_header: &[u8]) -> (usize, Vec<u8>) {
-    if flv_sequence_header.len() > 5 {
+    if crate::media::codec::ex_video_tag(flv_sequence_header).is_some() {
+        crate::media::codec::flv_video_config(flv_sequence_header).unwrap_or((4, Vec::new()))
+    } else if flv_sequence_header.len() > 5 {
         crate::media::codec::parse_avcc_config(&flv_sequence_header[5..])
     } else {
         (4, Vec::new())
@@ -217,7 +219,11 @@ fn prepare_video_startup_packet(
             }
         }
         crate::media::packet::PayloadFormat::Flv => {
-            if (packet.payload.len() > 1 && packet.payload[1] == 0) || packet.is_keyframe {
+            let sequence_header = match crate::media::codec::ex_video_tag(&packet.payload) {
+                Some(tag) => tag.packet_type == crate::media::codec::EX_SEQUENCE_START,
+                None => packet.payload.len() > 1 && packet.payload[1] == 0,
+            };
+            if sequence_header || packet.is_keyframe {
                 VideoStartupAction::Emit
             } else {
                 VideoStartupAction::Skip
