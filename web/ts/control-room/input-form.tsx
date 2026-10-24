@@ -240,7 +240,7 @@ export function InputForm(props: {
               <textarea
                 rows={3}
                 autoComplete="off"
-                className="textarea textarea-sm font-mono"
+                className="textarea textarea-sm min-h-[4lh] max-h-[16lh] font-mono [field-sizing:content]"
                 placeholder={AUTH_COOKIES_PLACEHOLDER}
                 value={draft.cookies}
                 onChange={(event) => set({ cookies: event.target.value })}

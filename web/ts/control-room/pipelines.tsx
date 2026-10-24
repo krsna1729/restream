@@ -128,7 +128,7 @@ export function Pipelines({ live }: { live: LiveSnapshot }) {
             chips={HEALTH_FILTERS.map(([value, label]) => ({ value, label, count: healthCounts[value], alert: value === "warning" }))}
           />
         </div>
-        <PipelineTable rows={shown} label="Pipelines" maxHeight={640} />
+        <PipelineTable rows={shown} label="Pipelines" maxHeight={640} trends={live.ingestTrend} />
       </Panel>
     </div>
   );

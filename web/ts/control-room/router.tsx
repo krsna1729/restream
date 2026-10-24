@@ -57,28 +57,37 @@ export function PlaceLink(props: {
   place: Place;
   current?: boolean;
   className?: string;
+  onClick?: () => void;
   children: ReactNode;
 }) {
+  const here = usePlace();
   return (
     <Link
+      viewTransition={here.workspace !== props.place.workspace}
       to="/"
       search={(previous: Record<string, unknown>) =>
         placeSearch(previous, props.place)
       }
       aria-current={props.current ? "page" : undefined}
       className={props.className}
+      onClick={props.onClick}
     >
       {props.children}
     </Link>
   );
 }
 
-/** Moves to a place; the router updates the URL and history. */
+/** Moves to a place; the router updates the URL and history. A move to
+ * another workspace crossfades where the browser has View Transitions
+ * (input.css drops it under reduced motion); a filter or a pipeline
+ * change within one swaps at once, so what was asked for shows now. */
 export function useGo(): (place: Place) => void {
   const navigate = useNavigate();
+  const here = usePlace();
   return (place) =>
     void navigate({
       to: "/",
       search: (previous) => placeSearch(previous, place),
+      viewTransition: here.workspace !== place.workspace,
     });
 }

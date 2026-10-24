@@ -1,3 +1,5 @@
+import { useMemo } from "react";
+
 import { DataTable } from "../ui/data-table.js";
 import type { Column } from "../ui/data-table.js";
 import { Meter } from "../ui/kpi.js";
@@ -5,10 +7,11 @@ import { StatusBadge } from "../ui/tone.js";
 import type { Tone } from "../ui/tone.js";
 import { pipelineHealth } from "./fleet-model.js";
 import type { FleetPipelineRow, PipelineHealth } from "./fleet-model.js";
+import { MiniTrend } from "../ui/mini-trend.js";
 import { formatBps } from "./format.js";
 import { PlaceLink, useGo } from "./router.js";
 
-const HEALTH_TONE: Record<PipelineHealth["tone"], Tone> = {
+export const HEALTH_TONE: Record<PipelineHealth["tone"], Tone> = {
   warning: "warn",
   info: "info",
   idle: "neutral",
@@ -30,7 +33,8 @@ function protocolMix(row: FleetPipelineRow): string {
   );
 }
 
-const COLUMNS: readonly Column<FleetPipelineRow>[] = [
+function columns(trends: ReadonlyMap<string, readonly number[]> | undefined): readonly Column<FleetPipelineRow>[] {
+  return [
   {
     id: "name",
     header: "Pipeline",
@@ -83,6 +87,18 @@ const COLUMNS: readonly Column<FleetPipelineRow>[] = [
     sort: (row) => row.egressBps,
     cell: (row) => `${formatBps(row.ingestBps)} → ${formatBps(row.egressBps)}`,
   },
+  ...(trends
+    ? [
+        {
+          id: "trend",
+          // The card form leaves it out (priority 3): a phone reads the numbers.
+          header: "Last min",
+          width: "4.5rem",
+          priority: 3 as const,
+          cell: (row: FleetPipelineRow) => <MiniTrend values={trends.get(row.id)} label={`${row.name} ingest, last minute`} />,
+        },
+      ]
+    : []),
   {
     id: "health",
     header: "Health",
@@ -90,7 +106,8 @@ const COLUMNS: readonly Column<FleetPipelineRow>[] = [
     sort: (row) => row.attention * 1000 + row.pending,
     cell: (row) => <HealthBadge row={row} />,
   },
-];
+  ];
+}
 
 /** One row per pipeline: source, delivery, destinations, flow and health,
  * each linked to its Operate view. Windowed, so the whole plant fits. */
@@ -100,12 +117,15 @@ export function PipelineTable(props: {
   maxHeight?: number;
   /** Where a row click goes; Operate by default. */
   onOpen?: (pipelineId: string) => void;
+  /** Ingest rates over the last minute, by pipeline: a trend in the row. */
+  trends?: ReadonlyMap<string, readonly number[]>;
 }) {
   const go = useGo();
+  const cols = useMemo(() => columns(props.trends), [props.trends]);
   return (
     <DataTable
       rows={props.rows}
-      columns={COLUMNS}
+      columns={cols}
       rowKey={(row) => row.id}
       label={props.label}
       maxHeight={props.maxHeight}

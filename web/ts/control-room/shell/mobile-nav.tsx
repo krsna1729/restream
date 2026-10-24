@@ -1,4 +1,4 @@
-// The phone's navigation: a bottom bar with the on-call path (Fleet,
+// The phone's navigation: a bottom dock with the on-call path (Fleet,
 // Incidents, Pipelines, Operate) and More, a sheet holding every workspace,
 // the host card and the viewing preferences.
 
@@ -25,7 +25,7 @@ export function MobileTabs(props: {
   return (
     <nav
       aria-label="Primary"
-      className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-base-content/10 bg-base-200/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
+      className="dock z-30 border-t border-base-content/10 bg-base-200/95 backdrop-blur md:hidden"
     >
       {MOBILE_TABS.map((id) => {
         const current = id === place.workspace;
@@ -35,10 +35,10 @@ export function MobileTabs(props: {
             key={id}
             place={{ workspace: id, pipelineId: place.pipelineId }}
             current={current}
-            className={`relative flex h-14 flex-col items-center justify-center gap-0.5 text-[0.7rem] ${current ? "text-primary" : "text-base-content/75"}`}
+            className={current ? "dock-active text-primary" : "text-base-content/75"}
           >
             <Icon name={NAV_ICONS[id]} className="size-5" />
-            <span>{WORKSPACE_LABELS[id]}</span>
+            <span className="dock-label">{WORKSPACE_LABELS[id]}</span>
             {badge && badge.tone !== "neutral" && (
               <span className={`absolute top-1.5 left-1/2 ml-1.5 rounded-full px-1 text-[0.65rem] leading-4 font-semibold ${badge.tone === "bad" ? "bg-error text-error-content" : "bg-warning text-warning-content"}`}>
                 {compactCount(badge.count)}
@@ -51,10 +51,10 @@ export function MobileTabs(props: {
         type="button"
         onClick={props.onMore}
         aria-expanded={props.moreOpen}
-        className={`flex h-14 flex-col items-center justify-center gap-0.5 text-[0.7rem] ${inMore ? "text-primary" : "text-base-content/75"}`}
+        className={inMore ? "dock-active text-primary" : "text-base-content/75"}
       >
         <Icon name="menu" className="size-5" />
-        <span>{inMore ? WORKSPACE_LABELS[place.workspace] : "More"}</span>
+        <span className="dock-label">{inMore ? WORKSPACE_LABELS[place.workspace] : "More"}</span>
       </button>
     </nav>
   );

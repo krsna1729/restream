@@ -5,7 +5,7 @@ import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
 const fleetModel = await loadCompiledFrontendModule("control-room/fleet-model.js");
 const { attentionGroups, buildFleetModel, pipelineHealth } = fleetModel;
-const { telemetryRates } = await loadCompiledFrontendModule(
+const { appendTrends, telemetryRates } = await loadCompiledFrontendModule(
   "control-room/rates.js",
 );
 const { parseSearch, placeFromSearch, placeSearch, stringifySearch } =
@@ -192,6 +192,21 @@ test("rates come from two samples of one session", () => {
   assert.equal(failover.ingestBps.has("a"), false);
 
   assert.equal(telemetryRates(first, telemetry(0, 2_000, 6_000)), null);
+});
+
+test("a row trend keeps the last samples and restarts across a gap", () => {
+  let trends = new Map();
+  for (let index = 1; index <= 5; index += 1) {
+    trends = appendTrends(trends, new Map([["a", index], ["b", index * 10]]), 3);
+  }
+  assert.deepEqual(trends.get("a"), [3, 4, 5], "oldest first, the last three kept");
+  assert.deepEqual(trends.get("b"), [30, 40, 50]);
+  // "b" had no rate this sample (a new session): its line starts again.
+  trends = appendTrends(trends, new Map([["a", 6]]), 3);
+  assert.deepEqual(trends.get("a"), [4, 5, 6]);
+  assert.equal(trends.has("b"), false);
+  trends = appendTrends(trends, new Map([["b", 7]]), 3);
+  assert.deepEqual(trends.get("b"), [7]);
 });
 
 test("an unknown or absent workspace opens Fleet; the pipeline is kept", () => {

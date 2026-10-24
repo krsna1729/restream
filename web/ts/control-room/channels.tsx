@@ -25,7 +25,7 @@ import { useNow } from "./store.js";
 import type { LiveSnapshot } from "./store.js";
 import { LogsLink } from "./logs-link.js";
 import { outputTrouble, troubleTitle } from "./trouble-model.js";
-import { retryWords } from "./when.js";
+import { RetryCountdown } from "./retry-countdown.js";
 import { Since } from "./when-view.js";
 import { NextEvent } from "./next-event.js";
 
@@ -315,7 +315,7 @@ function ChannelCard(props: { channel: Channel; detail: boolean; bps: number | n
         <StatusBadge tone={STATE_TONE[channel.state]} dot>
           {STATE_LABEL[channel.state]}
         </StatusBadge>
-        {output.retry ? <RetryIn atMs={output.retry.nextAttemptAtMs} attempts={output.retry.attempts} /> : <Since sinceMs={output.stateSinceMs} />}
+        {output.retry ? <RetryCountdown atMs={output.retry.nextAttemptAtMs} attempts={output.retry.attempts} /> : <Since sinceMs={output.stateSinceMs} />}
         <span className="ml-auto tabular text-base-content/70">{channel.state === "live" ? formatBps(props.bps) : ""}</span>
         {props.watchUrl && (
           <a className="link link-hover touch-36 inline-flex items-center" href={props.watchUrl} target="_blank" rel="noreferrer" aria-label={`Watch ${output.name} on ${channel.platform.label}`}>
@@ -360,12 +360,6 @@ function ChannelCard(props: { channel: Channel; detail: boolean; bps: number | n
       )}
     </li>
   );
-}
-
-function RetryIn(props: { atMs: number; attempts: number }) {
-  const now = useNow(1000);
-  const seconds = Math.max(0, Math.round((props.atMs - now) / 1000));
-  return <span className="tabular text-base-content/70">{retryWords(props.attempts, seconds * 1000)}</span>;
 }
 
 interface OutputRef {

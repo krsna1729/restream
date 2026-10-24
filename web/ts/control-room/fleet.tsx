@@ -51,7 +51,7 @@ export function Fleet({ live }: { live: LiveSnapshot }) {
         <Headroom metrics={live.metrics} />
       </div>
       <History history={live.history} />
-      <FleetTable rows={model.pipelines} />
+      <FleetTable rows={model.pipelines} trends={live.ingestTrend} />
       <RawJson value={{ capacity, metrics: live.metrics }} label="capacity + host metrics" />
     </div>
   );
@@ -347,7 +347,7 @@ function History({ history }: { history: readonly FleetSample[] }) {
 /** The fleet table shows the worst pipelines; Pipelines lists all. */
 const FLEET_TABLE_ROWS = 12;
 
-function FleetTable({ rows }: { rows: readonly FleetPipelineRow[] }) {
+function FleetTable({ rows, trends }: { rows: readonly FleetPipelineRow[]; trends: ReadonlyMap<string, readonly number[]> }) {
   const shown = useMemo(() => worstFirst(rows).slice(0, FLEET_TABLE_ROWS), [rows]);
   return (
     <Panel
@@ -363,7 +363,7 @@ function FleetTable({ rows }: { rows: readonly FleetPipelineRow[] }) {
         ) : undefined
       }
     >
-      {rows.length === 0 ? <EmptyState title="No pipeline yet" /> : <PipelineTable rows={shown} label="Worst pipelines" />}
+      {rows.length === 0 ? <EmptyState title="No pipeline yet" /> : <PipelineTable rows={shown} label="Worst pipelines" trends={trends} />}
     </Panel>
   );
 }

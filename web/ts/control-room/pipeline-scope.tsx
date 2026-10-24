@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
-import { SearchField } from "../ui/controls.js";
+import { MenuButton, SearchField } from "../ui/controls.js";
+import { Icon } from "../ui/icons.js";
 import { PageHeader } from "../ui/page-header.js";
+import { StatusDot } from "../ui/tone.js";
 import { EmptyState, Panel } from "../ui/panel.js";
-import { buildFleetModel, filterPipelineRows } from "./fleet-model.js";
+import { buildFleetModel, filterPipelineRows, pipelineHealth } from "./fleet-model.js";
+import type { FleetPipelineRow } from "./fleet-model.js";
 import { formatBps } from "./format.js";
-import { HealthBadge, PipelineTable } from "./pipeline-table.js";
+import { HEALTH_TONE, HealthBadge, PipelineTable } from "./pipeline-table.js";
 import { WORKSPACE_LABELS } from "./route.js";
 import type { Workspace } from "./route.js";
 import { PlaceLink, useGo } from "./router.js";
@@ -98,18 +101,7 @@ export function PipelineHeading(props: { live: LiveSnapshot; workspace: Workspac
         }
         subtitle={`${row.source ? `${row.source.protocol.toUpperCase()}${row.source.bonded ? " bonded" : ""} in · ${formatBps(row.ingestBps)}` : "no source connected"} · ${formatBps(row.egressBps)} out · ${row.delivering} / ${row.wanted} destinations delivering`}
         actions={
-          <select
-            className="select select-sm w-full sm:w-64"
-            aria-label="Pipeline"
-            value={pipelineId}
-            onChange={(event) => go({ workspace, pipelineId: event.target.value })}
-          >
-            {state.pipelines.map((pipeline) => (
-              <option key={pipeline.id} value={pipeline.id}>
-                {pipeline.name}
-              </option>
-            ))}
-          </select>
+          <PipelinePicker rows={rows ?? []} workspace={workspace} pipelineId={pipelineId} />
         }
       />
       <nav ref={tabs} aria-label="Pipeline views" className="tab-strip -mt-1">
@@ -125,6 +117,79 @@ export function PipelineHeading(props: { live: LiveSnapshot; workspace: Workspac
         ))}
       </nav>
     </>
+  );
+}
+
+/** How many matches the picker lists; a search narrows the rest. */
+const PICKER_LIMIT = 50;
+
+/** Switch pipeline: a button with the current name that opens a search
+ * over every pipeline, worst health first, Enter taking the top match. */
+function PipelinePicker(props: { rows: readonly FleetPipelineRow[]; workspace: Workspace; pipelineId: string }) {
+  const go = useGo();
+  const [query, setQuery] = useState("");
+  const search = useRef<HTMLInputElement | null>(null);
+  const current = props.rows.find((row) => row.id === props.pipelineId);
+  const shown = filterPipelineRows(props.rows, query, "all");
+  return (
+    <MenuButton
+      label="Switch pipeline"
+      className="btn btn-sm w-full justify-between border-base-content/15 bg-base-100 font-normal sm:w-64"
+      width="w-80"
+      onOpen={() => search.current?.select()}
+      button={
+        <>
+          <span className="truncate">{current?.name ?? "Pipeline"}</span>
+          <Icon name="chevron" className="size-4 shrink-0 rotate-90 text-base-content/70" />
+        </>
+      }
+    >
+      {(close) => (
+        <div className="flex flex-col gap-2">
+          <label className="input input-sm w-full">
+            <Icon name="search" className="size-4 text-base-content/70" />
+            <input
+              ref={search}
+              type="search"
+              aria-label="Find a pipeline"
+              placeholder="Name or id"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                const first = shown[0];
+                if (event.key === "Enter" && first) {
+                  // Closing hands focus back to the picker button; without
+                  // this the same Enter would press it and reopen the menu.
+                  event.preventDefault();
+                  close();
+                  go({ workspace: props.workspace, pipelineId: first.id });
+                }
+              }}
+            />
+          </label>
+          <ul aria-label="Pipelines" className="scrollbar-thin -mx-2 flex max-h-80 flex-col overflow-y-auto">
+            {shown.slice(0, PICKER_LIMIT).map((row) => (
+              <li key={row.id}>
+                <PlaceLink
+                  place={{ workspace: props.workspace, pipelineId: row.id }}
+                  current={row.id === props.pipelineId}
+                  onClick={close}
+                  className={`touch-36 flex items-center gap-2 rounded-field px-2 py-1.5 text-sm hover:bg-base-content/5 ${row.id === props.pipelineId ? "bg-primary/10 font-semibold" : ""}`}
+                >
+                  <StatusDot tone={HEALTH_TONE[pipelineHealth(row).tone]} />
+                  <span className="min-w-0 flex-1 truncate">{row.name}</span>
+                  {row.egressBps !== null && <span className="text-xs text-base-content/70 tabular">{formatBps(row.egressBps)} out</span>}
+                </PlaceLink>
+              </li>
+            ))}
+            {shown.length === 0 && <li className="px-2 py-1.5 text-sm text-base-content/70">No pipeline matches.</li>}
+            {shown.length > PICKER_LIMIT && (
+              <li className="px-2 py-1.5 text-xs text-base-content/70">{(shown.length - PICKER_LIMIT).toLocaleString()} more: narrow the search.</li>
+            )}
+          </ul>
+        </div>
+      )}
+    </MenuButton>
   );
 }
 

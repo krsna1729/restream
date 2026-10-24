@@ -1870,6 +1870,8 @@ test("team: an admin adds a viewer, views as one, and the audit log records both
   // offering what it would refuse.
   await page.getByLabel(/^Account: admin/).click();
   await page.getByRole("button", { name: "Viewer", exact: true }).click();
+  // Choosing closes the menu.
+  await expect(page.getByRole("button", { name: "Viewer", exact: true })).toBeHidden();
   const banner = page.getByRole("status").filter({ hasText: "Viewing as" });
   await expect(banner).toContainText("Viewer");
   await expect(page.getByRole("link", { name: "Team" })).toHaveCount(0);
@@ -1887,6 +1889,38 @@ test("team: an admin adds a viewer, views as one, and the audit log records both
   const members = (await (await page.request.get("/api/v1/users")).json()).users as Array<{ id: string; username: string }>;
   const created = members.find((member) => member.username === username);
   if (created) await page.request.delete(`/api/v1/users/${created.id}`);
+});
+
+test("pipeline picker: search every pipeline, Enter opens the top match in the same view", async ({ page }) => {
+  const login = await page.request.post("/api/v1/auth/login", { data: { password: "admin" } });
+  expect(login.ok()).toBe(true);
+  const stamp = Date.now();
+  const ids: string[] = [];
+  try {
+    for (const name of [`cr-pick-alpha-${stamp}`, `cr-pick-bravo-${stamp}`]) {
+      const created = await page.request.post("/api/v1/pipelines", { data: { name, streamKey: `crpick${name.length}${ids.length}_${stamp}` } });
+      expect(created.ok()).toBe(true);
+      ids.push((await created.json()).pipeline.id);
+    }
+    await page.goto(`/?w=health&p=${ids[0]}`);
+    const picker = page.getByRole("button", { name: "Switch pipeline" });
+    await expect(picker).toContainText(`cr-pick-alpha-${stamp}`);
+    await picker.click();
+    const search = page.getByRole("searchbox", { name: "Find a pipeline" });
+    await expect(search).toBeFocused();
+    await search.fill(`bravo-${stamp}`);
+    await expect(page.getByRole("list", { name: "Pipelines" }).getByRole("link")).toHaveCount(1);
+    await search.press("Enter");
+    await expect(page).toHaveURL(new RegExp(`w=health.*p=${ids[1]}|p=${ids[1]}.*w=health`));
+    await expect(search).toBeHidden();
+    await expect(picker).toContainText(`cr-pick-bravo-${stamp}`);
+    // Escape closes it without moving.
+    await picker.click();
+    await page.keyboard.press("Escape");
+    await expect(search).toBeHidden();
+  } finally {
+    for (const id of ids) await page.request.delete(`/api/v1/pipelines/${id}`);
+  }
 });
 
 test("notifications: a webhook channel's test arrives signed, and the delivery is logged", async ({ page }) => {

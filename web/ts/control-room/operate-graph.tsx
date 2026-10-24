@@ -61,14 +61,14 @@ export function MediaGraph(props: {
         subtitle="shared work drawn once"
         actions={<Freshness atMs={props.atMs} />}
       >
-        <div role="tablist" aria-label="Media path views" className="scrollbar-thin mb-3 flex gap-1 overflow-x-auto">
+        <div role="tablist" aria-label="Media path views" className="tabs tabs-box tabs-sm scrollbar-thin mb-3 w-fit max-w-full flex-nowrap overflow-x-auto">
           {TABS.map(([value, label]) => (
             <button
               key={value}
               type="button"
               role="tab"
               aria-selected={tab === value}
-              className={`touch-36 h-8 shrink-0 rounded-field px-3 text-sm ${tab === value ? "bg-primary/15 font-semibold" : "text-base-content/70 hover:bg-base-content/5"}`}
+              className={`tab touch-36 shrink-0 ${tab === value ? "tab-active font-semibold" : "text-base-content/70"}`}
               onClick={() => setTab(value)}
             >
               {label}

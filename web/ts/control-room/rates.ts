@@ -72,3 +72,24 @@ export function telemetryRates(
 
   return { ingestBps, egressBps };
 }
+
+/** Samples a row's trend keeps: a minute on the 2 s clock. */
+export const TREND_SAMPLES = 30;
+
+/**
+ * Each key's recent rates, `rates` appended, the last `limit` kept. A key
+ * with no rate this sample (gone, or a new session) starts again: a line
+ * across the gap would join two sessions.
+ */
+export function appendTrends(
+  previous: ReadonlyMap<string, readonly number[]>,
+  rates: ReadonlyMap<string, number>,
+  limit = TREND_SAMPLES,
+): ReadonlyMap<string, readonly number[]> {
+  const next = new Map<string, readonly number[]>();
+  for (const [key, rate] of rates) {
+    const before = previous.get(key) ?? [];
+    next.set(key, [...before.slice(Math.max(0, before.length - limit + 1)), rate]);
+  }
+  return next;
+}
