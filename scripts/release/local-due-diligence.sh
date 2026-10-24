@@ -60,10 +60,10 @@ restream_release_require_version local-due-diligence "$VERSION"
 
 sha="$(git rev-parse --short=12 HEAD)"
 run_id="local-release-${VERSION}-${sha}"
-arch="${RESTREAM_RELEASE_ARCH:-linux-x86_64}"
+arch="${RESTREAM_RELEASE_ARCH:-linux-$(uname -m)}"
 bundle="${RESTREAM_RELEASE_DIR:-dist}/restream-${VERSION}-${arch}.tar.gz"
 oci="${RESTREAM_RELEASE_DIR:-dist}/restream-${VERSION}-oci.tar.gz"
-sbom="${RESTREAM_RELEASE_DIR:-dist}/restream-${VERSION}.sbom.cdx.json"
+sbom="${RESTREAM_RELEASE_DIR:-dist}/restream-${VERSION}-${arch}.sbom.cdx.json"
 
 cargo fmt --all --check
 scripts/release/prepare-build-tree.sh
