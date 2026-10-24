@@ -10,7 +10,7 @@ use crate::media::pipe_metrics::PipeMetrics;
 use crate::media::startup_policy;
 
 /// A Tokio child pipe as a blocking `File`, for a dedicated I/O thread.
-pub(super) fn blocking_pipe(fd: std::os::fd::OwnedFd) -> std::io::Result<std::fs::File> {
+pub(crate) fn blocking_pipe(fd: std::os::fd::OwnedFd) -> std::io::Result<std::fs::File> {
     use std::os::fd::AsRawFd;
     let raw = fd.as_raw_fd();
     // SAFETY: `raw` is a valid descriptor owned by `fd` for this call.
@@ -28,7 +28,7 @@ pub(super) fn blocking_pipe(fd: std::os::fd::OwnedFd) -> std::io::Result<std::fs
 /// input, on cancellation or on a write error, then closes stdin so FFmpeg
 /// sees EOF. The outcome is sent on `done`; the caller joins the returned
 /// thread after reaping the child ([`reap_external_child`]).
-pub(super) fn spawn_external_stdin_writer(
+pub(crate) fn spawn_external_stdin_writer(
     stdin: tokio::process::ChildStdin,
     mut input: crate::media::ffmpeg::stage_input::StageInputRefill,
     pipe_metrics: Arc<PipeMetrics>,
@@ -140,7 +140,7 @@ pub(super) const EXTERNAL_CANCEL_GRACE: std::time::Duration = std::time::Duratio
 /// [`EXTERNAL_CANCEL_GRACE`] after cancellation, and is killed past that.
 /// Once it is gone its pipes are broken, so a writer blocked in `write_all`
 /// fails and the stdout reader sees EOF: the joins are bounded.
-pub(super) async fn reap_external_child(
+pub(crate) async fn reap_external_child(
     child: &mut tokio::process::Child,
     cancelled: bool,
     io_threads: Vec<std::thread::JoinHandle<()>>,

@@ -331,21 +331,19 @@ impl MediaLibraryService {
         files
     }
 
-    /// Runs synchronous FFmpeg-backed file inspection on Tokio's blocking pool
-    /// and normalizes both analysis and worker failures for application callers.
+    /// Inspects a stored file with the external `ffprobe` (bounded in time;
+    /// nothing is parsed inside the engine).
     pub async fn analyze_media_file(
         &self,
         path: PathBuf,
     ) -> Result<crate::media::file_analysis::MediaFileAnalysis, String> {
-        tokio::task::spawn_blocking(move || crate::media::file_analysis::analyze_media_file(&path))
-            .await
-            .map_err(|error| format!("analysis task failed: {error}"))?
+        crate::media::file_analysis::analyze_media_file(&path).await
     }
 
-    /// A PNG poster of one frame of a stored file. FFmpeg runs on the
-    /// blocking pool, at most `POSTER_CONCURRENCY` at a time so a library
-    /// page asking for many cannot crowd out other blocking work; a panic
-    /// inside FFmpeg is an error for this poster, not the engine.
+    /// A PNG poster of one frame of a stored file, made by the external
+    /// FFmpeg, at most `POSTER_CONCURRENCY` at a time so a library page
+    /// asking for many cannot start a process per file at once; a crash in
+    /// FFmpeg is an error for this poster, not the engine.
     pub async fn media_poster(&self, path: PathBuf) -> Result<Vec<u8>, String> {
         static PERMITS: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
         let _permit = PERMITS
@@ -353,14 +351,7 @@ impl MediaLibraryService {
             .acquire()
             .await
             .map_err(|error| format!("poster queue closed: {error}"))?;
-        tokio::task::spawn_blocking(move || {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                crate::media::poster::extract_poster(&path)
-            }))
-            .unwrap_or_else(|_| Err("poster extraction panicked".to_string()))
-        })
-        .await
-        .map_err(|error| format!("poster task failed: {error}"))?
+        crate::media::poster::extract_poster(&path).await
     }
 
     /// Enables recording for one pipeline and starts the runtime recording task

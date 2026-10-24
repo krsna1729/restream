@@ -21,37 +21,25 @@ pub async fn load_stream_qa_enabled(meta_store: &dyn MetaStore, pipeline_id: &st
         .is_some_and(|value| value == "1")
 }
 
-/// Starts the sampler for `pipeline_id` unless it runs already. The thread
-/// is joined off Tokio; its entry is released when it ends.
+/// Starts the sampler for `pipeline_id` unless it runs already; its entry
+/// is released when it ends.
 pub async fn spawn_stream_qa(engine: Arc<MediaEngine>, pipeline_id: String) -> bool {
     let ring = engine.get_or_create_pipeline(&pipeline_id).await;
     let Some((cancel, findings)) = engine.register_stream_qa(&pipeline_id) else {
         return false;
     };
-    let header_engine = engine.clone();
-    let header_pipeline = pipeline_id.clone();
-    let sequence_header =
-        Box::new(move || header_engine.try_video_sequence_header(&header_pipeline));
-    match crate::media::stream_qa::runner::spawn(
-        pipeline_id.clone(),
-        ring,
-        sequence_header,
-        findings.clone(),
-        cancel,
-    ) {
-        Ok(handle) => {
-            tokio::spawn(async move {
-                let _ = tokio::task::spawn_blocking(move || handle.join()).await;
-                engine.release_stream_qa(&pipeline_id, &findings);
-            });
-            true
-        }
-        Err(error) => {
-            tracing::warn!(pipeline_id = %pipeline_id, err = %error, "stream checks could not start a thread");
-            engine.release_stream_qa(&pipeline_id, &findings);
-            false
-        }
-    }
+    tokio::spawn(async move {
+        crate::media::stream_qa::runner::run(
+            engine.clone(),
+            pipeline_id.clone(),
+            ring,
+            findings.clone(),
+            cancel,
+        )
+        .await;
+        engine.release_stream_qa(&pipeline_id, &findings);
+    });
+    true
 }
 
 /// Every pipeline whose checks are on and whose source is live (or within

@@ -1,446 +1,385 @@
-//! The sampler: one OS thread per checked pipeline. It owns a reader of the
-//! source ring and waits on it off Tokio; it decodes at most one video
-//! keyframe a second (an IDR decodes alone) and every packet of the first
-//! audio track, and hands the results to a [`QaTracker`]. FFmpeg runs only
-//! here, inside `catch_unwind`: a panic ends this pipeline's checks and
-//! nothing else.
+//! The sampler: an external FFmpeg per checked pipeline, so no codec runs
+//! inside the engine. The source ring is fed to its stdin as MPEG-TS by
+//! the transcoder's input pump (on its own thread, with back-pressure: a
+//! slow child makes this reader lag and the ring moves it forward; the
+//! writer and the outputs never wait). FFmpeg decodes only keyframes and
+//! writes, per keyframe, a 64x36 grey thumbnail to stdout; it writes the
+//! first audio track as 48 kHz stereo f32 to fd 3. Two threads read those
+//! and feed the [`QaTracker`]. A child that dies is started again with
+//! backoff: a crash in FFmpeg costs this pipeline's checks a few seconds
+//! and nothing else.
 
+use std::io::Read;
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use bytes::Bytes;
-use ffmpeg_next::codec;
-use ffmpeg_next::format::Pixel;
-use ffmpeg_next::software::scaling::{Context as Scaler, Flags};
-use ffmpeg_next::{Packet, frame};
+use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use super::loudness::LoudnessMeter;
 use super::picture::{THUMB_HEIGHT, THUMB_WIDTH};
 use super::{QaTracker, StreamQa};
-use crate::media::codec::{audio_for_ts, parse_avcc_config, video_for_ts};
-use crate::media::metadata::AudioMeta;
-use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
-use crate::media::ring_buffer::{Reader, RingBuffer};
+use crate::media::engine::MediaEngine;
+use crate::media::ffmpeg::stage_input::StageInputPump;
+use crate::media::ring_buffer::RingBuffer;
+use crate::media::stage_metrics::StageMetrics;
 
-/// At most one picture a second.
-const PICTURE_EVERY: Duration = Duration::from_secs(1);
+/// The audio FFmpeg hands back: 48 kHz, two channels, f32.
+pub const SOUND_RATE: u32 = 48_000;
+pub const SOUND_CHANNELS: usize = 2;
 /// A loudness reading every half second.
-const SOUND_EVERY: Duration = Duration::from_millis(500);
-/// Packets taken from the ring per pull.
-const BURST: usize = 256;
+const SOUND_EVERY_MS: u64 = 500;
+/// Backoff between restarts of a child that exited, doubling to the cap;
+/// a child that ran this long resets it.
+const RESTART_MIN: Duration = Duration::from_secs(2);
+const RESTART_MAX: Duration = Duration::from_secs(30);
+const RAN_LONG_ENOUGH: Duration = Duration::from_secs(60);
 
-/// What the sampler needs from the source beside its packets; read when a
-/// packet needs it, never per packet.
-pub trait Source {
-    /// "h264", "hevc" or "" (unknown).
-    fn video_codec(&self) -> String;
-    /// Annex-B parameter sets a keyframe may lack (TS and SRT sources).
-    fn parameter_sets(&self) -> Option<Vec<u8>>;
-    /// The RTMP sequence header (FLV tag body), for a reader that joined
-    /// after it was sent.
-    fn flv_sequence_header(&self) -> Option<Bytes>;
-    /// The audio tracks, lowest index first.
-    fn audio_tracks(&self) -> Vec<AudioMeta>;
-}
-
-/// Packets in, findings out. Holds the decoders and the tracker.
-pub struct Sampler {
-    tracker: QaTracker,
-    dirty: bool,
-    video: Option<(codec::Id, ffmpeg_next::decoder::Video)>,
-    video_failed: Option<codec::Id>,
-    nalu_len_size: usize,
-    sps_pps: Vec<u8>,
-    last_picture_ms: Option<u64>,
-    scaler: Option<((Pixel, u32, u32), Scaler)>,
-    decoded: frame::Video,
-    scratch: frame::Video,
-    grey: frame::Video,
-    audio: Option<(AudioMeta, ffmpeg_next::decoder::Audio)>,
-    audio_failed: bool,
-    meter: Option<LoudnessMeter>,
-    samples: frame::Audio,
-    planes: Vec<Vec<f32>>,
-    last_sound_ms: u64,
-}
-
-impl Default for Sampler {
-    fn default() -> Self {
-        Self::new()
+/// FFmpeg's arguments: TS on stdin; keyframes only, decoded on one thread;
+/// per keyframe a grey thumbnail on stdout (raw, `THUMB_WIDTH` x
+/// `THUMB_HEIGHT` bytes); the first audio track as f32 to `sound` (a Unix
+/// socket the engine listens on), when `Some`. A side the source lacks is
+/// left out (FFmpeg refuses a map that matches nothing).
+pub fn qa_ffmpeg_args(input: &str, video: bool, sound: Option<&str>) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-threads",
+        "1",
+        "-filter_threads",
+        "1",
+        "-skip_frame",
+        "nokey",
+    ]
+    .map(String::from)
+    .to_vec();
+    if input == "pipe:0" {
+        args.extend(["-f", "mpegts"].map(String::from));
     }
-}
-
-impl Sampler {
-    pub fn new() -> Self {
-        Self {
-            tracker: QaTracker::default(),
-            dirty: false,
-            video: None,
-            video_failed: None,
-            nalu_len_size: 4,
-            sps_pps: Vec::new(),
-            last_picture_ms: None,
-            scaler: None,
-            decoded: frame::Video::empty(),
-            scratch: frame::Video::empty(),
-            grey: frame::Video::empty(),
-            audio: None,
-            audio_failed: false,
-            meter: None,
-            samples: frame::Audio::empty(),
-            planes: Vec::new(),
-            last_sound_ms: 0,
-        }
-    }
-
-    /// The findings, if they changed since the last call.
-    pub fn take_changed(&mut self) -> Option<StreamQa> {
-        std::mem::take(&mut self.dirty).then(|| self.tracker.snapshot().clone())
-    }
-
-    /// The reader skipped ahead: decoders restart at the next keyframe and
-    /// the next picture is compared with nothing.
-    pub fn resync(&mut self) {
-        if let Some((_, decoder)) = self.video.as_mut() {
-            decoder.flush();
-        }
-        if let Some((_, decoder)) = self.audio.as_mut() {
-            decoder.flush();
-        }
-        self.tracker.forget_picture();
-    }
-
-    pub fn packet(&mut self, packet: &MediaPacket, source: &dyn Source, now_ms: u64) {
-        match packet.media_type {
-            MediaType::Video if packet.is_keyframe => self.video_keyframe(packet, source, now_ms),
-            MediaType::Audio => self.audio_packet(packet, source, now_ms),
-            _ => {}
-        }
-    }
-
-    fn video_keyframe(&mut self, packet: &MediaPacket, source: &dyn Source, now_ms: u64) {
-        let id = match source.video_codec().as_str() {
-            "hevc" if packet.format == PayloadFormat::Raw => codec::Id::HEVC,
-            // FLV carries H.264 here; enhanced-RTMP HEVC is not unpacked.
-            "hevc" => return,
-            _ => codec::Id::H264,
-        };
-        if self.sps_pps.is_empty() {
-            match packet.format {
-                PayloadFormat::Raw => {
-                    if let Some(sets) = source.parameter_sets() {
-                        self.sps_pps = sets;
-                    }
-                }
-                PayloadFormat::Flv => {
-                    if let Some(header) = source.flv_sequence_header()
-                        && header.len() > 5
-                    {
-                        let (nalu_len_size, sets) = parse_avcc_config(&header[5..]);
-                        if !sets.is_empty() {
-                            self.nalu_len_size = nalu_len_size;
-                            self.sps_pps = sets;
-                        }
-                    }
-                }
-            }
-        }
-        // Converted even when no picture is due: a sequence header updates
-        // the cached parameter sets.
-        let Some(annexb) = video_for_ts(
-            &packet.payload,
-            packet.format,
-            &mut self.nalu_len_size,
-            &mut self.sps_pps,
-        ) else {
-            return;
-        };
-        if self
-            .last_picture_ms
-            .is_some_and(|last| now_ms.saturating_sub(last) < PICTURE_EVERY.as_millis() as u64)
-        {
-            return;
-        }
-        if let Some(thumb) = self.decode_thumb(id, &annexb) {
-            self.last_picture_ms = Some(now_ms);
-            self.tracker.picture(now_ms, thumb);
-            self.dirty = true;
-        }
-    }
-
-    /// One keyframe decoded alone (sent, drained, then the decoder reset
-    /// for the next) and scaled to a grey thumbnail.
-    fn decode_thumb(&mut self, id: codec::Id, annexb: &[u8]) -> Option<Vec<u8>> {
-        if self.video_failed == Some(id) {
-            return None;
-        }
-        if self.video.as_ref().is_none_or(|(open, _)| *open != id) {
-            match open_video(id) {
-                Some(decoder) => self.video = Some((id, decoder)),
-                None => {
-                    self.video_failed = Some(id);
-                    return None;
-                }
-            }
-        }
-        let (_, decoder) = self.video.as_mut()?;
-        let mut got = false;
-        if decoder.send_packet(&Packet::copy(annexb)).is_ok() {
-            let _ = decoder.send_eof();
-            // A failed receive clears the frame it was given: receive into
-            // scratch and keep the last picture that came out.
-            while decoder.receive_frame(&mut self.scratch).is_ok() {
-                std::mem::swap(&mut self.decoded, &mut self.scratch);
-                got = true;
-            }
-        }
-        decoder.flush();
-        if !got || self.decoded.width() == 0 || self.decoded.height() == 0 {
-            return None;
-        }
-        let shape = (
-            self.decoded.format(),
-            self.decoded.width(),
-            self.decoded.height(),
+    args.extend(["-i".to_string(), input.to_string()]);
+    if video {
+        args.extend(
+            [
+                "-map",
+                "0:v:0",
+                "-fps_mode",
+                "passthrough",
+                "-vf",
+                &format!("scale={THUMB_WIDTH}:{THUMB_HEIGHT}:flags=area,format=gray"),
+                "-f",
+                "rawvideo",
+                "pipe:1",
+            ]
+            .map(String::from),
         );
-        if self.scaler.as_ref().is_none_or(|(had, _)| *had != shape) {
-            let scaler = Scaler::get(
-                shape.0,
-                shape.1,
-                shape.2,
-                Pixel::GRAY8,
-                THUMB_WIDTH,
-                THUMB_HEIGHT,
-                Flags::AREA,
-            )
-            .ok()?;
-            self.scaler = Some((shape, scaler));
+    }
+    if let Some(sound) = sound {
+        args.extend(
+            [
+                "-map",
+                "0:a:0",
+                "-ac",
+                &SOUND_CHANNELS.to_string(),
+                "-ar",
+                &SOUND_RATE.to_string(),
+                "-f",
+                "f32le",
+                &format!("unix:{sound}"),
+            ]
+            .map(String::from),
+        );
+    }
+    args
+}
+
+/// The tracker and where its findings are published, shared by the two
+/// reader threads.
+#[derive(Clone)]
+pub struct Findings {
+    tracker: Arc<Mutex<QaTracker>>,
+    published: Arc<Mutex<StreamQa>>,
+}
+
+impl Findings {
+    pub fn new(published: Arc<Mutex<StreamQa>>) -> Self {
+        Self {
+            tracker: Arc::default(),
+            published,
         }
-        let (_, scaler) = self.scaler.as_mut()?;
-        scaler.run(&self.decoded, &mut self.grey).ok()?;
-        let stride = self.grey.stride(0);
-        let width = THUMB_WIDTH as usize;
-        let plane = self.grey.data(0);
-        let mut thumb = Vec::with_capacity(width * THUMB_HEIGHT as usize);
-        for row in 0..THUMB_HEIGHT as usize {
-            thumb.extend_from_slice(plane.get(row * stride..row * stride + width)?);
-        }
-        Some(thumb)
     }
 
-    fn audio_packet(&mut self, packet: &MediaPacket, source: &dyn Source, now_ms: u64) {
-        if self.audio_failed {
-            return;
-        }
-        // The first track, AAC: what the decoder here reads.
-        let track = match &self.audio {
-            Some((meta, _)) if meta.track_index == packet.track_index => meta.clone(),
-            Some(_) => return,
-            None => {
-                let Some(meta) = source.audio_tracks().into_iter().next() else {
-                    return;
-                };
-                if meta.track_index != packet.track_index {
-                    return;
-                }
-                if !meta.codec.eq_ignore_ascii_case("aac") {
-                    self.audio_failed = true;
-                    return;
-                }
-                match open_audio() {
-                    Some(decoder) => self.audio = Some((meta.clone(), decoder)),
-                    None => {
-                        self.audio_failed = true;
-                        return;
-                    }
-                }
-                meta
-            }
-        };
-        let Some(adts) = audio_for_ts(
-            &packet.payload,
-            packet.format,
-            track.sample_rate,
-            track.channels,
-        ) else {
-            return;
-        };
-        let Some((_, decoder)) = self.audio.as_mut() else {
-            return;
-        };
-        if decoder.send_packet(&Packet::copy(&adts)).is_err() {
-            return;
-        }
-        while decoder.receive_frame(&mut self.samples).is_ok() {
-            let rate = self.samples.rate();
-            let channels = usize::from(self.samples.channels());
-            if self
-                .meter
-                .as_ref()
-                .is_none_or(|meter| meter.sample_rate() != rate || meter.channels() != channels)
-            {
-                self.meter = LoudnessMeter::new(rate, channels);
-            }
-            let Some(meter) = self.meter.as_mut() else {
-                continue;
-            };
-            if !planar_f32(&self.samples, &mut self.planes) {
-                continue;
-            }
-            let planes: Vec<&[f32]> = self.planes.iter().map(Vec::as_slice).collect();
-            meter.push_planar(&planes);
-        }
-        if now_ms.saturating_sub(self.last_sound_ms) >= SOUND_EVERY.as_millis() as u64
-            && let Some(lufs) = self.meter.as_ref().and_then(LoudnessMeter::short_term_lufs)
-        {
-            self.last_sound_ms = now_ms;
-            self.tracker.sound(now_ms, lufs);
-            self.dirty = true;
-        }
+    fn update(&self, change: impl FnOnce(&mut QaTracker)) {
+        let mut tracker = crate::sync::lock(&self.tracker);
+        change(&mut tracker);
+        *crate::sync::lock(&self.published) = tracker.snapshot().clone();
+    }
+
+    /// A restarted child starts a new picture sequence.
+    fn forget_picture(&self) {
+        crate::sync::lock(&self.tracker).forget_picture();
     }
 }
 
-fn open_video(id: codec::Id) -> Option<ffmpeg_next::decoder::Video> {
-    let codec = ffmpeg_next::decoder::find(id)?;
-    let mut context = codec::Context::new_with_codec(codec);
-    // One thread: a keyframe a second does not need a pool.
-    context.set_threading(codec::threading::Config::count(1));
-    context.decoder().video().ok()
+/// Reads grey thumbnails until the pipe ends: each is one picture.
+pub fn read_pictures(mut pipe: impl Read, findings: &Findings) {
+    let mut thumb = vec![0u8; (THUMB_WIDTH * THUMB_HEIGHT) as usize];
+    while pipe.read_exact(&mut thumb).is_ok() {
+        let now = MediaEngine::now_epoch_ms();
+        findings.update(|tracker| tracker.picture(now, thumb.clone()));
+    }
 }
 
-fn open_audio() -> Option<ffmpeg_next::decoder::Audio> {
-    let codec = ffmpeg_next::decoder::find(codec::Id::AAC)?;
-    codec::Context::new_with_codec(codec).decoder().audio().ok()
-}
-
-/// The frame's samples as one f32 vector per channel; `false` for a sample
-/// format the meter does not read.
-fn planar_f32(samples: &frame::Audio, planes: &mut Vec<Vec<f32>>) -> bool {
-    use ffmpeg_next::format::Sample;
-    use ffmpeg_next::format::sample::Type;
-    let channels = usize::from(samples.channels());
-    let count = samples.samples();
-    planes.resize_with(channels, Vec::new);
-    let as_f32 = |bytes: &[u8]| -> Vec<f32> {
-        bytes
-            .chunks_exact(4)
-            .map(|chunk| f32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-            .collect()
+/// Reads interleaved f32 stereo until the pipe ends, measuring it, and
+/// reports the loudness every half second.
+pub fn read_sound(mut pipe: impl Read, findings: &Findings) {
+    let Some(mut meter) = LoudnessMeter::new(SOUND_RATE, SOUND_CHANNELS) else {
+        return;
     };
-    match samples.format() {
-        Sample::F32(Type::Planar) => {
-            for (channel, plane) in planes.iter_mut().enumerate() {
-                let bytes = samples.data(channel);
-                let Some(bytes) = bytes.get(..count * 4) else {
-                    return false;
-                };
-                *plane = as_f32(bytes);
-            }
-            true
+    // 100 ms of audio per read.
+    let frame_bytes = SOUND_CHANNELS * 4;
+    let mut bytes = vec![0u8; (SOUND_RATE as usize / 10) * frame_bytes];
+    let mut planes = vec![Vec::new(); SOUND_CHANNELS];
+    let mut last_reading = 0;
+    loop {
+        let filled = match read_some(&mut pipe, &mut bytes) {
+            0 => return,
+            filled => filled - filled % frame_bytes,
+        };
+        for plane in &mut planes {
+            plane.clear();
         }
-        Sample::F32(Type::Packed) => {
-            let Some(bytes) = samples.data(0).get(..count * channels * 4) else {
-                return false;
-            };
-            let interleaved = as_f32(bytes);
-            for (channel, plane) in planes.iter_mut().enumerate() {
-                plane.clear();
-                plane.extend(interleaved.iter().skip(channel).step_by(channels));
+        for frame in bytes[..filled].chunks_exact(frame_bytes) {
+            for (channel, sample) in frame.chunks_exact(4).enumerate() {
+                planes[channel].push(f32::from_le_bytes([
+                    sample[0], sample[1], sample[2], sample[3],
+                ]));
             }
-            true
         }
-        _ => false,
+        let views: Vec<&[f32]> = planes.iter().map(Vec::as_slice).collect();
+        meter.push_planar(&views);
+        let now = MediaEngine::now_epoch_ms();
+        if now.saturating_sub(last_reading) >= SOUND_EVERY_MS
+            && let Some(lufs) = meter.short_term_lufs()
+        {
+            last_reading = now;
+            findings.update(|tracker| tracker.sound(now, lufs));
+        }
     }
 }
 
-/// The ring and the engine, as a [`Source`].
-struct RingSource {
-    ring: Arc<RingBuffer>,
-    sequence_header: Box<dyn Fn() -> Option<Bytes> + Send>,
+/// Fills `buf` as far as the pipe allows; 0 at its end.
+fn read_some(pipe: &mut impl Read, buf: &mut [u8]) -> usize {
+    let mut filled = 0;
+    while filled < buf.len() {
+        match pipe.read(&mut buf[filled..]) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => filled += read,
+        }
+    }
+    filled
 }
 
-impl Source for RingSource {
-    fn video_codec(&self) -> String {
-        self.ring.codec_hint_str().to_string()
+/// Where FFmpeg sends the sound: a Unix socket the engine listens on (no
+/// descriptor passing, so no unsafe code), removed when dropped.
+pub struct SoundSocket {
+    path: std::path::PathBuf,
+    listener: std::os::unix::net::UnixListener,
+}
+
+impl SoundSocket {
+    pub fn bind() -> std::io::Result<Self> {
+        let path =
+            std::env::temp_dir().join(format!("restream-qa-{:016x}.sock", rand::random::<u64>()));
+        let listener = std::os::unix::net::UnixListener::bind(&path)?;
+        listener.set_nonblocking(true)?;
+        Ok(Self { path, listener })
     }
-    fn parameter_sets(&self) -> Option<Vec<u8>> {
-        self.ring.video_parameter_sets()
+
+    pub fn path(&self) -> String {
+        self.path.display().to_string()
     }
-    fn flv_sequence_header(&self) -> Option<Bytes> {
-        (self.sequence_header)()
-    }
-    fn audio_tracks(&self) -> Vec<AudioMeta> {
-        let mut tracks = self.ring.audio_tracks().unwrap_or_default();
-        tracks.sort_by_key(|track| track.track_index);
-        tracks
+
+    /// Waits for FFmpeg to connect, up to `within`, or until `stop`.
+    pub fn accept(
+        &self,
+        within: Duration,
+        stop: &CancellationToken,
+    ) -> Option<std::os::unix::net::UnixStream> {
+        let deadline = std::time::Instant::now() + within;
+        while std::time::Instant::now() < deadline && !stop.is_cancelled() {
+            match self.listener.accept() {
+                Ok((stream, _)) => {
+                    stream.set_nonblocking(false).ok()?;
+                    return Some(stream);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(_) => return None,
+            }
+        }
+        None
     }
 }
 
-/// Starts the sampler thread for `pipeline_id`. It stops when `cancel`
-/// fires or the ring ends; findings go to `findings`.
-pub fn spawn(
+impl Drop for SoundSocket {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Runs the checks for `pipeline_id` until `cancel`: one child at a time,
+/// restarted with backoff when it exits.
+pub async fn run(
+    engine: Arc<MediaEngine>,
     pipeline_id: String,
     ring: Arc<RingBuffer>,
-    sequence_header: Box<dyn Fn() -> Option<Bytes> + Send>,
-    findings: Arc<Mutex<StreamQa>>,
+    published: Arc<Mutex<StreamQa>>,
     cancel: CancellationToken,
-) -> std::io::Result<std::thread::JoinHandle<()>> {
-    std::thread::Builder::new()
-        .name(format!("stream-qa-{}", pipeline_id.chars().take(6).collect::<String>()))
-        .spawn(move || {
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                run(&pipeline_id, ring, sequence_header, &findings, &cancel);
-            }));
-            if let Err(payload) = outcome {
-                let message = crate::panic_boundary::record_contained(payload.as_ref());
-                warn!(pipeline_id = %pipeline_id, panic = message, "stream checks stopped by a panic");
-            }
-        })
+) {
+    let findings = Findings::new(published);
+    let mut backoff = RESTART_MIN;
+    while !cancel.is_cancelled() {
+        let started = std::time::Instant::now();
+        if let Err(error) = run_child(&engine, &pipeline_id, &ring, &findings, &cancel).await {
+            warn!(pipeline_id = %pipeline_id, err = %error, "stream checks: ffmpeg ended");
+        }
+        if started.elapsed() >= RAN_LONG_ENOUGH {
+            backoff = RESTART_MIN;
+        }
+        findings.forget_picture();
+        tokio::select! {
+            () = cancel.cancelled() => return,
+            () = tokio::time::sleep(backoff) => {}
+        }
+        backoff = (backoff * 2).min(RESTART_MAX);
+    }
 }
 
-fn run(
+/// One child's life: feed it, read it, reap it.
+async fn run_child(
+    engine: &Arc<MediaEngine>,
     pipeline_id: &str,
-    ring: Arc<RingBuffer>,
-    sequence_header: Box<dyn Fn() -> Option<Bytes> + Send>,
-    findings: &Mutex<StreamQa>,
+    ring: &Arc<RingBuffer>,
+    findings: &Findings,
     cancel: &CancellationToken,
-) {
-    let mut reader = Reader::new(format!("qa:{pipeline_id}"), ring.clone());
-    let source = RingSource {
-        ring,
-        sequence_header,
+) -> Result<(), String> {
+    let (video, audio) = {
+        let ingests = engine.ingests.active.read().await;
+        let Some(ingest) = ingests.get(pipeline_id) else {
+            return Err("no live source".to_string());
+        };
+        (
+            ingest.metadata().video.clone(),
+            crate::sync::lock(&ingest.audio_tracks).to_vec(),
+        )
     };
-    let mut sampler = Sampler::new();
-    let mut burst = Vec::with_capacity(BURST);
-    loop {
-        let data = crate::media::ffmpeg::stage_input::block_on(async {
-            tokio::select! {
-                biased;
-                _ = cancel.cancelled() => false,
-                _ = reader.wait_for_data() => true,
-            }
-        });
-        if !data || reader.is_caught_up_to_end_of_stream() {
-            return;
-        }
-        loop {
-            burst.clear();
-            match reader.pull_burst(&mut burst, BURST) {
-                Ok(0) => break,
-                Ok(_) => {
-                    let now_ms = crate::media::engine::MediaEngine::now_epoch_ms();
-                    for packet in &burst {
-                        sampler.packet(packet, &source, now_ms);
+    let has_video = video.is_some();
+    let has_audio = !audio.is_empty();
+    if !has_video && !has_audio {
+        return Err("the source has reported no track yet".to_string());
+    }
+    let (sequence_header, _) = engine.get_sequence_headers(pipeline_id).await;
+    let pump = StageInputPump::new(
+        format!("qa:{pipeline_id}"),
+        ring.clone(),
+        0,
+        video.as_ref(),
+        &audio,
+        true,
+        Arc::new(StageMetrics::new()),
+    )
+    .with_video_sequence_header(sequence_header)
+    .with_engine(engine.clone(), pipeline_id.to_string());
+
+    let sound = if has_audio {
+        Some(SoundSocket::bind().map_err(|error| format!("sound socket: {error}"))?)
+    } else {
+        None
+    };
+    let mut child = tokio::process::Command::new(crate::ffmpeg_binary::ffmpeg_bin_path())
+        .args(qa_ffmpeg_args(
+            "pipe:0",
+            has_video,
+            sound.as_ref().map(SoundSocket::path).as_deref(),
+        ))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| format!("spawn: {error}"))?;
+    let stdin = child.stdin.take().ok_or("no stdin")?;
+    let stdout = child.stdout.take().ok_or("no stdout")?;
+    let mut stderr = child.stderr.take().ok_or("no stderr")?;
+
+    let mut threads = Vec::with_capacity(3);
+    let child_cancel = cancel.child_token();
+    let (input_done, input_result) = tokio::sync::oneshot::channel();
+    threads.push(
+        crate::media::external_transcoder::spawn_external_stdin_writer(
+            stdin,
+            pump.into_queue_refill(child_cancel.clone()),
+            Arc::new(crate::media::pipe_metrics::PipeMetrics::default()),
+            crate::media::timing::clock(),
+            input_done,
+        )
+        .map_err(|error| error.to_string())?,
+    );
+    let pictures = crate::media::external_transcoder::blocking_pipe(
+        stdout.into_owned_fd().map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let picture_findings = findings.clone();
+    threads.push(
+        std::thread::Builder::new()
+            .name("stream-qa-pic".to_string())
+            .spawn(move || read_pictures(pictures, &picture_findings))
+            .map_err(|error| error.to_string())?,
+    );
+    if let Some(sound) = sound {
+        let sound_findings = findings.clone();
+        let stop = child_cancel.clone();
+        threads.push(
+            std::thread::Builder::new()
+                .name("stream-qa-snd".to_string())
+                .spawn(move || {
+                    // FFmpeg connects once it has decoded the first audio.
+                    if let Some(stream) = sound.accept(Duration::from_secs(30), &stop) {
+                        read_sound(stream, &sound_findings);
                     }
-                }
-                Err(_) => sampler.resync(),
-            }
-        }
-        if let Some(changed) = sampler.take_changed() {
-            *crate::sync::lock(findings) = changed;
-        }
+                })
+                .map_err(|error| error.to_string())?,
+        );
+    }
+
+    // The last of stderr says why a child gave up.
+    let tail = tokio::spawn(async move {
+        let mut text = Vec::new();
+        let _ = stderr.read_to_end(&mut text).await;
+        let start = text.len().saturating_sub(600);
+        String::from_utf8_lossy(&text[start..]).trim().to_string()
+    });
+    let cancelled = tokio::select! {
+        () = cancel.cancelled() => true,
+        _ = child.wait() => false,
+        _ = input_result => false,
+    };
+    child_cancel.cancel();
+    crate::media::external_transcoder::reap_external_child(&mut child, true, threads).await;
+    let why = tail.await.unwrap_or_default();
+    if cancelled {
+        Ok(())
+    } else {
+        Err(if why.is_empty() {
+            "exited".to_string()
+        } else {
+            why
+        })
     }
 }
 
@@ -448,150 +387,88 @@ fn run(
 mod tests {
     use super::*;
 
-    /// The fixture's codec details, as an RTMP ingest would report them.
-    struct FixtureSource {
-        sequence_header: Bytes,
-        audio: AudioMeta,
+    #[test]
+    fn arguments_leave_out_a_side_the_source_lacks() {
+        let both = qa_ffmpeg_args("pipe:0", true, Some("/tmp/s.sock")).join(" ");
+        assert!(both.contains("-skip_frame nokey -f mpegts -i pipe:0"));
+        assert!(both.contains("scale=64:36:flags=area,format=gray -f rawvideo pipe:1"));
+        assert!(both.contains("-map 0:a:0 -ac 2 -ar 48000 -f f32le unix:/tmp/s.sock"));
+        assert!(
+            !qa_ffmpeg_args("pipe:0", false, Some("/s"))
+                .join(" ")
+                .contains("pipe:1")
+        );
+        assert!(
+            !qa_ffmpeg_args("pipe:0", true, None)
+                .join(" ")
+                .contains("unix:")
+        );
+        assert!(
+            !qa_ffmpeg_args("in.mp4", true, None)
+                .join(" ")
+                .contains("mpegts")
+        );
     }
 
-    impl Source for FixtureSource {
-        fn video_codec(&self) -> String {
-            "h264".to_string()
+    #[test]
+    fn pictures_and_sound_are_read_from_their_pipes() {
+        let published = Arc::new(Mutex::new(StreamQa::default()));
+        let findings = Findings::new(published.clone());
+        // Two black thumbnails.
+        let frame = (THUMB_WIDTH * THUMB_HEIGHT) as usize;
+        read_pictures(&vec![8u8; frame * 2][..], &findings);
+        assert!(published.lock().unwrap().black_since_ms.is_some());
+        // 4 s of a 1 kHz stereo tone at -23 dBFS, as FFmpeg writes it.
+        let amplitude = 10f64.powf(-23.0 / 20.0);
+        let mut bytes = Vec::new();
+        for n in 0..SOUND_RATE as usize * 4 {
+            let sample = (amplitude
+                * (2.0 * std::f64::consts::PI * 1000.0 * n as f64 / f64::from(SOUND_RATE)).sin())
+                as f32;
+            bytes.extend_from_slice(&sample.to_le_bytes());
+            bytes.extend_from_slice(&sample.to_le_bytes());
         }
-        fn parameter_sets(&self) -> Option<Vec<u8>> {
-            None
-        }
-        fn flv_sequence_header(&self) -> Option<Bytes> {
-            Some(self.sequence_header.clone())
-        }
-        fn audio_tracks(&self) -> Vec<AudioMeta> {
-            vec![self.audio.clone()]
-        }
+        read_sound(&bytes[..], &findings);
+        let lufs = published.lock().unwrap().loudness_lufs.unwrap();
+        assert!((lufs + 23.0).abs() < 0.2, "{lufs}");
     }
 
-    /// The fixture file's first video and first audio stream as the FLV
-    /// packets an RTMP publisher sends, with their presentation time (ms).
-    fn fixture_as_rtmp() -> (FixtureSource, Vec<(u64, MediaPacket)>) {
+    /// The real FFmpeg on the checked-in clip, with the arguments the
+    /// sampler uses (a file instead of stdin): keyframes come out as moving
+    /// colour bars and the tone as a loudness.
+    #[test]
+    fn ffmpeg_turns_the_fixture_into_pictures_and_a_loudness() {
         let path = crate::test_fixtures::checked_in_fixture(
             "test/fixtures/media-library/colorbar-timer-2v16a.mp4",
         )
         .unwrap();
-        let mut input = ffmpeg_next::format::input(&path).unwrap();
-        let video = input
-            .streams()
-            .best(ffmpeg_next::media::Type::Video)
+        let socket = SoundSocket::bind().unwrap();
+        let mut args = qa_ffmpeg_args(&path.display().to_string(), true, Some(&socket.path()));
+        // Ten seconds is enough for 3 s of loudness and a few keyframes.
+        let input = args.iter().position(|arg| arg == "-i").unwrap();
+        args.splice(input..input, ["-t".to_string(), "10".to_string()]);
+        let mut child = std::process::Command::new(crate::ffmpeg_binary::ffmpeg_bin_path())
+            .args(&args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
             .unwrap();
-        let audio = input
-            .streams()
-            .best(ffmpeg_next::media::Type::Audio)
-            .unwrap();
-        let (video_index, audio_index) = (video.index(), audio.index());
-        let video_base = f64::from(video.time_base());
-        let audio_base = f64::from(audio.time_base());
-        let parameters = video.parameters();
-        // SAFETY: `parameters` holds the stream's live AVCodecParameters for
-        // this whole block; FFmpeg keeps `extradata_size` readable bytes at a
-        // non-null `extradata` (checked first), copied out before it ends.
-        let extradata = unsafe {
-            let raw = &*parameters.as_ptr();
-            assert!(
-                !raw.extradata.is_null(),
-                "the fixture's H.264 track has an avcC record"
-            );
-            std::slice::from_raw_parts(raw.extradata, raw.extradata_size as usize).to_vec()
-        };
-        let audio_parameters = codec::Context::from_parameters(audio.parameters())
-            .unwrap()
-            .decoder()
-            .audio()
-            .unwrap();
-        let source = FixtureSource {
-            sequence_header: Bytes::from([&[0x17, 0, 0, 0, 0][..], &extradata].concat()),
-            audio: AudioMeta {
-                codec: "aac".to_string(),
-                sample_rate: audio_parameters.rate(),
-                channels: u32::from(audio_parameters.channels()),
-                track_index: 0,
-                ..AudioMeta::default()
-            },
-        };
-        let mut packets = Vec::new();
-        for (stream, packet) in input.packets() {
-            let Some(data) = packet.data() else { continue };
-            let pts = packet.pts().or(packet.dts()).unwrap_or(0);
-            if stream.index() == video_index {
-                let key = packet.is_key();
-                let at_ms = (pts as f64 * video_base * 1000.0) as u64;
-                let tag = if key { 0x17 } else { 0x27 };
-                packets.push((
-                    at_ms,
-                    MediaPacket {
-                        media_type: MediaType::Video,
-                        format: PayloadFormat::Flv,
-                        is_keyframe: key,
-                        track_index: 0,
-                        pts: at_ms as i64,
-                        dts: at_ms as i64,
-                        payload: Bytes::from([&[tag, 1, 0, 0, 0][..], data].concat()),
-                    },
-                ));
-            } else if stream.index() == audio_index {
-                let at_ms = (pts as f64 * audio_base * 1000.0) as u64;
-                packets.push((
-                    at_ms,
-                    MediaPacket {
-                        media_type: MediaType::Audio,
-                        format: PayloadFormat::Flv,
-                        is_keyframe: true,
-                        track_index: 0,
-                        pts: at_ms as i64,
-                        dts: at_ms as i64,
-                        payload: Bytes::from([&[0xAF, 1][..], data].concat()),
-                    },
-                ));
-            }
-        }
-        (source, packets)
-    }
-
-    #[test]
-    fn an_rtmp_style_fixture_decodes_to_a_moving_picture_and_a_loudness() {
-        let (source, packets) = fixture_as_rtmp();
-        let mut sampler = Sampler::new();
-        let mut pictures = 0;
-        for (at_ms, packet) in &packets {
-            sampler.packet(packet, &source, *at_ms);
-            if let Some(qa) = sampler.take_changed()
-                && packet.media_type == MediaType::Video
-                && qa.picture_checked_ms == Some(*at_ms)
-            {
-                pictures += 1;
-            }
-        }
-        let qa = sampler.tracker.snapshot();
-        assert!(pictures >= 2, "keyframes decoded: {pictures}");
+        let published = Arc::new(Mutex::new(StreamQa::default()));
+        let findings = Findings::new(published.clone());
+        let sound_findings = findings.clone();
+        let sound = std::thread::spawn(move || {
+            let stream = socket
+                .accept(Duration::from_secs(10), &CancellationToken::new())
+                .expect("ffmpeg connects for the sound");
+            read_sound(stream, &sound_findings);
+        });
+        read_pictures(child.stdout.take().unwrap(), &findings);
+        sound.join().unwrap();
+        assert!(child.wait().unwrap().success());
+        let qa = published.lock().unwrap().clone();
+        assert!(qa.picture_checked_ms.is_some(), "keyframes decoded");
         assert_eq!(qa.black_since_ms, None, "colour bars are not black");
-        assert_eq!(qa.still_since_ms, None, "the burnt-in timer moves");
         let lufs = qa.loudness_lufs.expect("3 s of audio measured");
         assert!((-70.0..0.0).contains(&lufs), "loudness {lufs}");
-    }
-
-    #[test]
-    fn a_skip_in_the_source_compares_the_next_picture_with_nothing() {
-        let (source, packets) = fixture_as_rtmp();
-        let mut sampler = Sampler::new();
-        let keyframes: Vec<_> = packets
-            .iter()
-            .filter(|(_, packet)| packet.media_type == MediaType::Video && packet.is_keyframe)
-            .collect();
-        // The same keyframe twice reads as a still picture...
-        let (at, first) = keyframes[0];
-        sampler.packet(first, &source, *at);
-        sampler.packet(first, &source, at + 2_000);
-        assert_eq!(sampler.tracker.snapshot().still_since_ms, Some(*at));
-        // ...but not across a resync.
-        sampler.resync();
-        sampler.packet(first, &source, at + 4_000);
-        assert_eq!(sampler.tracker.snapshot().still_since_ms, None);
     }
 }

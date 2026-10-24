@@ -267,7 +267,8 @@ async fn run_file_live_edge_case(
 
     let recording_mp4 =
         wait_for_new_media_file(media_dir, &before_files, ".mp4", Duration::from_secs(30)).await?;
-    let recorded_analysis = restream::media::file_analysis::analyze_media_file(&recording_mp4)?;
+    let recorded_analysis =
+        restream::media::file_analysis::analyze_media_file(&recording_mp4).await?;
 
     let expected_source_ts = recording_mp4.with_extension("ts");
     let source_retained = expected_source_ts.exists();
