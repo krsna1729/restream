@@ -38,7 +38,6 @@ cargo build "${cargo_args[@]}" "${build_targets[@]}" "${feature_args[@]}"
 
 BINARY="${CARGO_TARGET_DIR:-$ROOT/target}/$binary_dir/restream"
 SBOM="${RESTREAM_SBOM_PATH:-$ROOT/dist/restream-runtime.cdx.json}"
-file "$BINARY"
 
 ldd_output="$(ldd "$BINARY" 2>&1 || true)"
 printf '%s\n' "$ldd_output"

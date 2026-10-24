@@ -113,6 +113,7 @@ pub(crate) fn fixture_discipline() -> StepResult {
         .split(|byte| *byte == 0)
         .filter(|raw| !raw.is_empty())
         .map(|raw| PathBuf::from(String::from_utf8_lossy(raw).into_owned()))
+        .filter(|path| scanned_for_generators(path))
         .filter(|path| fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file()))
         .collect();
     let hits = grep_files(&files, |line| {
@@ -135,6 +136,13 @@ generation workflow and document why the committed fixture set is insufficient."
     }
     eprintln!("[fixture-discipline] passed");
     Ok(())
+}
+
+/// Code is scanned; the committed assets under `test/fixtures/` are not. They
+/// are the media the rule asks for, and some are text that names generators
+/// without running them (an FFmpeg `-filters` listing includes `testsrc`).
+fn scanned_for_generators(path: &Path) -> bool {
+    !path.starts_with("test/fixtures")
 }
 
 /// Output that must not appear in a passing test run.
@@ -229,6 +237,18 @@ fn tee_combined_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generator_scan_covers_code_but_not_the_committed_assets() {
+        assert!(scanned_for_generators(Path::new("src/media/poster.rs")));
+        assert!(scanned_for_generators(Path::new(
+            "test/frontend/app.spec.ts"
+        )));
+        assert!(scanned_for_generators(Path::new("tests/transcoder.rs")));
+        assert!(!scanned_for_generators(Path::new(
+            "test/fixtures/ffmpeg/btbn-n8.1.3/filters.txt"
+        )));
+    }
 
     #[test]
     fn noise_scan_reports_one_based_line_numbers() {
