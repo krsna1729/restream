@@ -22,8 +22,6 @@ import type {
   OutputProtocol,
   PipelineSummarySnapshot,
   FlightTrace,
-  Schedule,
-  NotifyChannel,
   BuildLogsStreamUrlOptions,
   PipelineMutationResponse,
   OutputMutationResponse,
