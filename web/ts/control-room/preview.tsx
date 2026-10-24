@@ -84,8 +84,10 @@ const STATUS_TEXT: Record<PreviewState, string> = {
 };
 
 /** A muted live preview of an HLS URL, loaded only when asked: a preview
- * makes the engine segment the stream while it plays. */
-export function Preview(props: { url: string; label: string }) {
+ * makes the engine segment the stream while it plays. With `fallbackUrl`,
+ * a preview that fails before its first frame tries that URL once (an
+ * H.265 source the browser claimed it decodes, then the H.264 copy). */
+export function Preview(props: { url: string; label: string; fallbackUrl?: string | null }) {
   const video = useRef<HTMLVideoElement | null>(null);
   const hls = useRef<Hls | null>(null);
   /** 0 while off; each start (or retry) is a new attempt. */
@@ -97,6 +99,9 @@ export function Preview(props: { url: string; label: string }) {
    * the meter routes the element through it. */
   const [audio, setAudio] = useState<AudioContext | null>(null);
   const [element, setElement] = useState<HTMLVideoElement | null>(null);
+  /** Set once the primary URL failed before playing and the fallback took over. */
+  const [fellBack, setFellBack] = useState(false);
+  const url = fellBack && props.fallbackUrl ? props.fallbackUrl : props.url;
   useEffect(() => () => void audio?.close().catch(() => undefined), [audio]);
 
   useEffect(() => {
@@ -150,6 +155,11 @@ export function Preview(props: { url: string; label: string }) {
     };
     const fail = (next: "failed" | "stalled") => {
       end();
+      if (!played && !fellBack && props.fallbackUrl) {
+        setFellBack(true);
+        setState("starting");
+        return;
+      }
       setState(next);
     };
 
@@ -172,18 +182,18 @@ export function Preview(props: { url: string; label: string }) {
         }
         if ("fatal" in data && data.fatal) fail("failed");
       });
-      player.loadSource(props.url);
+      player.loadSource(url);
       player.attachMedia(element);
     } else {
-      awaitFirstSegment(props.url, () => !ended, (outcome) => {
+      awaitFirstSegment(url, () => !ended, (outcome) => {
         if (outcome === "login") return redirectToLogin();
         if (outcome === "missing") return fail("failed");
-        element.src = props.url;
+        element.src = url;
         void element.play().catch(() => fail("failed"));
       });
     }
     return end;
-  }, [attempt, props.url]);
+  }, [attempt, url, fellBack, props.fallbackUrl]);
 
   const start = () => {
     if (!audio && typeof AudioContext !== "undefined") {
@@ -218,6 +228,7 @@ export function Preview(props: { url: string; label: string }) {
         )}
         <span role="status" className="text-xs text-base-content/70">
           {STATUS_TEXT[state]}
+          {showing && props.fallbackUrl && (fellBack ? " · H.264 copy (H.265 did not play here)" : " · H.265 as sent")}
         </span>
         {showing && tracks.length > 1 && (
           <select

@@ -15,6 +15,7 @@ use shiguredo_mp4::{
             SamplingFrequency, build_mp4a_box, parse_audio_specific_config,
         },
         h264::{H264SampleEntryConfig, LengthSize, build_avc1_box, build_avc1_box_from_annexb},
+        h265::{H265ConstantFrameRate, H265SampleEntryConfig, build_hvc1_box_from_annexb},
     },
     boxes::SampleEntry,
     codec_string,
@@ -23,7 +24,10 @@ use shiguredo_mp4::{
 };
 
 use super::rendition::BufferedSample;
-use crate::media::codec::{adts_frame_count, avcc_record, build_aac_sequence_header};
+use crate::media::codec::{
+    EX_CODED_FRAMES, EX_CODED_FRAMES_X, EX_SEQUENCE_START, adts_frame_count, avcc_record,
+    build_aac_sequence_header, ex_video_tag, flv_video_config,
+};
 use crate::media::metadata::{AudioMeta, VideoMeta};
 use crate::media::packet::{MediaPacket, PayloadFormat};
 
@@ -77,6 +81,114 @@ pub(super) fn build_mux_samples(
         });
     }
     Ok(samples)
+}
+
+/// The video codec a preview rendition packages: H.264 as `avc1`, H.265 as
+/// `hvc1` (parameter sets out of band, in the sample entry).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PreviewVideoCodec {
+    H264,
+    H265,
+}
+
+impl PreviewVideoCodec {
+    pub(super) fn of(video: &VideoMeta) -> Self {
+        if video.codec.eq_ignore_ascii_case("hevc") || video.codec.eq_ignore_ascii_case("h265") {
+            Self::H265
+        } else {
+            Self::H264
+        }
+    }
+}
+
+/// The codec of an FLV video sequence header of any kind the preview reads:
+/// classic H.264, legacy H.265 (codec id 12), or an enhanced RTMP sequence
+/// start; `None` for any other tag.
+pub(super) fn flv_sequence_header_codec(payload: &[u8]) -> Option<PreviewVideoCodec> {
+    if let Some(tag) = ex_video_tag(payload) {
+        return (tag.packet_type == EX_SEQUENCE_START).then_some(if tag.is_hevc() {
+            PreviewVideoCodec::H265
+        } else {
+            PreviewVideoCodec::H264
+        });
+    }
+    match payload {
+        [tag, 0, ..] if tag & 0x0F == 7 => Some(PreviewVideoCodec::H264),
+        [tag, 0, ..] if tag & 0x0F == 12 => Some(PreviewVideoCodec::H265),
+        _ => None,
+    }
+}
+
+pub(super) fn is_flv_video_sequence_header(payload: &[u8]) -> bool {
+    flv_sequence_header_codec(payload).is_some()
+}
+
+/// The sample entry an FLV video sequence header describes: `avc1` for
+/// H.264, `hvc1` for H.265.
+pub(super) fn build_sample_entry_from_flv_sequence_header(header: &[u8]) -> Option<SampleEntry> {
+    if is_flv_avc_sequence_header(header) {
+        return build_h264_sample_entry_from_flv_sequence_header(header);
+    }
+    let hevc = flv_sequence_header_codec(header) == Some(PreviewVideoCodec::H265);
+    let (nalu_len_size, annexb) = flv_video_config(header)?;
+    let length_size =
+        LengthSize::from_length_size_minus_one(u8::try_from(nalu_len_size.checked_sub(1)?).ok()?)
+            .ok()?;
+    if hevc {
+        build_hevc_sample_entry(&annexb, length_size)
+    } else {
+        build_avc1_box_from_annexb(&annexb, &H264SampleEntryConfig { length_size })
+            .ok()
+            .map(SampleEntry::Avc1)
+    }
+}
+
+fn build_hevc_sample_entry(annexb: &[u8], length_size: LengthSize) -> Option<SampleEntry> {
+    build_hvc1_box_from_annexb(
+        annexb,
+        &H265SampleEntryConfig {
+            length_size,
+            avg_frame_rate: H265SampleEntryConfig::AVG_FRAME_RATE_UNSPECIFIED,
+            constant_frame_rate: H265ConstantFrameRate::Unknown,
+        },
+    )
+    .ok()
+    .map(SampleEntry::Hvc1)
+}
+
+/// The sample entry a video packet carries, if it carries one: an FLV
+/// sequence header, or a raw keyframe with its parameter sets in band.
+pub(super) fn build_sample_entry_from_video_packet(
+    packet: &MediaPacket,
+    codec: PreviewVideoCodec,
+) -> Option<SampleEntry> {
+    match (packet.format, codec) {
+        (PayloadFormat::Flv, _) => (flv_sequence_header_codec(&packet.payload) == Some(codec))
+            .then(|| build_sample_entry_from_flv_sequence_header(&packet.payload))
+            .flatten(),
+        (PayloadFormat::Raw, PreviewVideoCodec::H264) => {
+            build_h264_sample_entry_from_video_packet(packet)
+        }
+        (PayloadFormat::Raw, PreviewVideoCodec::H265) => {
+            build_hevc_sample_entry(&packet.payload, LengthSize::FourBytes)
+        }
+    }
+}
+
+/// The length-prefixed NAL units of an FLV coded-frame tag (classic or
+/// enhanced); `None` for a sequence header or any other tag.
+pub(super) fn flv_coded_frame_body(payload: &[u8]) -> Option<&[u8]> {
+    if let Some(tag) = ex_video_tag(payload) {
+        return matches!(tag.packet_type, EX_CODED_FRAMES | EX_CODED_FRAMES_X)
+            .then_some(tag.body)
+            .filter(|body| !body.is_empty());
+    }
+    match payload {
+        [_, packet_type, ..] if *packet_type != 0 => {
+            payload.get(5..).filter(|body| !body.is_empty())
+        }
+        _ => None,
+    }
 }
 
 pub(super) fn is_flv_avc_sequence_header(payload: &[u8]) -> bool {

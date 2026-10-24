@@ -261,7 +261,7 @@ impl Reconciler {
             if self
                 .engine
                 .has_recent_ingest_disconnect(
-                    &pipeline_id,
+                    crate::media::engine_hls::preview_pipeline(&pipeline_id).0,
                     self.config.tuning.ingest_disconnect_grace_ms,
                 )
                 .await

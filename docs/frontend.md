@@ -690,6 +690,12 @@ connected input (its `previewUrl`) muted through hls.js.
   "buffering", never "live". A 401 goes to the login page.
 - More than one audio track adds a track picker.
 - Input previews are always HLS: the MoQ origin serves pipeline broadcasts.
+- An H.265 program (`preview-codec.ts`): where `MediaSource`,
+  `ManagedMediaSource` or the native player reports `hvc1` support, the
+  preview asks for `/hls/{pipeline}.hevc/master.m3u8`, the source as sent,
+  with no server transcode, and shows "H.265 as sent". If that fails before
+  its first frame (a browser that claimed H.265 it cannot decode), it falls
+  back once to the H.264 copy and says so.
 
 ### Program transport switch
 
@@ -714,6 +720,10 @@ flowchart TD
   storage is blocked, the choice lasts this visit.
 - MoQ needs WebTransport and WebCodecs (`VideoDecoder`). Otherwise the MoQ
   button is disabled with a tooltip.
+- MoQ sends the source as it is. For an H.265 source, `MoqPreview` first
+  asks `VideoDecoder.isConfigSupported`; a browser without an H.265 decoder
+  (Chrome without one in hardware, Firefox off Windows) is told at once to
+  use HLS, instead of waiting out the first-frame timer.
 
 ### MoQ
 

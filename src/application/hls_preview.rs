@@ -37,7 +37,8 @@ pub async fn ensure_hls_preview(
     engine: Arc<MediaEngine>,
     pipeline_id: &str,
 ) -> Result<Arc<Fmp4HlsStore>, HlsPreviewError> {
-    let has_ingest = engine.ingests.active.read().await.contains_key(pipeline_id);
+    let source = crate::media::engine_hls::preview_pipeline(pipeline_id).0;
+    let has_ingest = engine.ingests.active.read().await.contains_key(source);
 
     if has_ingest {
         return Ok(engine.ensure_hls_preview_runtime(pipeline_id).await);

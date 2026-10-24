@@ -132,6 +132,7 @@ function Cockpit(props: { live: LiveSnapshot; pipelineId: string }) {
           egresses={telemetry?.egresses ?? null}
           shards={props.live.metrics?.egressShards ?? null}
           shardsAtMs={props.live.metricsAtMs}
+          sourceCodec={inputs?.find((input) => input.selected && input.runtime.connected)?.runtime.video?.codec ?? null}
         />
       </div>
       <DestinationMatrix

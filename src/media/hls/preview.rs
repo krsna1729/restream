@@ -25,7 +25,11 @@ impl MediaEngine {
             {
                 Some(graph) => graph,
                 None => crate::media::hls::preview_graph::HlsPreviewGraph {
-                    video_ring: self.get_or_create_pipeline(pipeline_id).await,
+                    video_ring: self
+                        .get_or_create_pipeline(
+                            crate::media::engine_hls::preview_pipeline(pipeline_id).0,
+                        )
+                        .await,
                     video_meta: None,
                     stage: None,
                 },

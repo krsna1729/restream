@@ -12,6 +12,7 @@ import { StatusBadge } from "../ui/tone.js";
 import { MoqPreview, moqPreviewSupported } from "./moq-preview.js";
 import { Freshness, useLifecycleEvents } from "./polled.js";
 import { Preview } from "./preview.js";
+import { hlsDecodesHevc, programPreviewChoice } from "./preview-codec.js";
 import { When } from "./when-view.js";
 
 type Tab = "graph" | "destinations" | "timeline" | "preview";
@@ -43,6 +44,8 @@ export function MediaGraph(props: {
   /** The live store's sampled shard statuses and when they were read. */
   shards: readonly EgressShardStatus[] | null;
   shardsAtMs: number | null;
+  /** The live source's video codec ("h264", "hevc"), when one is live. */
+  sourceCodec: string | null;
 }) {
   const [tab, setTab] = useState<Tab>("graph");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -83,7 +86,7 @@ export function MediaGraph(props: {
             <GroupTable groups={props.columns === null ? null : groups} selected={selectedKey} onSelect={select} />
           )}
           {tab === "timeline" && <Timeline pipelineId={props.pipelineId} outputs={props.outputs} />}
-          {tab === "preview" && <ProgramPreview pipelineId={props.pipelineId} />}
+          {tab === "preview" && <ProgramPreview pipelineId={props.pipelineId} sourceCodec={props.sourceCodec} />}
         </div>
       </Panel>
       {selected && (
@@ -113,7 +116,7 @@ function storedTransport(): PreviewTransport {
 /** The program preview over HLS (default, plays everywhere) or MoQ (lower
  * latency; needs WebTransport and WebCodecs and the engine's MoQ listener).
  * The operator's choice is kept across visits. */
-function ProgramPreview(props: { pipelineId: string }) {
+function ProgramPreview(props: { pipelineId: string; sourceCodec: string | null }) {
   const supported = moqPreviewSupported();
   const [chosen, setChosen] = useState<PreviewTransport>(storedTransport);
   const transport = supported ? chosen : "hls";
@@ -144,12 +147,31 @@ function ProgramPreview(props: { pipelineId: string }) {
         ))}
       </div>
       {transport === "moq" ? (
-        <MoqPreview key="moq" pipelineId={props.pipelineId} label="program" />
+        <MoqPreview key="moq" pipelineId={props.pipelineId} label="program" sourceCodec={props.sourceCodec} />
       ) : (
-        <Preview key="hls" url={programPreviewUrl(props.pipelineId)} label="program" />
+        <HlsProgramPreview pipelineId={props.pipelineId} sourceCodec={props.sourceCodec} />
       )}
     </div>
   );
+}
+
+/** HLS program preview: an H.265 source this browser decodes plays as it
+ * is (no FFmpeg on the server); otherwise, or if that fails, the H.264
+ * copy. */
+function HlsProgramPreview(props: { pipelineId: string; sourceCodec: string | null }) {
+  const choice = useMemo(
+    () =>
+      programPreviewChoice(
+        {
+          source: programPreviewUrl(props.pipelineId, { hevcPassthrough: true }),
+          h264: programPreviewUrl(props.pipelineId),
+        },
+        props.sourceCodec,
+        hlsDecodesHevc(),
+      ),
+    [props.pipelineId, props.sourceCodec],
+  );
+  return <Preview key={choice.url} url={choice.url} fallbackUrl={choice.fallbackUrl} label="program" />;
 }
 
 /** Egress groups the graph draws before folding the rest into a link. */

@@ -55,7 +55,7 @@ use codec::{
     rescale_ms, sample_entry_codec_string,
 };
 #[cfg(test)]
-use rendition::BufferedSample;
+use rendition::{BufferedSample, VideoRenditionState};
 #[cfg(test)]
 use segmenter::{relative_to_hls_zero_ms, resolve_hls_sequence_headers};
 #[cfg(test)]
@@ -463,6 +463,119 @@ mod tests {
             .expect("media metadata");
         let init = muxer.init_segment_bytes().expect("init segment");
         assert!(!init.is_empty());
+    }
+
+    /// The checked-in H.265 clip packaged as the browser preview packages
+    /// a source it passes through, from each form the ring carries: raw
+    /// Annex B (SRT, files), enhanced RTMP tags, legacy FLV (codec id 12).
+    /// Real ffprobe must read an `hvc1` HEVC track, and FFmpeg decode
+    /// every frame with no error.
+    #[test]
+    fn hevc_sources_package_as_hvc1_fmp4_that_ffmpeg_decodes() {
+        use crate::media::codec;
+        let (video, _, packets) =
+            crate::test_fixtures::primary_av_packets_for_codec("h265").unwrap();
+        let video_packets: Vec<&MediaPacket> = packets
+            .iter()
+            .filter(|packet| packet.media_type == MediaType::Video)
+            .collect();
+        let keyframe = video_packets.iter().find(|p| p.is_keyframe).unwrap();
+        let enhanced_header =
+            codec::build_hevc_enhanced_rtmp_sequence_header(&keyframe.payload).unwrap();
+        let mut legacy_header = vec![0x1C, 0, 0, 0, 0];
+        legacy_header.extend_from_slice(&enhanced_header[5..]);
+
+        let flv = |enhanced: bool| -> Vec<MediaPacket> {
+            video_packets
+                .iter()
+                .map(|packet| {
+                    let cts = i32::try_from(packet.pts - packet.dts).unwrap();
+                    let mut tag = Vec::new();
+                    if enhanced {
+                        codec::hevc_video_for_enhanced_rtmp_with_composition_into(
+                            &packet.payload,
+                            packet.is_keyframe,
+                            cts,
+                            &mut tag,
+                        );
+                    } else {
+                        tag.push(if packet.is_keyframe { 0x1C } else { 0x2C });
+                        tag.push(1);
+                        tag.extend_from_slice(&cts.to_be_bytes()[1..]);
+                        codec::h265_annexb_to_length_prefixed_into(&packet.payload, &mut tag);
+                    }
+                    MediaPacket {
+                        payload: Bytes::from(tag),
+                        format: PayloadFormat::Flv,
+                        ..(*packet).clone()
+                    }
+                })
+                .collect()
+        };
+        let raw: Vec<MediaPacket> = video_packets.iter().map(|p| (*p).clone()).collect();
+        type Case<'a> = (&'a str, Option<&'a [u8]>, Vec<MediaPacket>);
+        let cases: [Case; 3] = [
+            ("raw annex b", None, raw),
+            ("enhanced rtmp", Some(&enhanced_header), flv(true)),
+            ("legacy flv", Some(&legacy_header), flv(false)),
+        ];
+        let dir = std::env::temp_dir().join(format!("hevc-fmp4-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, header, packets) in cases {
+            let store = test_store();
+            let mut rendition = VideoRenditionState::new(&video, header);
+            let zero_ms = packets.first().unwrap().dts;
+            for packet in &packets {
+                rendition.push_packet(packet, zero_ms).unwrap();
+            }
+            rendition.flush_segment(&store, 0, 10.0, None).unwrap();
+            let mut file = store.get_video_init_segment().expect(name).to_vec();
+            file.extend_from_slice(&store.get_video_segment(0).expect(name));
+            let path = dir.join(format!("{}.mp4", name.replace(' ', "-")));
+            std::fs::write(&path, &file).unwrap();
+            assert!(
+                store
+                    .sample_codec_list()
+                    .unwrap_or_default()
+                    .starts_with("hvc1."),
+                "{name}: {:?}",
+                store.sample_codec_list()
+            );
+
+            let probe = std::process::Command::new(crate::ffmpeg_binary::ffprobe_bin_path())
+                .args([
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "stream=codec_name,codec_tag_string,width,height,nb_read_frames",
+                    "-count_frames",
+                    "-of",
+                    "csv=p=0",
+                ])
+                .arg(&path)
+                .output()
+                .unwrap();
+            let probed = String::from_utf8_lossy(&probe.stdout).trim().to_string();
+            assert!(
+                probed.starts_with(&format!("hevc,hvc1,{},{},", video.width, video.height)),
+                "{name}: ffprobe read {probed:?} ({})",
+                String::from_utf8_lossy(&probe.stderr)
+            );
+            let frames: usize = probed.rsplit(',').next().unwrap().parse().unwrap();
+            assert_eq!(frames, packets.len(), "{name}: every frame decodes");
+            let decode = std::process::Command::new(crate::ffmpeg_binary::ffmpeg_bin_path())
+                .args(["-v", "error", "-xerror", "-i"])
+                .arg(&path)
+                .args(["-f", "null", "-"])
+                .output()
+                .unwrap();
+            assert!(
+                decode.status.success() && decode.stderr.is_empty(),
+                "{name}: {}",
+                String::from_utf8_lossy(&decode.stderr)
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
