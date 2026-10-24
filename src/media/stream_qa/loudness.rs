@@ -33,7 +33,7 @@ impl Biquad {
 /// prototypes (the coefficients BS.1770 tabulates at 48 kHz fall out).
 fn k_weighting(sample_rate: f64) -> [Biquad; 2] {
     use std::f64::consts::PI;
-    let f0 = 1681.974_450_955_533;
+    let f0 = 1_681.974_450_955_533;
     let gain_db = 3.999_843_853_973_347;
     let q = 0.707_175_236_955_419_6;
     let k = (PI * f0 / sample_rate).tan();
