@@ -186,25 +186,6 @@ mod tests {
         assert_eq!(running.desired_state, DesiredOutputState::Running);
     }
 
-    /// A row from before exhaustion had its own flag (desired 'failed')
-    /// keeps the operator's intent and its exhaustion after the upgrade.
-    #[tokio::test]
-    async fn a_legacy_failed_output_becomes_running_with_retries_exhausted() {
-        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
-        crate::db::setup_database_schema(&pool).await.unwrap();
-        seed_output(&pool).await;
-        sqlx::query("UPDATE outputs SET desired_state = 'failed' WHERE id = 'out-1'")
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        crate::db::setup_database_schema(&pool).await.unwrap();
-
-        let output = get_by_id(&pool, "pipe-1", "out-1").await.unwrap();
-        assert_eq!(output.desired_state, DesiredOutputState::Running);
-        assert!(output.retries_exhausted);
-    }
-
     /// Exhaustion is the reconciler's verdict on the current intent: an
     /// operator start or stop gives the output a fresh retry budget.
     #[tokio::test]

@@ -104,6 +104,10 @@ proptest! {
 async fn past_occurrences_are_not_run_on_create() {
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
     crate::db::setup_database_schema(&pool).await.unwrap();
+    // A schedule references its pipeline.
+    crate::db::create_pipeline(&pool, "p", "P", "key-p", None, None)
+        .await
+        .unwrap();
     let draft = ScheduleDraft {
         pipeline_id: "p".into(),
         name: "Morning show".into(),

@@ -205,6 +205,12 @@ mod tests {
     async fn links() -> ShareLinks {
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         crate::db::setup_database_schema(&pool).await.unwrap();
+        // Links reference their pipeline.
+        for id in ["p", "p1"] {
+            crate::db::create_pipeline(&pool, id, id, &format!("key-{id}"), None, None)
+                .await
+                .unwrap();
+        }
         ShareLinks::new(pool)
     }
 
