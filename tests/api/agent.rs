@@ -170,7 +170,6 @@ async fn agent_context_returns_redacted_state_bundle() {
         "job-agent-context",
         &pid,
         &output_id,
-        Some(4321),
         restream::application::models::JobStatus::Running,
         "2024-01-01T00:00:00Z",
     )
@@ -206,7 +205,7 @@ async fn agent_context_returns_redacted_state_bundle() {
     assert_eq!(body["state"]["jobs"][0]["id"], "job-agent-context");
     assert_eq!(body["state"]["jobs"][0]["pipelineId"], pid);
     assert_eq!(body["state"]["jobs"][0]["outputId"], output_id);
-    assert_eq!(body["state"]["jobs"][0]["pid"], 4321);
+    assert_eq!(body["state"]["jobs"][0]["id"], "job-agent-context");
     assert_eq!(body["state"]["jobs"][0]["status"], "running");
     assert!(body["runtime"]["health"].is_object());
     assert!(body["runtime"]["telemetry"]["engine"].is_object());

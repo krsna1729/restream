@@ -92,12 +92,9 @@ pub(crate) fn job_response_json(job: &Job) -> serde_json::Value {
         "id": job.id,
         "pipelineId": job.pipeline_id,
         "outputId": job.output_id,
-        "pid": job.pid,
         "status": job.status,
         "startedAt": job.started_at,
         "endedAt": job.ended_at,
-        "exitCode": job.exit_code,
-        "exitSignal": job.exit_signal,
     })
 }
 
@@ -197,34 +194,25 @@ mod tests {
                 id: "job-newest".to_string(),
                 pipeline_id: "pipe-1".to_string(),
                 output_id: "out-1".to_string(),
-                pid: Some(200),
                 status: JobStatus::Running,
                 started_at: "2026-06-30T12:00:00Z".to_string(),
                 ended_at: None,
-                exit_code: None,
-                exit_signal: None,
             },
             Job {
                 id: "job-older".to_string(),
                 pipeline_id: "pipe-1".to_string(),
                 output_id: "out-1".to_string(),
-                pid: Some(100),
                 status: JobStatus::Stopped,
                 started_at: "2026-06-30T11:00:00Z".to_string(),
                 ended_at: Some("2026-06-30T11:30:00Z".to_string()),
-                exit_code: Some(0),
-                exit_signal: None,
             },
             Job {
                 id: "job-other-output".to_string(),
                 pipeline_id: "pipe-1".to_string(),
                 output_id: "out-2".to_string(),
-                pid: Some(300),
                 status: JobStatus::Failed,
                 started_at: "2026-06-30T10:00:00Z".to_string(),
                 ended_at: Some("2026-06-30T10:10:00Z".to_string()),
-                exit_code: Some(1),
-                exit_signal: None,
             },
         ];
 

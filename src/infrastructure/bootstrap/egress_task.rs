@@ -334,16 +334,8 @@ impl EgressTask {
         } else {
             JobStatus::Failed
         };
-        let _ = crate::db::update_job(
-            &self.pool,
-            &self.job_id,
-            None,
-            Some(job_status),
-            Some(&ended_at),
-            Some(0),
-            None,
-        )
-        .await;
+        let _ = crate::db::update_job(&self.pool, &self.job_id, Some(job_status), Some(&ended_at))
+            .await;
     }
 
     /// Waits for explicit cancellation (normal stop/reconfigure), the fabric
@@ -920,11 +912,8 @@ impl EgressTask {
         let _ = crate::db::update_job(
             &self.pool,
             &self.job_id,
-            None,
             Some(JobStatus::Failed),
             Some(&ended_at),
-            Some(0),
-            None,
         )
         .await;
         // Record the failure before the egress is gone: its stop event wakes

@@ -58,11 +58,8 @@ pub(super) fn job_model(record: crate::db::JobRecord) -> Job {
         id: record.id,
         pipeline_id: record.pipeline_id,
         output_id: record.output_id,
-        pid: record.pid,
         status: record.status.into(),
         started_at: record.started_at,
         ended_at: record.ended_at,
-        exit_code: record.exit_code,
-        exit_signal: record.exit_signal,
     }
 }

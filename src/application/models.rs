@@ -90,12 +90,9 @@ pub struct Job {
     pub id: String,
     pub pipeline_id: String,
     pub output_id: String,
-    pub pid: Option<i64>,
     pub status: JobStatus,
     pub started_at: String,
     pub ended_at: Option<String>,
-    pub exit_code: Option<i64>,
-    pub exit_signal: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,12 +159,9 @@ mod tests {
             id: "job-1".to_string(),
             pipeline_id: "pipe".to_string(),
             output_id: "out".to_string(),
-            pid: Some(42),
             status: JobStatus::Running,
             started_at: "2024-01-01T00:00:00Z".to_string(),
             ended_at: None,
-            exit_code: None,
-            exit_signal: None,
         };
 
         assert_eq!(job.status, JobStatus::Running);

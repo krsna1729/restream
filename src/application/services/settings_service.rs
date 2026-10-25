@@ -230,12 +230,9 @@ mod tests {
                 id: "job-1".to_string(),
                 pipeline_id: "pipe-1".to_string(),
                 output_id: "out-1".to_string(),
-                pid: Some(42),
                 status: JobStatus::Running,
                 started_at: "2026-07-09T00:00:00Z".to_string(),
                 ended_at: None,
-                exit_code: None,
-                exit_signal: None,
             });
             store
         }
