@@ -35,14 +35,14 @@ impl AvMarkerBframeMode {
 }
 
 pub const REQUIRED_CHECKED_IN_FIXTURES: &[&str] = &[
-    // Picture-check thumbnails (64x36 grey, the sampler's scaler) of FFmpeg
-    // test sources: drawn cards (bars, a card, a gradient) and textured
-    // pictures, for the slate test.
-    "test/fixtures/stream-qa/smptehdbars.gray",
-    "test/fixtures/stream-qa/card.gray",
-    "test/fixtures/stream-qa/gradients.gray",
-    "test/fixtures/stream-qa/mandelbrot.gray",
-    "test/fixtures/stream-qa/life.gray",
+    // Picture-check thumbnails (64x36 grey, made once with the sampler's
+    // scaler): drawn slates (colour bars, a card, a gradient) and textured
+    // pictures (a fractal, a cell pattern), for the slate test.
+    "test/fixtures/stream-qa/slate-bars.gray",
+    "test/fixtures/stream-qa/slate-card.gray",
+    "test/fixtures/stream-qa/slate-gradient.gray",
+    "test/fixtures/stream-qa/textured-fractal.gray",
+    "test/fixtures/stream-qa/textured-cells.gray",
     // Two AAC tracks, 6 s: a -20 dBFS tone, then silence. The sound check
     // names the silent second track.
     "test/fixtures/stream-qa/tone-then-silent-track.mp4",
