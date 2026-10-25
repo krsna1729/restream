@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 
-import { programPreviewUrl } from "../core/api.js";
 import type { TelemetryEgress } from "../core/api-types.js";
 import type { OutputState } from "../core/generated/runtime-state.js";
 import type { EgressShardStatus } from "../types.js";
@@ -11,8 +10,7 @@ import { Panel } from "../ui/panel.js";
 import { StatusBadge } from "../ui/tone.js";
 import { MoqPreview, moqPreviewSupported } from "./moq-preview.js";
 import { Freshness, useLifecycleEvents } from "./polled.js";
-import { Preview } from "./preview.js";
-import { hlsDecodesHevc, programPreviewChoice } from "./preview-codec.js";
+import { HlsProgramPreview } from "./preview.js";
 import { When } from "./when-view.js";
 
 type Tab = "graph" | "destinations" | "timeline" | "preview";
@@ -153,25 +151,6 @@ function ProgramPreview(props: { pipelineId: string; sourceCodec: string | null 
       )}
     </div>
   );
-}
-
-/** HLS program preview: an H.265 source this browser decodes plays as it
- * is (no FFmpeg on the server); otherwise, or if that fails, the H.264
- * copy. */
-function HlsProgramPreview(props: { pipelineId: string; sourceCodec: string | null }) {
-  const choice = useMemo(
-    () =>
-      programPreviewChoice(
-        {
-          source: programPreviewUrl(props.pipelineId, { hevcPassthrough: true }),
-          h264: programPreviewUrl(props.pipelineId),
-        },
-        props.sourceCodec,
-        hlsDecodesHevc(),
-      ),
-    [props.pipelineId, props.sourceCodec],
-  );
-  return <Preview key={choice.url} url={choice.url} fallbackUrl={choice.fallbackUrl} label="program" />;
 }
 
 /** Egress groups the graph draws before folding the rest into a link. */

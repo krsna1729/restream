@@ -21,7 +21,7 @@ export interface NavGroup {
  * group, a click away, so a first look is not a wall of words.
  */
 export const NAV_GROUPS: readonly NavGroup[] = [
-  { label: "Operate", items: ["fleet", "channels", "pipelines", "operate", "monitor", "schedule"] },
+  { label: "Operate", items: ["fleet", "channels", "pipelines", "operate", "wall", "monitor", "schedule"] },
   { label: "Understand", items: ["incidents", "health"] },
   { label: "Manage", items: ["media", "notifications", "team", "settings"] },
   { label: "Learn", items: ["guides"] },
@@ -33,6 +33,7 @@ export const NAV_ICONS: Record<Workspace, IconName> = {
   channels: "channels",
   pipelines: "pipelines",
   operate: "operate",
+  wall: "wall",
   inspect: "inspect",
   monitor: "monitor",
   schedule: "schedule",
