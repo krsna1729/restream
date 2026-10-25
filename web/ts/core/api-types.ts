@@ -667,6 +667,20 @@ export interface ProbeAudioTrack {
 /** `GET /pipelines/{id}/probe`: what the live publisher sends (404 without one). */
 export interface PipelineProbe {
   audioTracks: ProbeAudioTrack[];
+  /** What an RTMP encoder declared in `onMetaData`; absent for other
+   * protocols or an encoder that sent none. */
+  encoder?: DeclaredEncoder | null;
+}
+
+/** An encoder's own description of what it sends (`DeclaredEncoder`):
+ * declared, not measured. */
+export interface DeclaredEncoder {
+  encoder?: string;
+  width?: number;
+  height?: number;
+  frameRate?: number;
+  videoKbps?: number;
+  audioKbps?: number;
 }
 
 /** `POST /pipelines/{id}/moq-token`: a viewer grant for the pipeline's MoQ

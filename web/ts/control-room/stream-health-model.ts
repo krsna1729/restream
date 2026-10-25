@@ -4,7 +4,7 @@
 // most any accepts), a steady bitrate, a steady frame rate, and a link
 // without sustained loss.
 
-import type { DecoderHealth, FlightSample, ProbeAudioTrack, StreamInspection, StreamQaFindings, TrackInspection } from "../core/api-types.js";
+import type { DecoderHealth, FlightSample, IngestHealth, ProbeAudioTrack, StreamInspection, StreamQaFindings, TrackInspection } from "../core/api-types.js";
 
 export type Severity = "ok" | "warn" | "bad";
 
@@ -98,9 +98,9 @@ export function streamVerdicts(samples: readonly FlightSample[]): Verdict[] {
     }
   }
 
-  const fpsValues = present(ingests.map((ingest) => ingest.fps));
+  const fpsValues = present(ingests.map(arrivingFps));
   const fpsTypical = median(fpsValues);
-  const fpsNow = last.ingest.fps;
+  const fpsNow = arrivingFps(last.ingest);
   if (fpsTypical !== null && fpsNow !== null) {
     if (fpsNow < fpsTypical * 0.8) {
       verdicts.push({
@@ -254,6 +254,16 @@ export function trackMeter(
     severity: reading?.severity ?? "ok",
     words: `${track.loudnessLufs.toFixed(0)} LUFS`,
   };
+}
+
+/** Frames arriving a second: the stream inspector's video packets a second
+ * (one per frame), else the frame rate the stream describes. The stream's
+ * own figure is declared (SPS timing, `onMetaData`), so it stays put while
+ * an overloaded encoder drops frames; the inspector counts what comes. */
+export function arrivingFps(ingest: Pick<IngestHealth, "fps" | "timeline">): number | null {
+  const video = ingest.timeline?.tracks.find((track) => track.media === "video");
+  if (video && video.packetsPerSec > 0) return Math.round(video.packetsPerSec * 100) / 100;
+  return ingest.fps;
 }
 
 /** Verdicts from the picture and sound checks; none while they are off. */

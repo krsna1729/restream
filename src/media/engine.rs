@@ -41,6 +41,8 @@ pub struct IngestMetadata {
     /// A container supplied a complete set, so missing tracks are absent,
     /// not merely unknown (as with an unprobed recirculation input).
     pub tracks_authoritative: bool,
+    /// What an RTMP encoder declared in `onMetaData`, latest first seen.
+    pub declared: Option<crate::media::metadata::DeclaredEncoder>,
 }
 
 pub struct ActiveIngest {

@@ -12,6 +12,14 @@ import { createNotify } from "./notify.mjs";
 import { createSchedules } from "./schedule.mjs";
 import { createTeam } from "./team.mjs";
 
+const FIXTURE_ENCODERS = [
+  { encoder: "obs-output module (libobs version 30.2.3)", width: 1920, height: 1080, frameRate: 30, videoKbps: 6000, audioKbps: 160 },
+  { encoder: "vMix/27.0.0.49", width: 1920, height: 1080, frameRate: 60, videoKbps: 12000, audioKbps: 192 },
+  { encoder: "Lavf60.16.100", width: 1280, height: 720, frameRate: 30, videoKbps: 3000, audioKbps: 128 },
+  null,
+  { encoder: "Larix Broadcaster 1.3.12", width: 1280, height: 720, frameRate: 30, videoKbps: 2500 },
+];
+
 export function createFixtureApi({ preset, seed }) {
   const plant = createDeployment({ preset, seed });
   const schedules = createSchedules({ seed, pipelines: plant.state().pipelines, outputs: plant.state().outputs, count: preset === "small" ? 6 : 40 });
@@ -50,11 +58,14 @@ export function createFixtureApi({ preset, seed }) {
     ],
     [
       /^\/api\/v1\/pipelines\/([^/]+)\/probe$/,
-      () => ({
+      (m) => ({
         audioTracks: [
           { trackIndex: 0, codec: "aac", channels: 2, channelLayout: "stereo", sampleRate: 48000 },
           { trackIndex: 1, codec: "aac", channels: 2, channelLayout: "stereo", sampleRate: 48000 },
         ],
+        // RTMP encoders' onMetaData: a mix of products, one set higher
+        // than it can send.
+        encoder: FIXTURE_ENCODERS[Number.parseInt(decodeURIComponent(m[1]).replace(/\D/g, ""), 10) % FIXTURE_ENCODERS.length] ?? null,
       }),
     ],
     [/^\/api\/v1\/pipelines\/([^/]+)\/stream-qa$/, (m) => plant.streamQa(decodeURIComponent(m[1]))],

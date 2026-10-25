@@ -77,6 +77,17 @@ impl MediaEngine {
         }
     }
 
+    /// Records what the session's encoder declared (`onMetaData`).
+    pub async fn update_ingest_session_declared(
+        &self,
+        registration: &IngestRegistration,
+        declared: crate::media::metadata::DeclaredEncoder,
+    ) {
+        if let Some(ingest) = self.current_ingest_session(registration).await {
+            crate::sync::write(&ingest.metadata).declared = Some(declared);
+        }
+    }
+
     pub async fn update_ingest_session_meta(
         &self,
         pipeline_id: &str,

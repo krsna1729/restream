@@ -351,6 +351,7 @@ pub(crate) fn probe_snapshot(pipeline_id: &str, ingest: &ActiveIngest) -> serde_
         "videoTrackSelection": video_track_selection,
         "audioTracks": audio_tracks,
         "gop": gop,
+        "encoder": metadata.declared,
     })
 }
 

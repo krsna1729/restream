@@ -114,6 +114,9 @@ pub(super) enum RtmpControlCommand {
     },
     /// The publisher's one-time stream probe, for ingest metadata.
     MediaProbe(RtmpMediaEvent),
+    /// What the encoder declared in `onMetaData` (sent again when it
+    /// changes).
+    EncoderDeclared(crate::media::metadata::DeclaredEncoder),
     PlayRequested {
         stream_key: String,
         client_ip: String,
@@ -225,6 +228,13 @@ pub(super) async fn run_rtmp_control_session(
                         _ = shutdown.cancelled() => break 'actor,
                         _ = record_media_probe(&engine, active, event) => {}
                     }
+                }
+            }
+            RtmpControlCommand::EncoderDeclared(declared) => {
+                if let Some(active) = active_ingest.as_ref() {
+                    engine
+                        .update_ingest_session_declared(&active.registration, declared)
+                        .await;
                 }
             }
             RtmpControlCommand::PlayRequested {

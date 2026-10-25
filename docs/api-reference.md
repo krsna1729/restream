@@ -740,7 +740,11 @@ Each entry has `id`, `ts`, `level`, `target`, `message`, `fields` (JSON),
 Active ingest metadata: bitrate, GOP observations, ingest identity, `video`,
 `audio` and `audioTracks` (every active audio track; `audio` is the first).
 Track metadata includes MPEG-TS `pid`, `language` and `title` when the
-source descriptors carry them. `404` without an active ingest.
+source descriptors carry them. `encoder` is what an RTMP encoder declared in
+`onMetaData` (absent for other protocols, or when it sent none): `encoder`
+(its name, control characters removed, at most 128 characters), `width`,
+`height`, `frameRate`, `videoKbps`, `audioKbps`, each only when present and
+plausible. It is declared, not measured. `404` without an active ingest.
 
 ### `GET /api/v1/pipelines/:pipelineId/graph`
 

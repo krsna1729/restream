@@ -286,3 +286,13 @@ test("captions: on is fine, stopped turns amber then red, none says nothing", ()
     "a source that never sent captions has no captions verdict",
   );
 });
+
+test("frame rate is what arrives (the inspector's count), not what the stream declares", () => {
+  const dropping = { fps: 30, timeline: inspection([inspected("video", 0, { packetsPerSec: 13 })]) };
+  const verdicts = streamVerdicts(Array.from({ length: 10 }, (_, index) => sample(index, dropping)));
+  assert.equal(severityOf(verdicts, "fps"), "warn");
+  assert.equal(verdicts.find((verdict) => verdict.key === "fps").title, "13 fps");
+  // Without the inspector's reading, the stream's own figure is what there is.
+  const declaredOnly = streamVerdicts(Array.from({ length: 10 }, (_, index) => sample(index, { fps: 30 })));
+  assert.equal(declaredOnly.find((verdict) => verdict.key === "fps").title, "30 fps");
+});
