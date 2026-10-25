@@ -718,10 +718,12 @@ connected input (its `previewUrl`) muted through hls.js.
 - The audio meter (`audio-meter.tsx`) has one bar per channel of the track
   playing, named in Web Audio order (L, R, C, LFE, Ls, Rs for 5.1) from the
   rendition's `CHANNELS`, so a dead side shows. Listen unmutes it.
-- Stats overlays the player's readings on the picture
-  (`playback-stats.ts`): size, decoded frame rate, share of frames dropped,
+- Player stats overlays this browser's playback of the preview on the
+  picture (`playback-stats.ts`), like a video site's "stats for nerds". It
+  says how the preview plays here, not how the input arrives (that is
+  Stream health): size, decoded frame rate, share of frames dropped,
   buffer ahead, seconds behind live, bandwidth estimate and stalls. Values
-  the player has not measured yet read "--". Export stats downloads every
+  the player has not measured yet read "--". Export player stats downloads every
   reading (one a second, the last 10 min) and state change as
   `restream.playback.v1` JSON, to attach to a ticket.
 - Input previews are always HLS: the MoQ origin serves pipeline broadcasts.
