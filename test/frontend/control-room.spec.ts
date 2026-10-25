@@ -1853,6 +1853,36 @@ test("an H.265 source: the preview plays as sent where the browser decodes H.265
     }
     await preview.getByRole("button", { name: "Stop preview" }).click();
 
+    // The input's own preview takes the same choice.
+    const inputs = await (
+      await page.request.get(`/api/v1/pipelines/${pipelineId}/inputs`)
+    ).json();
+    const input = inputs.inputs[0] as { id: string; label: string };
+    const inputSource = `/hls/inputs/${input.id}.hevc`;
+    await expect
+      .poll(
+        async () =>
+          (await page.request.get(`${inputSource}/master.m3u8`)).status(),
+        { timeout: 30_000 },
+      )
+      .toBe(200);
+    expect(
+      await (await page.request.get(`${inputSource}/master.m3u8`)).text(),
+    ).toMatch(/CODECS="hvc1\./);
+    const inputPreview = page.getByRole("group", {
+      name: `Preview ${input.label}`,
+    });
+    await inputPreview
+      .getByRole("button", { name: `Preview ${input.label}` })
+      .click();
+    await expect(inputPreview.getByRole("status")).toHaveText(
+      decodes ? "live · H.265 as sent" : "live",
+      {
+        timeout: 45_000,
+      },
+    );
+    await inputPreview.getByRole("button", { name: "Stop preview" }).click();
+
     // MoQ sends the source as it is: a browser without an H.265 decoder is
     // told so at once.
     const moqDecodes = await page.evaluate(async () => {

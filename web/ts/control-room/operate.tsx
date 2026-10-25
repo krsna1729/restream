@@ -23,6 +23,7 @@ import { buildDestinationRows, buildMediaGraph, destinationFilterCounts } from "
 import { PipelineScope } from "./pipeline-scope.js";
 import { Freshness } from "./polled.js";
 import { Preview } from "./preview.js";
+import { hlsDecodesHevc, passthroughPreviewUrl, programPreviewChoice } from "./preview-codec.js";
 import { pipelineGraph, pipelineInputs } from "./state-views.js";
 import type { LiveSnapshot } from "./store.js";
 
@@ -217,7 +218,7 @@ function SourceDeck(props: {
                 )}
                 {input.runtime.connected && (
                   <div className="mt-2">
-                    <Preview url={withBasePath(input.previewUrl)} label={input.label} />
+                    <InputPreview url={withBasePath(input.previewUrl)} label={input.label} codec={video?.codec ?? null} />
                   </div>
                 )}
                 {input.enabled && !input.selected && (
@@ -272,4 +273,14 @@ function SourceDeck(props: {
       </div>
     </Panel>
   );
+}
+
+/** An input's HLS preview: its H.265 as sent where this browser decodes
+ * it, else (or if that fails) the H.264 copy. */
+function InputPreview(props: { url: string; label: string; codec: string | null }) {
+  const choice = useMemo(
+    () => programPreviewChoice({ source: passthroughPreviewUrl(props.url), h264: props.url }, props.codec, hlsDecodesHevc()),
+    [props.url, props.codec],
+  );
+  return <Preview key={choice.url} url={choice.url} fallbackUrl={choice.fallbackUrl} label={props.label} />;
 }

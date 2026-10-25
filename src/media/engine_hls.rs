@@ -41,8 +41,21 @@ pub(crate) fn input_hls_preview_resource_id(input_id: &str) -> String {
     format!("{INPUT_PREVIEW_RESOURCE_PREFIX}{input_id}")
 }
 
+/// The input an input-preview resource id shows; a passthrough one
+/// (`<input>.hevc`) shows the same input.
 pub(crate) fn input_id_from_hls_preview_resource_id(resource_id: &str) -> Option<&str> {
-    resource_id.strip_prefix(INPUT_PREVIEW_RESOURCE_PREFIX)
+    resource_id
+        .strip_prefix(INPUT_PREVIEW_RESOURCE_PREFIX)
+        .map(|id| preview_pipeline(id).0)
+}
+
+/// The preview with the same source in the other form (H.264 copy versus
+/// H.265 as sent): both read one input preview ring.
+fn sibling_preview_id(preview_id: &str) -> String {
+    match preview_pipeline(preview_id) {
+        (base, true) => base.to_string(),
+        (base, false) => hevc_passthrough_preview_id(base),
+    }
 }
 
 /// Tracks HLS consumers for a pipeline. Persistent consumers (egress outputs)
@@ -117,6 +130,25 @@ impl Drop for PersistentLease {
 }
 
 impl MediaEngine {
+    /// The ingest a stage keyed by `stage_pipeline` reads: the pipeline's
+    /// live ingest, or for an input preview's stage (`__input__:<input>`)
+    /// that input's session.
+    pub(crate) async fn stage_source_ingest(
+        &self,
+        stage_pipeline: &str,
+    ) -> Option<Arc<crate::media::engine::ActiveIngest>> {
+        match input_id_from_hls_preview_resource_id(stage_pipeline) {
+            Some(input_id) => self.ingests.sessions.read().await.get(input_id).cloned(),
+            None => self
+                .ingests
+                .active
+                .read()
+                .await
+                .get(stage_pipeline)
+                .cloned(),
+        }
+    }
+
     pub(crate) async fn get_input_sequence_headers(
         &self,
         input_id: &str,
@@ -219,9 +251,14 @@ impl MediaEngine {
         if let Some(c) = consumers.remove(&preview_key) {
             c.cancel_token.cancel();
         }
+        // The input's ring stays while its other preview form still plays.
+        let sibling_running =
+            consumers.contains_key(&hls_preview_registry_key(&sibling_preview_id(pipeline_id)));
         drop(consumers);
         self.hls.preview_stores.write().await.remove(&preview_key);
-        if let Some(input_id) = input_id_from_hls_preview_resource_id(pipeline_id) {
+        if let Some(input_id) = input_id_from_hls_preview_resource_id(pipeline_id)
+            && !sibling_running
+        {
             self.release_input_preview_ring(input_id).await;
         }
     }

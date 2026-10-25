@@ -690,9 +690,10 @@ connected input (its `previewUrl`) muted through hls.js.
   "buffering", never "live". A 401 goes to the login page.
 - More than one audio track adds a track picker.
 - Input previews are always HLS: the MoQ origin serves pipeline broadcasts.
-- An H.265 program (`preview-codec.ts`): where `MediaSource`,
+- An H.265 program or input (`preview-codec.ts`): where `MediaSource`,
   `ManagedMediaSource` or the native player reports `hvc1` support, the
-  preview asks for `/hls/{pipeline}.hevc/master.m3u8`, the source as sent,
+  preview asks for `/hls/{pipeline}.hevc/master.m3u8` (an input's
+  `previewUrl` with `.hevc` after its id), the source as sent,
   with no server transcode, and shows "H.265 as sent". If that fails before
   its first frame (a browser that claimed H.265 it cannot decode), it falls
   back once to the H.264 copy and says so.

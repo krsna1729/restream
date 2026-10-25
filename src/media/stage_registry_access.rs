@@ -491,6 +491,10 @@ impl MediaEngine {
         let mut needed = HashSet::new();
 
         for pipeline_id in active_preview_ids {
+            // A passthrough preview (`<id>.hevc`) plans no stage.
+            if crate::media::engine_hls::preview_pipeline(&pipeline_id).1 {
+                continue;
+            }
             let ingest_codec =
                 if let Some(input_id) = input_id_from_hls_preview_resource_id(&pipeline_id) {
                     input_codecs.get(input_id).map(String::as_str)

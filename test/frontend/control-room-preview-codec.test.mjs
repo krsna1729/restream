@@ -3,8 +3,13 @@ import { test } from "node:test";
 
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
-const { hlsDecodesHevc, isHevc, moqUndecodableReason, programPreviewChoice } =
-  await loadCompiledFrontendModule("control-room/preview-codec.js");
+const {
+  hlsDecodesHevc,
+  isHevc,
+  moqUndecodableReason,
+  passthroughPreviewUrl,
+  programPreviewChoice,
+} = await loadCompiledFrontendModule("control-room/preview-codec.js");
 
 const URLS = { source: "/hls/p.hevc/master.m3u8", h264: "/hls/p/master.m3u8" };
 const mse = (supported) => ({
@@ -72,4 +77,15 @@ test("MoQ refuses an H.265 source at once where WebCodecs cannot decode it", asy
     /cannot decode H\.265.*use HLS/,
   );
   assert.match(await moqUndecodableReason("hevc", {}), /cannot decode H\.265/);
+});
+
+test("an input preview URL has a passthrough form beside it", () => {
+  assert.equal(
+    passthroughPreviewUrl("/base/hls/inputs/input_ab/master.m3u8"),
+    "/base/hls/inputs/input_ab.hevc/master.m3u8",
+  );
+  assert.equal(
+    passthroughPreviewUrl("/hls/pipeline_1/master.m3u8"),
+    "/hls/pipeline_1.hevc/master.m3u8",
+  );
 });

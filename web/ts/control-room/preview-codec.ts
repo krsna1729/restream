@@ -51,6 +51,12 @@ export function programPreviewChoice(
   return { url: urls.h264, fallbackUrl: null };
 }
 
+/** The passthrough form of an HLS preview URL (`…/<id>/master.m3u8` to
+ * `…/<id>.hevc/master.m3u8`): the H.265 source as sent. */
+export function passthroughPreviewUrl(url: string): string {
+  return url.replace(/\/master\.m3u8$/, ".hevc/master.m3u8");
+}
+
 /** The parts of WebCodecs the MoQ check reads. */
 export interface MoqDecodeEnv {
   VideoDecoder?: {
