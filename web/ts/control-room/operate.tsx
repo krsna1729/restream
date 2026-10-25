@@ -247,6 +247,15 @@ function SourceDeck(props: {
                     ))}
                     <p className="text-sm text-base-content/70">{VARIANT_LABELS[input.variantRule]}</p>
                   </div>
+                ) : input.kind === "srtCall" ? (
+                  <div className="mt-2 text-xs">
+                    {urls.map((url) => (
+                      <p key={url} className="font-mono break-all">
+                        {url}
+                      </p>
+                    ))}
+                    <p className="text-sm text-base-content/70">The engine calls this SRT listener and redials if the call drops.</p>
+                  </div>
                 ) : (
                   urls.length > 0 && (
                     <details className="mt-2 text-xs">

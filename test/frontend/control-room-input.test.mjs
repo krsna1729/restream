@@ -372,3 +372,25 @@ test("HLS push Basic replacements enforce UTF-8 byte limits without trimming sec
     { kind: "basic", username: " user ", password: " pass " });
   assert.ok(!("pushAuth" in inputWrite(inputDraft(null), null)));
 });
+
+test("an SRT call input asks for a dialable listener URL and masks its passphrase", () => {
+  const draft = { ...inputDraft(null), label: "Camera 1", kind: "srtCall" };
+  assert.deepEqual(inputFields(draft), ["sourceUrl"]);
+  assert.deepEqual(authFields(draft), []);
+  assert.match(inputProblem(draft), /SRT listener URL/);
+  for (const bad of ["srt://encoder", "udp://encoder:9000", "srt://encoder:0", "srt://encoder:70000"]) {
+    assert.match(inputProblem({ ...draft, sourceUrl: bad }), /srt:\/\/host:port/, bad);
+  }
+  const url = "srt://encoder.example:9000?streamid=cam1&passphrase=secret-pass";
+  assert.equal(inputProblem({ ...draft, sourceUrl: url }), null);
+  assert.equal(inputProblem({ ...draft, sourceUrl: "srt://[::1]:9000" }), null);
+  assert.deepEqual(inputWrite({ ...draft, sourceUrl: ` ${url} ` }, null), {
+    label: "Camera 1",
+    kind: "srtCall",
+    sourceUrl: url,
+    variantRule: "highestBandwidth",
+  });
+  assert.deepEqual(inputSourceLines(input({ kind: "srtCall", sourceUrl: url, ingestUrls: null })), [
+    "srt://encoder.example:9000?streamid=cam1&passphrase=••••",
+  ]);
+});

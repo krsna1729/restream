@@ -23,12 +23,30 @@ import type {
 } from "../types.js";
 
 /** The source choices, in the order the editor's select lists them. */
-export const SOURCE_KINDS: readonly PipelineInputKind[] = ["keyed", "hlsPull"];
+export const SOURCE_KINDS: readonly PipelineInputKind[] = ["keyed", "hlsPull", "srtCall"];
 
 export const SOURCE_LABELS: Record<PipelineInputKind, string> = {
   keyed: "Live (RTMP / SRT / HLS push)",
   hlsPull: "Pull from an HLS URL",
+  srtCall: "Call an SRT listener",
 };
+
+/** What the URL field is called and shows for each remote source. */
+export const SOURCE_URL_FIELD: Partial<Record<PipelineInputKind, { label: string; placeholder: string }>> = {
+  hlsPull: { label: "HLS source URL", placeholder: "https://origin.example/live/master.m3u8" },
+  srtCall: {
+    label: "SRT listener URL",
+    placeholder: "srt://encoder.example:9000?streamid=cam1&passphrase=…",
+  },
+};
+
+/** `srt://host:port` or `srt://[v6]:port`, then optional `?options`. */
+const SRT_CALL_URL = /^srt:\/\/(?:\[[^\]]+\]|[^/?:[\]]+):(\d{1,5})(?:\?|$)/;
+
+/** A URL to show on a deck row: an SRT passphrase is masked. */
+export function displaySourceUrl(url: string): string {
+  return url.replace(/([?&]passphrase=)[^&]*/i, "$1••••");
+}
 
 /** The renditions of a remote master playlist, in select order. */
 export const VARIANT_RULES: readonly VariantRule[] = ["highestBandwidth", "lowestBandwidth"];
@@ -122,7 +140,8 @@ export type AuthField = "token" | "cookies" | "username" | "password" | "headers
 /** The pull fields the editor shows: none for a keyed input, which waits for a
  * publisher on its ingest URLs instead. */
 export function inputFields(draft: InputDraft): readonly PullField[] {
-  return draft.kind === "hlsPull" ? ["sourceUrl", "variantRule", "auth"] : [];
+  if (draft.kind === "hlsPull") return ["sourceUrl", "variantRule", "auth"];
+  return draft.kind === "srtCall" ? ["sourceUrl"] : [];
 }
 
 /** The credential fields the editor shows: exactly the ones the chosen
@@ -222,7 +241,7 @@ function headerProblem(headers: readonly PullHeaderPair[]): string | null {
  * fetches and no ingest URL (it accepts no pushes), while a keyed input lists
  * the publish URLs of a backup — what it has always shown. */
 export function inputSourceLines(input: PipelineInput): string[] {
-  if (input.kind === "hlsPull") return input.sourceUrl ? [input.sourceUrl] : [];
+  if (input.kind !== "keyed") return input.sourceUrl ? [displaySourceUrl(input.sourceUrl)] : [];
   if (input.role !== "backup") return [];
   return [
     input.ingestUrls?.rtmp,
@@ -247,6 +266,13 @@ export function inputProblem(draft: InputDraft): string | null {
     return null;
   }
   const url = draft.sourceUrl.trim();
+  if (draft.kind === "srtCall") {
+    if (!url) return "A call input needs the SRT listener URL.";
+    const port = SRT_CALL_URL.exec(url)?.[1];
+    return port && Number(port) > 0 && Number(port) < 65536
+      ? null
+      : "The SRT listener URL is srt://host:port, with options after ?.";
+  }
   if (!url) return "A pull input needs the HLS source URL.";
   if (!isHttpUrl(url)) return "The HLS source URL must be an absolute http or https URL.";
   if (draft.keepAuth) return null;
@@ -312,11 +338,11 @@ function pushAuthWrite(draft: InputDraft, stored: PipelineInput | null): PushAut
  * stored credential alone carries no `auth` field, so the engine keeps a
  * secret no endpoint ever returns. */
 export function inputWrite(draft: InputDraft, stored: PipelineInput | null): PipelineInputWrite {
-  const pull = draft.kind === "hlsPull";
+  const remote = draft.kind !== "keyed";
   const body: PipelineInputWrite = {
     label: draft.label.trim(),
     kind: draft.kind,
-    sourceUrl: pull ? draft.sourceUrl.trim() : null,
+    sourceUrl: remote ? draft.sourceUrl.trim() : null,
     variantRule: draft.variantRule,
   };
   const auth = authWrite(draft, stored);

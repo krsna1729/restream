@@ -13,6 +13,7 @@ import {
   AUTH_NONE_NOTE,
   SOURCE_KINDS,
   SOURCE_LABELS,
+  SOURCE_URL_FIELD,
   VARIANT_LABELS,
   VARIANT_RULES,
   authFields,
@@ -160,11 +161,11 @@ export function InputForm(props: {
         </div>
       )}
       {fields.includes("sourceUrl") && (
-        <Field label="HLS source URL">
+        <Field label={SOURCE_URL_FIELD[draft.kind]?.label ?? "Source URL"}>
           <input
             className="input font-mono"
             inputMode="url"
-            placeholder="https://origin.example/live/master.m3u8"
+            placeholder={SOURCE_URL_FIELD[draft.kind]?.placeholder}
             value={draft.sourceUrl}
             onChange={(event) => set({ sourceUrl: event.target.value })}
           />

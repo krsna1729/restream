@@ -52,6 +52,7 @@ The diagram shows the shared path from each ingest to the egress readers.
 | RTMP | ingest | TCP `0.0.0.0:1935` (`RESTREAM_RTMP_PORT`) | `src/media/rtmp/` |
 | RTMP, RTMPS | egress | `rtmp://`, `rtmps://` output URLs | `src/media/rtmp/`, `src/media/egress/` |
 | SRT | ingest | UDP `0.0.0.0:10080` (`RESTREAM_SRT_PORT`) | `src/media/srt/` |
+| SRT call | ingest | `srtCall` pipeline input: the engine dials a remote listener | `src/media/srt/calls.rs` |
 | SRT | egress | `srt://` output URLs | `src/media/srt/`, `src/media/egress/backends/` |
 | HLS push | ingest | HTTP port 3030 (`RESTREAM_HTTP_PORT`), `/ingest/hls/` | `src/media/hls_ingest/` |
 | HLS pull | ingest | `hlsPull` pipeline input, no listener | `src/media/hls_pull.rs` |
@@ -479,6 +480,22 @@ lifecycle and probe events (dotted).
 Ingest latency comes from the saved SRT ingest policy: default 250 ms, valid
 20–8000 ms. A passphrase is 10–79 bytes; key length is 16, 24 or 32
 (`src/domain/srt_ingest.rs`).
+
+### SRT call inputs
+
+An `srtCall` input reverses the handshake: the engine is the caller.
+`converge_srt_call_inputs` writes the enabled rows into
+`engine.ingests.srt_calls`; the SRT server's Tokio loop (`CallSupervisor`,
+`src/media/srt/calls.rs`) resolves the host (IPv4, off the loop) and sends
+`IngressCommand::Call` to Owner 0, which dials through its caller pool
+(`CALLS_IN_FLIGHT` handshakes at once, more queued). The Owner keys sessions
+by `SessionId::{Peer, Caller}`, so a call's events, stats, disconnect and
+retirement take the same paths as an admitted peer's. On `Connected` Tokio
+registers the call as a publisher of its input, without stream-key or IP
+checks, and its media runs on the Owner like any publisher's. A failed or
+ended call redials with backoff (1 s doubling to 30 s); a call whose row left
+or changed is hung up, including one the pool admits late. The supervisor
+commands the Owner only when the bridge's one command slot is free.
 
 ### SRT Stream ID
 
