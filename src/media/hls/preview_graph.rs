@@ -116,6 +116,15 @@ pub async fn resolve_input_hls_preview_graph(
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     };
+    // A passthrough input preview reads the input's ring as it is.
+    let passthrough = crate::media::engine_hls::preview_pipeline(resource_id).1;
+    if passthrough {
+        return HlsPreviewGraph {
+            video_ring: source_ring,
+            video_meta: source_video,
+            stage: None,
+        };
+    }
     let codec_hint = source_ring.codec_hint_str();
     let codec = source_video
         .as_ref()
@@ -287,6 +296,51 @@ mod tests {
         let ids = engine.runtime_pipeline_ids().await;
         assert!(ids.contains("pipe-preview-owner"));
         assert!(!ids.contains(&id), "{ids:?}");
+    }
+
+    /// An input's two preview forms read one preview ring: the passthrough
+    /// one plans no stage, and stopping either keeps the ring while the
+    /// other still plays.
+    #[tokio::test]
+    async fn an_input_passthrough_preview_shares_the_ring_and_starts_no_stage() {
+        let engine = Arc::new(MediaEngine::new());
+        engine
+            .try_register_pipeline_input_attempt("pipe", "input-a", "key", "srt", true)
+            .await
+            .expect("register input");
+        let ring = engine.ensure_input_preview_ring("input-a").await.unwrap();
+        ring.set_codec_hint("hevc");
+        let copy = crate::media::engine_hls::input_hls_preview_resource_id("input-a");
+        let passthrough = crate::media::engine_hls::input_hls_preview_resource_id(
+            &crate::media::engine_hls::hevc_passthrough_preview_id("input-a"),
+        );
+        assert_eq!(
+            crate::media::engine_hls::input_id_from_hls_preview_resource_id(&passthrough),
+            Some("input-a")
+        );
+        let graph = resolve_input_hls_preview_graph(
+            engine.clone(),
+            &passthrough,
+            "input-a",
+            ring.clone(),
+            CancellationToken::new(),
+        )
+        .await;
+        assert!(Arc::ptr_eq(&graph.video_ring, &ring) && graph.stage.is_none());
+
+        engine.ensure_hls_preview_segmenter(&copy).await;
+        engine.ensure_hls_preview_segmenter(&passthrough).await;
+        engine.shutdown_hls_preview_segmenter(&passthrough).await;
+        assert!(
+            engine
+                .ensure_input_preview_ring("input-a")
+                .await
+                .is_some_and(|kept| Arc::ptr_eq(&kept, &ring)),
+            "the copy still plays from the same ring"
+        );
+        engine.shutdown_hls_preview_segmenter(&copy).await;
+        let after = engine.ensure_input_preview_ring("input-a").await.unwrap();
+        assert!(!Arc::ptr_eq(&after, &ring), "released once neither plays");
     }
 
     /// The reconciler keeps a passthrough preview while its pipeline is live

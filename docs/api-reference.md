@@ -1773,7 +1773,7 @@ All routes are `GET` and need the session cookie (`require_hls_access`).
 | `/hls/:pipelineId/audio/:trackIndex/index.m3u8` | Audio media playlist |
 | `/hls/:pipelineId/audio/:trackIndex/init.mp4` | Audio init segment |
 | `/hls/:pipelineId/audio/:trackIndex/:segment` | Audio segment |
-| `/hls/:pipelineId.hevc/…` | The same routes for an H.265 source passed through as `hvc1` (no transcode), for a browser that decodes H.265; an H.264 source plays as it is under either id |
+| `/hls/:pipelineId.hevc/…`, `/hls/inputs/:inputId.hevc/…` | The same routes for an H.265 source passed through as `hvc1` (no transcode), for a browser that decodes H.265; an H.264 source plays as it is under either id |
 | `/hls/inputs/:inputId/master.m3u8` | Input-scoped master playlist |
 | `/hls/inputs/:inputId/video/index.m3u8` | Input-scoped video playlist |
 | `/hls/inputs/:inputId/video/init.mp4` | Input-scoped video init |

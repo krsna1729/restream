@@ -600,3 +600,45 @@ async fn wait_for_stage_metadata_still_prefers_late_audio_before_grace() {
     assert_eq!(resolved_audio.len(), 1);
     assert_eq!(resolved_audio[0].channels, 2);
 }
+
+/// A stage an input preview leases (its H.264 bridge, keyed
+/// `__input__:<input>`) reads that input's session, which is not a
+/// pipeline's live ingest: the wait used to look only at live ingests and
+/// never ended, so an H.265 input's H.264 preview never started.
+#[tokio::test]
+async fn wait_for_stage_metadata_reads_an_input_preview_stage_from_its_input_session() {
+    let engine = Arc::new(MediaEngine::new());
+    let source = Arc::new(RingBuffer::new(16));
+    let cancel = CancellationToken::new();
+    // A standby input: a session that is not the pipeline's live ingest.
+    let registration = engine
+        .try_register_pipeline_input_attempt("pipe-standby", "standby", "key", "srt", false)
+        .await
+        .expect("register standby input");
+    engine
+        .update_ingest_session_meta(
+            "pipe-standby",
+            &registration,
+            Some(ready_video_meta("hevc")),
+            None,
+            None,
+        )
+        .await;
+    let stage_pipeline = crate::media::engine_hls::input_hls_preview_resource_id("standby");
+    let resolved = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        wait_for_stage_metadata(
+            &engine,
+            &stage_pipeline,
+            &source,
+            false,
+            false,
+            None,
+            &cancel,
+        ),
+    )
+    .await
+    .expect("resolves from the input session")
+    .expect("metadata");
+    assert_eq!(resolved.0.codec, "hevc");
+}

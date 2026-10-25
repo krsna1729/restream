@@ -801,8 +801,10 @@ The diagram shows the preview path from the ring to the browser.
   `/hls/{pipeline_id}/` goes through the shared `hevc_to_h264:from:source`
   stage (FFmpeg), and `/hls/{pipeline_id}.hevc/`, which the dashboard asks
   for when the browser reports it decodes H.265, segments the source ring as
-  it is, with no stage. The two are separate preview stores; pipeline ids
-  never contain a dot. Input previews always take the bridge.
+  it is, with no stage. Input previews have the same pair
+  (`/hls/inputs/{input_id}.hevc/`); both forms read the input's one preview
+  ring, which is released only when neither plays. The forms are separate
+  preview stores; pipeline and input ids never contain a dot.
 - **Window.** The playlist advertises `RESTREAM_HLS_MAX_SEGMENTS` (default
   20) segments and keeps 6 more fetchable. `EXT-X-TARGETDURATION` starts at
   the first segment's duration and never decreases.

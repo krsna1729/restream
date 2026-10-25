@@ -278,7 +278,12 @@ impl StageRuntimeManager {
             // TsPacketFeeder; for TS/SRT sources it is typically None (the
             // feeder obtains raw annex-B parameter sets from the ring or
             // per-packet payload instead).
-            let (video_seq_header, _) = engine.get_sequence_headers(&pipeline_id).await;
+            let (video_seq_header, _) =
+                match crate::media::engine_hls::input_id_from_hls_preview_resource_id(&pipeline_id)
+                {
+                    Some(input_id) => engine.get_input_sequence_headers(input_id).await,
+                    None => engine.get_sequence_headers(&pipeline_id).await,
+                };
 
             let input_pump = StageInputPump::new(
                 key.to_string(),
@@ -447,8 +452,8 @@ pub(crate) async fn wait_for_stage_metadata(
         }
 
         let ingest_result = {
-            let ingests = engine.ingests.active.read().await;
-            ingests.get(pipeline_id).and_then(|ingest| {
+            let ingest = engine.stage_source_ingest(pipeline_id).await;
+            ingest.and_then(|ingest| {
                 let metadata = ingest.metadata();
                 let mut video = metadata.video?;
                 if let Some(codec) = input_codec_override {

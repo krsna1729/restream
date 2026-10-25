@@ -57,12 +57,15 @@ impl MediaEngine {
         store
     }
 
+    /// `preview_input_id` is an input id, or `<input>.hevc` for the H.265
+    /// source as sent.
     pub async fn ensure_input_hls_preview_runtime(
         self: &Arc<Self>,
-        input_id: &str,
+        preview_input_id: &str,
     ) -> Option<(String, Arc<Fmp4HlsStore>)> {
+        let input_id = crate::media::engine_hls::preview_pipeline(preview_input_id).0;
         let source_ring = self.ensure_input_preview_ring(input_id).await?;
-        let resource_id = crate::media::engine_hls::input_hls_preview_resource_id(input_id);
+        let resource_id = crate::media::engine_hls::input_hls_preview_resource_id(preview_input_id);
         let (store, already_running, cancel_token) =
             self.ensure_hls_preview_segmenter(&resource_id).await;
         if !already_running {
