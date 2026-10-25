@@ -72,6 +72,7 @@ pub mod stage_registry_access;
 pub mod stage_runtime;
 pub mod standby_gop;
 pub mod startup_policy;
+pub mod stream_inspector;
 pub mod stream_qa;
 
 pub mod ffmpeg;

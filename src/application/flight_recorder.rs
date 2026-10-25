@@ -8,7 +8,9 @@
 //! [`FLIGHT_HISTORY_SPAN`] of them (`GET /api/v1/pipelines/:id/flight-recorder`).
 //!
 //! It reads counters the engine already keeps, on its own task, once per
-//! interval: nothing is added to the media path.
+//! interval: nothing is added to the media path. The stream inspector
+//! (`media::stream_inspector`), started here, reads the source rings' packet
+//! headers on its own thread for each track's timestamps.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::Ordering;
@@ -75,6 +77,10 @@ pub struct IngestHealth {
     /// pipeline (absent in samples taken before they existed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qa: Option<crate::media::stream_qa::StreamQa>,
+    /// Each track's timestamps and audio/video timing over the last minute
+    /// (`media::stream_inspector`), read from the source ring.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<crate::media::stream_inspector::StreamInspection>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -106,6 +112,22 @@ pub struct OutputsHealth {
     pub worst_feed_lag: u64,
 }
 
+/// A transcoding stage's input: how far behind the source its FFmpeg is.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DecoderHealth {
+    /// The stage kind, e.g. `transcode:h264_720p`.
+    pub stage: String,
+    /// Packets the stage's reader is behind the source ring's writer.
+    pub lag_slots: u64,
+    /// The same in seconds, at the ring's packet rate (absent until known).
+    pub lag_sec: Option<f64>,
+    /// Share of the interval the engine waited to write FFmpeg's input
+    /// (its pipe was full: FFmpeg took input slower than it arrived), 0..1;
+    /// absent on the stage's first sample.
+    pub input_blocked: Option<f64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct FlightSample {
@@ -113,6 +135,9 @@ pub struct FlightSample {
     pub ingest: Option<IngestHealth>,
     pub ring: Option<RingHealth>,
     pub outputs: OutputsHealth,
+    /// The pipeline's FFmpeg stages, by stage.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decoders: Vec<DecoderHealth>,
 }
 
 /// What a page or an export receives.
@@ -150,6 +175,7 @@ pub struct IngestProbe {
     pub retrans_per_sec: Option<f64>,
     pub receive_buffer: Option<f64>,
     pub qa: Option<crate::media::stream_qa::StreamQa>,
+    pub timeline: Option<crate::media::stream_inspector::StreamInspection>,
 }
 
 /// One running egress's counters.
@@ -161,6 +187,17 @@ pub struct EgressProbe {
     pub feed_lag: u64,
 }
 
+/// One FFmpeg stage's input counters, before differencing.
+#[derive(Debug, Clone, Default)]
+pub struct DecoderProbe {
+    pub stage: String,
+    pub lag_slots: u64,
+    /// The source ring's packet rate, packets per second (0 unknown).
+    pub packets_per_sec: f64,
+    /// Cumulative microseconds spent blocked writing FFmpeg's input.
+    pub stall_us: u64,
+}
+
 /// Everything the recorder reads about one pipeline at one instant.
 #[derive(Debug, Clone, Default)]
 pub struct PipelineProbe {
@@ -168,6 +205,7 @@ pub struct PipelineProbe {
     pub ingest: Option<IngestProbe>,
     pub ring: Option<RingHealth>,
     pub outputs: OutputsHealth,
+    pub decoders: Vec<DecoderProbe>,
 }
 
 /// Mean and longest gap between successive keyframes, in seconds; `None`
@@ -231,6 +269,8 @@ struct Trace {
     /// The selected session's byte counter at the last sample, for the
     /// next bitrate: (input, bytes, at).
     last_bytes: Option<(String, u64, u64)>,
+    /// Each FFmpeg stage's blocked-write counter at the last sample: (µs, at).
+    last_stalls: HashMap<String, (u64, u64)>,
 }
 
 /// Every pipeline's trace. Pipelines that disappear from a sample are
@@ -279,6 +319,7 @@ impl FlightRecorder {
                     samples: VecDeque::new(),
                     complete_from_ms: at_ms.max(self.started_ms),
                     last_bytes: None,
+                    last_stalls: HashMap::new(),
                 });
             // Strictly after the newest sample, even if the wall clock
             // stepped back, so the trace stays in time order.
@@ -317,6 +358,7 @@ impl FlightRecorder {
                     retrans_per_sec: ingest.retrans_per_sec,
                     receive_buffer: ingest.receive_buffer,
                     qa: ingest.qa,
+                    timeline: ingest.timeline,
                 }
             });
             if ingest.is_none() {
@@ -327,11 +369,40 @@ impl FlightRecorder {
             {
                 trace.complete_from_ms = evicted.at_ms;
             }
+            let stalls_now: HashMap<String, (u64, u64)> = probe
+                .decoders
+                .iter()
+                .map(|decoder| (decoder.stage.clone(), (decoder.stall_us, at_ms)))
+                .collect();
+            let decoders = probe
+                .decoders
+                .into_iter()
+                .map(|decoder| {
+                    let input_blocked = match trace.last_stalls.get(&decoder.stage) {
+                        Some((stall_us, then))
+                            if decoder.stall_us >= *stall_us && at_ms > *then =>
+                        {
+                            let waited_ms = (decoder.stall_us - stall_us) as f64 / 1_000.0;
+                            Some((waited_ms / (at_ms - then) as f64).min(1.0))
+                        }
+                        _ => None,
+                    };
+                    DecoderHealth {
+                        lag_sec: (decoder.packets_per_sec > 0.0)
+                            .then(|| decoder.lag_slots as f64 / decoder.packets_per_sec),
+                        lag_slots: decoder.lag_slots,
+                        input_blocked,
+                        stage: decoder.stage,
+                    }
+                })
+                .collect::<Vec<_>>();
+            trace.last_stalls = stalls_now;
             trace.samples.push_back(FlightSample {
                 at_ms,
                 ingest,
                 ring: probe.ring,
                 outputs: probe.outputs,
+                decoders,
             });
         }
     }
@@ -497,7 +568,11 @@ async fn persist(
 }
 
 /// Reads one probe per pipeline from the engine and the runtime state.
-async fn collect_probes(hub: &StateHub, engine: &MediaEngine) -> Vec<PipelineProbe> {
+async fn collect_probes(
+    hub: &StateHub,
+    engine: &MediaEngine,
+    inspector: Option<&crate::media::stream_inspector::StreamInspector>,
+) -> Vec<PipelineProbe> {
     let egresses: HashMap<String, EgressProbe> = engine
         .egresses
         .active
@@ -518,8 +593,27 @@ async fn collect_probes(hub: &StateHub, engine: &MediaEngine) -> Vec<PipelinePro
         })
         .collect();
     let mut ingests: HashMap<String, IngestProbe> = HashMap::new();
+    // Each AAC track's frame length, for the inspector's clock drift.
+    let mut aac_frames: HashMap<String, HashMap<u32, f64>> = HashMap::new();
     for (pipeline_id, ingest) in engine.ingests.active.read().await.iter() {
         let metadata = ingest.metadata();
+        // Every track a multi-track source declared, else its one track.
+        let tracks = crate::sync::lock(&ingest.audio_tracks).clone();
+        let frames: HashMap<u32, f64> = tracks
+            .iter()
+            .chain(
+                tracks
+                    .is_empty()
+                    .then_some(metadata.audio.as_ref())
+                    .flatten(),
+            )
+            .filter(|track| track.codec.eq_ignore_ascii_case("aac"))
+            .filter_map(|track| {
+                crate::media::stream_inspector::aac_frame_ms(track.sample_rate)
+                    .map(|frame_ms| (track.track_index, frame_ms))
+            })
+            .collect();
+        aac_frames.insert(pipeline_id.clone(), frames);
         let quality = &metadata.quality;
         let receive_buffer = match (
             quality.srt_recv_buf_packets,
@@ -550,11 +644,48 @@ async fn collect_probes(hub: &StateHub, engine: &MediaEngine) -> Vec<PipelinePro
                 retrans_per_sec: quality.packets_received_retrans_per_sec,
                 receive_buffer,
                 qa: engine.stream_qa(pipeline_id),
+                timeline: inspector.and_then(|inspector| inspector.inspection(pipeline_id)),
             },
         );
     }
     let mut rings: HashMap<String, RingHealth> = HashMap::new();
-    for (pipeline_id, ring) in engine.ingests.pipelines.read().await.iter() {
+    let mut decoders: HashMap<String, Vec<DecoderProbe>> = HashMap::new();
+    let mut watched = Vec::new();
+    // Copied, so no engine lock is held while the next one is taken.
+    let source_rings: HashMap<String, Arc<crate::media::ring_buffer::RingBuffer>> =
+        engine.ingests.pipelines.read().await.clone();
+    // An FFmpeg stage's reader on its source ring is named by its key.
+    for (key, runtime) in engine.stages.runtimes.read().await.iter() {
+        let (Some(pipe), Some(ring)) = (
+            runtime.pipe_metrics.as_ref(),
+            source_rings.get(key.pipeline.as_str()),
+        ) else {
+            continue;
+        };
+        let name = key.to_string();
+        let Some(reader) = ring
+            .reader_snapshots()
+            .into_iter()
+            .find(|reader| reader.name == name)
+        else {
+            continue;
+        };
+        decoders
+            .entry(key.pipeline.as_str().to_string())
+            .or_default()
+            .push(DecoderProbe {
+                stage: key.kind.to_string(),
+                lag_slots: reader.lag_slots as u64,
+                packets_per_sec: ring.estimated_pkt_rate(),
+                stall_us: pipe.snapshot().stall_us,
+            });
+    }
+    for (pipeline_id, ring) in source_rings.iter() {
+        watched.push(crate::media::stream_inspector::Watched {
+            pipeline_id: pipeline_id.clone(),
+            ring: Arc::downgrade(ring),
+            aac_frame_ms: aac_frames.remove(pipeline_id).unwrap_or_default(),
+        });
         let (fill, capacity) = ring.fill_and_capacity();
         let readers = ring.reader_snapshots();
         rings.insert(
@@ -574,6 +705,9 @@ async fn collect_probes(hub: &StateHub, engine: &MediaEngine) -> Vec<PipelinePro
             },
         );
     }
+    if let Some(inspector) = inspector {
+        inspector.watch(watched);
+    }
     hub.read(|projection| {
         let mut by_pipeline: HashMap<&str, Vec<&OutputState>> = HashMap::new();
         for output in projection.outputs.values() {
@@ -589,6 +723,7 @@ async fn collect_probes(hub: &StateHub, engine: &MediaEngine) -> Vec<PipelinePro
                 pipeline_id: pipeline_id.clone(),
                 ingest: ingests.remove(pipeline_id),
                 ring: rings.remove(pipeline_id),
+                decoders: decoders.remove(pipeline_id).unwrap_or_default(),
                 outputs: outputs_health(
                     by_pipeline
                         .get(pipeline_id.as_str())
@@ -646,13 +781,16 @@ pub async fn run_flight_recorder(
     let mut ticks = tokio::time::interval(interval);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut tick: u32 = 0;
+    // Its own OS thread reads the source rings; dropped (and stopped) with
+    // this task.
+    let inspector = crate::media::stream_inspector::StreamInspector::start();
     loop {
         tokio::select! {
             () = shutdown.cancelled() => return,
             _ = ticks.tick() => {}
         }
         hub.refresh_on_demand(&pool, &engine).await;
-        let probes = collect_probes(&hub, &engine).await;
+        let probes = collect_probes(&hub, &engine, inspector.as_ref()).await;
         let now_ms = MediaEngine::now_epoch_ms();
         recorder.record(now_ms, probes);
         recorder

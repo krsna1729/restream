@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
-const { audioTrackWords, bitrateWords, loudnessWords, overallSeverity, qaCostWords, qaVerdicts, streamVerdicts, trackMeter, loudnessFraction } = await loadCompiledFrontendModule(
+const { audioTrackWords, bitrateWords, loudnessWords, overallSeverity, qaCostWords, qaVerdicts, streamVerdicts, trackMeter, loudnessFraction, timelineVerdicts, decoderVerdicts, trackName } = await loadCompiledFrontendModule(
   "control-room/stream-health-model.js",
 );
 
@@ -200,4 +200,69 @@ test("each track's meter: level, how it reads, and nothing from a stale check", 
   assert.equal(loudnessFraction(-80), 0);
   assert.equal(loudnessFraction(0), 1);
   assert.equal(loudnessFraction(-14), 46 / 60);
+});
+
+function inspection(tracks) {
+  return { windowSec: 60, unread: 0, tracks };
+}
+
+function inspected(media, track, extra = {}) {
+  return { media, track, packetsPerSec: media === "video" ? 30 : 47, backwards: 0, jumps: 0, ptsBeforeDts: 0, ...extra };
+}
+
+test("timestamps: steady is ok, a reset or a leap is named by track, three are bad", () => {
+  assert.deepEqual(timelineVerdicts(null), [], "nothing until the inspector has read the source");
+  const steady = timelineVerdicts(inspection([inspected("video", 0), inspected("audio", 0, { avOffsetMs: 40 })]));
+  assert.deepEqual(steady.map((verdict) => [verdict.key, verdict.severity]), [["timestamps", "ok"]]);
+  const reset = timelineVerdicts(inspection([inspected("video", 0, { backwards: 1 }), inspected("audio", 0)]));
+  assert.equal(reset[0].severity, "warn");
+  assert.equal(reset[0].title, "Timestamps broke on Video 1");
+  assert.match(reset[0].detail, /1 went back/);
+  const many = timelineVerdicts(inspection([inspected("video", 0, { jumps: 2 }), inspected("audio", 1, { backwards: 1 })]));
+  assert.equal(many[0].severity, "bad");
+  assert.equal(many[0].title, "Timestamps broke on Video 1, Audio 2");
+  assert.equal(trackName({ media: "audio", track: 0 }), "Audio 1");
+});
+
+test("a picture shown before it decodes, audio drift and a large offset each get a verdict", () => {
+  const verdicts = timelineVerdicts(
+    inspection([
+      inspected("video", 0, { ptsBeforeDts: 4 }),
+      inspected("audio", 0, { avOffsetMs: 120, clockDriftMsPerMin: 350 }),
+      inspected("audio", 1, { avOffsetMs: -1500 }),
+      inspected("audio", 2, { avOffsetMs: 300, clockDriftMsPerMin: -1200 }),
+    ]),
+  );
+  const byKey = Object.fromEntries(verdicts.map((verdict) => [verdict.key, verdict]));
+  assert.equal(byKey.order.severity, "warn");
+  assert.equal(byKey["drift-0"].severity, "warn");
+  assert.match(byKey["drift-0"].title, /Audio 1 clock drifts 350 ms a minute/);
+  assert.match(byKey["drift-0"].detail, /run fast/);
+  assert.equal(byKey["offset-1"].title, "Audio 2 arrives 1.5 s before the video");
+  assert.equal(byKey["drift-2"].severity, "bad", "a second a minute is bad");
+  assert.equal(byKey["offset-2"], undefined, "drift is said once per track");
+  assert.equal(
+    timelineVerdicts(inspection([inspected("video", 0), inspected("audio", 0, { avOffsetMs: 300, clockDriftMsPerMin: 150 })])).length,
+    1,
+    "a steady offset and small drift are fine",
+  );
+});
+
+test("an FFmpeg stage that cannot keep up is named; one that keeps up says nothing", () => {
+  const decoder = (inputBlocked) => ({ stage: "transcode:h264_720p", lagSlots: 40, lagSec: 0.4, inputBlocked });
+  assert.deepEqual(decoderVerdicts([decoder(null), decoder(0.05)]), []);
+  assert.equal(decoderVerdicts([decoder(0.3)])[0].severity, "warn");
+  const bad = decoderVerdicts([decoder(0.6)])[0];
+  assert.equal(bad.severity, "bad");
+  assert.match(bad.detail, /60% of the time, 0.4 s behind the source/);
+});
+
+test("a publisher whose timestamps break and whose encode lags reads as damaged", () => {
+  const broken = { timeline: inspection([inspected("video", 0, { backwards: 2, jumps: 1 }), inspected("audio", 0)]) };
+  const samples = Array.from({ length: 10 }, (_, index) => sample(index, broken));
+  samples[9] = { ...samples[9], decoders: [{ stage: "transcode:h264_720p", lagSlots: 300, lagSec: 3, inputBlocked: 0.7 }] };
+  const verdicts = streamVerdicts(samples);
+  assert.equal(overallSeverity(verdicts), "bad");
+  assert.equal(severityOf(verdicts, "timestamps"), "bad");
+  assert.equal(severityOf(verdicts, "decoder-transcode:h264_720p"), "bad");
 });

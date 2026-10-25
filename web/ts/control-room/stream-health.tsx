@@ -17,6 +17,7 @@ import { PictureAndSound } from "./picture-sound.js";
 import { PipelineScope } from "./pipeline-scope.js";
 import { Freshness, useFlightRecorder } from "./polled.js";
 import type { LiveSnapshot } from "./store.js";
+import { StreamTimeline } from "./stream-timeline.js";
 import { KEYFRAME_LIMIT_SEC, KEYFRAME_TARGET_SEC, bitrateWords, contributionTransport, overallSeverity, streamVerdicts } from "./stream-health-model.js";
 import type { Severity } from "./stream-health-model.js";
 
@@ -137,6 +138,7 @@ function Health(props: { pipelineId: string }) {
           )}
         </Panel>
       </div>
+      <StreamTimeline timeline={ingest?.timeline ?? null} decoders={last?.decoders ?? []} />
       <PictureAndSound pipelineId={props.pipelineId} samples={samples} />
       <RawJson value={last ?? null} label="newest flight sample" />
     </>
