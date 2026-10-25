@@ -74,7 +74,7 @@ function awaitFirstSegment(
   poll();
 }
 
-type PreviewState = "idle" | "starting" | "playing" | "buffering" | "paused" | "failed" | "stalled";
+type PreviewState = "idle" | "starting" | "playing" | "buffering" | "paused" | "failed" | "stalled" | "unsupported";
 const STATUS_TEXT: Record<PreviewState, string> = {
   idle: "",
   starting: "starting (the engine makes the first segment)…",
@@ -83,7 +83,12 @@ const STATUS_TEXT: Record<PreviewState, string> = {
   paused: "paused",
   failed: "preview unavailable",
   stalled: "stalled: no new frames",
+  unsupported: "this browser cannot decode this stream (H.264 and AAC play in Chrome, Edge, Safari and Firefox)",
 };
+
+/** hls.js errors that mean the browser cannot decode the stream: retrying
+ * will not help, so the preview says why. */
+const CODEC_ERRORS = new Set(["manifestIncompatibleCodecsError", "bufferIncompatibleCodecsError", "bufferAddCodecError"]);
 
 /** How a preview is drawn. `panel` (default) has its own start/stop
  * buttons, status line, track picker and meter. `tile` (the multiview wall)
@@ -168,7 +173,7 @@ export function Preview(props: {
       setTracks([]);
       setTrack(null);
     };
-    const fail = (next: "failed" | "stalled") => {
+    const fail = (next: "failed" | "stalled" | "unsupported") => {
       end();
       if (!played && !fellBack && props.fallbackUrl) {
         setFellBack(true);
@@ -195,7 +200,8 @@ export function Preview(props: {
           redirectToLogin();
           return;
         }
-        if ("fatal" in data && data.fatal) fail("failed");
+        const codec = "details" in data && typeof data.details === "string" && CODEC_ERRORS.has(data.details);
+        if ("fatal" in data && data.fatal) fail(codec ? "unsupported" : "failed");
       });
       player.loadSource(url);
       player.attachMedia(element);
@@ -227,10 +233,10 @@ export function Preview(props: {
     setAttempt(0);
     setState("idle");
   };
-  const showing = state !== "idle" && state !== "failed" && state !== "stalled";
+  const ended = state === "failed" || state === "stalled" || state === "unsupported";
+  const showing = state !== "idle" && !ended;
 
   if (tile) {
-    const ended = state === "failed" || state === "stalled";
     return (
       <div className="relative aspect-video w-full overflow-hidden bg-black" role="group" aria-label={`Preview ${props.label}`}>
         <video
@@ -247,7 +253,7 @@ export function Preview(props: {
           <div className="absolute inset-0 grid place-items-center p-2 text-center text-xs text-white/80">
             <span role="status" className="flex flex-col items-center gap-2">
               {STATUS_TEXT[state]}
-              {ended && (
+              {ended && state !== "unsupported" && (
                 <button type="button" className="btn btn-xs" onClick={start}>
                   Retry
                 </button>
