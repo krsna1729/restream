@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
-const { MAX_WATCHED_TILES, buildWall, prunedWatched, toggleWatched, wallColumns, watchAll } =
+const { MAX_WATCHED_TILES, buildWall, prunedWatched, toggleWatched, wallColumns, wallScreenFit, watchAll } =
   await loadCompiledFrontendModule("control-room/wall-model.js");
 
 function row(id, name, overrides = {}) {
@@ -39,7 +39,7 @@ const rows = [
   row("p-d", "Delta"),
 ];
 const alerts = [
-  alert("p-d", "Picture is black", "critical"),
+  alert("p-d", "Delta: Picture is black", "critical"),
   alert("p-d", "Audio track 2 is silent", "warning"),
   alert(undefined, "Host CPU high", "warning"),
 ];
@@ -53,7 +53,11 @@ test("tiles keep fixed places by name and carry their tally, source and alarms",
   assert.equal(byName.Charlie.tally, "idle");
   assert.equal(byName.Charlie.source, null);
   assert.equal(byName.Delta.tally, "alarm", "a critical alarm outranks everything");
-  assert.deepEqual(byName.Delta.alarms.map((a) => a.title), ["Picture is black", "Audio track 2 is silent"]);
+  assert.deepEqual(
+    byName.Delta.alarms.map((a) => a.title),
+    ["Picture is black", "Audio track 2 is silent"],
+    "critical first; the tile's own name is not repeated",
+  );
   assert.equal(byName.Bravo.source, "srt · h264");
   assert.equal(byName.Bravo.alarms.length, 0, "an alert without a pipeline lands on no tile");
 });
@@ -75,6 +79,27 @@ test("auto layout fits every tile in the smallest square, at most six across", (
   assert.equal(wallColumns("auto", 16), 4);
   assert.equal(wallColumns("auto", 200), 6);
   assert.equal(wallColumns(3, 200), 3, "a chosen layout is kept");
+});
+
+test("full screen picks the widest tiles that all fit the screen", () => {
+  const screen = { width: 1920, height: 1080 };
+  const fits = (fit, tiles) => {
+    const rows = Math.ceil(tiles / fit.columns);
+    return fit.columns * fit.tileWidth <= screen.width + 0.5 && rows * ((fit.tileWidth * 9) / 16 + 64) <= screen.height + 0.5;
+  };
+  for (const tiles of [1, 2, 3, 4, 5, 9, 12, 16, 30]) {
+    const fit = wallScreenFit("auto", tiles, screen);
+    assert.ok(fits(fit, tiles), `${tiles} tiles fit without scrolling`);
+    for (let columns = 1; columns <= 6; columns += 1) {
+      const rows = Math.ceil(tiles / columns);
+      const other = Math.min(screen.width / columns, ((screen.height / rows - 64) * 16) / 9);
+      assert.ok(other <= fit.tileWidth + 1e-9, `${tiles} tiles: no column count gives wider tiles`);
+    }
+  }
+  assert.equal(wallScreenFit("auto", 1, screen).columns, 1, "one tile fills the height, centred");
+  assert.equal(wallScreenFit("auto", 5, screen).columns, 3);
+  assert.equal(wallScreenFit("auto", 9, screen).columns, 3);
+  assert.deepEqual(wallScreenFit(2, 9, screen), { columns: 2, tileWidth: 960 }, "a chosen layout keeps full-width columns");
 });
 
 test("watching is capped and only live tiles play", () => {

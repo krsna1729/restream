@@ -453,8 +453,13 @@ pipeline, for a screen in the control room.
   across and tablets two. Layout, order and filter are kept per browser.
 - Tiles show state at no cost. Video is opt-in per tile ("Watch", or
   "Watch N" for every receiving tile) and capped at 9 playing tiles,
-  because each one makes the engine produce a preview (see Previews). A
-  tile that goes idle, is deleted or is filtered out stops playing.
+  because each one makes the engine produce a preview (see Previews). The
+  whole picture area of a tile is its Watch button. A tile that goes idle
+  or is deleted stops playing; one the filter hides plays again when shown.
+- Full screen fits every tile on the screen with the largest tiles that
+  fit (`wallScreenFit`), under a slim bar with the headline and an exit.
+- A browser that cannot decode the stream (a Chromium build without H.264
+  and AAC) says so on the tile instead of retrying.
 
 ### Incidents
 

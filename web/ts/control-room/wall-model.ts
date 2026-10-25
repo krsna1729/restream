@@ -64,7 +64,12 @@ export function buildWall(
     byPipeline.set(alert.pipelineId, list);
   }
   const tiles = model.pipelines.map((row): WallTile => {
-    const alarms = (byPipeline.get(row.id) ?? []).sort(
+    // A tile already shows its name: "Lobby: No active publisher" reads
+    // "No active publisher" on Lobby's tile.
+    const prefix = `${row.name}: `;
+    const alarms = (byPipeline.get(row.id) ?? [])
+      .map((alarm) => (alarm.title.startsWith(prefix) ? { ...alarm, title: alarm.title.slice(prefix.length) } : alarm))
+      .sort(
       (a, b) => (SEVERITY_RANK[a.severity] ?? 3) - (SEVERITY_RANK[b.severity] ?? 3) || a.title.localeCompare(b.title),
     );
     const health = pipelineHealth(row);
@@ -98,11 +103,36 @@ export function buildWall(
   );
 }
 
+/** The most tiles across. */
+const MAX_COLUMNS = 6;
+/** A tile's caption under its 16:9 picture, in px (name, rates, an alarm). */
+export const TILE_CAPTION_PX = 64;
+
 /** Grid columns: the chosen count, or for `auto` the smallest square that
- * fits every tile (at most 6 across). */
+ * holds every tile. */
 export function wallColumns(layout: WallLayout, tiles: number): number {
   if (layout !== "auto") return layout;
-  return Math.min(6, Math.max(1, Math.ceil(Math.sqrt(tiles))));
+  return Math.min(MAX_COLUMNS, Math.max(1, Math.ceil(Math.sqrt(tiles))));
+}
+
+/** Full screen: columns and tile width (px). `auto` picks the columns that
+ * give the widest tile with every tile on the screen, no scrolling: a tile
+ * is as wide as its column, or narrower when its rows would not fit the
+ * height. A chosen layout keeps its columns at full width (it may scroll). */
+export function wallScreenFit(
+  layout: WallLayout,
+  tiles: number,
+  screen: { width: number; height: number },
+): { columns: number; tileWidth: number } {
+  if (layout !== "auto") return { columns: layout, tileWidth: screen.width / layout };
+  let best = { columns: 1, tileWidth: 0 };
+  for (let columns = 1; columns <= Math.min(MAX_COLUMNS, Math.max(1, tiles)); columns += 1) {
+    const rows = Math.max(1, Math.ceil(tiles / columns));
+    const byHeight = ((screen.height / rows - TILE_CAPTION_PX) * 16) / 9;
+    const tileWidth = Math.max(0, Math.min(screen.width / columns, byHeight));
+    if (tileWidth > best.tileWidth) best = { columns, tileWidth };
+  }
+  return best;
 }
 
 /** Start or stop watching one tile. Starting past the cap is refused (the
