@@ -358,13 +358,19 @@ export function Preview(props: {
           </select>
         )}
         {showing && (
-          <button type="button" className="btn btn-ghost btn-xs" aria-pressed={statsOpen} onClick={() => setStatsOpen(!statsOpen)}>
-            Stats
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            aria-pressed={statsOpen}
+            onClick={() => setStatsOpen(!statsOpen)}
+            title="How this browser plays the preview; the input's own health is on Stream health"
+          >
+            Player stats
           </button>
         )}
         {samples.length > 0 && (
-          <button type="button" className="btn btn-ghost btn-xs" onClick={exportStats} title="Download this preview's playback readings as JSON">
-            Export stats
+          <button type="button" className="btn btn-ghost btn-xs" onClick={exportStats} title="Download this browser's playback readings as JSON">
+            Export player stats
           </button>
         )}
       </div>
@@ -411,9 +417,10 @@ function StatsOverlay(props: { samples: readonly PlaybackSample[] }) {
   ];
   return (
     <dl
-      aria-label="Playback stats"
+      aria-label="Player stats (this browser)"
       className="pointer-events-none absolute left-2 top-2 grid grid-cols-[auto_auto] gap-x-3 rounded bg-black/70 px-2 py-1.5 font-mono text-[0.6875rem] leading-tight text-white"
     >
+      <dt className="col-span-2 pb-0.5 text-white/70">player · this browser (input health: Stream health)</dt>
       {rows.map(([name, value]) => (
         <div key={name} className="contents">
           <dt className="text-white/70">{name}</dt>
