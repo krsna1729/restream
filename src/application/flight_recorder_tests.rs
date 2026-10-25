@@ -208,6 +208,7 @@ fn sample(at_ms: u64) -> FlightSample {
         ingest: None,
         ring: None,
         outputs: OutputsHealth::default(),
+        decoders: Vec::new(),
     }
 }
 
@@ -348,4 +349,61 @@ fn stream_check_findings_ride_on_the_ingest_and_older_rows_still_read() {
     row["ingest"].as_object_mut().unwrap().remove("qa");
     let old: FlightSample = serde_json::from_value(row).unwrap();
     assert_eq!(old.ingest.unwrap().qa, None);
+}
+
+#[test]
+fn an_ffmpeg_stage_reads_as_its_lag_and_the_share_of_time_its_input_was_blocked() {
+    let recorder = FlightRecorder::started_at(0, 10);
+    let stage = |stall_us| DecoderProbe {
+        stage: "transcode:h264_720p".to_string(),
+        lag_slots: 50,
+        packets_per_sec: 100.0,
+        stall_us,
+    };
+    let with = |stall_us| PipelineProbe {
+        decoders: vec![stage(stall_us)],
+        ..probe("p1", None)
+    };
+    recorder.record(1_000, vec![with(0)]);
+    recorder.record(3_000, vec![with(500_000)]);
+    // A counter that went back (a restarted FFmpeg) says nothing.
+    recorder.record(5_000, vec![with(100)]);
+    let decoders: Vec<DecoderHealth> = recorder
+        .trace("p1", 0)
+        .expect("trace")
+        .samples
+        .into_iter()
+        .map(|sample| sample.decoders[0].clone())
+        .collect();
+    assert_eq!(decoders[0].input_blocked, None, "no earlier counter");
+    assert_eq!(
+        decoders[1].input_blocked,
+        Some(0.25),
+        "0.5 s blocked of 2 s"
+    );
+    assert_eq!(decoders[2].input_blocked, None);
+    assert_eq!(decoders[1].lag_sec, Some(0.5));
+    assert_eq!(decoders[1].stage, "transcode:h264_720p");
+}
+
+#[test]
+fn the_inspection_rides_on_the_ingest_sample() {
+    let recorder = FlightRecorder::started_at(0, 10);
+    let inspection = crate::media::stream_inspector::StreamInspection {
+        window_sec: 60.0,
+        ..Default::default()
+    };
+    let ingest = IngestProbe {
+        timeline: Some(inspection.clone()),
+        ..ingest("in-a", 0)
+    };
+    recorder.record(1_000, vec![probe("p1", Some(ingest))]);
+    let trace = recorder.trace("p1", 0).expect("trace");
+    assert_eq!(
+        trace.samples[0]
+            .ingest
+            .as_ref()
+            .and_then(|i| i.timeline.clone()),
+        Some(inspection)
+    );
 }

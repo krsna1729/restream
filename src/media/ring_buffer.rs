@@ -702,6 +702,15 @@ impl RingBuffer {
         self.slots[slot_idx].data.load_full()
     }
 
+    /// When the packet at `sequence` was published, in microseconds since
+    /// the ring was created. The slot may hold a newer packet by the time
+    /// it is read: check [`Self::frame_unit`] after reading the packet.
+    pub fn published_at_us(&self, sequence: usize) -> u64 {
+        self.slots[sequence % self.capacity]
+            .published_at_us
+            .load(Ordering::Acquire)
+    }
+
     fn add_published_bytes(&self, bytes: u64) {
         // Single producer: no read-modify-write instruction needed.
         let total = self.published_bytes.load(Ordering::Relaxed);

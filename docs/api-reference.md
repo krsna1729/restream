@@ -1273,7 +1273,30 @@ already keeps, read once per interval on the recorder's own task.
     `null`, never `0`.
   - `qa` carries the [picture and sound checks'](#picture-and-sound-checks)
     findings while they run; it is absent otherwise.
+  - `timeline` is the stream inspector's last minute, per track, read from
+    the source ring once a second on its own thread
+    (`src/media/stream_inspector.rs`); absent until it has read the ring:
+    - `tracks[]`: `media` (`video` first, then `audio`), `track`,
+      `packetsPerSec`; `backwards` (DTS that went back), `jumps` (DTS that
+      moved more than 1 s apart from arrival time; a network stall moves
+      both and is not one), `ptsBeforeDts`, `largestJumpMs` (signed);
+    - audio only: `avOffsetMs`, how much later than the first video track
+      its media arrives against its timestamps (smallest over 5 s): how far
+      apart the publisher interleaves them;
+    - AAC only: `clockDriftMsPerMin`, how far the track's timestamps move
+      from its sample count (1024 samples a frame at its sample rate) each
+      minute, positive when they run fast; absent until 20 s of unbroken
+      clock, or when the two disagree by over 5% (a frame size the engine
+      cannot know, such as HE-AAC declared at its core rate). Arrival times
+      cannot show drift: muxers send packets in timestamp order;
+    - `windowSec` (up to 60) and `unread`, packets the ring reused before
+      the inspector read them (the counts miss those).
 - `ring` is `null` while the pipeline has no source ring.
+- `decoders` lists the pipeline's FFmpeg stages (absent when it has none):
+  `stage` (the stage kind), `lagSlots` and `lagSec` (how far the stage's
+  reader is behind the source ring), and `inputBlocked`, the share of the
+  interval the engine waited to write FFmpeg's input because its pipe was
+  full (`null` on a stage's first sample or after FFmpeg restarts).
 - `outputs` counts wanted outputs, plus the counters summed over the running
   egresses (`retryAttempts` over the retrying ones).
   - `resyncs` and `overflows` are cumulative counters.

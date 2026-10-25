@@ -21,7 +21,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-091 SRT Backup replays the lost prefix](#q-091-protocol-opus-srt-backup-failover-replays-the-lost-prefix)
 - [Q-092 no descendants of a dropped dependency](#q-092-resilience-opus-never-emit-descendants-of-a-dropped-dependency-bearing-unit)
 - [Q-094 sideband media events](#q-094-protocol-opus-first-class-sideband-media-events)
-- [Q-095 stream inspector](#q-095-observability-sonnet-stream-inspector-gop-health-skew-and-scte)
 - [Q-096 GRO and arrival timestamps](#q-096-performance-sonnet-gro-and-arrival-timestamps-in-the-reference-srt-path)
 - [Q-097 MediaMTX MoQ dialect interoperability](#q-097-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop)
 - [Q-100 agent protocol: approval mid-task and live panels](#q-100-agent-opus-agent-protocol-approval-mid-task-and-live-panels)
@@ -188,18 +187,10 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: an ingest fixture with captions and an SCTE-35 splice reaches the HLS
   output and the MoQ catalog; a ring-overrun test keeps events aligned with
   retained media.
-- Also: the preview renders the captions it carries, and the test media
+- Also: the preview renders the captions it carries, the test media
   generators (`test_fixtures.rs`) can produce captions and SCTE-35, so the
-  gates use checked-in fixtures.
-
-### Q-095 [observability] [sonnet] Stream inspector: GOP health, skew and SCTE
-- Goal: one view per live pipeline shows GOP health, A/V skew, source
-  timecode, SCTE timeline, decoder state and transport state.
-- Also per track: timestamp errors (PTS/DTS jumps and reorders), A/V sync
-  drift against the video track, and the decode queue depth where a stage
-  decodes, each with a threshold that raises a verdict.
-- Gates: a frontend test for a pipeline that loses keyframes shows the damaged
-  state; every value comes from the API.
+  gates use checked-in fixtures, and Stream health shows the source's
+  timecode and an SCTE-35 timeline beside the stream inspector's tracks.
 
 ### Q-096 [performance] [sonnet] GRO and arrival timestamps in the reference SRT path
 - Goal: the non-Compio reference SRT path (srt-rs) accepts GRO-coalesced

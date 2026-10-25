@@ -4,7 +4,7 @@
 // most any accepts), a steady bitrate, a steady frame rate, and a link
 // without sustained loss.
 
-import type { FlightSample, ProbeAudioTrack, StreamQaFindings } from "../core/api-types.js";
+import type { DecoderHealth, FlightSample, ProbeAudioTrack, StreamInspection, StreamQaFindings, TrackInspection } from "../core/api-types.js";
 
 export type Severity = "ok" | "warn" | "bad";
 
@@ -138,6 +138,8 @@ export function streamVerdicts(samples: readonly FlightSample[]): Verdict[] {
   }
 
   verdicts.push(...qaVerdicts(last.ingest.qa ?? null, last.atMs));
+  verdicts.push(...timelineVerdicts(last.ingest.timeline ?? null));
+  verdicts.push(...decoderVerdicts(last.decoders ?? []));
 
   const order: Record<Severity, number> = { bad: 0, warn: 1, ok: 2 };
   return verdicts.sort((a, b) => order[a.severity] - order[b.severity]);
@@ -328,4 +330,93 @@ export function audioTrackWords(track: ProbeAudioTrack): string {
   if (layout) parts.push(layout);
   else if (track.channels) parts.push(track.channels === 1 ? "mono" : track.channels === 2 ? "stereo" : `${track.channels} channels`);
   return parts.join(" · ") || "details not reported yet";
+}
+
+/** An audio clock drifting this far from its samples each minute is felt
+ * as lip sync sliding (ms). */
+export const DRIFT_WARN_MS = 200;
+/** Audio arriving this far from video makes players wait for one of them
+ * (ms). */
+export const OFFSET_WARN_MS = 1_000;
+/** An FFmpeg stage whose input is blocked this share of the time cannot
+ * keep up. */
+export const BLOCKED_WARN = 0.2;
+export const BLOCKED_BAD = 0.5;
+
+/** "Video 1", "Audio 2": a track as the panels name it. */
+export function trackName(track: Pick<TrackInspection, "media" | "track">): string {
+  return `${track.media === "video" ? "Video" : "Audio"} ${track.track + 1}`;
+}
+
+function names(tracks: readonly TrackInspection[]): string {
+  return tracks.map(trackName).join(", ");
+}
+
+/** Verdicts from the stream inspector's last minute: timestamps that went
+ * back or leapt, pictures shown before they decode, an audio clock drifting
+ * from its samples, audio sent far from its video. None until it has read
+ * the source. */
+export function timelineVerdicts(timeline: StreamInspection | null): Verdict[] {
+  if (timeline === null || timeline.tracks.length === 0) return [];
+  const verdicts: Verdict[] = [];
+  const broken = timeline.tracks.filter((track) => track.backwards + track.jumps > 0);
+  if (broken.length > 0) {
+    const resets = broken.reduce((sum, track) => sum + track.backwards, 0);
+    const jumps = broken.reduce((sum, track) => sum + track.jumps, 0);
+    const parts = [resets > 0 ? `${resets} went back` : null, jumps > 0 ? `${jumps} leapt` : null].filter(Boolean).join(", ");
+    verdicts.push({
+      key: "timestamps",
+      severity: resets + jumps >= 3 ? "bad" : "warn",
+      title: `Timestamps broke on ${names(broken)}`,
+      detail: `In the last minute ${parts}. Players stutter, drop audio or stop at each one: look for the encoder (or a relay in front of it) restarting or changing its clock.`,
+    });
+  } else {
+    verdicts.push({ key: "timestamps", severity: "ok", title: "Timestamps steady", detail: "Every track's clock moved with real time over the last minute." });
+  }
+  const misordered = timeline.tracks.filter((track) => track.ptsBeforeDts > 0);
+  if (misordered.length > 0) {
+    verdicts.push({
+      key: "order",
+      severity: "warn",
+      title: `Frames shown before they decode on ${names(misordered)}`,
+      detail: "Their presentation time comes before their decode time: the encoder or a remuxer writes broken B-frame timing. Players may drop those frames.",
+    });
+  }
+  for (const track of timeline.tracks) {
+    if (track.media !== "audio") continue;
+    const drift = track.clockDriftMsPerMin;
+    const offset = track.avOffsetMs;
+    if (drift !== undefined && Math.abs(drift) >= DRIFT_WARN_MS) {
+      verdicts.push({
+        key: `drift-${track.track}`,
+        severity: Math.abs(drift) >= OFFSET_WARN_MS ? "bad" : "warn",
+        title: `${trackName(track)} clock drifts ${Math.abs(Math.round(drift))} ms a minute`,
+        detail: `Its timestamps run ${drift > 0 ? "fast" : "slow"} against its own samples, so players fill gaps or drop audio and lip sync slides. Usually the encoder stamps audio with the system clock while the sound card runs at its own rate: turn on its audio clock sync or resampling.`,
+      });
+    } else if (offset !== undefined && Math.abs(offset) >= OFFSET_WARN_MS) {
+      verdicts.push({
+        key: `offset-${track.track}`,
+        severity: "warn",
+        title: `${trackName(track)} arrives ${(Math.abs(offset) / 1000).toFixed(1)} s ${offset > 0 ? "after" : "before"} the video`,
+        detail: "Players hold the other while they wait for it, which adds delay and can stall playback. Check the encoder's interleaving or audio buffer.",
+      });
+    }
+  }
+  return verdicts;
+}
+
+/** A transcoding stage that cannot keep up: FFmpeg takes its input slower
+ * than it arrives. */
+export function decoderVerdicts(decoders: readonly DecoderHealth[]): Verdict[] {
+  return decoders
+    .filter((decoder) => (decoder.inputBlocked ?? 0) >= BLOCKED_WARN)
+    .map((decoder) => {
+      const blocked = decoder.inputBlocked ?? 0;
+      return {
+        key: `decoder-${decoder.stage}`,
+        severity: blocked >= BLOCKED_BAD ? ("bad" as const) : ("warn" as const),
+        title: `${decoder.stage} cannot keep up`,
+        detail: `Its FFmpeg took input slower than it arrived ${Math.round(blocked * 100)}% of the time${decoder.lagSec !== null ? `, ${decoder.lagSec.toFixed(1)} s behind the source` : ""}. The host is short of CPU for this encode: lower its preset or resolution, or move work off the host.`,
+      };
+    });
 }

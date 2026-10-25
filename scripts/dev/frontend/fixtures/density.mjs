@@ -615,7 +615,7 @@ export function createDeployment({ preset = "plant", seed = 7, nowMs = Date.now(
   }
 
   function record(now) {
-    for (const pipeline of pipelines) {
+    for (const [order, pipeline] of pipelines.entries()) {
       const state = sim.get(pipeline.id);
       const mine = outputsByPipeline.get(pipeline.id);
       const wanted = mine.filter((output) => output.desired === "running");
@@ -655,6 +655,17 @@ export function createDeployment({ preset = "plant", seed = 7, nowMs = Date.now(
                 ],
               },
             }),
+            // The stream inspector's minute: every fifth pipeline's encoder
+            // has audio drifting off and an occasional clock leap.
+            timeline: {
+              windowSec: 60,
+              unread: 0,
+              tracks: [
+                { media: "video", track: 0, packetsPerSec: state.fps, backwards: 0, jumps: order % 5 === 2 && random.chance(0.5) ? 1 : 0, ptsBeforeDts: 0, ...(order % 5 === 2 && { largestJumpMs: 4_960 }) },
+                { media: "audio", track: 0, packetsPerSec: 46.9, backwards: 0, jumps: 0, ptsBeforeDts: 0, avOffsetMs: Math.round(random.jitter(45, 0.2)), clockDriftMsPerMin: order % 5 === 2 ? Math.round(random.jitter(320, 0.1)) : Math.round((random.next() - 0.5) * 30) },
+                { media: "audio", track: 1, packetsPerSec: 46.9, backwards: 0, jumps: 0, ptsBeforeDts: 0, avOffsetMs: Math.round(random.jitter(60, 0.2)), clockDriftMsPerMin: Math.round((random.next() - 0.5) * 30) },
+              ],
+            },
           }
         : null;
       let offered = 0;
@@ -665,9 +676,15 @@ export function createDeployment({ preset = "plant", seed = 7, nowMs = Date.now(
         delivered += output.flow === "flowing" ? state.bitrateBps * (sim.get(output.id).health === "slow" ? 0.7 : 0.995) : 0;
       }
       const samples = flight.get(pipeline.id) ?? [];
+      // Every third pipeline encodes on the host; every ninth struggles.
+      const decoders =
+        pipeline.ingest && order % 3 === 0
+          ? [{ stage: "transcode:h264_720p", lagSlots: order % 9 === 0 ? random.int(200, 400) : random.int(0, 20), lagSec: null, inputBlocked: order % 9 === 0 ? random.jitter(0.35, 0.2) : random.jitter(0.02, 0.5) }].map((decoder) => ({ ...decoder, lagSec: decoder.lagSlots / 120 }))
+          : [];
       samples.push({
         atMs: now,
         ingest,
+        ...(decoders.length > 0 && { decoders }),
         ring: pipeline.ingest ? { fill: state.ringFill, capacity: state.ringCapacity, worstLagSlots: random.int(0, 60), overflows: state.overflows } : null,
         outputs: {
           wanted: wanted.length,

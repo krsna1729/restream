@@ -720,6 +720,38 @@ export interface IngestHealth {
   receiveBuffer: number | null;
   /** The picture and sound checks' findings, where they run. */
   qa?: StreamQaFindings | null;
+  /** Each track's timestamps and audio/video timing over the last minute
+   * (`StreamInspection` in `media/stream_inspector.rs`). */
+  timeline?: StreamInspection | null;
+}
+
+/** One track's timestamps over the last minute (`TrackInspection`). */
+export interface TrackInspection {
+  media: "video" | "audio";
+  track: number;
+  packetsPerSec: number;
+  /** DTS that went backwards. */
+  backwards: number;
+  /** DTS that moved more than 1 s apart from arrival time. */
+  jumps: number;
+  /** Packets whose PTS came before their DTS. */
+  ptsBeforeDts: number;
+  /** The largest jump, signed: forward is positive. */
+  largestJumpMs?: number;
+  /** Audio: how much later than the video its media arrives, ms. */
+  avOffsetMs?: number;
+  /** AAC: how far its timestamps move from its sample count each minute,
+   * ms (positive: they run fast); absent until 20 s of unbroken clock. */
+  clockDriftMsPerMin?: number;
+}
+
+/** A pipeline's source as the stream inspector last read it. */
+export interface StreamInspection {
+  tracks: TrackInspection[];
+  /** Seconds the counts cover (up to 60). */
+  windowSec: number;
+  /** Packets the inspector could not read in time over the window. */
+  unread: number;
 }
 
 /** What the picture and sound checks found (`StreamQa` in
@@ -775,11 +807,25 @@ export interface OutputsHealth {
   worstFeedLag: number;
 }
 
+/** A transcoding stage's input (`DecoderHealth`): how far behind the
+ * source its FFmpeg is. */
+export interface DecoderHealth {
+  /** The stage kind, e.g. `transcode:h264_720p`. */
+  stage: string;
+  lagSlots: number;
+  lagSec: number | null;
+  /** Share of the interval FFmpeg's input pipe was full, 0..1; null on the
+   * stage's first sample. */
+  inputBlocked: number | null;
+}
+
 export interface FlightSample {
   atMs: number;
   ingest: IngestHealth | null;
   ring: RingHealth | null;
   outputs: OutputsHealth;
+  /** The pipeline's FFmpeg stages; absent when it has none. */
+  decoders?: DecoderHealth[];
 }
 
 /** `GET /pipelines/{id}/flight-recorder`: a pipeline's recorded health,
