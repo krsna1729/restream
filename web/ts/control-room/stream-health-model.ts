@@ -226,11 +226,32 @@ export function qaCostWords(audioTracks: number): string {
   return `about ${percent < 10 ? percent.toFixed(1) : Math.round(percent)}% of a CPU core (${tracks})`;
 }
 
-/** One track's sound as the checks last measured it. */
-export function trackSoundWords(track: { silentSinceMs: number | null; loudnessLufs: number } | undefined): string {
-  if (track === undefined) return "checking";
-  if (track.silentSinceMs !== null) return "silent";
-  return `${track.loudnessLufs.toFixed(0)} LUFS`;
+/** The level platforms normalise streams to, LUFS. */
+export const LOUDNESS_TARGET_LUFS = -14;
+/** A loudness meter's floor, LUFS: the checks call anything at or below
+ * -60 silence. */
+export const LOUDNESS_FLOOR_LUFS = -60;
+
+/** Where a loudness sits on a meter, 0 (floor) to 1 (0 LUFS). */
+export function loudnessFraction(lufs: number): number {
+  return Math.min(1, Math.max(0, (lufs - LOUDNESS_FLOOR_LUFS) / -LOUDNESS_FLOOR_LUFS));
+}
+
+/** One track's meter from the checks' last measurement: its level and how
+ * it reads, or null while the track has no current measurement. */
+export function trackMeter(
+  track: { silentSinceMs: number | null; loudnessLufs: number } | undefined,
+  soundCheckedMs: number | null,
+  nowMs: number,
+): { fraction: number; severity: Severity; words: string } | null {
+  if (track === undefined || soundCheckedMs === null || nowMs - soundCheckedMs > QA_STALE_MS) return null;
+  if (track.silentSinceMs !== null) return { fraction: 0, severity: "bad", words: "silent" };
+  const reading = loudnessWords(track.loudnessLufs);
+  return {
+    fraction: loudnessFraction(track.loudnessLufs),
+    severity: reading?.severity ?? "ok",
+    words: `${track.loudnessLufs.toFixed(0)} LUFS`,
+  };
 }
 
 /** Verdicts from the picture and sound checks; none while they are off. */

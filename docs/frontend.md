@@ -408,8 +408,9 @@ revoke (`share-panel.tsx`, `share-model.ts`).
     `/pipelines/{id}/probe`; Operate's source card shows the first;
   - the switch for the engine's picture and sound checks (operators; off by
     default, since they decode on the server);
-  - while they run, a loudness chart (LUFS, the -14 LUFS platform level
-    drawn) and verdicts beside the others: picture moving, black (amber,
+  - while they run, a loudness meter on each track (the -14 LUFS platform
+    level marked; a check over 10 s old shows no level), a loudness chart
+    with one line per track, and verdicts beside the others: picture moving, black (amber,
     red from 10 s), unchanged (amber from 30 s, a slate may be meant), and
     sound level or silence (red from 10 s). A check over 10 s old reads as
     "not checked", never as fine.
@@ -714,6 +715,15 @@ connected input (its `previewUrl`) muted through hls.js.
   raises no player error). The preview stops and offers Retry. Waiting reads
   "buffering", never "live". A 401 goes to the login page.
 - More than one audio track adds a track picker.
+- The audio meter (`audio-meter.tsx`) has one bar per channel of the track
+  playing, named in Web Audio order (L, R, C, LFE, Ls, Rs for 5.1) from the
+  rendition's `CHANNELS`, so a dead side shows. Listen unmutes it.
+- Stats overlays the player's readings on the picture
+  (`playback-stats.ts`): size, decoded frame rate, share of frames dropped,
+  buffer ahead, seconds behind live, bandwidth estimate and stalls. Values
+  the player has not measured yet read "--". Export stats downloads every
+  reading (one a second, the last 10 min) and state change as
+  `restream.playback.v1` JSON, to attach to a ticket.
 - Input previews are always HLS: the MoQ origin serves pipeline broadcasts.
 - An H.265 program or input (`preview-codec.ts`): where `MediaSource`,
   `ManagedMediaSource` or the native player reports `hvc1` support, the

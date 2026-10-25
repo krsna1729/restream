@@ -12,10 +12,29 @@ import { TimeSeries } from "../ui/time-series.js";
 import { usePolled } from "./polled.js";
 import { useSession } from "./session.js";
 import {
+  LOUDNESS_FLOOR_LUFS,
+  LOUDNESS_TARGET_LUFS,
   audioTrackWords,
+  loudnessFraction,
   qaCostWords,
-  trackSoundWords,
+  trackMeter,
 } from "./stream-health-model.js";
+import type { Severity } from "./stream-health-model.js";
+
+/** One colour per track on the loudness chart, in track order. */
+const TRACK_COLORS = [
+  "text-secondary",
+  "text-accent",
+  "text-info",
+  "text-warning",
+  "text-primary",
+  "text-success",
+];
+const METER_FILL: Record<Severity, string> = {
+  ok: "bg-success",
+  warn: "bg-warning",
+  bad: "bg-error",
+};
 
 /** Loudness is drawn as LU above this floor, so the scale starts at 0. */
 const FLOOR = -70;
@@ -44,6 +63,14 @@ export function PictureAndSound(props: {
   const tracks: readonly ProbeAudioTrack[] = probe.value?.audioTracks ?? [];
   const measured = props.samples.some(
     (sample) => sample.ingest?.qa?.loudnessLufs != null,
+  );
+  // One line per track the checks measured (at most the colours we have).
+  const chartTracks = Math.min(
+    TRACK_COLORS.length,
+    Math.max(
+      0,
+      ...props.samples.map((sample) => sample.ingest?.qa?.tracks?.length ?? 0),
+    ),
   );
   return (
     <Panel
@@ -96,18 +123,25 @@ export function PictureAndSound(props: {
               {tracks.map((track, index) => (
                 <li
                   key={track.trackIndex}
-                  className="flex items-baseline gap-2 rounded-field bg-base-100 px-3 py-2 text-sm"
+                  className="flex flex-col gap-1.5 rounded-field bg-base-100 px-3 py-2 text-sm"
                 >
-                  <span className="font-medium">
-                    Track {track.trackIndex + 1}
-                  </span>
-                  <span className="text-base-content/70">
-                    {audioTrackWords(track)}
+                  <span className="flex items-baseline gap-2">
+                    <span className="font-medium">
+                      Track {track.trackIndex + 1}
+                    </span>
+                    <span className="text-base-content/70">
+                      {audioTrackWords(track)}
+                    </span>
                   </span>
                   {enabled && (
-                    <span className="ml-auto text-xs text-base-content/70">
-                      {trackSoundWords(qa.value?.findings?.tracks?.[index])}
-                    </span>
+                    <TrackLoudness
+                      label={`Track ${track.trackIndex + 1}`}
+                      meter={trackMeter(
+                        qa.value?.findings?.tracks?.[index],
+                        qa.value?.findings?.soundCheckedMs ?? null,
+                        Date.now(),
+                      )}
+                    />
                   )}
                 </li>
               ))}
@@ -138,19 +172,25 @@ export function PictureAndSound(props: {
                   tone: "ok",
                 },
               ]}
-              series={[
-                {
-                  id: "lufs",
-                  label: "LUFS (3 s)",
-                  pick: (sample) =>
-                    sample.ingest?.qa?.loudnessLufs == null
-                      ? null
-                      : sample.ingest.qa.loudnessLufs - FLOOR,
-                  color: "text-secondary",
-                  area: true,
-                  format: (value) => `${(value + FLOOR).toFixed(1)} LUFS`,
-                },
-              ]}
+              series={Array.from(
+                { length: Math.max(1, chartTracks) },
+                (_, index) => ({
+                  id: `lufs-${index}`,
+                  label: chartTracks > 1 ? `Track ${index + 1}` : "LUFS (3 s)",
+                  pick: (sample: FlightSample) => {
+                    const qaSample = sample.ingest?.qa;
+                    // Older samples carry only the first track's figure.
+                    const lufs =
+                      qaSample?.tracks?.[index]?.loudnessLufs ??
+                      (index === 0 ? qaSample?.loudnessLufs : null);
+                    return lufs == null ? null : lufs - FLOOR;
+                  },
+                  color: TRACK_COLORS[index % TRACK_COLORS.length],
+                  area: chartTracks <= 1,
+                  format: (value: number) =>
+                    `${(value + FLOOR).toFixed(1)} LUFS`,
+                }),
+              )}
             />
           ) : (
             <p className="text-sm text-base-content/70">
@@ -162,5 +202,48 @@ export function PictureAndSound(props: {
         </div>
       </div>
     </Panel>
+  );
+}
+
+/** A track's loudness on a bar, with the platform target marked. */
+function TrackLoudness(props: {
+  label: string;
+  meter: ReturnType<typeof trackMeter>;
+}) {
+  const { meter } = props;
+  return (
+    <span className="flex items-center gap-2 text-xs">
+      <span
+        role="meter"
+        aria-label={`Loudness of ${props.label}`}
+        aria-valuemin={LOUDNESS_FLOOR_LUFS}
+        aria-valuemax={0}
+        aria-valuenow={
+          meter
+            ? Math.round(
+                LOUDNESS_FLOOR_LUFS + meter.fraction * -LOUDNESS_FLOOR_LUFS,
+              )
+            : undefined
+        }
+        aria-valuetext={meter?.words ?? "not measured yet"}
+        className="relative h-2 flex-1 overflow-hidden rounded-full bg-base-content/10"
+      >
+        {meter && (
+          <span
+            className={`block h-full rounded-full ${METER_FILL[meter.severity]}`}
+            style={{ width: `${meter.fraction * 100}%` }}
+          />
+        )}
+        <span
+          aria-hidden="true"
+          title={`${LOUDNESS_TARGET_LUFS} LUFS: platform level`}
+          className="absolute inset-y-0 w-0.5 bg-base-content/60"
+          style={{ left: `${loudnessFraction(LOUDNESS_TARGET_LUFS) * 100}%` }}
+        />
+      </span>
+      <span className="tabular w-16 text-right text-base-content/70">
+        {meter?.words ?? "checking"}
+      </span>
+    </span>
   );
 }

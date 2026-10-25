@@ -2,7 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { programPreviewUrl } from "../core/api.js";
 import { redirectToLogin } from "../core/auth-redirect.js";
+import { declaredChannels } from "./audio-level.js";
 import { AudioMeter } from "./audio-meter.js";
+import { formatBps } from "./format.js";
+import { appendSample, playbackReport, summarizePlayback } from "./playback-stats.js";
+import type { PlaybackEvent, PlaybackSample } from "./playback-stats.js";
 import { hlsDecodesHevc, programPreviewChoice } from "./preview-codec.js";
 
 /** Seconds a preview may take to produce its first segment: the engine
@@ -113,7 +117,7 @@ export function Preview(props: {
    * on mount. */
   const [attempt, setAttempt] = useState(tile ? 1 : 0);
   const [state, setState] = useState<PreviewState>(tile ? "starting" : "idle");
-  const [tracks, setTracks] = useState<ReadonlyArray<{ id: number; name: string }>>([]);
+  const [tracks, setTracks] = useState<ReadonlyArray<{ id: number; name: string; channels: number }>>([]);
   const [track, setTrack] = useState<number | null>(null);
   /** Made in the click that starts a preview (browsers allow audio then);
    * the meter routes the element through it. */
@@ -123,6 +127,54 @@ export function Preview(props: {
   const [fellBack, setFellBack] = useState(false);
   const url = fellBack && props.fallbackUrl ? props.fallbackUrl : props.url;
   useEffect(() => () => void audio?.close().catch(() => undefined), [audio]);
+  /** The player's readings once a second and its state changes, for the
+   * stats overlay and its export (`playback-stats.ts`). Panel only. */
+  const [samples, setSamples] = useState<PlaybackSample[]>([]);
+  const events = useRef<PlaybackEvent[]>([]);
+  const [statsOpen, setStatsOpen] = useState(false);
+  const stateNow = useRef<PreviewState>(state);
+  stateNow.current = state;
+  useEffect(() => {
+    if (tile || state === "idle") return;
+    events.current = [...events.current.slice(-199), { atMs: Date.now(), kind: state, detail: fellBack ? "H.264 copy" : undefined }];
+  }, [tile, state, fellBack]);
+  useEffect(() => {
+    if (tile || attempt === 0 || element === null) return;
+    const timer = window.setInterval(() => {
+      const quality = typeof element.getVideoPlaybackQuality === "function" ? element.getVideoPlaybackQuality() : null;
+      const ranges = element.buffered;
+      const edge = ranges.length > 0 ? ranges.end(ranges.length - 1) : element.currentTime;
+      const player = hls.current;
+      const loaded = element.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+      const reading: PlaybackSample = {
+        atMs: Date.now(),
+        state: stateNow.current,
+        width: element.videoWidth,
+        height: element.videoHeight,
+        decodedFrames: quality && loaded ? quality.totalVideoFrames - quality.droppedVideoFrames : null,
+        droppedFrames: quality && loaded ? quality.droppedVideoFrames : null,
+        bufferAheadSec: Math.max(0, edge - element.currentTime),
+        // Before media loads, hls.js reports its defaults (0 s behind, its
+        // starting bandwidth guess), not measurements.
+        latencySec: player && loaded && Number.isFinite(player.latency) ? player.latency : null,
+        bandwidthBps: player && loaded && Number.isFinite(player.bandwidthEstimate) ? player.bandwidthEstimate : null,
+      };
+      setSamples((current) => appendSample(current, reading));
+    }, 1_000);
+    return () => window.clearInterval(timer);
+  }, [tile, attempt, element]);
+  const exportStats = () => {
+    const report = playbackReport(
+      { label: props.label, url, userAgent: navigator.userAgent, exportedAtMs: Date.now() },
+      samples,
+      events.current,
+    );
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }));
+    link.download = `playback-${props.label.replace(/[^a-z0-9]+/gi, "-")}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(link.href), 1_000);
+  };
 
   useEffect(() => {
     const element = video.current;
@@ -190,8 +242,12 @@ export function Preview(props: {
       player.on(Hls.Events.MANIFEST_PARSED, () => void element.play().catch(() => undefined));
       player.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => {
         if (!player) return;
-        setTracks(player.audioTracks.map(({ id, name }) => ({ id, name })));
+        setTracks(player.audioTracks.map(({ id, name, channels }) => ({ id, name, channels: declaredChannels(channels) })));
         setTrack(player.audioTrack);
+      });
+      // The selected track settles after the list arrives.
+      player.on(Hls.Events.AUDIO_TRACK_SWITCHED, () => {
+        if (player) setTrack(player.audioTrack);
       });
       player.on(Hls.Events.ERROR, (_event, data) => {
         if (typeof data !== "object" || data === null) return;
@@ -226,6 +282,8 @@ export function Preview(props: {
     }
     setTracks([]);
     setTrack(null);
+    setSamples([]);
+    events.current = [];
     setState("starting");
     setAttempt((current) => current + 1);
   };
@@ -299,8 +357,19 @@ export function Preview(props: {
             ))}
           </select>
         )}
+        {showing && (
+          <button type="button" className="btn btn-ghost btn-xs" aria-pressed={statsOpen} onClick={() => setStatsOpen(!statsOpen)}>
+            Stats
+          </button>
+        )}
+        {samples.length > 0 && (
+          <button type="button" className="btn btn-ghost btn-xs" onClick={exportStats} title="Download this preview's playback readings as JSON">
+            Export stats
+          </button>
+        )}
       </div>
       {showing && (
+        <div className="relative">
         <video
           ref={(node) => {
             video.current = node;
@@ -312,9 +381,46 @@ export function Preview(props: {
           controls
           aria-label={`Video ${props.label}`}
         />
+        {statsOpen && <StatsOverlay samples={samples} />}
+        </div>
       )}
-      {showing && audio && element && state !== "starting" && <AudioMeter element={element} context={audio} label={props.label} />}
+      {showing && audio && element && state !== "starting" && (
+        <AudioMeter
+          element={element}
+          context={audio}
+          label={props.label}
+          channels={(tracks.find((item) => item.id === track) ?? tracks[0])?.channels ?? 2}
+        />
+      )}
     </div>
+  );
+}
+
+/** The player's readings over the picture, for "why does this preview
+ * look bad?" without opening developer tools. */
+function StatsOverlay(props: { samples: readonly PlaybackSample[] }) {
+  const summary = summarizePlayback(props.samples);
+  const rows: Array<[string, string]> = [
+    ["picture", summary.resolution ?? "--"],
+    ["frames", summary.fps === null ? "--" : `${summary.fps.toFixed(0)} fps`],
+    ["dropped", summary.droppedShare === null ? "--" : `${(summary.droppedShare * 100).toFixed(1)}%`],
+    ["buffer", summary.bufferAheadSec === null ? "--" : `${summary.bufferAheadSec.toFixed(1)} s ahead`],
+    ["behind live", summary.latencySec === null ? "--" : `${summary.latencySec.toFixed(1)} s`],
+    ["bandwidth", summary.bandwidthBps === null ? "--" : formatBps(summary.bandwidthBps)],
+    ["stalls", String(summary.stalls)],
+  ];
+  return (
+    <dl
+      aria-label="Playback stats"
+      className="pointer-events-none absolute left-2 top-2 grid grid-cols-[auto_auto] gap-x-3 rounded bg-black/70 px-2 py-1.5 font-mono text-[0.6875rem] leading-tight text-white"
+    >
+      {rows.map(([name, value]) => (
+        <div key={name} className="contents">
+          <dt className="text-white/70">{name}</dt>
+          <dd className="tabular">{value}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
