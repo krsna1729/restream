@@ -75,7 +75,7 @@ fn backoff_doubles_to_its_cap() {
 async fn a_failed_call_redials_after_its_backoff_and_a_connected_one_publishes() {
     let inputs = SrtCallInputs::default();
     inputs.converge(vec![spec("a", "srt://127.0.0.1:9000?streamid=cam")]);
-    let mut calls = Calls::new(2);
+    let mut calls = Calls::new();
     let t0 = Instant::now();
     calls.tick(&inputs, t0, |_| true);
     let first = dialed(&mut calls, t0).await;
@@ -104,7 +104,7 @@ async fn a_failed_call_redials_after_its_backoff_and_a_connected_one_publishes()
 async fn an_ended_call_redials_promptly_and_an_unwanted_one_is_hung_up() {
     let inputs = SrtCallInputs::default();
     inputs.converge(vec![spec("a", "srt://127.0.0.1:9000")]);
-    let mut calls = Calls::new(2);
+    let mut calls = Calls::new();
     let t0 = Instant::now();
     calls.tick(&inputs, t0, |_| true);
     let token = dialed(&mut calls, t0).await;
@@ -136,7 +136,7 @@ async fn an_ended_call_redials_promptly_and_an_unwanted_one_is_hung_up() {
 async fn a_call_admitted_after_its_row_left_is_refused() {
     let inputs = SrtCallInputs::default();
     inputs.converge(vec![spec("a", "srt://127.0.0.1:9000")]);
-    let mut calls = Calls::new(2);
+    let mut calls = Calls::new();
     let t0 = Instant::now();
     calls.tick(&inputs, t0, |_| true);
     let token = dialed(&mut calls, t0).await;
@@ -152,7 +152,7 @@ async fn a_call_admitted_after_its_row_left_is_refused() {
 async fn a_busy_command_slot_defers_the_hang_up_to_the_next_tick() {
     let inputs = SrtCallInputs::default();
     inputs.converge(vec![spec("a", "srt://127.0.0.1:9000")]);
-    let mut calls = Calls::new(2);
+    let mut calls = Calls::new();
     let t0 = Instant::now();
     calls.tick(&inputs, t0, |_| true);
     let token = dialed(&mut calls, t0).await;
@@ -173,7 +173,7 @@ async fn a_busy_command_slot_defers_the_hang_up_to_the_next_tick() {
 async fn a_replaced_calls_late_admission_is_refused_while_its_successor_dials() {
     let inputs = SrtCallInputs::default();
     inputs.converge(vec![spec("a", "srt://127.0.0.1:9000")]);
-    let mut calls = Calls::new(2);
+    let mut calls = Calls::new();
     let t0 = Instant::now();
     calls.tick(&inputs, t0, |_| true);
     let old = dialed(&mut calls, t0).await;
@@ -194,25 +194,19 @@ fn addr(text: &str) -> SocketAddr {
 }
 
 #[test]
-fn calls_dial_ipv4_from_owner_0_and_ipv6_from_owner_1() {
+fn calls_prefer_ipv4_and_dial_ipv6_only_listeners_over_ipv6() {
     let dual = vec![addr("[2001:db8::1]:9000"), addr("192.0.2.1:9000")];
     assert_eq!(
-        place(std::slice::from_ref(&dual), 1),
-        Ok((0, vec![addr("192.0.2.1:9000")]))
+        place(std::slice::from_ref(&dual)),
+        Ok(vec![addr("192.0.2.1:9000")])
     );
     let v6 = vec![addr("[2001:db8::1]:9000")];
-    assert_eq!(place(std::slice::from_ref(&v6), 2), Ok((1, v6.clone())));
-    assert!(
-        place(std::slice::from_ref(&v6), 1)
-            .unwrap_err()
-            .contains("RESTREAM_SRT_INGRESS_OWNERS"),
-        "one Owner cannot carry both families"
-    );
+    assert_eq!(place(std::slice::from_ref(&v6)), Ok(v6.clone()));
     // A bond: one leg v4-only, one dual-stack -> both legs over IPv4.
     let v4 = vec![addr("192.0.2.2:9001")];
     assert_eq!(
-        place(&[v4.clone(), dual], 2),
-        Ok((0, vec![addr("192.0.2.2:9001"), addr("192.0.2.1:9000")]))
+        place(&[v4.clone(), dual]),
+        Ok(vec![addr("192.0.2.2:9001"), addr("192.0.2.1:9000")])
     );
-    assert!(place(&[v4, v6], 2).is_err(), "no shared family");
+    assert!(place(&[v4, v6]).is_err(), "no shared family");
 }
