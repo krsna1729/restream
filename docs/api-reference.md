@@ -452,9 +452,12 @@ for anything that must stay write-only.
 }
 ```
 
-The engine dials the listener from ingress Owner 0's caller socket (IPv4)
-and, once the call connects, publishes it to this input like an SRT
-publisher; there is no stream-key check. URL options are those of SRT
+The engine dials the listener over IPv4 when every listed host has an IPv4
+address, from ingress Owner 0's caller socket, else over IPv6 from Owner 1's.
+Each Owner's caller socket carries one address family, so an IPv6-only
+listener needs `RESTREAM_SRT_INGRESS_OWNERS=2` or more; with one Owner the call
+fails with that reason. Once the call connects, it publishes to this input
+like an SRT publisher; there is no stream-key check. URL options are those of SRT
 outputs: `streamid`, `passphrase`, `pbkeylen`, `latency` (milliseconds,
 range-checked) and `bond=host:port,…` with `type=backup|broadcast`. A failed
 or dropped call is redialled after 1 s, doubling to 30 s while it keeps
