@@ -743,6 +743,18 @@ export interface TrackInspection {
   /** AAC: how far its timestamps move from its sample count each minute,
    * ms (positive: they run fast); absent until 20 s of unbroken clock. */
   clockDriftMsPerMin?: number;
+  /** Video: closed captions in its SEI, once any were seen on this source. */
+  captions?: CaptionsInspection;
+}
+
+/** A video track's closed captions (`CaptionsInspection`). */
+export interface CaptionsInspection {
+  cea608: boolean;
+  cea708: boolean;
+  /** Seconds since a frame last carried captions (0: in the last second). */
+  lastSeenSec: number;
+  /** Seconds since caption text (not padding) was last sent. */
+  lastTextSec?: number;
 }
 
 /** A pipeline's source as the stream inspector last read it. */

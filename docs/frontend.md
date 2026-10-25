@@ -406,11 +406,13 @@ revoke (`share-panel.tsx`, `share-model.ts`).
 - Timestamps and sync (`stream-timeline.tsx`), from the engine's stream
   inspector (`ingest.timeline` in the trace): per track, timestamps that
   went back or leapt against real time, frames out of order (PTS before
-  DTS), each audio track's offset from the video as sent, and each AAC
+  DTS), closed captions per video track (CEA-608/708, or "stopped N s
+  ago"), each audio track's offset from the video as sent, and each AAC
   track's clock drift against its own samples; below it, each FFmpeg stage on this host with how far it is
   behind the source and how often its input pipe was full. Verdicts
   (`timelineVerdicts`, `decoderVerdicts`): any broken timestamp is amber
-  (red from three in a minute); clock drift from 200 ms a minute is amber
+  (red from three in a minute); captions that stop are amber from 10 s, red
+  from a minute; clock drift from 200 ms a minute is amber
   (red from 1 s); an offset over 1 s is amber; a stage blocked 20% of the
   time is amber, 50% red.
 - Picture and sound (`picture-sound.tsx`):

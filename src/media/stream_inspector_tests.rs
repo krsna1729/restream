@@ -430,3 +430,89 @@ proptest! {
         prop_assert_eq!(video.pts_before_dts, 0);
     }
 }
+
+#[test]
+fn captions_seen_then_stopped_keep_being_reported() {
+    use crate::media::codec::FrameCaptions;
+    let mut timeline = Timeline::default();
+    timeline.inspect(0);
+    let captioned = FrameCaptions {
+        cea608: true,
+        cea708: false,
+        text: true,
+    };
+    let padding = FrameCaptions {
+        cea608: true,
+        cea708: false,
+        text: false,
+    };
+    for second in 0..5u64 {
+        let dts = (second * 1_000) as i64;
+        timeline.observe(MediaType::Video, 0, dts, dts, second * 1_000_000, None);
+        timeline.observe_captions(0, if second < 3 { captioned } else { padding });
+        timeline.inspect((second + 1) * 1_000);
+    }
+    let captions = track(&timeline.inspect(5_000), "video", 0)
+        .captions
+        .clone()
+        .expect("captions seen");
+    assert!(captions.cea608 && !captions.cea708);
+    assert_eq!(captions.last_seen_sec, 0.0);
+    assert_eq!(captions.last_text_sec, Some(2.0), "padding is not text");
+
+    // The source keeps sending video but no captions, past the window.
+    for second in 5..95u64 {
+        let dts = (second * 1_000) as i64;
+        timeline.observe(MediaType::Video, 0, dts, dts, second * 1_000_000, None);
+        timeline.observe_captions(0, FrameCaptions::default());
+        timeline.inspect((second + 1) * 1_000);
+    }
+    let captions = track(&timeline.inspect(95_000), "video", 0)
+        .captions
+        .clone()
+        .expect("a dropout outlives the window");
+    assert_eq!(captions.last_seen_sec, 90.0);
+}
+
+#[test]
+fn a_source_without_captions_reports_none() {
+    let mut timeline = Timeline::default();
+    timeline.observe(MediaType::Video, 0, 0, 0, 0, None);
+    timeline.observe_captions(0, crate::media::codec::FrameCaptions::default());
+    assert_eq!(track(&timeline.inspect(1_000), "video", 0).captions, None);
+}
+
+#[test]
+fn a_scan_reads_captions_from_flv_video_in_the_ring() {
+    // One SEI with an A/53 CEA-608 pair ("HE") and a slice, as a legacy
+    // FLV H.264 frame with four-byte NAL lengths.
+    let message: Vec<u8> = [
+        &[0xB5, 0x00, 0x31, b'G', b'A', b'9', b'4', 0x03, 0x41, 0xFF][..],
+        &[0xFC, b'H' | 0x80, b'E', 0xFF][..],
+    ]
+    .concat();
+    let sei: Vec<u8> = [&[0x06, 4, message.len() as u8][..], &message, &[0x80]].concat();
+    let slice = [0x65u8, 0x88, 0x84];
+    let mut payload = vec![0x17, 1, 0, 0, 0];
+    for nal in [&sei[..], &slice[..]] {
+        payload.extend_from_slice(&(nal.len() as u32).to_be_bytes());
+        payload.extend_from_slice(nal);
+    }
+    let ring = RingBuffer::new(64);
+    let mut next = ring.get_write_idx();
+    for frame in 0..10 {
+        ring.push(MediaPacket {
+            format: PayloadFormat::Flv,
+            payload: Bytes::from(payload.clone()),
+            ..packet(MediaType::Video, frame * 33)
+        });
+    }
+    let mut timeline = Timeline::default();
+    scan(&ring, &mut next, &mut timeline, &HashMap::new());
+    let captions = track(&timeline.inspect(1_000), "video", 0)
+        .captions
+        .clone()
+        .expect("captions");
+    assert!(captions.cea608);
+    assert_eq!(captions.last_text_sec, Some(0.0));
+}

@@ -20,7 +20,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
 - [Q-091 SRT Backup replays the lost prefix](#q-091-protocol-opus-srt-backup-failover-replays-the-lost-prefix)
 - [Q-092 no descendants of a dropped dependency](#q-092-resilience-opus-never-emit-descendants-of-a-dropped-dependency-bearing-unit)
-- [Q-094 caption presence](#q-094-observability-sonnet-caption-presence-and-dropout)
 - [Q-096 GRO and arrival timestamps](#q-096-performance-sonnet-gro-and-arrival-timestamps-in-the-reference-srt-path)
 - [Q-097 MediaMTX MoQ dialect interoperability](#q-097-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop)
 - [Q-100 agent protocol: approval mid-task and live panels](#q-100-agent-opus-agent-protocol-approval-mid-task-and-live-panels)
@@ -179,20 +178,6 @@ the [assurance roadmap](assurance-roadmap.md).
   fallback.
 - Gates: a test per boundary that drops one unit and asserts no dependent unit
   is emitted before the keyframe; removing the suppression fails it.
-
-### Q-094 [observability] [sonnet] Caption presence and dropout
-- Goal: when users stream captioned content, the stream inspector reads
-  CEA-608/708 from the video SEI, reports per track which caption channels
-  are present, and raises a verdict when captions that were present stop.
-  Captions already pass through every output, transcodes included
-  ([Media pipeline](media-pipeline.md#codecs-by-output)); this is about
-  noticing a source that stops sending them.
-- Gates: a checked-in fixture with captions shows them present; the same
-  stream with captions cut mid-way raises the dropout verdict.
-- Not planned: SCTE-35 is dropped at ingest today (the TS demuxer keeps only
-  H.264, H.265 and AAC; RTMP ingest ignores data messages) and SMPTE timecode
-  is not read. Carrying ad cues through every path is large; build it when a
-  customer running ad-supported channels needs it.
 
 ### Q-096 [performance] [sonnet] GRO and arrival timestamps in the reference SRT path
 - Goal: the non-Compio reference SRT path (srt-rs) accepts GRO-coalesced

@@ -9,6 +9,7 @@
 
 mod aac;
 mod bits;
+mod captions;
 mod enhanced_rtmp_hevc;
 mod h264_sps;
 mod video;
@@ -19,6 +20,7 @@ pub use aac::{
     build_adts_header, build_adts_header_for, strip_adts,
 };
 pub(crate) use bits::{BitReader, rbsp};
+pub use captions::{FrameCaptions, frame_captions};
 pub(crate) use enhanced_rtmp_hevc::{
     EX_CODED_FRAMES, EX_CODED_FRAMES_X, EX_SEQUENCE_START, ExVideoTag, ex_video_tag,
     h265_annexb_to_length_prefixed_into, hvcc_record, parse_hevc_profile_tier_level,

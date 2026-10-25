@@ -1,8 +1,8 @@
 // Stream health's "Timestamps and sync": per track, what the engine's
 // stream inspector read from the source ring over the last minute
 // (timestamps that went back or leapt, pictures shown before they decode,
-// audio's offset from video and its drift), and each FFmpeg stage's input
-// queue. Every value comes from the flight recorder.
+// captions in the video, audio's offset from video and its clock drift),
+// and each FFmpeg stage's input queue. Every value comes from the flight recorder.
 
 import type {
   DecoderHealth,
@@ -16,6 +16,8 @@ import { StatusBadge } from "../ui/tone.js";
 import {
   BLOCKED_BAD,
   BLOCKED_WARN,
+  CAPTIONS_STOPPED_SEC,
+  captionKinds,
   DRIFT_WARN_MS,
   OFFSET_WARN_MS,
   trackName,
@@ -47,6 +49,25 @@ const TRACK_COLUMNS: readonly Column<TrackInspection>[] = [
     align: "right",
     cell: (track) => track.packetsPerSec.toFixed(0),
     priority: 3,
+  },
+  {
+    id: "captions",
+    header: "Captions",
+    cell: (track) => {
+      if (track.media !== "video")
+        return <span className="text-base-content/60">–</span>;
+      const captions = track.captions;
+      if (captions === undefined)
+        return <span className="text-base-content/60">none</span>;
+      return captions.lastSeenSec >= CAPTIONS_STOPPED_SEC ? (
+        <b className="text-warning">
+          stopped {Math.round(captions.lastSeenSec)} s ago
+        </b>
+      ) : (
+        <span>{captionKinds(captions).replaceAll("CEA-", "")}</span>
+      );
+    },
+    priority: 2,
   },
   {
     id: "back",

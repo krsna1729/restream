@@ -1289,6 +1289,11 @@ already keeps, read once per interval on the recorder's own task.
       clock, or when the two disagree by over 5% (a frame size the engine
       cannot know, such as HE-AAC declared at its core rate). Arrival times
       cannot show drift: muxers send packets in timestamp order;
+    - video only: `captions`, present once the source sent closed captions
+      (CEA-608/708 in SEI, read up to each frame's first picture slice):
+      `cea608`, `cea708`, `lastSeenSec` and `lastTextSec` (seconds since a
+      frame carried captions, and caption text rather than padding). It
+      stays after captions stop, so a dropout keeps being reported;
     - `windowSec` (up to 60) and `unread`, packets the ring reused before
       the inspector read them (the counts miss those).
 - `ring` is `null` while the pipeline has no source ring.
