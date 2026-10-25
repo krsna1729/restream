@@ -678,3 +678,75 @@ async fn q098_review_superseded_resize_ack_keeps_current_ring_through_deselectio
     server.server.finish_publisher(session).await;
     server.stop().await;
 }
+
+// ---------------------------------------------------------------------------
+// SRT caller inputs: the engine dials a remote listener
+// ---------------------------------------------------------------------------
+
+/// A remote SRT listener (FFmpeg in listener mode, looping the canonical
+/// H.264 fixture) and an `srt_call` input pointed at it: the server dials,
+/// the call publishes into the input's pipeline ring, and removing the row
+/// hangs the call up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_srt_call_input_dials_a_remote_listener_and_publishes() {
+    let server = TestServer::start(&[], Vec::new()).await;
+    let fixture = crate::test_fixtures::canonical_h264_ts_fixture().expect("fixture");
+    let port = free_port();
+    let mut listener = tokio::process::Command::new(crate::ffmpeg_binary::ffmpeg_bin_path())
+        .args([
+            "-nostdin",
+            "-hide_banner",
+            "-v",
+            "error",
+            "-re",
+            "-stream_loop",
+            "-1",
+            "-i",
+        ])
+        .arg(&fixture)
+        .args(["-c", "copy", "-f", "mpegts"])
+        .arg(format!(
+            "srt://127.0.0.1:{port}?mode=listener&streamid=camera-1"
+        ))
+        .stdin(std::process::Stdio::null())
+        // The hang-up ends FFmpeg's output with an expected write error.
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("ffmpeg runs");
+
+    let started = server
+        .engine
+        .ingests
+        .srt_calls
+        .converge(vec![crate::media::srt::SrtCallSpec {
+            pipeline_id: "pipeline-call".to_string(),
+            input_id: "input-call".to_string(),
+            stream_key: "call-key".to_string(),
+            selected: true,
+            url: format!("srt://127.0.0.1:{port}?streamid=camera-1"),
+        }]);
+    assert_eq!(started, ["input-call"]);
+    // The listener may not be up for the first dial: the call redials.
+    server
+        .wait_until(
+            "the call publishes into its pipeline ring",
+            Duration::from_secs(20),
+            || async {
+                server.ingest_active("pipeline-call").await
+                    && server.ring_progress("pipeline-call").await > 0
+            },
+        )
+        .await;
+
+    server.engine.ingests.srt_calls.converge(Vec::new());
+    server
+        .wait_until(
+            "removing the row hangs the call up",
+            Duration::from_secs(10),
+            || async { !server.ingest_active("pipeline-call").await },
+        )
+        .await;
+    let _ = listener.kill().await;
+    server.stop().await;
+}

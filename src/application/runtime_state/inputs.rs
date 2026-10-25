@@ -48,7 +48,7 @@ impl IngestEndpoints {
                 hls: format!("http://{host}:{}/ingest/hls/{key}/index.m3u8", ports.http),
                 moq: ports.moq.map(|port| format!("https://{host}:{port}/{key}")),
             }),
-            PipelineInputSourceKind::HlsPull => None,
+            PipelineInputSourceKind::HlsPull | PipelineInputSourceKind::SrtCall => None,
         }
     }
 }

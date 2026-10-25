@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use srt_transport::advanced::admission::LogicalPeerId;
+use srt_transport::advanced::caller::LogicalCallerId;
 use srt_transport::{ListenerTransfer, OwnerListenerPlan};
 use tokio::sync::mpsc;
 
@@ -39,14 +40,28 @@ pub(crate) const INGRESS_EVENT_CAPACITY: usize = 256;
 /// (counted in `telemetryDropped`) instead of ever delaying protocol service.
 pub(crate) const INGRESS_TELEMETRY_CAPACITY: usize = 256;
 
+/// One ingress session on its Owner: a peer the listener admitted, or a
+/// caller this Owner dialed for an `srt_call` input. Both feed the same
+/// media path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum SessionId {
+    Peer(LogicalPeerId),
+    Caller(LogicalCallerId),
+}
+
 /// One ingress session: the Owner thread that holds it and its id there. The
 /// sole cross-thread session handle; no protocol object, table reference,
 /// socket id or `SocketAddr` identifies a session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct IngressPeer {
     pub(crate) owner: u16,
-    pub(crate) id: LogicalPeerId,
+    pub(crate) id: SessionId,
 }
+
+/// Tokio's name for one outbound call it asked an Owner to make, until the
+/// Owner reports the session it became.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct CallToken(pub(crate) u64);
 
 pub(crate) enum IngressCommand {
     /// Tokio admitted the peer as a publisher; the Owner runs its media.
@@ -57,7 +72,7 @@ pub(crate) enum IngressCommand {
     /// Tokio admitted the peer as a direct read/play reader.
     AttachReader {
         logical_peer: IngressPeer,
-        reader: SrtReaderMedia,
+        reader: Box<SrtReaderMedia>,
     },
     /// Tokio applied the publisher's stream probe; `ring` replaces its ring.
     ProbeApplied {
@@ -68,6 +83,17 @@ pub(crate) enum IngressCommand {
     /// Begin an orderly protocol disconnect of one peer. The owner retires the
     /// peer when its terminal event arrives (or after a short grace).
     Disconnect { logical_peer: IngressPeer },
+    /// Dial a remote SRT listener for an `srt_call` input. The Owner answers
+    /// with [`SrtIngressEvent::CallStarted`] or [`SrtIngressEvent::CallFailed`];
+    /// a started call later reports `Connected` and, at its end,
+    /// `Disconnected`, like an admitted peer.
+    Call {
+        owner: u16,
+        token: CallToken,
+        /// The resolved listener address, for lifecycle events.
+        remote: SocketAddr,
+        request: Box<super::egress_connect::SrtConnectRequest>,
+    },
     /// Disconnect nothing further; flush, drain the Owner and exit. Sent to
     /// every Owner by [`SrtIngressHandle::shutdown`] only.
     Shutdown,
@@ -81,6 +107,7 @@ impl IngressCommand {
             | Self::AttachReader { logical_peer, .. }
             | Self::ProbeApplied { logical_peer, .. }
             | Self::Disconnect { logical_peer } => Some(logical_peer.owner),
+            Self::Call { owner, .. } => Some(*owner),
             Self::Shutdown => None,
         }
     }
@@ -109,6 +136,14 @@ pub(crate) enum SrtIngressEvent {
     },
     /// An Owner developed an OWNER-FATAL fault; the listener is gone.
     Fault { detail: String },
+    /// The Owner admitted a call: `logical_peer` is its session from now on.
+    CallStarted {
+        token: CallToken,
+        logical_peer: IngressPeer,
+    },
+    /// The Owner could not start the call (or the pool expired or refused
+    /// it before admission); nothing is left behind.
+    CallFailed { token: CallToken, reason: String },
 }
 
 /// What the owner threads report when they exit.

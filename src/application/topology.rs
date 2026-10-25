@@ -292,6 +292,39 @@ pub async fn converge_pull_inputs(
     started
 }
 
+/// Converge SRT caller inputs with their rows: the SRT server dials every
+/// enabled `srt_call` input and hangs up every other call. Like
+/// [`converge_pull_inputs`], unchanged rows cost a comparison.
+///
+/// Returns the inputs whose call this pass started or replaced.
+pub async fn converge_srt_call_inputs(pool: &SqlitePool, engine: &MediaEngine) -> Vec<String> {
+    let rows = match crate::db::list_srt_call_inputs(pool).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            warn!(err = %error, "DB error reading SRT call inputs; calls not converged this pass");
+            return Vec::new();
+        }
+    };
+    let wanted = rows
+        .into_iter()
+        .filter(|input| input.enabled)
+        .filter_map(|input| {
+            Some(crate::media::srt::SrtCallSpec {
+                url: input.source_url?,
+                pipeline_id: input.pipeline_id,
+                input_id: input.id,
+                stream_key: input.stream_key,
+                selected: input.selected,
+            })
+        })
+        .collect();
+    let started = engine.ingests.srt_calls.converge(wanted);
+    for input_id in &started {
+        info!(input_id = %input_id, "SRT call input (re)dialled");
+    }
+    started
+}
+
 #[cfg(test)]
 #[path = "topology_tests.rs"]
 mod tests;

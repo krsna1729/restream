@@ -77,7 +77,7 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
             role TEXT NOT NULL CHECK(role IN ('primary', 'backup')),
             enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
             selected INTEGER NOT NULL DEFAULT 0 CHECK(selected IN (0, 1)),
-            source_kind TEXT NOT NULL DEFAULT 'keyed' CHECK(source_kind IN ('keyed', 'hls_pull')),
+            source_kind TEXT NOT NULL DEFAULT 'keyed' CHECK(source_kind IN ('keyed', 'hls_pull', 'srt_call')),
             source_url TEXT,
             variant_rule TEXT NOT NULL DEFAULT 'highest_bandwidth' CHECK(variant_rule IN ('highest_bandwidth', 'lowest_bandwidth')),
             source_auth TEXT CHECK(source_auth IS NULL OR (json_valid(source_auth) AND json_extract(source_auth, '$.kind') IN ('none', 'bearer', 'cookies', 'basic', 'headers'))),
@@ -93,7 +93,7 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
         pool,
         "pipeline_inputs",
         "source_kind",
-        "TEXT NOT NULL DEFAULT 'keyed' CHECK(source_kind IN ('keyed', 'hls_pull'))",
+        "TEXT NOT NULL DEFAULT 'keyed' CHECK(source_kind IN ('keyed', 'hls_pull', 'srt_call'))",
     )
     .await?;
     super::migrations::ensure_column_exists(pool, "pipeline_inputs", "source_url", "TEXT").await?;
@@ -119,6 +119,9 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
         "TEXT CHECK(push_auth IS NULL OR (json_valid(push_auth) AND json_extract(push_auth, '$.kind') IN ('none', 'basic')))",
     )
     .await?;
+    // SRT caller inputs widen the source-kind CHECK, which SQLite can change
+    // only by rebuilding the table. Its indexes and trigger follow below.
+    super::migrations::widen_pipeline_input_source_kinds(pool).await?;
     sqlx::query(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_pipeline_inputs_stream_key_unique
          ON pipeline_inputs(stream_key);",

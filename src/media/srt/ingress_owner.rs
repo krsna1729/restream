@@ -39,7 +39,11 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use futures_util::future::{Either, pending, select};
 use srt_proto::{ConnectionEvent, Timestamp};
+use srt_transport::advanced::admission::LogicalPeerStats;
 use srt_transport::advanced::admission::{AdmissionEvent, BondedInputPolicy, LogicalPeerId};
+use srt_transport::advanced::caller::{
+    CallerEvent, LogicalCallerId, LogicalCallerStats, PoolEvent, PoolOutcome, PoolRequestId,
+};
 use srt_transport::compio::{
     Owner, OwnerRxMode, OwnerServiceBudget, ProductionRuntimeConfig, RxModePolicy,
     observe_production_runtime,
@@ -58,8 +62,9 @@ use crate::media::snapshots::ListenerSocketStats;
 
 use super::ingress_admission::ingress_resolver;
 pub(crate) use super::ingress_bridge::{
-    INGRESS_COMMAND_CAPACITY, INGRESS_EVENT_CAPACITY, INGRESS_TELEMETRY_CAPACITY, IngressCommand,
-    IngressConfig, IngressExit, IngressPeer, OwnerSeat, SrtIngressEvent, SrtIngressHandle,
+    CallToken, INGRESS_COMMAND_CAPACITY, INGRESS_EVENT_CAPACITY, INGRESS_TELEMETRY_CAPACITY,
+    IngressCommand, IngressConfig, IngressExit, IngressPeer, OwnerSeat, SessionId, SrtIngressEvent,
+    SrtIngressHandle,
 };
 use super::ingress_media::IngressMedia;
 use crate::media::snapshots::SrtIngressOwnerStats;
@@ -129,12 +134,16 @@ const TRANSFERS_PER_VISIT: usize = 32;
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 const SAMPLES_PER_VISIT: usize = 16;
 
+/// Outbound calls (`srt_call` inputs) one Owner has in its handshake at once;
+/// more wait in the caller pool's queue.
+const CALLS_IN_FLIGHT: usize = 16;
+
 /// Finite bounds for the orderly shutdown.
 const SHUTDOWN_FLUSH_VISITS: u32 = 20;
 const SHUTDOWN_DRAIN_DEADLINE: Duration = Duration::from_secs(2);
 
 struct ClosingPeer {
-    peer: LogicalPeerId,
+    peer: SessionId,
     since: Instant,
 }
 
@@ -145,21 +154,26 @@ struct OwnerLoop {
     events: mpsc::Sender<SrtIngressEvent>,
     telemetry: mpsc::Sender<QualitySample>,
     stats: Arc<ListenerSocketStats>,
-    /// Live admitted peers, and the slice of them still to sample this round.
-    live: std::collections::HashSet<LogicalPeerId>,
-    sample_queue: VecDeque<LogicalPeerId>,
+    /// Live sessions (admitted peers and connected calls), and the slice of
+    /// them still to sample this round.
+    live: std::collections::HashSet<SessionId>,
+    sample_queue: VecDeque<SessionId>,
     next_sample_round: Instant,
     epoch: Instant,
     /// Translated events waiting for bridge room. Only refilled when empty,
     /// so it is bounded by one Owner drain and accepted media is never lost.
     pending_events: VecDeque<SrtIngressEvent>,
     scratch: Vec<AdmissionEvent>,
+    caller_scratch: Vec<CallerEvent>,
+    pool_scratch: Vec<PoolEvent>,
+    /// Calls the caller pool queued, until it admits or drops them.
+    queued_calls: HashMap<PoolRequestId, (CallToken, SocketAddr)>,
     payload_work: VecDeque<PayloadWork>,
-    active_payloads: std::collections::HashSet<LogicalPeerId>,
+    active_payloads: std::collections::HashSet<SessionId>,
     /// Every publisher's and reader's media state (run to completion here).
-    media: IngressMedia,
-    /// Representative address of each admitted peer, for lifecycle events.
-    addrs: HashMap<LogicalPeerId, SocketAddr>,
+    media: IngressMedia<SessionId>,
+    /// Representative address of each session, for lifecycle events.
+    addrs: HashMap<SessionId, SocketAddr>,
     reader_scratch: Vec<Bytes>,
     deferred: DeferredSends,
     closing: VecDeque<ClosingPeer>,
@@ -287,6 +301,12 @@ fn build(
         .set_rx_substrate(substrate)
         .map_err(|error| format!("failed to set SRT ingress RX substrate: {error}"))?;
     owner.set_rx_mode_policy(rx_policy);
+    // Before any socket attaches: the caller pool `srt_call` inputs dial from.
+    owner
+        .set_caller_pool_capacity(
+            std::num::NonZeroUsize::new(CALLS_IN_FLIGHT).expect("non-zero call capacity"),
+        )
+        .map_err(|error| format!("failed to size the SRT ingress caller pool: {error}"))?;
     let resolver = ingress_resolver(config.policy_store, config.receiver_group);
     runtime
         .block_on(async { owner.listen_planned(&plan, Some(resolver)) })
@@ -342,6 +362,9 @@ fn build(
             epoch,
             pending_events: VecDeque::with_capacity(64),
             scratch: Vec::with_capacity(64),
+            caller_scratch: Vec::with_capacity(64),
+            pool_scratch: Vec::with_capacity(16),
+            queued_calls: HashMap::new(),
             payload_work: VecDeque::with_capacity(PAYLOAD_WORK_CAPACITY),
             active_payloads: std::collections::HashSet::with_capacity(PAYLOAD_WORK_CAPACITY),
             media: IngressMedia::default(),
@@ -436,6 +459,7 @@ impl OwnerLoop {
                 fault = Some(detail);
                 break;
             }
+            self.drain_call_pool();
             self.drain_owner_events();
             self.drive_readers(now);
             self.flush_events();
@@ -482,7 +506,7 @@ impl OwnerLoop {
     }
 
     /// The cross-thread handle of this Owner's session `id`.
-    fn session(&self, id: LogicalPeerId) -> IngressPeer {
+    fn session(&self, id: SessionId) -> IngressPeer {
         IngressPeer {
             owner: self.index,
             id,
@@ -523,7 +547,7 @@ impl OwnerLoop {
                 reader,
             } => {
                 if self.live.contains(&logical_peer.id) {
-                    self.media.attach_reader(logical_peer.id, reader);
+                    self.media.attach_reader(logical_peer.id, *reader);
                 }
             }
             IngressCommand::ProbeApplied {
@@ -539,8 +563,110 @@ impl OwnerLoop {
                 );
             }
             IngressCommand::Disconnect { logical_peer } => self.disconnect(logical_peer.id, now),
+            IngressCommand::Call {
+                token,
+                remote,
+                request,
+                ..
+            } => self.call(token, remote, *request, now),
             IngressCommand::Shutdown => self.shutting_down = true,
         }
+    }
+
+    /// Dial out for an `srt_call` input on this Owner's shared caller socket.
+    /// A call the pool admits is a live session at once (its handshake is
+    /// under way); `Connected` follows from the protocol.
+    fn call(
+        &mut self,
+        token: CallToken,
+        remote: SocketAddr,
+        request: super::egress_connect::SrtConnectRequest,
+        now: Timestamp,
+    ) {
+        use super::egress_connect::SrtConnectKind;
+        let owner = &mut self.owner;
+        let outcome = self.runtime.block_on(async {
+            match &request.kind {
+                SrtConnectKind::Direct(config) => owner.connect(config, now),
+                SrtConnectKind::Bonded(config) => owner.connect_bonded(config, now),
+            }
+        });
+        match outcome {
+            Ok(PoolOutcome::Admitted(caller)) => self.call_admitted(token, remote, caller),
+            Ok(PoolOutcome::Queued(request)) => {
+                self.queued_calls.insert(request, (token, remote));
+            }
+            Ok(PoolOutcome::Full) => self.pending_events.push_back(SrtIngressEvent::CallFailed {
+                token,
+                reason: "too many SRT calls in progress".to_string(),
+            }),
+            Err(error) => self.pending_events.push_back(SrtIngressEvent::CallFailed {
+                token,
+                reason: error.to_string(),
+            }),
+        }
+    }
+
+    fn call_admitted(&mut self, token: CallToken, remote: SocketAddr, caller: LogicalCallerId) {
+        let session = SessionId::Caller(caller);
+        self.addrs.insert(session, remote);
+        self.pending_events.push_back(SrtIngressEvent::CallStarted {
+            token,
+            logical_peer: self.session(session),
+        });
+    }
+
+    /// The pool's verdicts on queued calls, and attempt-deadline expiries.
+    pub(super) fn drain_call_pool(&mut self) {
+        self.owner.poll_caller_pool_events(&mut self.pool_scratch);
+        let events = std::mem::take(&mut self.pool_scratch);
+        for event in &events {
+            match *event {
+                PoolEvent::Admitted {
+                    request_id,
+                    caller_id,
+                } => {
+                    if let Some((token, remote)) = self.queued_calls.remove(&request_id) {
+                        self.call_admitted(token, remote, caller_id);
+                    }
+                }
+                PoolEvent::Failed {
+                    request_id,
+                    ref reason,
+                } => {
+                    if let Some((token, _)) = self.queued_calls.remove(&request_id) {
+                        self.pending_events.push_back(SrtIngressEvent::CallFailed {
+                            token,
+                            reason: reason.clone(),
+                        });
+                    }
+                }
+                PoolEvent::Cancelled { request_id } => {
+                    if let Some((token, _)) = self.queued_calls.remove(&request_id) {
+                        self.pending_events.push_back(SrtIngressEvent::CallFailed {
+                            token,
+                            reason: "the call was cancelled".to_string(),
+                        });
+                    }
+                }
+                // The handshake ran out of time: the call ends like any session.
+                PoolEvent::Expired { caller_id, .. } => {
+                    let session = SessionId::Caller(caller_id);
+                    if let Some(peer) = self.addrs.get(&session).copied() {
+                        self.pending_events
+                            .push_back(SrtIngressEvent::Disconnected {
+                                peer,
+                                logical_peer: self.session(session),
+                                reason: "the SRT listener did not answer in time".to_string(),
+                            });
+                    }
+                    self.retire(session);
+                }
+                PoolEvent::Queued { .. } => {}
+            }
+        }
+        self.pool_scratch = events;
+        self.pool_scratch.clear();
     }
 
     /// Fault domain: one peer's media work (TS demux, timestamp mapping,
@@ -550,8 +676,8 @@ impl OwnerLoop {
     /// pipeline's own ring, and the byte budgets `discard` gives back.
     fn contain_peer_media<R>(
         &mut self,
-        peer: LogicalPeerId,
-        work: impl FnOnce(&mut IngressMedia, &SrtIngressOwnerStats) -> R,
+        peer: SessionId,
+        work: impl FnOnce(&mut IngressMedia<SessionId>, &SrtIngressOwnerStats) -> R,
     ) -> Option<R> {
         let media = &mut self.media;
         let stats = &self.stats.ingress_owner;
@@ -572,16 +698,29 @@ impl OwnerLoop {
         }
     }
 
-    fn disconnect(&mut self, peer: LogicalPeerId, now: Timestamp) {
-        let Some(mut entry) = self.owner.listener_peer_mut(peer) else {
+    fn disconnect(&mut self, peer: SessionId, now: Timestamp) {
+        let found = match peer {
+            SessionId::Peer(id) => self
+                .owner
+                .listener_peer_mut(id)
+                .map(|mut entry| entry.disconnect(now))
+                .is_some(),
+            SessionId::Caller(id) => self
+                .owner
+                .logical_caller_mut(&id)
+                .map(|mut entry| entry.disconnect(now))
+                .is_some(),
+        };
+        if !found {
             self.stats
                 .ingress_owner
                 .stale_commands
                 .fetch_add(1, Ordering::Relaxed);
             return;
-        };
-        entry.disconnect(now);
-        self.deferred.forget(&peer);
+        }
+        if let SessionId::Peer(id) = peer {
+            self.deferred.forget(&id);
+        }
         self.closing.push_back(ClosingPeer {
             peer,
             since: Instant::now(),
@@ -606,11 +745,21 @@ impl OwnerLoop {
             if !self.live.contains(&peer) {
                 continue;
             }
-            let sample = self
-                .owner
-                .listener_peer_mut(peer)
-                .and_then(|entry| entry.stats())
-                .and_then(|stats| sample_from_stats(&stats));
+            let stats = match peer {
+                SessionId::Peer(id) => self
+                    .owner
+                    .listener_peer_mut(id)
+                    .and_then(|entry| entry.stats()),
+                SessionId::Caller(id) => self
+                    .owner
+                    .logical_caller(&id)
+                    .and_then(|entry| entry.stats())
+                    .map(|stats| match stats {
+                        LogicalCallerStats::Direct(stats) => LogicalPeerStats::Direct(stats),
+                        LogicalCallerStats::Group(stats) => LogicalPeerStats::Group(stats),
+                    }),
+            };
+            let sample = stats.and_then(|stats| sample_from_stats(&stats));
             let Some(sample) = sample else {
                 continue;
             };
@@ -640,7 +789,11 @@ impl OwnerLoop {
             let Some(entry) = self.closing.pop_front() else {
                 break;
             };
-            if self.owner.listener_peer_mut(entry.peer).is_none() {
+            let present = match entry.peer {
+                SessionId::Peer(id) => self.owner.listener_peer_mut(id).is_some(),
+                SessionId::Caller(id) => self.owner.logical_caller(&id).is_some(),
+            };
+            if !present {
                 continue;
             }
             if entry.since.elapsed() >= CLOSING_GRACE {
@@ -664,13 +817,20 @@ impl OwnerLoop {
     /// Remove a logical peer from the Owner. Idempotent: a peer already retired
     /// (or never present) makes this a no-op that cannot touch a later peer,
     /// because `LogicalPeerId`s are never reused.
-    fn retire(&mut self, peer: LogicalPeerId) {
+    fn retire(&mut self, peer: SessionId) {
         self.cancel_payload_work(peer);
-        if self.owner.retire_listener_peer(peer) {
-            self.peers = self.peers.saturating_sub(1);
+        match peer {
+            SessionId::Peer(id) => {
+                if self.owner.retire_listener_peer(id) {
+                    self.peers = self.peers.saturating_sub(1);
+                }
+                self.deferred.forget(&id);
+                self.overloaded.remove(&id);
+            }
+            SessionId::Caller(id) => {
+                self.owner.retire_caller(id);
+            }
         }
-        self.deferred.forget(&peer);
-        self.overloaded.remove(&peer);
         self.live.remove(&peer);
         self.addrs.remove(&peer);
         // Flushes a publisher's last media into the ring and drops any reader

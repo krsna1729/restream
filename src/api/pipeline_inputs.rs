@@ -97,7 +97,9 @@ fn bad_request(message: impl Into<String>) -> Response {
 /// silently defaulting to a keyed input.
 fn parse_source_kind(raw: &str) -> Result<PipelineInputSourceKind, String> {
     serde_json::from_value::<PipelineInputSourceKind>(serde_json::Value::String(raw.to_string()))
-        .map_err(|_| format!("unknown input kind \"{raw}\": expected \"keyed\" or \"hlsPull\""))
+        .map_err(|_| {
+            format!("unknown input kind \"{raw}\": expected \"keyed\", \"hlsPull\" or \"srtCall\"")
+        })
 }
 
 /// Parse the request `variantRule` string. Unknown values are rejected.
@@ -346,6 +348,30 @@ fn build_source(
                 push_auth,
             })
         }
+        PipelineInputSourceKind::SrtCall => {
+            if push_auth != PushAuth::None {
+                return Err("an srtCall input cannot carry pushAuth".to_string());
+            }
+            if auth != PullAuth::None {
+                return Err(
+                    "an srtCall input cannot carry auth; put passphrase= in sourceUrl".to_string(),
+                );
+            }
+            let url = url.ok_or_else(|| "an srtCall input requires sourceUrl".to_string())?;
+            if url.len() > MAX_URL_LEN {
+                return Err(format!(
+                    "sourceUrl exceeds maximum length of {MAX_URL_LEN} bytes"
+                ));
+            }
+            crate::media::srt::validate_srt_call_url(&url)?;
+            Ok(PipelineInputSource {
+                kind,
+                url: Some(url),
+                variant_rule,
+                auth,
+                push_auth,
+            })
+        }
     }
 }
 
@@ -575,8 +601,12 @@ pub async fn pipeline_input_patch_handler(
     let url = match kind {
         // A keyed input has no URL: passing one is rejected, not ignored.
         PipelineInputSourceKind::Keyed => payload.source_url,
-        PipelineInputSourceKind::HlsPull => {
-            payload.source_url.or_else(|| current.source_url.clone())
+        PipelineInputSourceKind::HlsPull | PipelineInputSourceKind::SrtCall => {
+            payload.source_url.or_else(|| {
+                (current.source_kind == kind)
+                    .then(|| current.source_url.clone())
+                    .flatten()
+            })
         }
     };
     let push_auth = match payload.push_auth {
@@ -675,4 +705,45 @@ pub async fn pipeline_input_promote_handler(
         "connected": connected,
     }))
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn srt_call(
+        url: Option<&str>,
+        auth: PullAuth,
+        push: PushAuth,
+    ) -> Result<PipelineInputSource, String> {
+        build_source(
+            PipelineInputSourceKind::SrtCall,
+            url.map(str::to_string),
+            VariantRule::default(),
+            auth,
+            push,
+        )
+    }
+
+    #[test]
+    fn an_srt_call_input_needs_a_dialable_url_and_no_http_credentials() {
+        let source = srt_call(
+            Some("srt://encoder.example:9000?streamid=cam&passphrase=secret-pass"),
+            PullAuth::None,
+            PushAuth::None,
+        )
+        .expect("valid");
+        assert_eq!(source.kind, PipelineInputSourceKind::SrtCall);
+        assert!(srt_call(None, PullAuth::None, PushAuth::None).is_err());
+        assert!(srt_call(Some("http://encoder:9000"), PullAuth::None, PushAuth::None).is_err());
+        assert!(srt_call(Some("srt://encoder"), PullAuth::None, PushAuth::None).is_err());
+        let bearer = PullAuth::Bearer {
+            token: "t".to_string(),
+        };
+        assert!(srt_call(Some("srt://encoder:9000"), bearer, PushAuth::None).is_err());
+        assert_eq!(
+            parse_source_kind("srtCall"),
+            Ok(PipelineInputSourceKind::SrtCall)
+        );
+    }
 }

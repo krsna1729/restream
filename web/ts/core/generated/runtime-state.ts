@@ -117,7 +117,7 @@ moq: string | null, };
 
 export type PipelineInputRole = "primary" | "backup";
 
-export type PipelineInputSourceKind = "keyed" | "hlsPull";
+export type PipelineInputSourceKind = "keyed" | "hlsPull" | "srtCall";
 
 export type VariantRule = "highestBandwidth" | "lowestBandwidth";
 

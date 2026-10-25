@@ -8,6 +8,8 @@ use std::sync::atomic::Ordering;
 use bytes::Bytes;
 use srt_proto::Timestamp;
 use srt_transport::advanced::admission::LogicalPeerId;
+
+use super::super::ingress_bridge::SessionId;
 use tracing::warn;
 
 use super::{DEFERRED_PER_PEER, DEFERRED_TOTAL, OwnerLoop, READER_SENDS_PER_VISIT};
@@ -44,13 +46,22 @@ impl OwnerLoop {
         if !self.media.has_readers() {
             return;
         }
-        let peers: Vec<LogicalPeerId> = self.media.readers.keys().copied().collect();
+        // Readers are listener peers: a caller session only publishes to us.
+        let peers: Vec<LogicalPeerId> = self
+            .media
+            .readers
+            .keys()
+            .filter_map(|session| match session {
+                SessionId::Peer(peer) => Some(*peer),
+                SessionId::Caller(_) => None,
+            })
+            .collect();
         for peer in peers {
             if self.deferred.len_for(&peer) > 0 {
                 continue;
             }
             let mut fragments = std::mem::take(&mut self.reader_scratch);
-            if let Some(reader) = self.media.readers.get_mut(&peer) {
+            if let Some(reader) = self.media.readers.get_mut(&SessionId::Peer(peer)) {
                 reader.refill();
                 let count = reader.pending.len().min(READER_SENDS_PER_VISIT);
                 fragments.extend(reader.pending.drain(..count));
@@ -132,7 +143,7 @@ impl OwnerLoop {
                 .fetch_add(1, Ordering::Relaxed);
             self.overloaded.insert(peer);
             self.deferred.forget(&peer);
-            self.disconnect(peer, now);
+            self.disconnect(SessionId::Peer(peer), now);
             return;
         }
         self.deferred.push(peer, payload);
