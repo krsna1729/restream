@@ -362,16 +362,24 @@ fn place(hosts: &[Vec<SocketAddr>], owners: u16) -> Result<(u16, Vec<SocketAddr>
     Ok((IPV6_CALL_OWNER, addrs))
 }
 
-/// Every address of every listed host.
+/// Every address of every listed host. The system resolver blocks, so it
+/// runs on the blocking pool (never on a Tokio worker), bounded by
+/// `RESOLVE_TIMEOUT` per host.
 async fn resolve(hosts: Vec<String>) -> Result<Vec<Vec<SocketAddr>>, String> {
     let mut resolved = Vec::with_capacity(hosts.len());
     for host in hosts {
-        let addrs: Vec<SocketAddr> =
-            tokio::time::timeout(RESOLVE_TIMEOUT, tokio::net::lookup_host(host.as_str()))
-                .await
-                .map_err(|_| format!("resolving {host} timed out"))?
-                .map_err(|error| format!("resolving {host}: {error}"))?
-                .collect();
+        let lookup = host.clone();
+        let addrs: Vec<SocketAddr> = tokio::time::timeout(
+            RESOLVE_TIMEOUT,
+            tokio::task::spawn_blocking(move || {
+                std::net::ToSocketAddrs::to_socket_addrs(lookup.as_str())
+                    .map(Iterator::collect::<Vec<_>>)
+            }),
+        )
+        .await
+        .map_err(|_| format!("resolving {host} timed out"))?
+        .map_err(|_| format!("resolving {host} was interrupted"))?
+        .map_err(|error| format!("resolving {host}: {error}"))?;
         if addrs.is_empty() {
             return Err(format!("{host} resolved to no address"));
         }
