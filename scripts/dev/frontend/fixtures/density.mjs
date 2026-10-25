@@ -661,7 +661,7 @@ export function createDeployment({ preset = "plant", seed = 7, nowMs = Date.now(
               windowSec: 60,
               unread: 0,
               tracks: [
-                { media: "video", track: 0, packetsPerSec: state.fps, backwards: 0, jumps: order % 5 === 2 && random.chance(0.5) ? 1 : 0, ptsBeforeDts: 0, ...(order % 5 === 2 && { largestJumpMs: 4_960 }) },
+                { media: "video", track: 0, packetsPerSec: state.fps, backwards: 0, jumps: order % 5 === 2 && random.chance(0.5) ? 1 : 0, ptsBeforeDts: 0, ...(order % 5 === 2 && { largestJumpMs: 4_960 }), ...(order % 4 === 1 && { captions: { cea608: true, cea708: order % 8 === 1, lastSeenSec: order % 8 === 5 ? 42 : 0, lastTextSec: 3 } }) },
                 { media: "audio", track: 0, packetsPerSec: 46.9, backwards: 0, jumps: 0, ptsBeforeDts: 0, avOffsetMs: Math.round(random.jitter(45, 0.2)), clockDriftMsPerMin: order % 5 === 2 ? Math.round(random.jitter(320, 0.1)) : Math.round((random.next() - 0.5) * 30) },
                 { media: "audio", track: 1, packetsPerSec: 46.9, backwards: 0, jumps: 0, ptsBeforeDts: 0, avOffsetMs: Math.round(random.jitter(60, 0.2)), clockDriftMsPerMin: Math.round((random.next() - 0.5) * 30) },
               ],

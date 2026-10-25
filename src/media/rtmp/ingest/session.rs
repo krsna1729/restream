@@ -126,6 +126,28 @@ pub(super) async fn handle_session_results(
                         .await?;
                     }
                 }
+                // The encoder's own description: kept for the dashboard,
+                // never forwarded (each egress writes its own).
+                ServerSessionEvent::StreamMetadataChanged { metadata, .. } => {
+                    if publisher.is_some()
+                        && let Some(declared) =
+                            crate::media::metadata::DeclaredEncoder::from_metadata(
+                                metadata.encoder.as_deref(),
+                                metadata.video_width,
+                                metadata.video_height,
+                                metadata.video_frame_rate,
+                                metadata.video_bitrate_kbps,
+                                metadata.audio_bitrate_kbps,
+                            )
+                    {
+                        send_control_command(
+                            commands,
+                            shutdown,
+                            RtmpControlCommand::EncoderDeclared(declared),
+                        )
+                        .await?;
+                    }
+                }
                 ServerSessionEvent::PlayStreamRequested {
                     request_id,
                     stream_key,

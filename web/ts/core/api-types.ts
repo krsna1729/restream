@@ -667,6 +667,20 @@ export interface ProbeAudioTrack {
 /** `GET /pipelines/{id}/probe`: what the live publisher sends (404 without one). */
 export interface PipelineProbe {
   audioTracks: ProbeAudioTrack[];
+  /** What an RTMP encoder declared in `onMetaData`; absent for other
+   * protocols or an encoder that sent none. */
+  encoder?: DeclaredEncoder | null;
+}
+
+/** An encoder's own description of what it sends (`DeclaredEncoder`):
+ * declared, not measured. */
+export interface DeclaredEncoder {
+  encoder?: string;
+  width?: number;
+  height?: number;
+  frameRate?: number;
+  videoKbps?: number;
+  audioKbps?: number;
 }
 
 /** `POST /pipelines/{id}/moq-token`: a viewer grant for the pipeline's MoQ
@@ -743,6 +757,18 @@ export interface TrackInspection {
   /** AAC: how far its timestamps move from its sample count each minute,
    * ms (positive: they run fast); absent until 20 s of unbroken clock. */
   clockDriftMsPerMin?: number;
+  /** Video: closed captions in its SEI, once any were seen on this source. */
+  captions?: CaptionsInspection;
+}
+
+/** A video track's closed captions (`CaptionsInspection`). */
+export interface CaptionsInspection {
+  cea608: boolean;
+  cea708: boolean;
+  /** Seconds since a frame last carried captions (0: in the last second). */
+  lastSeenSec: number;
+  /** Seconds since caption text (not padding) was last sent. */
+  lastTextSec?: number;
 }
 
 /** A pipeline's source as the stream inspector last read it. */

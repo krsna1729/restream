@@ -108,3 +108,10 @@ path = "fuzz_targets/moq_wire.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "sei_captions"
+path = "fuzz_targets/sei_captions.rs"
+test = false
+doc = false
+bench = false

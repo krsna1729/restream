@@ -266,3 +266,33 @@ test("a publisher whose timestamps break and whose encode lags reads as damaged"
   assert.equal(severityOf(verdicts, "timestamps"), "bad");
   assert.equal(severityOf(verdicts, "decoder-transcode:h264_720p"), "bad");
 });
+
+test("captions: on is fine, stopped turns amber then red, none says nothing", () => {
+  const on = timelineVerdicts(inspection([inspected("video", 0, { captions: { cea608: true, cea708: true, lastSeenSec: 0, lastTextSec: 2 } })]));
+  const byKey = Object.fromEntries(on.map((verdict) => [verdict.key, verdict]));
+  assert.equal(byKey["captions-0"].severity, "ok");
+  assert.match(byKey["captions-0"].detail, /CEA-608 and CEA-708/);
+  const quiet = timelineVerdicts(inspection([inspected("video", 0, { captions: { cea608: true, cea708: false, lastSeenSec: 0, lastTextSec: 300 } })]));
+  assert.match(quiet.find((verdict) => verdict.key === "captions-0").detail, /No caption text for 5 min/);
+  const stopped = timelineVerdicts(inspection([inspected("video", 0, { captions: { cea608: true, cea708: false, lastSeenSec: 25 } })]));
+  const verdict = stopped.find((item) => item.key === "captions-0");
+  assert.equal(verdict.severity, "warn");
+  assert.equal(verdict.title, "Captions stopped on Video 1 25 s ago");
+  const gone = timelineVerdicts(inspection([inspected("video", 0, { captions: { cea608: true, cea708: false, lastSeenSec: 61 } })]));
+  assert.equal(gone.find((item) => item.key === "captions-0").severity, "bad");
+  assert.equal(
+    timelineVerdicts(inspection([inspected("video", 0)])).some((item) => item.key.startsWith("captions")),
+    false,
+    "a source that never sent captions has no captions verdict",
+  );
+});
+
+test("frame rate is what arrives (the inspector's count), not what the stream declares", () => {
+  const dropping = { fps: 30, timeline: inspection([inspected("video", 0, { packetsPerSec: 13 })]) };
+  const verdicts = streamVerdicts(Array.from({ length: 10 }, (_, index) => sample(index, dropping)));
+  assert.equal(severityOf(verdicts, "fps"), "warn");
+  assert.equal(verdicts.find((verdict) => verdict.key === "fps").title, "13 fps");
+  // Without the inspector's reading, the stream's own figure is what there is.
+  const declaredOnly = streamVerdicts(Array.from({ length: 10 }, (_, index) => sample(index, { fps: 30 })));
+  assert.equal(declaredOnly.find((verdict) => verdict.key === "fps").title, "30 fps");
+});

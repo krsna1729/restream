@@ -28,6 +28,11 @@
 //!   system clock while the sound card runs at its own rate drifts here,
 //!   and lip sync slides by as much. A muxer's interleaving hides this from
 //!   arrival times; the sample count does not.
+//!
+//! Per video track it also reads closed captions (CEA-608/708 in SEI,
+//! [`crate::media::codec::frame_captions`], which stops at the frame's
+//! first picture slice): which kinds were seen and how long ago, so a
+//! source whose captions stop is noticed.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -83,6 +88,24 @@ pub struct TrackInspection {
     /// run of at least [`DRIFT_MIN_SPAN_MS`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clock_drift_ms_per_min: Option<f64>,
+    /// Video only: the closed captions in its SEI, once any were seen on
+    /// this source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub captions: Option<CaptionsInspection>,
+}
+
+/// A video track's closed captions (CEA-608/708 in SEI).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionsInspection {
+    pub cea608: bool,
+    pub cea708: bool,
+    /// Seconds since a frame last carried captions (0: in the last read).
+    pub last_seen_sec: f64,
+    /// Seconds since a frame last carried caption text rather than padding;
+    /// absent until one did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_text_sec: Option<f64>,
 }
 
 /// A pipeline's source as the inspector last read it.
@@ -109,6 +132,19 @@ struct Read {
     largest_jump_ms: Option<i64>,
     /// Smallest `arrival - DTS` in this read (milliseconds).
     min_offset_ms: Option<i64>,
+    /// What this read's frames carried as captions.
+    captions: crate::media::codec::FrameCaptions,
+}
+
+/// A video track's captions since the inspector started reading the
+/// source: kinds seen, and when (read times, ms) they and text were last
+/// seen. Kept past the window, so a dropout keeps being reported.
+#[derive(Debug, Clone, Copy, Default)]
+struct CaptionsSeen {
+    cea608: bool,
+    cea708: bool,
+    last_ms: Option<u64>,
+    last_text_ms: Option<u64>,
 }
 
 /// An audio track's clock since it last broke: its first frame's DTS, the
@@ -140,6 +176,7 @@ struct Track {
     /// DTS and arrival (µs) of the last packet, while they are continuous.
     last: Option<(i64, u64)>,
     clock: Option<ClockRun>,
+    captions: CaptionsSeen,
     current: Read,
     reads: VecDeque<Read>,
 }
@@ -201,6 +238,15 @@ impl Track {
     fn close(&mut self, at_ms: u64) {
         let mut read = std::mem::take(&mut self.current);
         read.at_ms = at_ms;
+        if read.captions.any() {
+            let seen = &mut self.captions;
+            seen.cea608 |= read.captions.cea608;
+            seen.cea708 |= read.captions.cea708;
+            seen.last_ms = Some(at_ms);
+            if read.captions.text {
+                seen.last_text_ms = Some(at_ms);
+            }
+        }
         self.reads.push_back(read);
         while self
             .reads
@@ -259,6 +305,17 @@ impl Timeline {
             .entry((kind_rank(media), track))
             .or_default()
             .observe(pts, dts, arrival_us, frame_ms);
+    }
+
+    /// What one video frame of `track` carried as captions (after
+    /// [`Self::observe`] for the same packet).
+    pub fn observe_captions(&mut self, track: u32, captions: crate::media::codec::FrameCaptions) {
+        if let Some(track) = self.tracks.get_mut(&(VIDEO, track)) {
+            let read = &mut track.current.captions;
+            read.cea608 |= captions.cea608;
+            read.cea708 |= captions.cea708;
+            read.text |= captions.text;
+        }
     }
 
     /// `count` packets could not be read: what follows is not continuous
@@ -327,6 +384,18 @@ impl Timeline {
                     }
                 }
                 inspection.packets_per_sec = packets as f64 / window_sec;
+                let seen = track.captions;
+                if key.0 == VIDEO
+                    && let Some(last_ms) = seen.last_ms
+                {
+                    let age = |at_ms: u64| now_ms.saturating_sub(at_ms) as f64 / 1_000.0;
+                    inspection.captions = Some(CaptionsInspection {
+                        cea608: seen.cea608,
+                        cea708: seen.cea708,
+                        last_seen_sec: age(last_ms),
+                        last_text_sec: seen.last_text_ms.map(age),
+                    });
+                }
                 if key.0 == AUDIO {
                     let now = track.min_offset(recent_from, now_ms);
                     inspection.av_offset_ms =
@@ -363,6 +432,8 @@ fn scan(
 ) {
     let write_idx = ring.get_write_idx();
     let capacity = ring.capacity();
+    let hevc = crate::domain::output_spec::VideoCodecKind::from_codec_name(ring.codec_hint_str())
+        == crate::domain::output_spec::VideoCodecKind::Hevc;
     let readable_from = write_idx.saturating_sub(capacity - capacity / 4);
     if *next < readable_from {
         timeline.skipped((readable_from - *next) as u64);
@@ -388,7 +459,13 @@ fn scan(
                     packet.dts,
                     arrival_us,
                     frame_ms,
-                )
+                );
+                if packet.media_type == MediaType::Video {
+                    timeline.observe_captions(
+                        packet.track_index,
+                        crate::media::codec::frame_captions(packet.format, &packet.payload, hevc),
+                    );
+                }
             }
             _ => timeline.skipped(1),
         }

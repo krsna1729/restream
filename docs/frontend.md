@@ -406,13 +406,25 @@ revoke (`share-panel.tsx`, `share-model.ts`).
 - Timestamps and sync (`stream-timeline.tsx`), from the engine's stream
   inspector (`ingest.timeline` in the trace): per track, timestamps that
   went back or leapt against real time, frames out of order (PTS before
-  DTS), each audio track's offset from the video as sent, and each AAC
+  DTS), closed captions per video track (CEA-608/708, or "stopped N s
+  ago"), each audio track's offset from the video as sent, and each AAC
   track's clock drift against its own samples; below it, each FFmpeg stage on this host with how far it is
   behind the source and how often its input pipe was full. Verdicts
   (`timelineVerdicts`, `decoderVerdicts`): any broken timestamp is amber
-  (red from three in a minute); clock drift from 200 ms a minute is amber
+  (red from three in a minute); captions that stop are amber from 10 s, red
+  from a minute; clock drift from 200 ms a minute is amber
   (red from 1 s); an offset over 1 s is amber; a stage blocked 20% of the
   time is amber, 50% red.
+- The encoder (`encoder-model.ts`, `encoder-mark.tsx`), from an RTMP
+  publisher's `onMetaData` on `/probe`: a recognised product and version
+  ("OBS Studio 30.2.3", "FFmpeg 6.x" from `Lavf60.16.100`, vMix, Wirecast,
+  Larix and others) with a simple mark, and what it is set to send. Verdicts
+  compare that with what arrives over the last minute: bitrate below 75% of
+  the declared (red below 50%), frame rate below 90% (red below 75%), and a
+  picture size other than declared.
+- Frame rate everywhere on the page is what arrives: the stream inspector's
+  video frames a second, the stream's own (declared) figure only until the
+  inspector has read the source.
 - Picture and sound (`picture-sound.tsx`):
   - the publisher's audio tracks in words ("AAC · 48 kHz · stereo"), from
     `/pipelines/{id}/probe`; Operate's source card shows the first;

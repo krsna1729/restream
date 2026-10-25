@@ -4,7 +4,7 @@
 // most any accepts), a steady bitrate, a steady frame rate, and a link
 // without sustained loss.
 
-import type { DecoderHealth, FlightSample, ProbeAudioTrack, StreamInspection, StreamQaFindings, TrackInspection } from "../core/api-types.js";
+import type { DecoderHealth, FlightSample, IngestHealth, ProbeAudioTrack, StreamInspection, StreamQaFindings, TrackInspection } from "../core/api-types.js";
 
 export type Severity = "ok" | "warn" | "bad";
 
@@ -98,9 +98,9 @@ export function streamVerdicts(samples: readonly FlightSample[]): Verdict[] {
     }
   }
 
-  const fpsValues = present(ingests.map((ingest) => ingest.fps));
+  const fpsValues = present(ingests.map(arrivingFps));
   const fpsTypical = median(fpsValues);
-  const fpsNow = last.ingest.fps;
+  const fpsNow = arrivingFps(last.ingest);
   if (fpsTypical !== null && fpsNow !== null) {
     if (fpsNow < fpsTypical * 0.8) {
       verdicts.push({
@@ -256,6 +256,16 @@ export function trackMeter(
   };
 }
 
+/** Frames arriving a second: the stream inspector's video packets a second
+ * (one per frame), else the frame rate the stream describes. The stream's
+ * own figure is declared (SPS timing, `onMetaData`), so it stays put while
+ * an overloaded encoder drops frames; the inspector counts what comes. */
+export function arrivingFps(ingest: Pick<IngestHealth, "fps" | "timeline">): number | null {
+  const video = ingest.timeline?.tracks.find((track) => track.media === "video");
+  if (video && video.packetsPerSec > 0) return Math.round(video.packetsPerSec * 100) / 100;
+  return ingest.fps;
+}
+
 /** Verdicts from the picture and sound checks; none while they are off. */
 export function qaVerdicts(qa: StreamQaFindings | null, nowMs: number): Verdict[] {
   if (qa === null) return [];
@@ -338,6 +348,16 @@ export const DRIFT_WARN_MS = 200;
 /** Audio arriving this far from video makes players wait for one of them
  * (ms). */
 export const OFFSET_WARN_MS = 1_000;
+/** Captions unseen this long, after the source sent them, have stopped
+ * (seconds); this long again and it is bad. */
+export const CAPTIONS_STOPPED_SEC = 10;
+export const CAPTIONS_GONE_SEC = 60;
+
+/** "CEA-608 and CEA-708": the caption kinds a track carries. */
+export function captionKinds(captions: { cea608: boolean; cea708: boolean }): string {
+  return [captions.cea608 ? "CEA-608" : null, captions.cea708 ? "CEA-708" : null].filter(Boolean).join(" and ");
+}
+
 /** An FFmpeg stage whose input is blocked this share of the time cannot
  * keep up. */
 export const BLOCKED_WARN = 0.2;
@@ -381,6 +401,25 @@ export function timelineVerdicts(timeline: StreamInspection | null): Verdict[] {
       title: `Frames shown before they decode on ${names(misordered)}`,
       detail: "Their presentation time comes before their decode time: the encoder or a remuxer writes broken B-frame timing. Players may drop those frames.",
     });
+  }
+  for (const track of timeline.tracks) {
+    const captions = track.captions;
+    if (track.media !== "video" || captions === undefined) continue;
+    if (captions.lastSeenSec >= CAPTIONS_STOPPED_SEC) {
+      verdicts.push({
+        key: `captions-${track.track}`,
+        severity: captions.lastSeenSec >= CAPTIONS_GONE_SEC ? "bad" : "warn",
+        title: `Captions stopped on ${trackName(track)} ${Math.round(captions.lastSeenSec)} s ago`,
+        detail: `The source sent ${captionKinds(captions)} captions and stopped: viewers who need them have none. Check the captioner or the encoder's caption input.`,
+      });
+    } else {
+      verdicts.push({
+        key: `captions-${track.track}`,
+        severity: "ok",
+        title: `Captions on ${trackName(track)}`,
+        detail: `${captionKinds(captions)} in the video, passed through to every output.${captions.lastTextSec === undefined ? " No caption text yet." : captions.lastTextSec > 60 ? ` No caption text for ${Math.round(captions.lastTextSec / 60)} min.` : ""}`,
+      });
+    }
   }
   for (const track of timeline.tracks) {
     if (track.media !== "audio") continue;
