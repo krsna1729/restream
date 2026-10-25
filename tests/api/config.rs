@@ -25,7 +25,6 @@ async fn config_get_returns_structured_data() {
         "j1",
         "p1",
         "o1",
-        Some(1234),
         restream::application::models::JobStatus::Running,
         "2024-01-01T00:00:00Z",
     )
@@ -45,7 +44,7 @@ async fn config_get_returns_structured_data() {
     assert_eq!(json["jobs"][0]["id"], "j1");
     assert_eq!(json["jobs"][0]["pipelineId"], "p1");
     assert_eq!(json["jobs"][0]["outputId"], "o1");
-    assert_eq!(json["jobs"][0]["pid"], 1234);
+    assert_eq!(json["jobs"][0]["id"], "j1");
     assert_eq!(json["jobs"][0]["status"], "running");
     assert_eq!(json["jobs"][0]["startedAt"], "2024-01-01T00:00:00Z");
     assert!(json["serverName"].is_string());

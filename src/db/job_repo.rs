@@ -6,12 +6,9 @@ struct JobRow {
     id: String,
     pipeline_id: String,
     output_id: String,
-    pid: Option<i64>,
     status: String,
     started_at: String,
     ended_at: Option<String>,
-    exit_code: Option<i64>,
-    exit_signal: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -19,12 +16,9 @@ pub struct JobRecord {
     pub id: String,
     pub pipeline_id: String,
     pub output_id: String,
-    pub pid: Option<i64>,
     pub status: JobStatusRecord,
     pub started_at: String,
     pub ended_at: Option<String>,
-    pub exit_code: Option<i64>,
-    pub exit_signal: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,12 +61,9 @@ impl TryFrom<JobRow> for JobRecord {
             id: row.id,
             pipeline_id: row.pipeline_id,
             output_id: row.output_id,
-            pid: row.pid,
             status,
             started_at: row.started_at,
             ended_at: row.ended_at,
-            exit_code: row.exit_code,
-            exit_signal: row.exit_signal,
         })
     }
 }
@@ -113,7 +104,6 @@ pub async fn create_job<S>(
     id: &str,
     pipeline_id: &str,
     output_id: &str,
-    pid: Option<i64>,
     status: S,
     started_at: &str,
 ) -> Result<JobRecord, sqlx::Error>
@@ -122,21 +112,17 @@ where
 {
     let status = status.into();
     sqlx::query(
-        "INSERT INTO jobs (id, pipeline_id, output_id, pid, status, started_at, ended_at, exit_code, exit_signal)
-         VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
+        "INSERT INTO jobs (id, pipeline_id, output_id, status, started_at, ended_at)
+         VALUES (?, ?, ?, ?, ?, NULL)
          ON CONFLICT(pipeline_id, output_id) DO UPDATE SET
              id = excluded.id,
-             pid = excluded.pid,
              status = excluded.status,
              started_at = excluded.started_at,
-             ended_at = NULL,
-             exit_code = NULL,
-             exit_signal = NULL",
+             ended_at = NULL",
     )
     .bind(id)
     .bind(pipeline_id)
     .bind(output_id)
-    .bind(pid)
     .bind(status.as_str())
     .bind(started_at)
     .execute(pool)
@@ -150,7 +136,7 @@ where
 pub async fn get_job(pool: &SqlitePool, id: &str) -> Result<Option<JobRecord>, sqlx::Error> {
     fetch_job_optional(
         pool,
-        "SELECT id, pipeline_id, output_id, pid, status, started_at, ended_at, exit_code, exit_signal FROM jobs WHERE id = ?",
+        "SELECT id, pipeline_id, output_id, status, started_at, ended_at FROM jobs WHERE id = ?",
         &[id],
     )
     .await
@@ -163,7 +149,7 @@ pub async fn get_running_job_for(
 ) -> Result<Option<JobRecord>, sqlx::Error> {
     fetch_job_optional(
         pool,
-        "SELECT id, pipeline_id, output_id, pid, status, started_at, ended_at, exit_code, exit_signal
+        "SELECT id, pipeline_id, output_id, status, started_at, ended_at
          FROM jobs WHERE pipeline_id = ? AND output_id = ? AND status = ? LIMIT 1",
         &[pipeline_id, output_id, JobStatusRecord::Running.as_str()],
     )
@@ -173,24 +159,17 @@ pub async fn get_running_job_for(
 pub async fn update_job<S>(
     pool: &SqlitePool,
     id: &str,
-    pid: Option<i64>,
     status: Option<S>,
     ended_at: Option<&str>,
-    exit_code: Option<i64>,
-    exit_signal: Option<&str>,
 ) -> Result<Option<JobRecord>, sqlx::Error>
 where
     S: Into<JobStatusRecord>,
 {
     sqlx::query(
-        "UPDATE jobs SET pid = COALESCE(?, pid), status = COALESCE(?, status), ended_at = COALESCE(?, ended_at),
-                         exit_code = COALESCE(?, exit_code), exit_signal = COALESCE(?, exit_signal) WHERE id = ?",
+        "UPDATE jobs SET status = COALESCE(?, status), ended_at = COALESCE(?, ended_at) WHERE id = ?",
     )
-    .bind(pid)
     .bind(status.map(Into::into).map(JobStatusRecord::as_str))
     .bind(ended_at)
-    .bind(exit_code)
-    .bind(exit_signal)
     .bind(id)
     .execute(pool)
     .await?;
@@ -205,7 +184,7 @@ pub async fn list_jobs_for_output(
 ) -> Result<Vec<JobRecord>, sqlx::Error> {
     fetch_job_all(
         pool,
-        "SELECT id, pipeline_id, output_id, pid, status, started_at, ended_at, exit_code, exit_signal
+        "SELECT id, pipeline_id, output_id, status, started_at, ended_at
          FROM jobs WHERE pipeline_id = ? AND output_id = ? ORDER BY started_at DESC",
         &[pipeline_id, output_id],
     )
@@ -215,7 +194,7 @@ pub async fn list_jobs_for_output(
 pub async fn list_jobs(pool: &SqlitePool) -> Result<Vec<JobRecord>, sqlx::Error> {
     fetch_job_all(
         pool,
-        "SELECT id, pipeline_id, output_id, pid, status, started_at, ended_at, exit_code, exit_signal
+        "SELECT id, pipeline_id, output_id, status, started_at, ended_at
          FROM jobs ORDER BY started_at DESC, id DESC",
         &[],
     )
@@ -243,14 +222,11 @@ pub async fn cleanup_old_jobs(pool: &SqlitePool) -> Result<(u64, u64), sqlx::Err
 }
 
 pub async fn reset_running_jobs(pool: &SqlitePool, now_ts: &str) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE jobs SET status = ?, ended_at = ?, exit_code = NULL, exit_signal = 'SIGKILL'
-         WHERE status = ?",
-    )
-    .bind(JobStatusRecord::Stopped.as_str())
-    .bind(now_ts)
-    .bind(JobStatusRecord::Running.as_str())
-    .execute(pool)
-    .await?;
+    sqlx::query("UPDATE jobs SET status = ?, ended_at = ? WHERE status = ?")
+        .bind(JobStatusRecord::Stopped.as_str())
+        .bind(now_ts)
+        .bind(JobStatusRecord::Running.as_str())
+        .execute(pool)
+        .await?;
     Ok(())
 }

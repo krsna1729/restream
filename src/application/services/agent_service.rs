@@ -339,7 +339,6 @@ mod tests {
             "job-1",
             "pipe-1",
             "out-1",
-            Some(123),
             JobStatus::Running,
             "2026-07-09T00:00:00Z",
         )

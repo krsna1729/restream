@@ -77,7 +77,7 @@ async fn schema_setup_records_current_migration_version_once() {
             .await
             .unwrap();
 
-    assert_eq!(rows, vec![(2, "pipeline_inputs_hls_pull_v2".to_string())]);
+    assert_eq!(rows, vec![(3, "canonical_tables_v3".to_string())]);
 }
 
 #[tokio::test]
@@ -269,14 +269,12 @@ async fn job_lifecycle() {
         "j1",
         "p1",
         "o1",
-        Some(1234),
         JobStatusRecord::Running,
         "2024-01-01T00:00:00Z",
     )
     .await
     .unwrap();
     assert_eq!(job.status, JobStatusRecord::Running);
-    assert_eq!(job.pid, Some(1234));
 
     let running = db::get_running_job_for(&pool, "p1", "o1").await.unwrap();
     assert!(running.is_some());
@@ -284,17 +282,14 @@ async fn job_lifecycle() {
     let updated = db::update_job(
         &pool,
         "j1",
-        None,
         Some(JobStatusRecord::Stopped),
         Some("2024-01-01T00:01:00Z"),
-        Some(0),
-        None,
     )
     .await
     .unwrap()
     .unwrap();
     assert_eq!(updated.status, JobStatusRecord::Stopped);
-    assert_eq!(updated.exit_code, Some(0));
+    assert_eq!(updated.ended_at.as_deref(), Some("2024-01-01T00:01:00Z"));
 
     let no_running = db::get_running_job_for(&pool, "p1", "o1").await.unwrap();
     assert!(no_running.is_none());
@@ -324,7 +319,6 @@ async fn job_upsert_on_conflict() {
         "j1",
         "p1",
         "o1",
-        Some(100),
         JobStatusRecord::Running,
         "2024-01-01T00:00:00Z",
     )
@@ -335,14 +329,12 @@ async fn job_upsert_on_conflict() {
         "j2",
         "p1",
         "o1",
-        Some(200),
         JobStatusRecord::Running,
         "2024-01-01T01:00:00Z",
     )
     .await
     .unwrap();
     assert_eq!(replaced.id, "j2");
-    assert_eq!(replaced.pid, Some(200));
 
     let all = db::list_jobs(&pool).await.unwrap();
     assert_eq!(all.len(), 1);
@@ -372,7 +364,6 @@ async fn stale_job_update_cannot_clobber_replacement_attempt() {
         "j1",
         "p1",
         "o1",
-        Some(100),
         JobStatusRecord::Running,
         "2024-01-01T00:00:00Z",
     )
@@ -384,7 +375,6 @@ async fn stale_job_update_cannot_clobber_replacement_attempt() {
         "j2",
         "p1",
         "o1",
-        Some(200),
         JobStatusRecord::Running,
         "2024-01-01T01:00:00Z",
     )
@@ -395,11 +385,8 @@ async fn stale_job_update_cannot_clobber_replacement_attempt() {
     let stale_cleanup = db::update_job(
         &pool,
         "j1",
-        None,
         Some(JobStatusRecord::Failed),
         Some("2024-01-01T00:05:00Z"),
-        Some(1),
-        None,
     )
     .await
     .unwrap();
@@ -411,9 +398,7 @@ async fn stale_job_update_cannot_clobber_replacement_attempt() {
         .unwrap();
     assert_eq!(running.id, "j2");
     assert_eq!(running.status, JobStatusRecord::Running);
-    assert_eq!(running.pid, Some(200));
     assert!(running.ended_at.is_none());
-    assert!(running.exit_code.is_none());
 }
 
 #[tokio::test]
@@ -440,7 +425,6 @@ async fn multiple_stale_job_updates_cannot_clobber_newest_attempt() {
         "j1",
         "p1",
         "o1",
-        Some(100),
         JobStatusRecord::Running,
         "2024-01-01T00:00:00Z",
     )
@@ -451,7 +435,6 @@ async fn multiple_stale_job_updates_cannot_clobber_newest_attempt() {
         "j2",
         "p1",
         "o1",
-        Some(200),
         JobStatusRecord::Running,
         "2024-01-01T00:10:00Z",
     )
@@ -462,7 +445,6 @@ async fn multiple_stale_job_updates_cannot_clobber_newest_attempt() {
         "j3",
         "p1",
         "o1",
-        Some(300),
         JobStatusRecord::Running,
         "2024-01-01T00:20:00Z",
     )
@@ -473,22 +455,16 @@ async fn multiple_stale_job_updates_cannot_clobber_newest_attempt() {
     let stale_j1 = db::update_job(
         &pool,
         "j1",
-        None,
         Some(JobStatusRecord::Failed),
         Some("2024-01-01T00:05:00Z"),
-        Some(1),
-        None,
     )
     .await
     .unwrap();
     let stale_j2 = db::update_job(
         &pool,
         "j2",
-        None,
         Some(JobStatusRecord::Failed),
         Some("2024-01-01T00:15:00Z"),
-        Some(1),
-        None,
     )
     .await
     .unwrap();
@@ -501,10 +477,8 @@ async fn multiple_stale_job_updates_cannot_clobber_newest_attempt() {
         .unwrap();
     assert_eq!(running.id, "j3");
     assert_eq!(running.status, JobStatusRecord::Running);
-    assert_eq!(running.pid, Some(300));
     assert_eq!(running.started_at, "2024-01-01T00:20:00Z");
     assert!(running.ended_at.is_none());
-    assert!(running.exit_code.is_none());
 }
 
 #[tokio::test]
@@ -625,7 +599,6 @@ async fn reset_running_jobs() {
         "j1",
         "p1",
         "o1",
-        Some(999),
         JobStatusRecord::Running,
         "2024-01-01T00:00:00Z",
     )
@@ -638,7 +611,6 @@ async fn reset_running_jobs() {
 
     let job = db::get_job(&pool, "j1").await.unwrap().unwrap();
     assert_eq!(job.status, JobStatusRecord::Stopped);
-    assert_eq!(job.exit_signal.as_deref(), Some("SIGKILL"));
 }
 
 #[tokio::test]
@@ -689,7 +661,6 @@ async fn cleanup_old_jobs_removes_only_old_terminal_jobs() {
         "old-stopped",
         "p1",
         "o1",
-        None,
         JobStatusRecord::Stopped,
         "2000-01-01T00:00:00Z",
     )
@@ -700,7 +671,6 @@ async fn cleanup_old_jobs_removes_only_old_terminal_jobs() {
         "old-failed",
         "p1",
         "o2",
-        None,
         JobStatusRecord::Failed,
         "2000-01-02T00:00:00Z",
     )
@@ -711,7 +681,6 @@ async fn cleanup_old_jobs_removes_only_old_terminal_jobs() {
         "keep-running",
         "p1",
         "o3",
-        None,
         JobStatusRecord::Running,
         "2999-01-01T00:00:00Z",
     )

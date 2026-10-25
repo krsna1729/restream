@@ -232,7 +232,6 @@ impl EgressReconciler {
             &job_id,
             &output.pipeline_id,
             &output.id,
-            None,
             JobStatus::Running,
             &now,
         )

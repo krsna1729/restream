@@ -1,109 +1,144 @@
-use sqlx::{AssertSqlSafe, Row, SqlitePool};
+//! Schema versions. A new database is created at [`CURRENT_SCHEMA_VERSION`].
+//! A database from an earlier version is rebuilt onto the canonical table
+//! definitions (`schema::TABLES`) in one transaction: each table is
+//! recreated and every column the new definition still has is copied, so
+//! dropped columns go, new ones take their defaults, and widened CHECKs,
+//! new foreign keys and indexes apply to every database the same way.
+
+use sqlx::{Acquire, AssertSqlSafe, Row, SqlitePool};
 
 pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 3;
-pub(crate) const CURRENT_SCHEMA_MIGRATION_NAME: &str = "pipeline_inputs_srt_call_v3";
+const CURRENT_SCHEMA_NAME: &str = "canonical_tables_v3";
 
-pub(crate) async fn ensure_schema_migrations_table(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+/// Bring an existing database to the current version; a new one is left for
+/// the schema setup to create.
+pub(crate) async fn upgrade(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS schema_migrations (
             version INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );",
+        )",
     )
     .execute(pool)
     .await?;
-    Ok(())
-}
-
-pub(crate) async fn record_schema_migration(
-    pool: &SqlitePool,
-    version: i64,
-    name: &str,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO schema_migrations (version, name)
-         VALUES (?, ?)
-         ON CONFLICT(version) DO UPDATE SET name = excluded.name;",
-    )
-    .bind(version)
-    .bind(name)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-pub(crate) async fn ensure_column_exists(
-    pool: &SqlitePool,
-    table: &str,
-    column: &str,
-    column_type: &str,
-) -> Result<(), sqlx::Error> {
-    if !table_has_column(pool, table, column).await? {
-        let alter = format!("ALTER TABLE {table} ADD COLUMN {column} {column_type}");
-        sqlx::query(AssertSqlSafe(alter)).execute(pool).await?;
+    let version: Option<i64> = sqlx::query_scalar("SELECT MAX(version) FROM schema_migrations")
+        .fetch_one(pool)
+        .await?;
+    if let Some(version) = version.filter(|version| *version > CURRENT_SCHEMA_VERSION) {
+        return Err(sqlx::Error::Configuration(
+            format!(
+                "the database is at schema version {version}, newer than this build's \
+                 {CURRENT_SCHEMA_VERSION}; run the release that wrote it"
+            )
+            .into(),
+        ));
     }
-    Ok(())
-}
-
-async fn table_has_column(
-    pool: &SqlitePool,
-    table: &str,
-    column: &str,
-) -> Result<bool, sqlx::Error> {
-    let pragma = format!("PRAGMA table_info({table})");
-    let rows = sqlx::query(AssertSqlSafe(pragma)).fetch_all(pool).await?;
-    Ok(rows
-        .iter()
-        .any(|row| row.get::<String, _>("name") == column))
-}
-
-/// Rebuild `pipeline_inputs` when its stored definition predates the
-/// `srt_call` source kind. Rows, ids and every column carry over; nothing
-/// references this table, and its indexes and trigger are recreated by the
-/// schema setup that runs after this. A database already carrying the kind
-/// is left untouched.
-pub(crate) async fn widen_pipeline_input_source_kinds(
-    pool: &SqlitePool,
-) -> Result<(), sqlx::Error> {
-    let stored: Option<String> = sqlx::query_scalar(
-        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'pipeline_inputs'",
-    )
-    .fetch_optional(pool)
-    .await?;
-    if stored.is_none_or(|sql| sql.contains("'srt_call'")) {
+    if version == Some(CURRENT_SCHEMA_VERSION) {
         return Ok(());
     }
-    const COLUMNS: &str = "id, pipeline_id, label, stream_key, role, enabled, selected, \
-                           source_kind, source_url, variant_rule, source_auth, push_auth";
-    let mut tx = pool.begin().await?;
-    sqlx::query(
-        "CREATE TABLE pipeline_inputs_v3 (
-            id TEXT PRIMARY KEY,
-            pipeline_id TEXT NOT NULL,
-            label TEXT NOT NULL CHECK(length(trim(label)) > 0),
-            stream_key TEXT NOT NULL CHECK(length(stream_key) > 0),
-            role TEXT NOT NULL CHECK(role IN ('primary', 'backup')),
-            enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
-            selected INTEGER NOT NULL DEFAULT 0 CHECK(selected IN (0, 1)),
-            source_kind TEXT NOT NULL DEFAULT 'keyed' CHECK(source_kind IN ('keyed', 'hls_pull', 'srt_call')),
-            source_url TEXT,
-            variant_rule TEXT NOT NULL DEFAULT 'highest_bandwidth' CHECK(variant_rule IN ('highest_bandwidth', 'lowest_bandwidth')),
-            source_auth TEXT CHECK(source_auth IS NULL OR (json_valid(source_auth) AND json_extract(source_auth, '$.kind') IN ('none', 'bearer', 'cookies', 'basic', 'headers'))),
-            push_auth TEXT CHECK(push_auth IS NULL OR (json_valid(push_auth) AND json_extract(push_auth, '$.kind') IN ('none', 'basic'))),
-            FOREIGN KEY(pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE
-        );",
-    )
-    .execute(&mut *tx)
-    .await?;
-    let copy =
-        format!("INSERT INTO pipeline_inputs_v3 ({COLUMNS}) SELECT {COLUMNS} FROM pipeline_inputs");
-    sqlx::query(AssertSqlSafe(copy)).execute(&mut *tx).await?;
-    sqlx::query("DROP TABLE pipeline_inputs")
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("ALTER TABLE pipeline_inputs_v3 RENAME TO pipeline_inputs")
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await
+    let existing: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .fetch_all(pool)
+            .await?;
+    let tables: Vec<(&str, &str)> = super::schema::TABLES
+        .iter()
+        .copied()
+        .filter(|(name, _)| existing.iter().any(|table| table == name))
+        .collect();
+    if tables.is_empty() {
+        return Ok(());
+    }
+    rebuild(pool, &tables).await
 }
+
+/// Record that the database matches the current definitions.
+pub(crate) async fn record_current(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO schema_migrations (version, name) VALUES (?, ?)
+         ON CONFLICT(version) DO UPDATE SET name = excluded.name",
+    )
+    .bind(CURRENT_SCHEMA_VERSION)
+    .bind(CURRENT_SCHEMA_NAME)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Recreate `tables` (parents first) on their canonical definitions. Foreign
+/// keys are off for the swap, or dropping a parent would cascade into its
+/// children; rows a new foreign key refuses (a schedule of a pipeline deleted
+/// before schedules had one) are removed before the commit.
+async fn rebuild(pool: &SqlitePool, tables: &[(&str, &str)]) -> Result<(), sqlx::Error> {
+    let mut conn = pool.acquire().await?;
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await?;
+    let result = async {
+        let mut tx = conn.begin().await?;
+        for (name, create) in tables {
+            let staged = format!("{name}__rebuild");
+            let prefix = format!("CREATE TABLE IF NOT EXISTS {name} (");
+            let ddl = create.replacen(&prefix, &format!("CREATE TABLE {staged} ("), 1);
+            assert_ne!(
+                &ddl, create,
+                "canonical definition of {name} starts with {prefix}"
+            );
+            sqlx::query(AssertSqlSafe(ddl)).execute(&mut *tx).await?;
+            let kept = columns(&mut tx, name).await?;
+            let shared: Vec<String> = columns(&mut tx, &staged)
+                .await?
+                .into_iter()
+                .filter(|column| kept.contains(column))
+                .map(|column| format!("\"{column}\""))
+                .collect();
+            let shared = shared.join(", ");
+            let copy = format!("INSERT INTO {staged} ({shared}) SELECT {shared} FROM {name}");
+            sqlx::query(AssertSqlSafe(copy)).execute(&mut *tx).await?;
+            sqlx::query(AssertSqlSafe(format!("DROP TABLE {name}")))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query(AssertSqlSafe(format!(
+                "ALTER TABLE {staged} RENAME TO {name}"
+            )))
+            .execute(&mut *tx)
+            .await?;
+        }
+        let orphans = sqlx::query("PRAGMA foreign_key_check")
+            .fetch_all(&mut *tx)
+            .await?;
+        for orphan in orphans {
+            let table: String = orphan.get(0);
+            let rowid: i64 = orphan.get(1);
+            sqlx::query(AssertSqlSafe(format!(
+                "DELETE FROM \"{table}\" WHERE rowid = ?"
+            )))
+            .bind(rowid)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await
+    }
+    .await;
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&mut *conn)
+        .await?;
+    result
+}
+
+async fn columns(
+    conn: &mut sqlx::SqliteConnection,
+    table: &str,
+) -> Result<Vec<String>, sqlx::Error> {
+    let rows = sqlx::query(AssertSqlSafe(format!("PRAGMA table_info({table})")))
+        .fetch_all(conn)
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|row| row.get::<String, _>("name"))
+        .collect())
+}
+
+#[cfg(test)]
+#[path = "migrations_tests.rs"]
+mod tests;
