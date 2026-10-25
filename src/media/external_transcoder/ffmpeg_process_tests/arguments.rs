@@ -465,3 +465,20 @@ async fn kill_and_wait_on_child_without_piped_stdin_does_not_hang() {
     let status = child.wait().await.expect("wait must not fail");
     let _ = status;
 }
+
+/// Captions (CEA-608/708) travel in the video's SEI. A transcode decodes
+/// them into frame side data, and the encoder writes them back only when
+/// asked: FFmpeg 8.1's libx265 defaults `a53cc` off, so the pinned build
+/// dropped every caption of an H.265 source without it.
+#[test]
+fn stage_args_keep_closed_captions_through_either_encoder() {
+    for codec in ["h264", "hevc"] {
+        let args = build_stage_ffmpeg_args("720p", codec);
+        assert!(
+            args.windows(2).any(|w| w == ["-a53cc", "1"]),
+            "codec={codec}: {args:?}"
+        );
+    }
+    let copy = build_stage_ffmpeg_args("source", "hevc");
+    assert!(!copy.iter().any(|arg| arg == "-a53cc"), "a copy keeps SEI as is");
+}
