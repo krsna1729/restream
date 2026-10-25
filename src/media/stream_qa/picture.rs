@@ -125,10 +125,10 @@ mod tests {
     /// textured pictures do not.
     #[test]
     fn drawn_cards_are_slates_and_textured_pictures_are_not() {
-        for slate in ["smptehdbars.gray", "card.gray", "gradients.gray"] {
+        for slate in ["slate-bars.gray", "slate-card.gray", "slate-gradient.gray"] {
             assert!(looks_like_slate(&thumbnail(slate)), "{slate}");
         }
-        for picture in ["mandelbrot.gray", "life.gray"] {
+        for picture in ["textured-fractal.gray", "textured-cells.gray"] {
             assert!(!looks_like_slate(&thumbnail(picture)), "{picture}");
         }
         assert!(looks_like_slate(&flat(90)));
