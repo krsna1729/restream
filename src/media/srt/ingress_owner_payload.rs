@@ -1,8 +1,9 @@
 use super::{
-    AdmissionEvent, Bytes, ConnectionEvent, Instant, LogicalPeerId, Ordering, OwnerLoop,
-    PENDING_EVENTS_MAX, SrtIngressEvent,
+    AdmissionEvent, Bytes, CallerEvent, ConnectionEvent, Instant, Ordering, OwnerLoop,
+    PENDING_EVENTS_MAX, SessionId, SrtIngressEvent,
 };
 use srt_proto::{PayloadChunks, PayloadRetirement};
+use std::net::{Ipv4Addr, SocketAddr};
 
 pub(super) const PAYLOAD_WORK_CAPACITY: usize = 64;
 const MEDIA_CHUNKS_PER_VISIT: usize = 64;
@@ -12,12 +13,30 @@ const RECLAIM_ACTIONS_PER_VISIT: usize = 64;
 /// One fixed-capacity Owner-local work list. A message, its chunk cursor and
 /// its retirement occupy the same slot; cancellation never adds a second job.
 pub(super) enum PayloadWork {
-    Event(AdmissionEvent),
+    Event(SessionEvent),
     Data {
-        peer: LogicalPeerId,
+        peer: SessionId,
         chunks: PayloadChunks,
     },
     Retired(PayloadRetirement),
+}
+
+/// A protocol event of one session: an admitted listener peer's or an
+/// outbound call's, which run the same media path.
+pub(super) struct SessionEvent {
+    peer: SocketAddr,
+    session: SessionId,
+    event: ConnectionEvent,
+}
+
+impl From<AdmissionEvent> for SessionEvent {
+    fn from(event: AdmissionEvent) -> Self {
+        Self {
+            peer: event.representative_peer,
+            session: SessionId::Peer(event.logical_peer),
+            event: event.event,
+        }
+    }
 }
 
 /// One visit's event-order discipline. Events apply in queue order, so the
@@ -50,8 +69,28 @@ impl OwnerLoop {
             let available = PAYLOAD_WORK_CAPACITY - self.payload_work.len();
             self.owner
                 .poll_listener_events_bounded(available, &mut self.scratch);
-            self.payload_work
-                .extend(self.scratch.drain(..).map(PayloadWork::Event));
+            self.payload_work.extend(
+                self.scratch
+                    .drain(..)
+                    .map(|event| PayloadWork::Event(event.into())),
+            );
+            let available = PAYLOAD_WORK_CAPACITY.saturating_sub(self.payload_work.len());
+            self.owner
+                .poll_caller_events_bounded(available, &mut self.caller_scratch);
+            for CallerEvent { id, event } in self.caller_scratch.drain(..) {
+                let session = SessionId::Caller(id);
+                let peer = self
+                    .addrs
+                    .get(&session)
+                    .copied()
+                    .unwrap_or(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)));
+                self.payload_work
+                    .push_back(PayloadWork::Event(SessionEvent {
+                        peer,
+                        session,
+                        event,
+                    }));
+            }
         } else {
             self.stats
                 .ingress_owner
@@ -84,7 +123,7 @@ impl OwnerLoop {
                 PayloadWork::Event(event) => {
                     let needs_defer = self.pending_events.len() >= PENDING_EVENTS_MAX
                         || (!self.active_payloads.is_empty()
-                            && self.active_payloads.contains(&event.logical_peer))
+                            && self.active_payloads.contains(&event.session))
                         || (media_left == 0
                             && matches!(event.event, ConnectionEvent::DataReceived { .. }));
                     if order.step(needs_defer) {
@@ -109,20 +148,24 @@ impl OwnerLoop {
         }
     }
 
-    fn apply_received_event(&mut self, event: AdmissionEvent, media_left: &mut usize) {
-        let AdmissionEvent {
-            representative_peer: peer,
-            logical_peer,
+    fn apply_received_event(&mut self, event: SessionEvent, media_left: &mut usize) {
+        let SessionEvent {
+            peer,
+            session: logical_peer,
             event,
         } = event;
         match event {
             ConnectionEvent::Connected => {
-                let stream_id = self
-                    .owner
-                    .listener_peer_mut(logical_peer)
-                    .and_then(|entry| entry.stream_id().map(str::to_owned))
-                    .unwrap_or_default();
-                self.peers += 1;
+                // A call's identity is its input, which the Tokio side holds.
+                let mut stream_id = String::new();
+                if let SessionId::Peer(id) = logical_peer {
+                    stream_id = self
+                        .owner
+                        .listener_peer_mut(id)
+                        .and_then(|entry| entry.stream_id().map(str::to_owned))
+                        .unwrap_or_default();
+                    self.peers += 1;
+                }
                 self.live.insert(logical_peer);
                 self.addrs.insert(logical_peer, peer);
                 self.pending_events.push_back(SrtIngressEvent::Connected {
@@ -158,12 +201,7 @@ impl OwnerLoop {
         }
     }
 
-    fn drive_payload_chunks(
-        &mut self,
-        peer: LogicalPeerId,
-        chunks: PayloadChunks,
-        left: &mut usize,
-    ) {
+    fn drive_payload_chunks(&mut self, peer: SessionId, chunks: PayloadChunks, left: &mut usize) {
         // Restore the cursor before calling media containment: a panic-triggered
         // retirement must find and cancel its unconsumed tail in this work list.
         self.payload_work
@@ -199,7 +237,7 @@ impl OwnerLoop {
         }
     }
 
-    fn accept_payload_chunk(&mut self, peer: LogicalPeerId, chunk: Bytes) {
+    fn accept_payload_chunk(&mut self, peer: SessionId, chunk: Bytes) {
         match self.contain_peer_media(peer, |ingress, stats| {
             ingress.on_payload(peer, chunk, stats)
         }) {
@@ -232,10 +270,10 @@ impl OwnerLoop {
                     .any(|work| matches!(work, PayloadWork::Retired(_))))
     }
 
-    pub(super) fn cancel_payload_work(&mut self, peer: LogicalPeerId) {
+    pub(super) fn cancel_payload_work(&mut self, peer: SessionId) {
         for work in &mut self.payload_work {
             let owner = match work {
-                PayloadWork::Event(event) => Some(event.logical_peer),
+                PayloadWork::Event(event) => Some(event.session),
                 PayloadWork::Data { peer, .. } => Some(*peer),
                 PayloadWork::Retired(_) => None,
             };
@@ -245,7 +283,7 @@ impl OwnerLoop {
             let old = std::mem::replace(work, PayloadWork::Retired(PayloadRetirement::default()));
             let retired = match old {
                 PayloadWork::Data { chunks, .. } => chunks.retire(),
-                PayloadWork::Event(AdmissionEvent {
+                PayloadWork::Event(SessionEvent {
                     event: ConnectionEvent::DataReceived { payload, .. },
                     ..
                 }) => payload.retire(),

@@ -263,6 +263,19 @@ pub async fn create_pipeline_input(
         .ok_or(sqlx::Error::RowNotFound)
 }
 
+/// Every `srt_call` input, enabled or not: the reconciler needs the
+/// disabled ones too, to hang up a call that is already up.
+pub async fn list_srt_call_inputs(pool: &SqlitePool) -> Result<Vec<PipelineInput>, sqlx::Error> {
+    let query = format!(
+        "SELECT {SELECT_FIELDS} FROM pipeline_inputs
+         WHERE source_kind = 'srt_call' ORDER BY pipeline_id ASC, id ASC"
+    );
+    let rows = sqlx::query_as::<_, PipelineInputRow>(sqlx::AssertSqlSafe(query))
+        .fetch_all(pool)
+        .await?;
+    Ok(convert_rows(rows))
+}
+
 /// Every `hls_pull` input, enabled or not: the reconciler needs the disabled
 /// ones too, to cancel a puller that is already running.
 pub async fn list_pull_inputs(pool: &SqlitePool) -> Result<Vec<PipelineInput>, sqlx::Error> {
@@ -401,6 +414,93 @@ mod tests {
         let pool = create_pool("sqlite::memory:").await.unwrap();
         setup_database_schema(&pool).await.unwrap();
         pool
+    }
+
+    /// A database from before `srt_call` keeps every row through the CHECK
+    /// rebuild, then accepts caller inputs, with its indexes back in place.
+    #[tokio::test]
+    async fn the_source_kind_rebuild_keeps_rows_and_admits_srt_call_inputs() {
+        let dir = std::env::temp_dir().join(format!(
+            "restream-srt-call-migration-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let url = format!("sqlite://{}", dir.join("db.sqlite").display());
+        let pool = create_pool(&url).await.unwrap();
+        setup_database_schema(&pool).await.unwrap();
+        // Put the table back the way a previous release created it.
+        let old = sqlx::query_scalar::<_, String>(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'pipeline_inputs'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .replace("'keyed', 'hls_pull', 'srt_call'", "'keyed', 'hls_pull'")
+        .replace("pipeline_inputs", "pipeline_inputs_old");
+        sqlx::query(sqlx::AssertSqlSafe(old))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE pipeline_inputs")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("ALTER TABLE pipeline_inputs_old RENAME TO pipeline_inputs")
+            .execute(&pool)
+            .await
+            .unwrap();
+        create_pipeline(&pool, "p1", "Pipeline", "sk1", None, None)
+            .await
+            .unwrap();
+        let pull = PipelineInputSource {
+            kind: PipelineInputSourceKind::HlsPull,
+            url: Some("http://origin.example/master.m3u8".to_string()),
+            ..PipelineInputSource::keyed()
+        };
+        create_pipeline_input(&pool, "in-pull", "p1", "Pull", "sk-pull", &pull)
+            .await
+            .unwrap();
+        let call = PipelineInputSource {
+            kind: PipelineInputSourceKind::SrtCall,
+            url: Some("srt://encoder.example:9000".to_string()),
+            ..PipelineInputSource::keyed()
+        };
+        assert!(
+            create_pipeline_input(&pool, "in-call", "p1", "Call", "sk-call", &call)
+                .await
+                .is_err(),
+            "the old CHECK refuses the new kind"
+        );
+
+        setup_database_schema(&pool).await.unwrap();
+        create_pipeline_input(&pool, "in-call", "p1", "Call", "sk-call", &call)
+            .await
+            .unwrap();
+        let ids: Vec<String> = list_pipeline_inputs(&pool, "p1")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|input| input.id)
+            .collect();
+        assert!(ids.contains(&"in-pull".to_string()), "{ids:?}");
+        let calls = list_srt_call_inputs(&pool).await.unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].source_url.as_deref(),
+            Some("srt://encoder.example:9000")
+        );
+        assert!(
+            create_pipeline_input(&pool, "in-dup", "p1", "Dup", "sk-call", &call)
+                .await
+                .is_err(),
+            "the stream-key unique index is rebuilt"
+        );
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

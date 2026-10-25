@@ -22,6 +22,7 @@ use crate::media::ts_chunk_ring::TsChunkReader;
 
 pub(crate) use super::srt_policy::SrtIngestPolicyStore;
 
+use super::calls::CallSupervisor;
 use super::ingress_admission::ReceiverGroupId;
 use super::ingress_media::{SrtPublisherMedia, SrtReaderMedia};
 use super::ingress_owner::{
@@ -155,6 +156,7 @@ impl SrtServer {
             .bonding_available
             .store(true, std::sync::atomic::Ordering::Relaxed);
         let mut sessions: HashMap<IngressPeer, Session> = HashMap::new();
+        let mut calls: CallSupervisor = CallSupervisor::new();
 
         info!(port, bind = %ingress.handle.local_addr(), "SRT listener ready (srt-rs compio Owner ingress)");
         let mut owner_fault = None;
@@ -168,7 +170,7 @@ impl SrtServer {
                         break;
                     }
                     Some(event) => {
-                        if self.handle_ingress_event(&mut ingress, &mut sessions, event).await.is_err() {
+                        if self.handle_ingress_event(&mut ingress, &mut sessions, &mut calls, event).await.is_err() {
                             owner_fault = Some("SRT ingress command reservation exhausted".to_string());
                             break;
                         }
@@ -178,6 +180,12 @@ impl SrtServer {
                         break;
                     }
                 },
+                Some(resolved) = calls.resolved.recv(), if ingress.pending_command.is_none() => {
+                    if let Some(command) = calls.resolved(resolved, std::time::Instant::now()) {
+                        // The slot is free (the guard above), so this is accepted.
+                        let _ = ingress.command(command);
+                    }
+                }
                 sample = ingress.handle.telemetry.recv() => {
                     if let Some(sample) = sample {
                         self.fold_telemetry(&mut sessions, sample).await;
@@ -188,6 +196,9 @@ impl SrtServer {
                         break;
                     }
                     close_deleted_sessions(&self.engine, &mut ingress, &mut sessions).await;
+                    calls.tick(&self.engine.ingests.srt_calls, std::time::Instant::now(), |peer| {
+                        ingress.pending_command.is_none() && ingress.disconnect(peer).is_ok()
+                    });
                     if ingress.handle.is_closed() {
                         owner_fault = Some("the SRT ingress owner thread stopped".to_string());
                         break;
@@ -244,6 +255,7 @@ impl SrtServer {
         &self,
         ingress: &mut Ingress,
         sessions: &mut HashMap<IngressPeer, Session>,
+        calls: &mut CallSupervisor,
         event: SrtIngressEvent,
     ) -> Result<(), IngressCommand> {
         match event {
@@ -253,8 +265,26 @@ impl SrtServer {
                 logical_peer,
                 stream_id,
             } => {
-                self.handle_connected(ingress, sessions, peer, logical_peer, stream_id)
-                    .await?;
+                if calls.owns(&logical_peer) {
+                    if let Some(caller) = calls.connected(logical_peer) {
+                        self.start_caller(ingress, sessions, peer, logical_peer, caller)
+                            .await?;
+                    }
+                } else {
+                    self.handle_connected(ingress, sessions, peer, logical_peer, stream_id)
+                        .await?;
+                }
+            }
+            SrtIngressEvent::CallStarted {
+                token,
+                logical_peer,
+            } => {
+                if !calls.started(token, logical_peer) {
+                    ingress.disconnect(logical_peer)?;
+                }
+            }
+            SrtIngressEvent::CallFailed { token, reason } => {
+                calls.failed(token, &reason, std::time::Instant::now());
             }
             SrtIngressEvent::Probe {
                 logical_peer,
@@ -283,6 +313,7 @@ impl SrtServer {
                 if let Some(Session::Publish(publisher)) = sessions.remove(&logical_peer) {
                     self.finish_publisher(publisher).await;
                 }
+                calls.disconnected(logical_peer, &reason, std::time::Instant::now());
                 info!(peer = %peer, %reason, "SRT peer disconnected");
             }
         }
@@ -355,7 +386,7 @@ impl SrtServer {
                     );
                     ingress.command(IngressCommand::AttachReader {
                         logical_peer,
-                        reader,
+                        reader: Box::new(reader),
                     })?;
                 }
                 Err(error) => {
@@ -365,6 +396,36 @@ impl SrtServer {
             },
         }
         Ok(())
+    }
+
+    /// A call connected: it publishes to its own input, with no stream-key
+    /// or IP checks (the engine placed the call).
+    async fn start_caller(
+        &self,
+        ingress: &mut Ingress,
+        sessions: &mut HashMap<IngressPeer, Session>,
+        peer: SocketAddr,
+        logical_peer: IngressPeer,
+        caller: super::calls::CallerPublisher,
+    ) -> Result<(), IngressCommand> {
+        let input_id = caller.pipeline.input_id.clone();
+        match self
+            .start_publisher(peer, caller.pipeline, caller.stream_key)
+            .await
+        {
+            Ok((session, media)) => {
+                info!(peer = %peer, input_id = %input_id, "SRT call connected");
+                sessions.insert(logical_peer, Session::Publish(session));
+                ingress.command(IngressCommand::AttachPublisher {
+                    logical_peer,
+                    media,
+                })
+            }
+            Err(error) => {
+                warn!(peer = %peer, input_id = %input_id, %error, "hanging up SRT call");
+                ingress.disconnect(logical_peer)
+            }
+        }
     }
 
     /// Register an admitted publisher and build the media state the Owner

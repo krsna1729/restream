@@ -114,8 +114,9 @@ impl PipelineInput {
 /// How a pipeline input receives its media.
 ///
 /// `Keyed` inputs wait for an external publisher that presents the input's
-/// stream key on one of the ingest listeners; `HlsPull` inputs have no
-/// listener at all — the engine fetches a remote HLS origin instead.
+/// stream key on one of the ingest listeners. `HlsPull` and `SrtCall` inputs
+/// have no listener at all: the engine fetches a remote HLS origin, or dials
+/// a remote SRT listener (caller mode) and receives its stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
@@ -123,6 +124,7 @@ pub enum PipelineInputSourceKind {
     #[default]
     Keyed,
     HlsPull,
+    SrtCall,
 }
 
 impl PipelineInputSourceKind {
@@ -131,6 +133,7 @@ impl PipelineInputSourceKind {
         match self {
             Self::Keyed => "keyed",
             Self::HlsPull => "hls_pull",
+            Self::SrtCall => "srt_call",
         }
     }
 }
@@ -142,6 +145,7 @@ impl TryFrom<&str> for PipelineInputSourceKind {
         match value {
             "keyed" => Ok(Self::Keyed),
             "hls_pull" => Ok(Self::HlsPull),
+            "srt_call" => Ok(Self::SrtCall),
             _ => Err(PipelineInputSourceKindParseError(value.to_string())),
         }
     }

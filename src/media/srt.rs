@@ -1,5 +1,7 @@
 //! SRT API surface backed by the external `srt-rs` protocol implementation.
 
+#[path = "srt/calls.rs"]
+mod calls;
 #[path = "srt/egress_connect.rs"]
 pub(crate) mod egress_connect;
 #[path = "srt/egress_stats.rs"]
@@ -33,6 +35,8 @@ pub(crate) mod srt_egress_engine;
 mod srt_policy;
 mod tokio_ingress;
 
+pub(crate) use calls::validate_srt_call_url;
+pub use calls::{SrtCallInputs, SrtCallSpec};
 pub(crate) use egress_connect::{
     AddressFamily, SrtConnectKind, SrtConnectRequest, SrtFabricEgressConnectSpec,
     validate_srt_egress_url,

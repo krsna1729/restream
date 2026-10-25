@@ -44,6 +44,8 @@ pub struct IngestRegistry {
     pub preview_lock: TokioMutex<()>,
     pub active: TokioRwLock<HashMap<String, Arc<ActiveIngest>>>,
     pub recent: TokioRwLock<HashMap<String, RecentIngestOutcome>>,
+    /// The `srt_call` inputs the SRT server dials.
+    pub srt_calls: crate::media::srt::SrtCallInputs,
 }
 
 impl Default for IngestRegistry {
@@ -66,6 +68,7 @@ impl IngestRegistry {
             preview_lock: TokioMutex::new(()),
             active: TokioRwLock::new(HashMap::new()),
             recent: TokioRwLock::new(HashMap::new()),
+            srt_calls: Default::default(),
         }
     }
 }
