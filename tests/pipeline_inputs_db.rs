@@ -455,11 +455,16 @@ async fn push_auth_migration_defaults_existing_inputs_to_none() {
     db::create_pipeline(&pool, "p1", "Main", "primary-key", None, None)
         .await
         .expect("pipeline create");
-    // Recreate the pre-push-auth schema while retaining its existing input.
+    // Recreate the pre-push-auth schema while retaining its existing input:
+    // a database that old was written at an earlier schema version.
     sqlx::query("ALTER TABLE pipeline_inputs DROP COLUMN push_auth")
         .execute(&pool)
         .await
         .expect("pre-push-auth schema");
+    sqlx::query("UPDATE schema_migrations SET version = 2")
+        .execute(&pool)
+        .await
+        .expect("pre-v3 schema version");
     db::setup_database_schema(&pool).await.expect("migration");
     let migrated = db::get_pipeline_input_by_stream_key(&pool, "primary-key")
         .await
