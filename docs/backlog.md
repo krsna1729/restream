@@ -25,6 +25,7 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-100 agent protocol: approval mid-task and live panels](#q-100-agent-opus-agent-protocol-approval-mid-task-and-live-panels)
 - [Q-101 incident investigation and approval UX](#q-101-agent-opus-explain-an-incident-and-approve-its-fix-in-one-place)
 - [Q-102 plain-language command palette](#q-102-frontend-sonnet-plain-language-command-palette)
+- [Q-104 FFmpeg 9 pin](#q-104-platform-sonnet-move-the-ffmpeg-pin-to-a-90x-point-release)
 
 ### Q-025 [performance] [opus] Re-qualify the SRT shard law after transport convergence
 - Goal: qualify the SRT cold prior (64 outputs per shard at 4.8 Mbit/s,
@@ -228,3 +229,15 @@ the [assurance roadmap](assurance-roadmap.md).
 - Files: `web/ts/control-room/shell/command-palette.tsx`, `palette-model.ts`.
 - Gates: a request maps to the same plan the buttons would make; nothing
   applies without the approval step.
+
+### Q-104 [platform] [sonnet] Move the FFmpeg pin to a 9.0.x point release
+- Goal: `restream ffmpeg-fetch` and the container images pin a BtbN 9.0.x
+  build (a month's last, per [FFmpeg versions](ffmpeg-versions.md)) once a
+  point release follows 9.0 "Lei" (August 2026). Nothing restream uses needs
+  9.0; the move keeps the pin on a maintained branch. 9.0 turns `tls_verify`
+  on and drops old NVENC options, neither of which restream uses.
+- Gates: the startup capability check passes on the new build; the caption
+  test (608 through a libx264 and a libx265 transcode, as in the
+  `-a53cc` fix) still keeps every cue; the transport harness and the HEVC
+  fixtures pass; an encode-speed A/B (libx264 and libx265, same host and
+  profile) shows no regression.
