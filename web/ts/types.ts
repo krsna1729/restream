@@ -56,8 +56,9 @@ export interface PipelineInputRuntime {
 }
 
 /** How an input receives media: a publisher that presents its stream key on
- * one of the ingest listeners, or a remote HLS origin the engine pulls. */
-export type PipelineInputKind = "keyed" | "hlsPull";
+ * one of the ingest listeners, a remote HLS origin the engine pulls, or a
+ * remote SRT listener the engine calls. */
+export type PipelineInputKind = "keyed" | "hlsPull" | "srtCall";
 
 /** Which rendition of a remote master playlist a pull input follows. */
 export type VariantRule = "highestBandwidth" | "lowestBandwidth";
@@ -75,7 +76,7 @@ export interface PipelineInput {
   enabled: boolean;
   selected: boolean;
   /** "keyed" waits for a publisher on `ingestUrls`; "hlsPull" fetches
-   * `sourceUrl` and accepts no pushes. */
+   * `sourceUrl` and "srtCall" dials it; neither accepts pushes. */
   kind: PipelineInputKind;
   /** The remote origin, for a pull input only. */
   sourceUrl: string | null;

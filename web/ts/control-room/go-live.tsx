@@ -44,7 +44,7 @@ export function GoLive(props: { live: LiveSnapshot; pipelineId: string; inputs: 
   const ready = passed === checks.length;
   const [open, setOpen] = useState<boolean | null>(null);
   const expanded = open ?? !ready;
-  const keyed = (props.inputs ?? []).filter((input) => input.kind !== "hlsPull" && input.ingestUrls);
+  const keyed = (props.inputs ?? []).filter((input) => input.kind === "keyed" && input.ingestUrls);
   return (
     <Panel
       id="go-live"

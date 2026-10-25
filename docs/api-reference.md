@@ -374,8 +374,9 @@ A pipeline starts with one primary input and holds at most four
 and URLs. Exactly one enabled input is selected. `role` records how the input
 was created; promoting a backup changes selection, not role.
 
-`kind` is `keyed` (default: waits for a publisher) or `hlsPull` (the engine
-fetches a remote live HLS origin; no listener). A pull input has `sourceUrl`
+`kind` is `keyed` (default: waits for a publisher), `hlsPull` (the engine
+fetches a remote live HLS origin; no listener) or `srtCall` (the engine dials
+a remote SRT listener in caller mode; see [SRT call inputs](#srt-call-inputs)). A pull input has `sourceUrl`
 and a `variantRule` of `highestBandwidth` (default) or `lowestBandwidth`. The
 rule picks the master-playlist variant with the highest or lowest `BANDWIDTH`
 among those whose `CODECS` the ingest publishes (H.264 or HEVC video, AAC-LC
@@ -402,6 +403,8 @@ Validation:
 - An unknown `kind`, `variantRule` or `auth.kind` is `400`, not defaulted.
 - An empty `label` is `400`.
 - `hlsPull` must not carry `pushAuth` other than `{"kind":"none"}`.
+- `srtCall` needs `srt://host:port` (options after `?`, at most 2048 bytes)
+  and carries no `auth` or `pushAuth`.
 
 Changing an input's `kind` ends the session the old kind held (a keyed
 input's pusher is disconnected; a pull input's puller stops), so the new kind
@@ -438,6 +441,26 @@ returned.
 `sourceUrl` is configuration and is returned in full, query included, so a
 signed URL's token is visible to any authenticated reader. Use an `auth` kind
 for anything that must stay write-only.
+
+#### SRT call inputs
+
+```json
+{
+  "label": "Venue gateway",
+  "kind": "srtCall",
+  "sourceUrl": "srt://gateway.example:9000?streamid=cam1&passphrase=…&latency=200"
+}
+```
+
+The engine dials the listener from ingress Owner 0's caller socket (IPv4)
+and, once the call connects, publishes it to this input like an SRT
+publisher; there is no stream-key check. URL options are those of SRT
+outputs: `streamid`, `passphrase`, `pbkeylen`, `latency` (milliseconds,
+range-checked) and `bond=host:port,…` with `type=backup|broadcast`. A failed
+or dropped call is redialled after 1 s, doubling to 30 s while it keeps
+failing; disabling, deleting or changing the input hangs the call up. The
+`sourceUrl`, passphrase included, is returned in full like an SRT output URL;
+the dashboard masks the passphrase on its input cards.
 
 #### HLS push credentials
 
