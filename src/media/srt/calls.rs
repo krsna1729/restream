@@ -24,8 +24,10 @@ const CALL_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 const BACKOFF_FIRST: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
-/// The Owner whose caller socket every call uses.
-const CALL_OWNER: u16 = 0;
+/// Each ingress Owner has one caller socket, of one address family: IPv4
+/// calls dial from Owner 0 and IPv6 calls from Owner 1.
+const IPV4_CALL_OWNER: u16 = 0;
+const IPV6_CALL_OWNER: u16 = 1;
 
 /// One `srt_call` input the rows want running.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -122,7 +124,8 @@ pub(super) struct CallerPublisher {
     pub(super) stream_key: String,
 }
 
-pub(super) type Resolved = (CallToken, Result<Vec<SocketAddr>, String>);
+/// Every address each listed host resolved to, in listed order.
+pub(super) type Resolved = (CallToken, Result<Vec<Vec<SocketAddr>>, String>);
 
 /// The SRT server's per-run call state. Every method that may command the
 /// Owner first checks the bridge's one command slot is free and otherwise
@@ -130,6 +133,7 @@ pub(super) type Resolved = (CallToken, Result<Vec<SocketAddr>, String>);
 /// Generic over the session key (`IngressPeer` in production) so the state
 /// machine is testable without minting transport ids.
 pub(super) struct CallSupervisor<P = IngressPeer> {
+    owners: u16,
     next_token: u64,
     seen_generation: u64,
     calls: HashMap<String, Call<P>>,
@@ -140,9 +144,11 @@ pub(super) struct CallSupervisor<P = IngressPeer> {
 }
 
 impl<P: Copy + Eq + Hash> CallSupervisor<P> {
-    pub(super) fn new() -> Self {
+    /// `owners`: how many ingress Owners run (IPv6 calls need two).
+    pub(super) fn new(owners: u16) -> Self {
         let (resolved_tx, resolved) = tokio::sync::mpsc::unbounded_channel();
         Self {
+            owners,
             next_token: 1,
             seen_generation: 0,
             calls: HashMap::new(),
@@ -223,18 +229,20 @@ impl<P: Copy + Eq + Hash> CallSupervisor<P> {
         (token, result): Resolved,
         now: Instant,
     ) -> Option<IngressCommand> {
+        let owners = self.owners;
         let call = self.current(token)?;
-        let request = result.and_then(|addrs| {
+        let request = result.and_then(|hosts| {
+            let (owner, addrs) = place(&hosts, owners)?;
             let request =
                 SrtFabricEgressConnectSpec::from_url(&call.spec.url, CALL_CONNECT_TIMEOUT)
                     .connect_request(&addrs)?;
-            Ok((addrs[0], request))
+            Ok((owner, addrs[0], request))
         });
         match request {
-            Ok((remote, request)) => {
+            Ok((owner, remote, request)) => {
                 call.phase = Phase::Dialing(None);
                 Some(IngressCommand::Call {
-                    owner: CALL_OWNER,
+                    owner,
                     token,
                     remote,
                     request: Box::new(request),
@@ -323,20 +331,53 @@ impl<P: Copy + Eq + Hash> CallSupervisor<P> {
     }
 }
 
-/// Resolve every listed host to IPv4 addresses: the Owner's one caller socket
-/// is IPv4.
-async fn resolve(hosts: Vec<String>) -> Result<Vec<SocketAddr>, String> {
-    let mut addrs = Vec::with_capacity(hosts.len());
-    for host in hosts {
-        let found = tokio::time::timeout(RESOLVE_TIMEOUT, tokio::net::lookup_host(host.as_str()))
-            .await
-            .map_err(|_| format!("resolving {host} timed out"))?
-            .map_err(|error| format!("resolving {host}: {error}"))?
-            .find(SocketAddr::is_ipv4)
-            .ok_or_else(|| format!("{host} has no IPv4 address; SRT calls dial over IPv4"))?;
-        addrs.push(found);
+/// Choose the address family, and so the Owner, a call dials from: IPv4
+/// when every listed host has an IPv4 address, else IPv6 when every one has
+/// an IPv6 address. A bond's legs share one caller socket, so all of them
+/// use the same family.
+fn place(hosts: &[Vec<SocketAddr>], owners: u16) -> Result<(u16, Vec<SocketAddr>), String> {
+    let pick = |v6: bool| -> Option<Vec<SocketAddr>> {
+        hosts
+            .iter()
+            .map(|addrs| addrs.iter().copied().find(|addr| addr.is_ipv6() == v6))
+            .collect()
+    };
+    if let Some(addrs) = pick(false) {
+        return Ok((IPV4_CALL_OWNER, addrs));
     }
-    Ok(addrs)
+    let Some(addrs) = pick(true) else {
+        return Err(
+            "the listed hosts share no address family; every leg of a call must be reachable \
+             over IPv4, or every leg over IPv6"
+                .to_string(),
+        );
+    };
+    if owners <= IPV6_CALL_OWNER {
+        return Err(format!(
+            "{} is reachable only over IPv6, and IPv6 calls dial from a second SRT ingress \
+             Owner: set RESTREAM_SRT_INGRESS_OWNERS=2 or more",
+            addrs[0]
+        ));
+    }
+    Ok((IPV6_CALL_OWNER, addrs))
+}
+
+/// Every address of every listed host.
+async fn resolve(hosts: Vec<String>) -> Result<Vec<Vec<SocketAddr>>, String> {
+    let mut resolved = Vec::with_capacity(hosts.len());
+    for host in hosts {
+        let addrs: Vec<SocketAddr> =
+            tokio::time::timeout(RESOLVE_TIMEOUT, tokio::net::lookup_host(host.as_str()))
+                .await
+                .map_err(|_| format!("resolving {host} timed out"))?
+                .map_err(|error| format!("resolving {host}: {error}"))?
+                .collect();
+        if addrs.is_empty() {
+            return Err(format!("{host} resolved to no address"));
+        }
+        resolved.push(addrs);
+    }
+    Ok(resolved)
 }
 
 #[cfg(test)]
