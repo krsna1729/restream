@@ -487,8 +487,8 @@ An `srtCall` input reverses the handshake: the engine is the caller.
 `converge_srt_call_inputs` writes the enabled rows into
 `engine.ingests.srt_calls`; the SRT server's Tokio loop (`CallSupervisor`,
 `src/media/srt/calls.rs`) resolves the host off the loop and sends
-`IngressCommand::Call` to Owner 0 for IPv4 or Owner 1 for IPv6 (each Owner's
-caller socket has one address family), which dials through its caller pool
+`IngressCommand::Call` to Owner 0, whose caller side holds an IPv4 and an
+IPv6 socket (each bound on first use) and dials through its caller pool
 (`CALLS_IN_FLIGHT` handshakes at once, more queued). The Owner keys sessions
 by `SessionId::{Peer, Caller}`, so a call's events, stats, disconnect and
 retirement take the same paths as an admitted peer's. On `Connected` Tokio

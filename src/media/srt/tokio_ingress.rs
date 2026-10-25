@@ -156,9 +156,7 @@ impl SrtServer {
             .bonding_available
             .store(true, std::sync::atomic::Ordering::Relaxed);
         let mut sessions: HashMap<IngressPeer, Session> = HashMap::new();
-        let mut calls: CallSupervisor = CallSupervisor::new(
-            u16::try_from(self.engine.config.srt_ingress_owners).unwrap_or(u16::MAX),
-        );
+        let mut calls: CallSupervisor = CallSupervisor::new();
 
         info!(port, bind = %ingress.handle.local_addr(), "SRT listener ready (srt-rs compio Owner ingress)");
         let mut owner_fault = None;
