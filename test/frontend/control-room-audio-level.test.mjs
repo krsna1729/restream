@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
-const { FLOOR_DB, levelDb, meterFraction } = await loadCompiledFrontendModule("control-room/audio-level.js");
+const { FLOOR_DB, channelLabels, declaredChannels, levelDb, meterFraction } = await loadCompiledFrontendModule("control-room/audio-level.js");
 
 test("a full-scale square wave is 0 dBFS, half scale about -6, silence the floor", () => {
   const square = Float32Array.from({ length: 512 }, (_, index) => (index % 2 ? 1 : -1));
@@ -18,4 +18,21 @@ test("the meter maps the floor to empty and full scale to full", () => {
   assert.equal(meterFraction(0), 1);
   assert.equal(meterFraction(-30), 0.5);
   assert.equal(meterFraction(6), 1);
+});
+
+test("channels are named in Web Audio order, others numbered", () => {
+  assert.deepEqual(channelLabels(1), ["M"]);
+  assert.deepEqual(channelLabels(2), ["L", "R"]);
+  assert.deepEqual(channelLabels(6), ["L", "R", "C", "LFE", "Ls", "Rs"]);
+  assert.deepEqual(channelLabels(3), ["1", "2", "3"]);
+  assert.deepEqual(channelLabels(0), ["M"], "at least one channel");
+});
+
+test("the channels an HLS rendition declares, clamped, stereo when unsaid", () => {
+  assert.equal(declaredChannels("1"), 1);
+  assert.equal(declaredChannels("6"), 6);
+  assert.equal(declaredChannels("16/JOC"), 8, "clamped to what the meter draws");
+  assert.equal(declaredChannels(undefined), 2);
+  assert.equal(declaredChannels("x"), 2);
+  assert.equal(declaredChannels("0"), 2);
 });

@@ -188,10 +188,16 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: an ingest fixture with captions and an SCTE-35 splice reaches the HLS
   output and the MoQ catalog; a ring-overrun test keeps events aligned with
   retained media.
+- Also: the preview renders the captions it carries, and the test media
+  generators (`test_fixtures.rs`) can produce captions and SCTE-35, so the
+  gates use checked-in fixtures.
 
 ### Q-095 [observability] [sonnet] Stream inspector: GOP health, skew and SCTE
 - Goal: one view per live pipeline shows GOP health, A/V skew, source
   timecode, SCTE timeline, decoder state and transport state.
+- Also per track: timestamp errors (PTS/DTS jumps and reorders), A/V sync
+  drift against the video track, and the decode queue depth where a stage
+  decodes, each with a threshold that raises a verdict.
 - Gates: a frontend test for a pipeline that loses keyframes shows the damaged
   state; every value comes from the API.
 

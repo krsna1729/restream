@@ -27,6 +27,8 @@ declare global {
       name: string;
       lang?: string;
       groupId?: string;
+      /** The rendition's `CHANNELS` attribute, e.g. "2" or "6". */
+      channels?: string;
     }>;
     audioTrack: number;
     loadSource(url: string): void;
@@ -47,6 +49,8 @@ declare global {
     readonly autoLevelEnabled: boolean;
     readonly manualLevel: number;
     readonly latency: number;
+    /** Estimated download bandwidth, bits per second. */
+    readonly bandwidthEstimate: number;
     readonly targetLatency: number;
     readonly liveSyncPosition: number;
     startLoad(startPosition?: number): void;

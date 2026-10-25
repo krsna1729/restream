@@ -647,6 +647,12 @@ export function createDeployment({ preset = "plant", seed = 7, nowMs = Date.now(
                 soundCheckedMs: now,
                 silentSinceMs: null,
                 loudnessLufs: -16 + (random.next() - 0.5) * 4 + (wobble < 1 ? -6 : 0),
+                // The fixture probe reports two tracks: program and a quieter
+                // commentary track.
+                tracks: [
+                  { silentSinceMs: null, loudnessLufs: -16 + (random.next() - 0.5) * 4 },
+                  { silentSinceMs: null, loudnessLufs: -27 + (random.next() - 0.5) * 6 },
+                ],
               },
             }),
           }

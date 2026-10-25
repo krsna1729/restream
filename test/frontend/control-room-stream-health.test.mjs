@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
-const { audioTrackWords, bitrateWords, loudnessWords, overallSeverity, qaCostWords, qaVerdicts, streamVerdicts, trackSoundWords } = await loadCompiledFrontendModule(
+const { audioTrackWords, bitrateWords, loudnessWords, overallSeverity, qaCostWords, qaVerdicts, streamVerdicts, trackMeter, loudnessFraction } = await loadCompiledFrontendModule(
   "control-room/stream-health-model.js",
 );
 
@@ -178,11 +178,26 @@ test("loudness and audio tracks in words", () => {
   assert.equal(audioTrackWords({ trackIndex: 3 }), "details not reported yet");
 });
 
-test("the checks' cost is stated for the pipeline's tracks, and each track's sound in words", () => {
+test("the checks' cost is stated for the pipeline's tracks", () => {
   assert.equal(qaCostWords(1), "about 2.0% of a CPU core (1 audio track)");
   assert.equal(qaCostWords(16), "about 8.8% of a CPU core (16 audio tracks)");
   assert.equal(qaCostWords(0), "about 2.0% of a CPU core (0 audio tracks)");
-  assert.equal(trackSoundWords(undefined), "checking");
-  assert.equal(trackSoundWords({ silentSinceMs: 1, loudnessLufs: -70 }), "silent");
-  assert.equal(trackSoundWords({ silentSinceMs: null, loudnessLufs: -18.4 }), "-18 LUFS");
+});
+
+test("each track's meter: level, how it reads, and nothing from a stale check", () => {
+  const now = 100_000;
+  assert.equal(trackMeter(undefined, now, now), null, "a track not measured yet has no meter");
+  assert.equal(trackMeter({ silentSinceMs: null, loudnessLufs: -18 }, now - 10_001, now), null, "a stale check says nothing about now");
+  assert.equal(trackMeter({ silentSinceMs: null, loudnessLufs: -18 }, null, now), null);
+  assert.deepEqual(trackMeter({ silentSinceMs: 1, loudnessLufs: -70 }, now, now), { fraction: 0, severity: "bad", words: "silent" });
+  const comfortable = trackMeter({ silentSinceMs: null, loudnessLufs: -18.4 }, now, now);
+  assert.equal(comfortable.words, "-18 LUFS");
+  assert.equal(comfortable.severity, "ok");
+  assert.ok(Math.abs(comfortable.fraction - (60 - 18.4) / 60) < 1e-9);
+  assert.equal(trackMeter({ silentSinceMs: null, loudnessLufs: -5 }, now, now).severity, "warn", "too loud");
+  assert.equal(trackMeter({ silentSinceMs: null, loudnessLufs: -40 }, now, now).severity, "warn", "too quiet");
+  assert.equal(loudnessFraction(-60), 0);
+  assert.equal(loudnessFraction(-80), 0);
+  assert.equal(loudnessFraction(0), 1);
+  assert.equal(loudnessFraction(-14), 46 / 60);
 });
