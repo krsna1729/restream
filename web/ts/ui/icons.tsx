@@ -10,6 +10,7 @@ const PATHS = {
   channels: <><circle cx="12" cy="12" r="2" /><path d="M7.8 16.2a6 6 0 0 1 0-8.4" /><path d="M16.2 7.8a6 6 0 0 1 0 8.4" /><path d="M4.9 19.1a10 10 0 0 1 0-14.2" /><path d="M19.1 4.9a10 10 0 0 1 0 14.2" /></>,
   operate: <><path d="M4 21v-7" /><path d="M4 10V3" /><path d="M12 21v-9" /><path d="M12 8V3" /><path d="M20 21v-5" /><path d="M20 12V3" /><path d="M1.5 14h5" /><path d="M9.5 8h5" /><path d="M17.5 16h5" /></>,
   monitor: <path d="M3 12h4l3-8 4 16 3-8h4" />,
+  wall: <><rect x="2" y="4" width="20" height="14" rx="2" /><path d="M12 4v14" /><path d="M2 11h20" /><path d="M8 21h8" /></>,
   inspect: <><circle cx="11" cy="11" r="6.5" /><path d="m20 20-4.2-4.2" /><path d="M11 8v6" /><path d="M8 11h6" /></>,
   incidents: <><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" /><path d="M12 9v4" /><path d="M12 17h.01" /></>,
   health: <><path d="M20.8 8.6a5 5 0 0 0-8.8-3.2 5 5 0 0 0-8.8 3.2c0 5.4 8.8 11.4 8.8 11.4s3.3-2.2 5.8-5" /><path d="M3 12h4l2-3 3 6 2-3h7" /></>,

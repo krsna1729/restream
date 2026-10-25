@@ -107,6 +107,17 @@ export const PAGE_HELP: Record<Workspace, PageHelp> = {
       { target: panel("health-link"), title: "Contribution link", body: "Round trip and loss for SRT and RTMP publishers." },
     ],
   },
+  wall: {
+    purpose: "Do all my programs look right, on one screen?",
+    when: "On a control-room screen during a show, to watch every program and see an alarm the moment it starts.",
+    terms: [
+      ["Tile", "One pipeline: its program (when you watch it), what is on air, delivery and open alarms. The border turns amber or red with trouble."],
+      ["Watching", "A playing tile. Each one makes the engine produce a preview, so at most nine play at once; the rest show state only."],
+    ],
+    tour: [
+      { target: HEADER, title: "The verdict and the cost", body: "How many programs need attention, and how many tiles are playing video out of the nine allowed." },
+    ],
+  },
   monitor: {
     purpose: "How do this pipeline's signals move together?",
     when: "While something is going wrong, to see cause and effect on one clock.",

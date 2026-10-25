@@ -182,7 +182,7 @@ floor and a ceiling.
 is `app.tsx` plus `control-room/shell/`.
 
 - Navigation groups the workspaces (`shell/nav.ts`): Operate (Fleet,
-  Channels, Pipelines, Operate, Monitor, Schedule), Understand (Incidents,
+  Channels, Pipelines, Operate, Wall, Monitor, Schedule), Understand (Incidents,
   Stream health), Manage (Media, Notifications, Team, Settings), Learn
   (Guides), and More tools (Capacity, Stability Lab, Inspect, Logs, System,
   Changes, Audit log, How it works). More tools is folded until opened (the
@@ -435,6 +435,26 @@ revoke (`share-panel.tsx`, `share-model.ts`).
 Operate, Stream health, Monitor, Inspect and Logs share one header, picker
 and tab row (`pipeline-scope.tsx`). The picker searches every pipeline by
 name or id, worst health first; Enter opens the top match in the same view.
+
+### Wall
+
+The multiview wall (`wall.tsx`, model in `wall-model.ts`): one tile per
+pipeline, for a screen in the control room.
+
+- A tile shows the source (protocol and codec), ingest rate, delivering out
+  of wanted, recording, and up to two open alerts, critical first. Its ring
+  is the tally: red for a critical alert, amber for any other alert or a
+  degraded pipeline, green when receiving, grey when idle. The name opens
+  Operate.
+- Tiles keep their place by name; "Worst first" orders by tally instead.
+  The filter shows all, receiving, or those needing attention.
+- Layout is "Fit all" (the smallest square, at most 6 across) or 2 to 5
+  across, from desktop widths and in full screen. Phones show one tile
+  across and tablets two. Layout, order and filter are kept per browser.
+- Tiles show state at no cost. Video is opt-in per tile ("Watch", or
+  "Watch N" for every receiving tile) and capped at 9 playing tiles,
+  because each one makes the engine produce a preview (see Previews). A
+  tile that goes idle, is deleted or is filtered out stops playing.
 
 ### Incidents
 

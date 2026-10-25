@@ -14,6 +14,7 @@ const WORKSPACES = [
   "channels",
   "pipelines",
   "operate",
+  "wall",
   "health",
   "monitor",
   "inspect",

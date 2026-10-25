@@ -16,6 +16,7 @@ import { useOpenAlerts } from "./polled.js";
 import { usePlace } from "./router.js";
 import { Settings } from "./settings.js";
 import { StreamHealth } from "./stream-health.js";
+import { Wall } from "./wall.js";
 import { navBadges } from "./shell/badges.js";
 import { CommandPalette, useCommandPaletteShortcut } from "./shell/command-palette.js";
 import { MobileTabs, MoreSheet } from "./shell/mobile-nav.js";
@@ -95,6 +96,7 @@ function Shell() {
             {place.workspace === "monitor" && <Monitor live={live} pipelineId={place.pipelineId} />}
             {place.workspace === "schedule" && <ScheduleView live={live} />}
             {place.workspace === "health" && <StreamHealth live={live} pipelineId={place.pipelineId} />}
+            {place.workspace === "wall" && <Wall live={live} />}
             {place.workspace === "incidents" && <Incidents live={live} />}
             {place.workspace === "logs" && (
               <Logs live={live} pipelineId={place.pipelineId} outputId={place.outputId} />

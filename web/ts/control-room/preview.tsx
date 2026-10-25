@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
+import { programPreviewUrl } from "../core/api.js";
 import { redirectToLogin } from "../core/auth-redirect.js";
 import { AudioMeter } from "./audio-meter.js";
+import { hlsDecodesHevc, programPreviewChoice } from "./preview-codec.js";
 
 /** Seconds a preview may take to produce its first segment: the engine
  * starts a preview on its first request and answers 404 until then. */
@@ -83,16 +85,29 @@ const STATUS_TEXT: Record<PreviewState, string> = {
   stalled: "stalled: no new frames",
 };
 
+/** How a preview is drawn. `panel` (default) has its own start/stop
+ * buttons, status line, track picker and meter. `tile` (the multiview wall)
+ * plays from mount to unmount: the parent decides when it plays, and the
+ * tile shows only the picture with its status over it. */
+export type PreviewVariant = "panel" | "tile";
+
 /** A muted live preview of an HLS URL, loaded only when asked: a preview
  * makes the engine segment the stream while it plays. With `fallbackUrl`,
  * a preview that fails before its first frame tries that URL once (an
  * H.265 source the browser claimed it decodes, then the H.264 copy). */
-export function Preview(props: { url: string; label: string; fallbackUrl?: string | null }) {
+export function Preview(props: {
+  url: string;
+  label: string;
+  fallbackUrl?: string | null;
+  variant?: PreviewVariant;
+}) {
+  const tile = props.variant === "tile";
   const video = useRef<HTMLVideoElement | null>(null);
   const hls = useRef<Hls | null>(null);
-  /** 0 while off; each start (or retry) is a new attempt. */
-  const [attempt, setAttempt] = useState(0);
-  const [state, setState] = useState<PreviewState>("idle");
+  /** 0 while off; each start (or retry) is a new attempt. A tile starts
+   * on mount. */
+  const [attempt, setAttempt] = useState(tile ? 1 : 0);
+  const [state, setState] = useState<PreviewState>(tile ? "starting" : "idle");
   const [tracks, setTracks] = useState<ReadonlyArray<{ id: number; name: string }>>([]);
   const [track, setTrack] = useState<number | null>(null);
   /** Made in the click that starts a preview (browsers allow audio then);
@@ -214,6 +229,36 @@ export function Preview(props: { url: string; label: string; fallbackUrl?: strin
   };
   const showing = state !== "idle" && state !== "failed" && state !== "stalled";
 
+  if (tile) {
+    const ended = state === "failed" || state === "stalled";
+    return (
+      <div className="relative aspect-video w-full overflow-hidden bg-black" role="group" aria-label={`Preview ${props.label}`}>
+        <video
+          ref={(node) => {
+            video.current = node;
+            setElement(node);
+          }}
+          className="size-full object-contain"
+          muted
+          playsInline
+          aria-label={`Video ${props.label}`}
+        />
+        {state !== "playing" && (
+          <div className="absolute inset-0 grid place-items-center p-2 text-center text-xs text-white/80">
+            <span role="status" className="flex flex-col items-center gap-2">
+              {STATUS_TEXT[state]}
+              {ended && (
+                <button type="button" className="btn btn-xs" onClick={start}>
+                  Retry
+                </button>
+              )}
+            </span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-1" aria-label={`Preview ${props.label}`} role="group">
       <div className="flex flex-wrap items-center gap-2">
@@ -264,5 +309,30 @@ export function Preview(props: { url: string; label: string; fallbackUrl?: strin
       )}
       {showing && audio && element && state !== "starting" && <AudioMeter element={element} context={audio} label={props.label} />}
     </div>
+  );
+}
+
+/** The program over HLS: an H.265 source this browser decodes plays as it
+ * is (no FFmpeg on the server); otherwise, or if that fails, the H.264
+ * copy. */
+export function HlsProgramPreview(props: {
+  pipelineId: string;
+  sourceCodec: string | null;
+  variant?: PreviewVariant;
+}) {
+  const choice = useMemo(
+    () =>
+      programPreviewChoice(
+        {
+          source: programPreviewUrl(props.pipelineId, { hevcPassthrough: true }),
+          h264: programPreviewUrl(props.pipelineId),
+        },
+        props.sourceCodec,
+        hlsDecodesHevc(),
+      ),
+    [props.pipelineId, props.sourceCodec],
+  );
+  return (
+    <Preview key={choice.url} url={choice.url} fallbackUrl={choice.fallbackUrl} label="program" variant={props.variant} />
   );
 }
