@@ -5,8 +5,8 @@ import path from "node:path";
 
 const repoRoot = process.cwd();
 
-const directApiFetchAllowlist = new Set(["web/pages/login.html"]);
-const routeLiteralAllowlist = new Set(["web/ts/core/api.ts", "web/ts/core/api-admin.ts", "web/pages/login.html"]);
+const directApiFetchAllowlist = new Set(["web/assets/login.js"]);
+const routeLiteralAllowlist = new Set(["web/ts/core/api.ts", "web/ts/core/api-admin.ts"]);
 const apiRequestAllowlist = new Set(["web/ts/core/api.ts", "web/ts/core/api-admin.ts"]);
 
 const directApiFetchPattern = /fetch\s*\(\s*(["'`])\/api\b/;
@@ -26,14 +26,15 @@ const bannedPathPatterns = [
 
 const scanRoots = [
   "web/ts",
-  "web/pages/login.html",
+  "web/pages",
+  "web/assets",
   "src",
-  "src/bin",
   "tests",
   "test",
 ];
 const sourceExtensions = new Set([
   ".ts",
+  ".tsx",
   ".js",
   ".rs",
   ".html",
@@ -94,7 +95,7 @@ async function main() {
         violations,
         file,
         findLineNumber(content, directFetchMatch.index),
-        "raw fetch('/api...') is only allowed in web/pages/login.html; use web/ts/core/api.ts",
+        "raw fetch('/api...') is only allowed in web/assets/login.js; use web/ts/core/api.ts",
       );
     }
 
@@ -118,7 +119,7 @@ async function main() {
         violations,
         file,
         findLineNumber(content, routeLiteralMatch.index),
-        "route literals should live in web/ts/core/api.ts or web/pages/login.html",
+        "route literals should live in web/ts/core/api.ts",
       );
     }
   }
