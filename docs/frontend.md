@@ -29,8 +29,7 @@ The diagram shows the steps of `build:frontend` in `package.json`.
 ```mermaid
 flowchart LR
   pages["web/pages/*.html, web/assets/*"] --> prep["scripts/dev/frontend/prepare-assets.mjs"]
-  hls["node_modules/hls.js"] --> prep
-  prep --> pub["public/ (html, logo, js/lib/hls.min.js)"]
+  prep --> pub["public/ (html, assets, logo)"]
   ts["web/ts/**/*.ts(x)"] --> tsc["tsc -p tsconfig.json (type-check only)"]
   tsc --> vite["vite build (vite.config.ts)"]
   vite --> js["public/js/ (one file per module, deps in vendor/)"]
@@ -42,16 +41,16 @@ flowchart LR
 ```
 
 - `prepare-assets.mjs` clears the old output, copies `index.html`,
-  `login.html`, `base-path.js`, `login.js` and `logo.png`, and copies
-  `hls.min.js` without its source-map comment.
+  `login.html`, `base-path.js`, `login.js`, `sw.js` and `logo.png`.
 - `vite.config.ts` makes every module under `web/ts` an entry and uses
-  `preserveModules`, so `public/js` mirrors `web/ts`. The dashboard loads
-  its views lazily, and tests import single shipped modules. Dependencies go
-  to `public/js/vendor/`, because Node treats files under `node_modules` as
-  CommonJS.
+  `preserveModules`, so `public/js` mirrors `web/ts`, and tests import
+  single shipped modules. Dependencies go to `public/js/vendor/`, because
+  Node treats files under `node_modules` as CommonJS. hls.js loads from
+  there when a preview starts (`preview.tsx`), and the public `/watch` page
+  imports the same module.
 - `scripts/release/prepare-build-tree.sh` checks that the key outputs exist
   before a release build (`public/index.html`, `public/output.css`,
-  `public/js/control-room/main.js`, `public/js/lib/hls.min.js`, and others).
+  `public/js/control-room/main.js`, and others).
 
 ```sh
 npm ci
