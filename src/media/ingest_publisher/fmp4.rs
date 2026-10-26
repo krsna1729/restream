@@ -26,8 +26,8 @@ use shiguredo_mp4::demux::Fmp4SegmentDemuxer;
 
 use super::{MediaRejection, SegmentDemux};
 use crate::media::codec::{
-    AAC_SAMPLE_RATES, build_adts_header_for, build_avcc_sequence_header, level_name,
-    parse_h264_sps, profile_name,
+    AAC_SAMPLE_RATES, build_adts_header_for, build_avcc_sequence_header, for_each_length_prefixed,
+    level_name, parse_h264_sps, profile_name,
 };
 use crate::media::metadata::{AudioMeta, VideoMeta};
 use crate::media::mpegts::DemuxProbe;
@@ -708,30 +708,37 @@ fn convert_sample(
             nalu_length_size,
             parameter_sets,
         } => {
-            let nalu_units = avcc_nalus(data, *nalu_length_size).ok_or_else(|| {
-                malformed("video sample ends inside a NALU length field or is empty")
-            })?;
-            if *nal == VideoNal::H265 {
-                keyframe &= nalu_units.iter().any(|nalu| {
-                    nalu.first()
-                        .is_some_and(|header| (16..=23).contains(&((header >> 1) & 0x3F)))
-                });
+            // One pass validates the framing (a truncated access unit is
+            // refused, not published in part) and reads what the second
+            // needs; neither allocates per NAL unit.
+            let (mut irap, mut has_sps, mut annexb_len) = (false, false, 0usize);
+            let framed = for_each_length_prefixed(*nalu_length_size, data, |nalu| {
+                let header = nalu.first().copied().unwrap_or_default();
+                irap |= (16..=23).contains(&((header >> 1) & 0x3F));
+                has_sps |= nal.is_sps(header);
+                annexb_len = annexb_len.saturating_add(nalu.len().saturating_add(START_CODE.len()));
+            });
+            if !framed {
+                return Err(malformed(
+                    "video sample ends inside a NALU length field or is empty",
+                ));
             }
-            let inject = keyframe && !carries_sps(data, *nalu_length_size, *nal);
-            let mut payload = Vec::with_capacity(
-                nalu_units
-                    .iter()
-                    .map(|nalu| nalu.len().saturating_add(START_CODE.len()))
-                    .sum::<usize>()
-                    .saturating_add(if inject { parameter_sets.len() } else { 0 }),
-            );
+            if *nal == VideoNal::H265 {
+                keyframe &= irap;
+            }
+            let inject = keyframe && !has_sps;
+            let mut payload = Vec::with_capacity(annexb_len.saturating_add(if inject {
+                parameter_sets.len()
+            } else {
+                0
+            }));
             if inject {
                 payload.extend_from_slice(parameter_sets);
             }
-            for nalu in nalu_units {
+            for_each_length_prefixed(*nalu_length_size, data, |nalu| {
                 payload.extend_from_slice(&START_CODE);
                 payload.extend_from_slice(nalu);
-            }
+            });
             payload
         }
         Codec::Aac(adts) => {
@@ -762,50 +769,6 @@ fn convert_sample(
         dts,
         payload: Bytes::from(payload),
     })
-}
-
-/// The NAL units of a length-prefixed H.264 sample, `None` if a length
-/// field runs past the sample or is zero: a truncated access unit must be
-/// refused, not published in part.
-fn avcc_nalus(data: &[u8], nalu_length_size: usize) -> Option<Vec<&[u8]>> {
-    if nalu_length_size == 0 {
-        return None;
-    }
-    let mut nalus = Vec::new();
-    let mut rest = data;
-    while !rest.is_empty() {
-        let (length, after) = rest.split_at_checked(nalu_length_size)?;
-        let length = length
-            .iter()
-            .fold(0usize, |len, &byte| (len << 8) | usize::from(byte));
-        if length == 0 {
-            return None;
-        }
-        let (nalu, after) = after.split_at_checked(length)?;
-        nalus.push(nalu);
-        rest = after;
-    }
-    Some(nalus)
-}
-
-/// Whether a length-prefixed H.264 sample carries an SPS (NAL type 7).
-fn carries_sps(mut data: &[u8], nalu_length_size: usize, nal: VideoNal) -> bool {
-    while let Some((length, rest)) = data.split_at_checked(nalu_length_size) {
-        let length = length
-            .iter()
-            .fold(0usize, |len, &byte| (len << 8) | usize::from(byte));
-        let Some((nalu, rest)) = rest.split_at_checked(length) else {
-            return false;
-        };
-        if nalu.first().is_some_and(|header| nal.is_sps(*header)) {
-            return true;
-        }
-        if length == 0 {
-            return false;
-        }
-        data = rest;
-    }
-    false
 }
 
 #[cfg(test)]
