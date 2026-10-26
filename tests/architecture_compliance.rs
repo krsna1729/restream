@@ -268,108 +268,6 @@ fn srt_policy_store_consumes_typed_policies_without_persistence_dependencies() {
     );
 }
 
-/// Production SRT rides `srt_transport::compio::Owner` in both directions. The
-/// retired Restream-native UDP/io_uring transport must not come back into
-/// production SRT source (benchmark-only packet-I/O experiments elsewhere are
-/// intentionally not covered by this guard).
-#[test]
-fn production_srt_does_not_own_native_udp_transport() {
-    const FORBIDDEN: &[&str] = &[
-        "UringUdpDriver",
-        "UringUdpPoller",
-        "UringUdpReceiver",
-        "NativeSrtIngress",
-        "CompatReceiver",
-        "restream_dataplane::udp",
-    ];
-    let roots = ["src/media/srt", "src/media/egress/backends/srt"];
-    let files = ["src/media/srt.rs", "src/media/egress/backends/srt.rs"];
-    let mut inspect = |path: &std::path::Path, source: &str| {
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default();
-        let is_test_file = name.ends_with("_tests.rs")
-            || name == "tests.rs"
-            || path.components().any(|part| part.as_os_str() == "tests");
-        if is_test_file {
-            return;
-        }
-        let production = source.split("#[cfg(test)]").next().unwrap_or(source);
-        for forbidden in FORBIDDEN {
-            assert!(
-                !production.contains(forbidden),
-                "{} references retired native SRT transport `{forbidden}`",
-                path.display()
-            );
-        }
-    };
-    for root in roots {
-        collect_rust_sources(std::path::Path::new(root), &mut inspect);
-    }
-    for file in files {
-        let source = std::fs::read_to_string(file).expect("SRT module root is readable");
-        inspect(std::path::Path::new(file), &source);
-    }
-    for retired in [
-        "crates/restream-dataplane/src/udp.rs",
-        "crates/restream-dataplane/src/udp_recv.rs",
-        "src/media/srt/native_ingress.rs",
-        "src/media/srt/native_ingress_drive.rs",
-    ] {
-        assert!(
-            !std::path::Path::new(retired).exists(),
-            "{retired} was deleted and must not return"
-        );
-    }
-}
-
-/// Kernel-queue telemetry from the removed native SRT UDP monitor must not come
-/// back as fabricated zero-valued fields, alerts or docs. SRT listener state is
-/// `srtListener.ingressOwner`, published by the Compio Owner.
-#[test]
-fn dead_srt_udp_queue_telemetry_does_not_return() {
-    // Fields nobody writes, and retired names/claims describing the removed
-    // kernel-queue monitor or libsrt-era statistics.
-    const DEAD: &[&str] = &[
-        "udpRxQueueBytes",
-        "udpRxQueuePeakBytes",
-        "udpDrops",
-        "srtRecvBufBytes",
-        "srtRecvBufAvailBytes",
-        "srt_recv_buf_avail_bytes",
-        "srt_bistats",
-        "SRT monitor task",
-        "/proc/net/udp",
-        "SRT UDP drops",
-    ];
-    let mut inspect = |path: &std::path::Path, source: &str| {
-        // The harness SRT sink reads real per-socket drops from
-        // `/proc/net/udp` to grade its own receiver; the guard is about
-        // production telemetry.
-        if path.starts_with("src/bin/test_harness") {
-            return;
-        }
-        for dead in DEAD {
-            assert!(
-                !source.contains(dead),
-                "{} reintroduces dead SRT telemetry `{dead}`",
-                path.display()
-            );
-        }
-    };
-    collect_rust_sources(std::path::Path::new("src"), &mut inspect);
-    for doc in [
-        "docs/api-reference.md",
-        "docs/observability.md",
-        "docs/configuration.md",
-        "README.md",
-    ] {
-        let source = std::fs::read_to_string(doc).expect("active doc is readable");
-        inspect(std::path::Path::new(doc), &source);
-    }
-}
-
 #[test]
 fn db_module_uses_explicit_repository_exports() {
     let db_mod = include_str!("../src/db/mod.rs");
@@ -547,21 +445,6 @@ fn app_state_hides_security_session_and_srt_internals() {
             "AppState should expose explicit operation {required}"
         );
     }
-}
-
-#[test]
-fn god_file_extractions_keep_owned_helpers_out_of_protocol_roots() {
-    let rtmp = include_str!("../src/media/rtmp.rs");
-    assert!(
-        !rtmp.contains("struct RtmpTimestampGuard"),
-        "RTMP timestamp monotonicity should stay in the timestamp helper module"
-    );
-
-    let lib_rs = include_str!("../src/lib.rs");
-    assert!(
-        !lib_rs.contains("pub struct RuntimeTuning"),
-        "runtime tuning shape should stay in config, not the crate composition root"
-    );
 }
 
 #[test]

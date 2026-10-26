@@ -8,25 +8,3 @@ mod media_validation;
 mod mixed_execution;
 #[path = "root_tests/output_contracts.rs"]
 mod output_contracts;
-
-fn mixed_runner_matrix_source() -> String {
-    [
-        include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/bin/test_harness/mixed_runner.rs"
-        )),
-        include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/bin/test_harness/mixed_matrix_runner.rs"
-        )),
-        include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/bin/test_harness/mixed_matrix_execution.rs"
-        )),
-        include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/bin/test_harness/mixed_matrix_progress.rs"
-        )),
-    ]
-    .join("\n")
-}
