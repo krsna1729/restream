@@ -32,7 +32,7 @@ use moq_net::VarInt;
 use super::WireError;
 use crate::media::codec::{
     build_avcc_sequence_header, build_hevc_enhanced_rtmp_sequence_header, for_each_annexb_nalu,
-    parse_avcc_config, parse_h264_sps, parse_hevc_profile_tier_level, take_u16_prefixed,
+    h265_nal_type, hvcc_record, parse_avcc_config, parse_h264_sps, parse_hevc_profile_tier_level,
 };
 
 /// hang's catalog track.
@@ -142,7 +142,7 @@ impl VideoConfig {
             }
             VideoCodec::H265 => {
                 let header = build_hevc_enhanced_rtmp_sequence_header(annexb)?;
-                let sps = find_nalu(annexb, |nalu| h265_type(nalu) == Some(33))?;
+                let sps = find_nalu(annexb, |nalu| h265_nal_type(nalu) == Some(33))?;
                 let size = parse_hevc_profile_tier_level(sps).map(|ptl| (ptl.width, ptl.height));
                 (header, size, None)
             }
@@ -185,37 +185,25 @@ fn find_nalu(annexb: &[u8], wanted: impl Fn(&[u8]) -> bool) -> Option<&[u8]> {
     found
 }
 
-fn h265_type(nalu: &[u8]) -> Option<u8> {
-    match nalu {
-        [first, _, ..] => Some((first >> 1) & 0x3F),
-        _ => None,
-    }
-}
-
 /// An hvcC record's (ISO/IEC 14496-15 8.3.3.1) NAL length size and its VPS,
 /// SPS and PPS as Annex-B. Truncation, or a record without an SPS, is `None`.
 fn hvcc_config(record: &[u8]) -> Option<(Bytes, u8)> {
-    let (header, mut rest) = record.split_first_chunk::<22>()?;
-    let size = (header[21] & 0x03).saturating_add(1);
-    let (&arrays, tail) = rest.split_first()?;
-    rest = tail;
+    let record = hvcc_record(record)?;
     let mut sets = Vec::new();
     let mut has_sps = false;
-    for _ in 0..arrays {
-        let (&nal_type, tail) = rest.split_first()?;
-        let (count, tail) = tail.split_first_chunk::<2>()?;
-        rest = tail;
-        let nal_type = nal_type & 0x3F;
-        for _ in 0..u16::from_be_bytes(*count) {
-            let nalu = take_u16_prefixed(&mut rest)?;
-            if (32..=34).contains(&nal_type) && !nalu.is_empty() {
-                has_sps |= nal_type == 33;
-                sets.extend_from_slice(&[0, 0, 0, 1]);
-                sets.extend_from_slice(nalu);
-            }
+    for (kind, nalus) in [(32, &record.vps), (33, &record.sps), (34, &record.pps)] {
+        for nalu in nalus.iter().filter(|nalu| !nalu.is_empty()) {
+            has_sps |= kind == 33;
+            sets.extend_from_slice(&[0, 0, 0, 1]);
+            sets.extend_from_slice(nalu);
         }
     }
-    has_sps.then(|| (Bytes::from(sets), size))
+    has_sps.then(|| {
+        (
+            Bytes::from(sets),
+            record.length_size_minus_one.saturating_add(1),
+        )
+    })
 }
 
 /// Append Annex-B access unit `au` with 4-byte NAL lengths, without access
@@ -227,7 +215,7 @@ fn annexb_to_length_prefixed(codec: VideoCodec, au: &[u8], out: &mut BytesMut) {
             // SPS, PPS, AUD.
             VideoCodec::H264 => nalu.first().is_some_and(|b| matches!(b & 0x1F, 7..=9)),
             // VPS, SPS, PPS, AUD.
-            VideoCodec::H265 => h265_type(nalu).is_some_and(|t| matches!(t, 32..=35)),
+            VideoCodec::H265 => h265_nal_type(nalu).is_some_and(|t| matches!(t, 32..=35)),
         };
         if !out_of_band && let Ok(len) = u32::try_from(nalu.len()) {
             out.put_u32(len);

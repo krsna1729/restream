@@ -23,7 +23,7 @@ pub(crate) use bits::{BitReader, rbsp};
 pub use captions::{FrameCaptions, frame_captions};
 pub(crate) use enhanced_rtmp_hevc::{
     EX_CODED_FRAMES, EX_CODED_FRAMES_X, EX_SEQUENCE_START, ExVideoTag, ex_video_tag,
-    h265_annexb_to_length_prefixed_into, hvcc_record, parse_hevc_profile_tier_level,
+    h265_annexb_to_length_prefixed_into, h265_nal_type, hvcc_record, parse_hevc_profile_tier_level,
 };
 pub use enhanced_rtmp_hevc::{
     build_hevc_enhanced_rtmp_sequence_header, hevc_video_for_enhanced_rtmp_with_composition_into,
