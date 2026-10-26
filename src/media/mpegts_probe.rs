@@ -9,6 +9,8 @@
     clippy::panic
 )]
 
+use std::ops::ControlFlow;
+
 use super::StreamKind;
 use crate::media::metadata::{AudioMeta, VideoMeta};
 
@@ -140,26 +142,19 @@ pub(super) fn audio_meta_complete(kind: StreamKind, meta: &AudioMeta) -> bool {
     }
 }
 
-/// Raw Annex B start-code scanner. Callback receives full NAL data (including header).
+/// Whether `callback` holds for some NAL unit (header included) of an Annex B
+/// payload. Runs per video PES on the SRT ingress Owner, so it walks the
+/// start codes in place rather than collecting them.
 fn for_each_nal_raw<F>(data: &[u8], mut callback: F) -> bool
 where
     F: FnMut(&[u8]) -> bool,
 {
-    let starts = crate::media::codec::find_annexb_start_codes(data);
-    if starts.is_empty() {
-        return false;
-    }
-    let mut starts = starts.iter().peekable();
-    while let Some(&(_, nalu_start)) = starts.next() {
-        let nalu_end = starts
-            .peek()
-            .map_or(data.len(), |&&(next_code, _)| next_code);
-        if let Some(nalu) = data.get(nalu_start..nalu_end)
-            && !nalu.is_empty()
-            && callback(nalu)
-        {
-            return true;
+    crate::media::codec::for_each_annexb_nalu(data, |nalu| {
+        if callback(nalu) {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
         }
-    }
-    false
+    })
+    .is_break()
 }

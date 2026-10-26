@@ -5,10 +5,12 @@
     clippy::expect_used,
     clippy::panic
 )]
+use std::ops::ControlFlow;
+
 use bytes::Bytes;
 
 use super::bits::{BitReader, rbsp};
-use super::video::{signed_be24, split_annexb_nalus, take_u16_prefixed};
+use super::video::{for_each_annexb_nalu, signed_be24, split_annexb_nalus, take_u16_prefixed};
 
 /// Enhanced RTMP (E-RTMP v1) video packet types.
 pub(crate) const EX_SEQUENCE_START: u8 = 0;
@@ -175,24 +177,23 @@ fn push_hvcc_array(out: &mut Vec<u8>, nal_type: u8, nalu: &[u8]) -> Option<()> {
 /// Annex B H.265 as 4-byte length-prefixed NAL units, without the VPS, SPS,
 /// PPS and access unit delimiters; whether a picture slice was written.
 pub(crate) fn h265_annexb_to_length_prefixed_into(data: &[u8], out: &mut Vec<u8>) -> bool {
-    let nalus = split_annexb_nalus(data);
     let mut has_vcl = false;
-    for nalu in &nalus {
+    let _ = for_each_annexb_nalu(data, |nalu| {
         let Some(nal_type) = h265_nal_type(nalu) else {
-            continue;
+            return ControlFlow::Continue(());
         };
         if matches!(nal_type, 32..=35) {
-            continue;
+            return ControlFlow::Continue(());
         }
         if nal_type <= 31 {
             has_vcl = true;
         }
-        let Ok(len) = u32::try_from(nalu.len()) else {
-            continue;
-        };
-        out.extend_from_slice(&len.to_be_bytes());
-        out.extend_from_slice(nalu);
-    }
+        if let Ok(len) = u32::try_from(nalu.len()) {
+            out.extend_from_slice(&len.to_be_bytes());
+            out.extend_from_slice(nalu);
+        }
+        ControlFlow::Continue(())
+    });
     has_vcl
 }
 
