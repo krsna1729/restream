@@ -17,7 +17,6 @@ pub const RESOLVED_CAP: usize = 256;
 #[derive(Debug, Clone)]
 struct AlertHistory {
     first_seen: String,
-    pipeline_id: Option<String>,
     /// The alert as last observed: what the resolved entry reports.
     last: Alert,
 }
@@ -39,13 +38,23 @@ struct TrackerState {
     /// start (a restart forgets), moved to the latest evicted entry's
     /// `resolved_at` once the ring is full.
     complete_from: DateTime<Utc>,
+    /// The notifier's last whole evaluation, which readers are served.
+    latest: Option<Evaluation>,
+}
+
+/// One whole alert evaluation: the open alerts, stamped, and the time of the
+/// health snapshot they were derived from.
+#[derive(Debug, Clone, Default)]
+pub struct Evaluation {
+    pub generated_at: String,
+    pub alerts: Vec<Alert>,
 }
 
 /// Tracks `first_seen`/`last_seen` timestamps for recurring alert conditions.
 ///
-/// Call one of the `track_*` methods after each `derive_alerts` invocation. It
-/// stamps each alert with its history and resolves entries only for the
-/// snapshot scope that was actually observed.
+/// The alert evaluator calls `track` after each whole `derive_alerts` and
+/// `publish`es the result; readers use `latest`, `stamp_only` and
+/// `resolved_since`, which change nothing.
 pub struct AlertTracker {
     state: Mutex<TrackerState>,
 }
@@ -76,28 +85,33 @@ impl AlertTracker {
                 open: HashMap::new(),
                 resolved: VecDeque::with_capacity(RESOLVED_CAP),
                 complete_from: start,
+                latest: None,
             }),
         }
     }
 
     /// Stamp alerts from a complete snapshot and resolve every absent entry.
     pub fn track(&self, alerts: &mut [Alert]) {
-        self.track_at(alerts, Utc::now(), |_| true);
+        self.track_at(alerts, Utc::now());
     }
 
-    /// Stamp alerts from a single-pipeline snapshot and resolve only absent
-    /// entries for that same pipeline. Alerts for other pipelines remain open
-    /// because this snapshot did not observe them.
-    pub fn track_pipeline(&self, pipeline_id: &str, alerts: &mut [Alert]) {
-        self.track_at(alerts, Utc::now(), |history| {
-            history.pipeline_id.as_deref() == Some(pipeline_id)
+    /// Keep `alerts`, already tracked, as the evaluation readers are served.
+    pub fn publish(&self, generated_at: String, alerts: &[Alert]) {
+        crate::sync::lock(&self.state).latest = Some(Evaluation {
+            generated_at,
+            alerts: alerts.to_vec(),
         });
     }
 
-    /// Stamp alerts from a snapshot that does not carry every alert input
-    /// (the pipeline summary). It can neither tell that an alert ended nor
-    /// be trusted to open one (its thinner signals may diagnose another
-    /// cause), so it only stamps alerts already open and changes nothing.
+    /// The last published evaluation, if one has run.
+    pub fn latest(&self) -> Option<Evaluation> {
+        crate::sync::lock(&self.state).latest.clone()
+    }
+
+    /// Stamp alerts that a reader derived itself (a pipeline view) with the
+    /// history the evaluator keeps. Reads change nothing: only the evaluator
+    /// opens or resolves an alert, so the history has one writer however
+    /// many pages are open.
     pub fn stamp_only(&self, alerts: &mut [Alert]) {
         let stamp = Utc::now().to_rfc3339();
         let state = crate::sync::lock(&self.state);
@@ -109,24 +123,20 @@ impl AlertTracker {
         }
     }
 
-    fn track_at(
-        &self,
-        alerts: &mut [Alert],
-        now: DateTime<Utc>,
-        mut observed: impl FnMut(&AlertHistory) -> bool,
-    ) {
+    fn track_at(&self, alerts: &mut [Alert], now: DateTime<Utc>) {
         let stamp = now.to_rfc3339();
         let mut state = crate::sync::lock(&self.state);
         let TrackerState {
             open,
             resolved,
             complete_from,
+            ..
         } = &mut *state;
         let active: HashSet<&str> = alerts.iter().map(|alert| alert.id.as_str()).collect();
 
         let gone: Vec<String> = open
             .iter()
-            .filter(|(id, history)| !active.contains(id.as_str()) && observed(history))
+            .filter(|(id, _)| !active.contains(id.as_str()))
             .map(|(id, _)| id.clone())
             .collect();
         for id in gone {
@@ -151,7 +161,6 @@ impl AlertTracker {
                 .entry(alert.id.clone())
                 .or_insert_with(|| AlertHistory {
                     first_seen: stamp.clone(),
-                    pipeline_id: alert.pipeline_id.clone(),
                     last: alert.clone(),
                 });
             alert.first_seen = Some(entry.first_seen.clone());
@@ -217,9 +226,9 @@ mod tests {
     #[test]
     fn a_resolved_alert_keeps_its_last_observation_and_when_it_closed() {
         let tracker = AlertTracker::started_at(at(-60));
-        tracker.track_at(&mut [alert("a", "p1"), alert("b", "p1")], at(0), |_| true);
-        tracker.track_at(&mut [alert("b", "p1")], at(1), |_| true);
-        tracker.track_at(&mut [], at(2), |_| true);
+        tracker.track_at(&mut [alert("a", "p1"), alert("b", "p1")], at(0));
+        tracker.track_at(&mut [alert("b", "p1")], at(1));
+        tracker.track_at(&mut [], at(2));
 
         let resolved = tracker.resolved_since(at(-60)).alerts;
         assert_eq!(ids(&resolved), ["b", "a"], "newest first");
@@ -234,38 +243,22 @@ mod tests {
         let tracker = AlertTracker::started_at(at(-60));
         for minute in 0..3 {
             let id = format!("m{minute}");
-            tracker.track_at(&mut [alert(&id, "p1")], at(minute), |_| true);
+            tracker.track_at(&mut [alert(&id, "p1")], at(minute));
         }
-        tracker.track_at(&mut [], at(3), |_| true);
+        tracker.track_at(&mut [], at(3));
         // m0 resolved at 1, m1 at 2, m2 at 3.
         assert_eq!(ids(&tracker.resolved_since(at(2)).alerts), ["m2", "m1"]);
         assert!(tracker.resolved_since(at(4)).alerts.is_empty());
     }
 
     #[test]
-    fn a_pipeline_snapshot_resolves_only_its_own_alerts() {
-        let tracker = AlertTracker::started_at(at(-60));
-        tracker.track_at(&mut [alert("a", "p1"), alert("b", "p2")], at(0), |_| true);
-        tracker.track_at(&mut [], at(1), |history| {
-            history.pipeline_id.as_deref() == Some("p1")
-        });
-        assert_eq!(ids(&tracker.resolved_since(at(-60)).alerts), ["a"]);
-        assert_eq!(
-            tracker.resolved_since(at(-60)).complete_from,
-            at(-60),
-            "nothing evicted: complete from the start"
-        );
-        assert_eq!(tracker.active_count(), 1);
-    }
-
-    #[test]
     fn a_flapping_alert_keeps_one_entry_and_evicts_nothing_else() {
         let tracker = AlertTracker::started_at(at(-60));
-        tracker.track_at(&mut [alert("steady", "p2")], at(0), |_| true);
-        tracker.track_at(&mut [], at(0), |_| true);
+        tracker.track_at(&mut [alert("steady", "p2")], at(0));
+        tracker.track_at(&mut [], at(0));
         for minute in 1..=(RESOLVED_CAP as i64 + 44) {
-            tracker.track_at(&mut [alert("flap", "p1")], at(minute), |_| true);
-            tracker.track_at(&mut [], at(minute), |_| true);
+            tracker.track_at(&mut [alert("flap", "p1")], at(minute));
+            tracker.track_at(&mut [], at(minute));
         }
         let window = tracker.resolved_since(at(-60));
         assert_eq!(ids(&window.alerts), ["flap", "steady"]);
@@ -280,7 +273,7 @@ mod tests {
         let mut summary_only = [alert("summary-cause", "p1")];
         tracker.stamp_only(&mut summary_only);
         assert_eq!(summary_only[0].first_seen, None);
-        tracker.track_at(&mut [], at(1), |_| true);
+        tracker.track_at(&mut [], at(1));
         assert!(tracker.resolved_since(at(-60)).alerts.is_empty());
         assert_eq!(tracker.active_count(), 0);
     }
@@ -289,12 +282,12 @@ mod tests {
     fn a_stamp_only_snapshot_resolves_nothing_and_keeps_first_seen() {
         let tracker = AlertTracker::started_at(at(-60));
         let mut full = [alert("stage", "p1")];
-        tracker.track_at(&mut full, at(0), |_| true);
+        tracker.track_at(&mut full, at(0));
         let first_seen = full[0].first_seen.clone();
         // The summary does not derive the stage alert: absent, not ended.
         tracker.stamp_only(&mut []);
         let mut again = [alert("stage", "p1")];
-        tracker.track_at(&mut again, at(1), |_| true);
+        tracker.track_at(&mut again, at(1));
         assert!(tracker.resolved_since(at(-60)).alerts.is_empty());
         assert_eq!(again[0].first_seen, first_seen);
     }
@@ -303,9 +296,9 @@ mod tests {
     fn the_history_is_bounded_and_drops_the_oldest() {
         let tracker = AlertTracker::started_at(at(-60));
         for n in 0..=RESOLVED_CAP {
-            tracker.track_at(&mut [alert(&format!("a{n}"), "p1")], at(0), |_| true);
+            tracker.track_at(&mut [alert(&format!("a{n}"), "p1")], at(0));
         }
-        tracker.track_at(&mut [], at(1), |_| true);
+        tracker.track_at(&mut [], at(1));
         let window = tracker.resolved_since(at(-60));
         assert_eq!(window.alerts.len(), RESOLVED_CAP);
         assert!(

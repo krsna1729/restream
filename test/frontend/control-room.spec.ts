@@ -393,7 +393,8 @@ test("incidents: the correlation reaches back to an incident older than the page
         );
         firstSeen = alert?.firstSeen ?? "";
         return firstSeen;
-      })
+      // Alerts are evaluated every 5 s; a read serves the last evaluation.
+      }, { timeout: 15_000 })
       .not.toBe("");
     // The engine has sampled the degraded fleet since then.
     await expect

@@ -10,7 +10,7 @@ use serde::Serialize;
 mod output;
 mod tracker;
 
-pub use tracker::{AlertTracker, ResolvedAlert, ResolvedWindow};
+pub use tracker::{AlertTracker, Evaluation, ResolvedAlert, ResolvedWindow};
 
 // ─── Severity ────────────────────────────────────────────────────────────────
 

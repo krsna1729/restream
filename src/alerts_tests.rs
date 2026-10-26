@@ -638,7 +638,7 @@ fn tracker_prunes_resolved_alerts() {
 }
 
 #[test]
-fn tracker_pipeline_scope_does_not_prune_other_pipelines() {
+fn a_pipeline_read_stamps_open_alerts_and_changes_no_history() {
     let tracker = AlertTracker::new();
     let snap = json!({
         "generatedAt": "2026-06-25T00:00:00Z",
@@ -661,8 +661,10 @@ fn tracker_pipeline_scope_does_not_prune_other_pipelines() {
 
     let pipe_a = snapshot_with_pipeline("pipe-a", "off");
     let mut pipe_a_alerts = derive_alerts(&pipe_a);
-    tracker.track_pipeline("pipe-a", &mut pipe_a_alerts);
+    tracker.stamp_only(&mut pipe_a_alerts);
 
+    // A pipeline view neither resolves the other pipeline's alert nor
+    // opens anything: only the evaluator writes history.
     assert_eq!(tracker.active_count(), 2);
     assert_eq!(
         pipe_a_alerts[0].first_seen,

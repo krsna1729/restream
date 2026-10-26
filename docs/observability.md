@@ -74,7 +74,7 @@ flowchart LR
     StageSnap --> View
     View --> Health["/api/v1/engine/health"]
     View --> Derive["derive_alerts"]
-    Derive --> Tracker["AlertTracker"]
+    Derive --> Notifier["run_alert_notifier (every 5 s)"] --> Tracker["AlertTracker"]
     Tracker --> Alerts["/api/v1/alerts and pipeline alerts"]
     Derive --> Overview["/api/v1/overview"]
 ```
@@ -538,10 +538,17 @@ of a health snapshot. It returns alerts sorted critical first, then by
 pipeline and id. `AlertTracker` (`src/alerts/tracker.rs`) adds `firstSeen`
 and `lastSeen`.
 
-| Route | Snapshot | Tracking |
+Alerts have one evaluator, as rule state does in Prometheus: the notifier
+loop (`run_alert_notifier`, every 5 s) derives them from the all-pipelines
+snapshot, opens and resolves them in the tracker, publishes the result and
+notifies channels. Reads never evaluate or change alert history, so a page
+shows the state as of `generatedAt`, at most one interval old, however many
+pages are open.
+
+| Route | Source | Tracking |
 |---|---|---|
-| `GET /api/v1/alerts` | All pipelines, no grace | Opens and resolves alerts; `?since=<RFC 3339>` adds `resolved` and `resolvedCompleteFrom` |
-| `GET /api/v1/pipelines/:id/alerts` | One pipeline, no grace | Resolves only that pipeline's alerts |
+| `GET /api/v1/alerts` | The last evaluation (the first read before one has run evaluates once) | None; `?since=<RFC 3339>` adds `resolved` and `resolvedCompleteFrom` |
+| `GET /api/v1/pipelines/:id/alerts` | One pipeline, no grace | Stamps already-open alerts only |
 | `GET /api/v1/pipelines/:id/summary` | Summary view | Stamps already-open alerts only |
 | `GET /api/v1/overview` | All pipelines, no grace | Counts only |
 
