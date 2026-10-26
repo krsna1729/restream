@@ -26,17 +26,14 @@ use shiguredo_mp4::demux::Fmp4SegmentDemuxer;
 
 use super::{MediaRejection, SegmentDemux};
 use crate::media::codec::{
-    build_adts_header_for, build_avcc_sequence_header, level_name, parse_h264_sps, profile_name,
+    AAC_SAMPLE_RATES, build_adts_header_for, build_avcc_sequence_header, level_name,
+    parse_h264_sps, profile_name,
 };
 use crate::media::metadata::{AudioMeta, VideoMeta};
 use crate::media::mpegts::DemuxProbe;
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
 
 const START_CODE: [u8; 4] = [0, 0, 0, 1];
-const AAC_SAMPLE_RATES: [u32; 13] = [
-    96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000,
-    7_350,
-];
 
 fn malformed(message: impl Into<String>) -> MediaRejection {
     MediaRejection::Malformed(message.into())
