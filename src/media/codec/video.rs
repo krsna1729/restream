@@ -788,3 +788,31 @@ pub fn build_avcc_sequence_header(annexb_data: &[u8]) -> Option<Bytes> {
 
     Some(Bytes::from(buf))
 }
+
+/// Visit each NAL unit of a length-prefixed (AVCC/HVCC) access unit with
+/// `size`-byte big-endian lengths (1..=4). `false` when the framing is
+/// broken: a length field or NAL unit runs past the end, or a length is
+/// zero. A truncated access unit must be refused, not published in part.
+pub(crate) fn for_each_length_prefixed(
+    size: usize,
+    mut au: &[u8],
+    mut visit: impl FnMut(&[u8]),
+) -> bool {
+    if !(1..=4).contains(&size) {
+        return false;
+    }
+    while !au.is_empty() {
+        let Some((length, rest)) = au.split_at_checked(size) else {
+            return false;
+        };
+        let len = length
+            .iter()
+            .fold(0usize, |len, &byte| (len << 8) | usize::from(byte));
+        let Some((nalu, rest)) = rest.split_at_checked(len).filter(|_| len > 0) else {
+            return false;
+        };
+        visit(nalu);
+        au = rest;
+    }
+    true
+}

@@ -28,7 +28,10 @@ use std::ops::ControlFlow;
 use bytes::{BufMut, Bytes, BytesMut};
 
 use super::cmaf::CmafTrack;
-use crate::media::codec::{annexb_parameter_sets, build_aac_sequence_header, for_each_annexb_nalu};
+use crate::media::codec::{
+    annexb_parameter_sets, build_aac_sequence_header, for_each_annexb_nalu,
+    for_each_length_prefixed,
+};
 use crate::media::ingest_publisher::fmp4::AdtsConfig;
 use crate::media::metadata::{AudioMeta, VideoMeta};
 use crate::media::moq::WireError;
@@ -424,7 +427,7 @@ impl VideoTrack {
                 }
                 match framing {
                     VideoFraming::LengthPrefixed(size) => {
-                        for_each_length_prefixed(size, payload, |nalu| {
+                        for_each_length_prefixed(usize::from(size), payload, |nalu| {
                             out.put_slice(&[0, 0, 0, 1]);
                             out.put_slice(nalu);
                         });
@@ -502,32 +505,10 @@ impl NalScan {
     }
 }
 
-/// Walk length-prefixed NAL units; `false` if the framing is broken.
-fn for_each_length_prefixed(size: u8, mut au: &[u8], mut visit: impl FnMut(&[u8])) -> bool {
-    let size = usize::from(size);
-    if !(1..=4).contains(&size) {
-        return false;
-    }
-    while !au.is_empty() {
-        let Some((length, rest)) = au.split_at_checked(size) else {
-            return false;
-        };
-        let len = length
-            .iter()
-            .fold(0usize, |len, &byte| (len << 8) | usize::from(byte));
-        let Some((nalu, rest)) = rest.split_at_checked(len).filter(|_| len > 0) else {
-            return false;
-        };
-        visit(nalu);
-        au = rest;
-    }
-    true
-}
-
 fn scan_length_prefixed(codec: VideoCodec, size: u8, au: &[u8]) -> Result<NalScan, ConvertError> {
     let mut scan = NalScan::default();
     let mut any = false;
-    let framed = for_each_length_prefixed(size, au, |nalu| {
+    let framed = for_each_length_prefixed(usize::from(size), au, |nalu| {
         any = true;
         if let Some(&header) = nalu.first() {
             scan.note(codec, header);
