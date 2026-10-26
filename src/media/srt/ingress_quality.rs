@@ -16,7 +16,9 @@
 //! fields, never folded into the ordinary publisher loss counters, because one
 //! degraded leg does not mean the deduplicated logical stream lost data.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
+
+use super::per_second;
 
 use srt_transport::advanced::admission::LogicalPeerStats;
 
@@ -199,13 +201,6 @@ fn is_connected(state: srt_proto::GroupMemberState) -> bool {
     )
 }
 
-/// `current - previous` as a per-second rate, or `None` when the interval is
-/// empty or the counter moved backwards (a reset is not a zero rate).
-fn per_second(current: u64, previous: u64, interval: Duration) -> Option<f64> {
-    let seconds = interval.as_secs_f64();
-    (seconds > 0.0 && current >= previous).then(|| (current - previous) as f64 / seconds)
-}
-
 /// The ingest quality snapshot for `current`, with rates computed against the
 /// previous Owner observation of the same peer when there is one.
 pub(crate) fn quality_from(
@@ -308,6 +303,7 @@ mod tests {
     use srt_transport::advanced::group::{
         GroupAggregateStats, GroupConnectionStats, GroupLegStats,
     };
+    use std::time::Duration;
 
     fn at(base: Instant, seconds: u64, sample: PeerReceiverSample) -> Observation {
         Observation {

@@ -108,26 +108,29 @@ pub fn audio_for_rtmp_into(payload: &[u8], out: &mut Vec<u8>) {
     out.extend_from_slice(raw);
 }
 
+/// The MPEG-4 audio sampling frequencies by `samplingFrequencyIndex`
+/// (ISO/IEC 14496-3 Table 1.18); index 15 means an explicit rate.
+pub const AAC_SAMPLE_RATES: [u32; 13] = [
+    96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000,
+    7_350,
+];
+
+/// The `samplingFrequencyIndex` of `sample_rate`, or `None` for a rate the
+/// table does not list.
+pub fn aac_frequency_index(sample_rate: u32) -> Option<u8> {
+    AAC_SAMPLE_RATES
+        .iter()
+        .position(|&rate| rate == sample_rate)
+        .and_then(|index| u8::try_from(index).ok())
+}
+
 /// Build an FLV audio sequence header (AudioSpecificConfig) from sample rate
 /// and channel count. Used for the SRT→RTMP Raw path where no cached
 /// AudioSpecificConfig exists — the 2-byte config is synthesized from the
 /// audio metadata that is always available.
 pub fn build_aac_sequence_header(sample_rate: u32, channels: u32) -> Bytes {
-    let freq_idx: u8 = match sample_rate {
-        96000 => 0,
-        88200 => 1,
-        64000 => 2,
-        48000 => 3,
-        44100 => 4,
-        32000 => 5,
-        24000 => 6,
-        22050 => 7,
-        16000 => 8,
-        12000 => 9,
-        11025 => 10,
-        8000 => 11,
-        _ => 3,
-    };
+    // An unlisted rate is written as 48 kHz.
+    let freq_idx = aac_frequency_index(sample_rate).unwrap_or(3);
     let chan_cfg = channels.min(7) as u8;
     let audio_object_type: u8 = 2; // AAC-LC
 
@@ -151,21 +154,8 @@ pub const MAX_ADTS_PAYLOAD: usize = 0x1FFF - 7;
 /// Build a 7-byte ADTS header for an AAC frame of `frame_len` bytes, or
 /// `None` above [`MAX_ADTS_PAYLOAD`], where the length field cannot hold it.
 pub fn build_adts_header(frame_len: usize, sample_rate: u32, channels: u32) -> Option<[u8; 7]> {
-    let freq_idx: u8 = match sample_rate {
-        96000 => 0,
-        88200 => 1,
-        64000 => 2,
-        48000 => 3,
-        44100 => 4,
-        32000 => 5,
-        24000 => 6,
-        22050 => 7,
-        16000 => 8,
-        12000 => 9,
-        11025 => 10,
-        8000 => 11,
-        _ => 3,
-    };
+    // An unlisted rate is written as 48 kHz.
+    let freq_idx = aac_frequency_index(sample_rate).unwrap_or(3);
     build_adts_header_for(frame_len, 2, freq_idx, channels.min(7) as u8)
 }
 
@@ -253,11 +243,9 @@ pub fn adts_sample_rate(data: &[u8]) -> Option<u32> {
     if header[0] != 0xFF || header[1] & 0xF0 != 0xF0 {
         return None;
     }
-    const RATES: [u32; 13] = [
-        96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025,
-        8_000, 7_350,
-    ];
-    RATES.get(usize::from((header[2] >> 2) & 0x0F)).copied()
+    AAC_SAMPLE_RATES
+        .get(usize::from((header[2] >> 2) & 0x0F))
+        .copied()
 }
 
 /// `raw_aac` behind an ADTS header, or `None` when it is too long for one.

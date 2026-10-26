@@ -117,12 +117,7 @@ pub(super) fn probe_audio(
             // top two bits of byte 3.
             let channel_config = (u16::from_be_bytes([b2, b3]) >> 6) & 0x07;
 
-            const SAMPLE_RATES: [u32; 13] = [
-                96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000,
-                7350,
-            ];
-
-            if let Some(&rate) = SAMPLE_RATES.get(sample_rate_idx) {
+            if let Some(&rate) = crate::media::codec::AAC_SAMPLE_RATES.get(sample_rate_idx) {
                 meta.sample_rate = rate;
             }
             meta.channels = u32::from(channel_config);

@@ -205,11 +205,7 @@ pub(super) fn parse_flv_audio_meta(data: &[u8]) -> Option<AudioMeta> {
             // 5 bits object type, 4 bits frequency index, 4 bits channels.
             let freq_idx = (u16::from_be_bytes([asc0, asc1]) >> 7) & 0x0F;
             let ch_config = (asc1 >> 3) & 0x0F;
-            let aac_rates: &[u32] = &[
-                96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000,
-                7350,
-            ];
-            if let Some(&rate) = aac_rates.get(usize::from(freq_idx)) {
+            if let Some(&rate) = crate::media::codec::AAC_SAMPLE_RATES.get(usize::from(freq_idx)) {
                 meta.sample_rate = rate;
             }
             if ch_config > 0 {

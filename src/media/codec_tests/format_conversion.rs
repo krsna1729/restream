@@ -348,3 +348,25 @@ fn audio_for_rtmp_strips_adts() {
     assert_eq!(result[1], 0x01);
     assert_eq!(&result[2..], &raw);
 }
+
+#[test]
+fn every_aac_rate_names_its_own_frequency_index() {
+    // ISO/IEC 14496-3 Table 1.18: indices 0..=12, 96 kHz down to 7.35 kHz.
+    for (index, rate) in [
+        96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025,
+        8_000, 7_350,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let adts = build_adts_header(10, rate, 2).unwrap();
+        assert_eq!(usize::from((adts[2] >> 2) & 0x0F), index, "ADTS {rate} Hz");
+        assert_eq!(adts_sample_rate(&adts), Some(rate), "ADTS {rate} Hz read back");
+        let asc = build_aac_sequence_header(rate, 2);
+        let asc_index = (u16::from_be_bytes([asc[2], asc[3]]) >> 7) & 0x0F;
+        assert_eq!(usize::from(asc_index), index, "AudioSpecificConfig {rate} Hz");
+    }
+    // A rate with no index keeps the 48 kHz fallback.
+    let adts = build_adts_header(10, 50_000, 2).unwrap();
+    assert_eq!((adts[2] >> 2) & 0x0F, 3);
+}

@@ -197,7 +197,8 @@ pub(crate) fn h265_annexb_to_length_prefixed_into(data: &[u8], out: &mut Vec<u8>
     has_vcl
 }
 
-fn h265_nal_type(nalu: &[u8]) -> Option<u8> {
+/// The H.265 NAL unit type, from the first of its two header bytes.
+pub(crate) fn h265_nal_type(nalu: &[u8]) -> Option<u8> {
     match nalu {
         [first, _, ..] => Some((first >> 1) & 0x3F),
         _ => None,
