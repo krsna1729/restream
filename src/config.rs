@@ -138,7 +138,7 @@ impl RuntimeTuning {
 const WI37_SRT_SHARDS_ENV: &str = "RESTREAM_WI37_SRT_SHARDS";
 
 /// Benchmark-only exact SRT shard override. Invalid values are ignored here;
-/// the egress-duty harness rejects them before starting a measurement. Keeping
+/// an operator setting one owns validating it. Keeping
 /// parsing in the product config makes the feature seam explicit and leaves
 /// every default build on the production CPU-derived policy.
 fn wi37_srt_shard_override() -> Option<u32> {

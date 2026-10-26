@@ -1,11 +1,8 @@
-//! CPU accounting and thread placement: `/proc/<pid>/stat` tick parsing,
-//! tick deltas, per-unit ratios, `/proc` thread-`comm` discovery of the egress
-//! shard threads, and `sched_setaffinity` set/read-back.
+//! CPU accounting for harness measurements: `/proc/<pid>/stat` tick parsing,
+//! tick deltas, and `/proc` thread-`comm` discovery of the egress shard
+//! threads.
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-
-use super::super::*;
 
 /// `comm` is `PROC_COMM_LEN - 1` bytes on Linux; `egress-shard-{n}` fits up to
 /// `n = 99`, and a longer index arrives truncated.
@@ -14,38 +11,6 @@ pub(super) const COMM_MAX_BYTES: usize = 15;
 /// The production egress shard thread name prefix (`egress-{ShardId}`, and
 /// `ShardId` renders as `shard-{n}`).
 pub(super) const EGRESS_SHARD_PREFIX: &str = "egress-shard-";
-
-/// Pin a thread set to an exact CPU set (`pid == 0` = the calling thread), and
-/// report the mask the kernel actually holds afterwards.
-pub(super) fn set_affinity_mask(pid: u32, cpus: &BTreeSet<u32>) -> Result<Vec<u32>, String> {
-    // SAFETY: cpu_set_t is plain old data; all-zero bytes are the empty set.
-    let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
-    // SAFETY: `set` is a live cpu_set_t; an index past CPU_SETSIZE panics in libc's
-    // Rust wrapper rather than writing out of bounds.
-    unsafe {
-        libc::CPU_ZERO(&mut set);
-    }
-    for cpu in cpus {
-        // SAFETY: `set` is a live cpu_set_t; an index past CPU_SETSIZE panics in libc's
-        // Rust wrapper rather than writing out of bounds.
-        unsafe { libc::CPU_SET(*cpu as usize, &mut set) };
-    }
-    // SAFETY: `set` is a live cpu_set_t and the length passed is its size.
-    let rc = unsafe {
-        libc::sched_setaffinity(
-            pid as libc::pid_t,
-            std::mem::size_of::<libc::cpu_set_t>(),
-            &set,
-        )
-    };
-    if rc != 0 {
-        return Err(format!(
-            "sched_setaffinity({pid}, {cpus:?}): {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    observe_affinity(pid)
-}
 
 /// One `/proc/<pid>/task/<tid>/comm` reading, already trimmed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,15 +30,7 @@ pub(crate) struct EgressShardThread {
     pub(super) comm_truncated: bool,
 }
 
-impl EgressShardThread {
-    pub(super) fn json(&self) -> Value {
-        json!({
-            "tid": self.tid,
-            "index": self.index,
-            "commTruncated": self.comm_truncated,
-        })
-    }
-}
+impl EgressShardThread {}
 
 /// The shard index a thread `comm` names, if it is an egress shard thread.
 pub(super) fn parse_egress_shard_comm(comm: &str) -> Option<(u32, bool)> {
@@ -186,12 +143,6 @@ pub(super) fn ticks_delta(current: u64, previous: u64) -> Option<u64> {
     (current >= previous).then(|| current - previous)
 }
 
-/// Microseconds of CPU per counter unit. `None` when the window carried no
-/// units: a ratio over an empty window is undefined, not zero.
-pub(super) fn micros_per_unit(seconds: f64, units: u64) -> Option<f64> {
-    (units > 0).then(|| seconds * 1_000_000.0 / units as f64)
-}
-
 /// CPU seconds between two tick readings, rounded to nanoseconds.
 pub(crate) fn cpu_secs_between(
     before: CpuTicks,
@@ -203,87 +154,4 @@ pub(crate) fn cpu_secs_between(
     }
     let ticks = ticks_delta(after.total(), before.total())?;
     Some(ticks as f64 / ticks_per_sec as f64)
-}
-
-/// Round to 6 decimal places: enough for microsecond-per-datagram ratios
-/// without printing float noise into the artifact.
-pub(super) fn round6(value: f64) -> f64 {
-    (value * 1_000_000.0).round() / 1_000_000.0
-}
-
-pub(super) fn opt_round6(value: Option<f64>) -> Value {
-    value.map_or(Value::Null, |value| json!(round6(value)))
-}
-
-pub(super) fn read_cpus_allowed_list(pid: u32) -> Option<String> {
-    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
-    status
-        .lines()
-        .find_map(|line| line.strip_prefix("Cpus_allowed_list:"))
-        .map(|value| value.trim().to_string())
-}
-
-/// Observed affinities of a tid, as a CPU list.
-pub(super) fn observe_affinity(tid: u32) -> Result<Vec<u32>, String> {
-    // SAFETY: cpu_set_t is plain old data; all-zero bytes are the empty set.
-    let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
-    // SAFETY: `set` is a live cpu_set_t and the length passed is its size.
-    let rc = unsafe {
-        libc::sched_getaffinity(
-            tid as libc::pid_t,
-            std::mem::size_of::<libc::cpu_set_t>(),
-            &mut set,
-        )
-    };
-    if rc != 0 {
-        return Err(format!(
-            "sched_getaffinity({tid}): {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    Ok((0..libc::CPU_SETSIZE as usize)
-        // SAFETY: `set` is a live cpu_set_t; an index past CPU_SETSIZE panics in libc's
-        // Rust wrapper rather than writing out of bounds.
-        .filter(|cpu| unsafe { libc::CPU_ISSET(*cpu, &set) })
-        .map(|cpu| cpu as u32)
-        .collect())
-}
-
-/// Pin one thread to exactly `cpu` with `sched_setaffinity`, falling back to
-/// `/usr/bin/taskset -pc` when the kernel refuses (a same-UID child is granted
-/// this, but the fallback keeps the mode honest if it is not).
-pub(super) fn set_thread_affinity(tid: u32, cpu: u32) -> Result<(Vec<u32>, &'static str), String> {
-    // SAFETY: cpu_set_t is plain old data; all-zero bytes are the empty set.
-    let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
-    // SAFETY: `set` is a live cpu_set_t; an index past CPU_SETSIZE panics in libc's
-    // Rust wrapper rather than writing out of bounds.
-    unsafe {
-        libc::CPU_ZERO(&mut set);
-        libc::CPU_SET(cpu as usize, &mut set);
-    }
-    // SAFETY: `set` is a live cpu_set_t and the length passed is its size.
-    let rc = unsafe {
-        libc::sched_setaffinity(
-            tid as libc::pid_t,
-            std::mem::size_of::<libc::cpu_set_t>(),
-            &set,
-        )
-    };
-    if rc == 0 {
-        return Ok((observe_affinity(tid)?, "sched_setaffinity"));
-    }
-    let syscall_error = std::io::Error::last_os_error();
-    let fallback = std::process::Command::new("/usr/bin/taskset")
-        .args(["-pc", &cpu.to_string(), &tid.to_string()])
-        .output();
-    match fallback {
-        Ok(output) if output.status.success() => Ok((observe_affinity(tid)?, "taskset-fallback")),
-        Ok(output) => Err(format!(
-            "sched_setaffinity({tid}, {cpu}) failed ({syscall_error}); taskset -pc fallback failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )),
-        Err(error) => Err(format!(
-            "sched_setaffinity({tid}, {cpu}) failed ({syscall_error}); taskset fallback could not run: {error}"
-        )),
-    }
 }

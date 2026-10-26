@@ -59,9 +59,9 @@ flowchart LR
 | `api-contract` (API contract smoke) | `cargo xtask api-contract` | every run |
 | `frontend` (Frontend unit) | `npm run test:frontend:coverage` | every run |
 | `frontend-e2e` (Frontend app E2E) | `npm run test:e2e` in Chromium | after `frontend` |
-| `concurrency-fast` (Concurrency fast proof) | `cargo xtask concurrency fast`, `cargo test --test egress_scheduler_shape` | after `api-contract` |
+| `concurrency-fast` (Concurrency fast proof) | `cargo xtask concurrency fast`, `cargo test --test egress_scheduler_shape` | every run, in parallel |
 | `concurrency-contract` (Concurrency live lifecycle proof) | `cargo xtask concurrency contract` with `--no-netns` | `master` only |
-| `fuzz-smoke` (Parser fuzz smoke) | every target in `fuzz/` for 30 s | after `test` |
+| `fuzz-smoke` (Parser fuzz smoke) | every target in `fuzz/` for 30 s | after `test`; on pull requests only when the diff touches `src/media/`, `src/lib.rs`, `fuzz/`, `vendor/`, the Cargo manifests, the toolchain or `ci.yml` |
 | `miri` (Miri) | `cargo +nightly miri test --lib` over `MIRI_FILTERS` | after `test` |
 | `kani` (Kani) | `cargo kani --lib -Z stubbing`; expects `KANI_PROOFS` (7) proofs and every cover satisfied | after `test` |
 | `asan` (AddressSanitizer) | `cargo +nightly test -Zbuild-std` over `ASAN_FILTERS` | after `test` |

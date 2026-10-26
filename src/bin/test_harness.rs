@@ -40,8 +40,6 @@ mod catalog;
 mod catalog_cli;
 #[path = "test_harness/core.rs"]
 mod core;
-#[path = "test_harness/egress_duty.rs"]
-mod egress_duty;
 #[path = "test_harness/fault_input_promotion.rs"]
 mod fault_input_promotion;
 #[path = "test_harness/fault_manifest.rs"]
@@ -82,6 +80,8 @@ mod moq_moxygen_interop;
 mod moq_relay_interop;
 #[path = "test_harness/output_progress.rs"]
 mod output_progress;
+#[path = "test_harness/thread_cpu.rs"]
+mod thread_cpu;
 
 #[path = "test_harness/peer_state.rs"]
 mod peer_state;
@@ -100,11 +100,10 @@ mod srt_slow_peer;
 #[path = "test_harness/srt_urls.rs"]
 mod srt_urls;
 
-#[path = "test_harness/substrate_pps.rs"]
-mod substrate_pps;
 #[path = "test_harness/suite.rs"]
 mod suite;
 
+#[cfg(test)]
 #[path = "test_harness/udp_drain.rs"]
 mod udp_drain;
 #[path = "test_harness/workflow_exec.rs"]
@@ -113,7 +112,6 @@ mod workflow_exec;
 use api_client::*;
 use catalog_cli::*;
 use core::*;
-use egress_duty::*;
 use fault_input_promotion::*;
 use fault_manifest::*;
 use fault_recovery::*;
@@ -268,15 +266,12 @@ async fn run() -> Result<(), String> {
             "recovery" => recovery().await,
             "resource-sweep" => resource_sweep().await,
             "srt-sink" => srt_sink::srt_sink_mode().await,
-            "egress-duty" => egress_duty().await,
             "hls-pull-duty" => hls_pull_duty(&raw[1..]).await,
             "hls-push-duty" => hls_push_duty(&raw[1..]).await,
             "moq-relay-interop" => moq_relay_interop::moq_relay_interop(&raw[1..]).await,
             "moq-dev-interop" => moq_dev_interop::moq_dev_interop(&raw[1..]).await,
             "moq-impairment" => moq_impairment::moq_impairment(&raw[1..]).await,
             "moq-moxygen-interop" => moq_moxygen_interop::moq_moxygen_interop(&raw[1..]).await,
-            "udp-drain" => udp_drain::udp_drain_mode().await,
-            "substrate-pps" => substrate_pps::substrate_pps_mode().await,
             "msr" => msr().await,
             "bitrate-sweep" => bitrate_sweep().await,
             "branch-matrix" => branch_matrix().await,
