@@ -18,6 +18,8 @@
 
 use std::time::{Duration, Instant};
 
+use super::per_second;
+
 use srt_transport::advanced::admission::LogicalPeerStats;
 
 use super::ingress_bridge::IngressPeer;
@@ -197,13 +199,6 @@ fn is_connected(state: srt_proto::GroupMemberState) -> bool {
         state,
         GroupMemberState::Active | GroupMemberState::Standby | GroupMemberState::Unstable
     )
-}
-
-/// `current - previous` as a per-second rate, or `None` when the interval is
-/// empty or the counter moved backwards (a reset is not a zero rate).
-fn per_second(current: u64, previous: u64, interval: Duration) -> Option<f64> {
-    let seconds = interval.as_secs_f64();
-    (seconds > 0.0 && current >= previous).then(|| (current - previous) as f64 / seconds)
 }
 
 /// The ingest quality snapshot for `current`, with rates computed against the

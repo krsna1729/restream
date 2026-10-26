@@ -3,6 +3,8 @@
 
 use std::time::{Duration, Instant};
 
+use super::per_second;
+
 use srt_transport::advanced::caller::LogicalCallerStats;
 
 use crate::media::snapshots::PublisherQuality;
@@ -44,13 +46,6 @@ pub(crate) fn send_backlog(stats: &LogicalCallerStats) -> Option<SrtSendBacklog>
 /// Bytes per second as megabits per second (the unit `mbps_*` fields carry).
 fn megabits_per_second(bytes_per_second: f64) -> f64 {
     bytes_per_second * 8.0 / 1_000_000.0
-}
-
-/// `current - previous` as a per-second rate, or `None` when the interval is
-/// empty or the counter moved backwards (a reset is not a zero rate).
-fn per_second(current: u64, previous: u64, interval: Duration) -> Option<f64> {
-    let seconds = interval.as_secs_f64();
-    (seconds > 0.0 && current >= previous).then(|| (current - previous) as f64 / seconds)
 }
 
 /// One cumulative wire-sender counter reading, stamped.
