@@ -31,7 +31,7 @@ pub use enhanced_rtmp_hevc::{
 pub(crate) use h264_sps::{level_name, parse_h264_sps, profile_name};
 pub(crate) use video::{
     AnnexbParameterSetAccumulator, annexb_parameter_sets, avcc_record, flv_video_config,
-    for_each_annexb_nalu, raw_annexb_is_keyframe, take_u16_prefixed,
+    for_each_annexb_nalu, for_each_length_prefixed, raw_annexb_is_keyframe, take_u16_prefixed,
 };
 pub use video::{
     annexb_to_avcc, annexb_to_avcc_into, annexb_to_avcc_with_scratch, avcc_to_annexb,
