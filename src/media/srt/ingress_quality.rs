@@ -16,7 +16,7 @@
 //! fields, never folded into the ordinary publisher loss counters, because one
 //! degraded leg does not mean the deduplicated logical stream lost data.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::per_second;
 
@@ -303,6 +303,7 @@ mod tests {
     use srt_transport::advanced::group::{
         GroupAggregateStats, GroupConnectionStats, GroupLegStats,
     };
+    use std::time::Duration;
 
     fn at(base: Instant, seconds: u64, sample: PeerReceiverSample) -> Observation {
         Observation {

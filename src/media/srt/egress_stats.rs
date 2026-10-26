@@ -1,7 +1,7 @@
 //! Product-level SRT sender signals derived from public `srt-transport`
 //! logical-caller statistics. Nothing here reads private table state.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::per_second;
 
@@ -150,6 +150,7 @@ mod tests {
     use srt_transport::advanced::group::{
         GroupAggregateStats, GroupConnectionStats, GroupLegStats,
     };
+    use std::time::Duration;
 
     /// A sender with the wire counter under test; peer feedback stays absent
     /// unless a test sets it, exactly as it is until an ACK arrives.
