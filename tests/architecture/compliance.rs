@@ -1,4 +1,4 @@
-#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
+use super::collect_rust_sources;
 use restream::domain::ids::OutputId;
 use restream::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
 use restream::domain::output_spec::OutputConfig;
@@ -38,7 +38,7 @@ async fn test_phase_3_routing_resolves_all_major_routes() {
 
 #[test]
 fn router_routes_have_explicit_auth_classification() {
-    let source = include_str!("../src/api/router.rs");
+    let source = include_str!("../../src/api/router.rs");
     let declared = extract_router_route_paths(source);
     let public: BTreeSet<&str> = restream::api::router::PUBLIC_ROUTE_PATHS
         .iter()
@@ -71,7 +71,7 @@ fn router_routes_have_explicit_auth_classification() {
 
 #[test]
 fn release_policy_metadata_is_declared_and_enforced() {
-    let cargo_toml = include_str!("../Cargo.toml");
+    let cargo_toml = include_str!("../../Cargo.toml");
     assert!(cargo_toml.contains("rust-version = \"1.96\""));
     assert!(cargo_toml.contains("publish = false"));
     assert!(cargo_toml.contains("license = \"MIT\""));
@@ -80,7 +80,7 @@ fn release_policy_metadata_is_declared_and_enforced() {
 
     // Media codecs run only in external FFmpeg processes: the engine links no
     // native media library.
-    let build_rs = include_str!("../build.rs");
+    let build_rs = include_str!("../../build.rs");
     assert!(!cargo_toml.contains("ffmpeg-next"));
     assert!(!cargo_toml.contains("ffmpeg-sys"));
     assert!(!build_rs.contains("rustc-link-arg"));
@@ -115,25 +115,25 @@ fn release_policy_metadata_is_declared_and_enforced() {
         srt_revs[0], srt_revs[1],
         "srt-rs crates must share one revision"
     );
-    let third_party = include_str!("../distribution/THIRD_PARTY_COMPONENTS.md");
+    let third_party = include_str!("../../distribution/THIRD_PARTY_COMPONENTS.md");
     assert!(
         third_party.contains(&format!("git commit `{}`", srt_revs[0])),
         "distribution/THIRD_PARTY_COMPONENTS.md must name the pinned srt-rs revision"
     );
 
-    let deny_toml = include_str!("../deny.toml");
+    let deny_toml = include_str!("../../deny.toml");
     assert!(deny_toml.contains("unknown-registry = \"deny\""));
     assert!(deny_toml.contains("unknown-git = \"deny\""));
     assert!(deny_toml.contains("duplicate families currently come through"));
 
-    let sbom_workflow = include_str!("../.github/workflows/sbom-security.yml");
+    let sbom_workflow = include_str!("../../.github/workflows/sbom-security.yml");
     assert!(sbom_workflow.contains("cargo deny check advisories licenses bans sources"));
 
-    let license = include_str!("../LICENSE.md");
+    let license = include_str!("../../LICENSE.md");
     assert!(license.contains("MIT License"));
     assert!(license.contains("Permission is hereby granted"));
 
-    let runtime_info = include_str!("../src/runtime_info.rs");
+    let runtime_info = include_str!("../../src/runtime_info.rs");
     for required in [
         "env!(\"RESTREAM_BUILD_TIMESTAMP\")",
         "restream:enabledFeatures",
@@ -149,7 +149,7 @@ fn release_policy_metadata_is_declared_and_enforced() {
 
 #[test]
 fn hls_preview_runtime_execution_stays_out_of_planner() {
-    let planner_mod = include_str!("../src/planner/mod.rs");
+    let planner_mod = include_str!("../../src/planner/mod.rs");
     assert!(
         !planner_mod.contains("mod hls_preview")
             && !planner_mod.contains("pub mod hls_preview")
@@ -158,12 +158,12 @@ fn hls_preview_runtime_execution_stays_out_of_planner() {
         "planner root may re-export pure HLS preview planning, but not runtime execution"
     );
 
-    let graph_plan = include_str!("../src/planner/graph_plan.rs");
+    let graph_plan = include_str!("../../src/planner/graph_plan.rs");
     assert!(graph_plan.contains("pub fn plan_hls_preview_graph"));
     assert!(!graph_plan.contains("StageRuntimeManager"));
     assert!(!graph_plan.contains("tokio::time"));
 
-    let preview_graph = include_str!("../src/media/hls/preview_graph.rs");
+    let preview_graph = include_str!("../../src/media/hls/preview_graph.rs");
     assert!(preview_graph.contains("StageRuntimeManager"));
     assert!(preview_graph.contains("resolve_hls_preview_graph"));
 }
@@ -232,19 +232,19 @@ fn agent_core_stays_independent_of_edge_and_runtime_layers() {
         "agent_core must stay transport-, persistence-, and runtime-independent: {offenders:?}"
     );
 
-    let cargo_toml = include_str!("../Cargo.toml");
+    let cargo_toml = include_str!("../../Cargo.toml");
     assert!(
         cargo_toml
             .lines()
             .any(|line| line.trim() == "mcp-core = []"),
         "mcp-core must not enable the in-process agent plane"
     );
-    let lib_rs = include_str!("../src/lib.rs");
+    let lib_rs = include_str!("../../src/lib.rs");
     assert!(
         lib_rs.contains("#[cfg(any(feature = \"agent-plane\", feature = \"mcp-core\"))]"),
         "agent_core must compile for either the HTTP agent plane or MCP core"
     );
-    let backends_mod = include_str!("../src/agent_backends/mod.rs");
+    let backends_mod = include_str!("../../src/agent_backends/mod.rs");
     assert!(backends_mod.contains("#[cfg(feature = \"mcp-http-backend\")]"));
     assert!(
         !backends_mod.contains("in_process"),
@@ -254,7 +254,7 @@ fn agent_core_stays_independent_of_edge_and_runtime_layers() {
 
 #[test]
 fn srt_policy_store_consumes_typed_policies_without_persistence_dependencies() {
-    let srt_policy = include_str!("../src/media/srt_policy.rs");
+    let srt_policy = include_str!("../../src/media/srt_policy.rs");
     assert!(srt_policy.contains("pub struct SrtIngestPolicyEntry"));
     assert!(srt_policy.contains("pub policy: SrtPipelineIngestConfig"));
     assert!(
@@ -270,7 +270,7 @@ fn srt_policy_store_consumes_typed_policies_without_persistence_dependencies() {
 
 #[test]
 fn db_module_uses_explicit_repository_exports() {
-    let db_mod = include_str!("../src/db/mod.rs");
+    let db_mod = include_str!("../../src/db/mod.rs");
     assert!(
         !db_mod.contains("pub use ingest_repo::*"),
         "db repositories should export explicit APIs, not wildcard repository surfaces"
@@ -287,35 +287,38 @@ fn db_module_uses_explicit_repository_exports() {
 #[test]
 fn db_production_layer_stays_independent_of_application() {
     for (name, source) in [
-        ("db/mod.rs", include_str!("../src/db/mod.rs")),
+        ("db/mod.rs", include_str!("../../src/db/mod.rs")),
         (
             "db/ingest_repo.rs",
-            include_str!("../src/db/ingest_repo.rs"),
+            include_str!("../../src/db/ingest_repo.rs"),
         ),
-        ("db/job_repo.rs", include_str!("../src/db/job_repo.rs")),
-        ("db/log_repo.rs", include_str!("../src/db/log_repo.rs")),
-        ("db/meta_repo.rs", include_str!("../src/db/meta_repo.rs")),
-        ("db/migrations.rs", include_str!("../src/db/migrations.rs")),
+        ("db/job_repo.rs", include_str!("../../src/db/job_repo.rs")),
+        ("db/log_repo.rs", include_str!("../../src/db/log_repo.rs")),
+        ("db/meta_repo.rs", include_str!("../../src/db/meta_repo.rs")),
+        (
+            "db/migrations.rs",
+            include_str!("../../src/db/migrations.rs"),
+        ),
         (
             "db/output_repo.rs",
-            include_str!("../src/db/output_repo.rs"),
+            include_str!("../../src/db/output_repo.rs"),
         ),
         (
             "db/pipeline_input_repo.rs",
-            include_str!("../src/db/pipeline_input_repo.rs"),
+            include_str!("../../src/db/pipeline_input_repo.rs"),
         ),
         (
             "db/pipeline_repo.rs",
-            include_str!("../src/db/pipeline_repo.rs"),
+            include_str!("../../src/db/pipeline_repo.rs"),
         ),
         (
             "db/recording_repo.rs",
-            include_str!("../src/db/recording_repo.rs"),
+            include_str!("../../src/db/recording_repo.rs"),
         ),
-        ("db/schema.rs", include_str!("../src/db/schema.rs")),
+        ("db/schema.rs", include_str!("../../src/db/schema.rs")),
         (
             "db/session_repo.rs",
-            include_str!("../src/db/session_repo.rs"),
+            include_str!("../../src/db/session_repo.rs"),
         ),
     ] {
         assert!(
@@ -327,7 +330,7 @@ fn db_production_layer_stays_independent_of_application() {
 
 #[test]
 fn application_ports_are_abstract_and_sqlite_adapters_live_in_infrastructure() {
-    let ports = include_str!("../src/application/ports.rs");
+    let ports = include_str!("../../src/application/ports.rs");
     for forbidden in ["sqlx", "Sqlite", "crate::db"] {
         assert!(
             !ports.contains(forbidden),
@@ -335,11 +338,11 @@ fn application_ports_are_abstract_and_sqlite_adapters_live_in_infrastructure() {
         );
     }
 
-    let infrastructure_mod = include_str!("../src/infrastructure/mod.rs");
+    let infrastructure_mod = include_str!("../../src/infrastructure/mod.rs");
     assert!(infrastructure_mod.contains("pub mod sqlite_ports;"));
     assert!(infrastructure_mod.contains("pub mod recording_metadata;"));
 
-    let sqlite_ports = include_str!("../src/infrastructure/sqlite_ports.rs");
+    let sqlite_ports = include_str!("../../src/infrastructure/sqlite_ports.rs");
     assert!(sqlite_ports.contains("SqlitePool"));
     assert!(sqlite_ports.contains("impl PipelineStore for SqlitePipelineStore"));
     assert!(
@@ -376,7 +379,7 @@ fn application_production_code_does_not_depend_on_axum() {
 
 #[test]
 fn recording_metadata_persistence_is_infrastructure_owned() {
-    let recording = include_str!("../src/application/recording.rs");
+    let recording = include_str!("../../src/application/recording.rs");
     let production_recording = recording
         .split("#[cfg(test)]")
         .next()
@@ -388,23 +391,23 @@ fn recording_metadata_persistence_is_infrastructure_owned() {
         );
     }
 
-    let infrastructure = include_str!("../src/infrastructure/recording_metadata.rs");
+    let infrastructure = include_str!("../../src/infrastructure/recording_metadata.rs");
     assert!(infrastructure.contains("SqlitePool"));
     assert!(infrastructure.contains("persist_recording_metadata_event"));
 }
 
 #[test]
 fn application_records_do_not_live_in_root_types_module() {
-    let lib_rs = include_str!("../src/lib.rs");
+    let lib_rs = include_str!("../../src/lib.rs");
     assert!(
         !lib_rs.contains("pub mod types;"),
         "application records should live under application::models, not a root types module"
     );
 
-    let application_mod = include_str!("../src/application/mod.rs");
+    let application_mod = include_str!("../../src/application/mod.rs");
     assert!(application_mod.contains("pub mod models;"));
 
-    let models = include_str!("../src/application/models.rs");
+    let models = include_str!("../../src/application/models.rs");
     assert!(models.contains("pub struct Pipeline"));
     assert!(models.contains("pub struct Output"));
     assert!(models.contains("pub struct Ingest"));
@@ -413,7 +416,7 @@ fn application_records_do_not_live_in_root_types_module() {
 
 #[test]
 fn app_state_hides_security_session_and_srt_internals() {
-    let state = include_str!("../src/api/state.rs");
+    let state = include_str!("../../src/api/state.rs");
     let app_state = state
         .split("pub struct AppState {")
         .nth(1)
@@ -449,13 +452,13 @@ fn app_state_hides_security_session_and_srt_internals() {
 
 #[test]
 fn runtime_json_views_stay_out_of_application_services() {
-    let services_mod = include_str!("../src/application/services/mod.rs");
+    let services_mod = include_str!("../../src/application/services/mod.rs");
     assert!(
         !services_mod.contains("runtime_view_service"),
         "API/runtime JSON adapters should stay at the presentation-runtime boundary"
     );
 
-    let app_state = include_str!("../src/api/state.rs");
+    let app_state = include_str!("../../src/api/state.rs");
     assert!(
         !app_state.contains("RuntimeViewService"),
         "AppState should not carry a pass-through application service for API JSON views"
@@ -464,12 +467,12 @@ fn runtime_json_views_stay_out_of_application_services() {
 
 #[test]
 fn frontend_tooling_and_vendored_assets_are_reproducible() {
-    let package_json = include_str!("../package.json");
+    let package_json = include_str!("../../package.json");
     assert!(package_json.contains("\"build:frontend\""));
     assert!(package_json.contains("\"format:check\""));
     assert!(package_json.contains("\"test:frontend\""));
 
-    let package_lock = include_str!("../package-lock.json");
+    let package_lock = include_str!("../../package-lock.json");
     assert!(package_lock.contains("\"lockfileVersion\""));
     assert!(package_lock.contains("\"hls.js\""));
 
@@ -489,7 +492,7 @@ fn frontend_tooling_and_vendored_assets_are_reproducible() {
 
 #[test]
 fn source_distribution_manifest_matches_declared_build_inputs() {
-    let cargo_toml = include_str!("../Cargo.toml");
+    let cargo_toml = include_str!("../../Cargo.toml");
     let mut missing_benches = Vec::new();
     for bench in declared_benches(cargo_toml) {
         let expected = format!("benches/{bench}.rs");
@@ -540,21 +543,6 @@ fn declared_benches(cargo_toml: &str) -> Vec<&str> {
         }
     }
     benches
-}
-
-fn collect_rust_sources(
-    directory: &std::path::Path,
-    inspect: &mut impl FnMut(&std::path::Path, &str),
-) {
-    for entry in std::fs::read_dir(directory).expect("Rust source directory should be readable") {
-        let path = entry.expect("Rust source entry should be readable").path();
-        if path.is_dir() {
-            collect_rust_sources(&path, inspect);
-        } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
-            let source = std::fs::read_to_string(&path).expect("Rust source should be UTF-8");
-            inspect(&path, &source);
-        }
-    }
 }
 
 fn extract_router_route_paths(source: &'static str) -> BTreeSet<&'static str> {

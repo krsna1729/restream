@@ -1,13 +1,18 @@
-#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 #[test]
 fn selected_runtime_contracts_stay_ready_for_extraction() {
     for (name, source) in [
-        ("runtime/graph.rs", include_str!("../src/runtime/graph.rs")),
+        (
+            "runtime/graph.rs",
+            include_str!("../../src/runtime/graph.rs"),
+        ),
         (
             "runtime/output.rs",
-            include_str!("../src/runtime/output.rs"),
+            include_str!("../../src/runtime/output.rs"),
         ),
-        ("runtime/stage.rs", include_str!("../src/runtime/stage.rs")),
+        (
+            "runtime/stage.rs",
+            include_str!("../../src/runtime/stage.rs"),
+        ),
     ] {
         for forbidden in [
             "crate::media::",
@@ -31,7 +36,7 @@ fn selected_runtime_contracts_stay_ready_for_extraction() {
 
 #[test]
 fn runtime_module_has_no_upward_compatibility_facades() {
-    let runtime_mod = include_str!("../src/runtime/mod.rs");
+    let runtime_mod = include_str!("../../src/runtime/mod.rs");
 
     assert!(
         !runtime_mod.contains("pub mod snapshots"),
@@ -45,7 +50,7 @@ fn runtime_module_has_no_upward_compatibility_facades() {
 
 #[test]
 fn hls_preview_consumes_typed_runtime_state() {
-    let hls_preview = include_str!("../src/application/hls_preview.rs");
+    let hls_preview = include_str!("../../src/application/hls_preview.rs");
 
     assert!(
         !hls_preview.contains("api_runtime_views") && !hls_preview.contains("serde_json"),
