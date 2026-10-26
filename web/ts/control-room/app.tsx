@@ -1,38 +1,42 @@
-import { useCallback, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useMemo, useState } from "react";
 
 import { PrefsProvider } from "../ui/prefs.js";
-import { Capacity } from "./capacity.js";
-import { Changes } from "./changes.js";
-import { Channels } from "./channels.js";
 import { Fleet } from "./fleet.js";
-import { Incidents } from "./incidents.js";
-import { Inspect } from "./inspect.js";
-import { Logs } from "./logs.js";
-import { Media } from "./media.js";
-import { Monitor } from "./monitor.js";
-import { Operate } from "./operate.js";
-import { Pipelines } from "./pipelines.js";
 import { useOpenAlerts } from "./polled.js";
 import { usePlace } from "./router.js";
-import { Settings } from "./settings.js";
-import { StreamHealth } from "./stream-health.js";
-import { Wall } from "./wall.js";
 import { navBadges } from "./shell/badges.js";
 import { CommandPalette, useCommandPaletteShortcut } from "./shell/command-palette.js";
 import { MobileTabs, MoreSheet } from "./shell/mobile-nav.js";
 import { Sidebar } from "./shell/sidebar.js";
 import { Topbar, ViewAsBanner } from "./shell/topbar.js";
 import { useLive } from "./store.js";
-import { StabilityLab } from "./stability/stability.js";
-import { System } from "./system.js";
-import { Audit, Team } from "./team.js";
-import { Notifications } from "./notifications.js";
-import { ScheduleView } from "./schedule.js";
 import { useInTabAlertNotifications } from "./browser-notify.js";
 import { useTabAlerts } from "./tab-alerts.js";
-import { Architecture } from "./architecture.js";
-import { Guides } from "./guides.js";
 import { HelpButton, TourProvider } from "./shell/help.js";
+
+// Each workspace loads when first opened; Fleet, the landing page, ships
+// with the shell. Their modules are already separate files (preserveModules).
+const Capacity = lazy(() => import("./capacity.js").then((module) => ({ default: module.Capacity })));
+const Changes = lazy(() => import("./changes.js").then((module) => ({ default: module.Changes })));
+const Channels = lazy(() => import("./channels.js").then((module) => ({ default: module.Channels })));
+const Incidents = lazy(() => import("./incidents.js").then((module) => ({ default: module.Incidents })));
+const Inspect = lazy(() => import("./inspect.js").then((module) => ({ default: module.Inspect })));
+const Logs = lazy(() => import("./logs.js").then((module) => ({ default: module.Logs })));
+const Media = lazy(() => import("./media.js").then((module) => ({ default: module.Media })));
+const Monitor = lazy(() => import("./monitor.js").then((module) => ({ default: module.Monitor })));
+const Operate = lazy(() => import("./operate.js").then((module) => ({ default: module.Operate })));
+const Pipelines = lazy(() => import("./pipelines.js").then((module) => ({ default: module.Pipelines })));
+const Settings = lazy(() => import("./settings.js").then((module) => ({ default: module.Settings })));
+const StreamHealth = lazy(() => import("./stream-health.js").then((module) => ({ default: module.StreamHealth })));
+const Wall = lazy(() => import("./wall.js").then((module) => ({ default: module.Wall })));
+const StabilityLab = lazy(() => import("./stability/stability.js").then((module) => ({ default: module.StabilityLab })));
+const System = lazy(() => import("./system.js").then((module) => ({ default: module.System })));
+const Notifications = lazy(() => import("./notifications.js").then((module) => ({ default: module.Notifications })));
+const ScheduleView = lazy(() => import("./schedule.js").then((module) => ({ default: module.ScheduleView })));
+const Architecture = lazy(() => import("./architecture.js").then((module) => ({ default: module.Architecture })));
+const Guides = lazy(() => import("./guides.js").then((module) => ({ default: module.Guides })));
+const Team = lazy(() => import("./team.js").then((module) => ({ default: module.Team })));
+const Audit = lazy(() => import("./team.js").then((module) => ({ default: module.Audit })));
 
 export function App() {
   return (
@@ -88,6 +92,7 @@ function Shell() {
             <span id="error-msg" />
           </div>
           <main className="mx-auto w-full max-w-[1680px] flex-1 px-3 pt-4 pb-24 md:px-6 md:pb-8">
+            <Suspense fallback={<WorkspaceLoading />}>
             {place.workspace === "fleet" && <Fleet live={live} />}
             {place.workspace === "channels" && <Channels live={live} />}
             {place.workspace === "pipelines" && <Pipelines live={live} />}
@@ -112,6 +117,7 @@ function Shell() {
             {place.workspace === "settings" && <Settings />}
             {place.workspace === "guides" && <Guides />}
             {place.workspace === "architecture" && <Architecture />}
+            </Suspense>
           </main>
         </div>
         <MobileTabs badges={badges} onMore={() => setMoreOpen(true)} moreOpen={moreOpen} />
@@ -124,5 +130,13 @@ function Shell() {
         />
       </div>
     </TourProvider>
+  );
+}
+
+function WorkspaceLoading() {
+  return (
+    <p className="text-sm text-base-content/70" role="status">
+      Loading…
+    </p>
   );
 }
