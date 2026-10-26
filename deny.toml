@@ -3,9 +3,7 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 # cargo-deny 0.20 derives advisory severity from the advisory database. Keep
 # this section minimal so release CI can use the current prebuilt cargo-deny
 # binary without schema drift blocking the real vulnerability check.
-ignore = [
-  { id = "RUSTSEC-2024-0436", reason = "paste is pulled through the dev-only pulp benchmark dependency; keep visible through cargo audit warnings while avoiding a release hard block." },
-]
+ignore = []
 
 [licenses]
 allow = [

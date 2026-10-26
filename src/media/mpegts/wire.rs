@@ -77,7 +77,7 @@ pub(super) fn ms_to_ts(ms: i64) -> i64 {
 // Benchmarked crc-fast (PCLMULQDQ) vs table-driven: at our workload sizes
 // (12-22 bytes, once per ~100ms), crc-fast is 2.5× slower due to SIMD dispatch
 // overhead. Table-driven is zero-dependency, faster at these sizes, and more than
-// sufficient for production. See benches/simd_alternatives.rs.
+// sufficient for production.
 //
 // All operations used in the table computation (`<<`, `^`, conditionals) are
 // valid in `const fn`, so the table is computed at compile time and placed in

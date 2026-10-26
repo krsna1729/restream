@@ -137,8 +137,6 @@ criterion = "0.8"
 rtrb = "0.4"
 crossbeam-queue = "0.3"
 http-body-util = "0.1"
-pulp = { version = "0.22", features = ["x86-v4"] }
-wide = "1.5"
 proptest = "1"
 loom = { version = "0.7", features = ["checkpoint"] }
 rcgen = "0.14.8"
@@ -150,10 +148,6 @@ ts-rs = "12"
 name = "restream-mcp"
 path = "src/bin/restream-mcp.rs"
 required-features = ["mcp-server", "mcp-http-backend"]
-
-[[bench]]
-name = "simd_alternatives"
-harness = false
 
 [[bench]]
 name = "ring_buffer"
