@@ -8,9 +8,10 @@ const { buildResourceRows, nodeCards, ringFromGraph, shardsFrom } =
 const { incidentOnsets, takeSample } = await loadCompiledFrontendModule(
   "control-room/monitor-model.js",
 );
-const { appendSample, sparkline } = await loadCompiledFrontendModule(
+const { appendSample } = await loadCompiledFrontendModule(
   "control-room/sample-window.js",
 );
+const { sparkline } = await loadCompiledFrontendModule("ui/series-geometry.js");
 const ingest = (sample) => sample.ingestBps;
 const DIAGNOSED = {
   flow: "stalled",

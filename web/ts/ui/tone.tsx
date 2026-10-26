@@ -43,12 +43,6 @@ const BADGE: Record<Tone, string> = {
   accent: "bg-accent/15 text-accent border-accent/30",
 };
 
-/** The worse of two tones, for roll-ups. */
-export function worseTone(a: Tone, b: Tone): Tone {
-  const rank: Record<Tone, number> = { bad: 0, warn: 1, info: 2, accent: 3, neutral: 4, ok: 5 };
-  return rank[a] <= rank[b] ? a : b;
-}
-
 /** A utilization (0..1+) against the safe line (0.8) and saturation (1). */
 export function utilizationTone(value: number | null | undefined, warnAt = 0.8, badAt = 1): Tone {
   if (value === null || value === undefined || !Number.isFinite(value)) return "neutral";

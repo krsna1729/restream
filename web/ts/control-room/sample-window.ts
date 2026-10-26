@@ -1,12 +1,10 @@
 // A bounded window of samples kept in the page (the engine keeps no metric
-// history), and the sparkline that draws one signal of it. Monitor keeps
-// one per pipeline; the live store keeps the fleet-wide one.
+// history). Monitor keeps one per pipeline; the live store keeps the
+// fleet-wide one.
 
 /** The window every sampled history keeps: since the page opened, up to
  * this long. */
 export const WINDOW_MS = 15 * 60 * 1000;
-
-export { max, sparkline } from "../ui/series-geometry.js";
 
 /**
  * `history` with `sample` appended, keeping the samples no older than

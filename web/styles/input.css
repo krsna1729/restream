@@ -129,8 +129,6 @@
 /* Secondary text never falls below AA: the semantic utility names stay,
    the floor is enforced once here. */
 @layer utilities {
-  .stat-title,
-  .stat-desc,
   .table thead {
     color: color-mix(in oklab, var(--color-base-content) 72%, transparent);
   }
@@ -148,7 +146,6 @@
     color: color-mix(in oklab, var(--color-base-content) 72%, transparent);
   }
 
-  .badge-success,
   .badge-warning,
   .badge-error,
   .badge-info {
@@ -156,7 +153,6 @@
     color: var(--badge-color);
     border-color: color-mix(in oklab, var(--badge-color) 32%, transparent);
   }
-  .badge-success { --badge-color: var(--color-success); }
   .badge-warning { --badge-color: var(--color-warning); }
   .badge-error { --badge-color: var(--color-error); }
   .badge-info { --badge-color: var(--color-info); }
@@ -215,12 +211,6 @@
     min-width: 0;
     border: 1px solid color-mix(in oklab, var(--color-base-content) 10%, transparent);
     border-radius: var(--radius-box);
-  }
-  .card-title {
-    font-size: 0.95rem;
-    font-weight: 600;
-    flex-wrap: wrap;
-    align-items: baseline;
   }
   .badge {
     font-weight: 600;
