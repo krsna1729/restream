@@ -12,9 +12,10 @@ const RUST_LINE_WARNING: usize = 800;
 const FRONTEND_LINE_LIMIT: usize = 999;
 
 /// Rust responsibility classes reported by the audit, in print order.
-const RUST_CLASSES: [&str; 6] = [
+const RUST_CLASSES: [&str; 7] = [
     "build-script",
     "production",
+    "tooling",
     "dedicated-test",
     "harness",
     "benchmark",
@@ -25,6 +26,7 @@ const RUST_CLASSES: [&str; 6] = [
 /// including `/`, as in a shell `case` pattern.
 const CLASSIFICATION: &[(&str, &[&str])] = &[
     ("build-script", &["build.rs"]),
+    ("tooling", &["crates/*.rs"]),
     ("benchmark", &["benches/*.rs"]),
     ("integration-test", &["tests/*.rs"]),
     (
@@ -176,7 +178,7 @@ fn audit_file_sizes() -> Result<bool, String> {
     if Path::new("build.rs").is_file() {
         files.push("build.rs".into());
     }
-    let roots: Vec<&str> = ["src", "web/ts", "test", "tests", "benches"]
+    let roots: Vec<&str> = ["src", "crates", "web/ts", "test", "tests", "benches"]
         .into_iter()
         .filter(|root| Path::new(root).is_dir())
         .collect();
@@ -292,7 +294,7 @@ mod tests {
             ("src/media/engine.rs", "production"),
             ("test/frontend/x.test.mjs", "frontend-test"),
             ("web/ts/core/api.ts", "frontend-production"),
-            ("crates/xtask/src/main.rs", "other"),
+            ("crates/xtask/src/main.rs", "tooling"),
         ] {
             assert_eq!(classify(path), class, "{path}");
         }
