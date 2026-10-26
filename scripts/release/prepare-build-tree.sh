@@ -67,8 +67,7 @@ frontend_assets_exist() {
         [[ -s public/login.html ]] &&
         [[ -s public/output.css ]] &&
         [[ -s public/js/control-room/main.js ]] &&
-        [[ -s public/js/vendor/react/jsx-runtime.js ]] &&
-        [[ -s public/js/lib/hls.min.js ]]
+        [[ -s public/js/vendor/react/jsx-runtime.js ]]
 }
 
 frontend_assets_fresh() {
@@ -120,8 +119,7 @@ for asset in \
     public/login.html \
     public/output.css \
     public/js/control-room/main.js \
-    public/js/vendor/react/jsx-runtime.js \
-    public/js/lib/hls.min.js; do
+    public/js/vendor/react/jsx-runtime.js; do
     [[ -s "$asset" ]] || {
         echo "prepare-build-tree: required generated asset is missing: $asset" >&2
         exit 1

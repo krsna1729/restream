@@ -8,8 +8,7 @@
 //     [--out .local/demo] [--preset empty|small|plant|extreme]
 // The page also takes ?demo=<preset> to load another plant.
 //
-// Writes index.html, demo-backend.js, app.js, output.css, logo.png and
-// hls.min.js.
+// Writes index.html, demo-backend.js, app.js, output.css and logo.png.
 
 import { copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -47,7 +46,6 @@ await build({
 });
 copyFileSync(join(publicDir, "output.css"), join(out, "output.css"));
 copyFileSync(join(publicDir, "logo.png"), join(out, "logo.png"));
-copyFileSync(join(publicDir, "js/lib/hls.min.js"), join(out, "hls.min.js"));
 
 // The base path is wherever the page is served from, so the router and the
 // fetch shim agree on it under any host. The page carries no document
@@ -68,7 +66,6 @@ writeFileSync(
   window.__RESTREAM_DEMO_PRESET__ = ((asked) => ["empty", "small", "plant", "extreme"].includes(asked) ? asked : ${JSON.stringify(preset)})(new URLSearchParams(location.search).get("demo"));
 </script>
 <script src="demo-backend.js"></script>
-<script src="hls.min.js"></script>
 <script type="module" src="app.js"></script>
 <div id="root"></div>
 `,
