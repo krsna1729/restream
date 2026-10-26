@@ -7,7 +7,7 @@ import type { OutputState } from "../core/generated/runtime-state.js";
 import { isDelivering } from "./fleet-model.js";
 import { ringFromGraph, shardsFrom } from "./inspect-model.js";
 import type { TelemetryRates } from "./rates.js";
-import { max } from "./sample-window.js";
+import { max } from "../ui/series-geometry.js";
 
 /** One instant; `null` where the source had nothing to say. */
 export interface MonitorSample {
