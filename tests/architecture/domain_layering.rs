@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -6,7 +5,7 @@ use std::path::{Path, PathBuf};
 fn production_domain_dependencies_are_contract_only() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let domain_dir = manifest_dir.join("src/domain");
-    let dependencies = declared_dependency_roots(include_str!("../Cargo.toml"));
+    let dependencies = declared_dependency_roots(include_str!("../../Cargo.toml"));
     let mut sources = Vec::new();
     collect_rust_sources(&domain_dir, &mut sources);
     let mut offenders = Vec::new();

@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-// Mirrors the backend's architecture_compliance.rs / domain_layering.rs:
+// Mirrors the backend's tests/architecture/ (compliance, domain_layering):
 // prove the module-layering rule holds by scanning raw source, rather than
 // assuming it from convention. core/ is the lowest layer (types, API client,
 // pure state) and must not depend upward on control-room/, the app.

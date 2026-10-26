@@ -3,22 +3,7 @@
 //! or bypassing transport paths from returning. Test-only items are excluded
 //! item by item (`strip_test_items`), so production code that follows a test
 //! block is still checked.
-#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
-
-fn collect_rust_sources(
-    directory: &std::path::Path,
-    inspect: &mut impl FnMut(&std::path::Path, &str),
-) {
-    for entry in std::fs::read_dir(directory).expect("Rust source directory should be readable") {
-        let path = entry.expect("Rust source entry should be readable").path();
-        if path.is_dir() {
-            collect_rust_sources(&path, inspect);
-        } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
-            let source = std::fs::read_to_string(&path).expect("Rust source should be UTF-8");
-            inspect(&path, &source);
-        }
-    }
-}
+use super::collect_rust_sources;
 
 /// `source` without its `#[cfg(test)]`-gated items: the attribute and the item
 /// it gates, either up to the matching `}` of its first `{` or to the next `;`

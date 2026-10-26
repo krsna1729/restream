@@ -1,11 +1,10 @@
-#![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 #[test]
 fn candidate_types_stay_independent_of_engine_and_runtime_adapters() {
     for (name, source) in [
-        ("media/packet.rs", include_str!("../src/media/packet.rs")),
+        ("media/packet.rs", include_str!("../../src/media/packet.rs")),
         (
             "media/metadata.rs",
-            include_str!("../src/media/metadata.rs"),
+            include_str!("../../src/media/metadata.rs"),
         ),
     ] {
         for forbidden in [
@@ -27,7 +26,7 @@ fn candidate_types_stay_independent_of_engine_and_runtime_adapters() {
 
 #[test]
 fn ring_metadata_depends_on_metadata_owner_instead_of_engine() {
-    let ring_buffer = include_str!("../src/media/ring_buffer.rs");
+    let ring_buffer = include_str!("../../src/media/ring_buffer.rs");
     assert!(!ring_buffer.contains("crate::media::engine::AudioMeta"));
     assert!(ring_buffer.contains("crate::media::metadata::AudioMeta"));
 }

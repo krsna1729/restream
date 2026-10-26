@@ -471,10 +471,10 @@ egress tasks, and `src/logging.rs` still call `crate::db` with a pool.
 
 `cargo xtask source-audit` (`crates/xtask/src/source_audit.rs`) enforces the
 file-size limit, environment readers, API stage starts and media-to-API
-imports. The architecture tests enforce the import rules:
-`tests/domain_layering.rs`, `tests/architecture_compliance.rs`,
-`tests/runtime_contract_architecture.rs`,
-`tests/service_wiring_architecture.rs` and `tests/transport_architecture.rs`.
+imports. The architecture tests (`cargo test --test architecture`) enforce
+the import rules: one module per boundary under `tests/architecture/`
+(compliance, domain layering, media core, runtime contract, service wiring,
+transport).
 To change a boundary, update the check, its test and this page in one change.
 The [layering audit skill](agent-guidance/skills/layering-audit/SKILL.md)
 owns the audit procedure.
