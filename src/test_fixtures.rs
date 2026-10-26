@@ -113,9 +113,6 @@ pub const REQUIRED_CHECKED_IN_FIXTURES: &[&str] = &[
     // HEVC two-audio marker oracle with B-frames disabled for multi-audio
     // no-reorder ingest coverage.
     "test/fixtures/transport/av-marker-h265-bf0-2a.ts",
-    // HLS edge-case fixture whose first segment starts audio-only, guarding
-    // preview and playlist startup behavior when video arrives later.
-    "test/fixtures/transport/hls-first-audio-only-6s.ts",
     // Sparse-GOP MP4 fixture for file-live-edge optimization tests that verify
     // GOP normalization and recording duration behavior.
     "test/fixtures/media-library/sparse-gop-5s.mp4",

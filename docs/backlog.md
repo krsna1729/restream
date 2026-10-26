@@ -87,8 +87,8 @@ the [assurance roadmap](assurance-roadmap.md).
   remaining fabric.
 
 ### Q-047 [protocol] [opus] MoQ egress: IETF MOQT profiles
-- Goal: MoQ egress and origin also speak IETF MOQT draft-18 (MSF catalog, LOC
-  objects), Cloudflare's draft-16 (token in the URL path) and the MediaMTX
+- Goal: MoQ egress and origin also speak IETF MOQT (MSF catalog, LOC objects;
+  `moqt-19` against moq-relay, drafts 16 and 18 against moxygen), Cloudflare's draft-16 (token in the URL path) and the MediaMTX
   v1.21.2 subset, beside moq-lite + hang.
 - Done so far: wire-codec fuzzing (`moq_wire`, `moq_ingest`) and moxygen
   interop (`moq-moxygen-interop`, draft-16 and draft-18).
@@ -123,7 +123,7 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: none until it flakes.
 
 ### Q-070 [protocol] [opus] MoQ ingest: IETF MOQT profiles
-- Goal: an IETF MOQT draft-18 publisher (MSF catalog, LOC objects) feeds a
+- Goal: an IETF MOQT `moqt-19` publisher (MSF catalog, LOC objects) feeds a
   pipeline input through the existing MoQ listener. The stream key comes from
   the connection path, else the track namespace; the input registers as
   protocol `"moq"`.
