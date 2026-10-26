@@ -67,12 +67,6 @@ fn request_targets_authenticated_html(path: &str) -> bool {
     path.ends_with(".html")
 }
 
-/// Serves one embedded asset without conditional request headers, mainly for
-/// internal call sites that already know caching state is irrelevant.
-pub fn serve_embedded(path: &str) -> Response {
-    serve_embedded_with_headers(path, &HeaderMap::new())
-}
-
 /// Serves one embedded or disk-backed dashboard asset and applies the module's
 /// shared cache and ETag policy.
 pub fn serve_embedded_with_headers(path: &str, headers: &HeaderMap) -> Response {

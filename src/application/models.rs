@@ -111,10 +111,6 @@ impl JobStatus {
             Self::Failed => "failed",
         }
     }
-
-    pub const fn is_running(self) -> bool {
-        matches!(self, Self::Running)
-    }
 }
 
 impl FromStr for JobStatus {

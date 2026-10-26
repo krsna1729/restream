@@ -18,11 +18,7 @@ use crate::api_runtime_views::{ResourceMapOptions, ResourceMapView};
 use crate::diag;
 use crate::events;
 
-use super::health::{
-    build_health_snapshot_for_pipeline_ids, build_health_summary_snapshot_for_pipeline_ids,
-    list_dashboard_runtime_pipeline_ids, merge_dashboard_runtime_focus_pipeline,
-    select_dashboard_runtime_pipeline_ids,
-};
+use super::health::{build_health_snapshot_for_pipeline_ids, list_dashboard_runtime_pipeline_ids};
 use super::state::{
     AppState, get_session_token_from_headers, recording_enabled_map, require_authenticated,
 };
@@ -49,7 +45,6 @@ pub struct EventsQuery {
 
 #[derive(Deserialize)]
 pub struct DashboardRuntimeQuery {
-    pub health_view: Option<String>,
     pub metrics_view: Option<String>,
     pub pipeline_id: Option<String>,
 }
@@ -284,39 +279,16 @@ pub async fn v1_dashboard_runtime_handler(
         return response;
     }
 
-    let summary_health = summary_view_requested(query.health_view.as_deref());
     let summary_metrics = summary_view_requested(query.metrics_view.as_deref());
     let all_pipeline_ids = match list_dashboard_runtime_pipeline_ids(&state).await {
         Ok(pipeline_ids) => pipeline_ids,
         Err(error) => return error.into_response(),
     };
-    let requested_pipeline_id = dashboard_runtime_requested_pipeline(&query, &all_pipeline_ids);
-    let health_pipeline_ids = select_dashboard_runtime_pipeline_ids(
-        requested_pipeline_id,
-        summary_health,
-        all_pipeline_ids.clone(),
-    );
+    let health_pipeline_ids = dashboard_runtime_requested_pipeline(&query, &all_pipeline_ids)
+        .map(|pipeline_id| vec![pipeline_id.to_string()])
+        .unwrap_or(all_pipeline_ids);
     let (health, metrics) = tokio::join!(
-        async {
-            if summary_health {
-                let mut health =
-                    build_health_summary_snapshot_for_pipeline_ids(&state, &health_pipeline_ids)
-                        .await;
-                if let Some(pipeline_id) = requested_pipeline_id {
-                    let focused_health =
-                        build_health_snapshot_for_pipeline_ids(&state, &[pipeline_id.to_string()])
-                            .await;
-                    merge_dashboard_runtime_focus_pipeline(
-                        &mut health,
-                        &focused_health,
-                        pipeline_id,
-                    );
-                }
-                health
-            } else {
-                build_health_snapshot_for_pipeline_ids(&state, &health_pipeline_ids).await
-            }
-        },
+        build_health_snapshot_for_pipeline_ids(&state, &health_pipeline_ids),
         build_system_metrics_snapshot(&state, summary_metrics)
     );
 
@@ -639,7 +611,6 @@ mod tests {
     #[test]
     fn dashboard_runtime_requested_pipeline_requires_known_pipeline() {
         let query = DashboardRuntimeQuery {
-            health_view: None,
             metrics_view: None,
             pipeline_id: Some("pipe-2".to_string()),
         };
