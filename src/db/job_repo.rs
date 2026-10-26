@@ -177,20 +177,6 @@ where
     get_job(pool, id).await
 }
 
-pub async fn list_jobs_for_output(
-    pool: &SqlitePool,
-    pipeline_id: &str,
-    output_id: &str,
-) -> Result<Vec<JobRecord>, sqlx::Error> {
-    fetch_job_all(
-        pool,
-        "SELECT id, pipeline_id, output_id, status, started_at, ended_at
-         FROM jobs WHERE pipeline_id = ? AND output_id = ? ORDER BY started_at DESC",
-        &[pipeline_id, output_id],
-    )
-    .await
-}
-
 pub async fn list_jobs(pool: &SqlitePool) -> Result<Vec<JobRecord>, sqlx::Error> {
     fetch_job_all(
         pool,

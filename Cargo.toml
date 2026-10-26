@@ -47,7 +47,7 @@ wi37-shard-bench = []
 httparse = "1.10"
 tokio = { version = "1.39", features = [
     "fs", "io-util", "macros", "net", "process",
-    "rt-multi-thread", "signal", "sync", "time", "test-util",
+    "rt-multi-thread", "signal", "sync", "time",
 ] }
 axum = { version = "0.8", features = ["macros", "multipart"] }
 # The dashboard listener serves axum on hyper directly to allow half-closed
@@ -74,8 +74,6 @@ ring = "0.17"
 sha2 = "0.11"
 md-5 = "0.11"
 chrono = { version = "0.4", features = ["serde"] }
-crc32fast = "1.5"
-flate2 = "1.1"
 tokio-util = { version = "0.7", features = ["codec"] }
 rml_rtmp = "0.8.0"
 arc-swap = "1"
@@ -133,6 +131,8 @@ tracing-appender = "0.2"
 serde_json = "1.0"
 
 [dev-dependencies]
+# Paused-clock tests (`start_paused`, `time::advance`) only.
+tokio = { version = "1.39", features = ["test-util"] }
 criterion = "0.8"
 rtrb = "0.4"
 crossbeam-queue = "0.3"

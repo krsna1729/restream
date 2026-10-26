@@ -1393,10 +1393,7 @@ a session. Field derivation for all of these is in
 
 ### `GET /api/v1/engine/health`
 
-`view=summary` returns `{ status, pipelines, runtimeLimits, hostSettings }`
-with compact per-pipeline health (status, bitrate, uptime, recording,
-reconnect and grace flags). The default full view (`EngineHealthView`)
-returns:
+Returns `EngineHealthView`:
 
 | Field | Content |
 |---|---|
@@ -1427,9 +1424,8 @@ Returns `{ health, metrics }` so a dashboard refresh costs one round trip.
 
 | Param | Default | Notes |
 |---|---|---|
-| `health_view` | full | `summary` trims pipeline and output detail |
 | `metrics_view` | full | `summary` trims host metrics to aggregate percentages and rates |
-| `pipeline_id` | — | With summary health: every pipeline in summary, this one in full. With full health: only this pipeline. |
+| `pipeline_id` | — | Health for only this pipeline |
 
 ### `GET /metrics/system`
 

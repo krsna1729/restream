@@ -129,38 +129,6 @@ pub async fn get_recording(
     .await
 }
 
-/// List all recordings for a pipeline, newest first.
-pub async fn list_recordings_for_pipeline(
-    pool: &SqlitePool,
-    pipeline_id: &str,
-) -> Result<Vec<RecordingRow>, sqlx::Error> {
-    sqlx::query_as::<_, RecordingRow>(
-        "SELECT recording_id, pipeline_id, started_at, ended_at, status,
-                temp_path, final_path, codec_summary, error
-         FROM recordings WHERE pipeline_id = ?
-         ORDER BY started_at DESC",
-    )
-    .bind(pipeline_id)
-    .fetch_all(pool)
-    .await
-}
-
-/// List recordings by phase (e.g. to resume in-progress recordings after restart).
-pub async fn list_recordings_by_status(
-    pool: &SqlitePool,
-    phase: RecordingPhase,
-) -> Result<Vec<RecordingRow>, sqlx::Error> {
-    sqlx::query_as::<_, RecordingRow>(
-        "SELECT recording_id, pipeline_id, started_at, ended_at, status,
-                temp_path, final_path, codec_summary, error
-         FROM recordings WHERE status = ?
-         ORDER BY started_at DESC",
-    )
-    .bind(phase.as_str())
-    .fetch_all(pool)
-    .await
-}
-
 /// List all recordings, newest first.
 pub async fn list_recordings(pool: &SqlitePool) -> Result<Vec<RecordingRow>, sqlx::Error> {
     sqlx::query_as::<_, RecordingRow>(
@@ -171,19 +139,6 @@ pub async fn list_recordings(pool: &SqlitePool) -> Result<Vec<RecordingRow>, sql
     )
     .fetch_all(pool)
     .await
-}
-
-/// Delete a recording row by ID.
-pub async fn delete_recording(
-    pool: &SqlitePool,
-    recording_id: &RecordingId,
-) -> Result<bool, sqlx::Error> {
-    let rows = sqlx::query("DELETE FROM recordings WHERE recording_id = ?")
-        .bind(recording_id.as_str())
-        .execute(pool)
-        .await?
-        .rows_affected();
-    Ok(rows > 0)
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -275,38 +230,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_recordings_for_pipeline_returns_newest_first() {
-        let pool = test_pool().await;
-        make_pipeline(&pool).await;
-
-        create_recording(
-            &pool,
-            &RecordingId::from("rec-a"),
-            "p1",
-            "2026-01-01T00:00:00Z",
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-        create_recording(
-            &pool,
-            &RecordingId::from("rec-b"),
-            "p1",
-            "2026-01-02T00:00:00Z",
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-
-        let rows = list_recordings_for_pipeline(&pool, "p1").await.unwrap();
-        assert_eq!(rows.len(), 2);
-        // newest first
-        assert_eq!(rows[0].recording_id, "rec-b");
-    }
-
-    #[tokio::test]
     async fn list_recordings_returns_newest_first() {
         let pool = test_pool().await;
         make_pipeline(&pool).await;
@@ -336,19 +259,5 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].recording_id, "rec-new");
         assert_eq!(rows[1].recording_id, "rec-old");
-    }
-
-    #[tokio::test]
-    async fn delete_recording_removes_row() {
-        let pool = test_pool().await;
-        make_pipeline(&pool).await;
-
-        let id = RecordingId::from("rec-del");
-        create_recording(&pool, &id, "p1", "2026-01-01T00:00:00Z", None, None)
-            .await
-            .unwrap();
-
-        assert!(delete_recording(&pool, &id).await.unwrap());
-        assert!(get_recording(&pool, &id).await.unwrap().is_none());
     }
 }

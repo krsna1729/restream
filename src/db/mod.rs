@@ -27,7 +27,7 @@ pub use ingest_repo::{
 };
 pub use job_repo::{
     JobRecord, JobStatusRecord, cleanup_old_jobs, create_job, get_job, get_running_job_for,
-    list_jobs, list_jobs_for_output, reset_running_jobs, update_job,
+    list_jobs, reset_running_jobs, update_job,
 };
 pub use log_repo::{
     append_app_log_batch, append_app_log_batch_returning, delete_app_logs_older_than, list_app_logs,
@@ -48,8 +48,7 @@ pub use pipeline_repo::{
     list_pipelines, update_pipeline, update_pipeline_input_source,
 };
 pub use recording_repo::{
-    RecordingRow, create_recording, delete_recording, finalize_recording, get_recording,
-    list_recordings, list_recordings_by_status, list_recordings_for_pipeline,
+    RecordingRow, create_recording, finalize_recording, get_recording, list_recordings,
     update_recording_status,
 };
 pub use schema::setup_database_schema;

@@ -24,8 +24,8 @@ Every route below except `/healthz` needs a dashboard session. The
 | Route | Purpose |
 |---|---|
 | `GET /healthz` | Liveness only: always `{ "status": "ok" }`, no session |
-| `GET /api/v1/engine/health` | Pipeline input/output state, transport quality, recording, listeners, fabric shards; `?view=summary` for a smaller shape |
-| `GET /api/v1/dashboard/runtime` | Health and system metrics in one response (`health_view`, `metrics_view`, `pipeline_id`) |
+| `GET /api/v1/engine/health` | Pipeline input/output state, transport quality, recording, listeners, fabric shards |
+| `GET /api/v1/dashboard/runtime` | Health and system metrics in one response (`metrics_view`, `pipeline_id`) |
 | `GET /metrics/system` | Host and process resources, capacity, media executor, egress shards, TLS counters (JSON); `?view=summary` |
 | `GET /api/v1/engine/resource-map` | CPU/RSS/thread attribution per resource node; grouped top-N by default |
 | `GET /api/v1/capacity/scenario` | Observe-only projection of added outputs or stages on the capacity priors |
@@ -107,8 +107,7 @@ flowchart LR
 `GET /api/v1/engine/health` is built on demand by
 `api_runtime_views::health_snapshot_view` (`src/api_runtime_views/status.rs`)
 from `MediaEngine` state and per-pipeline recording settings in SQLite. The
-full view is serialized straight from its typed form; `?view=summary` returns
-only `status`, `pipelines`, `runtimeLimits` and `hostSettings`.
+view is serialized straight from its typed form.
 
 ### Top-level shape
 

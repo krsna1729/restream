@@ -186,10 +186,6 @@ impl RtmpOutputMode {
         }
     }
 
-    pub fn is_legacy(&self) -> bool {
-        matches!(self, Self::Legacy)
-    }
-
     pub fn is_enhanced(self) -> bool {
         matches!(self, Self::Enhanced)
     }

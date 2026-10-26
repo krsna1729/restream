@@ -34,13 +34,11 @@ pub const MAX_NAME_LEN: usize = 256;
 pub const MAX_URL_LEN: usize = 2048;
 pub const MAX_OUTPUT_CONFIG_LEN: usize = 512;
 pub const MAX_STREAM_KEY_LEN: usize = 256;
-pub const MAX_FFMPEG_ARGS_LEN: usize = 4096;
 pub const MAX_PASSWORD_LEN: usize = 1024;
 pub const MIN_DASHBOARD_PASSWORD_LEN: usize = 12;
 
 pub const SESSION_COOKIE_NAME: &str = "session";
 pub const SESSION_MAX_AGE_SECONDS: i64 = 30 * 24 * 60 * 60;
-pub const PASSWORD_META_KEY: &str = "dashboardPasswordHash";
 pub const BOOTSTRAP_PASSWORD_PROMPT_META_KEY: &str = "dashboardPasswordPrompt";
 pub const DEFAULT_INGEST_HOST: &str = "localhost";
 
