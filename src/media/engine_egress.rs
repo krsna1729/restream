@@ -13,8 +13,6 @@ use crate::domain::state::{EgressPhase, EgressStatus};
 use crate::media::engine::{
     ActiveEgress, EgressRegistration, EgressRetryState, MediaEngine, RecentEgressOutcome,
 };
-use crate::media::packet::MediaType;
-use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 use crate::media::snapshots::PublisherQuality;
 use crate::media::stage_metrics::StageMetrics;
 
@@ -45,46 +43,6 @@ impl MediaEngine {
             .read()
             .await
             .contains_key(output_id)
-    }
-
-    pub async fn wait_for_upstream_warmup(
-        &self,
-        output_id: &str,
-        registration: &EgressRegistration,
-        ring_buffer: Arc<RingBuffer>,
-        cancel_token: CancellationToken,
-    ) {
-        if ring_buffer.codec_hint_str().is_empty() {
-            return;
-        }
-
-        self.update_egress_phase_if_current(output_id, registration, EgressPhase::WaitingUpstream)
-            .await;
-        let mut warmup = Reader::new(format!("egress_warmup:{output_id}"), ring_buffer.clone());
-        let mut warmup_packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
-        tokio::select! {
-            _ = cancel_token.cancelled() => {}
-            _ = async {
-                loop {
-                    warmup.wait_for_data().await;
-                    warmup_packets.clear();
-                    let _ = warmup.pull_burst(
-                        &mut warmup_packets,
-                        MEDIA_PULL_BURST_PACKETS,
-                    );
-
-                    if ring_buffer.video_parameter_sets().is_some()
-                        || warmup_packets
-                            .iter()
-                            .any(|packet| packet.media_type == MediaType::Video)
-                        || (!warmup_packets.is_empty()
-                            && ring_buffer.video_parameter_sets().is_none())
-                    {
-                        break;
-                    }
-                }
-            } => {}
-        }
     }
 
     pub async fn update_egress_bytes(&self, output_id: &str, bytes: u64) {
@@ -398,19 +356,6 @@ impl MediaEngine {
         if let Some(egress) = egresses.get(output_id) {
             *crate::sync::lock(&egress.quality) = quality;
         }
-    }
-
-    pub async fn update_egress_quality_if_current(
-        &self,
-        output_id: &str,
-        registration: &EgressRegistration,
-        quality: PublisherQuality,
-    ) -> bool {
-        self.with_current_egress(output_id, registration, |egress| {
-            *crate::sync::lock(&egress.quality) = quality;
-        })
-        .await
-        .is_some()
     }
 
     pub async fn record_egress_progress(&self, output_id: &str, bytes: u64) {

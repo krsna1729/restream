@@ -223,20 +223,6 @@ impl MediaEngine {
             });
     }
 
-    pub async fn update_ingest_video_track_selection(
-        &self,
-        pipeline_id: &str,
-        video_track_count: usize,
-        selected_video_track_index: Option<u32>,
-    ) {
-        let ingests = self.ingests.active.read().await;
-        if let Some(ingest) = ingests.get(pipeline_id) {
-            let mut metadata = crate::sync::write(&ingest.metadata);
-            metadata.video_track_count = video_track_count;
-            metadata.selected_video_track_index = selected_video_track_index;
-        }
-    }
-
     pub async fn update_ingest_session_video_track_selection(
         &self,
         registration: &IngestRegistration,

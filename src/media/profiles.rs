@@ -82,21 +82,6 @@ pub fn get_blocking(name: &str) -> TranscodeProfile {
     resolve_from_profiles(&cache, name)
 }
 
-/// Look up preset dimensions without blocking the current thread.
-///
-/// Called from async egress startup paths (e.g. SRT keyframe preroll
-/// policy), so it must use [`try_get_cached`] rather than
-/// [`get_blocking`] — `blocking_read()` on the shared `RwLock` panics
-/// when invoked from a Tokio worker thread.
-pub fn dimensions_for_preset(name: &str) -> Option<(u32, u32)> {
-    let profile = try_get_cached(name);
-    (profile.width > 0 && profile.height > 0).then_some((profile.width, profile.height))
-}
-
-pub fn baseline_profile() -> TranscodeProfile {
-    get_blocking(BASELINE_TRANSCODE_PROFILE_KEY)
-}
-
 /// Built-in realtime defaults. Used when no DB config is present.
 /// All settings are optimized for live streaming: lowest latency, no reordering.
 pub fn built_in_defaults() -> TranscodeProfiles {

@@ -247,22 +247,6 @@ impl TsMuxer {
         &self.output
     }
 
-    /// Like [`mux_packet_into`](Self::mux_packet_into), but takes an
-    /// already-resolved stream index (see
-    /// [`mux_packet_by_stream_idx`](Self::mux_packet_by_stream_idx)).
-    pub fn mux_packet_by_stream_idx_into(
-        &mut self,
-        stream_idx: usize,
-        media_type: MediaType,
-        meta: PacketMeta,
-        payload: &[u8],
-        out: &mut Vec<u8>,
-    ) {
-        if self.streams.get(stream_idx).map(|s| s.media_type) == Some(media_type) {
-            self.mux_packet_at(stream_idx, media_type, meta, payload, out);
-        }
-    }
-
     fn mux_packet_at(
         &mut self,
         stream_idx: usize,

@@ -1,8 +1,8 @@
 //! `EgressFeed` trait, `FeedCursor`, and related read types.
 //!
 //! The fabric consumes a bounded, sequence-addressed, immutable feed.
-//! The contract is defined here; concrete adapters (for `RingBuffer` and
-//! `TsChunkRing`) are implemented in Phase 2 (`journal.rs`).
+//! The contract is defined here; the adapters for `RingBuffer` and
+//! `TsChunkRing` live in `journal.rs`.
 
 // ---------------------------------------------------------------------------
 // FeedCursor

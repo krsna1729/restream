@@ -373,67 +373,6 @@ impl LeafMetrics {
 }
 
 // ---------------------------------------------------------------------------
-// FeedMetrics
-// ---------------------------------------------------------------------------
-
-/// Per-feed statistics.
-#[derive(Debug, Clone, Default)]
-pub struct FeedMetrics {
-    /// Sequence number of the newest entry.
-    pub head_sequence: u64,
-    /// Sequence number of the oldest retained entry.
-    pub oldest_sequence: u64,
-    /// Retained bytes.
-    pub retained_bytes: u64,
-    pub retained_media_age_ms: Option<u64>,
-    pub oversized_unit_count: u64,
-    /// Number of shards currently subscribed.
-    pub subscriber_shard_count: u32,
-    /// Number of coalesced wakeup notifications sent.
-    pub coalesced_wake_count: u64,
-    /// Cumulative overrun events.
-    pub overrun_count: u64,
-    /// Age of the most recent synchronization point in milliseconds.
-    pub sync_point_age_ms: Option<u64>,
-}
-
-// ---------------------------------------------------------------------------
-// Metric name constants
-// ---------------------------------------------------------------------------
-
-/// Stable metric name constants matching the observability spec.
-///
-/// These are string literals intended for use with the repository's existing
-/// metrics plumbing (Phase 3 integration).
-pub mod names {
-    pub const FABRIC_SHARDS: &str = "egress.fabric.shards";
-    pub const FABRIC_LEAVES: &str = "egress.fabric.leaves";
-    pub const SHARD_READY_DEPTH: &str = "egress.shard.ready_depth";
-    pub const SHARD_SERVICE_DELAY_MS: &str = "egress.shard.service_delay_ms";
-    pub const SHARD_LOOP_DURATION_US: &str = "egress.shard.loop_duration_us";
-    pub const SHARD_HEARTBEAT_AGE_MS: &str = "egress.shard.heartbeat_age_ms";
-    pub const SHARD_COMMAND_DEPTH: &str = "egress.shard.command_depth";
-    pub const FEED_RETAINED_BYTES: &str = "egress.feed.retained_bytes";
-    pub const FEED_RETAINED_MEDIA_AGE_MS: &str = "egress.feed.retained_media_age_ms";
-    pub const FEED_OVERSIZED_UNITS: &str = "egress.feed.oversized_units";
-    pub const FEED_LAG_MS: &str = "egress.feed.lag_ms";
-    pub const FEED_WAKE_COALESCED: &str = "egress.feed.wake_coalesced";
-    pub const FEED_OVERRUNS: &str = "egress.feed.overruns";
-    pub const LEAF_PENDING_BYTES: &str = "egress.leaf.pending_bytes";
-    pub const LEAF_PROGRESS_AGE_MS: &str = "egress.leaf.progress_age_ms";
-    pub const LEAF_WOULD_BLOCK: &str = "egress.leaf.would_block";
-    pub const LEAF_PARTIAL_WRITES: &str = "egress.leaf.partial_writes";
-    pub const LEAF_RESYNCS: &str = "egress.leaf.resyncs";
-    pub const LEAF_RETRY_ATTEMPT: &str = "egress.leaf.retry_attempt";
-    pub const LEAF_BYTES_SENT: &str = "egress.leaf.bytes_sent";
-    pub const LEAF_UNITS_SENT: &str = "egress.leaf.units_sent";
-    pub const LEAF_BYTES_DISCARDED: &str = "egress.leaf.bytes_discarded";
-    pub const LEAF_UNITS_DISCARDED: &str = "egress.leaf.units_discarded";
-    pub const DRIVER_CALL_DURATION_US: &str = "egress.driver.call_duration_us";
-    pub const DRIVER_BUDGET_VIOLATIONS: &str = "egress.driver.budget_violations";
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

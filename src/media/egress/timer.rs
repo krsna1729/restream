@@ -2,10 +2,7 @@
 //!
 //! Provides a heap-based timer wheel that supports per-entry generation tags
 //! so stale entries (from superseded leaf generations) are silently ignored
-//! on expiry.
-//!
-//! Phase 3 will integrate this with the real shard OS-thread loop. Phase 1
-//! exposes the structure and tests its correctness in isolation.
+//! on expiry. Each shard OS thread owns one.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -124,24 +121,6 @@ impl<K: Ord + Hash + Clone> TimerWheel<K> {
     {
         let mut fired = Vec::new();
         self.drain_expired_limited_into(now, usize::MAX, &mut valid_gen, &mut fired);
-        fired
-    }
-
-    /// Drain at most `max_fired` current entries whose `fire_at <= now`.
-    ///
-    /// Stale entries are still discarded while searching for current timers.
-    /// Current entries beyond the limit remain in the heap for a later pass.
-    pub fn drain_expired_limited<F>(
-        &mut self,
-        now: Instant,
-        max_fired: usize,
-        mut valid_gen: F,
-    ) -> Vec<(K, u64)>
-    where
-        F: FnMut(&K) -> Option<u64>,
-    {
-        let mut fired = Vec::new();
-        self.drain_expired_limited_into(now, max_fired, &mut valid_gen, &mut fired);
         fired
     }
 
