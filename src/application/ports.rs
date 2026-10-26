@@ -59,12 +59,14 @@ pub struct RecordingCatalogRow {
     pub error: Option<String>,
 }
 
+/// The error every store port returns: what failed, as text. Each port keeps
+/// its own name for readability; they are one type.
 #[derive(Debug, Clone)]
-pub struct PipelineStoreError {
+pub struct StoreError {
     message: String,
 }
 
-impl PipelineStoreError {
+impl StoreError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -72,139 +74,27 @@ impl PipelineStoreError {
     }
 }
 
-impl fmt::Display for PipelineStoreError {
+impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.message)
     }
 }
 
-impl std::error::Error for PipelineStoreError {}
+impl std::error::Error for StoreError {}
 
-#[derive(Debug, Clone)]
-pub struct IngestLookupError {
-    message: String,
-}
+pub type PipelineStoreError = StoreError;
 
-impl IngestLookupError {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
+pub type IngestLookupError = StoreError;
 
-impl fmt::Display for IngestLookupError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
+pub type IngestWriteError = StoreError;
 
-impl std::error::Error for IngestLookupError {}
+pub type MetaLookupError = StoreError;
 
-#[derive(Debug, Clone)]
-pub struct IngestWriteError {
-    message: String,
-}
+pub type SessionStoreError = StoreError;
 
-impl IngestWriteError {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
+pub type JobStoreError = StoreError;
 
-impl fmt::Display for IngestWriteError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for IngestWriteError {}
-
-#[derive(Debug, Clone)]
-pub struct MetaLookupError {
-    message: String,
-}
-
-impl MetaLookupError {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for MetaLookupError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for MetaLookupError {}
-
-#[derive(Debug, Clone)]
-pub struct SessionStoreError {
-    message: String,
-}
-
-impl SessionStoreError {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for SessionStoreError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for SessionStoreError {}
-
-#[derive(Debug, Clone)]
-pub struct JobStoreError {
-    message: String,
-}
-
-impl JobStoreError {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for JobStoreError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for JobStoreError {}
-
-#[derive(Debug, Clone)]
-pub struct RecordingStoreError {
-    message: String,
-}
-
-impl RecordingStoreError {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for RecordingStoreError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for RecordingStoreError {}
+pub type RecordingStoreError = StoreError;
 
 pub trait PipelineStore: Send + Sync {
     fn get_pipeline<'a>(&'a self, id: &'a str) -> PipelineLookupFuture<'a>;
@@ -320,26 +210,7 @@ pub trait SessionStore: Send + Sync {
 
 pub type TeamFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, TeamStoreError>> + Send + 'a>>;
 
-#[derive(Debug, Clone)]
-pub struct TeamStoreError {
-    message: String,
-}
-
-impl TeamStoreError {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for TeamStoreError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for TeamStoreError {}
+pub type TeamStoreError = StoreError;
 
 /// A stored member with the password hash login verifies against.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -401,26 +272,7 @@ pub trait TeamStore: Send + Sync {
 pub type NotifyFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, NotifyStoreError>> + Send + 'a>>;
 
-#[derive(Debug, Clone)]
-pub struct NotifyStoreError {
-    message: String,
-}
-
-impl NotifyStoreError {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for NotifyStoreError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for NotifyStoreError {}
+pub type NotifyStoreError = StoreError;
 
 /// Notification channels, browser push subscriptions and the delivery log.
 pub trait NotifyStore: Send + Sync {
