@@ -5,6 +5,7 @@
 //!   annexb_to_avcc  — Ring buffer → RTMP egress (per video frame, O(NALUs))
 //!   video_for_ts    — FLV and Raw variants (HLS/transcoder/recording consumers)
 //!   video_for_rtmp  — Ring buffer → RTMP egress (alloc + AVCC wrap)
+//!   hevc_for_enhanced_rtmp — H.265 ring → enhanced RTMP / fMP4 (length prefix)
 //!   audio_for_ts    — Raw AAC: ADTS passthrough + ADTS synthesis
 //!   audio_for_rtmp  — ADTS strip + FLV 2-byte header
 //!
@@ -17,7 +18,8 @@ use bytes::Bytes;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use restream::media::codec::{
     annexb_to_avcc, annexb_to_avcc_with_scratch, audio_for_rtmp, audio_for_rtmp_into, audio_for_ts,
-    avcc_to_annexb, video_for_rtmp, video_for_rtmp_with_composition_into, video_for_ts,
+    avcc_to_annexb, hevc_video_for_enhanced_rtmp_with_composition_into, video_for_rtmp,
+    video_for_rtmp_with_composition_into, video_for_ts,
 };
 use restream::media::packet::PayloadFormat;
 use std::hint::black_box;
@@ -47,6 +49,18 @@ fn make_annexb(num_nalus: usize, nalu_size: usize) -> Vec<u8> {
         buf.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
         buf.push(if i == 0 { 0x65 } else { 0x41 });
         buf.extend(std::iter::repeat_n(0xBBu8, nalu_size - 1));
+    }
+    buf
+}
+
+/// Annex B H.265 access unit: an AUD, then `num_nalus` slices of
+/// `nalu_size` bytes (IDR_W_RADL first, TRAIL_R after).
+fn make_hevc_annexb(num_nalus: usize, nalu_size: usize) -> Vec<u8> {
+    let mut buf = vec![0x00, 0x00, 0x00, 0x01, 35 << 1, 0x01, 0x50];
+    for i in 0..num_nalus {
+        buf.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+        buf.extend_from_slice(&[if i == 0 { 19 << 1 } else { 1 << 1 }, 0x01]);
+        buf.extend(std::iter::repeat_n(0xBBu8, nalu_size - 2));
     }
     buf
 }
@@ -246,6 +260,29 @@ fn bench_video_for_rtmp(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_hevc_for_enhanced_rtmp(c: &mut Criterion) {
+    let mut group = c.benchmark_group("codec/hevc_for_enhanced_rtmp");
+
+    for (label, num_nalus, nalu_size, is_key) in [
+        ("pframe_8k", 1, 8 * 1024, false),
+        ("pframe_30k_3nalu", 3, 10 * 1024, false),
+        ("idr_80k", 1, 80 * 1024, true),
+    ] {
+        let annexb = make_hevc_annexb(num_nalus, nalu_size);
+        let mut out = Vec::with_capacity(annexb.len() + 16);
+        group.throughput(Throughput::Bytes(annexb.len() as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(label), &annexb, |b, data| {
+            b.iter(|| {
+                black_box(hevc_video_for_enhanced_rtmp_with_composition_into(
+                    data, is_key, 0, &mut out,
+                ))
+            })
+        });
+    }
+
+    group.finish();
+}
+
 // ---------------------------------------------------------------------------
 // audio_for_ts  — Raw ADTS passthrough and ADTS synthesis
 // ---------------------------------------------------------------------------
@@ -374,6 +411,7 @@ criterion_group!(
     bench_annexb_to_avcc,
     bench_video_for_ts,
     bench_video_for_rtmp,
+    bench_hevc_for_enhanced_rtmp,
     bench_audio_for_ts,
     bench_audio_for_rtmp,
     bench_rtmp_payload_ownership,
