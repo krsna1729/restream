@@ -14,10 +14,6 @@ impl MediaEngine {
         self.runtime.listener_stats.clone()
     }
 
-    pub fn sender_semaphore_handle(&self) -> Arc<tokio::sync::Semaphore> {
-        self.runtime.sender_semaphore.clone()
-    }
-
     pub fn bonding_available(&self) -> bool {
         self.runtime
             .listener_stats
@@ -72,10 +68,6 @@ impl MediaEngine {
         let _ = child.kill().await;
         let _ = child.wait().await;
         true
-    }
-
-    pub async fn take_file_ingest_child(&self, ingest_id: &str) -> Option<tokio::process::Child> {
-        self.file_ingests.children.write().await.remove(ingest_id)
     }
 
     pub async fn is_file_ingest_running(&self, id: &str) -> bool {

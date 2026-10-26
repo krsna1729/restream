@@ -170,11 +170,6 @@ impl StageRuntimeManager {
         self.spawn_ffmpeg(handle, source_ring, None, true);
     }
 
-    /// Spawn a browser-preview stage that converts to H.264 video only.
-    pub fn spawn_preview_stage(&self, handle: StageHandle, source_ring: Arc<RingBuffer>) {
-        self.spawn_ffmpeg(handle, source_ring, None, false);
-    }
-
     fn spawn_ffmpeg(
         &self,
         handle: StageHandle,

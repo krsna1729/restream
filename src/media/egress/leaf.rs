@@ -1,4 +1,4 @@
-//! Per-leaf state: `Leaf<P>`, `LeafCommon`, and associated types.
+//! Per-leaf state: `LeafCommon` and associated types.
 //!
 //! Every output has one protocol-neutral shell (`LeafCommon`) and one
 //! specialized protocol value (`P`). The shell owns all shared policy,
@@ -115,12 +115,6 @@ impl ProgressState {
 
     pub fn record_overrun(&mut self) {
         self.overrun_count = self.overrun_count.saturating_add(1);
-    }
-
-    /// Age of the last byte progress in seconds, or `None` if no bytes sent.
-    pub fn byte_progress_age_secs(&self, now: Instant) -> Option<f64> {
-        self.last_byte_progress
-            .map(|t| now.duration_since(t).as_secs_f64())
     }
 }
 
@@ -397,34 +391,6 @@ impl LeafCommon {
 }
 
 // ---------------------------------------------------------------------------
-// Leaf<P>
-// ---------------------------------------------------------------------------
-
-/// A complete egress leaf: protocol-neutral shell + protocol-specific state.
-///
-/// `P` is typically an enum or struct owned by the protocol module (e.g.
-/// `RtmpLeaf`, `SrtLeaf`). During Phase 1 tests, `P` is [`FakeProtocol`].
-#[derive(Debug)]
-pub struct Leaf<P> {
-    pub common: LeafCommon,
-    pub protocol: P,
-}
-
-impl<P> Leaf<P> {
-    pub fn new(common: LeafCommon, protocol: P) -> Self {
-        Self { common, protocol }
-    }
-
-    pub fn output_id(&self) -> &OutputId {
-        &self.common.output_id
-    }
-
-    pub fn generation(&self) -> u64 {
-        self.common.generation
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -517,14 +483,6 @@ mod tests {
         let mut d = LeafDeadlines::none();
         d.connect_by = Some(Instant::now() - Duration::from_millis(1));
         assert!(d.any_expired(Instant::now()));
-    }
-
-    #[test]
-    fn leaf_wrapper_delegates() {
-        let c = make_common("out-1", 3);
-        let leaf = Leaf::new(c, "fake-protocol");
-        assert_eq!(leaf.output_id().as_str(), "out-1");
-        assert_eq!(leaf.generation(), 3);
     }
 
     /// The gap this closes: before `metrics` existed on `EgressProgressSink`,

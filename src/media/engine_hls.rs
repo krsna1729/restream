@@ -207,14 +207,6 @@ impl MediaEngine {
         (store, already_running, cancel_token)
     }
 
-    /// Touch the HLS consumer heartbeat (called on playlist/segment fetch).
-    pub async fn touch_hls(&self, pipeline_id: &str) {
-        let consumers = self.hls.consumers.read().await;
-        if let Some(c) = consumers.get(pipeline_id) {
-            c.touch();
-        }
-    }
-
     pub async fn touch_hls_preview(&self, pipeline_id: &str) {
         let preview_key = hls_preview_registry_key(pipeline_id);
         let consumers = self.hls.consumers.read().await;
@@ -295,11 +287,6 @@ impl MediaEngine {
             .entry(preview_key)
             .or_insert_with(|| Arc::new(Fmp4HlsStore::with_config(hls_config)))
             .clone()
-    }
-
-    pub async fn remove_hls_store(&self, pipeline_id: &str) {
-        let mut stores = self.hls.stores.write().await;
-        stores.remove(pipeline_id);
     }
 
     pub async fn get_hls_store(&self, pipeline_id: &str) -> Option<Arc<HlsStore>> {

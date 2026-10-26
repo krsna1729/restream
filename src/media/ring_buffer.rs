@@ -71,11 +71,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 use tracing::debug;
 
-/// Compatibility path for the historical ring-owned packet vocabulary.
-///
-/// Remove only with an explicit downstream API migration; in-tree consumers
-/// import these types from `media::packet`.
-pub use super::packet::{MediaPacket, MediaType, PayloadFormat};
+use super::packet::{MediaPacket, MediaType, PayloadFormat};
 
 mod frame_units;
 mod reader;
@@ -97,10 +93,6 @@ pub const MEDIA_PULL_BURST_PACKETS: usize = 32;
 /// Soft cap for producer-side publications into a packet ring.
 pub const MEDIA_PRODUCER_BATCH_PACKETS: usize = MEDIA_PULL_BURST_PACKETS;
 
-pub fn default_ring_capacity() -> usize {
-    DEFAULT_RING_CAPACITY
-}
-
 // Transcoder output rings hold demuxed frames from the FFmpeg child process.
 // At 720p30 with one audio track, the packet rate is ~80 pkt/s; 512 slots
 // ≈ 6.4 s of jitter headroom (above the 5 s requirement). I-frames from the
@@ -108,10 +100,6 @@ pub fn default_ring_capacity() -> usize {
 // much larger than the source ring — 512 slots already dominate memory at high
 // bitrates. Scale-test evidence: no transcoder ring overflows across 15 cases.
 pub const DEFAULT_TRANSCODER_RING_CAPACITY: usize = 512;
-
-pub fn default_transcoder_ring_capacity() -> usize {
-    DEFAULT_TRANSCODER_RING_CAPACITY
-}
 
 pub struct RingSlot {
     data: ArcSwapOption<MediaPacket>,

@@ -31,7 +31,7 @@ pub(crate) enum MediaServiceClass {
     AudioRouter,
     FileIngest,
     HlsIngest,
-    #[allow(dead_code)]
+    /// Unlabelled services (tests).
     Other,
 }
 
@@ -59,6 +59,7 @@ pub(crate) struct MediaService {
 }
 
 impl MediaService {
+    #[cfg(test)]
     fn other() -> Self {
         Self {
             class: MediaServiceClass::Other,
@@ -580,7 +581,7 @@ where
 }
 
 /// Start an owned media service with default class `Other`.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn spawn<F>(
     cancel: CancellationToken,
     future: F,
@@ -623,7 +624,7 @@ where
 }
 
 /// Await a media service from the control runtime with default class `Other`.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) async fn run<F>(cancel: CancellationToken, future: F) -> Result<F::Output, String>
 where
     F: Future + Send + 'static,

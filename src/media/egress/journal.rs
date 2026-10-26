@@ -1,7 +1,6 @@
 //! Bounded shared feed adaptors implementing [`EgressFeed`].
 //!
-//! Phase 2 wraps the existing ring structures behind the trait without
-//! rewriting them.  Two concrete adaptors are provided:
+//! They wrap the existing ring structures behind the trait. Two adaptors:
 //!
 //! - [`RingFeed`] — wraps [`RingBuffer`] for RTMP-compatible packet fan-out.
 //! - [`TsFeed`] — wraps the inner ring of [`TsChunkRing`] for SRT/HLS
