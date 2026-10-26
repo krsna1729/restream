@@ -148,7 +148,6 @@ assert_contains "/output.css" "--color-base-100"
 assert_contains "/base-path.js" "__RESTREAM_BASE_PATH__"
 assert_contains "/js/control-room/main.js" "createRoot"
 assert_contains "/js/vendor/react/jsx-runtime.js" "jsx"
-assert_contains "/js/lib/hls.min.js" "Hls"
 assert_nonempty "/logo.png"
 
 cookie_jar="$runtime/cookies.txt"

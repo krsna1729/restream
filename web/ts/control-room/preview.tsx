@@ -1,3 +1,5 @@
+import type Hls from "hls.js";
+import type { HlsConfig, LoaderResponse, RetryConfig } from "hls.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { programPreviewUrl } from "../core/api.js";
@@ -27,12 +29,12 @@ function previewConfig(): Partial<HlsConfig> {
     retryDelayMs: RETRY_DELAY_MS,
     maxRetryDelayMs: RETRY_DELAY_MS,
     shouldRetry: (
-      config: { maxNumRetry: number },
+      config: RetryConfig | null | undefined,
       retryCount: number,
       _isTimeout: boolean,
-      response: { code?: number } | undefined,
+      response: LoaderResponse | undefined,
       retry: boolean,
-    ) => retry || (response?.code === 404 && retryCount < config.maxNumRetry),
+    ) => retry || (response?.code === 404 && retryCount < (config?.maxNumRetry ?? FIRST_SEGMENT_RETRIES)),
   };
   const policy = {
     default: {
@@ -235,8 +237,17 @@ export function Preview(props: {
       setState(next);
     };
 
-    const Hls = window.Hls;
-    if (Hls?.isSupported()) {
+    const playNatively = () =>
+      awaitFirstSegment(url, () => !ended, (outcome) => {
+        if (outcome === "login") return redirectToLogin();
+        if (outcome === "missing") return fail("failed");
+        element.src = url;
+        void element.play().catch(() => fail("failed"));
+      });
+    // hls.js (about 600 KB) loads with the first preview, not the page.
+    void import("hls.js").then(({ default: Hls }) => {
+      if (ended) return;
+      if (!Hls.isSupported()) return playNatively();
       player = new Hls(previewConfig());
       hls.current = player;
       player.on(Hls.Events.MANIFEST_PARSED, () => void element.play().catch(() => undefined));
@@ -261,14 +272,7 @@ export function Preview(props: {
       });
       player.loadSource(url);
       player.attachMedia(element);
-    } else {
-      awaitFirstSegment(url, () => !ended, (outcome) => {
-        if (outcome === "login") return redirectToLogin();
-        if (outcome === "missing") return fail("failed");
-        element.src = url;
-        void element.play().catch(() => fail("failed"));
-      });
-    }
+    }, () => fail("failed"));
     return end;
   }, [attempt, url, fellBack, props.fallbackUrl]);
 
