@@ -1,6 +1,6 @@
 //! Shared helpers for harness peer processes and measurement threads.
 //!
-//! A peer process (`srt-sink`, `udp-drain`) or a pinned measurement thread has
+//! A peer process (`srt-sink`) or a pinned measurement thread has
 //! to report the same things the same way: the CPU mask it actually observed,
 //! its own kernel UDP/NIC drop counters, a run identity, and a `GET /state`
 //! endpoint the measuring side differences per window. These live here so the
@@ -20,16 +20,6 @@ use super::*;
 /// for.
 pub(crate) fn cpus_allowed_list() -> Option<String> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
-    status
-        .lines()
-        .find_map(|line| line.strip_prefix("Cpus_allowed_list:"))
-        .map(|value| value.trim().to_string())
-}
-
-/// One thread's own CPU affinity. `/proc/self/status` reports the thread-group
-/// leader, so a thread that pinned itself needs its own task entry instead.
-pub(crate) fn thread_cpus_allowed_list(tid: libc::pid_t) -> Option<String> {
-    let status = std::fs::read_to_string(format!("/proc/self/task/{tid}/status")).ok()?;
     status
         .lines()
         .find_map(|line| line.strip_prefix("Cpus_allowed_list:"))
@@ -150,86 +140,10 @@ pub(crate) fn host_nic_drop_counters() -> (Option<u64>, Option<u64>) {
     (rx, tx)
 }
 
-/// Per-CPU software-network-stack counters from `/proc/net/softnet_stat`,
-/// summed: `processed`, `dropped`, `time_squeeze`, `received_rps` and
-/// `flow_limit`. A peer-side netdev drop claim needs these alongside the
-/// interface counters, because they name which part of the receive path
-/// discarded the packet instead of leaving it as an inference.
-pub(crate) fn softnet_counters() -> Option<Value> {
-    let raw = std::fs::read_to_string("/proc/net/softnet_stat").ok()?;
-    let column = |index: usize| -> Option<u64> {
-        let mut total = 0_u64;
-        let mut seen = false;
-        for line in raw.lines() {
-            let Some(field) = line.split_whitespace().nth(index) else {
-                continue;
-            };
-            if let Ok(value) = u64::from_str_radix(field, 16) {
-                total += value;
-                seen = true;
-            }
-        }
-        seen.then_some(total)
-    };
-    Some(json!({
-        "processed": column(0),
-        "dropped": column(1),
-        "timeSqueeze": column(2),
-        "receivedRps": column(9),
-        "flowLimit": column(10),
-    }))
-}
-
 pub(crate) fn read_counter_file(path: &Path) -> Option<u64> {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|value| value.trim().parse::<u64>().ok())
-}
-
-/// The calling thread's kernel thread id, for `/proc/self/task/<tid>/stat`.
-pub(crate) fn current_thread_id() -> libc::pid_t {
-    // SAFETY: gettid(2) takes no arguments and cannot fail.
-    unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t }
-}
-
-/// One thread's CPU time split into user and system seconds, plus its
-/// voluntary and involuntary context switches: the first cut of an on-CPU /
-/// off-CPU attribution (which half of the time, and whether the thread is
-/// being descheduled rather than working).
-#[derive(Debug)]
-pub(crate) struct ThreadCpu {
-    pub(crate) user_secs: f64,
-    pub(crate) system_secs: f64,
-    pub(crate) voluntary_switches: u64,
-    pub(crate) involuntary_switches: u64,
-}
-
-pub(crate) fn thread_cpu(tid: libc::pid_t) -> Option<ThreadCpu> {
-    let stat = std::fs::read_to_string(format!("/proc/self/task/{tid}/stat")).ok()?;
-    // The comm field may contain spaces and parentheses; fields after the last
-    // ')' are positional.
-    let after_comm = stat.rsplit_once(')')?.1;
-    let fields: Vec<&str> = after_comm.split_whitespace().collect();
-    let utime = fields.get(11)?.parse::<u64>().ok()?;
-    let stime = fields.get(12)?.parse::<u64>().ok()?;
-    // SAFETY: sysconf(3) takes no pointers.
-    let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
-    if ticks <= 0 {
-        return None;
-    }
-    let status = std::fs::read_to_string(format!("/proc/self/task/{tid}/status")).ok()?;
-    let counter = |name: &str| -> Option<u64> {
-        status
-            .lines()
-            .find_map(|line| line.strip_prefix(name))
-            .and_then(|value| value.trim().parse::<u64>().ok())
-    };
-    Some(ThreadCpu {
-        user_secs: utime as f64 / ticks as f64,
-        system_secs: stime as f64 / ticks as f64,
-        voluntary_switches: counter("voluntary_ctxt_switches:")?,
-        involuntary_switches: counter("nonvoluntary_ctxt_switches:")?,
-    })
 }
 
 /// Bind the peer's `GET /state` listener: dual-stack first (Linux maps IPv4
@@ -274,9 +188,6 @@ pub(crate) async fn serve_state_json(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::Ordering;
-    use std::time::Duration;
-
     use super::*;
 
     #[test]
@@ -288,58 +199,6 @@ mod tests {
             mask.chars()
                 .all(|c| c.is_ascii_digit() || c == ',' || c == '-')
         );
-    }
-
-    #[test]
-    fn thread_mask_is_observed_per_thread() {
-        let tid = current_thread_id();
-        let mask = thread_cpus_allowed_list(tid).expect("own thread mask");
-        assert!(
-            mask.chars()
-                .all(|c| c.is_ascii_digit() || c == ',' || c == '-')
-        );
-        assert!(thread_cpus_allowed_list(-1).is_none());
-    }
-
-    #[test]
-    fn thread_cpu_reads_the_calling_thread() {
-        let tid = current_thread_id();
-        assert!(tid > 0);
-        let cpu = thread_cpu(tid).expect("own thread cpu time");
-        assert!(cpu.user_secs >= 0.0 && cpu.system_secs >= 0.0, "{cpu:?}");
-        // A thread that does not exist has no record.
-        assert!(thread_cpu(-1).is_none());
-    }
-
-    #[test]
-    fn thread_cpu_reads_another_thread() {
-        // The substrate benchmark reads the sender thread's CPU time from the
-        // harness thread, so cross-thread reads must work.
-        let tid = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
-        let handle = std::thread::spawn({
-            let tid = std::sync::Arc::clone(&tid);
-            move || {
-                tid.store(current_thread_id(), Ordering::Relaxed);
-                let deadline = std::time::Instant::now() + Duration::from_millis(300);
-                let mut spin = 0_u64;
-                while std::time::Instant::now() < deadline {
-                    spin = spin.wrapping_add(1);
-                }
-                spin
-            }
-        });
-        while tid.load(Ordering::Relaxed) == 0 {
-            std::thread::yield_now();
-        }
-        // Let the thread accumulate measurable CPU time before reading it from
-        // this thread.
-        std::thread::sleep(Duration::from_millis(200));
-        let cpu = thread_cpu(tid.load(Ordering::Relaxed));
-        let _ = handle.join();
-        let busy = cpu
-            .as_ref()
-            .is_some_and(|cpu| cpu.user_secs + cpu.system_secs > 0.0);
-        assert!(busy, "{cpu:?}");
     }
 
     #[test]

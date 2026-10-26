@@ -12,7 +12,7 @@
 //! thread runs at or above the 62% busy where one shard began to degrade.
 
 use super::*;
-use crate::egress_duty::cpu::{
+use crate::thread_cpu::{
     CpuTicks, clock_ticks_per_sec, cpu_secs_between, read_proc_stat_cpu, read_thread_comms,
     select_egress_shard_threads,
 };
