@@ -72,8 +72,9 @@ flowchart LR
 | `docker-runtime-smoke` | `scripts/check/container-smoke.sh` on a source-built image | when the diff touches the Dockerfile, release/build scripts, `distribution/`, `tests/seccomp_profile.rs`, RTMP, SRT or egress sources |
 
 `nightly-full-certification.yml` adds `cargo test --workspace --all-features`,
-a nightly container smoke and the broad harness shard matrix. The workflow
-files are the source of truth for shard lists.
+a nightly container smoke and the full harness shard matrix. Nightly and
+release both read that matrix from `scripts/lib/release-shards.sh`; the PR and
+`master` shard lists above live in `ci.yml`.
 
 ## Rust test suite
 
