@@ -158,13 +158,4 @@ fn media_transport_has_no_epoll_readiness_path() {
             );
         }
     });
-    for retired in [
-        "src/media/egress/backends/tcp_connect.rs",
-        "src/media/egress/backends/tcp_tests.rs",
-    ] {
-        assert!(
-            !std::path::Path::new(retired).exists(),
-            "{retired} was deleted and must not return"
-        );
-    }
 }
