@@ -79,6 +79,15 @@ async fn a_share_link_opens_its_pipeline_preview_to_anyone_until_revoked() {
     let page = String::from_utf8(page).unwrap();
     assert!(page.contains("Lobby cam"));
     assert!(page.contains(&format!("../hls/{pipeline}/master.m3u8?t={token}")));
+    // The player it imports is served to a viewer with no session.
+    let player = page
+        .split("import Hls from \"../")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("the watch page imports hls.js");
+    let (status, _, script) = call(&app, "GET", &format!("/{player}"), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{player}");
+    assert!(String::from_utf8_lossy(&script).contains("isSupported"));
     let (_, _, listed) = call(
         &app,
         "GET",

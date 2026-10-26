@@ -590,15 +590,15 @@ fn frontend_tooling_and_vendored_assets_are_reproducible() {
     assert!(package_lock.contains("\"lockfileVersion\""));
     assert!(package_lock.contains("\"hls.js\""));
 
-    let hls_sync = include_str!("../scripts/dev/frontend/prepare-assets.mjs");
-    assert!(hls_sync.contains("sourceMappingURL=hls\\.min\\.js\\.map"));
-    let generated_hls_bundle =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("public/js/lib/hls.min.js");
+    // hls.js ships through the Vite build (loaded with the first preview);
+    // the bundled module must not point at a source map that is not shipped.
+    let generated_hls_bundle = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("public/js/vendor/hls.js/dist/hls.js");
     if generated_hls_bundle.is_file() {
         let hls_bundle =
             std::fs::read_to_string(&generated_hls_bundle).expect("generated HLS bundle is UTF-8");
         assert!(
-            !hls_bundle.contains("sourceMappingURL=hls.min.js.map"),
+            !hls_bundle.contains("sourceMappingURL="),
             "generated HLS bundle should not point at an absent source map"
         );
     }

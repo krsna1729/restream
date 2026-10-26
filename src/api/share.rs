@@ -165,8 +165,9 @@ const WATCH_PAGE: &str = r#"<!doctype html>
 <div class="stage"><video id="player" controls playsinline muted autoplay aria-label="{{title}}, live"></video></div>
 <div class="bar"><span id="live" class="live off">OFFLINE</span><span class="title">{{title}}</span></div>
 <p id="note" class="note" role="status">Connecting…</p>
-<script src="../js/lib/hls.min.js"></script>
-<script>
+<script type="module">
+// The dashboard's own build of hls.js (Vite emits it under js/vendor).
+import Hls from "../js/vendor/hls.js/dist/hls.js";
 (function () {
   var video = document.getElementById("player");
   var live = document.getElementById("live");
@@ -179,16 +180,16 @@ const WATCH_PAGE: &str = r#"<!doctype html>
     note.textContent = message || "";
   }
   video.addEventListener("playing", function () { onAir(true, ""); });
-  if (window.Hls && window.Hls.isSupported()) {
+  if (Hls.isSupported()) {
     var start = function () {
-      var hls = new window.Hls({
+      var hls = new Hls({
         liveSyncDurationCount: 3,
         // Every playlist and segment carries the link's token.
         xhrSetup: function (xhr, url) {
           if (url.indexOf("t=") === -1) xhr.open("GET", url + (url.indexOf("?") === -1 ? "?" : "&") + "t=" + token, true);
         },
       });
-      hls.on(window.Hls.Events.ERROR, function (_event, data) {
+      hls.on(Hls.Events.ERROR, function (_event, data) {
         if (!data.fatal) return;
         hls.destroy();
         onAir(false, "The stream is not live right now. Retrying…");
