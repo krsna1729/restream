@@ -384,6 +384,18 @@ async fn aggregate_alerts_requires_auth_and_returns_array() {
     assert!(body["generatedAt"].is_string());
     assert!(body["resolved"].is_null(), "history is opt-in: {body}");
 
+    // Reads are served the last evaluation; they do not evaluate again
+    // (the notifier is the one writer of alert state).
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let again = body_json(
+        app.clone()
+            .oneshot(auth_req("GET", "/api/v1/alerts", &cookie, None))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(again["generatedAt"], body["generatedAt"], "{again}");
+
     // Without a session a malformed query still reads as unauthenticated.
     let unauth_bad = app
         .clone()

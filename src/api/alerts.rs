@@ -1,6 +1,8 @@
-//! Alert HTTP handlers expose derived operator alerts from the runtime health
-//! snapshot. This module stays at the transport boundary so request auth,
-//! snapshot shaping, and alert-tracker state remain easy to audit together.
+//! Alerts are evaluated in one place: the notifier loop derives them from the
+//! health snapshot every `NOTIFY_INTERVAL`, tracks their history and
+//! publishes the result. `GET /api/v1/alerts` serves that last evaluation,
+//! as Prometheus serves rule state, so a read never evaluates or changes
+//! alert history and the page lags the engine by at most one interval.
 
 use axum::{
     Json,
@@ -39,13 +41,12 @@ fn snapshot_generated_at(snapshot: &serde_json::Value) -> String {
 // Transport shaping for the alert payload stays local to this module so the
 // tracker and derivation code do not need to know the HTTP response schema.
 fn alerts_response(
-    snapshot: &serde_json::Value,
-    alerts: Vec<crate::alerts::Alert>,
+    evaluation: crate::alerts::Evaluation,
     resolved: Option<crate::alerts::ResolvedWindow>,
 ) -> Response {
     let mut body = serde_json::json!({
-        "generatedAt": snapshot_generated_at(snapshot),
-        "alerts": alerts,
+        "generatedAt": evaluation.generated_at,
+        "alerts": evaluation.alerts,
     });
     // History is opt-in: a reader of the open set does not pay for it.
     if let Some(resolved) = resolved {
@@ -55,10 +56,10 @@ fn alerts_response(
     Json(body).into_response()
 }
 
-/// The open alerts now, stamped by the tracker. Alerts are derived from the
-/// same health snapshot shape the dashboard uses, so transport-only alert
-/// logic does not need to understand engine internals.
-pub async fn current_alerts(state: &AppState) -> (serde_json::Value, Vec<crate::alerts::Alert>) {
+/// Evaluate the open alerts now: derive them from the dashboard health
+/// snapshot, track their history and publish the result for readers. Only the
+/// notifier calls this, apart from the very first read before it has run.
+pub async fn evaluate_alerts(state: &AppState) -> Vec<crate::alerts::Alert> {
     let snapshot = dashboard_alert_snapshot(state).await;
     let mut alert_list = alerts::derive_alerts(&snapshot);
     alert_list.extend(alerts::anomaly_alerts(
@@ -78,7 +79,10 @@ pub async fn current_alerts(state: &AppState) -> (serde_json::Value, Vec<crate::
         .collect();
     alerts::name_subjects(&mut alert_list, &pipeline_names, &output_names);
     state.alert_tracker.track(&mut alert_list);
-    (snapshot, alert_list)
+    state
+        .alert_tracker
+        .publish(snapshot_generated_at(&snapshot), &alert_list);
+    alert_list
 }
 
 /// How often the notifier evaluates alerts.
@@ -102,7 +106,7 @@ pub async fn run_alert_notifier(
             () = shutdown.cancelled() => return,
             _ = ticks.tick() => {}
         }
-        let (_, open) = current_alerts(&state).await;
+        let open = evaluate_alerts(&state).await;
         let briefs: Vec<_> = open
             .iter()
             .map(crate::application::notify::AlertBrief::from)
@@ -140,11 +144,19 @@ pub async fn aggregate_alerts_handler(
         Err(rejection) => return rejection.into_response(),
     };
 
-    let (snapshot, alert_list) = current_alerts(&state).await;
+    // The evaluator publishes within one interval of start; a read that
+    // comes before it evaluates once so it is never served "no alerts".
+    let evaluation = match state.alert_tracker.latest() {
+        Some(evaluation) => evaluation,
+        None => {
+            evaluate_alerts(&state).await;
+            state.alert_tracker.latest().unwrap_or_default()
+        }
+    };
     let resolved = query
         .since
         .map(|since| state.alert_tracker.resolved_since(since));
-    alerts_response(&snapshot, alert_list, resolved)
+    alerts_response(evaluation, resolved)
 }
 
 #[cfg(test)]
@@ -163,7 +175,7 @@ mod tests {
 
     #[test]
     fn alerts_response_uses_ok_status() {
-        let response = alerts_response(&serde_json::json!({}), Vec::new(), None);
+        let response = alerts_response(crate::alerts::Evaluation::default(), None);
 
         assert_eq!(response.status(), StatusCode::OK);
     }
