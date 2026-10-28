@@ -11,8 +11,8 @@
 )]
 
 use restream_core::{
-    AAC_SAMPLE_RATES, AudioMeta, VideoMeta, annexb_parameter_sets, for_each_annexb_nalu,
-    level_name, parse_h264_sps, profile_name, signed_be24, take_u16_prefixed,
+    AAC_SAMPLE_RATES, AudioMeta, VideoMeta, annexb_parameter_sets, level_name, parse_h264_sps,
+    profile_name, signed_be24, take_u16_prefixed,
 };
 pub use restream_core::{AvccRecord, avcc_record};
 
@@ -319,27 +319,7 @@ pub fn audio_for_rtmp_into(payload: &[u8], out: &mut Vec<u8>) {
     out.extend_from_slice(raw);
 }
 
-pub fn annexb_to_avcc_into(data: &[u8], out: &mut Vec<u8>) -> bool {
-    let mut has_vcl = false;
-    let _ = for_each_annexb_nalu(data, |nalu| {
-        let Some(&first) = nalu.first() else {
-            return std::ops::ControlFlow::Continue(());
-        };
-        let nal_type = first & 0x1F;
-        if matches!(nal_type, 7..=9) {
-            return std::ops::ControlFlow::Continue(());
-        }
-        if matches!(nal_type, 1..=5) {
-            has_vcl = true;
-        }
-        if let Ok(len) = u32::try_from(nalu.len()) {
-            out.extend_from_slice(&len.to_be_bytes());
-            out.extend_from_slice(nalu);
-        }
-        std::ops::ControlFlow::Continue(())
-    });
-    has_vcl
-}
+pub use restream_core::codec::annexb_to_avcc_into;
 
 pub fn video_for_rtmp_with_composition_into(
     payload: &[u8],

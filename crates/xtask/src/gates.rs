@@ -111,14 +111,6 @@ pub(crate) fn run_gates(args: &[&str]) -> StepResult {
             plan.follow_up("cargo xtask concurrency fast");
         }
     }
-    for file in &rust {
-        if !is_lifecycle(file)
-            && !is_fixture_or_harness(file)
-            && let Some(filter) = module_filter(file)
-        {
-            plan.follow_up(&format!("cargo test {filter}"));
-        }
-    }
 
     plan.print(&diff, &changed);
     if dry_run {
@@ -250,7 +242,7 @@ fn route(changed: &[String]) -> Plan {
         if is_fixture_or_harness(file) {
             plan.follow_up("cargo xtask fixture-discipline");
         }
-        if any(file, &["src/media/*", "benches/*"]) {
+        if any(file, &["src/media/*", "crates/restream-*/*", "benches/*"]) {
             plan.manual("relevant cargo bench --bench <name>");
         }
         if is_protocol(file) {
@@ -261,6 +253,13 @@ fn route(changed: &[String]) -> Plan {
         }
         if is_source_audit_scope(file) {
             plan.auto.insert(AutoGate::SourceAudit);
+        }
+        if file.ends_with(".rs")
+            && !is_lifecycle(file)
+            && !is_fixture_or_harness(file)
+            && let Some(filter) = module_filter(file)
+        {
+            plan.follow_up(&package_test_command(file, filter));
         }
     }
     plan
@@ -276,10 +275,20 @@ fn is_shell(file: &str) -> bool {
 
 fn is_rust_lint_scope(file: &str) -> bool {
     file.ends_with(".rs")
+        || file.ends_with("/Cargo.toml")
         || matches!(
             file,
             "Cargo.toml" | "Cargo.lock" | "rust-toolchain.toml" | ".cargo/config.toml"
         )
+}
+
+fn package_test_command(file: &str, filter: &str) -> String {
+    if let Some(crate_path) = file.strip_prefix("crates/")
+        && let Some(pkg) = crate_path.split('/').next()
+    {
+        return format!("cargo test -p {pkg} {filter}");
+    }
+    format!("cargo test {filter}")
 }
 
 fn is_frontend(file: &str) -> bool {
@@ -550,5 +559,63 @@ mod tests {
         ));
         assert!(!adds_concurrency("+    let x = NonAtomicCounter;"));
         assert!(!adds_concurrency("+    let x = self.mpsc_queue;"));
+    }
+
+    #[test]
+    fn package_test_command_selects_crate_package() {
+        assert_eq!(
+            package_test_command("src/media/hls/segmenter.rs", "segmenter"),
+            "cargo test segmenter"
+        );
+        assert_eq!(
+            package_test_command("crates/restream-rtmp/src/flv.rs", "flv"),
+            "cargo test -p restream-rtmp flv"
+        );
+        assert_eq!(
+            package_test_command("crates/restream-moq/src/media.rs", "media"),
+            "cargo test -p restream-moq media"
+        );
+    }
+
+    #[test]
+    fn extracted_crate_routing_selects_package_tests_and_manifest_lints() {
+        let rtmp_plan = plan_for(&["crates/restream-rtmp/src/flv.rs"]);
+        assert!(
+            rtmp_plan
+                .follow_ups
+                .contains(&"cargo test -p restream-rtmp flv".to_string())
+        );
+        assert!(
+            rtmp_plan
+                .manual
+                .contains(&"target/debug/test_harness correctness*".to_string())
+        );
+        assert!(
+            rtmp_plan
+                .manual
+                .contains(&"relevant cargo bench --bench <name>".to_string())
+        );
+
+        let manifest_plan = plan_for(&["crates/restream-srt/Cargo.toml"]);
+        assert!(manifest_plan.auto.contains(&AutoGate::ClippyLib));
+        assert!(manifest_plan.auto.contains(&AutoGate::ClippyWorkspace));
+    }
+
+    #[test]
+    fn ci_workflow_filters_recognize_extracted_crates() {
+        let ci_yaml = std::fs::read_to_string(crate::repo_root().join(".github/workflows/ci.yml"))
+            .expect("read ci.yml");
+        assert!(
+            ci_yaml.contains("crates/restream-[^/]+/.*"),
+            "ci.yml must include restream crates in docker smoke"
+        );
+        assert!(
+            ci_yaml.contains("crates/restream-[^/]+/"),
+            "ci.yml must include restream crates in parser fuzz smoke"
+        );
+        assert!(
+            ci_yaml.contains("crates/restream-moq/.*"),
+            "ci.yml must include restream-moq in moq-interop"
+        );
     }
 }

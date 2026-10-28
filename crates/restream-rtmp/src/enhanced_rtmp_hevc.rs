@@ -127,7 +127,7 @@ pub fn build_hevc_enhanced_rtmp_sequence_header(annexb_data: &[u8]) -> Option<By
 }
 /// Annex B H.265 as 4-byte length-prefixed NAL units, without the VPS, SPS,
 /// PPS and access unit delimiters; whether a picture slice was written.
-pub(crate) fn h265_annexb_to_length_prefixed_into(data: &[u8], out: &mut Vec<u8>) -> bool {
+pub fn h265_annexb_to_length_prefixed_into(data: &[u8], out: &mut Vec<u8>) -> bool {
     let mut has_vcl = false;
     let _ = for_each_annexb_nalu(data, |nalu| {
         let Some(nal_type) = h265_nal_type(nalu) else {

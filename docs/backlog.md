@@ -26,6 +26,7 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-101 incident investigation and approval UX](#q-101-agent-opus-explain-an-incident-and-approve-its-fix-in-one-place)
 - [Q-102 plain-language command palette](#q-102-frontend-sonnet-plain-language-command-palette)
 - [Q-104 FFmpeg 9 pin](#q-104-platform-sonnet-move-the-ffmpeg-pin-to-a-90x-point-release)
+- [Q-105 shell scripts to xtask](#q-105-tooling-opus-consolidate-43-of-46-shell-scripts-into-cratesxtask)
 
 ### Q-025 [performance] [opus] Re-qualify the SRT shard law after transport convergence
 - Goal: qualify the SRT cold prior (64 outputs per shard at 4.8 Mbit/s,
@@ -241,3 +242,14 @@ the [assurance roadmap](assurance-roadmap.md).
   `-a53cc` fix) still keeps every cue; the transport harness and the HEVC
   fixtures pass; an encode-speed A/B (libx264 and libx265, same host and
   profile) shows no regression.
+
+### Q-105 [tooling] [opus] Consolidate 43 of 46 shell scripts into crates/xtask
+- Goal: achieve `srt-rs` tooling parity by migrating repository management,
+  benchmarking, qualification, and packaging from 43 shell scripts into typed
+  Rust modules under `crates/xtask/` (`harness.rs`, `release.rs`, `qualify.rs`,
+  `worktree.rs`, `container.rs`, `fetch.rs`), retaining only the 3 pre-Rust OS
+  bootstrap scripts (`scripts/dev/bootstrap.sh`, `scripts/dev/bootstrap-runtime.sh`,
+  and `scripts/ci/install-system-deps.sh`).
+- Files: `scripts/`, `crates/xtask/`.
+- Gates: full local qualification via `cargo xtask qualify`, `cargo xtask harness`,
+  and pre-commit gates passing without shell script wrappers.

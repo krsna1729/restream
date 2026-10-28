@@ -8,11 +8,12 @@ pub mod codec;
 pub use codec::{
     AAC_SAMPLE_RATES, AnnexbCodecKind, AnnexbParameterSetAccumulator, AvccRecord, BitReader,
     H264Sps, HevcProfileTierLevel, VideoCodecKind, aac_frequency_index, adts_frame_count,
-    adts_frame_ranges, adts_sample_rate, annexb_parameter_sets, avcc_record, avcc_to_annexb,
-    avcc_to_annexb_into, build_aac_sequence_header, build_avcc_record, build_avcc_sequence_header,
-    build_hvcc_record, find_annexb_start_codes, for_each_annexb_nalu, h265_nal_type, level_name,
-    parse_avcc_config, parse_h264_sps, parse_hevc_profile_tier_level, profile_name,
-    raw_annexb_is_keyframe, rbsp, signed_be24, split_annexb_nalus, take_u16_prefixed,
+    adts_frame_ranges, adts_sample_rate, annexb_parameter_sets, annexb_to_avcc,
+    annexb_to_avcc_into, avcc_record, avcc_to_annexb, avcc_to_annexb_into,
+    build_aac_sequence_header, build_avcc_record, build_avcc_sequence_header, build_hvcc_record,
+    find_annexb_start_codes, for_each_annexb_nalu, h265_nal_type, level_name, parse_avcc_config,
+    parse_h264_sps, parse_hevc_profile_tier_level, profile_name, raw_annexb_is_keyframe, rbsp,
+    signed_be24, split_annexb_nalus, take_u16_prefixed,
 };
 pub mod metadata;
 pub use metadata::{AudioMeta, DeclaredEncoder, VideoMeta};

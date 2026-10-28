@@ -744,6 +744,38 @@ pub fn avcc_to_annexb_into(data: &[u8], nalu_len_size: usize, out: &mut Vec<u8>)
     }
 }
 
+/// Convert Annex B NALUs to AVCC format (4-byte length prefix).
+/// Filters out SPS (7), PPS (8), and AUD (9) NALUs.
+pub fn annexb_to_avcc(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
+    let _ = annexb_to_avcc_into(data, &mut out);
+    out
+}
+
+/// Like `annexb_to_avcc` but appends output into a caller-provided buffer.
+/// Callers can reuse the allocation across packets to avoid per-packet heap churn.
+#[inline]
+pub fn annexb_to_avcc_into(data: &[u8], out: &mut Vec<u8>) -> bool {
+    let mut has_vcl = false;
+    let _ = for_each_annexb_nalu(data, |nalu| {
+        let Some(&first) = nalu.first() else {
+            return ControlFlow::Continue(());
+        };
+        let nal_type = first & 0x1F;
+        if matches!(nal_type, 7..=9) {
+            return ControlFlow::Continue(());
+        }
+        if matches!(nal_type, 1..=5) {
+            has_vcl = true;
+        }
+        let len = nalu.len() as u32;
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(nalu);
+        ControlFlow::Continue(())
+    });
+    has_vcl
+}
+
 pub fn h265_nal_type(nalu: &[u8]) -> Option<u8> {
     match nalu {
         [first, _, ..] => Some((first >> 1) & 0x3F),

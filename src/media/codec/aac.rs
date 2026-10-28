@@ -99,14 +99,7 @@ pub fn audio_for_rtmp(payload: &[u8]) -> Vec<u8> {
 /// Zero-allocation variant of [`audio_for_rtmp`].
 ///
 /// Clears `out` and writes the FLV-wrapped raw AAC into it in-place.
-#[inline]
-pub fn audio_for_rtmp_into(payload: &[u8], out: &mut Vec<u8>) {
-    let raw = strip_adts(payload);
-    out.clear();
-    out.reserve(raw.len().saturating_add(2));
-    out.extend_from_slice(&[0xAF, 0x01]);
-    out.extend_from_slice(raw);
-}
+pub use restream_rtmp::flv::audio_for_rtmp_into;
 
 /// The MPEG-4 audio sampling frequencies by `samplingFrequencyIndex`
 /// (ISO/IEC 14496-3 Table 1.18); index 15 means an explicit rate.

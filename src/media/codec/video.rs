@@ -8,10 +8,8 @@
 use std::borrow::Cow;
 use std::ops::ControlFlow;
 
-use bytes::Bytes;
-
 use super::enhanced_rtmp_hevc::{
-    EX_CODED_FRAMES, EX_CODED_FRAMES_X, EX_SEQUENCE_START, ex_video_tag, hvcc_record,
+    EX_CODED_FRAMES, EX_CODED_FRAMES_X, EX_SEQUENCE_START, ex_video_tag,
 };
 use crate::media::packet::PayloadFormat;
 
@@ -221,65 +219,7 @@ fn length_prefixed_frame_to_annexb<'a>(
 
 /// The NALU length width and Annex B parameter sets of an FLV video
 /// sequence header: a classic H.264 one, or an enhanced RTMP `avc1`/`hvc1`
-/// sequence start. `None` for anything else, or a record missing a
-/// parameter set (an incomplete set would be prepended to keyframes as if
-/// it were whole).
-pub(crate) fn flv_video_config(payload: &[u8]) -> Option<(usize, Vec<u8>)> {
-    let (length_size_minus_one, sets): (u8, Vec<&[u8]>) = match ex_video_tag(payload) {
-        Some(tag) if tag.packet_type != EX_SEQUENCE_START => return None,
-        Some(tag) if tag.is_hevc() => {
-            let record = hvcc_record(tag.body)?;
-            if record.vps.is_empty() || record.sps.is_empty() || record.pps.is_empty() {
-                return None;
-            }
-            let sets = [record.vps, record.sps, record.pps].concat();
-            (record.length_size_minus_one, sets)
-        }
-        Some(tag) => {
-            let record = avcc_record(tag.body)?;
-            if record.sps.is_empty() || record.pps.is_empty() {
-                return None;
-            }
-            (
-                record.length_size_minus_one,
-                [record.sps, record.pps].concat(),
-            )
-        }
-        None => {
-            let (&[tag, 0, ..], body) = payload.split_first_chunk::<5>()? else {
-                return None;
-            };
-            match tag & 0x0F {
-                7 => {
-                    let record = avcc_record(body)?;
-                    if record.sps.is_empty() || record.pps.is_empty() {
-                        return None;
-                    }
-                    (
-                        record.length_size_minus_one,
-                        [record.sps, record.pps].concat(),
-                    )
-                }
-                // Legacy FLV HEVC (codec id 12): an hvcC record.
-                12 => {
-                    let record = hvcc_record(body)?;
-                    if record.vps.is_empty() || record.sps.is_empty() || record.pps.is_empty() {
-                        return None;
-                    }
-                    let sets = [record.vps, record.sps, record.pps].concat();
-                    (record.length_size_minus_one, sets)
-                }
-                _ => return None,
-            }
-        }
-    };
-    let mut annexb = Vec::new();
-    for nalu in sets {
-        annexb.extend_from_slice(&[0, 0, 0, 1]);
-        annexb.extend_from_slice(nalu);
-    }
-    Some((usize::from(length_size_minus_one).saturating_add(1), annexb))
-}
+pub(crate) use restream_rtmp::flv::flv_video_config;
 
 fn refresh_annexb_parameter_set_cache(payload: &[u8], sps_pps_cache: &mut Vec<u8>) -> bool {
     let Some(parameter_sets) = annexb_parameter_sets(payload) else {
@@ -519,106 +459,9 @@ pub(crate) fn take_u16_prefixed<'a>(rest: &mut &'a [u8]) -> Option<&'a [u8]> {
     Some(item)
 }
 
-/// Parse AVCC decoder configuration record.
-/// Returns `(nalu_length_size, sps_pps_as_annexb)`.
-///
-/// Fails closed: if the SPS or PPS list is truncated at any point, the
-/// annexb output is empty rather than containing whatever prefix parsed
-/// before the truncation. A cached parameter set missing its PPS (or with a
-/// PPS but no SPS) is worse than caching nothing, since it would be
-/// prepended to keyframes as if it were complete.
-pub fn parse_avcc_config(data: &[u8]) -> (usize, Vec<u8>) {
-    let Some(&length_byte) = data.get(4).filter(|_| data.len() >= 8) else {
-        return (4, Vec::new());
-    };
-    let nalu_len_size = usize::from(length_byte & 0x03).saturating_add(1);
-    let annexb = avcc_record(data)
-        .map(|record| {
-            let mut out = Vec::new();
-            for nalu in record.sps.iter().chain(&record.pps) {
-                out.extend_from_slice(&[0, 0, 0, 1]);
-                out.extend_from_slice(nalu);
-            }
-            out
-        })
-        .unwrap_or_default();
-    (nalu_len_size, annexb)
-}
-
-/// Convert AVCC-format NALUs to Annex B (start codes).
-pub fn avcc_to_annexb(data: &[u8], nalu_len_size: usize) -> Vec<u8> {
-    let mut out = Vec::with_capacity(data.len());
-    avcc_to_annexb_into(data, nalu_len_size, &mut out);
-    out
-}
-
-/// Like `avcc_to_annexb` but appends output into a caller-provided buffer.
-/// Callers can reuse the allocation across packets to avoid per-packet heap churn.
-#[inline]
-///
-/// `nalu_len_size` must be 1..=4 (an AVC record's `lengthSizeMinusOne` + 1);
-/// any other width produces no output.
-pub fn avcc_to_annexb_into(data: &[u8], nalu_len_size: usize, out: &mut Vec<u8>) {
-    if !(1..=4).contains(&nalu_len_size) {
-        return;
-    }
-    let mut rest = data;
-    while let Some((length, tail)) = rest.split_at_checked(nalu_len_size) {
-        let nalu_len = length
-            .iter()
-            .fold(0usize, |len, &byte| (len << 8) | usize::from(byte));
-        let Some((nalu, tail)) = tail.split_at_checked(nalu_len).filter(|_| nalu_len > 0) else {
-            break;
-        };
-        out.extend_from_slice(&[0, 0, 0, 1]);
-        out.extend_from_slice(nalu);
-        rest = tail;
-    }
-}
-
-/// Convert Annex B NALUs to AVCC format (4-byte length prefix).
-/// Filters out SPS (7), PPS (8), and AUD (9) NALUs.
-pub fn annexb_to_avcc(data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(data.len());
-    let _ = annexb_to_avcc_into(data, &mut out);
-    out
-}
-
-/// Like `annexb_to_avcc` but appends output into a caller-provided buffer.
-/// Callers can reuse the allocation across packets to avoid per-packet heap churn.
-///
-/// # Implementation choice: callback walker (no allocation)
-///
-/// History: a `memmem::find_iter().peekable()` single-pass variant was
-/// measured 25–31% slower than a two-pass split into two small `Vec`s on
-/// 2026-06-23 (1-NALU P-frame at 8 KiB, ~890 ns vs ~690 ns), in a
-/// single-threaded micro-benchmark where allocation is uncontended. Under
-/// production load those per-packet `Vec`s contend on the allocator (arena
-/// lock waits on the SRT ingress Owner, runtime-crossings C3), so this walks
-/// NALUs with [`for_each_annexb_nalu`]: one pass, no `Peekable`, no
-/// allocation. `benches/codec_conversions.rs` compares it with the scratch
-/// variant below.
-#[inline]
-pub fn annexb_to_avcc_into(data: &[u8], out: &mut Vec<u8>) -> bool {
-    let mut has_vcl = false;
-    let _ = for_each_annexb_nalu(data, |nalu| {
-        let Some(&first) = nalu.first() else {
-            return ControlFlow::Continue(());
-        };
-        let nal_type = first & 0x1F;
-        if matches!(nal_type, 7..=9) {
-            return ControlFlow::Continue(());
-        }
-        if matches!(nal_type, 1..=5) {
-            has_vcl = true;
-        }
-        let len = nalu.len() as u32;
-        out.extend_from_slice(&len.to_be_bytes());
-        out.extend_from_slice(nalu);
-        ControlFlow::Continue(())
-    });
-    has_vcl
-}
+pub use restream_core::codec::{
+    annexb_to_avcc, annexb_to_avcc_into, avcc_to_annexb, avcc_to_annexb_into, parse_avcc_config,
+};
 
 /// Like `annexb_to_avcc` but uses caller-provided scratch buffers to avoid the
 /// two intermediate Vec allocations (`Vec<(usize,usize)>` for start-code spans
@@ -737,57 +580,7 @@ pub fn for_each_annexb_nalu<'a>(
     ControlFlow::Continue(())
 }
 
-/// Build an FLV video sequence header (AVCC decoder config) from Annex B keyframe data.
-///
-/// Returns `None` when the parameter sets do not fit the record: at most 31
-/// SPS (5-bit count), 255 PPS, and 65,535 bytes per NALU (16-bit length).
-pub fn build_avcc_sequence_header(annexb_data: &[u8]) -> Option<Bytes> {
-    let nalus = split_annexb_nalus(annexb_data);
-    let nal_type = |nalu: &&[u8]| nalu.first().map(|first| first & 0x1F);
-    let sps_list: Vec<&[u8]> = nalus
-        .iter()
-        .filter(|nalu| nal_type(nalu) == Some(7))
-        .copied()
-        .collect();
-    let pps_list: Vec<&[u8]> = nalus
-        .iter()
-        .filter(|nalu| nal_type(nalu) == Some(8))
-        .copied()
-        .collect();
-
-    let &[_, profile, compatibility, level] = sps_list.first()?.first_chunk::<4>()?;
-    let sps_count = u8::try_from(sps_list.len())
-        .ok()
-        .filter(|count| *count <= 0x1F)?;
-    let pps_count = u8::try_from(pps_list.len()).ok()?;
-    let too_long = |nalu: &&[u8]| u16::try_from(nalu.len()).is_err();
-    if sps_list.iter().chain(&pps_list).any(too_long) {
-        return None;
-    }
-
-    let mut buf = Vec::with_capacity(64);
-    // FLV video tag: keyframe(0x17) + sequence header(0x00) + composition time(0,0,0)
-    buf.extend_from_slice(&[0x17, 0x00, 0x00, 0x00, 0x00]);
-    // AVCDecoderConfigurationRecord
-    buf.push(1); // configurationVersion
-    buf.push(profile); // AVCProfileIndication
-    buf.push(compatibility); // profile_compatibility
-    buf.push(level); // AVCLevelIndication
-    buf.push(0xFF); // lengthSizeMinusOne = 3 (4 bytes)
-
-    buf.push(0xE0 | sps_count);
-    for s in &sps_list {
-        buf.extend_from_slice(&(s.len() as u16).to_be_bytes());
-        buf.extend_from_slice(s);
-    }
-    buf.push(pps_count);
-    for p in &pps_list {
-        buf.extend_from_slice(&(p.len() as u16).to_be_bytes());
-        buf.extend_from_slice(p);
-    }
-
-    Some(Bytes::from(buf))
-}
+pub use restream_core::codec::build_avcc_sequence_header;
 
 /// Visit each NAL unit of a length-prefixed (AVCC/HVCC) access unit with
 /// `size`-byte big-endian lengths (1..=4). `false` when the framing is

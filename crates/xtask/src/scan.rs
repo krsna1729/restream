@@ -102,7 +102,7 @@ pub(crate) fn fixture_discipline() -> StepResult {
             "-z",
             "--",
         ])
-        .args(["src", "tests", "test", "benches"])
+        .args(["src", "tests", "test", "benches", "crates/test_harness"])
         .output()
         .map_err(|error| format!("cannot run git ls-files: {error}"))?;
     if !listed.status.success() {
@@ -142,7 +142,7 @@ generation workflow and document why the committed fixture set is insufficient."
 /// are the media the rule asks for, and some are text that names generators
 /// without running them (an FFmpeg `-filters` listing includes `testsrc`).
 fn scanned_for_generators(path: &Path) -> bool {
-    !path.starts_with("test/fixtures")
+    !path.starts_with("test/fixtures") && !path.starts_with("crates/xtask")
 }
 
 /// Output that must not appear in a passing test run.
@@ -248,6 +248,22 @@ mod tests {
         assert!(!scanned_for_generators(Path::new(
             "test/fixtures/ffmpeg/btbn-n8.1.3/filters.txt"
         )));
+    }
+
+    #[test]
+    fn generator_scan_covers_test_harness_and_detects_inline_generators() {
+        assert!(scanned_for_generators(Path::new(
+            "crates/test_harness/src/main.rs"
+        )));
+        assert!(scanned_for_generators(Path::new(
+            "crates/test_harness/src/test_harness/suite.rs"
+        )));
+
+        let forbidden_line = "let _ = \"-f lavfi -i testsrc\";";
+        let is_hit = INLINE_GENERATORS
+            .iter()
+            .any(|pattern| forbidden_line.to_ascii_lowercase().contains(pattern));
+        assert!(is_hit, "generator pattern must be detected");
     }
 
     #[test]
