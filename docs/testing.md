@@ -68,7 +68,7 @@ flowchart LR
 | `integration-build` (Transport live-harness build) | `cargo xtask build-bench`; uploads `restream` and `test_harness` | after `test` |
 | `integration-shards` | `mixed.live.srt.h264.a1.bf0`, `mixed.live.rtmp.h264.a1.bf0`, `direct-play` | not on `master` pushes |
 | `master-transport-shards` | the H.264/H.265 SRT shapes, two RTMP shapes, `srt-crypto-matrix`, `fault.resilience`, `direct-play` | `master` pushes |
-| `moq-interop` (MoQ interop) | `moq-dev-interop --browsers` | `master`, manual runs, and pull requests touching MoQ/egress, `crates/restream-{core,sync,moq}/`, MoQ peer/browser tools or `ci.yml` |
+| `moq-interop` (MoQ interop) | `moq-dev-interop --browsers` | `master`, manual runs, and pull requests touching MoQ/egress, `crates/restream-{core,sync,moq}/`, moved MoQ harness sources, MoQ peer/browser tools or `ci.yml` |
 | `docker-runtime-smoke` | `scripts/check/container-smoke.sh` on a source-built image | Dockerfile, release/build scripts, `distribution/`, seccomp tests, RTMP/SRT/egress, production `crates/restream-*/` or harness changes |
 
 `nightly-full-certification.yml` adds `cargo test --workspace --all-features`,
@@ -83,6 +83,13 @@ cargo xtask test-hygiene        # the CI gate: full suite plus noise scan
 cargo xtask fixture-discipline  # fixture-first media discipline
 cargo test                      # all workspace default members, including extracted crates
 ```
+
+Feature-isolation commands must select the product explicitly, for example
+`cargo test -p restream --no-default-features --test api -- agent::`.
+Selecting all default workspace members also selects the harness, whose
+dependency enables the product's default features through Cargo feature
+unification. CI requires both compiled-out agent API tests to be discoverable
+before running the opt-out tests; enabled-agent tests are not equivalent proof.
 
 Passing runs stay quiet. Do not land compiler warnings, panic text, FFmpeg
 probe chatter or other "expected noise". Fix or suppress it in the helper.

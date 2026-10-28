@@ -61,25 +61,30 @@ jobs:
             -- -D warnings
       - name: Prove MCP feature matrix
         run: |
+          # Select the product package explicitly: workspace members such as
+          # the harness otherwise re-enable its dependency's default features.
           # Lower-layer isolation: agent-plane/agent-execution stay disabled.
-          cargo check \
+          cargo check -p restream \
             --lib --no-default-features --features mcp-core
-          cargo check \
+          cargo check -p restream \
             --lib --no-default-features --features mcp-server
-          cargo check \
+          cargo check -p restream \
             --bin restream-mcp --no-default-features \
             --features mcp-server,mcp-http-backend
           # Compatibility combo: mcp-embedded = mcp-core + agent-plane.
           # Must compile; must not invent an in-process MCP backend.
-          cargo check \
+          cargo check -p restream \
             --lib --no-default-features --features mcp-embedded
           # Agent tool list (discovery, MCP catalog, dispatch) and agent output mutations.
-          cargo test --lib --no-default-features \
+          cargo test -p restream --lib --no-default-features \
             --features mcp-embedded,agent-execution -- agent_mcp agent_service
-          # The agent plane is a default feature; the opt-out build still
-          # answers its routes with 404 compiledIn:false. Lint and test it.
-          cargo clippy --lib --test api --no-default-features -- -D warnings
-          cargo test --no-default-features --test api -- agent::
+          # Require both compiled-out tests, not merely a passing test binary:
+          # a feature-unified build must fail this proof instead of testing enabled routes.
+          scripts/ci/require-test-filters.sh cargo test -p restream --no-default-features --test api -- \
+            agent::agent_plane_returns_404_when_feature_is_compiled_out \
+            agent::agent_context_returns_404_when_feature_is_compiled_out
+          cargo clippy -p restream --lib --test api --no-default-features -- -D warnings
+          cargo test -p restream --no-default-features --test api -- agent::
 
   architecture-guardrails:
     name: Source architecture audit
@@ -592,7 +597,7 @@ jobs:
             exit 0
           fi
           git fetch --no-tags origin "$BASE_SHA" --depth=1 || true
-          if git diff --name-only "$BASE_SHA" "$GITHUB_SHA" | grep -Eq '^(src/.*moq.*|crates/restream-(moq|core|sync)/.*|src/media/egress/.*|scripts/dev/moq/.*|test/e2e/moq/.*|\.github/workflows/ci\.yml)$'; then
+          if git diff --name-only "$BASE_SHA" "$GITHUB_SHA" | grep -Eq '^(src/.*moq.*|crates/restream-(moq|core|sync)/.*|crates/test_harness/.*moq.*|src/media/egress/.*|scripts/dev/moq/.*|test/e2e/moq/.*|\.github/workflows/ci\.yml)$'; then
             echo "run=true" >>"$GITHUB_OUTPUT"
           else
             echo "run=false" >>"$GITHUB_OUTPUT"

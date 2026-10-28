@@ -742,6 +742,24 @@ mod tests {
                 ("src/media/egress/output.rs", true, true, true),
                 ("crates/test_harness/src/main.rs", true, true, false),
                 ("crates/test_harness/Cargo.toml", true, true, false),
+                (
+                    "crates/test_harness/src/test_harness/moq_dev_interop/run.rs",
+                    true,
+                    true,
+                    true,
+                ),
+                (
+                    "crates/test_harness/src/test_harness/moq_dev_interop/peers.rs",
+                    true,
+                    true,
+                    true,
+                ),
+                (
+                    "crates/test_harness/src/test_harness/moq_dev_interop.rs",
+                    true,
+                    true,
+                    true,
+                ),
                 ("fuzz/fuzz_targets/flv.rs", false, true, false),
                 ("scripts/dev/moq/fetch-moq-dev.sh", false, false, true),
             ] {

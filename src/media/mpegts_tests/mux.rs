@@ -331,3 +331,75 @@ fn mux_audio_only_does_not_panic() {
     );
 }
 
+#[test]
+fn mpegts_diagnostics_remain_visible_to_legacy_target_filters() {
+    use tracing_subscriber::{Layer, layer::SubscriberExt};
+
+    struct Events(std::sync::mpsc::Sender<(&'static str, tracing::Level)>);
+
+    impl<S: tracing::Subscriber> Layer<S> for Events {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _context: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let metadata = event.metadata();
+            self.0.send((metadata.target(), *metadata.level())).unwrap();
+        }
+    }
+
+    let (send, receive) = std::sync::mpsc::channel();
+    let subscriber = tracing_subscriber::registry().with(
+        Events(send).with_filter(
+            tracing_subscriber::filter::Targets::new()
+                .with_target("restream::media::mpegts", tracing::Level::DEBUG),
+        ),
+    );
+    tracing::subscriber::with_default(subscriber, || {
+        let audio = AudioMeta {
+            codec: "aac".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            channel_layout: None,
+            track_index: 0,
+            pid: None,
+            language: None,
+            title: None,
+            profile: None,
+        };
+
+        // Real mux/demux entrypoints: malformed AAC is dropped and diagnosed.
+        let mut muxer = TsMuxer::new(None, std::slice::from_ref(&audio));
+        let mut demuxer = TsDemuxer::new();
+        demuxer.feed(muxer.mux_packet(
+            MediaType::Audio,
+            0,
+            1_000,
+            1_000,
+            false,
+            &[0x55; 17_000],
+        ));
+        demuxer.flush();
+        assert!(demuxer.drain().is_empty());
+
+        // A PMT cannot describe this many tracks: the mux must report it.
+        let tracks: Vec<_> = (0..205)
+            .map(|track_index| AudioMeta {
+                track_index,
+                ..audio.clone()
+            })
+            .collect();
+        let mut oversized = TsMuxer::new(None, &tracks);
+        oversized.mux_packet(MediaType::Audio, 0, 0, 0, false, &[0x55]);
+    });
+    let events: Vec<_> = receive.try_iter().collect();
+    assert!(events.contains(&(
+        "restream::media::mpegts::demux::adts",
+        tracing::Level::WARN,
+    )));
+    assert!(events.contains(&(
+        "restream::media::mpegts::mux",
+        tracing::Level::ERROR,
+    )));
+}
+

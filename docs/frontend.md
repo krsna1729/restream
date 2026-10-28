@@ -153,7 +153,7 @@ The primitives live in `web/ts/ui/`, a layer below the app: `ui/` may import
 | `DataTable` | `data-table.tsx` | Sortable table whose columns carry a priority; cards on phones; windowed past 80 rows (`useWindowedRows`) |
 | `TimeSeries` | `time-series.tsx` | Multi-series chart: area, dashed, gaps for missing samples, bands, labelled cursors, a ghost overlay, hover readout |
 | `Field`, `UnitInput`, `SearchField`, `ChipGroup`, `CopyButton`, `ShareBar` | `controls.tsx` | A labelled control (caption over it, optional hint, and an `invalid` message shown in the error colour once the person leaves a control marked `validator` with a value its constraints refuse), a text box with its unit inside, filters, a copy button and a protocol-mix bar |
-| `MenuButton` | `controls.tsx` | A button that opens a panel beside it: the browser's popover (top layer, light dismiss, Escape) placed by CSS anchor positioning, a fixed corner where that is unsupported, fading in with `@starting-style` |
+| `MenuButton` | `controls.tsx` | A button that opens a panel beside it: the browser's popover (top layer, light dismiss) placed by CSS anchor positioning, a fixed corner where that is unsupported, fading in with `@starting-style`. Escape dismisses even from a search input and restores focus to the button. |
 | `RawJson` | `raw-json.tsx` | A section's raw payload, collapsed and copyable |
 | `Icon` | `icons.tsx` | Inline stroke icons |
 

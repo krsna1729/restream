@@ -78,6 +78,7 @@ impl AdtsFraming {
                             expected = Some((pts.saturating_add(step), dts.saturating_add(step)));
                         }
                         _ => debug!(
+                            target: "restream::media::mpegts::demux::adts",
                             track = track_index,
                             "a carried AAC frame with no time or rate to give it; dropped"
                         ),
@@ -90,6 +91,7 @@ impl AdtsFraming {
                     // take the dropped frame's slot.
                     expected = None;
                     debug!(
+                        target: "restream::media::mpegts::demux::adts",
                         track = track_index,
                         "an AAC frame the last PES ended inside does not continue in this one; dropped"
                     );
@@ -119,6 +121,7 @@ impl AdtsFraming {
             let at = pes_first.take().or(expected);
             let Some((pts, dts)) = at else {
                 debug!(
+                    target: "restream::media::mpegts::demux::adts",
                     track = track_index,
                     "AAC frame with no timestamp to give it; dropped"
                 );
@@ -134,6 +137,7 @@ impl AdtsFraming {
                             return Framed::Whole(data.slice(start..));
                         }
                         debug!(
+                            target: "restream::media::mpegts::demux::adts",
                             track = track_index,
                             dropped = rest.len(),
                             "AAC frames with no known sample rate after timed ones; dropped"
@@ -160,6 +164,7 @@ impl AdtsFraming {
                 }
                 None => {
                     debug!(
+                        target: "restream::media::mpegts::demux::adts",
                         track = track_index,
                         dropped = rest.len(),
                         "AAC PES bytes after its last frame are not a frame; dropped"
@@ -228,12 +233,14 @@ impl AdtsFraming {
             self.unframed = self.unframed.saturating_add(dropped);
             if before <= 2 * MAX_ADTS_FRAME && self.unframed > 2 * MAX_ADTS_FRAME {
                 warn!(
+                    target: "restream::media::mpegts::demux::adts",
                     track = track_index,
                     "MPEG-TS AAC stream (type 0x0F) carries no ADTS frames; its audio is dropped"
                 );
             }
         }
         debug!(
+            target: "restream::media::mpegts::demux::adts",
             track = track_index,
             dropped, "AAC PES holds no frame start; dropped"
         );

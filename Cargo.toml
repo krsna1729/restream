@@ -37,8 +37,8 @@ workspace = true
 
 [features]
 # The agent plane and its approval-gated execution back the control room's
-# Change Studio, so every build carries them; `--no-default-features` removes
-# them (the lower MCP layers are proven to compile without them).
+# Change Studio. `-p restream --no-default-features` removes them without
+# workspace consumers re-enabling defaults through feature unification.
 default = ["agent-execution"]
 agent-plane = []
 agent-execution = ["agent-plane"]
