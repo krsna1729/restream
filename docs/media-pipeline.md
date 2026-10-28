@@ -6,7 +6,8 @@ Each protocol section gives a diagram and a short contract: ports and
 environment variables, codecs, limits, failure behavior and source paths.
 
 Related pages: [Architecture](architecture.md) owns the layer and runtime
-model, [Egress architecture](egress-architecture.md) owns the egress fabric,
+model and the central [workspace/dependency map](architecture.md#workspace-layout),
+[Egress architecture](egress-architecture.md) owns the egress fabric,
 and [Configuration](configuration.md) lists every environment variable.
 
 ## Contents
@@ -83,6 +84,13 @@ payload format (`Flv` or `Raw`) and reference-counted bytes
 (`crates/restream-core/src/lib.rs`). Readers pull in bursts of up to 32 packets
 (`MEDIA_PULL_BURST_PACKETS`). A reader that falls behind the producer resyncs.
 
+The implementation lives in `restream-sync`; `src/media/ring_buffer.rs`
+is the root application's re-export facade. `restream-core` owns the packet,
+metadata, frame-unit vocabulary and shared codec helpers;
+`src/media/packet.rs` and `src/media/metadata.rs` expose that vocabulary to
+application media code. These package boundaries do not select a runtime:
+the producer, stage or protocol owner that calls them determines execution.
+
 | Ring | Default capacity | Setting |
 |---|---|---|
 | Source ring | 1024 packets, clamp 64–16384 | `RESTREAM_RING_CAPACITY` |
@@ -98,6 +106,11 @@ Every ring slot also records the configuration generation of its packet's
 track. A reader asks by ring sequence (`RingBuffer::frame_unit`,
 `RingBuffer::track_config_at`) without a lock. A sequence that the producer
 has overwritten reads as not retained.
+
+The side-band frame-unit word uses preallocated slot storage and adds no
+per-packet allocation. Packet ownership is separate: `push` and `push_batch`
+store each packet in a new `Arc<MediaPacket>`, sharing its `Bytes` payload
+without copying the payload. Ring publication is therefore not allocation-free.
 
 - A track configuration is the codec configuration bytes for one
   `(media type, track index)`. For video it is the raw Annex B parameter
@@ -141,7 +154,8 @@ The diagram shows the gate states during a promotion.
    publications drain (`src/media/engine_ingest.rs`).
 2. It arms the target gate (`AwaitingKeyframe`).
 3. RTMP, SRT, MoQ and recirculation standbys keep the newest compressed GOP in
-   a `StandbyGopCache` (`src/media/standby_gop.rs`): 16 MiB of payload and
+   a `StandbyGopCache` (`crates/restream-sync/src/standby_gop.rs`, re-exported
+   by `src/media/standby_gop.rs`): 16 MiB of payload and
    2,048 packets per input by default. Crossing either limit drops the cache
    until the next keyframe.
 4. On the target's next packet, a cache that starts with a video keyframe is
@@ -394,9 +408,10 @@ The diagram shows one RTMP output from its ring to the destination socket.
   1935, so an RTMPS destination on 443 must name the port. When the query
   contains `/`, the key is the text after the last `/` of `path?query`
   (`rtmp://host/live2?backup=1/<key>`). App and key are percent-decoded
-  (`src/media/rtmp/egress_transport.rs`).
+  (`crates/restream-rtmp/src/egress_transport.rs`).
 - **Mode.** Legacy mode (default) sends H.264. Enhanced mode also sends H.265
-  as Enhanced RTMP `hvc1` packets (`src/media/codec/enhanced_rtmp_hevc.rs`).
+  as Enhanced RTMP `hvc1` packets
+  (`crates/restream-core/src/codec/enhanced_rtmp_hevc.rs`).
   The `connect` command does not advertise a `fourCcList`.
 - **Media.** The startup snapshot fixes the tracks once. More than one audio
   track is rejected. Raw audio without an AAC sequence header is dropped.
@@ -558,7 +573,7 @@ The diagram shows one SRT output from its ring to the remote receiver.
 
 - **URL.** `srt://host:port?streamid=…&passphrase=…&pbkeylen=…&bond=…&type=…`.
   Other parameters, such as `latency`, are ignored
-  (`src/media/srt/egress_connect.rs`). Restream is always the caller.
+  (`crates/restream-srt/src/egress_connect.rs`). Restream is always the caller.
 - **Muxer.** `start_shared_ts_muxer` (`src/media/srt/shared_muxer.rs`) runs on
   the MEDIA executor. It is keyed by pipeline and stage. With
   `RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD` above 0 (max 10000),
@@ -841,6 +856,15 @@ drafts 14–22 using `moq-net` on Compio QUIC. One listener serves publishers
 (plus its compressed form) and MSF `catalog`; media tracks use LOC.
 The vendored `moq-net` `unsend` feature preserves the `!Send` transport owner.
 
+`crates/restream-moq/src/` implements media/catalog conversion helpers,
+cache budgets, tokens, URL parsing and TLS configuration builders. It is
+not just a serialization package. The root application's
+`src/media/moq/mod.rs` re-exports these helpers; live QUIC/WebTransport
+endpoints and session drivers remain in `src/media/moq/transport/`,
+`src/media/moq/ingest/`, `src/media/moq/origin/` and
+`src/media/moq/egress/`. Those root owners choose the listener or fabric
+runtime; the lower-crate dependency does not imply a task or thread handoff.
+
 | Setting | Default | Notes |
 |---|---|---|
 | `RESTREAM_MOQ_INGEST_LISTEN` | off | UDP socket address, for example `0.0.0.0:4443` |
@@ -951,7 +975,7 @@ The diagram shows a dashboard preview subscribing to a pipeline.
   ([API](api-reference.md)) returns `{token, url, broadcast, expiresAt,
   certificateSha256}`, or `409` when the listener is off. The token is
   `v1.<pipeline>.<expiry>.<HMAC-SHA256>` under a random key created on first
-  use in this process (`src/media/moq/origin/token.rs`). It admits only its
+  use in this process (`crates/restream-moq/src/token.rs`). It admits only its
   own pipeline and must be used within 60 s. An open session does not expire
   with its token.
 - **Admission.** A missing, forged or expired token is refused as
@@ -1013,7 +1037,9 @@ The diagram shows a dashboard preview subscribing to a pipeline.
 | Browser viewer | normal WebPKI validation; on failure, `serverCertificateHashes` with the SHA-256 of the leaf certificate DER (`certificateSha256`, `null` if unreadable). Browsers accept a pinned certificate only when it is valid for at most 14 days |
 | `moqt://` egress | TLS 1.3 with bundled web roots plus `ca=` PEM files confined to operator-set `RESTREAM_MOQ_CA_DIR`; `insecure=1` skips chain and name checks but still verifies handshake signatures |
 
-Restream does not generate a certificate (`src/media/moq/tls.rs`).
+Restream does not generate a certificate. TLS configuration builders live in
+`crates/restream-moq/src/tls.rs`; `src/media/moq/mod.rs` re-exports them for
+the root transport and session owners.
 
 ### MoQ egress
 
@@ -1036,7 +1062,7 @@ flowchart LR
 The diagram shows one MoQ output from its ring to the relay.
 
 - **URL.** `moqt://HOST[:PORT][/PATH][?broadcast=NAME&ca=FILE&insecure=1&version=moqt-19]`,
-  default port 443, no userinfo (`src/media/moq/egress/url.rs`). `broadcast`,
+  default port 443, no userinfo (`crates/restream-moq/src/url.rs`). `broadcast`,
   `ca`, `insecure` and `version` are Restream-only keys; other query pairs
   remain in the relay session path. `broadcast` defaults to the pipeline id.
   Without `version`, offer all supported MoQ ALPNs; a known ALPN pins one,
@@ -1142,8 +1168,14 @@ destination. Errors are `sink_fabric_ensure`, `sink_fabric_dispatch` and
 
 ## Thread and memory ownership, ingest to egress
 
-Each protocol keeps its socket and protocol state on one owner thread. Tokio
-carries control, lifecycle and the probe, not per-packet media. See
+The Compio ingress and fabric egress owners keep RTMP, SRT and MoQ socket
+and protocol state thread-affine; their Tokio control tasks carry lifecycle
+and probe work rather than per-packet media. Diagnostic direct RTMP play
+still runs on CONTROL. HTTP ingest and segment assembly use the contexts
+below. MEDIA (`restream-media`) is a separate multi-thread Tokio runtime, implemented
+in `src/media/executor.rs`, not a name for all blocking media threads.
+FFmpeg pipes and recording file writes have dedicated blocking I/O threads.
+Package boundaries do not change these execution owners. See
 [Architecture](architecture.md#runtime-ownership) for the runtime policy and
 [Runtime crossings](runtime-crossings.md) for each crossing.
 
@@ -1156,6 +1188,7 @@ carries control, lifecycle and the probe, not per-packet media. See
 | MoQ ingest and origin | `moq-ingest` | Compio QUIC endpoint, sessions, origin pumps |
 | FFmpeg stage | `restream-ffin`, `restream-ffout`, FFmpeg child | pipe buffers, stage output ring |
 | Audio router, SRT TS muxer, HLS segmenters | `restream-media` | output ring, `TsChunkRing`, `HlsStore`, `Fmp4HlsStore` |
+| Recording | feed and TS muxing on `restream-media`; file writer on a dedicated OS thread | recording ring reader, TS batches and `MemoryQueue` (`src/media/recording/mod.rs`) |
 | Egress (RTMP, SRT, HLS PUT, MoQ, pipeline, sink) | `egress-shard-<n>` | leaf state; SRT owner per address family |
 | HLS PUT over `https` without kTLS | Reqwest uploader on Tokio | upload policy state |
 | Picture and sound checks (opt in per pipeline) | an external FFmpeg per checked pipeline; `restream-ffin` feeds it, `stream-qa-pic` and `stream-qa-snd` read it | its own source-ring reader and TS feeder; decoding happens in the child (`src/media/stream_qa/`) |
@@ -1166,8 +1199,8 @@ independent of the output count.
 
 | Buffer | Default | Source |
 |---|---|---|
-| Standby GOP cache | 16 MiB or 2,048 packets per input | `src/media/standby_gop.rs` |
-| Recording `MemoryQueue` | 512 KiB (`RESTREAM_RECORDING_QUEUE_CAPACITY`, clamp 64 KiB–16 MiB); soft limit, a write can overshoot by one batch | `src/media/byte_queue.rs` |
+| Standby GOP cache | 16 MiB or 2,048 packets per input | `crates/restream-sync/src/standby_gop.rs` |
+| Recording `MemoryQueue` | 512 KiB (`RESTREAM_RECORDING_QUEUE_CAPACITY`, clamp 64 KiB–16 MiB); soft limit, a write can overshoot by one batch | `crates/restream-sync/src/byte_queue.rs`, re-exported by `src/media/byte_queue.rs` |
 | HLS MPEG-TS window | `RESTREAM_HLS_MAX_SEGMENTS` (20); target duration starts at 6 s and never decreases | `src/media/hls/store.rs` |
 | HLS fMP4 window | 20 advertised, 26 kept | `src/media/hls/fmp4/store.rs` |
 
@@ -1199,6 +1232,6 @@ PTS = DTS + signed 24-bit composition offset
 ```
 
 Audio has `PTS = DTS`. RTMP egress and play send DTS for video and PTS for
-audio (`src/media/rtmp/timestamps.rs`). MPEG-TS and fMP4 ingest keep their
+audio (`crates/restream-rtmp/src/timestamps.rs`). MPEG-TS and fMP4 ingest keep their
 own PTS and DTS. Every ingest passes through `InputTimestampMapper` before
 the source ring.

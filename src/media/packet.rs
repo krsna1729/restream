@@ -1,8 +1,7 @@
-//! Stable packet vocabulary shared by media producers, transforms, and consumers.
+//! Application facade for the packet vocabulary implemented in `restream-core`.
 //!
-//! These types describe encoded media independently of the transport or buffer
-//! carrying it. Keep this module dependency-light so it can become a crate
-//! boundary if its API and compile-time isolation prove useful later.
+//! Producers, transforms and consumers share these transport-independent types;
+//! this module re-exports them rather than defining a second representation.
 
 pub use restream_core::{MediaPacket, MediaType, PayloadFormat};
 #[cfg(test)]

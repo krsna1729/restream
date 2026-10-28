@@ -8,6 +8,7 @@ MediaMTX is a peer in the live test harness only; Restream does not need it.
 ## Contents
 
 - [Restream at a glance](#restream-at-a-glance)
+- [Workspace layout](#workspace-layout)
 - [Runtime ownership](#runtime-ownership)
 - [Input selection](#input-selection)
 - [Packets, rings and containers](#packets-rings-and-containers)
@@ -99,6 +100,82 @@ The API persists desired state in SQLite and asks for a reconcile pass. The
 reconciler compares the rows with the engine's runtime state and starts,
 stops or retries media work. See
 [Lifecycle and recovery](#lifecycle-and-recovery).
+
+## Workspace layout
+
+The root `Cargo.toml` defines nine packages: the `restream` application, six
+library crates under `crates/restream-*`, and the `test_harness` and `xtask`
+command packages. They share one `Cargo.lock`; all are default workspace
+members. These are source and compilation boundaries, not separate services
+or additional thread families.
+
+Arrows below are direct workspace dependencies from the manifests. External
+dependencies and runtime interactions are not edges in this graph.
+
+```mermaid
+flowchart TD
+    Harness["test_harness"] --> App["restream: src/"]
+    App --> Core["restream-core"]
+    App --> Sync["restream-sync"]
+    App --> Ts["restream-mpegts"]
+    App --> Rtmp["restream-rtmp"]
+    App --> Srt["restream-srt"]
+    App --> Moq["restream-moq"]
+    Sync --> Core
+    Ts --> Core
+    Rtmp --> Core
+    Rtmp --> Sync
+    Srt --> Sync
+    Moq --> Core
+    Xtask["xtask: no workspace dependencies"]
+```
+
+The harness imports the root library; it does not directly depend on the core
+or sync packages. `xtask` invokes repository commands and tools rather than
+linking the application. The root application still depends on all six
+libraries, so checking a leaf package does not validate its downstream
+integration.
+
+### Package boundaries and runtime seams
+
+- **Media vocabulary:** `restream-core` owns `MediaPacket`, metadata, frame
+  units, `VideoCodecKind` and canonical codec parsers/converters. Its external
+  dependencies are `bytes`, `serde` and `memchr`; it has no network runtime.
+- **Shared transport:** `restream-sync` owns the packet `RingBuffer`, readers,
+  subscriber wakes and recording `MemoryQueue`. It depends on core types,
+  ArcSwap and Tokio synchronization utilities; its package boundary is not a
+  dedicated runtime.
+- **Protocol utilities:** `restream-mpegts` owns container mux/demux.
+  `restream-rtmp` owns RTMP session/encoding state, FLV handling and payload
+  caches; listener admission and the Compio socket drivers stay in the root.
+  `restream-srt` owns call/connect specifications, address-family helpers,
+  send outcomes and statistics; it depends on the Compio-enabled `srt-transport`.
+  The root owns the SRT listeners, admission and egress Owner lifecycle.
+- **MoQ helpers:** `restream-moq` owns catalog/media conversion, budgets,
+  tokens, URLs and TLS/QUIC configuration builders. It has Compio/QUIC,
+  `moq-net`, `hang`, Reqwest and `tokio-rustls` dependencies; it is not a
+  dependency-free wire codec. The actual endpoints, transport/session drivers,
+  ingest, origin and egress lifecycle remain in `src/media/moq/`. A
+  `tokio-rustls` dependency used for rustls configuration does not move QUIC
+  sockets onto Tokio.
+- **Application integration:** `src/api/` owns HTTP/authentication and SSE.
+  `src/application/` owns orchestration and `reconcile.rs`; `src/db/` owns SQL.
+  `src/infrastructure/` owns bootstrap, service wiring and adapters.
+  `src/media/` retains pipeline admission, stages, input selection, shard
+  lifecycle and thread-affine transport integration.
+
+Selected root modules, including `media::packet`, `media::ring_buffer`,
+`media::byte_queue` and `media::mpegts`, re-export extracted implementations.
+The codec and protocol facades also keep root callers, fuzz targets,
+benchmarks and retained root consumer tests on the canonical implementation.
+They do not imply that every root media module moved or that every test now
+lives in the corresponding library package. [Testing](testing.md#rust-test-suite)
+lists the package and consumer-suite distinction.
+
+The frontend remains React/TypeScript under `web/ts/`, built with Node/Vite
+into generated `public/` assets. Shell tools under `scripts/` and the Git
+hooks also remain; their separate xtask consolidation is Q-105 in
+[Backlog](backlog.md).
 
 ## Runtime ownership
 
@@ -206,7 +283,7 @@ handoffs.
 
 ## Packets, rings and containers
 
-`MediaPacket` (`src/media/packet.rs`) carries media type, track, PTS, DTS,
+`MediaPacket` (`crates/restream-core/src/lib.rs`, re-exported by `src/media/packet.rs`) carries media type, track, PTS, DTS,
 keyframe flag, payload format and reference-counted bytes. Producers set
 `PayloadFormat` explicitly:
 
@@ -483,32 +560,30 @@ owns the audit procedure.
 
 ## Key source areas
 
-The workspace shares one lockfile. `restream-core` owns the packet vocabulary
-and canonical codec helpers; `restream-sync` owns bounded synchronization;
-`restream-mpegts`, `restream-rtmp`, `restream-srt` and `restream-moq` own protocol
-utilities. Application lifecycle, admission policy, shard ownership and runtime
-construction remain in `src/`. These are compilation and ownership boundaries,
-not independently deployed services. Root media facades route existing tests,
-fuzz targets and benchmarks to the same implementation used by the protocols.
-The integration harness is a separate `crates/test_harness` package.
-
+This table locates implementation owners. The [workspace graph](#workspace-layout)
+shows compile-time dependencies; [runtime ownership](#runtime-ownership)
+describes where their callers execute.
 
 | Source area | Responsibility |
 |---|---|
-| `src/main.rs`, `src/lib.rs`, `src/infrastructure/` | Process bootstrap, runtime construction, service wiring, reconciler |
+| `src/main.rs`, `src/lib.rs`, `src/infrastructure/bootstrap/` | Process bootstrap and runtime construction |
+| `src/infrastructure/` | Service wiring, SQLite adapters and notification transports |
 | `src/api/` | Router, authentication, REST and SSE handlers, HLS push upload, embedded assets |
-| `src/application/` | Control-plane workflows, ports, topology requests |
-| `src/domain/` | IDs, output specs, stage identity, validation |
+| `src/application/` | Control-plane workflows, `reconcile.rs`, persistence ports and topology requests |
+| `src/domain/` | IDs, `state.rs`, pipeline inputs, output specs, stage identity and validation |
 | `src/db/` | SQLite schema and repositories |
 | `src/planner/` | Pure stage-graph planning |
 | `src/runtime/`, `src/api_runtime_views/` | Runtime contracts and operator snapshots |
 | `src/media/engine*.rs` | `MediaEngine`: media lifecycle, registries, fabric retention, snapshots |
 | `crates/restream-core/src/` | Shared packet/metadata descriptors and canonical codec parsing/conversion |
 | `crates/restream-sync/src/`, `src/media/ts_chunk_ring.rs` | Bounded packet and byte transport |
-| `crates/restream-{rtmp,srt,mpegts}/src/` | RTMP/SRT protocol utilities, MPEG-TS mux and demux |
-| `src/media/rtmp/`, `src/media/srt/` | Ingest owners, control/lifecycle integration and engine adapters |
+| `crates/restream-mpegts/src/` | MPEG-TS mux/demux, tables, audio framing and probing |
+| `crates/restream-rtmp/src/` | RTMP session/encoding state, FLV helpers, payload caches and URL parsing |
+| `crates/restream-srt/src/` | SRT call/connect specifications, address-family helpers, send outcomes and statistics |
+| `crates/restream-moq/src/` | MoQ media/catalog helpers, budgets, tokens, URLs and TLS/QUIC configuration builders |
+| `src/media/rtmp.rs`, `src/media/rtmp/`, `src/media/srt/` | Ingest owners, control/lifecycle integration, protocol facades and engine adapters |
 | `src/media/hls_ingest/`, `src/media/hls_pull/`, `src/media/ingest_publisher/` | HLS push and pull ingest, byte-stream ingest publishing |
-| `src/media/moq/`, `crates/restream-moq/src/` | MoQ lifecycle/owners and shared media, TLS, token and URL utilities |
+| `src/media/moq/` | MoQ endpoints, Compio transport/session drivers, ingest, origin and egress lifecycle |
 | `src/media/egress/` | Egress fabric: shards, scheduler, leaf lifecycle, protocol backends. See [Egress architecture](egress-architecture.md) |
 | `src/media/hls/`, `src/media/recording/` | HLS segmenting, preview, HLS PUT upload policy, recording |
 | `src/media/external_transcoder/`, `src/media/ffmpeg/`, `src/media/audio_router.rs` | FFmpeg child stages, native audio track selection |
@@ -516,3 +591,8 @@ The integration harness is a separate `crates/test_harness` package.
 | `src/agent_plane/`, `src/agent_execution.rs`, `src/agent_core/`, `src/agent_backends/`, `src/agent_mcp/` | Agent planning and approval-gated execution, contracts, MCP server |
 | `web/ts/` | Dashboard and control room source; `public/` is generated |
 | `crates/test_harness/src/` | Integration scenarios, peers and live qualification |
+| `crates/xtask/src/` | Build helpers, local gates, source/fixture audits and qualification commands |
+| `tests/`, `src/**/*tests*`, `crates/**/src/**/*tests*` | Integration, architecture and owner/consumer unit tests |
+| `test/` | Fixtures, frontend tests, MoQ browser tools and harness definitions |
+| `fuzz/`, `benches/` | Parser fuzz entrypoints and performance benchmarks |
+| `scripts/`, `.githooks/` | Existing bootstrap, build, release, harness and hook entrypoints |

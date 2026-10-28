@@ -94,13 +94,28 @@ before running the opt-out tests; enabled-agent tests are not equivalent proof.
 Passing runs stay quiet. Do not land compiler warnings, panic text, FFmpeg
 probe chatter or other "expected noise". Fix or suppress it in the helper.
 
-Canonical codec implementations live in `crates/restream-core` and RTMP framing
-in `crates/restream-rtmp`. The root codec facade imports these implementations,
-so root parser proptests, fuzz entrypoints and conversion benchmarks exercise
-the shipped functions rather than a second copy. Synchronization white-box
-tests live beside their owner in `restream-sync`; use
-`cargo test -p restream-sync --lib ring_buffer::tests` or
-`cargo test -p restream-sync --lib byte_queue::tests` for focused runs.
+Canonical codec implementations live in `crates/restream-core`; RTMP framing
+and session helpers live in `crates/restream-rtmp`. Root facades import these
+implementations, so retained parser proptests, fuzz entrypoints and conversion
+benchmarks exercise the shipped functions rather than a second copy.
+
+Implementation ownership and test-package selection are not identical:
+
+| Changed implementation | Focused owner or consumer suite |
+|---|---|
+| `crates/restream-core/src/codec/` | `cargo test -p restream-core --lib codec`; also `cargo test -p restream --lib media::codec::tests` for retained consumer tests |
+| `crates/restream-sync/src/ring_buffer.rs` and readers | `cargo test -p restream-sync --lib ring_buffer::tests` |
+| `crates/restream-sync/src/byte_queue.rs` | `cargo test -p restream-sync --lib byte_queue::tests` |
+| `crates/restream-mpegts/src/` | `cargo test -p restream --lib media::mpegts::tests`; the extracted package has no unit suite of its own |
+| `crates/restream-rtmp/src/` | `cargo test -p restream --lib media::rtmp::tests`; codec consumer tests also cover the shared framing helpers |
+| `crates/restream-moq/src/` | `cargo test -p restream-moq --lib` and `cargo test -p restream --lib media::moq::` for retained integration/consumer tests |
+
+`cargo xtask gates` currently derives crate-local test recommendations from
+file names. Such a recommendation alone does not prove that it selected tests
+or reached a retained root consumer suite. Use the mapping above and check the
+reported test count; `cargo test --workspace` remains the CI-wide coverage gate.
+The package graph and runtime seams are in
+[Workspace layout](architecture.md#workspace-layout).
 
 
 ### Parser fuzz targets
@@ -151,17 +166,23 @@ touch raw syscall and FFI memory.
 
 | CI job | Modules | Why |
 |---|---|---|
-| `miri` | `media::egress::tls::ktls::tests::ancillary`, `egress::leaf_arena`, `egress::scheduler`, `codec::bits` | the kTLS cmsg parser is project `unsafe`; the rest run fast under Miri and check std and dependency use |
-| `asan` | `media::byte_queue`, `egress::tls`, `egress::backends::compio_tcp`, `external_transcoder`, `timing`, `rtmp::listener`, `rtmp::tests`, `tcp_stats`, `runtime_info` | kTLS, socket, SQLite/glibc FFI and child-pipe memory; leak detection off |
+| `miri` | Root `media::egress::tls::ktls::tests::ancillary`, `media::egress::leaf_arena`, `media::egress::scheduler`; separately `restream-core`'s `codec::bits::tests` | the kTLS cmsg parser is project `unsafe`; the rest check std and dependency use without sockets or child processes |
+| `asan` | Root `media::egress::tls`, `media::egress::backends::compio_tcp`, `media::external_transcoder`, `media::timing`, `media::rtmp::listener`, `media::rtmp::tests`, `media::tcp_stats`, `runtime_info`; separately the `restream-sync` and `restream-mpegts` library targets | kTLS, socket, SQLite/glibc FFI, child-pipe memory and synchronization; leak detection off |
 
-Both jobs first run `scripts/ci/require-test-filters.sh`. It fails when a
-filter selects no test, so a renamed module cannot drop out silently.
+The named root filters and core bit-reader filter first pass
+`scripts/ci/require-test-filters.sh`. It fails when a filter selects no test.
+The extracted-package ASan command has no such filter check: the MPEG-TS
+library currently has no unit tests, so that target does not exercise the
+retained root MPEG-TS consumer suite. A successful ASan job must not be read
+as proof that those consumer tests ran under ASan.
 
 ```sh
 MIRIFLAGS=-Zmiri-disable-isolation PROPTEST_CASES=8 \
-  cargo +nightly miri test --lib -- media::egress::tls::ktls::tests::ancillary media::egress::leaf_arena
+  cargo +nightly miri test -p restream --lib -- media::egress::tls::ktls::tests::ancillary media::egress::leaf_arena
+MIRIFLAGS=-Zmiri-disable-isolation PROPTEST_CASES=8 \
+  cargo +nightly miri test -p restream-core --lib -- codec::bits::tests
 RUSTFLAGS=-Zsanitizer=address ASAN_OPTIONS=detect_leaks=0 \
-  cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu --lib -- media::byte_queue
+  cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu -p restream-sync --lib -- byte_queue::tests
 ```
 
 `ring_buffer` and `egress::journal` are not in Miri: they are too slow there

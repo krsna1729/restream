@@ -1,10 +1,9 @@
 //! MoQ (Media over QUIC): egress to a relay, ingest from a publisher, and
 //! an origin for direct subscribers.
 //!
-//! Phase 1 speaks moq-lite + hang through the pinned `moq-net` lite driver
-//! over [`transport`] (Compio QUIC and WebTransport), with [`media`] mapping
-//! frames and the hang catalog. The phase-2 IETF/MediaMTX profile is not in
-//! the tree yet.
+//! The pinned `moq-net` lite and IETF drivers run over [`transport`] (Compio
+//! QUIC and WebTransport). [`media`] re-exports shared frame/catalog helpers
+//! from `restream-moq`; endpoints, sessions and their lifecycle remain here.
 //!
 //! [`origin`] serves the pipelines' broadcasts to direct subscribers on the
 //! ingest listener's thread. [`tls`] builds the rustls configurations.

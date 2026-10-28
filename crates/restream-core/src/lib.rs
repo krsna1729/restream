@@ -1,7 +1,7 @@
 //! Core media vocabulary shared across all Restream subsystems.
 //!
 //! These types define the data-path invariants:
-//! - [`MediaPacket`]: The 56-byte cache-line aligned packet envelope carrying `bytes::Bytes`.
+//! - [`MediaPacket`]: The 56-byte packet envelope carrying `bytes::Bytes`.
 //! - [`MediaType`] and [`PayloadFormat`]: Ingest and egress format descriptors.
 //! - [`FrameUnit`], [`TrackConfig`], and [`NotRetained`]: Side-band track configuration history.
 #![forbid(unsafe_code)]
@@ -87,7 +87,7 @@ pub struct TrackConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotRetained;
 
-/// 56-byte media packet. `#[repr(C)]` pins field order for cache-line alignment.
+/// 56-byte media packet. `#[repr(C)]` pins field order, not cache-line alignment.
 #[derive(Clone, Debug)]
 #[repr(C)]
 pub struct MediaPacket {
