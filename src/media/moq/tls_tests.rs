@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use compio::quic::Endpoint;
+use compio::quic::{ClientConfig, Endpoint, ServerConfig};
 
-use super::*;
+use restream_moq::tls::*;
 
 const ALPN: &str = "moq-lite-06";
 

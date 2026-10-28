@@ -1,0 +1,248 @@
+//! `MemoryQueue`: the bounded byte queue between a media producer and a
+//! blocking consumer (the recording writer). Data flows through a
+//! `VecDeque<u8>` protected by `Mutex` + `Condvar`, with bulk `as_slices()` +
+//! `drain()` reads instead of per-byte `pop_front()`.
+
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Condvar, Mutex};
+use std::time::Duration;
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
+use tracing::debug;
+
+use crate::lock::lock;
+
+pub const DEFAULT_RECORDING_QUEUE_CAPACITY: usize = 512 * 1024;
+
+fn default_recording_queue_capacity() -> usize {
+    DEFAULT_RECORDING_QUEUE_CAPACITY
+}
+
+pub struct MemoryQueue {
+    pub inner: Mutex<MemoryQueueInner>,
+    cvar: Condvar,
+    space_available: Notify,
+    capacity: usize,
+    high_water_bytes: AtomicUsize,
+    blocked_writes: AtomicU64,
+}
+
+pub struct MemoryQueueInner {
+    pub buf: VecDeque<u8>,
+    pub closed: bool,
+}
+
+impl Default for MemoryQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MemoryQueue {
+    pub fn new() -> Self {
+        Self::new_with_capacity(default_recording_queue_capacity())
+    }
+
+    pub fn new_with_capacity(capacity: usize) -> Self {
+        debug!(capacity_bytes = capacity, "memory queue created");
+        Self {
+            inner: Mutex::new(MemoryQueueInner {
+                buf: VecDeque::new(),
+                closed: false,
+            }),
+            cvar: Condvar::new(),
+            space_available: Notify::new(),
+            capacity,
+            high_water_bytes: AtomicUsize::new(0),
+            blocked_writes: AtomicU64::new(0),
+        }
+    }
+
+    pub async fn write(&self, data: &[u8]) {
+        let mut counted_block = false;
+        loop {
+            let notified = self.space_available.notified();
+            {
+                let inner = lock(&self.inner);
+                if inner.closed || inner.buf.len() < self.capacity {
+                    break;
+                }
+            }
+            if !counted_block {
+                counted_block = true;
+                self.blocked_writes.fetch_add(1, Ordering::Relaxed);
+            }
+            notified.await;
+        }
+        let mut inner = lock(&self.inner);
+        if inner.closed {
+            return;
+        }
+        inner.buf.extend(data.iter().copied());
+        self.record_depth(inner.buf.len());
+        self.cvar.notify_all();
+    }
+
+    pub async fn write_cancellable(&self, data: &[u8], cancel: &CancellationToken) -> bool {
+        let mut counted_block = false;
+        loop {
+            let notified = self.space_available.notified();
+            {
+                let inner = lock(&self.inner);
+                if inner.closed || inner.buf.len() < self.capacity {
+                    break;
+                }
+            }
+            if !counted_block {
+                counted_block = true;
+                self.blocked_writes.fetch_add(1, Ordering::Relaxed);
+            }
+            tokio::select! {
+                _ = notified => {}
+                _ = cancel.cancelled() => {
+                    return false;
+                }
+            }
+        }
+        let mut inner = lock(&self.inner);
+        if inner.closed || cancel.is_cancelled() {
+            return false;
+        }
+        inner.buf.extend(data.iter().copied());
+        self.record_depth(inner.buf.len());
+        self.cvar.notify_all();
+        true
+    }
+
+    pub async fn write_batch<'a, I>(&self, chunks: I) -> usize
+    where
+        I: IntoIterator<Item = &'a [u8]> + Clone,
+    {
+        let total_bytes: usize = chunks.clone().into_iter().map(|c| c.len()).sum();
+        if total_bytes == 0 {
+            return 0;
+        }
+
+        let mut counted_block = false;
+        loop {
+            let notified = self.space_available.notified();
+            {
+                let inner = lock(&self.inner);
+                if inner.closed || inner.buf.len() < self.capacity {
+                    break;
+                }
+            }
+            if !counted_block {
+                counted_block = true;
+                self.blocked_writes.fetch_add(1, Ordering::Relaxed);
+            }
+            notified.await;
+        }
+        let mut inner = lock(&self.inner);
+        if inner.closed {
+            return 0;
+        }
+        let mut bytes = 0usize;
+        for chunk in chunks {
+            bytes += chunk.len();
+            inner.buf.extend(chunk.iter().copied());
+        }
+        if bytes > 0 {
+            self.record_depth(inner.buf.len());
+            self.cvar.notify_all();
+        }
+        bytes
+    }
+
+    pub fn write_sync(&self, data: &[u8]) {
+        let mut inner = lock(&self.inner);
+        if inner.closed {
+            return;
+        }
+        inner.buf.extend(data.iter().copied());
+        self.record_depth(inner.buf.len());
+        self.cvar.notify_all();
+    }
+
+    pub fn close(&self) {
+        let mut inner = lock(&self.inner);
+        inner.closed = true;
+        self.cvar.notify_all();
+        self.space_available.notify_waiters();
+        let high = self.high_water_bytes.load(Ordering::Relaxed);
+        let blocked = self.blocked_writes.load(Ordering::Relaxed);
+        debug!(
+            high_water_bytes = high,
+            blocked_writes = blocked,
+            "memory queue closed"
+        );
+    }
+
+    pub fn is_closed(&self) -> bool {
+        lock(&self.inner).closed
+    }
+
+    pub fn len(&self) -> usize {
+        lock(&self.inner).buf.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn record_depth(&self, len: usize) {
+        self.high_water_bytes.fetch_max(len, Ordering::Relaxed);
+    }
+
+    pub fn read(&self, target: &mut [u8]) -> usize {
+        let mut inner = lock(&self.inner);
+        while inner.buf.is_empty() && !inner.closed {
+            inner = self
+                .cvar
+                .wait_timeout(inner, Duration::from_secs(5))
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+        if inner.buf.is_empty() && inner.closed {
+            return 0;
+        }
+        let to_read = std::cmp::min(target.len(), inner.buf.len());
+        let (front, back) = inner.buf.as_slices();
+        if to_read <= front.len() {
+            target[..to_read].copy_from_slice(&front[..to_read]);
+        } else {
+            target[..front.len()].copy_from_slice(front);
+            target[front.len()..to_read].copy_from_slice(&back[..to_read - front.len()]);
+        }
+        inner.buf.drain(..to_read);
+
+        if inner.buf.len() < self.capacity {
+            self.space_available.notify_waiters();
+        }
+
+        to_read
+    }
+
+    pub fn read_nonblocking(&self, target: &mut [u8]) -> usize {
+        let mut inner = lock(&self.inner);
+        if inner.buf.is_empty() {
+            return 0;
+        }
+        let to_read = std::cmp::min(target.len(), inner.buf.len());
+        let (front, back) = inner.buf.as_slices();
+        if to_read <= front.len() {
+            target[..to_read].copy_from_slice(&front[..to_read]);
+        } else {
+            target[..front.len()].copy_from_slice(front);
+            target[front.len()..to_read].copy_from_slice(&back[..to_read - front.len()]);
+        }
+        inner.buf.drain(..to_read);
+
+        if inner.buf.len() < self.capacity {
+            self.space_available.notify_waiters();
+        }
+
+        to_read
+    }
+}

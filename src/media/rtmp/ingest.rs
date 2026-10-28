@@ -38,8 +38,7 @@ use super::play::{PlayAuthorization, RtmpPlayRequest, handle_play_request};
 /// separate read buffer this replaced.
 const INGEST_READ_BYTES: usize = 4096;
 
-#[path = "ingest/parser_budget.rs"]
-pub(super) mod parser_budget;
+pub(super) use restream_rtmp::parser_budget;
 #[path = "ingest/session.rs"]
 mod session;
 use session::handle_session_results;

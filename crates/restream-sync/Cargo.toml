@@ -1,0 +1,18 @@
+[package]
+name = "restream-sync"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+restream-core = { path = "../restream-core" }
+bytes = "1.12"
+arc-swap = "1"
+tokio = { version = "1.39", default-features = false, features = ["sync", "macros"] }
+tokio-util = { version = "0.7" }
+tracing = "0.1"

@@ -1,11 +1,14 @@
-use super::*;
+use restream_moq::token::*;
 
 const KEY: TokenKey = [7; 32];
 const NOW: u64 = 1_800_000_000;
 
 #[test]
 fn hmac_matches_rfc_4231_case_2() {
-    let mac = hmac_sha256(b"Jefe", &[b"what do ya ", b"want for nothing?"]);
+    let mac = hmac_sha256(
+        b"Jefe",
+        &[b"what do ya " as &[u8], b"want for nothing?" as &[u8]],
+    );
     let hex: String = mac.iter().map(|byte| format!("{byte:02x}")).collect();
     assert_eq!(
         hex,

@@ -26,17 +26,17 @@ const RUST_CLASSES: [&str; 7] = [
 /// including `/`, as in a shell `case` pattern.
 const CLASSIFICATION: &[(&str, &[&str])] = &[
     ("build-script", &["build.rs"]),
-    ("tooling", &["crates/*.rs"]),
-    ("benchmark", &["benches/*.rs"]),
-    ("integration-test", &["tests/*.rs"]),
     (
         "harness",
         &[
-            "src/bin/test_harness.rs",
-            "src/bin/test_harness/*.rs",
+            "crates/test_harness/src/main.rs",
+            "crates/test_harness/src/test_harness/*.rs",
             "test/harness/*.rs",
         ],
     ),
+    ("tooling", &["crates/*.rs"]),
+    ("benchmark", &["benches/*.rs"]),
+    ("integration-test", &["tests/*.rs"]),
     (
         "dedicated-test",
         &[
@@ -63,7 +63,7 @@ const ENV_VAR_OWNERS: &[&str] = &[
     "src/lib.rs",
     "src/ffmpeg_binary.rs",
     "src/planner/",
-    "src/bin/test_harness",
+    "crates/test_harness",
     "src/bin/restream-mcp.rs",
     "tests/",
     "benches/",
@@ -135,7 +135,10 @@ pub(crate) fn run() -> StepResult {
         "Harness reads a non-schema output status field named state",
         "Harness does not read the removed output status state field.",
         grep_files(
-            &files_under(&["src/bin/test_harness", "src/bin/test_harness.rs"])?,
+            &files_under(&[
+                "crates/test_harness/src/main.rs",
+                "crates/test_harness/src/test_harness",
+            ])?,
             |line| line.contains("[\"state\"]"),
         ),
     );
@@ -286,8 +289,11 @@ mod tests {
             ("build.rs", "build-script"),
             ("benches/api_health.rs", "benchmark"),
             ("tests/api/health.rs", "integration-test"),
-            ("src/bin/test_harness.rs", "harness"),
-            ("src/bin/test_harness/modes/fault.rs", "harness"),
+            ("crates/test_harness/src/main.rs", "harness"),
+            (
+                "crates/test_harness/src/test_harness/modes/fault.rs",
+                "harness",
+            ),
             ("src/media/engine_tests.rs", "dedicated-test"),
             ("src/media/engine_tests/egress_fabric.rs", "dedicated-test"),
             ("src/api/tests.rs", "dedicated-test"),

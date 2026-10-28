@@ -29,7 +29,9 @@
 //! track metadata in the same session, so removals and reappearance also
 //! revalidate generations without a later viewer attach.
 
-pub(crate) mod token;
+pub(crate) use restream_moq::token;
+#[cfg(test)]
+mod token_tests;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;

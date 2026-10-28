@@ -38,10 +38,10 @@ pub const TIMESCALE: Timescale = Timescale::MICRO;
 /// tier, both on the wire and in
 /// [`bandwidth::Allocator`](moq_net::bandwidth::Allocator).
 pub fn track_info(priority: u8) -> moq_net::track::Info {
-	moq_net::track::Info::default()
-		.with_timescale(TIMESCALE)
-		.with_max_age(MAX_AGE)
-		.with_priority(priority)
+    moq_net::track::Info::default()
+        .with_timescale(TIMESCALE)
+        .with_max_age(MAX_AGE)
+        .with_priority(priority)
 }
 
 /// A media frame with a timestamp and codec-specific payload.
@@ -51,154 +51,162 @@ pub fn track_info(priority: u8) -> moq_net::track::Info {
 /// - A codec-specific payload.
 #[derive(Clone, Debug)]
 pub struct Frame {
-	/// The presentation timestamp for this frame.
-	///
-	/// This indicates when the frame should be displayed relative to the
-	/// start of the stream or some other reference point.
-	/// This is NOT a wall clock time.
-	pub timestamp: Timestamp,
+    /// The presentation timestamp for this frame.
+    ///
+    /// This indicates when the frame should be displayed relative to the
+    /// start of the stream or some other reference point.
+    /// This is NOT a wall clock time.
+    pub timestamp: Timestamp,
 
-	/// The encoded media data for this frame.
-	///
-	/// The format depends on the codec being used (H.264, AV1, Opus, etc.).
-	/// The debug implementation shows only the payload length for brevity.
-	#[debug("{} bytes", payload.len())]
-	pub payload: Bytes,
+    /// The encoded media data for this frame.
+    ///
+    /// The format depends on the codec being used (H.264, AV1, Opus, etc.).
+    /// The debug implementation shows only the payload length for brevity.
+    #[debug("{} bytes", payload.len())]
+    pub payload: Bytes,
 }
 
 impl Frame {
-	/// Encode the frame: VarInt timestamp prefix followed by the raw codec payload.
-	///
-	/// The timestamp is normalized to [`TIMESCALE`] (microseconds) so peers using a
-	/// different source scale (e.g. nanoseconds from MKV) can decode without knowing
-	/// the producer's internal scale. Inverse of [`Self::decode`].
-	pub fn encode(&self, buf: &mut impl BufMut) -> Result<(), Error> {
-		self.encode_header(buf)?;
-		buf.put_slice(&self.payload);
-		Ok(())
-	}
+    /// Encode the frame: VarInt timestamp prefix followed by the raw codec payload.
+    ///
+    /// The timestamp is normalized to [`TIMESCALE`] (microseconds) so peers using a
+    /// different source scale (e.g. nanoseconds from MKV) can decode without knowing
+    /// the producer's internal scale. Inverse of [`Self::decode`].
+    pub fn encode(&self, buf: &mut impl BufMut) -> Result<(), Error> {
+        self.encode_header(buf)?;
+        buf.put_slice(&self.payload);
+        Ok(())
+    }
 
-	/// Decode a frame from raw bytes (VarInt timestamp prefix + payload).
-	///
-	/// Attaches [`TIMESCALE`] (microseconds) to the decoded timestamp, matching what
-	/// [`Self::encode`] writes. Inverse of [`Self::encode`].
-	pub fn decode(mut buf: impl Buf) -> Result<Self, Error> {
-		let value: u64 = VarInt::decode_quic(&mut buf).map_err(moq_net::Error::from)?.into();
-		let timestamp = Timestamp::new(value, TIMESCALE)?;
-		let payload = buf.copy_to_bytes(buf.remaining());
+    /// Decode a frame from raw bytes (VarInt timestamp prefix + payload).
+    ///
+    /// Attaches [`TIMESCALE`] (microseconds) to the decoded timestamp, matching what
+    /// [`Self::encode`] writes. Inverse of [`Self::encode`].
+    pub fn decode(mut buf: impl Buf) -> Result<Self, Error> {
+        let value: u64 = VarInt::decode_quic(&mut buf)
+            .map_err(moq_net::Error::from)?
+            .into();
+        let timestamp = Timestamp::new(value, TIMESCALE)?;
+        let payload = buf.copy_to_bytes(buf.remaining());
 
-		Ok(Self { timestamp, payload })
-	}
+        Ok(Self { timestamp, payload })
+    }
 
-	/// Write the frame to `group` as a single moq-lite frame, in the [`Self::encode`] format.
-	///
-	/// Prefer this over [`Self::encode`] when writing to a group: it streams the header and
-	/// payload as separate chunks rather than copying the payload into one buffer, and stamps
-	/// the moq-net frame timestamp so moq-lite-05 and later can delta-encode it on the wire
-	/// independently of the container-level prefix.
-	pub fn write_to(&self, group: &mut moq_net::group::Producer) -> Result<(), Error> {
-		let mut header = BytesMut::new();
-		self.encode_header(&mut header)?;
-		let header = header.freeze();
+    /// Write the frame to `group` as a single moq-lite frame, in the [`Self::encode`] format.
+    ///
+    /// Prefer this over [`Self::encode`] when writing to a group: it streams the header and
+    /// payload as separate chunks rather than copying the payload into one buffer, and stamps
+    /// the moq-net frame timestamp so moq-lite-05 and later can delta-encode it on the wire
+    /// independently of the container-level prefix.
+    pub fn write_to(&self, group: &mut moq_net::group::Producer) -> Result<(), Error> {
+        let mut header = BytesMut::new();
+        self.encode_header(&mut header)?;
+        let header = header.freeze();
 
-		let size = (header.len() + self.payload.len()) as u64;
+        let size = (header.len() + self.payload.len()) as u64;
 
-		// `create_frame` converts the timestamp into the track's timescale; older drafts
-		// simply don't put it on the wire.
-		let info = moq_net::frame::Info {
-			size,
-			timestamp: self.timestamp,
-		};
-		let mut chunked = group.create_frame(info)?;
-		chunked.write(header)?;
-		chunked.write(self.payload.clone())?;
-		chunked.finish()?;
+        // `create_frame` converts the timestamp into the track's timescale; older drafts
+        // simply don't put it on the wire.
+        let info = moq_net::frame::Info {
+            size,
+            timestamp: self.timestamp,
+        };
+        let mut chunked = group.create_frame(info)?;
+        chunked.write(header)?;
+        chunked.write(self.payload.clone())?;
+        chunked.finish()?;
 
-		Ok(())
-	}
+        Ok(())
+    }
 
-	/// Write the VarInt timestamp prefix, normalized to [`TIMESCALE`].
-	fn encode_header(&self, buf: &mut impl BufMut) -> Result<(), Error> {
-		let timestamp = self.timestamp.convert(TIMESCALE)?;
-		let value = VarInt::try_from(timestamp.value()).map_err(moq_net::Error::from)?;
-		value.encode_quic(buf).map_err(moq_net::Error::from)?;
+    /// Write the VarInt timestamp prefix, normalized to [`TIMESCALE`].
+    fn encode_header(&self, buf: &mut impl BufMut) -> Result<(), Error> {
+        let timestamp = self.timestamp.convert(TIMESCALE)?;
+        let value = VarInt::try_from(timestamp.value()).map_err(moq_net::Error::from)?;
+        value.encode_quic(buf).map_err(moq_net::Error::from)?;
 
-		Ok(())
-	}
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod test {
-	use super::*;
+    use super::*;
 
-	#[test]
-	fn encode_decode_roundtrip() {
-		let frame = Frame {
-			timestamp: Timestamp::from_micros(1_234_567).expect("timestamp"),
-			payload: Bytes::from_static(b"hello"),
-		};
+    #[test]
+    fn encode_decode_roundtrip() {
+        let frame = Frame {
+            timestamp: Timestamp::from_micros(1_234_567).expect("timestamp"),
+            payload: Bytes::from_static(b"hello"),
+        };
 
-		let mut buf = BytesMut::new();
-		frame.encode(&mut buf).expect("encode");
+        let mut buf = BytesMut::new();
+        frame.encode(&mut buf).expect("encode");
 
-		let decoded = Frame::decode(buf.freeze()).expect("decode");
-		assert_eq!(decoded.timestamp, frame.timestamp);
-		assert_eq!(decoded.payload, frame.payload);
-	}
+        let decoded = Frame::decode(buf.freeze()).expect("decode");
+        assert_eq!(decoded.timestamp, frame.timestamp);
+        assert_eq!(decoded.payload, frame.payload);
+    }
 
-	#[test]
-	fn encode_normalizes_timescale() {
-		// A nanosecond-scale source (e.g. MKV) still lands on the wire as microseconds.
-		let frame = Frame {
-			timestamp: Timestamp::new(1_234_567_000, Timescale::NANO).expect("timestamp"),
-			payload: Bytes::from_static(b"hello"),
-		};
+    #[test]
+    fn encode_normalizes_timescale() {
+        // A nanosecond-scale source (e.g. MKV) still lands on the wire as microseconds.
+        let frame = Frame {
+            timestamp: Timestamp::new(1_234_567_000, Timescale::NANO).expect("timestamp"),
+            payload: Bytes::from_static(b"hello"),
+        };
 
-		let mut buf = BytesMut::new();
-		frame.encode(&mut buf).expect("encode");
+        let mut buf = BytesMut::new();
+        frame.encode(&mut buf).expect("encode");
 
-		let decoded = Frame::decode(buf.freeze()).expect("decode");
-		assert_eq!(decoded.timestamp, Timestamp::from_micros(1_234_567).expect("timestamp"));
-	}
+        let decoded = Frame::decode(buf.freeze()).expect("decode");
+        assert_eq!(
+            decoded.timestamp,
+            Timestamp::from_micros(1_234_567).expect("timestamp")
+        );
+    }
 
-	/// Publishers stamp the kind's priority, which is what keeps audio ahead of video
-	/// both on the wire and in `bandwidth::Allocator`. It is a parameter precisely so
-	/// this can't silently fall back to the undifferentiated default.
-	#[test]
-	fn track_info_carries_the_publisher_priority() {
-		use crate::catalog::PRIORITY;
+    /// Publishers stamp the kind's priority, which is what keeps audio ahead of video
+    /// both on the wire and in `bandwidth::Allocator`. It is a parameter precisely so
+    /// this can't silently fall back to the undifferentiated default.
+    #[test]
+    fn track_info_carries_the_publisher_priority() {
+        use crate::catalog::PRIORITY;
 
-		assert_eq!(track_info(PRIORITY.video).priority, PRIORITY.video);
-		assert_eq!(track_info(PRIORITY.audio).priority, PRIORITY.audio);
-	}
+        assert_eq!(track_info(PRIORITY.video).priority, PRIORITY.video);
+        assert_eq!(track_info(PRIORITY.audio).priority, PRIORITY.audio);
+    }
 
-	#[test]
-	fn track_info_uses_container_timescale() {
-		assert_eq!(track_info(crate::catalog::PRIORITY.video).timescale, TIMESCALE);
-	}
+    #[test]
+    fn track_info_uses_container_timescale() {
+        assert_eq!(
+            track_info(crate::catalog::PRIORITY.video).timescale,
+            TIMESCALE
+        );
+    }
 
-	#[test]
-	fn media_tracks_declare_their_retention() {
-		// A media track is read as history (a segmented egress FETCHes segments a playlist
-		// advertised), so it declares a retention rather than inheriting the live-edge default.
-		assert_eq!(track_info(crate::catalog::PRIORITY.video).max_age, MAX_AGE);
-		assert!(MAX_AGE > moq_net::track::DEFAULT_MAX_AGE);
+    #[test]
+    fn media_tracks_declare_their_retention() {
+        // A media track is read as history (a segmented egress FETCHes segments a playlist
+        // advertised), so it declares a retention rather than inheriting the live-edge default.
+        assert_eq!(track_info(crate::catalog::PRIORITY.video).max_age, MAX_AGE);
+        assert!(MAX_AGE > moq_net::track::DEFAULT_MAX_AGE);
 
-		// Retimescaling for a container that carries the source's own scale keeps it, since that
-		// is the shape that would otherwise reach for `Info::default()` and lose the retention.
-		let at = track_info(crate::catalog::PRIORITY.video).with_timescale(Timescale::MILLI);
-		assert_eq!(at.timescale, Timescale::MILLI);
-		assert_eq!(at.max_age, MAX_AGE);
-	}
+        // Retimescaling for a container that carries the source's own scale keeps it, since that
+        // is the shape that would otherwise reach for `Info::default()` and lose the retention.
+        let at = track_info(crate::catalog::PRIORITY.video).with_timescale(Timescale::MILLI);
+        assert_eq!(at.timescale, Timescale::MILLI);
+        assert_eq!(at.max_age, MAX_AGE);
+    }
 
-	#[test]
-	fn non_media_tracks_keep_the_default_retention() {
-		// The catalog is snapshot mode and the timeline is a single never-rolled group: in both
-		// the useful value is the live edge, which is retained unconditionally, so neither pays
-		// for history it never serves.
-		assert_eq!(
-			crate::Catalog::default_track_info().max_age,
-			moq_net::track::DEFAULT_MAX_AGE
-		);
-	}
+    #[test]
+    fn non_media_tracks_keep_the_default_retention() {
+        // The catalog is snapshot mode and the timeline is a single never-rolled group: in both
+        // the useful value is the live edge, which is retained unconditionally, so neither pays
+        // for history it never serves.
+        assert_eq!(
+            crate::Catalog::default_track_info().max_age,
+            moq_net::track::DEFAULT_MAX_AGE
+        );
+    }
 }

@@ -1,4 +1,4 @@
-use super::*;
+use restream_moq::url::*;
 
 #[test]
 fn port_defaults_to_443_and_path_keeps_its_leading_slash() {

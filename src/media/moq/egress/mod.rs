@@ -18,7 +18,9 @@ pub(crate) mod leaf;
 pub(crate) mod media;
 pub(crate) mod publish;
 pub(crate) mod startup;
-pub(crate) mod url;
+pub(crate) use restream_moq::url;
+#[cfg(test)]
+mod url_tests;
 
 pub(crate) use backend::moq_shard_backend;
 pub(crate) use startup::{MoqPublishStartup, SharedMoqStartupSource, publish_startup};

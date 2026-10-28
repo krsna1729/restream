@@ -149,7 +149,7 @@ pub(crate) fn contract() -> StepResult {
 
 fn contract_steps(baseline: &HashSet<u32>) -> StepResult {
     logged("process-lifecycle-guards", || {
-        process_lifecycle_guards(Path::new("src/bin/test_harness.rs"))
+        process_lifecycle_guards(Path::new("crates/test_harness/src/main.rs"))
     })?;
     for target in LOOM_TARGETS {
         logged(&format!("loom-{target}"), || loom(target))?;

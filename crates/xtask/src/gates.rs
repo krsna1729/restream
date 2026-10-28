@@ -316,7 +316,7 @@ fn is_api_contract(file: &str) -> bool {
             "src/api_runtime_views.rs",
             "src/api_runtime_views/*.rs",
             "src/api_view_models.rs",
-            "src/bin/test_harness/api_client.rs",
+            "crates/test_harness/src/test_harness/api_client.rs",
             "web/ts/core/api.ts",
             "web/ts/types.ts",
             "docs/api-reference.md",
@@ -335,8 +335,8 @@ fn is_fixture_or_harness(file: &str) -> bool {
             "scripts/fixtures/*",
             "scripts/harness/*",
             "crates/xtask/src/bins.rs",
-            "src/bin/test_harness.rs",
-            "src/bin/test_harness/*",
+            "crates/test_harness/src/main.rs",
+            "crates/test_harness/src/test_harness/*",
         ],
     )
 }
@@ -522,7 +522,7 @@ mod tests {
         assert_eq!(module_filter("tests/api.rs"), Some("api"));
         assert_eq!(module_filter("src/media/mod.rs"), None);
         assert_eq!(module_filter("src/lib.rs"), None);
-        assert_eq!(module_filter("src/bin/test_harness/main.rs"), None);
+        assert_eq!(module_filter("crates/test_harness/src/main.rs"), None);
         assert_eq!(module_filter("benches/api_health.rs"), None);
         assert_eq!(module_filter("crates/xtask/src/main.rs"), None);
     }

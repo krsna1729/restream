@@ -25,35 +25,35 @@ use crate::catalog::Container;
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct Text {
-	/// A map of track name to rendition configuration.
-	/// This is not an array so it will work with JSON Merge Patch.
-	/// We use a BTreeMap so keys are sorted alphabetically for *some* deterministic behavior.
-	pub renditions: BTreeMap<String, TextConfig>,
+    /// A map of track name to rendition configuration.
+    /// This is not an array so it will work with JSON Merge Patch.
+    /// We use a BTreeMap so keys are sorted alphabetically for *some* deterministic behavior.
+    pub renditions: BTreeMap<String, TextConfig>,
 }
 
 impl crate::catalog::Section for Text {
-	const MAP: &'static str = "renditions";
+    const MAP: &'static str = "renditions";
 }
 
 impl Text {
-	/// Insert a track config, returning an error if the name already exists.
-	pub fn insert(&mut self, name: &str, config: TextConfig) -> crate::Result<()> {
-		let btree_map::Entry::Vacant(entry) = self.renditions.entry(name.to_string()) else {
-			return Err(crate::Error::Duplicate(name.to_string()));
-		};
-		entry.insert(config);
-		Ok(())
-	}
+    /// Insert a track config, returning an error if the name already exists.
+    pub fn insert(&mut self, name: &str, config: TextConfig) -> crate::Result<()> {
+        let btree_map::Entry::Vacant(entry) = self.renditions.entry(name.to_string()) else {
+            return Err(crate::Error::Duplicate(name.to_string()));
+        };
+        entry.insert(config);
+        Ok(())
+    }
 
-	/// Remove the track from the catalog and return the configuration if found.
-	pub fn remove(&mut self, name: &str) -> Option<TextConfig> {
-		self.renditions.remove(name)
-	}
+    /// Remove the track from the catalog and return the configuration if found.
+    pub fn remove(&mut self, name: &str) -> Option<TextConfig> {
+        self.renditions.remove(name)
+    }
 
-	/// True when there are no renditions, so the section can be omitted from the catalog.
-	pub fn is_empty(&self) -> bool {
-		self.renditions.is_empty()
-	}
+    /// True when there are no renditions, so the section can be omitted from the catalog.
+    pub fn is_empty(&self) -> bool {
+        self.renditions.is_empty()
+    }
 }
 
 /// Timed-text (caption/subtitle) track configuration.
@@ -73,81 +73,81 @@ impl Text {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct TextConfig {
-	/// Optional reference to another broadcast that publishes this track, expressed relative to the
-	/// broadcast that served this catalog (e.g. `../source`). If unset, the track lives in the same
-	/// broadcast as the catalog.
-	#[serde(default)]
-	pub broadcast: Option<moq_net::path::RelativeOwned>,
+    /// Optional reference to another broadcast that publishes this track, expressed relative to the
+    /// broadcast that served this catalog (e.g. `../source`). If unset, the track lives in the same
+    /// broadcast as the catalog.
+    #[serde(default)]
+    pub broadcast: Option<moq_net::path::RelativeOwned>,
 
-	/// The serialization format of each cue payload.
-	#[serde_as(as = "DisplayFromStr")]
-	pub format: TextFormat,
+    /// The serialization format of each cue payload.
+    #[serde_as(as = "DisplayFromStr")]
+    pub format: TextFormat,
 
-	/// The accessibility role of the track. Defaults to [`TextRole::Subtitle`].
-	#[serde_as(as = "DisplayFromStr")]
-	#[serde(default)]
-	pub role: TextRole,
+    /// The accessibility role of the track. Defaults to [`TextRole::Subtitle`].
+    #[serde_as(as = "DisplayFromStr")]
+    #[serde(default)]
+    pub role: TextRole,
 
-	/// The BCP-47 language tag of the track (e.g. `en`, `es-419`), if known.
-	pub lang: Option<String>,
+    /// The BCP-47 language tag of the track (e.g. `en`, `es-419`), if known.
+    pub lang: Option<String>,
 
-	/// A human-readable label for a track picker, when `lang` alone is ambiguous (e.g. distinguishing
-	/// "English" from "English (SDH)").
-	pub label: Option<String>,
+    /// A human-readable label for a track picker, when `lang` alone is ambiguous (e.g. distinguishing
+    /// "English" from "English (SDH)").
+    pub label: Option<String>,
 
-	/// Container format for frame encoding. Defaults to "legacy" (a microsecond timestamp prefix
-	/// followed by the cue payload).
-	#[serde(default)]
-	pub container: Container,
+    /// Container format for frame encoding. Defaults to "legacy" (a microsecond timestamp prefix
+    /// followed by the cue payload).
+    #[serde(default)]
+    pub container: Container,
 
-	/// The maximum delay, in milliseconds, before the publisher flushes the next cue. A consumer's
-	/// jitter buffer should be at least this large. Absent means each cue is flushed immediately.
-	///
-	/// Serialized as an integer number of milliseconds, rounded up.
-	#[serde_as(as = "MillisCeil")]
-	#[serde(default)]
-	pub jitter: Option<std::time::Duration>,
+    /// The maximum delay, in milliseconds, before the publisher flushes the next cue. A consumer's
+    /// jitter buffer should be at least this large. Absent means each cue is flushed immediately.
+    ///
+    /// Serialized as an integer number of milliseconds, rounded up.
+    #[serde_as(as = "MillisCeil")]
+    #[serde(default)]
+    pub jitter: Option<std::time::Duration>,
 
-	/// How far this rendition's frames reach the transport behind the broadcast's earliest
-	/// rendition, measured at the publisher from each rendition's minimum flush lateness.
-	/// Absent on the earliest rendition and on any rendition the publisher did not measure.
-	///
-	/// A consumer holds `delay + jitter` for this rendition and MUST NOT subtract one rendition's
-	/// `delay` from another's: each is a lifetime maximum, so two need not share an origin. It only
-	/// ever grows over the life of a stream, and is serialized like [`jitter`](Self::jitter).
-	#[serde_as(as = "MillisCeil")]
-	#[serde(default)]
-	pub delay: Option<std::time::Duration>,
+    /// How far this rendition's frames reach the transport behind the broadcast's earliest
+    /// rendition, measured at the publisher from each rendition's minimum flush lateness.
+    /// Absent on the earliest rendition and on any rendition the publisher did not measure.
+    ///
+    /// A consumer holds `delay + jitter` for this rendition and MUST NOT subtract one rendition's
+    /// `delay` from another's: each is a lifetime maximum, so two need not share an origin. It only
+    /// ever grows over the life of a stream, and is serialized like [`jitter`](Self::jitter).
+    #[serde_as(as = "MillisCeil")]
+    #[serde(default)]
+    pub delay: Option<std::time::Duration>,
 }
 
 impl TextConfig {
-	/// Construct a config with the required format set and every optional field cleared. `role`
-	/// defaults to [`TextRole::Subtitle`] and `container` to [`Container::default`]. Fields are
-	/// `pub`, so callers set whatever they need by assignment afterwards.
-	///
-	/// This is the only path external crates have to build a `TextConfig` since the type is
-	/// `#[non_exhaustive]`.
-	pub fn new(format: TextFormat) -> Self {
-		Self {
-			broadcast: None,
-			format,
-			role: TextRole::default(),
-			lang: None,
-			label: None,
-			container: Container::default(),
-			jitter: None,
-			delay: None,
-		}
-	}
+    /// Construct a config with the required format set and every optional field cleared. `role`
+    /// defaults to [`TextRole::Subtitle`] and `container` to [`Container::default`]. Fields are
+    /// `pub`, so callers set whatever they need by assignment afterwards.
+    ///
+    /// This is the only path external crates have to build a `TextConfig` since the type is
+    /// `#[non_exhaustive]`.
+    pub fn new(format: TextFormat) -> Self {
+        Self {
+            broadcast: None,
+            format,
+            role: TextRole::default(),
+            lang: None,
+            label: None,
+            container: Container::default(),
+            jitter: None,
+            delay: None,
+        }
+    }
 }
 
 #[cfg(test)]
 mod test {
-	use super::*;
+    use super::*;
 
-	#[test]
-	fn roundtrip() {
-		let mut encoded = r#"{
+    #[test]
+    fn roundtrip() {
+        let mut encoded = r#"{
 			"renditions": {
 				"captions.en": {
 					"format": "vtt",
@@ -158,55 +158,59 @@ mod test {
 				}
 			}
 		}"#
-		.to_string();
-		encoded.retain(|c| !c.is_whitespace());
+        .to_string();
+        encoded.retain(|c| !c.is_whitespace());
 
-		let mut config = TextConfig::new(TextFormat::Vtt);
-		config.role = TextRole::Caption;
-		config.lang = Some("en".to_string());
-		config.label = Some("SDH".to_string());
-		config.container = Container::Legacy;
+        let mut config = TextConfig::new(TextFormat::Vtt);
+        config.role = TextRole::Caption;
+        config.lang = Some("en".to_string());
+        config.label = Some("SDH".to_string());
+        config.container = Container::Legacy;
 
-		let mut text = Text::default();
-		text.insert("captions.en", config).unwrap();
+        let mut text = Text::default();
+        text.insert("captions.en", config).unwrap();
 
-		let decoded: Text = serde_json::from_str(&encoded).expect("failed to decode");
-		assert_eq!(decoded, text, "wrong decoded output");
+        let decoded: Text = serde_json::from_str(&encoded).expect("failed to decode");
+        assert_eq!(decoded, text, "wrong decoded output");
 
-		let output = serde_json::to_string(&text).expect("failed to encode");
-		assert_eq!(encoded, output, "wrong encoded output");
-	}
+        let output = serde_json::to_string(&text).expect("failed to encode");
+        assert_eq!(encoded, output, "wrong encoded output");
+    }
 
-	#[test]
-	fn optionals_omitted() {
-		// A minimal config omits the optional lang/label/broadcast so the wire stays small, while
-		// role (like container) always serializes and round-trips.
-		let mut text = Text::default();
-		text.insert("subs", TextConfig::new(TextFormat::Vtt)).unwrap();
+    #[test]
+    fn optionals_omitted() {
+        // A minimal config omits the optional lang/label/broadcast so the wire stays small, while
+        // role (like container) always serializes and round-trips.
+        let mut text = Text::default();
+        text.insert("subs", TextConfig::new(TextFormat::Vtt))
+            .unwrap();
 
-		let output = serde_json::to_string(&text).unwrap();
-		assert!(!output.contains("lang"), "empty lang leaked: {output}");
-		assert!(!output.contains("label"), "empty label leaked: {output}");
-		assert!(!output.contains("broadcast"), "empty broadcast leaked: {output}");
+        let output = serde_json::to_string(&text).unwrap();
+        assert!(!output.contains("lang"), "empty lang leaked: {output}");
+        assert!(!output.contains("label"), "empty label leaked: {output}");
+        assert!(
+            !output.contains("broadcast"),
+            "empty broadcast leaked: {output}"
+        );
 
-		let decoded: Text = serde_json::from_str(&output).unwrap();
-		assert_eq!(decoded.renditions["subs"].role, TextRole::Subtitle);
-	}
+        let decoded: Text = serde_json::from_str(&output).unwrap();
+        assert_eq!(decoded.renditions["subs"].role, TextRole::Subtitle);
+    }
 
-	#[test]
-	fn unknown_role_preserved() {
-		// A role from a newer publisher must not fail the decode: the MSF registry can grow, and
-		// rejecting the value would take the whole catalog (audio and video included) down with it.
-		let encoded = r#"{"renditions":{"subs":{"format":"vtt","role":"commentary","container":{"kind":"legacy"}}}}"#;
+    #[test]
+    fn unknown_role_preserved() {
+        // A role from a newer publisher must not fail the decode: the MSF registry can grow, and
+        // rejecting the value would take the whole catalog (audio and video included) down with it.
+        let encoded = r#"{"renditions":{"subs":{"format":"vtt","role":"commentary","container":{"kind":"legacy"}}}}"#;
 
-		let decoded: Text = serde_json::from_str(encoded).expect("failed to decode");
-		assert_eq!(
-			decoded.renditions["subs"].role,
-			TextRole::Unknown("commentary".to_string())
-		);
+        let decoded: Text = serde_json::from_str(encoded).expect("failed to decode");
+        assert_eq!(
+            decoded.renditions["subs"].role,
+            TextRole::Unknown("commentary".to_string())
+        );
 
-		// And it survives a republish verbatim, so a relaying consumer doesn't erase it.
-		let output = serde_json::to_string(&decoded).expect("failed to encode");
-		assert_eq!(encoded, output, "unknown role not preserved");
-	}
+        // And it survives a republish verbatim, so a relaying consumer doesn't erase it.
+        let output = serde_json::to_string(&decoded).expect("failed to encode");
+        assert_eq!(encoded, output, "unknown role not preserved");
+    }
 }

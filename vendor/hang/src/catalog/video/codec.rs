@@ -11,101 +11,101 @@ use crate::Error;
 #[derive(Debug, Clone, PartialEq, Eq, Display, From)]
 #[non_exhaustive]
 pub enum VideoCodec {
-	/// H.264/AVC codec with profile and level information
-	H264(H264),
-	/// H.265/HEVC codec with profile and level information
-	H265(H265),
-	/// VP9 codec with profile and color information
-	VP9(VP9),
-	/// AV1 codec with profile and level information
-	AV1(AV1),
+    /// H.264/AVC codec with profile and level information
+    H264(H264),
+    /// H.265/HEVC codec with profile and level information
+    H265(H265),
+    /// VP9 codec with profile and color information
+    VP9(VP9),
+    /// AV1 codec with profile and level information
+    AV1(AV1),
 
-	/// VP8 codec (no additional parameters)
-	#[display("vp8")]
-	VP8,
+    /// VP8 codec (no additional parameters)
+    #[display("vp8")]
+    VP8,
 
-	/// Unknown or unsupported codec with original string
-	#[display("{_0}")]
-	Unknown(String),
+    /// Unknown or unsupported codec with original string
+    #[display("{_0}")]
+    Unknown(String),
 }
 
 /// Coarse video codec family, used for tag-only matching.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum VideoCodecKind {
-	H264,
-	H265,
-	VP8,
-	VP9,
-	AV1,
-	Unknown,
+    H264,
+    H265,
+    VP8,
+    VP9,
+    AV1,
+    Unknown,
 }
 
 impl VideoCodec {
-	/// Return the coarse codec family for tag-only matching.
-	pub fn kind(&self) -> VideoCodecKind {
-		match self {
-			Self::H264(_) => VideoCodecKind::H264,
-			Self::H265(_) => VideoCodecKind::H265,
-			Self::VP9(_) => VideoCodecKind::VP9,
-			Self::AV1(_) => VideoCodecKind::AV1,
-			Self::VP8 => VideoCodecKind::VP8,
-			Self::Unknown(_) => VideoCodecKind::Unknown,
-		}
-	}
+    /// Return the coarse codec family for tag-only matching.
+    pub fn kind(&self) -> VideoCodecKind {
+        match self {
+            Self::H264(_) => VideoCodecKind::H264,
+            Self::H265(_) => VideoCodecKind::H265,
+            Self::VP9(_) => VideoCodecKind::VP9,
+            Self::AV1(_) => VideoCodecKind::AV1,
+            Self::VP8 => VideoCodecKind::VP8,
+            Self::Unknown(_) => VideoCodecKind::Unknown,
+        }
+    }
 }
 
 impl FromStr for VideoCodec {
-	type Err = Error;
+    type Err = Error;
 
-	fn from_str(s: &str) -> Result<Self, Self::Err> {
-		if s.starts_with("avc1.") || s.starts_with("avc3.") {
-			return H264::from_str(s).map(Into::into);
-		} else if s.starts_with("hvc1.") || s.starts_with("hev1.") {
-			return H265::from_str(s).map(Into::into);
-		} else if s == "vp8" {
-			return Ok(Self::VP8);
-		} else if s.starts_with("vp09.") {
-			return VP9::from_str(s).map(Into::into);
-		} else if s.starts_with("av01.") {
-			return AV1::from_str(s).map(Into::into);
-		}
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.starts_with("avc1.") || s.starts_with("avc3.") {
+            return H264::from_str(s).map(Into::into);
+        } else if s.starts_with("hvc1.") || s.starts_with("hev1.") {
+            return H265::from_str(s).map(Into::into);
+        } else if s == "vp8" {
+            return Ok(Self::VP8);
+        } else if s.starts_with("vp09.") {
+            return VP9::from_str(s).map(Into::into);
+        } else if s.starts_with("av01.") {
+            return AV1::from_str(s).map(Into::into);
+        }
 
-		Ok(Self::Unknown(s.to_string()))
-	}
+        Ok(Self::Unknown(s.to_string()))
+    }
 }
 
 #[cfg(test)]
 mod test {
-	use super::*;
+    use super::*;
 
-	#[test]
-	fn test_vp8() {
-		let encoded = "vp8";
-		let decoded = VideoCodec::from_str(encoded).expect("failed to parse");
-		assert_eq!(decoded, VideoCodec::VP8);
+    #[test]
+    fn test_vp8() {
+        let encoded = "vp8";
+        let decoded = VideoCodec::from_str(encoded).expect("failed to parse");
+        assert_eq!(decoded, VideoCodec::VP8);
 
-		let output = decoded.to_string();
-		assert_eq!(output, encoded);
-	}
+        let output = decoded.to_string();
+        assert_eq!(output, encoded);
+    }
 
-	// restream vendor patch: every codec parser on codec strings with a two-byte
-	// character at each position, in place of zero, one or two ASCII characters
-	// (two keeps the byte length, which is what hid the H.264 slice panic).
-	#[test]
-	fn non_ascii_codec_strings_never_panic() {
-		for valid in [
-			"avc1.42c01e",
-			"hev1.A4.41.H120.B0.23",
-			"vp09.02.10.10.01.09.16.09.01",
-			"av01.0.04M.10.0.112.09.16.09.0",
-		] {
-			for at in 0..=valid.len() {
-				for replaced in 0..=2 {
-					let end = (at + replaced).min(valid.len());
-					let _ = VideoCodec::from_str(&format!("{}Ψ{}", &valid[..at], &valid[end..]));
-				}
-			}
-		}
-	}
+    // restream vendor patch: every codec parser on codec strings with a two-byte
+    // character at each position, in place of zero, one or two ASCII characters
+    // (two keeps the byte length, which is what hid the H.264 slice panic).
+    #[test]
+    fn non_ascii_codec_strings_never_panic() {
+        for valid in [
+            "avc1.42c01e",
+            "hev1.A4.41.H120.B0.23",
+            "vp09.02.10.10.01.09.16.09.01",
+            "av01.0.04M.10.0.112.09.16.09.0",
+        ] {
+            for at in 0..=valid.len() {
+                for replaced in 0..=2 {
+                    let end = (at + replaced).min(valid.len());
+                    let _ = VideoCodec::from_str(&format!("{}Ψ{}", &valid[..at], &valid[end..]));
+                }
+            }
+        }
+    }
 }
