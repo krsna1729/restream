@@ -12,7 +12,7 @@
 
 use restream_core::{
     AAC_SAMPLE_RATES, AudioMeta, VideoMeta, annexb_parameter_sets, level_name, parse_h264_sps,
-    profile_name, signed_be24, take_u16_prefixed,
+    profile_name, take_u16_prefixed,
 };
 pub use restream_core::{AvccRecord, avcc_record};
 
@@ -107,6 +107,11 @@ pub fn flv_config_annexb_parameter_sets(data: &[u8]) -> Option<Vec<u8>> {
     annexb_parameter_sets(&annexb)
 }
 
+/// The NALU length width and Annex B parameter sets of an FLV video
+/// sequence header: a classic H.264 one, or an enhanced RTMP `avc1`/`hvc1`
+/// sequence start. `None` for anything else, or a record missing a
+/// parameter set (an incomplete set would be prepended to keyframes as if
+/// it were whole).
 pub fn flv_video_config(payload: &[u8]) -> Option<(usize, Vec<u8>)> {
     let (length_size_minus_one, sets): (u8, Vec<&[u8]>) = match ex_video_tag(payload) {
         Some(tag) if tag.packet_type != EX_SEQUENCE_START => return None,
@@ -299,41 +304,7 @@ pub fn parse_flv_audio_meta(data: &[u8]) -> Option<AudioMeta> {
     Some(meta)
 }
 
-pub fn strip_adts(payload: &[u8]) -> &[u8] {
-    if let [0xFF, second, _, _, _, _, _, ..] = *payload
-        && second & 0xF0 == 0xF0
-    {
-        let hdr_len = if second & 0x01 == 1 { 7 } else { 9 };
-        if payload.len() > hdr_len {
-            return payload.get(hdr_len..).unwrap_or(payload);
-        }
-    }
-    payload
-}
-
-pub fn audio_for_rtmp_into(payload: &[u8], out: &mut Vec<u8>) {
-    let raw = strip_adts(payload);
-    out.clear();
-    out.reserve(raw.len().saturating_add(2));
-    out.extend_from_slice(&[0xAF, 0x01]);
-    out.extend_from_slice(raw);
-}
-
-pub use restream_core::codec::annexb_to_avcc_into;
-
-pub fn video_for_rtmp_with_composition_into(
-    payload: &[u8],
-    is_keyframe: bool,
-    composition_time_ms: i32,
-    out: &mut Vec<u8>,
-) -> bool {
-    let tag = if is_keyframe { 0x17u8 } else { 0x27u8 };
-    out.clear();
-    out.extend_from_slice(&[tag, 1]);
-    out.extend_from_slice(&signed_be24(composition_time_ms));
-    annexb_to_avcc_into(payload, out)
-}
-
-pub fn video_for_rtmp_into(payload: &[u8], is_keyframe: bool, out: &mut Vec<u8>) -> bool {
-    video_for_rtmp_with_composition_into(payload, is_keyframe, 0, out)
-}
+pub use restream_core::codec::{
+    annexb_to_avcc_into, audio_for_rtmp_into, strip_adts, video_for_rtmp_into,
+    video_for_rtmp_with_composition_into,
+};

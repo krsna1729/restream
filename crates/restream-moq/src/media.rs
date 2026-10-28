@@ -30,8 +30,8 @@ use hang::catalog::{
 use moq_net::VarInt;
 
 use restream_core::{
-    build_avcc_record, build_hvcc_record, for_each_annexb_nalu, h265_nal_type, parse_avcc_config,
-    parse_h264_sps, parse_hevc_profile_tier_level, take_u16_prefixed,
+    build_avcc_record, build_hvcc_record, for_each_annexb_nalu, h265_nal_type, hvcc_record,
+    parse_avcc_config, parse_h264_sps, parse_hevc_profile_tier_level,
 };
 
 /// Malformed MoQ wire data. Every parser in this module returns it instead
@@ -200,34 +200,22 @@ fn find_nalu(annexb: &[u8], wanted: impl Fn(&[u8]) -> bool) -> Option<&[u8]> {
 /// An hvcC record's (ISO/IEC 14496-15 8.3.3.1) NAL length size and its VPS,
 /// SPS and PPS as Annex-B. Truncation, or a record without an SPS, is `None`.
 fn hvcc_config(record: &[u8]) -> Option<(Bytes, u8)> {
-    let (header, mut rest) = record.split_first_chunk::<23>()?;
-    let [.., length_byte, arrays] = *header;
-    let mut vps = Vec::new();
-    let mut sps = Vec::new();
-    let mut pps = Vec::new();
-    for _ in 0..arrays {
-        let (&[kind, count_high, count_low], tail) = rest.split_first_chunk::<3>()?;
-        rest = tail;
-        for _ in 0..u16::from_be_bytes([count_high, count_low]) {
-            let nalu = take_u16_prefixed(&mut rest)?;
-            match kind & 0x3F {
-                32 => vps.push(nalu),
-                33 => sps.push(nalu),
-                34 => pps.push(nalu),
-                _ => {}
-            }
-        }
-    }
+    let record = hvcc_record(record)?;
     let mut sets = Vec::new();
     let mut has_sps = false;
-    for (kind, nalus) in [(32, &vps), (33, &sps), (34, &pps)] {
+    for (kind, nalus) in [(32, &record.vps), (33, &record.sps), (34, &record.pps)] {
         for nalu in nalus.iter().filter(|nalu| !nalu.is_empty()) {
             has_sps |= kind == 33;
             sets.extend_from_slice(&[0, 0, 0, 1]);
             sets.extend_from_slice(nalu);
         }
     }
-    has_sps.then(|| (Bytes::from(sets), (length_byte & 0x03).saturating_add(1)))
+    has_sps.then(|| {
+        (
+            Bytes::from(sets),
+            record.length_size_minus_one.saturating_add(1),
+        )
+    })
 }
 
 /// Append Annex-B access unit `au` with 4-byte NAL lengths, without access

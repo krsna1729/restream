@@ -254,12 +254,20 @@ fn route(changed: &[String]) -> Plan {
         if is_source_audit_scope(file) {
             plan.auto.insert(AutoGate::SourceAudit);
         }
-        if file.ends_with(".rs")
-            && !is_lifecycle(file)
-            && !is_fixture_or_harness(file)
-            && let Some(filter) = module_filter(file)
-        {
-            plan.follow_up(&package_test_command(file, filter));
+        if file.ends_with(".rs") {
+            if file.starts_with("crates/") {
+                // Crate lifecycle and harness checks supplement, not replace,
+                // the owning package's tests. Roots require an unfiltered run.
+                plan.follow_up(&package_test_command(
+                    file,
+                    module_filter(file).unwrap_or(""),
+                ));
+            } else if !is_lifecycle(file)
+                && !is_fixture_or_harness(file)
+                && let Some(filter) = module_filter(file)
+            {
+                plan.follow_up(&package_test_command(file, filter));
+            }
         }
     }
     plan
@@ -286,7 +294,11 @@ fn package_test_command(file: &str, filter: &str) -> String {
     if let Some(crate_path) = file.strip_prefix("crates/")
         && let Some(pkg) = crate_path.split('/').next()
     {
-        return format!("cargo test -p {pkg} {filter}");
+        return if filter.is_empty() {
+            format!("cargo test -p {pkg}")
+        } else {
+            format!("cargo test -p {pkg} {filter}")
+        };
     }
     format!("cargo test {filter}")
 }
@@ -562,60 +574,224 @@ mod tests {
     }
 
     #[test]
-    fn package_test_command_selects_crate_package() {
-        assert_eq!(
-            package_test_command("src/media/hls/segmenter.rs", "segmenter"),
-            "cargo test segmenter"
-        );
-        assert_eq!(
-            package_test_command("crates/restream-rtmp/src/flv.rs", "flv"),
-            "cargo test -p restream-rtmp flv"
-        );
-        assert_eq!(
-            package_test_command("crates/restream-moq/src/media.rs", "media"),
-            "cargo test -p restream-moq media"
-        );
-    }
-
-    #[test]
     fn extracted_crate_routing_selects_package_tests_and_manifest_lints() {
-        let rtmp_plan = plan_for(&["crates/restream-rtmp/src/flv.rs"]);
+        for (package, module, lifecycle, protocol) in [
+            ("restream-core", "codec", false, false),
+            ("restream-sync", "byte_queue", true, false),
+            ("restream-mpegts", "demux", false, true),
+            ("restream-rtmp", "flv", false, true),
+            ("restream-srt", "calls", true, true),
+            ("restream-moq", "media", false, true),
+        ] {
+            let source = format!("crates/{package}/src/{module}.rs");
+            let plan = plan_for(&[&source]);
+            assert!(
+                plan.follow_ups
+                    .contains(&format!("cargo test -p {package} {module}")),
+                "{source}: missing owning package tests"
+            );
+            assert_eq!(
+                plan.follow_ups
+                    .contains(&"cargo xtask concurrency contract".to_owned()),
+                lifecycle,
+                "{source}"
+            );
+            assert_eq!(
+                plan.manual
+                    .contains(&"target/debug/test_harness correctness*".to_owned()),
+                protocol,
+                "{source}"
+            );
+            assert!(
+                plan.manual
+                    .contains(&"relevant cargo bench --bench <name>".to_owned()),
+                "{source}"
+            );
+            let root = format!("crates/{package}/src/lib.rs");
+            assert!(
+                plan_for(&[&root])
+                    .follow_ups
+                    .contains(&format!("cargo test -p {package}")),
+                "{root}: crate roots must not omit owning tests"
+            );
+            let manifest = format!("crates/{package}/Cargo.toml");
+            let plan = plan_for(&[&manifest]);
+            assert_eq!(
+                plan.auto.into_iter().collect::<Vec<_>>(),
+                vec![
+                    AutoGate::ClippyLib,
+                    AutoGate::ClippyWorkspace,
+                    AutoGate::ClippyMcp,
+                ],
+                "{manifest}"
+            );
+        }
+        for (source, command) in [
+            (
+                "crates/test_harness/src/main.rs",
+                "cargo test -p test_harness",
+            ),
+            (
+                "crates/test_harness/src/test_harness/api_client.rs",
+                "cargo test -p test_harness api_client",
+            ),
+        ] {
+            let plan = plan_for(&[source]);
+            assert!(plan.follow_ups.contains(&command.to_owned()), "{source}");
+            assert!(
+                plan.follow_ups
+                    .contains(&"cargo xtask fixture-discipline".to_owned()),
+                "{source}"
+            );
+        }
         assert!(
-            rtmp_plan
+            plan_for(&["src/media/hls/segmenter.rs"])
                 .follow_ups
-                .contains(&"cargo test -p restream-rtmp flv".to_string())
+                .contains(&"cargo test segmenter".to_owned())
         );
-        assert!(
-            rtmp_plan
-                .manual
-                .contains(&"target/debug/test_harness correctness*".to_string())
-        );
-        assert!(
-            rtmp_plan
-                .manual
-                .contains(&"relevant cargo bench --bench <name>".to_string())
-        );
+    }
 
-        let manifest_plan = plan_for(&["crates/restream-srt/Cargo.toml"]);
-        assert!(manifest_plan.auto.contains(&AutoGate::ClippyLib));
-        assert!(manifest_plan.auto.contains(&AutoGate::ClippyWorkspace));
+    /// Extract the workflow's scope step verbatim, without duplicating its
+    /// predicates or requiring a YAML dependency (or Cargo in the CI step).
+    fn workflow_scope(workflow: &str, job: &str) -> String {
+        let job_header = format!("  {job}:");
+        let mut lines = workflow
+            .lines()
+            .skip_while(|line| *line != job_header)
+            .skip(1)
+            .take_while(|line| !line.starts_with("  ") || line.starts_with("    "));
+        assert!(
+            lines.any(|line| line == "      - id: scope"),
+            "{job}: missing scope step"
+        );
+        assert!(
+            lines.any(|line| line == "        run: |"),
+            "{job}: missing scope script"
+        );
+        let script = lines
+            .take_while(|line| line.is_empty() || line.starts_with("          "))
+            .map(|line| line.strip_prefix("          ").unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!script.is_empty(), "{job}: empty scope script");
+        script
+    }
+
+    fn scope_runs(script: &str, paths: &str, event: &str, base: &str) -> bool {
+        // Only Git is substituted: the real workflow's Bash and grep execute.
+        // Writing the Actions output to stdout avoids shared process state or
+        // temporary files when tests run concurrently.
+        let script = format!(
+            "git() {{\n\
+             case \"$1\" in\n\
+             fetch) return 0 ;;\n\
+             diff) printf '%s\\n' \"$CHANGED_FILES\" ;;\n\
+             *) return 2 ;;\n\
+             esac\n\
+             }}\n{script}"
+        );
+        let output = Command::new("bash")
+            .args(["-e", "-o", "pipefail", "-c", &script])
+            .env("EVENT_NAME", event)
+            .env("BASE_SHA", base)
+            .env("BEFORE_SHA", base)
+            .env("GITHUB_SHA", "head")
+            .env("GITHUB_OUTPUT", "/dev/stdout")
+            .env("CHANGED_FILES", paths)
+            .output()
+            .expect("execute workflow scope with Bash");
+        assert!(
+            output.status.success(),
+            "scope failed for {paths}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        match String::from_utf8_lossy(&output.stdout).trim() {
+            "run=true" => true,
+            "run=false" => false,
+            other => panic!("invalid scope output for {paths}: {other}"),
+        }
     }
 
     #[test]
-    fn ci_workflow_filters_recognize_extracted_crates() {
-        let ci_yaml = std::fs::read_to_string(crate::repo_root().join(".github/workflows/ci.yml"))
+    fn ci_workflow_scopes_execute_extracted_crate_changes() {
+        let workflow = std::fs::read_to_string(crate::repo_root().join(".github/workflows/ci.yml"))
             .expect("read ci.yml");
-        assert!(
-            ci_yaml.contains("crates/restream-[^/]+/.*"),
-            "ci.yml must include restream crates in docker smoke"
-        );
-        assert!(
-            ci_yaml.contains("crates/restream-[^/]+/"),
-            "ci.yml must include restream crates in parser fuzz smoke"
-        );
-        assert!(
-            ci_yaml.contains("crates/restream-moq/.*"),
-            "ci.yml must include restream-moq in moq-interop"
-        );
+        for job in ["docker-runtime-smoke", "fuzz-smoke", "moq-interop"] {
+            let scope = workflow_scope(&workflow, job);
+            for (package, module, affects_moq) in [
+                ("restream-core", "codec", true),
+                ("restream-sync", "byte_queue", true),
+                ("restream-mpegts", "demux", false),
+                ("restream-rtmp", "flv", false),
+                ("restream-srt", "calls", false),
+                ("restream-moq", "media", true),
+            ] {
+                for path in [
+                    format!("crates/{package}/src/{module}.rs"),
+                    format!("crates/{package}/Cargo.toml"),
+                ] {
+                    assert_eq!(
+                        scope_runs(&scope, &path, "pull_request", "base"),
+                        job != "moq-interop" || affects_moq,
+                        "{job}: {path}"
+                    );
+                }
+            }
+            for (path, docker, fuzz, moq) in [
+                ("src/media/rtmp/egress.rs", true, true, false),
+                ("src/media/egress/output.rs", true, true, true),
+                ("crates/test_harness/src/main.rs", true, true, false),
+                ("crates/test_harness/Cargo.toml", true, true, false),
+                ("fuzz/fuzz_targets/flv.rs", false, true, false),
+                ("scripts/dev/moq/fetch-moq-dev.sh", false, false, true),
+            ] {
+                let expected = match job {
+                    "docker-runtime-smoke" => docker,
+                    "fuzz-smoke" => fuzz,
+                    "moq-interop" => moq,
+                    _ => unreachable!(),
+                };
+                assert_eq!(
+                    scope_runs(&scope, path, "pull_request", "base"),
+                    expected,
+                    "{job}: existing scope {path}"
+                );
+            }
+            for path in [
+                "README.md",
+                "web/ts/core/api.ts",
+                "crates/xtask/src/gates.rs",
+                "crates/unrelated/Cargo.toml",
+                "docs/crates/restream-moq/src/media.rs",
+            ] {
+                assert!(
+                    !scope_runs(&scope, path, "pull_request", "base"),
+                    "{job}: unrelated path {path}"
+                );
+            }
+            assert!(
+                !scope_runs(&scope, "", "pull_request", "base"),
+                "{job}: empty diff"
+            );
+            assert!(
+                scope_runs(&scope, "README.md", "pull_request", ""),
+                "{job}: missing base must run"
+            );
+            // Docker retains targeted push routing; parser/MoQ pushes always run.
+            assert_eq!(
+                scope_runs(&scope, "README.md", "push", "base"),
+                job != "docker-runtime-smoke",
+                "{job}: push routing"
+            );
+            assert!(
+                scope_runs(
+                    &scope,
+                    "README.md\ncrates/restream-core/src/codec.rs\nweb/ts/core/api.ts",
+                    "pull_request",
+                    "base",
+                ),
+                "{job}: mixed diff"
+            );
+        }
     }
 }

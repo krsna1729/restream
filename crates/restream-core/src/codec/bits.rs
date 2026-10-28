@@ -11,7 +11,7 @@
 )]
 
 /// Most-significant-bit-first reader over an RBSP.
-pub(crate) struct BitReader<'a> {
+pub struct BitReader<'a> {
     /// Bytes not yet fully consumed; the first one is the current byte.
     data: &'a [u8],
     /// The next bit to read in the current byte (0x80 first, 0x01 last).
@@ -19,7 +19,7 @@ pub(crate) struct BitReader<'a> {
 }
 
 impl<'a> BitReader<'a> {
-    pub(crate) fn new(data: &'a [u8]) -> Self {
+    pub fn new(data: &'a [u8]) -> Self {
         Self { data, mask: 0x80 }
     }
 
@@ -36,7 +36,7 @@ impl<'a> BitReader<'a> {
     }
 
     /// Up to 32 bits as an unsigned value.
-    pub(crate) fn read_bits(&mut self, n: u32) -> Option<u32> {
+    pub fn read_bits(&mut self, n: u32) -> Option<u32> {
         if n > 32 {
             return None;
         }
@@ -47,7 +47,7 @@ impl<'a> BitReader<'a> {
         Some(value)
     }
 
-    pub(crate) fn skip(&mut self, n: u32) -> Option<()> {
+    pub fn skip(&mut self, n: u32) -> Option<()> {
         for _ in 0..n {
             self.read_bit()?;
         }
@@ -55,7 +55,7 @@ impl<'a> BitReader<'a> {
     }
 
     /// ue(v): unsigned Exp-Golomb, codeNum up to 2^32 - 2.
-    pub(crate) fn read_ue(&mut self) -> Option<u32> {
+    pub fn read_ue(&mut self) -> Option<u32> {
         let mut leading_zeros = 0u32;
         while !self.read_bit()? {
             leading_zeros = leading_zeros.checked_add(1)?;
@@ -74,7 +74,7 @@ impl<'a> BitReader<'a> {
 
     /// se(v): codeNum k maps to (-1)^(k+1) * ceil(k / 2), computed in i64
     /// because codeNum reaches 2^32 - 2.
-    pub(crate) fn read_se(&mut self) -> Option<i32> {
+    pub fn read_se(&mut self) -> Option<i32> {
         let code = i64::from(self.read_ue()?);
         let magnitude = code.checked_add(1)? / 2;
         let value = if code & 1 == 1 {
@@ -88,7 +88,7 @@ impl<'a> BitReader<'a> {
 
 /// The RBSP of a NAL unit payload: every 0x03 that follows two zero bytes
 /// (an emulation-prevention byte) removed.
-pub(crate) fn rbsp(data: &[u8]) -> Vec<u8> {
+pub fn rbsp(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len());
     let mut zeros = 0u8;
     for &byte in data {

@@ -4,10 +4,19 @@
 use arc_swap::ArcSwap;
 use std::sync::Arc;
 
+/// Woken by a ring's producer right after each publication, and when the ring
+/// is sealed or ends. Egress fabric shards subscribe with their coalescing
+/// wake gates, so a publication reaches them from the producing thread with no
+/// watcher task in between (WI11). The same type backs
+/// [`crate::ring_buffer::RingBuffer::metadata_subscribers`], woken only on track
+/// metadata changes. Implementations must be cheap and must not block: they
+/// run on the producer's hot path.
 pub trait PublishWake: Send + Sync {
     fn wake(&self);
 }
 
+/// A ring's publication subscribers. A replacement ring shares its
+/// predecessor's set (`seal_and_forward`), so wakes follow the feed.
 pub struct PublishSubscribers {
     list: ArcSwap<Vec<Arc<dyn PublishWake>>>,
 }
@@ -25,6 +34,8 @@ impl PublishSubscribers {
         }
     }
 
+    /// Add `subscriber`; idempotent per `Arc`. Control-plane only (copies
+    /// the list).
     pub fn subscribe(&self, subscriber: Arc<dyn PublishWake>) {
         self.list.rcu(|list| {
             let mut list = Vec::clone(list);
@@ -49,6 +60,8 @@ impl PublishSubscribers {
         });
     }
 
+    /// One `ArcSwap` load and one call per subscriber; no allocation.
+    #[inline]
     pub fn wake_all(&self) {
         for s in self.list.load().iter() {
             s.wake();

@@ -244,12 +244,66 @@ the [assurance roadmap](assurance-roadmap.md).
   profile) shows no regression.
 
 ### Q-105 [tooling] [opus] Consolidate 43 of 46 shell scripts into crates/xtask
-- Goal: achieve `srt-rs` tooling parity by migrating repository management,
-  benchmarking, qualification, and packaging from 43 shell scripts into typed
-  Rust modules under `crates/xtask/` (`harness.rs`, `release.rs`, `qualify.rs`,
-  `worktree.rs`, `container.rs`, `fetch.rs`), retaining only the 3 pre-Rust OS
-  bootstrap scripts (`scripts/dev/bootstrap.sh`, `scripts/dev/bootstrap-runtime.sh`,
-  and `scripts/ci/install-system-deps.sh`).
-- Files: `scripts/`, `crates/xtask/`.
-- Gates: full local qualification via `cargo xtask qualify`, `cargo xtask harness`,
-  and pre-commit gates passing without shell script wrappers.
+- Scope: **a separate PR after #436**. Keep the existing TypeScript dashboard,
+  Node/npm build and browser tests; no frontend rewrite or repository split.
+  Replace the 43 non-bootstrap `.sh` files in the current 46-file inventory
+  with Rust-owned workflows. Delete a script only after migrating its behavior,
+  callers and regression coverage, not because it looks like a wrapper.
+- Retain exactly these pre-Rust entrypoints:
+  `scripts/dev/bootstrap.sh`, `scripts/dev/bootstrap-runtime.sh`, and
+  `scripts/ci/install-system-deps.sh`. Make them usable without a compiler or
+  dependencies on removed shell libraries; preserve the runtime-only installer.
+- Implementation checklist (module names are ownership suggestions, not a
+  requirement to build a new framework):
+  - [ ] `harness`: migrate `scripts/harness/{run,media-validation,parallel-fast-breadth,
+    restream-pinned,restream-segregated,frontend-e2e}.sh`. Reuse existing bench
+    builds and the harness catalog. Preserve stale-binary checks, argument/env
+    forwarding, CPU affinity, three independent parallel port ranges, per-group
+    artifacts, waits, failure aggregation and merged reports.
+  - [ ] `release` and `qualify`: migrate all eight `scripts/release/*.sh`
+    workflows and `scripts/build/{app-native,emit-sbom}.sh`. Preserve version
+    validation, clean-tree/provenance checks, role-specific archives, checksums,
+    SBOM/compliance payloads, image builds/publishing, shard selection, dry-run
+    behavior and failure exits. Reuse `build-bench`/`build-release`, not a second
+    build convention.
+  - [ ] Shared helpers: absorb `scripts/lib/{common,release-common,
+    release-shards,debian-packages}.sh` into the owners above and setup code.
+    Keep package and shard definitions single-sourced for retained bootstrap
+    entrypoints, CI and Docker; do not require Cargo to install Cargo.
+  - [ ] `worktree`: migrate `scripts/agent/worktree.sh` and port
+    `scripts/check/agent-worktree-frontend-deps.sh` into Rust regression tests.
+    Preserve destination-owned cache copies, subset/incremental selection,
+    stale/corrupted frontend cache rejection, environment exports, dry runs,
+    safe cleanup and unrelated worktree/process protection.
+  - [ ] `container`: migrate `scripts/check/{container-smoke,
+    container-restream-shim}.sh` and `scripts/ci/{run-in-harness-runtime,
+    run-harness-shard-in-runtime}.sh`. Preserve testing of the shipped image,
+    non-root/host-network options, forwarded environment, TERM/INT forwarding,
+    exit status, label-based cleanup and the SIGKILL cleanup backstop. If a
+    harness requires an executable path, use the built Rust executable rather
+    than assuming `RESTREAM_BIN` accepts a command plus arguments.
+  - [ ] Qualification: migrate `scripts/check/{release-artifact-smoke,
+    release-evidence}.sh` and `scripts/ci/require-test-filters.sh`, retaining their
+    validation semantics and regression cases.
+  - [ ] Setup/fetch: migrate `scripts/dev/{install-git-hooks,
+    refresh-docker-seccomp,harness-host-prereqs,prepare}.sh`,
+    `scripts/dev/moq/{fetch-mediamtx,fetch-moq-dev,build-moxygen}.sh`, and
+    `scripts/dev/frontend/{compile-for-node,node-tests}.sh`. Preserve pinned
+    downloads/verification, explicit privilege boundaries, host check versus
+    mutation modes, and frontend command behavior. Keep Git's executable hook
+    entrypoint minimal (or install a Rust hook executable); `gates.rs` alone is
+    not a Git hook.
+  - [ ] Fixtures/deployment: migrate `scripts/fixtures/{generate-bench-fixtures,
+    generate-msr-1080p-fixture}.sh`, `scripts/deploy/install-systemd-service.sh`,
+    `scripts/native/cgroup-wrap.sh`, and `fuzz/seed-corpus.sh`. Keep generation
+    explicit and checked-in-fixture consumers unchanged. Preserve resource
+    limits, service permissions and fuzz corpus layout.
+  - [ ] Update every caller in workflows, Dockerfile, npm commands, Rust
+    tooling/harness, docs and agent guidance; remove obsolete shell paths with
+    no permanent compatibility shims.
+- Gates: focused behavior tests and executable smoke of each migrated command,
+  including error exits and child cleanup; equivalent artifact/catalog outputs;
+  clean-checkout CI/container preparation; worktree cache regression tests;
+  retained bootstrap works without Rust. Run broad qualification in CI, not as
+  an unbounded local matrix. No claim that invoking FFmpeg, Docker, npm, Git,
+  CMake or OS package managers from Rust removes those external dependencies.

@@ -1,4 +1,68 @@
 //! Lock-free single-producer multi-consumer ring buffer for media packet fan-out.
+//!
+//! # Memory Layout
+//!
+//! Packet slots are densely packed because readers only load them; cache-line
+//! isolation is reserved for the producer-owned indexes that are actively
+//! modified. This keeps the slot working set small enough for cache.
+//!
+//! # Packet Walk
+//!
+//! ```text
+//! Ingest (RTMP/SRT demuxer)
+//!   → push(MediaPacket)
+//!     → ArcSwapOption::store() on slot[write_idx % capacity]
+//!     → AtomicUsize::store(write_idx + 1, Release)
+//!     → Notify::notify_waiters()
+//!
+//! Reader (egress / HLS / recording)
+//!   → wait_for_data()  (Notify::notified().await)
+//!   → pull()
+//!     → ArcSwapOption::load_full() on slot[read_idx % capacity]
+//!     → returns Arc<MediaPacket> (zero-copy, ref-counted)
+//! ```
+//!
+//! # Capacity
+//!
+//! Default: 1024 slots, configurable with `RESTREAM_RING_CAPACITY`. Slots hold
+//! demuxed media packets rather than fixed 188-byte TS packets, so retained
+//! payload memory scales with compressed frame size. The default gives tens of
+//! seconds of burst tolerance for common live inputs while bounding memory
+//! earlier than the old 4096-slot default.
+//!
+//! # Overflow & Recovery
+//!
+//! When a reader falls behind by ≥ capacity slots, `pull()` detects the gap
+//! and calls `fast_forward()`, which jumps to the most recent keyframe via
+//! an O(1) atomic read of `last_keyframe_idx`. This avoids decoding artifacts
+//! by always resuming from an IDR frame.
+//!
+//! # Why ArcSwap
+//!
+//! Multiple readers call `load_full()` concurrently without locking. That
+//! eliminates per-slot `RwLock` contention that would otherwise dominate at
+//! hundreds of concurrent egress readers.
+//!
+//! # Single writer
+//!
+//! `push()` is not exclusive in the type system: a second caller compiles. The
+//! ingest contract is runtime discipline. The application's `InputPacketGate`
+//! plus selection serialized by `MediaEngine` (`select_pipeline_input`,
+//! `selection_lock`) ensure only the selected input forwards into a pipeline
+//! ring. HTTP promotion persists the choice and calls the engine directly; it
+//! does not wait for the reconciler. Monotonic `write_idx` orders slots for
+//! readers; it does not prove a unique producer.
+//!
+//! # Frame units
+//!
+//! Every slot also records a [`FrameUnit`]: the configuration generation of
+//! the packet's track at publication (see [`crate::frame_units`]).
+//! [`RingBuffer::frame_unit`] and [`RingBuffer::track_config_at`] answer by
+//! sequence in O(1) without a lock; the unit word is tagged with its
+//! sequence, so a sequence the producer has overwritten (even mid-batch,
+//! before the write index moves) reads as not retained. Publication never
+//! parses payloads: each producer records configurations it already has,
+//! right before the packet that carries them.
 
 use arc_swap::ArcSwapOption;
 use std::sync::Arc;
@@ -17,21 +81,35 @@ use crate::reader::{ReaderInfo, ReaderSnapshot};
 use crate::subscribers::PublishSubscribers;
 
 pub const DEFAULT_RING_CAPACITY: usize = 1024;
+/// Max media packets a runtime reader processes per hot-loop burst.
 pub const MEDIA_PULL_BURST_PACKETS: usize = 32;
+/// Soft cap for producer-side publications into a packet ring.
 pub const MEDIA_PRODUCER_BATCH_PACKETS: usize = MEDIA_PULL_BURST_PACKETS;
+// Transcoder output rings hold demuxed frames from the FFmpeg child process.
+// At 720p30 with one audio track, the packet rate is ~80 pkt/s; 512 slots
+// ≈ 6.4 s of jitter headroom (above the 5 s requirement). I-frames from the
+// CRF23 encoder are large (~30–50 KB each), so the per-slot payload size is
+// much larger than the source ring — 512 slots already dominate memory at high
+// bitrates. Scale-test evidence: no transcoder ring overflows across 15 cases.
 pub const DEFAULT_TRANSCODER_RING_CAPACITY: usize = 512;
 
 pub struct RingSlot {
     data: ArcSwapOption<MediaPacket>,
     published_at_us: AtomicU64,
+    /// Packed [`FrameUnit`] of the packet in `data`; 0 before the first write.
     unit: AtomicU64,
 }
 
 #[repr(align(64))]
 pub struct AlignedAtomicUsize {
-    pub val: AtomicUsize,
+    val: AtomicUsize,
 }
 
+/// Compact histogram for `pull_burst` yield sizes.
+///
+/// Buckets cover [1], [2], [3-4], [5-8], [9-16], [17-32].
+/// Burst size 0 (nothing available) is not counted — callers skip stat
+/// recording when `available == 0`.
 pub const BURST_HIST_BUCKETS: usize = 6;
 pub(crate) const fn burst_bucket(n: usize) -> usize {
     match n {
@@ -56,21 +134,47 @@ pub struct PayloadStats {
 
 pub struct RingBuffer {
     pub(crate) slots: Vec<RingSlot>,
-    pub write_idx: AlignedAtomicUsize,
-    pub last_keyframe_idx: AlignedAtomicUsize,
+    write_idx: AlignedAtomicUsize,
+    last_keyframe_idx: AlignedAtomicUsize,
+    /// Cumulative payload bytes published: the offered load for delivery
+    /// telemetry. Single producer, so a relaxed load/store suffices.
     published_bytes: AtomicU64,
     pub(crate) capacity: usize,
     created_at: Instant,
     notify: Arc<tokio::sync::Notify>,
     pub readers: std::sync::Mutex<Vec<std::sync::Weak<ReaderInfo>>>,
+    /// Current hint: 0 unknown/absent, 1 initial hint, 2 H.264, 3 HEVC.
+    /// The immutable initial string preserves arbitrary producer codec names
+    /// and the borrowed getter; later supported PMT changes use static names.
     codec_hint: AtomicU8,
     initial_codec_hint: std::sync::OnceLock<String>,
+    /// Per-track codec configurations with generations (video: raw Annex B
+    /// parameter sets, so late-joining stages can seed decoders before the
+    /// next keyframe). Written by the producer only.
     track_configs: TrackConfigs,
+    /// Audio tracks metadata of packets in this ring.
+    /// Stored behind ArcSwapOption so it can be updated when a publisher reconnects
+    /// with a different track configuration (OnceLock would silently ignore updates).
     pub audio_tracks: ArcSwapOption<Vec<AudioMeta>>,
+    /// Estimated packet rate (pkt/s) set once after stream probe.
+    /// Used by telemetry to compute buffer depth in seconds.
     pub estimated_pkt_rate: std::sync::atomic::AtomicU32,
     end_of_stream: AtomicBool,
+    /// Forwarding pointer set when this ring is superseded by a larger one.
+    ///
+    /// When the application's `adapt_pipeline_ring` grows the source ring, it
+    /// stores the new ring here and fires `self.notify.notify_waiters()`. Readers
+    /// on the old ring wake up, drain any remaining unread slots, then follow
+    /// `next` to the new ring. External egress connections never disconnect —
+    /// they just see a sub-millisecond hiccup as readers move to the new ring.
     pub next: ArcSwapOption<RingBuffer>,
+    /// Woken by the producer after each publication (see
+    /// [`crate::subscribers::PublishWake`]). Created on first subscription, so
+    /// a ring nobody subscribes to pays one atomic load per publication.
     pub publish_subscribers: std::sync::OnceLock<Arc<PublishSubscribers>>,
+    /// Woken by the producer only when track metadata (codec hint, track
+    /// configuration, audio tracks) changes. Created on first subscription,
+    /// so a ring nobody watches pays no wake work for metadata changes.
     metadata_subscribers: std::sync::OnceLock<Arc<PublishSubscribers>>,
 }
 
@@ -84,13 +188,16 @@ impl RingBuffer {
                 unit: AtomicU64::new(0),
             });
         }
-        debug!(capacity, "ring buffer created");
+        debug!(target: "restream::media::ring_buffer", capacity, "ring buffer created");
         Self {
             slots,
             write_idx: AlignedAtomicUsize {
                 val: AtomicUsize::new(0),
             },
             last_keyframe_idx: AlignedAtomicUsize {
+                // usize::MAX is the sentinel meaning "no keyframe seen yet".
+                // This disambiguates from a real keyframe at slot 0 (which
+                // would also produce index 0 if we started from AtomicUsize::new(0)).
                 val: AtomicUsize::new(usize::MAX),
             },
             published_bytes: AtomicU64::new(0),
@@ -110,6 +217,9 @@ impl RingBuffer {
         }
     }
 
+    /// The publication subscribers of this ring and of every ring that
+    /// replaces it. Subscribers hold this set rather than the ring, so a
+    /// subscription never pins a superseded ring's packets.
     pub fn publication_subscribers(&self) -> Arc<PublishSubscribers> {
         Arc::clone(
             self.publish_subscribers
@@ -117,6 +227,9 @@ impl RingBuffer {
         )
     }
 
+    /// The metadata subscribers of this ring and of every ring that replaces
+    /// it: woken only when the codec hint, a track configuration or the audio
+    /// tracks change, not on every publication.
     pub fn metadata_subscribers(&self) -> Arc<PublishSubscribers> {
         Arc::clone(
             self.metadata_subscribers
@@ -124,6 +237,8 @@ impl RingBuffer {
         )
     }
 
+    /// One atomic load without subscribers; with them, one `ArcSwap` load and
+    /// one call per subscriber. No allocation.
     #[inline]
     fn wake_publication_subscribers(&self) {
         if let Some(subscribers) = self.publish_subscribers.get() {
@@ -131,6 +246,8 @@ impl RingBuffer {
         }
     }
 
+    /// Metadata-only wake: no publication subscriber runs, so an origin
+    /// watcher sees codec/track changes without polling every packet.
     #[inline]
     fn wake_metadata_subscribers(&self) {
         if let Some(subscribers) = self.metadata_subscribers.get() {
@@ -138,12 +255,29 @@ impl RingBuffer {
         }
     }
 
+    /// Create a ring whose write cursor starts at `start_write_idx` rather than 0.
+    ///
+    /// Used when growing a pipeline ring: the new ring continues the old ring's
+    /// index sequence so that existing `Reader` instances (which remember their
+    /// `read_idx`) can transparently migrate and resume without a gap.
     pub fn new_continuing(capacity: usize, start_write_idx: usize) -> Self {
         let ring = Self::new(capacity);
         ring.write_idx.val.store(start_write_idx, Ordering::Relaxed);
+        // The last_keyframe sentinel is irrelevant to new readers migrating from
+        // the old ring; they will establish a new baseline from the first keyframe.
         ring
     }
 
+    /// Seed this continuing ring with the readable tail from `old_ring`.
+    ///
+    /// Adaptive resizing keeps the global write-index timeline intact so active
+    /// readers can migrate without gaps. Late readers created after the resize
+    /// also need a real preroll window; otherwise `fast_forward()` has no
+    /// keyframe to target and starts them at the live edge. This copies only the
+    /// still-readable tail (`capacity - 1` packets) into the matching indices of
+    /// the grown ring without advancing the write cursor, together with their
+    /// frame units and the track configurations, so sequence lookups and
+    /// generations continue across the resize.
     pub fn seed_readable_tail_from(&self, old_ring: &RingBuffer) -> usize {
         let old_write_idx = old_ring.get_write_idx();
         let tail_capacity = self
@@ -183,7 +317,16 @@ impl RingBuffer {
         copied
     }
 
+    /// Forward all waiting readers to `new_ring` and mark this ring as superseded.
+    ///
+    /// After this call, `self` receives no new data (the caller must redirect the
+    /// producer to `new_ring`). Readers currently blocked in `wait_for_data` are
+    /// woken; they drain any remaining slots in `self`, then follow `self.next` to
+    /// `new_ring` automatically.
     pub fn seal_and_forward(&self, new_ring: Arc<RingBuffer>) {
+        // The replacement inherits the publication subscribers before it is
+        // reachable, so no publication on it can miss them.
+        // A fresh replacement has no set of its own yet, so `set` succeeds.
         let _ = new_ring
             .publish_subscribers
             .set(self.publication_subscribers());
@@ -191,6 +334,7 @@ impl RingBuffer {
             let _ = new_ring.metadata_subscribers.set(Arc::clone(metadata));
         }
         self.next.store(Some(new_ring));
+        // Wake all readers blocked on this ring so they can discover `next`.
         self.notify.notify_waiters();
         self.wake_publication_subscribers();
         self.wake_metadata_subscribers();
@@ -211,21 +355,27 @@ impl RingBuffer {
         self.capacity
     }
 
+    /// Number of readers whose `Arc<ReaderInfo>` is still alive.
     pub fn active_reader_count(&self) -> usize {
         let mut readers = lock(&self.readers);
         readers.retain(|w| w.upgrade().is_some());
         readers.len()
     }
 
+    /// Store the probed packet rate so telemetry can show buffer depth in seconds.
     pub fn set_estimated_pkt_rate(&self, pkt_per_sec: f64) {
         self.estimated_pkt_rate
             .store(pkt_per_sec.round() as u32, Ordering::Relaxed);
     }
 
+    /// Probed packet rate (0 when the probe hasn't run yet). The shared
+    /// SRT TS muxer sizes its retention ring from this rate at creation.
     pub fn estimated_pkt_rate(&self) -> f64 {
         self.estimated_pkt_rate.load(Ordering::Relaxed) as f64
     }
 
+    /// Buffer depth in seconds: how long the ring can absorb an ingest interruption.
+    /// Returns `None` if the packet rate hasn't been set yet.
     pub fn buffer_depth_secs(&self) -> Option<f64> {
         let rate = self.estimated_pkt_rate.load(Ordering::Relaxed);
         if rate == 0 {
@@ -234,6 +384,8 @@ impl RingBuffer {
         Some(self.capacity as f64 / rate as f64)
     }
 
+    /// Set or replace the supported video codec hint. Called only on metadata
+    /// changes, never per packet; an unchanged hint does not wake observers.
     pub fn set_codec_hint(&self, codec: &str) {
         let initial = self.initial_codec_hint.get_or_init(|| codec.to_string());
         let hint = if codec.is_empty() {
@@ -252,6 +404,7 @@ impl RingBuffer {
         }
     }
 
+    /// Return the codec hint if set, or empty string.
     pub fn codec_hint_str(&self) -> &str {
         match self.codec_hint.load(Ordering::Acquire) {
             0 => "",
@@ -265,12 +418,19 @@ impl RingBuffer {
         }
     }
 
+    /// Remove a producer's video track, including its current decoder
+    /// configuration. Historical configurations remain available to readers
+    /// draining packets published before this boundary.
     pub fn remove_video_track(&self) {
         self.track_configs.clear(MediaType::Video, 0);
         self.codec_hint.store(0, Ordering::Release);
         self.wake_metadata_subscribers();
     }
 
+    /// Record `bytes` as the configuration of one track. Same bytes keep the
+    /// track's generation, changed bytes start the next one; packets
+    /// published afterwards carry it. Producer only. Returns the generation
+    /// (0 for a track index outside the table).
     pub fn set_track_config(&self, media_type: MediaType, track_index: u32, bytes: Vec<u8>) -> u32 {
         if bytes.is_empty() {
             return self.track_configs.generation(media_type, track_index);
@@ -283,6 +443,7 @@ impl RingBuffer {
         generation
     }
 
+    /// The current configuration of one track, if any was recorded.
     pub fn track_config(
         &self,
         media_type: MediaType,
@@ -291,23 +452,32 @@ impl RingBuffer {
         self.track_configs.current(media_type, track_index)
     }
 
+    /// Record raw Annex B parameter sets as the video track's configuration.
     pub fn set_video_parameter_sets(&self, parameter_sets: Vec<u8>) {
         self.set_track_config(MediaType::Video, 0, parameter_sets);
     }
 
+    /// The video track's current configuration with its generation.
     pub fn video_config(&self) -> Option<Arc<TrackConfig>> {
         self.track_config(MediaType::Video, 0)
     }
 
+    /// Returns a snapshot copy of the video track's current parameter sets.
     pub fn video_parameter_sets(&self) -> Option<Vec<u8>> {
         self.video_config().map(|config| config.bytes.to_vec())
     }
 
+    /// The frame unit recorded for the packet published at `sequence`, or
+    /// `None` when it is not published yet or no longer retained (the same
+    /// window as `Reader::pull`).
     pub fn frame_unit(&self, sequence: usize) -> Option<FrameUnit> {
         let write_idx = self.write_idx.val.load(Ordering::Acquire);
         if sequence >= write_idx || write_idx - sequence >= self.capacity {
             return None;
         }
+        // A publication overwrites the slot before it stores its write index
+        // (a batch, several slots before), so a re-check of the write index
+        // cannot see the overwrite; the word's sequence tag does.
         FrameUnit::unpack(
             self.slots[sequence % self.capacity]
                 .unit
@@ -316,6 +486,10 @@ impl RingBuffer {
         )
     }
 
+    /// The configuration that applies to the packet published at `sequence`,
+    /// whose track is `media_type`/`track_index`: `Ok(None)` when its
+    /// producer had recorded none, `Err(NotRetained)` when the packet or its
+    /// configuration generation is no longer retained.
     pub fn track_config_at(
         &self,
         sequence: usize,
@@ -332,6 +506,8 @@ impl RingBuffer {
             .ok_or(NotRetained)
     }
 
+    /// The unit word of the packet being published at `sequence`. Producer
+    /// only.
     #[inline]
     fn next_frame_unit(&self, packet: &MediaPacket, sequence: usize) -> u64 {
         FrameUnit {
@@ -342,6 +518,8 @@ impl RingBuffer {
         .pack(sequence)
     }
 
+    /// Record the complete in-band parameter sets a Raw video packet carries
+    /// as its track's configuration.
     fn record_in_band_config(&self, packet: &MediaPacket) {
         if packet.media_type == MediaType::Video
             && packet.format == PayloadFormat::Raw
@@ -351,6 +529,9 @@ impl RingBuffer {
         }
     }
 
+    /// Set (or update) the audio track metadata for this ring.
+    /// An empty `tracks` vec clears the metadata, signalling "not yet known" to
+    /// downstream stages — this is used by RTMP ingest on publisher reconnect.
     pub fn set_audio_tracks(&self, tracks: Vec<AudioMeta>) {
         for track_index in 0..CONFIG_TRACKS_PER_TYPE as u32 {
             if !tracks.iter().any(|track| track.track_index == track_index) {
@@ -360,18 +541,23 @@ impl RingBuffer {
         let count = tracks.len();
         if tracks.is_empty() {
             self.audio_tracks.store(None);
-            debug!("ring audio tracks cleared");
+            debug!(target: "restream::media::ring_buffer", "ring audio tracks cleared");
         } else {
             self.audio_tracks.store(Some(Arc::new(tracks)));
-            debug!(count, "ring audio tracks set");
+            debug!(target: "restream::media::ring_buffer", count, "ring audio tracks set");
         }
         self.wake_metadata_subscribers();
     }
 
+    /// The audio track metadata handle without copying it, for watchers that
+    /// only compare identity (a change installs a new `Arc`).
     pub fn audio_tracks_snapshot(&self) -> Option<Arc<Vec<AudioMeta>>> {
         self.audio_tracks.load_full()
     }
 
+    /// Returns a snapshot clone of the audio track metadata, or `None` if not yet known.
+    /// Clones the inner Vec; `audio_tracks` is only read at stage startup, not on the
+    /// hot packet path, so this clone is acceptable.
     pub fn audio_tracks(&self) -> Option<Vec<AudioMeta>> {
         self.audio_tracks.load_full().map(|arc| (*arc).clone())
     }
@@ -399,6 +585,11 @@ impl RingBuffer {
         self.wake_publication_subscribers();
     }
 
+    /// Publish a burst with one write-index release and one waiter notification.
+    ///
+    /// The ring is single-producer, so slots can be populated first and made
+    /// visible together by the final release store. Returns the number of
+    /// packets published.
     pub fn push_batch<I>(&self, packets: I) -> usize
     where
         I: IntoIterator<Item = MediaPacket>,
@@ -437,6 +628,7 @@ impl RingBuffer {
         count
     }
 
+    /// Drain and publish a reusable producer batch in bounded chunks.
     pub fn push_drained_batch_capped(&self, packets: &mut Vec<MediaPacket>) -> usize {
         let mut total = 0usize;
         let mut drained = packets.drain(..);
@@ -450,6 +642,11 @@ impl RingBuffer {
         total
     }
 
+    /// [`Self::push_batch`] for a producer whose Raw video carries its
+    /// parameter sets in band and that would scan them anyway (SRT ingest):
+    /// each packet's complete sets become its track's configuration just
+    /// before that packet is stamped, so a new generation starts exactly at
+    /// the packet carrying it and earlier packets keep the previous one.
     pub fn push_batch_recording_config<I>(&self, packets: I) -> usize
     where
         I: IntoIterator<Item = MediaPacket>,
@@ -461,6 +658,8 @@ impl RingBuffer {
         )
     }
 
+    /// [`Self::push_drained_batch_capped`] recording in-band configurations
+    /// as [`Self::push_batch_recording_config`] does.
     pub fn push_drained_batch_recording_config(&self, packets: &mut Vec<MediaPacket>) -> usize {
         let mut total = 0usize;
         let mut drained = packets.drain(..);
@@ -480,6 +679,9 @@ impl RingBuffer {
         self.slots[slot_idx].data.load_full()
     }
 
+    /// When the packet at `sequence` was published, in microseconds since
+    /// the ring was created. The slot may hold a newer packet by the time
+    /// it is read: check [`Self::frame_unit`] after reading the packet.
     pub fn published_at_us(&self, sequence: usize) -> u64 {
         self.slots[sequence % self.capacity]
             .published_at_us
@@ -487,11 +689,13 @@ impl RingBuffer {
     }
 
     fn add_published_bytes(&self, bytes: u64) {
+        // Single producer: no read-modify-write instruction needed.
         let total = self.published_bytes.load(Ordering::Relaxed);
         self.published_bytes
             .store(total.wrapping_add(bytes), Ordering::Relaxed);
     }
 
+    /// Cumulative payload bytes published so far (offered load).
     pub fn published_bytes(&self) -> u64 {
         self.published_bytes.load(Ordering::Relaxed)
     }
@@ -573,6 +777,8 @@ impl RingBuffer {
         stats
     }
 
+    /// Packets retained in the ring as (DTS, payload bytes), one entry per
+    /// DTS, in DTS order.
     fn payload_by_dts(&self) -> Vec<(i64, u64)> {
         let mut samples = Vec::with_capacity(self.capacity);
         for slot in &self.slots {
@@ -596,10 +802,24 @@ impl RingBuffer {
         grouped
     }
 
+    /// Average payload bitrate over the retained window's media time (DTS),
+    /// at least 250 ms of it: what the feed runs at now, however long the
+    /// ring has existed.
     pub fn retained_payload_bitrate_bps(&self) -> Option<u64> {
         average_payload_bps(&self.payload_by_dts())
     }
 
+    /// Estimate the aggregate encoded payload bitrate from packets currently
+    /// retained in the ring.
+    ///
+    /// This is sampled only during stage startup. It deliberately uses media
+    /// DTS rather than wall-clock arrival time: a publisher can deliver in
+    /// bursts, while FFmpeg's probe must cover a bounded amount of media time.
+    /// Use both the retained-window average and a short media-time peak. Early
+    /// live ingest can be VBR-heavy around the first keyframe, and FFmpeg needs
+    /// enough bytes to see the audio/video headers in that burst even when the
+    /// whole retained window averages lower. The startup policy applies the
+    /// final cap, so this estimator should err toward stable startup.
     pub fn observed_payload_bitrate_bps(&self) -> Option<u64> {
         const PEAK_WINDOW_MS: i64 = 250;
 
@@ -679,14 +899,26 @@ impl RingBuffer {
 
     pub fn fast_forward(&self, current_write_idx: usize) -> usize {
         let kf_idx = self.last_keyframe_idx.val.load(Ordering::Acquire);
+        // usize::MAX is the sentinel for "no keyframe seen yet".
         let kf_known = kf_idx != usize::MAX;
         if kf_known && current_write_idx.saturating_sub(kf_idx) < self.capacity {
             return kf_idx;
         }
+        // No valid keyframe is known yet (stream start) or the last keyframe
+        // index is more than `capacity` slots behind the write cursor (overflow
+        // without a keyframe in the window).
+        // Return the current write position to start at the live edge rather
+        // than using saturating_sub(100) which returns 0 when write_idx < 100.
         current_write_idx
     }
 }
 
+/// Per-stream DTS monotonicity enforcer for MPEG-TS muxing.
+///
+/// FFmpeg's `write_interleaved` requires strictly increasing DTS per stream.
+/// Audio packets at millisecond granularity can share timestamps (e.g. two AAC
+/// frames in the same millisecond). This enforcer bumps colliding DTS by 1 and
+/// adjusts PTS to maintain PTS >= DTS.
 #[derive(Debug, Clone)]
 pub struct DtsEnforcer {
     last_dts: Vec<i64>,
@@ -699,6 +931,8 @@ impl DtsEnforcer {
         }
     }
 
+    /// Enforce monotonically increasing DTS for a given stream.
+    /// Returns the corrected (pts, dts) pair.
     pub fn enforce(&mut self, stream_idx: usize, pts: i64, dts: i64) -> (i64, i64) {
         let mut dts = dts;
         if let Some(prev) = self.last_dts.get(stream_idx)
@@ -714,6 +948,7 @@ impl DtsEnforcer {
     }
 }
 
+/// Payload bitrate over `grouped`'s DTS span (milliseconds), at least 250 ms.
 fn average_payload_bps(grouped: &[(i64, u64)]) -> Option<u64> {
     const MIN_OBSERVATION_MS: i64 = 250;
 
@@ -734,3 +969,9 @@ fn average_payload_bps(grouped: &[(i64, u64)]) -> Option<u64> {
             .div_ceil(span_ms as u64),
     )
 }
+
+#[cfg(test)]
+// These white-box tests deliberately poison and inspect the raw mutex.
+#[allow(clippy::disallowed_methods)]
+#[path = "ring_buffer_tests.rs"]
+mod tests;

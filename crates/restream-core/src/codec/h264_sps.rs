@@ -15,19 +15,19 @@ use super::bits::{BitReader, rbsp};
 
 /// What the ingest probes report from an SPS.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct H264Sps {
-    pub(crate) profile_idc: u8,
-    pub(crate) level_idc: u8,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
+pub struct H264Sps {
+    pub profile_idc: u8,
+    pub level_idc: u8,
+    pub width: u32,
+    pub height: u32,
     /// Frame rate from VUI timing, 0.0 when absent.
-    pub(crate) fps: f64,
+    pub fps: f64,
 }
 
 /// Profiles whose SPS carries chroma format, bit depths and scaling lists.
 const HIGH_PROFILES: [u8; 13] = [100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135];
 
-pub(crate) fn profile_name(profile_idc: u8) -> &'static str {
+pub fn profile_name(profile_idc: u8) -> &'static str {
     match profile_idc {
         66 => "Baseline",
         77 => "Main",
@@ -41,13 +41,13 @@ pub(crate) fn profile_name(profile_idc: u8) -> &'static str {
 }
 
 /// `level_idc` as the familiar "major.minor" (31 → "3.1").
-pub(crate) fn level_name(level_idc: u8) -> String {
+pub fn level_name(level_idc: u8) -> String {
     format!("{}.{}", level_idc / 10, level_idc % 10)
 }
 
 /// Parses an SPS NAL unit payload: the bytes after the one-byte NAL header,
 /// emulation-prevention bytes still present.
-pub(crate) fn parse_h264_sps(payload: &[u8]) -> Option<H264Sps> {
+pub fn parse_h264_sps(payload: &[u8]) -> Option<H264Sps> {
     let sps = rbsp(payload);
     let &[profile_idc, _constraints, level_idc] = sps.first_chunk::<3>()?;
     let mut reader = BitReader::new(sps.get(3..)?);

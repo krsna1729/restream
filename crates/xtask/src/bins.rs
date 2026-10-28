@@ -28,8 +28,6 @@ pub(crate) fn build_bench() -> StepResult {
         "test_harness",
         "--bin",
         "test_harness",
-        "-p",
-        "restream",
         "--bin",
         "moq_subscriber",
     ];
@@ -83,8 +81,6 @@ pub(crate) fn build_release() -> StepResult {
             "test_harness",
             "--bin",
             "test_harness",
-            "-p",
-            "restream",
             "--bin",
             "moq_subscriber",
         ],

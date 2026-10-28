@@ -4,17 +4,11 @@
 //! - [`MediaPacket`]: The 56-byte cache-line aligned packet envelope carrying `bytes::Bytes`.
 //! - [`MediaType`] and [`PayloadFormat`]: Ingest and egress format descriptors.
 //! - [`FrameUnit`], [`TrackConfig`], and [`NotRetained`]: Side-band track configuration history.
+#![forbid(unsafe_code)]
+#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
+
 pub mod codec;
-pub use codec::{
-    AAC_SAMPLE_RATES, AnnexbCodecKind, AnnexbParameterSetAccumulator, AvccRecord, BitReader,
-    H264Sps, HevcProfileTierLevel, VideoCodecKind, aac_frequency_index, adts_frame_count,
-    adts_frame_ranges, adts_sample_rate, annexb_parameter_sets, annexb_to_avcc,
-    annexb_to_avcc_into, avcc_record, avcc_to_annexb, avcc_to_annexb_into,
-    build_aac_sequence_header, build_avcc_record, build_avcc_sequence_header, build_hvcc_record,
-    find_annexb_start_codes, for_each_annexb_nalu, h265_nal_type, level_name, parse_avcc_config,
-    parse_h264_sps, parse_hevc_profile_tier_level, profile_name, raw_annexb_is_keyframe, rbsp,
-    signed_be24, split_annexb_nalus, take_u16_prefixed,
-};
+pub use codec::*;
 pub mod metadata;
 pub use metadata::{AudioMeta, DeclaredEncoder, VideoMeta};
 
@@ -34,17 +28,22 @@ pub enum PayloadFormat {
     Raw = 1,
 }
 
-/// Tracks per media type that can carry a configuration.
+/// Tracks per media type that can carry a configuration. A packet with a
+/// higher track index publishes with configuration generation 0.
 pub const CONFIG_TRACKS_PER_TYPE: usize = 4;
 
-/// Configurations retained per track in the side table.
+/// Configurations retained per track. A packet whose generation is this many
+/// changes old no longer resolves ([`NotRetained`]).
 pub const CONFIG_HISTORY: usize = 4;
 
-/// Set in every recorded unit, so an unwritten slot reads as no unit at all.
+/// Set in every recorded unit, so an unwritten slot (raw value 0) reads as no
+/// unit at all.
 const PRESENT: u64 = 1 << 63;
-/// The low 31 bits of the sequence that wrote a unit, stored above the generation.
+/// The low 31 bits of the sequence that wrote a unit, stored above the
+/// generation.
 const TAG_MASK: u64 = (1 << 31) - 1;
 
+/// The sequence tag stored beside a published unit's configuration generation.
 #[inline]
 pub fn unit_tag(sequence: usize) -> u64 {
     sequence as u64 & TAG_MASK
@@ -59,11 +58,14 @@ pub struct FrameUnit {
 }
 
 impl FrameUnit {
+    /// The unit word for the packet published at `sequence`.
     #[inline]
     pub fn pack(self, sequence: usize) -> u64 {
         PRESENT | unit_tag(sequence) << 32 | u64::from(self.config_generation)
     }
 
+    /// The unit in `raw` if it was written for `sequence`; `None` for an
+    /// unwritten slot or one a later publication has overwritten.
     #[inline]
     pub fn unpack(raw: u64, sequence: usize) -> Option<Self> {
         (raw & PRESENT != 0 && (raw >> 32) & TAG_MASK == unit_tag(sequence)).then_some(Self {
@@ -79,7 +81,9 @@ pub struct TrackConfig {
     pub bytes: Bytes,
 }
 
-/// The packet at the requested sequence was overwritten or fell out of history.
+/// The packet at the requested sequence was overwritten (or never written),
+/// or its configuration generation fell out of [`CONFIG_HISTORY`]. A reader
+/// treats this like a ring overrun.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotRetained;
 
@@ -154,5 +158,21 @@ mod tests {
         let (nalu_len_size, annexb) = parse_avcc_config(&complete);
         assert_eq!(nalu_len_size, 4);
         assert_eq!(annexb, [0, 0, 0, 1, 103, 0, 0, 0, 1, 104]);
+    }
+
+    #[test]
+    fn avcc_builders_accept_sps_without_pps() {
+        let annexb = [0, 0, 0, 1, 0x67, 0x42, 0, 0x1E, 0xAB];
+        let record = build_avcc_record(&annexb).expect("SPS without PPS is representable");
+        let parsed = avcc_record(&record).expect("complete AVC record");
+        assert_eq!(parsed.length_size_minus_one, 3);
+        assert_eq!(parsed.sps, [vec![0x67, 0x42, 0, 0x1E, 0xAB].as_slice()]);
+        assert!(parsed.pps.is_empty());
+        assert_eq!(parse_avcc_config(&record), (4, annexb.to_vec()));
+
+        let header = build_avcc_sequence_header(&annexb).expect("SPS-only FLV header");
+        let (framing, record) = header.split_at(5);
+        assert_eq!(framing, [0x17, 0, 0, 0, 0]);
+        assert_eq!(parse_avcc_config(record), (4, annexb.to_vec()));
     }
 }

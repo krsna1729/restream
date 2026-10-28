@@ -1,5 +1,7 @@
 //! Low-level RTMP protocol handling, egress engine, and payload formatting.
 
+#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
+
 pub mod client_slots;
 pub mod egress_connection;
 pub mod egress_engine;
@@ -9,8 +11,10 @@ pub mod egress_payload_cache;
 pub mod egress_transport;
 pub mod enhanced;
 pub mod enhanced_rtmp_hevc;
+#[forbid(unsafe_code)]
 pub mod flv;
 pub mod parser_budget;
+#[forbid(unsafe_code)]
 pub mod timestamps;
 
 pub use client_slots::ClientSlots;

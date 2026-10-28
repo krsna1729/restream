@@ -75,7 +75,6 @@ const ENV_VAR_OWNERS: &[&str] = &[
     "tests/",
     "benches/",
     "test_fixtures.rs",
-    "crates/restream-srt/src/knobs.rs",
 ];
 
 const API_STAGE_STARTS: &[&str] = &[
@@ -88,48 +87,42 @@ const API_STAGE_STARTS: &[&str] = &[
     "external_transcoder",
 ];
 
+const PRODUCTION_ROOTS: &[&str] = &[
+    "src",
+    "crates/restream-core",
+    "crates/restream-sync",
+    "crates/restream-mpegts",
+    "crates/restream-rtmp",
+    "crates/restream-moq",
+    "crates/restream-srt",
+];
+
 pub(crate) fn run() -> StepResult {
     println!("=== Restream Source Audit ===");
     let mut failed = false;
+    let production_files = files_under(PRODUCTION_ROOTS)?;
+    let media_files: Vec<_> = production_files
+        .iter()
+        .filter(|path| path.starts_with("src/media") || path.starts_with("crates"))
+        .cloned()
+        .collect();
 
     failed |= report(
         "forbidden imports in src/media/ and production crates",
         "Media and production modules must not import api types",
         "No forbidden imports found.",
-        grep_files(
-            &files_under(&[
-                "src/media",
-                "crates/restream-core",
-                "crates/restream-sync",
-                "crates/restream-mpegts",
-                "crates/restream-rtmp",
-                "crates/restream-moq",
-                "crates/restream-srt",
-            ])?,
-            |line| line.contains("use crate::api"),
-        ),
+        grep_files(&media_files, |line| line.contains("use crate::api")),
     );
 
     failed |= audit_file_sizes()?;
 
-    let env_hits = grep_files(
-        &files_under(&[
-            "src",
-            "crates/restream-core",
-            "crates/restream-sync",
-            "crates/restream-mpegts",
-            "crates/restream-rtmp",
-            "crates/restream-moq",
-            "crates/restream-srt",
-        ])?,
-        |line| line.contains("std::env::var"),
-    )
-    .into_iter()
-    .filter(|hit| {
-        let row = hit.to_string();
-        !ENV_VAR_OWNERS.iter().any(|owner| row.contains(owner))
-    })
-    .collect();
+    let env_hits = grep_files(&production_files, |line| line.contains("std::env::var"))
+        .into_iter()
+        .filter(|hit| {
+            let row = hit.to_string();
+            !ENV_VAR_OWNERS.iter().any(|owner| row.contains(owner))
+        })
+        .collect();
     failed |= report(
         "inline std::env::var usage outside src/config.rs",
         "Found raw std::env::var usage outside approved config/test harness owners",
@@ -151,18 +144,9 @@ pub(crate) fn run() -> StepResult {
         "module-level dead-code suppression",
         "module-level #![allow(dead_code)] hides unused and duplicated code; annotate the specific item instead",
         "No module-level dead-code suppression in src/ or production crates.",
-        grep_files(
-            &files_under(&[
-                "src",
-                "crates/restream-core",
-                "crates/restream-sync",
-                "crates/restream-mpegts",
-                "crates/restream-rtmp",
-                "crates/restream-moq",
-                "crates/restream-srt",
-            ])?,
-            |line| line.starts_with("#![allow(dead_code)]"),
-        ),
+        grep_files(&production_files, |line| {
+            line.starts_with("#![allow(dead_code)]")
+        }),
     );
 
     failed |= report(

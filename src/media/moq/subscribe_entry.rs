@@ -28,11 +28,7 @@ use serde::Serialize;
 use crate::media::moq::{tls, transport};
 use crate::media::srt::AddressFamily;
 
-/// The `hang` catalog track Restream publishes.
-const CATALOG_TRACK: &str = "catalog.json";
-/// Track names Restream publishes; used when the catalog names none.
-const VIDEO_TRACK: &str = "video";
-const AUDIO_TRACK: &str = "audio";
+use restream_moq::media::{AUDIO_TRACK, CATALOG_TRACK, VIDEO_TRACK};
 /// Frames whose media timestamps are within this tolerance carry the same
 /// instant on the two tracks (30 fps video, ~21 ms AAC frames).
 const SKEW_MATCH_TOLERANCE_US: u64 = 25_000;

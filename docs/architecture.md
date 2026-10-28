@@ -240,13 +240,13 @@ Ring rules:
 - Each reader has its own cursor. One destination never consumes another
   destination's packets.
 - A lagging reader that overflows resumes at a keyframe.
-- Capacity and overflow are owned by `src/media/ring_buffer.rs` and
-  `src/config.rs`.
+- Capacity and overflow are owned by `crates/restream-sync/src/ring_buffer.rs`
+  and `src/config.rs`.
 
 SRT outputs share one MPEG-TS packaging per feed: the shared TS mux writes
 `TsChunkRing`, and each SRT leaf keeps only its cursor and socket state.
 Async-to-blocking boundaries, such as the recording writer, use a bounded
-`MemoryQueue` (`src/media/byte_queue.rs`).
+`MemoryQueue` (`crates/restream-sync/src/byte_queue.rs`).
 
 Timestamp rules:
 
@@ -452,7 +452,9 @@ egress tasks, and `src/logging.rs` still call `crate::db` with a pool.
 
 ### Layering rules
 
-- `domain` depends only on itself, std, serde and URL parsing.
+- `domain` depends only on itself, std, serde and URL parsing, plus the neutral
+  `restream_core::VideoCodecKind` value descriptor re-export. It does not depend
+  on core parsers, protocol utilities or media lifecycle.
 - `planner` does not import `application`, `media`, `api`, `db`, `config`,
   axum, sqlx, Tokio or the environment.
 - `runtime/graph.rs`, `runtime/output.rs` and `runtime/stage.rs` do not import
@@ -481,6 +483,16 @@ owns the audit procedure.
 
 ## Key source areas
 
+The workspace shares one lockfile. `restream-core` owns the packet vocabulary
+and canonical codec helpers; `restream-sync` owns bounded synchronization;
+`restream-mpegts`, `restream-rtmp`, `restream-srt` and `restream-moq` own protocol
+utilities. Application lifecycle, admission policy, shard ownership and runtime
+construction remain in `src/`. These are compilation and ownership boundaries,
+not independently deployed services. Root media facades route existing tests,
+fuzz targets and benchmarks to the same implementation used by the protocols.
+The integration harness is a separate `crates/test_harness` package.
+
+
 | Source area | Responsibility |
 |---|---|
 | `src/main.rs`, `src/lib.rs`, `src/infrastructure/` | Process bootstrap, runtime construction, service wiring, reconciler |
@@ -491,13 +503,16 @@ owns the audit procedure.
 | `src/planner/` | Pure stage-graph planning |
 | `src/runtime/`, `src/api_runtime_views/` | Runtime contracts and operator snapshots |
 | `src/media/engine*.rs` | `MediaEngine`: media lifecycle, registries, fabric retention, snapshots |
-| `src/media/ring_buffer.rs`, `src/media/ts_chunk_ring.rs`, `src/media/byte_queue.rs` | Bounded packet and byte transport |
-| `src/media/rtmp/`, `src/media/srt/`, `src/media/mpegts/` | RTMP and SRT protocols, MPEG-TS mux and demux |
+| `crates/restream-core/src/` | Shared packet/metadata descriptors and canonical codec parsing/conversion |
+| `crates/restream-sync/src/`, `src/media/ts_chunk_ring.rs` | Bounded packet and byte transport |
+| `crates/restream-{rtmp,srt,mpegts}/src/` | RTMP/SRT protocol utilities, MPEG-TS mux and demux |
+| `src/media/rtmp/`, `src/media/srt/` | Ingest owners, control/lifecycle integration and engine adapters |
 | `src/media/hls_ingest/`, `src/media/hls_pull/`, `src/media/ingest_publisher/` | HLS push and pull ingest, byte-stream ingest publishing |
-| `src/media/moq/` | MoQ ingest, egress, origin and QUIC transport |
+| `src/media/moq/`, `crates/restream-moq/src/` | MoQ lifecycle/owners and shared media, TLS, token and URL utilities |
 | `src/media/egress/` | Egress fabric: shards, scheduler, leaf lifecycle, protocol backends. See [Egress architecture](egress-architecture.md) |
 | `src/media/hls/`, `src/media/recording/` | HLS segmenting, preview, HLS PUT upload policy, recording |
 | `src/media/external_transcoder/`, `src/media/ffmpeg/`, `src/media/audio_router.rs` | FFmpeg child stages, native audio track selection |
 | `src/media/executor.rs` | MEDIA executor |
 | `src/agent_plane/`, `src/agent_execution.rs`, `src/agent_core/`, `src/agent_backends/`, `src/agent_mcp/` | Agent planning and approval-gated execution, contracts, MCP server |
 | `web/ts/` | Dashboard and control room source; `public/` is generated |
+| `crates/test_harness/src/` | Integration scenarios, peers and live qualification |

@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::with_expected_panic_suppressed;
 use proptest::prelude::*;
 use std::sync::Arc;
 
@@ -39,7 +40,7 @@ async fn read_recovers_from_poisoned_mutex() {
     let q = queue.clone();
     // unwrap() inside a thread that panics → the Mutex becomes poisoned
     let _ = std::thread::spawn(move || {
-        crate::test_support::with_expected_panic_suppressed(|| {
+        with_expected_panic_suppressed(|| {
             let _guard = q.inner.lock().unwrap();
             panic!("deliberate poison");
         });

@@ -1,7 +1,7 @@
 use percent_encoding::percent_decode_str;
 use reqwest::Url;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct RtmpUrlParts {
     pub host: String,
     pub port: u16,

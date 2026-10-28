@@ -1,5 +1,7 @@
 //! Low-level Media over QUIC (MoQ) wire protocol, catalog, and packaging.
 
+#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
+
 pub mod budget;
 pub mod media;
 pub mod tls;

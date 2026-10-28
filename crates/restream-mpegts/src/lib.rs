@@ -1,6 +1,9 @@
 //! Low-level MPEG-TS muxing, demuxing, and metadata extraction shared by
 //! ingest, HLS, recording, and transcoding paths.
 
+#![forbid(unsafe_code)]
+#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
+
 use bytes::Bytes;
 use restream_core::{AudioMeta, MediaType, VideoMeta};
 

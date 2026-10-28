@@ -10,6 +10,8 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
+// Transport URL bounds stay local: the application domain independently owns
+// its ingest-policy limits and must not depend on this protocol adapter.
 pub const SRT_LATENCY_MS_FLOOR: i32 = 20;
 pub const SRT_LATENCY_MS_CEILING: i32 = 8_000;
 use srt_proto::handshake::GroupType;
@@ -51,6 +53,8 @@ pub struct SrtFabricEgressConnectSpec {
     /// `CallerConfig.connect.attempt_deadline` of every leg; the Owner's pool
     /// starts its clock at ADMISSION, so queue wait never consumes it.
     connect_timeout: Duration,
+    /// Socket-buffer policy supplied by the application configuration owner.
+    udp_buffer_bytes: usize,
 }
 
 impl SrtFabricEgressConnectSpec {
@@ -97,7 +101,14 @@ impl SrtFabricEgressConnectSpec {
             ignored_latency,
             bond_type,
             connect_timeout: connect_timeout.max(Duration::from_millis(1)),
+            udp_buffer_bytes: crate::knobs::DESIRED_UDP_BUF,
         }
+    }
+
+    /// Apply the application's resolved UDP socket-buffer policy to every leg.
+    pub fn with_udp_buffer(mut self, bytes: usize) -> Self {
+        self.udp_buffer_bytes = bytes;
+        self
     }
 
     pub fn peer_hosts(&self) -> &[String] {
@@ -131,7 +142,7 @@ impl SrtFabricEgressConnectSpec {
     }
 
     fn leg(&self, peer: SocketAddr) -> Result<CallerConfig, String> {
-        let buffer = std::num::NonZeroUsize::new(super::desired_udp_buf());
+        let buffer = std::num::NonZeroUsize::new(self.udp_buffer_bytes);
         CallerConfig::builder(peer)
             .ownership(SocketOwnership::Shared)
             .session(self.session())
@@ -140,7 +151,6 @@ impl SrtFabricEgressConnectSpec {
                 if let Some(bytes) = buffer {
                     transport.socket_buffers = SocketBufferConfig::Bytes(bytes);
                 }
-                crate::knobs::apply_optional_udp_buf(transport);
             })
             .build()
             .map_err(|error| error.to_string())
@@ -285,6 +295,34 @@ mod tests {
         assert_eq!(config.transport.ownership, SocketOwnership::Shared);
         let v6 = spec.connect_request(&[addr("[::1]:9000")]).expect("v6");
         assert_eq!(v6.family, AddressFamily::V6);
+    }
+
+    #[test]
+    fn application_udp_buffer_policy_reaches_direct_and_bonded_callers() {
+        let bytes = std::num::NonZeroUsize::new(262_144).expect("positive");
+        let spec = SrtFabricEgressConnectSpec::from_url("srt://127.0.0.1:9000", TIMEOUT)
+            .with_udp_buffer(bytes.get());
+        let SrtConnectKind::Direct(config) = spec
+            .connect_request(&[addr("127.0.0.1:9000")])
+            .expect("direct request")
+            .kind
+        else {
+            panic!("expected a direct caller");
+        };
+        assert_eq!(
+            config.transport.socket_buffers,
+            SocketBufferConfig::Bytes(bytes)
+        );
+        let SrtConnectKind::Bonded(config) = spec
+            .connect_request(&[addr("127.0.0.1:9000"), addr("127.0.0.1:9001")])
+            .expect("bonded request")
+            .kind
+        else {
+            panic!("expected a bonded caller");
+        };
+        assert!(config.legs.iter().all(|leg| {
+            leg.caller.transport.socket_buffers == SocketBufferConfig::Bytes(bytes)
+        }));
     }
 
     #[test]

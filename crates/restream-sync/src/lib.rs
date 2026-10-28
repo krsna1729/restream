@@ -1,5 +1,7 @@
 //! Zero-copy synchronization, ring buffers, and bounded queues for Restream.
 
+#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
+
 pub mod byte_queue;
 pub mod frame_units;
 pub mod lock;
@@ -7,6 +9,9 @@ pub mod reader;
 pub mod ring_buffer;
 pub mod standby_gop;
 pub mod subscribers;
+
+#[cfg(test)]
+mod test_support;
 
 pub use byte_queue::{DEFAULT_RECORDING_QUEUE_CAPACITY, MemoryQueue};
 pub use frame_units::VideoConfigFollower;

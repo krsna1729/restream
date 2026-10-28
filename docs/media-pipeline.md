@@ -50,10 +50,10 @@ The diagram shows the shared path from each ingest to the egress readers.
 | Protocol | Direction | Port or setting | Source |
 |---|---|---|---|
 | RTMP | ingest | TCP `0.0.0.0:1935` (`RESTREAM_RTMP_PORT`) | `src/media/rtmp/` |
-| RTMP, RTMPS | egress | `rtmp://`, `rtmps://` output URLs | `src/media/rtmp/`, `src/media/egress/` |
+| RTMP, RTMPS | egress | `rtmp://`, `rtmps://` output URLs | `crates/restream-rtmp/src/`, `src/media/egress/` |
 | SRT | ingest | UDP `0.0.0.0:10080` (`RESTREAM_SRT_PORT`) | `src/media/srt/` |
 | SRT call | ingest | `srtCall` pipeline input: the engine dials a remote listener | `src/media/srt/calls.rs` |
-| SRT | egress | `srt://` output URLs | `src/media/srt/`, `src/media/egress/backends/` |
+| SRT | egress | `srt://` output URLs | `crates/restream-srt/src/`, `src/media/egress/backends/` |
 | HLS push | ingest | HTTP port 3030 (`RESTREAM_HTTP_PORT`), `/ingest/hls/` | `src/media/hls_ingest/` |
 | HLS pull | ingest | `hlsPull` pipeline input, no listener | `src/media/hls_pull.rs` |
 | HLS PUT | egress | `http://`, `https://` output URLs | `src/media/hls/` |
@@ -77,10 +77,10 @@ egress reconciler owns the restart.
 
 ### Ring buffers
 
-`RingBuffer` (`src/media/ring_buffer.rs`) is a fixed-capacity SPMC ring of
+`RingBuffer` (`crates/restream-sync/src/ring_buffer.rs`) is a fixed-capacity SPMC ring of
 `MediaPacket`s. A packet has media type, track index, PTS, DTS, keyframe flag,
 payload format (`Flv` or `Raw`) and reference-counted bytes
-(`src/media/packet.rs`). Readers pull in bursts of up to 32 packets
+(`crates/restream-core/src/lib.rs`). Readers pull in bursts of up to 32 packets
 (`MEDIA_PULL_BURST_PACKETS`). A reader that falls behind the producer resyncs.
 
 | Ring | Default capacity | Setting |
@@ -285,10 +285,10 @@ FFmpeg decoder hands them to the encoder, which writes them back with
 `-a53cc 1` (FFmpeg 8.1's libx265 defaults it off). SCTE-35 cues and RTMP
 data messages (`onCuePoint`, `onFI`) are not carried.
 
-The MPEG-TS demuxer (`src/media/mpegts/demux.rs`) ignores other stream types.
+The MPEG-TS demuxer (`crates/restream-mpegts/src/demux.rs`) ignores other stream types.
 It keeps audio track indices, PIDs and languages. It emits one AAC frame per
 packet, even when a frame spans PES packets. The MPEG-TS muxer
-(`src/media/mpegts/mux.rs`) assigns PIDs from `0x100`, keeps track index and
+(`crates/restream-mpegts/src/mux.rs`) assigns PIDs from `0x100`, keeps track index and
 language, and writes H.264, H.265 and AAC ADTS.
 
 ## RTMP

@@ -398,6 +398,29 @@ fn env_optional_positive_usize_rejects_zero_and_garbage() {
 }
 
 #[test]
+fn srt_knobs_use_untrimmed_config_values_and_thread_local_overrides() {
+    for name in [
+        "RESTREAM_SRT_UDP_BUF_BYTES",
+        "RESTREAM_SRT_RECV_BUDGET_DATAGRAMS",
+    ] {
+        for raw in ["", "0", "-1", "x", " 5", "5 ", " 5 "] {
+            with_env_vars(&[(name, raw)], || {
+                let parsed = env_optional_positive_usize(name);
+                assert_eq!(parsed, None, "{name}={raw:?}");
+                assert_eq!(restream_srt::knobs::resolve_recv_budget(parsed), None);
+            });
+        }
+        with_env_vars(&[(name, "5")], || {
+            let parsed = env_optional_positive_usize(name);
+            assert_eq!(parsed, Some(5));
+            let budget = restream_srt::knobs::resolve_recv_budget(parsed).expect("positive");
+            assert_eq!(budget.max_datagrams, 5);
+            assert_eq!(budget.max_rounds, 1);
+        });
+    }
+}
+
+#[test]
 fn srt_egress_connect_concurrency_defaults_and_allows_override() {
     with_env_overlay(&[], &["RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY"], || {
         assert_eq!(AppConfig::from_env().srt_egress_connect_concurrency, 64);

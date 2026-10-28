@@ -24,7 +24,7 @@ skills; load the skill for the area you touch.
 - If overlapping work is visible in `git status`, diffs, or file contents, use hunk-based edits and hunk-based git operations. Do not overwrite, reformat, stage, or revert whole files unless explicitly asked.
 - Add or update tests for behavior changes.
 - No internal or external failure path may crash the engine; isolate faults and surface errors.
-- Anywhere in `src/`: no blocking or per-packet work on Tokio workers or Compio Owner threads; OS-thread entry points `catch_unwind`; codecs run only in FFmpeg child processes; SRT sockets and `PeerTable` stay on Owner threads (details: [media-pipeline](docs/agent-guidance/skills/media-pipeline/SKILL.md)).
+- Anywhere in `src/` or `crates/restream-*/src/`: no blocking or per-packet work on Tokio workers or Compio Owner threads; OS-thread entry points `catch_unwind`; codecs run only in FFmpeg child processes; SRT sockets and `PeerTable` stay on Owner threads (details: [media-pipeline](docs/agent-guidance/skills/media-pipeline/SKILL.md)).
 - Update docs when changing commands, configuration, architecture, protocols, or user-visible behavior.
 - Prefer targeted fixes over rewrites. Add abstractions only when they remove real complexity.
 
@@ -37,7 +37,7 @@ because a skill is relevant.
 
 | Touching | Skill |
 |---|---|
-| `src/media/`, protocol paths, stages, ring buffers, any hot path, thread/runtime placement anywhere in `src/` | [media-pipeline](docs/agent-guidance/skills/media-pipeline/SKILL.md) |
+| `src/media/`, `crates/restream-*/src/`, protocol paths, stages, ring buffers, any hot path, thread/runtime placement | [media-pipeline](docs/agent-guidance/skills/media-pipeline/SKILL.md) |
 | `web/ts/`, `web/styles/`, frontend build, API contract | [frontend](docs/agent-guidance/skills/frontend/SKILL.md) |
 | RTMP/SRT/HLS behavior, codecs, live fault recovery | [protocol-test](docs/agent-guidance/skills/protocol-test/SKILL.md) |
 | synchronization, thread hops, cancellation, teardown/recovery | [concurrency-proof](docs/agent-guidance/skills/concurrency-proof/SKILL.md) |
@@ -53,7 +53,7 @@ worktrees). After adding or editing a canonical skill, rerun it.
 ## Repository Map
 
 - Backend: `src/`
-- Media engine: `src/media/`
+- Media engine and lifecycle: `src/media/`; shared codec, synchronization and protocol utilities: `crates/restream-*/src/`
 - Frontend source: `web/ts/`
 - Generated frontend output: `public/js/`
 - Tests: `test/`

@@ -29,7 +29,7 @@ pub struct ReaderSnapshot {
 }
 
 impl ReaderInfo {
-    pub fn new(name: String, read_idx: usize) -> Self {
+    pub(crate) fn new(name: String, read_idx: usize) -> Self {
         Self {
             name,
             read_idx: AtomicUsize::new(read_idx),
@@ -75,10 +75,10 @@ impl ReaderInfo {
 }
 
 pub struct Reader {
-    pub buffer: Arc<RingBuffer>,
+    pub(crate) buffer: Arc<RingBuffer>,
     pub info: Arc<ReaderInfo>,
-    pub read_idx: usize,
-    pub migration_preroll_packets: usize,
+    pub(crate) read_idx: usize,
+    pub(crate) migration_preroll_packets: usize,
 }
 
 impl Drop for Reader {
@@ -89,6 +89,7 @@ impl Drop for Reader {
             None => false,
         });
         info!(
+            target: "restream::media::ring_buffer::reader",
             reader = %self.info.name,
             overflows = self.info.overflow_count.load(Ordering::Relaxed),
             "ring reader deregistered"
@@ -122,6 +123,8 @@ impl Reader {
         &self.buffer
     }
 
+    /// Ring sequence of the next packet this reader pulls; a successful
+    /// `pull_burst` returns the packets from here on, in sequence order.
     pub fn next_sequence(&self) -> usize {
         self.read_idx
     }
@@ -134,7 +137,7 @@ impl Reader {
         let current_write = buffer.get_write_idx();
         let start_idx = buffer.fast_forward(current_write);
         let reader = Self::register(name, buffer, start_idx, 0);
-        info!(reader = %reader.info.name, start_idx, "ring reader registered");
+        info!(target: "restream::media::ring_buffer::reader", reader = %reader.info.name, start_idx, "ring reader registered");
         reader
     }
 
@@ -155,6 +158,7 @@ impl Reader {
         };
         let reader = Self::register(name, buffer, start_idx, 0);
         info!(
+            target: "restream::media::ring_buffer::reader",
             reader = %reader.info.name,
             start_idx,
             preroll_packets,
@@ -176,6 +180,7 @@ impl Reader {
         };
         let reader = Self::register(name, buffer, start_idx, preroll_packets);
         info!(
+            target: "restream::media::ring_buffer::reader",
             reader = %reader.info.name,
             start_idx,
             preroll_packets,
@@ -188,6 +193,7 @@ impl Reader {
         let current_write = buffer.get_write_idx();
         let reader = Self::register(name, buffer, current_write, 0);
         info!(
+            target: "restream::media::ring_buffer::reader",
             reader = %reader.info.name,
             start_idx = current_write,
             "ring reader registered (live edge)"
@@ -211,6 +217,7 @@ impl Reader {
             self.info.read_idx.store(new_idx, Ordering::Relaxed);
             self.info.overflow_count.fetch_add(1, Ordering::Relaxed);
             warn!(
+                target: "restream::media::ring_buffer::reader",
                 reader = %self.info.name,
                 lag_packets = lag,
                 "ring reader overflowed — fast-forwarding to keyframe"
@@ -232,6 +239,7 @@ impl Reader {
             self.info.read_idx.store(new_idx, Ordering::Relaxed);
             self.info.overflow_count.fetch_add(1, Ordering::Relaxed);
             warn!(
+                target: "restream::media::ring_buffer::reader",
                 reader = %self.info.name,
                 lag_packets = lag,
                 "ring reader overflowed mid-read — fast-forwarding to keyframe"
@@ -339,6 +347,7 @@ impl Reader {
         }
         lock(&old_ring.readers).retain(|weak| weak.upgrade().is_some());
         debug!(
+            target: "restream::media::ring_buffer::reader",
             read_idx = self.read_idx,
             name = %self.info.name,
             "reader migrated to resized ring"

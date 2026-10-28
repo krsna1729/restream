@@ -1,5 +1,7 @@
 //! Low-level SRT protocol configuration, caller setup, and metrics.
 
+#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
+
 pub mod address_family;
 pub mod calls;
 pub mod egress_connect;
@@ -15,6 +17,4 @@ pub use egress_connect::{
 };
 pub use egress_engine::{MAX_SRT_MESSAGE_PAYLOAD, SrtSendResult};
 pub use egress_stats::{SrtSendBacklog, send_backlog};
-pub use knobs::{
-    DESIRED_UDP_BUF, apply_optional_udp_buf, desired_udp_buf, recv_budget, recv_budget_or,
-};
+pub use knobs::DESIRED_UDP_BUF;

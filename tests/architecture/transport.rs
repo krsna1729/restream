@@ -92,6 +92,10 @@ fn production_transport_stays_on_io_uring_owners() {
         "src/media/rtmp",
         "src/media/srt",
         "src/media/egress/backends",
+        "crates/restream-rtmp/src",
+        "crates/restream-srt/src",
+        "crates/restream-moq/src",
+        "crates/restream-mpegts/src",
     ] {
         collect_rust_sources(std::path::Path::new(root), &mut inspect);
     }
@@ -130,17 +134,25 @@ fn media_transport_has_no_epoll_readiness_path() {
         "TcpEgressPoller",
         "TcpPollOps",
     ];
-    collect_rust_sources(std::path::Path::new("src/media"), &mut |path, source| {
-        let code: String = source
-            .lines()
-            .filter(|line| !line.trim_start().starts_with("//"))
-            .collect();
-        for forbidden in FORBIDDEN {
-            assert!(
-                !code.contains(forbidden),
-                "{} reintroduces retired epoll transport `{forbidden}`",
-                path.display()
-            );
-        }
-    });
+    for root in [
+        "src/media",
+        "crates/restream-rtmp/src",
+        "crates/restream-srt/src",
+        "crates/restream-moq/src",
+        "crates/restream-mpegts/src",
+    ] {
+        collect_rust_sources(std::path::Path::new(root), &mut |path, source| {
+            let code: String = source
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .collect();
+            for forbidden in FORBIDDEN {
+                assert!(
+                    !code.contains(forbidden),
+                    "{} reintroduces retired epoll transport `{forbidden}`",
+                    path.display()
+                );
+            }
+        });
+    }
 }

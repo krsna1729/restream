@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
-use super::egress_connect::SrtFabricEgressConnectSpec;
+use super::egress_connect::egress_connect_spec;
 use super::ingress_bridge::{CallToken, IngressCommand, IngressPeer};
 use std::hash::Hash;
 
@@ -144,7 +144,7 @@ impl<P: Copy + Eq + Hash> CallSupervisor<P> {
             self.next_token += 1;
             self.by_token.insert(call.token, input_id.clone());
             call.phase = Phase::Resolving;
-            let spec = SrtFabricEgressConnectSpec::from_url(&call.spec.url, CALL_CONNECT_TIMEOUT);
+            let spec = egress_connect_spec(&call.spec.url, CALL_CONNECT_TIMEOUT);
             let hosts = spec.peer_hosts().to_vec();
             let token = call.token;
             let tx = self.resolved_tx.clone();
@@ -164,9 +164,8 @@ impl<P: Copy + Eq + Hash> CallSupervisor<P> {
         let call = self.current(token)?;
         let request = result.and_then(|hosts| {
             let addrs = place(&hosts)?;
-            let request =
-                SrtFabricEgressConnectSpec::from_url(&call.spec.url, CALL_CONNECT_TIMEOUT)
-                    .connect_request(&addrs)?;
+            let request = egress_connect_spec(&call.spec.url, CALL_CONNECT_TIMEOUT)
+                .connect_request(&addrs)?;
             Ok((addrs[0], request))
         });
         match request {

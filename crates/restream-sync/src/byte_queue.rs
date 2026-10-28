@@ -3,6 +3,8 @@
 //! `VecDeque<u8>` protected by `Mutex` + `Condvar`, with bulk `as_slices()` +
 //! `drain()` reads instead of per-byte `pop_front()`.
 
+#![forbid(unsafe_code)]
+
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
@@ -15,12 +17,18 @@ use crate::lock::lock;
 
 pub const DEFAULT_RECORDING_QUEUE_CAPACITY: usize = 512 * 1024;
 
+// 512 KB is the pre-cutover default: it absorbed bursts between the async TS
+// reader and the blocking SRT/RTMP sender threads that used this queue then
+// (scale-test evidence: max per-queue HWM = 398 KB at 8 Mb/s across all
+// config×bitrate combinations, 0 blocked_writes throughout). Recording is the
+// only user left; operators can raise it with RESTREAM_RECORDING_QUEUE_CAPACITY.
+
 fn default_recording_queue_capacity() -> usize {
     DEFAULT_RECORDING_QUEUE_CAPACITY
 }
 
 pub struct MemoryQueue {
-    pub inner: Mutex<MemoryQueueInner>,
+    inner: Mutex<MemoryQueueInner>,
     cvar: Condvar,
     space_available: Notify,
     capacity: usize,
@@ -28,9 +36,9 @@ pub struct MemoryQueue {
     blocked_writes: AtomicU64,
 }
 
-pub struct MemoryQueueInner {
-    pub buf: VecDeque<u8>,
-    pub closed: bool,
+struct MemoryQueueInner {
+    buf: VecDeque<u8>,
+    closed: bool,
 }
 
 impl Default for MemoryQueue {
@@ -45,7 +53,7 @@ impl MemoryQueue {
     }
 
     pub fn new_with_capacity(capacity: usize) -> Self {
-        debug!(capacity_bytes = capacity, "memory queue created");
+        debug!(target: "restream::media::byte_queue", capacity_bytes = capacity, "memory queue created");
         Self {
             inner: Mutex::new(MemoryQueueInner {
                 buf: VecDeque::new(),
@@ -62,6 +70,12 @@ impl MemoryQueue {
     pub async fn write(&self, data: &[u8]) {
         let mut counted_block = false;
         loop {
+            // Arm the `Notified` future *before* checking capacity: it snapshots
+            // the notify generation on creation, so a `notify_waiters()` racing
+            // in right after we drop the lock below is still observed. Creating
+            // it only after the check (the previous bug) left a gap where a
+            // reader could drain and notify before we started waiting, losing
+            // the wakeup and hanging the writer forever.
             let notified = self.space_available.notified();
             {
                 let inner = lock(&self.inner);
@@ -87,6 +101,9 @@ impl MemoryQueue {
     pub async fn write_cancellable(&self, data: &[u8], cancel: &CancellationToken) -> bool {
         let mut counted_block = false;
         loop {
+            // See `write()` for why this future must be armed before the
+            // capacity check — it closes a lost-wakeup race against a
+            // concurrent `notify_waiters()`.
             let notified = self.space_available.notified();
             {
                 let inner = lock(&self.inner);
@@ -115,6 +132,7 @@ impl MemoryQueue {
         true
     }
 
+    /// Append multiple chunks while taking the queue lock and notifying once.
     pub async fn write_batch<'a, I>(&self, chunks: I) -> usize
     where
         I: IntoIterator<Item = &'a [u8]> + Clone,
@@ -126,6 +144,9 @@ impl MemoryQueue {
 
         let mut counted_block = false;
         loop {
+            // See `write()` for why this future must be armed before the
+            // capacity check — it closes a lost-wakeup race against a
+            // concurrent `notify_waiters()`.
             let notified = self.space_available.notified();
             {
                 let inner = lock(&self.inner);
@@ -173,6 +194,7 @@ impl MemoryQueue {
         let high = self.high_water_bytes.load(Ordering::Relaxed);
         let blocked = self.blocked_writes.load(Ordering::Relaxed);
         debug!(
+            target: "restream::media::byte_queue",
             high_water_bytes = high,
             blocked_writes = blocked,
             "memory queue closed"
@@ -183,6 +205,11 @@ impl MemoryQueue {
         lock(&self.inner).closed
     }
 
+    /// Current number of buffered bytes awaiting consumption.
+    ///
+    /// Useful for detecting producer/consumer imbalance (e.g., a slow FFmpeg
+    /// thread unable to keep pace with ingest). Values consistently above a few
+    /// megabytes indicate the downstream stage is falling behind.
     pub fn len(&self) -> usize {
         lock(&self.inner).buf.len()
     }
@@ -198,6 +225,9 @@ impl MemoryQueue {
     pub fn read(&self, target: &mut [u8]) -> usize {
         let mut inner = lock(&self.inner);
         while inner.buf.is_empty() && !inner.closed {
+            // Use wait_timeout so the reading thread is not blocked indefinitely
+            // if the producer panics without calling close(). Poison recovery via
+            // unwrap_or_else ensures we don't panic on a poisoned mutex here.
             inner = self
                 .cvar
                 .wait_timeout(inner, Duration::from_secs(5))
@@ -246,3 +276,9 @@ impl MemoryQueue {
         to_read
     }
 }
+
+#[cfg(test)]
+// These white-box tests deliberately poison and inspect the raw mutex.
+#[allow(clippy::disallowed_methods)]
+#[path = "byte_queue_tests.rs"]
+mod tests;

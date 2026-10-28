@@ -19,7 +19,8 @@ members = [
     "crates/restream-srt",
     "crates/test_harness",
 ]
-default-members = [".", "crates/test_harness"]
+default-members = [".", "crates/*"]
+
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)', 'cfg(fuzzing)', 'cfg(kani)'] }
 unsafe_op_in_unsafe_fn = "deny"

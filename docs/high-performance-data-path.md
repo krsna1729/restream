@@ -44,11 +44,11 @@ flowchart LR
 - `TsChunkRing` shares packaged MPEG-TS chunks across SRT destinations.
 - Egress shards read rings directly by cursor
   ([Egress architecture](egress-architecture.md)).
-- `MemoryQueue` (`src/media/byte_queue.rs`) is the bounded byte queue between a
+- `MemoryQueue` (`crates/restream-sync/src/byte_queue.rs`) is the bounded byte queue between a
   media producer and blocking native or file I/O.
 
 `MediaPacket` is pinned at 56 bytes by a size assertion in
-`src/media/packet.rs`. Per-frame metadata stays out of it. Each ring slot
+`crates/restream-core/src/lib.rs`. Per-frame metadata stays out of it. Each ring slot
 carries one atomic word with the packet's track configuration generation,
 written by the producer with the slot and read by sequence without a lock
 ([frame units](media-pipeline.md#frame-units)). Publication costs one relaxed

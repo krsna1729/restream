@@ -1,6 +1,5 @@
 pub use restream_core::{
-    CONFIG_HISTORY, CONFIG_TRACKS_PER_TYPE, FrameUnit, MediaPacket, MediaType, NotRetained,
-    PayloadFormat, TrackConfig,
+    CONFIG_HISTORY, CONFIG_TRACKS_PER_TYPE, FrameUnit, NotRetained, TrackConfig,
 };
 pub use restream_sync::frame_units::VideoConfigFollower;
 pub use restream_sync::reader::{Reader, ReaderInfo, ReaderSnapshot};
@@ -10,11 +9,3 @@ pub use restream_sync::ring_buffer::{
     MEDIA_PULL_BURST_PACKETS, PayloadStats, RingBuffer, RingSlot,
 };
 pub use restream_sync::subscribers::{PublishSubscribers, PublishWake};
-#[cfg(test)]
-use std::sync::Arc;
-#[cfg(test)]
-use std::sync::atomic::Ordering;
-
-#[cfg(test)]
-#[path = "ring_buffer_tests.rs"]
-mod tests;

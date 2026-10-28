@@ -95,7 +95,7 @@ fn mac(key: &TokenKey, pipeline_id: &str, expiry: u64) -> [u8; 32] {
     )
 }
 
-pub fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
+fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     let mut block = [0u8; BLOCK];
     if key.len() > BLOCK {
         block[..32].copy_from_slice(&Sha256::digest(key));
@@ -121,4 +121,22 @@ fn constant_time_eq(left: &[u8; 32], right: &[u8; 32]) -> bool {
         .zip(right)
         .fold(0u8, |diff, (left, right)| diff | (left ^ right));
     std::hint::black_box(diff) == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hmac_sha256;
+
+    #[test]
+    fn hmac_matches_rfc_4231_case_2() {
+        let mac = hmac_sha256(
+            b"Jefe",
+            &[b"what do ya " as &[u8], b"want for nothing?" as &[u8]],
+        );
+        let hex: String = mac.iter().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(
+            hex,
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+    }
 }
