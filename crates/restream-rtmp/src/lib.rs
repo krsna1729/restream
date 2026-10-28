@@ -10,7 +10,6 @@ pub mod egress_transport;
 pub mod enhanced;
 pub mod enhanced_rtmp_hevc;
 pub mod flv;
-pub mod handshake;
 pub mod parser_budget;
 pub mod timestamps;
 
@@ -41,6 +40,5 @@ pub use flv::{
     flv_video_composition_time_ms, flv_video_config, parse_flv_audio_meta, parse_flv_video_meta,
     strip_adts, video_for_rtmp_into, video_for_rtmp_with_composition_into,
 };
-pub use handshake::{RtmpSocket, perform_server_handshake};
 pub use parser_budget::{ParserBudget, ParserCharge, held_bytes};
 pub use timestamps::{RtmpTimestampGuard, refreshed_video_sequence_header_timestamp};

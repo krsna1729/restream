@@ -21,36 +21,36 @@ use crate::catalog::{Compression, Mode};
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct Binary {
-    /// A map of track name to configuration.
-    ///
-    /// A map rather than an array so it works with JSON Merge Patch, and a `BTreeMap` so keys are
-    /// sorted for *some* deterministic behavior.
-    pub tracks: BTreeMap<String, BinaryConfig>,
+	/// A map of track name to configuration.
+	///
+	/// A map rather than an array so it works with JSON Merge Patch, and a `BTreeMap` so keys are
+	/// sorted for *some* deterministic behavior.
+	pub tracks: BTreeMap<String, BinaryConfig>,
 }
 
 impl crate::catalog::Section for Binary {
-    const MAP: &'static str = "tracks";
+	const MAP: &'static str = "tracks";
 }
 
 impl Binary {
-    /// Insert a track config, returning an error if the name already exists.
-    pub fn insert(&mut self, name: &str, config: BinaryConfig) -> crate::Result<()> {
-        let btree_map::Entry::Vacant(entry) = self.tracks.entry(name.to_string()) else {
-            return Err(crate::Error::Duplicate(name.to_string()));
-        };
-        entry.insert(config);
-        Ok(())
-    }
+	/// Insert a track config, returning an error if the name already exists.
+	pub fn insert(&mut self, name: &str, config: BinaryConfig) -> crate::Result<()> {
+		let btree_map::Entry::Vacant(entry) = self.tracks.entry(name.to_string()) else {
+			return Err(crate::Error::Duplicate(name.to_string()));
+		};
+		entry.insert(config);
+		Ok(())
+	}
 
-    /// Remove the track from the catalog and return its configuration if found.
-    pub fn remove(&mut self, name: &str) -> Option<BinaryConfig> {
-        self.tracks.remove(name)
-    }
+	/// Remove the track from the catalog and return its configuration if found.
+	pub fn remove(&mut self, name: &str) -> Option<BinaryConfig> {
+		self.tracks.remove(name)
+	}
 
-    /// Whether there are no binary tracks, in which case the section is left off the wire.
-    pub fn is_empty(&self) -> bool {
-        self.tracks.is_empty()
-    }
+	/// Whether there are no binary tracks, in which case the section is left off the wire.
+	pub fn is_empty(&self) -> bool {
+		self.tracks.is_empty()
+	}
 }
 
 /// How to read one binary track.
@@ -67,73 +67,73 @@ impl Binary {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct BinaryConfig {
-    /// Optional reference to another broadcast that publishes this track, expressed relative to the
-    /// broadcast that served this catalog (e.g. `./source`). If unset, the track lives in the same
-    /// broadcast as the catalog.
-    #[serde(default)]
-    pub broadcast: Option<moq_net::path::RelativeOwned>,
+	/// Optional reference to another broadcast that publishes this track, expressed relative to the
+	/// broadcast that served this catalog (e.g. `./source`). If unset, the track lives in the same
+	/// broadcast as the catalog.
+	#[serde(default)]
+	pub broadcast: Option<moq_net::path::RelativeOwned>,
 
-    /// Whether the track is a latest-value blob or an append log. Always stated: see [`Mode`].
-    #[serde_as(as = "serde_with::DisplayFromStr")]
-    pub mode: Mode,
+	/// Whether the track is a latest-value blob or an append log. Always stated: see [`Mode`].
+	#[serde_as(as = "serde_with::DisplayFromStr")]
+	pub mode: Mode,
 
-    /// The compression applied to each frame, or `None` when they are written through untouched.
-    #[serde(default)]
-    #[serde_as(as = "Option<serde_with::DisplayFromStr>")]
-    pub compression: Option<Compression>,
+	/// The compression applied to each frame, or `None` when they are written through untouched.
+	#[serde(default)]
+	#[serde_as(as = "Option<serde_with::DisplayFromStr>")]
+	pub compression: Option<Compression>,
 
-    /// An optional media type for each payload (e.g. `image/jpeg`). Purely descriptive: a consumer
-    /// that doesn't recognize it can still read the track.
-    #[serde(default)]
-    pub mime: Option<String>,
+	/// An optional media type for each payload (e.g. `image/jpeg`). Purely descriptive: a consumer
+	/// that doesn't recognize it can still read the track.
+	#[serde(default)]
+	pub mime: Option<String>,
 
-    /// The maximum bitrate of the track in bits per second, if known.
-    #[serde(default)]
-    pub bitrate: Option<u64>,
+	/// The maximum bitrate of the track in bits per second, if known.
+	#[serde(default)]
+	pub bitrate: Option<u64>,
 
-    /// The maximum delay between a payload being ready and the publisher flushing it, with the same
-    /// meaning and whole-millisecond encoding as [`VideoConfig::jitter`](crate::catalog::VideoConfig::jitter).
-    #[serde_as(as = "MillisCeil")]
-    #[serde(default)]
-    pub jitter: Option<std::time::Duration>,
+	/// The maximum delay between a payload being ready and the publisher flushing it, with the same
+	/// meaning and whole-millisecond encoding as [`VideoConfig::jitter`](crate::catalog::VideoConfig::jitter).
+	#[serde_as(as = "MillisCeil")]
+	#[serde(default)]
+	pub jitter: Option<std::time::Duration>,
 
-    /// How far this track's payloads reach the transport behind the broadcast's earliest
-    /// rendition, with the same meaning and encoding as
-    /// [`VideoConfig::delay`](crate::catalog::VideoConfig::delay). Only measured for payloads that
-    /// carry a capture time.
-    #[serde_as(as = "MillisCeil")]
-    #[serde(default)]
-    pub delay: Option<std::time::Duration>,
+	/// How far this track's payloads reach the transport behind the broadcast's earliest
+	/// rendition, with the same meaning and encoding as
+	/// [`VideoConfig::delay`](crate::catalog::VideoConfig::delay). Only measured for payloads that
+	/// carry a capture time.
+	#[serde_as(as = "MillisCeil")]
+	#[serde(default)]
+	pub delay: Option<std::time::Duration>,
 
-    /// Fields this build doesn't recognize, kept so the entry round-trips.
-    ///
-    /// A future [`Mode`] or [`Compression`] almost certainly comes with fields describing it, and
-    /// preserving the discriminant without them would leave a relay republishing an entry nothing
-    /// can act on. Same reason [`Container`](crate::catalog::Container) keeps an unknown container
-    /// verbatim.
-    #[serde(flatten)]
-    pub extra: serde_json::Map<String, serde_json::Value>,
+	/// Fields this build doesn't recognize, kept so the entry round-trips.
+	///
+	/// A future [`Mode`] or [`Compression`] almost certainly comes with fields describing it, and
+	/// preserving the discriminant without them would leave a relay republishing an entry nothing
+	/// can act on. Same reason [`Container`](crate::catalog::Container) keeps an unknown container
+	/// verbatim.
+	#[serde(flatten)]
+	pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl BinaryConfig {
-    /// A config for a track read in `mode`, uncompressed and with no optional fields set.
-    pub fn new(mode: Mode) -> Self {
-        Self {
-            broadcast: None,
-            mode,
-            compression: None,
-            mime: None,
-            bitrate: None,
-            jitter: None,
-            delay: None,
-            extra: Default::default(),
-        }
-    }
+	/// A config for a track read in `mode`, uncompressed and with no optional fields set.
+	pub fn new(mode: Mode) -> Self {
+		Self {
+			broadcast: None,
+			mode,
+			compression: None,
+			mime: None,
+			bitrate: None,
+			jitter: None,
+			delay: None,
+			extra: Default::default(),
+		}
+	}
 }
 
 /// The config itself, so a data producer takes it wherever it takes an entry embedding one.
 impl AsMut<BinaryConfig> for BinaryConfig {
-    fn as_mut(&mut self) -> &mut Self {
-        self
-    }
+	fn as_mut(&mut self) -> &mut Self {
+		self
+	}
 }

@@ -63,11 +63,11 @@ const COMMON_TESTS: &[(&str, &[&str])] = &[
     ("hls-segment-dts-boundaries", &["test", "hls_segment_boundaries_preserve_non_decreasing_dts_per_stream", "--lib", "--", "--nocapture"]),
     ("recording-remux-continuity-retention-disabled", &["test", "remux_recording_to_mp4_preserves_timestamp_continuity_when_retention_disabled", "--lib", "--", "--nocapture"]),
     ("recording-remux-continuity-retention-enabled", &["test", "remux_recording_to_mp4_preserves_timestamp_continuity_when_retention_enabled", "--lib", "--", "--nocapture"]),
-    ("test-harness-process-lifecycle", &["test", "--bin", "test_harness", "tests::media_validation::kill_and_wait_child_terminates_spawned_process", "--", "--exact", "--nocapture"]),
+    ("test-harness-process-lifecycle", &["test", "-p", "test_harness", "--bin", "test_harness", "tests::media_validation::kill_and_wait_child_terminates_spawned_process", "--", "--exact", "--nocapture"]),
     ("rtmp-ingress-owner-shutdown", &["test", "--lib", "--", "shutdown_cancels_pending_publish_auth_before_owner_join", "idle_playback_is_cancelled_with_listener_shutdown", "shutdown_cancels_blocked_play_write_and_joins_owner", "--nocapture"]),
     ("rtmp-sharded-ingress-lifecycle", &["test", "media::rtmp::listener::tests", "--lib"]),
     ("lib-compio-rtmp-readiness-fairness", &["test", "media::egress::backends::compio_tcp::poller::tests", "--lib", "--", "--nocapture"]),
-    ("test-harness-slow-sink-sibling-count", &["test", "--bin", "test_harness", "tests::harness_contracts::fault_output_stall_sibling_count_honors_n_per_group_cap", "--", "--exact", "--nocapture"]),
+    ("test-harness-slow-sink-sibling-count", &["test", "-p", "test_harness", "--bin", "test_harness", "tests::harness_contracts::fault_output_stall_sibling_count_honors_n_per_group_cap", "--", "--exact", "--nocapture"]),
     ("lib-recent-egress", &["test", "recent_egress", "--lib", "--", "--nocapture"]),
     ("lib-ingest-grace", &["test", "recent_ingest_disconnect_respects_grace_window", "--lib", "--", "--nocapture"]),
     ("lib-ingest-flap-window", &["test", "build_recent_ingest_outcome_resets_flap_streak_outside_window", "--lib", "--", "--nocapture"]),
@@ -102,7 +102,7 @@ const FAST_ONLY_TESTS: &[(&str, &[&str])] = &[
     ("lib-rtmp-feed-wake-after-media", &["test", "feed_wake_delivers_media_after_idle_when_factory_start_is_delayed", "--lib", "--", "--nocapture"]),
     ("lib-srt-ingress-two-owners", &["test", "two_owners_share_the_port_and_each_session_command_reaches_its_owner", "--lib", "--", "--nocapture"]),
     ("health-view", &["test", "api_runtime_views::status::tests::health", "--lib"]),
-    ("test-harness-unit", &["test", "--bin", "test_harness", "--", "--nocapture"]),
+    ("test-harness-unit", &["test", "-p", "test_harness", "--bin", "test_harness", "--", "--nocapture"]),
 ];
 
 /// Live harness modes run by `contract`, each with its own work directory.
@@ -158,7 +158,17 @@ fn contract_steps(baseline: &HashSet<u32>) -> StepResult {
         logged(label, || cargo_test(args))?;
     }
     logged("build-harness-bins", || {
-        cargo(&["build", "--bin", "restream", "--bin", "test_harness"])
+        cargo(&[
+            "build",
+            "-p",
+            "restream",
+            "--bin",
+            "restream",
+            "-p",
+            "test_harness",
+            "--bin",
+            "test_harness",
+        ])
     })?;
     let extra = std::env::var("CONCURRENCY_HARNESS_ARGS").unwrap_or_default();
     for (mode, work_dir) in CONTRACT_MODES {

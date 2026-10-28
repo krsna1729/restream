@@ -115,7 +115,7 @@ mod tests {
 
     #[test]
     fn live_catalog_only_routes_rtmps_from_rtmp_ingest() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test/harness");
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test/harness");
         let catalog = HarnessCatalog::load(&root).expect("load checked-in harness catalog");
         for (mode, expected_rtmps) in [
             ("mixed.live.rtmp.h264.a1.bf0", true),
@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn checked_in_catalog_self_check_resolves_every_suite_ref() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test/harness");
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test/harness");
         HarnessCatalog::load(&root)
             .expect("load checked-in harness catalog")
             .self_check()

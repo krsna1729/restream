@@ -38,14 +38,14 @@ pub use video::*;
 
 pub(crate) fn deserialize_timescale_or_default<'de, D>(deserializer: D) -> Result<u32, D::Error>
 where
-    D: serde::Deserializer<'de>,
+	D: serde::Deserializer<'de>,
 {
-    use serde::Deserialize;
-    let value = u32::deserialize(deserializer)?;
-    if value == 0 {
-        return Err(serde::de::Error::custom("invalid timescale: 0"));
-    }
-    Ok(value)
+	use serde::Deserialize;
+	let value = u32::deserialize(deserializer)?;
+	if value == 0 {
+		return Err(serde::de::Error::custom("invalid timescale: 0"));
+	}
+	Ok(value)
 }
 
 /// A catalog section: a map of track name to config, published under one well-known root key.
@@ -53,8 +53,8 @@ where
 /// The associated [`MAP`](Self::MAP) is what tells a real section apart from an application's own
 /// value under the same name. See [`deserialize_section`].
 pub trait Section: Default + serde::de::DeserializeOwned {
-    /// The key holding the section's map of tracks.
-    const MAP: &'static str;
+	/// The key holding the section's map of tracks.
+	const MAP: &'static str;
 }
 
 /// Decode a catalog section, falling back to an empty one when the value isn't a section at all.
@@ -70,15 +70,15 @@ pub trait Section: Default + serde::de::DeserializeOwned {
 /// protect an unrelated key.
 pub fn deserialize_section<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
-    D: serde::Deserializer<'de>,
-    T: Section,
+	D: serde::Deserializer<'de>,
+	T: Section,
 {
-    use serde::Deserialize;
-    let value = serde_json::Value::deserialize(deserializer)?;
+	use serde::Deserialize;
+	let value = serde_json::Value::deserialize(deserializer)?;
 
-    if !value.get(T::MAP).is_some_and(serde_json::Value::is_object) {
-        return Ok(T::default());
-    }
+	if !value.get(T::MAP).is_some_and(serde_json::Value::is_object) {
+		return Ok(T::default());
+	}
 
-    serde_json::from_value(value).map_err(serde::de::Error::custom)
+	serde_json::from_value(value).map_err(serde::de::Error::custom)
 }

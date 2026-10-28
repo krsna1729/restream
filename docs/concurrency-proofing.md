@@ -88,7 +88,7 @@ the ownership model was broken.
 | `fault.egress-retry` | RTMP and SRT dead sinks show `retrying`, then `failed` when the retry budget runs out | `contract` |
 | `fault.output-stall` | a connected RTMP sink that stops draining shows `stalled` in output status and health | `contract` |
 | `recovery` | hung HLS PUT destinations time out and recover; rapid SRT publisher replacement; repeated RTMP/SRT sink flaps show as recovered but unstable; a killed transcoder FFmpeg is retried from a new stage process | `contract` |
-| `fault.srt-output-stall` | bounded RSS while retrying a frozen SRT receiver; against `src/bin/test_harness/srt_raw_sink.rs`, a real handshake and data while siblings progress; the retired output stops and two sibling receivers keep advancing | `contract`, nightly and release shards |
+| `fault.srt-output-stall` | bounded RSS while retrying a frozen SRT receiver; against `crates/test_harness/src/test_harness/srt_raw_sink.rs`, a real handshake and data while siblings progress; the retired output stops and two sibling receivers keep advancing | `contract`, nightly and release shards |
 
 srt-rs exposes no hook for an application-unread receive buffer, so
 `fault.srt-output-stall` does not claim that backpressure shape.
@@ -102,7 +102,7 @@ cargo xtask concurrency contract   # CI: concurrency-contract, master only
 
 | Step | `fast` | `contract` |
 |---|---|---|
-| Process-lifecycle guard over `src/bin/test_harness.rs` (every spawn armed for kill-and-wait) | — | yes |
+| Process-lifecycle guard over `crates/test_harness/src/main.rs` (every spawn armed for kill-and-wait) | — | yes |
 | All loom models | yes | yes |
 | `COMMON_TESTS`: focused API, db, lib, proptest and transcoder tests | yes | yes |
 | `FAST_ONLY_TESTS`: RTMP feed-wake, two SRT ingress Owners, health view, `test_harness` unit tests | yes | — |
@@ -151,7 +151,7 @@ equal or stronger replacement in the same change. Names marked *gate* run in
 | Egress shard recovery (*gate*: `lib-egress-resize`, `lib-egress-panic-recovery`) | `a_panicked_shard_is_replaced_and_its_retried_outputs_are_delivered`, `placement_skips_a_dead_shard_until_its_replacement_starts`, `every_fabric_recovers_panics_without_adaptive_observation`, `reconciler_recovery_replaces_a_panicked_sink_shard`, `a_retried_output_delivers_again_after_its_shard_panics` |
 | SRT stream id (*gate*) | `media::srt_stream_id::tests` |
 | TS chunk ring | `live_reader_starts_after_existing_chunks` |
-| Harness (`src/bin/test_harness.rs`) | `kill_and_wait_child_terminates_spawned_process` (*gate*), and the live modes above |
+| Harness (`crates/test_harness/src/main.rs`) | `kill_and_wait_child_terminates_spawned_process` (*gate*), and the live modes above |
 
 ## Open gaps
 

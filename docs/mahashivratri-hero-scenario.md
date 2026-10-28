@@ -136,7 +136,7 @@ MSR_FULL=1 ./scripts/harness/run.sh msr        # 30,120,300,600,900,1200 ramp
   `signal-calibration` profile runs first in `signal-calibration/` and
   writes `msr-signal-*` files; the canonical run follows.
 - Plan rules (Zipf totals, protocol split, track selection) have unit tests
-  in `src/bin/test_harness/resource_sweep/msr/tests.rs`.
+  in `crates/test_harness/src/test_harness/resource_sweep/msr/tests.rs`.
 
 Before a 1,200-output run, prepare the host per
 [Linux host and harness capacity](configuration.md#linux-host-and-harness-capacity).

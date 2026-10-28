@@ -1574,7 +1574,6 @@ dependencies = [
 name = "hang"
 version = "0.21.16"
 dependencies = [
- "anyhow",
  "bytes",
  "derive_more",
  "hex",
@@ -1587,8 +1586,6 @@ dependencies = [
  "serde_json",
  "serde_with",
  "thiserror 2.0.18",
- "tokio",
- "tracing",
  "url",
 ]
 

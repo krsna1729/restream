@@ -38,7 +38,7 @@ the [assurance roadmap](assurance-roadmap.md).
 - Goal: explain the historical ~70 MB RSS growth of `fault.srt-output-stall`'s
   frozen-destination case (then a plateau), then remove the cause or
   recalibrate the 64 MiB `MAX_ACCEPTABLE_RSS_GROWTH_KB` from that attribution.
-- Files: `src/bin/test_harness/fault_recovery/srt_stall.rs`, retry/cleanup paths
+- Files: `crates/test_harness/src/test_harness/fault_recovery/srt_stall.rs`, retry/cleanup paths
   in `src/media/egress/backends/srt*.rs`.
 - Context: current runs pass well under the gate and the opt-in attribution
   census does not reproduce the old growth. Closing needs allocation stacks,
@@ -50,7 +50,7 @@ the [assurance roadmap](assurance-roadmap.md).
 ### Q-027 [performance] [opus] Find why SRT×100 still fails a repeat with the multi-Owner sink
 - Goal: SRT capacity rungs measure Restream, not the receiver.
 - Context: with the two-Owner `SO_REUSEPORT` harness sink
-  (`src/bin/test_harness/harness_srt_sink.rs`), SRT×100 passed 6 of 7
+  (`crates/test_harness/src/test_harness/harness_srt_sink.rs`), SRT×100 passed 6 of 7
   repeats. The failing repeat had 14 destinations at zero delivery and 5 leaves
   closed by the plain stall sweep (not shard saturation); kernel drops
   concentrated on one reuseport member per port. Hypothesis, unproven: one
@@ -201,7 +201,7 @@ the [assurance roadmap](assurance-roadmap.md).
   - the catalog emits `channels`/`clockrate` (MSF: `timescale`,
     `channelConfig`) and `ToStream` accepts only `avc3`/`hev1`, not
     Restream's `avc1`/`hvc1`.
-- Files: `src/bin/test_harness/moq_relay_interop/`. Keep `moq-relay-interop`
+- Files: `crates/test_harness/src/test_harness/moq_relay_interop/`. Keep `moq-relay-interop`
   diagnostic-only; `moq-dev-interop --ietf` is the IETF gate.
 - Gates: real egress and forwarded-ingest read-back with H.264/AAC, monotonic
   timestamps and frame counts against an unmodified upstream release; then

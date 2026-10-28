@@ -23,7 +23,7 @@ pub(crate) struct HarnessModeSpec {
 pub(crate) fn harness_catalog_root() -> PathBuf {
     std::env::var_os("HARNESS_CATALOG_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test/harness"))
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test/harness"))
 }
 
 static BUILTIN_MODE_SPECS_FROM_CATALOG: OnceLock<Vec<HarnessModeSpec>> = OnceLock::new();

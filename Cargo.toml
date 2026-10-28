@@ -9,8 +9,17 @@ repository = "https://github.com/krsna1729/restream"
 
 [workspace]
 resolver = "3"
-members = ["crates/xtask", "crates/restream-core", "crates/restream-sync", "crates/restream-mpegts", "crates/restream-rtmp", "crates/restream-moq", "crates/restream-srt", "crates/test_harness"]
-
+members = [
+    "crates/xtask",
+    "crates/restream-core",
+    "crates/restream-sync",
+    "crates/restream-mpegts",
+    "crates/restream-rtmp",
+    "crates/restream-moq",
+    "crates/restream-srt",
+    "crates/test_harness",
+]
+default-members = [".", "crates/test_harness"]
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)', 'cfg(fuzzing)', 'cfg(kani)'] }
 unsafe_op_in_unsafe_fn = "deny"

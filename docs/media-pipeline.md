@@ -616,7 +616,7 @@ Sources: `src/api/hls_ingest.rs`, `src/media/hls_ingest/`,
   Segment URIs must be relative to their playlist. The first media object
   fixes the container; a later object of the other container gets `415`.
   To copy ADTS AAC into fMP4, add `-bsf:a aac_adtstoasc`; the harness does
-  this (`src/bin/test_harness/hls_push_duty/options.rs`).
+  this (`crates/test_harness/src/test_harness/hls_push_duty/options.rs`).
 - **Authorization.** The stream key is checked like an RTMP or SRT key,
   under the `hls-publish` rate-limit scope. A keyed input may additionally
   require HTTP Basic via write-only `pushAuth` configuration. Every PUT,

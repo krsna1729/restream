@@ -54,8 +54,37 @@ impl PublishSubscribers {
             s.wake();
         }
     }
+    pub fn len(&self) -> usize {
+        self.list.load().len()
+    }
 
     pub fn is_empty(&self) -> bool {
         self.list.load().is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct DummyWake;
+    impl PublishWake for DummyWake {
+        fn wake(&self) {}
+    }
+
+    #[test]
+    fn subscribers_len_and_empty() {
+        let subs = PublishSubscribers::default();
+        assert!(subs.is_empty());
+        assert_eq!(subs.len(), 0);
+
+        let sub1: Arc<dyn PublishWake> = Arc::new(DummyWake);
+        subs.subscribe(sub1.clone());
+        assert!(!subs.is_empty());
+        assert_eq!(subs.len(), 1);
+
+        subs.unsubscribe(&sub1);
+        assert!(subs.is_empty());
+        assert_eq!(subs.len(), 0);
     }
 }
