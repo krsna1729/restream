@@ -34,7 +34,7 @@ const CLASSIFICATION: &[(&str, &[&str])] = &[
             "test/harness/*.rs",
         ],
     ),
-    ("tooling", &["crates/*.rs"]),
+    ("tooling", &["crates/xtask/*.rs"]),
     ("benchmark", &["benches/*.rs"]),
     ("integration-test", &["tests/*.rs"]),
     (
@@ -47,9 +47,16 @@ const CLASSIFICATION: &[(&str, &[&str])] = &[
             "src/*/tests.rs",
             "src/*_test.rs",
             "src/*_tests.rs",
+            "crates/*/tests/*.rs",
+            "crates/*_test/*.rs",
+            "crates/*_tests/*.rs",
+            "crates/*/test.rs",
+            "crates/*/tests.rs",
+            "crates/*_test.rs",
+            "crates/*_tests.rs",
         ],
     ),
-    ("production", &["src/*.rs"]),
+    ("production", &["src/*.rs", "crates/restream-*/*.rs"]),
     ("frontend-test", &["test/*"]),
     ("frontend-production", &["web/ts/*"]),
 ];
@@ -68,6 +75,7 @@ const ENV_VAR_OWNERS: &[&str] = &[
     "tests/",
     "benches/",
     "test_fixtures.rs",
+    "crates/restream-srt/src/knobs.rs",
 ];
 
 const API_STAGE_STARTS: &[&str] = &[
@@ -85,19 +93,37 @@ pub(crate) fn run() -> StepResult {
     let mut failed = false;
 
     failed |= report(
-        "forbidden imports in src/media/",
-        "Media modules must not import api types",
+        "forbidden imports in src/media/ and production crates",
+        "Media and production modules must not import api types",
         "No forbidden imports found.",
-        grep_files(&files_under(&["src/media"])?, |line| {
-            line.contains("use crate::api")
-        }),
+        grep_files(
+            &files_under(&[
+                "src/media",
+                "crates/restream-core",
+                "crates/restream-sync",
+                "crates/restream-mpegts",
+                "crates/restream-rtmp",
+                "crates/restream-moq",
+                "crates/restream-srt",
+            ])?,
+            |line| line.contains("use crate::api"),
+        ),
     );
 
     failed |= audit_file_sizes()?;
 
-    let env_hits = grep_files(&files_under(&["src"])?, |line| {
-        line.contains("std::env::var")
-    })
+    let env_hits = grep_files(
+        &files_under(&[
+            "src",
+            "crates/restream-core",
+            "crates/restream-sync",
+            "crates/restream-mpegts",
+            "crates/restream-rtmp",
+            "crates/restream-moq",
+            "crates/restream-srt",
+        ])?,
+        |line| line.contains("std::env::var"),
+    )
     .into_iter()
     .filter(|hit| {
         let row = hit.to_string();
@@ -124,10 +150,19 @@ pub(crate) fn run() -> StepResult {
     failed |= report(
         "module-level dead-code suppression",
         "module-level #![allow(dead_code)] hides unused and duplicated code; annotate the specific item instead",
-        "No module-level dead-code suppression in src/.",
-        grep_files(&files_under(&["src"])?, |line| {
-            line.starts_with("#![allow(dead_code)]")
-        }),
+        "No module-level dead-code suppression in src/ or production crates.",
+        grep_files(
+            &files_under(&[
+                "src",
+                "crates/restream-core",
+                "crates/restream-sync",
+                "crates/restream-mpegts",
+                "crates/restream-rtmp",
+                "crates/restream-moq",
+                "crates/restream-srt",
+            ])?,
+            |line| line.starts_with("#![allow(dead_code)]"),
+        ),
     );
 
     failed |= report(
@@ -301,6 +336,8 @@ mod tests {
             ("test/frontend/x.test.mjs", "frontend-test"),
             ("web/ts/core/api.ts", "frontend-production"),
             ("crates/xtask/src/main.rs", "tooling"),
+            ("crates/restream-core/src/lib.rs", "production"),
+            ("crates/restream-sync/src/byte_queue.rs", "production"),
         ] {
             assert_eq!(classify(path), class, "{path}");
         }

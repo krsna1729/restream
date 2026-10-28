@@ -303,6 +303,8 @@ fn is_lifecycle(file: &str) -> bool {
             "src/media/external_transcoder/*.rs",
             "src/media/external_file_ingest.rs",
             "src/media/external_file_ingest/*.rs",
+            "crates/restream-sync/*",
+            "crates/restream-srt/*",
         ],
     )
 }
@@ -352,6 +354,10 @@ fn is_protocol(file: &str) -> bool {
             "src/media/srt/*",
             "src/media/hls.rs",
             "src/media/hls/*",
+            "crates/restream-rtmp/*",
+            "crates/restream-srt/*",
+            "crates/restream-mpegts/*",
+            "crates/restream-moq/*",
         ],
     )
 }
@@ -378,6 +384,7 @@ fn is_source_audit_scope(file: &str) -> bool {
             file,
             &[
                 "src/*.rs",
+                "crates/*.rs",
                 "web/ts/*.ts",
                 "test/*.rs",
                 "test/*.ts",
@@ -396,13 +403,15 @@ fn module_filter(file: &str) -> Option<&str> {
             "src/bin/*",
             "src/main.rs",
             "src/lib.rs",
+            "crates/*/src/main.rs",
+            "crates/*/src/lib.rs",
             "*/mod.rs",
             "benches/*.rs",
         ],
     ) {
         return None;
     }
-    if !(glob("tests/*.rs", file) || glob("src/*.rs", file)) {
+    if !(glob("tests/*.rs", file) || glob("src/*.rs", file) || glob("crates/*.rs", file)) {
         return None;
     }
     let name = file.rsplit('/').next()?;
