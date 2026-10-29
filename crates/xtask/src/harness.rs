@@ -63,6 +63,12 @@ pub(crate) fn run(args: &[&str]) -> WorkflowResult {
     let Some(mode) = parsed.mode.filter(|_| !parsed.prepare_only) else {
         return Ok(());
     };
+    if env::var("HARNESS_USE_CGROUP_WRAPPER")
+        .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+    {
+        // The harness execs this path (core/setup.rs CGROUP_WRAP_BIN).
+        crate::container::install_executable(&root.join(".local/bin"), "restream-cgroup-wrap")?;
+    }
     workflow::checked(
         Command::new(binary)
             .current_dir(root)

@@ -197,7 +197,7 @@ pub(super) fn unique_dir(parent: &Path, prefix: &str) -> Result<PathBuf, Error> 
         }
     }
 }
-pub(super) fn install_executable(directory: &Path, name: &str) -> Result<PathBuf, Error> {
+pub(crate) fn install_executable(directory: &Path, name: &str) -> Result<PathBuf, Error> {
     fs::create_dir_all(directory)?;
     let source = std::env::current_exe()?;
     let destination = directory.join(name);

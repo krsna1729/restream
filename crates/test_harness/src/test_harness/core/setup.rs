@@ -97,16 +97,16 @@ pub(crate) fn maybe_prune_old_artifacts() -> Result<(), String> {
     Ok(())
 }
 
+/// Installed by `cargo xtask harness` when `HARNESS_USE_CGROUP_WRAPPER` is set;
+/// exec'd directly so peer launches never invoke Cargo.
+pub(crate) const CGROUP_WRAP_BIN: &str = ".local/bin/restream-cgroup-wrap";
+
 pub(crate) fn command_with_optional_cgroup(program: impl AsRef<OsStr>, scope: &str) -> Command {
     if !env_flag("HARNESS_USE_CGROUP_WRAPPER") {
         return Command::new(program);
     }
-    let mut command = Command::new("cargo");
-    command
-        .args(["xtask", "native", "cgroup-wrap", "--scope"])
-        .arg(scope)
-        .arg("--")
-        .arg(program);
+    let mut command = Command::new(CGROUP_WRAP_BIN);
+    command.arg("--scope").arg(scope).arg("--").arg(program);
     command
 }
 

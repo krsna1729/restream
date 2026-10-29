@@ -487,10 +487,13 @@ jobs:
       - name: The sanitizer flags are in effect
         run: |
           [[ $RUSTFLAGS == *sanitizer=address* ]] || { echo "RUSTFLAGS lost -Zsanitizer=address: $RUSTFLAGS"; exit 1; }
+      # The guard itself runs from an unsanitized stable xtask build; only the
+      # inner nightly test command it checks carries the sanitizer flags.
       - name: Every filter selects tests
-        run: >
-          cargo xtask require-test-filters cargo +nightly test -Zbuild-std
-          --target x86_64-unknown-linux-gnu -p restream --lib -- $ASAN_FILTERS
+        run: |
+          RUSTFLAGS= RUSTDOCFLAGS= cargo build -q -p xtask
+          target/debug/xtask require-test-filters cargo +nightly test -Zbuild-std \
+            --target x86_64-unknown-linux-gnu -p restream --lib -- $ASAN_FILTERS
       - name: Run the FFI-heavy tests under ASan
         run: >
           cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu -p restream --lib --

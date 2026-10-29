@@ -6,7 +6,8 @@ mod smoke;
 mod tests;
 
 use crate::workflow::{Error, WorkflowResult, env_or};
-use process::{Signals, execute, install_executable};
+pub(crate) use process::install_executable;
+use process::{Signals, execute};
 use std::ffi::OsString;
 use std::fs;
 use std::process::{Command, Stdio};

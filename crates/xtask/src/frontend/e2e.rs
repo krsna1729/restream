@@ -42,7 +42,7 @@ pub(super) fn run(root: &Path, args: &[&str]) -> WorkflowResult {
 
     // These are the only persistent directories this workflow owns. Keep the
     // application log/database and Playwright's configured artifacts on failure.
-    remove_work_root(&work_root)?;
+    remove_work_root(root, &work_root)?;
     for directory in ["media", "logs", "moq"] {
         fs::create_dir_all(work_root.join(directory))?;
     }
@@ -130,9 +130,19 @@ pub(super) fn run(root: &Path, args: &[&str]) -> WorkflowResult {
     Err(Error::exit(1, "frontend-e2e: app did not become healthy"))
 }
 
-fn remove_work_root(path: &Path) -> io::Result<()> {
+/// Deletes the previous run's work root. A directory that is the checkout or
+/// one of its ancestors (`.`, `..`, `/`) is refused before any traversal.
+fn remove_work_root(root: &Path, path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path),
+        Ok(metadata) if metadata.is_dir() => {
+            if fs::canonicalize(root)?.starts_with(fs::canonicalize(path)?) {
+                return Err(io::Error::other(format!(
+                    "frontend-e2e: refusing to delete {}: it contains the repository",
+                    path.display()
+                )));
+            }
+            fs::remove_dir_all(path)
+        }
         Ok(_) => fs::remove_file(path),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
@@ -153,5 +163,38 @@ fn sleep_interruptibly(duration: Duration) -> WorkflowResult {
             return Ok(());
         }
         thread::sleep(remaining.min(Duration::from_millis(50)));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remove_work_root;
+    use std::fs;
+
+    #[test]
+    fn work_root_cleanup_refuses_the_checkout_and_its_ancestors() {
+        let base = std::env::temp_dir().join(format!("xtask-e2e-root-{}", std::process::id()));
+        let repo = base.join("repo");
+        let owned = repo.join(".local/e2e");
+        fs::create_dir_all(owned.join("logs")).unwrap();
+        fs::write(repo.join("Cargo.toml"), "").unwrap();
+
+        for protected in [
+            repo.join("."),
+            repo.clone(),
+            repo.join(".local/.."),
+            base.clone(),
+        ] {
+            assert!(
+                remove_work_root(&repo, &protected).is_err(),
+                "{}",
+                protected.display()
+            );
+            assert!(repo.join("Cargo.toml").is_file(), "{}", protected.display());
+        }
+        remove_work_root(&repo, &owned).unwrap();
+        assert!(!owned.exists());
+        assert!(repo.join("Cargo.toml").is_file());
+        fs::remove_dir_all(&base).unwrap();
     }
 }
