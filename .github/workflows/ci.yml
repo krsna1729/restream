@@ -464,7 +464,7 @@ jobs:
       ASAN_FILTERS: >-
         media::egress::tls media::egress::backends::compio_tcp
         media::external_transcoder media::timing media::rtmp::listener
-        media::rtmp::tests media::tcp_stats runtime_info
+        media::rtmp::tests media::tcp_stats runtime_info media::mpegts::tests
       RUSTFLAGS: -Zsanitizer=address
       RUSTDOCFLAGS: -Zsanitizer=address
       ASAN_OPTIONS: detect_leaks=0
@@ -495,10 +495,10 @@ jobs:
         run: >
           cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu -p restream --lib --
           $ASAN_FILTERS
-      - name: Run extracted synchronization and MPEG-TS tests under ASan
+      - name: Run extracted synchronization tests under ASan
         run: >
           cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu
-          -p restream-sync -p restream-mpegts --lib
+          -p restream-sync --lib
 
   integration-build:
     name: Transport live-harness build

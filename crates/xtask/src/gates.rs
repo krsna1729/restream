@@ -254,10 +254,17 @@ fn route(changed: &[String]) -> Plan {
         if is_source_audit_scope(file) {
             plan.auto.insert(AutoGate::SourceAudit);
         }
+        if (file.ends_with(".rs") || file.ends_with("/Cargo.toml"))
+            && let Some(package) = file
+                .strip_prefix("crates/")
+                .and_then(|path| path.split('/').next())
+            && library_tests(&mut plan, package)
+        {
+            continue;
+        }
         if file.ends_with(".rs") {
             if file.starts_with("crates/") {
-                // Crate lifecycle and harness checks supplement, not replace,
-                // the owning package's tests. Roots require an unfiltered run.
+                // Command packages retain their own test harness.
                 plan.follow_up(&package_test_command(
                     file,
                     module_filter(file).unwrap_or(""),
@@ -290,17 +297,43 @@ fn is_rust_lint_scope(file: &str) -> bool {
         )
 }
 
+/// Select actual owner suites and consumers retained by the application.
+fn library_tests(plan: &mut Plan, package: &str) -> bool {
+    let (target, filter) = match package {
+        "restream-core" => ("--lib", "media::codec::tests"),
+        "restream-sync" => ("--test standby_gop", ""),
+        "restream-mpegts" => ("--lib", "media::mpegts::tests"),
+        "restream-rtmp" => ("--lib", "media::rtmp::tests"),
+        "restream-srt" => ("--lib", "media::srt::"),
+        "restream-moq" => ("--lib", "media::moq::"),
+        _ => return false,
+    };
+    // MPEG-TS's behavior suite remains entirely in the root package.
+    if package != "restream-mpegts" {
+        plan.follow_up(&guarded_test_command(
+            &format!("cargo test -p {package} --lib"),
+            "",
+        ));
+    }
+    plan.follow_up(&guarded_test_command(
+        &format!("cargo test -p restream {target}"),
+        filter,
+    ));
+    true
+}
+
+fn guarded_test_command(command: &str, filter: &str) -> String {
+    let filter = if filter.is_empty() { "''" } else { filter };
+    format!("scripts/ci/require-test-filters.sh {command} -- {filter} && {command} -- {filter}")
+}
+
 fn package_test_command(file: &str, filter: &str) -> String {
     if let Some(crate_path) = file.strip_prefix("crates/")
         && let Some(pkg) = crate_path.split('/').next()
     {
-        return if filter.is_empty() {
-            format!("cargo test -p {pkg}")
-        } else {
-            format!("cargo test -p {pkg} {filter}")
-        };
+        return guarded_test_command(&format!("cargo test -p {pkg}"), filter);
     }
-    format!("cargo test {filter}")
+    guarded_test_command("cargo test", filter)
 }
 
 fn is_frontend(file: &str) -> bool {
@@ -585,11 +618,23 @@ mod tests {
         ] {
             let source = format!("crates/{package}/src/{module}.rs");
             let plan = plan_for(&[&source]);
-            assert!(
-                plan.follow_ups
-                    .contains(&format!("cargo test -p {package} {module}")),
-                "{source}: missing owning package tests"
-            );
+            if package != "restream-mpegts" {
+                assert!(
+                    plan.follow_ups
+                        .iter()
+                        .any(|command| command
+                            .contains(&format!("cargo test -p {package} --lib -- ''"))),
+                    "{source}: missing owning library suite"
+                );
+            } else {
+                assert!(
+                    !plan
+                        .follow_ups
+                        .iter()
+                        .any(|command| command.contains("cargo test -p restream-mpegts")),
+                    "do not recommend MPEG-TS's empty library suite"
+                );
+            }
             assert_eq!(
                 plan.follow_ups
                     .contains(&"cargo xtask concurrency contract".to_owned()),
@@ -611,8 +656,9 @@ mod tests {
             assert!(
                 plan_for(&[&root])
                     .follow_ups
-                    .contains(&format!("cargo test -p {package}")),
-                "{root}: crate roots must not omit owning tests"
+                    .iter()
+                    .any(|command| { command.contains("cargo test -p restream ") }),
+                "{root}: missing retained consumer suite"
             );
             let manifest = format!("crates/{package}/Cargo.toml");
             let plan = plan_for(&[&manifest]);
@@ -633,11 +679,16 @@ mod tests {
             ),
             (
                 "crates/test_harness/src/test_harness/api_client.rs",
-                "cargo test -p test_harness api_client",
+                "cargo test -p test_harness -- api_client",
             ),
         ] {
             let plan = plan_for(&[source]);
-            assert!(plan.follow_ups.contains(&command.to_owned()), "{source}");
+            assert!(
+                plan.follow_ups
+                    .iter()
+                    .any(|guarded| guarded.contains(command)),
+                "{source}"
+            );
             assert!(
                 plan.follow_ups
                     .contains(&"cargo xtask fixture-discipline".to_owned()),
@@ -647,8 +698,90 @@ mod tests {
         assert!(
             plan_for(&["src/media/hls/segmenter.rs"])
                 .follow_ups
-                .contains(&"cargo test segmenter".to_owned())
+                .iter()
+                .any(|command| command.contains("cargo test -- segmenter"))
         );
+    }
+
+    #[test]
+    fn mpegts_changes_select_the_retained_consumer_suite() {
+        for path in [
+            "crates/restream-mpegts/src/lib.rs",
+            "crates/restream-mpegts/src/demux.rs",
+            "crates/restream-mpegts/src/mux.rs",
+            "crates/restream-mpegts/Cargo.toml",
+        ] {
+            let plan = plan_for(&[path]);
+            assert!(
+                plan.follow_ups.iter().any(|command| {
+                    command.starts_with("scripts/ci/require-test-filters.sh ")
+                        && command.contains("cargo test -p restream --lib -- media::mpegts::tests")
+                }),
+                "{path}: missing guarded root MPEG-TS tests"
+            );
+        }
+    }
+
+    #[test]
+    fn focused_recommendations_reject_empty_selection_before_running() {
+        struct TempProject(std::path::PathBuf);
+        impl Drop for TempProject {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let project = TempProject(std::env::temp_dir().join(format!(
+            "restream-test-selection-{}-{unique}",
+            std::process::id()
+        )));
+        std::fs::create_dir_all(project.0.join("src")).unwrap();
+        std::fs::write(project.0.join("Cargo.toml"),
+            "[package]\nname = \"selection_fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[workspace]\n"
+        ).unwrap();
+        std::fs::write(
+            project.0.join("src/lib.rs"),
+            r#"
+#[test]
+fn records_execution() {
+    std::fs::write(std::env::var_os("GATE_TEST_MARKER").unwrap(), b"executed").unwrap();
+}
+"#,
+        )
+        .unwrap();
+        let marker = project.0.join("executed");
+        let command = format!(
+            "cargo test --offline --manifest-path '{}' --lib",
+            project.0.join("Cargo.toml").display()
+        );
+        for (filter, should_run) in [
+            ("records_execution", true),
+            ("missing_test", false),
+            ("", true),
+        ] {
+            let output = Command::new("bash")
+                .args(["-c", &guarded_test_command(&command, filter)])
+                .current_dir(crate::repo_root())
+                .env("CARGO_TARGET_DIR", project.0.join("target"))
+                .env("CARGO_BUILD_JOBS", "1")
+                .env("RUSTC_WORKSPACE_WRAPPER", "")
+                .env("GATE_TEST_MARKER", &marker)
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.success(),
+                should_run,
+                "{filter}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(marker.exists(), should_run);
+            if should_run {
+                std::fs::remove_file(&marker).unwrap();
+            }
+        }
     }
 
     /// Extract the workflow's scope step verbatim, without duplicating its

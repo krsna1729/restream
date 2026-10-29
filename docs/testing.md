@@ -103,17 +103,25 @@ Implementation ownership and test-package selection are not identical:
 
 | Changed implementation | Focused owner or consumer suite |
 |---|---|
-| `crates/restream-core/src/codec/` | `cargo test -p restream-core --lib codec`; also `cargo test -p restream --lib media::codec::tests` for retained consumer tests |
+| `crates/restream-core/src/codec/` | `cargo test -p restream-core --lib`; also `cargo test -p restream --lib media::codec::tests` for retained consumer tests |
 | `crates/restream-sync/src/ring_buffer.rs` and readers | `cargo test -p restream-sync --lib ring_buffer::tests` |
 | `crates/restream-sync/src/byte_queue.rs` | `cargo test -p restream-sync --lib byte_queue::tests` |
+| `crates/restream-sync/src/standby_gop.rs` | `cargo test -p restream-sync --lib` and `cargo test -p restream --test standby_gop` for retained consumers |
 | `crates/restream-mpegts/src/` | `cargo test -p restream --lib media::mpegts::tests`; the extracted package has no unit suite of its own |
 | `crates/restream-rtmp/src/` | `cargo test -p restream --lib media::rtmp::tests`; codec consumer tests also cover the shared framing helpers |
+| `crates/restream-srt/src/` | `cargo test -p restream-srt --lib` and `cargo test -p restream --lib media::srt::` for retained consumers |
 | `crates/restream-moq/src/` | `cargo test -p restream-moq --lib` and `cargo test -p restream --lib media::moq::` for retained integration/consumer tests |
 
-`cargo xtask gates` currently derives crate-local test recommendations from
-file names. Such a recommendation alone does not prove that it selected tests
-or reached a retained root consumer suite. Use the mapping above and check the
-reported test count; `cargo test --workspace` remains the CI-wide coverage gate.
+For extracted-library source and manifest changes, `cargo xtask gates`
+recommends the owning unit suite plus its retained root consumer suite.
+MPEG-TS selects only its root suite because its extracted package has no unit
+tests. Owner suites run unfiltered rather than deriving a possibly empty
+filter from the implementation file name.
+
+Every recommended focused test command first runs
+`scripts/ci/require-test-filters.sh` and chains the actual test run with `&&`.
+An empty selection fails instead of reporting a successful zero-test run.
+`cargo test --workspace` remains the CI-wide coverage gate.
 The package graph and runtime seams are in
 [Workspace layout](architecture.md#workspace-layout).
 
@@ -167,14 +175,13 @@ touch raw syscall and FFI memory.
 | CI job | Modules | Why |
 |---|---|---|
 | `miri` | Root `media::egress::tls::ktls::tests::ancillary`, `media::egress::leaf_arena`, `media::egress::scheduler`; separately `restream-core`'s `codec::bits::tests` | the kTLS cmsg parser is project `unsafe`; the rest check std and dependency use without sockets or child processes |
-| `asan` | Root `media::egress::tls`, `media::egress::backends::compio_tcp`, `media::external_transcoder`, `media::timing`, `media::rtmp::listener`, `media::rtmp::tests`, `media::tcp_stats`, `runtime_info`; separately the `restream-sync` and `restream-mpegts` library targets | kTLS, socket, SQLite/glibc FFI, child-pipe memory and synchronization; leak detection off |
+| `asan` | Root `media::egress::tls`, `media::egress::backends::compio_tcp`, `media::external_transcoder`, `media::timing`, `media::rtmp::listener`, `media::rtmp::tests`, `media::tcp_stats`, `media::mpegts::tests`, `runtime_info`; separately the `restream-sync` library target | kTLS, socket, SQLite/glibc FFI, child-pipe memory, MPEG-TS consumers and synchronization; leak detection off |
 
 The named root filters and core bit-reader filter first pass
 `scripts/ci/require-test-filters.sh`. It fails when a filter selects no test.
-The extracted-package ASan command has no such filter check: the MPEG-TS
-library currently has no unit tests, so that target does not exercise the
-retained root MPEG-TS consumer suite. A successful ASan job must not be read
-as proof that those consumer tests ran under ASan.
+The root MPEG-TS filter exercises the retained consumer suite against the
+extracted mux/demux implementation under ASan; it is guarded like every other
+named root filter. The synchronization package's unit suite runs separately.
 
 ```sh
 MIRIFLAGS=-Zmiri-disable-isolation PROPTEST_CASES=8 \
