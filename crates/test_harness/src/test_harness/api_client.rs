@@ -399,4 +399,50 @@ mod tests {
         assert_eq!(first.len(), 64);
         assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
     }
+
+    /// The login (which carries the admin password) goes straight to the
+    /// loopback engine and a redirect is not followed, so the body cannot be
+    /// forwarded anywhere else.
+    #[tokio::test]
+    async fn login_does_not_follow_a_redirect_with_the_password() {
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+        use tokio::time::timeout;
+
+        let elsewhere = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let elsewhere_port = elsewhere.local_addr().unwrap().port();
+        let engine = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let engine_port = engine.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = engine.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request).await.unwrap();
+            let response = format!(
+                "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://127.0.0.1:{elsewhere_port}/api/v1/auth/login\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let mut api = super::RampApi::new(engine_port);
+        let password = generate_harness_admin_password();
+        let error = timeout(Duration::from_secs(5), api.login_with_password(&password))
+            .await
+            .expect("login hung: the client followed the redirect")
+            .unwrap_err();
+        assert!(
+            error.contains("307"),
+            "login did not reach the loopback engine directly: {error}"
+        );
+        timeout(Duration::from_secs(1), server)
+            .await
+            .expect("the engine never received the login")
+            .unwrap();
+        assert!(api.cookie.is_none());
+        let forwarded = timeout(Duration::from_millis(200), elsewhere.accept()).await;
+        assert!(
+            forwarded.is_err(),
+            "the password body was forwarded to the redirect target"
+        );
+    }
 }
