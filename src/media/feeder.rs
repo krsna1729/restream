@@ -9,10 +9,10 @@
 use std::sync::Arc;
 
 use crate::media::codec::{audio_for_ts_into, video_for_ts_into};
-use crate::media::metadata::{AudioMeta, VideoMeta};
-use crate::media::mpegts::{TsMuxer, TsServiceMetadata};
-use crate::media::packet::{MediaPacket, MediaType};
-use crate::media::ring_buffer::DtsEnforcer;
+use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_core::{MediaPacket, MediaType};
+use restream_mpegts::{TsMuxer, TsServiceMetadata};
+use restream_sync::DtsEnforcer;
 
 #[derive(Debug, Clone, Default)]
 pub struct PacketFeedConfig {
@@ -189,10 +189,11 @@ fn parse_video_sequence_header(flv_sequence_header: &[u8]) -> (usize, Vec<u8>) {
     let legacy_hevc = flv_sequence_header
         .first()
         .is_some_and(|tag| tag & 0x0F == 12);
-    if legacy_hevc || crate::media::codec::ex_video_tag(flv_sequence_header).is_some() {
-        crate::media::codec::flv_video_config(flv_sequence_header).unwrap_or((4, Vec::new()))
+    if legacy_hevc || restream_rtmp::enhanced_rtmp_hevc::ex_video_tag(flv_sequence_header).is_some()
+    {
+        restream_rtmp::flv::flv_video_config(flv_sequence_header).unwrap_or((4, Vec::new()))
     } else if flv_sequence_header.len() > 5 {
-        crate::media::codec::parse_avcc_config(&flv_sequence_header[5..])
+        restream_core::codec::parse_avcc_config(&flv_sequence_header[5..])
     } else {
         (4, Vec::new())
     }
@@ -209,23 +210,26 @@ fn prepare_video_startup_packet(
     sps_pps_cache: &mut Vec<u8>,
 ) -> VideoStartupAction {
     match packet.format {
-        crate::media::packet::PayloadFormat::Raw => {
+        restream_core::PayloadFormat::Raw => {
             if let Some(parameter_sets) =
-                crate::media::codec::annexb_parameter_sets(&packet.payload)
+                restream_core::codec::annexb_parameter_sets(&packet.payload)
             {
                 *sps_pps_cache = parameter_sets;
             }
-            if crate::media::codec::raw_annexb_is_keyframe(&packet.payload) {
+            if restream_core::codec::raw_annexb_is_keyframe(&packet.payload) {
                 VideoStartupAction::Emit
             } else {
                 VideoStartupAction::Skip
             }
         }
-        crate::media::packet::PayloadFormat::Flv => {
-            let sequence_header = match crate::media::codec::ex_video_tag(&packet.payload) {
-                Some(tag) => tag.packet_type == crate::media::codec::EX_SEQUENCE_START,
-                None => packet.payload.len() > 1 && packet.payload[1] == 0,
-            };
+        restream_core::PayloadFormat::Flv => {
+            let sequence_header =
+                match restream_rtmp::enhanced_rtmp_hevc::ex_video_tag(&packet.payload) {
+                    Some(tag) => {
+                        tag.packet_type == restream_rtmp::enhanced_rtmp_hevc::EX_SEQUENCE_START
+                    }
+                    None => packet.payload.len() > 1 && packet.payload[1] == 0,
+                };
             if sequence_header || packet.is_keyframe {
                 VideoStartupAction::Emit
             } else {

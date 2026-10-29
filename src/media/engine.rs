@@ -12,11 +12,11 @@ use crate::media::engine_registries::{
     EgressRegistry, FabricRegistry, FileIngestRegistry, HlsRegistry, IngestRegistry,
     RecordingRegistry, RuntimeInfra, StageRegistry, StreamQaRegistry,
 };
-use crate::media::metadata::{AudioMeta, VideoMeta};
-use crate::media::ring_buffer::RingBuffer;
 use crate::media::snapshots::PublisherQuality;
 use crate::media::stage_metrics::StageMetrics;
 use crate::media::stage_metrics::StageMetricsSnapshot;
+use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_sync::RingBuffer;
 
 pub(crate) const EGRESS_PROGRESS_STALE_MS: u64 = 10_000;
 pub(crate) const INGEST_FLAP_WINDOW_MS: u64 = 30_000;
@@ -42,7 +42,7 @@ pub struct IngestMetadata {
     /// not merely unknown (as with an unprobed recirculation input).
     pub tracks_authoritative: bool,
     /// What an RTMP encoder declared in `onMetaData`, latest first seen.
-    pub declared: Option<crate::media::metadata::DeclaredEncoder>,
+    pub declared: Option<restream_core::metadata::DeclaredEncoder>,
 }
 
 pub struct ActiveIngest {

@@ -302,19 +302,16 @@ fn library_tests(plan: &mut Plan, package: &str) -> bool {
     let (target, filter) = match package {
         "restream-core" => ("--lib", "media::codec::tests"),
         "restream-sync" => ("--test standby_gop", ""),
-        "restream-mpegts" => ("--lib", "media::mpegts::tests"),
+        "restream-mpegts" => ("--lib", "media::mpegts_allocation_tests"),
         "restream-rtmp" => ("--lib", "media::rtmp::tests"),
         "restream-srt" => ("--lib", "media::srt::"),
         "restream-moq" => ("--lib", "media::moq::"),
         _ => return false,
     };
-    // MPEG-TS's behavior suite remains entirely in the root package.
-    if package != "restream-mpegts" {
-        plan.follow_up(&guarded_test_command(
-            &format!("cargo test -p {package} --lib"),
-            "",
-        ));
-    }
+    plan.follow_up(&guarded_test_command(
+        &format!("cargo test -p {package} --lib"),
+        "",
+    ));
     plan.follow_up(&guarded_test_command(
         &format!("cargo test -p restream {target}"),
         filter,
@@ -350,7 +347,6 @@ fn is_lifecycle(file: &str) -> bool {
             "src/media/engine.rs",
             "src/media/srt.rs",
             "src/media/ts_chunk_ring.rs",
-            "src/media/byte_queue.rs",
             "src/media/recording.rs",
             "src/media/recording/*.rs",
             "src/media/external_transcoder.rs",
@@ -387,6 +383,7 @@ fn is_fixture_or_harness(file: &str) -> bool {
             "test/*",
             "tests/fixtures.rs",
             "src/test_fixtures.rs",
+            "src/test_fixtures/*",
             "benches/*",
             "scripts/fixtures/*",
             "scripts/harness/*",
@@ -618,23 +615,12 @@ mod tests {
         ] {
             let source = format!("crates/{package}/src/{module}.rs");
             let plan = plan_for(&[&source]);
-            if package != "restream-mpegts" {
-                assert!(
-                    plan.follow_ups
-                        .iter()
-                        .any(|command| command
-                            .contains(&format!("cargo test -p {package} --lib -- ''"))),
-                    "{source}: missing owning library suite"
-                );
-            } else {
-                assert!(
-                    !plan
-                        .follow_ups
-                        .iter()
-                        .any(|command| command.contains("cargo test -p restream-mpegts")),
-                    "do not recommend MPEG-TS's empty library suite"
-                );
-            }
+            assert!(
+                plan.follow_ups.iter().any(
+                    |command| command.contains(&format!("cargo test -p {package} --lib -- ''"))
+                ),
+                "{source}: missing owning library suite"
+            );
             assert_eq!(
                 plan.follow_ups
                     .contains(&"cargo xtask concurrency contract".to_owned()),
@@ -704,7 +690,7 @@ mod tests {
     }
 
     #[test]
-    fn mpegts_changes_select_the_retained_consumer_suite() {
+    fn mpegts_changes_select_the_retained_allocation_consumer() {
         for path in [
             "crates/restream-mpegts/src/lib.rs",
             "crates/restream-mpegts/src/demux.rs",
@@ -715,7 +701,9 @@ mod tests {
             assert!(
                 plan.follow_ups.iter().any(|command| {
                     command.starts_with("scripts/ci/require-test-filters.sh ")
-                        && command.contains("cargo test -p restream --lib -- media::mpegts::tests")
+                        && command.contains(
+                            "cargo test -p restream --lib -- media::mpegts_allocation_tests",
+                        )
                 }),
                 "{path}: missing guarded root MPEG-TS tests"
             );

@@ -12,11 +12,15 @@ use crate::media::ingest_auth::{
 };
 use crate::media::moq::egress::media::MediaFrame;
 use crate::media::moq::egress::publish::HangBroadcast;
-use crate::media::moq::media::{AudioConfig, LocBuffer, TrackContainer, TrackKind, hang_catalog};
 use crate::media::moq::transport::test_support::{
     LOOPBACK_CERT, LOOPBACK_SERVER_NAME, loopback_client_tls, run,
 };
-use crate::media::srt::AddressFamily;
+use restream_moq::media::AudioConfig;
+use restream_moq::media::LocBuffer;
+use restream_moq::media::TrackContainer;
+use restream_moq::media::TrackKind;
+use restream_moq::media::hang_catalog;
+use restream_srt::address_family::AddressFamily;
 
 const INPUT_ID: &str = "input-moq";
 
@@ -88,7 +92,7 @@ fn publish_until(addr: SocketAddr, done: Arc<AtomicBool>) {
         let session = transport::connect(&endpoint, addr, LOOPBACK_SERVER_NAME, tls)
             .await
             .unwrap();
-        let (origin, origin_driver, budget) = crate::media::moq::budget::origin();
+        let (origin, origin_driver, budget) = restream_moq::budget::origin();
         compio::runtime::spawn(transport::run_driver(origin_driver)).detach();
         let mut broadcast = HangBroadcast::create(&origin, budget, "moq-key", false, true).unwrap();
         let audio = AudioConfig {

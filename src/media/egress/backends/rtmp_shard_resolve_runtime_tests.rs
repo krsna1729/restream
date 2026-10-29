@@ -26,7 +26,7 @@ fn budget() -> WorkBudgetConfig {
 
 fn feed() -> RingFeed {
     RingFeed::new(
-        Arc::new(crate::media::ring_buffer::RingBuffer::new(4)),
+        Arc::new(restream_sync::RingBuffer::new(4)),
         Arc::new(FeedEpoch::new()),
     )
 }

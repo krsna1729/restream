@@ -7,7 +7,7 @@ use crate::media::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use crate::media::egress::journal::TsFeed;
 use crate::media::egress::policy::WorkBudget;
 
-pub(crate) use restream_srt::egress_engine::{MAX_SRT_MESSAGE_PAYLOAD, SrtSendResult};
+use restream_srt::egress_engine::{MAX_SRT_MESSAGE_PAYLOAD, SrtSendResult};
 const FEED_READ_BURST: usize = 32;
 
 #[derive(Debug)]

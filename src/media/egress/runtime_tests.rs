@@ -770,8 +770,8 @@ fn shrinking_waits_for_the_tail_to_empty_and_never_reconnects_live_outputs() {
 #[test]
 fn fabric_feed_wakes_follow_ring_growth_rescale_and_stop_on_drop() {
     use crate::media::egress::journal::{FeedEpoch, RingFeed};
-    use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
-    use crate::media::ring_buffer::RingBuffer;
+    use restream_core::{MediaPacket, MediaType, PayloadFormat};
+    use restream_sync::RingBuffer;
 
     let packet = |timestamp| MediaPacket {
         media_type: MediaType::Video,

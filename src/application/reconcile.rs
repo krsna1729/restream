@@ -258,7 +258,7 @@ mod tests {
     use crate::application::models::Pipeline;
     use crate::application::ports::{MetaLookupFuture, PipelineListFuture};
     use crate::domain::output_spec::OutputConfig;
-    use crate::media::metadata::VideoMeta;
+    use restream_core::metadata::VideoMeta;
     // `Strategy` brings `prop_map` into scope for the `proptest!` block below.
     use proptest::strategy::Strategy;
     use std::collections::HashMap;

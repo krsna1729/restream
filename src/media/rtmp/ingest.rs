@@ -22,13 +22,13 @@ use crate::media::ingest_auth::{
     PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessMode,
 };
 use crate::media::input_gate::InputTimestampMapper;
-use crate::media::packet::MediaPacket;
-use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, Reader};
 use crate::media::security::IngestSecurityService;
 use crate::media::snapshots::PublisherQuality;
-use crate::media::standby_gop::StandbyGopCache;
 use crate::media::tcp_stats::collect_tcp_stats_by_fd;
 use crate::secret_display::redact_secret;
+use restream_core::MediaPacket;
+use restream_sync::standby_gop::StandbyGopCache;
+use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader};
 
 use super::handshake::perform_server_handshake;
 use super::ingest_media::{RtmpMediaEvent, RtmpPublisherMedia};
@@ -38,7 +38,7 @@ use super::play::{PlayAuthorization, RtmpPlayRequest, handle_play_request};
 /// separate read buffer this replaced.
 const INGEST_READ_BYTES: usize = 4096;
 
-pub(super) use restream_rtmp::parser_budget;
+use restream_rtmp::parser_budget;
 #[path = "ingest/session.rs"]
 mod session;
 use session::handle_session_results;
@@ -115,7 +115,7 @@ pub(super) enum RtmpControlCommand {
     MediaProbe(RtmpMediaEvent),
     /// What the encoder declared in `onMetaData` (sent again when it
     /// changes).
-    EncoderDeclared(crate::media::metadata::DeclaredEncoder),
+    EncoderDeclared(restream_core::metadata::DeclaredEncoder),
     PlayRequested {
         stream_key: String,
         client_ip: String,

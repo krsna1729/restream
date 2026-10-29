@@ -34,10 +34,10 @@ use continuity::ContinuousTimestampState;
 
 use crate::media::engine::{IngestRegistration, MediaEngine};
 use crate::media::input_gate::{InputPacketBoundary, InputTimestampMapper};
-use crate::media::mpegts::{DemuxProbe, TsDemuxer};
-use crate::media::packet::{MediaPacket, MediaType};
-use crate::media::ring_buffer::{MEDIA_PRODUCER_BATCH_PACKETS, RingBuffer};
 use crate::media::stage_metrics::StageMetrics;
+use restream_core::{MediaPacket, MediaType};
+use restream_mpegts::{DemuxProbe, TsDemuxer};
+use restream_sync::{MEDIA_PRODUCER_BATCH_PACKETS, RingBuffer};
 
 /// Largest chunk a caller should hand to [`SegmentPublisher::publish`] at once.
 pub const PUBLISH_CHUNK_BYTES: usize = 64 * 1024;

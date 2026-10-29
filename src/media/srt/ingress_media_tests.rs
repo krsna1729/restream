@@ -12,9 +12,9 @@ use tokio_util::sync::CancellationToken;
 use super::super::ingress_test_support::{CHUNK, ts_chunks};
 use super::*;
 use crate::media::input_gate::InputPacketGate;
-use crate::media::packet::MediaType;
 use crate::media::snapshots::SrtIngressOwnerStats;
 use crate::media::stage_metrics::StageMetrics;
+use restream_core::MediaType;
 
 fn publisher(ring: Arc<RingBuffer>) -> Box<SrtPublisherMedia> {
     Box::new(SrtPublisherMedia {
@@ -560,7 +560,7 @@ fn q098_hold_topology_updates_keep_the_outstanding_absolute_deadline() {
 #[test]
 fn q098_review_coalesced_video_replacement_invalidates_held_media_and_standby_gop() {
     use super::super::ingress_test_support::topology_pmt_typed;
-    use crate::media::mpegts::TsMuxer;
+    use restream_mpegts::TsMuxer;
 
     for (codec, new_pid) in [("h264", 0x120), ("hevc", 0x100), ("hevc", 0x120)] {
         let stats = SrtIngressOwnerStats::default();
@@ -591,7 +591,7 @@ fn q098_review_coalesced_video_replacement_invalidates_held_media_and_standby_go
         let sets = packets
             .iter()
             .filter(|p| p.media_type == MediaType::Video)
-            .find_map(|p| crate::media::codec::annexb_parameter_sets(&p.payload))
+            .find_map(|p| restream_core::codec::annexb_parameter_sets(&p.payload))
             .unwrap();
         let kind = if codec == "hevc" { 0x24 } else { 0x1B };
         let mut batch = topology_pmt_typed(

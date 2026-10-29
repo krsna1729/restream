@@ -655,7 +655,7 @@ impl TopologyPublisher {
 /// fixture bytes; no media parser or probe application is emulated here.
 pub(super) fn topology_chunks(video: bool, audio: bool, version: u8) -> Vec<Bytes> {
     let fixture = ts_chunks(600);
-    let mut probe = crate::media::mpegts::TsDemuxer::new();
+    let mut probe = restream_mpegts::TsDemuxer::new();
     for chunk in &fixture {
         probe.feed(chunk);
     }
@@ -724,7 +724,7 @@ pub(super) fn topology_pmt_typed(
         section.extend_from_slice(&[kind, 0xE0 | (pid >> 8) as u8, pid as u8, 0xF0, 0]);
     }
     section[2] = (section.len() + 1) as u8;
-    let crc = crate::media::mpegts::test_crc32_mpeg2(&section);
+    let crc = restream_mpegts::wire::crc32_mpeg2(&section);
     section.extend_from_slice(&crc.to_be_bytes());
     let mut pmt = [0xFF; 188];
     pmt[..5].copy_from_slice(&[0x47, 0x50, 0, 0x10, 0]);

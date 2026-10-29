@@ -2,13 +2,14 @@ use bytes::Bytes;
 use moq_net::track;
 
 use super::*;
-use crate::media::codec::build_avcc_sequence_header;
 use crate::media::egress::journal::FeedEpoch;
 use crate::media::moq::egress::startup::{MoqPublishStartup, MoqVideoStartup};
-use crate::media::moq::media::{CATALOG_TRACK, VideoCodec};
 use crate::media::moq::transport::{self, test_support::run};
-use crate::media::packet::PayloadFormat;
-use crate::media::ring_buffer::RingBuffer;
+use restream_core::PayloadFormat;
+use restream_core::codec::build_avcc_sequence_header;
+use restream_moq::media::CATALOG_TRACK;
+use restream_moq::media::VideoCodec;
+use restream_sync::RingBuffer;
 
 const PARAMETER_SETS: &[u8] = &[
     0, 0, 0, 1, 0x67, 0x42, 0, 0x1e, 0xf4, 0x05, 1, 0xec, 0x80, 0, 0, 0, 1, 0x68, 0xce, 0x06, 0xe2,
@@ -17,7 +18,7 @@ const PARAMETER_SETS: &[u8] = &[
 /// A broadcast on its own budgeted origin, as the leaf and the origin make
 /// one; the origin is returned so it outlives the test's reads.
 fn broadcast(name: &str, video: bool, audio: bool) -> (origin::Producer, HangBroadcast) {
-    let (origin, driver, budget) = crate::media::moq::budget::origin();
+    let (origin, driver, budget) = restream_moq::budget::origin();
     compio::runtime::spawn(transport::run_driver(driver)).detach();
     let broadcast = HangBroadcast::create(&origin, budget, name, video, audio).unwrap();
     (origin, broadcast)

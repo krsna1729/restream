@@ -12,7 +12,8 @@ use crate::media::egress::journal::{FeedEpoch, RingFeed};
 use crate::media::egress::policy::LeafPolicy;
 use crate::media::egress::{FeedId, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::engine::MediaEngine;
-use crate::media::moq::egress::{MoqPublishStartup, parse_moq_url, publish_startup};
+use crate::media::moq::egress::{MoqPublishStartup, publish_startup};
+use restream_moq::url::parse_moq_url;
 
 pub(crate) struct PreparedMoqFabricFeed {
     pub(crate) feed_id: FeedId,

@@ -1,4 +1,4 @@
-use crate::media::ring_buffer::DtsEnforcer;
+use restream_sync::DtsEnforcer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NormalizedTs {

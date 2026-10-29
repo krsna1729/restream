@@ -19,12 +19,12 @@ use srt_transport::advanced::admission::LogicalPeerId;
 
 use crate::media::engine::{IngestRegistration, MediaEngine};
 use crate::media::input_gate::InputTimestampMapper;
-use crate::media::mpegts::{DemuxProbe, TopologyChanges, TsDemuxer};
-use crate::media::packet::MediaPacket;
-use crate::media::ring_buffer::RingBuffer;
 use crate::media::snapshots::SrtIngressOwnerStats;
-use crate::media::standby_gop::StandbyGopCache;
 use crate::media::ts_chunk_ring::TsChunkReader;
+use restream_core::MediaPacket;
+use restream_mpegts::{DemuxProbe, TopologyChanges, TsDemuxer};
+use restream_sync::RingBuffer;
+use restream_sync::standby_gop::StandbyGopCache;
 
 #[path = "ingest_packets.rs"]
 pub(super) mod ingest_packets;
@@ -113,7 +113,7 @@ impl SrtReaderMedia {
         Self {
             muxer,
             _muxer_lease: muxer_lease,
-            packets: Vec::with_capacity(crate::media::ring_buffer::MEDIA_PULL_BURST_PACKETS),
+            packets: Vec::with_capacity(restream_sync::MEDIA_PULL_BURST_PACKETS),
             pending: VecDeque::new(),
         }
     }
@@ -126,10 +126,7 @@ impl SrtReaderMedia {
         self.packets.clear();
         if self
             .muxer
-            .pull_burst(
-                &mut self.packets,
-                crate::media::ring_buffer::MEDIA_PULL_BURST_PACKETS,
-            )
+            .pull_burst(&mut self.packets, restream_sync::MEDIA_PULL_BURST_PACKETS)
             .unwrap_or(0)
             == 0
         {
@@ -292,8 +289,8 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
         // A slow control response can leave packets from an older topology
         // held here. Never replay those removed tracks into the updated ring.
         let keep = |packet: &MediaPacket| match packet.media_type {
-            crate::media::packet::MediaType::Video => probe.video.is_some(),
-            crate::media::packet::MediaType::Audio => probe
+            restream_core::MediaType::Video => probe.video.is_some(),
+            restream_core::MediaType::Audio => probe
                 .audio_tracks
                 .iter()
                 .any(|track| track.track_index == packet.track_index),
@@ -321,8 +318,8 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
         held_total: &mut usize,
     ) {
         let keep = |packet: &MediaPacket| match packet.media_type {
-            crate::media::packet::MediaType::Audio => !changes.audio,
-            crate::media::packet::MediaType::Video => !changes.video,
+            restream_core::MediaType::Audio => !changes.audio,
+            restream_core::MediaType::Video => !changes.video,
         };
         slot.media.standby_gop.retain(keep);
         let previous = slot.held_bytes;

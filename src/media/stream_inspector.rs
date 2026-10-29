@@ -41,8 +41,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::media::packet::MediaType;
-use crate::media::ring_buffer::RingBuffer;
+use restream_core::MediaType;
+use restream_sync::RingBuffer;
 
 /// DTS and arrival moving apart by more than this, between two packets of a
 /// track, is a jump in the media clock (milliseconds).
@@ -473,8 +473,8 @@ fn scan(
 }
 
 /// An FLV AAC sequence header: configuration, not a frame.
-fn is_flv_aac_config(packet: &crate::media::packet::MediaPacket) -> bool {
-    packet.format == crate::media::packet::PayloadFormat::Flv
+fn is_flv_aac_config(packet: &restream_core::MediaPacket) -> bool {
+    packet.format == restream_core::PayloadFormat::Flv
         && matches!(packet.payload.as_ref(), [tag, 0, ..] if tag >> 4 == 10)
 }
 

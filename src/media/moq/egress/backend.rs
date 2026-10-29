@@ -33,10 +33,10 @@ use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 use super::leaf::{
     Activity, LeafLink, LinkPlan, MoqConnector, MoqEngine, QuicConnector, spawn_link,
 };
-use super::media::MediaConverter;
 use super::publish::{HangBroadcast, RingPublisher};
 use super::startup::SharedMoqStartupSource;
-use super::url::parse_moq_url;
+use crate::media::moq::egress::media::MediaConverter;
+use restream_moq::url::parse_moq_url;
 
 struct MoqFabricLeaf {
     common: LeafCommon,
@@ -147,7 +147,7 @@ impl<C: MoqConnector> MoqShardBackend<C> {
             return refuse("no publish startup for the output");
         };
         let converter = MediaConverter::new(&startup);
-        let (origin, origin_driver, budget) = crate::media::moq::budget::origin();
+        let (origin, origin_driver, budget) = restream_moq::budget::origin();
         let broadcast = match HangBroadcast::create(
             &origin,
             budget,

@@ -140,9 +140,9 @@ async fn hls_segment_bad_name_returns_400() {
 #[tokio::test]
 async fn hls_playlist_route_returns_blocked_stage_cause_when_applicable() {
     use restream::domain::stage::StageKind;
-    use restream::media::metadata::VideoMeta;
-    use restream::media::ring_buffer::RingBuffer;
     use restream::media::stage_lifecycle::StagePhase;
+    use restream_core::metadata::VideoMeta;
+    use restream_sync::RingBuffer;
 
     let (app, _, engine) = test_app_with_engine().await;
     let cookie = login(&app).await;

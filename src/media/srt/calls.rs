@@ -26,7 +26,7 @@ const BACKOFF_MAX: Duration = Duration::from_secs(30);
 /// binds an IPv4 and an IPv6 socket as each family is first needed.
 const CALL_OWNER: u16 = 0;
 
-pub use restream_srt::calls::{SrtCallInputs, SrtCallSpec, validate_srt_call_url};
+use restream_srt::calls::{SrtCallInputs, SrtCallSpec};
 
 /// The next wait after `failures` consecutive failed attempts (at least one).
 fn backoff(failures: u32) -> Duration {

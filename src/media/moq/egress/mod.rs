@@ -1,8 +1,8 @@
 //! MoQ egress (Q-047): `moqt://` outputs published to a relay over
 //! moq-lite + hang, and the ring → broadcast path the origin reuses.
 //!
-//! - [`url`]: the output URL (relay address, session path, broadcast name,
-//!   TLS trust keys).
+//! - [`restream_moq::url`]: the output URL (relay address, session path,
+//!   broadcast name, TLS trust keys).
 //! - [`media`]: ring packets → hang frames, with the catalog configurations.
 //! - [`publish`]: a hang broadcast fed from a ring (groups, catalog
 //!   republish, retention).
@@ -18,10 +18,8 @@ pub(crate) mod leaf;
 pub(crate) mod media;
 pub(crate) mod publish;
 pub(crate) mod startup;
-pub(crate) use restream_moq::url;
 #[cfg(test)]
 mod url_tests;
 
 pub(crate) use backend::moq_shard_backend;
 pub(crate) use startup::{MoqPublishStartup, SharedMoqStartupSource, publish_startup};
-pub(crate) use url::parse_moq_url;

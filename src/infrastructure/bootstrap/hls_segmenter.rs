@@ -15,7 +15,7 @@ pub(super) fn spawn_pipeline_hls_segmenter(
     engine: Arc<MediaEngine>,
     pipeline_id: String,
     store: Arc<crate::media::hls::HlsStore>,
-    ring: Arc<crate::media::ring_buffer::RingBuffer>,
+    ring: Arc<restream_sync::RingBuffer>,
     cancel: tokio_util::sync::CancellationToken,
     stage_key: crate::domain::stage::StageKey,
     stages: Vec<StageLease>,

@@ -1,6 +1,6 @@
 use super::*;
 use crate::media::egress::feed::ReadBudget;
-use crate::media::packet::{MediaType, PayloadFormat};
+use restream_core::{MediaType, PayloadFormat};
 use tokio_util::sync::CancellationToken;
 
 // -----------------------------------------------------------------------
@@ -175,7 +175,7 @@ fn ring_feed_head_sequence_matches_write_idx() {
 fn ring_feed_follows_grown_ring_for_reads_and_wakes() {
     #[derive(Default)]
     struct CountingWake(std::sync::atomic::AtomicUsize);
-    impl crate::media::ring_buffer::PublishWake for CountingWake {
+    impl restream_sync::PublishWake for CountingWake {
         fn wake(&self) {
             self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }

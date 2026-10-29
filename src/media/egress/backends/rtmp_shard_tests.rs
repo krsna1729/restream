@@ -10,7 +10,7 @@ fn budget() -> WorkBudgetConfig {
 
 fn feed() -> RingFeed {
     RingFeed::new(
-        Arc::new(crate::media::ring_buffer::RingBuffer::new(4)),
+        Arc::new(restream_sync::RingBuffer::new(4)),
         Arc::new(FeedEpoch::new()),
     )
 }
@@ -806,11 +806,11 @@ async fn feed_wake_delivers_media_after_idle_when_factory_start_is_delayed() {
         run_accepting_server_peer_reporting_video_after_idle(stream, publish_tx, video_tx);
     });
 
-    let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(4));
+    let ring = Arc::new(restream_sync::RingBuffer::new(4));
     let feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
-    let packet = |timestamp| crate::media::packet::MediaPacket {
-        media_type: crate::media::packet::MediaType::Video,
-        format: crate::media::packet::PayloadFormat::Flv,
+    let packet = |timestamp| restream_core::MediaPacket {
+        media_type: restream_core::MediaType::Video,
+        format: restream_core::PayloadFormat::Flv,
         is_keyframe: true,
         track_index: 0,
         pts: timestamp,

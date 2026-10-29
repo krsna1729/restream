@@ -7,8 +7,8 @@ use tracing::info;
 
 use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
-use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_lease::StageLease;
+use restream_sync::RingBuffer;
 
 impl MediaEngine {
     pub async fn get_or_create_pipeline(&self, pipeline_id: &str) -> Arc<RingBuffer> {

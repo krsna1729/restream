@@ -9,11 +9,11 @@ use crate::application::hls_preview::{
 };
 use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
-use crate::media::metadata::{AudioMeta, VideoMeta};
-use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_lifecycle::{StageBackendKind, StagePhase};
 use crate::media::stage_runtime::StageRuntimeManager;
 use bytes::Bytes;
+use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_sync::RingBuffer;
 
 #[tokio::test]
 async fn primary_playlist_reports_graph_planned_blocked_stage_cause() {

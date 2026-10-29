@@ -29,11 +29,16 @@ use moq_net::{Timestamp, broadcast, group, origin};
 
 use crate::media::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use crate::media::egress::journal::RingFeed;
-use crate::media::moq::budget::CacheBudget;
-use crate::media::moq::media::{AUDIO_TRACK, LocBuffer, TrackKind, VIDEO_TRACK, parse_loc_frame};
-use crate::media::packet::{MediaPacket, MediaType};
+use restream_core::{MediaPacket, MediaType};
+use restream_moq::budget::CacheBudget;
+use restream_moq::media::AUDIO_TRACK;
+use restream_moq::media::LocBuffer;
+use restream_moq::media::TrackKind;
+use restream_moq::media::VIDEO_TRACK;
+use restream_moq::media::parse_loc_frame;
 
-use super::media::{MediaConverter, MediaFrame};
+use crate::media::moq::egress::media::MediaConverter;
+use crate::media::moq::egress::media::MediaFrame;
 
 /// Audio group length.
 const AUDIO_GROUP_US: u64 = 1_000_000;
@@ -159,7 +164,7 @@ pub(crate) struct HangBroadcast {
 
 impl HangBroadcast {
     /// Create and announce broadcast `name` under `origin`, with the tracks
-    /// asked for. `budget` is `origin`'s ([`crate::media::moq::budget::origin`]).
+    /// asked for. `budget` is `origin`'s ([`restream_moq::budget::origin`]).
     pub(crate) fn create(
         origin: &origin::Producer,
         budget: CacheBudget,

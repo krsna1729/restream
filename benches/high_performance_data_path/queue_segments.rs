@@ -2,7 +2,7 @@ use std::hint::black_box;
 
 use bytes::{Bytes, BytesMut};
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput};
-use restream::media::byte_queue::MemoryQueue;
+use restream_sync::byte_queue::MemoryQueue;
 
 use super::support::PACKET_BYTES;
 

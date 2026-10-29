@@ -363,7 +363,7 @@ fn build_source(
                     "sourceUrl exceeds maximum length of {MAX_URL_LEN} bytes"
                 ));
             }
-            crate::media::srt::validate_srt_call_url(&url)?;
+            restream_srt::calls::validate_srt_call_url(&url)?;
             Ok(PipelineInputSource {
                 kind,
                 url: Some(url),

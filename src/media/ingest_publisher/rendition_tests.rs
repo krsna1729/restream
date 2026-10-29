@@ -8,8 +8,8 @@ use bytes::Bytes;
 
 use super::tests::harness;
 use super::*;
-use crate::media::metadata::{AudioMeta, VideoMeta};
-use crate::media::packet::PayloadFormat;
+use restream_core::PayloadFormat;
+use restream_core::metadata::{AudioMeta, VideoMeta};
 
 /// A demux that releases its next scripted batch per fed chunk.
 #[derive(Default)]

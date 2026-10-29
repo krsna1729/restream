@@ -109,9 +109,9 @@ fn replacement_ring_resets_forecast_counter_even_if_new_counter_is_larger() {
     runtime.sizer.forecast_feed(4.8e6);
     runtime.forecast_feed(&old);
     runtime.feed_mark.as_mut().unwrap().2 -= Duration::from_millis(500);
-    new.push(crate::media::packet::MediaPacket {
-        media_type: crate::media::packet::MediaType::Video,
-        format: crate::media::packet::PayloadFormat::Raw,
+    new.push(restream_core::MediaPacket {
+        media_type: restream_core::MediaType::Video,
+        format: restream_core::PayloadFormat::Raw,
         is_keyframe: true,
         track_index: 0,
         pts: 0,
@@ -136,9 +136,9 @@ fn a_burst_of_adds_on_a_new_runtime_is_priced_at_the_feed_rate() {
     // 2 MB over 500 ms of media time: 32 Mbit/s, well over the 4.8 Mbit/s
     // reference rate, all published before the runtime first looks.
     for dts in [0, 500] {
-        ring.push(crate::media::packet::MediaPacket {
-            media_type: crate::media::packet::MediaType::Video,
-            format: crate::media::packet::PayloadFormat::Raw,
+        ring.push(restream_core::MediaPacket {
+            media_type: restream_core::MediaType::Video,
+            format: restream_core::PayloadFormat::Raw,
             is_keyframe: dts == 0,
             track_index: 0,
             pts: dts,

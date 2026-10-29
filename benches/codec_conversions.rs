@@ -16,12 +16,17 @@
 
 use bytes::Bytes;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use restream::media::codec::{
-    annexb_to_avcc, annexb_to_avcc_with_scratch, audio_for_rtmp, audio_for_rtmp_into, audio_for_ts,
-    avcc_to_annexb, hevc_video_for_enhanced_rtmp_with_composition_into, video_for_rtmp,
-    video_for_rtmp_with_composition_into, video_for_ts,
-};
-use restream::media::packet::PayloadFormat;
+use restream::media::codec::audio_for_rtmp;
+use restream::media::codec::audio_for_ts;
+use restream::media::codec::video_for_ts;
+use restream_core::PayloadFormat;
+use restream_core::codec::annexb_to_avcc;
+use restream_core::codec::annexb_to_avcc_with_scratch;
+use restream_core::codec::audio_for_rtmp_into;
+use restream_core::codec::avcc_to_annexb;
+use restream_core::codec::video_for_rtmp;
+use restream_core::codec::video_for_rtmp_with_composition_into;
+use restream_rtmp::enhanced_rtmp_hevc::hevc_video_for_enhanced_rtmp_with_composition_into;
 use std::hint::black_box;
 
 // ---------------------------------------------------------------------------

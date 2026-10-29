@@ -13,8 +13,10 @@
 use std::time::Duration;
 
 use super::*;
-use crate::media::codec::{MAX_ADTS_PAYLOAD, build_adts_header_for};
-use crate::media::moq::media::{LocBuffer, from_hang_catalog};
+use restream_core::codec::MAX_ADTS_PAYLOAD;
+use restream_core::codec::build_adts_header_for;
+use restream_moq::media::LocBuffer;
+use restream_moq::media::from_hang_catalog;
 
 const SPS: &[u8] = &[0x67, 0x42, 0x00, 0x1e, 0xf4, 0x05, 0x01, 0xec, 0x80];
 const PPS: &[u8] = &[0x68, 0xce, 0x06, 0xe2];

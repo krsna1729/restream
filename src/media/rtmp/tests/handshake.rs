@@ -306,9 +306,9 @@ async fn shutdown_cancels_blocked_play_write_and_joins_owner() {
         let nalu_len = (payload.len() - 9) as u32;
         payload[5..9].copy_from_slice(&nalu_len.to_be_bytes());
         payload[9] = if is_keyframe { 0x65 } else { 0x41 };
-        ring.push(crate::media::packet::MediaPacket {
-            media_type: crate::media::packet::MediaType::Video,
-            format: crate::media::packet::PayloadFormat::Flv,
+        ring.push(restream_core::MediaPacket {
+            media_type: restream_core::MediaType::Video,
+            format: restream_core::PayloadFormat::Flv,
             is_keyframe,
             track_index: 0,
             pts: index,
@@ -601,7 +601,7 @@ async fn owner_publishes_media_in_order_and_reports_only_probes() {
     assert_eq!(packets[0].payload.as_ref(), header.as_ref());
     assert_eq!(packets[1].payload.as_ref(), keyframe.as_ref());
     assert!(packets[1].is_keyframe);
-    assert_eq!(packets[2].media_type, crate::media::packet::MediaType::Audio);
+    assert_eq!(packets[2].media_type, restream_core::MediaType::Audio);
     assert_eq!(packets[2].payload.as_ref(), audio.as_ref());
     assert_eq!(
         media.keyframe_times.lock().unwrap().as_slice(),
@@ -616,9 +616,9 @@ async fn owner_publishes_media_in_order_and_reports_only_probes() {
 #[test]
 fn standby_publisher_promotes_with_headers_before_the_cached_gop() {
     use crate::media::input_gate::InputPacketGate;
-    use crate::media::packet::MediaType;
+    use restream_core::MediaType;
     let gate = Arc::new(InputPacketGate::standby());
-    let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(64));
+    let ring = Arc::new(restream_sync::RingBuffer::new(64));
     let mut media = super::ingest_media::RtmpPublisherMedia {
         registration: crate::media::engine::IngestRegistration {
             cancel_token: CancellationToken::new(),
@@ -637,7 +637,7 @@ fn standby_publisher_promotes_with_headers_before_the_cached_gop() {
         video_sequence_header: Arc::new(std::sync::Mutex::new(None)),
         audio_sequence_header: Arc::new(std::sync::Mutex::new(None)),
         timestamp_mapper: crate::media::input_gate::InputTimestampMapper::default(),
-        standby_gop: crate::media::standby_gop::StandbyGopCache::default(),
+        standby_gop: restream_sync::standby_gop::StandbyGopCache::default(),
         video_probed: false,
         audio_probed: false,
     };
@@ -702,9 +702,9 @@ async fn client_stop_during_playback_detaches_the_reader() {
                 let nalu_len = (payload.len() - 9) as u32;
                 payload[5..9].copy_from_slice(&nalu_len.to_be_bytes());
                 payload[9] = if is_keyframe { 0x65 } else { 0x41 };
-                ring.push(crate::media::packet::MediaPacket {
-                    media_type: crate::media::packet::MediaType::Video,
-                    format: crate::media::packet::PayloadFormat::Flv,
+                ring.push(restream_core::MediaPacket {
+                    media_type: restream_core::MediaType::Video,
+                    format: restream_core::PayloadFormat::Flv,
                     is_keyframe,
                     track_index: 0,
                     pts: index * 33,

@@ -1,7 +1,7 @@
 #![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 use restream::media::engine::MediaEngine;
 use restream::media::input_gate::{InputForwardState, InputPacketBoundary};
-use restream::media::metadata::{AudioMeta, VideoMeta};
+use restream_core::metadata::{AudioMeta, VideoMeta};
 use std::sync::Arc;
 
 #[tokio::test]

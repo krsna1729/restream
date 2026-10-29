@@ -1,3 +1,5 @@
+use crate::parse_rtmp_url;
+
 #[test]
 fn parse_rtmp_url_standard_forms() {
     // Default port
@@ -175,4 +177,3 @@ fn parse_rtmp_url_trims_surrounding_whitespace() {
     assert_eq!(parts.app, "live");
     assert_eq!(parts.stream_key, "key");
 }
-

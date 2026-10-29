@@ -13,10 +13,12 @@ use super::*;
 use crate::media::engine::IngestRegistration;
 use crate::media::input_gate::InputPacketGate;
 use crate::media::moq::ingest::publisher::{ProbeHoldLimits, PublisherCounters};
-use crate::media::moq::media::{
-    AudioConfig, CatalogTracks, TrackContainer, VideoCodec, VideoConfig,
-};
 use crate::media::stage_metrics::StageMetrics;
+use restream_moq::media::AudioConfig;
+use restream_moq::media::CatalogTracks;
+use restream_moq::media::TrackContainer;
+use restream_moq::media::VideoCodec;
+use restream_moq::media::VideoConfig;
 
 const SPS: &[u8] = &[0x67, 0x42, 0x00, 0x1e, 0xf4, 0x05, 0x01, 0xec, 0x80];
 const PPS: &[u8] = &[0x68, 0xce, 0x06, 0xe2];
@@ -328,8 +330,10 @@ fn a_dropped_session_releases_its_input_exactly_once() {
 fn a_loopback_publisher_reaches_the_ring_and_shutdown_releases_it() {
     use crate::media::moq::egress::media::MediaFrame;
     use crate::media::moq::egress::publish::HangBroadcast;
-    use crate::media::moq::media::{LocBuffer, TrackKind, hang_catalog};
     use crate::media::moq::transport::test_support::{Loopback, run};
+    use restream_moq::media::LocBuffer;
+    use restream_moq::media::TrackKind;
+    use restream_moq::media::hang_catalog;
 
     // The publish/connect futures are large in a debug build; the default
     // 2 MiB test stack overflows. Run this case on a thread with room.
@@ -340,7 +344,7 @@ fn a_loopback_publisher_reaches_the_ring_and_shutdown_releases_it() {
             run(async {
                 let loopback = Loopback::new().await;
                 let (client, accepted) = loopback.native().await;
-                let (origin, origin_driver, budget) = crate::media::moq::budget::origin();
+                let (origin, origin_driver, budget) = restream_moq::budget::origin();
                 let mut broadcast =
                     HangBroadcast::create(&origin, budget, "tenant/moq-key.hang", false, true)
                         .unwrap();
@@ -449,7 +453,7 @@ fn a_panicking_catalog_parser_ends_the_session_as_a_protocol_violation() {
 
 #[test]
 fn msf_only_catalog_maps_loc_h264_h265_and_aac_into_the_ring() {
-    use crate::media::moq::media::LocBuffer;
+    use restream_moq::media::LocBuffer;
 
     crate::media::moq::transport::test_support::run(async {
         for (codec, nalus) in [
@@ -681,7 +685,7 @@ fn a_suffix_preference_falls_back_only_when_its_catalog_is_missing() {
 
 #[test]
 fn bounded_draft01_shared_init_references_reach_the_ring() {
-    use crate::media::moq::media::LocBuffer;
+    use restream_moq::media::LocBuffer;
 
     crate::media::moq::transport::test_support::run(async {
         let json = br#"{
@@ -775,8 +779,8 @@ fn an_oversized_declared_frame_is_rejected_before_waiting_for_payload() {
 
 #[test]
 fn an_ietf_msf_preferred_publisher_reaches_the_ring() {
-    use crate::media::moq::media::LocBuffer;
     use crate::media::moq::transport::test_support::{Loopback, run};
+    use restream_moq::media::LocBuffer;
 
     std::thread::Builder::new()
         .name("moq-ietf-publisher".into())
@@ -785,7 +789,7 @@ fn an_ietf_msf_preferred_publisher_reaches_the_ring() {
             run(async {
                 let loopback = Loopback::new().await;
                 let (client, accepted) = loopback.native_offering(&["moqt-19"]).await;
-                let (origin, driver, _budget) = crate::media::moq::budget::origin();
+                let (origin, driver, _budget) = restream_moq::budget::origin();
                 let broadcast = origin.create_broadcast("tenant/moq-key.msf").unwrap();
                 let alternate = broadcast
                     .create_track(

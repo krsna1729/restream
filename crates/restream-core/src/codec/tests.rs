@@ -1,0 +1,144 @@
+#![allow(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used,
+    clippy::expect_used
+)]
+
+use super::*;
+use proptest::prelude::*;
+
+include!("tests/format_conversion.rs");
+include!("tests/transport_helpers.rs");
+include!("tests/annexb_avcc.rs");
+include!("tests/parser_round_trips.rs");
+include!("tests/h264_sps.rs");
+fn push_bits(bits: &mut Vec<bool>, value: u64, width: usize) {
+    for shift in (0..width).rev() {
+        bits.push(((value >> shift) & 1) == 1);
+    }
+}
+
+fn push_ue(bits: &mut Vec<bool>, value: u64) {
+    let code_num = value + 1;
+    let width = 64 - code_num.leading_zeros() as usize;
+    bits.extend(std::iter::repeat_n(false, width.saturating_sub(1)));
+    push_bits(bits, code_num, width);
+}
+
+fn pack_bits(bits: &[bool]) -> Vec<u8> {
+    bits.chunks(8)
+        .map(|chunk| {
+            chunk.iter().enumerate().fold(0u8, |byte, (index, bit)| {
+                byte | (u8::from(*bit) << (7 - index))
+            })
+        })
+        .collect()
+}
+
+fn insert_emulation_prevention(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
+    let mut zero_run = 0u8;
+    for &byte in data {
+        if zero_run >= 2 && byte <= 3 {
+            out.push(3);
+            zero_run = 0;
+        }
+        out.push(byte);
+        zero_run = if byte == 0 {
+            zero_run.saturating_add(1)
+        } else {
+            0
+        };
+    }
+    out
+}
+
+fn minimal_hevc_sps_nalu(chroma_format_idc: u64, bit_depth_minus8: u64) -> Vec<u8> {
+    let mut bits = Vec::new();
+    push_bits(&mut bits, 0, 4);
+    push_bits(&mut bits, 0, 3);
+    push_bits(&mut bits, 1, 1);
+    push_bits(&mut bits, 0, 2);
+    push_bits(&mut bits, 0, 1);
+    push_bits(&mut bits, 2, 5);
+    push_bits(&mut bits, 0, 32);
+    push_bits(&mut bits, 0, 48);
+    push_bits(&mut bits, 0x7b, 8);
+    push_ue(&mut bits, 0);
+    push_ue(&mut bits, chroma_format_idc);
+    if chroma_format_idc == 3 {
+        push_bits(&mut bits, 0, 1); // separate_colour_plane_flag
+    }
+    push_ue(&mut bits, 1920);
+    push_ue(&mut bits, 1080);
+    push_bits(&mut bits, 0, 1);
+    push_ue(&mut bits, bit_depth_minus8);
+    push_ue(&mut bits, bit_depth_minus8);
+    // rbsp_trailing_bits: a stop bit keeps the last byte nonzero, so Annex-B
+    // framing (which strips trailing zero bytes) leaves the SPS intact.
+    push_bits(&mut bits, 1, 1);
+
+    let mut sps = vec![0x42, 0x01];
+    sps.extend(insert_emulation_prevention(&pack_bits(&bits)));
+    sps
+}
+/// The allocation-free NALU walker yields exactly the NALUs the production
+/// start-code finder delimits, for arbitrary byte streams (zeros and start
+/// codes over-represented so boundaries are dense).
+mod annexb_walker {
+    use std::ops::ControlFlow;
+
+    use proptest::prelude::*;
+
+    use crate::codec::{find_annexb_start_codes, for_each_annexb_nalu};
+
+    fn by_start_codes(data: &[u8]) -> Vec<&[u8]> {
+        let starts = find_annexb_start_codes(data);
+        let mut nalus = Vec::new();
+        for (index, &(_, nalu_start)) in starts.iter().enumerate() {
+            let nalu_end = starts.get(index + 1).map_or(data.len(), |next| next.0);
+            if nalu_start < nalu_end {
+                nalus.push(&data[nalu_start..nalu_end]);
+            }
+        }
+        nalus
+    }
+
+    fn walked(data: &[u8]) -> Vec<&[u8]> {
+        let mut nalus = Vec::new();
+        let _ = for_each_annexb_nalu(data, |nalu| {
+            nalus.push(nalu);
+            ControlFlow::Continue(())
+        });
+        nalus
+    }
+
+    proptest! {
+        #[test]
+        fn walker_matches_the_start_code_finder(
+            data in proptest::collection::vec(
+                prop_oneof![4 => Just(0u8), 2 => Just(1u8), 1 => any::<u8>()],
+                0..256,
+            )
+        ) {
+            prop_assert_eq!(walked(&data), by_start_codes(&data));
+        }
+    }
+
+    #[test]
+    fn walker_stops_when_the_visitor_breaks() {
+        let data = [0, 0, 1, 0x67, 0, 0, 1, 0x68, 0, 0, 1, 0x65];
+        let mut seen = 0;
+        let flow = for_each_annexb_nalu(&data, |_| {
+            seen += 1;
+            if seen == 2 {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        });
+        assert!(flow.is_break());
+        assert_eq!(seen, 2);
+    }
+}

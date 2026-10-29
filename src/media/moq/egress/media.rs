@@ -1,5 +1,5 @@
 //! Ring packets → MoQ frames, the shared media model of
-//! [`crate::media::moq::media`]:
+//! [`restream_moq::media`]:
 //!
 //! - Video: one access unit per frame, 4-byte NAL lengths, parameter sets
 //!   out of band (the catalog `description`, an avcC/hvcC record). A `Raw`
@@ -17,12 +17,19 @@
 //! A configuration change bumps [`MediaConverter::catalog_version`]; the
 //! publisher republishes the catalog before the next frame.
 
-use crate::media::codec::{adts_frame_ranges, annexb_parameter_sets, avcc_to_annexb, strip_adts};
-use crate::media::moq::media::{
-    AudioConfig, LocBuffer, MediaError, TrackKind, VideoCodec, VideoConfig, hang_catalog,
-};
-use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
-use crate::media::ring_buffer::TrackConfig;
+use restream_core::TrackConfig;
+use restream_core::codec::adts_frame_ranges;
+use restream_core::codec::annexb_parameter_sets;
+use restream_core::codec::avcc_to_annexb;
+use restream_core::codec::strip_adts;
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
+use restream_moq::media::AudioConfig;
+use restream_moq::media::LocBuffer;
+use restream_moq::media::MediaError;
+use restream_moq::media::TrackKind;
+use restream_moq::media::VideoCodec;
+use restream_moq::media::VideoConfig;
+use restream_moq::media::hang_catalog;
 
 use super::startup::MoqPublishStartup;
 

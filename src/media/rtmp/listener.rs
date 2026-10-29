@@ -67,7 +67,7 @@ pub(crate) async fn start_rtmp_server_on_with_shutdown(
     let addr = format!("0.0.0.0:{port}");
     let connection_limit = engine.config.rtmp_max_connections.clamp(1, 16_384);
     let client_slots =
-        super::client_slots::ClientSlots::new(engine.config.rtmp_max_connections_per_ip);
+        restream_rtmp::client_slots::ClientSlots::new(engine.config.rtmp_max_connections_per_ip);
     let parser_budget = engine.config.rtmp_ingest_parser_budget_bytes;
     let owners = engine
         .config
@@ -241,7 +241,7 @@ impl Drop for RunningOwners<'_> {
 struct OwnerLimits {
     connections: usize,
     parser_budget_bytes: usize,
-    client_slots: Arc<super::client_slots::ClientSlots>,
+    client_slots: Arc<restream_rtmp::client_slots::ClientSlots>,
 }
 
 fn owner_share(total: usize, index: usize, owners: usize) -> usize {
@@ -341,7 +341,7 @@ async fn run_compio_owner(
         client_slots,
     } = limits;
     let connection_shutdown = CancellationToken::new();
-    let parser_budget = super::ingest::parser_budget::ParserBudget::new(parser_budget_bytes);
+    let parser_budget = restream_rtmp::parser_budget::ParserBudget::new(parser_budget_bytes);
     let mut connections = FuturesUnordered::new();
     // One accept stays in flight across iterations and is replaced only when
     // it completes. Dropping a pending Compio accept (as a fresh

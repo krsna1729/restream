@@ -5,7 +5,7 @@
 //! parse stringified stage keys or preset names itself.
 
 use crate::domain::stage::StageKey;
-use crate::media::metadata::{AudioMeta, VideoMeta};
+use restream_core::metadata::{AudioMeta, VideoMeta};
 
 /// Codec kinds that can appear in a stage plan.
 #[derive(Clone, Debug, PartialEq, Eq)]

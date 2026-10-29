@@ -3240,7 +3240,9 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "memchr",
+ "proptest",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3270,7 +3272,9 @@ dependencies = [
  "memchr",
  "proptest",
  "restream-core",
+ "serde_json",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3279,6 +3283,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "percent-encoding",
+ "proptest",
  "reqwest",
  "restream-core",
  "restream-sync",

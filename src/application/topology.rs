@@ -309,7 +309,7 @@ pub async fn converge_srt_call_inputs(pool: &SqlitePool, engine: &MediaEngine) -
         .into_iter()
         .filter(|input| input.enabled)
         .filter_map(|input| {
-            Some(crate::media::srt::SrtCallSpec {
+            Some(restream_srt::calls::SrtCallSpec {
                 url: input.source_url?,
                 pipeline_id: input.pipeline_id,
                 input_id: input.id,

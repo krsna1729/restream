@@ -17,10 +17,10 @@ impl OwnerLoop {
         &mut self,
         token: CallToken,
         remote: SocketAddr,
-        request: crate::media::srt::egress_connect::SrtConnectRequest,
+        request: restream_srt::egress_connect::SrtConnectRequest,
         now: Timestamp,
     ) {
-        use crate::media::srt::egress_connect::SrtConnectKind;
+        use restream_srt::egress_connect::SrtConnectKind;
         let owner = &mut self.owner;
         let outcome = self.runtime.block_on(async {
             match &request.kind {

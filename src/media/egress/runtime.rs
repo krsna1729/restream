@@ -14,7 +14,7 @@ use crate::media::egress::shard::{
     EgressShardHeartbeat, EgressShardSnapshot, FeedWakeHandle,
 };
 use crate::media::egress::sizing::{Saturated, ServiceSample, ShardSizer};
-use crate::media::ring_buffer::{PublishSubscribers, PublishWake, RingBuffer};
+use restream_sync::{PublishSubscribers, PublishWake, RingBuffer};
 
 #[cfg(test)]
 #[path = "runtime_sizing_tests.rs"]
@@ -470,7 +470,7 @@ impl Drop for FeedWakeSubscription {
 pub(crate) fn subscribe_fabric_wakes(
     kind: &'static str,
     feed_id: FeedId,
-    subscribers: Arc<crate::media::ring_buffer::PublishSubscribers>,
+    subscribers: Arc<restream_sync::PublishSubscribers>,
     wake_handles: Arc<ArcSwap<Vec<FeedWakeHandle>>>,
 ) -> FeedWakeSubscription {
     let waker: Arc<dyn PublishWake> = Arc::new(FabricWakers {

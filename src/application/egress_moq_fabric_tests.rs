@@ -5,13 +5,16 @@ use bytes::Bytes;
 use crate::application::egress::prepare_output_ring;
 use crate::domain::output_spec::{OutputConfig, VideoCodecKind};
 use crate::domain::state::DesiredOutputState;
-use crate::media::codec::build_avcc_sequence_header;
 use crate::media::egress::EgressFeed;
-use crate::media::metadata::AudioMeta;
 use crate::media::moq::egress::startup::startup_video;
 use crate::media::moq::egress::startup::{MoqAudioStartup, MoqVideoStartup};
-use crate::media::moq::media::{AudioConfig, TrackContainer, VideoCodec, VideoConfig};
-use crate::media::ring_buffer::RingBuffer;
+use restream_core::codec::build_avcc_sequence_header;
+use restream_core::metadata::AudioMeta;
+use restream_moq::media::AudioConfig;
+use restream_moq::media::TrackContainer;
+use restream_moq::media::VideoCodec;
+use restream_moq::media::VideoConfig;
+use restream_sync::RingBuffer;
 
 fn test_output(pipeline_id: &str, url: &str) -> Output {
     Output {
@@ -229,11 +232,11 @@ fn ca_test_directory(name: &str) -> std::path::PathBuf {
 
 #[test]
 fn moq_ca_directory_trusted_tls_runtime_smoke() {
-    use crate::media::moq::tls;
     use crate::media::moq::transport;
     use crate::media::moq::transport::test_support::{
         LOOPBACK_CERT, LOOPBACK_SERVER_NAME, Loopback, run,
     };
+    use restream_moq::tls;
 
     let dir = ca_test_directory("tls");
     std::fs::write(dir.join("relay.pem"), &LOOPBACK_CERT.0).unwrap();

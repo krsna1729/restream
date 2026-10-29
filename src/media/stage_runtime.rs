@@ -22,12 +22,12 @@ use crate::media::ffmpeg::stage_plan::{
     AudioStageOp, CodecEdgeOp, FfmpegStagePlan, StageInputSpec, StageStartupPolicy, TimelinePolicy,
     VideoCodecKind, VideoStageOp,
 };
-use crate::media::metadata::{AudioMeta, VideoMeta};
-use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_lease::StageLease;
 use crate::media::stage_lifecycle::{StageBackendKind, StageLifecycle, StagePhase};
 use crate::media::stage_metrics::StageMetrics;
 use crate::runtime::stage::StageRuntimeSnapshot;
+use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_sync::RingBuffer;
 
 /// Handle to an admitted stage. Consumers read from `ring`; the runtime manager
 /// owns the lifecycle, metrics, and cancellation token.

@@ -36,7 +36,9 @@ use crate::media::egress::shard::{
 };
 use crate::media::egress::visit::EngineVisitResult;
 use crate::media::srt::egress_connect::egress_connect_spec;
-use crate::media::srt::{AddressFamily, SrtFabricEgressConnectSpec, SrtSendBacklog};
+use restream_srt::address_family::AddressFamily;
+use restream_srt::egress_connect::SrtFabricEgressConnectSpec;
+use restream_srt::egress_stats::SrtSendBacklog;
 
 pub(crate) mod owner_set;
 pub(crate) mod resolve_runtime;
@@ -669,7 +671,7 @@ impl SrtShardBackend {
             let backlog = self
                 .owners
                 .stats(&leaf.caller)
-                .and_then(|stats| crate::media::srt::egress_stats::send_backlog(&stats));
+                .and_then(|stats| restream_srt::egress_stats::send_backlog(&stats));
             let flushed = !leaf.pressure(backlog).is_backpressured();
             let expired = draining_since.elapsed() >= self.drain_timeout;
             if flushed || expired {

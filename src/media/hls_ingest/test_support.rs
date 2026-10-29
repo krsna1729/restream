@@ -193,9 +193,7 @@ fn fixture_keyframe(codec: &str) -> Vec<u8> {
         .unwrap_or_else(|error| panic!("the canonical {codec} fixture demuxes: {error}"));
     packets
         .into_iter()
-        .find(|packet| {
-            packet.media_type == crate::media::packet::MediaType::Video && packet.is_keyframe
-        })
+        .find(|packet| packet.media_type == restream_core::MediaType::Video && packet.is_keyframe)
         .expect("the fixture has a keyframe")
         .payload
         .to_vec()

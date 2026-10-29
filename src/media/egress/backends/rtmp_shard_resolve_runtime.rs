@@ -15,7 +15,7 @@ use crate::media::egress::journal::RingFeed;
 use crate::media::egress::metrics::ShardMetrics;
 use crate::media::egress::policy::WorkBudgetConfig;
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
-use crate::media::rtmp::parse_rtmp_url;
+use restream_rtmp::parse_rtmp_url;
 
 use super::rtmp_shard::{
     RtmpPublishStartupSource, RtmpReadinessPoller, RtmpResolvedConnect, RtmpShardBackend,

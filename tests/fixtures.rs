@@ -32,8 +32,8 @@ fn canonical_transport_fixtures_resolve() {
 
 #[test]
 fn bf0_marker_transport_fixtures_demux_into_packets() {
-    use restream::media::mpegts::TsDemuxer;
     use restream::test_fixtures::{AvMarkerBframeMode, av_marker_transport_fixture_for_bframes};
+    use restream_mpegts::TsDemuxer;
 
     for (codec, multi_audio) in [
         ("h264", false),
@@ -66,8 +66,8 @@ fn bf0_marker_transport_fixtures_demux_into_packets() {
 
 #[test]
 fn h264_bf0_marker_probe_emits_startup_sequence_header() {
-    use restream::media::mpegts::TsDemuxer;
     use restream::test_fixtures::{AvMarkerBframeMode, av_marker_transport_fixture_for_bframes};
+    use restream_mpegts::TsDemuxer;
 
     let path = av_marker_transport_fixture_for_bframes("h264", false, AvMarkerBframeMode::Bf0)
         .unwrap_or_else(|e| panic!("{e}"));
@@ -106,8 +106,8 @@ fn h264_bf0_marker_probe_emits_startup_sequence_header() {
 /// workload that later optimization numbers are compared against.
 #[test]
 fn canonical_8m_bench_fixtures_carry_the_stated_payload_rate() {
-    use restream::media::mpegts::TsDemuxer;
     use restream::test_fixtures::bench_transport_fixture;
+    use restream_mpegts::TsDemuxer;
 
     const TARGET_MBPS: f64 = 8.0;
     const TOLERANCE_MBPS: f64 = 0.4;

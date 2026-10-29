@@ -13,12 +13,12 @@ use tracing::{error, info, warn};
 use crate::media::engine::{IngestRegistration, MediaEngine};
 use crate::media::ingest_auth::{PipelineAccessAuthenticator, PipelineAccessMode};
 use crate::media::input_gate::InputTimestampMapper;
-use crate::media::mpegts::DemuxProbe;
-use crate::media::ring_buffer::RingBuffer;
 use crate::media::security::{IngestSecurityService, RateLimitScope};
 use crate::media::srt_stream_id::{SrtConnectionMode, parse_srt_stream_id};
-use crate::media::standby_gop::StandbyGopCache;
 use crate::media::ts_chunk_ring::TsChunkReader;
+use restream_mpegts::DemuxProbe;
+use restream_sync::RingBuffer;
+use restream_sync::standby_gop::StandbyGopCache;
 
 pub(crate) use super::srt_policy::SrtIngestPolicyStore;
 
@@ -484,7 +484,7 @@ impl SrtServer {
         let media = Box::new(SrtPublisherMedia {
             registration: registration.clone(),
             ring_buffer,
-            demuxer: crate::media::mpegts::TsDemuxer::new(),
+            demuxer: restream_mpegts::TsDemuxer::new(),
             timestamp_mapper: InputTimestampMapper::default(),
             standby_gop: StandbyGopCache::default(),
             packets: Vec::with_capacity(16),

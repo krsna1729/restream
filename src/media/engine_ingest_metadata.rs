@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use crate::media::engine::{IngestRegistration, MediaEngine};
-use crate::media::metadata::{AudioMeta, VideoMeta};
 use crate::media::snapshots::PublisherQuality;
+use restream_core::metadata::{AudioMeta, VideoMeta};
 
 /// How long a source may publish media without reporting a probe before an
 /// output stops waiting for one and starts video-only.
@@ -81,7 +81,7 @@ impl MediaEngine {
     pub async fn update_ingest_session_declared(
         &self,
         registration: &IngestRegistration,
-        declared: crate::media::metadata::DeclaredEncoder,
+        declared: restream_core::metadata::DeclaredEncoder,
     ) {
         if let Some(ingest) = self.current_ingest_session(registration).await {
             crate::sync::write(&ingest.metadata).declared = Some(declared);
@@ -146,7 +146,7 @@ impl MediaEngine {
         audio_tracks: Vec<AudioMeta>,
         video_track_count: usize,
         video_sequence_header: Option<bytes::Bytes>,
-    ) -> Option<Arc<crate::media::ring_buffer::RingBuffer>> {
+    ) -> Option<Arc<restream_sync::RingBuffer>> {
         let _selection = self.ingests.selection_lock.lock().await;
         let ingest = self.current_ingest_session(registration).await?;
         if registration.cancel_token.is_cancelled() {
@@ -176,7 +176,7 @@ impl MediaEngine {
         if audio_tracks.is_empty() {
             *crate::sync::lock(&ingest.audio_sequence_header) = None;
         }
-        let update_ring = |ring: &crate::media::ring_buffer::RingBuffer| {
+        let update_ring = |ring: &restream_sync::RingBuffer| {
             if let Some(video) = &video {
                 ring.set_codec_hint(&video.codec);
             } else {

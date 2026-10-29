@@ -4,10 +4,10 @@ use bytes::Bytes;
 
 use super::{PacketFeedConfig, TsPacketFeeder};
 use crate::media::codec::{audio_for_ts_into, video_for_ts_into};
-use crate::media::metadata::{AudioMeta, VideoMeta};
-use crate::media::mpegts::TsMuxer;
-use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
-use crate::media::ring_buffer::DtsEnforcer;
+use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
+use restream_mpegts::TsMuxer;
+use restream_sync::DtsEnforcer;
 
 fn audio_track(index: u32) -> AudioMeta {
     AudioMeta {
@@ -163,7 +163,7 @@ fn feeder_remuxed_h265_multi_audio_fixture_decodes_cleanly() {
     let fixture = crate::test_fixtures::bench_transport_fixture("h265", "1.5M", true)
         .expect("fixture must exist");
     let input = std::fs::read(&fixture).expect("fixture must be readable");
-    let mut demuxer = crate::media::mpegts::TsDemuxer::new();
+    let mut demuxer = restream_mpegts::TsDemuxer::new();
     let mut packets = Vec::new();
 
     for chunk in input.chunks(1316) {

@@ -11,11 +11,11 @@ use super::rendition::{AudioRenditionState, VideoRenditionState};
 use super::store::Fmp4HlsStore;
 use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
-use crate::media::metadata::{AudioMeta, VideoMeta};
-use crate::media::packet::MediaType;
-use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 use crate::media::stage_lifecycle::StageLifecycle;
 use crate::media::stage_metrics::StageMetrics;
+use restream_core::MediaType;
+use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 
 pub async fn start_hls_fmp4_segmenter(
     pipeline_id: String,
@@ -363,7 +363,7 @@ fn segment_duration_secs(start_pts_ms: i64, end_pts_ms: i64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media::metadata::AudioMeta;
+    use restream_core::metadata::AudioMeta;
 
     fn aac_track(track_index: u32) -> AudioMeta {
         AudioMeta {

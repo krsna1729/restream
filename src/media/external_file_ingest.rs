@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tracing::{error, warn};
 
 use crate::media::engine::{IngestRegistration, MediaEngine};
-use crate::media::ring_buffer::RingBuffer;
+use restream_sync::RingBuffer;
 
 use crate::media::ingest_publisher::IngestTimestamps;
 use process::SpawnedExternalFileIngest;
@@ -411,9 +411,9 @@ mod tests {
     use tokio::process::{ChildStdout, Command};
 
     use super::*;
-    use crate::media::mpegts::{TsDemuxer, TsMuxer};
-    use crate::media::packet::MediaType;
-    use crate::media::ring_buffer::PublishWake;
+    use restream_core::MediaType;
+    use restream_mpegts::{TsDemuxer, TsMuxer};
+    use restream_sync::PublishWake;
 
     async fn registered_runtime(name: &str) -> Arc<ExternalFileIngestRuntime> {
         let engine = Arc::new(MediaEngine::new_with_config(Arc::new(

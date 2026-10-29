@@ -33,11 +33,12 @@ use crate::media::egress::feed::{FeedCursor, ReadBudget};
 use crate::media::egress::journal::RingFeed;
 use crate::media::egress::leaf_arena::LeafKey;
 use crate::media::egress::policy::WorkBudget;
-use crate::media::moq::{tls, transport};
-use crate::media::srt::AddressFamily;
+use crate::media::moq::transport;
+use restream_moq::tls;
+use restream_srt::address_family::AddressFamily;
 
 use super::publish::{Pump, RingPublisher};
-use super::url::MoqUrl;
+use restream_moq::url::MoqUrl;
 
 /// Opens the transport session a leaf publishes over. Production is
 /// [`QuicConnector`]; tests inject sessions of their own.

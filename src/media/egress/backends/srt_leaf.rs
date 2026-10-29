@@ -6,8 +6,9 @@ use crate::media::egress::leaf::LeafCommon;
 use crate::media::egress::policy::{LeafStallClass, WorkBudget, classify_stall};
 use crate::media::egress::visit::{EngineVisitResult, visit_leaf};
 use crate::media::snapshots::PublisherQuality;
+use crate::media::srt::SrtEgressEngine;
 use crate::media::srt::egress_stats::SenderQualitySampler;
-use crate::media::srt::{SrtEgressEngine, SrtSendBacklog};
+use restream_srt::egress_stats::SrtSendBacklog;
 use srt_transport::advanced::caller::LogicalCallerStats;
 
 use super::{SrtCaller, SrtLeafPressure, SrtOwners, apply_send_backlog};
@@ -142,7 +143,7 @@ impl SrtFabricLeaf {
             quality.offered_bps = delivery.offered_bps;
             quality.delivery_ratio = delivery.ratio;
         }
-        if let Some(backlog) = crate::media::srt::egress_stats::send_backlog(stats) {
+        if let Some(backlog) = restream_srt::egress_stats::send_backlog(stats) {
             apply_send_backlog(&mut quality, backlog);
         }
         Some(quality)

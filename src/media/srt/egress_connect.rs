@@ -1,7 +1,6 @@
 //! Restream's SRT egress URL/session semantics as typed `srt-transport`
 //! configuration.
-pub(crate) use restream_srt::address_family::AddressFamily;
-pub(crate) use restream_srt::egress_connect::*;
+use restream_srt::egress_connect::SrtFabricEgressConnectSpec;
 
 /// Resolve application-owned tuning before constructing transport configuration.
 pub(crate) fn egress_connect_spec(

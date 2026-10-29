@@ -131,7 +131,7 @@ pub(super) async fn handle_session_results(
                 ServerSessionEvent::StreamMetadataChanged { metadata, .. } => {
                     if publisher.is_some()
                         && let Some(declared) =
-                            crate::media::metadata::DeclaredEncoder::from_metadata(
+                            restream_core::metadata::DeclaredEncoder::from_metadata(
                                 metadata.encoder.as_deref(),
                                 metadata.video_width,
                                 metadata.video_height,

@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use super::*;
-use crate::media::ring_buffer::RingBuffer;
+use restream_sync::RingBuffer;
 
 /// The publication harness file ingest uses: an engine, a registered input
 /// attempt, its ring and the target over them.

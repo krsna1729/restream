@@ -6,7 +6,7 @@ use std::{
 
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput};
-use restream::media::ring_buffer::{Reader, RingBuffer};
+use restream_sync::{Reader, RingBuffer};
 
 use super::support::{PACKET_BYTES, RING_CAPACITY, packet};
 

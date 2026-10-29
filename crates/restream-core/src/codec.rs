@@ -53,3 +53,6 @@ impl VideoCodecKind {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -5,8 +5,8 @@
 use bytes::Bytes;
 use proptest::prelude::*;
 use proptest::test_runner::{Config as ProptestConfig, FileFailurePersistence};
-use restream::media::packet::{MediaPacket, MediaType, PayloadFormat};
-use restream::media::ring_buffer::{Reader, RingBuffer};
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
+use restream_sync::{Reader, RingBuffer};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 

@@ -55,9 +55,11 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 
 use crate::media::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
-use crate::media::packet::{MediaPacket, MediaType};
-use crate::media::ring_buffer::{NotRetained, RingBuffer, TrackConfig};
 use crate::media::ts_chunk_ring::TsChunkRing;
+use restream_core::NotRetained;
+use restream_core::TrackConfig;
+use restream_core::{MediaPacket, MediaType};
+use restream_sync::RingBuffer;
 
 fn oldest_retained_sequence(ring: &RingBuffer) -> u64 {
     ring.get_write_idx().saturating_sub(ring.capacity()) as u64
@@ -504,9 +506,10 @@ impl EgressFeed for RingFeed {
 
         // Linear scan — only used during resync, not on the hot path.
         for idx in start..head {
-            if ring.read_at(idx as usize).is_some_and(|p| {
-                p.media_type == crate::media::packet::MediaType::Video && p.is_keyframe
-            }) {
+            if ring
+                .read_at(idx as usize)
+                .is_some_and(|p| p.media_type == restream_core::MediaType::Video && p.is_keyframe)
+            {
                 return Some(FeedCursor::new(epoch, idx));
             }
         }

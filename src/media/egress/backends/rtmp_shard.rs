@@ -30,7 +30,7 @@ use crate::media::egress::shard::{
     EgressShardBackend, EgressShardCommandEffect, EgressShardConfig,
 };
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
-use crate::media::rtmp::parse_rtmp_url;
+use restream_rtmp::parse_rtmp_url;
 
 #[cfg(test)]
 use super::compio_tcp::CompioTcpPoller;
@@ -333,7 +333,7 @@ where
 {
     poller: P,
     /// Raw → FLV conversions shared by every leaf on this shard thread.
-    payload_cache: crate::media::rtmp::egress_payload_cache::SharedRtmpPayloadCache,
+    payload_cache: restream_rtmp::egress_payload_cache::SharedRtmpPayloadCache,
     resolve_completions: RtmpResolveCompletionQueue,
     resolved_connects: Vec<RtmpResolvedConnect>,
     startup_source: S,
@@ -424,7 +424,7 @@ where
             tx_units: 0,
             tx_bytes: 0,
             queue_overflows: 0,
-            payload_cache: crate::media::rtmp::egress_payload_cache::RtmpPayloadCache::shared(),
+            payload_cache: restream_rtmp::egress_payload_cache::RtmpPayloadCache::shared(),
         }
     }
 

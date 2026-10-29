@@ -29,7 +29,7 @@ async fn external_720p_stage_emits_live_packets_for_hevc_sample() {
     // metadata wait loop can find them (required for HEVC).
     if let Some(ps) = packets.iter().find_map(|p| {
         (p.media_type == MediaType::Video)
-            .then(|| crate::media::codec::annexb_parameter_sets(&p.payload))
+            .then(|| restream_core::codec::annexb_parameter_sets(&p.payload))
             .flatten()
     }) {
         source_ring.set_video_parameter_sets(ps);
@@ -135,7 +135,7 @@ async fn chained_hevc_preview_stages_emit_live_h264_packets() {
     source_ring.set_audio_tracks(audio_tracks);
     if let Some(parameter_sets) = packets.iter().find_map(|packet| {
         (packet.media_type == MediaType::Video)
-            .then(|| crate::media::codec::annexb_parameter_sets(&packet.payload))
+            .then(|| restream_core::codec::annexb_parameter_sets(&packet.payload))
             .flatten()
     }) {
         source_ring.set_video_parameter_sets(parameter_sets);
@@ -286,7 +286,7 @@ async fn hevc_scaled_rtmp_audio_routes_emit_both_selected_tracks() {
     source_ring.set_audio_tracks(audio_tracks);
     if let Some(parameter_sets) = packets.iter().find_map(|packet| {
         (packet.media_type == MediaType::Video)
-            .then(|| crate::media::codec::annexb_parameter_sets(&packet.payload))
+            .then(|| restream_core::codec::annexb_parameter_sets(&packet.payload))
             .flatten()
     }) {
         source_ring.set_video_parameter_sets(parameter_sets);
@@ -408,7 +408,7 @@ async fn hevc_scaled_rtmp_audio_routes_emit_both_selected_tracks() {
 }
 
 fn selected_track_output_ready(
-    packets: &[std::sync::Arc<crate::media::packet::MediaPacket>],
+    packets: &[std::sync::Arc<restream_core::MediaPacket>],
 ) -> bool {
     packets
         .iter()
@@ -450,7 +450,7 @@ async fn hevc_hls_preview_stage_uses_hevc_input_and_emits_h264() {
     source_ring.set_audio_tracks(audio_tracks);
     if let Some(parameter_sets) = packets.iter().find_map(|packet| {
         (packet.media_type == MediaType::Video)
-            .then(|| crate::media::codec::annexb_parameter_sets(&packet.payload))
+            .then(|| restream_core::codec::annexb_parameter_sets(&packet.payload))
             .flatten()
     }) {
         source_ring.set_video_parameter_sets(parameter_sets);
@@ -548,7 +548,7 @@ async fn hevc_codec_edge_starts_for_video_only_ingest() {
     packets.retain(|packet| packet.media_type == MediaType::Video);
     if let Some(parameter_sets) = packets.iter().find_map(|packet| {
         (packet.media_type == MediaType::Video)
-            .then(|| crate::media::codec::annexb_parameter_sets(&packet.payload))
+            .then(|| restream_core::codec::annexb_parameter_sets(&packet.payload))
             .flatten()
     }) {
         source_ring.set_video_parameter_sets(parameter_sets);

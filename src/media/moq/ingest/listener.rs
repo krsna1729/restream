@@ -31,8 +31,9 @@ use crate::config::{MoqIngestConfig, MoqIngestSetting};
 use crate::media::engine::MediaEngine;
 use crate::media::ingest_auth::PipelineAccessAuthenticator;
 use crate::media::moq::origin::{Origin, request_token};
-use crate::media::moq::{tls, transport};
+use crate::media::moq::transport;
 use crate::media::security::IngestSecurityService;
+use restream_moq::tls;
 
 /// How long shutdown waits for sessions to close before dropping them.
 const SHUTDOWN_DRAIN: Duration = Duration::from_secs(1);

@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 
-use crate::media::packet::MediaPacket;
+use restream_core::MediaPacket;
 
 const STANDBY: u8 = 0;
 const AWAITING_KEYFRAME: u8 = 1;

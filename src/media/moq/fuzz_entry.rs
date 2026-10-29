@@ -3,9 +3,9 @@
 //! the way a session feeds it; the parsers stay private to `media::moq`.
 
 use super::ingest::media::TrackSet;
-use super::media::from_hang_catalog;
 use bytes::Bytes;
 use futures_util::FutureExt;
+use restream_moq::media::from_hang_catalog;
 
 /// A publisher's hang or MSF catalog and LOC / legacy / CMAF frames,
 /// through the same upstream catalog consumers and production conversion

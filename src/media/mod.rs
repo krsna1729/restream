@@ -3,13 +3,11 @@
 //! Transcoding and file ingest run as managed `ffmpeg` child processes
 //! ([`external_transcoder`], `external_file_ingest`).
 //!
-//! Live packets flow through [`ring_buffer`] (lock-free SPMC). MediaMTX is not a
+//! Live packets flow through [`restream_sync::ring_buffer`] (lock-free SPMC). MediaMTX is not a
 //! runtime dependency; it appears only as an optional live-harness peer.
 //! Supports H.264, H.265/HEVC, and multi-track audio.
 
 pub mod audio_router;
-#[forbid(unsafe_code)]
-pub mod byte_queue;
 #[forbid(unsafe_code)]
 pub mod codec;
 pub mod egress;
@@ -42,7 +40,6 @@ pub mod hls_ingest;
 pub mod hls_pull;
 pub mod ingest_auth;
 pub mod input_gate;
-pub mod metadata;
 pub(crate) mod moq;
 #[doc(hidden)]
 pub use moq::bench_entry as moq_bench_entry;
@@ -51,14 +48,12 @@ pub use moq::bench_entry as moq_bench_entry;
 pub use moq::fuzz_entry as moq_fuzz_entry;
 #[doc(hidden)]
 pub use moq::subscribe_entry as moq_subscribe_entry;
-#[forbid(unsafe_code)]
-pub mod mpegts;
-pub mod packet;
+#[cfg(test)]
+mod mpegts_allocation_tests;
 pub mod pipe_metrics;
 pub mod profiles;
 pub mod recirculation;
 pub mod recording;
-pub mod ring_buffer;
 pub mod rtmp;
 pub mod security;
 pub mod snapshots;
@@ -69,7 +64,6 @@ pub mod stage_lifecycle;
 pub mod stage_metrics;
 pub mod stage_registry_access;
 pub mod stage_runtime;
-pub mod standby_gop;
 pub mod startup_policy;
 pub mod stream_inspector;
 pub mod stream_qa;
@@ -81,7 +75,7 @@ pub mod timing;
 pub mod ts_chunk_ring;
 pub mod uring_capabilities;
 
-use ring_buffer::MEDIA_PULL_BURST_PACKETS;
+use restream_sync::MEDIA_PULL_BURST_PACKETS;
 
 /// One fixed-size MPEG-TS packet.
 pub const MPEG_TS_PACKET_BYTES: usize = 188;

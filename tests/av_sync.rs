@@ -23,7 +23,7 @@
 //!    independently and cause visible sync drift.
 #![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 
-use restream::media::ring_buffer::DtsEnforcer;
+use restream_sync::DtsEnforcer;
 
 // ---------------------------------------------------------------------------
 // 1. Cross-stream isolation

@@ -14,7 +14,8 @@ pub fn parse_timestamp(data: &[u8; 5]) -> i64 {
 /// header into a growing `Vec`. Delegates rather than repeating the
 /// bit-packing: a second copy would let the encoding tests keep asserting
 /// a layout production had already stopped emitting.
-pub fn write_timestamp(buf: &mut Vec<u8>, ts: i64, marker: u8) {
+#[cfg(test)]
+pub(crate) fn write_timestamp(buf: &mut Vec<u8>, ts: i64, marker: u8) {
     let mut bytes = [0u8; 5];
     write_timestamp_buf(&mut bytes, ts, marker);
     buf.extend_from_slice(&bytes);

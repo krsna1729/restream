@@ -4,7 +4,7 @@
 //!
 //! The bench publishes far faster than real time, so moq-net's wall-clock
 //! idle window never reclaims anything; the production cache budget
-//! ([`crate::media::moq::budget`]) evicts inline as frames are written and
+//! ([`restream_moq::budget`]) evicts inline as frames are written and
 //! keeps memory bounded.
 
 use std::sync::Arc;
@@ -12,15 +12,18 @@ use std::sync::Arc;
 use bytes::{BufMut, Bytes, BytesMut};
 use moq_net::origin;
 
-use crate::media::codec::build_avcc_sequence_header;
 use crate::media::egress::feed::{EgressFeed, FeedCursor, ReadBudget};
 use crate::media::egress::journal::{FeedEpoch, RingFeed};
 use crate::media::moq::egress::media::MediaConverter;
 use crate::media::moq::egress::publish::{HangBroadcast, Pump, RingPublisher};
 use crate::media::moq::egress::startup::{MoqAudioStartup, MoqPublishStartup, MoqVideoStartup};
-use crate::media::moq::media::{AudioConfig, TrackContainer, VideoCodec, VideoConfig};
-use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
-use crate::media::ring_buffer::RingBuffer;
+use restream_core::codec::build_avcc_sequence_header;
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
+use restream_moq::media::AudioConfig;
+use restream_moq::media::TrackContainer;
+use restream_moq::media::VideoCodec;
+use restream_moq::media::VideoConfig;
+use restream_sync::RingBuffer;
 
 const PARAMETER_SETS: &[u8] = &[
     0, 0, 0, 1, 0x67, 0x42, 0, 0x1e, 0xf4, 0x05, 1, 0xec, 0x80, 0, 0, 0, 1, 0x68, 0xce, 0x06, 0xe2,
@@ -57,7 +60,7 @@ pub struct PublishBench {
 impl PublishBench {
     /// H.264 (avcC known at startup) plus AAC, as `units`.
     pub fn new(units: RingUnits) -> Self {
-        let (origin, driver, budget) = crate::media::moq::budget::origin();
+        let (origin, driver, budget) = restream_moq::budget::origin();
         let video = VideoConfig::from_parameter_sets(VideoCodec::H264, PARAMETER_SETS);
         let startup = MoqPublishStartup {
             video: Some(MoqVideoStartup {

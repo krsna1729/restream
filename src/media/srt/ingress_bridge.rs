@@ -18,9 +18,9 @@ use srt_transport::advanced::caller::LogicalCallerId;
 use srt_transport::{ListenerTransfer, OwnerListenerPlan};
 use tokio::sync::mpsc;
 
-use crate::media::mpegts::DemuxProbe;
-use crate::media::ring_buffer::RingBuffer;
 use crate::media::snapshots::ListenerSocketStats;
+use restream_mpegts::DemuxProbe;
+use restream_sync::RingBuffer;
 
 use super::ingress_admission::ReceiverGroupId;
 use super::ingress_media::{SrtPublisherMedia, SrtReaderMedia};
@@ -92,7 +92,7 @@ pub(crate) enum IngressCommand {
         token: CallToken,
         /// The resolved listener address, for lifecycle events.
         remote: SocketAddr,
-        request: Box<super::egress_connect::SrtConnectRequest>,
+        request: Box<restream_srt::egress_connect::SrtConnectRequest>,
     },
     /// Disconnect nothing further; flush, drain the Owner and exit. Sent to
     /// every Owner by [`SrtIngressHandle::shutdown`] only.

@@ -38,9 +38,9 @@ use std::sync::atomic::AtomicI64;
 
 use restream::media::engine::IngestRegistration;
 use restream::media::input_gate::InputPacketGate;
-use restream::media::packet::{MediaPacket, MediaType, PayloadFormat};
 use restream::media::recirculation::RecirculationInputPublisher;
-use restream::media::ring_buffer::RingBuffer;
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
+use restream_sync::RingBuffer;
 
 fn make_packets(count: usize, payload_bytes: usize) -> Vec<Arc<MediaPacket>> {
     (0..count)

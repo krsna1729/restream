@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use crate::media::engine::{
     ActiveEgress, ActiveIngest, EgressRetryState, MediaEngine, RecentEgressOutcome,
 };
-use crate::media::ring_buffer::RingBuffer;
+use restream_sync::RingBuffer;
 
 /// Retry state as an output view reports it; computed once per output.
 struct RetryView {
@@ -386,9 +386,7 @@ pub(super) fn ring_payload_stats_json(ring: &RingBuffer) -> serde_json::Value {
     })
 }
 
-pub(super) fn reader_snapshot_json(
-    reader: &crate::media::ring_buffer::ReaderSnapshot,
-) -> serde_json::Value {
+pub(super) fn reader_snapshot_json(reader: &restream_sync::ReaderSnapshot) -> serde_json::Value {
     serde_json::json!({
         "name": reader.name,
         "readIndex": reader.read_idx,

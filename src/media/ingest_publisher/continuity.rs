@@ -2,7 +2,7 @@
 //! and each stream after an HLS discontinuity, is shifted so every stream's
 //! timestamps keep increasing.
 
-use crate::media::packet::MediaPacket;
+use restream_core::MediaPacket;
 use std::collections::HashMap;
 
 #[derive(Default)]
@@ -144,8 +144,8 @@ impl ContinuousTimestampState {
 #[cfg(test)]
 mod tests {
     use super::ContinuousTimestampState;
-    use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
     use bytes::Bytes;
+    use restream_core::{MediaPacket, MediaType, PayloadFormat};
 
     #[test]
     fn continuous_timestamp_state_offsets_replayed_subprocess_packets() {

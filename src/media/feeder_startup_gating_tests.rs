@@ -3,8 +3,8 @@ use std::sync::Arc;
 use bytes::Bytes;
 
 use super::{PacketFeedConfig, TsPacketFeeder};
-use crate::media::metadata::{AudioMeta, VideoMeta};
-use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
+use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
 
 fn audio_track(index: u32) -> AudioMeta {
     AudioMeta {

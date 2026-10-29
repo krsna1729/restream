@@ -5,7 +5,7 @@ use bytes::Bytes;
 use tokio::sync::watch;
 
 use super::HlsConfig;
-use crate::media::metadata::{AudioMeta, VideoMeta};
+use restream_core::metadata::{AudioMeta, VideoMeta};
 
 const TARGET_DURATION_SECS: f64 = 6.0;
 
@@ -41,7 +41,7 @@ pub struct HlsStore {
     /// Woken on every publish, on the publishing thread: the HLS PUT fabric's
     /// shards (the same producer-side wake the media rings give the other
     /// fabrics).
-    publish_subscribers: Arc<crate::media::ring_buffer::PublishSubscribers>,
+    publish_subscribers: Arc<restream_sync::PublishSubscribers>,
 }
 
 struct HlsStoreInner {
@@ -82,13 +82,11 @@ impl HlsStore {
             }),
             config,
             published: watch::Sender::new(None),
-            publish_subscribers: Arc::new(crate::media::ring_buffer::PublishSubscribers::new()),
+            publish_subscribers: Arc::new(restream_sync::PublishSubscribers::new()),
         }
     }
 
-    pub(crate) fn publication_subscribers(
-        &self,
-    ) -> Arc<crate::media::ring_buffer::PublishSubscribers> {
+    pub(crate) fn publication_subscribers(&self) -> Arc<restream_sync::PublishSubscribers> {
         Arc::clone(&self.publish_subscribers)
     }
 

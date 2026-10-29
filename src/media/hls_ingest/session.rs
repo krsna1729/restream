@@ -38,7 +38,7 @@ use crate::media::ingest_publisher::{
     Container, DiscontinuityKind, IngestTimestamps, MediaRejection, PUBLISH_CHUNK_BYTES,
     PublishTarget, SegmentPublisher,
 };
-use crate::media::ring_buffer::RingBuffer;
+use restream_sync::RingBuffer;
 
 /// One uploaded object handed from the HTTP handler to its session.
 pub(super) struct HlsObject {

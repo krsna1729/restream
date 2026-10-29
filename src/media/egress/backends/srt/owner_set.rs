@@ -36,7 +36,10 @@ use srt_transport::compio::{
 use crate::media::egress::command::EgressCommand;
 use crate::media::egress::metrics::{OwnerFamilyMetrics, ShardMetrics};
 use crate::media::egress::shard::EgressShardIdleWake;
-use crate::media::srt::{AddressFamily, SrtConnectKind, SrtConnectRequest, SrtSendResult};
+use restream_srt::address_family::AddressFamily;
+use restream_srt::egress_connect::SrtConnectKind;
+use restream_srt::egress_connect::SrtConnectRequest;
+use restream_srt::egress_engine::SrtSendResult;
 
 mod dispose;
 use self::dispose::{Disposing, FamilyClosure};

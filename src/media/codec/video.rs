@@ -7,10 +7,10 @@
 )]
 use std::borrow::Cow;
 
-use super::enhanced_rtmp_hevc::{
+use restream_core::PayloadFormat;
+use restream_rtmp::enhanced_rtmp_hevc::{
     EX_CODED_FRAMES, EX_CODED_FRAMES_X, EX_SEQUENCE_START, ex_video_tag,
 };
-use crate::media::packet::PayloadFormat;
 
 /// Prepare a video payload for MPEG-TS muxing (Annex B output).
 ///
@@ -94,7 +94,7 @@ pub fn video_for_ts<'a>(
 /// # Usage
 /// ```
 /// use restream::media::codec::video_for_ts_into;
-/// use restream::media::packet::PayloadFormat;
+/// use restream_core::PayloadFormat;
 ///
 /// let payload = [0, 0, 1, 9, 0x10];
 /// let mut nalu_len_size = 4;
@@ -218,7 +218,7 @@ fn length_prefixed_frame_to_annexb<'a>(
 
 /// The NALU length width and Annex B parameter sets of an FLV video
 /// sequence header: a classic H.264 one, or an enhanced RTMP `avc1`/`hvc1`
-pub(crate) use restream_rtmp::flv::flv_video_config;
+use restream_rtmp::flv::flv_video_config;
 
 fn refresh_annexb_parameter_set_cache(payload: &[u8], sps_pps_cache: &mut Vec<u8>) -> bool {
     let Some(parameter_sets) = annexb_parameter_sets(payload) else {
@@ -229,12 +229,7 @@ fn refresh_annexb_parameter_set_cache(payload: &[u8], sps_pps_cache: &mut Vec<u8
     true
 }
 
-pub(crate) use restream_core::codec::{
-    AnnexbParameterSetAccumulator, annexb_parameter_sets, avcc_record, for_each_annexb_nalu,
-    for_each_length_prefixed, raw_annexb_is_keyframe,
-};
-pub use restream_core::codec::{
-    annexb_to_avcc, annexb_to_avcc_into, annexb_to_avcc_with_scratch, avcc_to_annexb,
-    avcc_to_annexb_into, build_avcc_sequence_header, find_annexb_start_codes, parse_avcc_config,
-    split_annexb_nalus, video_for_rtmp, video_for_rtmp_into, video_for_rtmp_with_composition_into,
+use restream_core::codec::{
+    annexb_parameter_sets, avcc_to_annexb, avcc_to_annexb_into, parse_avcc_config,
+    raw_annexb_is_keyframe,
 };

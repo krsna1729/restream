@@ -1,7 +1,7 @@
 use super::*;
 use crate::domain::stage::StageKind;
-use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
 use bytes::Bytes;
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
 use std::sync::Arc;
 
 fn ready_video_meta(codec: &str) -> VideoMeta {

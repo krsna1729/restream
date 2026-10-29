@@ -61,7 +61,7 @@ impl MediaEngine {
         &self,
         feed_id: FeedId,
         feed: &TsFeed,
-        source: &crate::media::ring_buffer::RingBuffer,
+        source: &restream_sync::RingBuffer,
     ) -> Result<bool, SrtFabricEnsureError> {
         let mut registry = self.fabric.srt.lock().await;
         let created = if registry.runtimes.contains_key(&feed_id) {

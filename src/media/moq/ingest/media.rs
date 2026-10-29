@@ -2,7 +2,7 @@
 //! pipeline takes them, and each frame as the packet a TS input carries.
 //!
 //! The catalog maps through the shared model
-//! ([`crate::media::moq::media::from_hang_catalog`]): at most one video
+//! ([`restream_moq::media::from_hang_catalog`]): at most one video
 //! track (ring track 0) and every AAC track (ring indices in catalog order,
 //! at most [`MAX_AUDIO_TRACKS`]). A LOC or legacy frame is a timestamp and
 //! the codec payload; an empty payload is an end-of-group or discontinuity
@@ -28,18 +28,22 @@ use std::ops::ControlFlow;
 use bytes::{BufMut, Bytes, BytesMut};
 
 use super::cmaf::CmafTrack;
-use crate::media::codec::{
-    annexb_parameter_sets, build_aac_sequence_header, for_each_annexb_nalu,
-    for_each_length_prefixed,
-};
 use crate::media::ingest_publisher::fmp4::AdtsConfig;
-use crate::media::metadata::{AudioMeta, VideoMeta};
-use crate::media::moq::WireError;
-use crate::media::moq::media::{
-    AudioConfig, CatalogTracks, TrackContainer, TrackKind, VideoCodec, VideoConfig,
-    parse_legacy_frame, parse_loc_frame,
-};
-use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
+use restream_core::codec::annexb_parameter_sets;
+use restream_core::codec::build_aac_sequence_header;
+use restream_core::codec::for_each_annexb_nalu;
+use restream_core::codec::for_each_length_prefixed;
+use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
+use restream_moq::WireError;
+use restream_moq::media::AudioConfig;
+use restream_moq::media::CatalogTracks;
+use restream_moq::media::TrackContainer;
+use restream_moq::media::TrackKind;
+use restream_moq::media::VideoCodec;
+use restream_moq::media::VideoConfig;
+use restream_moq::media::parse_legacy_frame;
+use restream_moq::media::parse_loc_frame;
 
 /// AAC tracks one publisher may feed; further ones are refused.
 pub(crate) const MAX_AUDIO_TRACKS: usize = 8;
@@ -465,8 +469,8 @@ fn derived_dts(pts: u64, reorder: u64, max_pts: &mut Option<u64>, last: &mut Opt
 
 fn video_meta(config: &VideoConfig, sets: &[u8]) -> VideoMeta {
     let mut meta = match config.codec {
-        VideoCodec::H264 => crate::media::mpegts::h264_video_meta(sets),
-        VideoCodec::H265 => crate::media::mpegts::hevc_video_meta(sets),
+        VideoCodec::H264 => restream_mpegts::h264_video_meta(sets),
+        VideoCodec::H265 => restream_mpegts::hevc_video_meta(sets),
     };
     if meta.width == 0 || meta.height == 0 {
         meta.width = config.coded_width.unwrap_or_default();

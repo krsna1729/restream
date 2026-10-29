@@ -5,11 +5,11 @@ use std::{
 
 use bytes::Bytes;
 use criterion::{Criterion, Throughput};
-use restream::media::byte_queue::MemoryQueue;
-use restream::media::metadata::{AudioMeta, VideoMeta};
-use restream::media::mpegts::{PacketMeta, TsMuxer};
-use restream::media::packet::{MediaPacket, MediaType, PayloadFormat};
-use restream::media::ring_buffer::RingBuffer;
+use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
+use restream_mpegts::{PacketMeta, TsMuxer};
+use restream_sync::RingBuffer;
+use restream_sync::byte_queue::MemoryQueue;
 
 use super::support::{PACKET_BYTES, RING_CAPACITY, packet};
 

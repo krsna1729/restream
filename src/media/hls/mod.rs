@@ -40,11 +40,11 @@ use crate::domain::stage::StageKey;
 use crate::domain::stage::StageKind;
 #[cfg(test)]
 use crate::media::engine::MediaEngine;
-use crate::media::metadata::VideoMeta;
 #[cfg(test)]
-use crate::media::packet::MediaType;
+use restream_core::MediaType;
+use restream_core::metadata::VideoMeta;
 #[cfg(test)]
-use crate::media::ring_buffer::RingBuffer;
+use restream_sync::RingBuffer;
 
 pub use segmenter::start_hls_segmenter;
 pub use store::{HlsPublished, HlsSegmentSnapshot, HlsSegmentVariant, HlsStore, HlsStoreSnapshot};
@@ -357,7 +357,7 @@ mod tests {
         assert!(v.is_none());
         assert!(a.is_empty());
 
-        let video = crate::media::metadata::VideoMeta {
+        let video = restream_core::metadata::VideoMeta {
             codec: "h264".into(),
             width: 1920,
             height: 1080,
@@ -370,7 +370,7 @@ mod tests {
             level: None,
             pixel_format: None,
         };
-        let audio = crate::media::metadata::AudioMeta {
+        let audio = restream_core::metadata::AudioMeta {
             codec: "aac".into(),
             sample_rate: 48000,
             channels: 2,
@@ -666,7 +666,7 @@ mod tests {
         let mut prev_segment_last_dts: Option<HashMap<(u8, u32), i64>> = None;
 
         for segment in &snapshot.segments {
-            let mut demuxer = crate::media::mpegts::TsDemuxer::new();
+            let mut demuxer = restream_mpegts::TsDemuxer::new();
             demuxer.feed(&segment.data);
             demuxer.flush();
             let packets = demuxer.drain();

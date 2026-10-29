@@ -58,7 +58,7 @@ async fn owner_runs_publisher_media_to_completion_without_losing_payloads() {
         )
     });
 
-    let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(8192));
+    let ring = Arc::new(restream_sync::RingBuffer::new(8192));
     let (media, bytes_received) = test_publisher_media(ring.clone());
     let mut media = Some(media);
     let deadline = Instant::now() + Duration::from_secs(25);
@@ -180,7 +180,7 @@ async fn two_owners_share_the_port_and_each_session_command_reaches_its_owner() 
         match tokio::time::timeout(Duration::from_millis(100), handle.events.recv()).await {
             Ok(Some(SrtIngressEvent::Connected { logical_peer, .. })) => {
                 owners.insert(logical_peer.owner);
-                let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(1024));
+                let ring = Arc::new(restream_sync::RingBuffer::new(1024));
                 let (media, bytes) = test_publisher_media(ring);
                 received.push(bytes);
                 let command = IngressCommand::AttachPublisher {
@@ -246,7 +246,7 @@ async fn two_owners_share_the_port_and_each_session_command_reaches_its_owner() 
 /// A publisher's Owner-side media state wired to `ring`, plus its received
 /// byte counter.
 fn test_publisher_media(
-    ring: Arc<crate::media::ring_buffer::RingBuffer>,
+    ring: Arc<restream_sync::RingBuffer>,
 ) -> (
     Box<super::ingress_media::SrtPublisherMedia>,
     Arc<std::sync::atomic::AtomicU64>,
@@ -262,9 +262,9 @@ fn test_publisher_media(
             preview_ring: Arc::new(arc_swap::ArcSwapOption::empty()),
         },
         ring_buffer: ring,
-        demuxer: crate::media::mpegts::TsDemuxer::new(),
+        demuxer: restream_mpegts::TsDemuxer::new(),
         timestamp_mapper: crate::media::input_gate::InputTimestampMapper::default(),
-        standby_gop: crate::media::standby_gop::StandbyGopCache::default(),
+        standby_gop: restream_sync::standby_gop::StandbyGopCache::default(),
         packets: Vec::new(),
         keyframe_times: Arc::new(std::sync::Mutex::new(Vec::new())),
         bytes_received: bytes_received.clone(),

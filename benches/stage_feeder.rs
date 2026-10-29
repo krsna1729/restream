@@ -6,9 +6,9 @@
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use restream::media::feeder::{PacketFeedConfig, TsPacketFeeder};
-use restream::media::metadata::{AudioMeta, VideoMeta};
-use restream::media::packet::{MediaPacket, MediaType, PayloadFormat};
-use restream::media::ring_buffer::DtsEnforcer;
+use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
+use restream_sync::DtsEnforcer;
 use std::hint::black_box;
 use std::sync::Arc;
 

@@ -60,13 +60,13 @@ use ffmpeg_process::{spawn_external_stderr_logger, spawn_external_stdout_reader}
 const PIPE_STALL_THRESHOLD_US: u64 = 1_000;
 
 #[cfg(test)]
-use crate::media::packet::MediaType;
+use restream_core::MediaType;
 
 #[cfg(test)]
 fn external_output_stream_idx(
     media_type: MediaType,
     track_index: u32,
-    audio_tracks: &[crate::media::metadata::AudioMeta],
+    audio_tracks: &[restream_core::metadata::AudioMeta],
     include_audio: bool,
 ) -> Option<usize> {
     match media_type {

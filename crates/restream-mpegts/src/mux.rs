@@ -53,7 +53,7 @@ pub struct TsMuxer {
     pmt_pid: u16,
     pcr_pid: u16,
     last_pat_pmt_dts: Option<i64>,
-    pub last_dts_90k: Vec<i64>,
+    pub(crate) last_dts_90k: Vec<i64>,
     service_metadata: TsServiceMetadata,
     output: Vec<u8>,
 }

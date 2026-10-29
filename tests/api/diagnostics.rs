@@ -86,7 +86,7 @@ async fn pipeline_graph_stage_nodes_include_lifecycle_details() {
     let (handle, _lease206, _) = manager
         .ensure_stage(
             stage_key.clone(),
-            Arc::new(restream::media::ring_buffer::RingBuffer::new(8)),
+            Arc::new(restream_sync::RingBuffer::new(8)),
             None,
         )
         .await;

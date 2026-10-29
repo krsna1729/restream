@@ -229,9 +229,9 @@ async fn health_snapshot_drops_egress_registry_before_stage_blocked_lookup() {
 
 #[tokio::test]
 async fn stage_runtime_snapshot_reads_runtime_after_side_maps_removed() {
-    use crate::media::ring_buffer::RingBuffer;
     use crate::media::stage_lifecycle::StagePhase;
     use crate::media::stage_runtime::StageRuntimeManager;
+    use restream_sync::RingBuffer;
 
     let engine = Arc::new(MediaEngine::new());
     let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));

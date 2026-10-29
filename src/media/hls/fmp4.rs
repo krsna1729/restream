@@ -36,9 +36,9 @@ use super::HlsConfig;
 #[cfg(test)]
 use crate::media::engine::MediaEngine;
 #[cfg(test)]
-use crate::media::metadata::{AudioMeta, VideoMeta};
+use restream_core::metadata::{AudioMeta, VideoMeta};
 #[cfg(test)]
-use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
 
 mod codec;
 mod rendition;
@@ -472,7 +472,7 @@ mod tests {
     /// every frame with no error.
     #[test]
     fn hevc_sources_package_as_hvc1_fmp4_that_ffmpeg_decodes() {
-        use crate::media::codec;
+        use restream_core::codec;
         let (video, _, packets) =
             crate::test_fixtures::primary_av_packets_for_codec("h265").unwrap();
         let video_packets: Vec<&MediaPacket> = packets

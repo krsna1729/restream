@@ -30,7 +30,7 @@ use compio::quic::{
 pub(crate) use driver::run_driver;
 pub(crate) use session::MoqSession;
 
-use crate::media::srt::AddressFamily;
+use restream_srt::address_family::AddressFamily;
 
 /// Every MoQ version Restream speaks, most preferred first: moq-net's
 /// `ALPNS` (moq-lite, the legacy `moql` SETUP negotiation, IETF MOQT drafts

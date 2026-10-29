@@ -4,7 +4,9 @@ use std::io::{ErrorKind, Read, Write};
 use bytes::Bytes;
 
 use crate::media::egress::backend::{Interest, Readiness};
-use crate::media::rtmp::{RtmpSessionCore, RtmpSessionError, RtmpSessionEvent};
+use restream_rtmp::RtmpSessionCore;
+use restream_rtmp::RtmpSessionError;
+use restream_rtmp::RtmpSessionEvent;
 
 use super::SESSION_READ_BUFFER;
 use crate::media::egress::tls::TlsTcpConnection;

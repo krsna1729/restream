@@ -50,11 +50,11 @@ async fn a_retried_output_delivers_again_after_its_shard_panics() {
             .unwrap_or_else(|_| panic!("{what} never happened"));
     };
 
-    let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(4));
+    let ring = Arc::new(restream_sync::RingBuffer::new(4));
     let feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
-    let packet = |timestamp| crate::media::packet::MediaPacket {
-        media_type: crate::media::packet::MediaType::Video,
-        format: crate::media::packet::PayloadFormat::Flv,
+    let packet = |timestamp| restream_core::MediaPacket {
+        media_type: restream_core::MediaType::Video,
+        format: restream_core::PayloadFormat::Flv,
         is_keyframe: true,
         track_index: 0,
         pts: timestamp,

@@ -1,12 +1,12 @@
 use bytes::Bytes;
 
 use super::*;
-use crate::media::codec::{
-    build_aac_sequence_header, build_avcc_sequence_header, build_hevc_enhanced_rtmp_sequence_header,
-};
 use crate::media::moq::egress::startup::{MoqAudioStartup, MoqVideoStartup};
-use crate::media::moq::media::TrackContainer;
-use crate::media::mpegts::TsDemuxer;
+use restream_core::codec::build_aac_sequence_header;
+use restream_core::codec::build_avcc_sequence_header;
+use restream_moq::media::TrackContainer;
+use restream_mpegts::TsDemuxer;
+use restream_rtmp::enhanced_rtmp_hevc::build_hevc_enhanced_rtmp_sequence_header;
 
 /// Baseline 3.0 SPS (640x480) and a PPS, Annex-B.
 const PARAMETER_SETS: &[u8] = &[
@@ -395,7 +395,7 @@ fn flv_aac_strips_its_header_and_a_new_asc_republishes() {
 fn raw_adts_splits_into_access_units_one_aac_frame_apart() {
     let mut converter = converter(None, Some(aac_audio(0, 48_000)));
     let adts = |raw: &[u8]| {
-        let mut frame = crate::media::codec::build_adts_header(raw.len(), 48_000, 2)
+        let mut frame = restream_core::codec::build_adts_header(raw.len(), 48_000, 2)
             .unwrap()
             .to_vec();
         frame.extend_from_slice(raw);

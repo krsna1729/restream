@@ -3,9 +3,8 @@
 //! frame packer.
 #![no_main]
 
-use restream::media::codec::{
-    build_hevc_enhanced_rtmp_sequence_header, hevc_video_for_enhanced_rtmp_with_composition_into,
-};
+use restream_rtmp::enhanced_rtmp_hevc::build_hevc_enhanced_rtmp_sequence_header;
+use restream_rtmp::enhanced_rtmp_hevc::hevc_video_for_enhanced_rtmp_with_composition_into;
 
 libfuzzer_sys::fuzz_target!(|data: &[u8]| {
     if let Some(header) = build_hevc_enhanced_rtmp_sequence_header(data) {

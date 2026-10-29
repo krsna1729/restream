@@ -9,10 +9,10 @@ use std::time::{Duration, Instant};
 
 use crate::media::engine::{IngestRegistration, MediaEngine};
 use crate::media::input_gate::InputTimestampMapper;
-use crate::media::packet::MediaPacket;
-use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_metrics::StageMetrics;
-use crate::media::standby_gop::StandbyGopCache;
+use restream_core::MediaPacket;
+use restream_sync::RingBuffer;
+use restream_sync::standby_gop::StandbyGopCache;
 
 /// Bounds on packets held while Tokio applies the probe (the ring may be
 /// replaced): the same budget SRT ingest holds per publisher.

@@ -2,13 +2,13 @@ use super::*;
 use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
-use crate::media::metadata::AudioMeta;
-use crate::media::mpegts::TsDemuxer;
-use crate::media::packet::MediaType;
-use crate::media::ring_buffer::{DtsEnforcer, Reader, RingBuffer};
 use crate::media::stage_runtime::{build_ffmpeg_stage_plan, wait_for_stage_metadata};
 use proptest::prelude::*;
 use proptest::test_runner::Config as ProptestConfig;
+use restream_core::MediaType;
+use restream_core::metadata::AudioMeta;
+use restream_mpegts::TsDemuxer;
+use restream_sync::{DtsEnforcer, Reader, RingBuffer};
 use tokio_util::sync::CancellationToken;
 
 // Helpers shared by the argument, metadata, and live-stage behavior slices.
@@ -26,7 +26,7 @@ fn write_temp_ts_artifact(name: &str, bytes: &[u8]) -> std::path::PathBuf {
 
 fn assert_strict_video_dts<'a, I>(label: &str, packets: I)
 where
-    I: IntoIterator<Item = &'a crate::media::packet::MediaPacket>,
+    I: IntoIterator<Item = &'a restream_core::MediaPacket>,
 {
     let mut previous = None;
     let mut count = 0usize;

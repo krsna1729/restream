@@ -19,7 +19,7 @@ use crate::media::egress::policy::WorkBudget;
 use crate::media::engine::IngestRegistration;
 
 use crate::media::recirculation::RecirculationInputPublisher;
-use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, RingBuffer};
+use restream_sync::{MEDIA_PULL_BURST_PACKETS, RingBuffer};
 
 /// Everything a pipeline leaf needs to publish into its claimed target
 /// input — resolved asynchronously by the application layer (claiming the

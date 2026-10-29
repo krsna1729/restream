@@ -6,10 +6,10 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::media::packet::{MediaPacket, MediaType};
+use restream_core::{MediaPacket, MediaType};
 
 use super::ingest::{RtmpClientSocket, RtmpControlCommand};
-use super::timestamps::RtmpTimestampGuard;
+use restream_rtmp::timestamps::RtmpTimestampGuard;
 
 pub(super) enum PlayAuthorization {
     Accepted {

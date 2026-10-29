@@ -414,7 +414,7 @@ fn a_multi_frame_audio_pes_becomes_one_packet_per_adts_frame() {
     demuxer.pid_to_stream[pid as usize] = 0;
 
     let frame = |fill: u8| {
-        let mut frame = crate::media::codec::build_adts_header(40, 48_000, 2)
+        let mut frame = restream_core::build_adts_header(40, 48_000, 2)
             .expect("a 40-byte payload fits one ADTS frame")
             .to_vec();
         frame.extend(std::iter::repeat_n(fill, 40));
@@ -459,7 +459,7 @@ fn a_multi_frame_audio_pes_becomes_one_packet_per_adts_frame() {
 fn an_audio_pes_is_split_by_one_rule() {
     let pid = 0x0101;
     let frame = |fill: u8| {
-        let mut frame = crate::media::codec::build_adts_header(40, 48_000, 2)
+        let mut frame = restream_core::build_adts_header(40, 48_000, 2)
             .expect("a 40-byte payload fits one ADTS frame")
             .to_vec();
         frame.extend(std::iter::repeat_n(fill, 40));
@@ -512,7 +512,7 @@ fn an_audio_pes_is_split_by_one_rule() {
 
 /// One AAC frame: an ADTS header and `len` bytes of `fill`.
 fn adts_frame(len: usize, fill: u8) -> Vec<u8> {
-    let mut frame = crate::media::codec::build_adts_header(len, 48_000, 2)
+    let mut frame = restream_core::build_adts_header(len, 48_000, 2)
         .expect("the payload fits one ADTS frame")
         .to_vec();
     frame.extend(std::iter::repeat_n(fill, len));
@@ -537,7 +537,7 @@ fn audio_pes(pid: u16, cc: u8, pts_90k: Option<i64>, es_payload: &[u8]) -> [u8; 
 }
 
 /// Demux `pieces` (each a PES payload with its PTS, if any) as one AAC stream.
-fn demux_audio_pes(pieces: &[(Option<i64>, Vec<u8>)]) -> Vec<crate::media::packet::MediaPacket> {
+fn demux_audio_pes(pieces: &[(Option<i64>, Vec<u8>)]) -> Vec<restream_core::MediaPacket> {
     let pid = 0x0101;
     let mut demuxer = TsDemuxer::new();
     demuxer.streams = vec![aac_adts_stream_info(pid, 0)];
@@ -652,7 +652,7 @@ fn a_stray_sync_word_inside_a_frame_is_not_taken_for_one() {
     let mut body = vec![0x11; 10];
     body.extend_from_slice(&fake);
     body.extend_from_slice(&[0x11; 10]);
-    let mut first = crate::media::codec::build_adts_header(body.len(), 48_000, 2)
+    let mut first = restream_core::build_adts_header(body.len(), 48_000, 2)
         .expect("the payload fits one ADTS frame")
         .to_vec();
     first.extend_from_slice(&body);
@@ -719,60 +719,20 @@ proptest! {
     }
 }
 
-/// A chunk that continues a partial packet is joined in a buffer the demuxer
-/// keeps, not in a fresh chunk-sized allocation: on the MEDIA executor one
-/// such feed is one poll, and allocate/copy/free of the whole chunk per poll
-/// was measurable per-poll work (`hlsIngest`, Q-074).
+/// A feed that ends mid-packet keeps exactly that tail, and the next feed
+/// joins and consumes it. The root allocation guard
+/// (`media::mpegts_allocation_tests`) measures this same path; these state
+/// transitions prove each measured iteration really enters and clears it.
 #[test]
-fn continuing_a_partial_packet_reuses_its_staging_buffer() {
-    // 100 bytes of a packet: no complete 188-byte packet, so it becomes the
-    // partial tail the next feed must continue.
+fn continuing_a_partial_packet_stages_then_clears_the_tail() {
     let partial = [TS_SYNC_BYTE; 100];
-    // A chunk with no sync byte at all: nothing demuxes, nothing is emitted,
-    // so allocations counted below can only come from the staging path.
     let body = vec![0xFFu8; 64 * 1024];
     let mut demuxer = TsDemuxer::new();
-    let mut feed_pair = || {
+    for _ in 0..4 {
         demuxer.feed(&partial);
         assert_eq!(demuxer.remainder.len(), partial.len());
         demuxer.feed(&body);
         assert!(demuxer.remainder.is_empty());
-    };
-    // Warm every buffer the path keeps.
-    for _ in 0..3 {
-        feed_pair();
     }
-
-    crate::test_alloc::begin();
-    for _ in 0..8 {
-        feed_pair();
-    }
-    let allocations = crate::test_alloc::end();
-    assert_eq!(
-        allocations, 0,
-        "{allocations} allocations in 8 partial-packet feeds; the staging buffer must be reused"
-    );
-
-    // Repeated non-packet-aligned feeds must preserve every ordered packet,
-    // including the final PES emitted by flush and a pending tail on empty
-    // feeds. Packet counts alone would miss reordered/corrupted payloads.
-    let fixture =
-        crate::test_fixtures::canonical_h264_ts_fixture().unwrap_or_else(|e| panic!("{e}"));
-    let ts_data = std::fs::read(&fixture).unwrap_or_else(|e| panic!("{e}"));
-    let mut whole = TsDemuxer::new();
-    whole.feed(&ts_data);
-    whole.flush();
-    let mut chunked = TsDemuxer::new();
-    for chunk in ts_data.chunks(64 * 1024 + 7) {
-        chunked.feed(chunk);
-        chunked.feed(&[]);
-    }
-    chunked.flush();
-    let packets = |mut demuxer: TsDemuxer| {
-        demuxer.drain().into_iter().map(|packet| (
-            packet.media_type, packet.format, packet.is_keyframe, packet.track_index,
-            packet.pts, packet.dts, packet.payload,
-        )).collect::<Vec<_>>()
-    };
-    assert_eq!(packets(whole), packets(chunked));
 }
+

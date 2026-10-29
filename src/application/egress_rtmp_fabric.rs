@@ -10,12 +10,14 @@ use crate::media::egress::journal::{FeedEpoch, RingFeed};
 use crate::media::egress::policy::LeafPolicy;
 use crate::media::egress::{FeedId, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::engine::MediaEngine;
-use crate::media::metadata::AudioMeta;
-use crate::media::rtmp::{
-    output_ring_video_codec_kind, resolved_output_audio_tracks, rtmp_publish_metadata,
-    should_defer_audio_until_video_ready, should_send_startup_audio_sequence_header,
-    startup_video_sequence_header, validate_rtmp_output_audio_tracks,
-};
+use crate::media::rtmp::output_ring_video_codec_kind;
+use crate::media::rtmp::resolved_output_audio_tracks;
+use crate::media::rtmp::rtmp_publish_metadata;
+use restream_core::metadata::AudioMeta;
+use restream_rtmp::should_defer_audio_until_video_ready;
+use restream_rtmp::should_send_startup_audio_sequence_header;
+use restream_rtmp::startup_video_sequence_header;
+use restream_rtmp::validate_rtmp_output_audio_tracks;
 
 pub struct PreparedRtmpFabricFeed {
     pub feed_id: FeedId,
@@ -85,7 +87,7 @@ pub async fn prepare_rtmp_fabric_startup(
         && let Some(track) = output_audio_track.as_ref()
     {
         audio_sequence_header = track.codec.eq_ignore_ascii_case("aac").then(|| {
-            crate::media::codec::build_aac_sequence_header(track.sample_rate, track.channels)
+            restream_core::codec::build_aac_sequence_header(track.sample_rate, track.channels)
         });
     }
     let (startup_video_sequence_header, startup_video_generation) = startup_video_sequence_header(
@@ -147,7 +149,7 @@ mod tests {
     use crate::domain::state::DesiredOutputState;
     use crate::media::egress::EgressFeed;
     use crate::media::engine::MediaEngine;
-    use crate::media::metadata::AudioMeta;
+    use restream_core::metadata::AudioMeta;
 
     fn test_output(pipeline_id: &str, url: &str) -> Output {
         Output {
