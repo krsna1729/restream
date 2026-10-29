@@ -47,7 +47,7 @@ because a skill is relevant.
 | live pipeline operations | [restream-ops-agent](docs/agent-guidance/skills/restream-ops-agent/SKILL.md) |
 
 Claude Code shims are generated locally by `cargo xtask setup-skills`
-(`.claude/` is gitignored; `scripts/agent/worktree.sh` runs it in new
+(`.claude/` is gitignored; `cargo xtask worktree` runs it in new
 worktrees). After adding or editing a canonical skill, rerun it.
 
 ## Repository Map
@@ -80,16 +80,16 @@ cargo test
 cargo clippy
 cargo fmt --all
 
-scripts/agent/worktree.sh <id>
+cargo xtask worktree <id>
 source .local/worktrees/<id>/.agent-state/setup.env
-scripts/agent/worktree.sh --cleanup <id>
+cargo xtask worktree --cleanup <id>
 
 cargo xtask setup-skills
 
 npm run test:frontend
 
 cargo bench --bench <name>
-scripts/harness/run.sh <mode>   # modes: target/bench/test_harness catalog list-modes
+cargo xtask harness <mode>   # modes: target/bench/test_harness catalog list-modes
 ```
 
 Integration tests use a private loopback namespace by default; use `--no-netns` only when required.
@@ -115,7 +115,7 @@ in on demand, and verify with the narrowest gate first.
 | lifecycle, concurrency primitives, thread hops | Concurrency fast; Concurrency live on master pushes | the new test or loom case only |
 | frontend/backend contract surface | API contract | — |
 | test media, fixtures, bench/harness setup | Rust unit hygiene and fixtures | — |
-| Markdown documentation | Source architecture audit (`scripts/check/docs.mjs`) | — |
+| Markdown documentation | Source architecture audit (`cargo xtask docs-audit`) | — |
 | `web/ts/`, `web/styles/input.css` | Frontend unit, Frontend app E2E | the new test only |
 | RTMP/SRT/HLS protocol behavior | Transport live-harness; master push transport matrix | one harness mode for a new scenario (`test_harness catalog list-modes`) |
 | hot-path code | — | relevant `benches/` suite before and after |
@@ -138,7 +138,7 @@ pgrep -a -x cargo
 - Stop only processes owned by this task or covered by the user's restart
   request, after checking their PIDs and command lines. A matching process
   name does not establish ownership. Defer heavy work while other media runs.
-- Prefer `scripts/agent/worktree.sh <id>` over manual setup; use one worktree per agent or task.
+- Prefer `cargo xtask worktree <id>` over manual setup; use one worktree per agent or task.
 - Treat `target/`, `.cargo/`, and `node_modules/` as copied caches owned by the destination worktree; do not point multiple worktrees at one live `target/`.
 - Use `.agent-state/setup.env` as the source of truth for `WORK_ROOT`.
 

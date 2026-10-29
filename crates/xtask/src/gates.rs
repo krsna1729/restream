@@ -33,7 +33,7 @@ impl AutoGate {
             Self::ClippyMcp => CLIPPY_MCP,
             Self::ShellSyntax => "bash -n staged shell files",
             Self::FrontendFormat => "npm run format:check",
-            Self::Docs => "node scripts/check/docs.mjs",
+            Self::Docs => "cargo xtask docs-audit",
             Self::SourceAudit => "cargo xtask source-audit",
         }
     }
@@ -200,7 +200,7 @@ impl Plan {
                     .filter(|file| is_shell(file))
                     .try_for_each(|file| run("bash", &["-n", file], &[])),
                 AutoGate::FrontendFormat => run("npm", &["run", "format:check"], &[]),
-                AutoGate::Docs => run("node", &["scripts/check/docs.mjs"], &[]),
+                AutoGate::Docs => crate::docs_audit::run(&[]).map_err(|error| error.to_string()),
                 AutoGate::SourceAudit => source_audit::run(),
             };
             result.map_err(|error| format!("gates: failed: {}: {error}", gate.label()))?;
@@ -213,7 +213,7 @@ impl Plan {
 fn route(changed: &[String]) -> Plan {
     let mut plan = Plan::default();
     for file in changed.iter().map(String::as_str) {
-        if file.ends_with(".md") || file == "scripts/check/docs.mjs" {
+        if file.ends_with(".md") || file == "crates/xtask/src/docs_audit.rs" {
             plan.auto.insert(AutoGate::Docs);
         }
         if file.ends_with(".rs") {
@@ -321,7 +321,7 @@ fn library_tests(plan: &mut Plan, package: &str) -> bool {
 
 fn guarded_test_command(command: &str, filter: &str) -> String {
     let filter = if filter.is_empty() { "''" } else { filter };
-    format!("scripts/ci/require-test-filters.sh {command} -- {filter} && {command} -- {filter}")
+    format!("cargo xtask require-test-filters {command} -- {filter} && {command} -- {filter}")
 }
 
 fn package_test_command(file: &str, filter: &str) -> String {
@@ -385,7 +385,9 @@ fn is_fixture_or_harness(file: &str) -> bool {
             "src/test_fixtures.rs",
             "src/test_fixtures/*",
             "benches/*",
-            "scripts/fixtures/*",
+            "crates/xtask/src/harness.rs",
+            "crates/xtask/src/harness/*",
+            "crates/xtask/src/fixtures.rs",
             "scripts/harness/*",
             "crates/xtask/src/bins.rs",
             "crates/test_harness/src/main.rs",
@@ -700,7 +702,7 @@ mod tests {
             let plan = plan_for(&[path]);
             assert!(
                 plan.follow_ups.iter().any(|command| {
-                    command.starts_with("scripts/ci/require-test-filters.sh ")
+                    command.starts_with("cargo xtask require-test-filters ")
                         && command.contains(
                             "cargo test -p restream --lib -- media::mpegts_allocation_tests",
                         )
@@ -882,7 +884,11 @@ fn records_execution() {
                     true,
                 ),
                 ("fuzz/fuzz_targets/flv.rs", false, true, false),
-                ("scripts/dev/moq/fetch-moq-dev.sh", false, false, true),
+                ("crates/xtask/src/fetch.rs", false, false, true),
+                ("crates/xtask/src/fetch/moxygen.rs", false, false, true),
+                ("crates/xtask/src/container/smoke.rs", true, false, false),
+                ("crates/xtask/src/release.rs", true, false, false),
+                ("crates/xtask/src/qualify/evidence.rs", true, false, false),
             ] {
                 let expected = match job {
                     "docker-runtime-smoke" => docker,

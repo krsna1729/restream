@@ -59,12 +59,12 @@ jobs:
         run: cargo xtask build-bench
       - uses: docker/setup-buildx-action@v4
       - name: Prepare build tree
-        run: scripts/release/prepare-build-tree.sh
+        run: cargo xtask release prepare-build-tree
       - name: Smoke production runtime image
         env:
           RESTREAM_CONTAINER_IMAGE: restream:nightly-runtime-smoke
           RESTREAM_DOCKER_GHA_CACHE: "1"
-        run: scripts/check/container-smoke.sh --image "$RESTREAM_CONTAINER_IMAGE"
+        run: cargo xtask container smoke --image "$RESTREAM_CONTAINER_IMAGE"
 
   nightly-harness-build:
     name: Nightly harness release build
@@ -73,27 +73,29 @@ jobs:
       shards: ${{ steps.shards.outputs.json }}
     steps:
       - uses: actions/checkout@v7
-      - name: Release shard list
-        id: shards
-        # The catalog in scripts/lib/release-shards.sh is the one list.
-        run: echo "json=$(scripts/release/harness-shard.sh list | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/ci-bootstrap
         with:
           node_version: '22'
           system_deps_profile: build
           rust_cache: 'true'
+      - name: Release shard list
+        id: shards
+        # The catalog in crates/xtask/src/qualify/shards.rs is the one list.
+        run: echo "json=$(cargo xtask release shards --json)" >> "$GITHUB_OUTPUT"
       - name: Prepare build tree
-        run: scripts/release/prepare-build-tree.sh
+        run: cargo xtask release prepare-build-tree
       - name: Build release harness binaries
         run: |
           RESTREAM_BUILD_PROFILE=release \
           RESTREAM_BUILD_BINS="restream test_harness" \
-          ./scripts/build/app-native.sh
+          cargo xtask release app-native
+          cargo build --release -p xtask
       - name: Stage nightly harness binaries
         run: |
           mkdir -p .local/nightly-harness-bin
           cp target/release/restream .local/nightly-harness-bin/restream
           cp target/release/test_harness .local/nightly-harness-bin/test_harness
+          cp target/release/xtask .local/nightly-harness-bin/xtask
       - uses: actions/upload-artifact@v7
         with:
           name: nightly-harness-bin-${{ github.sha }}

@@ -1,5 +1,5 @@
 // Browser interop specs for Restream's MoQ origin and a moq-relay, driven by
-// `scripts/harness/run.sh moq-dev-interop -- --browsers`, which starts the
+// `cargo xtask harness moq-dev-interop -- --browsers`, which starts the
 // endpoints and passes them in MOQ_BROWSER_* variables. Kept out of the
 // frontend suite (its own package, `*.moq.ts` names) because nothing here
 // works without those live endpoints.

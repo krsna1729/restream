@@ -8,8 +8,8 @@ on:
     paths:
       - Dockerfile
       - scripts/dev/bootstrap-runtime.sh
-      - scripts/dev/harness-host-prereqs.sh
-      - scripts/lib/**
+      - scripts/ci/install-system-deps.sh
+      - scripts/data/debian-packages.tsv
       - .github/workflows/ci-harness-runtime-image.yml
 
 permissions:

@@ -121,9 +121,9 @@ production binary, configures it through the API, publishes real media over
 SRT, and receives RTMP and SRT egress on localhost peers.
 
 ```sh
-MSR_PLAN_ONLY=1 ./scripts/harness/run.sh msr   # print the deterministic plan
-./scripts/harness/run.sh msr                   # first 30 outputs
-MSR_FULL=1 ./scripts/harness/run.sh msr        # 30,120,300,600,900,1200 ramp
+MSR_PLAN_ONLY=1 cargo xtask harness msr   # print the deterministic plan
+cargo xtask harness msr                   # first 30 outputs
+MSR_FULL=1 cargo xtask harness msr        # 30,120,300,600,900,1200 ramp
 ```
 
 - Each checkpoint proves Restream output progress and peer health (see
@@ -153,7 +153,7 @@ buffers.
 | `MSR_FULL` | unset | `1` uses `30,120,300,600,900,1200` |
 | `MSR_PLAN_ONLY` | unset | Print the 1,200-output plan without media |
 | `MSR_PROTOCOL_MIX` | `canonical` | `canonical`, `rtmp-only`, `srt-only` or `srt-every:N` |
-| `RESTREAM_MSR_FIXTURE_OVERRIDE` | unset | Source media. The default is the checked-in ~2 Mb/s fixture. For 1080p60 at ~8 Mb/s, run `scripts/fixtures/generate-msr-1080p-fixture.sh` and set `.local/fixtures/bbb-1080p60-30a.mp4` |
+| `RESTREAM_MSR_FIXTURE_OVERRIDE` | unset | Source media. The default is the checked-in ~2 Mb/s fixture. For 1080p60 at ~8 Mb/s, run `cargo xtask fixtures generate-msr-1080p` and set `.local/fixtures/bbb-1080p60-30a.mp4` |
 | `MSR_SAMPLE_SECS` | `6` | Sampling window per checkpoint |
 | `MSR_SAMPLE_INTERVAL_MS` | `1000` | Resource sample interval |
 | `MSR_SETTLE_SECS` | `4` | Settle time before sampling |

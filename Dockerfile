@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-# Multi-stage build that keeps the build logic in repo scripts and uses Docker
+# Multi-stage build that keeps the build logic in `cargo xtask` and uses Docker
 # layers only for cache boundaries:
 #
 #   1. toolchain    → OS packages and the pinned Rust toolchain
@@ -10,7 +10,7 @@
 #   5. harness       → a minimal Ubuntu image for live protocol validation
 #
 # The Rust toolchain bootstrap comes from scripts/dev/bootstrap.sh and the
-# application build from scripts/build/app-native.sh. The engine links no media
+# application build from `cargo xtask release app-native`. The engine links no media
 # library: FFmpeg is a separate executable (the ffmpeg-fetch stage below).
 
 # ── Stage 1: toolchain ───────────────────────────────────────────────────────
@@ -33,12 +33,11 @@ ENV RESTREAM_REPO_ROOT=/workspace
 # this stage.
 COPY package.json package-lock.json ./
 COPY rust-toolchain.toml rust-toolchain.toml
-COPY scripts/lib/ scripts/lib/
-# Keep this stage script-aware but not script-global: copying all of scripts/
-# would make unrelated release/harness/frontend helper edits rebuild the
-# toolchain. Add only bootstrap owners here.
-COPY scripts/dev/bootstrap.sh scripts/dev/harness-host-prereqs.sh scripts/dev/install-git-hooks.sh scripts/dev/
-COPY .githooks/ .githooks/
+# Copy only the bootstrap owners: copying all of scripts/ would make unrelated
+# helper edits rebuild the toolchain.
+COPY scripts/data/debian-packages.tsv scripts/data/
+COPY scripts/ci/install-system-deps.sh scripts/ci/
+COPY scripts/dev/bootstrap.sh scripts/dev/bootstrap-runtime.sh scripts/dev/
 
 # bootstrap owns the fresh-Ubuntu dependency contract, including Node/npm
 # plus npm ci for the committed frontend toolchain dependencies.
@@ -68,8 +67,9 @@ RUN npm run build:frontend
 #   - manifest/config only + dummy src/main.rs → compile Cargo dependencies
 #   - real src/ + built public/ assets         → relink just the app crate
 #
-# scripts/build/app-native.sh is used for both so Docker never re-implements the
-# linkage verification.
+# The warm layer is a plain dependency build; the real build runs
+# `cargo xtask release app-native` so Docker never re-implements the linkage
+# verification.
 
 FROM toolchain AS rust-build
 
@@ -84,8 +84,6 @@ RUN test -n "$RESTREAM_BUILD_GIT_COMMIT" \
 ENV RESTREAM_BUILD_GIT_COMMIT=${RESTREAM_BUILD_GIT_COMMIT} \
     RESTREAM_BUILD_TIMESTAMP=${RESTREAM_BUILD_TIMESTAMP} \
     RESTREAM_SKIP_SBOM=1
-
-COPY scripts/build/app-native.sh scripts/build/emit-sbom.sh scripts/build/
 
 # Warm the release dependency graph without copying the real application code.
 # The dummy main compiles the full dependency set into target/
@@ -117,7 +115,7 @@ RUN mkdir -p benches src crates/xtask/src crates/restream-core/src crates/restre
     && : > crates/restream-srt/src/lib.rs \
     && : > crates/test_harness/src/lib.rs \
     && printf 'fn main() {}\n' > crates/test_harness/src/main.rs
-RUN RESTREAM_BUILD_PROFILE=release ./scripts/build/app-native.sh
+RUN cargo build --release --bin restream && cargo build -p xtask
 
 # Return to the application build stage for its runtime filesystem assembly.
 FROM rust-build AS runtime-tree
@@ -141,7 +139,7 @@ COPY --from=frontend-build /workspace/public public
 # artifacts (a stub main, an empty member lib) as up to date. Touch the real
 # sources so the final build compiles them.
 RUN find crates src -type f -name '*.rs' -exec touch {} + \
-    && RESTREAM_BUILD_PROFILE=release ./scripts/build/app-native.sh
+    && RESTREAM_BUILD_PROFILE=release cargo xtask release app-native
 
 # The harness image is an explicit target, so this extra bench build is paid
 # only by `--target harness`, never by the production runtime image. It must
@@ -220,7 +218,7 @@ COPY --from=runtime-tree /workspace/target/release/restream /restream
 COPY distribution/ /usr/share/doc/restream/distribution/
 
 # Release packaging uses the same final image recipe without rebuilding Rust:
-# scripts/release/package-runtime-image.sh supplies an already-built restream
+# `cargo xtask release package-runtime-image` supplies an already-built restream
 # binary as the `release_payload` build context.
 FROM runtime-base AS runtime-artifact
 
@@ -270,8 +268,9 @@ FROM ubuntu:24.04 AS ci-harness-runtime
 
 WORKDIR /workspace
 ENV RESTREAM_REPO_ROOT=/workspace
-COPY scripts/lib/ scripts/lib/
-COPY scripts/dev/bootstrap-runtime.sh scripts/dev/harness-host-prereqs.sh scripts/dev/
+COPY scripts/data/debian-packages.tsv scripts/data/
+COPY scripts/ci/install-system-deps.sh scripts/ci/
+COPY scripts/dev/bootstrap-runtime.sh scripts/dev/
 RUN scripts/dev/bootstrap-runtime.sh --skip-harness-host-check
 
 # ── Stage 6: live-harness image ──────────────────────────────────────────────

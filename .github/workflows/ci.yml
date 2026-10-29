@@ -36,7 +36,7 @@ jobs:
       - name: Check TypeScript types
         run: npx tsc -p tsconfig.json --noEmit
       - name: Check agent worktree dependency readiness
-        run: ./scripts/check/agent-worktree-frontend-deps.sh
+        run: cargo test -p xtask worktree::tests
 
   lint:
     name: Rust lint
@@ -80,7 +80,7 @@ jobs:
             --features mcp-embedded,agent-execution -- agent_mcp agent_service
           # Require both compiled-out tests, not merely a passing test binary:
           # a feature-unified build must fail this proof instead of testing enabled routes.
-          scripts/ci/require-test-filters.sh cargo test -p restream --no-default-features --test api -- \
+          cargo xtask require-test-filters cargo test -p restream --no-default-features --test api -- \
             agent::agent_plane_returns_404_when_feature_is_compiled_out \
             agent::agent_context_returns_404_when_feature_is_compiled_out
           cargo clippy -p restream --lib --test api --no-default-features -- -D warnings
@@ -95,9 +95,9 @@ jobs:
       - name: Check source size and generated-file boundaries
         run: cargo xtask source-audit
       - name: Check Markdown documentation
-        run: node scripts/check/docs.mjs
+        run: cargo xtask docs-audit
       - name: Check the dashboard is built from its primitives
-        run: node scripts/check/frontend-style.mjs
+        run: cargo xtask frontend-style
 
   docker-runtime-smoke:
     name: Docker runtime source-build smoke (targeted)
@@ -129,7 +129,7 @@ jobs:
           # documentation. Extracted restream crates and the test harness also
           # qualify, alongside RTMP/RTMPS and SRT transport sources: they can
           # change the real media container proof and its runtime contract.
-          if git diff --name-only "$base" "$GITHUB_SHA" | grep -Eq '^(Dockerfile|scripts/build/app-native\.sh|scripts/release/package-binaries\.sh|scripts/release/package-runtime-image\.sh|scripts/check/container-smoke\.sh|scripts/check/container-restream-shim\.sh|scripts/check/release-evidence\.sh|scripts/release/prepare-build-tree\.sh|distribution/|tests/seccomp_profile\.rs|crates/restream-[^/]+/.*|crates/test_harness/.*|src/media/rtmp[^/]*\.rs|src/media/rtmp/.*|src/media/srt[^/]*\.rs|src/media/srt/.*|src/media/egress/.*|\.github/workflows/release\.yml|\.github/workflows/ci-harness-runtime-image\.yml)$'; then
+          if git diff --name-only "$base" "$GITHUB_SHA" | grep -Eq '^(Dockerfile|crates/xtask/src/(release|container|qualify)(\.rs|/.*)|distribution/|tests/seccomp_profile\.rs|crates/restream-[^/]+/.*|crates/test_harness/.*|src/media/rtmp[^/]*\.rs|src/media/rtmp/.*|src/media/srt[^/]*\.rs|src/media/srt/.*|src/media/egress/.*|\.github/workflows/release\.yml|\.github/workflows/ci-harness-runtime-image\.yml)$'; then
             echo "run=true" >>"$GITHUB_OUTPUT"
           else
             echo "run=false" >>"$GITHUB_OUTPUT"
@@ -159,14 +159,14 @@ jobs:
         uses: docker/setup-buildx-action@v4
       - if: ${{ steps.scope.outputs.run == 'true' }}
         name: Build runtime image from Dockerfile
-        run: scripts/release/prepare-build-tree.sh
+        run: cargo xtask release prepare-build-tree
       - if: ${{ steps.scope.outputs.run == 'true' }}
         name: Smoke production image (health + SRT and RTMP-to-RTMPS media under shipped seccomp)
         env:
           RESTREAM_CONTAINER_IMAGE: restream:pr-runtime-smoke
           RESTREAM_DOCKER_GHA_CACHE: "1"
           RESTREAM_CONTAINER_SMOKE_REPORT: .local/artifacts/container-smoke/report.json
-        run: scripts/check/container-smoke.sh --image "$RESTREAM_CONTAINER_IMAGE"
+        run: cargo xtask container smoke --image "$RESTREAM_CONTAINER_IMAGE"
       - if: ${{ always() && steps.scope.outputs.run == 'true' }}
         name: Upload container smoke report
         uses: actions/upload-artifact@v7
@@ -366,9 +366,9 @@ jobs:
           cargo install cargo-fuzz --locked
       - if: ${{ steps.scope.outputs.run == 'true' }}
         name: Run every parser target for 30 s
-        working-directory: fuzz
         run: |
-          ./seed-corpus.sh
+          cargo xtask fuzz seed-corpus
+          cd fuzz
           for target in $(cargo +nightly fuzz list); do
             cargo +nightly fuzz run "$target" -- -max_total_time=30 -timeout=5
           done
@@ -401,7 +401,7 @@ jobs:
         env:
           MIRIFLAGS: -Zmiri-disable-isolation
           RUSTFLAGS: ''
-        run: scripts/ci/require-test-filters.sh cargo +nightly miri test -p restream --lib -- $MIRI_FILTERS
+        run: cargo xtask require-test-filters cargo +nightly miri test -p restream --lib -- $MIRI_FILTERS
       - name: Run Miri over the selected modules
         env:
           MIRIFLAGS: -Zmiri-disable-isolation
@@ -413,7 +413,7 @@ jobs:
         env:
           MIRIFLAGS: -Zmiri-disable-isolation
           RUSTFLAGS: ''
-        run: scripts/ci/require-test-filters.sh cargo +nightly miri test -p restream-core --lib -- codec::bits::tests
+        run: cargo xtask require-test-filters cargo +nightly miri test -p restream-core --lib -- codec::bits::tests
       - name: Run canonical codec bit reader under Miri
         env:
           MIRIFLAGS: -Zmiri-disable-isolation
@@ -487,10 +487,13 @@ jobs:
       - name: The sanitizer flags are in effect
         run: |
           [[ $RUSTFLAGS == *sanitizer=address* ]] || { echo "RUSTFLAGS lost -Zsanitizer=address: $RUSTFLAGS"; exit 1; }
+      # The guard itself runs from an unsanitized stable xtask build; only the
+      # inner nightly test command it checks carries the sanitizer flags.
       - name: Every filter selects tests
-        run: >
-          scripts/ci/require-test-filters.sh cargo +nightly test -Zbuild-std
-          --target x86_64-unknown-linux-gnu -p restream --lib -- $ASAN_FILTERS
+        run: |
+          RUSTFLAGS= RUSTDOCFLAGS= cargo build -q -p xtask
+          target/debug/xtask require-test-filters cargo +nightly test -Zbuild-std \
+            --target x86_64-unknown-linux-gnu -p restream --lib -- $ASAN_FILTERS
       - name: Run the FFI-heavy tests under ASan
         run: >
           cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu -p restream --lib --
@@ -498,7 +501,7 @@ jobs:
       - name: Every extracted suite selects tests
         run: |
           for package in restream-sync restream-mpegts; do
-            scripts/ci/require-test-filters.sh cargo +nightly test -Zbuild-std \
+            target/debug/xtask require-test-filters cargo +nightly test -Zbuild-std \
               --target x86_64-unknown-linux-gnu -p "$package" --lib -- ''
           done
       - name: Run extracted synchronization and MPEG-TS tests under ASan
@@ -525,7 +528,8 @@ jobs:
       - name: Stage transport harness artifact
         run: |
           mkdir -p .local/ci-harness-bin
-          cp target/bench/restream target/bench/test_harness .local/ci-harness-bin/
+          cargo build --release -p xtask
+          cp target/bench/restream target/bench/test_harness target/release/xtask .local/ci-harness-bin/
       - uses: actions/upload-artifact@v7
         with:
           name: ci-harness-bin-${{ github.sha }}
@@ -603,7 +607,7 @@ jobs:
             exit 0
           fi
           git fetch --no-tags origin "$BASE_SHA" --depth=1 || true
-          if git diff --name-only "$BASE_SHA" "$GITHUB_SHA" | grep -Eq '^(src/.*moq.*|crates/restream-(moq|core|sync)/.*|crates/test_harness/.*moq.*|src/media/egress/.*|scripts/dev/moq/.*|test/e2e/moq/.*|\.github/workflows/ci\.yml)$'; then
+          if git diff --name-only "$BASE_SHA" "$GITHUB_SHA" | grep -Eq '^(src/.*moq.*|crates/restream-(moq|core|sync)/.*|crates/test_harness/.*moq.*|src/media/egress/.*|crates/xtask/src/fetch(\.rs|/.*)|test/e2e/moq/.*|\.github/workflows/ci\.yml)$'; then
             echo "run=true" >>"$GITHUB_OUTPUT"
           else
             echo "run=false" >>"$GITHUB_OUTPUT"
@@ -621,6 +625,7 @@ jobs:
         run: |
           mkdir -p target/bench
           cp .local/ci-harness-bin/restream .local/ci-harness-bin/test_harness target/bench/
+          install -D -m 0755 .local/ci-harness-bin/xtask .local/bin/xtask
           chmod 0755 target/bench/restream target/bench/test_harness
       - if: ${{ steps.scope.outputs.run == 'true' }}
         uses: ./.github/actions/system-deps
@@ -650,21 +655,21 @@ jobs:
           pactl set-default-sink moq_null
       - if: ${{ steps.scope.outputs.run == 'true' }}
         name: Fetch the pinned moq.dev tools (moq-cli 0.14.7, moq-relay 0.17.7, SHA256-verified, into .local/bin)
-        run: scripts/dev/moq/fetch-moq-dev.sh
+        run: .local/bin/xtask fetch moq-dev
       - if: ${{ steps.scope.outputs.run == 'true' }}
         name: Run moq-dev-interop with the browser specs
         env:
           BENCH_BUILD: never
           HARNESS_BIN: target/bench/test_harness
           RESTREAM_BIN: target/bench/restream
-        run: flock -x /tmp/restream-host.lock timeout --kill-after=30s 15m scripts/harness/run.sh moq-dev-interop -- --no-netns --browsers
+        run: flock -x /tmp/restream-host.lock timeout --kill-after=30s 15m .local/bin/xtask harness moq-dev-interop -- --no-netns --browsers
       - if: ${{ always() && steps.scope.outputs.run == 'true' }}
         name: Run moqt-19 MSF/LOC in both directions through moq-relay
         env:
           BENCH_BUILD: never
           HARNESS_BIN: target/bench/test_harness
           RESTREAM_BIN: target/bench/restream
-        run: flock -x /tmp/restream-host.lock timeout --kill-after=30s 15m scripts/harness/run.sh moq-dev-interop -- --no-netns --ietf
+        run: flock -x /tmp/restream-host.lock timeout --kill-after=30s 15m .local/bin/xtask harness moq-dev-interop -- --no-netns --ietf
       - if: ${{ always() && steps.scope.outputs.run == 'true' }}
         name: Upload MoQ interop evidence
         uses: actions/upload-artifact@v7

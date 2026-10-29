@@ -24,8 +24,8 @@
 //! helpers).
 //!
 //! ```text
-//! scripts/dev/moq/fetch-moq-dev.sh
-//! scripts/harness/run.sh moq-impairment
+//! cargo xtask fetch moq-dev
+//! cargo xtask harness moq-impairment
 //! ```
 
 use std::path::PathBuf;

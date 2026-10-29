@@ -1,0 +1,15 @@
+# group followed by packages; whitespace-delimited, no shell syntax
+rust-build libssl-dev pkg-config clang
+media-tools ca-certificates curl ffmpeg
+harness-runtime ca-certificates curl ffmpeg iproute2 jq sqlite3 util-linux
+dev-workstation build-essential ca-certificates clang curl ffmpeg git jq mold pkg-config iproute2 sqlite3 tzdata util-linux
+# profile name followed by mediamtx flag and groups
+@profile base 0 rust-build
+@profile build 0 rust-build
+@profile media 0 rust-build media-tools
+@profile browser 0 rust-build media-tools
+@profile browser-build 0 rust-build media-tools
+@profile live 1 rust-build harness-runtime
+@profile live-build 1 rust-build harness-runtime
+@profile harness-runtime 1 harness-runtime
+@profile live-runtime 1 harness-runtime

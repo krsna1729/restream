@@ -71,7 +71,7 @@ fn every_workspace_member_manifest_is_staged_for_the_warm_workspace() {
         );
         let copy_position = warm.find(&copy).expect("checked above");
         let warm_build = warm
-            .find("RESTREAM_BUILD_PROFILE=release")
+            .find("cargo build --release")
             .expect("rust-build warms the dependency graph");
         assert!(
             copy_position < warm_build,
@@ -130,7 +130,7 @@ fn the_real_sources_are_touched_so_cargo_rebuilds_them_over_the_warm_dummies() {
 fn every_patch_path_is_staged_before_the_warm_build() {
     let warm = stage("rust-build");
     let warm_build = warm
-        .find("RESTREAM_BUILD_PROFILE=release")
+        .find("cargo build --release")
         .expect("rust-build warms the dependency graph");
     let Some(patches) = CARGO_TOML.split("[patch.crates-io]").nth(1) else {
         return;

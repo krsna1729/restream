@@ -26,9 +26,9 @@
 //!   the pull, and re-enabling it starts the pull again.
 //!
 //! ```text
-//! scripts/harness/run.sh hls-pull-duty
-//! scripts/harness/run.sh hls-pull-duty -- --duration-secs 20
-//! scripts/harness/run.sh hls-pull-duty -- --fail-unresolvable   # must fail
+//! cargo xtask harness hls-pull-duty
+//! cargo xtask harness hls-pull-duty -- --duration-secs 20
+//! cargo xtask harness hls-pull-duty -- --fail-unresolvable   # must fail
 //! ```
 //!
 //! The `--fail-unresolvable` run points the *good* pull at an unresolvable

@@ -17,7 +17,7 @@ Do not stop processes belonging to another task.
 
 ```sh
 cargo bench --bench <name>
-scripts/harness/run.sh <mode>
+cargo xtask harness <mode>
 ```
 
 Cargo owns Criterion builds. The harness wrapper builds canonical
@@ -33,7 +33,7 @@ are context, not a current control run.
 
 - **Benchmark check:** run the relevant target and compare medians with a
   saved Criterion baseline. Confirm a suspected regression with comparable runs before attributing it.
-- **Resource check:** run `scripts/harness/run.sh resource-sweep`; compare
+- **Resource check:** run `cargo xtask harness resource-sweep`; compare
   delivered work, RSS, and ring payload.
 - **Optimization:** measure before editing, change one variable, then repeat
   the measurement and relevant correctness gates. If there is no demonstrated

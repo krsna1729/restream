@@ -6,10 +6,10 @@
     "build:css": "npx tailwindcss -i web/styles/input.css -o public/output.css",
     "check:api-contract": "cargo xtask api-contract",
     "format:check": "npx tsc -p tsconfig.json",
-    "test:frontend": "./scripts/dev/frontend/node-tests.sh && npm run test:frontend:js-smoke",
-    "test:frontend:coverage": "./scripts/dev/frontend/node-tests.sh --coverage && npm run test:frontend:js-smoke",
+    "test:frontend": "cargo xtask frontend node-tests && npm run test:frontend:js-smoke",
+    "test:frontend:coverage": "cargo xtask frontend node-tests --coverage && npm run test:frontend:js-smoke",
     "test:frontend:js-smoke": "npm run build:frontend && FRONTEND_MODULES_DIR=public/js node --experimental-default-type=module --test test/frontend/frontend-api-contract.test.mjs test/frontend/frontend-log-stream.test.mjs",
-    "test:e2e": "./scripts/harness/frontend-e2e.sh"
+    "test:e2e": "cargo xtask frontend e2e"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",

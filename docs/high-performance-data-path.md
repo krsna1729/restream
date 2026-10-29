@@ -187,7 +187,7 @@ The `[[bench]]` targets in `Cargo.toml` and their code under `benches/` are
 the benchmark inventory. Hot-path examples: `ring_buffer`, `ingest_handoff`,
 `input_gate`, `egress_visit`, `rtmp_serializer`, `codec_conversions`,
 `byte_queue_throughput`, `stage_feeder`. Live protocol modes belong to the harness
-(`scripts/harness/run.sh`).
+(`cargo xtask harness`).
 
 For a hot-path change:
 

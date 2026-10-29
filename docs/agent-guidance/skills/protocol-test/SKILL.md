@@ -10,15 +10,15 @@ Run relevant scoped unit tests first (`av_sync` for timestamps). Follow
 the canonical harness:
 
 ```sh
-scripts/harness/run.sh --prepare
+cargo xtask harness --prepare
 target/bench/test_harness catalog help
 target/bench/test_harness catalog plan <mode>
-scripts/harness/run.sh <mode>
+cargo xtask harness <mode>
 ```
 
 Choose scenarios whose plans cover the changed protocol, codec, timestamp,
 encryption, audio-track, or recovery contract. Use the live catalog rather than
-a copied list of mode names. Run `scripts/harness/media-validation.sh` for
+a copied list of mode names. Run `cargo xtask media-validation` for
 cross-codec/mux changes or when the bounded validation suite is requested.
 
 Private loopback namespaces are the default; use `--no-netns` only when

@@ -34,7 +34,7 @@ flowchart LR
     conc["Waits, registries, teardown"] --> cf["cargo xtask concurrency fast"] --> jcf["concurrency-fast"]
     parser["Untrusted-byte parser"] --> fz["cargo +nightly fuzz run"] --> jfz["fuzz-smoke"]
     unsafe["unsafe, FFI, egress primitive"] --> mk["miri / asan / cargo kani"] --> jmk["miri, asan, kani"]
-    docs["Markdown"] --> dc["node scripts/check/docs.mjs"] --> jarch["architecture-guardrails"]
+    docs["Markdown"] --> dc["cargo xtask docs-audit"] --> jarch["architecture-guardrails"]
 ```
 
 The second diagram shows the gates that run the real binary or browser.
@@ -43,17 +43,17 @@ The second diagram shows the gates that run the real binary or browser.
 flowchart LR
     ui["Dashboard TS"] --> fe["npm run test:frontend"] --> jfe["frontend"]
     flow["Dashboard flows"] --> e2e["npm run test:e2e"] --> je2e["frontend-e2e"]
-    proto["RTMP, SRT, HLS"] --> h["scripts/harness/run.sh mode"] --> jsh["integration-shards, master-transport-shards"]
+    proto["RTMP, SRT, HLS"] --> h["cargo xtask harness mode"] --> jsh["integration-shards, master-transport-shards"]
     moq["MoQ, egress fabric"] --> mi["moq-dev-interop"] --> jmoq["moq-interop"]
-    img["Dockerfile, seccomp, RTMP/SRT/egress"] --> cs["scripts/check/container-smoke.sh"] --> jdock["docker-runtime-smoke"]
+    img["Dockerfile, seccomp, RTMP/SRT/egress"] --> cs["cargo xtask container smoke"] --> jdock["docker-runtime-smoke"]
     life["Live lifecycle faults"] --> cc["cargo xtask concurrency contract"] --> jcc["concurrency-contract"]
 ```
 
 | CI job (name) | Runs | When |
 |---|---|---|
-| `format` (Source formatting and TS types) | `cargo fmt --all --check`, `npx tsc -p tsconfig.json --noEmit`, `scripts/check/agent-worktree-frontend-deps.sh` | every run |
+| `format` (Source formatting and TS types) | `cargo fmt --all --check`, `npx tsc -p tsconfig.json --noEmit`, `cargo test -p xtask worktree::tests` | every run |
 | `lint` (Rust lint) | `cargo clippy` for the lib, all targets, and the MCP features; the MCP feature `cargo check` matrix; agent tests with and without the agent plane | every run |
-| `architecture-guardrails` (Source architecture audit) | `cargo xtask source-audit`, `node scripts/check/docs.mjs` | every run |
+| `architecture-guardrails` (Source architecture audit) | `cargo xtask source-audit`, `cargo xtask docs-audit` | every run |
 | `test` (Rust unit hygiene and fixtures) | `cargo xtask test-hygiene` (runs `cargo test --workspace`, then scans for noise), `cargo xtask fixture-discipline` | every run |
 | `coverage` (Workspace coverage report) | `cargo llvm-cov --workspace`; uploads to Codecov; never fails on a percentage | after `test` |
 | `api-contract` (API contract smoke) | `cargo xtask api-contract` | every run |
@@ -69,11 +69,11 @@ flowchart LR
 | `integration-shards` | `mixed.live.srt.h264.a1.bf0`, `mixed.live.rtmp.h264.a1.bf0`, `direct-play` | not on `master` pushes |
 | `master-transport-shards` | the H.264/H.265 SRT shapes, two RTMP shapes, `srt-crypto-matrix`, `fault.resilience`, `direct-play` | `master` pushes |
 | `moq-interop` (MoQ interop) | `moq-dev-interop --browsers` | `master`, manual runs, and pull requests touching MoQ/egress, `crates/restream-{core,sync,moq}/`, moved MoQ harness sources, MoQ peer/browser tools or `ci.yml` |
-| `docker-runtime-smoke` | `scripts/check/container-smoke.sh` on a source-built image | Dockerfile, release/build scripts, `distribution/`, seccomp tests, RTMP/SRT/egress, production `crates/restream-*/` or harness changes |
+| `docker-runtime-smoke` | `cargo xtask container smoke` on a source-built image | Dockerfile, `crates/xtask` release/container/qualify workflows, `distribution/`, seccomp tests, RTMP/SRT/egress, production `crates/restream-*/` or harness changes |
 
 `nightly-full-certification.yml` adds `cargo test --workspace --all-features`,
 a nightly container smoke and the full harness shard matrix. Nightly and
-release both read that matrix from `scripts/lib/release-shards.sh`; the PR and
+release both read that matrix from `crates/xtask/src/qualify/shards.rs`; the PR and
 `master` shard lists above live in `ci.yml`.
 
 ## Rust test suite
@@ -121,7 +121,7 @@ forbid unsafe code without a custom test allocator. Owner suites run unfiltered
 rather than deriving a possibly empty filter from the implementation file name.
 
 Every recommended focused test command first runs
-`scripts/ci/require-test-filters.sh` and chains the actual test run with `&&`.
+`cargo xtask require-test-filters` and chains the actual test run with `&&`.
 An empty selection fails instead of reporting a successful zero-test run.
 `cargo test --workspace` remains the CI-wide coverage gate.
 The package graph and runtime seams are in
@@ -158,8 +158,7 @@ vendored moq-net's wire codecs are reached through its `fuzz` feature
 | `moq_wire` | MoQ session bytes: a draft and message-type selector, then the body | vendored moq-net IETF (drafts 14-22) and moq-lite control/object codecs, moq-lite announce-stream prefix compression (decoded value must re-encode to itself) |
 
 ```sh
-cd fuzz
-./seed-corpus.sh   # seeds ts_demux, http_response, hls_playlist, fmp4_ingest, moq_ingest, moq_wire
+cargo xtask fuzz seed-corpus   # seeds ts_demux, http_response, hls_playlist, fmp4_ingest, moq_ingest, moq_wire
 ```
 
 `moq_wire` seeds come from `moq_net::fuzz::seeds()`, written by the small
@@ -185,7 +184,7 @@ touch raw syscall and FFI memory.
 | `asan` | Root `media::egress::tls`, `media::egress::backends::compio_tcp`, `media::external_transcoder`, `media::timing`, `media::rtmp::listener`, `media::rtmp::tests`, `media::tcp_stats`, `media::mpegts_allocation_tests`, `runtime_info`; separately the `restream-sync` and `restream-mpegts` library targets | kTLS, socket, SQLite/glibc FFI, child-pipe memory, MPEG-TS behavior/allocation and synchronization; leak detection off |
 
 The named root filters, core bit-reader filter and each extracted sanitizer
-suite first pass `scripts/ci/require-test-filters.sh`. It fails when a selection
+suite first pass `cargo xtask require-test-filters`. It fails when a selection
 contains no test. The root MPEG-TS filter retains the allocation and ordered
 packet-output guard; the complete mux/demux behavior suite runs separately
 in `restream-mpegts`, alongside the `restream-sync` unit suite.
@@ -327,10 +326,10 @@ Ask the binary for it, and run modes through the wrapper, which rebuilds
 stale binaries:
 
 ```sh
-scripts/harness/run.sh --prepare
+cargo xtask harness --prepare
 target/bench/test_harness catalog help
-scripts/harness/run.sh <mode>
-scripts/harness/run.sh <mode> -- --no-netns
+cargo xtask harness <mode>
+cargo xtask harness <mode> -- --no-netns
 ```
 
 Modes use a private loopback namespace by default. Use `--no-netns` only when
@@ -378,9 +377,9 @@ Missing, reset or empty executor measurements fail the check.
 | `--host-probe` | off | run the host-stall probe on 1 ms in 4 ms for the rated window |
 
 ```sh
-scripts/harness/run.sh hls-push-duty
-scripts/harness/run.sh hls-push-duty -- --hls-publishers 4 --segment-type fmp4
-scripts/harness/run.sh hls-push-duty -- --pull-sessions 4 --duration-secs 60
+cargo xtask harness hls-push-duty
+cargo xtask harness hls-push-duty -- --hls-publishers 4 --segment-type fmp4
+cargo xtask harness hls-push-duty -- --pull-sessions 4 --duration-secs 60
 ```
 
 `.local/artifacts/hls-push-duty/report.json` holds, per pipeline:
@@ -403,17 +402,17 @@ spinning windows. A probe startup, clock or join failure invalidates the run.
 `moq-dev-interop` proves moq-lite-06 with hang by default, and explicit
 MOQT draft-19 with MSF/LOC under `--ietf`, using `moq-net` 0.3.15 and the
 tools from commit `e2c5b505`: `moq` (moq-cli 0.14.7), `moq-relay` 0.17.7.
-`scripts/dev/moq/fetch-moq-dev.sh` downloads them, checks the SHA256 and
+`cargo xtask fetch moq-dev` downloads them, checks the SHA256 and
 installs `.local/bin/moq-0.14.7` and `.local/bin/moq-relay-0.17.7`. The mode
 refuses another `--version`. `MOQ_DEV_INTEROP_MOQ_BIN` and
 `MOQ_DEV_INTEROP_RELAY_BIN` override the paths, not the versions.
 
 ```sh
-scripts/dev/moq/fetch-moq-dev.sh
-scripts/harness/run.sh moq-dev-interop -- --no-netns
-scripts/harness/run.sh moq-dev-interop -- --no-netns --ietf
+cargo xtask fetch moq-dev
+cargo xtask harness moq-dev-interop -- --no-netns
+cargo xtask harness moq-dev-interop -- --no-netns --ietf
 (cd test/e2e/moq && npm ci && npx playwright install chromium firefox)
-scripts/harness/run.sh moq-dev-interop -- --no-netns --browsers
+cargo xtask harness moq-dev-interop -- --no-netns --browsers
 ```
 
 Headless Firefox plays audio only through an audio server. Start a
@@ -458,7 +457,7 @@ scoped to this test). It checks decoded canvas content and persisted
 transport selection. After building frontend assets and `target/debug/restream`:
 
 ```sh
-RESTREAM_E2E_SKIP_BUILD=1 scripts/harness/frontend-e2e.sh --grep 'program preview over MoQ'
+RESTREAM_E2E_SKIP_BUILD=1 cargo xtask frontend e2e --grep 'program preview over MoQ'
 ```
 
 `.local/artifacts/moq-dev-interop/` (or `moq-dev-interop-ietf/`) holds
@@ -483,8 +482,8 @@ no origin token. `moq-dev-interop` still covers the Restream-direct origin
 path and the browser playback unchanged.
 
 ```sh
-scripts/dev/moq/fetch-moq-dev.sh
-scripts/harness/run.sh moq-impairment
+cargo xtask fetch moq-dev
+cargo xtask harness moq-impairment
 ```
 
 The mode requires the default private network namespace with
@@ -523,7 +522,7 @@ failure, so partial counts survive. `.local/artifacts/moq-impairment/` holds
 `.local/artifacts/moq-impairment.json`.
 
 `moq-relay-interop` targets unmodified MediaMTX v1.21.2
-(`scripts/dev/moq/fetch-mediamtx.sh`, `MOQ_INTEROP_MEDIAMTX_BIN`).
+(`cargo xtask fetch mediamtx`, `MOQ_INTEROP_MEDIAMTX_BIN`).
 It is diagnostic-only, not run by CI or suites: the SETUP, namespace and
 LOC/MSF dialect mismatches are source/spec-evidenced in
 [Q-097](backlog.md#q-097-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop).
@@ -534,7 +533,7 @@ MediaMTX-specific profile.
 
 `moq-moxygen-interop` checks Restream's IETF egress against moxygen, an
 independent C++ MOQT implementation. moxygen publishes no release binaries,
-so `scripts/dev/moq/build-moxygen.sh` builds `moqrelayserver` from a pinned
+so `cargo xtask fetch moxygen` builds `moqrelayserver` from a pinned
 commit with moxygen's own getdeps and installs
 `.local/bin/moxygen-<commit>/moqrelayserver` with a `.commit` stamp; the
 mode refuses another stamp. `MOQ_MOXYGEN_RELAY_BIN` overrides the path, not
@@ -551,9 +550,9 @@ draft (MSF catalog, LOC media), and FFprobe checks H.264/AAC, monotonic
 timestamps and the frame rate over at least 10 s (`dNNReadBack`).
 
 ```sh
-scripts/dev/moq/fetch-moq-dev.sh
-scripts/dev/moq/build-moxygen.sh
-scripts/harness/run.sh moq-moxygen-interop -- --no-netns
+cargo xtask fetch moq-dev
+cargo xtask fetch moxygen
+cargo xtask harness moq-moxygen-interop -- --no-netns
 ```
 
 `.local/artifacts/moq-moxygen-interop/` holds `report.json`, the relay,
@@ -611,7 +610,7 @@ Treat these as test results, not assumptions.
 
 ## Container runtime smoke
 
-`scripts/check/container-smoke.sh` tests the shipped image:
+`cargo xtask container smoke` tests the shipped image:
 
 1. non-root user and the no-mount health contract;
 2. real SRT egress under `distribution/docker/restream-seccomp.json`;
@@ -722,7 +721,7 @@ first. Then pick the lowest proof layer that catches the bug
 
 | Boundary | Contract | Proof |
 |---|---|---|
-| API client → routes | every call hits a canonical `/api/v1` route and method; multipart shape is stable | `test/frontend/frontend-api-contract.test.mjs`; `scripts/check/api-drift.mjs` in `cargo xtask api-contract` (a hard CI gate) |
+| API client → routes | every call hits a canonical `/api/v1` route and method; multipart shape is stable | `test/frontend/frontend-api-contract.test.mjs`; `cargo xtask api-drift` in `cargo xtask api-contract` (a hard CI gate) |
 | Runtime state stream | snapshot, then deltas in revision order; a gap reconnects; a silent stream is reported | `test/frontend/frontend-runtime-state-stream.test.mjs` |
 | Log stream (SSE) | one connection per filter, resumed from the last id, replaced on filter change; stale events never reach the caller | `frontend-log-stream.test.mjs`, `frontend-log-stream-interleaving.property.test.mjs` |
 | Workspace models | each workspace derives its view from the store and mutates through `core/api.ts` | `test/frontend/control-room-*.test.mjs` |
@@ -736,7 +735,7 @@ brings an equal or stronger proof in the same change.
 | Failure class | Replay | Guardrail |
 |---|---|---|
 | External H.265 capacity or zero-output stall | `test/fixtures/transport/correctness-h265.ts`, `bench-h265-1_5m.ts`, `bench-h265-1_5m-2a.ts`; `mixed.live.srt.h265.a1.bf2`, `mixed.live.srt.h265.a2.bf2` | `waitingForCapacity` health/alert tests; `cargo xtask concurrency fast` |
-| Low-CPU external-capacity collapse | `scripts/harness/run.sh resource-sweep` (output in `.local/artifacts/resource-sweep/`) | [resource sweep](resource-sweep.md) |
+| Low-CPU external-capacity collapse | `cargo xtask harness resource-sweep` (output in `.local/artifacts/resource-sweep/`) | [resource sweep](resource-sweep.md) |
 | Recording `.tmp.mp4` or wrong-case media selection | `cargo test media_recording_identity --bin test_harness` | API media-library tests key recordings by `pipelineId`/`recordingId` |
 
 New failure evidence takes a durable form: a fixture registered in

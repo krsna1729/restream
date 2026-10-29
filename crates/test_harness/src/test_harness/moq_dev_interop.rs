@@ -4,7 +4,7 @@
 //! The peers are the moq.dev release binaries built from the commit of
 //! `moq-net` 0.3.15, which Restream's MoQ code is pinned to: `moq` (moq-cli
 //! 0.14.7) and `moq-relay` 0.17.7, installed by
-//! `scripts/dev/moq/fetch-moq-dev.sh` under `.local/bin/` with their release
+//! `cargo xtask fetch moq-dev` under `.local/bin/` with their release
 //! SHA256s checked. Each run generates its own CA and ECDSA P-256 leaf
 //! (13 days, SANs `localhost` and `127.0.0.1`); the relay and Restream's MoQ
 //! listener both serve the leaf, the CLI trusts the CA, browsers pin the
@@ -41,9 +41,9 @@
 //!    Restream on moqt-19. No export/re-import bridge bypasses the relay.
 //!
 //! ```text
-//! scripts/dev/moq/fetch-moq-dev.sh
+//! cargo xtask fetch moq-dev
 //! npm ci --prefix test/e2e/moq && npx --prefix test/e2e/moq playwright install chromium firefox
-//! scripts/harness/run.sh moq-dev-interop -- --no-netns [--ietf] [--browsers]
+//! cargo xtask harness moq-dev-interop -- --no-netns [--ietf] [--browsers]
 //! ```
 
 #[path = "moq_dev_interop/checks.rs"]

@@ -16,7 +16,7 @@ only. Rust builds and the generated frontend (`public/`) are local outputs.
 - Frontend sources under `web/`, `package.json`, `package-lock.json`,
   `tsconfig.json` and `vite.config.ts` (one Vite build; `tsc` only
   type-checks). See [Frontend](frontend.md#build).
-- Build scripts under `scripts/build/` and the `Dockerfile`.
+- Build workflows under `crates/xtask/` and the `Dockerfile`.
 - License and distribution inputs under `distribution/`.
 
 ## Generated local state
@@ -35,8 +35,8 @@ These paths are gitignored outputs:
 
 | Script | Purpose |
 |---|---|
-| [scripts/dev/prepare.sh](../scripts/dev/prepare.sh) | Clean-checkout preparation for development |
-| [scripts/release/prepare-build-tree.sh](../scripts/release/prepare-build-tree.sh) | Release-tree preparation for packaging and CI: `public/`, then output checks |
+| `cargo xtask setup prepare` ([source](../crates/xtask/src/setup.rs)) | Clean-checkout preparation for development |
+| `cargo xtask release prepare-build-tree` ([source](../crates/xtask/src/release/prepare.rs)) | Release-tree preparation for packaging and CI: `public/`, then output checks |
 | `npm run build:frontend` | Embedded browser output |
 
 Do not copy their steps here. Update this page only when the distribution

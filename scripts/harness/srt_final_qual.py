@@ -15,6 +15,17 @@ import argparse, json, math, os, re, signal, statistics, subprocess, sys, thread
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+HARNESS = ["cargo", "xtask", "harness"]
+
+
+def pinned_restream_bin():
+    """Path to the restream-harness-pinned argv0 alias of the xtask binary."""
+    subprocess.run(["cargo", "build", "--quiet", "--package", "xtask"], cwd=ROOT, check=True)
+    alias = ROOT / ".local/bin/restream-harness-pinned"
+    alias.parent.mkdir(parents=True, exist_ok=True)
+    alias.unlink(missing_ok=True)
+    alias.symlink_to(ROOT / "target/debug/xtask")
+    return str(alias)
 PASSWORD = os.environ.get("RESTREAM_INITIAL_ADMIN_PASSWORD", "restream-local-harness-password")
 CLK = os.sysconf("SC_CLK_TCK")
 
@@ -363,7 +374,7 @@ def cmd_fanout(args):
     sampler = Sampler(work, work / "samples.jsonl")
     sampler.start()
     t0 = time.time()
-    p = subprocess.run([str(ROOT / "scripts/harness/run.sh"), "resource-sweep", "--", "--no-netns"],
+    p = subprocess.run([*HARNESS, "resource-sweep", "--", "--no-netns"],
                        env=env, cwd=ROOT, capture_output=True, text=True, timeout=1500)
     sampler.stop.set()
     sampler.join(timeout=5)
@@ -481,7 +492,7 @@ def cmd_burst(args):
     subprocess.run(["rm", "-rf", str(work)])
     work.mkdir(parents=True)
     real = ROOT / "target/bench/restream"
-    env = dict(os.environ, RESTREAM_BIN=str(ROOT / "scripts/harness/restream-pinned.sh"),
+    env = dict(os.environ, RESTREAM_BIN=pinned_restream_bin(),
                REAL_RESTREAM=str(real), PIN_CPUS=args.pin_cpus, MSR_PEER="sink",
                RESOURCE_SWEEP_SCENARIOS="egress-growth-source-srt", RESOURCE_SWEEP_EGRESS_COUNTS=str(args.outputs),
                RESOURCE_SWEEP_SAMPLE_SECS="2", RESOURCE_SWEEP_SETTLE_SECS="20", RESOURCE_SWEEP_BURST="1",
@@ -493,7 +504,7 @@ def cmd_burst(args):
         env["RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY"] = str(args.connect_concurrency)
     sampler = Sampler(work, work / "samples.jsonl", interval=0.1)
     sampler.start()
-    p = subprocess.run([str(ROOT / "scripts/harness/run.sh"), "resource-sweep", "--", "--no-netns"],
+    p = subprocess.run([*HARNESS, "resource-sweep", "--", "--no-netns"],
                        env=env, cwd=ROOT, capture_output=True, text=True, timeout=900)
     sampler.stop.set(); sampler.join(timeout=5)
     log = re.sub(r"\x1b\[[0-9;]*m", "", (work / "restream.log").read_text(errors="ignore"))
@@ -569,14 +580,14 @@ def cmd_slow(args):
     if args.exact_owner:
         env["SLOW_PEER_EXACT_OWNER"] = "1"
     if args.pin_cpus:
-        env.update(RESTREAM_BIN=str(ROOT / "scripts/harness/restream-pinned.sh"), REAL_RESTREAM=str(real), PIN_CPUS=args.pin_cpus)
+        env.update(RESTREAM_BIN=pinned_restream_bin(), REAL_RESTREAM=str(real), PIN_CPUS=args.pin_cpus)
     else:
         env["RESTREAM_BIN"] = str(real)
     sdir = work / "srt.slow-peer"
     sdir.mkdir(parents=True)
     sampler = Sampler(sdir, work / "samples.jsonl")
     sampler.start()
-    p = subprocess.run([str(ROOT / "scripts/harness/run.sh"), "srt.slow-peer", "--", "--no-netns"],
+    p = subprocess.run([*HARNESS, "srt.slow-peer", "--", "--no-netns"],
                        env=env, cwd=ROOT, capture_output=True, text=True, timeout=900)
     sampler.stop.set(); sampler.join(timeout=5)
     result_path = sdir / f"{args.tag}.json"
@@ -793,7 +804,7 @@ def cmd_frozen(args):
     run = {"returncode": None, "stdout": "", "stderr": "", "timed_out": False}
     try:
         run = run_frozen_harness(
-            [str(ROOT / "scripts/harness/run.sh"), "fault.srt-output-stall", "--", "--no-netns"], env)
+            [*HARNESS, "fault.srt-output-stall", "--", "--no-netns"], env)
     except (OSError, subprocess.SubprocessError) as exc:
         run["stderr"] = str(exc)
     finally:

@@ -8,7 +8,7 @@ use rustls_pki_types::pem::PemObject;
 
 /// The release the MoQ wire profile is pinned to.
 pub(crate) const PINNED_MEDIAMTX_VERSION: &str = "v1.21.2";
-/// Where `scripts/dev/moq/fetch-mediamtx.sh` installs it, relative to the
+/// Where `cargo xtask fetch mediamtx` installs it, relative to the
 /// repository root the harness runs from.
 const PINNED_MEDIAMTX_PATH: &str = ".local/bin/mediamtx-1.21.2";
 /// Overrides the pinned binary's path (the version check still applies).
@@ -27,7 +27,7 @@ pub(crate) async fn pinned_mediamtx_bin() -> Result<PathBuf, String> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(PINNED_MEDIAMTX_PATH));
     let bin = absolute_path(&bin)?;
-    let fetch_hint = "run scripts/dev/moq/fetch-mediamtx.sh";
+    let fetch_hint = "run cargo xtask fetch mediamtx";
     if !bin.is_file() {
         return Err(format!(
             "pinned MediaMTX {PINNED_MEDIAMTX_VERSION} not found at {}; {fetch_hint}",

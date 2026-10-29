@@ -255,7 +255,7 @@
             "portNamespace": true,
             "benchProfile": false
           },
-          "purpose": "MoQ against pinned moq-cli 0.14.7 and moq-relay 0.17.7 (scripts/dev/moq/fetch-moq-dev.sh): default moq-lite-06 + hang, or --ietf for explicit moqt-19 + MSF/LOC. RTMP-fed Restream egress to relay, catalog and negotiated-version assertions, CLI TS readback >=20 s with H.264/AAC, monotonic PTS and frame rate; authenticated origin readback and token refusal; relay crash/restart with uninterrupted RTMP sibling. Default ingest uses moq import ts directly; --ietf ingest uses a separate Restream source -> dedicated real relay -> Restream listener via a draft-19-only cluster dial, then RTMP readback >=8 s. --browsers retains Chromium/Firefox lite WebTransport playback of origin and relay with @moq/watch, including token-less origin refusal"
+          "purpose": "MoQ against pinned moq-cli 0.14.7 and moq-relay 0.17.7 (cargo xtask fetch moq-dev): default moq-lite-06 + hang, or --ietf for explicit moqt-19 + MSF/LOC. RTMP-fed Restream egress to relay, catalog and negotiated-version assertions, CLI TS readback >=20 s with H.264/AAC, monotonic PTS and frame rate; authenticated origin readback and token refusal; relay crash/restart with uninterrupted RTMP sibling. Default ingest uses moq import ts directly; --ietf ingest uses a separate Restream source -> dedicated real relay -> Restream listener via a draft-19-only cluster dial, then RTMP readback >=8 s. --browsers retains Chromium/Firefox lite WebTransport playback of origin and relay with @moq/watch, including token-less origin refusal"
         },
         "moq-impairment": {
           "suiteDefault": false,
@@ -271,7 +271,7 @@
             "portNamespace": true,
             "benchProfile": false
           },
-          "purpose": "MoQ egress through moxygen's moqrelayserver from a pinned commit (scripts/dev/moq/build-moxygen.sh), an independent C++ MOQT implementation: one RTMP-fed pipeline publishes MSF/LOC to one relay per draft (16 and 18), each offering only that draft. Asserts each relay negotiated the pinned draft and accepted the broadcast's PUBLISH_NAMESPACE, then the pinned moq CLI reads the broadcast back through moxygen on the same draft: TS readback >=10 s with H.264/AAC, monotonic PTS and frame rate. Manual protocol evidence (no CI job builds moxygen)"
+          "purpose": "MoQ egress through moxygen's moqrelayserver from a pinned commit (cargo xtask fetch moxygen), an independent C++ MOQT implementation: one RTMP-fed pipeline publishes MSF/LOC to one relay per draft (16 and 18), each offering only that draft. Asserts each relay negotiated the pinned draft and accepted the broadcast's PUBLISH_NAMESPACE, then the pinned moq CLI reads the broadcast back through moxygen on the same draft: TS readback >=10 s with H.264/AAC, monotonic PTS and frame rate. Manual protocol evidence (no CI job builds moxygen)"
         },
         "moq-relay-interop": {
           "suiteDefault": false,

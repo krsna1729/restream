@@ -3,7 +3,7 @@
 
 use super::*;
 
-/// A pinned moq.dev binary: where `scripts/dev/moq/fetch-moq-dev.sh`
+/// A pinned moq.dev binary: where `cargo xtask fetch moq-dev`
 /// installs it, the variable overriding that path, and what `--version`
 /// must print.
 pub(crate) struct PinnedBin {
@@ -34,7 +34,7 @@ pub(crate) async fn pinned_bin(pin: &PinnedBin) -> Result<PathBuf, String> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(pin.path));
     let bin = absolute_path(&bin)?;
-    let fetch_hint = "run scripts/dev/moq/fetch-moq-dev.sh";
+    let fetch_hint = "run cargo xtask fetch moq-dev";
     if !bin.is_file() {
         return Err(format!(
             "pinned {} not found at {}; {fetch_hint}",

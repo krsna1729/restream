@@ -209,7 +209,7 @@ impl MsrRunProfile {
         // the checked-in low-bitrate fixture, without changing
         // REQUIRED_CHECKED_IN_FIXTURES or committing external media --
         // large real-media fixtures are reproducible via
-        // scripts/fixtures/generate-msr-1080p-fixture.sh rather than
+        // `cargo xtask fixtures generate-msr-1080p` rather than
         // checked in.
         if let Self::Canonical = self
             && let Ok(path) = std::env::var("RESTREAM_MSR_FIXTURE_OVERRIDE")

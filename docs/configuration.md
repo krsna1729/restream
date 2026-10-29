@@ -343,12 +343,12 @@ at startup and then about once per hour.
 ## Linux service placement
 
 On systemd hosts, use systemd for CPU and NUMA placement.
-`scripts/deploy/install-systemd-service.sh` installs the unit:
+`cargo xtask deploy install-systemd-service` installs the unit:
 
 ```sh
 sudo RESTREAM_CPU_AFFINITY=0-5 \
   RESTREAM_NUMA_POLICY=local \
-  scripts/deploy/install-systemd-service.sh
+  cargo xtask deploy install-systemd-service
 ```
 
 | Installer variable | Default | Effect |
@@ -586,8 +586,8 @@ Production kernel settings come from `restream host-tune`
 private user and network namespaces:
 
 ```sh
-scripts/dev/harness-host-prereqs.sh                   # check
-scripts/dev/bootstrap.sh --configure-harness-host     # persist
+cargo xtask setup harness-host-prereqs              # check
+scripts/dev/bootstrap.sh --configure-harness-host   # persist
 scripts/dev/bootstrap-runtime.sh --configure-harness-host
 ```
 

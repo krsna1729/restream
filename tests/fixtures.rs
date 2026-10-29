@@ -146,7 +146,7 @@ fn canonical_8m_bench_fixtures_carry_the_stated_payload_rate() {
         assert!(
             (mbps - TARGET_MBPS).abs() <= TOLERANCE_MBPS,
             "{} carries {:.3} Mbps of MPEG-TS payload, expected {TARGET_MBPS} ±{TOLERANCE_MBPS} Mbps; \
-             re-tune scripts/fixtures/generate-bench-fixtures.sh and regenerate the fixture",
+             re-tune `cargo xtask fixtures generate-bench` and regenerate the fixture",
             path.display(),
             mbps
         );

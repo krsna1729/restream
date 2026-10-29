@@ -25,5 +25,5 @@ The corresponding license texts are in `licenses/`. Rust and frontend
 dependencies are enumerated in the release SBOM; their copyright notices and
 license terms remain those of their respective authors.
 
-The scripts under `scripts/build/` and the `Dockerfile` are the build and
+The `crates/xtask` build workflows and the `Dockerfile` are the build and
 installation information used to create the binaries and images.

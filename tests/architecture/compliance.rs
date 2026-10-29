@@ -509,7 +509,7 @@ fn source_distribution_manifest_matches_declared_build_inputs() {
     );
 
     for script in [
-        "scripts/harness/run.sh",
+        "crates/xtask/src/harness.rs",
         "crates/xtask/src/bins.rs",
         "scripts/dev/frontend/prepare-assets.mjs",
     ] {

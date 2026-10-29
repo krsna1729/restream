@@ -28,10 +28,10 @@
 //! counters, the wall-clock duration and the host CPU count.
 //!
 //! ```text
-//! scripts/harness/run.sh hls-push-duty
-//! scripts/harness/run.sh hls-push-duty -- --hls-publishers 4 --segment-type fmp4
-//! scripts/harness/run.sh hls-push-duty -- --hls-publishers 2 --method post
-//! scripts/harness/run.sh hls-push-duty -- --pull-sessions 4 --poll-usage
+//! cargo xtask harness hls-push-duty
+//! cargo xtask harness hls-push-duty -- --hls-publishers 4 --segment-type fmp4
+//! cargo xtask harness hls-push-duty -- --hls-publishers 2 --method post
+//! cargo xtask harness hls-push-duty -- --pull-sessions 4 --poll-usage
 //! ```
 //!
 //! FFmpeg is resolved through the project's `ffmpeg_binary` resolver; the
